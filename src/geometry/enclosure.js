@@ -6,7 +6,10 @@ export function addEnclosureGeometry(vertices, indices, params) {
     const mouthY = vertices[lastRowStart * 3 + 1];
 
     // Spacing: L(eft), T(op), R(ight), B(ottom)
-    const [sL, sT, sR, sB] = params.encSpace || [25, 25, 25, 25];
+    const sL = params.encSpaceL || 25;
+    const sT = params.encSpaceT || 25;
+    const sR = params.encSpaceR || 25;
+    const sB = params.encSpaceB || 25;
     const depth = params.encDepth;
     const edgeR = params.encEdge || 0;
 

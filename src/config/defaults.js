@@ -12,7 +12,7 @@ export function getDefaults(modelType) {
     }
 
     // Shared groups
-    const sharedGroups = ['MORPH', 'MESH', 'SOURCE', 'ABEC', 'ENCLOSURE'];
+    const sharedGroups = ['MORPH', 'MESH', 'ROLLBACK', 'SOURCE', 'ABEC', 'ENCLOSURE'];
     for (const group of sharedGroups) {
         const groupSchema = PARAM_SCHEMA[group];
         if (groupSchema) {
@@ -21,11 +21,6 @@ export function getDefaults(modelType) {
             }
         }
     }
-
-    // Rollback defaults (R-OSSE only technically)
-    defaults.rollback = false;
-    defaults.rollbackStart = 0.5;
-    defaults.rollbackAngle = 180;
 
     return defaults;
 }

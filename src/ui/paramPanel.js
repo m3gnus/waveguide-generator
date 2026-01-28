@@ -95,6 +95,16 @@ export class ParamPanel {
             }
         }
 
+        // --- Rollback (R-OSSE primarily, but available for both) ---
+        if (type === 'R-OSSE') {
+            const rollSection = this.createDetailsSection('Mouth Rollback', 'rollback-details');
+            const rollSchema = PARAM_SCHEMA.ROLLBACK;
+            for (const [key, def] of Object.entries(rollSchema)) {
+                rollSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+            this.container.appendChild(rollSection);
+        }
+
         // --- Mesh Settings (Shared) ---
         const meshSection = this.createDetailsSection('Mesh & Rear', 'mesh-details');
         for (const [key, def] of Object.entries(PARAM_SCHEMA.MESH)) {

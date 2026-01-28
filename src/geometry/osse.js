@@ -23,9 +23,9 @@ export function calculateOSSE(z, p, params) {
 
     let rTERM = 0;
     if (z > 0 && n > 0 && q > 0) {
-        const val = q * z / L;
-        if (val <= 1.0) {
-            rTERM = (s * L / q) * (1 - Math.pow(1 - Math.pow(val, n), 1 / n));
+        const zNorm = q * z / L;
+        if (zNorm <= 1.0) {
+            rTERM = (s * L / q) * (1 - Math.pow(1 - Math.pow(zNorm, n), 1 / n));
         } else {
             rTERM = (s * L / q);
         }

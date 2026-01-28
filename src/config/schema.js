@@ -66,7 +66,20 @@ export const PARAM_SCHEMA = {
             ],
             default: 1
         },
-        rearRadius: { type: 'range', label: 'Rear Radius', unit: 'mm', min: 50, max: 500, step: 1, default: 150 }
+    },
+    'ROLLBACK': {
+        rollback: {
+            type: 'select',
+            label: 'Rollback',
+            options: [
+                { value: false, label: 'Off' },
+                { value: true, label: 'On' }
+            ],
+            default: false,
+            tooltip: 'Add toroidal rollback fold at the mouth'
+        },
+        rollbackAngle: { type: 'range', label: 'Rollback Angle', unit: 'deg', min: 30, max: 270, step: 1, default: 180, tooltip: 'How far the lip curls back (degrees)' },
+        rollbackStart: { type: 'range', label: 'Rollback Start', min: 0.1, max: 0.99, step: 0.01, default: 0.5, tooltip: 'Where the rollback begins (0=throat, 1=mouth)' }
     },
     'ENCLOSURE': {
         encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 280 },

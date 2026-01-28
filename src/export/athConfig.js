@@ -48,6 +48,7 @@ export function generateATHConfigContent(params) {
         content += `Throat.Angle = ${params.a0}\n`;
         content += `Throat.Diameter = ${params.r0 * 2}\n`;
         content += `Throat.Profile = 1\n`;
+        content += `OS.k = ${params.k}\n`;
         if (params.h !== 0) content += `OS.h = ${params.h}\n`;
 
         if (params.morphTarget !== 0) {
@@ -59,12 +60,12 @@ export function generateATHConfigContent(params) {
             if (params.morphHeight > 0) content += `Morph.TargetHeight = ${params.morphHeight}\n`;
         }
 
-        if (params.encDepth > 0 && params.encSpace) {
+        if (params.encDepth > 0) {
             content += `Mesh.Enclosure = {\n`;
             content += `Depth = ${params.encDepth}\n`;
             content += `EdgeRadius = ${params.encEdge}\n`;
             content += `EdgeType = ${params.encEdgeType}\n`;
-            content += `Spacing = ${params.encSpace.join(',')}\n`;
+            content += `Spacing = ${params.encSpaceL || 25},${params.encSpaceT || 25},${params.encSpaceR || 25},${params.encSpaceB || 25}\n`;
             content += `}\n`;
         }
     }
