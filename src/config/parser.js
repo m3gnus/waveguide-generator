@@ -87,7 +87,7 @@ export class ATHConfigParser {
             if (p['Mesh.CornerSegments']) { p.cornerSegments = p['Mesh.CornerSegments']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
-            if (p['Mesh.RearShape']) { p.RearShape = p['Mesh.RearShape']; }
+            if (p['Mesh.RearShape']) { p.rearShape = p['Mesh.RearShape']; }
 
             // Source & ABEC
             if (p['Source.Shape']) { p.sourceShape = p['Source.Shape']; }
@@ -104,13 +104,25 @@ export class ATHConfigParser {
             const p = result.params;
             if (p['Mesh.AngularSegments']) { p.angularSegments = p['Mesh.AngularSegments']; }
             if (p['Mesh.LengthSegments']) { p.lengthSegments = p['Mesh.LengthSegments']; }
+            if (p['Mesh.CornerSegments']) { p.cornerSegments = p['Mesh.CornerSegments']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
-            if (p['Mesh.RearShape']) { p.RearShape = p['Mesh.RearShape']; }
+            if (p['Mesh.RearShape']) { p.rearShape = p['Mesh.RearShape']; }
+            if (p['Source.Shape']) { p.sourceShape = p['Source.Shape']; }
+            if (p['Source.Radius']) { p.sourceRadius = p['Source.Radius']; }
+            if (p['Source.Velocity']) { p.sourceVelocity = p['Source.Velocity']; }
             if (p['ABEC.SimType']) { p.abecSimType = p['ABEC.SimType']; }
             if (p['ABEC.f1']) { p.abecF1 = p['ABEC.f1']; }
             if (p['ABEC.f2']) { p.abecF2 = p['ABEC.f2']; }
             if (p['ABEC.NumFrequencies']) { p.abecNumFreq = p['ABEC.NumFrequencies']; }
+        }
+
+        // Normalize Rollback params (both types, flat keys)
+        {
+            const p = result.params;
+            if (p['Rollback'] !== undefined) { p.rollback = p['Rollback'] === '1' || p['Rollback'] === 1; }
+            if (p['Rollback.Angle']) { p.rollbackAngle = p['Rollback.Angle']; }
+            if (p['Rollback.StartAt']) { p.rollbackStart = p['Rollback.StartAt']; }
         }
 
         // Parse Mesh.Enclosure block if present

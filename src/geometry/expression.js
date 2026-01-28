@@ -1,6 +1,5 @@
 
 // --- MATH UTILS ---
-// --- MATH UTILS ---
 
 /**
  * Enhanced Expression Parser (Desmos-like)
@@ -15,75 +14,84 @@ export function parseExpression(expr) {
     if (!expr.trim()) return () => 0;
 
     try {
-        // 1. Normalize
-        let clean = expr.toLowerCase();
+        // 1. Normalize to lowercase
+        let clean = expr.toLowerCase().trim();
 
-        // 2. Handle constants
-        clean = clean.replace(/\bpi\b/g, 'Math.PI');
-        clean = clean.replace(/\be\b/g, 'Math.E');
-
-        // 3. Handle Operators
+        // 2. Handle power operator first (before any other substitution)
         clean = clean.replace(/\^/g, '**');
 
-        // 4. Protect known functions from implicit multiplication parsing
-        // We temporarily replace them with placeholders starting with @
-        // e.g. "2sin(p)" -> "2@sin(p)". This lets us identify "number followed by function"
-        const funcs = [
-            'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
-            'abs', 'sqrt', 'cbrt', 'exp', 'floor', 'ceil', 'round', 'sign',
-            'max', 'min', 'pow'
-        ];
+        // 3. Replace known functions with Math.FUNC_ placeholder
+        //    Using FUNC_ prefix so we can identify them during implicit mult
+        const funcMap = {
+            'sinh': 'Math.sinh', 'cosh': 'Math.cosh', 'tanh': 'Math.tanh',
+            'asin': 'Math.asin', 'acos': 'Math.acos', 'atan': 'Math.atan',
+            'sqrt': 'Math.sqrt', 'cbrt': 'Math.cbrt',
+            'floor': 'Math.floor', 'ceil': 'Math.ceil', 'round': 'Math.round',
+            'sign': 'Math.sign',
+            'abs': 'Math.abs',
+            'sin': 'Math.sin', 'cos': 'Math.cos', 'tan': 'Math.tan',
+            'exp': 'Math.exp',
+            'max': 'Math.max', 'min': 'Math.min', 'pow': 'Math.pow',
+            'ln': 'Math.log', 'log': 'Math.log10',
+        };
 
-        // Special mapping for logs
-        // ln -> Math.log (natural log)
-        // log -> Math.log10 (base 10)
-        clean = clean.replace(/\bln\b/g, '@log');
-        clean = clean.replace(/\blog\b/g, '@log10');
+        // Sort by length descending so 'asin' is matched before 'sin', 'sinh' before 'sin'
+        const funcNames = Object.keys(funcMap).sort((a, b) => b.length - a.length);
 
-        for (const f of funcs) {
-            clean = clean.replace(new RegExp(`\\b${f}\\b`, 'g'), `@${f}`);
+        // Replace functions with their Math.* equivalents
+        // Use word boundary to avoid partial matches
+        for (const name of funcNames) {
+            clean = clean.replace(new RegExp(`\\b${name}\\b`, 'g'), funcMap[name]);
         }
 
-        // 5. Insert Implicit Multiplication (*)
+        // 4. Handle constants (after functions, so 'exp' is already replaced)
+        clean = clean.replace(/\bpi\b/g, 'Math.PI');
+        // Only replace standalone 'e', not 'e' inside Math.xxx
+        clean = clean.replace(/(?<![a-zA-Z.])e(?![a-zA-Z])/g, 'Math.E');
 
-        // Case: Digit followed by (Function, Variable, or Open Paren)
-        // 2@sin -> 2*@sin, 2p -> 2*p, 2( -> 2*(
-        clean = clean.replace(/(\d)\s*([a-z_\(@])/g, '$1*$2');
+        // 5. Insert Implicit Multiplication
+        //    Strategy: work with the string that has Math.func already substituted.
+        //    Math.func( should NEVER get * inserted. We only insert * between:
+        //    - number and variable:       2p -> 2*p
+        //    - number and Math.func:      2Math.sin -> 2*Math.sin
+        //    - number and open paren:     2( -> 2*(
+        //    - variable and open paren:   p( -> p*(  (but NOT Math.sin( !)
+        //    - variable and Math.func:    pMath.sin -> p*Math.sin
+        //    - close paren and anything:  )2 -> )*2, )p -> )*p, )Math -> )*Math, )( -> )*(
+        //    - variable and variable:     p p -> p*p (with space)
 
-        // Case: Variable followed by (Function, Variable, or Open Paren)
-        // p@sin -> p*@sin, p( -> p*(  <-- BE CAREFUL! "sin(" is valid.
-        // But "p(" where p is a variable is implicit mult. 
-        // Since we protected functions with @, any normal [a-z] followed by ( is implicit mult
-        // UNLESS it's a variable being called as function? (not supported here)
-        clean = clean.replace(/([a-z_])\s*([@\(\[])/g, '$1*$2');
+        // Digit followed by variable, Math, or open paren
+        clean = clean.replace(/(\d)\s*([a-z_])/g, '$1*$2');
+        clean = clean.replace(/(\d)\s*(\()/g, '$1*$2');
+        clean = clean.replace(/(\d)\s*(Math\.)/g, '$1*$2');
 
-        // Case: Variable followed by Variable (e.g. "p p")
-        clean = clean.replace(/([a-z_])\s+([a-z_])/g, '$1*$2');
+        // Close paren followed by digit, variable, Math, or open paren
+        clean = clean.replace(/\)\s*(\d)/g, ')*$1');
+        clean = clean.replace(/\)\s*([a-z_])/g, ')*$1');
+        clean = clean.replace(/\)\s*(Math\.)/g, ')*$1');
+        clean = clean.replace(/\)\s*(\()/g, ')*(');
 
-        // Case: Closing Paren followed by (Digit, Variable, Function, Open Paren)
-        // )2 -> )*2, )p -> )*p, )@sin -> )*@sin, )( -> )*(
-        clean = clean.replace(/\)\s*([\d\.a-z_@\(])/g, ')*$1');
+        // Variable (single letter like p) followed by open paren or Math
+        // BUT we must not match the end of Math.sin, Math.abs etc.
+        // Only match if the letter is NOT preceded by a dot or other letters
+        clean = clean.replace(/(?<![a-zA-Z.])([a-z_])\s*(\()/g, '$1*$2');
+        clean = clean.replace(/(?<![a-zA-Z.])([a-z_])\s*(Math\.)/g, '$1*$2');
 
-        // 6. Restore Functions with Math. prefix
-        clean = clean.replace(/@/g, 'Math.');
+        // Variable followed by variable with space
+        clean = clean.replace(/(?<![a-zA-Z.])([a-z_])\s+(?=[a-z_](?![a-zA-Z.]))/g, '$1*');
 
-        // 7. Final Sanity Checks
-        // Remove multiple * if generated (e.g. 2**p is power, don't break it)
-        // But 2* *p is bad. 
-        // Our regexes shouldn't generate ** unless it was ^ substitution.
-        // Just Ensure "Math." isn't preceded by implicit stuff strangely?
-
-        // Create function
-        // 'p' is the standard variable for polar angle
+        // Create function with 'p' as the standard polar angle variable
         return new Function('p', `return ${clean};`);
 
     } catch (e) {
         console.warn("Expression parsing error:", expr, e);
-        // Fallback to simple parser or return 0
         try {
-            // Last ditch attempt with simple substitution
             let simple = expr.toLowerCase()
-                .replace(/abs|cos|sin|tan|sqrt/g, m => `Math.${m}`)
+                .replace(/\babs\b/g, 'Math.abs')
+                .replace(/\bcos\b/g, 'Math.cos')
+                .replace(/\bsin\b/g, 'Math.sin')
+                .replace(/\btan\b/g, 'Math.tan')
+                .replace(/\bsqrt\b/g, 'Math.sqrt')
                 .replace(/\^/g, '**');
             return new Function('p', `return ${simple};`);
         } catch (e2) {
