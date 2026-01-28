@@ -60,11 +60,11 @@ export const PARAM_SCHEMA = {
             type: 'select',
             label: 'Rear Shape',
             options: [
+                { value: 0, label: 'None (Open)' },
                 { value: 1, label: 'Full Model' },
-                { value: 2, label: 'Flat Disc' },
-                { value: 0, label: 'None (Open)' }
+                { value: 2, label: 'Flat Disc' }
             ],
-            default: 1
+            default: 0
         },
     },
     'ROLLBACK': {
