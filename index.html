@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATH Horn 3D Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Space+Mono&display=swap"
+        rel="stylesheet">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="ui-panel">
+        <h1>ATH Visualizer</h1>
+
+        <div class="section">
+            <h3>EXPORT SETTINGS</h3>
+            <div class="input-row">
+                <label>Prefix</label>
+                <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
+            </div>
+            <div class="input-row">
+                <label>Counter</label>
+                <input type="number" id="export-counter" value="1" min="1" step="1">
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>ACTIONS</h3>
+            <button id="load-config-btn" class="secondary">Load Config (.txt)</button>
+            <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
+            <button id="render-btn">Update Model</button>
+            <button id="export-btn" class="secondary">Export STL</button>
+            <button id="export-config-btn" class="secondary">Export ATH Config</button>
+
+            <div class="checkbox-group" style="margin-top: 15px;">
+                <input type="checkbox" id="live-update" checked>
+                <label for="live-update">Real-time Updates</label>
+            </div>
+
+            <label>Display Mode</label>
+            <select id="display-mode">
+                <option value="standard">Standard (Metal)</option>
+                <option value="zebra">Zebra Stripes</option>
+                <option value="grid">Grid / Wireframe</option>
+                <option value="curvature">Curvature Map</option>
+            </select>
+        </div>
+
+        <div class="section">
+            <h3>MODEL TYPE</h3>
+            <select id="model-type">
+                <option value="R-OSSE" selected>R-OSSE (Parametric)</option>
+                <option value="OSSE">OSSE (Baffle Mounted)</option>
+            </select>
+        </div>
+
+        <div id="osse-params" class="section" style="display: none;">
+            <h3>OSSE PARAMETERS</h3>
+            <div class="input-row">
+                <label>L (Axial Length)</label>
+                <input type="number" id="osse-L" value="120" step="1">
+                <input type="range" id="osse-L-slider" min="10" max="500" value="120" step="1">
+            </div>
+            <div class="input-row">
+                <label>a (Coverage Expr)</label>
+                <input type="text" id="osse-a" value="48.5 - 5.6*cos(2*p)^5 - 31*sin(p)^12" style="width: 100%;">
+            </div>
+            <div class="input-row">
+                <label>a0 (Throat Angle)</label>
+                <input type="number" id="osse-a0" value="15.5" step="0.5">
+                <input type="range" id="osse-a0-slider" min="0" max="60" value="15.5" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>r0 (Throat Rad)</label>
+                <input type="number" id="osse-r0" value="12.7" step="0.1">
+                <input type="range" id="osse-r0-slider" min="1" max="50" value="12.7" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>k (Expansion)</label>
+                <input type="number" id="osse-k" value="7" step="0.1">
+                <input type="range" id="osse-k-slider" min="0.1" max="15" value="7" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>s (Flare Expr)</label>
+                <input type="text" id="osse-s" value="0.58 + 0.2*cos(p)^2" style="width: 100%;">
+            </div>
+            <div class="input-row">
+                <label>n (Curvature)</label>
+                <input type="number" id="osse-n" value="4.158" step="0.01">
+                <input type="range" id="osse-n-slider" min="1" max="10" value="4.158" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>q (Truncation)</label>
+                <input type="number" id="osse-q" value="0.9909" step="0.001">
+                <input type="range" id="osse-q-slider" min="0.1" max="2" value="0.9909" step="0.01">
+            </div>
+            <details>
+                <summary>Advanced OSSE</summary>
+                <div class="input-row">
+                    <label>h (Shape Factor)</label>
+                    <input type="number" id="osse-h" value="0" step="0.1">
+                    <input type="range" id="osse-h-slider" min="0" max="10" value="0" step="0.1">
+                </div>
+            </details>
+            <details id="osse-morph-details">
+                <summary>Morphing & Corner</summary>
+                <div class="input-row">
+                    <label>Corner Radius</label>
+                    <input type="number" id="osse-morph-corner" value="0" step="1">
+                    <input type="range" id="osse-morph-corner-slider" min="0" max="100" value="0" step="1">
+                </div>
+                <div class="input-row">
+                    <label>Target Shape</label>
+                    <select id="osse-morph-target">
+                        <option value="1" selected>Rectangle</option>
+                        <option value="2">Circle</option>
+                        <option value="0">None</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>Target W / H</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="number" id="osse-morph-width" value="0" placeholder="Width" style="width: 50%;">
+                        <input type="number" id="osse-morph-height" value="0" placeholder="Height" style="width: 50%;">
+                    </div>
+                </div>
+                <div class="input-row">
+                    <label>Morph Rate</label>
+                    <input type="number" id="osse-morph-rate" value="3" step="0.1">
+                </div>
+                <div class="input-row">
+                    <label>Fixed Part (0-1)</label>
+                    <input type="number" id="osse-morph-fixed" value="0" step="0.01">
+                </div>
+            </details>
+            <details id="osse-enclosure-details">
+                <summary>Mesh Enclosure</summary>
+                <div class="sub-header">Spacing (L, T, R, B)</div>
+                <div class="input-row-4">
+                    <input type="number" id="osse-enc-space-l" value="25" placeholder="L">
+                    <input type="number" id="osse-enc-space-t" value="25" placeholder="T">
+                    <input type="number" id="osse-enc-space-r" value="25" placeholder="R">
+                    <input type="number" id="osse-enc-space-b" value="25" placeholder="B">
+                </div>
+                <div class="input-row">
+                    <label>Enclosure Depth</label>
+                    <input type="number" id="osse-enc-depth" value="280" step="1">
+                </div>
+                <div class="input-row">
+                    <label>Edge Radius</label>
+                    <input type="number" id="osse-enc-edge" value="18" step="1">
+                </div>
+                <div class="input-row">
+                    <label>Edge Type</label>
+                    <select id="osse-enc-edge-type">
+                        <option value="1">Rounded</option>
+                        <option value="2">Chamfered</option>
+                    </select>
+                </div>
+            </details>
+        </div>
+
+        <div id="r-osse-params" class="section">
+            <h3>R-OSSE PARAMETERS</h3>
+            <div class="input-row">
+                <label title="Mouth Radius Expression">R (Expression)</label>
+                <input type="text" id="param-R" value="140 * (abs(cos(p)/1.6)^3 + abs(sin(p)/1)^4)^(-1/4.5)"
+                    style="width: 100%;">
+            </div>
+            <div class="input-row">
+                <label title="Aperture Angle Expression">a (Expression)</label>
+                <input type="text" id="param-a" value="25 * (abs(cos(p)/1.2)^4 + abs(sin(p)/1)^3)^(-1/2.5)"
+                    style="width: 100%;">
+            </div>
+            <div class="input-row">
+                <label>a0 (Throat Angle)</label>
+                <input type="number" id="param-a0" value="15.5" step="0.5">
+                <input type="range" id="param-a0-slider" min="0" max="60" value="15.5" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>k (Rounding)</label>
+                <input type="number" id="param-k" value="2" step="0.1">
+                <input type="range" id="param-k-slider" min="0.1" max="10" value="2" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>m (Apex Shift)</label>
+                <input type="number" id="param-m" value="0.85" step="0.01">
+                <input type="range" id="param-m-slider" min="0" max="1" value="0.85" step="0.01">
+            </div>
+            <div class="input-row">
+                <label title="Bending Expression">b (Expression)</label>
+                <input type="text" id="param-b" value="0.2" style="width: 100%;">
+            </div>
+            <div class="input-row">
+                <label>r (Apex Radius)</label>
+                <input type="number" id="param-r" value="0.4" step="0.01">
+                <input type="range" id="param-r-slider" min="0.01" max="2" value="0.4" step="0.01">
+            </div>
+            <div class="input-row">
+                <label>q (Shape Factor)</label>
+                <input type="number" id="param-q" value="3.4" step="0.1">
+                <input type="range" id="param-q-slider" min="0.5" max="10" value="3.4" step="0.1">
+            </div>
+            <div class="input-row">
+                <label>r0 (Throat Rad)</label>
+                <input type="number" id="param-r0" value="12.7" step="0.1">
+                <input type="range" id="param-r0-slider" min="1" max="50" value="12.7" step="0.1">
+            </div>
+            <details>
+                <summary>Mouth Rollback</summary>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="param-rollback">
+                    <label for="param-rollback">Enable Rollback</label>
+                </div>
+                <div class="input-row">
+                    <label>Start At (0-1)</label>
+                    <input type="number" id="param-rollback-start" value="0.5" step="0.01">
+                </div>
+                <div class="input-row">
+                    <label>Angle (deg)</label>
+                    <input type="number" id="param-rollback-angle" value="180" step="1">
+                </div>
+            </details>
+            <details>
+                <summary>Advanced R-OSSE</summary>
+                <div class="input-row">
+                    <label>tmax (Truncation)</label>
+                    <input type="number" id="param-tmax" value="1.0" step="0.01">
+                    <input type="range" id="param-tmax-slider" min="0.5" max="1.5" value="1.0" step="0.01">
+                </div>
+            </details>
+        </div>
+
+        <div class="section">
+            <h3>MESH & REAR</h3>
+            <details>
+                <summary>Geometry Settings</summary>
+                <div class="input-row">
+                    <label>Angular Segs</label>
+                    <input type="number" id="mesh-angular" value="80">
+                </div>
+                <div class="input-row">
+                    <label>Length Segs</label>
+                    <input type="number" id="mesh-length" value="20">
+                </div>
+                <div class="input-row">
+                    <label>Corner Segs</label>
+                    <input type="number" id="mesh-corner" value="4">
+                </div>
+                <div class="input-row">
+                    <label>Quadrants</label>
+                    <select id="mesh-quadrants">
+                        <option value="1234">Full (1234)</option>
+                        <option value="14">Half (14)</option>
+                        <option value="12">Half (12)</option>
+                        <option value="1">Quadrant (1)</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>Wall Thickness</label>
+                    <input type="number" id="mesh-wall" value="5" step="0.1">
+                </div>
+                <hr>
+                <label>Rear Shape</label>
+                <select id="rear-shape">
+                    <option value="1">Full Model</option>
+                    <option value="2">Flat Disc</option>
+                    <option value="0">None (Open)</option>
+                </select>
+                <div id="rear-params" style="display: none;">
+                    <div class="input-row">
+                        <label>Rear Radius</label>
+                        <input type="number" id="rear-radius" value="150" step="1">
+                        <input type="range" id="rear-radius-slider" min="50" max="500" value="150" step="1">
+                    </div>
+                </div>
+            </details>
+        </div>
+
+        <div class="section">
+            <h3>SOURCE & ABEC</h3>
+            <details>
+                <summary>Acoustic Source</summary>
+                <div class="input-row">
+                    <label>Wavefront</label>
+                    <select id="source-shape">
+                        <option value="1">Spherical Cap</option>
+                        <option value="2">Flat Disc</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>Radius (-1=auto)</label>
+                    <input type="number" id="source-radius" value="-1" step="0.1">
+                </div>
+                <div class="input-row">
+                    <label>Velocity</label>
+                    <select id="source-velocity">
+                        <option value="1">Normal</option>
+                        <option value="2">Axial</option>
+                    </select>
+                </div>
+            </details>
+            <details>
+                <summary>Simulation Settings</summary>
+                <div class="input-row">
+                    <label>ABEC SimType</label>
+                    <select id="abec-simtype">
+                        <option value="1">Infinite Baffle</option>
+                        <option value="2">Free Standing</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>F1 / F2 (Hz)</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="number" id="abec-f1" value="400" style="width: 50%;">
+                        <input type="number" id="abec-f2" value="16000" style="width: 50%;">
+                    </div>
+                </div>
+                <div class="input-row">
+                    <label>Frequencies</label>
+                    <input type="number" id="abec-numfreq" value="40">
+                </div>
+            </details>
+        </div>
+    </div>
+
+    <div id="stats">Vertices: 0 | Triangles: 0</div>
+    <div id="canvas-container">
+        <div class="viewer-controls">
+            <button id="zoom-in" title="Zoom In">+</button>
+            <button id="zoom-out" title="Zoom Out">−</button>
+            <button id="camera-toggle" title="Toggle Perspective/Orthographic">⬚</button>
+            <button id="focus-horn" title="Focus on Horn">⊙</button>
+            <button id="zoom-reset" title="Reset View">⟲</button>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+
+</html>

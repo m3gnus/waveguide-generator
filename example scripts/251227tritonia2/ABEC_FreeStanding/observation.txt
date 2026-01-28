@@ -1,0 +1,41 @@
+Driving_Values
+  DrvType=Acceleration; Value=1.0
+  401  DrvGroup=1001  Weight=1 Delay=0ms  // 0.00 dB
+
+Radiation_Impedance
+  BodeType=Complex; GraphHeader="RadImp"
+  Range_min=0; Range_max=2; RadImpType=Normalized
+  402   1001 1001   ID=8001
+
+BE_Spectrum
+  PlotType=Polar; GraphHeader="PM_45"
+  BodeType=LeveldB; Range_max=5; Range_min=-45
+  PolarRange=-180,180,96
+  BasePlane=zx
+  Distance=2m
+  Offset=185mm
+  NormalizingAngle=0
+  501  Inclination=45  ID=5001
+
+
+BE_Spectrum
+  PlotType=Polar; GraphHeader="PM_hor"
+  BodeType=LeveldB; Range_max=5; Range_min=-45
+  PolarRange=-180,180,96
+  BasePlane=zx
+  Distance=1m
+  Offset=185mm
+  NormalizingAngle=0
+  502  Inclination=0  ID=5002
+
+
+BE_Spectrum
+  PlotType=Polar; GraphHeader="PM_ver"
+  BodeType=LeveldB; Range_max=5; Range_min=-45
+  PolarRange=-180,180,96
+  BasePlane=zx
+  Distance=2m
+  Offset=185mm
+  NormalizingAngle=0
+  503  Inclination=89  ID=5003
+

@@ -1,0 +1,48 @@
+OSSE = {{  ; horizontal waveguide section
+  r0 = {r0}          ; Initial throat radius [mm].
+  a0 = {a0}        ; Initial throat coverage angle [deg].
+  a = {a}          ; Mouth coverage angle [deg].
+  k = {k}          ; Flare constant (rate of expansion).
+  L = {L}          ; Length of the waveguide [mm].
+  s = {s}          ; Shape exponent for the termination section.
+  n = {n}          ; Curvature control exponent for the termination.
+  q = {q}          ; Transition smoothness parameter at termination.
+  Throat.Profile = 1 ;
+}}
+
+Source.Contours = {{
+  dome WG0 22 5.1 2 -0.8 5 1.5
+}}
+
+Morph.TargetShape = 2
+Morph.TargetWidth = 110
+
+Mesh.AngularSegments = 64
+Mesh.LengthSegments = 20
+
+ABEC.SimType = 1
+ABEC.SimProfile = 0
+ABEC.f1 = 1000 ; [Hz]
+ABEC.f2 = 20000 ; [Hz]
+ABEC.NumFrequencies = 100
+ABEC.MeshFrequency = 67000 ; [Hz] at least 30000 for circular!
+
+ABEC.Polars:SPL = {{
+  MapAngleRange = 0,90,19
+  NormAngle = 10    ; [deg]
+  Distance = 3      ; [m]
+  Offset = 95       ; [mm]
+}}
+
+Output.STL = 0
+Output.ABECProject = 1
+
+Report = {{
+  Title = "ATH report. All praise mabat!"
+  NormAngle = 10
+  Width = 1200
+  Height = 800
+  SPL_Range = 50
+  MaxRadius = 90
+  PolarData = "SPL"
+}}

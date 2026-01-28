@@ -1,0 +1,6 @@
+R_DIM='318 x 258 x 104 mm'
+R_DRIVER='N/A'
+R_VRMS='2.83 V'
+R_DIST='2 m'
+LINE_1=''
+R_XOFF=0

@@ -1,0 +1,67 @@
+; Ath version V2025-06
+; Created: 2025-12-27 15:49
+ABEC.MeshFrequency = 1000
+ABEC.NumFrequencies = 96
+ABEC.Polars:45 = {
+Distance = 2
+Inclination = 45
+MapAngleRange = -180,180,96
+NormAngle = 0
+Offset = 185
+}
+ABEC.Polars:hor = {
+Distance = 1
+Inclination = 0
+MapAngleRange = -180,180,96
+NormAngle = 0
+Offset = 185
+}
+ABEC.Polars:ver = {
+Distance = 2
+Inclination = 89
+MapAngleRange = -180,180,96
+NormAngle = 0
+Offset = 185
+}
+ABEC.SimType = 2
+ABEC.f1 = 100
+ABEC.f2 = 20000
+Coverage.Angle = 52.274 - 5.6626*cos(2*p)^5 - 31.62*sin(p)^12
+GridExport:throat = {
+Delimiter = ;
+ExportProfiles = 1
+ExportSlices = 1
+FileExtension = csv
+Scale = .1
+SeparateFiles = 0
+}
+Length = 130.69
+Mesh.AngularSegments = 36
+Mesh.CornerSegments = 4
+Mesh.Enclosure = {
+BackResolution = 20,20,20,20
+Depth = 344
+EdgeRadius = 30
+EdgeType = 1
+FrontResolution = 8,8,8,8
+Spacing = 30,150,30,150
+}
+Mesh.InterfaceOffset = 10.0
+Mesh.InterfaceResolution = 12
+Mesh.LengthSegments = 9
+Mesh.MouthResolution = 12
+Mesh.Quadrants = 1
+Mesh.ThroatResolution = 3
+Morph.CornerRadius = 18
+Morph.FixedPart = 0.0
+Morph.Rate = 3
+Morph.TargetShape = 1
+Output.ABECProject = 1
+Output.STL = 1
+Scale = 0.7960199
+Term.n = 4.1276
+Term.q = 0.9901
+Term.s = 0.52599 + 0.18135*cos(p)^2
+Throat.Angle = 10
+Throat.Diameter = 31.90875002
+Throat.Profile = 1

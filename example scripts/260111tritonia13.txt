@@ -1,0 +1,84 @@
+; -------------------------------------------------------------------------
+;   ATH Tritonia-M Waveguide
+;   Marcel Batik, 02/2025
+;
+;   This Ath script is provided under the CC BY-NC-SA 4.0 licence.
+; -------------------------------------------------------------------------
+
+OSSE = {
+L = 90
+r0 = 12.7
+a0 = 15.5   ; original=10
+a = 48.5 - 7*cos(2*p)^5 - 16*sin(p)^12
+s = 0.7 + 0.2*cos(p)^2
+n = 5.2
+k = 4
+q = 0.995
+}
+
+Morph.TargetShape = 1
+Morph.FixedPart = 0.0
+Morph.Rate = 3
+Morph.CornerRadius = 18 ; [mm]
+
+Mesh.Enclosure = {
+  Spacing = 22,22,22,280 ; [mm]
+  Depth = 320 ; [mm]
+  EdgeRadius = 22 ; [mm]
+  EdgeType = 1
+  FrontResolution = 10,10,20,25 ; [mm]
+  BackResolution = 40,40,40,40 ; [mm]
+}
+
+Mesh.Quadrants = 14
+Mesh.VerticalOffset = 80
+
+Mesh.AngularSegments = 80
+Mesh.LengthSegments = 20
+Mesh.CornerSegments = 4
+
+Mesh.ThroatResolution = 5 ; [mm]
+Mesh.MouthResolution = 10 ; [mm]
+Mesh.InterfaceResolution = 8 ; [mm]
+
+; Disable subdomain interface, i.e. set this to empty value
+Mesh.SubdomainSlices =
+
+ABEC.SimType = 2 ; free space
+ABEC.f1 = 400 ; [Hz]
+ABEC.f2 = 16000 ; [Hz]
+ABEC.NumFrequencies = 40
+ABEC.MeshFrequency = 1000 ; [Hz]
+
+ABEC.Polars:SPL_H = {
+  MapAngleRange = 0,180,37  ; [deg]
+  Distance = 2 ; [m]
+  NormAngle = 10 ; [deg]
+}
+
+ABEC.Polars:SPL_V = {
+  MapAngleRange = 0,180,37  ; [deg]
+  Distance = 2 ; [m]
+  Inclination = 270 ; [deg]
+  NormAngle = 10 ; [deg]
+}
+
+Output.STL = 1
+Output.ABECProject = 1
+
+GridExport:throat = {
+ ExportProfiles = 1
+ ExportSlices = 1
+ Scale = .1
+ Delimiter = ";"
+ FileExtension = "csv"
+ SeparateFiles = 0
+}
+
+Report = {
+  Title = "ATH Tritonia-M"
+  PolarData = SPL_H
+  PolarDataV = SPL_V
+  NormAngle = 10
+}
+

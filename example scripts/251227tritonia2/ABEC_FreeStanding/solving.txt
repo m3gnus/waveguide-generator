@@ -1,0 +1,33 @@
+Control_Solver
+  f1=100; f2=20000; NumFrequencies=96
+  Abscissa=log; Dim=3D; MeshFrequency=1000; Sym=xy
+
+MeshFile_Properties
+  MeshFileAlias="M1"; Scale=1mm
+
+
+SubDomain_Properties
+  SubDomain=1; ElType=Interior
+
+SubDomain_Properties
+  SubDomain=2; ElType=Exterior
+
+Elements "SD1G0"
+  Subdomain=1; MeshFileAlias="M1"
+  101 Mesh Include SD1G0
+
+Elements "SD1D1001"
+  Subdomain=1; MeshFileAlias="M1"
+  102 Mesh Include SD1D1001
+
+Driving "S1001"  // horn driver
+  RefElements="SD1D1001"; DrvGroup=1001;
+
+Elements "SD2G0"
+  Subdomain=2; MeshFileAlias="M1"
+  103 Mesh Include SD2G0
+
+Elements "I1-2"
+  SubDomain=1,2; MeshFileAlias="M1"
+  104 Mesh Include I1-2
+
