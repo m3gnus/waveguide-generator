@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Debug Test</title>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <h1>ATH Debug Test</h1>
+    <div id="param-container">Loading...</div>
+    <div id="canvas-container" style="width: 800px; height: 600px;"></div>
+    <div id="stats">Waiting...</div>
+
+    <script type="module">
+        console.log("Script started");
+
+        try {
+            // Test imports one by one
+            import * as THREE from 'three';
+            console.log("✓ THREE imported", THREE);
+
+            import { GlobalState } from './src/state.js';
+            console.log("✓ GlobalState imported", GlobalState);
+
+            import { ParamPanel } from './src/ui/paramPanel.js';
+            console.log("✓ ParamPanel imported", ParamPanel);
+
+            import { buildHornMesh } from './src/geometry/index.js';
+            console.log("✓ buildHornMesh imported", buildHornMesh);
+
+            console.log("All imports successful!");
+            console.log("Current state:", GlobalState.get());
+
+            // Try to create ParamPanel
+            const panel = new ParamPanel('param-container');
+            console.log("✓ ParamPanel created", panel);
+
+        } catch (error) {
+            console.error("❌ Error:", error);
+            document.body.innerHTML += `<pre style="color: red; background: #fee; padding: 20px; margin: 20px;">${error.stack}</pre>`;
+        }
+    </script>
+</body>
+
+</html>
