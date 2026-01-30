@@ -10,7 +10,15 @@
       "Bash(node \"/private/tmp/claude/-Users-magnus-IM-Dropbox-Magnus-Andersen-DOCS-code-260127---ATH-horn/32fcf104-cf50-4d8e-94a3-202987e336ae/scratchpad/test_parser.js\" 2>&1:*)",
       "Bash(open:*)",
       "Bash(gh auth status)",
-      "mcp__Desktop_Commander__read_file"
+      "mcp__Desktop_Commander__read_file",
+      "Bash(find:*)",
+      "Bash(du:*)",
+      "Bash(echo:*)",
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "Bash(node:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

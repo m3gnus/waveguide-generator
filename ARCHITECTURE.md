@@ -237,7 +237,7 @@ export class HornViewer {
 
 ### Module 4: Acoustic Solver Interface (`src/solver/`)
 
-**Purpose:** Bridge between the browser app and BEM acoustic simulation. Phase 2+ module.
+**Purpose:** Bridge between the browser app and BEM acoustic simulation. Phase 4 module.
 
 **Architecture decision: How to run BEM from the browser**
 
@@ -287,48 +287,44 @@ GET /api/results/{job_id}
   }
 ```
 
-**bempp-cl solver outline (server/solver.py):**
-```python
-import bempp.api
-import numpy as np
-import meshio
+**BEM Solver Integration - Phase 4 Update**
 
-def solve_horn(stl_path, f1, f2, num_freq, sim_type):
-    """
-    Solve exterior Helmholtz problem for horn radiation.
+Phase 4 of the ATH Horn system now includes a complete BEM solver integration. The implementation follows the architecture pattern established in Phase 2, with:
 
-    sim_type 1: Infinite baffle (only exterior half-space)
-    sim_type 2: Free-standing (full exterior)
-    """
-    mesh = meshio.read(stl_path)
-    vertices = mesh.points.T
-    elements = mesh.cells_dict["triangle"].T.astype("uint32")
-    grid = bempp.api.Grid(vertices, elements)
+1. **Modular BEM Interface**: The `src/solver/` module provides a clean API for BEM simulations with:
+   - HTTP client (`client.js`) for communication with Python backend
+   - Mesh conversion utilities (`meshExport.js`) that prepare geometries for BEM simulation with proper surface tags
+   - Result parsing (`resultParser.js`) that transforms raw solver output into structured acoustic data
+   - Connection status management (`status.js`) for UI feedback
 
-    space = bempp.api.function_space(grid, "P", 1)
-    c = 343.0  # speed of sound m/s
+2. **BEM-ready Export Pipeline**: The system now supports:
+   - Gmsh .msh export with proper surface tags for boundary conditions
+   - Mesh validation to ensure compatibility with BEM solvers
+   - Variable mesh density control (as requested in Phase 3)
 
-    frequencies = np.logspace(np.log10(f1), np.log10(f2), num_freq)
-    results = {}
+3. **Acoustic Output Generation**: The system produces:
+   - On-axis frequency response
+   - Polar/directivity data (horizontal, vertical, diagonal)
+   - Phase response
+   - Optional impedance or throat loading metrics
 
-    for freq in frequencies:
-        k = 2 * np.pi * freq / c
-        # Set up Burton-Miller formulation (combined field)
-        slp = bempp.api.operators.boundary.helmholtz.single_layer(space, space, space, k)
-        dlp = bempp.api.operators.boundary.helmholtz.double_layer(space, space, space, k)
-        identity = bempp.api.operators.boundary.sparse.identity(space, space, space)
+4. **Integration with Existing Workflow**: The BEM solver pipeline:
+   - Geometry → mesh conversion → BEM solve → acoustic results
+   - Supports single and multi-frequency sweeps
+   - Ensures numerical stability with reasonable defaults
 
-        # Neumann BC: normal velocity = v_n at throat, 0 elsewhere
-        # ... (boundary condition setup)
+5. **Validation & Reference Comparison**: The system:
+   - Validates simulation results against known ATH/ABEC reference simulations when available
+   - Documents assumptions and limitations of the current solver setup
 
-        lhs = 0.5 * identity + dlp - 1j / k * slp
-        solution, info = bempp.api.linalg.gmres(lhs, rhs, tol=1e-5)
+**Implementation Details:**
 
-        # Evaluate far-field directivity
-        # ... (far-field evaluation on angular grid)
+The BEM solver integration uses bempp-cl as the primary backend, which is compatible with Gmsh .msh files. The system implements proper boundary conditions:
+- **Rigid (sound-hard) boundary conditions** on horn walls (Neumann BC)
+- **Acoustic source** at the throat (pressure or velocity source) 
+- **Open radiation condition** at the mouth / exterior domain (Robin BC)
 
-    return results
-```
+The system maintains backward compatibility with existing functionality while providing a stable foundation for automated optimization in Phase 5.
 
 ---
 
@@ -523,8 +519,33 @@ This eliminates the current pattern of hand-maintained HTML + JS ID references f
 3. Implement CSV profile export (matching ATH's `_profiles_throat.csv` format)
 4. Add OBJ export for CAD import
 5. Add batch export (all formats at once, as .zip)
+6. Research BEM tools and their requirements for simulation readiness
 
 **Validation:** Generated .geo files open correctly in Gmsh. Generated ABEC projects load in ABEC3. CSV profiles match ATH reference output.
+
+### BEM Simulation Research & Prep
+
+**Research Goals:**
+1. Research existing BEM tools and scripts suitable for horn acoustics:
+   - https://github.com/bempp/bempp-cl  
+   - https://github.com/mscroggs/bempp-acoustic-tutorials  
+   - https://github.com/kurtjcu/PHM-PythonHornModelling  
+   - https://github.com/Any2HRTF/Mesh2HRTF  
+   - https://github.com/TomMunoz3772/electroacPy  
+
+2. Determine for each solver:
+   - Required mesh file formats (STL, OBJ, MSH, VTK, etc.)  
+   - Mesh definition guidelines (triangles, resolution, manifold conditions)  
+   - Boundary condition setup (acoustic source at throat, solid horn walls, etc.)  
+   - Solver-specific preprocessing or metadata needs
+
+3. Update Phase 3 architecture documentation with:
+   - Summary of findings for each BEM tool
+   - File format compatibility matrix  
+   - Boundary condition requirements
+   - Next steps for integrating BEM-ready export based on findings
+
+**Validation:** Research documentation provides clear guidance for implementing BEM-ready exports.
 
 ---
 
@@ -826,6 +847,7 @@ These will be ported to JavaScript in Phase 5 for in-browser scoring.
 | **3** | Full export suite (Gmsh, ABEC, CSV, OBJ) | Feed designs directly into simulation tools |
 | **4** | BEM solver, results viewer | Simulate horns without leaving the browser |
 | **5** | Optimization dashboard, batch sweeps | Automatically explore design space, find optimal horns |
+| **6** | UX workflows, presets, validation, server hardening | Trustworthy design tool for production use |
 
 ### Key Technical Constraints
 
@@ -849,3 +871,284 @@ Rollback: toroidal fold at mouth rim, curls in -Y direction
   vy = axialPosition
   vz = radius * sin(azimuthalAngle)
 ```
+
+## 10. Phase 6 - UX, Presets, Validation & Production Readiness
+
+### Overview
+
+Phase 6 transforms the ATH Horn Design Platform from a powerful engine into a usable, trustworthy design tool by implementing:
+
+1. **User-facing workflows** - Clear end-to-end design processes
+2. **Presets and reproducibility** - Fast starting points and configuration management  
+3. **Validation against known references** - Building trust in results
+4. **Production hardening** - Server reliability for Unraid environments
+
+### New Modules
+
+#### Workflow Module (`src/workflow/`)
+- Implements canonical workflow state machine
+- Tracks current stage, inputs, outputs, and errors/warnings
+- Ensures every step produces inspectable intermediate artifacts:
+  - Geometry
+  - Mesh  
+  - Boundary tags
+  - Solver config
+  - Results
+
+#### Presets Module (`src/presets/`)
+- Enables fast starting points and reproducibility
+- Includes ATH-style presets and known-good horn archetypes
+- Supports import/export as JSON with full round-trip safety
+- Presets include geometry parameters, mesh parameters, BEM settings, and default optimization objectives
+
+#### Validation Module (`src/validation/`)
+- Builds trust in solver and optimization results
+- Supports ATH/ABEC reference comparisons and published horn responses
+- Implements difference metrics (SPL error, phase error, DI error)
+- Provides pass/fail thresholds and structured reporting
+
+#### Server Hardening
+- Job persistence for resuming interrupted simulations/optimizations
+- Resource guards (max mesh size, max concurrent BEM jobs)
+- Memory estimation warnings
+- Structured logging for geometry, meshing, solver, and optimization
+
+### Documentation Updates
+
+#### New Documentation Files
+- `DEPLOYMENT_UNRAID.md` - Deployment guide for Unraid environments with job persistence and resource guards
+- `VALIDATION.md` - Detailed validation methodology and reference comparison strategy  
+- `PRESETS.md` - Preset system documentation with examples and import/export functionality
+
+### Integration Points
+
+1. **Workflow Integration** - All modules now integrate into a canonical workflow state machine
+2. **Preset Integration** - Users can load presets to start new designs or reproduce previous work
+3. **Validation Integration** - Results are automatically validated against reference data  
+4. **Server Hardening** - System ensures stable operation in Unraid environments with resource limits and structured logging
+
+### Expected Outcome
+
+After Phase 6 implementation, the system will be:
+- **Usable**: Clear workflows and user interfaces for all design steps
+- **Trustworthy**: Validation against known references builds confidence in results  
+- **Reproducible**: Presets enable fast starting points and exact reproduction
+- **Production-Ready**: Server hardening ensures reliable operation on Unraid systems
+
+### Validation & Trust
+
+| Check | Method |
+|-------|--------|
+| Workflow integrity | End-to-end workflow testing with all stages |
+| Preset round-trip | Import/export cycles preserve all configuration data |
+| Validation accuracy | Compare results against ATH/ABEC reference data |
+| Server stability | Long-running tests on Unraid-like environments |
+| Resource management | Memory usage and job limits enforced properly |
+
+### Future Enhancements
+
+1. **Advanced Workflow** - Multi-stage workflows with branching and conditional steps
+2. **Enhanced Presets** - Cloud sync, preset categories, and user customization  
+3. **Expanded Validation** - Dynamic threshold adjustment and additional acoustic metrics
+4. **Production Monitoring** - Health checks, performance metrics, and alerting systems
+
+### Technical Constraints for Phase 6
+
+- **No new horn math models** - Focus on usability and trust, not new acoustic physics
+- **No new BEM formulations** - Maintain existing solver integration  
+- **No performance over-optimization** - Prioritize clarity and reliability
+- **Backward compatibility** - All existing functionality must continue to work
+
+### Coordinate System (Reference)
+
+```
+Y-axis: Axial direction (throat at Y=0, mouth at Y=L or Y=calculated)
+X-axis: Horizontal (r * cos(p))
+Z-axis: Vertical (r * sin(p))
+
+Enclosure: extends in -Y direction from mouth (behind baffle)
+Rollback: toroidal fold at mouth rim, curls in -Y direction
+
+3D vertex mapping:
+  vx = radius * cos(azimuthalAngle)
+  vy = axialPosition
+  vz = radius * sin(azimuthalAngle)
+```
+
+## Frontend Element Reference
+
+This section documents the actual frontend UI elements used in the application, which were identified during E2E testing and differ slightly from initial assumptions:
+
+| Element ID | Description | Usage |
+|------------|-------------|-------|
+| `#render-btn` | Button to update the horn model geometry | Triggered by user interaction or E2E tests |
+| `#export-btn` | Button to export STL mesh | Triggered by user interaction or E2E tests |
+| `#export-config-btn` | Button to export ATH configuration files | Triggered by user interaction |
+| `#export-csv-btn` | Button to export CSV profile data | Triggered by user interaction |
+| `#export-geo-btn` | Button to export Gmsh .geo mesh files | Triggered by user interaction or E2E tests |
+| `#ui-panel` | Main UI panel container | Contains all parameter and control elements |
+| `#canvas-container` | Container for the 3D visualization canvas | Display area for rendered horn geometry |
+| `#export-prefix` | Input field for export filename prefix | Used in export operations |
+| `#export-counter` | Input field for export counter | Used in export operations |
+| `#load-config-btn` | Button to load configuration files | Triggered by user interaction |
+| `#config-upload` | Hidden file input for config uploads | Used in configuration loading |
+| `#display-mode` | Select dropdown for display modes | Changes visualization mode |
+| `#param-container` | Container for parameter controls | Dynamically populated with UI elements |
+| `#stats` | Display area for geometry statistics | Shows vertex and triangle counts |
+| `#zoom-in`, `#zoom-out` | Zoom controls for 3D view | Controls camera zoom |
+| `#camera-toggle` | Toggle between perspective and orthographic views | Switches camera projection |
+| `#focus-horn` | Button to center view on horn | Resets camera position |
+| `#zoom-reset` | Reset button for camera view | Returns to default zoom and view |
+
+## 11. Phase 7 - AI-Assisted Design & Learning Layer
+
+### Overview
+
+Phase 7 extends the ATH Horn Design Platform beyond deterministic optimization into AI-assisted design guidance.
+
+### New Modules
+
+#### AI Knowledge Module (`src/ai/knowledge/`)
+- Captures and structures knowledge generated by the system for learning purposes
+- Implements storage of geometry parameters, mesh parameters, solver settings, objective scores, and derived metrics
+- Ensures fully reproducible, versioned schema with backward compatibility
+
+#### AI Surrogate Modeling Module (`src/ai/surrogate/`)
+- Reduces reliance on expensive BEM runs through surrogate models
+- Supports simple regression models (linear, polynomial) and Gaussian Process for small datasets
+- Provides approximate predictions of on-axis response, DI trend, and ripple likelihood with uncertainty estimates
+
+#### AI Optimization Guidance Module (`src/ai/optimization/`)
+- Guides optimization rather than brute-forcing it
+- Implements Bayesian Optimization and CMA-ES (AI-guided initialization) 
+- Enables parameter importance ranking, adaptive bounds tightening, and early termination suggestions
+
+#### AI Insights Module (`src/ai/insights/`)
+- Generates human-readable design guidance and explanations
+- Provides textual explanations like "Mouth flare dominates DI stability above 3 kHz"
+- Offers sensitivity summaries and trade-off explanations
+
+#### AI-Guided Preset Evolution (`src/ai/presets/`)
+- Allows presets to improve over time through AI analysis
+- Tracks preset performance history and suggests refinements
+
+### Documentation Updates
+
+#### New Documentation Files
+- `AI_GUIDANCE.md` - Detailed documentation of AI-assisted design features and workflows
+- `DATA_MODEL.md` - Updated data model schema for AI knowledge capture
+
+### Integration Points
+
+1. **Knowledge Capture** - All system outputs are captured and stored for learning
+2. **Surrogate Modeling** - Reduces BEM simulation costs by predicting outcomes
+3. **Optimization Guidance** - AI enhances existing optimization algorithms
+4. **Insight Generation** - Provides human-readable explanations of design outcomes
+5. **Preset Evolution** - AI improves preset quality over time
+
+### Expected Outcome
+
+After Phase 7 implementation, the system will be:
+- **Learning**: System learns from previous simulations and optimizations
+- **Guided**: AI suggests better parameter regions to explore
+- **Accelerated**: Convergence is faster through surrogate models and AI guidance  
+- **Explainable**: Human-readable design insights explain why designs are good or bad
+
+### AI Design Principles
+
+1. **Assist, Don't Replace** - AI must assist engineering judgment, not replace it
+2. **Traceability** - All AI suggestions must be traceable to data and logic
+3. **Deterministic Outputs** - AI-generated insights must be deterministic and reproducible
+4. **No Black Boxes** - All models must have explanations for their outputs
+
+### Technical Constraints for Phase 7
+
+- **No physics replacement** - AI cannot replace physics with machine learning models
+- **No opaque models** - All AI decisions must have explanations and traceability
+- **No internet connectivity requirement** - AI operates entirely locally
+- **No silent overwrites** - AI never silently overwrites presets or configurations
+
+### Coordinate System (Reference)
+
+```
+Y-axis: Axial direction (throat at Y=0, mouth at Y=L or Y=calculated)
+X-axis: Horizontal (r * cos(p))
+Z-axis: Vertical (r * sin(p))
+
+Enclosure: extends in -Y direction from mouth (behind baffle)
+Rollback: toroidal fold at mouth rim, curls in -Y direction
+
+3D vertex mapping:
+  vx = radius * cos(azimuthalAngle)
+  vy = axialPosition
+  vz = radius * sin(azimuthalAngle)
+```
+
+
+## Event Bus Contract (Phase 0)
+
+The event bus is a minimal synchronous pub/sub system with:
+- emit(eventName, payload)
+- on(eventName, handler)
+- off(eventName, handler)
+
+No external libraries.
+
+### Phase 5: Optimization & Batch Processing
+
+**Goal:** Automated parameter exploration and design ranking.
+
+**Steps:**
+1. Implement parameter sweep generator (linspace over selected params)
+2. Implement batch solve queue
+3. Implement acoustic quality scoring (port `rate_radimp.py` logic to JS)
+4. Add optimization dashboard (sortable table of designs with scores)
+5. Add parameter sensitivity visualization (which params matter most)
+6. Add design comparison view (overlay two horn profiles)
+
+**Architecture:**
+```
+src/optimization/
+  index.js          -- Public API
+  parameterSpace.js -- Parameter bounds and definitions  
+  objectiveFunctions.js -- Acoustic quality scoring functions
+  engine.js         -- Optimization loop and algorithms
+  results.js        -- Result storage and management
+  api.js            -- Clean API for external integration
+```
+
+**Key Features:**
+- **Parameter Space Definition:** Extracts parameter bounds from `src/config/schema.js` and supports constraints and step sizes
+- **Objective Functions:** Implements reusable acoustic objective functions:
+  - Smooth on-axis frequency response (minimize ripple)
+  - Targeted directivity control (beamwidth vs frequency) 
+  - Minimized diffraction/ripple in SPL response
+  - Phase smoothness or group delay consistency
+  - Optional throat impedance matching (with weighted multi-objective scoring)
+- **Optimization Engine:** Implements deterministic methods:
+  - Grid search (for small parameter spaces)
+  - Random sampling (for larger spaces) 
+  - Coordinate descent (for single parameter optimization)
+  - Extensible design for future algorithms (GA, Bayesian, CMA-ES)
+- **Result Management:** Stores optimization results with:
+  - Parameter sets (all parameter combinations)
+  - Acoustic metrics (frequency response, directivity, phase, impedance)
+  - Objective scores (combined and individual)
+  - Reproducible runs with seeded randomization where applicable
+- **API Integration:** Exposes clean API: `optimizeHorn(config, objectives, bounds, options)`
+
+**Integration Points:**
+- Existing geometry modules (OSSE, R-OSSE, OS-GOS)
+- BEM solver interface (`src/solver/`)
+- Configuration management system
+- Export pipeline (for generating Gmsh meshes)
+- Results viewer (for displaying optimization outcomes)
+
+**Expected Outcome:**
+After implementation, the system will be able to:
+- Automatically explore horn design variants
+- Evaluate designs using BEM-derived acoustic metrics  
+- Rank and compare horn designs objectively
+- Serve as a foundation for future UI-driven or AI-assisted design workflows
+
+**Validation:** Batch sweep of N designs completes without memory leaks. Scoring matches Python `rate_radimp.py` output.

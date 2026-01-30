@@ -161,6 +161,30 @@ h3 {
     box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
 }
 
+/* Toggle button styling */
+.toggle-btn {
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.toggle-btn:hover {
+    background: var(--accent-color);
+    color: white;
+    border-color: var(--accent-color);
+}
+
 label[title] {
     position: relative;
 }
