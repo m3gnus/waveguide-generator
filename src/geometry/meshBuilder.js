@@ -1,5 +1,4 @@
-import { calculateROSSE } from './rosse.js';
-import { calculateOSSE } from './osse.js';
+import { calculateROSSE, calculateOSSE, calculateOSGOS } from './hornModels.js';
 import { applyMorphing } from './morphing.js';
 import { addRollbackGeometry } from './rollback.js';
 import { addEnclosureGeometry } from './enclosure.js';
@@ -17,16 +16,32 @@ export function buildHornMesh(params) {
     const vertices = [];
     const indices = [];
 
+    // Support for variable mesh resolution
+    const throatResolution = params.throatResolution || radialSteps;
+    const mouthResolution = params.mouthResolution || radialSteps;
+
     for (let j = 0; j <= lengthSteps; j++) {
         const t = j / lengthSteps;
         const tActual = params.type === 'R-OSSE' ? t * (params.tmax || 1.0) : t;
 
-        for (let i = 0; i <= radialSteps; i++) {
-            const p = (i / radialSteps) * Math.PI * 2;
+        // Adjust radial steps based on axial position for variable resolution
+        let currentRadialSteps = radialSteps;
+        if (params.type === 'OS-GOS' && (params.throatResolution || params.mouthResolution)) {
+            // Gradually transition from throat resolution to mouth resolution
+            const ratio = t;
+            currentRadialSteps = Math.round(throatResolution + (mouthResolution - throatResolution) * ratio);
+            // Ensure we have at least 4 steps to avoid degenerate meshes
+            currentRadialSteps = Math.max(4, currentRadialSteps);
+        }
+
+        for (let i = 0; i <= currentRadialSteps; i++) {
+            const p = (i / currentRadialSteps) * Math.PI * 2;
 
             let profile;
             if (params.type === 'R-OSSE') {
                 profile = calculateROSSE(tActual, p, params);
+            } else if (params.type === 'OS-GOS') {
+                profile = calculateOSGOS(tActual * params.L, p, params);
             } else {
                 profile = calculateOSSE(tActual * params.L, p, params);
                 if (params.h > 0) {

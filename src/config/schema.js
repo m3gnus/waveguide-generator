@@ -1,4 +1,3 @@
-
 export const PARAM_SCHEMA = {
     'R-OSSE': {
         R: { type: 'expression', label: 'Mouth Radius', unit: 'mm', default: '140 * (abs(cos(p)/1.6)^3 + abs(sin(p)/1)^4)^(-1/4.5)', tooltip: 'Mouth radius as function of azimuthal angle p. Can be constant or expression.' },
@@ -22,6 +21,22 @@ export const PARAM_SCHEMA = {
         n: { type: 'range', label: 'Curvature', min: 1, max: 10, step: 0.001, default: 4.158, tooltip: 'Controls profile curvature' },
         q: { type: 'range', label: 'Truncation', min: 0.1, max: 2, step: 0.001, default: 0.991, tooltip: 'Truncation factor (< 1 shortens horn)' },
         h: { type: 'range', label: 'Shape Factor', min: 0, max: 10, step: 0.1, default: 0.0, tooltip: 'Additional shape control parameter' },
+    },
+    'OS-GOS': {
+        L: { type: 'range', label: 'Axial Length', unit: 'mm', min: 10, max: 500, step: 1, default: 120, tooltip: 'Total axial length of horn' },
+        a: { type: 'expression', label: 'Coverage Angle', unit: 'deg', default: '48.5 - 5.6*cos(2*p)^5 - 31*sin(p)^12', tooltip: 'Coverage angle as function of p. Controls directivity pattern.' },
+        a0: { type: 'range', label: 'Throat Angle', unit: 'deg', min: 0, max: 60, step: 0.1, default: 15.5, tooltip: 'Initial throat angle in degrees' },
+        r0: { type: 'range', label: 'Throat Radius', unit: 'mm', min: 1, max: 50, step: 0.1, default: 12.7, tooltip: 'Throat radius (typically matches driver radius)' },
+        k: { type: 'range', label: 'Expansion', min: 0.1, max: 15, step: 0.1, default: 7.0, tooltip: 'Controls expansion rate' },
+        s: { type: 'expression', label: 'Flare', default: '0.58 + 0.2*cos(p)^2', tooltip: 'Flare parameter controlling mouth opening' },
+        n: { type: 'range', label: 'Curvature', min: 1, max: 10, step: 0.001, default: 4.158, tooltip: 'Controls profile curvature' },
+        q: { type: 'range', label: 'Truncation', min: 0.1, max: 2, step: 0.001, default: 0.991, tooltip: 'Truncation factor (< 1 shortens horn)' },
+        h: { type: 'range', label: 'Shape Factor', min: 0, max: 10, step: 0.1, default: 0.0, tooltip: 'Additional shape control parameter' },
+        gosType: { type: 'select', label: 'GOS Type', options: [
+            { value: 0, label: 'Standard GOS' },
+            { value: 1, label: 'Enhanced GOS' }
+        ], default: 0 },
+        gosFactor: { type: 'range', label: 'GOS Factor', min: 0.1, max: 5, step: 0.1, default: 1.0, tooltip: 'Controls GOS shape characteristics' },
     },
     'MORPH': {
         morphTarget: {

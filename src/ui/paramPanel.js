@@ -1,4 +1,3 @@
-
 import { PARAM_SCHEMA } from '../config/schema.js';
 import { GlobalState } from '../state.js';
 import { validateParams } from '../config/validator.js';
@@ -194,7 +193,164 @@ export class ParamPanel {
                 row.appendChild(slider);
             }
         } else if (def.type === 'expression') {
-            // Create wrapper for expression input with indicator
+            // Create wrapper for expression input with indicator and toggle button
+            const wrapper = document.createElement('div');
+            wrapper.style.display = 'flex';
+            wrapper.style.alignItems = 'center';
+            wrapper.style.gap = '4px';
+            wrapper.style.flex = '1';
+
+            // Expression indicator badge
+            const badge = document.createElement('span');
+            badge.textContent = 'ƒx';
+            badge.className = 'expression-badge';
+            badge.title = 'This field accepts mathematical expressions (e.g., sin, cos, abs, ^)';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentValue;
+            input.className = 'expression-input';
+            input.style.flex = '1';
+
+            // Add toggle button
+            const toggleBtn = document.createElement('button');
+            toggleBtn.textContent = 'f';
+            toggleBtn.className = 'toggle-btn';
+            toggleBtn.style.width = '24px';
+            toggleBtn.style.height = '24px';
+            toggleBtn.style.padding = '0';
+            toggleBtn.style.fontSize = '12px';
+            toggleBtn.style.marginLeft = '4px';
+            toggleBtn.title = 'Toggle between expression and slider mode';
+
+            // Store the current mode in state - we'll use a simple approach for now
+            toggleBtn.dataset.mode = 'expression'; // Default mode
+
+            toggleBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.toggleExpressionMode(key, toggleBtn);
+            };
+
+            input.onchange = (e) => {
+                this.updateParam(key, e.target.value);
+            };
+
+            // Add validation feedback
+            input.oninput = (e) => {
+                this.validateExpression(e.target.value, badge);
+            };
+
+            wrapper.appendChild(badge);
+            wrapper.appendChild(input);
+            wrapper.appendChild(toggleBtn);
+            row.appendChild(wrapper);
+        } else if (def.type === 'select') {
+            const select = document.createElement('select');
+            def.options.forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt.value;
+                option.textContent = opt.label;
+                if (String(opt.value) === String(currentValue)) option.selected = true;
+                select.appendChild(option);
+            });
+            select.onchange = (e) => {
+                const val = isNaN(parseFloat(e.target.value)) ? e.target.value : parseFloat(e.target.value);
+                this.updateParam(key, val);
+            };
+            row.appendChild(select);
+        }
+
+        return row;
+    }
+
+    toggleExpressionMode(key, toggleBtn) {
+        // For now, just swap between expression mode and slider mode
+        // In a more complex implementation, we would store the mode in state and persist it
+        
+        const state = GlobalState.get();
+        const currentValue = state.params[key];
+        
+        // Find the row containing the toggle button
+        const row = toggleBtn.parentElement.parentElement;
+        
+        // Determine current mode from the toggle button's dataset
+        const isExpressionMode = toggleBtn.dataset.mode === 'expression';
+        
+        if (isExpressionMode) {
+            // Convert to slider mode - remove existing inputs and create new ones
+            const expressionInput = row.querySelector('input[type="text"]');
+            const badge = row.querySelector('.expression-badge');
+            
+            // Remove existing elements
+            if (expressionInput) expressionInput.remove();
+            if (badge) badge.remove();
+            
+            // Create slider and numeric input
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = -100;
+            slider.max = 100;
+            slider.step = 0.1;
+            slider.value = parseFloat(currentValue) || 0;
+            slider.style.flex = '1';
+            
+            const numInput = document.createElement('input');
+            numInput.type = 'number';
+            numInput.value = parseFloat(currentValue) || 0;
+            numInput.style.width = '60px';
+            
+            // Sync numeric input with slider
+            slider.oninput = (e) => {
+                numInput.value = e.target.value;
+                this.updateParam(key, parseFloat(e.target.value));
+            };
+            
+            numInput.oninput = (e) => {
+                slider.value = e.target.value;
+                this.updateParam(key, parseFloat(e.target.value));
+            };
+            
+            // Create wrapper for slider and numeric input
+            const wrapper = document.createElement('div');
+            wrapper.style.display = 'flex';
+            wrapper.style.gap = '4px';
+            wrapper.style.flex = '1';
+            
+            wrapper.appendChild(slider);
+            wrapper.appendChild(numInput);
+            
+            // Add toggle button back
+            const newToggleBtn = document.createElement('button');
+            newToggleBtn.textContent = 's';
+            newToggleBtn.className = 'toggle-btn';
+            newToggleBtn.style.width = '28px';
+            newToggleBtn.style.height = '28px';
+            newToggleBtn.style.padding = '0';
+            newToggleBtn.style.fontSize = '12px';
+            newToggleBtn.style.marginLeft = '4px';
+            newToggleBtn.title = 'Toggle between expression and slider mode';
+            newToggleBtn.dataset.mode = 'slider'; // Update mode
+            
+            newToggleBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.toggleExpressionMode(key, newToggleBtn);
+            };
+            
+            wrapper.appendChild(newToggleBtn);
+            row.appendChild(wrapper);
+            
+        } else {
+            // Convert to expression mode - remove slider and numeric input, create expression input
+            const slider = row.querySelector('input[type="range"]');
+            const numInput = row.querySelector('input[type="number"]');
+            const oldToggleBtn = row.querySelector('.toggle-btn');
+            
+            // Remove existing elements
+            if (slider) slider.remove();
+            if (numInput) numInput.remove();
+            if (oldToggleBtn) oldToggleBtn.remove();
+            
+            // Create expression input and badge
             const wrapper = document.createElement('div');
             wrapper.style.display = 'flex';
             wrapper.style.alignItems = 'center';
@@ -222,26 +378,29 @@ export class ParamPanel {
                 this.validateExpression(e.target.value, badge);
             };
 
+            // Create new toggle button
+            const newToggleBtn = document.createElement('button');
+            newToggleBtn.textContent = 'f';
+            newToggleBtn.className = 'toggle-btn';
+            newToggleBtn.style.width = '28px';
+            newToggleBtn.style.height = '28px';
+            newToggleBtn.style.padding = '0';
+            newToggleBtn.style.fontSize = '12px';
+            newToggleBtn.style.marginLeft = '4px';
+            newToggleBtn.title = 'Toggle between expression and slider mode';
+            newToggleBtn.dataset.mode = 'expression'; // Update mode
+            
+            newToggleBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.toggleExpressionMode(key, newToggleBtn);
+            };
+            
             wrapper.appendChild(badge);
             wrapper.appendChild(input);
+            wrapper.appendChild(newToggleBtn);
+            
             row.appendChild(wrapper);
-        } else if (def.type === 'select') {
-            const select = document.createElement('select');
-            def.options.forEach(opt => {
-                const option = document.createElement('option');
-                option.value = opt.value;
-                option.textContent = opt.label;
-                if (String(opt.value) === String(currentValue)) option.selected = true;
-                select.appendChild(option);
-            });
-            select.onchange = (e) => {
-                const val = isNaN(parseFloat(e.target.value)) ? e.target.value : parseFloat(e.target.value);
-                this.updateParam(key, val);
-            };
-            row.appendChild(select);
         }
-
-        return row;
     }
 
     validateExpression(expr, badge) {
