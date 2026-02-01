@@ -23,8 +23,10 @@ export function exportProfilesCSV(vertices, params) {
 }
 
 /**
- * Export geometry in Gmsh .geo format
+ * Export geometry in Gmsh .geo format (simple version)
  * Format: Point(index)={x,y,z,meshSize};
+ *
+ * NOTE: For BEM usage with physical surfaces, prefer `exportHornToGeo` from msh.js
  */
 export function exportGmshGeo(vertices, params) {
     const { angularSegments, lengthSegments } = params;

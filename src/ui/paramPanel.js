@@ -45,7 +45,7 @@ export class ParamPanel {
         const typeSelect = document.createElement('select');
         typeSelect.id = 'model-type'; // Keep ID for compatibility if needed, but not strictly necessary
 
-        ['R-OSSE', 'OSSE'].forEach(t => {
+        ['R-OSSE', 'OSSE', 'OS-GOS'].forEach(t => {
             const opt = document.createElement('option');
             opt.value = t;
             opt.textContent = t;
@@ -71,11 +71,9 @@ export class ParamPanel {
             this.container.appendChild(section);
         }
 
-        // --- Morphing (only for OSSE in original, but schema has it separate) ---
-        // Original logic: Morph/Enclosure only shown for OSSE.
-        // We can respect that or make it available for all.
+        // --- Morphing (for OSSE and OS-GOS) ---
         // Architecture ref says: "Improve morphing... OSSE model".
-        if (type === 'OSSE') {
+        if (type === 'OSSE' || type === 'OS-GOS') {
             const morphSection = this.createDetailsSection('Morphing & Corner', 'osse-morph-details');
             const morphSchema = PARAM_SCHEMA.MORPH;
             for (const [key, def] of Object.entries(morphSchema)) {

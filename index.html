@@ -24,44 +24,109 @@
     <div id="ui-panel">
         <h1>ATH Visualizer</h1>
 
-        <div class="section">
-            <h3>EXPORT SETTINGS</h3>
-            <div class="input-row">
-                <label>Prefix</label>
-                <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
-            </div>
-            <div class="input-row">
-                <label>Counter</label>
-                <input type="number" id="export-counter" value="1" min="1" step="1">
-            </div>
+        <!-- Tab Navigation -->
+        <div class="tab-navigation">
+            <button class="tab-btn active" data-tab="geometry">Geometry</button>
+            <button class="tab-btn" data-tab="simulation">Simulation</button>
         </div>
 
-        <div class="section">
-            <h3>ACTIONS</h3>
-            <button id="load-config-btn" class="secondary">Load Config (.txt)</button>
-            <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
-            <button id="render-btn">Update Model</button>
-            <button id="export-btn" class="secondary">Export STL</button>
-            <button id="export-config-btn" class="secondary">Export ATH Config</button>
-            <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
-            <button id="export-geo-btn" class="secondary">Export Gmsh .geo</button>
-
-
-            <div class="checkbox-group" style="margin-top: 15px;">
-                <input type="checkbox" id="live-update" checked>
-                <label for="live-update">Real-time Updates</label>
+        <!-- Geometry Tab Content -->
+        <div id="geometry-tab" class="tab-content active">
+            <div class="section">
+                <h3>EXPORT SETTINGS</h3>
+                <div class="input-row">
+                    <label>Prefix</label>
+                    <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
+                </div>
+                <div class="input-row">
+                    <label>Counter</label>
+                    <input type="number" id="export-counter" value="1" min="1" step="1">
+                </div>
             </div>
 
-            <label>Display Mode</label>
-            <select id="display-mode">
-                <option value="standard">Standard (Metal)</option>
-                <option value="zebra">Zebra Stripes</option>
-                <option value="grid">Grid / Wireframe</option>
-                <option value="curvature">Curvature Map</option>
-            </select>
+            <div class="section">
+                <h3>ACTIONS</h3>
+                <button id="load-config-btn" class="secondary">Load Config (.txt)</button>
+                <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
+                <button id="render-btn">Update Model</button>
+                <button id="export-btn" class="secondary">Export STL</button>
+                <button id="export-config-btn" class="secondary">Export ATH Config</button>
+                <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
+                <button id="export-geo-btn" class="secondary">Export Gmsh .geo</button>
+
+
+                <div class="checkbox-group" style="margin-top: 15px;">
+                    <input type="checkbox" id="live-update" checked>
+                    <label for="live-update">Real-time Updates</label>
+                </div>
+
+                <label>Display Mode</label>
+                <select id="display-mode">
+                    <option value="standard">Standard (Metal)</option>
+                    <option value="zebra">Zebra Stripes</option>
+                    <option value="grid">Grid / Wireframe</option>
+                    <option value="curvature">Curvature Map</option>
+                </select>
+            </div>
+
+            <div id="param-container"></div>
         </div>
 
-        <div id="param-container"></div>
+        <!-- Simulation Tab Content -->
+        <div id="simulation-tab" class="tab-content">
+            <div class="section">
+                <h3>BEM SOLVER STATUS</h3>
+                <div class="status-indicator">
+                    <span id="solver-status" class="status-dot"></span>
+                    <span id="solver-status-text">Checking connection...</span>
+                </div>
+                <p class="status-help">
+                    BEM solver requires Python backend running on localhost:8000
+                </p>
+            </div>
+
+            <div class="section">
+                <h3>SIMULATION SETTINGS</h3>
+                <div class="input-row">
+                    <label>Start Freq (Hz)</label>
+                    <input type="number" id="freq-start" value="100" min="20" max="20000" step="10">
+                </div>
+                <div class="input-row">
+                    <label>End Freq (Hz)</label>
+                    <input type="number" id="freq-end" value="10000" min="20" max="20000" step="10">
+                </div>
+                <div class="input-row">
+                    <label>Num Frequencies</label>
+                    <input type="number" id="freq-steps" value="50" min="10" max="200" step="1">
+                </div>
+                <div class="input-row">
+                    <label>Simulation Type</label>
+                    <select id="sim-type">
+                        <option value="1">Infinite Baffle</option>
+                        <option value="2">Free-Standing</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>ACTIONS</h3>
+                <button id="run-simulation-btn">Run BEM Simulation</button>
+                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
+                <div id="simulation-progress" style="display: none;">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="progress-text" class="progress-text">Initializing...</p>
+                </div>
+            </div>
+
+            <div id="results-container" style="display: none;">
+                <div class="section">
+                    <h3>SIMULATION RESULTS</h3>
+                    <div id="results-charts"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="stats">Vertices: 0 | Triangles: 0</div>

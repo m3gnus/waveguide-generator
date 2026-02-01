@@ -1,5 +1,4 @@
-import { calculateROSSE } from './rosse.js';
-import { calculateOSSE } from './osse.js';
+import { calculateROSSE, calculateOSSE } from './hornModels.js';
 
 export function addRollbackGeometry(vertices, indices, params, lengthSteps, radialSteps) {
     const lastRowStart = lengthSteps * (radialSteps + 1);

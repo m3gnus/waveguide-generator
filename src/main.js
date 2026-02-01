@@ -19,6 +19,7 @@ import {
 
 import { GlobalState } from './state.js';
 import { ParamPanel } from './ui/paramPanel.js';
+import { SimulationPanel } from './ui/simulationPanel.js';
 import { AppEvents } from './events.js';
 
 class App {
@@ -29,6 +30,7 @@ class App {
 
         // Init UI
         this.paramPanel = new ParamPanel('param-container');
+        this.simulationPanel = new SimulationPanel();
 
         this.setupScene();
         this.setupEventListeners();
@@ -39,6 +41,11 @@ class App {
         // Subscribe to state updates
         AppEvents.on('state:updated', (state) => {
             this.onStateUpdate(state);
+        });
+
+        // Subscribe to simulation events
+        AppEvents.on('simulation:mesh-requested', () => {
+            this.provideMeshForSimulation();
         });
     }
 
@@ -111,9 +118,11 @@ class App {
             { id: 'zoom-in', handler: () => this.zoom(0.8), type: 'click' },
             { id: 'zoom-out', handler: () => this.zoom(1.2), type: 'click' },
             { id: 'camera-toggle', handler: () => this.toggleCamera(), type: 'click' },
-            { id: 'zoom-reset', handler: () => {
-                if (this.controls) this.controls.reset();
-            }, type: 'click' },
+            {
+                id: 'zoom-reset', handler: () => {
+                    if (this.controls) this.controls.reset();
+                }, type: 'click'
+            },
             { id: 'focus-horn', handler: () => this.focusOnModel(), type: 'click' },
             { id: 'export-csv-btn', handler: () => this.exportProfileCSV(), type: 'click' },
             { id: 'export-geo-btn', handler: () => this.exportGmshGeo(), type: 'click' }
@@ -400,6 +409,24 @@ class App {
             extension: '.geo',
             contentType: 'text/plain',
             typeInfo: { description: 'Gmsh Geometry', accept: { 'text/plain': ['.geo'] } }
+        });
+    }
+
+    provideMeshForSimulation() {
+        if (!this.hornMesh) {
+            console.warn('No mesh available for simulation');
+            return null;
+        }
+
+        // Provide mesh data to simulation panel
+        const vertices = this.hornMesh.geometry.attributes.position.array;
+        const indices = this.hornMesh.geometry.index.array;
+
+        AppEvents.emit('simulation:mesh-ready', {
+            vertices: Array.from(vertices),
+            indices: Array.from(indices),
+            vertexCount: vertices.length / 3,
+            triangleCount: indices.length / 3
         });
     }
 
