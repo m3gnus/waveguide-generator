@@ -5,3 +5,21 @@ node_modules/
 dist/
 coverage/
 .env
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# IDE/Tool specific configs (optional to track)
+# Uncomment these if you don't want to share tool configs
+# .agent/
+# .agents/
+# .cline/
+# .gemini/
+# .claude/

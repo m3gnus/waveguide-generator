@@ -1,0 +1,39 @@
+{
+  "name": "ath-horn-design-platform",
+  "version": "1.0.0-alpha-7.5",
+  "description": "Interactive 3D visualization and optimization platform for horn design - Validation Phase (Playwright E2E)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev-server.js",
+    "build": "webpack --mode production",
+    "start": "node server.js",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest tests/unit",
+    "test:e2e": "playwright test tests/e2e/app.spec.js",
+    "test:e2e:headed": "playwright test tests/e2e/app.spec.js --headed",
+    "test:e2e:report": "playwright show-report"
+  },
+  "keywords": [
+    "3d",
+    "visualization",
+    "horn-design",
+    "optimization",
+    "acoustics",
+    "bem-solver"
+  ],
+  "author": "Magnus Andersen",
+  "license": "MIT",
+  "dependencies": {
+    "@openrouter/sdk": "^0.5.1",
+    "express": "^5.2.1",
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "playwright": "^1.58.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.4"
+  }
+}
