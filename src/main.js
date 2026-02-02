@@ -7,8 +7,8 @@ import {
     buildHornMesh
 } from './geometry/index.js';
 
-import { ATHConfigParser } from './config/index.js';
-import { generateATHConfigContent, exportProfilesCSV, exportGmshGeo } from './export/index.js';
+import { MWGConfigParser } from './config/index.js';
+import { generateMWGConfigContent, exportProfilesCSV, exportGmshGeo } from './export/index.js';
 import { saveFile } from './ui/fileOps.js';
 import {
     createScene,
@@ -113,7 +113,7 @@ class App {
         const buttonBindings = [
             { id: 'render-btn', handler: () => this.requestRender(), type: 'click' },
             { id: 'export-btn', handler: () => this.exportSTL(), type: 'click' },
-            { id: 'export-config-btn', handler: () => this.exportATHConfig(), type: 'click' },
+            { id: 'export-config-btn', handler: () => this.exportMWGConfig(), type: 'click' },
             { id: 'display-mode', handler: () => this.requestRender(), type: 'change' },
             { id: 'zoom-in', handler: () => this.zoom(0.8), type: 'click' },
             { id: 'zoom-out', handler: () => this.zoom(1.2), type: 'click' },
@@ -183,7 +183,7 @@ class App {
         const reader = new FileReader();
         reader.onload = (e) => {
             const content = e.target.result;
-            const parsed = ATHConfigParser.parse(content);
+            const parsed = MWGConfigParser.parse(content);
             if (parsed.type) {
                 // Convert string values to proper types
                 const typedParams = {};
@@ -367,14 +367,14 @@ class App {
         });
     }
 
-    exportATHConfig() {
+    exportMWGConfig() {
         const state = GlobalState.get();
         const exportParams = { type: state.type, ...state.params };
-        const content = generateATHConfigContent(exportParams);
+        const content = generateMWGConfigContent(exportParams);
         saveFile(content, 'config.txt', {
             extension: '.txt',
             contentType: 'text/plain',
-            typeInfo: { description: 'ATH Config', accept: { 'text/plain': ['.txt'] } }
+            typeInfo: { description: 'MWG Config', accept: { 'text/plain': ['.txt'] } }
         });
     }
 
@@ -415,18 +415,43 @@ class App {
     provideMeshForSimulation() {
         if (!this.hornMesh) {
             console.warn('No mesh available for simulation');
+            AppEvents.emit('simulation:mesh-ready', null);
             return null;
         }
 
         // Provide mesh data to simulation panel
-        const vertices = this.hornMesh.geometry.attributes.position.array;
-        const indices = this.hornMesh.geometry.index.array;
+        const geometry = this.hornMesh.geometry;
+        const vertices = geometry.attributes.position.array;
+
+        // Check if geometry has an index buffer
+        if (!geometry.index) {
+            console.error('[Simulation] Geometry has no index buffer - mesh may be non-indexed');
+            AppEvents.emit('simulation:mesh-ready', null);
+            return null;
+        }
+
+        const indices = geometry.index.array;
+        const state = GlobalState.get();
+
+        // Validate mesh data before sending
+        const vertexCount = vertices.length / 3;
+        const maxIndex = Math.max(...indices);
+        if (maxIndex >= vertexCount) {
+            console.error(`[Simulation] Invalid mesh: max index ${maxIndex} >= vertex count ${vertexCount}`);
+            console.error('[Simulation] This indicates the mesh was corrupted during Three.js processing');
+            AppEvents.emit('simulation:mesh-ready', null);
+            return null;
+        }
+
+        console.log(`[Simulation] Mesh validated: ${vertexCount} vertices, ${indices.length / 3} triangles`);
 
         AppEvents.emit('simulation:mesh-ready', {
             vertices: Array.from(vertices),
             indices: Array.from(indices),
-            vertexCount: vertices.length / 3,
-            triangleCount: indices.length / 3
+            vertexCount: vertexCount,
+            triangleCount: indices.length / 3,
+            params: state.params,
+            type: state.type
         });
     }
 

@@ -1,5 +1,5 @@
 """
-ATH Horn BEM Solver Backend
+MWG Horn BEM Solver Backend
 FastAPI application for running acoustic simulations
 """
 
@@ -19,7 +19,7 @@ except ImportError:
     SOLVER_AVAILABLE = False
     print("Warning: BEM solver not available. Install bempp-cl to enable simulations.")
 
-app = FastAPI(title="ATH Horn BEM Solver", version="1.0.0")
+app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0")
 
 # Enable CORS for frontend communication
 app.add_middleware(
@@ -34,10 +34,20 @@ app.add_middleware(
 jobs: Dict[str, Dict[str, Any]] = {}
 
 
+class BoundaryCondition(BaseModel):
+    type: str  # 'velocity', 'neumann', 'robin'
+    surfaceTag: int
+    value: Optional[float] = None
+    impedance: Optional[str] = None
+
+
 class MeshData(BaseModel):
     vertices: List[float]
     indices: List[int]
-    format: str = "stl"
+    surfaceTags: Optional[List[int]] = None  # Per-triangle surface tags
+    format: str = "bem"
+    boundaryConditions: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class SimulationRequest(BaseModel):
@@ -66,7 +76,7 @@ class SimulationResults(BaseModel):
 async def root():
     """Root endpoint"""
     return {
-        "name": "ATH Horn BEM Solver",
+        "name": "MWG Horn BEM Solver",
         "version": "1.0.0",
         "status": "running",
         "solver_available": SOLVER_AVAILABLE
@@ -165,11 +175,13 @@ async def run_simulation(job_id: str, request: SimulationRequest):
         # Initialize solver
         solver = BEMSolver()
         
-        # Convert mesh data
+        # Convert mesh data with surface tags
         jobs[job_id]["progress"] = 0.2
         mesh = solver.prepare_mesh(
             request.mesh.vertices,
-            request.mesh.indices
+            request.mesh.indices,
+            surface_tags=request.mesh.surfaceTags,
+            boundary_conditions=request.mesh.boundaryConditions
         )
         
         # Run simulation
@@ -191,10 +203,13 @@ async def run_simulation(job_id: str, request: SimulationRequest):
         jobs[job_id]["completed_at"] = datetime.now().isoformat()
         
     except Exception as e:
+        import traceback
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
         jobs[job_id]["failed_at"] = datetime.now().isoformat()
         print(f"Simulation error for job {job_id}: {e}")
+        print(f"Full traceback:")
+        traceback.print_exc()
 
 
 def update_progress(job_id: str, progress: float):
@@ -205,7 +220,7 @@ def update_progress(job_id: str, progress: float):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting ATH Horn BEM Solver Backend...")
+    print("Starting MWG Horn BEM Solver Backend...")
     print(f"Solver available: {SOLVER_AVAILABLE}")
     if not SOLVER_AVAILABLE:
         print("Warning: bempp-cl not installed. Install it to enable simulations.")
