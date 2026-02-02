@@ -1,2 +1,2 @@
 
-export { ATHConfigParser } from './parser.js';
+export { MWGConfigParser } from './parser.js';

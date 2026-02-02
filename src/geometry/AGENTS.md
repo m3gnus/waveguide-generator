@@ -9,7 +9,7 @@ All horn mathematics and 3D mesh generation. This is the core computational modu
 | File | Purpose | Complexity |
 |------|---------|------------|
 | `index.js` | Public API exports | Simple |
-| `hornModels.js` | OSSE, R-OSSE, OS-GOS calculations | Complex math |
+| `hornModels.js` | OSSE, R-OSSE calculations | Complex math |
 | `meshBuilder.js` | Three.js BufferGeometry construction | Medium |
 | `morphing.js` | Round-to-rectangular shape morphing | Medium |
 | `enclosure.js` | Enclosure box geometry | Simple |
@@ -22,7 +22,6 @@ All horn mathematics and 3D mesh generation. This is the core computational modu
 import {
   calculateROSSE,      // R-OSSE horn profile at (t, p)
   calculateOSSE,       // OSSE horn profile at (t, p)
-  calculateOSGOS,      // OS-GOS horn profile at (t, p)
   buildHornMesh,       // Generate complete horn mesh
   applyMorphing,       // Apply shape morphing
   addEnclosureGeometry,// Add enclosure box

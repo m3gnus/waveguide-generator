@@ -10,7 +10,7 @@ Generate output files in various formats from horn geometry and parameters.
 |------|---------|------------|
 | `index.js` | Public API exports | Simple |
 | `stl.js` | Binary/ASCII STL export | Simple |
-| `athConfig.js` | ATH config file export | Medium |
+| `mwgConfig.js` | MWG config file export | Medium |
 | `csv.js` | CSV profile data export | Simple |
 | `msh.js` | Gmsh .geo file export | Medium |
 | `profiles.js` | Profile extraction utilities | Simple |
@@ -20,7 +20,7 @@ Generate output files in various formats from horn geometry and parameters.
 ```javascript
 import {
   exportSTL,            // Export STL mesh
-  exportATHConfig,      // Export ATH config file
+  exportMWGConfig,      // Export MWG config file
   exportCSV,            // Export profile CSV
   exportGmsh,           // Export Gmsh .geo file
   getProfileData        // Extract profile coordinates
@@ -32,7 +32,7 @@ import {
 | Format | Extension | Use Case |
 |--------|-----------|----------|
 | STL | `.stl` | 3D printing, CAD import |
-| ATH Config | `.txt` | ATH software compatibility |
+| MWG Config | `.txt` | MWG software compatibility |
 | CSV | `.csv` | Profile data for analysis |
 | Gmsh | `.geo` | BEM mesh generation |
 
@@ -40,7 +40,7 @@ import {
 
 1. Change STL format → modify `stl.js`
 2. Add CSV column → modify `csv.js`
-3. Update config format → modify `athConfig.js`
+3. Update config format → modify `mwgConfig.js`
 
 ## For Complex Changes
 
@@ -57,8 +57,8 @@ Before adding a new export format:
 const stlBlob = exportSTL(mesh, { binary: true });
 downloadFile(stlBlob, 'horn.stl');
 
-// Export ATH config
-const configText = exportATHConfig(params);
+// Export MWG config
+const configText = exportMWGConfig(params);
 downloadFile(new Blob([configText]), 'horn.txt');
 
 // Export CSV
@@ -77,7 +77,7 @@ The Gmsh exporter generates `.geo` files with:
 ## Key DOM Elements
 
 - `#export-btn` — STL export
-- `#export-config-btn` — ATH config export
+- `#export-config-btn` — MWG config export
 - `#export-csv-btn` — CSV export
 - `#export-geo-btn` — Gmsh export
 - `#export-prefix` — Filename prefix

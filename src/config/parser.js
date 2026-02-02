@@ -1,5 +1,5 @@
 
-export class ATHConfigParser {
+export class MWGConfigParser {
     static parse(content) {
         const result = { type: null, params: {}, blocks: {} };
         const lines = content.split('\n').map(line => {
@@ -62,7 +62,7 @@ export class ATHConfigParser {
         // Normalize OSSE flat-key names to internal parameter names
         if (result.type === 'OSSE' && !result.params.a) {
             const p = result.params;
-            // Map flat ATH keys to the internal names the UI uses
+            // Map flat config keys to the internal names the UI uses
             if (p['Coverage.Angle']) { p.a = p['Coverage.Angle']; }
             if (p['Throat.Angle']) { p.a0 = p['Throat.Angle']; }
             if (p['Throat.Diameter']) { p.r0 = String(parseFloat(p['Throat.Diameter']) / 2); }

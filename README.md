@@ -1,55 +1,61 @@
-# ATH Horn Design Platform
+# MWG - Mathematical Waveguide Generator
 
-A web-based 3D visualization and design tool for acoustic horns (waveguides), supporting OSSE, R-OSSE, and OS-GOS profiles with integrated BEM acoustic simulation.
+A web-based 3D visualization and design tool for acoustic horns (waveguides), supporting OSSE and R-OSSE profiles with integrated BEM acoustic simulation.
 
 ## Features
 
 *   **Real-time 3D Rendering:** Visualize horn geometry instantly with multiple display modes (standard, zebra stripes, wireframe, curvature)
 *   **Parametric Design:** Adjust throat angle, coverage angle, rollback, and more with live updates
-*   **Multiple Models:** Support for OSSE (Oblate Spheroid), R-OSSE (Round-over), and OS-GOS horn profiles
+*   **Multiple Models:** Support for OSSE (Oblate Spheroid) and R-OSSE (Round-over) horn profiles
 *   **BEM Acoustic Simulation:** Run boundary element method simulations directly from the browser
-*   **Export:** STL for 3D printing, Gmsh .geo for meshing, ATH config files, and CSV profiles
+*   **Export:** STL for 3D printing, Gmsh .geo for meshing, MWG config files, and CSV profiles
 *   **Morphing:** Circular to rectangular throat morphing with customizable parameters
 
 ## Quick Start
 
-### 1. Install and Run Frontend
+### 1. One-Time Setup
+
+Run the setup script to install all dependencies (Node.js and Python):
 
 ```bash
-npm install
-npm run dev
+./setup.sh
 ```
 
-Open http://localhost:3000 in your browser. The app is fully functional for geometry design and export.
+This installs:
+- Frontend dependencies (npm packages)
+- Backend dependencies (Python packages)
+- BEM solver (bempp-cl) for acoustic simulations
 
-### 2. BEM Simulation Setup (Optional)
+**Note:** bempp-cl is a large package and may take 5-10 minutes to install.
 
-For acoustic simulations, you need the Python backend:
+### 2. Start the Application
 
 ```bash
-cd server
-
-# Install dependencies
-pip3 install -r requirements.txt
-
-# Install bempp-cl (BEM solver)
-pip3 install git+https://github.com/bempp/bempp-cl.git
-
-# Start backend (use python3, NOT python on macOS)
-./start.sh
+npm start
 ```
 
-Backend runs on http://localhost:8000
+This starts both servers:
+- **Frontend:** http://localhost:3000 (3D visualization and design)
+- **Backend:** http://localhost:8000 (BEM acoustic simulations)
 
-**Important:** Use `python3` on macOS, not `python`
+Press `Ctrl+C` to stop both servers.
 
 ### 3. Run Your First Simulation
 
-1. Open http://localhost:3000
+1. Open http://localhost:3000 in your browser
 2. Click the **"Simulation"** tab
 3. Status should show "Connected to BEM solver" (green dot)
 4. Click **"Run BEM Simulation"**
 5. View results!
+
+### Alternative: Run Servers Separately
+
+If you only need the frontend or backend:
+
+```bash
+npm run start:frontend   # Frontend only (port 3000)
+npm run start:backend    # Backend only (port 8000)
+```
 
 ## Using the Platform
 
@@ -59,7 +65,7 @@ Backend runs on http://localhost:8000
 - Adjust horn parameters with sliders
 - Real-time 3D preview
 - Multiple display modes (metal, zebra, wireframe, curvature)
-- Export to STL, Gmsh, ATH config, CSV
+- Export to STL, Gmsh, MWG config, CSV
 
 ### BEM Simulation
 

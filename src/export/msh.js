@@ -1,6 +1,6 @@
 /**
  * Export horn geometries to Gmsh .msh format suitable for BEM solvers
- * Supports all horn types (OS-GOS, OSSE, R-OSSE) with proper boundary conditions
+ * Supports all horn types (OSSE, R-OSSE) with proper boundary conditions
  */
 
 /**
@@ -78,7 +78,7 @@ export function exportHornToGeo(vertices, params) {
     const { angularSegments, lengthSegments } = params;
     
     // Start with basic Gmsh header
-    let geoContent = `// Gmsh .geo file for ATH horn export\n`;
+    let geoContent = `// Gmsh .geo file for MWG horn export\n`;
     geoContent += `Mesh.Algorithm = 2;\n`;
     geoContent += `Mesh.MshFileVersion = 2.2;\n`;
     geoContent += `General.Verbosity = 2;\n`;

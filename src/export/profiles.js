@@ -1,5 +1,5 @@
 /**
- * Export profile coordinates in ATH CSV format
+ * Export profile coordinates in MWG CSV format
  * Format: X;Y;Z (semicolon delimiter)
  * Each cross-section separated by blank line
  */
@@ -33,7 +33,7 @@ export function exportGmshGeo(vertices, params) {
     let geo = `Mesh.Algorithm = 2;\r\nMesh.MshFileVersion = 2.2;\r\nGeneral.Verbosity = 2;\r\n`;
 
     let pointIndex = 1;
-    const meshSize = 50.0;  // ATH uses 50.0
+    const meshSize = 50.0;  // MWG uses 50.0
 
     for (let j = 0; j <= lengthSegments; j++) {
         for (let i = 0; i <= angularSegments; i++) {
@@ -50,7 +50,7 @@ export function exportGmshGeo(vertices, params) {
 }
 
 /**
- * Compare our vertices with ATH reference data
+ * Compare our vertices with legacy ATH reference data
  * Returns statistics about differences
  */
 export function compareWithReference(ourVertices, referenceCSV, params) {

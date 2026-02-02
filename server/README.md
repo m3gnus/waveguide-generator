@@ -1,4 +1,4 @@
-# ATH Horn BEM Solver Backend
+# MWG Horn BEM Solver Backend
 
 This is the Python backend for running BEM (Boundary Element Method) acoustic simulations using bempp-cl.
 

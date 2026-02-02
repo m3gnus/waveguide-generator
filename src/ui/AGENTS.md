@@ -18,8 +18,8 @@ User interface components for parameter controls, simulation, and file operation
 import {
   ParamPanel,          // Parameter control panel
   SimulationPanel,     // Simulation controls
-  loadConfigFile,      // Load ATH config
-  saveConfigFile       // Save ATH config
+  loadConfigFile,      // Load MWG config
+  saveConfigFile       // Save MWG config
 } from './ui/';
 ```
 

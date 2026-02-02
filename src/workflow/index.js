@@ -1,5 +1,5 @@
 /**
- * Workflow management module for ATH Horn Design Platform.
+ * Workflow management module for MWG - Mathematical Waveguide Generator.
  * Manages the end-to-end design process with state tracking and artifact storage.
  * @module workflow
  */

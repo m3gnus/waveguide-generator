@@ -25,7 +25,7 @@ import {
 
 | Type | Description |
 |------|-------------|
-| ATH Reference | Compare to ATH software output |
+| MWG Reference | Compare to MWG software output |
 | ABEC Reference | Compare to ABEC simulation |
 | Published Data | Compare to published horn measurements |
 | Self-Consistency | Check internal consistency |
@@ -74,7 +74,7 @@ if (report.passed) {
   warnings: ["Phase deviation at 10kHz"],
   reference: {
     name: "Tritonia 2 ABEC",
-    source: "ATH validation set"
+    source: "MWG validation set"
   }
 }
 ```

@@ -1,7 +1,7 @@
 # Button Functionality Fix Report
 
 ## Issue Summary
-The UI buttons in the ATH Horn Design Platform were not working properly. When clicked, they would not trigger their associated functions.
+The UI buttons in the MWG Horn Design Platform were not working properly. When clicked, they would not trigger their associated functions.
 
 ## Root Cause Analysis
 

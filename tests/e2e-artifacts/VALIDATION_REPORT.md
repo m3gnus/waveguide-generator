@@ -1,4 +1,4 @@
-# ATH Horn Design Platform - Phase 7.5-8 Validation Report
+# MWG Horn Design Platform - Phase 7.5-8 Validation Report
 Date: 2026-01-30T09:52:25+01:00
 Validator: Qwen 3 Coder + Playwright E2E
 

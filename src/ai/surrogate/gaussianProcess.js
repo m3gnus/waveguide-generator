@@ -12,7 +12,7 @@
 /**
  * Gaussian Process Surrogate Model
  * 
- * A simplified implementation of Gaussian Process regression for use in the ATH Horn Design Platform.
+ * A simplified implementation of Gaussian Process regression for use in the MWG - Mathematical Waveguide Generator.
  * This provides uncertainty estimates and is suitable for small datasets typical in horn design.
  */
 export class GaussianProcess {
