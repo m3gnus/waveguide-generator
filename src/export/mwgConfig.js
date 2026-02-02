@@ -1,11 +1,11 @@
 
 /**
- * Generate ATH Config file content from parameters.
+ * Generate MWG Config file content from parameters.
  * @param {Object} params - The parameter object.
  * @returns {string} The formatted config file content.
  */
-export function generateATHConfigContent(params) {
-    let content = '; Ath config\n';
+export function generateMWGConfigContent(params) {
+    let content = '; MWG config\n';
     content += `; Generated: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}\n`;
 
     // Helper to get raw value if it's a string expression, or check params

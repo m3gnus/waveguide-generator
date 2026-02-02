@@ -9,7 +9,7 @@ if (!fs.existsSync(ARTIFACTS_DIR)) {
   fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 }
 
-test.describe('ATH Horn Platform E2E', () => {
+test.describe('MWG Platform E2E', () => {
   let consoleErrors = [];
   
   test.beforeEach(async ({ page }) => {
@@ -39,7 +39,7 @@ test.describe('ATH Horn Platform E2E', () => {
   test('Test 1 - App Boot', async ({ page }) => {
     await expect(page.locator('body')).toBeVisible();
     // Check that the app has loaded properly by looking for key UI elements
-    await expect(page.locator('h1:has-text("ATH Visualizer")')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('h1:has-text("MWG - Mathematical Waveguide Generator")')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#render-btn')).toBeVisible({ timeout: 10000 });
     expect(consoleErrors).toHaveLength(0);
     
@@ -118,7 +118,7 @@ test.describe('ATH Horn Platform E2E', () => {
 
   test('Test 5 - Optimization', async ({ page }) => {
     // For now, just verify the app is running and we can find basic elements
-    await expect(page.locator('h1:has-text("ATH Visualizer")')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('h1:has-text("MWG - Mathematical Waveguide Generator")')).toBeVisible({ timeout: 5000 });
     
     // Check that main UI elements are present
     await expect(page.locator('#ui-panel')).toBeVisible({ timeout: 5000 });

@@ -16,10 +16,9 @@ __pycache__/
 venv/
 .venv/
 
-# IDE/Tool specific configs (optional to track)
-# Uncomment these if you don't want to share tool configs
-# .agent/
-# .agents/
-# .cline/
-# .gemini/
-# .claude/
+# IDE/Tool specific configs
+.agent/
+.agents/
+.cline/
+.gemini/
+# Keep .claude/ for Claude Code settings

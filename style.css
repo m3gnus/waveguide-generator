@@ -262,60 +262,270 @@ h3 {
     font-size: 0.85rem;
 }
 
-/* Expression field styling */
-.expression-badge {
-    display: inline-block;
-    background: #4a9eff;
-    color: white;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: 'Space Mono', monospace;
-    user-select: none;
-    cursor: help;
-    flex-shrink: 0;
-    transition: background 0.2s;
+/* Panel header row with formula reference button */
+.panel-header-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 15px;
 }
 
-.expression-input {
-    background: #1a1a1a;
-    border: 1px solid #4a9eff !important;
-    color: #fff;
-    font-family: 'Space Mono', monospace;
-    font-size: 13px;
-    padding: 8px 10px;
-    border-radius: 4px;
-}
-
-.expression-input:focus {
-    outline: none;
-    border-color: #6bb5ff !important;
-    box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
-}
-
-/* Toggle button styling */
-.toggle-btn {
+.formula-info-btn-global {
+    width: auto;
+    padding: 8px 14px;
+    margin: 0;
     background: var(--input-bg);
     border: 1px solid var(--border-color);
-    color: var(--text-color);
-    width: 28px;
-    height: 28px;
-    border-radius: 4px;
+    color: var(--accent-color);
+    border-radius: 8px;
     font-size: 12px;
-    font-weight: bold;
+    font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
-    flex-shrink: 0;
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 6px;
 }
 
-.toggle-btn:hover {
+.formula-info-btn-global:hover {
     background: var(--accent-color);
     color: white;
     border-color: var(--accent-color);
+}
+
+@media (prefers-color-scheme: dark) {
+    .formula-info-btn-global:hover {
+        color: #000;
+    }
+}
+
+/* Formula input wrapper */
+.formula-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+
+/* Formula input field - auto-resizing text field */
+.formula-input {
+    min-width: 60px;
+    max-width: 200px;
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.formula-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.15);
+}
+
+.formula-input.valid {
+    border-color: #34c759;
+}
+
+.formula-input.invalid {
+    border-color: #ff3b30;
+    background: rgba(255, 59, 48, 0.1);
+}
+
+.formula-input::placeholder {
+    color: var(--text-color);
+    opacity: 0.4;
+    font-size: 11px;
+}
+
+/* Formula info button */
+.formula-info-btn {
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    padding: 0;
+    margin: 0;
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+    color: var(--accent-color);
+    border-radius: 50%;
+    font-family: 'Georgia', serif;
+    font-size: 14px;
+    font-style: italic;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.formula-info-btn:hover {
+    background: var(--accent-color);
+    color: white;
+    border-color: var(--accent-color);
+    transform: scale(1.05);
+}
+
+/* Formula info panel */
+.formula-info-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.9);
+    width: 400px;
+    max-width: 90vw;
+    max-height: 80vh;
+    background: var(--panel-bg);
+    backdrop-filter: var(--glass-effect);
+    -webkit-backdrop-filter: var(--glass-effect);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+}
+
+.formula-info-panel.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.formula-info-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--input-bg);
+}
+
+.formula-info-header h4 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.formula-info-close {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.formula-info-close:hover {
+    background: var(--input-bg);
+    color: #ff3b30;
+}
+
+.formula-info-section {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.formula-info-section:last-child {
+    border-bottom: none;
+}
+
+.formula-info-section h5 {
+    margin: 0 0 10px 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.formula-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.formula-list.scrollable {
+    max-height: 200px;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+.formula-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.formula-item code {
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    background: var(--input-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--accent-color);
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+.formula-item span {
+    color: var(--text-color);
+    opacity: 0.7;
+    font-size: 11px;
+}
+
+.formula-examples {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.formula-example {
+    display: block;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    background: var(--input-bg);
+    padding: 8px 12px;
+    border-radius: 6px;
+    color: var(--text-color);
+    font-size: 11px;
+    word-break: break-all;
+    border-left: 3px solid var(--accent-color);
+}
+
+/* Scrollbar styling for formula list */
+.formula-list.scrollable::-webkit-scrollbar {
+    width: 6px;
+}
+
+.formula-list.scrollable::-webkit-scrollbar-track {
+    background: var(--input-bg);
+    border-radius: 3px;
+}
+
+.formula-list.scrollable::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.formula-list.scrollable::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-color);
 }
 
 label[title] {

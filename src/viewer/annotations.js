@@ -2,7 +2,7 @@
  * Cross-section visualization utilities for horn profiles.
  * Provides SVG-based 2D cross-sections of horn geometry at any axial position.
  */
-import { calculateOSGOS, calculateOSSE, calculateROSSE } from '../geometry/hornModels.js';
+import { calculateOSSE, calculateROSSE } from '../geometry/hornModels.js';
 
 /**
  * Generate SVG cross-section of horn profile at specified axial position
@@ -12,7 +12,6 @@ import { calculateOSGOS, calculateOSSE, calculateROSSE } from '../geometry/hornM
  * @returns {string} SVG string representing the cross-section
  */
 export function generateCrossSectionSVG(params, axialPosition, radialSteps = 64) {
-    // For OS-GOS, we need to calculate the profile at this axial position
     const L = params.L;
     const z = axialPosition * L;
 
@@ -25,11 +24,7 @@ export function generateCrossSectionSVG(params, axialPosition, radialSteps = 64)
         const p = (i / radialSteps) * Math.PI * 2;
 
         let radius = 0;
-        if (params.type === 'OS-GOS') {
-            // Use the OS-GOS calculation function
-            const profile = calculateOSGOS(z, p, params);
-            radius = profile.y;
-        } else if (params.type === 'OSSE') {
+        if (params.type === 'OSSE') {
             // Use the OSSE calculation function
             const profile = calculateOSSE(z, p, params);
             radius = profile.y;

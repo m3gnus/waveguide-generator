@@ -1,13 +1,15 @@
 {
-  "name": "ath-horn-design-platform",
+  "name": "mwg-mathematical-waveguide-generator",
   "version": "1.0.0-alpha-7.5",
-  "description": "Interactive 3D visualization and optimization platform for horn design - Validation Phase (Playwright E2E)",
+  "description": "MWG - Mathematical Waveguide Generator: Interactive 3D visualization and optimization platform for acoustic waveguide design - Validation Phase (Playwright E2E)",
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "start": "node scripts/start-all.js",
+    "start:frontend": "node scripts/dev-server.js",
+    "start:backend": "cd server && python3 app.py",
     "dev": "node scripts/dev-server.js",
     "build": "webpack --mode production",
-    "start": "node server.js",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest tests/unit",
     "test:e2e": "playwright test tests/e2e/app.spec.js",
     "test:e2e:headed": "playwright test tests/e2e/app.spec.js --headed",
@@ -24,7 +26,6 @@
   "author": "Magnus Andersen",
   "license": "MIT",
   "dependencies": {
-    "@openrouter/sdk": "^0.5.1",
     "express": "^5.2.1",
     "three": "^0.160.0"
   },

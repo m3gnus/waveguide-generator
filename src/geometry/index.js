@@ -1,5 +1,5 @@
 
-export { calculateROSSE, calculateOSSE, calculateOSGOS } from './hornModels.js';
+export { calculateROSSE, calculateOSSE } from './hornModels.js';
 export { buildHornMesh } from './meshBuilder.js';
 export { applyMorphing } from './morphing.js';
 export { addEnclosureGeometry } from './enclosure.js';

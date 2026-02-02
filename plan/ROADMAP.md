@@ -1,4 +1,4 @@
-# Development Roadmap — ATH Horn Design Platform
+# Development Roadmap — MWG - Mathematical Waveguide Generator Design Platform
 
 ## Completed Phases
 
@@ -22,9 +22,8 @@
 - [x] Add undo/redo system
 - [x] Add localStorage auto-save
 
-### Phase 2: Enhanced Geometry & OS-GOS ✅
+### Phase 2: Enhanced Geometry ✅
 
-- [x] Implement OS-GOS horn model
 - [x] Improve morphing (TargetWidth, TargetHeight, Rate curves)
 - [x] Add `Mesh.SubdomainSlices` support
 - [x] Add variable mesh density (ThroatResolution, MouthResolution)
@@ -33,22 +32,31 @@
 
 ### Phase 3: Export Suite ✅
 
-- [x] Gmsh .geo export with Physical Surface tags
+- [x] Gmsh .geo/.msh export with Physical Surface tags
 - [x] CSV profile export
-- [x] ATH config round-trip
+- [x] MWG config round-trip
 - [x] Batch export functionality
 
-### Phase 4: BEM Solver Integration ⚠️ (60%)
+### Phase 4: BEM Solver Integration ⚠️ (70%)
 
-- [x] Create Python backend (FastAPI)
-- [x] Basic bempp-cl integration
-- [x] HTTP client in browser
-- [x] Mesh conversion pipeline
-- [x] Mock solver for testing
-- [ ] **TODO**: Real BEM boundary conditions
-- [ ] **TODO**: Mesh quality validation
-- [ ] **TODO**: Result validation vs ABEC
-- [ ] **TODO**: Frequency-dependent mesh refinement
+**Completed:**
+- [x] Create Python backend (FastAPI) — `server/app.py`
+- [x] Full bempp-cl integration — `server/solver.py` (863 lines)
+- [x] HTTP client in browser — `src/solver/client.js`
+- [x] Mesh conversion pipeline — `src/solver/bemMeshGenerator.js`, `meshExport.js`
+- [x] Mock solver for testing — `MockBEMSolver` class with realistic acoustic data
+- [x] Gmsh mesh refinement support
+- [x] Proper boundary condition setup (throat velocity, rigid walls, radiation)
+- [x] Directivity index calculation
+- [x] Setup script (`setup.sh`) handles installation
+- [x] `gmsh>=4.10.0` in requirements.txt (auto-installed)
+- [x] `bempp-cl` installation via git (graceful fallback to mock)
+
+**Remaining:**
+- [ ] **TODO**: Validate BEM results against ABEC reference data
+- [ ] **TODO**: Test with real horn geometries
+- [ ] **TODO**: Verify boundary condition correctness
+- [ ] **TODO**: Document mesh quality requirements
 
 ### Phase 5: Optimization & Batch Processing ✅
 
@@ -65,56 +73,83 @@
 - [x] Preset management
 - [x] Validation framework
 - [x] Module structure cleanup
+- [x] Logging module
 
-### Phase 7: AI-Assisted Design 🔄 (20%)
+### Phase 7: AI-Assisted Design 🔄 (20% - Stubs Only)
 
+**Completed (stubs only):**
 - [x] Module structure (knowledge, surrogate, optimization, insights)
-- [x] Stub implementations
-- [x] API design
-- [ ] **TODO**: Knowledge capture with real data
-- [ ] **TODO**: Surrogate model training
-- [ ] **TODO**: Bayesian optimization implementation
-- [ ] **TODO**: Insight generation from real metrics
+- [x] Stub implementations with placeholder logic
+- [x] API design and interfaces defined
+
+**Note:** All AI modules return mock/demo data. Real implementation blocked by validated BEM solver.
+
+**Remaining:**
+- [ ] **TODO**: Implement proper GP with matrix inversion — `gaussianProcess.js:9`
+- [ ] **TODO**: Implement real Bayesian optimization — `bayesianOptimizer.js:9`
+- [ ] **TODO**: Train surrogate models with real BEM data
+- [ ] **TODO**: Generate insights from actual acoustic metrics
 
 ---
 
 ## Upcoming Work
 
-### Priority 1: Complete BEM Solver (Phase 4)
+### Priority 1: Validate BEM Solver (Phase 4 → 100%)
 
-**Goal**: Get real physics working in the BEM solver
+**Goal**: Validate BEM solver produces correct acoustic results
 
 Tasks:
-1. Fix bempp-cl boundary condition setup
-2. Validate mesh quality before simulation
-3. Compare results against ABEC references
-4. Implement frequency-dependent mesh refinement
+1. Run solver with known horn geometry (from ABEC reference)
+2. Compare SPL, directivity, impedance against ABEC output
+3. Document any discrepancies and acceptable tolerances
+4. Verify boundary conditions produce physically correct results
 
 **Blocked by**: Nothing (can start immediately)
+**Current status**: Code complete, needs validation testing
 
 ### Priority 2: Results Visualization
 
 **Goal**: Better display of simulation results
 
 Tasks:
-1. Polar plot (SVG) for directivity
-2. Frequency response chart
-3. Sonogram/directivity map
-4. Impedance plot
+1. Polar plot (SVG) for directivity — `src/results/polarPlot.js`
+2. Frequency response chart — `src/results/frequencyPlot.js`
+3. Sonogram/directivity map — `src/results/sonogram.js`
+4. Impedance plot — `src/results/impedancePlot.js`
 
-**Blocked by**: Working BEM solver (for real data)
+**Blocked by**: Validated BEM solver (for real data to display)
+**Current status**: Not started, basic display exists in simulationPanel.js
 
-### Priority 3: AI Module Implementation (Phase 7)
+### Priority 3: AI Module Implementation (Phase 7 → 100%)
 
 **Goal**: Implement actual AI-assisted design features
 
 Tasks:
-1. Store design knowledge from completed simulations
-2. Train simple surrogate model (polynomial regression first)
-3. Implement Bayesian optimization with acquisition function
-4. Generate insights from sensitivity analysis
+1. Implement proper Gaussian Process with Cholesky decomposition
+2. Implement Bayesian optimization with acquisition functions
+3. Store design knowledge from completed simulations
+4. Train surrogate models with real BEM simulation data
+5. Generate insights from sensitivity analysis
 
-**Blocked by**: Working BEM solver (for training data)
+**Blocked by**: Validated BEM solver (for training data)
+**Current status**: Stubs complete, awaiting real data
+
+---
+
+## Module Status Summary
+
+| Module | Files | Status |
+|--------|-------|--------|
+| `src/geometry/` | 8 files | ✅ Complete |
+| `src/config/` | 5 files | ✅ Complete |
+| `src/export/` | 5 files | ✅ Complete |
+| `src/viewer/` | 2 files | ⚠️ Simplified (combined in index.js) |
+| `src/solver/` | 6 files | ✅ Complete |
+| `src/ui/` | 3 files | ✅ Functional |
+| `src/optimization/` | 6 files | ✅ Complete |
+| `src/ai/` | 12 files | ⚠️ Stubs only |
+| `src/results/` | 0 files | ❌ Not implemented |
+| `server/` | 4 files | ✅ Complete |
 
 ---
 
@@ -126,6 +161,7 @@ Tasks:
 - Multi-horn comparison view
 - Cloud preset sync
 - Real-time collaboration
+- STL export refactoring (currently in main.js)
 
 ---
 
@@ -133,12 +169,12 @@ Tasks:
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0.0-alpha-7.5 | 2026-01 | Phase 6 complete, Phase 7 stubs |
+| 1.0.0-alpha-7.5 | 2026-02 | BEM solver implementation complete, setup script, gmsh/bempp dependencies |
 | 1.0.0-alpha-7.0 | 2026-01 | AI module structure |
 | 1.0.0-alpha-6.0 | 2025-12 | Production readiness |
 | 1.0.0-alpha-5.0 | 2025-11 | Optimization engine |
 | 1.0.0-alpha-4.0 | 2025-10 | BEM solver basics |
 | 1.0.0-alpha-3.0 | 2025-09 | Export suite |
-| 1.0.0-alpha-2.0 | 2025-08 | OS-GOS, morphing |
+| 1.0.0-alpha-2.0 | 2025-08 | Enhanced morphing |
 | 1.0.0-alpha-1.0 | 2025-07 | Config schema |
 | 1.0.0-alpha-0.0 | 2025-06 | Module extraction |

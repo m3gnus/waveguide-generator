@@ -1,4 +1,4 @@
-# AI Agent Instructions - ATH Horn Design Platform
+# AI Agent Instructions - MWG Horn Design Platform
 
 > This file provides context for AI agents working on this project. For tool-specific configs, see `.claude/`, `.gemini/`, `.cline/`, etc.
 
@@ -26,7 +26,7 @@ This project benefits from specialized agent roles:
 Each `src/` subfolder has its own `AGENTS.md` with domain-specific context:
 
 - `src/geometry/AGENTS.md` — Horn math, mesh generation
-- `src/config/AGENTS.md` — ATH config parsing, validation
+- `src/config/AGENTS.md` — MWG config parsing, validation
 - `src/viewer/AGENTS.md` — Three.js 3D visualization
 - `src/export/AGENTS.md` — File format exports
 - `src/solver/AGENTS.md` — BEM acoustic simulation

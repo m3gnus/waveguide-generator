@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Parse, validate, and serialize ATH configuration files. Handles both block-format (R-OSSE) and flat dot-notation (OSSE) configs.
+Parse, validate, and serialize MWG configuration files. Handles both block-format (R-OSSE) and flat dot-notation (OSSE) configs.
 
 ## Files
 
 | File | Purpose | Complexity |
 |------|---------|------------|
 | `index.js` | Public API exports | Simple |
-| `parser.js` | ATH config file parser | Medium |
+| `parser.js` | MWG config file parser | Medium |
 | `schema.js` | Parameter schema definitions | Medium |
 | `validator.js` | Parameter validation | Simple |
 | `defaults.js` | Default parameter values | Simple |
@@ -18,15 +18,15 @@ Parse, validate, and serialize ATH configuration files. Handles both block-forma
 
 ```javascript
 import {
-  ATHConfigParser,        // Parse ATH config files
-  generateATHConfigContent, // Export to ATH format
+  MWGConfigParser,        // Parse MWG config files
+  generateMWGConfigContent, // Export to MWG format
   PARAM_SCHEMA,          // Parameter definitions
   validateParams,        // Validate parameters
   getDefaults            // Get default values
 } from './config/index.js';
 ```
 
-## ATH Config Format
+## MWG Config Format
 
 Two formats are supported:
 
@@ -75,7 +75,7 @@ npm test -- --grep "config"
 
 ```javascript
 // Parse config file
-const config = ATHConfigParser.parse(fileContent);
+const config = MWGConfigParser.parse(fileContent);
 // Returns: { modelType, params, morph, enclosure, mesh, ... }
 
 // Validate parameters
@@ -83,8 +83,8 @@ const result = validateParams(params, 'R-OSSE');
 // Returns: { valid: true/false, issues: [...] }
 
 // Export config
-const content = generateATHConfigContent(params);
-// Returns: ATH-format string
+const content = generateMWGConfigContent(params);
+// Returns: MWG-format string
 ```
 
 ## Common Issues

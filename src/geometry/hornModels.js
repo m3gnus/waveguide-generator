@@ -1,12 +1,12 @@
 /**
- * ATH Horn Geometry Models
- * Contains logic for OSSE, R-OSSE, and OS-GOS profile calculations.
+ * MWG Horn Geometry Models
+ * Contains logic for OSSE and R-OSSE profile calculations.
  */
 
 /**
  * Validate horn parameters
  * @param {Object} params - Horn parameters to validate
- * @param {string} modelType - Type of model (OSSE, ROSSE, OSGOS)
+ * @param {string} modelType - Type of model (OSSE, ROSSE)
  * @returns {{ valid: boolean, errors: string[] }} Validation result
  */
 export function validateParameters(params, modelType) {
@@ -50,9 +50,9 @@ export function calculateOSSE(z, p, params) {
 
     const a0 = (params.a0 * Math.PI) / 180;
     const r0 = params.r0;
-    const k = params.k;
-    const n = params.n;
-    const q = params.q;
+    const k = params.k || 1;  // ATH default is 1
+    const n = params.n || 4;  // Typical default
+    const q = params.q || 1;  // Typical default
 
     const rGOS = Math.sqrt((k * r0) ** 2 + 2 * k * r0 * z * Math.tan(a0) + (z ** 2) * (Math.tan(a) ** 2)) + r0 * (1 - k);
 
@@ -116,70 +116,3 @@ export function calculateROSSE(t, p, params) {
     return { x: xt, y: yt };
 }
 
-/**
- * Calculate OS-GOS horn profile point at axial position z and angle p.
- * OS-GOS (Generalized Open Shape) extends OSSE with configurable GOS characteristics
- * @param {number} z - Axial position (0 to L)
- * @param {number} p - Azimuthal angle in radians
- * @param {Object} params - Horn parameters
- * @returns {{ x: number, y: number }} Axial position (x=z) and radius (y)
- */
-export function calculateOSGOS(z, p, params) {
-    const val = (v) => (typeof v === 'function' ? v(p) : v);
-
-    const validationResult = validateParameters(params, 'OSGOS');
-    if (!validationResult.valid) {
-        console.error('Validation failed:', validationResult.errors);
-        return { x: NaN, y: NaN };
-    }
-
-    const L = params.L;
-    const a = (val(params.a) * Math.PI) / 180;
-    const s = params.s ? val(params.s) : 0;
-
-    const a0 = (params.a0 * Math.PI) / 180;
-    const r0 = params.r0;
-    const k = params.k;
-    const n = params.n;
-    const q = params.q;
-    const gosType = params.gosType || 0;
-    const gosFactor = params.gosFactor || 1.0;
-
-    // Base GOS calculation - similar to OSSE but with GOS modifications
-    let rGOS = 0;
-
-    // Handle special case for z=0 (throat) to avoid NaN
-    if (z === 0) {
-        rGOS = r0;
-    } else {
-        // For non-zero z, calculate using the OSSE-like formula
-        rGOS = Math.sqrt((k * r0) ** 2 + 2 * k * r0 * z * Math.tan(a0) + (z ** 2) * (Math.tan(a) ** 2)) + r0 * (1 - k);
-    }
-
-    // Apply GOS modifications based on gosType and gosFactor
-    let rTERM = 0;
-    if (z > 0 && n > 0 && q > 0) {
-        const zNorm = q * z / L;
-        if (zNorm <= 1.0) {
-            // Apply GOS factor to modify the flare term
-            const modifiedN = n * gosFactor;
-            const modifiedQ = q * gosFactor;
-
-            // Different GOS types modify the flare behavior
-            if (gosType === 1) {
-                // Enhanced GOS - more aggressive flare with modified parameters
-                rTERM = (s * L / modifiedQ) * (1 - Math.pow(1 - Math.pow(zNorm, modifiedN), 1 / modifiedN));
-            } else {
-                // Standard GOS - basic flare with original parameters
-                rTERM = (s * L / modifiedQ) * (1 - Math.pow(1 - Math.pow(zNorm, modifiedN), 1 / modifiedN));
-            }
-        } else {
-            rTERM = (s * L / q);
-        }
-    }
-
-    // Ensure we don't return negative or zero radius
-    const finalRadius = Math.max(0.1, rGOS + rTERM);
-
-    return { x: z, y: finalRadius };
-}

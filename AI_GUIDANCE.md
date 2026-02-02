@@ -1,6 +1,6 @@
-# AI Guidance in ATH Horn Design Platform
+# AI Guidance in MWG - Mathematical Waveguide Generator Design Platform
 
-This document describes how the AI-assisted design features work within the ATH Horn Design Platform.
+This document describes how the AI-assisted design features work within the MWG - Mathematical Waveguide Generator Design Platform.
 
 ## Overview
 
@@ -458,4 +458,4 @@ AI Generated Insights:
 4. "High directivity index slope above 0.5 dB/octave, indicating strong directional response"
 ```
 
-This documentation provides a complete overview of how AI features are integrated into the ATH Horn Design Platform, ensuring that users understand both the capabilities and constraints of these AI-assisted design tools.
+This documentation provides a complete overview of how AI features are integrated into the MWG - Mathematical Waveguide Generator Design Platform, ensuring that users understand both the capabilities and constraints of these AI-assisted design tools.

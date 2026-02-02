@@ -1,7 +1,7 @@
 #!/bin/bash
-# ATH Horn BEM Solver Startup Script
+# MWG Horn BEM Solver Startup Script
 
-echo "🚀 Starting ATH Horn BEM Solver Backend..."
+echo "🚀 Starting MWG Horn BEM Solver Backend..."
 echo ""
 
 # Check if we're in the server directory

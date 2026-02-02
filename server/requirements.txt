@@ -1,4 +1,4 @@
-# ATH Horn BEM Solver Backend Requirements
+# MWG Horn BEM Solver Backend Requirements
 # Python 3.8+ required
 
 # Web Framework
@@ -19,6 +19,7 @@ meshio>=4.0.16
 
 # Mesh Processing
 trimesh==4.0.5
+gmsh>=4.10.0
 
 # Utilities
 pydantic>=2.10.0

@@ -46,22 +46,5 @@ export function applyMorphing(currentR, t, p, params) {
         }
     }
 
-    // Enhanced morphing for OS-GOS with variable curves
-    if (params.type === 'OS-GOS' && params.morphTarget !== 0) {
-        let morphFactor = 0;
-        if (t > params.morphFixed) {
-            const tMorph = (t - params.morphFixed) / (1 - params.morphFixed);
-            // Support for variable morphing rate curves
-            morphFactor = Math.pow(tMorph, params.morphRate || 3);
-        }
-
-        if (morphFactor > 0) {
-            const targetWidth = params.morphWidth || currentR * 2;
-            const targetHeight = params.morphHeight || currentR * 2;
-            const rectR = getRoundedRectRadius(p, targetWidth, targetHeight, params.morphCorner || 35);
-            return THREE.MathUtils.lerp(currentR, rectR, morphFactor);
-        }
-    }
-
     return currentR;
 }

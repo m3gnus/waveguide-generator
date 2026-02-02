@@ -1,5 +1,5 @@
 /**
- * Preset management module for ATH Horn Design Platform.
+ * Preset management module for MWG - Mathematical Waveguide Generator.
  * Enables fast starting points and reproducibility with known-good horn archetypes.
  * @module presets
  */
@@ -12,7 +12,7 @@
  * @property {Object} parameters - Geometry and mesh parameters
  * @property {Object} bemSettings - BEM simulation settings
  * @property {Object} optimization - Default optimization objectives
- * @property {string} type - Type of horn (R-OSSE, OSSE, OS-GOS)
+ * @property {string} type - Type of horn (R-OSSE, OSSE)
  * @property {Date} createdAt - When the preset was created
  * @property {Date} updatedAt - When the preset was last updated
  */
@@ -83,7 +83,7 @@ export function createPresetManager() {
 
   /**
    * Get all available presets for a specific horn type
-   * @param {string} type - Type of horn (R-OSSE, OSSE, OS-GOS)
+   * @param {string} type - Type of horn (R-OSSE, OSSE)
    * @returns {Array<Preset>} Array of presets matching the type
    */
   function getPresetsByType(type) {
@@ -100,9 +100,9 @@ export function createPresetManager() {
   }
 
   /**
-   * Create a default ATH-style preset
+   * Create a default MWG-style preset
    * @param {string} name - Name of the preset
-   * @param {string} type - Type of horn (R-OSSE, OSSE, OS-GOS)
+   * @param {string} type - Type of horn (R-OSSE, OSSE)
    * @returns {Preset} Default preset object
    */
   function createDefaultPreset(name, type) {

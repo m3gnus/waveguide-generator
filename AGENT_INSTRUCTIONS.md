@@ -1,14 +1,14 @@
-# Agent Instructions - ATH Horn Design Platform
+# Agent Instructions - MWG - Mathematical Waveguide Generator Design Platform
 
 This document provides clear instructions for AI agents (like Qwen Code 2.5) working on this project.
 
 ## Project Overview
 
-The ATH Horn Design Platform is a browser-based application for designing and simulating acoustic horn waveguides. It combines:
+The MWG - Mathematical Waveguide Generator Design Platform is a browser-based application for designing and simulating acoustic horn waveguides. It combines:
 - **Real-time 3D visualization** (Three.js)
-- **Parametric horn design** (OSSE, R-OSSE, OS-GOS models)
+- **Parametric horn design** (OSSE, R-OSSE models)
 - **BEM acoustic simulation** (Python backend with bempp-cl)
-- **Export capabilities** (STL, Gmsh, ATH config, CSV)
+- **Export capabilities** (STL, Gmsh, MWG config, CSV)
 
 ## Quick Start
 
@@ -53,28 +53,49 @@ npm run test:e2e:headed
 │   ├── state.js           # Global state management
 │   ├── geometry/          # Horn geometry calculations
 │   │   ├── index.js       # Public API
-│   │   ├── hornModels.js  # OSSE, R-OSSE, OS-GOS implementations
+│   │   ├── hornModels.js  # OSSE, R-OSSE implementations
 │   │   ├── meshBuilder.js # Three.js mesh generation
 │   │   ├── morphing.js    # Shape morphing
 │   │   ├── enclosure.js   # Enclosure geometry
 │   │   └── rollback.js    # Mouth rollback
 │   ├── config/            # Configuration management
 │   │   ├── index.js       # Public API
-│   │   └── parser.js      # ATH config file parser
+│   │   └── parser.js      # MWG config file parser
 │   ├── viewer/            # 3D visualization
 │   │   ├── index.js       # Public API
 │   │   └── annotations.js # Dimension annotations
 │   ├── export/            # Export functionality
 │   │   ├── index.js       # Public API
 │   │   ├── stl.js         # STL export
-│   │   ├── athConfig.js   # ATH config export
+│   │   ├── mwgConfig.js   # MWG config export
 │   │   ├── csv.js         # CSV profile export
 │   │   └── msh.js         # Gmsh export
 │   ├── solver/            # BEM solver interface
 │   │   ├── index.js       # Public API
 │   │   ├── client.js      # HTTP client for backend
 │   │   ├── meshExport.js  # Mesh conversion
+│   │   ├── bemMeshGenerator.js # BEM mesh generation
 │   │   └── resultParser.js # Result parsing
+│   ├── optimization/      # Parameter optimization
+│   │   ├── index.js       # Public API
+│   │   ├── parameterSpace.js # Parameter bounds
+│   │   ├── objectiveFunctions.js # Scoring functions
+│   │   ├── engine.js      # Optimization algorithms
+│   │   └── api.js         # External API
+│   ├── workflow/          # Workflow state machine
+│   │   └── index.js       # Design workflow stages
+│   ├── presets/           # Preset management
+│   │   └── index.js       # Save/load presets
+│   ├── validation/        # Result validation
+│   │   └── index.js       # Reference comparison
+│   ├── logging/           # Change tracking
+│   │   └── index.js       # Agent/user action logging
+│   ├── ai/                # AI-assisted design (STUBS)
+│   │   ├── index.js       # Module entry
+│   │   ├── knowledge/     # Design knowledge storage
+│   │   ├── surrogate/     # Surrogate models
+│   │   ├── optimization/  # Bayesian optimization
+│   │   └── insights/      # Design insights
 │   └── ui/                # User interface
 │       ├── paramPanel.js  # Parameter controls
 │       ├── simulationPanel.js # Simulation interface
@@ -99,11 +120,11 @@ Handles all horn mathematics and mesh generation.
 - `parseExpression(expr)` - Evaluate mathematical expressions
 
 ### Config Module (`src/config/`)
-Parses and validates ATH configuration files.
+Parses and validates MWG configuration files.
 
 **Key functions:**
-- `ATHConfigParser.parse(content)` - Parse ATH config file
-- `generateATHConfigContent(params)` - Export ATH config
+- `MWGConfigParser.parse(content)` - Parse MWG config file
+- `generateMWGConfigContent(params)` - Export MWG config
 
 ### Viewer Module (`src/viewer/`)
 Manages Three.js scene and rendering.
@@ -307,21 +328,35 @@ Output will be in `dist/` directory.
 - **Three.js**: 0.160.0
 - **bempp-cl**: 0.2.3 (install from git)
 
-## Next Steps for Development
+## Current Implementation Status
 
-Current implementation status:
-- ✅ Geometry visualization working
-- ✅ Parameter controls working
-- ✅ Export functionality working
-- ✅ BEM simulation UI added
-- ✅ Python backend created
-- ⚠️ BEM solver needs refinement (currently simplified)
-- ⚠️ Results visualization needs enhancement
-- ⚠️ E2E tests for simulation needed
+**Version:** 1.0.0-alpha-7.5
 
-Priority improvements:
-1. Refine BEM solver boundary conditions
-2. Enhance results visualization (better charts)
-3. Add result export functionality
-4. Implement optimization module
-5. Add validation against reference data
+| Phase | Status | Description |
+|-------|--------|-------------|
+| 0-3 | ✅ Complete | Core modules, config, geometry, export |
+| 4 | ⚠️ 70% | BEM solver (code complete, needs validation) |
+| 5 | ✅ Complete | Optimization engine |
+| 6 | ✅ Complete | Workflow, presets, validation framework |
+| 7 | ⚠️ 20% | AI modules (stubs only) |
+
+**What's Working:**
+- ✅ Geometry visualization (OSSE, R-OSSE, morphing, enclosure, rollback)
+- ✅ Parameter controls with schema validation
+- ✅ Export (MWG config, Gmsh .msh, CSV profiles)
+- ✅ BEM simulation UI and Python backend
+- ✅ Optimization engine (grid, random, coordinate descent)
+- ✅ Workflow state machine
+- ✅ Preset save/load
+- ✅ Validation framework
+- ✅ Change logging
+
+**Needs Work:**
+- ⚠️ BEM solver validation against ABEC references
+- ⚠️ Results visualization module (polar plots, sonograms)
+- ⚠️ AI modules (currently stubs)
+
+**Priority Tasks:**
+1. Validate BEM results against known ABEC data
+2. Implement results visualization (`src/results/`)
+3. Implement AI modules with real GP/Bayesian optimization
