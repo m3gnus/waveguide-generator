@@ -22,3 +22,7 @@ venv/
 .cline/
 .gemini/
 # Keep .claude/ for Claude Code settings
+
+# Reference materials (large files, not part of program)
+_references/
+ATHequivalent/
