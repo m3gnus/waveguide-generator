@@ -1,16 +1,37 @@
 import { PARAM_SCHEMA } from './schema.js';
 
+const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
+function isNumericString(value) {
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    return NUMERIC_PATTERN.test(trimmed);
+}
+
 export function validateParams(params, modelType) {
     const issues = [];
 
     // Helper to validate a single field
-    const validateField = (key, value, schemaDef) => {
+    const validateField = (key, value, schemaDef, options = {}) => {
         if (!schemaDef) return; // Unknown param, skip or warn
+
+        const allowExpression = options.allowExpression === true;
 
         // Number range validation
         if (schemaDef.type === 'range' || schemaDef.type === 'number') {
-            const numVal = parseFloat(value);
-            if (isNaN(numVal)) {
+            const isExpressionValue = typeof value === 'function'
+                || (typeof value === 'string' && !isNumericString(value));
+
+            if (allowExpression && isExpressionValue) {
+                if (typeof value === 'string' && value.trim() === '') {
+                    issues.push({ param: key, message: 'Expression cannot be empty', severity: 'error' });
+                }
+                return;
+            }
+
+            const numVal = Number(value);
+            if (!Number.isFinite(numVal)) {
                 issues.push({ param: key, message: 'Must be a number', severity: 'error' });
                 return;
             }
@@ -35,7 +56,7 @@ export function validateParams(params, modelType) {
     if (coreSchema) {
         for (const [key, def] of Object.entries(coreSchema)) {
             if (params[key] !== undefined) {
-                validateField(key, params[key], def);
+                validateField(key, params[key], def, { allowExpression: true });
             }
         }
     }

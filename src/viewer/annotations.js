@@ -4,6 +4,8 @@
  */
 import { calculateOSSE, calculateROSSE } from '../geometry/hornModels.js';
 
+const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
+
 /**
  * Generate SVG cross-section of horn profile at specified axial position
  * @param {Object} params - Horn parameters 
@@ -12,9 +14,6 @@ import { calculateOSSE, calculateROSSE } from '../geometry/hornModels.js';
  * @returns {string} SVG string representing the cross-section
  */
 export function generateCrossSectionSVG(params, axialPosition, radialSteps = 64) {
-    const L = params.L;
-    const z = axialPosition * L;
-
     // Sample the profile at multiple angles
     const points = [];
     let maxRadius = 0;
@@ -22,6 +21,8 @@ export function generateCrossSectionSVG(params, axialPosition, radialSteps = 64)
     // Sample profile at various angles
     for (let i = 0; i <= radialSteps; i++) {
         const p = (i / radialSteps) * Math.PI * 2;
+        const L = evalParam(params.L, p);
+        const z = axialPosition * L;
 
         let radius = 0;
         if (params.type === 'OSSE') {
