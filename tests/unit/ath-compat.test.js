@@ -85,7 +85,11 @@ const applySchema = (params, schema) => {
     }
 };
 
-const prepareParams = (content, { applyVerticalOffset = false, forceFullQuadrants = true } = {}) => {
+const prepareParams = (content, {
+    applyVerticalOffset = false,
+    forceFullQuadrants = true,
+    applyAthDefaults = true
+} = {}) => {
     const parsed = MWGConfigParser.parse(content);
     const preparedParams = { ...parsed.params };
 
@@ -95,6 +99,21 @@ const prepareParams = (content, { applyVerticalOffset = false, forceFullQuadrant
     });
 
     preparedParams.type = parsed.type;
+
+    if (applyAthDefaults) {
+        const isOSSE = parsed.type === 'OSSE';
+        if (preparedParams.quadrants === undefined || preparedParams.quadrants === null || preparedParams.quadrants === '') {
+            preparedParams.quadrants = isOSSE ? '14' : '1';
+        }
+        if (isOSSE) {
+            if (preparedParams.k === undefined) preparedParams.k = 1;
+            if (preparedParams.h === undefined) preparedParams.h = 0;
+            const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
+            if (!hasMeshEnclosure && preparedParams.encDepth === undefined) {
+                preparedParams.encDepth = 0;
+            }
+        }
+    }
 
     const rawScale = preparedParams.scale ?? preparedParams.Scale ?? 1;
     const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
@@ -196,6 +215,58 @@ const parseStlBounds = (filePath) => {
     return { minX, maxX, minY, maxY, minZ, maxZ };
 };
 
+const parseMshBounds = (filePath) => {
+    const text = fs.readFileSync(filePath, 'utf8');
+    const lines = text.split(/\r?\n/);
+    let nodes = [];
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === '$Nodes') {
+            const count = parseInt(lines[i + 1].trim().split(/\s+/)[0]);
+            let idx = i + 2;
+            for (let n = 0; n < count; n++) {
+                const parts = lines[idx + n].trim().split(/\s+/);
+                if (parts.length >= 4) {
+                    nodes.push([
+                        parseFloat(parts[1]),
+                        parseFloat(parts[2]),
+                        parseFloat(parts[3])
+                    ]);
+                }
+            }
+            break;
+        }
+    }
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    for (const node of nodes) {
+        const x = node[0];
+        const y = node[1];
+        const z = node[2];
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    }
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+};
+
+const rotateVerticesForAthSTL = (vertices) => {
+    const out = new Array(vertices.length);
+    for (let i = 0; i < vertices.length; i += 3) {
+        const x = vertices[i];
+        const y = vertices[i + 1];
+        const z = vertices[i + 2];
+        out[i] = x;
+        out[i + 1] = -z;
+        out[i + 2] = y;
+    }
+    return out;
+};
+
 const computeMeshBounds = (vertices) => {
     let minX = Infinity;
     let minY = Infinity;
@@ -252,12 +323,60 @@ describe('ATH Tritonia compatibility', () => {
         }
 
         const refBounds = parseStlBounds(stlPath);
-        const ourBounds = computeMeshBounds(vertices);
+        const rotated = rotateVerticesForAthSTL(vertices);
+        const ourBounds = computeMeshBounds(rotated);
         expect(Math.abs(ourBounds.minX - refBounds.minX)).toBeLessThanOrEqual(1.0);
         expect(Math.abs(ourBounds.maxX - refBounds.maxX)).toBeLessThanOrEqual(1.0);
-        expect(Math.abs(ourBounds.minZ - refBounds.minY)).toBeLessThanOrEqual(1.0);
-        expect(Math.abs(ourBounds.maxZ - refBounds.maxY)).toBeLessThanOrEqual(1.0);
-        expect(Math.abs(ourBounds.minY - refBounds.minZ)).toBeLessThanOrEqual(1.0);
-        expect(Math.abs(ourBounds.maxY - refBounds.maxZ)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.minY - refBounds.minY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxY - refBounds.maxY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.minZ - refBounds.minZ)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxZ - refBounds.maxZ)).toBeLessThanOrEqual(1.0);
+    });
+});
+
+describe('ATH Aolo compatibility', () => {
+    it('matches reference STL bounds', () => {
+        const refRoot = path.join(process.cwd(), '_references');
+        const scriptPath = path.join(refRoot, 'aolo.txt');
+        const stlPath = path.join(refRoot, 'aolo', '260112aolo1.stl');
+
+        const content = fs.readFileSync(scriptPath, 'utf8');
+        const params = prepareParams(content, { applyVerticalOffset: false, forceFullQuadrants: true });
+        const { vertices } = buildHornMesh(params);
+
+        const refBounds = parseStlBounds(stlPath);
+        const rotated = rotateVerticesForAthSTL(vertices);
+        const ourBounds = computeMeshBounds(rotated);
+        expect(Math.abs(ourBounds.minX - refBounds.minX)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxX - refBounds.maxX)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.minY - refBounds.minY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxY - refBounds.maxY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.minZ - refBounds.minZ)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxZ - refBounds.maxZ)).toBeLessThanOrEqual(1.0);
+    });
+
+    it('matches reference MSH extents (symmetry mesh)', () => {
+        const refRoot = path.join(process.cwd(), '_references');
+        const scriptPath = path.join(refRoot, 'aolo.txt');
+        const mshPath = path.join(refRoot, 'aolo', 'ABEC_FreeStanding', '260112aolo1.msh');
+
+        const content = fs.readFileSync(scriptPath, 'utf8');
+        const params = prepareParams(content, { applyVerticalOffset: true, forceFullQuadrants: false });
+        const { vertices } = buildHornMesh(params);
+
+        const refBounds = parseMshBounds(mshPath);
+        const rotated = rotateVerticesForAthSTL(vertices);
+        const ourBounds = computeMeshBounds(rotated);
+
+        const refAbsX = Math.max(Math.abs(refBounds.minX), Math.abs(refBounds.maxX));
+        const refAbsY = Math.max(Math.abs(refBounds.minY), Math.abs(refBounds.maxY));
+        const refAbsZ = Math.max(Math.abs(refBounds.minZ), Math.abs(refBounds.maxZ));
+        const ourAbsX = Math.max(Math.abs(ourBounds.minX), Math.abs(ourBounds.maxX));
+        const ourAbsY = Math.max(Math.abs(ourBounds.minY), Math.abs(ourBounds.maxY));
+        const ourAbsZ = Math.max(Math.abs(ourBounds.minZ), Math.abs(ourBounds.maxZ));
+
+        expect(Math.abs(ourAbsX - refAbsX)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourAbsY - refAbsY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourAbsZ - refAbsZ)).toBeLessThanOrEqual(1.0);
     });
 });

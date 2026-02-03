@@ -463,12 +463,46 @@ class App {
                     typedParams._blocks = parsed.blocks;
                 }
 
+                const isMWGConfig = this.isMWGConfig(content);
+                if (!isMWGConfig) {
+                    this.applyAthImportDefaults(parsed, typedParams);
+                }
+
                 GlobalState.update(typedParams, parsed.type);
             } else {
                 alert('Could not find OSSE or R-OSSE block in config file.');
             }
         };
         reader.readAsText(file);
+    }
+
+    isMWGConfig(content) {
+        if (typeof content !== 'string') return false;
+        return /;\s*MWG config/i.test(content);
+    }
+
+    applyAthImportDefaults(parsed, typedParams) {
+        if (!parsed || !parsed.type) return;
+
+        const isOSSE = parsed.type === 'OSSE';
+        const hasQuadrants = typedParams.quadrants !== undefined && typedParams.quadrants !== null && typedParams.quadrants !== '';
+        if (!hasQuadrants) {
+            typedParams.quadrants = isOSSE ? '14' : '1';
+        }
+
+        if (isOSSE) {
+            if (typedParams.k === undefined) {
+                typedParams.k = 1;
+            }
+            if (typedParams.h === undefined) {
+                typedParams.h = 0;
+            }
+
+            const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
+            if (!hasMeshEnclosure && typedParams.encDepth === undefined) {
+                typedParams.encDepth = 0;
+            }
+        }
     }
 
     renderModel() {
@@ -607,7 +641,11 @@ class App {
     exportSTL() {
         if (!this.hornMesh) return;
         const exporter = new STLExporter();
-        const result = exporter.parse(this.hornMesh, { binary: true });
+        const exportMesh = this.hornMesh.clone();
+        exportMesh.geometry = this.hornMesh.geometry.clone();
+        exportMesh.geometry.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+        exportMesh.updateMatrixWorld(true);
+        const result = exporter.parse(exportMesh, { binary: true });
 
         saveFile(result, 'horn.stl', {
             extension: '.stl',
