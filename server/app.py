@@ -50,12 +50,40 @@ class MeshData(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class PolarConfig(BaseModel):
+    """
+    Configuration for ABEC.Polars directivity map
+
+    Follows the ATH/ABEC format for polar observation configurations.
+    Reference: Ath-4.8.2-UserGuide section 4.1.5 (ABEC.Polars)
+
+    Example in ATH format:
+        ABEC.Polars:SPL_D = {
+            MapAngleRange = 0,180,37
+            NormAngle = 5
+            Distance = 2
+            Inclination = 35
+        }
+
+    Attributes:
+        angle_range: [start_deg, end_deg, num_points] for angular sweep
+        norm_angle: Reference angle in degrees for normalization
+        distance: Measurement distance from horn mouth in meters
+        inclination: Inclination angle in degrees for measurement plane
+    """
+    angle_range: List[float] = [0, 180, 37]  # [start, end, num_points]
+    norm_angle: float = 5.0  # Normalization angle in degrees
+    distance: float = 2.0  # Measurement distance in meters
+    inclination: float = 35.0  # Inclination angle in degrees
+
+
 class SimulationRequest(BaseModel):
     mesh: MeshData
     frequency_range: List[float]
     num_frequencies: int
     sim_type: str
     options: Optional[Dict[str, Any]] = {}
+    polar_config: Optional[PolarConfig] = None
 
 
 class JobStatus(BaseModel):
@@ -193,6 +221,7 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             frequency_range=request.frequency_range,
             num_frequencies=request.num_frequencies,
             sim_type=request.sim_type,
+            polar_config=request.polar_config.dict() if request.polar_config else None,
             progress_callback=lambda p: update_progress(job_id, 0.3 + p * 0.6)
         )
         

@@ -72,11 +72,28 @@ npm run start:backend    # Backend only (port 8000)
 **Simulation Tab:**
 - Configure frequency range (100-10000 Hz default)
 - Choose simulation type (infinite baffle/free-standing)
+- **ABEC.Polars Directivity Maps:**
+  - User-adjustable polar configuration (angle range, normalization, distance, inclination)
+  - Professional 2D heatmap visualization (frequency vs angle)
+  - Color-coded SPL maps matching industry standards
+- **Post-Processing Smoothing:**
+  - Fractional octave smoothing (1/1, 1/2, 1/3, 1/6, 1/12, 1/24, 1/48)
+  - Variable smoothing (frequency-dependent bandwidth for EQ work)
+  - Psychoacoustic smoothing (perception-based weighting)
+  - ERB smoothing (matches ear's frequency resolution)
+  - Keyboard shortcuts (Ctrl+Shift+1-9, X, Y, Z)
+  - Apply/remove smoothing without re-running simulation
 - Run simulations and view results:
   - Frequency response
   - Directivity patterns
   - Impedance curves
   - Directivity Index (DI)
+  - Polar directivity heatmaps
+- **Export Results:**
+  - PNG/SVG images of all charts
+  - CSV data files (frequency, SPL, DI, impedance)
+  - JSON format (complete results with metadata)
+  - Text reports with summary statistics
 
 **Note:** Simulations work in two modes:
 - **With backend:** Real BEM physics (takes seconds to minutes)

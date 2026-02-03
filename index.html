@@ -109,6 +109,26 @@
             </div>
 
             <div class="section">
+                <h3>DIRECTIVITY MAP (ABEC.Polars)</h3>
+                <div class="input-row">
+                    <label>Map Angle Range (deg)</label>
+                    <input type="text" id="polar-angle-range" value="0,180,37" placeholder="start,end,steps">
+                </div>
+                <div class="input-row">
+                    <label>Norm Angle (deg)</label>
+                    <input type="number" id="polar-norm-angle" value="5" min="0" max="90" step="1">
+                </div>
+                <div class="input-row">
+                    <label>Distance (m)</label>
+                    <input type="number" id="polar-distance" value="2" min="0.1" max="10" step="0.1">
+                </div>
+                <div class="input-row">
+                    <label>Inclination (deg)</label>
+                    <input type="number" id="polar-inclination" value="35" min="0" max="90" step="1">
+                </div>
+            </div>
+
+            <div class="section">
                 <h3>ACTIONS</h3>
                 <button id="run-simulation-btn">Run BEM Simulation</button>
                 <button id="export-results-btn" class="secondary" disabled>Export Results</button>
@@ -123,11 +143,28 @@
             <div id="results-container" style="display: none;">
                 <div class="section">
                     <h3>SIMULATION RESULTS</h3>
+                    <div class="input-row">
+                        <label>Smoothing</label>
+                        <select id="smoothing-select">
+                            <option value="none">None (Ctrl+0)</option>
+                            <option value="1/1">1/1 Octave (Ctrl+Shift+1)</option>
+                            <option value="1/2">1/2 Octave (Ctrl+Shift+2)</option>
+                            <option value="1/3">1/3 Octave (Ctrl+Shift+3)</option>
+                            <option value="1/6">1/6 Octave (Ctrl+Shift+6)</option>
+                            <option value="1/12">1/12 Octave (Ctrl+Shift+7)</option>
+                            <option value="1/24">1/24 Octave (Ctrl+Shift+8)</option>
+                            <option value="1/48">1/48 Octave (Ctrl+Shift+9)</option>
+                            <option value="variable">Variable (Ctrl+Shift+X)</option>
+                            <option value="psychoacoustic">Psychoacoustic (Ctrl+Shift+Y)</option>
+                            <option value="erb">ERB (Ctrl+Shift+Z)</option>
+                        </select>
+                    </div>
                     <div id="results-charts"></div>
                 </div>
             </div>
         </div>
     </div>
+    <div id="ui-panel-resizer" aria-hidden="true"></div>
 
     <div id="stats">Vertices: 0 | Triangles: 0</div>
     <div id="canvas-container">

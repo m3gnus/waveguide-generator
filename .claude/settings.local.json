@@ -18,7 +18,24 @@
       "Bash(curl:*)",
       "Bash(node:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(grep:*)",
+      "Bash(npm run test)",
+      "Bash(npm run build:*)",
+      "Bash(timeout 5 npm run dev:*)",
+      "Bash(git mv:*)",
+      "Bash(chmod:*)",
+      "Bash(pkill:*)",
+      "Bash(xargs:*)",
+      "Bash(then)",
+      "Bash(fi)",
+      "Bash(else)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(pip3 install:*)",
+      "Bash(pip3 show:*)",
+      "Bash(cd:*)",
+      "Bash(gtimeout 5 python3:*)"
     ]
   }
 }

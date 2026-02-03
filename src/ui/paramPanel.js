@@ -410,7 +410,7 @@ export class ParamPanel {
             infoPanel.classList.remove('visible');
         };
 
-        this.container.appendChild(infoPanel);
+        document.body.appendChild(infoPanel);
     }
 
     updateParam(key, value) {

@@ -287,6 +287,7 @@ class BEMSolver:
         frequency_range: List[float],
         num_frequencies: int,
         sim_type: str,
+        polar_config: Optional[Dict] = None,
         progress_callback: Optional[Callable[[float], None]] = None
     ) -> Dict:
         """
@@ -377,9 +378,9 @@ class BEMSolver:
             results["impedance"]["imaginary"].append(float(impedance.imag))
             results["di"]["di"].append(float(di))
         
-        # Calculate directivity patterns at key frequencies
+        # Calculate directivity patterns at key frequencies using polar config
         results["directivity"] = self._calculate_directivity_patterns(
-            grid, frequencies, c, rho, sim_type
+            grid, frequencies, c, rho, sim_type, polar_config
         )
         
         if progress_callback:
@@ -653,7 +654,8 @@ class BEMSolver:
         frequencies: np.ndarray,
         c: float,
         rho: float,
-        sim_type: str
+        sim_type: str,
+        polar_config: Optional[Dict] = None
     ) -> Dict[str, List[List[float]]]:
         """
         Calculate directivity patterns at key frequencies.
@@ -661,8 +663,32 @@ class BEMSolver:
         Uses an analytical approximation based on ka (wavenumber * radius).
         For a horn, the pattern narrows with increasing frequency.
 
+        Args:
+            grid: bempp grid
+            frequencies: frequency array
+            c: speed of sound
+            rho: air density
+            sim_type: simulation type
+            polar_config: Configuration dict with keys:
+                - angle_range: [start, end, num_points] for angles
+                - norm_angle: normalization angle in degrees
+                - distance: measurement distance in meters
+                - inclination: inclination angle in degrees
+
         Returns patterns for horizontal, vertical, and diagonal planes
         """
+        # Parse polar config with defaults matching ABEC.Polars format
+        if polar_config:
+            angle_start, angle_end, angle_points = polar_config.get('angle_range', [0, 180, 37])
+            norm_angle = polar_config.get('norm_angle', 5.0)
+            distance_m = polar_config.get('distance', 2.0)
+            inclination = polar_config.get('inclination', 35.0)
+        else:
+            # Defaults matching reference script
+            angle_start, angle_end, angle_points = 0, 180, 37
+            norm_angle = 5.0
+            distance_m = 2.0
+            inclination = 35.0
         # Find mouth dimensions from grid
         vertices = grid.vertices
         max_y = np.max(vertices[1, :])
@@ -681,19 +707,18 @@ class BEMSolver:
             mouth_radius_h = 100.0  # Default 100mm
             mouth_radius_v = 100.0
 
-        # Select 3 key frequencies for directivity
-        key_freq_indices = [0, len(frequencies) // 2, -1]
-
+        # Calculate directivity for ALL frequencies (not just 3 key frequencies)
+        # This is needed for the polar heatmap visualization
         patterns = {
             "horizontal": [],
             "vertical": [],
             "diagonal": []
         }
 
-        # Angles for directivity (0 to 180 degrees - front hemisphere)
-        angles = np.linspace(0, 180, 37)
+        # Angles for directivity using polar config
+        angles = np.linspace(angle_start, angle_end, int(angle_points))
 
-        for freq_idx in key_freq_indices:
+        for freq_idx in range(len(frequencies)):
             freq = frequencies[freq_idx]
             k = 2 * np.pi * freq / c
 
