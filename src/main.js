@@ -89,7 +89,7 @@ class App {
         });
     }
 
-    prepareParamsForMesh({ forceFullQuadrants = false } = {}) {
+    prepareParamsForMesh({ forceFullQuadrants = false, applyVerticalOffset = true } = {}) {
         const state = GlobalState.get();
         const preparedParams = { ...state.params };
         const type = state.type;
@@ -139,6 +139,52 @@ class App {
         });
 
         preparedParams.type = type;
+
+        const rawScale = preparedParams.scale ?? preparedParams.Scale ?? 1;
+        const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
+        const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
+        preparedParams.scale = scale;
+        preparedParams.useAthZMap = scale !== 1;
+
+        if (scale !== 1) {
+            const lengthKeys = [
+                'L',
+                'r0',
+                'throatExtLength',
+                'slotLength',
+                'circArcRadius',
+                'morphCorner',
+                'morphWidth',
+                'morphHeight',
+                'throatResolution',
+                'mouthResolution',
+                'verticalOffset',
+                'encDepth',
+                'encEdge',
+                'encSpaceL',
+                'encSpaceT',
+                'encSpaceR',
+                'encSpaceB',
+                'wallThickness',
+                'rearResolution',
+                'interfaceOffset',
+                'interfaceDraw'
+            ];
+
+            lengthKeys.forEach((key) => {
+                const value = preparedParams[key];
+                if (value === undefined || value === null || value === '') return;
+                if (typeof value === 'function') {
+                    preparedParams[key] = (p) => scale * value(p);
+                } else if (typeof value === 'number' && Number.isFinite(value)) {
+                    preparedParams[key] = value * scale;
+                }
+            });
+        }
+
+        if (!applyVerticalOffset) {
+            preparedParams.verticalOffset = 0;
+        }
 
         if (forceFullQuadrants) {
             preparedParams.quadrants = '1234';
@@ -432,7 +478,7 @@ class App {
             this.hornMesh.material.dispose();
         }
 
-        const preparedParams = this.prepareParamsForMesh({ forceFullQuadrants: true });
+        const preparedParams = this.prepareParamsForMesh({ forceFullQuadrants: true, applyVerticalOffset: false });
         const { vertices, indices } = buildHornMesh(preparedParams);
 
         const geometry = new THREE.BufferGeometry();
@@ -616,7 +662,7 @@ class App {
     }
 
     provideMeshForSimulation() {
-        const preparedParams = this.prepareParamsForMesh();
+        const preparedParams = this.prepareParamsForMesh({ applyVerticalOffset: true });
         const { vertices, indices } = buildHornMesh(preparedParams);
         const vertexCount = vertices.length / 3;
 

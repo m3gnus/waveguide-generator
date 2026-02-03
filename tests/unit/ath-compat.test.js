@@ -1,0 +1,263 @@
+import fs from 'fs';
+import path from 'path';
+import { MWGConfigParser } from '../../src/config/parser.js';
+import { PARAM_SCHEMA } from '../../src/config/schema.js';
+import { parseExpression } from '../../src/geometry/expression.js';
+import { buildHornMesh } from '../../src/geometry/meshBuilder.js';
+
+const ATH_ZMAP_20 = [
+    0.0,
+    0.01319,
+    0.03269,
+    0.05965,
+    0.094787,
+    0.139633,
+    0.195959,
+    0.263047,
+    0.340509,
+    0.427298,
+    0.518751,
+    0.610911,
+    0.695737,
+    0.770223,
+    0.833534,
+    0.88547,
+    0.925641,
+    0.955904,
+    0.977809,
+    0.992192,
+    1.0
+];
+
+const rawExpressionKeys = new Set([
+    'zMapPoints',
+    'subdomainSlices',
+    'interfaceOffset',
+    'interfaceDraw',
+    'gcurveSf',
+    'encFrontResolution',
+    'encBackResolution',
+    'outputSubDir',
+    'outputDestDir',
+    'sourceContours'
+]);
+
+const isNumericString = (value) => /^-?\d+(\.\d+)?$/.test(value);
+
+const resampleZMap = (map, lengthSteps) => {
+    const maxIndex = map.length - 1;
+    if (maxIndex === lengthSteps) return map.slice();
+    const out = new Array(lengthSteps + 1);
+    for (let j = 0; j <= lengthSteps; j++) {
+        const t = (j / lengthSteps) * maxIndex;
+        const idx = Math.floor(t);
+        const frac = t - idx;
+        const v0 = map[idx];
+        const v1 = map[Math.min(idx + 1, maxIndex)];
+        out[j] = v0 + (v1 - v0) * frac;
+    }
+    return out;
+};
+
+const applySchema = (params, schema) => {
+    if (!schema) return;
+    for (const [key, def] of Object.entries(schema)) {
+        const val = params[key];
+        if (val === undefined || val === null) continue;
+
+        if (def.type === 'expression') {
+            if (rawExpressionKeys.has(key)) continue;
+            if (typeof val !== 'string') continue;
+            const trimmed = val.trim();
+            if (!trimmed) continue;
+            if (isNumericString(trimmed)) {
+                params[key] = Number(trimmed);
+            } else {
+                params[key] = parseExpression(trimmed);
+            }
+        } else if ((def.type === 'number' || def.type === 'range') && typeof val === 'string') {
+            const trimmed = val.trim();
+            if (!trimmed) continue;
+            if (isNumericString(trimmed)) {
+                params[key] = Number(trimmed);
+            }
+        }
+    }
+};
+
+const prepareParams = (content, { applyVerticalOffset = false, forceFullQuadrants = true } = {}) => {
+    const parsed = MWGConfigParser.parse(content);
+    const preparedParams = { ...parsed.params };
+
+    applySchema(preparedParams, PARAM_SCHEMA[parsed.type] || {});
+    ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC', 'OUTPUT'].forEach((group) => {
+        applySchema(preparedParams, PARAM_SCHEMA[group] || {});
+    });
+
+    preparedParams.type = parsed.type;
+
+    const rawScale = preparedParams.scale ?? preparedParams.Scale ?? 1;
+    const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
+    const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
+    preparedParams.scale = scale;
+    preparedParams.useAthZMap = scale !== 1;
+
+    if (scale !== 1) {
+        const lengthKeys = [
+            'L',
+            'r0',
+            'throatExtLength',
+            'slotLength',
+            'circArcRadius',
+            'morphCorner',
+            'morphWidth',
+            'morphHeight',
+            'throatResolution',
+            'mouthResolution',
+            'verticalOffset',
+            'encDepth',
+            'encEdge',
+            'encSpaceL',
+            'encSpaceT',
+            'encSpaceR',
+            'encSpaceB',
+            'wallThickness',
+            'rearResolution',
+            'interfaceOffset',
+            'interfaceDraw'
+        ];
+
+        lengthKeys.forEach((key) => {
+            const value = preparedParams[key];
+            if (value === undefined || value === null || value === '') return;
+            if (typeof value === 'function') {
+                preparedParams[key] = (p) => scale * value(p);
+            } else if (typeof value === 'number' && Number.isFinite(value)) {
+                preparedParams[key] = value * scale;
+            }
+        });
+    }
+
+    if (!applyVerticalOffset) {
+        preparedParams.verticalOffset = 0;
+    }
+
+    if (forceFullQuadrants) {
+        preparedParams.quadrants = '1234';
+    }
+
+    return preparedParams;
+};
+
+const parseMeshGeoMouthExtents = (filePath) => {
+    const text = fs.readFileSync(filePath, 'utf8');
+    const pointRegex = /Point\(\d+\)=\{([^,]+),([^,]+),([^,]+),/g;
+    let match;
+    let maxZ = -Infinity;
+    const points = [];
+    while ((match = pointRegex.exec(text))) {
+        const x = Number(match[1]);
+        const y = Number(match[2]);
+        const z = Number(match[3]);
+        if (z > maxZ) maxZ = z;
+        points.push({ x, y, z });
+    }
+    const mouthPoints = points.filter((p) => Math.abs(p.z - maxZ) < 1e-6);
+    const maxX = Math.max(...mouthPoints.map((p) => Math.abs(p.x)));
+    const maxY = Math.max(...mouthPoints.map((p) => Math.abs(p.y)));
+    return { maxX, maxY, maxZ };
+};
+
+const parseStlBounds = (filePath) => {
+    const buffer = fs.readFileSync(filePath);
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const triangleCount = view.getUint32(80, true);
+    let offset = 84;
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+
+    for (let i = 0; i < triangleCount; i++) {
+        offset += 12; // normal
+        for (let v = 0; v < 3; v++) {
+            const x = view.getFloat32(offset, true); offset += 4;
+            const y = view.getFloat32(offset, true); offset += 4;
+            const z = view.getFloat32(offset, true); offset += 4;
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+        }
+        offset += 2; // attribute
+    }
+
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+};
+
+const computeMeshBounds = (vertices) => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    for (let i = 0; i < vertices.length; i += 3) {
+        const x = vertices[i];
+        const y = vertices[i + 1];
+        const z = vertices[i + 2];
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    }
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+};
+
+describe('ATH Tritonia compatibility', () => {
+    it('matches reference mesh extents and axial spacing', () => {
+        const refRoot = path.join(process.cwd(), '_references');
+        const scriptPath = path.join(refRoot, 'tritonia.txt');
+        const meshGeoPath = path.join(refRoot, 'tritonia', 'mesh.geo');
+        const stlPath = path.join(refRoot, 'tritonia', 'tritonia.stl');
+
+        const content = fs.readFileSync(scriptPath, 'utf8');
+        const params = prepareParams(content, { applyVerticalOffset: false, forceFullQuadrants: true });
+        const { vertices } = buildHornMesh(params);
+
+        const ringSize = params.angularSegments + 1;
+        const lastRingStart = params.lengthSegments * ringSize * 3;
+        const ringPoints = [];
+        for (let i = 0; i < ringSize; i++) {
+            const idx = lastRingStart + i * 3;
+            ringPoints.push([vertices[idx], vertices[idx + 1], vertices[idx + 2]]);
+        }
+        const maxX = Math.max(...ringPoints.map((p) => Math.abs(p[0])));
+        const maxZ = Math.max(...ringPoints.map((p) => Math.abs(p[2])));
+
+        const meshGeoExtents = parseMeshGeoMouthExtents(meshGeoPath);
+        expect(Math.abs(maxX - meshGeoExtents.maxX)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(maxZ - meshGeoExtents.maxY)).toBeLessThanOrEqual(1.0);
+
+        const totalLength = (typeof params.L === 'function' ? params.L(0) : params.L)
+            + (typeof params.throatExtLength === 'function' ? params.throatExtLength(0) : (params.throatExtLength || 0))
+            + (typeof params.slotLength === 'function' ? params.slotLength(0) : (params.slotLength || 0));
+        const expectedMap = resampleZMap(ATH_ZMAP_20, params.lengthSegments);
+
+        for (let j = 0; j <= params.lengthSegments; j++) {
+            const idx = j * ringSize * 3 + 1;
+            const y = vertices[idx];
+            const expected = expectedMap[j] * totalLength;
+            expect(Math.abs(y - expected)).toBeLessThanOrEqual(0.1);
+        }
+
+        const refBounds = parseStlBounds(stlPath);
+        const ourBounds = computeMeshBounds(vertices);
+        expect(Math.abs(ourBounds.minX - refBounds.minX)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxX - refBounds.maxX)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.minZ - refBounds.minY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxZ - refBounds.maxY)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.minY - refBounds.minZ)).toBeLessThanOrEqual(1.0);
+        expect(Math.abs(ourBounds.maxY - refBounds.maxZ)).toBeLessThanOrEqual(1.0);
+    });
+});
