@@ -89,6 +89,64 @@ class App {
         });
     }
 
+    prepareParamsForMesh({ forceFullQuadrants = false } = {}) {
+        const state = GlobalState.get();
+        const preparedParams = { ...state.params };
+        const type = state.type;
+
+        const rawExpressionKeys = new Set([
+            'zMapPoints',
+            'subdomainSlices',
+            'interfaceOffset',
+            'interfaceDraw',
+            'gcurveSf',
+            'encFrontResolution',
+            'encBackResolution',
+            'outputSubDir',
+            'outputDestDir',
+            'sourceContours'
+        ]);
+
+        const applySchema = (schema) => {
+            if (!schema) return;
+            for (const [key, def] of Object.entries(schema)) {
+                const val = preparedParams[key];
+                if (val === undefined || val === null) continue;
+
+                if (def.type === 'expression') {
+                    if (rawExpressionKeys.has(key)) continue;
+                    if (typeof val !== 'string') continue;
+                    const trimmed = val.trim();
+                    if (!trimmed) continue;
+                    if (isNumericString(trimmed)) {
+                        preparedParams[key] = Number(trimmed);
+                    } else {
+                        preparedParams[key] = parseExpression(trimmed);
+                    }
+                } else if ((def.type === 'number' || def.type === 'range') && typeof val === 'string') {
+                    const trimmed = val.trim();
+                    if (!trimmed) continue;
+                    if (isNumericString(trimmed)) {
+                        preparedParams[key] = Number(trimmed);
+                    }
+                }
+            }
+        };
+
+        applySchema(PARAM_SCHEMA[type] || {});
+        ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC', 'OUTPUT'].forEach((group) => {
+            applySchema(PARAM_SCHEMA[group] || {});
+        });
+
+        preparedParams.type = type;
+
+        if (forceFullQuadrants) {
+            preparedParams.quadrants = '1234';
+        }
+
+        return preparedParams;
+    }
+
     /**
      * Initialize the change logging system
      */
@@ -355,6 +413,10 @@ class App {
                     }
                 }
 
+                if (parsed.blocks && Object.keys(parsed.blocks).length > 0) {
+                    typedParams._blocks = parsed.blocks;
+                }
+
                 GlobalState.update(typedParams, parsed.type);
             } else {
                 alert('Could not find OSSE or R-OSSE block in config file.');
@@ -370,27 +432,7 @@ class App {
             this.hornMesh.material.dispose();
         }
 
-        const state = GlobalState.get();
-        const preparedParams = { ...state.params };
-
-        // Evaluate expressions for core OSSE / R-OSSE parameters (allow formulas on all)
-        const type = state.type;
-
-        const coreSchema = PARAM_SCHEMA[type] || {};
-        for (const key of Object.keys(coreSchema)) {
-            const val = preparedParams[key];
-            if (typeof val !== 'string') continue;
-            const trimmed = val.trim();
-            if (!trimmed) continue;
-            if (isNumericString(trimmed)) {
-                preparedParams[key] = Number(trimmed);
-            } else {
-                preparedParams[key] = parseExpression(trimmed);
-            }
-        }
-
-        preparedParams.type = type;
-
+        const preparedParams = this.prepareParamsForMesh({ forceFullQuadrants: true });
         const { vertices, indices } = buildHornMesh(preparedParams);
 
         const geometry = new THREE.BufferGeometry();
@@ -574,32 +616,14 @@ class App {
     }
 
     provideMeshForSimulation() {
-        if (!this.hornMesh) {
-            console.warn('No mesh available for simulation');
-            AppEvents.emit('simulation:mesh-ready', null);
-            return null;
-        }
-
-        // Provide mesh data to simulation panel
-        const geometry = this.hornMesh.geometry;
-        const vertices = geometry.attributes.position.array;
-
-        // Check if geometry has an index buffer
-        if (!geometry.index) {
-            console.error('[Simulation] Geometry has no index buffer - mesh may be non-indexed');
-            AppEvents.emit('simulation:mesh-ready', null);
-            return null;
-        }
-
-        const indices = geometry.index.array;
-        const state = GlobalState.get();
-
-        // Validate mesh data before sending
+        const preparedParams = this.prepareParamsForMesh();
+        const { vertices, indices } = buildHornMesh(preparedParams);
         const vertexCount = vertices.length / 3;
+
         const maxIndex = Math.max(...indices);
         if (maxIndex >= vertexCount) {
             console.error(`[Simulation] Invalid mesh: max index ${maxIndex} >= vertex count ${vertexCount}`);
-            console.error('[Simulation] This indicates the mesh was corrupted during Three.js processing');
+            console.error('[Simulation] This indicates the mesh was corrupted during simulation mesh generation');
             AppEvents.emit('simulation:mesh-ready', null);
             return null;
         }
@@ -611,8 +635,8 @@ class App {
             indices: Array.from(indices),
             vertexCount: vertexCount,
             triangleCount: indices.length / 3,
-            params: state.params,
-            type: state.type
+            params: preparedParams,
+            type: preparedParams.type
         });
     }
 

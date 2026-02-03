@@ -45,6 +45,8 @@ export function validateParams(params, modelType) {
 
         // Expression validation (basic check)
         if (schemaDef.type === 'expression') {
+            if (typeof value === 'number') return;
+            if (typeof value === 'function') return;
             if (typeof value !== 'string' || value.trim() === '') {
                 issues.push({ param: key, message: 'Expression cannot be empty', severity: 'error' });
             }
@@ -62,7 +64,7 @@ export function validateParams(params, modelType) {
     }
 
     // 2. Validate Shared Groups
-    ['MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach(group => {
+    ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC', 'OUTPUT'].forEach(group => {
         const groupSchema = PARAM_SCHEMA[group];
         for (const [key, def] of Object.entries(groupSchema)) {
             if (params[key] !== undefined) {

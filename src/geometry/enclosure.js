@@ -32,6 +32,229 @@
  * @param {number} verticalOffset - Y offset applied to the mesh (throat Y position)
  * @param {Object} quadrantInfo - Quadrant information for symmetry meshes
  */
+
+function parsePlanBlock(planBlock) {
+    if (!planBlock || !planBlock._lines) return null;
+
+    const points = new Map();
+    const cpoints = new Map();
+    const segments = [];
+
+    const addPoint = (id, x, y) => {
+        points.set(id, { x: Number(x), y: Number(y) });
+    };
+
+    const addCPoint = (id, x, y) => {
+        cpoints.set(id, { x: Number(x), y: Number(y) });
+    };
+
+    for (const rawLine of planBlock._lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const parts = line.split(/\s+/);
+        const keyword = parts[0];
+        if (keyword === 'point' && parts.length >= 4) {
+            addPoint(parts[1], parts[2], parts[3]);
+        } else if (keyword === 'cpoint' && parts.length >= 4) {
+            addCPoint(parts[1], parts[2], parts[3]);
+        } else if (keyword === 'line' && parts.length >= 3) {
+            segments.push({ type: 'line', ids: [parts[1], parts[2]] });
+        } else if (keyword === 'arc' && parts.length >= 4) {
+            segments.push({ type: 'arc', ids: [parts[1], parts[2], parts[3]] });
+        } else if (keyword === 'ellipse' && parts.length >= 5) {
+            segments.push({ type: 'ellipse', ids: [parts[1], parts[2], parts[3], parts[4]] });
+        } else if (keyword === 'bezier' && parts.length >= 3) {
+            segments.push({ type: 'bezier', ids: parts.slice(1) });
+        }
+    }
+
+    return { points, cpoints, segments };
+}
+
+function sampleArc(p1, center, p2, steps = 16) {
+    const a1 = Math.atan2(p1.y - center.y, p1.x - center.x);
+    const a2 = Math.atan2(p2.y - center.y, p2.x - center.x);
+    let delta = a2 - a1;
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const a = a1 + delta * t;
+        out.push({
+            x: center.x + Math.cos(a) * Math.hypot(p1.x - center.x, p1.y - center.y),
+            y: center.y + Math.sin(a) * Math.hypot(p1.x - center.x, p1.y - center.y)
+        });
+    }
+    return out;
+}
+
+function sampleEllipse(p1, center, major, p2, steps = 24) {
+    const vx = major.x - center.x;
+    const vy = major.y - center.y;
+    const a = Math.hypot(vx, vy);
+    if (a <= 0) return [p1, p2];
+
+    const phi = Math.atan2(vy, vx);
+    const cosP = Math.cos(phi);
+    const sinP = Math.sin(phi);
+
+    const toLocal = (pt) => {
+        const dx = pt.x - center.x;
+        const dy = pt.y - center.y;
+        return {
+            x: cosP * dx + sinP * dy,
+            y: -sinP * dx + cosP * dy
+        };
+    };
+
+    const p1l = toLocal(p1);
+    const p2l = toLocal(p2);
+
+    const calcB = (pl) => {
+        const denom = 1 - (pl.x / a) ** 2;
+        if (denom <= 0) return null;
+        return Math.abs(pl.y) / Math.sqrt(denom);
+    };
+
+    const b1 = calcB(p1l);
+    const b2 = calcB(p2l);
+    const b = Number.isFinite(b1) && Number.isFinite(b2) ? (b1 + b2) / 2 : (b1 || b2 || a);
+
+    const t1 = Math.atan2(p1l.y / b, p1l.x / a);
+    const t2 = Math.atan2(p2l.y / b, p2l.x / a);
+    let delta = t2 - t1;
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+        const t = t1 + delta * (i / steps);
+        const x = a * Math.cos(t);
+        const y = b * Math.sin(t);
+        out.push({
+            x: center.x + cosP * x - sinP * y,
+            y: center.y + sinP * x + cosP * y
+        });
+    }
+    return out;
+}
+
+function sampleBezier(points, steps = 24) {
+    const out = [];
+    const n = points.length - 1;
+    const bernstein = (i, t) => {
+        const binom = (n, k) => {
+            let res = 1;
+            for (let i = 1; i <= k; i++) {
+                res = (res * (n - (k - i))) / i;
+            }
+            return res;
+        };
+        return binom(n, i) * Math.pow(1 - t, n - i) * Math.pow(t, i);
+    };
+    for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        let x = 0;
+        let y = 0;
+        for (let i = 0; i <= n; i++) {
+            const b = bernstein(i, t);
+            x += points[i].x * b;
+            y += points[i].y * b;
+        }
+        out.push({ x, y });
+    }
+    return out;
+}
+
+function buildPlanOutline(params, quadrantInfo) {
+    let planName = params.encPlan;
+    if (typeof planName === 'string') {
+        const trimmed = planName.trim();
+        planName = trimmed.replace(/^\"(.*)\"$/, '$1').replace(/^\'(.*)\'$/, '$1');
+    }
+    if (!planName || !params._blocks) return null;
+
+    const planBlock = params._blocks[planName];
+    const parsed = parsePlanBlock(planBlock);
+    if (!parsed) return null;
+
+    const { points, cpoints, segments } = parsed;
+    if (!segments.length) return null;
+
+    const outline = [];
+    segments.forEach((seg, index) => {
+        let pts = [];
+        if (seg.type === 'line') {
+            const p1 = points.get(seg.ids[0]);
+            const p2 = points.get(seg.ids[1]);
+            if (p1 && p2) pts = [p1, p2];
+        } else if (seg.type === 'arc') {
+            const p1 = points.get(seg.ids[0]);
+            const c = cpoints.get(seg.ids[1]) || points.get(seg.ids[1]);
+            const p2 = points.get(seg.ids[2]);
+            if (p1 && c && p2) pts = sampleArc(p1, c, p2);
+        } else if (seg.type === 'ellipse') {
+            const p1 = points.get(seg.ids[0]);
+            const c = cpoints.get(seg.ids[1]) || points.get(seg.ids[1]);
+            const major = points.get(seg.ids[2]);
+            const p2 = points.get(seg.ids[3]);
+            if (p1 && c && major && p2) pts = sampleEllipse(p1, c, major, p2);
+        } else if (seg.type === 'bezier') {
+            const bezPoints = seg.ids.map((id) => points.get(id)).filter(Boolean);
+            if (bezPoints.length >= 2) pts = sampleBezier(bezPoints);
+        }
+
+        if (!pts.length) return;
+        if (index > 0) pts = pts.slice(1);
+        outline.push(...pts);
+    });
+
+    if (outline.length < 2) return null;
+
+    const sL = parseFloat(params.encSpaceL) || 0;
+    const sT = parseFloat(params.encSpaceT) || 0;
+    const sR = parseFloat(params.encSpaceR) || 0;
+    const sB = parseFloat(params.encSpaceB) || 0;
+
+    const applySpacing = (pt) => {
+        const x = pt.x >= 0 ? pt.x + sR : pt.x - sL;
+        const z = pt.y >= 0 ? pt.y + sT : pt.y - sB;
+        return { x, z };
+    };
+
+    const quarter = outline.map(applySpacing);
+    const qMode = String(params.quadrants || '1234');
+
+    if (qMode === '14') {
+        const bottom = [...quarter].reverse().map((pt) => ({ x: pt.x, z: -pt.z }));
+        const half = bottom.concat(quarter.slice(1));
+        half.push({ x: 0, z: quarter[quarter.length - 1].z });
+        half.push({ x: 0, z: -quarter[quarter.length - 1].z });
+        return half;
+    }
+
+    if (qMode === '12') {
+        const left = [...quarter].reverse().map((pt) => ({ x: -pt.x, z: pt.z }));
+        const half = quarter.concat(left.slice(1));
+        half.push({ x: -quarter[0].x, z: 0 });
+        half.push({ x: quarter[0].x, z: 0 });
+        return half;
+    }
+
+    if (qMode === '1') {
+        const out = [...quarter];
+        out.push({ x: 0, z: quarter[quarter.length - 1].z });
+        out.push({ x: 0, z: 0 });
+        out.push({ x: quarter[0].x, z: 0 });
+        return out;
+    }
+
+    const top = quarter.concat([...quarter].reverse().map((pt) => ({ x: -pt.x, z: pt.z })).slice(1));
+    const bottom = [...top].reverse().map((pt) => ({ x: pt.x, z: -pt.z }));
+    return top.concat(bottom.slice(1));
+}
 export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null) {
     const radialSteps = params.angularSegments;
 
@@ -46,8 +269,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const sT = parseFloat(params.encSpaceT) || 25;
     const sR = parseFloat(params.encSpaceR) || 25;
     const sB = parseFloat(params.encSpaceB) || 25;
-    const depth = parseFloat(params.encDepth);
+    const depthRaw = parseFloat(params.encDepth);
+    const depth = Number.isFinite(depthRaw) ? depthRaw : 0;
     const edgeR = parseFloat(params.encEdge) || 0;
+    const cornerSegs = Math.max(4, params.cornerSegments || 4);
 
     // Determine if we're in symmetry mode (quadrant 14 = right half)
     const isRightHalf = quadrantInfo && (params.quadrants === '14' || params.quadrants === 14);
@@ -64,17 +289,17 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         if (mz < minZ) minZ = mz;
     }
 
-    // Calculate enclosure outer bounds based on mouth dimensions + spacing
+    const planOutline = buildPlanOutline(params, quadrantInfo);
+    const usePlanOutline = Array.isArray(planOutline) && planOutline.length > 1;
+
     let boxRight, boxLeft, boxTop, boxBot;
 
     if (isRightHalf) {
-        // Symmetric mode: enclosure extends from x=0 (symmetry plane)
         boxRight = maxX + sR;
-        boxLeft = 0;  // Symmetry plane
+        boxLeft = 0;
         boxTop = maxZ + sT;
         boxBot = minZ - sB;
     } else {
-        // Full mode: enclosure extends around full mouth
         boxRight = maxX + sR;
         boxLeft = minX - sL;
         boxTop = maxZ + sT;
@@ -82,58 +307,85 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     }
 
     const startIdx = vertices.length / 3;
-
-    // Build rounded rectangle profile for the outer baffle edge
-    const halfW = (boxRight - boxLeft) / 2;
-    const halfH = (boxTop - boxBot) / 2;
-    const cx = (boxRight + boxLeft) / 2;
-    const cz = (boxTop + boxBot) / 2;
-    // Ensure radius doesn't degrade into degenerate geometry
-    const cr = Math.min(edgeR, halfW - 0.1, halfH - 0.1);
-
-    const cornerSegs = Math.max(4, params.cornerSegments || 4);
-
-    // Generate outline for baffle outer edge (includes rounded corners)
     const outline = [];
+    let cx = 0;
+    let cz = 0;
+    let halfW = 0;
+    let halfH = 0;
 
-    if (isRightHalf) {
-        // For right half symmetry, generate outline from bottom-right going counterclockwise
-        // but only the right side (x >= 0)
-        const addCorner = (cornerCx, cornerCz, startAngle) => {
-            for (let i = 0; i <= cornerSegs; i++) {
-                const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
-                const x = cornerCx + cr * Math.cos(a);
-                const z = cornerCz + cr * Math.sin(a);
-                if (x >= -0.001) {
-                    outline.push({ x: Math.max(0, x), z });
-                }
-            }
-        };
-
-        // Bottom-right corner (rounded)
-        addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2);
-        // Top-right corner (rounded)
-        addCorner(cx + halfW - cr, cz + halfH - cr, 0);
-        // Symmetry plane edges (straight line at x=0)
-        outline.push({ x: 0, z: cz + halfH });
-        outline.push({ x: 0, z: cz - halfH });
-
+    if (usePlanOutline) {
+        let maxPX = -Infinity, minPX = Infinity, maxPZ = -Infinity, minPZ = Infinity;
+        planOutline.forEach((pt) => {
+            if (pt.x > maxPX) maxPX = pt.x;
+            if (pt.x < minPX) minPX = pt.x;
+            if (pt.z > maxPZ) maxPZ = pt.z;
+            if (pt.z < minPZ) minPZ = pt.z;
+        });
+        outline.push(...planOutline);
+        cx = (maxPX + minPX) / 2;
+        cz = (maxPZ + minPZ) / 2;
+        halfW = (maxPX - minPX) / 2;
+        halfH = (maxPZ - minPZ) / 2;
     } else {
-        // Full enclosure outline (BR -> TR -> TL -> BL)
-        const addCorner = (cornerCx, cornerCz, startAngle) => {
-            for (let i = 0; i <= cornerSegs; i++) {
-                const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
-                outline.push({ x: cornerCx + cr * Math.cos(a), z: cornerCz + cr * Math.sin(a) });
-            }
-        };
+        halfW = (boxRight - boxLeft) / 2;
+        halfH = (boxTop - boxBot) / 2;
+        cx = (boxRight + boxLeft) / 2;
+        cz = (boxTop + boxBot) / 2;
 
-        addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2);  // BR
-        addCorner(cx + halfW - cr, cz + halfH - cr, 0);             // TR
-        addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2);   // TL
-        addCorner(cx - halfW + cr, cz - halfH + cr, Math.PI);       // BL
+        const cr = Math.min(edgeR, halfW - 0.1, halfH - 0.1);
+
+        if (isRightHalf) {
+            const addCorner = (cornerCx, cornerCz, startAngle) => {
+                for (let i = 0; i <= cornerSegs; i++) {
+                    const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
+                    const x = cornerCx + cr * Math.cos(a);
+                    const z = cornerCz + cr * Math.sin(a);
+                    if (x >= -0.001) {
+                        outline.push({ x: Math.max(0, x), z });
+                    }
+                }
+            };
+
+            addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2);
+            addCorner(cx + halfW - cr, cz + halfH - cr, 0);
+            outline.push({ x: 0, z: cz + halfH });
+            outline.push({ x: 0, z: cz - halfH });
+
+        } else {
+            const addCorner = (cornerCx, cornerCz, startAngle) => {
+                for (let i = 0; i <= cornerSegs; i++) {
+                    const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
+                    outline.push({ x: cornerCx + cr * Math.cos(a), z: cornerCz + cr * Math.sin(a) });
+                }
+            };
+
+            addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2);
+            addCorner(cx + halfW - cr, cz + halfH - cr, 0);
+            addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2);
+            addCorner(cx - halfW + cr, cz - halfH + cr, Math.PI);
+        }
     }
 
     const totalPts = outline.length;
+    const usePlanMap = usePlanOutline;
+    const outlineAngles = usePlanMap ? outline.map((pt) => Math.atan2(pt.z, pt.x)) : null;
+
+    const findNearestOutlineIndex = (angle) => {
+        if (!outlineAngles) return 0;
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < outlineAngles.length; i++) {
+            let delta = angle - outlineAngles[i];
+            while (delta > Math.PI) delta -= Math.PI * 2;
+            while (delta < -Math.PI) delta += Math.PI * 2;
+            const dist = Math.abs(delta);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
+    };
 
     // ==========================================
     // Key Y positions
@@ -230,8 +482,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
         // Map angle to enclosure outline index
         let ei, ei2;
-        if (isRightHalf) {
-            // Map angle (-π/2 to π/2) to outline index
+        if (usePlanMap) {
+            ei = findNearestOutlineIndex(p);
+            ei2 = findNearestOutlineIndex(p2);
+        } else if (isRightHalf) {
             const normalizedAngle1 = (p + Math.PI / 2) / Math.PI;
             const normalizedAngle2 = (p2 + Math.PI / 2) / Math.PI;
             const rightSidePts = 2 * (cornerSegs + 1);

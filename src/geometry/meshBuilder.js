@@ -6,6 +6,55 @@ import { addRearShapeGeometry } from './rearShape.js';
 
 const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
 
+const parseList = (value) => {
+    if (value === undefined || value === null) return null;
+    if (Array.isArray(value)) {
+        const out = value.map((v) => Number(v)).filter((v) => Number.isFinite(v));
+        return out.length ? out : null;
+    }
+    if (typeof value === 'string') {
+        const parts = value.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
+        const nums = parts.map((v) => Number(v)).filter((v) => Number.isFinite(v));
+        return nums.length ? nums : null;
+    }
+    return null;
+};
+
+const buildSliceMap = (params, lengthSteps) => {
+    const zMap = parseList(params.zMapPoints);
+    if (zMap && zMap.length === lengthSteps + 1) {
+        const maxVal = Math.max(...zMap);
+        if (maxVal > 1.0) {
+            return zMap.map((z) => z / maxVal);
+        }
+        return zMap.map((z) => Math.max(0, Math.min(1, z)));
+    }
+
+    const throatSegments = Number(params.throatSegments || 0);
+    if (!Number.isFinite(throatSegments) || throatSegments <= 0 || throatSegments >= lengthSteps) {
+        return null;
+    }
+
+    const extLen = Math.max(0, evalParam(params.throatExtLength || 0, 0));
+    const slotLen = Math.max(0, evalParam(params.slotLength || 0, 0));
+    const L = Math.max(0, evalParam(params.L || 0, 0));
+    const totalLength = L + extLen + slotLen;
+    if (totalLength <= 0) return null;
+
+    const extFraction = (extLen + slotLen) / totalLength;
+    if (extFraction <= 0 || extFraction >= 1) return null;
+    const map = new Array(lengthSteps + 1);
+    for (let j = 0; j <= lengthSteps; j++) {
+        if (j <= throatSegments) {
+            map[j] = extFraction * (j / throatSegments);
+        } else {
+            const t = (j - throatSegments) / (lengthSteps - throatSegments);
+            map[j] = extFraction + (1 - extFraction) * t;
+        }
+    }
+    return map;
+};
+
 /**
  * Parse quadrants parameter to get angular range.
  * ATH quadrants convention:
@@ -55,6 +104,7 @@ function parseQuadrants(quadrants) {
 export function buildHornMesh(params) {
     const radialSteps = params.angularSegments;
     const lengthSteps = params.lengthSegments;
+    const sliceMap = buildSliceMap(params, lengthSteps);
 
     const vertices = [];
     const indices = [];
@@ -76,7 +126,7 @@ export function buildHornMesh(params) {
     const effectiveRadialSteps = quadrantInfo.fullCircle ? radialSteps : radialSteps;
 
     for (let j = 0; j <= lengthSteps; j++) {
-        const t = j / lengthSteps;
+        const t = sliceMap ? sliceMap[j] : j / lengthSteps;
 
         for (let i = 0; i <= effectiveRadialSteps; i++) {
             // Map i to angle within the quadrant range
@@ -91,7 +141,10 @@ export function buildHornMesh(params) {
                 profile = calculateROSSE(tActual, p, params);
             } else {
                 const L = evalParam(params.L, p);
-                profile = calculateOSSE(tActual * L, p, params);
+                const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
+                const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
+                const totalLength = L + extLen + slotLen;
+                profile = calculateOSSE(tActual * totalLength, p, params);
                 const h = params.h === undefined ? 0 : evalParam(params.h, p);
                 if (h > 0) {
                     profile.y += h * Math.sin(tActual * Math.PI);

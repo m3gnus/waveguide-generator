@@ -64,6 +64,7 @@ export class ParamPanel {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         if (!this.container) throw new Error(`Container ${containerId} not found`);
+        this.simulationContainer = document.getElementById('simulation-param-container');
         this.formulaInfoVisible = false;
         this.init();
     }
@@ -94,6 +95,9 @@ export class ParamPanel {
     // Create the full UI structure
     createFullPanel() {
         this.container.innerHTML = '';
+        if (this.simulationContainer) {
+            this.simulationContainer.innerHTML = '';
+        }
         const state = GlobalState.get();
         const type = state.type;
 
@@ -147,6 +151,16 @@ export class ParamPanel {
             this.container.appendChild(section);
         }
 
+        // --- Geometry Advanced (OSSE only) ---
+        if (type === 'OSSE') {
+            const geomSection = this.createDetailsSection('Geometry Advanced', 'geometry-advanced-details');
+            const geomSchema = PARAM_SCHEMA.GEOMETRY;
+            for (const [key, def] of Object.entries(geomSchema)) {
+                geomSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+            this.container.appendChild(geomSection);
+        }
+
         // --- Morphing (for OSSE) ---
         // Architecture ref says: "Improve morphing... OSSE model".
         if (type === 'OSSE') {
@@ -156,16 +170,6 @@ export class ParamPanel {
                 morphSection.appendChild(this.createControlRow(key, def, state.params[key]));
             }
             this.container.appendChild(morphSection);
-
-            const encSection = this.createDetailsSection('Mesh Enclosure', 'osse-enc-details');
-            const encSchema = PARAM_SCHEMA.ENCLOSURE;
-            if (encSchema) {
-                for (const [key, def] of Object.entries(encSchema)) {
-                    // Combine space L/T/R/B into one row? For now, list them.
-                    encSection.appendChild(this.createControlRow(key, def, state.params[key]));
-                }
-                this.container.appendChild(encSection);
-            }
         }
 
         // --- Rollback (R-OSSE primarily, but available for both) ---
@@ -178,22 +182,76 @@ export class ParamPanel {
             this.container.appendChild(rollSection);
         }
 
-        // --- Mesh Settings (Shared) ---
-        const meshSection = this.createDetailsSection('Mesh & Rear', 'mesh-details');
-        for (const [key, def] of Object.entries(PARAM_SCHEMA.MESH)) {
-            meshSection.appendChild(this.createControlRow(key, def, state.params[key]));
-        }
-        this.container.appendChild(meshSection);
+        // --- Mesh Enclosure (Shared) ---
+        const meshSchema = PARAM_SCHEMA.MESH || {};
+        const enclosureSection = this.createDetailsSection('Mesh Enclosure', 'mesh-enclosure-details');
 
-        // --- Source & ABEC ---
-        const sourceSection = this.createDetailsSection('Source & ABEC', 'source-details');
-        for (const [key, def] of Object.entries(PARAM_SCHEMA.SOURCE)) {
-            sourceSection.appendChild(this.createControlRow(key, def, state.params[key]));
+        if (type === 'OSSE') {
+            const encSchema = PARAM_SCHEMA.ENCLOSURE;
+            if (encSchema) {
+                for (const [key, def] of Object.entries(encSchema)) {
+                    // Combine space L/T/R/B into one row? For now, list them.
+                    enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
+                }
+            }
         }
-        for (const [key, def] of Object.entries(PARAM_SCHEMA.ABEC)) {
-            sourceSection.appendChild(this.createControlRow(key, def, state.params[key]));
+
+        const meshEnclosureKeys = ['wallThickness', 'rearShape'];
+        meshEnclosureKeys.forEach((key) => {
+            const def = meshSchema[key];
+            if (def) {
+                enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+        });
+        this.container.appendChild(enclosureSection);
+
+        // --- Mesh Advanced (Shared) ---
+        const meshAdvanced = this.createDetailsSection('Mesh Advanced', 'mesh-advanced-details');
+        const meshAdvancedKeys = [
+            'throatSegments',
+            'throatResolution',
+            'mouthResolution',
+            'verticalOffset',
+            'zMapPoints',
+            'subdomainSlices',
+            'interfaceOffset',
+            'interfaceDraw',
+            'rearResolution'
+        ];
+        meshAdvancedKeys.forEach((key) => {
+            const def = meshSchema[key];
+            if (def) {
+                meshAdvanced.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+        });
+        this.container.appendChild(meshAdvanced);
+
+        // --- Output (Advanced) ---
+        const outputSchema = PARAM_SCHEMA.OUTPUT;
+        if (outputSchema) {
+            const outputSection = this.createDetailsSection('Output Settings', 'output-details');
+            for (const [key, def] of Object.entries(outputSchema)) {
+                outputSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+            this.container.appendChild(outputSection);
         }
-        this.container.appendChild(sourceSection);
+
+        // --- Simulation Mesh (Simulation Tab) ---
+        if (this.simulationContainer) {
+            const sourceSection = this.createDetailsSection('Source', 'source-details');
+            for (const [key, def] of Object.entries(PARAM_SCHEMA.SOURCE)) {
+                sourceSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+            this.simulationContainer.appendChild(sourceSection);
+
+            const simulationMeshSection = this.createDetailsSection('Simulation Mesh', 'simulation-mesh-details');
+            const meshEnclosureKeys = new Set(['wallThickness', 'rearShape']);
+            for (const [key, def] of Object.entries(meshSchema)) {
+                if (meshEnclosureKeys.has(key)) continue;
+                simulationMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+            this.simulationContainer.appendChild(simulationMeshSection);
+        }
     }
 
     createSection(title) {
