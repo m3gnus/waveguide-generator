@@ -12,7 +12,7 @@ export function getDefaults(modelType) {
     }
 
     // Shared groups
-    const sharedGroups = ['MORPH', 'MESH', 'ROLLBACK', 'SOURCE', 'ABEC', 'ENCLOSURE'];
+    const sharedGroups = ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'SOURCE', 'ABEC', 'ENCLOSURE', 'OUTPUT'];
     for (const group of sharedGroups) {
         const groupSchema = PARAM_SCHEMA[group];
         if (groupSchema) {

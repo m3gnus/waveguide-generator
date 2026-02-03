@@ -33,7 +33,17 @@
         <!-- Geometry Tab Content -->
         <div id="geometry-tab" class="tab-content active">
             <div class="section">
-                <h3>EXPORT SETTINGS</h3>
+                <h3>ACTIONS</h3>
+                <button id="render-btn">Update Model</button>
+                <div class="button-row">
+                    <button id="load-config-btn" class="secondary">Load Config</button>
+                    <button id="export-config-btn" class="secondary">Export Config</button>
+                </div>
+                <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
+                <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
+                <button id="export-btn" class="secondary">Export STL</button>
+
+                <hr>
                 <div class="input-row">
                     <label>Prefix</label>
                     <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
@@ -42,18 +52,6 @@
                     <label>Counter</label>
                     <input type="number" id="export-counter" value="1" min="1" step="1">
                 </div>
-            </div>
-
-            <div class="section">
-                <h3>ACTIONS</h3>
-                <button id="load-config-btn" class="secondary">Load Config (.txt)</button>
-                <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
-                <button id="render-btn">Update Model</button>
-                <button id="export-btn" class="secondary">Export STL</button>
-                <button id="export-config-btn" class="secondary">Export MWG Config</button>
-                <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
-                <button id="export-geo-btn" class="secondary">Export Gmsh .geo</button>
-
 
                 <div class="checkbox-group" style="margin-top: 15px;">
                     <input type="checkbox" id="live-update" checked>
@@ -107,6 +105,8 @@
                     </select>
                 </div>
             </div>
+
+            <div id="simulation-param-container"></div>
 
             <div class="section">
                 <h3>DIRECTIVITY MAP (ABEC.Polars)</h3>

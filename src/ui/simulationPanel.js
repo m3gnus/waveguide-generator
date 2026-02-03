@@ -13,6 +13,7 @@ import { AppEvents } from '../events.js';
 import { generateBemMesh } from '../solver/bemMeshGenerator.js';
 import validationManager from '../validation/index.js';
 import { applySmoothing } from '../processing/smoothing.js';
+import { GlobalState } from '../state.js';
 
 export class SimulationPanel {
     constructor() {
@@ -22,11 +23,18 @@ export class SimulationPanel {
         this.pendingMeshResolve = null;
         this.lastResults = null;
         this.currentSmoothing = 'none';
+        this.simulationParamBindings = [
+            { id: 'freq-start', key: 'abecF1', parse: (value) => parseFloat(value) },
+            { id: 'freq-end', key: 'abecF2', parse: (value) => parseFloat(value) },
+            { id: 'freq-steps', key: 'abecNumFreq', parse: (value) => parseInt(value, 10) },
+            { id: 'sim-type', key: 'abecSimType', parse: (value) => parseInt(value, 10) }
+        ];
 
         this.setupEventListeners();
         this.setupMeshListener();
         this.setupSmoothingListener();
         this.setupKeyboardShortcuts();
+        this.setupSimulationParamBindings();
         this.checkSolverConnection();
     }
 
@@ -132,6 +140,46 @@ export class SimulationPanel {
         if (exportBtn) {
             exportBtn.addEventListener('click', () => this.exportResults());
         }
+
+        AppEvents.on('state:updated', (state) => {
+            this.syncSimulationSettings(state);
+        });
+    }
+
+    setupSimulationParamBindings() {
+        this.simulationParamBindings.forEach(({ id, key, parse }) => {
+            const element = document.getElementById(id);
+            if (!element) return;
+
+            element.addEventListener('change', (e) => {
+                const nextValue = parse(e.target.value);
+                if (Number.isNaN(nextValue)) return;
+
+                const currentValue = GlobalState.get().params[key];
+                if (currentValue === nextValue) return;
+
+                GlobalState.update({ [key]: nextValue });
+            });
+        });
+
+        this.syncSimulationSettings(GlobalState.get());
+    }
+
+    syncSimulationSettings(state) {
+        if (!state || !state.params) return;
+
+        this.simulationParamBindings.forEach(({ id, key }) => {
+            const element = document.getElementById(id);
+            if (!element) return;
+
+            const value = state.params[key];
+            if (value === undefined || value === null) return;
+
+            const nextValue = String(value);
+            if (element.value !== nextValue) {
+                element.value = nextValue;
+            }
+        });
     }
 
     switchTab(tabName) {

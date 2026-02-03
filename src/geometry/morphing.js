@@ -42,7 +42,9 @@ export function applyMorphing(currentR, t, p, params) {
             const targetWidth = params.morphWidth || currentR * 2;
             const targetHeight = params.morphHeight || currentR * 2;
             const rectR = getRoundedRectRadius(p, targetWidth, targetHeight, params.morphCorner || 35);
-            return THREE.MathUtils.lerp(currentR, rectR, morphFactor);
+            const allowShrinkage = params.morphAllowShrinkage === 1 || params.morphAllowShrinkage === true;
+            const safeRectR = allowShrinkage ? rectR : Math.max(currentR, rectR);
+            return THREE.MathUtils.lerp(currentR, safeRectR, morphFactor);
         }
     }
 
