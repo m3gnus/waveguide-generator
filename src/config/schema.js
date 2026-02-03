@@ -218,35 +218,5 @@ export const PARAM_SCHEMA = {
         },
         abecMeshFrequency: { type: 'number', label: 'Mesh Freq', unit: 'Hz', default: 1000 }
     },
-    'OUTPUT': {
-        outputSTL: {
-            type: 'select',
-            label: 'Output STL',
-            options: [
-                { value: 0, label: 'Off' },
-                { value: 1, label: 'On' }
-            ],
-            default: 1
-        },
-        outputMSH: {
-            type: 'select',
-            label: 'Output MSH',
-            options: [
-                { value: 0, label: 'Off' },
-                { value: 1, label: 'On' }
-            ],
-            default: 0
-        },
-        outputABECProject: {
-            type: 'select',
-            label: 'Output ABEC Project',
-            options: [
-                { value: 0, label: 'Off' },
-                { value: 1, label: 'On' }
-            ],
-            default: 1
-        },
-        outputSubDir: { type: 'expression', label: 'Output SubDir', default: '', tooltip: 'Optional subdirectory under OutputRootDir.' },
-        outputDestDir: { type: 'expression', label: 'Output DestDir', default: '', tooltip: 'Override destination directory.' }
-    }
+    // Output actions are handled via export buttons in the UI.
 };

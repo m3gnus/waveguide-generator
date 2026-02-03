@@ -141,8 +141,6 @@ export class MWGConfigParser {
             if (p['Output.STL'] !== undefined) { p.outputSTL = p['Output.STL']; }
             if (p['Output.MSH'] !== undefined) { p.outputMSH = p['Output.MSH']; }
             if (p['Output.ABECProject'] !== undefined) { p.outputABECProject = p['Output.ABECProject']; }
-            if (p['Output.SubDir']) { p.outputSubDir = p['Output.SubDir']; }
-            if (p['Output.DestDir']) { p.outputDestDir = p['Output.DestDir']; }
         }
 
         // Normalize R-OSSE mesh/source/abec params too
@@ -181,8 +179,6 @@ export class MWGConfigParser {
             if (p['Output.STL'] !== undefined) { p.outputSTL = p['Output.STL']; }
             if (p['Output.MSH'] !== undefined) { p.outputMSH = p['Output.MSH']; }
             if (p['Output.ABECProject'] !== undefined) { p.outputABECProject = p['Output.ABECProject']; }
-            if (p['Output.SubDir']) { p.outputSubDir = p['Output.SubDir']; }
-            if (p['Output.DestDir']) { p.outputDestDir = p['Output.DestDir']; }
         }
 
         // Normalize Rollback params (both types, flat keys)

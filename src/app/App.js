@@ -9,7 +9,7 @@ import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } f
 import { setupEventListeners } from './events.js';
 import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
-import { exportSTL, exportMWGConfig, exportProfileCSV, exportGmshGeo } from './exports.js';
+import { exportSTL, exportMWGConfig, exportProfileCSV, exportGmshGeo, exportMSH, exportABECProject } from './exports.js';
 import { provideMeshForSimulation } from './mesh.js';
 
 export class App {
@@ -135,6 +135,14 @@ export class App {
 
   exportGmshGeo() {
     return exportGmshGeo(this);
+  }
+
+  exportMSH() {
+    return exportMSH(this);
+  }
+
+  exportABECProject() {
+    return exportABECProject(this);
   }
 
   provideMeshForSimulation() {

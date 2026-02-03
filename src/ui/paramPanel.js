@@ -66,6 +66,7 @@ export class ParamPanel {
         if (!this.container) throw new Error(`Container ${containerId} not found`);
         this.simulationContainer = document.getElementById('simulation-param-container');
         this.formulaInfoVisible = false;
+        this.controlIdCounter = 0;
         this.init();
     }
 
@@ -98,6 +99,7 @@ export class ParamPanel {
         if (this.simulationContainer) {
             this.simulationContainer.innerHTML = '';
         }
+        this.controlIdCounter = 0;
         const state = GlobalState.get();
         const type = state.type;
 
@@ -264,12 +266,13 @@ export class ParamPanel {
     }
 
     createDetailsSection(summaryText, id) {
-        const details = document.createElement('details');
-        if (id) details.id = id;
-        const summary = document.createElement('summary');
-        summary.textContent = summaryText;
-        details.appendChild(summary);
-        return details;
+        const section = document.createElement('div');
+        section.className = 'section';
+        if (id) section.id = id;
+        const h3 = document.createElement('h3');
+        h3.textContent = summaryText;
+        section.appendChild(h3);
+        return section;
     }
 
     createControlRow(key, def, currentValue) {
@@ -277,8 +280,10 @@ export class ParamPanel {
         row.className = 'input-row';
 
         const label = document.createElement('label');
+        const controlId = `param-${key}-${this.controlIdCounter++}`;
         label.textContent = def.label;
         if (def.unit) label.textContent += ` (${def.unit})`;
+        label.htmlFor = controlId;
 
         // Add tooltip if available
         if (def.tooltip) {
@@ -296,6 +301,7 @@ export class ParamPanel {
 
             const input = document.createElement('input');
             input.type = 'text';
+            input.id = controlId;
             input.value = currentValue;
             input.className = 'formula-input';
             input.placeholder = def.type === 'expression' ? 'e.g., 45 + 10*cos(p)' : 'number or formula';
@@ -346,6 +352,7 @@ export class ParamPanel {
             row.appendChild(wrapper);
         } else if (def.type === 'select') {
             const select = document.createElement('select');
+            select.id = controlId;
             def.options.forEach(opt => {
                 const option = document.createElement('option');
                 option.value = opt.value;

@@ -609,8 +609,7 @@ mwg-horn/
 │   └── README.md
 │
 ├── tests/
-│   ├── unit/                     -- Jest unit tests
-│   └── e2e/                      -- Playwright E2E tests
+│   └── unit/                     -- Jest unit tests
 │
 ├── plan/
 │   ├── ROADMAP.md                -- Development roadmap
@@ -622,7 +621,6 @@ mwg-horn/
 ├── package.json
 ├── package-lock.json
 ├── jest.config.js
-├── playwright.config.js
 ├── webpack.config.js
 │
 ├── docs/
@@ -647,7 +645,7 @@ mwg-horn/
 | Module System | ES Modules | Native browser support |
 | UI Framework | Vanilla DOM | No framework |
 | State Management | EventBus + state.js | Undo/redo support |
-| Testing | Jest + Playwright | Unit and E2E tests |
+| Testing | Jest | Unit tests |
 
 ### Backend (Python)
 
@@ -664,7 +662,6 @@ mwg-horn/
 |------|---------|
 | Webpack | Production bundling |
 | Jest | Unit testing |
-| Playwright | E2E testing |
 | Express | Dev server |
 
 ---

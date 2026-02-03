@@ -42,14 +42,16 @@
                 <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
                 <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
                 <button id="export-btn" class="secondary">Export STL</button>
+                <button id="export-msh-btn" class="secondary">Export MSH</button>
+                <button id="export-abec-btn" class="secondary">Export ABEC Project</button>
 
                 <hr>
                 <div class="input-row">
-                    <label>Prefix</label>
+                    <label for="export-prefix">Prefix</label>
                     <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
                 </div>
                 <div class="input-row">
-                    <label>Counter</label>
+                    <label for="export-counter">Counter</label>
                     <input type="number" id="export-counter" value="1" min="1" step="1">
                 </div>
 
@@ -58,7 +60,7 @@
                     <label for="live-update">Real-time Updates</label>
                 </div>
 
-                <label>Display Mode</label>
+                <label for="display-mode">Display Mode</label>
                 <select id="display-mode">
                     <option value="standard">Standard (Metal)</option>
                     <option value="zebra">Zebra Stripes</option>
@@ -86,19 +88,19 @@
             <div class="section">
                 <h3>SIMULATION SETTINGS</h3>
                 <div class="input-row">
-                    <label>Start Freq (Hz)</label>
+                    <label for="freq-start">Start Freq (Hz)</label>
                     <input type="number" id="freq-start" value="100" min="20" max="20000" step="10">
                 </div>
                 <div class="input-row">
-                    <label>End Freq (Hz)</label>
+                    <label for="freq-end">End Freq (Hz)</label>
                     <input type="number" id="freq-end" value="10000" min="20" max="20000" step="10">
                 </div>
                 <div class="input-row">
-                    <label>Num Frequencies</label>
+                    <label for="freq-steps">Num Frequencies</label>
                     <input type="number" id="freq-steps" value="50" min="10" max="200" step="1">
                 </div>
                 <div class="input-row">
-                    <label>Simulation Type</label>
+                    <label for="sim-type">Simulation Type</label>
                     <select id="sim-type">
                         <option value="1">Infinite Baffle</option>
                         <option value="2">Free-Standing</option>
@@ -111,19 +113,19 @@
             <div class="section">
                 <h3>DIRECTIVITY MAP (ABEC.Polars)</h3>
                 <div class="input-row">
-                    <label>Map Angle Range (deg)</label>
+                    <label for="polar-angle-range">Map Angle Range (deg)</label>
                     <input type="text" id="polar-angle-range" value="0,180,37" placeholder="start,end,steps">
                 </div>
                 <div class="input-row">
-                    <label>Norm Angle (deg)</label>
+                    <label for="polar-norm-angle">Norm Angle (deg)</label>
                     <input type="number" id="polar-norm-angle" value="5" min="0" max="90" step="1">
                 </div>
                 <div class="input-row">
-                    <label>Distance (m)</label>
+                    <label for="polar-distance">Distance (m)</label>
                     <input type="number" id="polar-distance" value="2" min="0.1" max="10" step="0.1">
                 </div>
                 <div class="input-row">
-                    <label>Inclination (deg)</label>
+                    <label for="polar-inclination">Inclination (deg)</label>
                     <input type="number" id="polar-inclination" value="35" min="0" max="90" step="1">
                 </div>
             </div>
@@ -144,7 +146,7 @@
                 <div class="section">
                     <h3>SIMULATION RESULTS</h3>
                     <div class="input-row">
-                        <label>Smoothing</label>
+                        <label for="smoothing-select">Smoothing</label>
                         <select id="smoothing-select">
                             <option value="none">None (Ctrl+0)</option>
                             <option value="1/1">1/1 Octave (Ctrl+Shift+1)</option>

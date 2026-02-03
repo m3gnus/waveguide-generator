@@ -26,8 +26,6 @@ export function prepareParamsForMesh(
     'gcurveSf',
     'encFrontResolution',
     'encBackResolution',
-    'outputSubDir',
-    'outputDestDir',
     'sourceContours'
   ]);
 
@@ -58,7 +56,7 @@ export function prepareParamsForMesh(
   };
 
   applySchema(PARAM_SCHEMA[type] || {});
-  ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC', 'OUTPUT'].forEach(
+  ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach(
     (group) => {
       applySchema(PARAM_SCHEMA[group] || {});
     }
