@@ -115,7 +115,7 @@ npm run start:backend    # Backend only (port 8000)
 │   ├── requirements.txt
 │   ├── start.sh        # Startup script
 │   └── README.md       # Backend setup guide
-└── tests/              # Unit and E2E tests
+└── tests/              # Unit tests
 ```
 
 ## Testing
@@ -124,11 +124,6 @@ npm run start:backend    # Backend only (port 8000)
 # Unit tests
 npm test
 
-# E2E tests
-npm run test:e2e
-
-# E2E tests with browser visible
-npm run test:e2e:headed
 ```
 
 ## Troubleshooting

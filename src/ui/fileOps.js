@@ -1,14 +1,22 @@
 
-export async function saveFile(content, fileName, options = {}) {
+export function getExportBaseName() {
     const prefix = document.getElementById('export-prefix')?.value || 'horn';
     const counterEl = document.getElementById('export-counter');
     const counter = counterEl ? counterEl.value : '1';
-    const finalName = `${prefix}_${counter}${options.extension}`;
+    return `${prefix}_${counter}`;
+}
 
-    // Helper to increment counter
-    const incrementCounter = () => {
-        if (counterEl) counterEl.value = parseInt(counterEl.value) + 1;
-    };
+export function incrementExportCounter() {
+    const counterEl = document.getElementById('export-counter');
+    if (!counterEl) return;
+    counterEl.value = parseInt(counterEl.value, 10) + 1;
+}
+
+export async function saveFile(content, fileName, options = {}) {
+    const baseName = options.baseName || getExportBaseName();
+    const extension = options.extension || '';
+    const finalName = `${baseName}${extension}`;
+    const incrementCounter = options.incrementCounter !== false;
 
     if ('showSaveFilePicker' in window) {
         try {
@@ -19,7 +27,7 @@ export async function saveFile(content, fileName, options = {}) {
             const writable = await handle.createWritable();
             await writable.write(content);
             await writable.close();
-            incrementCounter();
+            if (incrementCounter) incrementExportCounter();
             return;
         } catch (err) {
             if (err.name === 'AbortError') return;
@@ -34,5 +42,5 @@ export async function saveFile(content, fileName, options = {}) {
     link.download = finalName;
     link.click();
     URL.revokeObjectURL(url);
-    incrementCounter();
+    if (incrementCounter) incrementExportCounter();
 }

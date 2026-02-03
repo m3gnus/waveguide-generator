@@ -163,11 +163,15 @@ export function generateMWGConfigContent(params) {
     if (isNonZero(params.rearResolution)) content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;
     if (params.rearShape !== undefined) content += `Mesh.RearShape = ${formatValue(params.rearShape)}\n`;
 
-    if (params.outputSubDir) content += `Output.SubDir = ${formatValue(params.outputSubDir)}\n`;
-    if (params.outputDestDir) content += `Output.DestDir = ${formatValue(params.outputDestDir)}\n`;
-    content += `Output.ABECProject = ${formatValue(params.outputABECProject ?? 1)}\n`;
-    content += `Output.STL = ${formatValue(params.outputSTL ?? 1)}\n`;
-    if (params.outputMSH !== undefined) content += `Output.MSH = ${formatValue(params.outputMSH)}\n`;
+    if (params.outputABECProject !== undefined) {
+        content += `Output.ABECProject = ${formatValue(params.outputABECProject)}\n`;
+    }
+    if (params.outputSTL !== undefined) {
+        content += `Output.STL = ${formatValue(params.outputSTL)}\n`;
+    }
+    if (params.outputMSH !== undefined) {
+        content += `Output.MSH = ${formatValue(params.outputMSH)}\n`;
+    }
 
     if (params.sourceShape !== undefined) content += `Source.Shape = ${params.sourceShape}\n`;
     if (params.sourceRadius !== undefined && params.sourceRadius !== -1) {

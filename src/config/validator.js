@@ -64,7 +64,7 @@ export function validateParams(params, modelType) {
     }
 
     // 2. Validate Shared Groups
-    ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC', 'OUTPUT'].forEach(group => {
+    ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach(group => {
         const groupSchema = PARAM_SCHEMA[group];
         for (const [key, def] of Object.entries(groupSchema)) {
             if (params[key] !== undefined) {

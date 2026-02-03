@@ -35,11 +35,8 @@ The backend will run on `http://localhost:8000`
 # Unit tests
 npm test
 
-# E2E tests
-npm run test:e2e
-
-# E2E tests with browser visible
-npm run test:e2e:headed
+# Unit tests
+npm test
 ```
 
 ## Project Structure
@@ -106,8 +103,7 @@ npm run test:e2e:headed
 │   ├── requirements.txt  # Python dependencies
 │   └── README.md         # Backend setup instructions
 └── tests/
-    ├── unit/             # Unit tests
-    └── e2e/              # End-to-end tests
+    └── unit/             # Unit tests
 ```
 
 ## Key Modules
@@ -258,7 +254,7 @@ Expected response:
 
 1. Make changes to source files
 2. Refresh browser (dev server has live reload)
-3. Run tests: `npm test` and `npm run test:e2e`
+3. Run tests: `npm test`
 
 ### Building for Production
 

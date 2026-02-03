@@ -35,7 +35,9 @@ export function bindButtonEvents(app) {
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
     { id: 'export-csv-btn', handler: () => app.exportProfileCSV(), type: 'click' },
-    { id: 'export-geo-btn', handler: () => app.exportGmshGeo(), type: 'click' }
+    { id: 'export-geo-btn', handler: () => app.exportGmshGeo(), type: 'click' },
+    { id: 'export-msh-btn', handler: () => app.exportMSH(), type: 'click' },
+    { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' }
   ];
 
   buttonBindings.forEach(({ id, handler, type }) => {
