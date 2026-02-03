@@ -59,6 +59,7 @@ class App {
 
         this.setupScene();
         this.setupEventListeners();
+        this.setupPanelSizing();
 
         // Initial Render
         this.onStateUpdate(GlobalState.get());
@@ -71,6 +72,10 @@ class App {
         // Subscribe to simulation events
         AppEvents.on('simulation:mesh-requested', () => {
             this.provideMeshForSimulation();
+        });
+
+        AppEvents.on('ui:tab-changed', () => {
+            this.schedulePanelAutoSize();
         });
     }
 
@@ -160,6 +165,91 @@ class App {
         });
     }
 
+    setupPanelSizing() {
+        this.uiPanel = document.getElementById('ui-panel');
+        this.uiPanelResizer = document.getElementById('ui-panel-resizer');
+        if (!this.uiPanel || !this.uiPanelResizer) return;
+
+        const rootStyles = getComputedStyle(document.documentElement);
+        this.panelDefaultWidth = parseFloat(rootStyles.getPropertyValue('--panel-default-width')) || 350;
+        this.panelMinWidth = parseFloat(rootStyles.getPropertyValue('--panel-min-width')) || 280;
+        this.panelMaxWidth = parseFloat(rootStyles.getPropertyValue('--panel-max-width')) || 520;
+        this.userResizedPanel = false;
+        this.panelAutoSizeFrame = null;
+
+        this.uiPanel.style.width = `${this.panelDefaultWidth}px`;
+
+        this.uiPanelResizer.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            this.isResizingPanel = true;
+            this.userResizedPanel = true;
+            this.panelResizeStartX = event.clientX;
+            this.panelResizeStartWidth = this.uiPanel.getBoundingClientRect().width;
+            this.uiPanelResizer.setPointerCapture(event.pointerId);
+            document.body.style.cursor = 'col-resize';
+        });
+
+        this.uiPanelResizer.addEventListener('pointermove', (event) => {
+            if (!this.isResizingPanel) return;
+            const delta = event.clientX - this.panelResizeStartX;
+            this.setPanelWidth(this.panelResizeStartWidth + delta);
+        });
+
+        const stopResize = (event) => {
+            if (!this.isResizingPanel) return;
+            this.isResizingPanel = false;
+            if (event?.pointerId !== undefined) {
+                this.uiPanelResizer.releasePointerCapture(event.pointerId);
+            }
+            document.body.style.cursor = '';
+        };
+
+        this.uiPanelResizer.addEventListener('pointerup', stopResize);
+        this.uiPanelResizer.addEventListener('pointercancel', stopResize);
+
+        this.uiPanel.addEventListener('input', () => this.schedulePanelAutoSize());
+        this.uiPanel.addEventListener('toggle', () => this.schedulePanelAutoSize(), true);
+        window.addEventListener('resize', () => this.schedulePanelAutoSize());
+
+        this.schedulePanelAutoSize();
+    }
+
+    clampPanelWidth(width) {
+        const max = Math.min(this.panelMaxWidth, window.innerWidth * 0.7);
+        return Math.max(this.panelMinWidth, Math.min(max, width));
+    }
+
+    setPanelWidth(width) {
+        if (!this.uiPanel) return;
+        const clamped = this.clampPanelWidth(width);
+        const current = this.uiPanel.getBoundingClientRect().width;
+        if (Math.abs(clamped - current) < 1) return;
+        this.uiPanel.style.width = `${clamped}px`;
+        this.onResize();
+    }
+
+    schedulePanelAutoSize() {
+        if (this.userResizedPanel || !this.uiPanel) return;
+        if (this.panelAutoSizeFrame) {
+            cancelAnimationFrame(this.panelAutoSizeFrame);
+        }
+        this.panelAutoSizeFrame = requestAnimationFrame(() => {
+            this.panelAutoSizeFrame = null;
+            this.autoSizePanel();
+        });
+    }
+
+    autoSizePanel() {
+        if (this.userResizedPanel || !this.uiPanel) return;
+        const activeTab = this.uiPanel.querySelector('.tab-content.active');
+        const contentWidth = Math.max(
+            this.uiPanel.scrollWidth,
+            activeTab ? activeTab.scrollWidth : 0
+        );
+        const target = this.clampPanelWidth(contentWidth);
+        this.setPanelWidth(target);
+    }
+
     /**
      * Bind event listeners to UI buttons
      * Checks for element existence before attaching listeners
@@ -209,6 +299,7 @@ class App {
     onStateUpdate(state) {
         // 1. Rebuild Param UI
         this.paramPanel.createFullPanel();
+        this.schedulePanelAutoSize();
 
         // 2. Render
         if (document.getElementById('live-update')?.checked !== false) {

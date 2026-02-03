@@ -6,6 +6,9 @@
     --border-color: rgba(0, 0, 0, 0.1);
     --glass-effect: blur(20px) saturate(180%);
     --input-bg: rgba(0, 0, 0, 0.05);
+    --panel-default-width: 350px;
+    --panel-min-width: 280px;
+    --panel-max-width: 520px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -35,7 +38,9 @@ body {
 }
 
 #ui-panel {
-    width: 350px;
+    width: var(--panel-default-width);
+    min-width: var(--panel-min-width);
+    max-width: var(--panel-max-width);
     height: 100vh;
     background: var(--panel-bg);
     backdrop-filter: var(--glass-effect);
@@ -46,13 +51,43 @@ body {
     padding: 20px;
     z-index: 10;
     overflow-y: auto;
+    overflow-x: hidden;
     flex-shrink: 0;
+}
+
+#ui-panel-resizer {
+    width: 6px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 11;
+    touch-action: none;
+}
+
+#ui-panel-resizer::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    left: 2px;
+    width: 2px;
+    background: var(--border-color);
+    border-radius: 2px;
+    opacity: 0.6;
+    transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+#ui-panel-resizer:hover::before {
+    background: var(--accent-color);
+    opacity: 1;
 }
 
 #canvas-container {
     flex-grow: 1;
     position: relative;
     background: var(--bg-color);
+    min-width: 0;
 }
 
 h1 {

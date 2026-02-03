@@ -94,7 +94,8 @@ export class BemSolver {
       frequency_range: [config.frequencyStart, config.frequencyEnd],
       num_frequencies: config.numFrequencies,
       sim_type: config.simulationType,
-      options: options
+      options: options,
+      polar_config: config.polarConfig || null
     };
 
     const response = await fetch(`${this.backendUrl}/api/solve`, {

@@ -173,6 +173,10 @@ src/solver/
   resultParser.js   -- Parse solver response into visualization data
   status.js         -- Connection status management
   bemMeshGenerator.js -- Generate BEM-ready meshes with surface tags
+
+src/processing/
+  smoothing.js      -- Frequency response smoothing algorithms
+                       (fractional octave, variable, psychoacoustic, ERB)
 ```
 
 **Backend Files:**
@@ -188,7 +192,19 @@ server/
 **Solver API (REST):**
 ```
 POST /api/solve
-  Body: { mesh, frequency_range, num_frequencies, sim_type, boundary_conditions }
+  Body: {
+    mesh,
+    frequency_range,
+    num_frequencies,
+    sim_type,
+    boundary_conditions,
+    polar_config: {
+      angle_range: [start, end, num_points],
+      norm_angle: float,
+      distance: float,
+      inclination: float
+    }
+  }
   Response: { job_id: "..." }
 
 GET /api/status/{job_id}
@@ -205,6 +221,16 @@ GET /api/results/{job_id}
 GET /health
   Response: { status: "ok" }
 ```
+
+**ABEC.Polars Configuration:**
+
+The solver now supports ATH/ABEC-style polar directivity configuration:
+- `angle_range`: [start_deg, end_deg, num_points] for angular sweep
+- `norm_angle`: Reference angle for normalization (degrees)
+- `distance`: Measurement distance from horn mouth (meters)
+- `inclination`: Inclination angle for measurement plane (degrees)
+
+Reference: Ath-4.8.2-UserGuide section 4.1.5
 
 **BEM Solver Implementation Details:**
 
@@ -275,8 +301,34 @@ src/ui/
   paramPanel.js     -- Schema-driven parameter UI generation
   fileOps.js        -- Load/save config, file picker
   simulationPanel.js -- Combined solver controls, results panel, export
+                       Includes:
+                       - ABEC.Polars directivity configuration UI
+                       - Polar heatmap visualization (2D frequency/angle maps)
+                       - REW-style smoothing controls with keyboard shortcuts
+                       - Real-time smoothing application (no re-simulation needed)
   AGENTS.md         -- Module documentation
 ```
+
+**Features:**
+- **Directivity Heatmaps:** Professional 2D color-coded SPL maps (frequency vs angle) matching industry standards (e.g., ADAM Audio)
+- **Results Export:** Multiple export formats for simulation results:
+  - SVG/PNG images of charts
+  - CSV data files (frequency, SPL, DI, impedance)
+  - JSON format (complete results with metadata and smoothing info)
+  - Text reports with summary statistics
+  - Exports include current smoothing settings
+- **Post-Processing Smoothing:** 11 smoothing algorithms with full keyboard shortcut support:
+  - Fractional octave: 1/1, 1/2, 1/3, 1/6, 1/12, 1/24, 1/48 octave
+  - Variable: Frequency-dependent bandwidth (1/48 @ 100Hz to 1/3 @ 10kHz)
+  - Psychoacoustic: Perception-based with cubic mean peak emphasis
+  - ERB: Equivalent Rectangular Bandwidth matching ear's resolution
+- **Keyboard Shortcuts:**
+  - `Ctrl+Shift+1-9`: Fractional octave smoothing
+  - `Ctrl+Shift+X`: Variable smoothing
+  - `Ctrl+Shift+Y`: Psychoacoustic smoothing
+  - `Ctrl+Shift+Z`: ERB smoothing
+  - `Ctrl+0`: Remove smoothing
+  - Toggle behavior: Press same shortcut again to remove
 
 **Note:** The original architecture specified separate files for modelSelect.js, exportPanel.js, displayPanel.js, solverPanel.js, and resultsPanel.js. These were combined into fewer files, with `simulationPanel.js` handling most simulation-related UI.
 
@@ -513,6 +565,9 @@ mwg-horn/
 │   │   ├── resultParser.js       -- Parse results
 │   │   ├── status.js             -- Connection status
 │   │   └── bemMeshGenerator.js   -- BEM mesh generation
+│   │
+│   ├── processing/
+│   │   └── smoothing.js          -- REW-style frequency response smoothing
 │   │
 │   ├── optimization/
 │   │   ├── index.js
