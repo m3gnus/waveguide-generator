@@ -8,6 +8,7 @@ import {
 } from './geometry/index.js';
 
 import { MWGConfigParser } from './config/index.js';
+import { PARAM_SCHEMA } from './config/schema.js';
 import { generateMWGConfigContent, exportProfilesCSV, exportGmshGeo } from './export/index.js';
 import { saveFile } from './ui/fileOps.js';
 import {
@@ -43,6 +44,15 @@ window.getRecentLogs = getRecentLogs;
 window.getLogSummary = getSummary;
 window.exportLogs = exportLogs;
 window.printLogs = printLogs;
+
+const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
+function isNumericString(value) {
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    return NUMERIC_PATTERN.test(trimmed);
+}
 
 class App {
     constructor() {
@@ -336,13 +346,12 @@ class App {
                 for (const [key, value] of Object.entries(parsed.params)) {
                     if (value === undefined || value === null) continue;
 
-                    // Check if it's a number
-                    const num = parseFloat(value);
-                    if (!isNaN(num) && String(num) === String(value).trim()) {
-                        typedParams[key] = num;
+                    const stringValue = String(value).trim();
+                    if (isNumericString(stringValue)) {
+                        typedParams[key] = Number(stringValue);
                     } else {
                         // Keep as string (expressions, etc.)
-                        typedParams[key] = String(value);
+                        typedParams[key] = stringValue;
                     }
                 }
 
@@ -364,13 +373,19 @@ class App {
         const state = GlobalState.get();
         const preparedParams = { ...state.params };
 
-        // Evaluate expressions
+        // Evaluate expressions for core OSSE / R-OSSE parameters (allow formulas on all)
         const type = state.type;
 
-        for (const key of Object.keys(preparedParams)) {
+        const coreSchema = PARAM_SCHEMA[type] || {};
+        for (const key of Object.keys(coreSchema)) {
             const val = preparedParams[key];
-            if (typeof val === 'string' && (val.includes('sin') || val.includes('cos') || val.includes('p') || Number.isNaN(parseFloat(val)))) {
-                preparedParams[key] = parseExpression(val);
+            if (typeof val !== 'string') continue;
+            const trimmed = val.trim();
+            if (!trimmed) continue;
+            if (isNumericString(trimmed)) {
+                preparedParams[key] = Number(trimmed);
+            } else {
+                preparedParams[key] = parseExpression(trimmed);
             }
         }
 
