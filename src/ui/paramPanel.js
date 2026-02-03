@@ -97,20 +97,6 @@ export class ParamPanel {
         const state = GlobalState.get();
         const type = state.type;
 
-        // --- Formula Reference Button (Global) ---
-        const headerRow = document.createElement('div');
-        headerRow.className = 'panel-header-row';
-        const infoBtn = document.createElement('button');
-        infoBtn.className = 'formula-info-btn-global';
-        infoBtn.innerHTML = '<span style="font-style: italic;">ƒ</span> Formula Reference';
-        infoBtn.title = 'View available formulas and functions';
-        infoBtn.onclick = (e) => {
-            e.preventDefault();
-            this.showFormulaInfo();
-        };
-        headerRow.appendChild(infoBtn);
-        this.container.appendChild(headerRow);
-
         // --- Model Type Selector ---
         const typeSection = this.createSection('MODEL TYPE');
         const typeRow = document.createElement('div');
@@ -137,7 +123,24 @@ export class ParamPanel {
         // --- Model Specific Params ---
         const coreSchema = PARAM_SCHEMA[type];
         if (coreSchema) {
-            const section = this.createSection(`${type} PARAMETERS`);
+            const section = document.createElement('div');
+            section.className = 'section';
+            const header = document.createElement('div');
+            header.className = 'section-header';
+            const title = document.createElement('h3');
+            title.textContent = `${type} PARAMETERS`;
+            const infoBtn = document.createElement('button');
+            infoBtn.className = 'formula-info-btn';
+            infoBtn.textContent = 'ƒ';
+            infoBtn.title = 'View available formulas and functions';
+            infoBtn.setAttribute('aria-label', 'View available formulas and functions');
+            infoBtn.onclick = (e) => {
+                e.preventDefault();
+                this.showFormulaInfo();
+            };
+            header.appendChild(title);
+            header.appendChild(infoBtn);
+            section.appendChild(header);
             for (const [key, def] of Object.entries(coreSchema)) {
                 section.appendChild(this.createControlRow(key, def, state.params[key]));
             }
@@ -281,20 +284,6 @@ export class ParamPanel {
             };
 
             wrapper.appendChild(input);
-
-            // Add info button for expression-type fields
-            if (def.type === 'expression') {
-                const infoBtn = document.createElement('button');
-                infoBtn.className = 'formula-info-btn';
-                infoBtn.textContent = 'ƒ';
-                infoBtn.title = 'View available formulas and functions';
-                infoBtn.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.showFormulaInfo();
-                };
-                wrapper.appendChild(infoBtn);
-            }
 
             row.appendChild(wrapper);
         } else if (def.type === 'select') {
