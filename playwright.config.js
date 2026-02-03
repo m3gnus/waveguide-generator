@@ -2,7 +2,7 @@ export default {
   testDir: './tests/e2e',
   use: {
     baseURL: 'http://localhost:3000',
-    headless: false,
+    headless: true,
     screenshot: 'only-on-failure',
   },
   webServer: {
@@ -13,8 +13,8 @@ export default {
   },
   projects: [
     {
-      name: 'chromium',
-      use: { browserName: 'chromium' },
+      name: 'webkit',
+      use: { browserName: 'webkit' },
     },
   ],
 };

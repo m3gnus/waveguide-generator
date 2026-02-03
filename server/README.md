@@ -142,7 +142,7 @@ For large meshes, you may need to increase available memory or reduce mesh densi
 The backend consists of:
 
 - `app.py` - FastAPI application and API endpoints
-- `solver.py` - BEM solver implementation using bempp-cl
+- `solver/` - BEM solver implementation using bempp-cl
 - `mesh_io.py` - Mesh import/export utilities
 
 ## Testing

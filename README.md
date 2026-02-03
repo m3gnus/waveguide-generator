@@ -111,7 +111,7 @@ npm run start:backend    # Backend only (port 8000)
 │   └── export/         # Export functionality
 ├── server/             # Python BEM backend
 │   ├── app.py          # FastAPI application
-│   ├── solver.py       # bempp-cl solver
+│   ├── solver/         # bempp-cl solver package
 │   ├── requirements.txt
 │   ├── start.sh        # Startup script
 │   └── README.md       # Backend setup guide
@@ -151,9 +151,10 @@ npm run test:e2e:headed
 
 ## Documentation
 
-*   **[ARCHITECTURE.md](ARCHITECTURE.md)** - Detailed technical architecture, module design, and development roadmap
-*   **[AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md)** - Guide for AI agents working on this project
-*   **[AI_GUIDANCE.md](AI_GUIDANCE.md)** - AI collaboration guidelines and best practices
+*   **[docs/README.md](docs/README.md)** - Documentation index
+*   **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Detailed technical architecture, module design, and development roadmap
+*   **[docs/AGENT_INSTRUCTIONS.md](docs/AGENT_INSTRUCTIONS.md)** - Guide for AI agents working on this project
+*   **[docs/AI_GUIDANCE.md](docs/AI_GUIDANCE.md)** - AI collaboration guidelines and best practices
 *   **[server/README.md](server/README.md)** - Python backend setup and bempp-cl installation details
 
 ## Technologies
