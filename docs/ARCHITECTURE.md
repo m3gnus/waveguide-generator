@@ -183,7 +183,7 @@ src/processing/
 ```
 server/
   app.py            -- FastAPI application
-  solver.py         -- bempp-cl Helmholtz BEM solver (863 lines)
+  solver/           -- bempp-cl Helmholtz BEM solver package
   requirements.txt  -- Python dependencies (gmsh, bempp-cl prerequisites)
   start.sh          -- Server startup script
   README.md         -- Backend documentation
@@ -234,7 +234,7 @@ Reference: Ath-4.8.2-UserGuide section 4.1.5
 
 **BEM Solver Implementation Details:**
 
-The `server/solver.py` implements:
+The `server/solver/` package implements:
 - Full Helmholtz BIE formulation using bempp-cl
 - Gmsh mesh refinement for frequency-dependent element sizing
 - Proper boundary conditions:
@@ -603,7 +603,7 @@ mwg-horn/
 │
 ├── server/
 │   ├── app.py                    -- FastAPI application
-│   ├── solver.py                 -- bempp-cl BEM solver
+│   ├── solver/                  -- bempp-cl BEM solver package
 │   ├── requirements.txt          -- Python dependencies
 │   ├── start.sh                  -- Server startup
 │   └── README.md
@@ -625,10 +625,12 @@ mwg-horn/
 ├── playwright.config.js
 ├── webpack.config.js
 │
-├── ARCHITECTURE.md               -- This document
+├── docs/
+│   ├── ARCHITECTURE.md           -- This document
+│   ├── AGENT_INSTRUCTIONS.md     -- Detailed AI instructions
+│   ├── AI_GUIDANCE.md            -- AI module documentation
+│   └── README.md                 -- Documentation index
 ├── AGENTS.md                     -- Top-level AI guidance
-├── AGENT_INSTRUCTIONS.md         -- Detailed AI instructions
-├── AI_GUIDANCE.md                -- AI module documentation
 └── README.md                     -- Project overview
 ```
 

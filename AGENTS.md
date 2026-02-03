@@ -30,7 +30,9 @@ Each `src/` subfolder has its own `AGENTS.md` with domain-specific context:
 - `src/viewer/AGENTS.md` — Three.js 3D visualization
 - `src/export/AGENTS.md` — File format exports
 - `src/solver/AGENTS.md` — BEM acoustic simulation
+- `src/app/AGENTS.md` — App orchestration and bootstrap
 - `src/ui/AGENTS.md` — User interface components
+- `src/results/AGENTS.md` — Results processing and smoothing
 - `src/optimization/AGENTS.md` — Parameter optimization
 - `src/ai/AGENTS.md` — AI-assisted design features
 - `src/workflow/AGENTS.md` — Workflow state machine
@@ -51,7 +53,7 @@ If you're a smaller/local model:
 
 If you're a powerful model (Claude, GPT-4, etc.):
 
-1. **Read ARCHITECTURE.md** for full system understanding
+1. **Read docs/ARCHITECTURE.md** for full system understanding
 2. **Check plan/ folder** for current project status
 3. **Use the event bus pattern** — Don't bypass with direct imports
 4. **Keep files under 300 lines** — Split if approaching limit
@@ -61,9 +63,9 @@ If you're a powerful model (Claude, GPT-4, etc.):
 
 | File | Purpose |
 |------|---------|
-| `ARCHITECTURE.md` | Detailed architecture (1100+ lines) |
-| `AI_GUIDANCE.md` | Phase 7 AI system documentation |
-| `AGENT_INSTRUCTIONS.md` | Quick start guide |
+| `docs/ARCHITECTURE.md` | Detailed architecture (1100+ lines) |
+| `docs/AI_GUIDANCE.md` | Phase 7 AI system documentation |
+| `docs/AGENT_INSTRUCTIONS.md` | Quick start guide |
 | `plan/STATUS.md` | Current project status |
 | `plan/ROADMAP.md` | What's done and what's next |
 

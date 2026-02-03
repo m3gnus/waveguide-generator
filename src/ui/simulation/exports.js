@@ -1,0 +1,227 @@
+import { applySmoothing } from '../../results/smoothing.js';
+
+export function exportResults(panel) {
+  if (!panel.lastResults) {
+    alert('No simulation results available to export');
+    return;
+  }
+
+  // Create export options dialog
+  const exportType = prompt(
+    'Export format:\n' +
+      '1 - PNG image of all charts\n' +
+      '2 - CSV data (frequency response)\n' +
+      '3 - JSON data (all results)\n' +
+      '4 - Text report\n\n' +
+      'Enter number (1-4):',
+    '1'
+  );
+
+  switch (exportType) {
+    case '1':
+      exportAsImage();
+      break;
+    case '2':
+      exportAsCSV(panel);
+      break;
+    case '3':
+      exportAsJSON(panel);
+      break;
+    case '4':
+      exportAsText(panel);
+      break;
+    default:
+      if (exportType !== null) {
+        alert('Invalid selection. Please enter 1, 2, 3, or 4.');
+      }
+  }
+}
+
+/**
+ * Export results as PNG image
+ */
+export function exportAsImage() {
+  const resultsCharts = document.getElementById('results-charts');
+  if (!resultsCharts) {
+    alert('No charts to export');
+    return;
+  }
+
+  // Use html2canvas or similar library would be ideal, but for now use SVG export
+  const svgs = resultsCharts.querySelectorAll('svg');
+  if (svgs.length === 0) {
+    alert('No charts available to export');
+    return;
+  }
+
+  // Create a canvas to combine all SVGs
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Set canvas size (approximate)
+  canvas.width = 1200;
+  canvas.height = 400 * svgs.length;
+
+  // White background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  alert('PNG export requires html2canvas library. Exporting SVG data instead.');
+
+  // Export first SVG as example
+  const svgData = new XMLSerializer().serializeToString(svgs[0]);
+  const blob = new Blob([svgData], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `bem_results_${Date.now()}.svg`;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export results as CSV
+ */
+export function exportAsCSV(panel) {
+  const results = panel.lastResults;
+  const splData = results.spl_on_axis || {};
+  const frequencies = splData.frequencies || [];
+  const splValues = splData.spl || [];
+  const diData = results.di || {};
+  const impedanceData = results.impedance || {};
+
+  // Apply current smoothing
+  let smoothedSPL = splValues;
+  let smoothedDI = diData.di || [];
+  let smoothedImpReal = impedanceData.real || [];
+  let smoothedImpImag = impedanceData.imaginary || [];
+
+  if (panel.currentSmoothing !== 'none') {
+    smoothedSPL = applySmoothing(frequencies, splValues, panel.currentSmoothing);
+    smoothedDI = applySmoothing(frequencies, smoothedDI, panel.currentSmoothing);
+    smoothedImpReal = applySmoothing(frequencies, smoothedImpReal, panel.currentSmoothing);
+    smoothedImpImag = applySmoothing(frequencies, smoothedImpImag, panel.currentSmoothing);
+  }
+
+  // Build CSV content
+  let csv = 'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Ω),Impedance Imag (Ω)\n';
+
+  for (let i = 0; i < frequencies.length; i++) {
+    csv += `${frequencies[i]},${smoothedSPL[i] || ''},${smoothedDI[i] || ''},${smoothedImpReal[i] || ''},${smoothedImpImag[i] || ''}\n`;
+  }
+
+  // Add smoothing info as comment
+  if (panel.currentSmoothing !== 'none') {
+    csv = `# Smoothing: ${panel.currentSmoothing}\n` + csv;
+  }
+
+  // Download
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `bem_results_${Date.now()}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export results as JSON
+ */
+export function exportAsJSON(panel) {
+  const exportData = {
+    timestamp: new Date().toISOString(),
+    smoothing: panel.currentSmoothing,
+    results: panel.lastResults
+  };
+
+  const json = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `bem_results_${Date.now()}.json`;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export results as text report
+ */
+export function exportAsText(panel) {
+  const results = panel.lastResults;
+  const splData = results.spl_on_axis || {};
+  const frequencies = splData.frequencies || [];
+  const splValues = splData.spl || [];
+  const diData = results.di || {};
+  const impedanceData = results.impedance || {};
+
+  let report = 'BEM SIMULATION RESULTS\n';
+  report += '=====================\n\n';
+  report += `Generated: ${new Date().toISOString()}\n`;
+  report += `Smoothing: ${panel.currentSmoothing}\n`;
+  report += `Frequency range: ${Math.min(...frequencies).toFixed(0)} - ${Math.max(...frequencies).toFixed(0)} Hz\n`;
+  report += `Number of points: ${frequencies.length}\n\n`;
+
+  // Summary statistics
+  if (splValues.length > 0) {
+    const avgSPL = splValues.reduce((a, b) => a + b, 0) / splValues.length;
+    const minSPL = Math.min(...splValues);
+    const maxSPL = Math.max(...splValues);
+
+    report += 'FREQUENCY RESPONSE SUMMARY\n';
+    report += '--------------------------\n';
+    report += `Average SPL: ${avgSPL.toFixed(2)} dB\n`;
+    report += `SPL Range: ${minSPL.toFixed(2)} to ${maxSPL.toFixed(2)} dB\n`;
+    report += `Variation: ${(maxSPL - minSPL).toFixed(2)} dB\n\n`;
+  }
+
+  if (diData.di && diData.di.length > 0) {
+    const avgDI = diData.di.reduce((a, b) => a + b, 0) / diData.di.length;
+    const minDI = Math.min(...diData.di);
+    const maxDI = Math.max(...diData.di);
+
+    report += 'DIRECTIVITY INDEX SUMMARY\n';
+    report += '-------------------------\n';
+    report += `Average DI: ${avgDI.toFixed(2)} dB\n`;
+    report += `DI Range: ${minDI.toFixed(2)} to ${maxDI.toFixed(2)} dB\n\n`;
+  }
+
+  if (impedanceData.real && impedanceData.real.length > 0) {
+    const avgZ = impedanceData.real.reduce((a, b) => a + b, 0) / impedanceData.real.length;
+
+    report += 'IMPEDANCE SUMMARY\n';
+    report += '-----------------\n';
+    report += `Average Real Part: ${avgZ.toFixed(2)} Ω\n\n`;
+  }
+
+  report += '\n\nDETAILED DATA\n';
+  report += '=============\n\n';
+  report += 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Real(Ω)  Z_Imag(Ω)\n';
+  report += '--------  -------  ------  ---------  ---------\n';
+
+  for (let i = 0; i < Math.min(frequencies.length, 50); i++) {
+    report += `${frequencies[i].toString().padEnd(8)}  `;
+    report += `${(splValues[i] || 0).toFixed(2).padEnd(7)}  `;
+    report += `${((diData.di && diData.di[i]) || 0).toFixed(2).padEnd(6)}  `;
+    report += `${((impedanceData.real && impedanceData.real[i]) || 0).toFixed(2).padEnd(9)}  `;
+    report += `${((impedanceData.imaginary && impedanceData.imaginary[i]) || 0).toFixed(2)}\n`;
+  }
+
+  if (frequencies.length > 50) {
+    report += `\n... (${frequencies.length - 50} more rows) ...\n`;
+  }
+
+  // Download
+  const blob = new Blob([report], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `bem_report_${Date.now()}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
+}

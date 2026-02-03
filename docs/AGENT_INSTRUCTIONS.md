@@ -102,7 +102,7 @@ npm run test:e2e:headed
 │       └── fileOps.js     # File operations
 ├── server/                # Python BEM backend
 │   ├── app.py            # FastAPI application
-│   ├── solver.py         # bempp-cl solver
+│   ├── solver/           # bempp-cl solver package
 │   ├── requirements.txt  # Python dependencies
 │   └── README.md         # Backend setup instructions
 └── tests/

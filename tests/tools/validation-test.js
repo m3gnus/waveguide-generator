@@ -2,10 +2,10 @@
  * BEM Validation Test Script
  *
  * Run this to test the validation system against mock solver data.
- * Usage: node tests/validation-test.js
+ * Usage: node tests/tools/validation-test.js
  */
 
-import { createValidationManager } from '../src/validation/index.js';
+import { createValidationManager } from '../../src/validation/index.js';
 
 // Create validation manager
 const validator = createValidationManager();

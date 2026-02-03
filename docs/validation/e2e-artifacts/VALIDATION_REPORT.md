@@ -23,7 +23,7 @@ Validator: Qwen 3 Coder + Playwright E2E
 - Module system: Resolved ESM/CJS conflicts
 
 ## Architecture Verification
-Compare actual implementation vs ARCHITECTURE.md:
+Compare actual implementation vs ../../ARCHITECTURE.md:
 - [x] Geometry module: Matches documentation
 - [x] Export functionality: Matches documentation  
 - [ ] Solver integration: [any discrepancies noted]

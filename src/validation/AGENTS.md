@@ -8,7 +8,12 @@ Validate simulation results against known references to build trust in the syste
 
 | File | Purpose | Complexity |
 |------|---------|------------|
-| `index.js` | Public API, validation logic | Medium |
+| `index.js` | Public API, singleton instance | Simple |
+| `manager.js` | Validation orchestration | Medium |
+| `checks.js` | Physical and mesh checks | Medium |
+| `referenceData.js` | Reference horns and constraints | Simple |
+| `stats.js` | Stats helpers | Simple |
+| `report.js` | Report formatting | Simple |
 
 ## Public API
 

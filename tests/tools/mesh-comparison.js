@@ -2,7 +2,7 @@
  * Mesh Comparison Test Script
  *
  * Compare mesh output from the app vs ATH reference mesh for 251227tritonia4
- * Usage: node tests/mesh-comparison-test.js
+ * Usage: node tests/tools/mesh-comparison.js
  */
 
 import * as fs from 'fs';
@@ -752,8 +752,8 @@ async function runTest() {
     console.log('║         MESH COMPARISON TEST (UPDATED)                     ║');
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
-    const configPath = './ATHequivalent/251227tritonia4.txt';
-    const meshPath = './ATHequivalent/251227tritonia4/ABEC_FreeStanding/251227tritonia4.msh';
+    const configPath = '../../ATHequivalent/251227tritonia4.txt';
+    const meshPath = '../../ATHequivalent/251227tritonia4/ABEC_FreeStanding/251227tritonia4.msh';
 
     console.log('Loading ATH config from:', configPath);
     const configContent = fs.readFileSync(configPath, 'utf-8');
