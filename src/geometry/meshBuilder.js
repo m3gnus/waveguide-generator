@@ -4,6 +4,8 @@ import { addRollbackGeometry } from './rollback.js';
 import { addEnclosureGeometry } from './enclosure.js';
 import { addRearShapeGeometry } from './rearShape.js';
 
+const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
+
 /**
  * Parse quadrants parameter to get angular range.
  * ATH quadrants convention:
@@ -75,19 +77,24 @@ export function buildHornMesh(params) {
 
     for (let j = 0; j <= lengthSteps; j++) {
         const t = j / lengthSteps;
-        const tActual = params.type === 'R-OSSE' ? t * (params.tmax || 1.0) : t;
 
         for (let i = 0; i <= effectiveRadialSteps; i++) {
             // Map i to angle within the quadrant range
             const p = quadrantInfo.startAngle + (i / effectiveRadialSteps) * angleRange;
+            const tmax = params.type === 'R-OSSE'
+                ? (params.tmax === undefined ? 1.0 : evalParam(params.tmax, p))
+                : 1.0;
+            const tActual = params.type === 'R-OSSE' ? t * tmax : t;
 
             let profile;
             if (params.type === 'R-OSSE') {
                 profile = calculateROSSE(tActual, p, params);
             } else {
-                profile = calculateOSSE(tActual * params.L, p, params);
-                if (params.h > 0) {
-                    profile.y += params.h * Math.sin(tActual * Math.PI);
+                const L = evalParam(params.L, p);
+                profile = calculateOSSE(tActual * L, p, params);
+                const h = params.h === undefined ? 0 : evalParam(params.h, p);
+                if (h > 0) {
+                    profile.y += h * Math.sin(tActual * Math.PI);
                 }
             }
 

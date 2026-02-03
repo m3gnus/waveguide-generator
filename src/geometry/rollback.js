@@ -1,5 +1,7 @@
 import { calculateROSSE, calculateOSSE } from './hornModels.js';
 
+const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
+
 export function addRollbackGeometry(vertices, indices, params, lengthSteps, radialSteps) {
     const lastRowStart = lengthSteps * (radialSteps + 1);
     const startIdx = vertices.length / 3;
@@ -22,9 +24,11 @@ export function addRollbackGeometry(vertices, indices, params, lengthSteps, radi
             // Compute roll radius from profile difference at startAt vs mouth
             let profileAtStart;
             if (params.type === 'R-OSSE') {
-                profileAtStart = calculateROSSE(startAt * (params.tmax || 1.0), p, params);
+                const tmax = params.tmax === undefined ? 1.0 : evalParam(params.tmax, p);
+                profileAtStart = calculateROSSE(startAt * tmax, p, params);
             } else {
-                profileAtStart = calculateOSSE(startAt * params.L, p, params);
+                const L = evalParam(params.L, p);
+                profileAtStart = calculateOSSE(startAt * L, p, params);
             }
             const roll_r = Math.max(5, (r_mouth - profileAtStart.y) * 0.5);
 
