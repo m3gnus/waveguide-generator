@@ -20,6 +20,46 @@ const parseList = (value) => {
     return null;
 };
 
+const ATH_ZMAP_20 = [
+    0.0,
+    0.01319,
+    0.03269,
+    0.05965,
+    0.094787,
+    0.139633,
+    0.195959,
+    0.263047,
+    0.340509,
+    0.427298,
+    0.518751,
+    0.610911,
+    0.695737,
+    0.770223,
+    0.833534,
+    0.88547,
+    0.925641,
+    0.955904,
+    0.977809,
+    0.992192,
+    1.0
+];
+
+const resampleZMap = (map, lengthSteps) => {
+    if (!map || map.length < 2 || lengthSteps <= 0) return null;
+    const maxIndex = map.length - 1;
+    if (maxIndex === lengthSteps) return map.slice();
+    const out = new Array(lengthSteps + 1);
+    for (let j = 0; j <= lengthSteps; j++) {
+        const t = (j / lengthSteps) * maxIndex;
+        const idx = Math.floor(t);
+        const frac = t - idx;
+        const v0 = map[idx];
+        const v1 = map[Math.min(idx + 1, maxIndex)];
+        out[j] = v0 + (v1 - v0) * frac;
+    }
+    return out;
+};
+
 const buildSliceMap = (params, lengthSteps) => {
     const zMap = parseList(params.zMapPoints);
     if (zMap && zMap.length === lengthSteps + 1) {
@@ -28,6 +68,11 @@ const buildSliceMap = (params, lengthSteps) => {
             return zMap.map((z) => z / maxVal);
         }
         return zMap.map((z) => Math.max(0, Math.min(1, z)));
+    }
+
+    if (params.useAthZMap) {
+        const athMap = resampleZMap(ATH_ZMAP_20, lengthSteps);
+        if (athMap) return athMap;
     }
 
     const throatSegments = Number(params.throatSegments || 0);
@@ -53,6 +98,40 @@ const buildSliceMap = (params, lengthSteps) => {
         }
     }
     return map;
+};
+
+const computeOsseProfileAt = (t, p, params) => {
+    const L = evalParam(params.L, p);
+    const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
+    const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
+    const totalLength = L + extLen + slotLen;
+    const profile = calculateOSSE(t * totalLength, p, params);
+    const h = params.h === undefined ? 0 : evalParam(params.h, p);
+    if (h > 0) {
+        profile.y += h * Math.sin(t * Math.PI);
+    }
+    return profile;
+};
+
+const buildMorphTargets = (params, lengthSteps, radialSteps, sliceMap, quadrantInfo) => {
+    const targets = new Array(lengthSteps + 1);
+    const angleRange = quadrantInfo.endAngle - quadrantInfo.startAngle;
+    for (let j = 0; j <= lengthSteps; j++) {
+        const t = sliceMap ? sliceMap[j] : j / lengthSteps;
+        let maxX = 0;
+        let maxZ = 0;
+        for (let i = 0; i <= radialSteps; i++) {
+            const p = quadrantInfo.startAngle + (i / radialSteps) * angleRange;
+            const profile = computeOsseProfileAt(t, p, params);
+            const r = profile.y;
+            const x = Math.abs(r * Math.cos(p));
+            const z = Math.abs(r * Math.sin(p));
+            if (x > maxX) maxX = x;
+            if (z > maxZ) maxZ = z;
+        }
+        targets[j] = { halfW: maxX, halfH: maxZ };
+    }
+    return targets;
 };
 
 /**
@@ -124,6 +203,12 @@ export function buildHornMesh(params) {
     // Full circle uses radialSteps segments with wraparound
     // Partial uses radialSteps segments without wraparound (needs +1 for end point)
     const effectiveRadialSteps = quadrantInfo.fullCircle ? radialSteps : radialSteps;
+    const morphTarget = Number(params.morphTarget || 0);
+    const needsMorphTargets = params.type === 'OSSE' && morphTarget !== 0
+        && (!params.morphWidth || !params.morphHeight);
+    const morphTargets = needsMorphTargets
+        ? buildMorphTargets(params, lengthSteps, effectiveRadialSteps, sliceMap, quadrantInfo)
+        : null;
 
     for (let j = 0; j <= lengthSteps; j++) {
         const t = sliceMap ? sliceMap[j] : j / lengthSteps;
@@ -155,7 +240,8 @@ export function buildHornMesh(params) {
             let r = profile.y;
 
             // Apply morphing (only affects OSSE radius)
-            r = applyMorphing(r, t, p, params);
+            const morphTargetInfo = morphTargets ? morphTargets[j] : null;
+            r = applyMorphing(r, t, p, params, morphTargetInfo);
 
             const vx = r * Math.cos(p);
             const vy = x + verticalOffset;  // Apply vertical offset

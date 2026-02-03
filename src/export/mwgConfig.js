@@ -41,6 +41,15 @@ export function generateMWGConfigContent(params) {
     // NOTE: The original code fetched directly from DOM to get the string value.
     // In the refactor, we will eventually bindings that update the params object with the raw string.
 
+    const hasScale = params.Scale !== undefined || params.scale !== undefined;
+    if (hasScale) {
+        const scaleValue = params.scale ?? params.Scale;
+        const scaleNum = Number(scaleValue);
+        if (!Number.isFinite(scaleNum) || scaleNum !== 1 || params.Scale !== undefined) {
+            content += `Scale = ${formatValue(scaleValue)}\n`;
+        }
+    }
+
     if (params.type === 'R-OSSE') {
         content += 'R-OSSE = {\n';
         content += `R = ${params.R}\n`;

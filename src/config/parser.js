@@ -119,6 +119,7 @@ export class MWGConfigParser {
             if (p['Mesh.SubdomainSlices'] !== undefined) { p.subdomainSlices = p['Mesh.SubdomainSlices']; }
             if (p['Mesh.InterfaceOffset'] !== undefined) { p.interfaceOffset = p['Mesh.InterfaceOffset']; }
             if (p['Mesh.InterfaceDraw'] !== undefined) { p.interfaceDraw = p['Mesh.InterfaceDraw']; }
+            if (p['Mesh.InterfaceResolution'] !== undefined) { p.interfaceResolution = p['Mesh.InterfaceResolution']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.RearResolution']) { p.rearResolution = p['Mesh.RearResolution']; }
@@ -158,6 +159,7 @@ export class MWGConfigParser {
             if (p['Mesh.SubdomainSlices'] !== undefined) { p.subdomainSlices = p['Mesh.SubdomainSlices']; }
             if (p['Mesh.InterfaceOffset'] !== undefined) { p.interfaceOffset = p['Mesh.InterfaceOffset']; }
             if (p['Mesh.InterfaceDraw'] !== undefined) { p.interfaceDraw = p['Mesh.InterfaceDraw']; }
+            if (p['Mesh.InterfaceResolution'] !== undefined) { p.interfaceResolution = p['Mesh.InterfaceResolution']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.RearResolution']) { p.rearResolution = p['Mesh.RearResolution']; }
@@ -186,6 +188,10 @@ export class MWGConfigParser {
         // Normalize Rollback params (both types, flat keys)
         {
             const p = result.params;
+            if (p['Scale'] !== undefined) {
+                const scaleNum = Number(p['Scale']);
+                p.scale = Number.isFinite(scaleNum) ? scaleNum : p['Scale'];
+            }
             if (p['Rollback'] !== undefined) { p.rollback = p['Rollback'] === '1' || p['Rollback'] === 1; }
             if (p['Rollback.Angle']) { p.rollbackAngle = p['Rollback.Angle']; }
             if (p['Rollback.StartAt']) { p.rollbackStart = p['Rollback.StartAt']; }
