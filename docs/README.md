@@ -13,6 +13,10 @@ Start here if you are new to the codebase.
 - plan/STATUS.md - Current project status
 - plan/ROADMAP.md - Milestones and next steps
 
+## Calibration
+
+- ATH_CALIBRATION.md - ATH output matching status and technical details
+
 ## Backend
 
 - server/README.md - Python backend setup and bempp-cl notes

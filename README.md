@@ -108,13 +108,17 @@ npm run start:backend    # Backend only (port 8000)
 │   ├── config/         # Parameter management
 │   ├── solver/         # BEM solver interface
 │   ├── ui/             # User interface components
-│   └── export/         # Export functionality
+│   └── export/         # Export functionality (STL, MSH, GEO, CSV)
+├── scripts/            # Development and testing scripts
+│   ├── ath-compare.js  # ATH reference comparison
+│   └── gmsh-export.py  # Gmsh processing pipeline
 ├── server/             # Python BEM backend
 │   ├── app.py          # FastAPI application
 │   ├── solver/         # bempp-cl solver package
 │   ├── requirements.txt
 │   ├── start.sh        # Startup script
 │   └── README.md       # Backend setup guide
+├── _references/        # ATH reference configs and outputs
 └── tests/              # Unit tests
 ```
 
@@ -123,8 +127,36 @@ npm run start:backend    # Backend only (port 8000)
 ```bash
 # Unit tests
 npm test
-
 ```
+
+### ATH Comparison Testing
+
+Compare MWG output against ATH (Acoustical Topology Horn) reference files:
+
+```bash
+# Run comparison against all test configs
+node scripts/ath-compare.js
+
+# Use custom paths
+node scripts/ath-compare.js _references/testconfigs _references/testconfigs/_generated
+```
+
+This compares:
+- **GEO files**: Gmsh geometry format (Points, Lines, Curve Loops, Surfaces)
+- **STL files**: Binary mesh for 3D visualization
+- **MSH files**: Gmsh mesh format for BEM simulation
+
+Reference configs are in `_references/testconfigs/` with matching folders containing ATH-generated reference files.
+
+### Gmsh Export Pipeline
+
+Process .geo files through Gmsh for bitwise-identical output:
+
+```bash
+python scripts/gmsh-export.py <geo_file> [output_dir]
+```
+
+Requires Gmsh 4.15+ with Python bindings (`pip install gmsh`).
 
 ## Troubleshooting
 
