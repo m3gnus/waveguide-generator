@@ -295,10 +295,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         x = ipt.x + (opt.x - ipt.x) * t;
         z = ipt.z + (opt.z - ipt.z) * t;
         y = yBase - edgeR * t;
-      } else { // Rounded
-        x = ipt.x - ipt.nx * edgeR * (1 - cosP);
-        z = ipt.z - ipt.nz * edgeR * (1 - cosP);
-        y = yBase - edgeR * sinP;
+      } else { // Rounded (Convex)
+        x = ipt.x - ipt.nx * edgeR * sinP;
+        z = ipt.z - ipt.nz * edgeR * sinP;
+        y = yBase - edgeR * (1 - cosP);
       }
       vertices.push(x, y, z);
     }
@@ -333,10 +333,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         x = opt.x + (ipt.x - opt.x) * t;
         z = opt.z + (ipt.z - opt.z) * t;
         y = (backY + edgeR) - edgeR * t;
-      } else { // Rounded
-        x = opt.x + ipt.nx * edgeR * (1 - cosP);
-        z = opt.z + ipt.nz * edgeR * (1 - cosP);
-        y = (backY + edgeR) - edgeR * sinP;
+      } else { // Rounded (Convex)
+        x = opt.x + ipt.nx * edgeR * sinP;
+        z = opt.z + ipt.nz * edgeR * sinP;
+        y = (backY + edgeR) - edgeR * (1 - cosP);
       }
       vertices.push(x, y, z);
     }
@@ -355,8 +355,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const currRing = frontRoundsStarts[s];
     for (let i = 0; i < totalPts; i++) {
       const i2 = (i + 1) % totalPts;
-      indices.push(prevRing + i, currRing + i2, currRing + i);
-      indices.push(prevRing + i, prevRing + i2, currRing + i2);
+      indices.push(prevRing + i, currRing + i, currRing + i2);
+      indices.push(prevRing + i, currRing + i2, prevRing + i2);
     }
     prevRing = currRing;
   }
@@ -366,8 +366,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   const sideRing = frontRoundsStarts[frontRoundsStarts.length - 1];
   for (let i = 0; i < totalPts; i++) {
     const i2 = (i + 1) % totalPts;
-    indices.push(sideRing + i, backSideStart + i2, backSideStart + i);
-    indices.push(sideRing + i, sideRing + i2, backSideStart + i2);
+    indices.push(sideRing + i, backSideStart + i, backSideStart + i2);
+    indices.push(sideRing + i, backSideStart + i2, sideRing + i2);
   }
 
   // 3. Back Roundover Faces
@@ -376,8 +376,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const currRing = backRoundsStarts[s];
     for (let i = 0; i < totalPts; i++) {
       const i2 = (i + 1) % totalPts;
-      indices.push(prevRing + i, currRing + i2, currRing + i);
-      indices.push(prevRing + i, prevRing + i2, currRing + i2);
+      indices.push(prevRing + i, currRing + i, currRing + i2);
+      indices.push(prevRing + i, currRing + i2, prevRing + i2);
     }
     prevRing = currRing;
   }
