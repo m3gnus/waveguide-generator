@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple
 from .deps import BEMPP_AVAILABLE, bempp_api
 from .mesh import refine_mesh_with_gmsh, prepare_mesh
 from .solve import solve, solve_frequency
+from .solve_optimized import solve_optimized  # NEW: Optimized solver
 from .directivity import (
     calculate_directivity_index_from_pressure,
     calculate_directivity_patterns,
@@ -66,9 +67,40 @@ class BEMSolver:
         num_frequencies: int,
         sim_type: str,
         polar_config: Optional[Dict] = None,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        use_optimized: bool = True,
+        enable_symmetry: bool = True,
+        verbose: bool = False
     ) -> Dict:
-        return solve(mesh, frequency_range, num_frequencies, sim_type, polar_config, progress_callback)
+        """
+        Run BEM simulation with optional optimizations.
+
+        Args:
+            mesh: Mesh dictionary from prepare_mesh
+            frequency_range: [start_freq, end_freq] in Hz
+            num_frequencies: Number of frequency points
+            sim_type: Simulation type
+            polar_config: Polar directivity configuration
+            progress_callback: Progress callback function
+            use_optimized: Use optimized solver with symmetry, caching, correct polars (default: True)
+            enable_symmetry: Enable automatic symmetry detection and reduction (default: True)
+            verbose: Print detailed progress and validation reports (default: False)
+
+        Returns:
+            Results dictionary with simulation data and metadata
+        """
+        if use_optimized:
+            return solve_optimized(
+                mesh, frequency_range, num_frequencies, sim_type,
+                polar_config, progress_callback,
+                enable_symmetry, verbose=verbose
+            )
+        else:
+            # Legacy solver (no symmetry, analytical piston directivity)
+            return solve(
+                mesh, frequency_range, num_frequencies, sim_type,
+                polar_config, progress_callback
+            )
 
     def _solve_frequency(
         self,

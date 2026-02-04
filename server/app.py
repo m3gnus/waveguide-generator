@@ -84,6 +84,10 @@ class SimulationRequest(BaseModel):
     sim_type: str
     options: Optional[Dict[str, Any]] = {}
     polar_config: Optional[PolarConfig] = None
+    # New optimization options
+    use_optimized: bool = True  # Enable optimized solver with symmetry, caching, correct polars
+    enable_symmetry: bool = True  # Enable automatic symmetry detection and reduction
+    verbose: bool = False  # Print detailed progress and validation
 
 
 class JobStatus(BaseModel):
@@ -222,7 +226,10 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             num_frequencies=request.num_frequencies,
             sim_type=request.sim_type,
             polar_config=request.polar_config.dict() if request.polar_config else None,
-            progress_callback=lambda p: update_progress(job_id, 0.3 + p * 0.6)
+            progress_callback=lambda p: update_progress(job_id, 0.3 + p * 0.6),
+            use_optimized=request.use_optimized,
+            enable_symmetry=request.enable_symmetry,
+            verbose=request.verbose
         )
         
         # Store results
