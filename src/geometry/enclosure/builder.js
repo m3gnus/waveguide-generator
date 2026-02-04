@@ -333,10 +333,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         x = opt.x + (ipt.x - opt.x) * t;
         z = opt.z + (ipt.z - opt.z) * t;
         y = (backY + edgeR) - edgeR * t;
-      } else { // Rounded (Convex)
-        x = opt.x + ipt.nx * edgeR * sinP;
-        z = opt.z + ipt.nz * edgeR * sinP;
-        y = (backY + edgeR) - edgeR * (1 - cosP);
+      } else { // Rounded
+        x = opt.x - ipt.nx * edgeR * (1 - cosP);
+        z = opt.z - ipt.nz * edgeR * (1 - cosP);
+        y = (backY + edgeR) - edgeR * sinP;
       }
       vertices.push(x, y, z);
     }
@@ -389,7 +389,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
   for (let i = 0; i < totalPts; i++) {
     const i2 = (i + 1) % totalPts;
-    indices.push(backOuterStart + i, backCenterIdx, backOuterStart + i2);
+    indices.push(backOuterStart + i, backOuterStart + i2, backCenterIdx);
   }
 
   // ==========================================
