@@ -143,7 +143,8 @@ const prepareParams = (content, {
             'wallThickness',
             'rearResolution',
             'interfaceOffset',
-            'interfaceDraw'
+            'interfaceDraw',
+            'encEdge'
         ];
 
         lengthKeys.forEach((key) => {
@@ -287,7 +288,7 @@ const computeMeshBounds = (vertices) => {
 
 describe('ATH Tritonia compatibility', () => {
     it('matches reference mesh extents and axial spacing', () => {
-        const refRoot = path.join(process.cwd(), '_references');
+        const refRoot = path.join(process.cwd(), '_references', 'testconfigs');
         const scriptPath = path.join(refRoot, 'tritonia.txt');
         const meshGeoPath = path.join(refRoot, 'tritonia', 'mesh.geo');
         const stlPath = path.join(refRoot, 'tritonia', 'tritonia.stl');
@@ -296,7 +297,7 @@ describe('ATH Tritonia compatibility', () => {
         const params = prepareParams(content, { applyVerticalOffset: false, forceFullQuadrants: true });
         const { vertices } = buildHornMesh(params);
 
-        const ringSize = params.angularSegments + 1;
+        const ringSize = params.angularSegments;
         const lastRingStart = params.lengthSegments * ringSize * 3;
         const ringPoints = [];
         for (let i = 0; i < ringSize; i++) {
@@ -307,6 +308,7 @@ describe('ATH Tritonia compatibility', () => {
         const maxZ = Math.max(...ringPoints.map((p) => Math.abs(p[2])));
 
         const meshGeoExtents = parseMeshGeoMouthExtents(meshGeoPath);
+        console.log('Mesh extents:', { maxX, maxZ, meshGeoExtents });
         expect(Math.abs(maxX - meshGeoExtents.maxX)).toBeLessThanOrEqual(1.0);
         expect(Math.abs(maxZ - meshGeoExtents.maxY)).toBeLessThanOrEqual(1.0);
 
@@ -336,7 +338,7 @@ describe('ATH Tritonia compatibility', () => {
 
 describe('ATH Aolo compatibility', () => {
     it('matches reference STL bounds', () => {
-        const refRoot = path.join(process.cwd(), '_references');
+        const refRoot = path.join(process.cwd(), '_references', 'testconfigs');
         const scriptPath = path.join(refRoot, 'aolo.txt');
         const stlPath = path.join(refRoot, 'aolo', '260112aolo1.stl');
 
@@ -356,7 +358,7 @@ describe('ATH Aolo compatibility', () => {
     });
 
     it('matches reference MSH extents (symmetry mesh)', () => {
-        const refRoot = path.join(process.cwd(), '_references');
+        const refRoot = path.join(process.cwd(), '_references', 'testconfigs');
         const scriptPath = path.join(refRoot, 'aolo.txt');
         const mshPath = path.join(refRoot, 'aolo', 'ABEC_FreeStanding', '260112aolo1.msh');
 
