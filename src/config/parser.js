@@ -146,6 +146,15 @@ export class MWGConfigParser {
         // Normalize R-OSSE mesh/source/abec params too
         if (result.type === 'R-OSSE') {
             const p = result.params;
+            if (p['Morph.TargetShape']) { p.morphTarget = p['Morph.TargetShape']; }
+            if (p['Morph.TargetWidth']) { p.morphWidth = p['Morph.TargetWidth']; }
+            if (p['Morph.TargetHeight']) { p.morphHeight = p['Morph.TargetHeight']; }
+            if (p['Morph.CornerRadius']) { p.morphCorner = p['Morph.CornerRadius']; }
+            if (p['Morph.Rate']) { p.morphRate = p['Morph.Rate']; }
+            if (p['Morph.FixedPart']) { p.morphFixed = p['Morph.FixedPart']; }
+            if (p['Morph.AllowShrinkage'] !== undefined) {
+                p.morphAllowShrinkage = p['Morph.AllowShrinkage'] === '1' || p['Morph.AllowShrinkage'] === 1;
+            }
             if (p['Mesh.AngularSegments']) { p.angularSegments = p['Mesh.AngularSegments']; }
             if (p['Mesh.LengthSegments']) { p.lengthSegments = p['Mesh.LengthSegments']; }
             if (p['Mesh.CornerSegments']) { p.cornerSegments = p['Mesh.CornerSegments']; }

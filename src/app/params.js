@@ -50,6 +50,8 @@ export function prepareParamsForMesh(
         if (!trimmed) continue;
         if (isNumericString(trimmed)) {
           preparedParams[key] = Number(trimmed);
+        } else if (/[a-zA-Z]/.test(trimmed)) {
+          preparedParams[key] = parseExpression(trimmed);
         }
       }
     }
@@ -68,11 +70,13 @@ export function prepareParamsForMesh(
   const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
   const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
   preparedParams.scale = scale;
-  preparedParams.useAthZMap = scale !== 1;
+  const useAthZMap = preparedParams.useAthZMap ?? scale !== 1;
+  preparedParams.useAthZMap = Boolean(useAthZMap);
 
   if (scale !== 1) {
     const lengthKeys = [
       'L',
+      'R',
       'r0',
       'throatExtLength',
       'slotLength',
@@ -80,19 +84,8 @@ export function prepareParamsForMesh(
       'morphCorner',
       'morphWidth',
       'morphHeight',
-      'throatResolution',
-      'mouthResolution',
-      'verticalOffset',
-      'encDepth',
-      'encEdge',
-      'encSpaceL',
-      'encSpaceT',
-      'encSpaceR',
-      'encSpaceB',
-      'wallThickness',
-      'rearResolution',
-      'interfaceOffset',
-      'interfaceDraw'
+      'gcurveWidth',
+      'sourceRadius'
     ];
 
     lengthKeys.forEach((key) => {

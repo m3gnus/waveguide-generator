@@ -15,6 +15,8 @@ const symmetryMap = {
     '1': 'xy'
 };
 
+const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
+
 function normalizeAbscissa(value) {
     if (value === undefined || value === null) return 'log';
     const numeric = Number(value);
@@ -70,22 +72,46 @@ export function generateAbecSolvingFile(params) {
     const numFreq = params.abecNumFreq ?? 40;
     const meshFrequency = params.abecMeshFrequency ?? 1000;
     const abscissa = normalizeAbscissa(params.abecAbscissa);
-    const scaleValue = Number(params.scale ?? 1);
-    const scale = Number.isFinite(scaleValue) ? scaleValue : 1;
+    const scale = 1;
     const sym = mapQuadrantsToSym(params.quadrants);
     const symLine = sym ? `; Sym=${sym}` : '';
+    const hasInterface = Boolean(
+        params &&
+        params.encDepth > 0 &&
+        params.interfaceOffset !== undefined &&
+        params.interfaceOffset !== null &&
+        String(params.interfaceOffset).trim() !== ''
+    );
+    const simType = Number(params.abecSimType ?? 2);
 
-    return [
+    const output = [
         'Control_Solver',
         `  f1=${f1}; f2=${f2}; NumFrequencies=${numFreq}`,
         `  Abscissa=${abscissa}; Dim=3D; MeshFrequency=${meshFrequency}${symLine}`,
         '',
         'MeshFile_Properties',
         `  MeshFileAlias="M1"; Scale=${scale}mm`,
-        '',
-        'SubDomain_Properties',
-        '  SubDomain=1; ElType=Exterior',
-        '',
+        ''
+    ];
+
+    if (hasInterface) {
+        output.push(
+            'SubDomain_Properties',
+            '  SubDomain=1; ElType=Interior',
+            '',
+            'SubDomain_Properties',
+            '  SubDomain=2; ElType=Exterior',
+            ''
+        );
+    } else {
+        output.push(
+            'SubDomain_Properties',
+            '  SubDomain=1; ElType=Exterior',
+            ''
+        );
+    }
+
+    output.push(
         'Elements "SD1G0"',
         '  Subdomain=1; MeshFileAlias="M1"',
         '  101 Mesh Include SD1G0',
@@ -97,7 +123,34 @@ export function generateAbecSolvingFile(params) {
         'Driving "S1001"  // horn driver',
         '  RefElements="SD1D1001"; DrvGroup=1001;',
         ''
-    ].join('\n');
+    );
+
+    if (hasInterface) {
+        output.push(
+            'Elements "SD2G0"',
+            '  Subdomain=2; MeshFileAlias="M1"',
+            '  103 Mesh Include SD2G0',
+            '',
+            'Elements "I1-2"',
+            '  SubDomain=1,2; MeshFileAlias="M1"',
+            '  104 Mesh Include I1-2',
+            ''
+        );
+    }
+
+    if (simType === 1) {
+        const L = evalParam(params.L ?? 0, 0);
+        const extLen = Math.max(0, evalParam(params.throatExtLength ?? 0, 0));
+        const slotLen = Math.max(0, evalParam(params.slotLength ?? 0, 0));
+        const offset = Number.isFinite(L) ? (L + extLen + slotLen) : 0;
+        output.push(
+            'Infinite_Baffle',
+            `  Subdomain=1; Position=z offset=${offset.toFixed(3)}mm`,
+            ''
+        );
+    }
+
+    return output.join('\n');
 }
 
 /**

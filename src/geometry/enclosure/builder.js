@@ -9,13 +9,16 @@ import { buildPlanOutline } from './plan.js';
  * - The enclosure extends BACKWARD from the front baffle by the depth parameter
  * - Edge radius creates rounded edges on both front and back
  *
- * Key positions (Y-axis):
- *   - Throat Y = verticalOffset (e.g., 80mm)
- *   - Mouth Y = verticalOffset + horn length (e.g., 80 + 130 = 210mm)
+ * Key positions (Y-axis = axial):
+ *   - Throat Y = 0
+ *   - Mouth Y = horn length
  *   - Front baffle inner edge Y = Mouth Y
  *   - Front baffle outer edge Y = Mouth Y + edgeRadius
  *   - Back baffle inner edge Y = Mouth Y - depth
  *   - Back baffle outer edge Y = Mouth Y - depth - edgeRadius
+ *
+ * Vertical offset is applied on the Z axis (handled upstream in meshBuilder),
+ * so enclosure positions follow the mouth ring automatically.
  *
  * Spacing parameters define how far the baffle extends from the MOUTH outline:
  *   - L(eft): extends in -X direction from mouth
@@ -30,10 +33,10 @@ import { buildPlanOutline } from './plan.js';
  * @param {number[]} vertices - Vertex array to append to
  * @param {number[]} indices - Index array to append to
  * @param {Object} params - Parameter object
- * @param {number} verticalOffset - Y offset applied to the mesh (throat Y position)
+ * @param {number} verticalOffset - Legacy parameter (kept for signature compatibility)
  * @param {Object} quadrantInfo - Quadrant information for symmetry meshes
  */
-export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null) {
+export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null, groupInfo = null) {
   const radialSteps = params.angularSegments;
 
   // MOUTH is at the last row - the front baffle inner edge connects here
@@ -50,10 +53,16 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   const depthRaw = parseFloat(params.encDepth);
   const depth = Number.isFinite(depthRaw) ? depthRaw : 0;
   const edgeR = parseFloat(params.encEdge) || 0;
+  const interfaceOffsetRaw = parseFloat(params.interfaceOffset);
+  const frontOffset = Number.isFinite(interfaceOffsetRaw) && interfaceOffsetRaw > 0 ? interfaceOffsetRaw : 0;
   const cornerSegs = Math.max(4, params.cornerSegments || 4);
 
-  // Determine if we're in symmetry mode (quadrant 14 = right half)
-  const isRightHalf = quadrantInfo && (params.quadrants === '14' || params.quadrants === 14);
+  const quadrantKey = String(params.quadrants ?? '').trim();
+  const restrictX = quadrantKey === '14' || quadrantKey === '1' || quadrantKey === '14.0' || quadrantKey === '1.0';
+  const restrictZ = quadrantKey === '12' || quadrantKey === '1' || quadrantKey === '12.0' || quadrantKey === '1.0';
+  const isRightHalf = restrictX && !restrictZ;
+  const isTopHalf = restrictZ && !restrictX;
+  const isQuarter = restrictX && restrictZ;
 
   // Find bounding box at the MOUTH ring (last row)
   let maxX = -Infinity,
@@ -75,17 +84,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
   let boxRight, boxLeft, boxTop, boxBot;
 
-  if (isRightHalf) {
-    boxRight = maxX + sR;
-    boxLeft = 0;
-    boxTop = maxZ + sT;
-    boxBot = minZ - sB;
-  } else {
-    boxRight = maxX + sR;
-    boxLeft = minX - sL;
-    boxTop = maxZ + sT;
-    boxBot = minZ - sB;
-  }
+  boxRight = maxX + sR;
+  boxLeft = restrictX ? 0 : minX - sL;
+  boxTop = maxZ + sT;
+  boxBot = restrictZ ? 0 : minZ - sB;
 
   const outline = [];
   let cx = 0;
@@ -117,7 +119,23 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
     const cr = Math.min(edgeR, halfW - 0.1, halfH - 0.1);
 
-    if (isRightHalf) {
+    if (isQuarter) {
+      const addCorner = (cornerCx, cornerCz, startAngle) => {
+        for (let i = 0; i <= cornerSegs; i++) {
+          const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
+          const x = cornerCx + cr * Math.cos(a);
+          const z = cornerCz + cr * Math.sin(a);
+          if (x >= -0.001 && z >= -0.001) {
+            outline.push({ x: Math.max(0, x), z: Math.max(0, z) });
+          }
+        }
+      };
+
+      addCorner(cx + halfW - cr, cz + halfH - cr, 0);
+      outline.push({ x: 0, z: cz + halfH });
+      outline.push({ x: 0, z: 0 });
+      outline.push({ x: cx + halfW, z: 0 });
+    } else if (isRightHalf) {
       const addCorner = (cornerCx, cornerCz, startAngle) => {
         for (let i = 0; i <= cornerSegs; i++) {
           const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
@@ -133,6 +151,18 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
       addCorner(cx + halfW - cr, cz + halfH - cr, 0);
       outline.push({ x: 0, z: cz + halfH });
       outline.push({ x: 0, z: cz - halfH });
+    } else if (isTopHalf) {
+      const addCorner = (cornerCx, cornerCz, startAngle) => {
+        for (let i = 0; i <= cornerSegs; i++) {
+          const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
+          outline.push({ x: cornerCx + cr * Math.cos(a), z: cornerCz + cr * Math.sin(a) });
+        }
+      };
+
+      addCorner(cx + halfW - cr, cz + halfH - cr, 0);
+      addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2);
+      outline.push({ x: cx - halfW, z: 0 });
+      outline.push({ x: cx + halfW, z: 0 });
     } else {
       const addCorner = (cornerCx, cornerCz, startAngle) => {
         for (let i = 0; i <= cornerSegs; i++) {
@@ -149,11 +179,9 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   }
 
   const totalPts = outline.length;
-  const usePlanMap = usePlanOutline;
-  const outlineAngles = usePlanMap ? outline.map((pt) => Math.atan2(pt.z, pt.x)) : null;
+  const outlineAngles = outline.map((pt) => Math.atan2(pt.z, pt.x));
 
   const findNearestOutlineIndex = (angle) => {
-    if (!outlineAngles) return 0;
     let bestIdx = 0;
     let bestDist = Infinity;
     for (let i = 0; i < outlineAngles.length; i++) {
@@ -173,9 +201,9 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   // Key Y positions
   // ==========================================
   const frontInnerY = mouthY; // Front baffle inner edge (connects to mouth)
-  const frontOuterY = mouthY + edgeR; // Front baffle outer edge (extends forward)
+  const frontOuterY = mouthY + frontOffset; // Front baffle outer edge (interface offset)
   const backInnerY = mouthY - depth; // Back baffle inner edge
-  const backOuterY = mouthY - depth - edgeR; // Back baffle outer edge (extends backward)
+  const backOuterY = mouthY - depth; // Back baffle outer edge (no axial extension in ATH)
 
   // ==========================================
   // Create vertices for the enclosure
@@ -234,7 +262,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   // Create faces for the enclosure
   // ==========================================
 
+  const enclosureStartTri = indices.length / 3;
+
   // 1. Front baffle face (between front inner and front outer)
+  const frontStartTri = indices.length / 3;
   for (let i = 0; i < totalPts; i++) {
     const i2 = (i + 1) % totalPts;
     // Triangle 1
@@ -242,6 +273,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     // Triangle 2
     indices.push(frontInnerStart + i, frontOuterStart + i2, frontInnerStart + i2);
   }
+  const frontEndTri = indices.length / 3;
 
   // 2. Back panel face (between back inner and back outer)
   for (let i = 0; i < totalPts; i++) {
@@ -259,12 +291,6 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     indices.push(frontInnerStart + i, backInnerStart + i2, frontInnerStart + i2);
   }
 
-  // 4. Rounded edges (between front outer and back outer)
-  for (let i = 0; i < totalPts; i++) {
-    const i2 = (i + 1) % totalPts;
-    indices.push(frontOuterStart + i, frontOuterStart + i2, backOuterStart + i2);
-    indices.push(frontOuterStart + i, backOuterStart + i2, backOuterStart + i);
-  }
 
   // ==========================================
   // Connect mouth to enclosure front inner ring
@@ -284,16 +310,18 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
   // Connect mouth ring to front inner ring
   const mouthLoop = mouthRing.length;
-  const sideLoopEnd = usePlanMap ? totalPts : mouthLoop;
+  const fullCircle = !quadrantInfo || quadrantInfo.fullCircle;
+  const connectLoop = fullCircle ? mouthLoop : Math.max(0, mouthLoop - 1);
+  const mapToOutline = usePlanOutline || totalPts !== mouthLoop;
 
-  for (let i = 0; i < sideLoopEnd; i++) {
-    const i2 = (i + 1) % sideLoopEnd;
+  for (let i = 0; i < connectLoop; i++) {
+    const i2 = fullCircle ? (i + 1) % mouthLoop : i + 1;
 
     // Map angle to enclosure outline index
     let ei = i;
     let ei2 = i2;
 
-    if (usePlanMap) {
+    if (mapToOutline) {
       const mouthVertex = mouthRing[i % mouthLoop];
       const mouthAngle = Math.atan2(mouthVertex.z, mouthVertex.x);
       ei = findNearestOutlineIndex(mouthAngle);
@@ -315,34 +343,17 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   const backCenterIdx = vertices.length / 3;
   vertices.push(cx, backOuterY, cz);
 
-  for (let i = 0; i < sideLoopEnd; i++) {
+  for (let i = 0; i < totalPts; i++) {
     const i2 = (i + 1) % totalPts;
     // Winding for back cap facing outwards (away from front)
     indices.push(backOuterStart + i, backOuterStart + i2, backCenterIdx);
   }
 
-  // For symmetric mesh, add closing triangles along symmetry plane
-  if (isRightHalf) {
-    // Close the side at x=0
-    const topFrontInner = frontInnerStart + totalPts - 2;
-    const botFrontInner = frontInnerStart + totalPts - 1;
-    const topFrontOuter = frontOuterStart + totalPts - 2;
-    const botFrontOuter = frontOuterStart + totalPts - 1;
-    const topBackInner = backInnerStart + totalPts - 2;
-    const botBackInner = backInnerStart + totalPts - 1;
-    const topBackOuter = backOuterStart + totalPts - 2;
-    const botBackOuter = backOuterStart + totalPts - 1;
-
-    // Front edge along symmetry plane
-    indices.push(topFrontInner, botFrontInner, botFrontOuter);
-    indices.push(topFrontInner, botFrontOuter, topFrontOuter);
-
-    // Side wall along symmetry plane
-    indices.push(topFrontInner, topBackInner, botBackInner);
-    indices.push(topFrontInner, botBackInner, botFrontInner);
-
-    // Back edge along symmetry plane
-    indices.push(topBackInner, botBackInner, botBackOuter);
-    indices.push(topBackInner, botBackOuter, topBackOuter);
+  const enclosureEndTri = indices.length / 3;
+  if (groupInfo) {
+    groupInfo.enclosure = { start: enclosureStartTri, end: enclosureEndTri };
+    groupInfo.enclosureFront = { start: frontStartTri, end: frontEndTri };
   }
+
+  // NOTE: For symmetry meshes, ATH keeps the symmetry planes open.
 }
