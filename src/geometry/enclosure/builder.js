@@ -208,16 +208,13 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   };
 
   // ==========================================
-  // Key Y positions
+  // Key Y positions and Ring Generation
   // ==========================================
-  const frontInnerY = mouthY; // Front baffle inner edge (connects to mouth)
-  const frontOuterY = mouthY + frontOffset; // Front baffle outer edge (interface offset)
-  const backInnerY = mouthY - depth; // Back baffle inner edge
-  const backOuterY = mouthY - depth; // Back baffle outer edge (no axial extension in ATH)
+  const backY = mouthY - depth;
 
-  // ==========================================
-  // Create vertices for the enclosure
-  // ==========================================
+  // Generate multiple rings for rounded edges if edgeR > 0
+  // axialSegs determines how many steps in the quarter-circle arc
+  const axialSegs = edgeR > 0 ? cornerSegs : 1;
 
   // Generate inset outline for the rounded edge portions
   const insetOutline = [];
@@ -231,80 +228,14 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
       const nz = dz / dist;
       insetOutline.push({
         x: pt.x + nx * edgeR,
-        z: pt.z + nz * edgeR
+        z: pt.z + nz * edgeR,
+        nx,
+        nz
       });
     } else {
-      insetOutline.push({ x: pt.x, z: pt.z });
+      insetOutline.push({ x: pt.x, z: pt.z, nx: 0, nz: 0 });
     }
   }
-
-  // Create 4 rings of vertices:
-  // 1. Front inner (connects to mouth)
-  // 2. Front outer (rounded edge front)
-  // 3. Back inner (back panel)
-  // 4. Back outer (rounded edge back)
-
-  const frontInnerStart = vertices.length / 3;
-  for (let i = 0; i < totalPts; i++) {
-    const pt = outline[i];
-    vertices.push(pt.x, frontInnerY, pt.z);
-  }
-
-  const frontOuterStart = vertices.length / 3;
-  for (let i = 0; i < totalPts; i++) {
-    const pt = insetOutline[i];
-    vertices.push(pt.x, frontOuterY, pt.z);
-  }
-
-  const backInnerStart = vertices.length / 3;
-  for (let i = 0; i < totalPts; i++) {
-    const pt = outline[i];
-    vertices.push(pt.x, backInnerY, pt.z);
-  }
-
-  const backOuterStart = vertices.length / 3;
-  for (let i = 0; i < totalPts; i++) {
-    const pt = insetOutline[i];
-    vertices.push(pt.x, backOuterY, pt.z);
-  }
-
-  // ==========================================
-  // Create faces for the enclosure
-  // ==========================================
-
-  const enclosureStartTri = indices.length / 3;
-
-  // 1. Front baffle face (between front inner and front outer)
-  const frontStartTri = indices.length / 3;
-  for (let i = 0; i < totalPts; i++) {
-    const i2 = (i + 1) % totalPts;
-    // Triangle 1
-    indices.push(frontInnerStart + i, frontOuterStart + i, frontOuterStart + i2);
-    // Triangle 2
-    indices.push(frontInnerStart + i, frontOuterStart + i2, frontInnerStart + i2);
-  }
-  const frontEndTri = indices.length / 3;
-
-  // 2. Back panel face (between back inner and back outer)
-  for (let i = 0; i < totalPts; i++) {
-    const i2 = (i + 1) % totalPts;
-    // Triangle 1
-    indices.push(backInnerStart + i, backOuterStart + i2, backOuterStart + i);
-    // Triangle 2
-    indices.push(backInnerStart + i, backInnerStart + i2, backOuterStart + i2);
-  }
-
-  // 3. Side walls (between front inner and back inner)
-  for (let i = 0; i < totalPts; i++) {
-    const i2 = (i + 1) % totalPts;
-    indices.push(frontInnerStart + i, backInnerStart + i, backInnerStart + i2);
-    indices.push(frontInnerStart + i, backInnerStart + i2, frontInnerStart + i2);
-  }
-
-
-  // ==========================================
-  // Connect mouth to enclosure front inner ring
-  // ==========================================
 
   // Get mouth ring vertices from horn (last row of horn mesh)
   const mouthStart = lastRowStart;
@@ -318,8 +249,126 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     });
   }
 
+  // Ring 0: Front Inner (follows mouth profile exactly)
+  const frontInnerStart = vertices.length / 3;
+  for (let i = 0; i < totalPts; i++) {
+    const pt = outline[i];
+    // Find nearest mouth vertex to get its Y position
+    const angle = Math.atan2(pt.z - cz, pt.x - cx);
+    let bestDist = Infinity;
+    let bestY = mouthY;
+    for (const mv of mouthRing) {
+      const ma = Math.atan2(mv.z - cz, mv.x - cx);
+      let da = Math.abs(angle - ma);
+      while (da > Math.PI) da -= Math.PI * 2;
+      da = Math.abs(da);
+      if (da < bestDist) {
+        bestDist = da;
+        bestY = mv.y;
+      }
+    }
+    vertices.push(pt.x, bestY, pt.z);
+  }
+
+  // Front Rounded Rings
+  const frontRoundsStarts = [];
+  for (let s = 1; s <= axialSegs; s++) {
+    const startIdx = vertices.length / 3;
+    frontRoundsStarts.push(startIdx);
+    const phi = (s / axialSegs) * (Math.PI / 2); // 0 (baffle) to PI/2 (wall)
+    const sinP = Math.sin(phi);
+    const cosP = Math.cos(phi);
+
+    for (let i = 0; i < totalPts; i++) {
+      const ipt = insetOutline[i];
+      const yBase = vertices[(frontInnerStart + i) * 3 + 1];
+      const x = ipt.x - ipt.nx * edgeR * cosP;
+      const z = ipt.z - ipt.nz * edgeR * cosP;
+      const y = (yBase + frontOffset) + edgeR * sinP;
+      vertices.push(x, y, z);
+    }
+  }
+
+  // Back Side Ring (start of back rounding)
+  const backSideStart = vertices.length / 3;
+  for (let i = 0; i < totalPts; i++) {
+    const ipt = insetOutline[i];
+    vertices.push(ipt.x, backY + edgeR, ipt.z);
+  }
+
+  // Back Rounded Rings
+  const backRoundsStarts = [];
+  for (let s = 1; s <= axialSegs; s++) {
+    const startIdx = vertices.length / 3;
+    backRoundsStarts.push(startIdx);
+    const phi = (s / axialSegs) * (Math.PI / 2); // 0 (wall) to PI/2 (back plane)
+    const sinP = Math.sin(phi);
+    const cosP = Math.cos(phi);
+
+    for (let i = 0; i < totalPts; i++) {
+      const ipt = insetOutline[i];
+      const x = ipt.x - ipt.nx * edgeR * (1 - cosP);
+      const z = ipt.z - ipt.nz * edgeR * (1 - cosP);
+      const y = (backY + edgeR) - edgeR * sinP;
+      vertices.push(x, y, z);
+    }
+  }
+
+  // ==========================================
+  // Create faces for the enclosure
+  // ==========================================
+
+  const enclosureStartTri = indices.length / 3;
+
+  // 1. Front Roundover Faces
+  const frontStartTri = indices.length / 3;
+  let prevRing = frontInnerStart;
+  for (let s = 0; s < frontRoundsStarts.length; s++) {
+    const currRing = frontRoundsStarts[s];
+    for (let i = 0; i < totalPts; i++) {
+      const i2 = (i + 1) % totalPts;
+      indices.push(prevRing + i, currRing + i, currRing + i2);
+      indices.push(prevRing + i, currRing + i2, prevRing + i2);
+    }
+    prevRing = currRing;
+  }
+  const frontEndTri = indices.length / 3;
+
+  // 2. Side Walls
+  const sideRing = frontRoundsStarts[frontRoundsStarts.length - 1];
+  for (let i = 0; i < totalPts; i++) {
+    const i2 = (i + 1) % totalPts;
+    indices.push(sideRing + i, backSideStart + i, backSideStart + i2);
+    indices.push(sideRing + i, backSideStart + i2, sideRing + i2);
+  }
+
+  // 3. Back Roundover Faces
+  prevRing = backSideStart;
+  for (let s = 0; s < backRoundsStarts.length; s++) {
+    const currRing = backRoundsStarts[s];
+    for (let i = 0; i < totalPts; i++) {
+      const i2 = (i + 1) % totalPts;
+      indices.push(prevRing + i, currRing + i, currRing + i2);
+      indices.push(prevRing + i, currRing + i2, prevRing + i2);
+    }
+    prevRing = currRing;
+  }
+
+  // 4. Back Cap (fan from center)
+  const backOuterStart = backRoundsStarts[backRoundsStarts.length - 1];
+  const backCenterIdx = vertices.length / 3;
+  vertices.push(cx, backY, cz);
+
+  for (let i = 0; i < totalPts; i++) {
+    const i2 = (i + 1) % totalPts;
+    indices.push(backOuterStart + i, backOuterStart + i2, backCenterIdx);
+  }
+
+  // ==========================================
+  // Connect mouth to enclosure front inner ring
+  // ==========================================
+
   // Connect mouth ring to front inner ring using proper stitching
-  // When the rings have different point counts, we need careful triangulation
   const mouthLoop = mouthRing.length;
   const fullCircle = !quadrantInfo || quadrantInfo.fullCircle;
   const connectLoop = fullCircle ? mouthLoop : Math.max(0, mouthLoop - 1);
@@ -392,16 +441,6 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         indices.push(mi, mi2, frontInnerStart + e2);
       }
     }
-  }
-
-  // Back cap — fan from center to back outer ring
-  const backCenterIdx = vertices.length / 3;
-  vertices.push(cx, backOuterY, cz);
-
-  for (let i = 0; i < totalPts; i++) {
-    const i2 = (i + 1) % totalPts;
-    // Winding for back cap facing outwards (away from front)
-    indices.push(backOuterStart + i, backOuterStart + i2, backCenterIdx);
   }
 
   const enclosureEndTri = indices.length / 3;
