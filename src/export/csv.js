@@ -14,8 +14,8 @@ export function exportVerticesToCSV(vertices, params) {
     // Process vertices to create CSV rows
     for (let i = 0; i < vertices.length; i += 3) {
         const x = vertices[i];
-        const y = vertices[i + 1]; 
-        const z = vertices[i + 2];
+        const y = vertices[i + 2]; 
+        const z = vertices[i + 1];
         csv += `${x.toFixed(6)};${y.toFixed(6)};${z.toFixed(6)}\n`;
     }
     
@@ -34,8 +34,8 @@ export function exportVerticesToCSVWithMetadata(vertices, params) {
     // Process vertices to create CSV rows with metadata
     for (let i = 0; i < vertices.length; i += 3) {
         const x = vertices[i];
-        const y = vertices[i + 1]; 
-        const z = vertices[i + 2];
+        const y = vertices[i + 2]; 
+        const z = vertices[i + 1];
         const index = i / 3;
         
         // Determine type based on position (simplified)
@@ -71,8 +71,8 @@ export function exportCrossSectionProfilesCSV(vertices, params) {
             const idx = j * (angularSegments + 1) + i;
             if (idx < vertices.length / 3) {
                 const x = vertices[idx * 3];
-                const y = vertices[idx * 3 + 1]; 
-                const z = vertices[idx * 3 + 2];
+                const y = vertices[idx * 3 + 2]; 
+                const z = vertices[idx * 3 + 1];
                 csv += `${x.toFixed(6)};${y.toFixed(6)};${z.toFixed(6)}\n`;
             }
         }

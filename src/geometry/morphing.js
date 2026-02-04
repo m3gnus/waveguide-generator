@@ -35,10 +35,10 @@ export function getRoundedRectRadius(p, halfWidth, halfHeight, cornerRadius) {
 }
 
 export function applyMorphing(currentR, t, p, params, morphTargetInfo = null) {
-    // Morphing for OSSE
+    // Morphing for ATH-style targets (OSSE and R-OSSE)
     // t is normalized 0..1
     const targetShape = Number(params.morphTarget || 0);
-    if (params.type === 'OSSE' && targetShape !== 0) {
+    if (targetShape !== 0) {
         let morphFactor = 0;
         if (t > params.morphFixed) {
             const tMorph = (t - params.morphFixed) / (1 - params.morphFixed);

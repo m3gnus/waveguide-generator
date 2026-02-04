@@ -51,6 +51,10 @@ function applyAthImportDefaults(parsed, typedParams) {
   if (!parsed || !parsed.type) return;
 
   const isOSSE = parsed.type === 'OSSE';
+  typedParams.useAthZMap = true;
+  if (typedParams.morphTarget === undefined) {
+    typedParams.morphTarget = 0;
+  }
   const hasQuadrants =
     typedParams.quadrants !== undefined &&
     typedParams.quadrants !== null &&
@@ -59,17 +63,17 @@ function applyAthImportDefaults(parsed, typedParams) {
     typedParams.quadrants = isOSSE ? '14' : '1';
   }
 
+  const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
+  if (!hasMeshEnclosure && typedParams.encDepth === undefined) {
+    typedParams.encDepth = 0;
+  }
+
   if (isOSSE) {
     if (typedParams.k === undefined) {
       typedParams.k = 1;
     }
     if (typedParams.h === undefined) {
       typedParams.h = 0;
-    }
-
-    const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
-    if (!hasMeshEnclosure && typedParams.encDepth === undefined) {
-      typedParams.encDepth = 0;
     }
   }
 }

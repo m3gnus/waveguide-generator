@@ -9,14 +9,27 @@ import {
   generateAbecSolvingFile,
   generateAbecObservationFile
 } from '../export/index.js';
+import { buildHornMesh } from '../geometry/index.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { GlobalState } from '../state.js';
 
 export function exportSTL(app) {
-  if (!app.hornMesh) return;
+  const preparedParams = app.prepareParamsForMesh({
+    forceFullQuadrants: true,
+    applyVerticalOffset: false
+  });
+  const { vertices, indices } = buildHornMesh(preparedParams, {
+    includeEnclosure: false,
+    includeRearShape: false
+  });
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
   const exporter = new STLExporter();
-  const exportMesh = app.hornMesh.clone();
-  exportMesh.geometry = app.hornMesh.geometry.clone();
+  const exportMesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
   exportMesh.geometry.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));
   exportMesh.updateMatrixWorld(true);
   const result = exporter.parse(exportMesh, { binary: true });
@@ -78,21 +91,21 @@ export function exportGmshGeo(app) {
  * @param {Object} app
  */
 export function exportMSH(app) {
-  if (!app.hornMesh) {
-    alert('Please generate a horn model first');
-    return;
-  }
-
-  const geometry = app.hornMesh.geometry;
-  const vertices = geometry.attributes.position.array;
-  const indices = geometry.index?.array;
-  if (!indices) {
+  const preparedParams = app.prepareParamsForMesh({
+    forceFullQuadrants: false,
+    applyVerticalOffset: true
+  });
+  const { vertices, indices, groups } = buildHornMesh(preparedParams, {
+    includeEnclosure: true,
+    includeRearShape: true,
+    collectGroups: true
+  });
+  if (!indices || indices.length === 0) {
     alert('Mesh indices are missing. Please re-render the model and try again.');
     return;
   }
 
-  const state = GlobalState.get();
-  const msh = exportHornToMSHWithBoundaries(vertices, indices, state.params);
+  const msh = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups);
 
   saveFile(msh, 'mesh.msh', {
     extension: '.msh',
@@ -107,20 +120,20 @@ export function exportMSH(app) {
  * @returns {Promise<void>}
  */
 export async function exportABECProject(app) {
-  if (!app.hornMesh) {
-    alert('Please generate a horn model first');
-    return;
-  }
-
-  const geometry = app.hornMesh.geometry;
-  const vertices = geometry.attributes.position.array;
-  const indices = geometry.index?.array;
-  if (!indices) {
+  const preparedParams = app.prepareParamsForMesh({
+    forceFullQuadrants: false,
+    applyVerticalOffset: true
+  });
+  const { vertices, indices, groups } = buildHornMesh(preparedParams, {
+    includeEnclosure: true,
+    includeRearShape: true,
+    collectGroups: true
+  });
+  if (!indices || indices.length === 0) {
     alert('Mesh indices are missing. Please re-render the model and try again.');
     return;
   }
 
-  const state = GlobalState.get();
   const baseName = getExportBaseName();
   const projectBase = `${baseName}_project`;
   const solvingBase = `${baseName}_solving`;
@@ -141,14 +154,14 @@ export async function exportABECProject(app) {
     observationFileName,
     meshFileName
   });
-  const solvingContent = generateAbecSolvingFile(state.params);
+  const solvingContent = generateAbecSolvingFile(preparedParams);
   const observationContent = generateAbecObservationFile({
     angleRange: polarRange,
     distance: Number.isFinite(polarDistance) ? polarDistance : 2,
     normAngle: Number.isFinite(polarNormAngle) ? polarNormAngle : 5,
     inclination: Number.isFinite(polarInclination) ? polarInclination : 0
   });
-  const meshContent = exportHornToMSHWithBoundaries(vertices, indices, state.params);
+  const meshContent = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups);
 
   await saveFile(projectContent, projectFileName, {
     baseName: projectBase,

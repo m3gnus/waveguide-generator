@@ -12,8 +12,8 @@ export function exportProfilesCSV(vertices, params) {
         for (let i = 0; i <= angularSegments; i++) {
             const idx = j * (angularSegments + 1) + i;
             const x = vertices[idx * 3];
-            const y = vertices[idx * 3 + 1];
-            const z = vertices[idx * 3 + 2];
+            const y = vertices[idx * 3 + 2];
+            const z = vertices[idx * 3 + 1];
             csv += `${x.toFixed(6)};${y.toFixed(6)};${z.toFixed(6)}\r\n`;
         }
         csv += '\r\n'; // Blank line between cross-sections
@@ -39,8 +39,8 @@ export function exportGmshGeo(vertices, params) {
         for (let i = 0; i <= angularSegments; i++) {
             const idx = j * (angularSegments + 1) + i;
             const x = vertices[idx * 3];
-            const y = vertices[idx * 3 + 1];
-            const z = vertices[idx * 3 + 2];
+            const y = vertices[idx * 3 + 2];
+            const z = vertices[idx * 3 + 1];
             geo += `Point(${pointIndex})={${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)},${meshSize}};\r\n`;
             pointIndex++;
         }
@@ -83,14 +83,19 @@ export function compareWithReference(ourVertices, referenceCSV, params) {
     const minLen = Math.min(ourVertices.length, refVertices.length);
 
     for (let i = 0; i < minLen; i += 3) {
-        const dx = ourVertices[i] - refVertices[i];
-        const dy = ourVertices[i + 1] - refVertices[i + 1];
-        const dz = ourVertices[i + 2] - refVertices[i + 2];
+        const aligned = [
+            ourVertices[i],
+            ourVertices[i + 2],
+            ourVertices[i + 1]
+        ];
+        const dx = aligned[0] - refVertices[i];
+        const dy = aligned[1] - refVertices[i + 1];
+        const dz = aligned[2] - refVertices[i + 2];
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
         diffs.push({
             index: i / 3,
-            ourPoint: [ourVertices[i], ourVertices[i + 1], ourVertices[i + 2]],
+            ourPoint: aligned,
             refPoint: [refVertices[i], refVertices[i + 1], refVertices[i + 2]],
             diff: [dx, dy, dz],
             distance: dist

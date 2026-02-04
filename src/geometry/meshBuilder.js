@@ -180,7 +180,10 @@ function parseQuadrants(quadrants) {
  * @param {Object} params - The complete parameter object.
  * @returns {{ vertices: number[], indices: number[] }} The flat arrays of coordinates and indices.
  */
-export function buildHornMesh(params) {
+export function buildHornMesh(params, options = {}) {
+    const includeEnclosure = options.includeEnclosure !== false;
+    const includeRearShape = options.includeRearShape !== false;
+    const groupInfo = options.groupInfo ?? (options.collectGroups ? {} : null);
     const radialSteps = params.angularSegments;
     const lengthSteps = params.lengthSegments;
     const sliceMap = buildSliceMap(params, lengthSteps);
@@ -192,7 +195,7 @@ export function buildHornMesh(params) {
     const throatResolution = params.throatResolution || radialSteps;
     const mouthResolution = params.mouthResolution || radialSteps;
 
-    // Vertical offset (ATH Mesh.VerticalOffset)
+    // Vertical offset (ATH Mesh.VerticalOffset) applied to Z axis (vertical)
     const verticalOffset = parseFloat(params.verticalOffset) || 0;
 
     // Quadrant support for symmetry meshes
@@ -244,8 +247,8 @@ export function buildHornMesh(params) {
             r = applyMorphing(r, t, p, params, morphTargetInfo);
 
             const vx = r * Math.cos(p);
-            const vy = x + verticalOffset;  // Apply vertical offset
-            const vz = r * Math.sin(p);
+            const vy = x; // axial position (Y axis)
+            const vz = r * Math.sin(p) + verticalOffset; // vertical offset (Z axis)
 
             vertices.push(vx, vy, vz);
         }
@@ -257,9 +260,9 @@ export function buildHornMesh(params) {
     }
 
     // Add Enclosure for OSSE
-    if (params.type === 'OSSE' && params.encDepth > 0) {
-        addEnclosureGeometry(vertices, indices, params, verticalOffset, quadrantInfo);
-    } else if (params.rearShape !== 0) {
+    if (includeEnclosure && params.encDepth > 0) {
+        addEnclosureGeometry(vertices, indices, params, verticalOffset, quadrantInfo, groupInfo);
+    } else if (includeRearShape && params.rearShape !== 0) {
         addRearShapeGeometry(vertices, indices, params, lengthSteps, effectiveRadialSteps);
     }
 
@@ -285,5 +288,9 @@ export function buildHornMesh(params) {
         console.error(`[MeshBuilder] Rollback enabled: ${params.rollback}, RearShape: ${params.rearShape}`);
     }
 
-    return { vertices, indices };
+    const result = { vertices, indices };
+    if (groupInfo) {
+        result.groups = groupInfo;
+    }
+    return result;
 }
