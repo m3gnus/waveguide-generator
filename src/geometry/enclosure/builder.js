@@ -211,15 +211,16 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   // Key Y positions and Ring Generation
   // ==========================================
   const backY = mouthY - depth;
-
-  // Generate multiple rings for rounded edges if edgeR > 0
-  // axialSegs determines how many steps in the quarter-circle arc
+  const edgeType = parseInt(params.encEdgeType) || 1; // 1=rounded, 2=chamfered
   const axialSegs = edgeR > 0 ? cornerSegs : 1;
 
-  // Generate inset outline for the rounded edge portions
+  // Generate inset outline and outer outline
+  // outline = outer boundary of the box
+  // insetOutline = boundary where the roundover starts (inset by edgeR)
+  const outerOutline = outline;
   const insetOutline = [];
   for (let i = 0; i < totalPts; i++) {
-    const pt = outline[i];
+    const pt = outerOutline[i];
     const dx = cx - pt.x;
     const dz = cz - pt.z;
     const dist = Math.sqrt(dx * dx + dz * dz);
@@ -249,16 +250,17 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     });
   }
 
-  // Ring 0: Front Inner (follows mouth profile exactly)
+  // Ring 0: Front Inner (at the mouth y position, inset outline)
+  // This ring connects the mouth to the enclosure
   const frontInnerStart = vertices.length / 3;
   for (let i = 0; i < totalPts; i++) {
-    const pt = outline[i];
+    const ipt = insetOutline[i];
     // Find nearest mouth vertex to get its Y position
-    const angle = Math.atan2(pt.z - cz, pt.x - cx);
+    const angle = Math.atan2(ipt.z - cz, ipt.x - cx);
     let bestDist = Infinity;
     let bestY = mouthY;
     for (const mv of mouthRing) {
-      const ma = Math.atan2(mv.z - cz, mv.x - cx);
+      let ma = Math.atan2(mv.z - cz, mv.x - cx);
       let da = Math.abs(angle - ma);
       while (da > Math.PI) da -= Math.PI * 2;
       da = Math.abs(da);
@@ -267,49 +269,75 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         bestY = mv.y;
       }
     }
-    vertices.push(pt.x, bestY, pt.z);
+    vertices.push(ipt.x, bestY, ipt.z);
   }
 
-  // Front Rounded Rings
+  // Front Roundover Rings
+  // Curving from (insetPt, bestY) to (outerPt, bestY - edgeR)
   const frontRoundsStarts = [];
   for (let s = 1; s <= axialSegs; s++) {
     const startIdx = vertices.length / 3;
     frontRoundsStarts.push(startIdx);
-    const phi = (s / axialSegs) * (Math.PI / 2); // 0 (baffle) to PI/2 (wall)
+
+    // phi: 0 (at inset outline, y=bestY) to PI/2 (at outer outline, y=bestY - edgeR)
+    const phi = (s / axialSegs) * (Math.PI / 2);
     const sinP = Math.sin(phi);
     const cosP = Math.cos(phi);
 
     for (let i = 0; i < totalPts; i++) {
       const ipt = insetOutline[i];
+      const opt = outerOutline[i];
       const yBase = vertices[(frontInnerStart + i) * 3 + 1];
-      const x = ipt.x - ipt.nx * edgeR * cosP;
-      const z = ipt.z - ipt.nz * edgeR * cosP;
-      const y = (yBase + frontOffset) + edgeR * sinP;
+
+      let x, y, z;
+      if (edgeType === 2) { // Chamfer
+        const t = s / axialSegs;
+        x = ipt.x + (opt.x - ipt.x) * t;
+        z = ipt.z + (opt.z - ipt.z) * t;
+        y = yBase - edgeR * t;
+      } else { // Rounded
+        x = ipt.x - ipt.nx * edgeR * (1 - cosP);
+        z = ipt.z - ipt.nz * edgeR * (1 - cosP);
+        y = yBase - edgeR * sinP;
+      }
       vertices.push(x, y, z);
     }
   }
 
-  // Back Side Ring (start of back rounding)
+  // Side Wall Back Ring (at back elevation before roundover starts)
   const backSideStart = vertices.length / 3;
   for (let i = 0; i < totalPts; i++) {
-    const ipt = insetOutline[i];
-    vertices.push(ipt.x, backY + edgeR, ipt.z);
+    const opt = outerOutline[i];
+    vertices.push(opt.x, backY + edgeR, opt.z);
   }
 
-  // Back Rounded Rings
+  // Back Roundover Rings
+  // Curving from (outerPt, backY + edgeR) to (insetPt, backY)
   const backRoundsStarts = [];
   for (let s = 1; s <= axialSegs; s++) {
     const startIdx = vertices.length / 3;
     backRoundsStarts.push(startIdx);
-    const phi = (s / axialSegs) * (Math.PI / 2); // 0 (wall) to PI/2 (back plane)
+
+    // phi: 0 (at outer outline, y=backY + edgeR) to PI/2 (at inset outline, y=backY)
+    const phi = (s / axialSegs) * (Math.PI / 2);
     const sinP = Math.sin(phi);
     const cosP = Math.cos(phi);
 
     for (let i = 0; i < totalPts; i++) {
       const ipt = insetOutline[i];
-      const x = ipt.x - ipt.nx * edgeR * (1 - cosP);
-      const z = ipt.z - ipt.nz * edgeR * (1 - cosP);
-      const y = (backY + edgeR) - edgeR * sinP;
+      const opt = outerOutline[i];
+
+      let x, y, z;
+      if (edgeType === 2) { // Chamfer
+        const t = s / axialSegs;
+        x = opt.x + (ipt.x - opt.x) * t;
+        z = opt.z + (ipt.z - opt.z) * t;
+        y = (backY + edgeR) - edgeR * t;
+      } else { // Rounded
+        x = opt.x + ipt.nx * edgeR * (1 - cosP);
+        z = opt.z + ipt.nz * edgeR * (1 - cosP);
+        y = (backY + edgeR) - edgeR * sinP;
+      }
       vertices.push(x, y, z);
     }
   }
