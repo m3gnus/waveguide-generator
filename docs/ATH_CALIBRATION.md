@@ -25,10 +25,13 @@ MWG must replicate this exactly:
 - Fixed mesh size at 50.0 (ATH convention)
 - Curve Loops start at ID 511, Surfaces at 147
 
-### 2. Enclosure Stitching Fix (`src/geometry/enclosure/builder.js`)
-- Fixed degenerate triangles in mouth-to-baffle connection
-- Proper triangulation when multiple mouth vertices map to same enclosure vertex
-- Eliminates visual artifacts (edges sticking out of front baffle)
+### 2. Enclosure Geometry Fix (`src/geometry/enclosure/builder.js`)
+- Corrected axial direction of front roundovers (curving backward from mouth plane).
+- Fixed side wall mapping to outer box extent.
+- Aligned back roundover curving logic with ATH reference.
+- Added support for `EdgeType = 2` (chamfered edges).
+- Fixed degenerate triangles in mouth-to-baffle connection.
+- Eliminates visual artifacts (edges sticking out of front baffle).
 
 ### 3. Comparison Tools (`scripts/`)
 - `ath-compare.js`: Automated testing against ATH references
