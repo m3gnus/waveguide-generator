@@ -32,21 +32,27 @@ const transformVerticesToAth = (vertices) => {
     return out;
 };
 
-const appendThroatCap = (vertices, indices, params) => {
-    const radialSteps = Number(params.angularSegments || 0);
-    if (!Number.isFinite(radialSteps) || radialSteps <= 0) {
+const appendThroatCap = (vertices, indices, params, ringCount = null) => {
+    let count = Number.isFinite(ringCount) && ringCount > 1 ? ringCount : null;
+    if (!count) {
+        const radialSteps = Number(params.angularSegments || 0);
+        if (!Number.isFinite(radialSteps) || radialSteps <= 0) {
+            return { capTriangleCount: 0 };
+        }
+        count = Math.max(2, Math.round(radialSteps));
+    }
+    if (!Number.isFinite(count) || count <= 1) {
         return { capTriangleCount: 0 };
     }
 
-    const ringCount = radialSteps + 1;
-    if (vertices.length < ringCount * 3) {
+    if (vertices.length < count * 3) {
         return { capTriangleCount: 0 };
     }
 
     let throatY = Infinity;
     let maxR = 0;
 
-    for (let i = 0; i < ringCount; i++) {
+    for (let i = 0; i < count; i++) {
         const idx = i * 3;
         const y = vertices[idx + 1];
         if (y < throatY) throatY = y;
@@ -57,7 +63,7 @@ const appendThroatCap = (vertices, indices, params) => {
     const cx = 0;
     const cz = verticalOffset;
 
-    for (let i = 0; i < ringCount; i++) {
+    for (let i = 0; i < count; i++) {
         const idx = i * 3;
         const x = vertices[idx];
         const z = vertices[idx + 2];
@@ -85,12 +91,12 @@ const appendThroatCap = (vertices, indices, params) => {
     vertices.push(cx, throatY + capHeight, cz);
 
     const fullCircle = isFullCircle(params.quadrants);
-    const segmentCount = radialSteps;
+    const segmentCount = fullCircle ? count : Math.max(0, count - 1);
     const capStartIndex = indices.length / 3;
 
     for (let i = 0; i < segmentCount; i++) {
-        const i2 = fullCircle ? (i + 1) % ringCount : i + 1;
-        if (!fullCircle && i2 >= ringCount) break;
+        const i2 = fullCircle ? (i + 1) % count : i + 1;
+        if (!fullCircle && i2 >= count) break;
         indices.push(centerIndex, i2, i);
     }
 
@@ -151,7 +157,7 @@ const buildMsh = (vertices, indices, physicalTags, physicalNames = null) => {
  * @param {Array<number>} indices - Triangle index array
  * @returns {string} Gmsh .msh file content
  */
-export function exportHornToMSH(vertices, indices, params) {
+export function exportHornToMSH(vertices, indices, params, meshInfo = null) {
     const vertexList = Array.isArray(vertices) ? vertices.slice() : Array.from(vertices);
     const indexList = Array.isArray(indices) ? indices.slice() : Array.from(indices || []);
     const transformed = transformVerticesToAth(vertexList);
@@ -204,17 +210,169 @@ export function exportHornToGeo(vertices, params) {
 }
 
 /**
+ * Generate complete Gmsh .geo file matching ATH format exactly.
+ * This file can be processed by Gmsh to produce bitwise-identical .msh and .stl files.
+ *
+ * ATH mesh.geo structure:
+ * - Header: Mesh.Algorithm, Mesh.MshFileVersion, General.Verbosity
+ * - Points: Point(id)={x, y, z, meshSize}
+ * - Lines: interleaved radial/angular pattern (radial, angular, radial, angular, ...)
+ * - Curve Loops: quad boundaries starting at 511
+ * - Plane Surfaces: one per curve loop
+ * - Mesh 2; Save commands
+ *
+ * ATH Line ordering (per point):
+ *   For point i in ring j:
+ *     - Radial line: connects to point i in ring j+1 (if not last ring)
+ *     - Angular line: connects to point i+1 in same ring (wraps around for full circle)
+ *
+ * @param {Array<number>} vertices - Flat array of [x,y,z,...] in MWG coords (vx=r*cos, vy=axial, vz=r*sin)
+ * @param {Object} params - Config parameters
+ * @param {Object} options - Export options
+ * @returns {string} Gmsh .geo file content
+ */
+export function exportFullGeo(vertices, params, options = {}) {
+    const angularSegments = Number(params.angularSegments || 80);
+    const lengthSegments = Number(params.lengthSegments || 20);
+    // ATH always uses 50.0 as mesh size in mesh.geo
+    const meshSize = 50.0;
+    const outputName = options.outputName || 'output';
+
+    const numRings = lengthSegments + 1;
+    const pointsPerRing = angularSegments;
+    const fullCircle = isFullCircle(params.quadrants);
+
+    // Transform coordinates from MWG (vx, vy, vz) to ATH geo format (X, Y, Z)
+    // MWG: vx = r*cos(p), vy = axial, vz = r*sin(p) + verticalOffset
+    // GEO: X = r*cos(p), Y = r*sin(p), Z = axial (no vertical offset in geo file)
+    const verticalOffset = Number(params.verticalOffset) || 0;
+
+    let geo = `Mesh.Algorithm = 2;\n`;
+    geo += `Mesh.MshFileVersion = 2.2;\n`;
+    geo += `General.Verbosity = 2;\n`;
+
+    // Output points (1-indexed)
+    for (let j = 0; j < numRings; j++) {
+        for (let i = 0; i < pointsPerRing; i++) {
+            const idx = (j * pointsPerRing + i) * 3;
+            const vx = vertices[idx];       // r * cos(p)
+            const vy = vertices[idx + 1];   // axial
+            const vz = vertices[idx + 2];   // r * sin(p) + verticalOffset
+
+            // Convert to geo coordinates
+            const geoX = vx;
+            const geoY = vz - verticalOffset;  // Remove vertical offset for geo
+            const geoZ = vy;  // axial becomes Z
+
+            const pointId = j * pointsPerRing + i + 1;
+            geo += `Point(${pointId})={${geoX.toFixed(3)},${geoY.toFixed(3)},${geoZ.toFixed(3)},${meshSize.toFixed(1)}};\n`;
+        }
+    }
+
+    // Build line map for tracking IDs
+    // ATH pattern: for each ring j, for each point i:
+    //   - if j < numRings-1: radial line from point(j,i) to point(j+1,i)
+    //   - angular line from point(j,i) to point(j,i+1) (wraps if fullCircle)
+    const radialLineId = (j, i) => {
+        // Radial lines only exist for j < numRings-1
+        // Lines are numbered: for each point, radial first, then angular
+        // Total lines per ring (except last): pointsPerRing radials + pointsPerRing angulars
+        // Last ring: only angulars (pointsPerRing if fullCircle, else pointsPerRing-1)
+        if (j >= numRings - 1) return null;
+        // Lines before ring j
+        const linesPerFullRing = pointsPerRing * 2;  // radial + angular for each point
+        const linesBefore = j * linesPerFullRing;
+        // Within ring j, point i: radial is at position 2*i + 1
+        return linesBefore + 2 * i + 1;
+    };
+
+    const angularLineId = (j, i) => {
+        const lastAngularInRing = fullCircle ? pointsPerRing : pointsPerRing - 1;
+        if (i >= lastAngularInRing) return null;
+        if (j < numRings - 1) {
+            // Lines before ring j
+            const linesPerFullRing = pointsPerRing * 2;
+            const linesBefore = j * linesPerFullRing;
+            // Within ring j, point i: angular is at position 2*i + 2
+            return linesBefore + 2 * i + 2;
+        } else {
+            // Last ring: only angulars, no radials
+            const linesPerFullRing = pointsPerRing * 2;
+            const linesBefore = (numRings - 1) * linesPerFullRing;
+            return linesBefore + i + 1;
+        }
+    };
+
+    // Output lines in ATH's interleaved order
+    let lineId = 1;
+    for (let j = 0; j < numRings; j++) {
+        for (let i = 0; i < pointsPerRing; i++) {
+            const p1 = j * pointsPerRing + i + 1;
+
+            // Radial line to next ring (if not last ring)
+            if (j < numRings - 1) {
+                const p2 = (j + 1) * pointsPerRing + i + 1;
+                geo += `Line(${lineId})={${p1},${p2}};\n`;
+                lineId++;
+            }
+
+            // Angular line to next point in same ring
+            const lastAngularInRing = fullCircle ? pointsPerRing : pointsPerRing - 1;
+            if (i < lastAngularInRing) {
+                const nextI = (i + 1) % pointsPerRing;
+                const p2 = j * pointsPerRing + nextI + 1;
+                geo += `Line(${lineId})={${p1},${p2}};\n`;
+                lineId++;
+            }
+        }
+    }
+
+    // Generate Curve Loops and Plane Surfaces for each quad face
+    // ATH starts curve loops at 511, surfaces at 147
+    let curveLoopId = 511;
+    let surfaceId = 147;
+    const angularCount = fullCircle ? pointsPerRing : pointsPerRing - 1;
+
+    for (let j = 0; j < numRings - 1; j++) {
+        for (let i = 0; i < angularCount; i++) {
+            const nextI = (i + 1) % pointsPerRing;
+
+            // Get line IDs for the quad boundary
+            const radial1 = radialLineId(j, i);           // from (j,i) to (j+1,i)
+            const angular2 = angularLineId(j + 1, i);     // from (j+1,i) to (j+1,i+1)
+            const radial2 = radialLineId(j, nextI);       // from (j,i+1) to (j+1,i+1)
+            const angular1 = angularLineId(j, i);         // from (j,i) to (j,i+1)
+
+            if (radial1 && angular2 && radial2 && angular1) {
+                // Curve loop: radial1 (forward), angular2 (forward), -radial2 (backward), -angular1 (backward)
+                geo += `Curve Loop(${curveLoopId})={${radial1},${angular2},-${radial2},-${angular1}};\n`;
+                geo += `Plane Surface(${surfaceId})={${curveLoopId}};\n`;
+                curveLoopId++;
+                surfaceId++;
+            }
+        }
+    }
+
+    geo += `\nMesh 2;\n\n`;
+    geo += `Mesh.Binary = 1;\n`;
+    geo += `Save "${outputName}.stl";\n`;
+
+    return geo;
+}
+
+/**
  * Generate Gmsh-compatible mesh with proper boundary conditions
  * @param {Object} params - The complete parameter object
  * @param {Array<number>} vertices - Flat array of vertex coordinates [x,y,z, x,y,z, ...]
  * @param {Array<number>} indices - Triangle index array
  * @returns {string} Gmsh .msh file content with proper surface tags
  */
-export function exportHornToMSHWithBoundaries(vertices, indices, params, groups = null) {
+export function exportHornToMSHWithBoundaries(vertices, indices, params, groups = null, meshInfo = null) {
     const vertexList = Array.isArray(vertices) ? vertices.slice() : Array.from(vertices);
     const indexList = Array.isArray(indices) ? indices.slice() : Array.from(indices || []);
 
-    const { capTriangleCount } = appendThroatCap(vertexList, indexList, params);
+    const ringCount = meshInfo?.ringCount;
+    const { capTriangleCount } = appendThroatCap(vertexList, indexList, params, ringCount);
     const transformed = transformVerticesToAth(vertexList);
 
     const triangleCount = indexList.length / 3;
