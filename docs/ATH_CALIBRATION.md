@@ -43,13 +43,47 @@ Ours: Point(4)={12.311,3.118,0.000,50.0};
 ATH:  Point(4)={12.311,3.119,0.000,50.0};
 ```
 
-Root cause: ATH uses specific rounding for corner-aware angular sampling. Need to match ATH's exact trigonometric rounding.
+**Root cause analysis:**
+ATH uses corner-aware non-uniform angular distribution. The angles computed for the throat ring differ slightly from our implementation.
+
+**ATH's actual angles** (computed from reference geo file):
+```
+Point  Angle(deg)  Uniform(deg)  Diff
+  1      0.000        0.000     +0.000
+  2      4.738        4.500     +0.238
+  3      9.476        9.000     +0.476
+  4     14.217       13.500     +0.717
+  ...
+ 10     39.751       40.500     -0.749
+ 11     41.747       45.000     -3.253  (corner region)
+ 12     43.449       49.500     -6.051
+  ...
+ 21     90.000       90.000     +0.000
+```
+
+**Files to investigate:**
+- `src/geometry/meshBuilder.js` - `buildAngleList()`, `buildQuadrantAngles()`
+- The corner-aware sampling clusters more points around 45° (morphCorner region)
+- Check if ATH rounds cos/sin to 6 decimal places before coordinate calculation
+
+**Verification approach:**
+1. Run `node scripts/ath-compare.js` - shows GEO diff on line 7 (Point 4)
+2. Compare first ring coordinates between generated and reference geo files
+3. Focus on matching the angular distribution exactly
 
 ### 2. LFSource.B Geometry (Pending)
-Speaker cone cutout on front baffle:
+Speaker cone cutout on front baffle for low-frequency driver:
 - Cone depth = 0.4 × Radius
 - Spherical cap radius = 1.5 × Spacing
-- Parameters: `lfSourceBRadius`, `lfSourceBSpacing`, `lfSourceBDrivingWeight`, `lfSourceBSID`
+- Parameters defined in `src/config/schema.js` under 'ENCLOSURE':
+  - `lfSourceBRadius` - Cone radius in mm
+  - `lfSourceBSpacing` - Distance from horn center in mm
+  - `lfSourceBDrivingWeight` - Amplitude weight for BEM
+  - `lfSourceBSID` - Source ID for BEM solver
+
+**Implementation location:** `src/geometry/enclosure/builder.js`
+- Add cone + spherical cap geometry to front baffle
+- Reference ATH configs with LFSource.B: check `_references/testconfigs/` for examples
 
 ### 3. Full Test Suite (Pending)
 Run comparison across all configs in `_references/testconfigs/`:
