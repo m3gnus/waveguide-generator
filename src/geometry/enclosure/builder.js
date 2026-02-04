@@ -36,11 +36,13 @@ import { buildPlanOutline } from './plan.js';
  * @param {number} verticalOffset - Legacy parameter (kept for signature compatibility)
  * @param {Object} quadrantInfo - Quadrant information for symmetry meshes
  */
-export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null, groupInfo = null) {
-  const radialSteps = params.angularSegments;
+export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null, groupInfo = null, ringCount = null, angleList = null) {
+  const ringSize = Number.isFinite(ringCount) && ringCount > 0
+    ? ringCount
+    : Math.max(2, Math.round(params.angularSegments || 0));
 
   // MOUTH is at the last row - the front baffle inner edge connects here
-  const lastRowStart = params.lengthSegments * (radialSteps + 1);
+  const lastRowStart = params.lengthSegments * ringSize;
 
   // Get mouth Y position from vertex data
   const mouthY = vertices[lastRowStart * 3 + 1];
@@ -69,7 +71,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     minX = Infinity,
     maxZ = -Infinity,
     minZ = Infinity;
-  for (let i = 0; i <= radialSteps; i++) {
+  for (let i = 0; i < ringSize; i++) {
     const idx = lastRowStart + i;
     const mx = vertices[idx * 3];
     const mz = vertices[idx * 3 + 2];
@@ -77,6 +79,14 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     if (mx < minX) minX = mx;
     if (mz > maxZ) maxZ = mz;
     if (mz < minZ) minZ = mz;
+  }
+
+  const useAthRounding = params.useAthEnclosureRounding ?? params.useAthZMap ?? false;
+  if (useAthRounding) {
+    if (Number.isFinite(maxX)) maxX = Math.ceil(maxX);
+    if (Number.isFinite(minX)) minX = Math.floor(minX);
+    if (Number.isFinite(maxZ)) maxZ = Math.ceil(maxZ);
+    if (Number.isFinite(minZ)) minZ = Math.floor(minZ);
   }
 
   const planOutline = buildPlanOutline(params, quadrantInfo);
@@ -299,7 +309,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   // Get mouth ring vertices from horn (last row of horn mesh)
   const mouthStart = lastRowStart;
   const mouthRing = [];
-  for (let i = 0; i <= radialSteps; i++) {
+  for (let i = 0; i < ringSize; i++) {
     const idx = mouthStart + i;
     mouthRing.push({
       x: vertices[idx * 3],
@@ -308,35 +318,80 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     });
   }
 
-  // Connect mouth ring to front inner ring
+  // Connect mouth ring to front inner ring using proper stitching
+  // When the rings have different point counts, we need careful triangulation
   const mouthLoop = mouthRing.length;
   const fullCircle = !quadrantInfo || quadrantInfo.fullCircle;
   const connectLoop = fullCircle ? mouthLoop : Math.max(0, mouthLoop - 1);
-  const mapToOutline = usePlanOutline || totalPts !== mouthLoop;
 
+  // Build mapping from mouth vertices to enclosure outline vertices
+  // Each mouth vertex finds its nearest enclosure point
+  const mouthToEnc = new Array(mouthLoop);
+  for (let i = 0; i < mouthLoop; i++) {
+    const mouthVertex = mouthRing[i];
+    const mouthAngle = Math.atan2(mouthVertex.z - cz, mouthVertex.x - cx);
+    mouthToEnc[i] = findNearestOutlineIndex(mouthAngle);
+  }
+
+  // Stitch the two rings with proper triangulation to avoid degenerate triangles
   for (let i = 0; i < connectLoop; i++) {
     const i2 = fullCircle ? (i + 1) % mouthLoop : i + 1;
+    if (i2 >= mouthLoop) continue;
 
-    // Map angle to enclosure outline index
-    let ei = i;
-    let ei2 = i2;
+    const mi = mouthStart + i;
+    const mi2 = mouthStart + i2;
+    const ei = mouthToEnc[i];
+    const ei2 = mouthToEnc[i2];
 
-    if (mapToOutline) {
-      const mouthVertex = mouthRing[i % mouthLoop];
-      const mouthAngle = Math.atan2(mouthVertex.z, mouthVertex.x);
-      ei = findNearestOutlineIndex(mouthAngle);
+    // Create triangles only if the enclosure indices differ
+    // This avoids degenerate triangles when multiple mouth vertices map to same enclosure vertex
+    if (ei !== ei2) {
+      // Standard quad triangulation
+      indices.push(mi, mi2, frontInnerStart + ei2);
+      indices.push(mi, frontInnerStart + ei2, frontInnerStart + ei);
+    } else {
+      // Both mouth vertices map to the same enclosure vertex - create single triangle
+      indices.push(mi, mi2, frontInnerStart + ei);
+    }
+  }
 
-      const mouthVertex2 = mouthRing[i2 % mouthLoop];
-      const mouthAngle2 = Math.atan2(mouthVertex2.z, mouthVertex2.x);
-      ei2 = findNearestOutlineIndex(mouthAngle2);
+  // Connect enclosure outline points that were skipped
+  // Walk the enclosure outline and connect any gaps
+  for (let e = 0; e < totalPts; e++) {
+    const e2 = (e + 1) % totalPts;
+
+    // Find if any mouth vertices map to e and e2
+    let hasE = false, hasE2 = false;
+    let lastMouthForE = -1, firstMouthForE2 = -1;
+
+    for (let m = 0; m < mouthLoop; m++) {
+      if (mouthToEnc[m] === e) {
+        hasE = true;
+        lastMouthForE = m;
+      }
+      if (mouthToEnc[m] === e2 && firstMouthForE2 === -1) {
+        hasE2 = true;
+        firstMouthForE2 = m;
+      }
     }
 
-    const mi = mouthStart + (i % mouthLoop);
-    const mi2 = mouthStart + (i2 % mouthLoop);
+    // If we have mouth vertices for e but not for e2 (or vice versa),
+    // we need to add a connecting triangle
+    if (hasE && hasE2 && lastMouthForE >= 0 && firstMouthForE2 >= 0) {
+      // Check if there's a gap in mouth indices between lastMouthForE and firstMouthForE2
+      const mGap = fullCircle
+        ? (firstMouthForE2 - lastMouthForE + mouthLoop) % mouthLoop
+        : firstMouthForE2 - lastMouthForE;
 
-    // Triangle from mouth to enclosure front inner ring
-    indices.push(mi, mi2, frontInnerStart + ei2);
-    indices.push(mi, frontInnerStart + ei2, frontInnerStart + ei);
+      if (mGap > 1) {
+        // There are mouth vertices that don't have direct enclosure connections
+        // Connect the enclosure edge through them
+        const mi = mouthStart + lastMouthForE;
+        const mi2 = mouthStart + firstMouthForE2;
+        indices.push(frontInnerStart + e, mi, frontInnerStart + e2);
+        indices.push(mi, mi2, frontInnerStart + e2);
+      }
+    }
   }
 
   // Back cap — fan from center to back outer ring
