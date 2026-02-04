@@ -159,7 +159,11 @@ export const PARAM_SCHEMA = {
         encSpaceB: { type: 'number', label: 'Space B', default: 25 },
         encFrontResolution: { type: 'expression', label: 'Front Resolution', unit: 'mm', default: '', tooltip: 'Comma-separated front baffle resolutions (q1..q4).' },
         encBackResolution: { type: 'expression', label: 'Back Resolution', unit: 'mm', default: '', tooltip: 'Comma-separated back baffle resolutions (q1..q4).' },
-        encPlan: { type: 'expression', label: 'Enclosure Plan', default: '', tooltip: 'Name of a user-defined enclosure plan.' }
+        encPlan: { type: 'expression', label: 'Enclosure Plan', default: '', tooltip: 'Name of a user-defined enclosure plan.' },
+        lfSourceBRadius: { type: 'number', label: 'LF Source B Radius', unit: 'mm', default: 0 },
+        lfSourceBSpacing: { type: 'number', label: 'LF Source B Spacing', unit: 'mm', default: 0 },
+        lfSourceBDrivingWeight: { type: 'number', label: 'LF Source B Driving Weight', default: 0 },
+        lfSourceBSID: { type: 'number', label: 'LF Source B SID', default: 1 }
     },
     'SOURCE': {
         sourceShape: {

@@ -2,8 +2,10 @@ import { calculateROSSE, calculateOSSE } from './hornModels.js';
 
 const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
 
-export function addRollbackGeometry(vertices, indices, params, lengthSteps, radialSteps) {
-    const lastRowStart = lengthSteps * (radialSteps + 1);
+export function addRollbackGeometry(vertices, indices, params, lengthSteps, angleList, fullCircle = true) {
+    const ringCount = Array.isArray(angleList) ? angleList.length : 0;
+    if (ringCount <= 1) return;
+    const lastRowStart = lengthSteps * ringCount;
     const startIdx = vertices.length / 3;
     const rollbackAngle = (params.rollbackAngle || 180) * (Math.PI / 180);
     const rollbackSteps = 12;
@@ -13,8 +15,8 @@ export function addRollbackGeometry(vertices, indices, params, lengthSteps, radi
         const t = j / rollbackSteps;
         const angle = t * rollbackAngle;
 
-        for (let i = 0; i <= radialSteps; i++) {
-            const p = (i / radialSteps) * Math.PI * 2;
+        for (let i = 0; i < ringCount; i++) {
+            const p = angleList[i];
             const mouthIdx = lastRowStart + i;
             const mx = vertices[mouthIdx * 3];
             const my = vertices[mouthIdx * 3 + 1];
@@ -42,12 +44,14 @@ export function addRollbackGeometry(vertices, indices, params, lengthSteps, radi
 
     // Connect slices
     for (let j = 0; j < rollbackSteps; j++) {
-        const row1Offset = j === 0 ? lastRowStart : startIdx + (j - 1) * (radialSteps + 1);
-        const row2Offset = startIdx + j * (radialSteps + 1);
+        const row1Offset = j === 0 ? lastRowStart : startIdx + (j - 1) * ringCount;
+        const row2Offset = startIdx + j * ringCount;
+        const segmentCount = fullCircle ? ringCount : Math.max(0, ringCount - 1);
 
-        for (let i = 0; i < radialSteps; i++) {
-            indices.push(row1Offset + i, row1Offset + i + 1, row2Offset + i + 1);
-            indices.push(row1Offset + i, row2Offset + i + 1, row2Offset + i);
+        for (let i = 0; i < segmentCount; i++) {
+            const i2 = fullCircle ? (i + 1) % ringCount : i + 1;
+            indices.push(row1Offset + i, row1Offset + i2, row2Offset + i2);
+            indices.push(row1Offset + i, row2Offset + i2, row2Offset + i);
         }
     }
 }

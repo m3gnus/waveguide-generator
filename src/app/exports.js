@@ -95,7 +95,7 @@ export function exportMSH(app) {
     forceFullQuadrants: false,
     applyVerticalOffset: true
   });
-  const { vertices, indices, groups } = buildHornMesh(preparedParams, {
+  const { vertices, indices, groups, ringCount } = buildHornMesh(preparedParams, {
     includeEnclosure: true,
     includeRearShape: true,
     collectGroups: true
@@ -105,7 +105,7 @@ export function exportMSH(app) {
     return;
   }
 
-  const msh = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups);
+  const msh = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups, { ringCount });
 
   saveFile(msh, 'mesh.msh', {
     extension: '.msh',
@@ -124,7 +124,7 @@ export async function exportABECProject(app) {
     forceFullQuadrants: false,
     applyVerticalOffset: true
   });
-  const { vertices, indices, groups } = buildHornMesh(preparedParams, {
+  const { vertices, indices, groups, ringCount } = buildHornMesh(preparedParams, {
     includeEnclosure: true,
     includeRearShape: true,
     collectGroups: true
@@ -161,7 +161,7 @@ export async function exportABECProject(app) {
     normAngle: Number.isFinite(polarNormAngle) ? polarNormAngle : 5,
     inclination: Number.isFinite(polarInclination) ? polarInclination : 0
   });
-  const meshContent = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups);
+  const meshContent = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups, { ringCount });
 
   await saveFile(projectContent, projectFileName, {
     baseName: projectBase,

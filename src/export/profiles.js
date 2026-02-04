@@ -9,8 +9,8 @@ export function exportProfilesCSV(vertices, params) {
     let csv = '';
 
     for (let j = 0; j <= lengthSegments; j++) {
-        for (let i = 0; i <= angularSegments; i++) {
-            const idx = j * (angularSegments + 1) + i;
+        for (let i = 0; i < angularSegments; i++) {
+            const idx = j * angularSegments + i;
             const x = vertices[idx * 3];
             const y = vertices[idx * 3 + 2];
             const z = vertices[idx * 3 + 1];
@@ -36,8 +36,8 @@ export function exportGmshGeo(vertices, params) {
     const meshSize = 50.0;  // MWG uses 50.0
 
     for (let j = 0; j <= lengthSegments; j++) {
-        for (let i = 0; i <= angularSegments; i++) {
-            const idx = j * (angularSegments + 1) + i;
+        for (let i = 0; i < angularSegments; i++) {
+            const idx = j * angularSegments + i;
             const x = vertices[idx * 3];
             const y = vertices[idx * 3 + 2];
             const z = vertices[idx * 3 + 1];

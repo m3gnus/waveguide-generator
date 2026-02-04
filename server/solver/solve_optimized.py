@@ -314,9 +314,11 @@ def solve_optimized(
         frequencies, validation['max_valid_frequency'], safety_factor=0.95
     )
 
-    if len(invalid_freqs) > 0 and verbose:
-        print(f"\n⚠ WARNING: {len(invalid_freqs)} frequencies exceed mesh capability")
-        print(f"  Will simulate {len(valid_freqs)}/{len(frequencies)} frequencies")
+    if len(invalid_freqs) > 0:
+        if verbose:
+            print(f"\n⚠ WARNING: {len(invalid_freqs)} frequencies exceed mesh capability")
+            print(f"  Auto-filtering to {len(valid_freqs)}/{len(frequencies)} valid frequencies")
+            print(f"  Proceeding with simulation (invalid frequencies removed)")
         frequencies = valid_freqs
 
     # Initialize results
@@ -335,8 +337,11 @@ def solve_optimized(
             },
             "validation": {
                 "max_valid_frequency": validation['max_valid_frequency'],
+                "recommended_max_frequency": validation['recommended_max_frequency'],
                 "elements_per_wavelength": validation['elements_per_wavelength_at_max'],
-                "warnings": validation['warnings']
+                "warnings": validation['warnings'],
+                "recommendations": validation.get('recommendations', []),
+                "can_proceed": True  # Always can proceed (invalid freqs filtered)
             },
             "performance": {}
         }

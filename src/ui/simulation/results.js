@@ -207,6 +207,7 @@ export function renderBackendMetadata(metadata) {
   if (metadata.validation) {
     const val = metadata.validation;
     const warnings = val.warnings || [];
+    const recommendations = val.recommendations || [];
     hasWarnings = warnings.length > 0;
 
     const statusIcon = warnings.length === 0 ? '✓' : '⚠';
@@ -219,6 +220,32 @@ export function renderBackendMetadata(metadata) {
         .join('');
     }
 
+    let recommendationsHtml = '';
+    if (recommendations.length > 0) {
+      recommendationsHtml = `
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-color);">
+          <div style="font-weight: 600; color: #2196F3; margin-bottom: 4px;">💡 Recommendations:</div>
+          ${recommendations
+            .map((r) => {
+              // Highlight different recommendation types
+              const isRecommended = r.includes('RECOMMENDED');
+              const isAlternative = r.includes('ALTERNATIVE');
+              const canProceed = r.includes('proceed') || r.includes('safe to proceed');
+              const color = isRecommended
+                ? '#4CAF50'
+                : isAlternative
+                  ? '#2196F3'
+                  : canProceed
+                    ? '#4CAF50'
+                    : 'var(--text-color)';
+              const prefix = isRecommended ? '✓' : isAlternative ? '→' : canProceed ? '✓' : '•';
+              return `<div style="color: ${color}; margin: 4px 0;">${prefix} ${r.replace(/^(RECOMMENDED|ALTERNATIVE):\s*/, '')}</div>`;
+            })
+            .join('')}
+        </div>
+      `;
+    }
+
     sectionsHtml += `
       <div style="margin-bottom: 12px;">
         <div style="font-weight: 600; color: ${statusColor}; margin-bottom: 4px;">
@@ -226,8 +253,10 @@ export function renderBackendMetadata(metadata) {
         </div>
         <div style="font-size: 0.8rem; opacity: 0.9; margin-left: 16px;">
           <div style="color: var(--text-color);">Max valid frequency: ${val.max_valid_frequency?.toFixed(0) || 'N/A'} Hz</div>
+          <div style="color: var(--text-color);">Recommended max: ${val.recommended_max_frequency?.toFixed(0) || 'N/A'} Hz</div>
           <div style="color: var(--text-color);">Elements/wavelength: ${val.elements_per_wavelength?.toFixed(1) || 'N/A'}</div>
           ${warningsHtml}
+          ${recommendationsHtml}
         </div>
       </div>
     `;

@@ -113,15 +113,17 @@ const computeOsseProfileAt = (t, p, params) => {
     return profile;
 };
 
-const buildMorphTargets = (params, lengthSteps, radialSteps, sliceMap, quadrantInfo) => {
+const buildMorphTargets = (params, lengthSteps, angleList, sliceMap) => {
     const targets = new Array(lengthSteps + 1);
-    const angleRange = quadrantInfo.endAngle - quadrantInfo.startAngle;
+    const safeAngles = Array.isArray(angleList) && angleList.length > 0
+        ? angleList
+        : [0, Math.PI / 2];
     for (let j = 0; j <= lengthSteps; j++) {
         const t = sliceMap ? sliceMap[j] : j / lengthSteps;
         let maxX = 0;
         let maxZ = 0;
-        for (let i = 0; i <= radialSteps; i++) {
-            const p = quadrantInfo.startAngle + (i / radialSteps) * angleRange;
+        for (let i = 0; i < safeAngles.length; i++) {
+            const p = safeAngles[i];
             const profile = computeOsseProfileAt(t, p, params);
             const r = profile.y;
             const x = Math.abs(r * Math.cos(p));
@@ -132,6 +134,180 @@ const buildMorphTargets = (params, lengthSteps, radialSteps, sliceMap, quadrantI
         targets[j] = { halfW: maxX, halfH: maxZ };
     }
     return targets;
+};
+
+const computeMouthExtents = (params) => {
+    const t = 1;
+    const sampleCount = Math.max(360, Math.round((params.angularSegments || 80) * 4));
+    const needsTarget = params.morphTarget !== undefined && Number(params.morphTarget) !== 0;
+    const hasExplicit = (params.morphWidth && params.morphWidth > 0) || (params.morphHeight && params.morphHeight > 0);
+
+    let rawMaxX = 0;
+    let rawMaxZ = 0;
+
+    const rawAt = (p) => {
+        if (params.type === 'R-OSSE') {
+            const tmax = params.tmax === undefined ? 1.0 : evalParam(params.tmax, p);
+            return calculateROSSE(t * tmax, p, params);
+        }
+        return computeOsseProfileAt(t, p, params);
+    };
+
+    for (let i = 0; i < sampleCount; i++) {
+        const p = (i / sampleCount) * Math.PI * 2;
+        const profile = rawAt(p);
+        const r = profile.y;
+        const x = Math.abs(r * Math.cos(p));
+        const z = Math.abs(r * Math.sin(p));
+        if (x > rawMaxX) rawMaxX = x;
+        if (z > rawMaxZ) rawMaxZ = z;
+    }
+
+    let morphTargetInfo = null;
+    if (needsTarget && !hasExplicit) {
+        morphTargetInfo = { halfW: rawMaxX, halfH: rawMaxZ };
+    }
+
+    if (!needsTarget) {
+        return { halfW: rawMaxX, halfH: rawMaxZ, morphTargetInfo };
+    }
+
+    let maxX = 0;
+    let maxZ = 0;
+    for (let i = 0; i < sampleCount; i++) {
+        const p = (i / sampleCount) * Math.PI * 2;
+        const profile = rawAt(p);
+        const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);
+        const x = Math.abs(r * Math.cos(p));
+        const z = Math.abs(r * Math.sin(p));
+        if (x > maxX) maxX = x;
+        if (z > maxZ) maxZ = z;
+    }
+
+    return {
+        halfW: maxX,
+        halfH: maxZ,
+        morphTargetInfo
+    };
+};
+
+const buildQuadrantAngles = (params, pointsPerQuadrant, mouthExtents) => {
+    const halfW = mouthExtents?.halfW ?? 0;
+    const halfH = mouthExtents?.halfH ?? 0;
+    const cornerRaw = evalParam(params.morphCorner || 0, 0);
+    const cornerPoints = Math.max(1, Math.round(params.cornerSegments || 4));
+    const cornerSegments = Math.max(0, cornerPoints - 1);
+
+    if (!Number.isFinite(halfW) || !Number.isFinite(halfH) || halfW <= 0 || halfH <= 0) {
+        return null;
+    }
+
+    let cornerR = Number.isFinite(cornerRaw) ? cornerRaw : 0;
+    if (cornerR < 0) cornerR = 0;
+    const maxCorner = Math.max(0, Math.min(halfW, halfH) - 1e-6);
+    if (cornerR > maxCorner) cornerR = maxCorner;
+
+    if (cornerR <= 0 || cornerPoints <= 1) {
+        const angles = [];
+        for (let i = 0; i <= pointsPerQuadrant; i++) {
+            angles.push((Math.PI / 2) * (i / pointsPerQuadrant));
+        }
+        return angles;
+    }
+
+    const theta1 = Math.atan2(halfH - cornerR, halfW);
+    const theta2 = Math.atan2(halfH, halfW - cornerR);
+    const remainingSegments = Math.max(1, pointsPerQuadrant - cornerSegments);
+    const side1Span = theta1;
+    const side2Span = Math.max(0, (Math.PI / 2) - theta2);
+    let side1Seg = Math.round(remainingSegments * side1Span / (side1Span + side2Span));
+    side1Seg = Math.max(1, Math.min(remainingSegments - 1, side1Seg));
+    const side2Seg = Math.max(1, remainingSegments - side1Seg);
+
+    const angles = [];
+    for (let i = 0; i <= side1Seg; i++) {
+        angles.push(theta1 * (i / side1Seg));
+    }
+
+    const cx = halfW - cornerR;
+    const cy = halfH - cornerR;
+    for (let i = 1; i < cornerPoints; i++) {
+        const phi = (i / (cornerPoints - 1)) * (Math.PI / 2);
+        const x = cx + cornerR * Math.cos(phi);
+        const z = cy + cornerR * Math.sin(phi);
+        angles.push(Math.atan2(z, x));
+    }
+
+    for (let i = 1; i <= side2Seg; i++) {
+        angles.push(theta2 + ((Math.PI / 2) - theta2) * (i / side2Seg));
+    }
+
+    return angles;
+};
+
+const buildAngleList = (params) => {
+    const angularSegments = Number(params.angularSegments || 0);
+    if (!Number.isFinite(angularSegments) || angularSegments < 4) {
+        return { fullAngles: [0], pointsPerQuadrant: 0 };
+    }
+    if (angularSegments % 4 !== 0) {
+        const uniform = [];
+        for (let i = 0; i < angularSegments; i++) {
+            uniform.push((i / angularSegments) * Math.PI * 2);
+        }
+        return { fullAngles: uniform, pointsPerQuadrant: 0 };
+    }
+
+    const pointsPerQuadrant = angularSegments / 4;
+    const mouthExtents = computeMouthExtents(params);
+    const quadrantAngles = buildQuadrantAngles(params, pointsPerQuadrant, mouthExtents);
+    if (!quadrantAngles || quadrantAngles.length !== pointsPerQuadrant + 1) {
+        const uniform = [];
+        for (let i = 0; i < angularSegments; i++) {
+            uniform.push((i / angularSegments) * Math.PI * 2);
+        }
+        return { fullAngles: uniform, pointsPerQuadrant: 0 };
+    }
+
+    const fullAngles = [];
+    // Quadrant 1: 0 -> π/2
+    fullAngles.push(...quadrantAngles);
+    // Quadrant 2: π/2 -> π (exclude π/2)
+    for (let i = quadrantAngles.length - 2; i >= 0; i--) {
+        fullAngles.push(Math.PI - quadrantAngles[i]);
+    }
+    // Quadrant 3: π -> 3π/2 (exclude π)
+    for (let i = 1; i < quadrantAngles.length; i++) {
+        fullAngles.push(Math.PI + quadrantAngles[i]);
+    }
+    // Quadrant 4: 3π/2 -> 2π (exclude 3π/2 and 2π)
+    for (let i = quadrantAngles.length - 2; i > 0; i--) {
+        fullAngles.push((Math.PI * 2) - quadrantAngles[i]);
+    }
+
+    return { fullAngles, pointsPerQuadrant };
+};
+
+const selectAnglesForQuadrants = (fullAngles, quadrants) => {
+    const q = String(quadrants ?? '1234').trim();
+    if (q === '' || q === '1234') return fullAngles;
+
+    const eps = 1e-9;
+    if (q === '14') {
+        const positive = fullAngles.filter((a) => a >= -eps && a <= Math.PI / 2 + eps);
+        const negative = [];
+        for (const a of fullAngles) {
+            if (a >= Math.PI * 1.5 - eps) negative.push(a - Math.PI * 2);
+        }
+        return [...positive, ...negative];
+    }
+    if (q === '12') {
+        return fullAngles.filter((a) => a >= -eps && a <= Math.PI + eps);
+    }
+    if (q === '1') {
+        return fullAngles.filter((a) => a >= -eps && a <= Math.PI / 2 + eps);
+    }
+    return fullAngles;
 };
 
 /**
@@ -200,25 +376,21 @@ export function buildHornMesh(params, options = {}) {
 
     // Quadrant support for symmetry meshes
     const quadrantInfo = parseQuadrants(params.quadrants);
-    const angleRange = quadrantInfo.endAngle - quadrantInfo.startAngle;
-
-    // For partial meshes, we need to adjust how we generate angular segments
-    // Full circle uses radialSteps segments with wraparound
-    // Partial uses radialSteps segments without wraparound (needs +1 for end point)
-    const effectiveRadialSteps = quadrantInfo.fullCircle ? radialSteps : radialSteps;
+    const { fullAngles } = buildAngleList(params);
+    const angleList = selectAnglesForQuadrants(fullAngles, params.quadrants);
+    const ringCount = angleList.length;
     const morphTarget = Number(params.morphTarget || 0);
     const needsMorphTargets = params.type === 'OSSE' && morphTarget !== 0
         && (!params.morphWidth || !params.morphHeight);
     const morphTargets = needsMorphTargets
-        ? buildMorphTargets(params, lengthSteps, effectiveRadialSteps, sliceMap, quadrantInfo)
+        ? buildMorphTargets(params, lengthSteps, angleList, sliceMap)
         : null;
 
     for (let j = 0; j <= lengthSteps; j++) {
         const t = sliceMap ? sliceMap[j] : j / lengthSteps;
 
-        for (let i = 0; i <= effectiveRadialSteps; i++) {
-            // Map i to angle within the quadrant range
-            const p = quadrantInfo.startAngle + (i / effectiveRadialSteps) * angleRange;
+        for (let i = 0; i < ringCount; i++) {
+            const p = angleList[i];
             const tmax = params.type === 'R-OSSE'
                 ? (params.tmax === undefined ? 1.0 : evalParam(params.tmax, p))
                 : 1.0;
@@ -256,26 +428,27 @@ export function buildHornMesh(params, options = {}) {
 
     // Add Rollback for R-OSSE
     if (params.type === 'R-OSSE' && params.rollback) {
-        addRollbackGeometry(vertices, indices, params, lengthSteps, effectiveRadialSteps);
+        addRollbackGeometry(vertices, indices, params, lengthSteps, angleList, quadrantInfo.fullCircle);
     }
 
     // Add Enclosure for OSSE
     if (includeEnclosure && params.encDepth > 0) {
-        addEnclosureGeometry(vertices, indices, params, verticalOffset, quadrantInfo, groupInfo);
+        addEnclosureGeometry(vertices, indices, params, verticalOffset, quadrantInfo, groupInfo, ringCount, angleList);
     } else if (includeRearShape && params.rearShape !== 0) {
-        addRearShapeGeometry(vertices, indices, params, lengthSteps, effectiveRadialSteps);
+        addRearShapeGeometry(vertices, indices, params, lengthSteps, angleList, quadrantInfo.fullCircle);
     }
 
     // Generate indices for the main horn body
     // For partial meshes, don't wrap around
-    const indexRadialSteps = quadrantInfo.fullCircle ? radialSteps : effectiveRadialSteps;
+    const indexRadialSteps = quadrantInfo.fullCircle ? ringCount : Math.max(0, ringCount - 1);
     for (let j = 0; j < lengthSteps; j++) {
         for (let i = 0; i < indexRadialSteps; i++) {
-            const row1 = j * (effectiveRadialSteps + 1);
-            const row2 = (j + 1) * (effectiveRadialSteps + 1);
+            const row1 = j * ringCount;
+            const row2 = (j + 1) * ringCount;
+            const i2 = quadrantInfo.fullCircle ? (i + 1) % ringCount : i + 1;
 
-            indices.push(row1 + i, row1 + i + 1, row2 + i + 1);
-            indices.push(row1 + i, row2 + i + 1, row2 + i);
+            indices.push(row1 + i, row1 + i2, row2 + i2);
+            indices.push(row1 + i, row2 + i2, row2 + i);
         }
     }
 
@@ -288,7 +461,7 @@ export function buildHornMesh(params, options = {}) {
         console.error(`[MeshBuilder] Rollback enabled: ${params.rollback}, RearShape: ${params.rearShape}`);
     }
 
-    const result = { vertices, indices };
+    const result = { vertices, indices, ringCount, fullCircle: quadrantInfo.fullCircle };
     if (groupInfo) {
         result.groups = groupInfo;
     }

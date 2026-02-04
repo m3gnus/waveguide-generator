@@ -35,7 +35,13 @@
       "Bash(pip3 install:*)",
       "Bash(pip3 show:*)",
       "Bash(cd:*)",
-      "Bash(gtimeout 5 python3:*)"
+      "Bash(gtimeout 5 python3:*)",
+      "Bash(gmsh:*)",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.13/bin/gmsh:*)",
+      "Bash(mdfind:*)",
+      "Bash(brew list:*)",
+      "Bash(cmp /tmp/gmsh-test/mesh.stl \"_references/testconfigs/tritonia/tritonia.stl\")",
+      "Bash(python:*)"
     ]
   }
 }
