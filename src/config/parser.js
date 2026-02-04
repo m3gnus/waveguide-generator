@@ -223,6 +223,15 @@ export class MWGConfigParser {
             }
         }
 
+        const lfSourceB = result.blocks['LFSource.B'];
+        if (lfSourceB && lfSourceB._items) {
+            const p = result.params;
+            if (lfSourceB._items.Radius !== undefined) { p.lfSourceBRadius = lfSourceB._items.Radius; }
+            if (lfSourceB._items.Spacing !== undefined) { p.lfSourceBSpacing = lfSourceB._items.Spacing; }
+            if (lfSourceB._items.DrivingWeight !== undefined) { p.lfSourceBDrivingWeight = lfSourceB._items.DrivingWeight; }
+            if (lfSourceB._items.SID !== undefined) { p.lfSourceBSID = lfSourceB._items.SID; }
+        }
+
         return result;
     }
 }

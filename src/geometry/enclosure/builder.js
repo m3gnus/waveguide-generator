@@ -273,13 +273,15 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
   }
 
   // Front Roundover Rings
-  // Curving from (insetPt, bestY) to (outerPt, bestY - edgeR)
+  // Curving from Inset outline (at yBase) to Outer outline (at yBase - edgeR)
+  // Creates an inward-facing dish (bezel) that is FLUSH with the mouth
+  // and Recedes back to the side walls.
   const frontRoundsStarts = [];
   for (let s = 1; s <= axialSegs; s++) {
     const startIdx = vertices.length / 3;
     frontRoundsStarts.push(startIdx);
 
-    // phi: 0 (at inset outline, y=bestY) to PI/2 (at outer outline, y=bestY - edgeR)
+    // phi: 0 (at Inset) to PI/2 (at Outer)
     const phi = (s / axialSegs) * (Math.PI / 2);
     const sinP = Math.sin(phi);
     const cosP = Math.cos(phi);
@@ -291,14 +293,18 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
       let x, y, z;
       if (edgeType === 2) { // Chamfer
+        // Linear from Inset to Outer
         const t = s / axialSegs;
         x = ipt.x + (opt.x - ipt.x) * t;
         z = ipt.z + (opt.z - ipt.z) * t;
         y = yBase - edgeR * t;
-      } else { // Rounded (Convex)
-        x = ipt.x - ipt.nx * edgeR * (1 - cosP);
-        z = ipt.z - ipt.nz * edgeR * (1 - cosP);
-        y = yBase - edgeR * sinP;
+      } else { // Rounded (Concave/Dish)
+        // Start at Inset (phi=0, sin=0, cos=1) -> Pos = Inset, Y = yBase
+        // End at Outer (phi=90, sin=1, cos=0) -> Pos = Outer, Y = yBase - edgeR
+        // Note: ipt.nx points Inward. To go Outer, subtract nx.
+        x = ipt.x - ipt.nx * edgeR * sinP;
+        z = ipt.z - ipt.nz * edgeR * sinP;
+        y = yBase - edgeR * (1 - cosP);
       }
       vertices.push(x, y, z);
     }

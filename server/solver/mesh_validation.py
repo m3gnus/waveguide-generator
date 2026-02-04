@@ -136,6 +136,7 @@ def validate_frequency_range(
     elements_at_max = wavelength_at_max_mm / mesh_stats['max_edge_length']
 
     warnings = []
+    recommendations = []
     is_valid = True
 
     if max_freq > max_valid:
@@ -149,10 +150,32 @@ def validate_frequency_range(
             f"(need ≥{elements_per_wavelength:.0f})."
         )
 
+        # Calculate target element size
+        target_wavelength = c / max_freq * 1000.0  # mm
+        target_edge = target_wavelength / elements_per_wavelength
+
+        recommendations.append(
+            f"RECOMMENDED: Refine mesh to ~{target_edge:.1f} mm max element size "
+            f"(use use_gmsh=True with target_frequency={max_freq:.0f})"
+        )
+        recommendations.append(
+            f"ALTERNATIVE: Reduce max frequency to {recommended_max:.0f} Hz "
+            f"(80% safety margin)"
+        )
+        recommendations.append(
+            f"You can proceed with current mesh - invalid frequencies will be filtered automatically"
+        )
+
     elif max_freq > warn_threshold * max_valid:
         warnings.append(
             f"Max frequency ({max_freq:.0f} Hz) is close to mesh limit "
             f"({max_valid:.0f} Hz). Consider refining mesh for better accuracy."
+        )
+        recommendations.append(
+            f"OPTIONAL: Refine mesh for improved accuracy at high frequencies"
+        )
+        recommendations.append(
+            f"Current mesh is adequate - safe to proceed"
         )
 
     # Recommended frequency is 80% of theoretical max (safety margin)
@@ -163,6 +186,7 @@ def validate_frequency_range(
         'max_valid_frequency': max_valid,
         'recommended_max_frequency': recommended_max,
         'warnings': warnings,
+        'recommendations': recommendations,
         'elements_per_wavelength_at_max': elements_at_max,
         'mesh_stats': mesh_stats
     }
@@ -334,6 +358,12 @@ def print_mesh_validation_report(
         print(f"\nWARNINGS:")
         for warning in validation['warnings']:
             print(f"  ⚠ {warning}")
+
+        # Show recommendations
+        if 'recommendations' in validation and len(validation['recommendations']) > 0:
+            print(f"\nRECOMMENDATIONS:")
+            for rec in validation['recommendations']:
+                print(f"  → {rec}")
     else:
         print(f"\n✓ Mesh resolution is adequate for requested frequency range")
 

@@ -67,8 +67,8 @@ export function exportCrossSectionProfilesCSV(vertices, params) {
         csv += `Cross-section ${j}\n`;
         csv += 'X;Y;Z\n'; // Header for this cross-section
         
-        for (let i = 0; i <= angularSegments; i++) {
-            const idx = j * (angularSegments + 1) + i;
+        for (let i = 0; i < angularSegments; i++) {
+            const idx = j * angularSegments + i;
             if (idx < vertices.length / 3) {
                 const x = vertices[idx * 3];
                 const y = vertices[idx * 3 + 2]; 

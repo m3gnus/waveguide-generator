@@ -101,12 +101,14 @@ export function parseExpression(expr) {
 }
 
 // Helper for debugging/validation in console
-window.testExpressionParser = (expr, pVal = 1) => {
-    try {
-        const fn = parseExpression(expr);
-        console.log(`Expr: "${expr}" -> Result(p=${pVal}):`, fn(pVal));
-        return fn(pVal);
-    } catch (e) {
-        console.error(e);
-    }
-};
+if (typeof window !== 'undefined') {
+    window.testExpressionParser = (expr, pVal = 1) => {
+        try {
+            const fn = parseExpression(expr);
+            console.log(`Expr: "${expr}" -> Result(p=${pVal}):`, fn(pVal));
+            return fn(pVal);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+}
