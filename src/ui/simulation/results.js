@@ -103,6 +103,9 @@ export function renderBemResults(panel, results) {
   const validationReport = validationManager.runFullValidation(results);
   const validationHtml = renderValidationReport(validationReport);
 
+  // Render backend metadata (mesh validation, symmetry, performance)
+  const metadataHtml = renderBackendMetadata(results.metadata);
+
   // Smoothing indicator
   const smoothingLabel =
     panel.currentSmoothing !== 'none'
@@ -126,6 +129,7 @@ export function renderBemResults(panel, results) {
                 <div class="chart-title">Polar Directivity Map (ABEC.Polars)</div>
                 ${polarHeatmap}
             </div>
+            ${metadataHtml}
             ${validationHtml}
         `;
 }
@@ -191,4 +195,94 @@ export function renderValidationReport(report) {
                 </div>
             </div>
         `;
+}
+
+export function renderBackendMetadata(metadata) {
+  if (!metadata) return '';
+
+  let sectionsHtml = '';
+  let hasWarnings = false;
+
+  // Mesh Validation Section
+  if (metadata.validation) {
+    const val = metadata.validation;
+    const warnings = val.warnings || [];
+    hasWarnings = warnings.length > 0;
+
+    const statusIcon = warnings.length === 0 ? '✓' : '⚠';
+    const statusColor = warnings.length === 0 ? '#4CAF50' : '#ff9800';
+
+    let warningsHtml = '';
+    if (warnings.length > 0) {
+      warningsHtml = warnings
+        .map((w) => `<div style="color: #ff9800; margin: 4px 0;">⚠ ${w}</div>`)
+        .join('');
+    }
+
+    sectionsHtml += `
+      <div style="margin-bottom: 12px;">
+        <div style="font-weight: 600; color: ${statusColor}; margin-bottom: 4px;">
+          ${statusIcon} Mesh Resolution
+        </div>
+        <div style="font-size: 0.8rem; opacity: 0.9; margin-left: 16px;">
+          <div style="color: var(--text-color);">Max valid frequency: ${val.max_valid_frequency?.toFixed(0) || 'N/A'} Hz</div>
+          <div style="color: var(--text-color);">Elements/wavelength: ${val.elements_per_wavelength?.toFixed(1) || 'N/A'}</div>
+          ${warningsHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  // Symmetry Section
+  if (metadata.symmetry && metadata.symmetry.reduction_factor > 1.0) {
+    const sym = metadata.symmetry;
+    sectionsHtml += `
+      <div style="margin-bottom: 12px;">
+        <div style="font-weight: 600; color: #4CAF50; margin-bottom: 4px;">
+          ✓ Symmetry Optimization
+        </div>
+        <div style="font-size: 0.8rem; opacity: 0.9; margin-left: 16px;">
+          <div style="color: var(--text-color);">Type: ${sym.symmetry_type?.replace('_', ' ') || 'N/A'}</div>
+          <div style="color: var(--text-color);">Speedup: ${sym.reduction_factor?.toFixed(1) || 'N/A'}×</div>
+          ${sym.reduced_triangles ? `<div style="color: var(--text-color);">Elements: ${sym.original_triangles} → ${sym.reduced_triangles}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  // Performance Section
+  if (metadata.performance) {
+    const perf = metadata.performance;
+    sectionsHtml += `
+      <div style="margin-bottom: 12px;">
+        <div style="font-weight: 600; color: #2196F3; margin-bottom: 4px;">
+          ⓘ Performance
+        </div>
+        <div style="font-size: 0.8rem; opacity: 0.9; margin-left: 16px;">
+          <div style="color: var(--text-color);">Total time: ${perf.total_time_seconds?.toFixed(1) || 'N/A'}s</div>
+          <div style="color: var(--text-color);">Time per frequency: ${perf.time_per_frequency?.toFixed(2) || 'N/A'}s</div>
+          ${perf.directivity_compute_time ? `<div style="color: var(--text-color);">Directivity compute: ${perf.directivity_compute_time.toFixed(1)}s</div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  if (!sectionsHtml) return '';
+
+  const titleColor = hasWarnings ? '#ff9800' : '#4CAF50';
+  const titleIcon = hasWarnings ? '⚠' : 'ⓘ';
+  const titleText = hasWarnings ? 'WARNINGS' : 'INFO';
+
+  return `
+    <div class="chart-container" style="background: var(--panel-bg); margin-top: 16px;">
+      <div class="chart-title" style="display: flex; align-items: center; gap: 8px;">
+        <span style="color: ${titleColor}; font-size: 1.2rem;">${titleIcon}</span>
+        Simulation Metadata
+        <span style="color: ${titleColor}; font-size: 0.85rem; font-weight: normal;">(${titleText})</span>
+      </div>
+      <div style="color: var(--text-color); font-size: 0.85rem; padding: 8px 0;">
+        ${sectionsHtml}
+      </div>
+    </div>
+  `;
 }
