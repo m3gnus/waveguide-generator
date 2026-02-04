@@ -170,7 +170,12 @@ def prepare_mesh(
         target_frequency: Target frequency for mesh element sizing (Hz)
 
     Returns:
-        dict containing bempp grid and boundary info
+        dict containing bempp grid and boundary info, including:
+        - grid: bempp grid object
+        - original_vertices: (3, N) array - preserved for symmetry detection
+        - original_indices: (3, M) array - preserved for symmetry detection
+        - original_surface_tags: (M,) array - preserved for symmetry detection
+        - throat_elements, wall_elements, mouth_elements: element indices per boundary
     """
     print(f"[BEM prepare_mesh] Called with {len(vertices)} vertex values, {len(indices)} index values")
     print(f"[BEM prepare_mesh] surface_tags provided: {surface_tags is not None}")
@@ -207,12 +212,18 @@ def prepare_mesh(
         f"index range [{min_index}, {max_index}]"
     )
 
+    # Store original mesh for symmetry detection (before any refinement)
+    original_vertices = vertices_array.copy()
+    original_indices = indices_array.copy()
+
     # Create domain indices from surface tags if provided
     if surface_tags is not None:
         domain_indices = np.array(surface_tags, dtype=np.int32)
+        original_surface_tags = domain_indices.copy()
     else:
         # Default: all elements are wall (tag 2)
         domain_indices = np.full(indices_array.shape[1], 2, dtype=np.int32)
+        original_surface_tags = domain_indices.copy()
 
     # Optionally refine mesh with Gmsh
     if use_gmsh and GMSH_AVAILABLE:
@@ -224,6 +235,7 @@ def prepare_mesh(
     grid = bempp_api.Grid(vertices_array, indices_array, domain_indices)
 
     # Store boundary info with the grid
+    # IMPORTANT: Include original mesh data for symmetry detection
     return {
         'grid': grid,
         'surface_tags': domain_indices,
@@ -235,5 +247,9 @@ def prepare_mesh(
         },
         'throat_elements': np.where(domain_indices == 1)[0],
         'wall_elements': np.where(domain_indices == 2)[0],
-        'mouth_elements': np.where(domain_indices == 3)[0]
+        'mouth_elements': np.where(domain_indices == 3)[0],
+        # Preserve original mesh for symmetry detection
+        'original_vertices': original_vertices,
+        'original_indices': original_indices,
+        'original_surface_tags': original_surface_tags
     }
