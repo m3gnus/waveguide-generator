@@ -17,10 +17,7 @@ from .symmetry import (
     find_throat_center, apply_symmetry_reduction,
     validate_symmetry_reduction, SymmetryType
 )
-from .mesh_validation import (
-    calculate_mesh_statistics, validate_frequency_range,
-    filter_frequencies_by_mesh_capability, print_mesh_validation_report
-)
+
 from .directivity_correct import (
     calculate_directivity_patterns_correct,
     calculate_directivity_index_correct
@@ -236,7 +233,8 @@ def solve_optimized(
     c = 343.0  # m/s
     rho = 1.21  # kg/m³
 
-    # Generate frequency array
+    # Generate frequency array (ensure num_frequencies is int)
+    num_frequencies = int(num_frequencies)
     frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
 
     # Symmetry detection and reduction
@@ -298,28 +296,14 @@ def solve_optimized(
                 print(f"Symmetry detection failed: {e}")
                 print("Falling back to full model")
 
-    # Mesh validation
-    mesh_stats = calculate_mesh_statistics(grid.vertices, grid.elements)
-    validation = validate_frequency_range(
-        mesh_stats, frequency_range, c, elements_per_wavelength=6.0
-    )
-
-    if verbose:
-        print_mesh_validation_report(
-            validation, frequency_range, num_frequencies, reduction_factor, verbose=True
-        )
-
-    # Filter frequencies if needed
-    valid_freqs, invalid_freqs = filter_frequencies_by_mesh_capability(
-        frequencies, validation['max_valid_frequency'], safety_factor=0.95
-    )
-
-    if len(invalid_freqs) > 0:
-        if verbose:
-            print(f"\n⚠ WARNING: {len(invalid_freqs)} frequencies exceed mesh capability")
-            print(f"  Auto-filtering to {len(valid_freqs)}/{len(frequencies)} valid frequencies")
-            print(f"  Proceeding with simulation (invalid frequencies removed)")
-        frequencies = valid_freqs
+    # Validation and filtering disabled per user request
+    # mesh_stats = calculate_mesh_statistics(grid.vertices, grid.elements)
+    # validation = validate_frequency_range(
+    #     mesh_stats, frequency_range, c, elements_per_wavelength=6.0
+    # )
+    
+    # Simulate all frequencies regardless of mesh capability
+    # The user wants pure bempp/gmsh behavior without "safety wheels"
 
     # Initialize results
     results = {
@@ -330,19 +314,6 @@ def solve_optimized(
         "di": {"frequencies": frequencies.tolist(), "di": []},
         "metadata": {
             "symmetry": symmetry_info if symmetry_info else {"symmetry_type": "full", "reduction_factor": 1.0},
-            "mesh": {
-                "num_elements": mesh_stats['num_elements'],
-                "edge_length_range": [mesh_stats['min_edge_length'], mesh_stats['max_edge_length']],
-                "mean_edge_length": mesh_stats['mean_edge_length']
-            },
-            "validation": {
-                "max_valid_frequency": validation['max_valid_frequency'],
-                "recommended_max_frequency": validation['recommended_max_frequency'],
-                "elements_per_wavelength": validation['elements_per_wavelength_at_max'],
-                "warnings": validation['warnings'],
-                "recommendations": validation.get('recommendations', []),
-                "can_proceed": True  # Always can proceed (invalid freqs filtered)
-            },
             "performance": {}
         }
     }

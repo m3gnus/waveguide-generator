@@ -25,20 +25,8 @@ class BEMSolver:
         # API changed between bempp-cl versions:
         # - Older versions use hmat (H-matrices)
         # - Newer versions (0.3+) use fmm (Fast Multipole Method)
-        try:
-            if hasattr(bempp_api, 'GLOBAL_PARAMETERS'):
-                params = bempp_api.GLOBAL_PARAMETERS
-                # Newer bempp-cl uses FMM instead of H-matrices
-                if hasattr(params, 'fmm'):
-                    params.fmm.expansion_order = 5  # Balance accuracy/speed
-                # Older versions use hmat
-                elif hasattr(params, 'hmat'):
-                    params.hmat.eps = 1e-3
-                    if hasattr(params.assembly, 'boundary_operator_assembly_type'):
-                        params.assembly.boundary_operator_assembly_type = 'hmat'
-        except Exception as e:
-            # If parameter setting fails, continue with defaults
-            print(f"Note: Could not set bempp parameters (using defaults): {e}")
+        # Custom BEMPP parameters removed to use standard configuration
+        pass
 
     def refine_mesh_with_gmsh(
         self,

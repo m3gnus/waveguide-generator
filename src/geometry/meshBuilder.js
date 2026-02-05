@@ -76,28 +76,28 @@ const buildSliceMap = (params, lengthSteps) => {
     }
 
     const throatSegments = Number(params.throatSegments || 0);
-    if (!Number.isFinite(throatSegments) || throatSegments <= 0 || throatSegments >= lengthSteps) {
-        return null;
-    }
-
     const extLen = Math.max(0, evalParam(params.throatExtLength || 0, 0));
     const slotLen = Math.max(0, evalParam(params.slotLength || 0, 0));
     const L = Math.max(0, evalParam(params.L || 0, 0));
     const totalLength = L + extLen + slotLen;
-    if (totalLength <= 0) return null;
 
-    const extFraction = (extLen + slotLen) / totalLength;
-    if (extFraction <= 0 || extFraction >= 1) return null;
-    const map = new Array(lengthSteps + 1);
-    for (let j = 0; j <= lengthSteps; j++) {
-        if (j <= throatSegments) {
-            map[j] = extFraction * (j / throatSegments);
-        } else {
-            const t = (j - throatSegments) / (lengthSteps - throatSegments);
-            map[j] = extFraction + (1 - extFraction) * t;
+    if (totalLength > 0 && throatSegments > 0 && throatSegments < lengthSteps) {
+        const extFraction = (extLen + slotLen) / totalLength;
+        if (extFraction > 0 && extFraction < 1) {
+            const map = new Array(lengthSteps + 1);
+            for (let j = 0; j <= lengthSteps; j++) {
+                if (j <= throatSegments) {
+                    map[j] = extFraction * (j / throatSegments);
+                } else {
+                    const t = (j - throatSegments) / (lengthSteps - throatSegments);
+                    map[j] = extFraction + (1 - extFraction) * t;
+                }
+            }
+            return map;
         }
     }
-    return map;
+
+    return null;
 };
 
 const computeOsseProfileAt = (t, p, params) => {
@@ -386,8 +386,25 @@ export function buildHornMesh(params, options = {}) {
         ? buildMorphTargets(params, lengthSteps, angleList, sliceMap)
         : null;
 
+    // Parse subdomain info
+    const subdomainSlices = parseList(params.subdomainSlices);
+    const interfaceOffset = parseList(params.interfaceOffset);
+    const interfaceDraw = parseList(params.interfaceDraw);
+
     for (let j = 0; j <= lengthSteps; j++) {
         const t = sliceMap ? sliceMap[j] : j / lengthSteps;
+
+        // Check if this slice is a subdomain boundary
+        let zOffset = 0;
+        if (subdomainSlices) {
+            const sdIdx = subdomainSlices.indexOf(j);
+            if (sdIdx !== -1) {
+                const offset = interfaceOffset ? (interfaceOffset[sdIdx] || 0) : 0;
+                const draw = interfaceDraw ? (interfaceDraw[sdIdx] || 0) : 0;
+                // For visualization, we'll combine offset and draw into a protrusion
+                zOffset = offset + draw;
+            }
+        }
 
         for (let i = 0; i < ringCount; i++) {
             const p = angleList[i];
@@ -419,7 +436,7 @@ export function buildHornMesh(params, options = {}) {
             r = applyMorphing(r, t, p, params, morphTargetInfo);
 
             const vx = r * Math.cos(p);
-            const vy = x; // axial position (Y axis)
+            const vy = x + zOffset; // axial position (Y axis) + interface offset
             const vz = r * Math.sin(p) + verticalOffset; // vertical offset (Z axis)
 
             vertices.push(vx, vy, vz);

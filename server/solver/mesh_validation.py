@@ -139,6 +139,9 @@ def validate_frequency_range(
     recommendations = []
     is_valid = True
 
+    # Recommended frequency is 80% of theoretical max (safety margin)
+    recommended_max = max_valid * 0.8
+
     if max_freq > max_valid:
         is_valid = False
         warnings.append(
@@ -177,9 +180,6 @@ def validate_frequency_range(
         recommendations.append(
             f"Current mesh is adequate - safe to proceed"
         )
-
-    # Recommended frequency is 80% of theoretical max (safety margin)
-    recommended_max = max_valid * 0.8
 
     return {
         'is_valid': is_valid,

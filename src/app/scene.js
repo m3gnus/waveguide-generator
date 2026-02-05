@@ -56,7 +56,7 @@ export function renderModel(app) {
 
   const preparedParams = app.prepareParamsForMesh({
     forceFullQuadrants: true,
-    applyVerticalOffset: false
+    applyVerticalOffset: true
   });
   const { vertices, indices } = buildHornMesh(preparedParams);
 

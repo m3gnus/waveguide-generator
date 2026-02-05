@@ -10,9 +10,8 @@
  * @property {'geometry'} GEOMETRY - Geometry design stage
  * @property {'mesh'} MESH - Mesh generation stage  
  * @property {'solver'} SOLVER - BEM simulation stage
- * @property {'results'} RESULTS - Results inspection stage
- * @property {'optimization'} OPTIMIZATION - Optimization stage
- * @property {'comparison'} COMPARISON - Design comparison stage
+ * @property { 'results' } RESULTS - Results inspection stage
+ * @property { 'comparison' } COMPARISON - Design comparison stage
  */
 
 /**
@@ -46,7 +45,7 @@ export function createWorkflow() {
    */
   function transitionToStage(stage, inputs = {}) {
     const previousStage = state.currentStage;
-    
+
     // Validate stage transition
     const validTransitions = getValidTransitions(previousStage);
     if (!validTransitions.includes(stage)) {
@@ -58,10 +57,10 @@ export function createWorkflow() {
     state.currentStage = stage;
     state.inputs = inputs;
     state.outputs = {};
-    
+
     // Clear errors when transitioning to a new stage
     state.errors = [];
-    
+
     return state;
   }
 
@@ -78,7 +77,7 @@ export function createWorkflow() {
       timestamp: new Date(),
       stage: state.currentStage
     };
-    
+
     state.artifacts.push(artifact);
   }
 
@@ -104,13 +103,12 @@ export function createWorkflow() {
   function getValidTransitions(stage) {
     const transitions = {
       'geometry': ['mesh'],
-      'mesh': ['solver', 'optimization'],
-      'solver': ['results', 'optimization'],
-      'results': ['comparison', 'optimization'],
-      'optimization': ['results', 'comparison'],
+      'mesh': ['solver'],
+      'solver': ['results'],
+      'results': ['comparison'],
       'comparison': ['geometry']
     };
-    
+
     return transitions[stage] || [];
   }
 

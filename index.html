@@ -75,7 +75,7 @@
         <!-- Simulation Tab Content -->
         <div id="simulation-tab" class="tab-content">
             <div class="section">
-                <h3>BEM SOLVER STATUS</h3>
+                <h3>BEM SOLVER</h3>
                 <div class="status-indicator">
                     <span id="solver-status" class="status-dot"></span>
                     <span id="solver-status-text">Checking connection...</span>
@@ -83,6 +83,15 @@
                 <p class="status-help">
                     BEM solver requires Python backend running on localhost:8000
                 </p>
+                <hr>
+                <button id="run-simulation-btn">Run BEM Simulation</button>
+                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
+                <div id="simulation-progress" style="display: none;">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="progress-text" class="progress-text">Initializing...</p>
+                </div>
             </div>
 
             <div class="section">
@@ -106,12 +115,8 @@
                         <option value="2">Free-Standing</option>
                     </select>
                 </div>
-            </div>
-
-            <div id="simulation-param-container"></div>
-
-            <div class="section">
-                <h3>DIRECTIVITY MAP (ABEC.Polars)</h3>
+                <hr>
+                <h4 style="margin: 15px 0 10px 0; font-size: 0.9em; font-weight: 600; color: #999;">DIRECTIVITY MAP</h4>
                 <div class="input-row">
                     <label for="polar-angle-range">Map Angle Range (deg)</label>
                     <input type="text" id="polar-angle-range" value="0,180,37" placeholder="start,end,steps">
@@ -130,17 +135,7 @@
                 </div>
             </div>
 
-            <div class="section">
-                <h3>ACTIONS</h3>
-                <button id="run-simulation-btn">Run BEM Simulation</button>
-                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
-                <div id="simulation-progress" style="display: none;">
-                    <div class="progress-bar">
-                        <div id="progress-fill" class="progress-fill"></div>
-                    </div>
-                    <p id="progress-text" class="progress-text">Initializing...</p>
-                </div>
-            </div>
+            <div id="simulation-param-container"></div>
 
             <div id="results-container" style="display: none;">
                 <div class="section">

@@ -103,8 +103,8 @@ export function renderBemResults(panel, results) {
   const validationReport = validationManager.runFullValidation(results);
   const validationHtml = renderValidationReport(validationReport);
 
-  // Render backend metadata (mesh validation, symmetry, performance)
-  const metadataHtml = renderBackendMetadata(results.metadata);
+  // Render backend metadata (removed per user request)
+  const metadataHtml = '';
 
   // Smoothing indicator
   const smoothingLabel =
@@ -154,12 +154,12 @@ export function renderValidationReport(report) {
                     </div>
                     <div style="font-size: 0.8rem; opacity: 0.9; margin-left: 16px;">
                         ${section.checks
-                          .map((check) => {
-                            const icon = check.passed ? '✓' : check.severity === 'error' ? '✗' : '⚠';
-                            const color = check.passed ? '#4CAF50' : check.severity === 'error' ? '#f44336' : '#ff9800';
-                            return `<div style="color: ${color}; margin: 2px 0;">${icon} ${check.message}</div>`;
-                          })
-                          .join('')}
+        .map((check) => {
+          const icon = check.passed ? '✓' : check.severity === 'error' ? '✗' : '⚠';
+          const color = check.passed ? '#4CAF50' : check.severity === 'error' ? '#f44336' : '#ff9800';
+          return `<div style="color: ${color}; margin: 2px 0;">${icon} ${check.message}</div>`;
+        })
+        .join('')}
                     </div>
                 </div>
             `;
@@ -226,22 +226,22 @@ export function renderBackendMetadata(metadata) {
         <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-color);">
           <div style="font-weight: 600; color: #2196F3; margin-bottom: 4px;">💡 Recommendations:</div>
           ${recommendations
-            .map((r) => {
-              // Highlight different recommendation types
-              const isRecommended = r.includes('RECOMMENDED');
-              const isAlternative = r.includes('ALTERNATIVE');
-              const canProceed = r.includes('proceed') || r.includes('safe to proceed');
-              const color = isRecommended
-                ? '#4CAF50'
-                : isAlternative
-                  ? '#2196F3'
-                  : canProceed
-                    ? '#4CAF50'
-                    : 'var(--text-color)';
-              const prefix = isRecommended ? '✓' : isAlternative ? '→' : canProceed ? '✓' : '•';
-              return `<div style="color: ${color}; margin: 4px 0;">${prefix} ${r.replace(/^(RECOMMENDED|ALTERNATIVE):\s*/, '')}</div>`;
-            })
-            .join('')}
+          .map((r) => {
+            // Highlight different recommendation types
+            const isRecommended = r.includes('RECOMMENDED');
+            const isAlternative = r.includes('ALTERNATIVE');
+            const canProceed = r.includes('proceed') || r.includes('safe to proceed');
+            const color = isRecommended
+              ? '#4CAF50'
+              : isAlternative
+                ? '#2196F3'
+                : canProceed
+                  ? '#4CAF50'
+                  : 'var(--text-color)';
+            const prefix = isRecommended ? '✓' : isAlternative ? '→' : canProceed ? '✓' : '•';
+            return `<div style="color: ${color}; margin: 4px 0;">${prefix} ${r.replace(/^(RECOMMENDED|ALTERNATIVE):\s*/, '')}</div>`;
+          })
+          .join('')}
         </div>
       `;
     }

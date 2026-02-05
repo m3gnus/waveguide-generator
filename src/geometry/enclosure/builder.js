@@ -250,8 +250,9 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     });
   }
 
-  // Ring 0: Front Inner (at the mouth y position, inset outline)
+  // Ring 0: Front Inner (at the mouth y position + frontOffset, inset outline)
   // This ring connects the mouth to the enclosure
+  // When frontOffset > 0, this creates a flat front panel between mouth and roundover
   const frontInnerStart = vertices.length / 3;
   for (let i = 0; i < totalPts; i++) {
     const ipt = insetOutline[i];
@@ -269,7 +270,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         bestY = mv.y;
       }
     }
-    vertices.push(ipt.x, bestY, ipt.z);
+    vertices.push(ipt.x, bestY + frontOffset, ipt.z);
   }
 
   // Front Roundover Rings
