@@ -688,14 +688,14 @@ function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, qua
     });
   }
 
-  // Ring -1: Mouth Projection Ring (projects mouth vertices onto enclosure outline plane)
+  // Ring -1: Mouth Projection Ring (projects mouth to match enclosure point count)
   // This intermediate ring eliminates the gap between horn mouth and enclosure
-  // Positioned AT the mouth Y (no frontOffset yet)
+  // Positioned AT the mouth Y, using INSET outline (close to mouth, not far outer boundary)
   const mouthProjectionStart = vertices.length / 3;
   for (let i = 0; i < totalPts; i++) {
-    const opt = outerOutline[i];
+    const ipt = insetOutline[i];  // Use inset outline (edgeR from outer) - close to mouth
     // Find nearest mouth vertex to get its Y position
-    const angle = Math.atan2(opt.z - cz, opt.x - cx);
+    const angle = Math.atan2(ipt.z - cz, ipt.x - cx);
     let bestDist = Infinity;
     let bestY = mouthY;
     for (const mv of mouthRing) {
@@ -708,8 +708,8 @@ function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, qua
         bestY = mv.y;
       }
     }
-    // Use outer outline position (not inset), AT mouth Y (no offset)
-    vertices.push(opt.x, bestY, opt.z);
+    // Use INSET outline (not outer) - this is close to the mouth, not at the far boundary
+    vertices.push(ipt.x, bestY, ipt.z);
   }
   
   // Ring 0: Front Inner (at mouth y + frontOffset, inset outline)
