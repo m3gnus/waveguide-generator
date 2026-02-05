@@ -13,8 +13,8 @@ Transform the existing MWG - Mathematical Waveguide Generator 3D Visualizer into
 2. **Preview** -- Real-time 3D visualization with surface analysis (curvature, zebra, wireframe)
 3. **Simulate** -- Run BEM acoustic simulations (via bempp-cl) directly from the browser
 4. **Analyze** -- Display directivity, polar plots, impedance, SPL maps
-5. **Optimize** -- Batch parameter sweeps with automated scoring and ranking
-6. **Export** -- STL, Gmsh .msh, MWG config, CSV profiles
+4. **Analyze** -- Display directivity, polar plots, impedance, SPL maps
+5. **Export** -- STL, Gmsh .msh, MWG config, CSV profiles
 
 ### Current Status
 
@@ -24,11 +24,10 @@ The platform has completed Phases 0-6 and has Phase 7 (AI) as stubs:
 - ✅ Config parsing, validation, and schema system
 - ✅ Export suite (MWG config, Gmsh .msh, CSV profiles)
 - ✅ BEM solver backend (bempp-cl with mock fallback)
-- ✅ Optimization engine (grid, random, coordinate descent)
 - ✅ Workflow, presets, and validation framework
 - ⚠️ BEM solver needs validation against ABEC references
 - ⚠️ Results visualization module not yet implemented
-- ⚠️ AI modules are stubs only
+- ⚠️ Results visualization module not yet implemented
 
 ### Boundaries
 
@@ -38,7 +37,7 @@ The platform has completed Phases 0-6 and has Phase 7 (AI) as stubs:
 | BEM acoustic simulation (Helmholtz) | Full LEM circuit simulation |
 | Directivity, impedance, SPL output | Room acoustics / ray tracing |
 | STL, Gmsh, CSV export | Commercial CAD format export (STEP/IGES) |
-| Parameter optimization sweeps | Deep learning optimization |
+| STL, Gmsh, CSV export | Commercial CAD format export (STEP/IGES) |
 | Single-user browser application | Multi-user collaboration |
 
 ---
@@ -60,8 +59,8 @@ The platform has completed Phases 0-6 and has Phase 7 (AI) as stubs:
 │                        Browser Application                       │
 │                                                                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │
-│  │ UI Panel  │  │ 3D View  │  │Simulation│  │  Optimization    │ │
-│  │ Module    │  │ Module   │  │  Panel   │  │  Engine          │ │
+│  │ UI Panel  │  │ 3D View  │  │Simulation│                  │ │
+│  │ Module    │  │ Module   │  │  Panel   │                  │ │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────────┬─────────┘ │
 │       │              │              │                  │           │
 │  ┌────┴──────────────┴──────────────┴──────────────────┴────────┐ │
@@ -74,8 +73,8 @@ The platform has completed Phases 0-6 and has Phase 7 (AI) as stubs:
 │  └──────────┘  └──────────┘  └────────────┘  └────────────────┘ │
 │                                     │                             │
 │  ┌──────────┐  ┌──────────┐  ┌─────┴──────┐  ┌────────────────┐ │
-│  │ Workflow │  │ Presets  │  │ Validation │  │   AI Module    │ │
-│  │ Engine   │  │ Manager  │  │ Framework  │  │   (stubs)      │ │
+│  │ Workflow │  │ Presets  │  │ Validation │                  │ │
+│  │ Engine   │  │ Manager  │  │ Framework  │                  │ │
 │  └──────────┘  └──────────┘  └────────────┘  └────────────────┘ │
 │                                     │                             │
 │                              ┌──────┴──────┐                     │
@@ -334,33 +333,7 @@ src/ui/
 
 ---
 
-### Module 8: Optimization Engine (`src/optimization/`)
 
-**Purpose:** Automated parameter exploration and design ranking.
-
-**Actual Files:**
-```
-src/optimization/
-  index.js          -- Public API
-  parameterSpace.js -- Parameter bounds and definitions
-  objectiveFunctions.js -- Acoustic quality scoring
-  engine.js         -- Optimization loop and algorithms
-  results.js        -- Result storage and management
-  api.js            -- Clean API for external integration
-```
-
-**Implemented Algorithms:**
-- Grid search (exhaustive)
-- Random sampling
-- Coordinate descent
-
-**Objective Functions:**
-- Smooth on-axis frequency response
-- Directivity control
-- Impedance matching
-- Multi-objective weighted scoring
-
----
 
 ### Module 9: Workflow Engine (`src/workflow/`)
 
@@ -398,42 +371,7 @@ src/validation/
 
 ---
 
-### Module 12: AI Module (`src/ai/`) — STUBS ONLY
 
-**Purpose:** AI-assisted design guidance (not yet implemented).
-
-**Actual Files:**
-```
-src/ai/
-  index.js          -- Module entry point with status warning
-
-  knowledge/
-    index.js        -- Knowledge storage API
-    schema.js       -- Design knowledge schema
-    storage.js      -- Persistence layer
-
-  surrogate/
-    index.js        -- Surrogate model API
-    gaussianProcess.js -- GP stub (NOT mathematically correct)
-    regression.js   -- Simple regression models
-
-  optimization/
-    index.js        -- AI optimization API
-    bayesianOptimizer.js -- BO stub (returns mock values)
-    cmaesAdapter.js -- CMA-ES adapter stub
-
-  insights/
-    index.js        -- Insights API
-    sensitivityAnalyzer.js -- Sensitivity analysis
-    textGenerator.js -- Human-readable explanations
-```
-
-**Status:** All AI modules are **STUBS** that define interfaces but return mock/demo data. Real implementation requires:
-1. Validated BEM solver (for training data)
-2. Proper GP library with matrix inversion
-3. Real acoustic metrics for insight generation
-
----
 
 ### Supporting Modules
 
@@ -569,14 +507,7 @@ mwg-horn/
 │   ├── processing/
 │   │   └── smoothing.js          -- REW-style frequency response smoothing
 │   │
-│   ├── optimization/
-│   │   ├── index.js
-│   │   ├── parameterSpace.js
-│   │   ├── objectiveFunctions.js
-│   │   ├── engine.js
-│   │   ├── results.js
-│   │   └── api.js
-│   │
+│   │   │
 │   ├── workflow/
 │   │   └── index.js
 │   │
@@ -625,10 +556,7 @@ mwg-horn/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md           -- This document
-│   ├── AGENT_INSTRUCTIONS.md     -- Detailed AI instructions
-│   ├── AI_GUIDANCE.md            -- AI module documentation
-│   └── README.md                 -- Documentation index
-├── AGENTS.md                     -- Top-level AI guidance
+└── README.md                     -- Documentation index
 └── README.md                     -- Project overview
 ```
 
@@ -712,9 +640,9 @@ Rollback: toroidal fold at mouth rim, curls in -Y direction
 | 2 | ✅ Complete | Enhanced geometry, morphing, annotations |
 | 3 | ✅ Complete | Export suite (MWG, Gmsh, CSV) |
 | 4 | ⚠️ 70% | BEM solver (code complete, needs validation) |
-| 5 | ✅ Complete | Optimization engine |
+
 | 6 | ✅ Complete | Workflow, presets, validation framework |
-| 7 | ⚠️ 20% | AI module (stubs only) |
+
 
 ### Remaining Work
 
@@ -727,10 +655,7 @@ Rollback: toroidal fold at mouth rim, curls in -Y direction
 - Implement `src/results/` module
 - Polar plots, frequency response, sonograms
 
-**Phase 7 Implementation:**
-- Requires validated BEM solver first
-- Implement proper GP with matrix operations
-- Train surrogate models on real data
+
 
 ---
 

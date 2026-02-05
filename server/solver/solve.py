@@ -159,7 +159,8 @@ def solve(
         wall_elements = np.array([])
         mouth_elements = np.array([])
 
-    # Generate frequency array
+    # Generate frequency array (ensure num_frequencies is int)
+    num_frequencies = int(num_frequencies)
     frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
 
     results = {

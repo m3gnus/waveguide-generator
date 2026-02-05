@@ -23,6 +23,15 @@ export const PARAM_SCHEMA = {
         h: { type: 'range', label: 'h - Shape Factor', min: 0, max: 10, step: 0.1, default: 0.0, tooltip: 'Additional shape control parameter.' },
     },
     'GEOMETRY': {
+        scale: {
+            type: 'range',
+            label: 'Scale',
+            min: 0.1,
+            max: 2,
+            step: 0.001,
+            default: 1.0,
+            tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
+        },
         throatProfile: {
             type: 'select',
             label: 'Throat Profile',
@@ -91,8 +100,8 @@ export const PARAM_SCHEMA = {
         }
     },
     'MESH': {
-        angularSegments: { type: 'number', label: 'Angular Segs', default: 80 },
-        lengthSegments: { type: 'number', label: 'Length Segs', default: 20 },
+        angularSegments: { type: 'number', label: 'Angular Segs', default: 120 },
+        lengthSegments: { type: 'number', label: 'Length Segs', default: 40 },
         cornerSegments: { type: 'number', label: 'Corner Segs', default: 4 },
         throatSegments: { type: 'number', label: 'Throat Segs', default: 0 },
         throatResolution: { type: 'number', label: 'Throat Resolution', unit: 'mm', default: 5.0 },

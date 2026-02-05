@@ -153,16 +153,6 @@ export class ParamPanel {
             this.container.appendChild(section);
         }
 
-        // --- Geometry Advanced (OSSE only) ---
-        if (type === 'OSSE') {
-            const geomSection = this.createDetailsSection('Geometry Advanced', 'geometry-advanced-details');
-            const geomSchema = PARAM_SCHEMA.GEOMETRY;
-            for (const [key, def] of Object.entries(geomSchema)) {
-                geomSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-            this.container.appendChild(geomSection);
-        }
-
         // --- Morphing (for OSSE) ---
         // Architecture ref says: "Improve morphing... OSSE model".
         if (type === 'OSSE') {
@@ -207,26 +197,13 @@ export class ParamPanel {
         });
         this.container.appendChild(enclosureSection);
 
-        // --- Mesh Advanced (Shared) ---
-        const meshAdvanced = this.createDetailsSection('Mesh Advanced', 'mesh-advanced-details');
-        const meshAdvancedKeys = [
-            'throatSegments',
-            'throatResolution',
-            'mouthResolution',
-            'verticalOffset',
-            'zMapPoints',
-            'subdomainSlices',
-            'interfaceOffset',
-            'interfaceDraw',
-            'rearResolution'
-        ];
-        meshAdvancedKeys.forEach((key) => {
-            const def = meshSchema[key];
-            if (def) {
-                meshAdvanced.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-        });
-        this.container.appendChild(meshAdvanced);
+        // --- Geometry Advanced (at bottom of Geometry tab) ---
+        const geomSection = this.createDetailsSection('Geometry Advanced', 'geometry-advanced-details');
+        const geomSchema = PARAM_SCHEMA.GEOMETRY;
+        for (const [key, def] of Object.entries(geomSchema)) {
+            geomSection.appendChild(this.createControlRow(key, def, state.params[key]));
+        }
+        this.container.appendChild(geomSection);
 
         // --- Output (Advanced) ---
         const outputSchema = PARAM_SCHEMA.OUTPUT;
@@ -238,7 +215,7 @@ export class ParamPanel {
             this.container.appendChild(outputSection);
         }
 
-        // --- Simulation Mesh (Simulation Tab) ---
+        // --- Simulation Tab ---
         if (this.simulationContainer) {
             const sourceSection = this.createDetailsSection('Source', 'source-details');
             for (const [key, def] of Object.entries(PARAM_SCHEMA.SOURCE)) {
@@ -246,13 +223,39 @@ export class ParamPanel {
             }
             this.simulationContainer.appendChild(sourceSection);
 
-            const simulationMeshSection = this.createDetailsSection('Simulation Mesh', 'simulation-mesh-details');
+            // Combined Mesh section - all mesh parameters together
+            const combinedMeshSection = this.createDetailsSection('Mesh', 'mesh-details');
+
+            // First add the main mesh parameters (Angular Segs, Length Segs, Corner Segs, Quadrants)
             const meshEnclosureKeys = new Set(['wallThickness', 'rearShape']);
+            const meshAdvancedKeys = [
+                'throatSegments',
+                'throatResolution',
+                'mouthResolution',
+                'verticalOffset',
+                'zMapPoints',
+                'subdomainSlices',
+                'interfaceOffset',
+                'interfaceDraw',
+                'rearResolution'
+            ];
+            const meshAdvancedKeysSet = new Set(meshAdvancedKeys);
+
+            // Add main mesh parameters first
             for (const [key, def] of Object.entries(meshSchema)) {
-                if (meshEnclosureKeys.has(key)) continue;
-                simulationMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
+                if (meshEnclosureKeys.has(key) || meshAdvancedKeysSet.has(key)) continue;
+                combinedMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
             }
-            this.simulationContainer.appendChild(simulationMeshSection);
+
+            // Then add advanced mesh parameters
+            meshAdvancedKeys.forEach((key) => {
+                const def = meshSchema[key];
+                if (def) {
+                    combinedMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
+                }
+            });
+
+            this.simulationContainer.appendChild(combinedMeshSection);
         }
     }
 

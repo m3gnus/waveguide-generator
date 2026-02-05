@@ -165,6 +165,7 @@ def calculate_directivity_patterns_correct(
     # Parse config
     if polar_config:
         angle_start, angle_end, angle_points = polar_config.get('angle_range', [0, 180, 37])
+        angle_points = int(angle_points)  # Ensure integer for np.linspace
         norm_angle = polar_config.get('norm_angle', 5.0)
         distance_m = polar_config.get('distance', 2.0)
         inclination = polar_config.get('inclination', 35.0)

@@ -41,7 +41,11 @@
       "Bash(mdfind:*)",
       "Bash(brew list:*)",
       "Bash(cmp /tmp/gmsh-test/mesh.stl \"_references/testconfigs/tritonia/tritonia.stl\")",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(npm test:*)",
+      "Bash(git log:*)",
+      "Bash(npm uninstall jest jest-environment-jsdom)",
+      "Bash(git rm:*)"
     ]
   }
 }

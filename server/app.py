@@ -207,13 +207,28 @@ async def run_simulation(job_id: str, request: SimulationRequest):
         # Initialize solver
         solver = BEMSolver()
         
+        # Extract mesh generation options
+        mesh_opts = request.options.get("mesh", {})
+        
+        # Check if options are flat or nested
+        if "use_gmsh" in request.options:
+            use_gmsh = request.options.get("use_gmsh", False)
+            target_freq = request.options.get("target_frequency", 
+                                            max(request.frequency_range) if request.frequency_range else 1000.0)
+        else:
+            use_gmsh = mesh_opts.get("use_gmsh", False)
+            target_freq = mesh_opts.get("target_frequency", 
+                                        max(request.frequency_range) if request.frequency_range else 1000.0)
+
         # Convert mesh data with surface tags
         jobs[job_id]["progress"] = 0.2
         mesh = solver.prepare_mesh(
             request.mesh.vertices,
             request.mesh.indices,
             surface_tags=request.mesh.surfaceTags,
-            boundary_conditions=request.mesh.boundaryConditions
+            boundary_conditions=request.mesh.boundaryConditions,
+            use_gmsh=use_gmsh,
+            target_frequency=target_freq
         )
         
         # Run simulation

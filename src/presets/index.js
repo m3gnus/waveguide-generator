@@ -11,7 +11,6 @@
  * @property {string} description - Description of what the preset represents
  * @property {Object} parameters - Geometry and mesh parameters
  * @property {Object} bemSettings - BEM simulation settings
- * @property {Object} optimization - Default optimization objectives
  * @property {string} type - Type of horn (R-OSSE, OSSE)
  * @property {Date} createdAt - When the preset was created
  * @property {Date} updatedAt - When the preset was last updated
@@ -136,13 +135,6 @@ export function createPresetManager() {
         abecF2: 16000,
         abecNumFreq: 40
       },
-      optimization: {
-        objectives: ['flat_response', 'directivity_control'],
-        weights: {
-          flat_response: 0.5,
-          directivity_control: 0.5
-        }
-      },
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -167,13 +159,6 @@ export function createPresetManager() {
         abecF1: 400,
         abecF2: 16000,
         abecNumFreq: 40
-      },
-      optimization: {
-        objectives: ['flat_response', 'directivity_control'],
-        weights: {
-          flat_response: 0.5,
-          directivity_control: 0.5
-        }
       },
       createdAt: new Date(),
       updatedAt: new Date()
