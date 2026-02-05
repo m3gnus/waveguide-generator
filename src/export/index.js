@@ -4,3 +4,5 @@ export { exportProfilesCSV, exportGmshGeo, compareWithReference } from './profil
 export { exportHornToMSH, exportHornToGeo, exportHornToMSHWithBoundaries, exportFullGeo } from './msh.js';
 export { exportVerticesToCSV, exportVerticesToCSVWithMetadata, exportCrossSectionProfilesCSV } from './csv.js';
 export { generateAbecProjectFile, generateAbecSolvingFile, generateAbecObservationFile } from './abecProject.js';
+export { exportSTLBinary, exportSTLAscii, writeSTLFile } from './stl.js';
+export { meshHornWithGmsh, remeshSTL } from './gmshBridge.js';
