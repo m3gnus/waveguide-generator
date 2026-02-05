@@ -4,5 +4,11 @@ export { exportProfilesCSV, exportGmshGeo, compareWithReference } from './profil
 export { exportHornToMSH, exportHornToGeo, exportHornToMSHWithBoundaries, exportFullGeo } from './msh.js';
 export { exportVerticesToCSV, exportVerticesToCSVWithMetadata, exportCrossSectionProfilesCSV } from './csv.js';
 export { generateAbecProjectFile, generateAbecSolvingFile, generateAbecObservationFile } from './abecProject.js';
-export { exportSTLBinary, exportSTLAscii, writeSTLFile } from './stl.js';
-export { meshHornWithGmsh, remeshSTL } from './gmshBridge.js';
+
+// Browser-compatible STL exports (binary/ASCII generation)
+export { exportSTLBinary, exportSTLAscii } from './stl.browser.js';
+
+// Node.js-only exports (require fs/child_process modules)
+// These are available in Node.js environments only:
+// - import { writeSTLFile } from './src/export/stl.js'
+// - import { meshHornWithGmsh, remeshSTL } from './src/export/gmshBridge.js'
