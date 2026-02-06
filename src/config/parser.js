@@ -190,16 +190,13 @@ export class MWGConfigParser {
             if (p['Output.ABECProject'] !== undefined) { p.outputABECProject = p['Output.ABECProject']; }
         }
 
-        // Normalize Rollback params (both types, flat keys)
+        // Normalize params (both types, flat keys)
         {
             const p = result.params;
             if (p['Scale'] !== undefined) {
                 const scaleNum = Number(p['Scale']);
                 p.scale = Number.isFinite(scaleNum) ? scaleNum : p['Scale'];
             }
-            if (p['Rollback'] !== undefined) { p.rollback = p['Rollback'] === '1' || p['Rollback'] === 1; }
-            if (p['Rollback.Angle']) { p.rollbackAngle = p['Rollback.Angle']; }
-            if (p['Rollback.StartAt']) { p.rollbackStart = p['Rollback.StartAt']; }
         }
 
         // Parse Mesh.Enclosure block if present
@@ -221,15 +218,6 @@ export class MWGConfigParser {
                     p.encSpaceB = parts[3];
                 }
             }
-        }
-
-        const lfSourceB = result.blocks['LFSource.B'];
-        if (lfSourceB && lfSourceB._items) {
-            const p = result.params;
-            if (lfSourceB._items.Radius !== undefined) { p.lfSourceBRadius = lfSourceB._items.Radius; }
-            if (lfSourceB._items.Spacing !== undefined) { p.lfSourceBSpacing = lfSourceB._items.Spacing; }
-            if (lfSourceB._items.DrivingWeight !== undefined) { p.lfSourceBDrivingWeight = lfSourceB._items.DrivingWeight; }
-            if (lfSourceB._items.SID !== undefined) { p.lfSourceBSID = lfSourceB._items.SID; }
         }
 
         return result;

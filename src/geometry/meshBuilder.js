@@ -5,7 +5,7 @@ import {
   parseQuadrants
 } from './common.js';
 import { applyMorphing } from './morphing.js';
-import { addRollbackGeometry, addRearShapeGeometry } from './rollback.js';
+import { addRearShapeGeometry } from './rearShape.js';
 import { addEnclosureGeometry } from './enclosure.js';
 
 
@@ -417,10 +417,6 @@ export function buildHornMesh(params, options = {}) {
     }
   }
 
-  // Add Rollback for R-OSSE
-  if (params.type === 'R-OSSE' && params.rollback) {
-    addRollbackGeometry(vertices, indices, params, lengthSteps, angleList, quadrantInfo.fullCircle);
-  }
 
   // Add Enclosure for OSSE
   if (includeEnclosure && params.encDepth > 0) {
@@ -449,7 +445,6 @@ export function buildHornMesh(params, options = {}) {
   if (maxIndex >= vertexCount) {
     console.error(`[MeshBuilder] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`);
     console.error(`[MeshBuilder] Parameters: lengthSteps=${lengthSteps}, radialSteps=${radialSteps}, type=${params.type}`);
-    console.error(`[MeshBuilder] Rollback enabled: ${params.rollback}, RearShape: ${params.rearShape}`);
   }
 
   const result = { vertices, indices, ringCount, fullCircle: quadrantInfo.fullCircle };

@@ -1,5 +1,14 @@
 export const PARAM_SCHEMA = {
     'R-OSSE': {
+        scale: {
+            type: 'range',
+            label: 'Scale',
+            min: 0.1,
+            max: 2,
+            step: 0.001,
+            default: 1.0,
+            tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
+        },
         R: { type: 'expression', label: 'R - Mouth Radius', unit: 'mm', default: '140 * (abs(cos(p)/1.6)^3 + abs(sin(p)/1)^4)^(-1/4.5)', tooltip: 'Mouth radius as function of azimuthal angle p. Can be constant or expression.' },
         a: { type: 'expression', label: 'a - Aperture Angle', unit: 'deg', default: '25 * (abs(cos(p)/1.2)^4 + abs(sin(p)/1)^3)^(-1/2.5)', tooltip: 'Aperture (coverage) angle as function of p. Controls horn flare rate.' },
         a0: { type: 'expression', label: 'a0 - Throat Angle', unit: 'deg', default: 15.5, tooltip: 'Initial throat opening angle in degrees. Can be constant or expression like "15 + 2*sin(p)".' },
@@ -12,6 +21,15 @@ export const PARAM_SCHEMA = {
         tmax: { type: 'range', label: 'tmax - Truncation', min: 0.5, max: 1.5, step: 0.01, default: 1.0, tooltip: 'Truncates horn at a fraction of computed length.' },
     },
     'OSSE': {
+        scale: {
+            type: 'range',
+            label: 'Scale',
+            min: 0.1,
+            max: 2,
+            step: 0.001,
+            default: 1.0,
+            tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
+        },
         L: { type: 'expression', label: 'L - Length of the Waveguide', unit: 'mm', default: 120, tooltip: 'Length of the waveguide (axial length). Can be constant or expression.' },
         a: { type: 'expression', label: 'a - Mouth Coverage Angle', unit: 'deg', default: '48.5 - 5.6*cos(2*p)^5 - 31*sin(p)^12', tooltip: 'Mouth coverage angle as function of p.' },
         a0: { type: 'expression', label: 'a0 - Throat Coverage Angle', unit: 'deg', default: 15.5, tooltip: 'Initial throat coverage angle in degrees. Can be constant or expression.' },
@@ -23,15 +41,6 @@ export const PARAM_SCHEMA = {
         h: { type: 'range', label: 'h - Shape Factor', min: 0, max: 10, step: 0.1, default: 0.0, tooltip: 'Additional shape control parameter.' },
     },
     'GEOMETRY': {
-        scale: {
-            type: 'range',
-            label: 'Scale',
-            min: 0.1,
-            max: 2,
-            step: 0.001,
-            default: 1.0,
-            tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
-        },
         throatProfile: {
             type: 'select',
             label: 'Throat Profile',
@@ -136,20 +145,6 @@ export const PARAM_SCHEMA = {
             default: 0
         },
     },
-    'ROLLBACK': {
-        rollback: {
-            type: 'select',
-            label: 'Rollback',
-            options: [
-                { value: false, label: 'Off' },
-                { value: true, label: 'On' }
-            ],
-            default: false,
-            tooltip: 'Add toroidal rollback fold at the mouth'
-        },
-        rollbackAngle: { type: 'range', label: 'Rollback Angle', unit: 'deg', min: 30, max: 270, step: 1, default: 180, tooltip: 'How far the lip curls back (degrees)' },
-        rollbackStart: { type: 'range', label: 'Rollback Start', min: 0.1, max: 0.99, step: 0.01, default: 0.5, tooltip: 'Where the rollback begins (0=throat, 1=mouth)' }
-    },
     'ENCLOSURE': {
         encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 280 },
         encEdge: { type: 'number', label: 'Edge Radius', unit: 'mm', default: 18 },
@@ -168,10 +163,6 @@ export const PARAM_SCHEMA = {
         encSpaceB: { type: 'number', label: 'Space B', default: 25 },
         encFrontResolution: { type: 'expression', label: 'Front Resolution', unit: 'mm', default: '', tooltip: 'Comma-separated front baffle resolutions (q1..q4).' },
         encBackResolution: { type: 'expression', label: 'Back Resolution', unit: 'mm', default: '', tooltip: 'Comma-separated back baffle resolutions (q1..q4).' },
-        lfSourceBRadius: { type: 'number', label: 'LF Source B Radius', unit: 'mm', default: 0 },
-        lfSourceBSpacing: { type: 'number', label: 'LF Source B Spacing', unit: 'mm', default: 0 },
-        lfSourceBDrivingWeight: { type: 'number', label: 'LF Source B Driving Weight', default: 0 },
-        lfSourceBSID: { type: 'number', label: 'LF Source B SID', default: 1 }
     },
     'SOURCE': {
         sourceShape: {
