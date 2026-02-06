@@ -2,8 +2,8 @@
 
 > **Task Status**
 > - ✅ Prompt 1: Delete stale documentation files (COMPLETED)
-> - ⏭️ Prompt 2: Remove Enclosure Plan (ALREADY DONE - no encPlan references found in codebase)
-> - ⏭️ Prompt 3: Remove LF Source B (NOT STARTED)
+> - ✅ Prompt 2: Remove Enclosure Plan (ALREADY DONE - no encPlan references found in codebase)
+> - ✅ Prompt 3: Remove LF Source B (COMPLETED)
 > - ⏭️ Prompt 4: Enable STEP export button (ALREADY DONE - no disabled attribute on button)
 > - ⏭️ Prompt 5: Update Wall Thickness tooltip (ALREADY DONE - tooltip present)
 > - ⏭️ Prompt 6: Move Scale into R-OSSE and OSSE sections (NOT STARTED)
@@ -357,3 +357,13 @@ verify nothing was missed. The only remaining hits should be in fixes.md.
 
 Commit with message: "Remove Mouth Rollback feature, rename rollback.js to rearShape.js"
 ```
+
+# task_progress
+
+- [x] Prompt 1: Delete stale documentation files
+- [x] Prompt 2: Remove Enclosure Plan
+- [x] Prompt 3: Remove LF Source B
+- [ ] Prompt 4: Enable STEP export button
+- [ ] Prompt 5: Update Wall Thickness tooltip
+- [ ] Prompt 6: Move Scale into R-OSSE and OSSE sections
+- [ ] Prompt 7: Remove Mouth Rollback feature
