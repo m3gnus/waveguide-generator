@@ -1,7 +1,18 @@
-
 // ===========================================================================
 // Enclosure Geometry (Rear Chamber for BEM Simulation)
 // ===========================================================================
+
+/**
+ * Calculates the normal vector for a point on an ellipse.
+ */
+function getEllipseNormal(t, rx, ry, cosP, sinP) {
+    const localNx = ry * Math.cos(t);
+    const localNy = rx * Math.sin(t);
+    const nx = localNx * cosP - localNy * sinP;
+    const ny = localNx * sinP + localNy * cosP;
+    const len = Math.hypot(nx, ny);
+    return { nx: nx / len, ny: ny / len };
+}
 
 // Plan outline builder - parses enclosure plan definitions
 function parsePlanBlock(planBlock) {
@@ -53,10 +64,12 @@ function sampleArc(p1, center, p2, steps = 16) {
     for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         const a = a1 + delta * t;
-        out.push({
-            x: center.x + Math.cos(a) * Math.hypot(p1.x - center.x, p1.y - center.y),
-            y: center.y + Math.sin(a) * Math.hypot(p1.x - center.x, p1.y - center.y)
-        });
+        const x = center.x + Math.cos(a) * Math.hypot(p1.x - center.x, p1.y - center.y);
+        const y = center.y + Math.sin(a) * Math.hypot(p1.x - center.x, p1.y - center.y);
+        const dx = x - center.x;
+        const dy = y - center.y;
+        const len = Math.hypot(dx, dy);
+        out.push({ x, y, nx: dx / len, ny: dy / len });
     }
     return out;
 }
@@ -65,7 +78,7 @@ function sampleEllipse(p1, center, major, p2, steps = 24) {
     const vx = major.x - center.x;
     const vy = major.y - center.y;
     const a = Math.hypot(vx, vy);
-    if (a <= 0) return [p1, p2];
+    if (a <= 0) return [{ ...p1, nx: 0, ny: 0 }, { ...p2, nx: 0, ny: 0 }];
 
     const phi = Math.atan2(vy, vx);
     const cosP = Math.cos(phi);
@@ -102,12 +115,13 @@ function sampleEllipse(p1, center, major, p2, steps = 24) {
     const out = [];
     for (let i = 0; i <= steps; i++) {
         const t = t1 + delta * (i / steps);
-        const x = a * Math.cos(t);
-        const y = b * Math.sin(t);
-        out.push({
-            x: center.x + cosP * x - sinP * y,
-            y: center.y + sinP * x + cosP * y
-        });
+        const lx = a * Math.cos(t);
+        const ly = b * Math.sin(t);
+        const x = center.x + cosP * lx - sinP * ly;
+        const y = center.y + sinP * lx + cosP * ly;
+
+        const { nx, ny } = getEllipseNormal(t, a, b, cosP, sinP);
+        out.push({ x, y, nx, ny });
     }
     return out;
 }
@@ -115,180 +129,74 @@ function sampleEllipse(p1, center, major, p2, steps = 24) {
 function sampleBezier(points, steps = 24) {
     const out = [];
     const n = points.length - 1;
-    const bernstein = (i, t) => {
+
+    const evaluate = (t) => {
+        let x = 0, y = 0;
+        let dx = 0, dy = 0;
+
         const binom = (n, k) => {
             let res = 1;
-            for (let i = 1; i <= k; i++) {
-                res = (res * (n - (k - i))) / i;
-            }
+            for (let i = 1; i <= k; i++) res = (res * (n - (k - i))) / i;
             return res;
         };
-        return binom(n, i) * Math.pow(1 - t, n - i) * Math.pow(t, i);
-    };
-    for (let s = 0; s <= steps; s++) {
-        const t = s / steps;
-        let x = 0;
-        let y = 0;
+        const bernstein = (n, i, t) => binom(n, i) * Math.pow(1 - t, n - i) * Math.pow(t, i);
+
         for (let i = 0; i <= n; i++) {
-            const b = bernstein(i, t);
+            const b = bernstein(n, i, t);
             x += points[i].x * b;
             y += points[i].y * b;
         }
-        out.push({ x, y });
+
+        if (n > 0) {
+            for (let i = 0; i < n; i++) {
+                const b = bernstein(n - 1, i, t);
+                const weight = n * b;
+                dx += weight * (points[i + 1].x - points[i].x);
+                dy += weight * (points[i + 1].y - points[i].y);
+            }
+        }
+
+        const len = Math.hypot(dx, dy);
+        const nx = len > 0 ? -dy / len : 0;
+        const ny = len > 0 ? dx / len : 0;
+
+        return { x, y, nx, ny };
+    };
+
+    for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        out.push(evaluate(t));
     }
     return out;
 }
 
-export function buildPlanOutline(params, quadrantInfo) {
-    let planName = params.encPlan;
-    if (typeof planName === 'string') {
-        const trimmed = planName.trim();
-        planName = trimmed.replace(/^\"(.*)\"$/, '$1').replace(/^\'(.*)\'$/, '$1');
-    }
-    if (!planName || !params._blocks) return null;
+function sampleLine(p1, p2) {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    const nx = len > 0 ? -dy / len : 0;
+    const ny = len > 0 ? dx / len : 0;
 
-    const planBlock = params._blocks[planName];
-    const parsed = parsePlanBlock(planBlock);
-    if (!parsed) return null;
-
-    const { points, cpoints, segments } = parsed;
-    if (!segments.length) return null;
-
-    const outline = [];
-    segments.forEach((seg, index) => {
-        let pts = [];
-        if (seg.type === 'line') {
-            const p1 = points.get(seg.ids[0]);
-            const p2 = points.get(seg.ids[1]);
-            if (p1 && p2) pts = [p1, p2];
-        } else if (seg.type === 'arc') {
-            const p1 = points.get(seg.ids[0]);
-            const c = cpoints.get(seg.ids[1]) || points.get(seg.ids[1]);
-            const p2 = points.get(seg.ids[2]);
-            if (p1 && c && p2) pts = sampleArc(p1, c, p2);
-        } else if (seg.type === 'ellipse') {
-            const p1 = points.get(seg.ids[0]);
-            const c = cpoints.get(seg.ids[1]) || points.get(seg.ids[1]);
-            const major = points.get(seg.ids[2]);
-            const p2 = points.get(seg.ids[3]);
-            if (p1 && c && major && p2) pts = sampleEllipse(p1, c, major, p2);
-        } else if (seg.type === 'bezier') {
-            const bezPoints = seg.ids.map((id) => points.get(id)).filter(Boolean);
-            if (bezPoints.length >= 2) pts = sampleBezier(bezPoints);
-        }
-
-        if (!pts.length) return;
-        if (index > 0) pts = pts.slice(1);
-        outline.push(...pts);
-    });
-
-    if (outline.length < 2) return null;
-
-    const sL = parseFloat(params.encSpaceL) || 0;
-    const sT = parseFloat(params.encSpaceT) || 0;
-    const sR = parseFloat(params.encSpaceR) || 0;
-    const sB = parseFloat(params.encSpaceB) || 0;
-
-    const applySpacing = (pt) => {
-        const x = pt.x >= 0 ? pt.x + sR : pt.x - sL;
-        const z = pt.y >= 0 ? pt.y + sT : pt.y - sB;
-        return { x, z };
-    };
-
-    const quarter = outline.map(applySpacing);
-    const qMode = String(params.quadrants || '1234');
-
-    if (qMode === '14') {
-        const bottom = [...quarter].reverse().map((pt) => ({ x: pt.x, z: -pt.z }));
-        const half = bottom.concat(quarter.slice(1));
-        half.push({ x: 0, z: quarter[quarter.length - 1].z });
-        half.push({ x: 0, z: -quarter[quarter.length - 1].z });
-        return half;
-    }
-
-    if (qMode === '12') {
-        const left = [...quarter].reverse().map((pt) => ({ x: -pt.x, z: pt.z }));
-        const half = quarter.concat(left.slice(1));
-        half.push({ x: -quarter[0].x, z: 0 });
-        half.push({ x: quarter[0].x, z: 0 });
-        return half;
-    }
-
-    if (qMode === '1') {
-        const out = [...quarter];
-        out.push({ x: 0, z: quarter[quarter.length - 1].z });
-        out.push({ x: 0, z: 0 });
-        out.push({ x: quarter[0].x, z: 0 });
-        return out;
-    }
-
-    const top = quarter.concat(
-        [...quarter].reverse().map((pt) => ({ x: -pt.x, z: pt.z })).slice(1)
-    );
-    const bottom = [...top].reverse().map((pt) => ({ x: pt.x, z: -pt.z }));
-    return top.concat(bottom.slice(1));
+    return [
+        { x: p1.x, y: p1.y, nx, ny },
+        { x: p2.x, y: p2.y, nx, ny }
+    ];
 }
 
+// Enclosure Plan feature removed - always return null for user-defined plans
+// The enclosure uses standard rounded box outline instead
+function buildPlanOutline(params, quadrantInfo) {
+    return null;
+}
 
-
-/**
- * Add enclosure geometry for BEM simulation.
- *
- * ATH Enclosure Architecture:
- * - The front baffle is at the MOUTH Y position (not throat)
- * - The horn connects directly to the front baffle inner edge
- * - The enclosure extends BACKWARD from the front baffle by the depth parameter
- * - Edge radius creates rounded edges on both front and back
- *
- * Key positions (Y-axis = axial):
- *   - Throat Y = 0
- *   - Mouth Y = horn length
- *   - Front baffle inner edge Y = Mouth Y
- *   - Front baffle outer edge Y = Mouth Y + edgeRadius
- *   - Back baffle inner edge Y = Mouth Y - depth
- *   - Back baffle outer edge Y = Mouth Y - depth - edgeRadius
- *
- * Vertical offset is applied on the Z axis (handled upstream in meshBuilder),
- * so enclosure positions follow the mouth ring automatically.
- *
- * Spacing parameters define how far the baffle extends from the MOUTH outline:
- *   - L(eft): extends in -X direction from mouth
- *   - R(ight): extends in +X direction from mouth
- *   - T(op): extends in +Z direction from mouth
- *   - B(ottom): extends in -Z direction from mouth
- *
- * EdgeRadius creates rounded edges on:
- *   - The front baffle outer corners (extending forward from mouth)
- *   - The back panel outer corners (extending backward)
- *
- * @param {number[]} vertices - Vertex array to append to
- * @param {number[]} indices - Index array to append to
- * @param {Object} params - Parameter object
- * @param {number} verticalOffset - Legacy parameter (kept for signature compatibility)
- * @param {Object} quadrantInfo - Quadrant information for symmetry meshes
- */
-export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null, groupInfo = null, ringCount = null, angleList = null) {
-    const ringSize = Number.isFinite(ringCount) && ringCount > 0
-        ? ringCount
-        : Math.max(2, Math.round(params.angularSegments || 0));
-
-    // MOUTH is at the last row - the front baffle inner edge connects here
-    const lastRowStart = params.lengthSegments * ringSize;
-
-    // Get mouth Y position from vertex data
-    const mouthY = vertices[lastRowStart * 3 + 1];
-
-    // Spacing: L(eft), T(op), R(ight), B(ottom) - extends from MOUTH outline
+function generateRoundedBoxOutline(maxX, minX, maxZ, minZ, params, quadrantInfo) {
     const sL = parseFloat(params.encSpaceL) || 25;
     const sT = parseFloat(params.encSpaceT) || 25;
     const sR = parseFloat(params.encSpaceR) || 25;
     const sB = parseFloat(params.encSpaceB) || 25;
-    const depthRaw = parseFloat(params.encDepth);
-    const depth = Number.isFinite(depthRaw) ? depthRaw : 0;
     const edgeR = parseFloat(params.encEdge) || 0;
-    const interfaceOffsetRaw = parseFloat(params.interfaceOffset);
-    const frontOffset = Number.isFinite(interfaceOffsetRaw) && interfaceOffsetRaw > 0 ? interfaceOffsetRaw : 0;
-    const cornerSegs = Math.max(4, params.cornerSegments || 4);
+    const cornerSegs = Math.max(4, parseInt(params.cornerSegments) || 4);
+    const edgeType = parseInt(params.encEdgeType) || 1; // 1=Rounded, 2=Chamfered
 
     const quadrantKey = String(params.quadrants ?? '').trim();
     const restrictX = quadrantKey === '14' || quadrantKey === '1' || quadrantKey === '14.0' || quadrantKey === '1.0';
@@ -297,23 +205,105 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const isTopHalf = restrictZ && !restrictX;
     const isQuarter = restrictX && restrictZ;
 
-    // Find bounding box at the MOUTH ring (last row)
-    let maxX = -Infinity,
-        minX = Infinity,
-        maxZ = -Infinity,
-        minZ = Infinity;
+    let boxRight = maxX + sR;
+    let boxLeft = restrictX ? 0 : minX - sL;
+    let boxTop = maxZ + sT;
+    let boxBot = restrictZ ? 0 : minZ - sB;
+
+    const halfW = (boxRight - boxLeft) / 2;
+    const halfH = (boxTop - boxBot) / 2;
+    const cx = (boxRight + boxLeft) / 2;
+    const cz = (boxTop + boxBot) / 2;
+
+    const cr = Math.min(edgeR, halfW - 0.1, halfH - 0.1);
+    const outline = [];
+
+    const addCorner = (cornerCx, cornerCz, startAngle, endAngle) => {
+        const sweep = endAngle - startAngle;
+        const sx = cornerCx + cr * Math.cos(startAngle);
+        const sz = cornerCz + cr * Math.sin(startAngle);
+        const ex = cornerCx + cr * Math.cos(endAngle);
+        const ez = cornerCz + cr * Math.sin(endAngle);
+
+        for (let i = 0; i <= cornerSegs; i++) {
+            const t = i / cornerSegs;
+            let x, z, nx, nz;
+
+            if (edgeType === 2) {
+                // Chamfer: Linear position, Slerp normal (to maintain offset validity)
+                x = sx + (ex - sx) * t;
+                z = sz + (ez - sz) * t;
+                const a = startAngle + t * sweep;
+                nx = Math.cos(a);
+                nz = Math.sin(a);
+            } else {
+                // Rounded: Arc position, Radial normal
+                const a = startAngle + t * sweep;
+                const ca = Math.cos(a);
+                const sa = Math.sin(a);
+                x = cornerCx + cr * ca;
+                z = cornerCz + cr * sa;
+                nx = ca;
+                nz = sa;
+            }
+            outline.push({ x, z, nx, nz });
+        }
+    };
+
+    if (isQuarter) {
+        addCorner(cx + halfW - cr, cz + halfH - cr, 0, Math.PI / 2);
+        outline.push({ x: 0, z: boxTop, nx: 0, nz: 1 });
+        outline.push({ x: 0, z: 0, nx: 0, nz: 1 });
+        outline.push({ x: boxRight, z: 0, nx: 1, nz: 0 });
+    } else if (isRightHalf) {
+        addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2, 0);
+        addCorner(cx + halfW - cr, cz + halfH - cr, 0, Math.PI / 2);
+        outline.push({ x: 0, z: boxTop, nx: 0, nz: 1 });
+        outline.push({ x: 0, z: boxBot, nx: 0, nz: -1 });
+    } else if (isTopHalf) {
+        addCorner(cx + halfW - cr, cz + halfH - cr, 0, Math.PI / 2);
+        addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2, Math.PI);
+        outline.push({ x: boxLeft, z: 0, nx: -1, nz: 0 });
+        outline.push({ x: boxRight, z: 0, nx: 1, nz: 0 });
+    } else {
+        addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2, 0);       // BR
+        addCorner(cx + halfW - cr, cz + halfH - cr, 0, Math.PI / 2);        // TR
+        addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2, Math.PI);      // TL
+        addCorner(cx - halfW + cr, cz - halfH + cr, Math.PI, Math.PI * 1.5);    // BL
+        const start = outline[0];
+        outline.push({ ...start });
+    }
+
+    return outline;
+}
+
+export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null, groupInfo = null, ringCount = null, angleList = null) {
+    const ringSize = Number.isFinite(ringCount) && ringCount > 0
+        ? ringCount
+        : Math.max(2, Math.round(params.angularSegments || 0));
+
+    const lastRowStart = params.lengthSegments * ringSize;
+    const mouthY = vertices[lastRowStart * 3 + 1];
+
+    const depth = parseFloat(params.encDepth) || 0;
+    const edgeR = parseFloat(params.encEdge) || 0;
+    const interfaceOffset = parseFloat(params.interfaceOffset) || 0;
+    const edgeType = parseInt(params.encEdgeType) || 1;
+    const axialSegs = edgeR > 0 ? Math.max(4, parseInt(params.cornerSegments) || 4) : 1;
+    const backY = mouthY - depth;
+
+    let maxX = -Infinity, minX = Infinity, maxZ = -Infinity, minZ = Infinity;
     for (let i = 0; i < ringSize; i++) {
         const idx = lastRowStart + i;
         const mx = vertices[idx * 3];
         const mz = vertices[idx * 3 + 2];
-        if (mx > maxX) maxX = mx;
-        if (mx < minX) minX = mx;
-        if (mz > maxZ) maxZ = mz;
-        if (mz < minZ) minZ = mz;
+        maxX = Math.max(maxX, mx);
+        minX = Math.min(minX, mx);
+        maxZ = Math.max(maxZ, mz);
+        minZ = Math.min(minZ, mz);
     }
 
-    const useAthRounding = params.useAthEnclosureRounding ?? params.useAthZMap ?? false;
-    if (useAthRounding) {
+    if (params.useAthEnclosureRounding ?? params.useAthZMap) {
         if (Number.isFinite(maxX)) maxX = Math.ceil(maxX);
         if (Number.isFinite(minX)) minX = Math.floor(minX);
         if (Number.isFinite(maxZ)) maxZ = Math.ceil(maxZ);
@@ -321,414 +311,345 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     }
 
     const planOutline = buildPlanOutline(params, quadrantInfo);
-    const usePlanOutline = Array.isArray(planOutline) && planOutline.length > 1;
+    const outline = (planOutline && planOutline.length > 1)
+        ? planOutline
+        : generateRoundedBoxOutline(maxX, minX, maxZ, minZ, params, quadrantInfo);
 
-    let boxRight, boxLeft, boxTop, boxBot;
-
-    boxRight = maxX + sR;
-    boxLeft = restrictX ? 0 : minX - sL;
-    boxTop = maxZ + sT;
-    boxBot = restrictZ ? 0 : minZ - sB;
-
-    const outline = [];
-    let cx = 0;
-    let cz = 0;
-    let halfW = 0;
-    let halfH = 0;
-
-    if (usePlanOutline) {
-        let maxPX = -Infinity,
-            minPX = Infinity,
-            maxPZ = -Infinity,
-            minPZ = Infinity;
-        planOutline.forEach((pt) => {
-            if (pt.x > maxPX) maxPX = pt.x;
-            if (pt.x < minPX) minPX = pt.x;
-            if (pt.z > maxPZ) maxPZ = pt.z;
-            if (pt.z < minPZ) minPZ = pt.z;
-        });
-        outline.push(...planOutline);
-        cx = (maxPX + minPX) / 2;
-        cz = (maxPZ + minPZ) / 2;
-        halfW = (maxPX - minPX) / 2;
-        halfH = (maxPZ - minPZ) / 2;
-    } else {
-        halfW = (boxRight - boxLeft) / 2;
-        halfH = (boxTop - boxBot) / 2;
-        cx = (boxRight + boxLeft) / 2;
-        cz = (boxTop + boxBot) / 2;
-
-        const cr = Math.min(edgeR, halfW - 0.1, halfH - 0.1);
-
-        if (isQuarter) {
-            const addCorner = (cornerCx, cornerCz, startAngle) => {
-                for (let i = 0; i <= cornerSegs; i++) {
-                    const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
-                    const x = cornerCx + cr * Math.cos(a);
-                    const z = cornerCz + cr * Math.sin(a);
-                    if (x >= -0.001 && z >= -0.001) {
-                        outline.push({ x: Math.max(0, x), z: Math.max(0, z) });
-                    }
-                }
-            };
-
-            addCorner(cx + halfW - cr, cz + halfH - cr, 0);
-            outline.push({ x: 0, z: cz + halfH });
-            outline.push({ x: 0, z: 0 });
-            outline.push({ x: cx + halfW, z: 0 });
-        } else if (isRightHalf) {
-            const addCorner = (cornerCx, cornerCz, startAngle) => {
-                for (let i = 0; i <= cornerSegs; i++) {
-                    const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
-                    const x = cornerCx + cr * Math.cos(a);
-                    const z = cornerCz + cr * Math.sin(a);
-                    if (x >= -0.001) {
-                        outline.push({ x: Math.max(0, x), z });
-                    }
-                }
-            };
-
-            addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2);
-            addCorner(cx + halfW - cr, cz + halfH - cr, 0);
-            outline.push({ x: 0, z: cz + halfH });
-            outline.push({ x: 0, z: cz - halfH });
-        } else if (isTopHalf) {
-            const addCorner = (cornerCx, cornerCz, startAngle) => {
-                for (let i = 0; i <= cornerSegs; i++) {
-                    const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
-                    outline.push({ x: cornerCx + cr * Math.cos(a), z: cornerCz + cr * Math.sin(a) });
-                }
-            };
-
-            addCorner(cx + halfW - cr, cz + halfH - cr, 0);
-            addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2);
-            outline.push({ x: cx - halfW, z: 0 });
-            outline.push({ x: cx + halfW, z: 0 });
-        } else {
-            const addCorner = (cornerCx, cornerCz, startAngle) => {
-                for (let i = 0; i <= cornerSegs; i++) {
-                    const a = startAngle + (i / cornerSegs) * (Math.PI / 2);
-                    outline.push({ x: cornerCx + cr * Math.cos(a), z: cornerCz + cr * Math.sin(a) });
-                }
-            };
-
-            addCorner(cx + halfW - cr, cz - halfH + cr, -Math.PI / 2);
-            addCorner(cx + halfW - cr, cz + halfH - cr, 0);
-            addCorner(cx - halfW + cr, cz + halfH - cr, Math.PI / 2);
-            addCorner(cx - halfW + cr, cz - halfH + cr, Math.PI);
-        }
+    const cleanOutline = [];
+    if (outline.length > 0) cleanOutline.push(outline[0]);
+    for (let i = 1; i < outline.length; i++) {
+        const p = outline[i];
+        const prev = cleanOutline[cleanOutline.length - 1];
+        const d = Math.hypot(p.x - prev.x, p.z - prev.z);
+        if (d > 1e-4) cleanOutline.push(p);
     }
 
-    const totalPts = outline.length;
-    const outlineAngles = outline.map((pt) => Math.atan2(pt.z, pt.x));
+    let centerSumX = 0, centerSumZ = 0;
+    cleanOutline.forEach(p => { centerSumX += p.x; centerSumZ += p.z; });
+    const cx = centerSumX / cleanOutline.length;
+    const cz = centerSumZ / cleanOutline.length;
 
-    const findNearestOutlineIndex = (angle) => {
-        let bestIdx = 0;
-        let bestDist = Infinity;
-        for (let i = 0; i < outlineAngles.length; i++) {
-            let delta = angle - outlineAngles[i];
-            while (delta > Math.PI) delta -= Math.PI * 2;
-            while (delta < -Math.PI) delta += Math.PI * 2;
-            const dist = Math.abs(delta);
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestIdx = i;
+    const totalPts = cleanOutline.length;
+    const outerPts = [];
+    const insetPts = [];
+
+    for (let i = 0; i < totalPts; i++) {
+        const pt = cleanOutline[i];
+
+        let nx = pt.nx;
+        let nz = pt.nz;
+
+        const dx = pt.x - cx;
+        const dz = pt.z - cz;
+        if (!Number.isFinite(nx) || (nx === 0 && nz === 0)) {
+            const len = Math.hypot(dx, dz);
+            nx = len > 0 ? dx / len : 0;
+            nz = len > 0 ? dz / len : 0;
+        } else {
+            if (nx * dx + nz * dz < 0) {
+                nx = -nx;
+                nz = -nz;
             }
         }
-        return bestIdx;
-    };
 
-    // ==========================================
-    // Key Y positions and Ring Generation
-    // ==========================================
-    const backY = mouthY - depth;
-    const edgeType = parseInt(params.encEdgeType) || 1; // 1=rounded, 2=chamfered
-    const axialSegs = edgeR > 0 ? cornerSegs : 1;
+        outerPts.push({ x: pt.x, z: pt.z, nx, nz });
 
-    // Generate inset outline and outer outline
-    // outline = outer boundary of the box
-    // insetOutline = boundary where the roundover starts (inset by edgeR)
-    const outerOutline = outline;
-    const insetOutline = [];
-    for (let i = 0; i < totalPts; i++) {
-        const pt = outerOutline[i];
-        const dx = cx - pt.x;
-        const dz = cz - pt.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist > 0.001) {
-            const nx = dx / dist;
-            const nz = dz / dist;
-            insetOutline.push({
-                x: pt.x + nx * edgeR,
-                z: pt.z + nz * edgeR,
-                nx,
-                nz
-            });
-        } else {
-            insetOutline.push({ x: pt.x, z: pt.z, nx: 0, nz: 0 });
-        }
+        insetPts.push({
+            x: pt.x - nx * edgeR,
+            z: pt.z - nz * edgeR,
+            nx, nz
+        });
     }
 
-    // Get mouth ring vertices from horn (last row of horn mesh)
-    const mouthStart = lastRowStart;
+    const ringIndices = [];
     const mouthRing = [];
     for (let i = 0; i < ringSize; i++) {
-        const idx = mouthStart + i;
-        mouthRing.push({
-            x: vertices[idx * 3],
-            y: vertices[idx * 3 + 1],
-            z: vertices[idx * 3 + 2]
-        });
+        const idx = lastRowStart + i;
+        mouthRing.push({ x: vertices[idx * 3], y: vertices[idx * 3 + 1], z: vertices[idx * 3 + 2] });
     }
 
-    // Ring -1: Mouth Projection Ring (projects mouth to match enclosure point count)
-    // This intermediate ring eliminates the gap between horn mouth and enclosure
-    // Positioned AT the mouth Y, using INSET outline (close to mouth, not far outer boundary)
-    const mouthProjectionStart = vertices.length / 3;
+    const ring0Start = vertices.length / 3;
+    ringIndices.push(ring0Start);
     for (let i = 0; i < totalPts; i++) {
-        const ipt = insetOutline[i];  // Use inset outline (edgeR from outer) - close to mouth
-        // Find nearest mouth vertex to get its Y position
-        const angle = Math.atan2(ipt.z - cz, ipt.x - cx);
-        let bestDist = Infinity;
+        const ipt = insetPts[i];
+
         let bestY = mouthY;
+        let bestDist = Infinity;
+        const ang = Math.atan2(ipt.z - cz, ipt.x - cx);
         for (const mv of mouthRing) {
-            let ma = Math.atan2(mv.z - cz, mv.x - cx);
-            let da = Math.abs(angle - ma);
-            while (da > Math.PI) da -= Math.PI * 2;
-            da = Math.abs(da);
-            if (da < bestDist) {
-                bestDist = da;
-                bestY = mv.y;
-            }
+            const mang = Math.atan2(mv.z - cz, mv.x - cx);
+            let diff = Math.abs(ang - mang);
+            if (diff > Math.PI) diff = 2 * Math.PI - diff;
+            if (diff < bestDist) { bestDist = diff; bestY = mv.y; }
         }
-        // Use INSET outline (not outer) - this is close to the mouth, not at the far boundary
+
         vertices.push(ipt.x, bestY, ipt.z);
     }
 
-    // Ring 0: Front Inner (at mouth y + frontOffset, inset outline)
-    // This ring is where the roundover begins, offset forward if frontOffset > 0
-    const frontInnerStart = vertices.length / 3;
-    for (let i = 0; i < totalPts; i++) {
-        const ipt = insetOutline[i];
-        // Get Y from mouth projection ring and add frontOffset
-        const yBase = vertices[(mouthProjectionStart + i) * 3 + 1];
-        vertices.push(ipt.x, yBase + frontOffset, ipt.z);
+    let roundoverStartRingIdx = ring0Start;
+
+    if (interfaceOffset > 0.001) {
+        const offsetRingStart = vertices.length / 3;
+        ringIndices.push(offsetRingStart);
+        for (let i = 0; i < totalPts; i++) {
+            const x = vertices[(ring0Start + i) * 3];
+            const y = vertices[(ring0Start + i) * 3 + 1];
+            const z = vertices[(ring0Start + i) * 3 + 2];
+            vertices.push(x, y + interfaceOffset, z);
+        }
+        roundoverStartRingIdx = offsetRingStart;
     }
 
-    // Front Roundover Rings
-    // Curving from Inset outline (at yBase) to Outer outline (at yBase - edgeR)
-    // Creates an inward-facing dish (bezel) that is FLUSH with the mouth
-    // and Recedes back to the side walls.
-    const frontRoundsStarts = [];
-    for (let s = 1; s <= axialSegs; s++) {
-        const startIdx = vertices.length / 3;
-        frontRoundsStarts.push(startIdx);
+    const frontRings = [];
+    if (edgeR > 0.001) {
+        for (let s = 1; s <= axialSegs; s++) {
+            const ringStart = vertices.length / 3;
+            frontRings.push(ringStart);
 
-        // phi: 0 (at Inset) to PI/2 (at Outer)
-        const phi = (s / axialSegs) * (Math.PI / 2);
-        const sinP = Math.sin(phi);
-        const cosP = Math.cos(phi);
+            const t = s / axialSegs;
+            const phi = t * Math.PI / 2;
+            const c = Math.cos(phi);
+            const s_ang = Math.sin(phi);
 
-        for (let i = 0; i < totalPts; i++) {
-            const ipt = insetOutline[i];
-            const opt = outerOutline[i];
-            const yBase = vertices[(frontInnerStart + i) * 3 + 1];
+            for (let i = 0; i < totalPts; i++) {
+                const ipt = insetPts[i];
+                const nx = ipt.nx;
+                const nz = ipt.nz;
 
-            let x, y, z;
-            if (edgeType === 2) { // Chamfer
-                // Linear from Inset to Outer
-                const t = s / axialSegs;
-                x = ipt.x + (opt.x - ipt.x) * t;
-                z = ipt.z + (opt.z - ipt.z) * t;
-                y = yBase - edgeR * t;
-            } else { // Rounded (Concave/Dish)
-                // Start at Inset (phi=0, sin=0, cos=1) -> Pos = Inset, Y = yBase
-                // End at Outer (phi=90, sin=1, cos=0) -> Pos = Outer, Y = yBase - edgeR
-                // Note: ipt.nx points Inward. To go Outer, subtract nx.
-                x = ipt.x - ipt.nx * edgeR * sinP;
-                z = ipt.z - ipt.nz * edgeR * sinP;
-                y = yBase - edgeR * (1 - cosP);
+                const yBase = vertices[(roundoverStartRingIdx + i) * 3 + 1];
+                const opt = outerPts[i];
+
+                let x, y, z;
+                if (edgeType === 2) {
+                    x = ipt.x + (opt.x - ipt.x) * t;
+                    z = ipt.z + (opt.z - ipt.z) * t;
+                    y = yBase - edgeR * t;
+                } else {
+                    x = ipt.x + nx * edgeR * s_ang;
+                    z = ipt.z + nz * edgeR * s_ang;
+                    y = yBase - edgeR * (1 - c);
+                }
+                vertices.push(x, y, z);
             }
-            vertices.push(x, y, z);
+        }
+    } else {
+        const ringStart = vertices.length / 3;
+        frontRings.push(ringStart);
+        for (let i = 0; i < totalPts; i++) {
+            const opt = outerPts[i];
+            const yBase = vertices[(roundoverStartRingIdx + i) * 3 + 1];
+            vertices.push(opt.x, yBase, opt.z);
         }
     }
 
-    // Side Wall Back Ring (at back elevation before roundover starts)
-    const backSideStart = vertices.length / 3;
+    const backStartRing = vertices.length / 3;
+    ringIndices.push(backStartRing);
+
     for (let i = 0; i < totalPts; i++) {
-        const opt = outerOutline[i];
+        const opt = outerPts[i];
         vertices.push(opt.x, backY + edgeR, opt.z);
     }
 
-    // Back Roundover Rings
-    // Curving from (outerPt, backY + edgeR) to (insetPt, backY)
-    const backRoundsStarts = [];
-    for (let s = 1; s <= axialSegs; s++) {
-        const startIdx = vertices.length / 3;
-        backRoundsStarts.push(startIdx);
+    const backRings = [];
+    if (edgeR > 0.001) {
+        for (let s = 1; s <= axialSegs; s++) {
+            const ringStart = vertices.length / 3;
+            backRings.push(ringStart);
 
-        // phi: 0 (at outer outline, y=backY + edgeR) to PI/2 (at inset outline, y=backY)
-        const phi = (s / axialSegs) * (Math.PI / 2);
-        const sinP = Math.sin(phi);
-        const cosP = Math.cos(phi);
+            const t = s / axialSegs;
+            const phi = t * Math.PI / 2;
+            const c = Math.cos(phi);
+            const s_ang = Math.sin(phi);
 
-        for (let i = 0; i < totalPts; i++) {
-            const ipt = insetOutline[i];
-            const opt = outerOutline[i];
+            for (let i = 0; i < totalPts; i++) {
+                const opt = outerPts[i];
+                const ipt = insetPts[i];
+                const nx = opt.nx;
+                const nz = opt.nz;
 
-            let x, y, z;
-            if (edgeType === 2) { // Chamfer
-                const t = s / axialSegs;
-                x = opt.x + (ipt.x - opt.x) * t;
-                z = opt.z + (ipt.z - opt.z) * t;
-                y = (backY + edgeR) - edgeR * t;
-            } else { // Rounded (Convex)
-                x = opt.x + ipt.nx * edgeR * (1 - cosP);
-                z = opt.z + ipt.nz * edgeR * (1 - cosP);
-                y = (backY + edgeR) - edgeR * sinP;
+                let x, y, z;
+                if (edgeType === 2) {
+                    x = opt.x + (ipt.x - opt.x) * t;
+                    z = opt.z + (ipt.z - opt.z) * t;
+                    y = (backY + edgeR) - edgeR * t;
+                } else {
+                    x = opt.x - nx * edgeR * (1 - c);
+                    z = opt.z - nz * edgeR * (1 - c);
+                    y = (backY + edgeR) - edgeR * s_ang;
+                }
+                vertices.push(x, y, z);
             }
-            vertices.push(x, y, z);
+        }
+    } else {
+        const ringStart = vertices.length / 3;
+        backRings.push(ringStart);
+        for (let i = 0; i < totalPts; i++) {
+            const ipt = insetPts[i];
+            vertices.push(ipt.x, backY, ipt.z);
         }
     }
 
-    // ==========================================
-    // Create faces for the enclosure
-    // ==========================================
+    const backCapCenter = vertices.length / 3;
+    vertices.push(cx, backY, cz);
+
+    const stitch = (r1Start, r2Start) => {
+        for (let i = 0; i < totalPts; i++) {
+            const i2 = (i + 1) % totalPts;
+            indices.push(r1Start + i, r2Start + i, r2Start + i2);
+            indices.push(r1Start + i, r2Start + i2, r1Start + i2);
+        }
+    };
 
     const enclosureStartTri = indices.length / 3;
 
-    // 1. Front Roundover Faces
-    const frontStartTri = indices.length / 3;
-    let prevRing = frontInnerStart;
-    for (let s = 0; s < frontRoundsStarts.length; s++) {
-        const currRing = frontRoundsStarts[s];
-        for (let i = 0; i < totalPts; i++) {
-            const i2 = (i + 1) % totalPts;
-            indices.push(prevRing + i, currRing + i, currRing + i2);
-            indices.push(prevRing + i, currRing + i2, prevRing + i2);
-        }
-        prevRing = currRing;
-    }
-    const frontEndTri = indices.length / 3;
-
-    // 2. Side Walls
-    const sideRing = frontRoundsStarts[frontRoundsStarts.length - 1];
-    for (let i = 0; i < totalPts; i++) {
-        const i2 = (i + 1) % totalPts;
-        indices.push(sideRing + i, backSideStart + i, backSideStart + i2);
-        indices.push(sideRing + i, backSideStart + i2, sideRing + i2);
-    }
-
-    // 3. Back Roundover Faces
-    prevRing = backSideStart;
-    for (let s = 0; s < backRoundsStarts.length; s++) {
-        const currRing = backRoundsStarts[s];
-        for (let i = 0; i < totalPts; i++) {
-            const i2 = (i + 1) % totalPts;
-            indices.push(prevRing + i, currRing + i, currRing + i2);
-            indices.push(prevRing + i, currRing + i2, prevRing + i2);
-        }
-        prevRing = currRing;
-    }
-
-    // 4. Back Cap (fan from center)
-    const backOuterStart = backRoundsStarts[backRoundsStarts.length - 1];
-    const backCenterIdx = vertices.length / 3;
-    vertices.push(cx, backY, cz);
-
-    for (let i = 0; i < totalPts; i++) {
-        const i2 = (i + 1) % totalPts;
-        indices.push(backOuterStart + i, backOuterStart + i2, backCenterIdx);
-    }
-
-    // ==========================================
-    // Connect mouth to enclosure via projection ring
-    // ==========================================
-
-    // Step 1: Connect mouth ring to mouth projection ring using proper stitching
-    const mouthLoop = mouthRing.length;
     const fullCircle = !quadrantInfo || quadrantInfo.fullCircle;
-    const connectLoop = fullCircle ? mouthLoop : Math.max(0, mouthLoop - 1);
+    const mouthLoop = ringSize;
 
-    // Build mapping from mouth vertices to enclosure outline vertices
-    // Each mouth vertex finds its nearest enclosure point
-    const mouthToEnc = new Array(mouthLoop);
-    for (let i = 0; i < mouthLoop; i++) {
-        const mouthVertex = mouthRing[i];
-        const mouthAngle = Math.atan2(mouthVertex.z - cz, mouthVertex.x - cx);
-        mouthToEnc[i] = findNearestOutlineIndex(mouthAngle);
+    // Greedy Stitching Logic Mouth -> Enclosure
+    // Initialize start offset (find nearest Enclosure vertex to Mouth[0])
+    let bestIdx = 0;
+    let minDiff = Infinity;
+    const m0 = mouthRing[0];
+    const m0ang = Math.atan2(m0.z - cz, m0.x - cx);
+    for (let j = 0; j < totalPts; j++) {
+        const pt = cleanOutline[j];
+        const ang = Math.atan2(pt.z - cz, pt.x - cx);
+        let diff = Math.abs(m0ang - ang);
+        if (diff > Math.PI) diff = 2 * Math.PI - diff;
+        if (diff < minDiff) { minDiff = diff; bestIdx = j; }
     }
+    const ePsi = bestIdx; // Enclosure Start Pointer
 
-    // Stitch mouth ring to mouth projection ring
-    for (let i = 0; i < connectLoop; i++) {
-        const i2 = fullCircle ? (i + 1) % mouthLoop : i + 1;
-        if (i2 >= mouthLoop) continue;
+    const mLen = fullCircle ? mouthLoop : Math.max(0, mouthLoop - 1);
+    const eLen = totalPts;
 
-        const mi = mouthStart + i;
-        const mi2 = mouthStart + i2;
-        const ei = mouthToEnc[i];
-        const ei2 = mouthToEnc[i2];
+    const getM = (i) => lastRowStart + (i % mouthLoop);
+    const getE = (i) => ring0Start + ((ePsi + i) % totalPts);
+    const getMPos = (i) => {
+        const idx = i % mouthLoop;
+        return mouthRing[idx];
+    };
+    const getEPos = (i) => {
+        const idx = (ePsi + i) % totalPts;
+        const vIdx = ring0Start + idx;
+        return { x: vertices[vIdx * 3], y: vertices[vIdx * 3 + 1], z: vertices[vIdx * 3 + 2] };
+    };
+    const distSq = (p1, p2) => (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2;
 
-        // Create triangles connecting to mouth projection ring
-        if (ei !== ei2) {
-            // Standard quad triangulation
-            indices.push(mi, mi2, mouthProjectionStart + ei2);
-            indices.push(mi, mouthProjectionStart + ei2, mouthProjectionStart + ei);
+    let m = 0;
+    let e = 0;
+    const maxSteps = (mLen + eLen) * 2;
+    let steps = 0;
+
+    // For full circle, we stitch until we wrap around completely (e.g. M and E both complete loops)
+    // For partial, we stitch until both reach end.
+
+    // Condition handling:
+    // If Full Circle: We repeat until both m and e have traversed at least one full loop.
+    // Actually, simple greedy stitch for loop:
+    // Continue until m >= mLen AND e >= eLen? 
+    // Wait, m and e are loop counts.
+    // If m wraps, m continues growing.
+
+    const limitM = fullCircle ? mLen : mLen; // Effectively loop needs to clear this count
+    const limitE = fullCircle ? eLen : eLen;
+    // Actually if fullCircle is true, we want to close the loop.
+    // The number of triangles is approx 2 * max(m, e).
+
+    // Robust Terminator:
+    // We stop when M has completed its loop AND E has completed its loop.
+    // For full circle, "completed" means wrapped around to start.
+
+    while ((m < limitM || e < limitE) && steps++ < maxSteps) {
+        // Indices need to respect "strip" vs "loop"
+        // If !fullCircle, indices don't wrap.
+        // getM and getE currently use modulo.
+
+        // Correct getM/getE for NON-Wrapping strip:
+        const idxM = fullCircle ? getM(m) : (lastRowStart + m);
+        const idxMNext = fullCircle ? getM(m + 1) : (lastRowStart + m + 1);
+        const idxE = fullCircle ? getE(e) : (ring0Start + (ePsi + e) % totalPts);
+        const idxENext = fullCircle ? getE(e + 1) : (ring0Start + (ePsi + e + 1) % totalPts);
+
+        const posM = fullCircle ? getMPos(m) : { x: vertices[idxM * 3], y: vertices[idxM * 3 + 1], z: vertices[idxM * 3 + 2] };
+        const posMNext = fullCircle ? getMPos(m + 1) : { x: vertices[idxMNext * 3], y: vertices[idxMNext * 3 + 1], z: vertices[idxMNext * 3 + 2] };
+        const posE = fullCircle ? getEPos(e) : { x: vertices[idxE * 3], y: vertices[idxE * 3 + 1], z: vertices[idxE * 3 + 2] };
+        const posENext = fullCircle ? getEPos(e + 1) : { x: vertices[idxENext * 3], y: vertices[idxENext * 3 + 1], z: vertices[idxENext * 3 + 2] };
+
+        let advanceM = false;
+
+        // Boundary checks for open strip
+        if (!fullCircle) {
+            if (m >= limitM) advanceM = false;      // M finished, force E
+            else if (e >= limitE) advanceM = true;  // E finished, force M
+            else {
+                const d1 = distSq(posMNext, posE);
+                const d2 = distSq(posM, posENext);
+                advanceM = d1 < d2;
+            }
         } else {
-            // Both mouth vertices map to the same enclosure vertex - create single triangle
-            indices.push(mi, mi2, mouthProjectionStart + ei);
+            // Closed loop - flexible
+            // If one is way ahead (more than 1 lap?), hold it?
+            // Usually not an issue with simple shapes.
+            // Just check diagonals.
+            const d1 = distSq(posMNext, posE);
+            const d2 = distSq(posM, posENext);
+
+            // Bias to keep progress balanced if ratios are extreme? 
+            // Simple distance check usually suffices for convex-ish shapes.
+            advanceM = d1 < d2;
+
+            // Safety: if m is done but e is not, force e?
+            // For loops, "done" is arbitrary start/end line.
+            // We just need to stitch until we cover the angular span.
+            // Since we use distance, it handles it.
+            // But we must stop!
+            // Condition (m < limitM || e < limitE) handles stops.
+            // But if d1 always < d2, M will wrap infinitely.
+            // We need to count "progress".
+            // If m has done > 1 lap, force E?
+            if (m > limitM + 5) advanceM = false;
+            if (e > limitE + 5) advanceM = true;
+        }
+
+        if (advanceM) {
+            indices.push(idxM, idxMNext, idxE);
+            m++;
+        } else {
+            indices.push(idxM, idxENext, idxE);
+            e++;
         }
     }
 
-    // Step 2: Connect mouth projection ring to front inner ring (flat transition if frontOffset > 0)
+
+    let prevRing = ring0Start;
+
+    if (interfaceOffset > 0.001) {
+        stitch(prevRing, roundoverStartRingIdx);
+        prevRing = roundoverStartRingIdx;
+    }
+
+    for (const rid of frontRings) {
+        stitch(prevRing, rid);
+        prevRing = rid;
+    }
+
+    stitch(prevRing, backStartRing);
+
+    prevRing = backStartRing;
+    for (const rid of backRings) {
+        stitch(prevRing, rid);
+        prevRing = rid;
+    }
+
+    const backInnerStart = prevRing;
     for (let i = 0; i < totalPts; i++) {
         const i2 = (i + 1) % totalPts;
-        indices.push(mouthProjectionStart + i, mouthProjectionStart + i2, frontInnerStart + i2);
-        indices.push(mouthProjectionStart + i, frontInnerStart + i2, frontInnerStart + i);
-    }
-
-    // Connect enclosure outline points that were skipped
-    // Walk the enclosure outline and connect any gaps
-    for (let e = 0; e < totalPts; e++) {
-        const e2 = (e + 1) % totalPts;
-
-        // Find if any mouth vertices map to e and e2
-        let hasE = false, hasE2 = false;
-        let lastMouthForE = -1, firstMouthForE2 = -1;
-
-        for (let m = 0; m < mouthLoop; m++) {
-            if (mouthToEnc[m] === e) {
-                hasE = true;
-                lastMouthForE = m;
-            }
-            if (mouthToEnc[m] === e2 && firstMouthForE2 === -1) {
-                hasE2 = true;
-                firstMouthForE2 = m;
-            }
-        }
-
-        // If we have mouth vertices for e but not for e2 (or vice versa),
-        // we need to add a connecting triangle
-        if (hasE && hasE2 && lastMouthForE >= 0 && firstMouthForE2 >= 0) {
-            // Check if there's a gap in mouth indices between lastMouthForE and firstMouthForE2
-            const mGap = fullCircle
-                ? (firstMouthForE2 - lastMouthForE + mouthLoop) % mouthLoop
-                : firstMouthForE2 - lastMouthForE;
-
-            if (mGap > 1) {
-                // There are mouth vertices that don't have direct enclosure connections
-                // Connect the enclosure edge through them
-                const mi = mouthStart + lastMouthForE;
-                const mi2 = mouthStart + firstMouthForE2;
-                indices.push(frontInnerStart + e, mi, frontInnerStart + e2);
-                indices.push(mi, mi2, frontInnerStart + e2);
-            }
-        }
+        indices.push(backInnerStart + i, backInnerStart + i2, backCapCenter);
     }
 
     const enclosureEndTri = indices.length / 3;
     if (groupInfo) {
         groupInfo.enclosure = { start: enclosureStartTri, end: enclosureEndTri };
-        groupInfo.enclosureFront = { start: frontStartTri, end: frontEndTri };
     }
 }
