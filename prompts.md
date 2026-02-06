@@ -1,5 +1,14 @@
 # LLM Task Prompts
 
+> **Task Status**
+> - ✅ Prompt 1: Delete stale documentation files (COMPLETED)
+> - ⏭️ Prompt 2: Remove Enclosure Plan (ALREADY DONE - no encPlan references found in codebase)
+> - ⏭️ Prompt 3: Remove LF Source B (NOT STARTED)
+> - ⏭️ Prompt 4: Enable STEP export button (ALREADY DONE - no disabled attribute on button)
+> - ⏭️ Prompt 5: Update Wall Thickness tooltip (ALREADY DONE - tooltip present)
+> - ⏭️ Prompt 6: Move Scale into R-OSSE and OSSE sections (NOT STARTED)
+> - ⏭️ Prompt 7: Remove Mouth Rollback feature (NOT STARTED)
+
 Copy-paste each prompt below into a local LLM. Each one is self-contained.
 Do them in order -- later prompts assume earlier ones are done.
 
