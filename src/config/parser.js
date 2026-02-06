@@ -209,7 +209,6 @@ export class MWGConfigParser {
             if (encBlock._items.Depth) { p.encDepth = encBlock._items.Depth; }
             if (encBlock._items.EdgeRadius) { p.encEdge = encBlock._items.EdgeRadius; }
             if (encBlock._items.EdgeType) { p.encEdgeType = encBlock._items.EdgeType; }
-            if (encBlock._items.Plan) { p.encPlan = encBlock._items.Plan; }
             if (encBlock._items.FrontResolution) { p.encFrontResolution = encBlock._items.FrontResolution; }
             if (encBlock._items.BackResolution) { p.encBackResolution = encBlock._items.BackResolution; }
             if (encBlock._items.InterfaceOffset !== undefined) { p.interfaceOffset = encBlock._items.InterfaceOffset; }

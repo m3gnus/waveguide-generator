@@ -45,7 +45,17 @@
       "Bash(npm test:*)",
       "Bash(git log:*)",
       "Bash(npm uninstall jest jest-environment-jsdom)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(npm start)",
+      "Bash(wc:*)",
+      "mcp__Desktop_Commander__edit_block",
+      "mcp__Desktop_Commander__start_process",
+      "mcp__Desktop_Commander__write_file",
+      "Bash(git restore:*)",
+      "Bash(the next loop\" - it should be closer by the proper distance.\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "WebFetch(domain:ocjs.org)",
+      "Bash(npm install:*)",
+      "Bash(npx webpack:*)"
     ]
   }
 }

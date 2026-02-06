@@ -127,15 +127,12 @@ export function generateMWGConfigContent(params) {
             }
         }
 
-        if (params.encPlan || params.encDepth > 0) {
+        // Enclosure plan feature removed - only standard enclosure is supported
+        if (params.encDepth > 0) {
             content += `Mesh.Enclosure = {\n`;
-            if (params.encPlan) {
-                content += `Plan = ${params.encPlan}\n`;
-            } else {
-                content += `Depth = ${params.encDepth}\n`;
-                content += `EdgeRadius = ${params.encEdge}\n`;
-                content += `EdgeType = ${params.encEdgeType}\n`;
-            }
+            content += `Depth = ${params.encDepth}\n`;
+            content += `EdgeRadius = ${params.encEdge}\n`;
+            content += `EdgeType = ${params.encEdgeType}\n`;
             content += `Spacing = ${params.encSpaceL || 25},${params.encSpaceT || 25},${params.encSpaceR || 25},${params.encSpaceB || 25}\n`;
             if (isNonZero(params.encFrontResolution)) content += `FrontResolution = ${formatValue(params.encFrontResolution)}\n`;
             if (isNonZero(params.encBackResolution)) content += `BackResolution = ${formatValue(params.encBackResolution)}\n`;
