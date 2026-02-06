@@ -5,7 +5,6 @@
  *   - Pre-defined rectangular box with rounded/chamfered edges
  *   - User-defined ground plan (extruded profile with lines, arcs, ellipses, bezier)
  *   - Horn mouth opening cut from front baffle
- *   - LF source openings
  */
 
 import { evalParam, parseList } from '../geometry/common.js';
@@ -124,39 +123,6 @@ export function cutHornOpening(oc, enclosure, hornShape) {
 }
 
 /**
- * Cut a circular opening for an LF driver.
- *
- * @param {Object} oc - OpenCascade instance
- * @param {TopoDS_Shape} enclosure - The enclosure shape
- * @param {number} radius - LF source radius (mm)
- * @param {number} offsetY - Vertical offset for the LF source center (mm)
- * @returns {TopoDS_Shape}
- */
-export function cutLFSourceOpening(oc, enclosure, radius, offsetY) {
-    if (!radius || radius <= 0) return enclosure;
-
-    // Create a cylinder through the front face for the LF driver cutout
-    const center = new oc.gp_Pnt_3(0, -1, offsetY); // slightly behind front face
-    const axis = new oc.gp_Ax2_3(center, new oc.gp_Dir_4(0, 1, 0));
-    const cyl = new oc.BRepPrimAPI_MakeCylinder_1(axis, radius, 10); // short cylinder through baffle
-
-    try {
-        const cut = new oc.BRepAlgoAPI_Cut_3(
-            enclosure,
-            cyl.Shape(),
-            new oc.Message_ProgressRange_1()
-        );
-        if (cut.IsDone()) {
-            return cut.Shape();
-        }
-    } catch (e) {
-        console.warn('[CADEnclosure] LF source cut failed:', e.message);
-    }
-
-    return enclosure;
-}
-
-/**
  * Build a complete enclosure shape from parameters.
  *
  * @param {Object} oc - OpenCascade instance
@@ -176,13 +142,6 @@ export function buildEnclosureCAD(oc, params, mouthExtents, hornShape) {
     // Cut horn opening from front baffle
     if (hornShape) {
         encShape = cutHornOpening(oc, encShape, hornShape);
-    }
-
-    // Cut LF source opening if defined
-    const lfRadius = Number(params.lfSourceBRadius || 0);
-    if (lfRadius > 0) {
-        const lfSpacing = Number(params.lfSourceBSpacing || 0);
-        encShape = cutLFSourceOpening(oc, encShape, lfRadius, -lfSpacing);
     }
 
     console.log('[CADEnclosure] Enclosure build complete');

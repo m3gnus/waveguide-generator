@@ -58,7 +58,7 @@ export function prepareParamsForMesh(
   };
 
   applySchema(PARAM_SCHEMA[type] || {});
-  ['GEOMETRY', 'MORPH', 'MESH', 'ROLLBACK', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach(
+  ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach(
     (group) => {
       applySchema(PARAM_SCHEMA[group] || {});
     }

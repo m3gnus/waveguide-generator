@@ -63,12 +63,6 @@ export function generateMWGConfigContent(params) {
         content += `r0 = ${params.r0}\n`;
         if (params.tmax !== 1.0) content += `tmax = ${params.tmax}\n`;
         content += '}\n';
-
-        if (params.rollback) {
-            content += `Rollback = 1\n`;
-            content += `Rollback.Angle = ${params.rollbackAngle}\n`;
-            content += `Rollback.StartAt = ${params.rollbackStart}\n`;
-        }
     } else {
         if (params.throatProfile !== undefined) {
             content += `Throat.Profile = ${formatValue(params.throatProfile)}\n`;

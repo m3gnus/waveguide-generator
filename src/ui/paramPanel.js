@@ -160,16 +160,6 @@ export class ParamPanel {
             this.container.appendChild(morphSection);
         }
 
-        // --- Rollback (R-OSSE primarily, but available for both) ---
-        if (type === 'R-OSSE') {
-            const rollSection = this.createDetailsSection('Mouth Rollback', 'rollback-details');
-            const rollSchema = PARAM_SCHEMA.ROLLBACK;
-            for (const [key, def] of Object.entries(rollSchema)) {
-                rollSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-            this.container.appendChild(rollSection);
-        }
-
         // --- Enclosure & Wall (available for both OSSE and R-OSSE) ---
         const meshSchema = PARAM_SCHEMA.MESH || {};
         const enclosureSection = this.createDetailsSection('Enclosure', 'enclosure-details');
