@@ -22,6 +22,7 @@
   "license": "MIT",
   "dependencies": {
     "express": "^5.2.1",
+    "opencascade.js": "^1.1.1",
     "three": "^0.160.0"
   },
   "devDependencies": {

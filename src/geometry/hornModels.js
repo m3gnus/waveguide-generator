@@ -3,20 +3,8 @@
  * Contains logic for OSSE and R-OSSE profile calculations.
  */
 
-const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
-const toRad = (deg) => (deg * Math.PI) / 180;
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+import { evalParam, toRad, clamp, parseNumberList } from './common.js';
 
-const parseNumberList = (value) => {
-    if (!value) return null;
-    if (Array.isArray(value)) return value.map((v) => Number(v)).filter((v) => Number.isFinite(v));
-    if (typeof value === 'string') {
-        const parts = value.split(',').map((v) => v.trim()).filter(Boolean);
-        const nums = parts.map((v) => Number(v)).filter((v) => Number.isFinite(v));
-        return nums.length ? nums : null;
-    }
-    return null;
-};
 
 function getGuidingCurveRadius(p, params) {
     const type = Number(params.gcurveType || 0);

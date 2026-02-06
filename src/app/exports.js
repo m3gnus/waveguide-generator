@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import {
   exportHornToMSHWithBoundaries,
+  exportHornToMSHFromCAD,
   exportProfilesCSV,
   exportGmshGeo as exportGmshGeoContent,
   generateMWGConfigContent,
@@ -10,6 +11,7 @@ import {
   generateAbecObservationFile
 } from '../export/index.js';
 import { buildHornMesh } from '../geometry/index.js';
+import { isCADReady, buildForMSH } from '../cad/index.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { GlobalState } from '../state.js';
 
@@ -88,9 +90,17 @@ export function exportGmshGeo(app) {
 
 /**
  * Export the horn mesh to Gmsh .msh format.
+ * Uses the CAD pipeline when available, falls back to legacy mesh builder.
  * @param {Object} app
  */
-export function exportMSH(app) {
+export async function exportMSH(app) {
+  if (app.useCAD && isCADReady()) {
+    return exportMSHFromCAD(app);
+  }
+  return exportMSHLegacy(app);
+}
+
+function exportMSHLegacy(app) {
   const preparedParams = app.prepareParamsForMesh({
     forceFullQuadrants: false,
     applyVerticalOffset: true
@@ -114,8 +124,40 @@ export function exportMSH(app) {
   });
 }
 
+async function exportMSHFromCAD(app) {
+  const preparedParams = app.prepareParamsForMesh({
+    forceFullQuadrants: false,
+    applyVerticalOffset: true
+  });
+
+  app.stats.innerText = 'Building CAD mesh for MSH export...';
+  try {
+    const { vertices, indices, faceGroups, faceMapping } = await buildForMSH(preparedParams, {
+      numStations: preparedParams.lengthSegments || 30,
+      numAngles: preparedParams.angularSegments || 64,
+      includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
+      linearDeflection: 0.3,
+      angularDeflection: 0.2
+    });
+
+    const msh = exportHornToMSHFromCAD(vertices, indices, faceGroups, faceMapping);
+
+    saveFile(msh, 'mesh.msh', {
+      extension: '.msh',
+      contentType: 'text/plain',
+      typeInfo: { description: 'Gmsh Mesh', accept: { 'text/plain': ['.msh'] } }
+    });
+    app.stats.innerText = 'MSH export complete (CAD)';
+  } catch (err) {
+    console.error('[exports] CAD MSH export failed:', err);
+    app.stats.innerText = `CAD MSH error: ${err.message}`;
+    alert(`CAD MSH export failed: ${err.message}`);
+  }
+}
+
 /**
  * Export an ABEC project bundle (project + solving + observation + mesh files).
+ * Uses the CAD pipeline for mesh generation when available.
  * @param {Object} app
  * @returns {Promise<void>}
  */
@@ -124,14 +166,38 @@ export async function exportABECProject(app) {
     forceFullQuadrants: false,
     applyVerticalOffset: true
   });
-  const { vertices, indices, groups, ringCount } = buildHornMesh(preparedParams, {
-    includeEnclosure: true,
-    includeRearShape: true,
-    collectGroups: true
-  });
-  if (!indices || indices.length === 0) {
-    alert('Mesh indices are missing. Please re-render the model and try again.');
-    return;
+
+  // Generate the MSH content — CAD or legacy path
+  let meshContent;
+  if (app.useCAD && isCADReady()) {
+    try {
+      app.stats.innerText = 'Building CAD mesh for ABEC export...';
+      const { vertices, indices, faceGroups, faceMapping } = await buildForMSH(preparedParams, {
+        numStations: preparedParams.lengthSegments || 30,
+        numAngles: preparedParams.angularSegments || 64,
+        includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
+        linearDeflection: 0.3,
+        angularDeflection: 0.2
+      });
+      meshContent = exportHornToMSHFromCAD(vertices, indices, faceGroups, faceMapping);
+    } catch (err) {
+      console.error('[exports] CAD MSH failed for ABEC:', err);
+      app.stats.innerText = `CAD MSH error: ${err.message}`;
+      alert(`CAD MSH export failed for ABEC: ${err.message}`);
+      return;
+    }
+  } else {
+    // Legacy path (only when useCAD is false)
+    const { vertices, indices, groups, ringCount } = buildHornMesh(preparedParams, {
+      includeEnclosure: true,
+      includeRearShape: true,
+      collectGroups: true
+    });
+    if (!indices || indices.length === 0) {
+      alert('Mesh indices are missing. Please re-render the model and try again.');
+      return;
+    }
+    meshContent = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups, { ringCount });
   }
 
   const baseName = getExportBaseName();
@@ -161,7 +227,8 @@ export async function exportABECProject(app) {
     normAngle: Number.isFinite(polarNormAngle) ? polarNormAngle : 5,
     inclination: Number.isFinite(polarInclination) ? polarInclination : 0
   });
-  const meshContent = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups, { ringCount });
+
+  app.stats.innerText = 'Saving ABEC project files...';
 
   await saveFile(projectContent, projectFileName, {
     baseName: projectBase,
@@ -190,4 +257,6 @@ export async function exportABECProject(app) {
     contentType: 'text/plain',
     typeInfo: { description: 'Gmsh Mesh', accept: { 'text/plain': ['.msh'] } }
   });
+
+  app.stats.innerText = 'ABEC project exported';
 }

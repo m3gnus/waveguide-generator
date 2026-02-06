@@ -58,12 +58,33 @@ export function renderModel(app) {
     forceFullQuadrants: true,
     applyVerticalOffset: true
   });
+
+  // Viewport always uses the formula-based mesh — evaluates profile math
+  // directly at every grid point. CAD pipeline is used only for export
+  // (STEP, MSH, ABEC) where exact parametric geometry matters.
   const { vertices, indices } = buildHornMesh(preparedParams);
+  applyMeshToScene(app, vertices, indices, preparedParams);
+}
+
+/**
+ * Apply vertex/index data to the Three.js scene.
+ */
+function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
+  if (app.hornMesh) {
+    app.scene.remove(app.hornMesh);
+    app.hornMesh.geometry.dispose();
+    app.hornMesh.material.dispose();
+  }
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
+  geometry.setIndex(Array.from(indices));
+
+  if (normals && normals.length === vertices.length) {
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  } else {
+    geometry.computeVertexNormals();
+  }
 
   const displayMode = document.getElementById('display-mode')?.value || 'standard';
   let material;
@@ -74,7 +95,6 @@ export function renderModel(app) {
       side: THREE.DoubleSide
     });
   } else if (displayMode === 'curvature') {
-    // Need segments for curvature
     const ang = preparedParams.angularSegments || 80;
     const len = preparedParams.lengthSegments || 20;
     const colors = calculateCurvatureColors(geometry, ang, len);
