@@ -4,7 +4,7 @@
  */
 import { calculateOSSE, calculateROSSE } from '../geometry/hornModels.js';
 
-const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
+import { evalParam } from '../geometry/common.js';
 
 /**
  * Generate SVG cross-section of horn profile at specified axial position

@@ -15,7 +15,7 @@ const symmetryMap = {
     '1': 'xy'
 };
 
-const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
+import { evalParam } from '../geometry/common.js';
 
 function normalizeAbscissa(value) {
     if (value === undefined || value === null) return 'log';

@@ -170,27 +170,33 @@ export class ParamPanel {
             this.container.appendChild(rollSection);
         }
 
-        // --- Mesh Enclosure (Shared) ---
+        // --- Enclosure & Wall (available for both OSSE and R-OSSE) ---
         const meshSchema = PARAM_SCHEMA.MESH || {};
-        const enclosureSection = this.createDetailsSection('Mesh Enclosure', 'mesh-enclosure-details');
+        const enclosureSection = this.createDetailsSection('Enclosure', 'enclosure-details');
 
-        if (type === 'OSSE') {
-            const encSchema = PARAM_SCHEMA.ENCLOSURE;
-            if (encSchema) {
-                for (const [key, def] of Object.entries(encSchema)) {
-                    // Combine space L/T/R/B into one row? For now, list them.
-                    enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
-                }
-            }
-        }
-
-        const meshEnclosureKeys = ['wallThickness', 'rearShape'];
-        meshEnclosureKeys.forEach((key) => {
+        // Wall thickness and rear shape (moved from Simulation → Geometry tab)
+        const geomMeshKeys = ['wallThickness', 'rearShape'];
+        geomMeshKeys.forEach((key) => {
             const def = meshSchema[key];
             if (def) {
                 enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
             }
         });
+
+        // All enclosure parameters (now visible for both OSSE and R-OSSE)
+        const encSchema = PARAM_SCHEMA.ENCLOSURE;
+        if (encSchema) {
+            for (const [key, def] of Object.entries(encSchema)) {
+                enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+        }
+
+        // Vertical offset (geometric, not mesh-density)
+        const vertOffsetDef = meshSchema.verticalOffset;
+        if (vertOffsetDef) {
+            enclosureSection.appendChild(this.createControlRow('verticalOffset', vertOffsetDef, state.params.verticalOffset));
+        }
+
         this.container.appendChild(enclosureSection);
 
         // --- Geometry Advanced (at bottom of Geometry tab) ---
@@ -219,32 +225,30 @@ export class ParamPanel {
             }
             this.simulationContainer.appendChild(sourceSection);
 
-            // Combined Mesh section - all mesh parameters together
-            const combinedMeshSection = this.createDetailsSection('Mesh', 'mesh-details');
+            // Mesh density section (simulation-only parameters)
+            const combinedMeshSection = this.createDetailsSection('Mesh Density', 'mesh-details');
 
-            // First add the main mesh parameters (Angular Segs, Length Segs, Corner Segs, Quadrants)
-            const meshEnclosureKeys = new Set(['wallThickness', 'rearShape']);
-            const meshAdvancedKeys = [
+            // Params moved to Geometry tab — skip here
+            const geomTabKeys = new Set(['wallThickness', 'rearShape', 'verticalOffset']);
+
+            // Mesh density parameters (affect tessellation, not geometry shape)
+            const meshDensityOrder = [
+                'angularSegments',
+                'lengthSegments',
+                'cornerSegments',
+                'quadrants',
                 'throatSegments',
                 'throatResolution',
                 'mouthResolution',
-                'verticalOffset',
+                'rearResolution',
                 'zMapPoints',
                 'subdomainSlices',
                 'interfaceOffset',
-                'interfaceDraw',
-                'rearResolution'
+                'interfaceDraw'
             ];
-            const meshAdvancedKeysSet = new Set(meshAdvancedKeys);
 
-            // Add main mesh parameters first
-            for (const [key, def] of Object.entries(meshSchema)) {
-                if (meshEnclosureKeys.has(key) || meshAdvancedKeysSet.has(key)) continue;
-                combinedMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-
-            // Then add advanced mesh parameters
-            meshAdvancedKeys.forEach((key) => {
+            meshDensityOrder.forEach((key) => {
+                if (geomTabKeys.has(key)) return;
                 const def = meshSchema[key];
                 if (def) {
                     combinedMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));

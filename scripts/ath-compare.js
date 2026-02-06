@@ -330,17 +330,27 @@ function run() {
       continue;
     }
 
-    // GEO (horn only, full quadrants, no vertical offset - for Gmsh processing)
+    const isSplineRef = fs.existsSync(path.join(folderPath, 'bem_mesh.geo')) ||
+      fs.existsSync(path.join(folderPath, 'ABEC_FreeStanding', 'bem_mesh.geo'));
+    const geoRefPath = isSplineRef
+      ? (fs.existsSync(path.join(folderPath, 'bem_mesh.geo')) ? path.join(folderPath, 'bem_mesh.geo') : path.join(folderPath, 'ABEC_FreeStanding', 'bem_mesh.geo'))
+      : referenceGeo;
+
+    // GEO (horn only, full quadrants, offset depends on ref type)
     const geoParams = prepareParamsForMesh(params, type, {
       forceFullQuadrants: true,
-      applyVerticalOffset: false
+      applyVerticalOffset: isSplineRef
     });
     const geoMesh = buildHornMesh(geoParams, {
       includeEnclosure: false,
       includeRearShape: false
     });
+
     const geoOut = path.join(outDir, 'mesh.geo');
-    const geoContent = exportFullGeo(geoMesh.vertices, geoParams, { outputName: baseName });
+    const geoContent = exportFullGeo(geoMesh.vertices, geoParams, {
+      outputName: baseName,
+      useSplines: isSplineRef
+    });
     fs.writeFileSync(geoOut, geoContent);
 
     // STL (horn only, full quadrants, no vertical offset)
@@ -351,7 +361,7 @@ function run() {
 
     // MSH (with enclosure)
     const mshParams = prepareParamsForMesh(params, type, {
-      forceFullQuadrants: false,
+      forceFullQuadrants: true,
       applyVerticalOffset: true
     });
     const mshMesh = buildHornMesh(mshParams, {
@@ -360,20 +370,39 @@ function run() {
       collectGroups: true
     });
     const mshOut = path.join(outDir, `${baseName}.msh`);
-    const mshContent = exportHornToMSHWithBoundaries(
-      mshMesh.vertices,
-      mshMesh.indices,
-      mshParams,
-      mshMesh.groups,
-      { ringCount: mshMesh.ringCount }
-    );
-    fs.writeFileSync(mshOut, mshContent);
+
+    // Use Gmsh to generate MSH if we have a Spline reference
+    let mshGeneratedByGmsh = false;
+    if (isSplineRef) {
+      try {
+        const { execSync } = require('child_process');
+        const mesherTool = path.resolve(process.cwd(), 'scripts', 'gmsh_mesher.py');
+        const absGeoOut = path.resolve(geoOut);
+        const absMshOut = path.resolve(mshOut);
+        // We use a large element size to respect the values in the .geo points
+        execSync(`python3 "${mesherTool}" "${absGeoOut}" "${absMshOut}" --element-size 100`, { stdio: 'ignore' });
+        mshGeneratedByGmsh = true;
+      } catch (err) {
+        console.warn(`  Gmsh meshing failed for ${baseName}, falling back to structured export.`);
+      }
+    }
+
+    if (!mshGeneratedByGmsh) {
+      const mshContent = exportHornToMSHWithBoundaries(
+        mshMesh.vertices,
+        mshMesh.indices,
+        mshParams,
+        mshMesh.groups,
+        { ringCount: mshMesh.ringCount }
+      );
+      fs.writeFileSync(mshOut, mshContent);
+    }
 
     const record = { name: baseName };
 
     // Compare GEO files
-    if (fs.existsSync(referenceGeo)) {
-      record.geo = compareTextFiles(geoOut, referenceGeo);
+    if (fs.existsSync(geoRefPath)) {
+      record.geo = compareTextFiles(geoOut, geoRefPath);
     } else {
       record.geo = { equal: false, reason: 'missing reference GEO' };
     }

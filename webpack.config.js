@@ -22,7 +22,24 @@ export default {
     experiments: {
         outputModule: true
     },
+    module: {
+        rules: [
+            {
+                test: /\.wasm$/,
+                type: 'asset/resource'
+            }
+        ]
+    },
     resolve: {
-        extensions: ['.js']
+        extensions: ['.js'],
+        fallback: {
+            fs: false,
+            path: false,
+            perf_hooks: false,
+            os: false,
+            worker_threads: false,
+            crypto: false,
+            stream: false
+        }
     }
 };

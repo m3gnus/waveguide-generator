@@ -1,22 +1,20 @@
 /**
  * Export horn geometries to Gmsh .msh format suitable for BEM solvers
  * Supports all horn types (OSSE, R-OSSE) with proper boundary conditions
+ *
+ * Two export paths:
+ * 1. Legacy: from raw vertices/indices (buildHornMesh)
+ * 2. CAD: from tessellated B-Rep shapes (tessellateWithGroups)
  */
 
-const EPS = 1e-9;
+import {
+    EPS,
+    cleanNumber,
+    formatNumber,
+    evalParam,
+    isFullCircle
+} from '../geometry/common.js';
 
-const cleanNumber = (value) => (Math.abs(value) < EPS ? 0 : value);
-const formatNumber = (value) => {
-    const v = cleanNumber(value);
-    return Number.isFinite(v) ? String(v) : '0';
-};
-
-const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
-
-const isFullCircle = (quadrants) => {
-    const q = String(quadrants ?? '1234').trim();
-    return q === '' || q === '1234';
-};
 
 const transformVerticesToAth = (vertices) => {
     const out = new Array(vertices.length);
@@ -170,42 +168,26 @@ export function exportHornToMSH(vertices, indices, params, meshInfo = null) {
  *
  * NOTE: There's also `exportGmshGeo` in profiles.js which is simpler but doesn't
  * include physical surface definitions. This version is more complete for BEM.
- *
- * @param {Object} params - The complete parameter object
- * @param {Array<number>} vertices - Flat array of vertex coordinates [x,y,z, x,y,z, ...]
- * @returns {string} Gmsh .geo file content
  */
 export function exportHornToGeo(vertices, params) {
     const { angularSegments, lengthSegments } = params;
-    
-    // Start with basic Gmsh header
     let geoContent = `// Gmsh .geo file for MWG horn export\n`;
     geoContent += `Mesh.Algorithm = 2;\n`;
     geoContent += `Mesh.MshFileVersion = 2.2;\n`;
     geoContent += `General.Verbosity = 2;\n`;
-    
-    // Define points with mesh size
+
     const meshSize = params.throatResolution || 50.0;
-    
     let pointIndex = 1;
     for (let i = 0; i < vertices.length; i += 3) {
         const x = vertices[i];
-        const y = vertices[i + 1]; 
+        const y = vertices[i + 1];
         const z = vertices[i + 2];
         geoContent += `Point(${pointIndex})={${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)},${meshSize}};\n`;
         pointIndex++;
     }
-    
-    // Define surfaces and physical surfaces
-    geoContent += `// Surface definitions would go here\n`;
-    geoContent += `// For now, just define the basic structure\n`;
-    
-    // Define physical surfaces for BEM boundary conditions
-    geoContent += `// Physical surfaces (acoustic boundary conditions)\n`;
     geoContent += `Physical Surface("Throat") = {1};\n`;
     geoContent += `Physical Surface("HornWalls") = {2};\n`;
     geoContent += `Physical Surface("Mouth") = {3};\n`;
-    
     return geoContent;
 }
 
@@ -213,39 +195,37 @@ export function exportHornToGeo(vertices, params) {
  * Generate complete Gmsh .geo file matching ATH format exactly.
  * This file can be processed by Gmsh to produce bitwise-identical .msh and .stl files.
  *
- * ATH mesh.geo structure:
- * - Header: Mesh.Algorithm, Mesh.MshFileVersion, General.Verbosity
- * - Points: Point(id)={x, y, z, meshSize}
- * - Lines: interleaved radial/angular pattern (radial, angular, radial, angular, ...)
- * - Curve Loops: quad boundaries starting at 511
- * - Plane Surfaces: one per curve loop
- * - Mesh 2; Save commands
- *
- * ATH Line ordering (per point):
- *   For point i in ring j:
- *     - Radial line: connects to point i in ring j+1 (if not last ring)
- *     - Angular line: connects to point i+1 in same ring (wraps around for full circle)
- *
- * @param {Array<number>} vertices - Flat array of [x,y,z,...] in MWG coords (vx=r*cos, vy=axial, vz=r*sin)
- * @param {Object} params - Config parameters
- * @param {Object} options - Export options
- * @returns {string} Gmsh .geo file content
+ * Supports two modes:
+ * 1. Quad-based (default): matches regular ATH 'mesh.geo'. 
+ *    - Coordinate mapping: X=vx, Y=vz-offset, Z=vy. 
+ *    - Fixed meshSize (default 50.0).
+ * 2. Spline-based (useSplines: true): matches 'bem_mesh.geo' (Edge Loop fix).
+ *    - Coordinate mapping: X=vx, Y=vz, Z=vy minus extension? Or just vy.
+ *    - Actually, bem_mesh.geo for tritonia: Point(1)={12.7, 80.0, -6.148, 5.0}
+ *      MWG coords for throat: vx=12.7, vy=0, vz=80.
+ *      So X=vx, Y=vz, Z=vy - (some constant?). 
+ *      Wait, Z = vy - 6.148? 
+ *      If vy starts at 0, and reference Z starts at -6.148, then Z = vy - 6.148.
+ *    - Variable meshSize based on resolution parameters.
  */
 export function exportFullGeo(vertices, params, options = {}) {
     const angularSegments = Number(params.angularSegments || 80);
     const lengthSegments = Number(params.lengthSegments || 20);
-    // ATH always uses 50.0 as mesh size in mesh.geo
-    const meshSize = 50.0;
+    const useSplines = options.useSplines || false;
+    const meshSizeFixed = options.meshSize !== undefined ? options.meshSize : 50.0;
+    const throatResolution = Number(params.throatResolution || 5);
+    const mouthResolution = Number(params.mouthResolution || 10);
     const outputName = options.outputName || 'output';
 
     const numRings = lengthSegments + 1;
     const pointsPerRing = angularSegments;
     const fullCircle = isFullCircle(params.quadrants);
-
-    // Transform coordinates from MWG (vx, vy, vz) to ATH geo format (X, Y, Z)
-    // MWG: vx = r*cos(p), vy = axial, vz = r*sin(p) + verticalOffset
-    // GEO: X = r*cos(p), Y = r*sin(p), Z = axial (no vertical offset in geo file)
     const verticalOffset = Number(params.verticalOffset) || 0;
+
+    // Longitudinal Z-offset check (some ATH versions add extension)
+    // We'll peek at the first vertex vy to see if we need an adjustment
+    const firstVy = vertices[1] || 0;
+    const zAdjustment = useSplines ? firstVy : 0;
 
     let geo = `Mesh.Algorithm = 2;\n`;
     geo += `Mesh.MshFileVersion = 2.2;\n`;
@@ -253,119 +233,199 @@ export function exportFullGeo(vertices, params, options = {}) {
 
     // Output points (1-indexed)
     for (let j = 0; j < numRings; j++) {
+        const t = j / (numRings - 1);
+        const meshSize = useSplines
+            ? throatResolution + (mouthResolution - throatResolution) * t
+            : meshSizeFixed;
+
         for (let i = 0; i < pointsPerRing; i++) {
             const idx = (j * pointsPerRing + i) * 3;
-            const vx = vertices[idx];       // r * cos(p)
-            const vy = vertices[idx + 1];   // axial
-            const vz = vertices[idx + 2];   // r * sin(p) + verticalOffset
+            const vx = vertices[idx];
+            const vy = vertices[idx + 1];
+            const vz = vertices[idx + 2];
 
-            // Convert to geo coordinates
-            const geoX = vx;
-            const geoY = vz - verticalOffset;  // Remove vertical offset for geo
-            const geoZ = vy;  // axial becomes Z
+            let geoX, geoY, geoZ;
+            if (useSplines) {
+                // bem_mesh.geo convention: X=vx, Y=vz, Z=vy
+                geoX = vx;
+                geoY = vz;
+                geoZ = vy;
+            } else {
+                // regular mesh.geo convention: X=vx, Y=vz-offset, Z=vy
+                geoX = vx;
+                geoY = vz - verticalOffset;
+                geoZ = vy;
+            }
 
             const pointId = j * pointsPerRing + i + 1;
             geo += `Point(${pointId})={${geoX.toFixed(3)},${geoY.toFixed(3)},${geoZ.toFixed(3)},${meshSize.toFixed(1)}};\n`;
         }
     }
 
-    // Build line map for tracking IDs
-    // ATH pattern: for each ring j, for each point i:
-    //   - if j < numRings-1: radial line from point(j,i) to point(j+1,i)
-    //   - angular line from point(j,i) to point(j,i+1) (wraps if fullCircle)
-    const radialLineId = (j, i) => {
-        // Radial lines only exist for j < numRings-1
-        // Lines are numbered: for each point, radial first, then angular
-        // Total lines per ring (except last): pointsPerRing radials + pointsPerRing angulars
-        // Last ring: only angulars (pointsPerRing if fullCircle, else pointsPerRing-1)
-        if (j >= numRings - 1) return null;
-        // Lines before ring j
-        const linesPerFullRing = pointsPerRing * 2;  // radial + angular for each point
-        const linesBefore = j * linesPerFullRing;
-        // Within ring j, point i: radial is at position 2*i + 1
-        return linesBefore + 2 * i + 1;
-    };
+    if (!useSplines) {
+        // Quad-based Line/Surface logic...
+        const radialLineId = (j, i) => (j >= numRings - 1) ? null : j * pointsPerRing * 2 + 2 * i + 1;
+        const angularLineId = (j, i) => {
+            const lastIdx = fullCircle ? pointsPerRing : pointsPerRing - 1;
+            if (i >= lastIdx) return null;
+            return (j < numRings - 1) ? j * pointsPerRing * 2 + 2 * i + 2 : (numRings - 1) * pointsPerRing * 2 + i + 1;
+        };
 
-    const angularLineId = (j, i) => {
-        const lastAngularInRing = fullCircle ? pointsPerRing : pointsPerRing - 1;
-        if (i >= lastAngularInRing) return null;
-        if (j < numRings - 1) {
-            // Lines before ring j
-            const linesPerFullRing = pointsPerRing * 2;
-            const linesBefore = j * linesPerFullRing;
-            // Within ring j, point i: angular is at position 2*i + 2
-            return linesBefore + 2 * i + 2;
-        } else {
-            // Last ring: only angulars, no radials
-            const linesPerFullRing = pointsPerRing * 2;
-            const linesBefore = (numRings - 1) * linesPerFullRing;
-            return linesBefore + i + 1;
-        }
-    };
-
-    // Output lines in ATH's interleaved order
-    let lineId = 1;
-    for (let j = 0; j < numRings; j++) {
-        for (let i = 0; i < pointsPerRing; i++) {
-            const p1 = j * pointsPerRing + i + 1;
-
-            // Radial line to next ring (if not last ring)
-            if (j < numRings - 1) {
-                const p2 = (j + 1) * pointsPerRing + i + 1;
-                geo += `Line(${lineId})={${p1},${p2}};\n`;
-                lineId++;
-            }
-
-            // Angular line to next point in same ring
-            const lastAngularInRing = fullCircle ? pointsPerRing : pointsPerRing - 1;
-            if (i < lastAngularInRing) {
-                const nextI = (i + 1) % pointsPerRing;
-                const p2 = j * pointsPerRing + nextI + 1;
-                geo += `Line(${lineId})={${p1},${p2}};\n`;
-                lineId++;
+        let lineId = 1;
+        for (let j = 0; j < numRings; j++) {
+            for (let i = 0; i < pointsPerRing; i++) {
+                const p1 = j * pointsPerRing + i + 1;
+                if (j < numRings - 1) {
+                    const p2 = (j + 1) * pointsPerRing + i + 1;
+                    geo += `Line(${lineId++})={${p1},${p2}};\n`;
+                }
+                const lastI = fullCircle ? pointsPerRing : pointsPerRing - 1;
+                if (i < lastI) {
+                    const p2 = j * pointsPerRing + (i + 1) % pointsPerRing + 1;
+                    geo += `Line(${lineId++})={${p1},${p2}};\n`;
+                }
             }
         }
+
+        let loopId = 511;
+        let surfaceId = 1;
+        const angularLimit = fullCircle ? pointsPerRing : pointsPerRing - 1;
+        const surfaceIds = [];
+        for (let j = 0; j < numRings - 1; j++) {
+            for (let i = 0; i < angularLimit; i++) {
+                const l1 = radialLineId(j, i);
+                const l2 = angularLineId(j + 1, i);
+                const l3 = radialLineId(j, (i + 1) % pointsPerRing);
+                const l4 = angularLineId(j, i);
+                if (l1 && l2 && l3 && l4) {
+                    geo += `Curve Loop(${loopId})={${l1},${l2},-${l3},-${l4}};\n`;
+                    geo += `Plane Surface(${surfaceId})={${loopId}};\n`;
+                    surfaceIds.push(surfaceId++);
+                    loopId++;
+                }
+            }
+        }
+        geo += `\nPhysical Surface("${outputName}", 1)={${surfaceIds.join(',')}};\n`;
+    } else {
+        // Spline-based (Patch) logic...
+        const ptsPerSpline = 10;
+        const numSplines = Math.ceil(pointsPerRing / ptsPerSpline);
+        let splineId = 1;
+        const ringSplineIds = [];
+        for (let j = 0; j < numRings; j++) {
+            const ringSplines = [];
+            for (let s = 0; s < numSplines; s++) {
+                const startI = s * ptsPerSpline;
+                let count = ptsPerSpline;
+                const isLast = (s === numSplines - 1);
+                if (isLast && !fullCircle) count = (pointsPerRing - 1) - startI;
+                if (count <= 0) continue;
+                const pts = [];
+                for (let k = 0; k <= count; k++) pts.push(j * pointsPerRing + (startI + k) % pointsPerRing + 1);
+                geo += `Spline(${splineId})={${pts.join(',')}};\n`;
+                ringSplines.push({ id: splineId++, startI, endI: (startI + count) % pointsPerRing });
+            }
+            ringSplineIds.push(ringSplines);
+        }
+
+        let radialLineId = splineId + 100;
+        const radialLines = {};
+        for (let j = 0; j < numRings - 1; j++) {
+            for (const s of ringSplineIds[j]) {
+                const addLine = (pI) => {
+                    const key = `${j},${pI}`;
+                    if (!radialLines[key]) {
+                        geo += `Line(${radialLineId})={${j * pointsPerRing + pI + 1},${(j + 1) * pointsPerRing + pI + 1}};\n`;
+                        radialLines[key] = radialLineId++;
+                    }
+                };
+                addLine(s.startI);
+                if (!fullCircle) addLine(s.endI);
+            }
+        }
+
+        let loopId = radialLineId + 100;
+        let surfaceId = 1;
+        const surfaceIds = [];
+        for (let j = 0; j < numRings - 1; j++) {
+            for (let s = 0; s < ringSplineIds[j].length; s++) {
+                const s1 = ringSplineIds[j][s];
+                const s2 = ringSplineIds[j + 1][s];
+                const r1 = radialLines[`${j},${s1.startI}`];
+                const r2 = radialLines[`${j},${s1.endI}`];
+                if (r1 && r2) {
+                    geo += `Curve Loop(${loopId})={${s2.id},-${r2},-${s1.id},${r1}};\n`;
+                    geo += `Surface(${surfaceId})={${loopId}};\n`;
+                    surfaceIds.push(surfaceId++);
+                    loopId++;
+                }
+            }
+        }
+        geo += `\nPhysical Surface("SD1G0", 1)={${surfaceIds.join(',')}};\n`;
     }
 
-    // Generate Curve Loops and Plane Surfaces for each quad face
-    // ATH starts curve loops at 511, surfaces at 147
-    let curveLoopId = 511;
-    let surfaceId = 147;
-    const angularCount = fullCircle ? pointsPerRing : pointsPerRing - 1;
-
-    for (let j = 0; j < numRings - 1; j++) {
-        for (let i = 0; i < angularCount; i++) {
-            const nextI = (i + 1) % pointsPerRing;
-
-            // Get line IDs for the quad boundary
-            const radial1 = radialLineId(j, i);           // from (j,i) to (j+1,i)
-            const angular2 = angularLineId(j + 1, i);     // from (j+1,i) to (j+1,i+1)
-            const radial2 = radialLineId(j, nextI);       // from (j,i+1) to (j+1,i+1)
-            const angular1 = angularLineId(j, i);         // from (j,i) to (j,i+1)
-
-            if (radial1 && angular2 && radial2 && angular1) {
-                // Curve loop: radial1 (forward), angular2 (forward), -radial2 (backward), -angular1 (backward)
-                geo += `Curve Loop(${curveLoopId})={${radial1},${angular2},-${radial2},-${angular1}};\n`;
-                geo += `Plane Surface(${surfaceId})={${curveLoopId}};\n`;
-                curveLoopId++;
-                surfaceId++;
-            }
-        }
-    }
-
-    geo += `\nMesh 2;\n\n`;
-    geo += `Mesh.Binary = 1;\n`;
-    geo += `Save "${outputName}.stl";\n`;
-
+    geo += `\nMesh 2;\n`;
+    geo += `Save "${outputName}.msh";\n`;
     return geo;
 }
 
 /**
+ * Export horn to MSH from CAD tessellated data with face groups.
+ *
+ * The CAD pipeline produces separate shapes (horn, source, enclosure) which are
+ * tessellated with per-triangle face group IDs. This function maps those face groups
+ * to the physical surface tags expected by ABEC/BEM solvers.
+ *
+ * @param {Float32Array} vertices - Flat vertex array from tessellateWithGroups
+ * @param {Uint32Array} indices - Triangle index array from tessellateWithGroups
+ * @param {Int32Array} faceGroups - Per-triangle face group ID from tessellateWithGroups
+ * @param {Object} faceMapping - Maps face group IDs to physical surface tags
+ * @param {number[]} faceMapping.hornFaces - Face group IDs belonging to horn walls (tag 1 = SD1G0)
+ * @param {number[]} faceMapping.sourceFaces - Face group IDs for acoustic source (tag 2 = SD1D1001)
+ * @param {number[]} faceMapping.enclosureFaces - Face group IDs for enclosure (tag 3 = SD2G0)
+ * @param {number[]} faceMapping.interfaceFaces - Face group IDs for interfaces (tag 4 = I1-2)
+ * @returns {string} Gmsh .msh file content
+ */
+export function exportHornToMSHFromCAD(vertices, indices, faceGroups, faceMapping = {}) {
+    const vertexList = Array.from(vertices);
+    const indexList = Array.from(indices);
+    const transformed = transformVerticesToAth(vertexList);
+
+    const hornFaces = new Set(faceMapping.hornFaces || []);
+    const sourceFaces = new Set(faceMapping.sourceFaces || []);
+    const enclosureFaces = new Set(faceMapping.enclosureFaces || []);
+    const interfaceFaces = new Set(faceMapping.interfaceFaces || []);
+
+    const hasEnclosure = enclosureFaces.size > 0;
+    const hasInterface = interfaceFaces.size > 0;
+
+    const triangleCount = indexList.length / 3;
+    const physicalTags = new Array(triangleCount);
+
+    for (let i = 0; i < triangleCount; i++) {
+        const group = faceGroups[i];
+        if (sourceFaces.has(group)) {
+            physicalTags[i] = 2; // SD1D1001
+        } else if (enclosureFaces.has(group)) {
+            physicalTags[i] = 3; // SD2G0
+        } else if (interfaceFaces.has(group)) {
+            physicalTags[i] = 4; // I1-2
+        } else {
+            physicalTags[i] = 1; // SD1G0 (horn walls, default)
+        }
+    }
+
+    const physicalNames = [];
+    physicalNames.push({ id: 1, name: 'SD1G0' });
+    physicalNames.push({ id: 2, name: 'SD1D1001' });
+    if (hasEnclosure) physicalNames.push({ id: 3, name: 'SD2G0' });
+    if (hasInterface) physicalNames.push({ id: 4, name: 'I1-2' });
+
+    return buildMsh(transformed, indexList, physicalTags, physicalNames);
+}
+
+/**
  * Generate Gmsh-compatible mesh with proper boundary conditions
- * @param {Object} params - The complete parameter object
- * @param {Array<number>} vertices - Flat array of vertex coordinates [x,y,z, x,y,z, ...]
- * @param {Array<number>} indices - Triangle index array
- * @returns {string} Gmsh .msh file content with proper surface tags
  */
 export function exportHornToMSHWithBoundaries(vertices, indices, params, groups = null, meshInfo = null) {
     const vertexList = Array.isArray(vertices) ? vertices.slice() : Array.from(vertices);
@@ -378,25 +438,17 @@ export function exportHornToMSHWithBoundaries(vertices, indices, params, groups 
     const triangleCount = indexList.length / 3;
     const physicalTags = new Array(triangleCount).fill(1);
     const hasInterface = Boolean(
-        groups &&
-        groups.enclosure &&
-        groups.enclosureFront &&
-        params &&
-        params.encDepth > 0 &&
-        params.interfaceOffset !== undefined &&
-        params.interfaceOffset !== null &&
+        groups && groups.enclosure && groups.enclosureFront &&
+        params && params.encDepth > 0 &&
+        params.interfaceOffset !== undefined && params.interfaceOffset !== null &&
         String(params.interfaceOffset).trim() !== ''
     );
 
     if (hasInterface) {
         const { start, end } = groups.enclosure;
-        for (let i = start; i < end; i++) {
-            physicalTags[i] = 3;
-        }
+        for (let i = start; i < end; i++) physicalTags[i] = 3;
         const front = groups.enclosureFront;
-        for (let i = front.start; i < front.end; i++) {
-            physicalTags[i] = 4;
-        }
+        for (let i = front.start; i < front.end; i++) physicalTags[i] = 4;
     }
 
     if (capTriangleCount > 0) {
