@@ -8,96 +8,8 @@ later ones --- work them top to bottom.
 
 ## Phase 1 -- Remove dead code and unused features
 
-### 1.1 Delete stale documentation files
-
-The following files are already staged for deletion in git. Commit the deletion:
-
-```
-C99_FUNCTIONS_IMPLEMENTATION.md
-CONSOLIDATION_SUMMARY.md
-ENCLOSURE_CONNECTION_FINAL.md
-ENCLOSURE_GAP_FIX.md
-GEOMETRY_REDESIGN_PROPOSAL.md
-GMSH_INTEGRATION_STATUS.md
-SESSION_SUMMARY.md
-docs/ARCHITECTURE.md
-docs/ATH_CALIBRATION.md
-docs/README.md
-src/app/AGENTS.md
-src/config/AGENTS.md
-src/export/AGENTS.md
-src/geometry/AGENTS.md
-src/logging/AGENTS.md
-src/presets/AGENTS.md
-src/results/AGENTS.md
-src/solver/AGENTS.md
-src/ui/AGENTS.md
-src/validation/AGENTS.md
-src/viewer/AGENTS.md
-src/workflow/AGENTS.md
-test_gmsh_integration.js
-test_stl_remesh.js
-```
-
-Also delete `z_values.txt` (see 1.6 below).
-
-Keep only: `README.md`, `server/README.md`, `fixes.md`.
-
----
-
-### 1.2 Remove Mouth Rollback
-
-Rollback adds a toroidal fold at the horn mouth. It should be removed entirely.
-
-**What to remove:**
-
-| Location | What |
-|---|---|
-| `src/config/schema.js` lines 139-152 | Entire `ROLLBACK` section (rollback, rollbackAngle, rollbackStart) |
-| `src/geometry/rollback.js` | The rollback functions: `addRollbackGeometry()`, `addRearShapeGeometry()`. Note: `addRearShapeGeometry` handles both rollback AND rear-shape. Only the rollback part should be removed. If rear shape logic cannot be cleanly separated, move it to `meshBuilder.js` and delete `rollback.js`. |
-| `src/geometry/meshBuilder.js` | Calls to rollback functions |
-| `src/geometry/index.js` | Rollback re-exports |
-| `src/config/parser.js` | Rollback parameter parsing |
-| `src/export/mwgConfig.js` | Rollback config output |
-| `src/ui/paramPanel.js` | Rollback UI section rendering |
-
-**Suggestion:** Inspect `rollback.js` carefully. The `addRearShapeGeometry()` function handles the "Rear Shape" option (None/Full Model/Flat Disc) which is likely still needed. Only the rollback-specific code (the toroidal fold) should be removed. If they are intertwined, refactor rear shape out before deleting.
-
----
-
-### 1.3 Remove Enclosure Plan
-
-The `encPlan` field does not appear to have a working implementation. It is read
-in `enclosure.js:187` but the code path that uses it is not functional.
-
-**What to remove:**
-
-| Location | What |
-|---|---|
-| `src/config/schema.js` line 171 | `encPlan` field definition |
-| `src/geometry/enclosure.js` ~line 187 | `planName` usage |
-| `src/config/parser.js` ~line 212 | `encPlan` parsing from config blocks |
-| `src/export/mwgConfig.js` ~lines 132-133 | `encPlan` config output |
-| `src/ui/paramPanel.js` | Any rendering of the encPlan field |
-
----
-
-### 1.4 Remove LF Source B
-
-All four LF Source B fields (Radius, Spacing, DrivingWeight, SID) should be
-removed. These parameters appear to break or interfere with the system.
-
-**What to remove:**
-
-| Location | What |
-|---|---|
-| `src/config/schema.js` lines 172-175 | All four `lfSourceB*` field definitions |
-| `src/config/parser.js` ~lines 227-233 | `LFSource.B` block parsing |
-| `src/cad/cadEnclosure.js` ~line 182 | `lfSourceBRadius` / `lfSourceBSpacing` usage |
-| `src/ui/paramPanel.js` | Any rendering of LF Source B fields |
-| `src/presets/index.js` | Any preset defaults referencing LF Source B |
-
----
+> **Completed:** 1.1 Delete stale docs, 1.2 Remove Mouth Rollback,
+> 1.3 Remove Enclosure Plan, 1.4 Remove LF Source B
 
 ### 1.5 Remove legacy (non-CAD) MSH export path
 
@@ -157,44 +69,7 @@ in a later cleanup pass. Add a tooltip clarifying its purpose.
 
 ## Phase 2 -- Fix and clarify existing features
 
-### 2.1 Enable Export STEP button
-
-The "Export STEP" button in `index.html` line 44 is currently `disabled`. The
-CAD system (`src/cad/`) already has a working `exportToSTEP()` function and an
-`exportSTEP()` handler in `cadManager.js`. The button just needs to be enabled.
-
-**What to change:**
-
-- `index.html` line 44: remove `disabled` attribute from the Export STEP button.
-- Verify `src/app/App.js:173` (`exportSTEP()`) works end-to-end.
-- The button enable/disable should be managed dynamically in `App.js:165` based
-  on whether OpenCascade is loaded, not hardcoded.
-
----
-
-### 2.2 Clarify Wall Thickness behavior
-
-**Research findings:**
-
-Wall Thickness is NOT dead code. It is actively used in the CAD pipeline:
-
-- `src/cad/cad.worker.js` lines 65-67: if `wallThickness > 0`, the horn shape
-  is thickened via `addWallThickness()`.
-- `src/cad/cadBuilder.js:315`: `addWallThickness()` uses
-  `BRepOffsetAPI_MakeThickSolid` to create a solid shell from the horn surface.
-- It is also referenced in `rollback.js:79` for rollback geometry thickness
-  (which will be removed in 1.2).
-
-**Conclusion:** Wall Thickness is functional. It creates a solid wall of the
-specified thickness on the horn surface in the STEP/CAD output. It does NOT
-affect the viewer mesh (which is always a zero-thickness surface). No removal
-needed.
-
-**Suggestion:** Update the tooltip in `schema.js` to explain: "Thickness of the
-horn wall in the STEP/CAD export. Set to 0 for a zero-thickness surface. Does
-not affect the viewer mesh."
-
----
+> **Completed:** 2.1 Enable Export STEP button, 2.2 Clarify Wall Thickness (tooltip added)
 
 ### 2.3 Investigate viewing .msh in the viewer
 
@@ -255,26 +130,7 @@ not the 3D model.
 
 ## Phase 3 -- UI reorganization
 
-### 3.1 Move Scale into R-OSSE and OSSE subwindows
-
-Currently `scale` is in the GEOMETRY section of the schema (`schema.js:26-34`).
-It should appear inside both the R-OSSE and OSSE parameter groups instead.
-
-**What to change:**
-
-- Remove `scale` from `GEOMETRY` in `schema.js`.
-- Add `scale` to both `R-OSSE` and `OSSE` sections in `schema.js` (same
-  definition, just duplicated in both places).
-- Update `paramPanel.js` rendering logic so that scale appears at the top of
-  whichever horn model section is active.
-- Ensure the parameter key remains `scale` so all downstream code continues
-  working.
-
-**Alternative:** Instead of duplicating the definition, keep a single `scale`
-definition and have `paramPanel.js` render it within the active model section
-dynamically.
-
----
+> **Completed:** 3.1 Move Scale into R-OSSE and OSSE subwindows
 
 ### 3.2 Create unified Mesh Density box
 
@@ -394,51 +250,35 @@ Current `src/geometry/` files:
 
 | File | Purpose | Status |
 |---|---|---|
-| `index.js` | Re-exports | Keep, update after removals |
+| `index.js` | Re-exports | Done |
 | `common.js` | Shared utilities (evalParam, parseList, etc.) | Keep |
 | `expression.js` | Math expression parser | Keep |
 | `hornModels.js` | OSSE/R-OSSE profile calculations | Keep |
-| `meshBuilder.js` | Legacy triangulated mesh builder | Keep (used by viewer) |
+| `meshBuilder.js` | Triangulated mesh builder (viewer) | Keep |
 | `morphing.js` | Circular-to-rectangular throat morphing | Keep |
-| `rollback.js` | Rollback + rear shape geometry | Remove rollback, keep/move rear shape |
-| `enclosure.js` | Rear chamber/enclosure geometry | Keep, remove encPlan logic |
+| `rearShape.js` | Rear shape geometry (was rollback.js) | Done |
+| `enclosure.js` | Rear chamber/enclosure geometry | Done (encPlan removed) |
 
-**After cleanup (Phase 1 removals applied):**
-
-- If rollback removal leaves `rollback.js` with only rear shape code, consider
-  renaming to `rearShape.js` for clarity.
-- `enclosure.js` will have `encPlan` references removed but is otherwise needed.
-- No scripts can be fully combined -- they each serve distinct purposes.
-- `meshBuilder.js` remains needed for the viewer even after MSH export is
-  consolidated to the CAD path.
+Phase 1 removals are complete. No further consolidation needed.
 
 ---
 
-## Summary of all changes by file
+## Summary of remaining changes by file
 
-Quick reference for which files are touched by which tasks:
+Quick reference for which files are touched by remaining tasks:
 
 | File | Tasks |
 |---|---|
-| `index.html` | 2.1, 3.3, 4.1 |
-| `src/config/schema.js` | 1.2, 1.3, 1.4, 2.2, 3.1, 3.2 |
-| `src/config/parser.js` | 1.2, 1.3, 1.4 |
-| `src/geometry/rollback.js` | 1.2 (partial or full delete) |
-| `src/geometry/meshBuilder.js` | 1.2, 2.4 |
-| `src/geometry/enclosure.js` | 1.3 |
-| `src/geometry/index.js` | 1.2 |
+| `index.html` | 3.3, 4.1 |
+| `src/config/schema.js` | 3.2 |
+| `src/geometry/meshBuilder.js` | 2.4 |
 | `src/export/msh.js` | 1.5, 2.4 |
-| `src/export/mwgConfig.js` | 1.2, 1.3, 2.4 |
+| `src/export/mwgConfig.js` | 2.4 |
 | `src/export/index.js` | 1.5 |
 | `src/export/abecProject.js` | 3.3, 4.2 |
-| `src/cad/cadEnclosure.js` | 1.4 |
-| `src/cad/cad.worker.js` | (no change needed, wallThickness stays) |
 | `src/app/exports.js` | 1.5, 4.1 |
-| `src/app/App.js` | 2.1 |
-| `src/app/events.js` | 2.1 |
 | `src/app/params.js` | 2.4 |
-| `src/ui/paramPanel.js` | 1.2, 1.3, 1.4, 3.1, 3.2 |
+| `src/ui/paramPanel.js` | 3.2 |
 | `src/ui/fileOps.js` | 4.1 |
 | `src/ui/simulation/actions.js` | 3.3 |
-| `src/presets/index.js` | 1.4 |
 | `scripts/ath-compare.js` | 1.5 |
