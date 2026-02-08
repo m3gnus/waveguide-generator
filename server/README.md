@@ -18,8 +18,11 @@ python3 -m venv .venv
 ```
 
 Notes:
-- `gmsh` Python wheels are not available for every Python/architecture combination (for example some Python 3.13 Linux targets).
+- `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
 - The `/api/mesh/generate-msh` endpoint also supports the system `gmsh` CLI, so install `gmsh` on PATH if the Python package cannot be installed.
+- For snapshot Gmsh wheels, use:
+  - `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev --force-reinstall --no-cache-dir gmsh`
+  - Headless Linux: `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev-nox --force-reinstall --no-cache-dir gmsh`
 
 ## 2. Run Backend
 

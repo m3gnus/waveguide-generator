@@ -1,9 +1,17 @@
 import { spawn } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
+const serverDir = path.join(rootDir, 'server');
+const venvPythonUnix = path.join(rootDir, '.venv', 'bin', 'python');
+const venvPythonWindows = path.join(rootDir, '.venv', 'Scripts', 'python.exe');
+const backendPython = process.env.PYTHON_BIN
+  || (fs.existsSync(venvPythonUnix) ? venvPythonUnix : null)
+  || (fs.existsSync(venvPythonWindows) ? venvPythonWindows : null)
+  || 'python3';
 
 console.log('╔══════════════════════════════════════════════════════════════╗');
 console.log('║  WG - Waveguide Generator                     ║');
@@ -19,8 +27,8 @@ const frontend = spawn('node', ['scripts/dev-server.js'], {
 });
 
 // Start backend server
-const backend = spawn('python3', ['app.py'], {
-  cwd: path.join(rootDir, 'server'),
+const backend = spawn(backendPython, ['app.py'], {
+  cwd: serverDir,
   stdio: 'inherit'
 });
 
@@ -44,8 +52,9 @@ backend.on('error', (err) => {
   console.error('❌ Backend server error:', err);
   console.error('');
   console.error('💡 Backend failed to start. This might be because:');
-  console.error('   - Python dependencies are not installed');
-  console.error('   - Run: cd server && pip3 install -r requirements.txt');
+  console.error(`   - Python command is not available: ${backendPython}`);
+  console.error('   - Backend dependencies are not installed in .venv');
+  console.error('   - Run: python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt');
   console.error('');
   console.error('The frontend will still work, but simulations will use mock data.');
 });
@@ -68,6 +77,7 @@ console.log('');
 console.log('📡 Servers starting...');
 console.log('   Frontend: http://localhost:3000');
 console.log('   Backend:  http://localhost:8000');
+console.log(`   Python:   ${backendPython}`);
 console.log('');
 console.log('Press Ctrl+C to stop both servers');
 console.log('');
