@@ -15,7 +15,7 @@ app.get(/.*/, (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 MWG - Mathematical Waveguide Generator running at http://localhost:${PORT}`);
+  console.log(`\n🚀 WG - Waveguide Generator running at http://localhost:${PORT}`);
   console.log(`\nAvailable endpoints:`);
   console.log(`  - http://localhost:${PORT}/`);
 });
