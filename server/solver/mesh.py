@@ -2,6 +2,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 
 from .deps import GMSH_AVAILABLE, bempp_api, gmsh
+from .gmsh_geo_mesher import gmsh_lock
 
 
 def refine_mesh_with_gmsh(
@@ -27,131 +28,132 @@ def refine_mesh_with_gmsh(
         return vertices, indices, surface_tags
 
     try:
-        # Initialize Gmsh
-        gmsh.initialize()
-        gmsh.option.setNumber("General.Terminal", 0)  # Suppress output
-        gmsh.model.add("horn_mesh")
+        with gmsh_lock:
+            initialized_here = False
+            try:
+                if not gmsh.isInitialized():
+                    gmsh.initialize()
+                    initialized_here = True
+                gmsh.option.setNumber("General.Terminal", 0)  # Suppress output
+                gmsh.clear()
+                gmsh.model.add("horn_mesh")
 
-        # Calculate target element size based on wavelength
-        # Rule of thumb: 6-10 elements per wavelength
-        c = 343.0  # Speed of sound m/s
-        wavelength = c / target_frequency * 1000  # Convert to mm
-        target_size = wavelength / 8  # 8 elements per wavelength
+                # Calculate target element size based on wavelength
+                # Rule of thumb: 6-10 elements per wavelength
+                c = 343.0  # Speed of sound m/s
+                wavelength = c / target_frequency * 1000  # Convert to mm
+                target_size = wavelength / 8  # 8 elements per wavelength
+                print(f"[Gmsh] Target element size: {target_size:.1f} mm (for {target_frequency} Hz)")
 
-        print(f"[Gmsh] Target element size: {target_size:.1f} mm (for {target_frequency} Hz)")
+                # Add vertices to Gmsh
+                num_vertices = vertices.shape[1]
+                vertex_tags = []
+                for i in range(num_vertices):
+                    tag = gmsh.model.geo.addPoint(
+                        vertices[0, i], vertices[1, i], vertices[2, i], target_size
+                    )
+                    vertex_tags.append(tag)
 
-        # Add vertices to Gmsh
-        num_vertices = vertices.shape[1]
-        vertex_tags = []
-        for i in range(num_vertices):
-            tag = gmsh.model.geo.addPoint(
-                vertices[0, i], vertices[1, i], vertices[2, i], target_size
-            )
-            vertex_tags.append(tag)
+                # Create surface loops from triangles
+                # Group triangles by surface tag for physical groups
+                num_triangles = indices.shape[1]
+                triangle_surfaces = []
 
-        # Create surface loops from triangles
-        # Group triangles by surface tag for physical groups
-        num_triangles = indices.shape[1]
-        triangle_surfaces = []
+                for i in range(num_triangles):
+                    v0, v1, v2 = indices[0, i], indices[1, i], indices[2, i]
 
-        for i in range(num_triangles):
-            v0, v1, v2 = indices[0, i], indices[1, i], indices[2, i]
+                    # Create lines for this triangle
+                    l1 = gmsh.model.geo.addLine(vertex_tags[v0], vertex_tags[v1])
+                    l2 = gmsh.model.geo.addLine(vertex_tags[v1], vertex_tags[v2])
+                    l3 = gmsh.model.geo.addLine(vertex_tags[v2], vertex_tags[v0])
 
-            # Create lines for this triangle
-            l1 = gmsh.model.geo.addLine(vertex_tags[v0], vertex_tags[v1])
-            l2 = gmsh.model.geo.addLine(vertex_tags[v1], vertex_tags[v2])
-            l3 = gmsh.model.geo.addLine(vertex_tags[v2], vertex_tags[v0])
+                    # Create curve loop and surface
+                    loop = gmsh.model.geo.addCurveLoop([l1, l2, l3])
+                    surf = gmsh.model.geo.addPlaneSurface([loop])
+                    triangle_surfaces.append(surf)
 
-            # Create curve loop and surface
-            loop = gmsh.model.geo.addCurveLoop([l1, l2, l3])
-            surf = gmsh.model.geo.addPlaneSurface([loop])
-            triangle_surfaces.append(surf)
+                gmsh.model.geo.synchronize()
 
-        gmsh.model.geo.synchronize()
+                # Add physical groups for boundary conditions
+                if surface_tags is not None:
+                    # Canonical tag contract:
+                    # 1 = walls, 2 = source, 3 = secondary domain, 4 = interface/symmetry
+                    wall_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 1]
+                    source_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 2]
+                    secondary_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 3]
+                    interface_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 4]
 
-        # Add physical groups for boundary conditions
-        if surface_tags is not None:
-            # Canonical tag contract:
-            # 1 = walls, 2 = source, 3 = secondary domain, 4 = interface/symmetry
-            wall_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 1]
-            source_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 2]
-            secondary_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 3]
-            interface_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 4]
+                    if wall_surfs:
+                        gmsh.model.addPhysicalGroup(2, wall_surfs, 1, "SD1G0")
+                    if source_surfs:
+                        gmsh.model.addPhysicalGroup(2, source_surfs, 2, "SD1D1001")
+                    if secondary_surfs:
+                        gmsh.model.addPhysicalGroup(2, secondary_surfs, 3, "SD2G0")
+                    if interface_surfs:
+                        gmsh.model.addPhysicalGroup(2, interface_surfs, 4, "I1-2")
 
-            if wall_surfs:
-                gmsh.model.addPhysicalGroup(2, wall_surfs, 1, "SD1G0")
-            if source_surfs:
-                gmsh.model.addPhysicalGroup(2, source_surfs, 2, "SD1D1001")
-            if secondary_surfs:
-                gmsh.model.addPhysicalGroup(2, secondary_surfs, 3, "SD2G0")
-            if interface_surfs:
-                gmsh.model.addPhysicalGroup(2, interface_surfs, 4, "I1-2")
+                # Set mesh options
+                gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay
+                gmsh.option.setNumber("Mesh.ElementOrder", 1)  # Linear elements
+                gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)  # Optimize mesh
 
-        # Set mesh options
-        gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay
-        gmsh.option.setNumber("Mesh.ElementOrder", 1)  # Linear elements
-        gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)  # Optimize mesh
+                # Generate 2D mesh
+                gmsh.model.mesh.generate(2)
 
-        # Generate 2D mesh
-        gmsh.model.mesh.generate(2)
+                # Extract refined mesh
+                node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
 
-        # Extract refined mesh
-        node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+                # Reshape node coordinates
+                refined_vertices = np.array(node_coords).reshape(-1, 3).T
 
-        # Reshape node coordinates
-        refined_vertices = np.array(node_coords).reshape(-1, 3).T
+                # Get elements
+                elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
-        # Get elements
-        elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
+                if len(elem_types) == 0:
+                    print("[Gmsh] No elements generated, using original mesh")
+                    return vertices, indices, surface_tags
 
-        if len(elem_types) == 0:
-            print("[Gmsh] No elements generated, using original mesh")
-            gmsh.finalize()
-            return vertices, indices, surface_tags
+                # Find triangles (type 2)
+                refined_indices = None
+                for i, etype in enumerate(elem_types):
+                    if etype == 2:  # Triangle
+                        # Node tags are 1-indexed in Gmsh
+                        tri_nodes = np.array(elem_node_tags[i]).reshape(-1, 3) - 1
+                        refined_indices = tri_nodes.T.astype(np.int32)
+                        break
 
-        # Find triangles (type 2)
-        refined_indices = None
-        for i, etype in enumerate(elem_types):
-            if etype == 2:  # Triangle
-                # Node tags are 1-indexed in Gmsh
-                tri_nodes = np.array(elem_node_tags[i]).reshape(-1, 3) - 1
-                refined_indices = tri_nodes.T.astype(np.int32)
-                break
+                if refined_indices is None:
+                    print("[Gmsh] No triangles found, using original mesh")
+                    return vertices, indices, surface_tags
 
-        if refined_indices is None:
-            print("[Gmsh] No triangles found, using original mesh")
-            gmsh.finalize()
-            return vertices, indices, surface_tags
+                # Generate new surface tags based on physical groups
+                num_refined_tris = refined_indices.shape[1]
+                refined_tags = np.full(num_refined_tris, 1, dtype=np.int32)  # Default: wall
 
-        # Generate new surface tags based on physical groups
-        num_refined_tris = refined_indices.shape[1]
-        refined_tags = np.full(num_refined_tris, 1, dtype=np.int32)  # Default: wall
+                # Get physical group assignments
+                for dim, tag in gmsh.model.getPhysicalGroups(2):
+                    entities = gmsh.model.getEntitiesForPhysicalGroup(dim, tag)
+                    for entity in entities:
+                        elem_types_e, elem_tags_e, _ = gmsh.model.mesh.getElements(2, entity)
+                        for et, tags in zip(elem_types_e, elem_tags_e):
+                            if et == 2:
+                                for elem_tag in tags:
+                                    # Find element index (elem_tags are 1-indexed)
+                                    idx = np.where(np.array(elem_tags[0]) == elem_tag)[0]
+                                    if len(idx) > 0:
+                                        refined_tags[idx[0]] = tag
 
-        # Get physical group assignments
-        for dim, tag in gmsh.model.getPhysicalGroups(2):
-            entities = gmsh.model.getEntitiesForPhysicalGroup(dim, tag)
-            for entity in entities:
-                elem_types_e, elem_tags_e, _ = gmsh.model.mesh.getElements(2, entity)
-                for et, tags in zip(elem_types_e, elem_tags_e):
-                    if et == 2:
-                        for elem_tag in tags:
-                            # Find element index (elem_tags are 1-indexed)
-                            idx = np.where(np.array(elem_tags[0]) == elem_tag)[0]
-                            if len(idx) > 0:
-                                refined_tags[idx[0]] = tag
+                print(
+                    f"[Gmsh] Mesh refined: {num_vertices} -> {refined_vertices.shape[1]} vertices, "
+                    f"{num_triangles} -> {num_refined_tris} triangles"
+                )
 
-        print(
-            f"[Gmsh] Mesh refined: {num_vertices} -> {refined_vertices.shape[1]} vertices, "
-            f"{num_triangles} -> {num_refined_tris} triangles"
-        )
-
-        gmsh.finalize()
-        return refined_vertices, refined_indices, refined_tags
-
+                return refined_vertices, refined_indices, refined_tags
+            finally:
+                if initialized_here and gmsh.isInitialized():
+                    gmsh.finalize()
     except Exception as e:
         print(f"[Gmsh] Error during mesh refinement: {e}")
-        if gmsh.isInitialized():
-            gmsh.finalize()
         return vertices, indices, surface_tags
 
 

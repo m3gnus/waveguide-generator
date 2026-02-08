@@ -69,4 +69,42 @@ export class BemClient extends BemSolver {
 
     return await this.getResults(jobId);
   }
+
+  /**
+   * Generate a Gmsh-authored .msh from .geo text via backend service.
+   * @param {{ geoText: string, mshVersion?: '2.2' | '4.1', binary?: boolean }} request
+   * @returns {Promise<{ msh: string, generatedBy: string, stats: { nodeCount: number, elementCount: number } }>}
+   */
+  async generateMeshFromGeo(request) {
+    const payload = {
+      geoText: String(request?.geoText || ''),
+      mshVersion: request?.mshVersion || '2.2',
+      binary: Boolean(request?.binary)
+    };
+
+    const response = await fetch(`${this.backendUrl}/api/mesh/generate-msh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      let detail = `${response.status}`;
+      try {
+        const err = await response.json();
+        if (err?.detail) detail = String(err.detail);
+      } catch {
+        // Keep default detail fallback.
+      }
+      throw new Error(`Gmsh mesh generation failed: ${detail}`);
+    }
+
+    return response.json();
+  }
+}
+
+export async function generateMeshFromGeo(request, backendUrl = 'http://localhost:8000') {
+  const client = new BemClient();
+  client.setBackendUrl(backendUrl);
+  return client.generateMeshFromGeo(request);
 }

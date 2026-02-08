@@ -26,7 +26,7 @@ Waveguide Generator is a browser-based tool for designing acoustic horns, previe
 
 - Node.js 18+
 - npm 9+
-- Python 3.10+ (required for backend)
+- Python 3.10+ (Python 3.12 recommended for the widest backend package compatibility)
 
 ## macOS Install (Step by Step)
 
@@ -182,7 +182,7 @@ For Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip curl
+sudo apt install -y git curl gmsh python3.12 python3.12-venv
 ```
 
 ### 2. Install Node.js LTS (recommended via nvm)
@@ -199,7 +199,7 @@ Verify:
 ```bash
 node -v
 npm -v
-python3 --version
+python3.12 --version
 ```
 
 ### 3. Clone the repository
@@ -218,10 +218,15 @@ npm ci
 ### 5. Set up backend virtual environment
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r server/requirements.txt
 ```
+
+If `python3.12` is not available in your distro repo, install it with your distro’s recommended method (or use `pyenv`) and then run the same `python3.12 -m venv ...` command.
+
+`gmsh` in `server/requirements.txt` is intentionally optional because wheels are not available on every Python/architecture combination.  
+`.geo -> .msh` generation still works with the system `gmsh` CLI installed above.
 
 ### 6. (Optional) Install full BEM solver
 
@@ -244,14 +249,6 @@ npm start
 
 ```bash
 curl http://localhost:8000/health
-```
-
-6. Commit and push:
-
-```bash
-git add README.md docs/images/waveguide-generator-screenshot.png
-git commit -m "Add app screenshot to README"
-git push
 ```
 
 ## Test and Build

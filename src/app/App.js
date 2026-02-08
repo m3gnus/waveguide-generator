@@ -11,6 +11,7 @@ import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
 import { exportSTL, exportMWGConfig, exportProfileCSV, exportGmshGeo, exportMSH, exportABECProject } from './exports.js';
 import { provideMeshForSimulation } from './mesh.js';
+import { checkForUpdates } from './updates.js';
 
 export class App {
   constructor() {
@@ -147,5 +148,9 @@ export class App {
 
   async provideMeshForSimulation() {
     return provideMeshForSimulation(this);
+  }
+
+  async checkForUpdates() {
+    return checkForUpdates();
   }
 }

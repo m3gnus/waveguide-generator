@@ -102,9 +102,14 @@ export function selectAnglesForQuadrants(fullAngles, quadrants) {
   const inRange = (a, min, max) => a >= min - eps && a <= max + eps;
 
   if (q === '14') {
+    // Keep angular order continuous from -pi/2..pi/2.
+    // This prevents seam-bridging triangles across the x=0 split plane.
+    const negative = fullAngles
+      .filter((a) => a >= Math.PI * 1.5 - eps)
+      .map((a) => a - Math.PI * 2);
     const positive = fullAngles.filter((a) => inRange(a, 0, Math.PI / 2));
-    const negative = fullAngles.filter((a) => a >= Math.PI * 1.5 - eps).map((a) => a - Math.PI * 2);
-    return [...positive, ...negative];
+    const merged = [...negative, ...positive];
+    return merged.filter((a, i) => i === 0 || Math.abs(a - merged[i - 1]) > eps);
   }
 
   if (q === '12') return fullAngles.filter((a) => inRange(a, 0, Math.PI));

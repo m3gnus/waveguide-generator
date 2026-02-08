@@ -1,5 +1,5 @@
 # MWG Horn BEM Solver Backend Requirements
-# Python 3.8+ required
+# Python 3.10+ required
 
 # Web Framework
 fastapi==0.104.1
@@ -19,7 +19,10 @@ meshio>=4.0.16
 
 # Mesh Processing
 trimesh==4.0.5
-gmsh>=4.10.0
+# Optional: Gmsh Python API is not available on all Python/architecture combos.
+# The backend can also use the `gmsh` CLI if it is installed on the system PATH.
+# Install manually when available:
+# pip install gmsh>=4.10.0
 
 # Utilities
 pydantic>=2.10.0
