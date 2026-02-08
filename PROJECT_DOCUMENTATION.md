@@ -1,4 +1,4 @@
-# Mathematical Waveguide Generator: Technical Documentation
+# Waveguide Generator: Technical Documentation
 
 ## 1. Overview
 

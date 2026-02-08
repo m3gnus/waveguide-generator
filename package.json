@@ -1,7 +1,7 @@
 {
   "name": "mwg-mathematical-waveguide-generator",
   "version": "1.0.0-alpha-7.5",
-  "description": "Mathematical Waveguide Generator: Interactive 3D visualization and optimization platform for acoustic waveguide design - Validation Phase (Playwright E2E)",
+  "description": "Waveguide Generator: Interactive 3D visualization and optimization platform for acoustic waveguide design - Validation Phase (Playwright E2E)",
   "main": "index.js",
   "type": "module",
   "scripts": {

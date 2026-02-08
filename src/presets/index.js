@@ -1,5 +1,5 @@
 /**
- * Preset management module for the Mathematical Waveguide Generator (MWG).
+ * Preset management module for the Waveguide Generator (WG).
  * Enables fast starting points and reproducibility with known-good horn archetypes.
  * @module presets
  */

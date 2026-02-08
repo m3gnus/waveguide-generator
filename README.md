@@ -1,6 +1,6 @@
-# Mathematical Waveguide Generator
+# Waveguide Generator
 
-Mathematical Waveguide Generator is a browser-based tool for designing acoustic horns, previewing geometry in 3D, running BEM simulations, and exporting manufacturing/simulation files.
+Waveguide Generator is a browser-based tool for designing acoustic horns, previewing geometry in 3D, running BEM simulations, and exporting manufacturing/simulation files.
 
 ## What You Can Do
 

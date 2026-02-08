@@ -1,5 +1,5 @@
 /**
- * Workflow management module for the Mathematical Waveguide Generator (MWG).
+ * Workflow management module for the Waveguide Generator (WG).
  * Manages the end-to-end design process with state tracking and artifact storage.
  * @module workflow
  */

@@ -6,7 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 
 console.log('╔══════════════════════════════════════════════════════════════╗');
-console.log('║  MWG - Mathematical Waveguide Generator                     ║');
+console.log('║  WG - Waveguide Generator                     ║');
 console.log('╚══════════════════════════════════════════════════════════════╝');
 console.log('');
 console.log('🚀 Starting both frontend and backend servers...');

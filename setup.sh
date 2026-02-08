@@ -1,11 +1,11 @@
 #!/bin/bash
-# MWG - Mathematical Waveguide Generator Setup Script
+# WG - Waveguide Generator Setup Script
 # One-time installation of all dependencies
 
 set -e  # Exit on error
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  MWG - Mathematical Waveguide Generator Setup                ║"
+echo "║  WG - Waveguide Generator Setup                ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
