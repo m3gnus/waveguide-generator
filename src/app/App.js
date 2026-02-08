@@ -12,6 +12,7 @@ import { handleFileUpload } from './configImport.js';
 import { exportSTL, exportMWGConfig, exportProfileCSV, exportGmshGeo, exportMSH, exportABECProject } from './exports.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
+import { markParametersChanged } from '../ui/fileOps.js';
 
 export class App {
   constructor() {
@@ -36,6 +37,7 @@ export class App {
     // Subscribe to state updates
     AppEvents.on('state:updated', (state) => {
       this.onStateUpdate(state);
+      markParametersChanged();
     });
 
     // Subscribe to simulation events - canonical mesh payload generation for simulation

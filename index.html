@@ -32,76 +32,11 @@
 
         <!-- Geometry Tab Content -->
         <div id="geometry-tab" class="tab-content active">
-            <div class="section">
-                <h3>ACTIONS</h3>
-                <button id="render-btn">Update Model</button>
-                <div class="button-row">
-                    <button id="load-config-btn" class="secondary">Load Config</button>
-                    <button id="export-config-btn" class="secondary">Export Config</button>
-                </div>
-                <input type="file" id="config-upload" class="is-hidden" accept=".txt,.cfg">
-                <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
-                <button id="export-btn" class="secondary">Export STL</button>
-                <button id="export-geo-btn" class="secondary">Export Gmsh GEO</button>
-                <button id="export-msh-btn" class="secondary">Export MSH</button>
-                <button id="export-abec-btn" class="secondary">Export ABEC Project</button>
-                <button id="check-updates-btn" class="secondary">Check for Updates</button>
-
-                <hr>
-                <div class="input-row">
-                    <label for="export-prefix">Prefix</label>
-                    <input type="text" id="export-prefix" class="input-full-width" value="horn_design">
-                </div>
-                <div class="input-row" id="output-folder-row">
-                    <button id="choose-folder-btn" class="secondary button-compact">Choose Folder</button>
-                    <span id="output-folder-name" class="output-folder-name">No folder
-                        selected</span>
-                </div>
-                <div class="input-row">
-                    <label for="export-counter">Counter</label>
-                    <input type="number" id="export-counter" value="1" min="1" step="1">
-                </div>
-
-                <div class="checkbox-group">
-                    <input type="checkbox" id="live-update" checked>
-                    <label for="live-update">Real-time Updates</label>
-                </div>
-
-                <label for="display-mode">Display Mode</label>
-                <select id="display-mode">
-                    <option value="standard">Standard (Metal)</option>
-                    <option value="zebra">Zebra Stripes</option>
-                    <option value="grid">Grid / Wireframe</option>
-                    <option value="curvature">Curvature Map</option>
-                </select>
-            </div>
-
             <div id="param-container"></div>
         </div>
 
         <!-- Simulation Tab Content -->
         <div id="simulation-tab" class="tab-content">
-            <div class="section">
-                <h3>BEM SOLVER</h3>
-                <div class="status-indicator">
-                    <span id="solver-status" class="status-dot"></span>
-                    <span id="solver-status-text">Checking connection...</span>
-                </div>
-                <p class="status-help">
-                    BEM solver requires Python backend running on localhost:8000
-                </p>
-                <hr>
-                <button id="run-simulation-btn">Start BEM Simulation</button>
-                <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
-                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
-                <div id="simulation-progress" class="is-hidden">
-                    <div class="progress-bar">
-                        <div id="progress-fill" class="progress-fill"></div>
-                    </div>
-                    <p id="progress-text" class="progress-text">Initializing...</p>
-                </div>
-            </div>
-
             <div class="section">
                 <h3>SIMULATION SETTINGS</h3>
                 <div class="input-row">
@@ -189,6 +124,72 @@
         </div>
     </div>
     <div id="ui-panel-resizer" aria-hidden="true"></div>
+    <div id="actions-panel">
+        <details id="actions-panel-details" open>
+            <summary>Actions</summary>
+            <div class="section actions-section">
+                <button id="render-btn">Update Model</button>
+                <div class="button-row">
+                    <button id="load-config-btn" class="secondary">Load Config</button>
+                    <button id="export-config-btn" class="secondary">Export Config</button>
+                </div>
+                <input type="file" id="config-upload" class="is-hidden" accept=".txt,.cfg">
+                <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
+                <button id="export-btn" class="secondary">Export STL</button>
+                <button id="export-geo-btn" class="secondary">Export Gmsh GEO</button>
+                <button id="export-msh-btn" class="secondary">Export MSH</button>
+                <button id="export-abec-btn" class="secondary">Export ABEC Project</button>
+                <button id="check-updates-btn" class="secondary">Check for App Updates</button>
+
+                <hr>
+                <div class="input-row">
+                    <label for="export-prefix">Output Name</label>
+                    <input type="text" id="export-prefix" class="input-full-width" value="horn_design">
+                </div>
+                <div class="input-row" id="output-folder-row">
+                    <button id="choose-folder-btn" class="secondary button-compact">Choose Folder</button>
+                    <span id="output-folder-name" class="output-folder-name">No folder
+                        selected</span>
+                </div>
+                <div class="input-row">
+                    <label for="export-counter">Counter</label>
+                    <input type="number" id="export-counter" value="1" min="1" step="1">
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="live-update" checked>
+                    <label for="live-update">Real-time Updates</label>
+                </div>
+
+                <label for="display-mode">Display Mode</label>
+                <select id="display-mode">
+                    <option value="standard">Standard (Metal)</option>
+                    <option value="zebra">Zebra Stripes</option>
+                    <option value="grid">Grid / Wireframe</option>
+                    <option value="curvature">Curvature Map</option>
+                </select>
+
+                <hr>
+                <h4 class="section-subtitle">BEM SOLVER</h4>
+                <div class="status-indicator">
+                    <span id="solver-status" class="status-dot"></span>
+                    <span id="solver-status-text">Checking connection...</span>
+                </div>
+                <p class="status-help">
+                    BEM solver requires Python backend running on localhost:8000
+                </p>
+                <button id="run-simulation-btn">Start BEM Simulation</button>
+                <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
+                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
+                <div id="simulation-progress" class="is-hidden">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="progress-text" class="progress-text">Initializing...</p>
+                </div>
+            </div>
+        </details>
+    </div>
 
     <div id="stats">Vertices: 0 | Triangles: 0</div>
     <div id="canvas-container">

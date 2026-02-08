@@ -135,3 +135,30 @@ test('simulation payload removes split-plane faces for quadrant symmetry exports
   assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'x'), 0);
   assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'z'), 0);
 });
+
+test('non-divisible angular segments still include symmetry boundary vertices', () => {
+  const params = makePreparedParams({
+    angularSegments: 50,
+    lengthSegments: 20,
+    encDepth: 0,
+    quadrants: '1',
+    wallThickness: 0
+  });
+
+  const artifacts = buildGeometryArtifacts(params, { includeEnclosure: false });
+  const ringCount = artifacts.mesh.ringCount;
+  const vertices = artifacts.mesh.vertices;
+  const eps = 1e-6;
+
+  let hasXBoundary = false;
+  let hasZBoundary = false;
+  for (let i = 0; i < ringCount; i += 1) {
+    const x = vertices[i * 3];
+    const z = vertices[i * 3 + 2];
+    if (Math.abs(x) <= eps) hasXBoundary = true;
+    if (Math.abs(z) <= eps) hasZBoundary = true;
+  }
+
+  assert.equal(hasXBoundary, true);
+  assert.equal(hasZBoundary, true);
+});

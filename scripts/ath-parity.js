@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { MWGConfigParser } from '../src/config/index.js';
 import { getDefaults } from '../src/config/defaults.js';
+import { buildGmshGeo } from '../src/export/gmshGeoBuilder.js';
 import {
   buildGeometryArtifacts,
   prepareGeometryParams,
@@ -12,14 +15,134 @@ import {
   applyAthImportDefaults,
   isMWGConfig
 } from '../src/geometry/index.js';
-import { exportMSH } from '../src/export/msh.js';
+import { generateMeshFromGeo } from '../src/solver/client.js';
 
 const DEFAULT_ROOT = '_references/testconfigs';
 const DEFAULT_OUT = '.tmp-ath-parity';
+const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+const GMSH_CLI_TIMEOUT_MS = 180000;
 const VERTEX_CLOUD_MAX = 0.35;
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
+}
+
+function generateMshViaCli(geoText, { mshVersion = '2.2' } = {}) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ath-parity-gmsh-'));
+  const geoPath = path.join(tempDir, 'input.geo');
+  const mshPath = path.join(tempDir, 'output.msh');
+
+  try {
+    fs.writeFileSync(geoPath, geoText, 'utf8');
+    const format = mshVersion === '4.1' ? 'msh4' : 'msh2';
+    const args = [
+      geoPath,
+      '-2',
+      '-format',
+      format,
+      '-save_all',
+      '0',
+      '-o',
+      mshPath
+    ];
+
+    try {
+      execFileSync('gmsh', args, { stdio: 'pipe', timeout: GMSH_CLI_TIMEOUT_MS });
+    } catch (err) {
+      const stderr = String(err?.stderr || '');
+      if (!stderr.includes('env: python: No such file or directory')) {
+        throw err;
+      }
+      const gmshPath = execFileSync('which', ['gmsh'], { encoding: 'utf8' }).trim();
+      execFileSync('python3', [gmshPath, ...args], { stdio: 'pipe', timeout: GMSH_CLI_TIMEOUT_MS });
+    }
+    return fs.readFileSync(mshPath, 'utf8');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function generateMshViaPythonApi(geoText, { mshVersion = '2.2' } = {}) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ath-parity-gmsh-py-'));
+  const geoPath = path.join(tempDir, 'input.geo');
+  const mshPath = path.join(tempDir, 'output.msh');
+
+  try {
+    fs.writeFileSync(geoPath, geoText, 'utf8');
+    const script = [
+      'import gmsh, sys',
+      'geo_path, msh_path, msh_version = sys.argv[1], sys.argv[2], sys.argv[3]',
+      'gmsh.initialize()',
+      'try:',
+      "  gmsh.option.setNumber('General.Terminal', 0)",
+      '  gmsh.clear()',
+      '  gmsh.open(geo_path)',
+      "  gmsh.option.setNumber('Mesh.MshFileVersion', float(msh_version))",
+      "  gmsh.option.setNumber('Mesh.Binary', 0)",
+      "  gmsh.option.setNumber('Mesh.SaveAll', 0)",
+      '  gmsh.model.mesh.generate(2)',
+      '  gmsh.write(msh_path)',
+      'finally:',
+      '  if gmsh.isInitialized():',
+      '    gmsh.finalize()'
+    ].join('\n');
+
+    execFileSync(
+      'python3',
+      ['-c', script, geoPath, mshPath, mshVersion],
+      { stdio: 'pipe', timeout: GMSH_CLI_TIMEOUT_MS }
+    );
+    return fs.readFileSync(mshPath, 'utf8');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function generateMshWithGmsh(
+  geoText,
+  {
+    mshVersion = '2.2',
+    backendUrl = DEFAULT_BACKEND_URL,
+    mode = 'auto'
+  } = {}
+) {
+  const normalizedMode = String(mode || 'auto').trim().toLowerCase();
+  const errors = [];
+
+  if (normalizedMode !== 'cli') {
+    try {
+      const result = await generateMeshFromGeo(
+        { geoText, mshVersion, binary: false },
+        backendUrl
+      );
+      if (result?.generatedBy === 'gmsh' && typeof result?.msh === 'string') {
+        return result.msh;
+      }
+      errors.push('backend returned an invalid Gmsh response');
+    } catch (err) {
+      errors.push(`backend (${backendUrl}): ${err.message}`);
+    }
+  }
+
+  if (normalizedMode === 'auto' || normalizedMode === 'python') {
+    try {
+      return generateMshViaPythonApi(geoText, { mshVersion });
+    } catch (err) {
+      errors.push(`python: ${err.message}`);
+    }
+  }
+
+  if (normalizedMode === 'auto' || normalizedMode === 'cli') {
+    try {
+      return generateMshViaCli(geoText, { mshVersion });
+    } catch (err) {
+      errors.push(`cli: ${err.message}`);
+    }
+  }
+
+  throw new Error(
+    `unable to generate .msh via Gmsh (${normalizedMode} mode). ${errors.join(' | ')}`
+  );
 }
 
 function parseMsh(text) {
@@ -201,11 +324,14 @@ function compareMsh(oursText, refText) {
   return { errors, cloud, ours, ref };
 }
 
-function runParity({ root = DEFAULT_ROOT, outRoot = DEFAULT_OUT } = {}) {
+async function runParity({ root = DEFAULT_ROOT, outRoot = DEFAULT_OUT } = {}) {
   if (!fs.existsSync(root)) {
     console.log(`[ath-parity] skipped: reference root not found: ${root}`);
     return 0;
   }
+
+  const gmshBackendUrl = process.env.ATH_PARITY_BACKEND_URL || DEFAULT_BACKEND_URL;
+  const gmshMode = process.env.ATH_PARITY_GMSH_MODE || 'auto';
 
   ensureDir(outRoot);
 
@@ -244,14 +370,28 @@ function runParity({ root = DEFAULT_ROOT, outRoot = DEFAULT_OUT } = {}) {
     });
     const payload = artifacts.simulation;
 
-    const generatedMsh = exportMSH(payload.vertices, payload.indices, payload.surfaceTags, {
-      verticalOffset: payload.metadata?.verticalOffset || 0
-    });
-
     const outDir = path.join(outRoot, base);
     ensureDir(outDir);
+    const generatedGeoPath = path.join(outDir, `${base}.geo`);
     const generatedPath = path.join(outDir, `${base}.msh`);
-    fs.writeFileSync(generatedPath, generatedMsh);
+
+    const { geoText } = buildGmshGeo(prepared, artifacts.mesh, payload, { mshVersion: '2.2' });
+    fs.writeFileSync(generatedGeoPath, geoText, 'utf8');
+
+    let generatedMsh;
+    try {
+      generatedMsh = await generateMshWithGmsh(geoText, {
+        mshVersion: '2.2',
+        backendUrl: gmshBackendUrl,
+        mode: gmshMode
+      });
+    } catch (err) {
+      failures += 1;
+      console.log(`${base}: FAIL (gmsh generation error: ${err.message})`);
+      continue;
+    }
+
+    fs.writeFileSync(generatedPath, generatedMsh, 'utf8');
 
     const refMsh = fs.readFileSync(refMshPath, 'utf8');
     const result = compareMsh(generatedMsh, refMsh);
@@ -286,7 +426,14 @@ const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPat
 if (isMain) {
   const root = process.argv[2] || DEFAULT_ROOT;
   const outRoot = process.argv[3] || DEFAULT_OUT;
-  process.exitCode = runParity({ root, outRoot });
+  runParity({ root, outRoot })
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      console.error(`[ath-parity] fatal: ${err.message}`);
+      process.exitCode = 1;
+    });
 }
 
 export { runParity };
