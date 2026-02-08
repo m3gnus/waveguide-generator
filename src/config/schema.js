@@ -115,8 +115,7 @@ export const PARAM_SCHEMA = {
         throatSegments: { type: 'number', label: 'Throat Segs', default: 0 },
         throatResolution: { type: 'number', label: 'Throat Resolution', unit: 'mm', default: 5.0 },
         mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 8.0 },
-        verticalOffset: { type: 'number', label: 'Vertical Offset', unit: 'mm', default: 0.0 },
-        zMapPoints: { type: 'expression', label: 'Z Map Points', default: '', tooltip: 'Comma-separated list of slice positions.' },
+        verticalOffset: { type: 'number', label: 'Vertical Offset', unit: 'mm', default: 0.0, tooltip: 'Vertical offset for simulation/export coordinate system. Does not affect the 3D viewer.' },
         subdomainSlices: { type: 'expression', label: 'Subdomain Slices', default: '', tooltip: 'Comma-separated slice indices for subdomain interfaces.' },
         interfaceOffset: { type: 'expression', label: 'Interface Offset', unit: 'mm', default: '', tooltip: 'Comma-separated interface offsets.' },
         interfaceDraw: { type: 'expression', label: 'Interface Draw', unit: 'mm', default: '', tooltip: 'Comma-separated interface draw depths.' },
@@ -132,7 +131,7 @@ export const PARAM_SCHEMA = {
             default: '1234',
             tooltip: 'Simulation-only symmetry. The visible model stays full; simulation uses the selected quadrant.'
         },
-        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Thickness of the horn wall in the STEP/CAD export. Set to 0 for a zero-thickness surface. Does not affect the 3D viewer mesh.' },
+        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Thickness used when generating freestanding rear closure for simulation/export. Set to 0 for an open back. Does not affect the 3D viewer mesh.' },
         rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 10.0 },
         rearShape: {
             type: 'select',

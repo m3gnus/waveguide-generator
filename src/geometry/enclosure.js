@@ -303,7 +303,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         minZ = Math.min(minZ, mz);
     }
 
-    if (params.useAthEnclosureRounding ?? params.useAthZMap) {
+    if (params.useAthEnclosureRounding) {
         if (Number.isFinite(maxX)) maxX = Math.ceil(maxX);
         if (Number.isFinite(minX)) minX = Math.floor(minX);
         if (Number.isFinite(maxZ)) maxZ = Math.ceil(maxZ);
@@ -489,9 +489,6 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         }
     }
 
-    const backCapCenter = vertices.length / 3;
-    vertices.push(cx, backY, cz);
-
     const stitch = (r1Start, r2Start) => {
         for (let i = 0; i < totalPts; i++) {
             const i2 = (i + 1) % totalPts;
@@ -643,10 +640,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     }
 
     const backInnerStart = prevRing;
-    for (let i = 0; i < totalPts; i++) {
-        const i2 = (i + 1) % totalPts;
-        indices.push(backInnerStart + i, backInnerStart + i2, backCapCenter);
-    }
+    // No throat source in enclosure - it's now part of the horn geometry
 
     const enclosureEndTri = indices.length / 3;
     if (groupInfo) {

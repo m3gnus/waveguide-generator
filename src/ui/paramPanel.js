@@ -181,12 +181,6 @@ export class ParamPanel {
             }
         }
 
-        // Vertical offset (geometric, not mesh-density)
-        const vertOffsetDef = meshSchema.verticalOffset;
-        if (vertOffsetDef) {
-            enclosureSection.appendChild(this.createControlRow('verticalOffset', vertOffsetDef, state.params.verticalOffset));
-        }
-
         this.container.appendChild(enclosureSection);
 
         // --- Geometry Advanced (at bottom of Geometry tab) ---
@@ -219,7 +213,7 @@ export class ParamPanel {
             const combinedMeshSection = this.createDetailsSection('Mesh Density', 'mesh-details');
 
             // Params moved to Geometry tab — skip here
-            const geomTabKeys = new Set(['wallThickness', 'rearShape', 'verticalOffset']);
+            const geomTabKeys = new Set(['wallThickness', 'rearShape']);
 
             // Mesh density parameters (affect tessellation, not geometry shape)
             const meshDensityOrder = [
@@ -230,8 +224,9 @@ export class ParamPanel {
                 'throatSegments',
                 'throatResolution',
                 'mouthResolution',
+                'encFrontResolution',
+                'encBackResolution',
                 'rearResolution',
-                'zMapPoints',
                 'subdomainSlices',
                 'interfaceOffset',
                 'interfaceDraw'
@@ -239,7 +234,7 @@ export class ParamPanel {
 
             meshDensityOrder.forEach((key) => {
                 if (geomTabKeys.has(key)) return;
-                const def = meshSchema[key];
+                const def = meshSchema[key] || (PARAM_SCHEMA.ENCLOSURE && PARAM_SCHEMA.ENCLOSURE[key]);
                 if (def) {
                     combinedMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
                 }
@@ -288,7 +283,7 @@ export class ParamPanel {
         row.appendChild(label);
 
         if (def.type === 'range' || def.type === 'number' || def.type === 'expression') {
-            // All numeric/expression fields use auto-resizing text inputs that accept formulas
+            // All numeric/expression fields use fixed-width multi-line text inputs that accept formulas
             const wrapper = document.createElement('div');
             wrapper.className = 'formula-input-wrapper';
 
@@ -304,24 +299,10 @@ export class ParamPanel {
                 input.title = `Range: ${def.min} to ${def.max}`;
             }
 
-            // Auto-resize input based on content
-            const autoResize = () => {
-                // Create hidden span to measure text width
-                const span = document.createElement('span');
-                span.style.visibility = 'hidden';
-                span.style.position = 'absolute';
-                span.style.whiteSpace = 'pre';
-                span.style.font = window.getComputedStyle(input).font;
-                span.textContent = input.value || input.placeholder;
-                document.body.appendChild(span);
-                const width = Math.max(60, Math.min(200, span.offsetWidth + 16));
-                document.body.removeChild(span);
-                input.style.width = width + 'px';
-            };
-
-            input.addEventListener('input', autoResize);
-            // Initial resize
-            setTimeout(autoResize, 0);
+            // Set fixed width matching dropdown menus, enable multi-line expansion
+            input.style.width = '100%';
+            input.style.whiteSpace = 'pre-wrap';
+            input.style.overflowY = 'auto';
 
             input.onchange = (e) => {
                 const value = e.target.value.trim();
@@ -332,12 +313,6 @@ export class ParamPanel {
                 } else {
                     this.updateParam(key, value);
                 }
-            };
-
-            input.oninput = (e) => {
-                autoResize();
-                // Visual validation feedback
-                this.validateFormulaInput(input);
             };
 
             wrapper.appendChild(input);
@@ -361,29 +336,6 @@ export class ParamPanel {
         }
 
         return row;
-    }
-
-    validateFormulaInput(input) {
-        const value = input.value.trim();
-        // Check if it's a valid number
-        if (!isNaN(parseFloat(value)) && isFinite(value)) {
-            input.classList.remove('invalid');
-            input.classList.add('valid');
-            return true;
-        }
-        // Check for basic expression syntax (contains formula-like characters)
-        if (/^[\d\s\+\-\*\/\^\(\)\.\,a-zA-Z_]+$/.test(value)) {
-            input.classList.remove('invalid');
-            input.classList.add('valid');
-            return true;
-        }
-        if (value === '') {
-            input.classList.remove('valid', 'invalid');
-            return false;
-        }
-        input.classList.remove('valid');
-        input.classList.add('invalid');
-        return false;
     }
 
     showFormulaInfo() {

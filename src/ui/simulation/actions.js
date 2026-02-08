@@ -1,3 +1,45 @@
+export async function stopSimulation(panel) {
+  const runBtn = document.getElementById('run-simulation-btn');
+  const stopBtn = document.getElementById('stop-simulation-btn');
+  const progressDiv = document.getElementById('simulation-progress');
+  const progressFill = document.getElementById('progress-fill');
+  const progressText = document.getElementById('progress-text');
+
+  // Call backend API to stop the job if we have a job ID
+  if (panel.currentJobId) {
+    try {
+      await fetch(`http://localhost:8000/api/stop/${panel.currentJobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.warn('Failed to call stop API:', error);
+      // Continue with local cleanup even if API call fails
+    }
+  }
+
+  // Clear the polling interval
+  if (panel.pollInterval) {
+    clearInterval(panel.pollInterval);
+    panel.pollInterval = null;
+  }
+
+  // Update UI to show cancellation
+  progressText.textContent = 'Simulation cancelled';
+  runBtn.disabled = false;
+  stopBtn.disabled = true;
+
+  // Hide progress bar after a short delay
+  setTimeout(() => {
+    if (progressDiv.style.display !== 'none') {
+      progressDiv.style.display = 'none';
+    }
+  }, 1000);
+
+  // Reset job ID
+  panel.currentJobId = null;
+}
+
 export async function runSimulation(panel) {
   const runBtn = document.getElementById('run-simulation-btn');
   const progressDiv = document.getElementById('simulation-progress');
@@ -10,15 +52,18 @@ export async function runSimulation(panel) {
     frequencyStart: parseInt(document.getElementById('freq-start').value),
     frequencyEnd: parseInt(document.getElementById('freq-end').value),
     numFrequencies: parseInt(document.getElementById('freq-steps').value),
-    simulationType: document.getElementById('sim-type').value
+    simulationType: document.getElementById('sim-type').value,
+    circSymProfile: parseInt(document.getElementById('circsym-profile')?.value ?? '-1', 10)
   };
 
   // Get polar directivity configuration
-  const angleRangeStr = document.getElementById('polar-angle-range').value;
-  const angleRangeParts = angleRangeStr.split(',').map((s) => parseFloat(s.trim()));
+  const angleStart = parseFloat(document.getElementById('polar-angle-start').value) || 0;
+  const angleEnd = parseFloat(document.getElementById('polar-angle-end').value) || 180;
+  const angleStep = parseFloat(document.getElementById('polar-angle-step').value) || 5;
+  const angleCount = Math.floor((angleEnd - angleStart) / angleStep) + 1;
 
   config.polarConfig = {
-    angle_range: angleRangeParts.length === 3 ? angleRangeParts : [0, 180, 37],
+    angle_range: [angleStart, angleEnd, angleCount],
     norm_angle: parseFloat(document.getElementById('polar-norm-angle').value),
     distance: parseFloat(document.getElementById('polar-distance').value),
     inclination: parseFloat(document.getElementById('polar-inclination').value)
@@ -40,9 +85,18 @@ export async function runSimulation(panel) {
   try {
     // Get current mesh data
     const meshData = await panel.prepareMeshForSimulation();
+    if (!meshData.surfaceTags || meshData.surfaceTags.length !== meshData.indices.length / 3) {
+      throw new Error('Mesh payload is invalid: missing canonical surface tags.');
+    }
 
     progressFill.style.width = '20%';
     progressText.textContent = 'Submitting to BEM solver...';
+
+    // Disable stop button at start, enable it when simulation begins
+    const stopBtn = document.getElementById('stop-simulation-btn');
+    if (stopBtn) {
+      stopBtn.disabled = true;
+    }
 
     // Check if real solver is available
     const isConnected = await panel.solver.checkConnection();
@@ -53,6 +107,11 @@ export async function runSimulation(panel) {
 
       progressFill.style.width = '30%';
       progressText.textContent = 'Simulation running...';
+
+      // Enable stop button when simulation starts
+      if (stopBtn) {
+        stopBtn.disabled = false;
+      }
 
       // Poll for results
       panel.pollSimulationStatus();
@@ -83,10 +142,12 @@ export async function runSimulation(panel) {
   }
 }
 
-export async function runMockSimulation() {
+export async function runMockSimulation(config) {
   // Simulate processing time
-  return new Promise((resolve) => {
-    setTimeout(resolve, 2000);
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      resolve();
+    }, 2000);
   });
 }
 
@@ -99,6 +160,15 @@ export function pollSimulationStatus(panel) {
   panel.pollInterval = setInterval(async () => {
     try {
       const status = await panel.solver.getJobStatus(panel.currentJobId);
+
+      // Check if simulation was cancelled
+      if (status.status === 'cancelled' || status.status === 'error') {
+        clearInterval(panel.pollInterval);
+        progressFill.style.width = `${Math.min(100, progressFill.offsetWidth)}%`;
+        progressText.textContent = `Simulation ${status.status}`;
+        runBtn.disabled = false;
+        return;
+      }
 
       if (status.status === 'running') {
         const progress = Math.min(95, 30 + (status.progress * 65));

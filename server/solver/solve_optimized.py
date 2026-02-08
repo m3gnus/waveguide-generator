@@ -22,6 +22,7 @@ from .directivity_correct import (
     calculate_directivity_patterns_correct,
     calculate_directivity_index_correct
 )
+from .units import m_to_mm
 
 
 class CachedOperators:
@@ -42,10 +43,10 @@ class CachedOperators:
             self.grid = grid
             # P1 space for pressure (continuous piecewise linear)
             self.space_p = bempp_api.function_space(grid, "P", 1)
-            # DP0 space for velocity on throat only
-            # Note: segments=[1] selects throat elements (domain_index == 1)
-            # If symmetry faces are tagged as 4, they won't be in throat space
-            self.space_u = bempp_api.function_space(grid, "DP", 0, segments=[1])
+            # DP0 space for velocity on source only
+            # Note: segments=[2] selects source elements (domain_index == 2)
+            # If symmetry faces are tagged as 4, they won't be in source space
+            self.space_u = bempp_api.function_space(grid, "DP", 0, segments=[2])
             # Identity operator (frequency-independent)
             self.identity = bempp_api.operators.boundary.sparse.identity(
                 self.space_p, self.space_p, self.space_p
@@ -81,8 +82,8 @@ def apply_neumann_bc_on_symmetry_planes(grid, symmetry_info: Optional[Dict]) -> 
     are handled implicitly - we just don't place sources on those faces and
     they act as rigid boundaries (zero normal derivative of pressure).
 
-    The key is that symmetry faces (tagged as 4) should NOT be in the throat
-    velocity space (segments=[1]), which is already handled by mesh tagging.
+    The key is that symmetry faces (tagged as 4) should NOT be in the source
+    velocity space (segments=[2]), which is already handled by mesh tagging.
 
     Args:
         grid: BEMPP grid
@@ -92,7 +93,7 @@ def apply_neumann_bc_on_symmetry_planes(grid, symmetry_info: Optional[Dict]) -> 
         return
 
     # Symmetry boundary conditions are implicit in BEMPP:
-    # - Symmetry faces are NOT in the velocity function space (segments=[1])
+    # - Symmetry faces are NOT in the velocity function space (segments=[2])
     # - They have zero normal velocity (rigid boundary)
     # - This gives the correct Neumann BC (∂p/∂n = 0 on symmetry plane)
 
@@ -145,7 +146,7 @@ def solve_frequency_cached(
     # Calculate on-axis SPL
     vertices = grid.vertices
     max_y = np.max(vertices[1, :])
-    R_far = 1000.0  # 1m in mm
+    R_far = m_to_mm(1.0)
     obs_point = np.array([[0.0], [max_y + R_far], [0.0]])
 
     dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(space_p, obs_point, k)

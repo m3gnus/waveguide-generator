@@ -1,9 +1,15 @@
-
 export { generateMWGConfigContent } from './mwgConfig.js';
 export { exportProfilesCSV, exportGmshGeo, compareWithReference } from './profiles.js';
-export { exportHornToMSH, exportHornToGeo, exportHornToMSHWithBoundaries, exportHornToMSHFromCAD, exportFullGeo } from './msh.js';
+export { exportHornToGeo, exportMSH, exportFullGeo } from './msh.js';
 export { exportVerticesToCSV, exportVerticesToCSVWithMetadata, exportCrossSectionProfilesCSV } from './csv.js';
-export { generateAbecProjectFile, generateAbecSolvingFile, generateAbecObservationFile } from './abecProject.js';
+export {
+  generateAbecProjectFile,
+  generateAbecSolvingFile,
+  generateAbecObservationFile,
+  generateAbecCoordsFile,
+  generateAbecStaticFile
+} from './abecProject.js';
+export { generateBemppStarterScript } from './bempp.js';
 
 // Browser-compatible STL exports (binary/ASCII generation)
 export { exportSTLBinary, exportSTLAscii } from './stl.browser.js';

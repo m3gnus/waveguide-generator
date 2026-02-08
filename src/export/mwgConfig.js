@@ -143,7 +143,6 @@ export function generateMWGConfigContent(params) {
     if (isNonZero(params.throatResolution)) content += `Mesh.ThroatResolution = ${formatValue(params.throatResolution)}\n`;
     if (isNonZero(params.mouthResolution)) content += `Mesh.MouthResolution = ${formatValue(params.mouthResolution)}\n`;
     if (isNonZero(params.verticalOffset)) content += `Mesh.VerticalOffset = ${formatValue(params.verticalOffset)}\n`;
-    if (isNonZero(params.zMapPoints)) content += `Mesh.ZMapPoints = ${formatList(params.zMapPoints)}\n`;
     if (params.subdomainSlices !== undefined && params.subdomainSlices !== null) {
         content += `Mesh.SubdomainSlices = ${formatList(params.subdomainSlices)}\n`;
     }

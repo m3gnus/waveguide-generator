@@ -1,6 +1,13 @@
 import { AppEvents } from '../../events.js';
+import { stopSimulation } from './actions.js';
 
 export function setupEventListeners(panel) {
+  // Stop simulation button
+  const stopBtn = document.getElementById('stop-simulation-btn');
+  if (stopBtn) {
+    stopBtn.addEventListener('click', () => stopSimulation(panel));
+  }
+
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {

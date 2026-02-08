@@ -319,10 +319,13 @@ h3 {
     flex: 1;
 }
 
-/* Formula input field - auto-resizing text field */
+/* Formula input field - multi-line text field with fixed width */
 .formula-input {
-    min-width: 60px;
-    max-width: 200px;
+    width: 100%;
+    min-height: 32px;
+    /* Initial height for single line */
+    max-height: 150px;
+    /* Maximum expansion before scrolling */
     background: var(--input-bg);
     border: 1px solid var(--border-color);
     color: var(--text-color);
@@ -330,7 +333,11 @@ h3 {
     font-size: 12px;
     padding: 6px 8px;
     border-radius: 6px;
-    transition: all 0.2s ease;
+    white-space: pre-wrap;
+    overflow-y: auto;
+    resize: none;
+    /* Disable manual resize handle */
+    box-sizing: border-box;
 }
 
 .formula-input:focus {

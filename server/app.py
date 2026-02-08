@@ -44,8 +44,8 @@ class BoundaryCondition(BaseModel):
 class MeshData(BaseModel):
     vertices: List[float]
     indices: List[int]
-    surfaceTags: Optional[List[int]] = None  # Per-triangle surface tags
-    format: str = "bem"
+    surfaceTags: List[int]  # Per-triangle surface tags
+    format: str = "msh"
     boundaryConditions: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
 
@@ -132,6 +132,17 @@ async def submit_simulation(request: SimulationRequest):
     
     Returns a job ID for tracking progress
     """
+    triangle_count = len(request.mesh.indices) // 3
+    if len(request.mesh.vertices) % 3 != 0:
+        raise HTTPException(status_code=422, detail="Mesh vertices length must be divisible by 3.")
+    if len(request.mesh.indices) % 3 != 0:
+        raise HTTPException(status_code=422, detail="Mesh indices length must be divisible by 3.")
+    if len(request.mesh.surfaceTags) != triangle_count:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) must match triangle count ({triangle_count})."
+        )
+
     if not SOLVER_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -155,6 +166,31 @@ async def submit_simulation(request: SimulationRequest):
     asyncio.create_task(run_simulation(job_id, request))
     
     return {"job_id": job_id}
+
+
+@app.post("/api/stop/{job_id}")
+async def stop_simulation(job_id: str):
+    """
+    Stop a running simulation job
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs[job_id]
+    
+    # Only allow stopping if the job is queued or running
+    if job["status"] not in ["queued", "running"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot stop job with status: {job['status']}"
+        )
+    
+    job["status"] = "cancelled"
+    job["progress"] = 0.0
+    job["error"] = "Simulation cancelled by user"
+    job["stopped_at"] = datetime.now().isoformat()
+    
+    return {"message": f"Job {job_id} has been cancelled", "status": "cancelled"}
 
 
 @app.get("/api/status/{job_id}")

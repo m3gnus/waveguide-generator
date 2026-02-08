@@ -1,7 +1,7 @@
 {
   "name": "mwg-mathematical-waveguide-generator",
   "version": "1.0.0-alpha-7.5",
-  "description": "MWG - Mathematical Waveguide Generator: Interactive 3D visualization and optimization platform for acoustic waveguide design - Validation Phase (Playwright E2E)",
+  "description": "Mathematical Waveguide Generator: Interactive 3D visualization and optimization platform for acoustic waveguide design - Validation Phase (Playwright E2E)",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -9,7 +9,9 @@
     "start:frontend": "node scripts/dev-server.js",
     "start:backend": "cd server && python3 app.py",
     "dev": "node scripts/dev-server.js",
-    "build": "webpack --mode production"
+    "build": "webpack --mode production",
+    "test": "node --test",
+    "test:server": "cd server && python3 -m unittest discover -s tests"
   },
   "keywords": [
     "3d",
@@ -22,7 +24,7 @@
   "license": "MIT",
   "dependencies": {
     "express": "^5.2.1",
-    "opencascade.js": "^1.1.1",
+    "jszip": "^3.10.1",
     "three": "^0.160.0"
   },
   "devDependencies": {

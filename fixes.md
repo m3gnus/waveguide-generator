@@ -1,284 +1,191 @@
-# MWG Cleanup and Improvement Plan
+# ATH Rebuild Fixes (Updated)
 
-This document is both a task list and implementation guide. Each section is one
-discrete unit of work. They are ordered so that earlier steps do not depend on
-later ones --- work them top to bottom.
+Last updated: 2026-02-08
 
----
-
-## Phase 1 -- Remove dead code and unused features
-
-> **Completed:** 1.1 Delete stale docs, 1.2 Remove Mouth Rollback,
-> 1.3 Remove Enclosure Plan, 1.4 Remove LF Source B
-
-### 1.5 Remove legacy (non-CAD) MSH export path
-
-The system has two .msh export paths:
-
-1. **Legacy:** `exportHornToMSH()` and `exportHornToMSHWithBoundaries()` in
-   `src/export/msh.js` -- generates .msh from raw triangulated vertices/indices
-   produced by `meshBuilder.js`.
-2. **CAD:** `exportHornToMSHFromCAD()` in `src/export/msh.js` -- generates .msh
-   from tessellated STEP/B-Rep geometry via OpenCascade.
-
-Only the CAD path (2) should be kept. The .msh file must always be generated
-from the STEP geometry.
-
-**What to change:**
-
-- In `src/export/msh.js`: remove `exportHornToMSH()` and
-  `exportHornToMSHWithBoundaries()`. Keep `exportHornToMSHFromCAD()` and rename
-  it to something clearer (e.g. `exportMSH()`).
-- In `src/export/index.js`: update re-exports.
-- In `src/app/exports.js`: update MSH export handler to use the CAD path
-  exclusively. Currently line 118 calls `exportHornToMSHWithBoundaries()` --
-  replace with the CAD-based function.
-- In `scripts/ath-compare.js`: update or remove references to the legacy path.
-
-**Suggestion:** The legacy `meshBuilder.js` mesh is still needed for the 3D
-viewer (Three.js). Only the .msh *export* path should be consolidated to use
-CAD. The viewer can continue rendering from the fast triangulated mesh.
+This document tracks what is still left to do after the contract-first rebuild pass.
 
 ---
 
-### 1.6 Investigate and resolve z_values / zMapPoints
+## Completed in this pass
 
-**Research findings:**
-
-`z_values.txt` contains 916 floating-point values representing explicit axial
-(Z) slice positions for mesh generation, ranging from -6.148 to 94.77. These are
-loaded via the `zMapPoints` parameter in the schema (an expression field that
-accepts comma-separated values).
-
-In `meshBuilder.js`, the `buildSliceMap()` function checks if `zMapPoints` is
-provided. If it is, those explicit positions are used instead of the
-auto-computed resolution-based grading. This was used for ATH-compatible mesh
-topology matching.
-
-**Decision needed:** Since we are consolidating to the CAD/STEP mesh path,
-`zMapPoints` is only relevant for the legacy mesh builder (used by the viewer).
-The question is whether the viewer mesh needs exact slice positions or whether
-resolution-based grading is sufficient.
-
-**Suggestion:** Remove `z_values.txt` from the repo. Keep the `zMapPoints`
-schema field for now as a power-user option (it allows advanced users to specify
-exact slice distributions). If it is never used in practice, it can be removed
-in a later cleanup pass. Add a tooltip clarifying its purpose.
+1. Removed CAD/OpenCascade and STEP runtime path.
+2. Added canonical mesh payload contract end-to-end:
+   `mesh = { vertices, indices, surfaceTags, format, boundaryConditions, metadata }`.
+3. Locked canonical tag mapping in frontend/backend:
+   `1=walls`, `2=source`, `3=secondary`, `4=interface`.
+4. Added backend request validation for malformed mesh payloads.
+5. Aligned solver spaces to source tag `2` and fail-fast on missing source elements.
+6. Centralized mm<->m conversion helpers in backend solver.
+7. Added CircSym UI/config/export behavior:
+   `abecSimProfile=-1` => 3D, `>=0` => CircSym.
+8. Switched ABEC export to ZIP bundle with folder structure and fixed internal filenames.
+9. Added BEMPP starter script generation and wired GEO export to full GEO writer.
+10. Fixed CSV profile closure and 1/10 scaling.
+11. Added frontend and backend regression tests for key contract behaviors.
 
 ---
 
-## Phase 2 -- Fix and clarify existing features
+## Remaining release blockers (P0)
 
-> **Completed:** 2.1 Enable Export STEP button, 2.2 Clarify Wall Thickness (tooltip added)
+### P0.1 ATH parity is still failing across reference configs
 
-### 2.3 Investigate viewing .msh in the viewer
+Current result from:
+`node scripts/ath-compare.js _references/testconfigs /tmp/ath-generated`
 
-**Research findings:**
+Observed:
+1. GEO mismatch on many configs (axis/offset and spline structure differences).
+2. STL mismatch on many configs (mesh topology/count differences).
+3. MSH mismatch on many configs (physical group count/content differences).
 
-The current viewer (`src/viewer/`) uses Three.js `BufferGeometry` built from
-vertices/indices arrays. It renders the triangulated mesh from `meshBuilder.js`.
+Required work:
+1. Define exact parity targets per artifact:
+   - strict byte parity or semantic parity thresholds.
+2. Add deterministic parity checkpoints for:
+   - profile samples,
+   - mesh counts,
+   - physical tag counts.
+3. Iterate export/mesh transforms until reference gates pass for a minimum representative set:
+   - at least 2 OSSE + 2 R-OSSE configs first,
+   - then full `_references/testconfigs` sweep.
 
-A .msh file (Gmsh MSH 2.2 format) is a text-based mesh with nodes, elements,
-and physical groups. It can be parsed and displayed in Three.js, but the viewer
-would need:
-
-1. A .msh parser (read nodes + triangle elements from MSH format).
-2. Conversion to Three.js BufferGeometry.
-3. Ability to render physical group boundaries as colored overlays.
-
-**Suggestion:** This is feasible but non-trivial. A simpler approach: since the
-CAD path already tessellates the STEP geometry, use that tessellation directly
-for the viewer. This would show the actual mesh that gets exported, rather than
-the legacy meshBuilder output. Add a toggle between:
-
-- **Surface view** (current -- fast meshBuilder triangulation)
-- **Mesh view** (CAD tessellation -- shows the actual export mesh with
-  boundary groups highlighted)
-
-This avoids needing a .msh parser entirely. The CAD tessellator
-(`src/cad/tessellator.js`) already produces vertices/indices that Three.js can
-consume.
-
----
-
-### 2.4 Move Offset to Directivity Map section and decouple from geometry
-
-**Research findings:**
-
-`verticalOffset` (schema key in MESH section) currently does two things:
-
-1. Offsets the 3D model geometry in the Z axis (`meshBuilder.js:414`).
-2. Is used as part of the export coordinate system (`msh.js:60-62`).
-
-The request is to make Offset only affect the measurement/simulation position,
-not the 3D model.
-
-**What to change:**
-
-- Move `verticalOffset` from the MESH schema section to a new field in the
-  Simulation tab's DIRECTIVITY MAP section in `index.html` (near lines 120-136).
-- Rename to something like "Measurement Offset" for clarity.
-- In `meshBuilder.js:349-414`: remove the `verticalOffset` application to vertex
-  positions. The viewer mesh should always be centered.
-- In `src/export/msh.js` and `src/export/abecProject.js`: keep the offset for
-  simulation coordinate transforms only.
-- In `src/app/params.js`: the `applyVerticalOffset` flag already exists. Use
-  this to ensure the offset only applies to exports/simulation, never to the
-  viewer mesh.
+Files:
+1. `scripts/ath-compare.js`
+2. `src/export/msh.js`
+3. `src/export/profiles.js`
+4. `src/geometry/meshBuilder.js`
+5. `src/geometry/enclosure.js`
+6. `src/app/params.js`
 
 ---
 
-## Phase 3 -- UI reorganization
+### P0.2 MSH physical-group parity and rear-closure behavior need hard validation
 
-> **Completed:** 3.1 Move Scale into R-OSSE and OSSE subwindows
+Current risk:
+1. Canonical tags are now enforced, but reference `.msh` files still differ in PhysicalNames count and distribution.
+2. Freestanding back-wall behavior was moved to canonical payload generation and needs reference confirmation.
 
-### 3.2 Create unified Mesh Density box
+Required work:
+1. Validate tag distribution per config against reference intent:
+   - source region,
+   - rigid wall region,
+   - optional enclosure/interface regions.
+2. Confirm back-wall generation rules for:
+   - freestanding (`encDepth=0`) with `wallThickness > 0`,
+   - enclosure mode (`encDepth>0`) with no duplicate rear closure.
+3. Add regression tests for physical group counts and source-tag coverage.
 
-All mesh resolution controls should be grouped into a single "Mesh Density"
-section.
-
-**Target layout:**
-
-```
-Mesh Density
-├── Angular Segs      (currently in MESH)
-├── Length Segs        (currently in MESH)
-├── Corner Segs        (currently in MESH)
-├── ─────────────────
-├── Throat Resolution  (currently in MESH)
-├── Mouth Resolution   (currently in MESH)
-├── Front Resolution   (currently in ENCLOSURE)
-├── Back Resolution    (currently in ENCLOSURE)
-├── Rear Resolution    (currently in MESH)
-```
-
-**What to change:**
-
-- In `schema.js`: move `encFrontResolution` and `encBackResolution` from the
-  ENCLOSURE section into the MESH section (or create a dedicated MESH_DENSITY
-  section).
-- In `paramPanel.js`: update the rendering to group all these fields under a
-  single collapsible "Mesh Density" `<details>` element. A horizontal separator
-  should appear between the segment counts and the resolution fields.
-- Remove `throatSegments` if it is redundant with `throatResolution` (verify
-  this first).
+Files:
+1. `src/simulation/payload.js`
+2. `src/export/msh.js`
+3. `server/solver/mesh.py`
+4. `tests/mesh-payload.test.js`
 
 ---
 
-### 3.3 Split Map Angle Range into three fields
+### P0.3 ABEC/BEMPP export needs reference-level validation, not just feature presence
 
-Currently `polar-angle-range` in `index.html:123` is a single text input
-accepting comma-separated values like `"0,180,37"`.
+Current status:
+1. ZIP structure and extra files are implemented.
+2. GEO + starter script exports are implemented.
+3. Semantic parity vs reference ABEC outputs is not yet validated end-to-end.
 
-**What to change:**
+Required work:
+1. Compare generated ABEC ZIP contents against `_references/testconfigs/*/ABEC_*`.
+2. Confirm `solving.txt` values for:
+   - `Dim=3D` vs `Dim=CircSym`,
+   - symmetry fields,
+   - mesh alias and script references.
+3. Confirm `observation.txt` polar block semantics against reference templates.
+4. Run real Gmsh parse/mesh generation on exported GEO for representative cases.
+5. Execute a BEMPP tutorial workflow using one exported mesh/script pair.
 
-- Replace the single text input with three numeric inputs:
-  - **Start Angle (deg)** -- default 0
-  - **End Angle (deg)** -- default 180
-  - **Step (deg)** -- default 5
-- In `src/ui/simulation/actions.js:17-21`: update the parsing to read from three
-  separate input fields instead of splitting a comma string.
-- The step field means "measure every N degrees". So start=0, end=180, step=5
-  produces measurements at 0, 5, 10, ..., 175, 180 (37 points).
-- In `src/export/abecProject.js:166`: update `angleRange` generation to compute
-  `PolarRange` from the three fields.
-
-**Note:** The current format `"0,180,37"` uses a *count* (37 points), while the
-new format uses a *step* (5 degrees). The conversion is:
-`count = floor((end - start) / step) + 1`. Make sure downstream consumers
-receive the correct format (ABEC expects start, end, count).
-
----
-
-## Phase 4 -- New features
-
-### 4.1 Add output folder selection
-
-Currently each export opens the browser's file picker individually. A persistent
-output folder selection would streamline batch exports.
-
-**What to add:**
-
-- A "Choose Folder" button placed to the LEFT of the export counter input in
-  `index.html` (near lines 54-56).
-- Use the `window.showDirectoryPicker()` API (File System Access API) to let the
-  user pick a folder. Store the directory handle.
-- When a folder is selected, exports skip the per-file picker and write directly
-  to the chosen folder using the prefix + counter naming convention.
-- Show the selected folder name next to the button.
-- Fallback: if the browser doesn't support `showDirectoryPicker()`, hide the
-  button and keep the current per-file picker behavior.
-
-**Files to modify:**
-
-- `index.html`: add the button.
-- `src/ui/fileOps.js`: add `selectOutputFolder()` and modify `saveFile()` to
-  check for a stored directory handle.
-- `src/app/exports.js`: thread the directory handle through export functions.
+Files:
+1. `src/app/exports.js`
+2. `src/export/abecProject.js`
+3. `src/export/msh.js`
+4. `src/export/bempp.js`
+5. `_references/beminfo/*`
 
 ---
 
-### 4.2 Add CircSym simulation mode
+### P0.4 End-to-end simulation API/UI flow needs integrated runtime verification
 
-A circular symmetry mode for strictly axisymmetric devices. The schema already
-has a partial field: `abecSimProfile` with label "CircSym Profile" (line 219).
+Current status:
+1. Contract validation and unit tests are in place.
+2. Full browser-to-backend runtime verification with real solver has not been completed in this pass.
 
-**What to add:**
+Required work:
+1. Verify full flow from UI:
+   - `/health`
+   - `/api/solve`
+   - `/api/status/{id}`
+   - `/api/results/{id}`
+   - `/api/stop/{id}`
+2. Verify payload shape from UI is exactly canonical in live runs.
+3. Verify smoothing operates post-solve without resubmitting jobs.
+4. Capture one successful run artifact set for regression reference.
 
-- A clear toggle or mode selector for CircSym in the ABEC/Simulation settings.
-  When enabled, the simulation uses a single 2D axisymmetric profile instead of
-  the full 3D mesh.
-- The `abecSimProfile` field (currently just a number defaulting to -1) should
-  be expanded into a proper mode:
-  - Off (default, -1): full 3D simulation.
-  - On (profile index): axisymmetric simulation using the specified profile.
-- Update `src/export/abecProject.js` and `src/export/mwgConfig.js` to output the
-  correct ABEC configuration for CircSym mode.
-- Update the Simulation tab UI to show a CircSym toggle with a profile selector.
-
-**Note:** This needs clarification on what "CircSym Profile" index means in the
-ABEC context. Investigate the ABEC documentation or existing MWG configs to
-determine valid values and behavior.
-
----
-
-## Phase 5 -- Geometry script cleanup
-
-### 5.1 Review and consolidate geometry scripts
-
-Current `src/geometry/` files:
-
-| File | Purpose | Status |
-|---|---|---|
-| `index.js` | Re-exports | Done |
-| `common.js` | Shared utilities (evalParam, parseList, etc.) | Keep |
-| `expression.js` | Math expression parser | Keep |
-| `hornModels.js` | OSSE/R-OSSE profile calculations | Keep |
-| `meshBuilder.js` | Triangulated mesh builder (viewer) | Keep |
-| `morphing.js` | Circular-to-rectangular throat morphing | Keep |
-| `rearShape.js` | Rear shape geometry (was rollback.js) | Done |
-| `enclosure.js` | Rear chamber/enclosure geometry | Done (encPlan removed) |
-
-Phase 1 removals are complete. No further consolidation needed.
+Files:
+1. `src/ui/simulation/actions.js`
+2. `src/ui/simulation/mesh.js`
+3. `src/solver/index.js`
+4. `server/app.py`
+5. `server/solver/*`
 
 ---
 
-## Summary of remaining changes by file
+## High-priority follow-up (P1)
 
-Quick reference for which files are touched by remaining tasks:
+### P1.1 Expand automated regression coverage
 
-| File | Tasks |
-|---|---|
-| `index.html` | 3.3, 4.1 |
-| `src/config/schema.js` | 3.2 |
-| `src/geometry/meshBuilder.js` | 2.4 |
-| `src/export/msh.js` | 1.5, 2.4 |
-| `src/export/mwgConfig.js` | 2.4 |
-| `src/export/index.js` | 1.5 |
-| `src/export/abecProject.js` | 3.3, 4.2 |
-| `src/app/exports.js` | 1.5, 4.1 |
-| `src/app/params.js` | 2.4 |
-| `src/ui/paramPanel.js` | 3.2 |
-| `src/ui/fileOps.js` | 4.1 |
-| `src/ui/simulation/actions.js` | 3.3 |
-| `scripts/ath-compare.js` | 1.5 |
+Add tests for:
+1. ABEC ZIP folder/file names and internal file text checks.
+2. GEO output `Save "<mesh>.msh"` consistency.
+3. Parser round-trip for additional ATH fixtures.
+4. Backend validation edge-cases:
+   - indices out of range,
+   - zero source tags,
+   - malformed boundary condition objects.
+
+Files:
+1. `tests/*.test.js`
+2. `server/tests/*.py`
+
+---
+
+### P1.2 Remove or align stale legacy solver-side helper code
+
+Current risk:
+1. `src/solver/bemMeshGenerator.js` still exists with old tag assumptions and is not part of canonical flow.
+
+Required work:
+1. Either delete unused file(s) or refactor to canonical tag contract.
+2. Add import-smoke test to prevent accidental usage of stale path.
+
+Files:
+1. `src/solver/bemMeshGenerator.js`
+2. `src/ui/simulation/mesh.js`
+3. `tests/` (new smoke test)
+
+---
+
+## Validation commands (current baseline)
+
+1. Frontend build:
+   `npm run build`
+2. Frontend tests:
+   `npm test`
+3. Backend tests:
+   `npm run test:server`
+4. Parity smoke (currently failing, must be improved):
+   `node scripts/ath-compare.js _references/testconfigs /tmp/ath-generated`
+
+---
+
+## Definition of done for this fixes list
+
+All items in **P0** are complete when:
+1. canonical payload/tag/unit contracts remain enforced,
+2. ABEC/BEMPP exports validate against references,
+3. end-to-end simulation flow is verified in live runtime,
+4. ATH comparison is green for agreed reference set (initial subset + full sweep).

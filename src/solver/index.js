@@ -89,8 +89,25 @@ export class BemSolver {
    * Submit a horn geometry for BEM simulation
    */
   async submitSimulation(config, meshData, options = {}) {
+    if (!meshData || !Array.isArray(meshData.vertices) || !Array.isArray(meshData.indices)) {
+      throw new Error('Invalid mesh payload: missing vertices/indices arrays.');
+    }
+    if (!Array.isArray(meshData.surfaceTags)) {
+      throw new Error('Invalid mesh payload: missing surfaceTags array.');
+    }
+    if (meshData.surfaceTags.length !== meshData.indices.length / 3) {
+      throw new Error('Invalid mesh payload: surfaceTags length must match triangle count.');
+    }
+
     const payload = {
-      mesh: meshData,
+      mesh: {
+        vertices: meshData.vertices,
+        indices: meshData.indices,
+        surfaceTags: meshData.surfaceTags,
+        format: meshData.format || 'msh',
+        boundaryConditions: meshData.boundaryConditions || {},
+        metadata: meshData.metadata || {}
+      },
       frequency_range: [config.frequencyStart, config.frequencyEnd],
       num_frequencies: config.numFrequencies,
       sim_type: config.simulationType,

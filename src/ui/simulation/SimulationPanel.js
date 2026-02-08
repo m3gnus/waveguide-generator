@@ -42,7 +42,8 @@ export class SimulationPanel {
       { id: 'freq-start', key: 'abecF1', parse: (value) => parseFloat(value) },
       { id: 'freq-end', key: 'abecF2', parse: (value) => parseFloat(value) },
       { id: 'freq-steps', key: 'abecNumFreq', parse: (value) => parseInt(value, 10) },
-      { id: 'sim-type', key: 'abecSimType', parse: (value) => parseInt(value, 10) }
+      { id: 'sim-type', key: 'abecSimType', parse: (value) => parseInt(value, 10) },
+      { id: 'circsym-profile', key: 'abecSimProfile', parse: (value) => parseInt(value, 10) }
     ];
 
     this.setupEventListeners();
