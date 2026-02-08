@@ -16,7 +16,7 @@ function parseErrorDetail(payload) {
 
 export async function checkForUpdates() {
   const button = document.getElementById('check-updates-btn');
-  const originalLabel = button?.textContent || 'Check for Updates';
+  const originalLabel = button?.textContent || 'Check for App Updates';
 
   if (button) {
     button.disabled = true;

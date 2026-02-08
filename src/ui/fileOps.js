@@ -1,6 +1,7 @@
 import { showError } from './feedback.js';
 
 let outputDirHandle = null;
+let hasPendingParameterChanges = false;
 
 export function getExportBaseName() {
     const prefix = document.getElementById('export-prefix')?.value || 'horn';
@@ -13,6 +14,21 @@ export function incrementExportCounter() {
     const counterEl = document.getElementById('export-counter');
     if (!counterEl) return;
     counterEl.value = parseInt(counterEl.value, 10) + 1;
+}
+
+export function markParametersChanged() {
+    hasPendingParameterChanges = true;
+}
+
+function shouldIncrementCounter(options = {}) {
+    if (options.incrementCounter === false) return false;
+    return hasPendingParameterChanges;
+}
+
+function finalizeExportCounter(options = {}) {
+    if (!shouldIncrementCounter(options)) return;
+    incrementExportCounter();
+    hasPendingParameterChanges = false;
 }
 
 export async function selectOutputFolder() {
@@ -33,7 +49,6 @@ export async function selectOutputFolder() {
 
 export async function saveFile(content, fileName, options = {}) {
     const finalName = fileName || `${getExportBaseName()}${options.extension || ''}`;
-    const incrementCounter = options.incrementCounter !== false;
 
     // If a folder is selected, write directly to it
     if (outputDirHandle) {
@@ -45,7 +60,7 @@ export async function saveFile(content, fileName, options = {}) {
                 : new Blob([content], { type: options.contentType || 'text/plain' });
             await writable.write(blob);
             await writable.close();
-            if (incrementCounter) incrementExportCounter();
+            finalizeExportCounter(options);
             return;
         } catch (err) {
             console.warn('Direct folder write failed, falling back to file picker:', err);
@@ -64,7 +79,7 @@ export async function saveFile(content, fileName, options = {}) {
             const writable = await handle.createWritable();
             await writable.write(content);
             await writable.close();
-            if (incrementCounter) incrementExportCounter();
+            finalizeExportCounter(options);
             return;
         } catch (err) {
             if (err.name === 'AbortError') return;
@@ -79,5 +94,5 @@ export async function saveFile(content, fileName, options = {}) {
     link.download = finalName;
     link.click();
     URL.revokeObjectURL(url);
-    if (incrementCounter) incrementExportCounter();
+    finalizeExportCounter(options);
 }

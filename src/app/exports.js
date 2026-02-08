@@ -48,10 +48,10 @@ function getBackendUrl(app) {
 }
 
 const GMSH_EXPORT_DEFAULTS = Object.freeze({
-  segmentDivisor: 5,
-  resolutionScale: 8,
-  minAngularSegments: 16,
-  minLengthSegments: 6
+  segmentDivisor: 2,
+  resolutionScale: 2,
+  minAngularSegments: 20,
+  minLengthSegments: 10
 });
 
 function toPositiveNumber(value, fallback) {

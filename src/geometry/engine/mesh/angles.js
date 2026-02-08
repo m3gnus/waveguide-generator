@@ -5,6 +5,13 @@ function buildUniformAngles(segmentCount) {
   return Array.from({ length: segmentCount }, (_, i) => (i / segmentCount) * Math.PI * 2);
 }
 
+function normalizeAngularSegments(rawCount) {
+  const count = Math.max(4, Math.round(Number(rawCount) || 0));
+  if (count % 4 === 0) return count;
+  // ATH-compatible fallback: snap up to a full 8-way symmetric ring.
+  return Math.max(8, Math.ceil(count / 8) * 8);
+}
+
 function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSegments) {
   if (!Number.isFinite(halfW) || !Number.isFinite(halfH) || halfW <= 0 || halfH <= 0) {
     return null;
@@ -63,13 +70,11 @@ function mirrorQuadrantAngles(quadrantAngles) {
 }
 
 export function buildAngleList(params, mouthExtents) {
-  const angularSegments = Number(params.angularSegments || DEFAULTS.ANGULAR_SEGMENTS);
+  const angularSegments = normalizeAngularSegments(
+    Number(params.angularSegments || DEFAULTS.ANGULAR_SEGMENTS)
+  );
   if (!Number.isFinite(angularSegments) || angularSegments < 4) {
     return { fullAngles: [0], pointsPerQuadrant: 0 };
-  }
-
-  if (angularSegments % 4 !== 0) {
-    return { fullAngles: buildUniformAngles(angularSegments), pointsPerQuadrant: 0 };
   }
 
   const pointsPerQuadrant = angularSegments / 4;
