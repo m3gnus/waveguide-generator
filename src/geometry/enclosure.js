@@ -323,17 +323,22 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         const d = Math.hypot(p.x - prev.x, p.z - prev.z);
         if (d > 1e-4) cleanOutline.push(p);
     }
+    if (cleanOutline.length > 2) {
+        const first = cleanOutline[0];
+        const last = cleanOutline[cleanOutline.length - 1];
+        const dClose = Math.hypot(first.x - last.x, first.z - last.z);
+        if (dClose <= 1e-4) cleanOutline.pop();
+    }
 
     let centerSumX = 0, centerSumZ = 0;
     cleanOutline.forEach(p => { centerSumX += p.x; centerSumZ += p.z; });
     const cx = centerSumX / cleanOutline.length;
     const cz = centerSumZ / cleanOutline.length;
 
-    const totalPts = cleanOutline.length;
     const outerPts = [];
     const insetPts = [];
 
-    for (let i = 0; i < totalPts; i++) {
+    for (let i = 0; i < cleanOutline.length; i++) {
         const pt = cleanOutline[i];
 
         let nx = pt.nx;
@@ -360,6 +365,77 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
             nx, nz
         });
     }
+
+    // When offsetting a rounded rectangle by the same radius, corner sample runs
+    // can collapse to repeated points. Remap those points onto the collapsed
+    // inset polygon using radial projection so the perimeter remains well-behaved.
+    const dedupedInset = [];
+    const collapseEps = 1e-6;
+    for (let i = 0; i < insetPts.length; i++) {
+        const p = insetPts[i];
+        if (dedupedInset.length === 0) {
+            dedupedInset.push({ x: p.x, z: p.z });
+            continue;
+        }
+        const prev = dedupedInset[dedupedInset.length - 1];
+        const d = Math.hypot(p.x - prev.x, p.z - prev.z);
+        if (d > collapseEps) dedupedInset.push({ x: p.x, z: p.z });
+    }
+    if (dedupedInset.length > 2) {
+        const first = dedupedInset[0];
+        const last = dedupedInset[dedupedInset.length - 1];
+        const d = Math.hypot(first.x - last.x, first.z - last.z);
+        if (d <= collapseEps) dedupedInset.pop();
+    }
+
+    const projectRayToPolygon = (dx, dz, polygon) => {
+        const denomEps = 1e-10;
+        let bestT = Infinity;
+        let hit = null;
+
+        for (let i = 0; i < polygon.length; i++) {
+            const p1 = polygon[i];
+            const p2 = polygon[(i + 1) % polygon.length];
+            const ex = p2.x - p1.x;
+            const ez = p2.z - p1.z;
+
+            const det = dx * (-ez) - dz * (-ex);
+            if (Math.abs(det) <= denomEps) continue;
+
+            const rhsX = p1.x - cx;
+            const rhsZ = p1.z - cz;
+
+            const t = (rhsX * (-ez) - rhsZ * (-ex)) / det;
+            const u = (dx * rhsZ - dz * rhsX) / det;
+
+            if (t <= 0 || u < -1e-6 || u > 1 + 1e-6) continue;
+            if (t < bestT) {
+                bestT = t;
+                hit = {
+                    x: cx + dx * t,
+                    z: cz + dz * t
+                };
+            }
+        }
+        return hit;
+    };
+
+    if (dedupedInset.length >= 3 && dedupedInset.length < insetPts.length) {
+        for (let i = 0; i < insetPts.length; i++) {
+            const opt = outerPts[i];
+            const dx = opt.x - cx;
+            const dz = opt.z - cz;
+            const dirLen = Math.hypot(dx, dz);
+            if (dirLen <= collapseEps) continue;
+            const hit = projectRayToPolygon(dx / dirLen, dz / dirLen, dedupedInset);
+            if (!hit) continue;
+            insetPts[i].x = hit.x;
+            insetPts[i].z = hit.z;
+        }
+    }
+
+    const totalPts = insetPts.length;
+    if (totalPts < 3) return;
 
     const ringIndices = [];
     const mouthRing = [];
@@ -425,8 +501,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
                     z = ipt.z + (opt.z - ipt.z) * t;
                     y = yBase - edgeR * t;
                 } else {
-                    x = ipt.x + nx * edgeR * s_ang;
-                    z = ipt.z + nz * edgeR * s_ang;
+                    x = ipt.x + (opt.x - ipt.x) * s_ang;
+                    z = ipt.z + (opt.z - ipt.z) * s_ang;
                     y = yBase - edgeR * (1 - c);
                 }
                 vertices.push(x, y, z);
@@ -473,19 +549,12 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
                     z = opt.z + (ipt.z - opt.z) * t;
                     y = (backY + edgeR) - edgeR * t;
                 } else {
-                    x = opt.x - nx * edgeR * (1 - c);
-                    z = opt.z - nz * edgeR * (1 - c);
+                    x = opt.x + (ipt.x - opt.x) * (1 - c);
+                    z = opt.z + (ipt.z - opt.z) * (1 - c);
                     y = (backY + edgeR) - edgeR * s_ang;
                 }
                 vertices.push(x, y, z);
             }
-        }
-    } else {
-        const ringStart = vertices.length / 3;
-        backRings.push(ringStart);
-        for (let i = 0; i < totalPts; i++) {
-            const ipt = insetPts[i];
-            vertices.push(ipt.x, backY, ipt.z);
         }
     }
 
@@ -690,23 +759,63 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const rearCenterIdx = vertices.length / 3;
     vertices.push(centerX, centerY, centerZ);
 
-    let ringArea = 0;
+    const preCapTriEnd = indices.length / 3;
+    const capEps = 1e-6;
+    const capLoop = [];
     for (let i = 0; i < totalPts; i++) {
-        const i2 = (i + 1) % totalPts;
-        const x1 = vertices[(backInnerStart + i) * 3];
-        const z1 = vertices[(backInnerStart + i) * 3 + 2];
-        const x2 = vertices[(backInnerStart + i2) * 3];
-        const z2 = vertices[(backInnerStart + i2) * 3 + 2];
-        ringArea += (x1 * z2) - (x2 * z1);
+        const idx = backInnerStart + i;
+        const x = vertices[idx * 3];
+        const z = vertices[idx * 3 + 2];
+        let seen = false;
+        for (let j = 0; j < capLoop.length; j++) {
+            const ex = capLoop[j];
+            const dx = x - ex.x;
+            const dz = z - ex.z;
+            if (Math.hypot(dx, dz) <= capEps) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        capLoop.push({
+            idx,
+            x,
+            z,
+            angle: Math.atan2(z - centerZ, x - centerX)
+        });
     }
+    if (capLoop.length >= 3) {
+        capLoop.sort((a, b) => a.angle - b.angle);
 
-    const isCounterClockwise = ringArea >= 0;
-    for (let i = 0; i < totalPts; i++) {
-        const i2 = (i + 1) % totalPts;
-        if (isCounterClockwise) {
-            pushTri(backInnerStart + i, backInnerStart + i2, rearCenterIdx);
-        } else {
-            pushTri(backInnerStart + i2, backInnerStart + i, rearCenterIdx);
+        const edgeMatchesOrientation = (fromIdx, toIdx) => {
+            for (let t = enclosureStartTri; t < preCapTriEnd; t++) {
+                const off = t * 3;
+                const a = indices[off];
+                const b = indices[off + 1];
+                const c = indices[off + 2];
+                if ((a === fromIdx && b === toIdx) || (b === fromIdx && c === toIdx) || (c === fromIdx && a === toIdx)) {
+                    return 1;
+                }
+                if ((a === toIdx && b === fromIdx) || (b === toIdx && c === fromIdx) || (c === toIdx && a === fromIdx)) {
+                    return -1;
+                }
+            }
+            return 0;
+        };
+
+        let useForward = true;
+        const firstEdgeMatch = edgeMatchesOrientation(capLoop[0].idx, capLoop[1].idx);
+        if (firstEdgeMatch === 1) useForward = false;
+
+        for (let i = 0; i < capLoop.length; i++) {
+            const i2 = (i + 1) % capLoop.length;
+            const idx1 = capLoop[i].idx;
+            const idx2 = capLoop[i2].idx;
+            if (useForward) {
+                pushTri(idx1, idx2, rearCenterIdx);
+            } else {
+                pushTri(idx2, idx1, rearCenterIdx);
+            }
         }
     }
 

@@ -9,6 +9,7 @@ import {
   buildBoundaryConditions
 } from './tags.js';
 import { mapVertexToAth, transformVerticesToAth } from './transforms.js';
+import { prepareGeometryParams } from './params.js';
 
 function resolveBuildOptions(buildParams, options = {}) {
   return {
@@ -55,15 +56,17 @@ function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForc
 }
 
 export function buildCanonicalMeshPayload(params, options = {}) {
-  const rearClosureForced = shouldForceRearClosure(params, options);
-  const buildParams = normalizeBuildParams(params, options);
+  const preparedParams = prepareGeometryParams(params, { type: params?.type });
+  const rearClosureForced = shouldForceRearClosure(preparedParams, options);
+  const buildParams = normalizeBuildParams(preparedParams, options);
   const meshData = buildHornMesh(buildParams, resolveBuildOptions(buildParams, options));
   return buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced });
 }
 
 export function buildGeometryArtifacts(params, options = {}) {
-  const rearClosureForced = shouldForceRearClosure(params, options);
-  const buildParams = normalizeBuildParams(params, options);
+  const preparedParams = prepareGeometryParams(params, { type: params?.type });
+  const rearClosureForced = shouldForceRearClosure(preparedParams, options);
+  const buildParams = normalizeBuildParams(preparedParams, options);
   const meshData = buildHornMesh(buildParams, resolveBuildOptions(buildParams, options));
   const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced });
 

@@ -143,11 +143,21 @@ function analyzeEnclosure(mesh) {
     }
   }
 
+  const rearCoordSet = new Set();
+  for (const idx of enclosureVertices) {
+    const y = vertices[idx * 3 + 1];
+    if (Math.abs(y - rearY) > 1e-6) continue;
+    const x = vertices[idx * 3];
+    const z = vertices[idx * 3 + 2];
+    rearCoordSet.add(`${x.toFixed(6)},${z.toFixed(6)}`);
+  }
+
   return {
     rearBoundaryEdges: countRearBoundaryEdges(vertices, indices, rearY),
     sameDirectionSharedEdges,
     nonManifoldSharedEdges,
-    tinyTriangles
+    tinyTriangles,
+    rearUniqueCoords: rearCoordSet.size
   };
 }
 
@@ -155,6 +165,10 @@ for (const encEdge of [0, 25]) {
   test(`enclosure regression checks pass (encEdge=${encEdge})`, () => {
     const params = makePreparedParams({ encEdge });
     const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
+    assert.ok(
+      artifacts.mesh.groups?.enclosure?.end > artifacts.mesh.groups?.enclosure?.start,
+      'Enclosure generation should emit at least one enclosure triangle'
+    );
     const analysis = analyzeEnclosure(artifacts.mesh);
 
     assert.equal(
@@ -177,5 +191,11 @@ for (const encEdge of [0, 25]) {
       0,
       'Enclosure should not contain zero-area or near-zero-area triangles'
     );
+    if (encEdge > 0) {
+      assert.ok(
+        analysis.rearUniqueCoords > 8,
+        'Rounded case should retain multiple distinct rear-loop points, not collapse to corner-only topology'
+      );
+    }
   });
 }
