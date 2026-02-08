@@ -1,215 +1,90 @@
 # Mathematical Waveguide Generator
 
-A web-based 3D visualization and design tool for acoustic horns (waveguides), supporting OSSE and R-OSSE profiles with integrated BEM acoustic simulation.
+Mathematical Waveguide Generator is a browser-based tool for designing acoustic horns, previewing geometry in 3D, running BEM simulations, and exporting manufacturing/simulation files.
 
-## Features
+## What You Can Do
 
-*   **Real-time 3D Rendering:** Visualize horn geometry instantly with multiple display modes (standard, zebra stripes, wireframe, curvature)
-*   **Parametric Design:** Adjust throat angle, coverage angle, rollback, and more with live updates
-*   **Multiple Models:** Support for OSSE (Oblate Spheroid) and R-OSSE (Round-over) horn profiles
-*   **BEM Acoustic Simulation:** Run boundary element method simulations directly from the browser
-*   **Export:** STL for 3D printing, Gmsh .geo for meshing, MWG config files, and CSV profiles
-*   **Morphing:** Circular to rectangular mouth morphing with customizable parameters
+- Design OSSE and R-OSSE horn profiles with live parameter controls.
+- View geometry in real time (standard, zebra, wireframe, curvature).
+- Run acoustic simulations from the Simulation tab.
+- Export design data:
+  - `STL` (3D model)
+  - `GEO` and `MSH` (Gmsh/BEM workflow)
+  - `ABEC` project ZIP
+  - `CSV` profiles
+  - MWG config text
 
-## Quick Start
+## Quick Setup
 
-### 1. One-Time Setup
-
-Run the setup script to install all dependencies (Node.js and Python):
+### 1. Install frontend dependencies
 
 ```bash
-./setup.sh
+npm ci
 ```
 
-This installs:
-- Frontend dependencies (npm packages)
-- Backend dependencies (Python packages)
-- BEM solver (bempp-cl) for acoustic simulations
+### 2. (Optional, for real simulations) Set up backend in a local virtual environment
 
-**Note:** bempp-cl is a large package and may take 5-10 minutes to install.
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install --upgrade pip
+./.venv/bin/pip install -r server/requirements.txt
+./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
+```
 
-### 2. Start the Application
+If you skip backend setup, the UI still runs and uses mock simulation behavior when the solver is unavailable.
+
+## Run the App
+
+### Start both frontend and backend
 
 ```bash
 npm start
 ```
 
-This starts both servers:
-- **Frontend:** http://localhost:3000 (3D visualization and design)
-- **Backend:** http://localhost:8000 (BEM acoustic simulations)
+- Frontend: [http://localhost:3000](http://localhost:3000)
+- Backend: [http://localhost:8000](http://localhost:8000)
 
-Press `Ctrl+C` to stop both servers.
-
-### 3. Run Your First Simulation
-
-1. Open http://localhost:3000 in your browser
-2. Click the **"Simulation"** tab
-3. Status should show "Connected to BEM solver" (green dot)
-4. Click **"Run BEM Simulation"**
-5. View results!
-
-### Alternative: Run Servers Separately
-
-If you only need the frontend or backend:
+### Start only one side
 
 ```bash
-npm run start:frontend   # Frontend only (port 3000)
-npm run start:backend    # Backend only (port 8000)
+npm run start:frontend
+npm run start:backend
 ```
 
-## Using the Platform
+## Basic User Workflow
 
-### Geometry Design
+1. Open the Geometry tab and set horn parameters.
+2. Keep `Real-time Updates` on (or click `Update Model`).
+3. Use the Simulation tab to set frequency range and run solver.
+4. Export files from the Geometry tab when ready.
 
-**Geometry Tab:**
-- Adjust horn parameters with sliders
-- Real-time 3D preview
-- Multiple display modes (metal, zebra, wireframe, curvature)
-- Export to STL, Gmsh, MWG config, CSV
-
-### BEM Simulation
-
-**Simulation Tab:**
-- Configure frequency range (100-10000 Hz default)
-- Choose simulation type (infinite baffle/free-standing)
-- **ABEC.Polars Directivity Maps:**
-  - User-adjustable polar configuration (angle range, normalization, distance, inclination)
-  - Professional 2D heatmap visualization (frequency vs angle)
-  - Color-coded SPL maps matching industry standards
-- **Post-Processing Smoothing:**
-  - Fractional octave smoothing (1/1, 1/2, 1/3, 1/6, 1/12, 1/24, 1/48)
-  - Variable smoothing (frequency-dependent bandwidth for EQ work)
-  - Psychoacoustic smoothing (perception-based weighting)
-  - ERB smoothing (matches ear's frequency resolution)
-  - Keyboard shortcuts (Ctrl+Shift+1-9, X, Y, Z)
-  - Apply/remove smoothing without re-running simulation
-- Run simulations and view results:
-  - Frequency response
-  - Directivity patterns
-  - Impedance curves
-  - Directivity Index (DI)
-  - Polar directivity heatmaps
-- **Export Results:**
-  - PNG/SVG images of all charts
-  - CSV data files (frequency, SPL, DI, impedance)
-  - JSON format (complete results with metadata)
-  - Text reports with summary statistics
-
-**Note:** Simulations work in two modes:
-- **With backend:** Real BEM physics (takes seconds to minutes)
-- **Without backend:** Mock data for UI testing (instant)
-
-## Project Structure
-
-```
-├── src/
-│   ├── geometry/       # Canonical geometry pipeline (params -> mesh -> simulation/export artifacts)
-│   ├── viewer/         # Three.js 3D visualization
-│   ├── config/         # Parameter management
-│   ├── solver/         # BEM solver interface
-│   ├── ui/             # User interface components
-│   └── export/         # Export functionality (STL, MSH, GEO, CSV)
-├── scripts/            # Development and testing scripts
-│   ├── ath-compare.js  # ATH reference comparison
-│   ├── abec-compare.js # ABEC bundle comparison
-│   └── gmsh-export.py  # Gmsh processing pipeline
-├── server/             # Python BEM backend
-│   ├── app.py          # FastAPI application
-│   ├── solver/         # bempp-cl solver package
-│   ├── requirements.txt
-│   ├── start.sh        # Startup script
-│   └── README.md       # Backend setup guide
-├── _references/        # ATH reference configs and outputs
-└── tests/              # Unit tests
-```
-
-### Canonical Geometry Pipeline
-
-Geometry generation is centralized in `src/geometry/`:
-
-- `params.js`: shared parameter normalization/parsing
-- `meshBuilder.js`: core horn/enclosure topology generation
-- `tags.js`: canonical surface tag assignment rules
-- `transforms.js`: coordinate frame transforms (MWG -> ATH/Gmsh)
-- `pipeline.js`: `buildGeometryArtifacts()` and `buildCanonicalMeshPayload()`
-
-App runtime (`src/app/scene.js`, `src/app/mesh.js`, `src/app/exports.js`) and comparison scripts now consume this shared pipeline.
-
-## Testing
+## Verification Commands
 
 ```bash
-# Unit tests
 npm test
+npm run test:server
+npm run build
 ```
-
-### ATH Comparison Testing
-
-Compare MWG output against ATH (Acoustical Topology Horn) reference files:
-
-```bash
-# Run comparison against all test configs
-node scripts/ath-compare.js
-
-# Use custom paths
-node scripts/ath-compare.js _references/testconfigs _references/testconfigs/_generated
-```
-
-This compares:
-- **GEO files**: Gmsh geometry format (Points, Lines, Curve Loops, Surfaces)
-- **STL files**: Binary mesh for 3D visualization
-- **MSH files**: Gmsh mesh format for BEM simulation
-
-Reference configs are in `_references/testconfigs/` with matching folders containing ATH-generated reference files.
-
-### Gmsh Export Pipeline
-
-Process .geo files through Gmsh for bitwise-identical output:
-
-```bash
-python scripts/gmsh-export.py export <geo_file> [output_dir]
-
-# Legacy export form (still supported)
-python scripts/gmsh-export.py <geo_file> [output_dir]
-
-# Validate generated GEO files
-python scripts/gmsh-export.py validate <reference_root> <generated_root>
-```
-
-Requires Gmsh 4.15+ with Python bindings (`pip install gmsh`).
 
 ## Troubleshooting
 
-### "BEM solver not available"
-- Backend isn't running
-- Start it: `cd server && ./start.sh`
+### Simulation says backend is not connected
 
-### "python: command not found" (macOS)
-- Use `python3` instead of `python`
-- macOS doesn't have a `python` command by default
+- Make sure backend is running on port `8000`.
+- Check health endpoint:
 
-### Python 3.13 Compatibility
-- ✅ Fixed! Using pydantic>=2.10.0 for Python 3.13 support
+```bash
+curl http://localhost:8000/health
+```
 
-### Slow Installation
-- bempp-cl is a large package (~100MB with dependencies)
-- Installation takes 5-10 minutes
-- This is normal
+### `python` command issues on macOS
 
-## Documentation
+Use `python3` and `./.venv/bin/python` explicitly.
 
-*   **[docs/README.md](docs/README.md)** - Documentation index
-*   **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Detailed technical architecture, module design, and development roadmap
-*   **[docs/AGENT_INSTRUCTIONS.md](docs/AGENT_INSTRUCTIONS.md)** - Guide for AI agents working on this project
-*   **[docs/AI_GUIDANCE.md](docs/AI_GUIDANCE.md)** - AI collaboration guidelines and best practices
-*   **[server/README.md](server/README.md)** - Python backend setup and bempp-cl installation details
+### bempp-cl install is slow
 
-## Technologies
+This is normal. Building/installing `bempp-cl` can take several minutes.
 
-*   **Frontend:** JavaScript (ES modules), Three.js 0.160
-*   **Backend:** Python 3.8-3.13, FastAPI, bempp-cl 0.2.3
-*   **Testing:** Jest (unit), Playwright (E2E)
-*   **Build:** Webpack 5
+## More Technical Detail
 
-## License
-
-MIT
+See `PROJECT_DOCUMENTATION.md` for architecture, data contracts, API details, and development/testing notes.
