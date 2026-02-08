@@ -94,7 +94,6 @@ export function buildWaveguideMesh(params, options = {}) {
       ringCount,
       lengthSteps,
       fullCircle: quadrantInfo.fullCircle,
-      angleList,
       groupInfo
     });
   }

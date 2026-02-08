@@ -115,7 +115,7 @@ Important behavior:
 - A single geometry path feeds render/export/simulation to reduce drift.
 - `rearShape` is removed from active geometry generation.
 - `wallThickness` is applied only for freestanding horns (`encDepth = 0`):
-  - outward shell thickening
+  - normal-offset shell thickening (one wall-thickness from horn surface)
   - rear disc at `throatY - wallThickness`
 - Interface/enclosure tagging is derived from mesh groups and interface offset.
 

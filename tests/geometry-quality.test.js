@@ -46,6 +46,19 @@ test('freestanding wall thickness adds shell and rear disc behind throat', () =>
   assert.ok(thick.indices.length > base.indices.length, 'wall thickness should add triangles');
   assert.ok(thick.groups?.freestandingWall, 'freestanding wall group should be present');
 
+  const innerVertexCount = (Number(thickParams.lengthSegments) + 1) * thick.ringCount;
+  const outerStart = innerVertexCount;
+  for (let idx = 0; idx < innerVertexCount; idx += 1) {
+    const ix = thick.vertices[idx * 3];
+    const iy = thick.vertices[idx * 3 + 1];
+    const iz = thick.vertices[idx * 3 + 2];
+    const ox = thick.vertices[(outerStart + idx) * 3];
+    const oy = thick.vertices[(outerStart + idx) * 3 + 1];
+    const oz = thick.vertices[(outerStart + idx) * 3 + 2];
+    const d = Math.hypot(ox - ix, oy - iy, oz - iz);
+    assert.ok(Math.abs(d - 8) < 1e-5, 'outer wall should stay one thickness away from original surface');
+  }
+
   const throatY = thick.vertices[1];
   const targetRearY = throatY - 8;
   let foundRear = false;
