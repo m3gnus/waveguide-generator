@@ -182,6 +182,59 @@ Files:
 
 ---
 
+## Current findings snapshot (2026-02-08)
+
+This snapshot records the latest verified status after the recent P0 implementation pass.
+
+### Verified green
+
+1. `npm run build` passes.
+2. `npm test` passes (15 tests).
+3. `npm run test:server` passes (6 tests).
+4. `python3 scripts/validate-geo.py _references/testconfigs /tmp/ath-generated` passes for representative set:
+   - `0414je3`
+   - `250729solanaS2`
+   - `0416ro1`
+   - `260112aolo1`
+5. `bash scripts/runtime-api-smoke.sh` passes:
+   - `/health`, `/api/solve`, `/api/status/{id}`, `/api/results/{id}`, `/api/stop/{id}` success/cancel paths
+   - runtime artifact written to `_references/runtime_smoke/latest.json`
+
+### Still failing (release blockers)
+
+1. `node scripts/ath-compare.js _references/testconfigs /tmp/ath-generated` still fails across all 9 configs.
+2. `node scripts/abec-compare.js _references/testconfigs /tmp/ath-generated-abec` still fails across all 9 configs.
+
+### High-confidence findings from failure analysis
+
+1. Current parity comparators are still effectively topology-strict for core geometry:
+   - GEO currently fails immediately on point-count mismatch.
+   - STL currently fails immediately on triangle-count mismatch.
+   - MSH currently fails immediately on node/element-count mismatch.
+   This is incompatible with the intended semantic+deterministic parity gate when generator topology differs.
+2. Generated GEO/mesh coordinate frame is still materially offset vs ATH references in multiple fixtures (large bbox/axis deltas observed), indicating remaining transform/alignment gaps.
+3. ABEC interface-mode detection is too narrow for reference intent:
+   - At least `0416ro1` reference `solving.txt` expects interface sections (`SD2G0`/`I1-2`) while generated output does not currently enable interface mode.
+4. `scripts/abec-compare.js` has a prep inconsistency:
+   - it does not apply the same `Scale` length normalization path used elsewhere, which can skew downstream ABEC text parity (including offsets/dimensions) for scaled fixtures.
+5. Infinite-baffle offset handling was patched to use geometry-derived axial max in export path, but full ABEC parity has not yet been re-baselined after all related changes.
+
+### Immediate next actions to clear P0
+
+1. Align comparator policy with semantic gates:
+   - GEO: compare entity semantics/tolerances without hard point-count equality.
+   - STL: compare shape metrics (bbox/centroid/tolerances) without hard triangle-count equality.
+   - MSH: compare physical names/tag presence and deterministic tag distribution policy; avoid hard node/element equality as blocker.
+2. Fix interface-enable rule to match reference behavior (especially enclosed free-standing cases like `0416ro1`).
+3. Unify param preparation in `scripts/abec-compare.js` with app/export prep (including `Scale` handling and shared defaults).
+4. Re-run full validation matrix after each fix:
+   - build/tests/server tests
+   - ATH compare full sweep
+   - ABEC compare full sweep
+   - runtime smoke
+
+---
+
 ## Definition of done for this fixes list
 
 All items in **P0** are complete when:
