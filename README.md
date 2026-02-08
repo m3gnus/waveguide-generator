@@ -302,6 +302,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, and PR expectations.
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting instructions.
 
+## Acknowledgments
+
+- [ATH Horns](https://at-horns.eu/)
+- [bempp-cl](https://github.com/bempp/bempp-cl)
+- [Gmsh](https://gmsh.info/)
+
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
