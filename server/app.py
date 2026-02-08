@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import uuid
 import asyncio
+import subprocess
+from pathlib import Path
 from datetime import datetime
 
 # Import solver module (will be created)
@@ -18,6 +20,19 @@ try:
 except ImportError:
     SOLVER_AVAILABLE = False
     print("Warning: BEM solver not available. Install bempp-cl to enable simulations.")
+
+try:
+    from solver.gmsh_geo_mesher import (
+        generate_msh_from_geo,
+        gmsh_mesher_available,
+        GmshMeshingError
+    )
+except ImportError:
+    generate_msh_from_geo = None
+    gmsh_mesher_available = lambda: False
+
+    class GmshMeshingError(RuntimeError):
+        pass
 
 app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0")
 
@@ -32,6 +47,71 @@ app.add_middleware(
 
 # Job storage (in production, use Redis or database)
 jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _run_git(repo_root: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(repo_root),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git {' '.join(args)} timed out.") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip() or f"exit code {exc.returncode}"
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}") from exc
+
+
+def get_update_status() -> Dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[1]
+    if not (repo_root / ".git").exists():
+        raise RuntimeError("Repository metadata not found (.git directory is missing).")
+
+    try:
+        _run_git(repo_root, "remote", "get-url", "origin")
+    except RuntimeError as exc:
+        raise RuntimeError("Git remote 'origin' is not configured.") from exc
+
+    try:
+        _run_git(repo_root, "fetch", "origin", "--quiet")
+    except RuntimeError as exc:
+        raise RuntimeError("Unable to fetch updates from origin. Check network and remote access.") from exc
+
+    current_commit = _run_git(repo_root, "rev-parse", "HEAD")
+    current_branch = _run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+
+    try:
+        origin_head_ref = _run_git(repo_root, "symbolic-ref", "refs/remotes/origin/HEAD")
+    except RuntimeError:
+        origin_head_ref = "refs/remotes/origin/main"
+
+    default_branch = origin_head_ref.rsplit("/", 1)[-1]
+    remote_ref = f"refs/remotes/origin/{default_branch}"
+    remote_commit = _run_git(repo_root, "rev-parse", remote_ref)
+
+    counts_raw = _run_git(repo_root, "rev-list", "--left-right", "--count", f"HEAD...{remote_ref}")
+    counts = counts_raw.split()
+    if len(counts) != 2:
+        raise RuntimeError(f"Unexpected git rev-list output: '{counts_raw}'")
+
+    ahead_count = int(counts[0])
+    behind_count = int(counts[1])
+
+    return {
+        "updateAvailable": behind_count > 0,
+        "aheadCount": ahead_count,
+        "behindCount": behind_count,
+        "currentBranch": current_branch,
+        "defaultBranch": default_branch,
+        "currentCommit": current_commit,
+        "remoteCommit": remote_commit,
+        "checkedAt": datetime.now().isoformat()
+    }
 
 
 class BoundaryCondition(BaseModel):
@@ -104,6 +184,12 @@ class SimulationResults(BaseModel):
     di: Optional[Dict[str, List[float]]] = None
 
 
+class GmshMeshRequest(BaseModel):
+    geoText: str
+    mshVersion: str = "2.2"
+    binary: bool = False
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -122,6 +208,60 @@ async def health_check():
         "status": "ok",
         "solver": "bempp-cl" if SOLVER_AVAILABLE else "unavailable",
         "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/updates/check")
+async def check_updates():
+    try:
+        return get_update_status()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/mesh/generate-msh")
+async def generate_mesh_with_gmsh(request: GmshMeshRequest):
+    """
+    Generate a .msh file from .geo input using Gmsh.
+
+    This endpoint is intentionally strict: .msh content must be authored by Gmsh.
+    """
+    if not request.geoText or not request.geoText.strip():
+        raise HTTPException(status_code=422, detail="geoText must be a non-empty string.")
+
+    if request.mshVersion not in ("2.2", "4.1"):
+        raise HTTPException(status_code=422, detail="mshVersion must be '2.2' or '4.1'.")
+
+    if generate_msh_from_geo is None or not gmsh_mesher_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Gmsh meshing service unavailable. .msh export requires a working Gmsh backend."
+        )
+
+    try:
+        # Run gmsh generation on the request thread; gmsh Python API may fail in worker threads.
+        result = generate_msh_from_geo(
+            request.geoText,
+            request.mshVersion,
+            request.binary
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GmshMeshingError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gmsh meshing failed: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error during Gmsh meshing: {exc}"
+        ) from exc
+
+    return {
+        "msh": result["msh"],
+        "generatedBy": "gmsh",
+        "stats": result["stats"]
     }
 
 

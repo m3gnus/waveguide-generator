@@ -1,7 +1,7 @@
 import * as THREE from '../../node_modules/three/build/three.module.js';
 import { STLExporter } from '../../node_modules/three/examples/jsm/exporters/STLExporter.js';
 import {
-  exportMSH as exportMSHContent,
+  buildGmshGeo,
   exportProfilesCSV,
   exportFullGeo,
   generateMWGConfigContent,
@@ -13,6 +13,7 @@ import {
   generateBemppStarterScript
 } from '../export/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
+import { generateMeshFromGeo } from '../solver/client.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
@@ -42,15 +43,102 @@ function getPolarSettings() {
   };
 }
 
-function buildExportMesh(preparedParams) {
-  const artifacts = buildGeometryArtifacts(preparedParams, {
-    includeEnclosure: Number(preparedParams.encDepth || 0) > 0
+function getBackendUrl(app) {
+  return app?.simulationPanel?.solver?.backendUrl || 'http://localhost:8000';
+}
+
+const GMSH_EXPORT_DEFAULTS = Object.freeze({
+  segmentDivisor: 5,
+  resolutionScale: 8,
+  minAngularSegments: 16,
+  minLengthSegments: 6
+});
+
+function toPositiveNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function scaleResolutionValue(value, scale) {
+  if (value === undefined || value === null || value === '') return value;
+
+  if (typeof value === 'number') {
+    return value > 0 ? value * scale : value;
+  }
+
+  const text = String(value).trim();
+  if (!text) return value;
+  const parts = text.split(',').map((part) => part.trim()).filter((part) => part.length > 0);
+  if (parts.length === 0) return value;
+
+  const nums = parts.map((part) => Number(part));
+  if (nums.some((n) => !Number.isFinite(n))) return value;
+
+  return nums.map((n) => (n > 0 ? n * scale : n)).join(',');
+}
+
+function normalizeAngularSegments(value, minSegments) {
+  const rounded = Math.max(minSegments, Math.round(value));
+  const snapped = Math.round(rounded / 4) * 4;
+  return Math.max(4, snapped);
+}
+
+function buildGmshExportParams(preparedParams) {
+  const baseAngular = toPositiveNumber(preparedParams.angularSegments, 120);
+  const baseLength = toPositiveNumber(preparedParams.lengthSegments, 40);
+  const coarseAngular = normalizeAngularSegments(
+    baseAngular / GMSH_EXPORT_DEFAULTS.segmentDivisor,
+    GMSH_EXPORT_DEFAULTS.minAngularSegments
+  );
+  const coarseLength = Math.max(
+    GMSH_EXPORT_DEFAULTS.minLengthSegments,
+    Math.round(baseLength / GMSH_EXPORT_DEFAULTS.segmentDivisor)
+  );
+  const scale = GMSH_EXPORT_DEFAULTS.resolutionScale;
+
+  return {
+    ...preparedParams,
+    angularSegments: coarseAngular,
+    lengthSegments: coarseLength,
+    throatResolution: toPositiveNumber(preparedParams.throatResolution, 5) * scale,
+    mouthResolution: toPositiveNumber(preparedParams.mouthResolution, 8) * scale,
+    rearResolution: toPositiveNumber(preparedParams.rearResolution, 10) * scale,
+    encFrontResolution: scaleResolutionValue(preparedParams.encFrontResolution, scale),
+    encBackResolution: scaleResolutionValue(preparedParams.encBackResolution, scale)
+  };
+}
+
+export async function buildExportMeshWithGmsh(app, preparedParams, options = {}) {
+  const gmshParams = buildGmshExportParams(preparedParams);
+  const artifacts = buildGeometryArtifacts(gmshParams, {
+    includeEnclosure: Number(gmshParams.encDepth || 0) > 0
   });
   const payload = artifacts.simulation;
-  const msh = exportMSHContent(payload.vertices, payload.indices, payload.surfaceTags, {
-    verticalOffset: payload.metadata?.verticalOffset || 0
+  const { geoText, geoStats } = buildGmshGeo(gmshParams, artifacts.mesh, payload, {
+    mshVersion: options.mshVersion || '2.2'
   });
-  return { artifacts, payload, msh };
+
+  const meshResponse = await generateMeshFromGeo(
+    {
+      geoText,
+      mshVersion: options.mshVersion || '2.2',
+      binary: Boolean(options.binary)
+    },
+    getBackendUrl(app)
+  );
+
+  if (!meshResponse || meshResponse.generatedBy !== 'gmsh' || typeof meshResponse.msh !== 'string') {
+    throw new Error('Invalid mesh service response: gmsh-authored mesh data is missing.');
+  }
+
+  return {
+    artifacts,
+    payload,
+    msh: meshResponse.msh,
+    bemGeo: geoText,
+    geoStats,
+    meshStats: meshResponse.stats || null
+  };
 }
 
 function getAxialMax(vertices) {
@@ -153,7 +241,7 @@ export async function exportMSH(app) {
   });
   app.stats.innerText = 'Building mesh for MSH export...';
   try {
-    const { msh } = buildExportMesh(preparedParams);
+    const { msh } = await buildExportMeshWithGmsh(app, preparedParams);
     await saveFile(msh, 'mesh.msh', {
       contentType: 'text/plain',
       typeInfo: { description: 'Gmsh Mesh', accept: { 'text/plain': ['.msh'] } }
@@ -162,7 +250,7 @@ export async function exportMSH(app) {
   } catch (err) {
     console.error('[exports] MSH export failed:', err);
     app.stats.innerText = `MSH error: ${err.message}`;
-    showError(`MSH export failed: ${err.message}`);
+    showError(`MSH export failed: ${err.message}. Gmsh backend meshing is required for .msh export.`);
   }
 }
 
@@ -187,7 +275,7 @@ export async function exportABECProject(app) {
   app.stats.innerText = 'Building ABEC bundle...';
 
   try {
-    const { artifacts, payload, msh } = buildExportMesh(preparedParams);
+    const { artifacts, payload, msh, bemGeo } = await buildExportMeshWithGmsh(app, preparedParams);
     const hornGeometry = artifacts.mesh;
     const solvingContent = generateAbecSolvingFile(preparedParams, {
       interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
@@ -203,12 +291,6 @@ export async function exportABECProject(app) {
     });
     const coordsContent = generateAbecCoordsFile(hornGeometry.vertices, hornGeometry.ringCount);
     const staticContent = generateAbecStaticFile(payload.vertices);
-    const bemGeo = exportFullGeo(hornGeometry.vertices, preparedParams, {
-      outputName: baseName,
-      useSplines: true,
-      ringCount: hornGeometry.ringCount,
-      fullCircle: hornGeometry.fullCircle
-    });
 
     const JSZipCtor = getJSZipCtor();
     const zip = new JSZipCtor();
@@ -233,6 +315,6 @@ export async function exportABECProject(app) {
   } catch (err) {
     console.error('[exports] ABEC export failed:', err);
     app.stats.innerText = `ABEC export failed: ${err.message}`;
-    showError(`ABEC export failed: ${err.message}`);
+    showError(`ABEC export failed: ${err.message}. Gmsh backend meshing is required for ABEC mesh export.`);
   }
 }

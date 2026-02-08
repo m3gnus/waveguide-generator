@@ -17,6 +17,10 @@ python3 -m venv .venv
 ./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
 ```
 
+Notes:
+- `gmsh` Python wheels are not available for every Python/architecture combination (for example some Python 3.13 Linux targets).
+- The `/api/mesh/generate-msh` endpoint also supports the system `gmsh` CLI, so install `gmsh` on PATH if the Python package cannot be installed.
+
 ## 2. Run Backend
 
 From repository root:
@@ -32,6 +36,10 @@ This starts Uvicorn on `0.0.0.0:8000`.
 ### `GET /health`
 
 Health check and solver status.
+
+### `GET /api/updates/check`
+
+Checks local repository state against `origin` and reports whether updates are available.
 
 ### `POST /api/solve`
 

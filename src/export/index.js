@@ -1,6 +1,7 @@
 export { generateMWGConfigContent } from './mwgConfig.js';
 export { exportProfilesCSV, exportGmshGeo } from './profiles.js';
 export { exportHornToGeo, exportMSH, exportFullGeo } from './msh.js';
+export { buildGmshGeo } from './gmshGeoBuilder.js';
 export { exportVerticesToCSV, exportVerticesToCSVWithMetadata, exportCrossSectionProfilesCSV } from './csv.js';
 export {
   generateAbecProjectFile,

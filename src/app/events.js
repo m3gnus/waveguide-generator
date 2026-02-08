@@ -45,7 +45,8 @@ export function bindButtonEvents(app) {
     { id: 'export-csv-btn', handler: () => app.exportProfileCSV(), type: 'click' },
     { id: 'export-geo-btn', handler: () => app.exportGmshGeo(), type: 'click' },
     { id: 'export-msh-btn', handler: () => app.exportMSH(), type: 'click' },
-    { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' }
+    { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' },
+    { id: 'check-updates-btn', handler: () => app.checkForUpdates(), type: 'click' }
   ];
 
   buttonBindings.forEach(({ id, handler, type }) => {

@@ -32,6 +32,23 @@ function makePreparedParams(overrides = {}) {
   );
 }
 
+function countTrianglesOnPlane(vertices, indices, axis, epsilon = 1e-7) {
+  const coordOffset = axis === 'x' ? 0 : 2;
+  let count = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i];
+    const b = indices[i + 1];
+    const c = indices[i + 2];
+    const av = vertices[a * 3 + coordOffset];
+    const bv = vertices[b * 3 + coordOffset];
+    const cv = vertices[c * 3 + coordOffset];
+    if (Math.abs(av) <= epsilon && Math.abs(bv) <= epsilon && Math.abs(cv) <= epsilon) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
   const params = makePreparedParams({
     encDepth: 0,
@@ -93,4 +110,28 @@ test('exportMSH preserves canonical interface and secondary domain tags', () => 
 
   assert.match(msh, /2 3 "SD2G0"/);
   assert.match(msh, /2 4 "I1-2"/);
+});
+
+test('simulation payload removes split-plane faces for quadrant symmetry exports', () => {
+  const q14Params = makePreparedParams({
+    encDepth: 220,
+    quadrants: '14'
+  });
+  const q12Params = makePreparedParams({
+    encDepth: 220,
+    quadrants: '12'
+  });
+  const q1Params = makePreparedParams({
+    encDepth: 220,
+    quadrants: '1'
+  });
+
+  const q14 = buildGeometryArtifacts(q14Params, { includeEnclosure: true }).simulation;
+  const q12 = buildGeometryArtifacts(q12Params, { includeEnclosure: true }).simulation;
+  const q1 = buildGeometryArtifacts(q1Params, { includeEnclosure: true }).simulation;
+
+  assert.equal(countTrianglesOnPlane(q14.vertices, q14.indices, 'x'), 0);
+  assert.equal(countTrianglesOnPlane(q12.vertices, q12.indices, 'z'), 0);
+  assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'x'), 0);
+  assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'z'), 0);
 });

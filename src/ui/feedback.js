@@ -137,3 +137,100 @@ export function chooseExportFormat() {
     document.body.appendChild(backdrop);
   });
 }
+
+export function showCommandSuggestion({
+  title = 'Command Suggestion',
+  subtitle = '',
+  command = ''
+} = {}) {
+  if (!hasDom()) return Promise.resolve(false);
+
+  const commandText = String(command || '').trim();
+  if (!commandText) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'ui-choice-backdrop';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'ui-choice-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', String(title || 'Command Suggestion'));
+
+    const titleEl = document.createElement('h4');
+    titleEl.className = 'ui-choice-title';
+    titleEl.textContent = String(title || 'Command Suggestion');
+    dialog.appendChild(titleEl);
+
+    if (subtitle) {
+      const subtitleEl = document.createElement('p');
+      subtitleEl.className = 'ui-choice-subtitle';
+      subtitleEl.textContent = String(subtitle);
+      dialog.appendChild(subtitleEl);
+    }
+
+    const commandEl = document.createElement('pre');
+    commandEl.className = 'ui-command-box';
+    commandEl.textContent = commandText;
+    dialog.appendChild(commandEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'ui-choice-actions';
+    dialog.appendChild(actions);
+
+    let settled = false;
+    const finalize = (copied) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('keydown', onKeyDown);
+      backdrop.remove();
+      resolve(Boolean(copied));
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finalize(false);
+      }
+    };
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'ui-choice-btn';
+    copyBtn.textContent = 'Copy Command';
+    copyBtn.addEventListener('click', async () => {
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(commandText);
+          showSuccess('Copied update command to clipboard.');
+          finalize(true);
+          return;
+        }
+      } catch {
+        // Fall through to user-facing error.
+      }
+
+      showError('Clipboard not available. Copy the command manually.');
+      finalize(false);
+    });
+    actions.appendChild(copyBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'ui-choice-btn secondary';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => finalize(false));
+    actions.appendChild(closeBtn);
+
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) {
+        finalize(false);
+      }
+    });
+
+    window.addEventListener('keydown', onKeyDown);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+  });
+}
