@@ -1,6 +1,5 @@
-import * as THREE from 'three';
-import JSZip from 'jszip';
-import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+import * as THREE from '../../node_modules/three/build/three.module.js';
+import { STLExporter } from '../../node_modules/three/examples/jsm/exporters/STLExporter.js';
 import {
   exportMSH as exportMSHContent,
   exportProfilesCSV,
@@ -16,6 +15,14 @@ import {
 import { buildGeometryArtifacts } from '../geometry/index.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { GlobalState } from '../state.js';
+
+function getJSZipCtor() {
+  const JSZipCtor = globalThis.JSZip;
+  if (!JSZipCtor) {
+    throw new Error('JSZip failed to load. Reload the page and try again.');
+  }
+  return JSZipCtor;
+}
 
 function getPolarSettings() {
   const aStart = parseFloat(document.getElementById('polar-angle-start')?.value) || 0;
@@ -204,7 +211,8 @@ export async function exportABECProject(app) {
       fullCircle: hornGeometry.fullCircle
     });
 
-    const zip = new JSZip();
+    const JSZipCtor = getJSZipCtor();
+    const zip = new JSZipCtor();
     const root = zip.folder(folderName);
     root.file('Project.abec', projectContent);
     root.file('solving.txt', solvingContent);

@@ -1,5 +1,5 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from '../../node_modules/three/build/three.module.js';
+import { OrbitControls } from '../../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import {
   createScene,
   createPerspectiveCamera,
@@ -10,27 +10,39 @@ import { buildGeometryArtifacts } from '../geometry/index.js';
 
 export function setupScene(app) {
   app.scene = createScene();
-
   app.cameraMode = 'perspective';
-  const aspect = app.container.clientWidth / app.container.clientHeight;
+
+  const width = Math.max(1, app.container.clientWidth);
+  const height = Math.max(1, app.container.clientHeight);
+  const aspect = width / height;
   app.camera = createPerspectiveCamera(aspect);
 
-  app.renderer = new THREE.WebGLRenderer({ antialias: true });
-  app.renderer.setSize(app.container.clientWidth, app.container.clientHeight);
-  app.renderer.setPixelRatio(window.devicePixelRatio);
-  app.container.appendChild(app.renderer.domElement);
+  try {
+    app.renderer = new THREE.WebGLRenderer({ antialias: true });
+    app.renderer.setSize(width, height);
+    app.renderer.setPixelRatio(window.devicePixelRatio);
+    app.container.appendChild(app.renderer.domElement);
+  } catch (error) {
+    app.renderer = null;
+    app.controls = null;
+    app.sceneInitError = error;
+    console.error('Failed to initialize WebGL renderer:', error);
+    app.stats.innerText = 'Viewport unavailable: WebGL failed to initialize';
+    return false;
+  }
 
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
   app.controls.enableDamping = true;
-
   window.addEventListener('resize', () => onResize(app));
-
   animate(app);
+  return true;
 }
 
 export function onResize(app) {
+  if (!app.camera || !app.renderer) return;
   const width = app.container.clientWidth;
   const height = app.container.clientHeight;
+  if (width <= 0 || height <= 0) return;
   const aspect = width / height;
 
   if (app.cameraMode === 'perspective') {
@@ -48,6 +60,7 @@ export function onResize(app) {
 }
 
 export function renderModel(app) {
+  if (!app.scene || !app.renderer) return;
   if (app.hornMesh) {
     app.scene.remove(app.hornMesh);
     app.hornMesh.geometry.dispose();
@@ -159,7 +172,7 @@ export function calculateCurvatureColors(geometry, radialSteps, lengthSteps) {
 }
 
 export function focusOnModel(app) {
-  if (!app.hornMesh) return;
+  if (!app.hornMesh || !app.controls) return;
   app.hornMesh.geometry.computeBoundingBox();
   const box = app.hornMesh.geometry.boundingBox;
   const center = new THREE.Vector3();
@@ -169,6 +182,7 @@ export function focusOnModel(app) {
 }
 
 export function zoom(app, factor) {
+  if (!app.camera || !app.controls) return;
   if (app.cameraMode === 'perspective') {
     app.camera.position.multiplyScalar(factor);
   } else {
@@ -179,6 +193,7 @@ export function zoom(app, factor) {
 }
 
 export function toggleCamera(app) {
+  if (!app.camera || !app.controls || !app.renderer || !app.scene) return;
   const width = app.container.clientWidth;
   const height = app.container.clientHeight;
   const aspect = width / height;
@@ -212,6 +227,7 @@ export function getOrthoSize() {
 }
 
 function animate(app) {
+  if (!app.renderer || !app.camera || !app.scene || !app.controls) return;
   requestAnimationFrame(() => animate(app));
   app.controls.update();
   app.renderer.render(app.scene, app.camera);
