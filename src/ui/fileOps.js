@@ -1,3 +1,5 @@
+import { showError } from './feedback.js';
+
 let outputDirHandle = null;
 
 export function getExportBaseName() {
@@ -15,7 +17,7 @@ export function incrementExportCounter() {
 
 export async function selectOutputFolder() {
     if (!window.showDirectoryPicker) {
-        alert('Your browser does not support folder selection.');
+        showError('Your browser does not support folder selection.');
         return;
     }
     try {

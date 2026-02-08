@@ -1,3 +1,18 @@
+import { showError, showMessage, showSuccess } from '../feedback.js';
+
+export function validateSimulationConfig(config) {
+  if (!Number.isFinite(config.frequencyStart) || !Number.isFinite(config.frequencyEnd)) {
+    return 'Frequency range must contain valid numbers.';
+  }
+  if (!Number.isFinite(config.numFrequencies) || config.numFrequencies < 1) {
+    return 'Number of frequencies must be at least 1.';
+  }
+  if (config.frequencyStart >= config.frequencyEnd) {
+    return 'Start frequency must be less than end frequency.';
+  }
+  return null;
+}
+
 export async function stopSimulation(panel) {
   const runBtn = document.getElementById('run-simulation-btn');
   const stopBtn = document.getElementById('stop-simulation-btn');
@@ -26,6 +41,7 @@ export async function stopSimulation(panel) {
 
   // Update UI to show cancellation
   progressText.textContent = 'Simulation cancelled';
+  showMessage('Simulation cancelled.', { type: 'info', duration: 2000 });
   runBtn.disabled = false;
   stopBtn.disabled = true;
 
@@ -49,9 +65,9 @@ export async function runSimulation(panel) {
 
   // Get simulation settings
   const config = {
-    frequencyStart: parseInt(document.getElementById('freq-start').value),
-    frequencyEnd: parseInt(document.getElementById('freq-end').value),
-    numFrequencies: parseInt(document.getElementById('freq-steps').value),
+    frequencyStart: Number(document.getElementById('freq-start').value),
+    frequencyEnd: Number(document.getElementById('freq-end').value),
+    numFrequencies: Number(document.getElementById('freq-steps').value),
     simulationType: document.getElementById('sim-type').value,
     circSymProfile: parseInt(document.getElementById('circsym-profile')?.value ?? '-1', 10)
   };
@@ -70,8 +86,9 @@ export async function runSimulation(panel) {
   };
 
   // Validate settings
-  if (config.frequencyStart >= config.frequencyEnd) {
-    alert('Start frequency must be less than end frequency');
+  const validationError = validateSimulationConfig(config);
+  if (validationError) {
+    showError(validationError);
     return;
   }
 
@@ -124,6 +141,7 @@ export async function runSimulation(panel) {
 
       progressFill.style.width = '100%';
       progressText.textContent = 'Complete!';
+      showSuccess('Mock simulation complete.');
 
       setTimeout(() => {
         progressDiv.style.display = 'none';
@@ -134,6 +152,7 @@ export async function runSimulation(panel) {
   } catch (error) {
     console.error('Simulation error:', error);
     progressText.textContent = `Error: ${error.message}`;
+    showError(`Simulation failed: ${error.message}`);
     runBtn.disabled = false;
 
     setTimeout(() => {
@@ -197,6 +216,7 @@ export function pollSimulationStatus(panel) {
       clearInterval(panel.pollInterval);
       console.error('Status polling error:', error);
       progressText.textContent = 'Error checking status';
+      showError('Error checking simulation status.');
       runBtn.disabled = false;
     }
   }, 1000);

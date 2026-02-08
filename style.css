@@ -2,6 +2,7 @@
     --bg-color: #f5f5f7;
     --panel-bg: rgba(255, 255, 255, 0.85);
     --text-color: #1d1d1f;
+    --text-secondary: rgba(29, 29, 31, 0.65);
     --accent-color: #0071e3;
     --border-color: rgba(0, 0, 0, 0.1);
     --glass-effect: blur(20px) saturate(180%);
@@ -16,6 +17,7 @@
         --bg-color: #0d0d0d;
         --panel-bg: rgba(25, 25, 25, 0.85);
         --text-color: #f5f5f7;
+        --text-secondary: rgba(245, 245, 247, 0.7);
         --accent-color: #00ffcc;
         --border-color: rgba(255, 255, 255, 0.1);
         --input-bg: rgba(255, 255, 255, 0.05);
@@ -88,6 +90,14 @@ body {
     position: relative;
     background: var(--bg-color);
     min-width: 0;
+}
+
+.is-hidden {
+    display: none !important;
+}
+
+.input-full-width {
+    width: 100% !important;
 }
 
 h1 {
@@ -187,6 +197,13 @@ h1 {
     opacity: 0.6;
     margin-top: 8px;
     line-height: 1.4;
+}
+
+.section-subtitle {
+    margin: 15px 0 10px 0;
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--text-secondary);
 }
 
 .progress-bar {
@@ -606,12 +623,103 @@ button.secondary {
     margin-bottom: 0;
 }
 
+.button-compact {
+    font-size: 0.8em;
+}
+
+.output-folder-name {
+    font-size: 0.8em;
+    color: var(--text-secondary);
+    margin-left: 8px;
+}
+
 .checkbox-group {
     display: flex;
     align-items: center;
     gap: 10px;
     margin: 15px 0;
     font-size: 0.9rem;
+}
+
+.ui-toast-container {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.ui-toast {
+    min-width: 220px;
+    max-width: 420px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--panel-bg);
+    color: var(--text-color);
+    font-size: 0.82rem;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.ui-toast.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.ui-toast-error {
+    border-color: rgba(255, 59, 48, 0.6);
+}
+
+.ui-toast-success {
+    border-color: rgba(52, 199, 89, 0.7);
+}
+
+.ui-choice-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1150;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.ui-choice-dialog {
+    width: min(360px, 100%);
+    border-radius: 14px;
+    border: 1px solid var(--border-color);
+    background: var(--panel-bg);
+    backdrop-filter: var(--glass-effect);
+    -webkit-backdrop-filter: var(--glass-effect);
+    padding: 16px;
+}
+
+.ui-choice-title {
+    margin: 0 0 6px 0;
+    font-size: 1rem;
+    color: var(--text-color);
+}
+
+.ui-choice-subtitle {
+    margin: 0 0 14px 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.ui-choice-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ui-choice-btn {
+    margin: 0;
 }
 
 #stats {

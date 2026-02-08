@@ -196,9 +196,10 @@ This snapshot records the latest verified status after the recent P0 implementat
    - `250729solanaS2`
    - `0416ro1`
    - `260112aolo1`
-5. `bash scripts/runtime-api-smoke.sh` passes:
-   - `/health`, `/api/solve`, `/api/status/{id}`, `/api/results/{id}`, `/api/stop/{id}` success/cancel paths
-   - runtime artifact written to `_references/runtime_smoke/latest.json`
+5. Historical (script removed during legacy cleanup on 2026-02-08):
+   - `bash scripts/runtime-api-smoke.sh` previously passed
+   - covered `/health`, `/api/solve`, `/api/status/{id}`, `/api/results/{id}`, `/api/stop/{id}` success/cancel paths
+   - wrote runtime artifact to `_references/runtime_smoke/latest.json`
 
 ### Still failing (release blockers)
 

@@ -1,5 +1,6 @@
 import { MWGConfigParser } from '../config/index.js';
 import { GlobalState } from '../state.js';
+import { showError } from '../ui/feedback.js';
 import {
   coerceConfigParams,
   applyAthImportDefaults,
@@ -27,7 +28,7 @@ export function handleFileUpload(event) {
 
       GlobalState.update(typedParams, parsed.type);
     } else {
-      alert('Could not find OSSE or R-OSSE block in config file.');
+      showError('Could not find OSSE or R-OSSE block in config file.');
     }
   };
   reader.readAsText(file);
