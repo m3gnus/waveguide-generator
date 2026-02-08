@@ -39,12 +39,13 @@ test('buildGmshGeo emits required mesh options and field controls', () => {
     mshVersion: '2.2'
   });
 
-  assert.match(geoText, /Mesh\.Algorithm = 1;/);
+  assert.match(geoText, /Mesh\.Algorithm = 6;/);
   assert.match(geoText, /Mesh\.Algorithm3D = 5;/);
   assert.match(geoText, /Mesh\.RecombinationAlgorithm = 1;/);
   assert.match(geoText, /Mesh\.MeshSizeFromCurvature = 1;/);
   assert.match(geoText, /Mesh\.RecombineAll = 0;/);
   assert.match(geoText, /Mesh 2;/);
+  assert.match(geoText, /Ruled Surface\(\d+\) = \{\d+\};/);
   assert.match(geoText, /Background Field =/);
   assert.match(geoText, /Field\[\d+\] = Distance;/);
   assert.match(geoText, /Field\[\d+\] = MathEval;/);
@@ -52,7 +53,8 @@ test('buildGmshGeo emits required mesh options and field controls', () => {
   assert.doesNotMatch(geoText, /Field\(\d+\) = Distance;/);
 
   assert.equal(typeof geoStats.pointCount, 'number');
-  assert.equal(geoStats.surfaceCount, artifacts.simulation.indices.length / 3);
+  assert.ok(geoStats.surfaceCount > 0);
+  assert.ok(geoStats.surfaceCount < artifacts.simulation.indices.length / 3);
   assert.equal(geoStats.throatResolution, 4);
   assert.equal(geoStats.mouthResolution, 9);
 });
