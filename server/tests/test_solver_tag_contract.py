@@ -7,8 +7,10 @@ class SolverTagContractTest(unittest.TestCase):
         solver_dir = Path(__file__).resolve().parents[1].joinpath("solver")
         solve_text = solver_dir.joinpath("solve.py").read_text()
         optimized_text = solver_dir.joinpath("solve_optimized.py").read_text()
+        mesh_text = solver_dir.joinpath("mesh.py").read_text()
         self.assertIn("segments=[2]", solve_text)
         self.assertIn("segments=[2]", optimized_text)
+        self.assertIn("surface_tags[i] == 2", mesh_text)
 
 
 if __name__ == "__main__":

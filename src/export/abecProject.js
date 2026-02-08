@@ -35,6 +35,44 @@ function mapQuadrantsToSym(quadrants) {
     return symmetryMap[key] || '';
 }
 
+function parseNumeric(value, fallback = null) {
+    if (value === undefined || value === null) return fallback;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function parsePolarBlockEntry(name, block, fallbackIndex = 0) {
+    const key = String(name || '').split(':')[1] || `SPL_${fallbackIndex + 1}`;
+    const items = block && typeof block === 'object' ? (block._items || {}) : {};
+
+    const angleRange = String(items.MapAngleRange || DEFAULT_POLAR_RANGE).trim();
+    const distance = parseNumeric(items.Distance, 2);
+    const normAngle = parseNumeric(items.NormAngle, null);
+    const inclination = parseNumeric(items.Inclination, 0);
+    const offset = parseNumeric(items.Offset, null);
+
+    return {
+        graphHeader: `PM_${key}`,
+        angleRange,
+        distance,
+        normAngle,
+        inclination,
+        offset
+    };
+}
+
+export function extractPolarBlocks(blocks) {
+    if (!blocks || typeof blocks !== 'object') return [];
+    const entries = Object.entries(blocks)
+        .filter(([name]) => name.startsWith('ABEC.Polars:'))
+        .sort((a, b) => {
+            const keyA = String(a[0]).split(':')[1] || '';
+            const keyB = String(b[0]).split(':')[1] || '';
+            return keyA.localeCompare(keyB, undefined, { sensitivity: 'base', numeric: true });
+        });
+    return entries.map(([name, block], idx) => parsePolarBlockEntry(name, block, idx));
+}
+
 /**
  * Generate the ABEC project (.abec) file content.
  * @param {Object} options
@@ -66,7 +104,7 @@ export function generateAbecProjectFile({ solvingFileName, observationFileName, 
  * @param {Object} params
  * @returns {string}
  */
-export function generateAbecSolvingFile(params) {
+export function generateAbecSolvingFile(params, options = {}) {
     const f1 = params.abecF1 ?? 100;
     const f2 = params.abecF2 ?? 20000;
     const numFreq = params.abecNumFreq ?? 40;
@@ -77,13 +115,15 @@ export function generateAbecSolvingFile(params) {
     const dim = circSymProfile >= 0 ? 'CircSym' : '3D';
     const sym = dim === '3D' ? mapQuadrantsToSym(params.quadrants) : '';
     const symLine = sym ? `; Sym=${sym}` : '';
-    const hasInterface = Boolean(
-        params &&
-        params.encDepth > 0 &&
-        params.interfaceOffset !== undefined &&
-        params.interfaceOffset !== null &&
-        String(params.interfaceOffset).trim() !== ''
-    );
+    const hasInterface = options.interfaceEnabled !== undefined
+        ? Boolean(options.interfaceEnabled)
+        : Boolean(
+            params &&
+            params.encDepth > 0 &&
+            params.interfaceOffset !== undefined &&
+            params.interfaceOffset !== null &&
+            String(params.interfaceOffset).trim() !== ''
+        );
     const simType = Number(params.abecSimType ?? 2);
 
     const output = [
@@ -141,10 +181,12 @@ export function generateAbecSolvingFile(params) {
     }
 
     if (simType === 1) {
+        const inferredOffset = Number(options.infiniteBaffleOffset);
         const L = evalParam(params.L ?? 0, 0);
         const extLen = Math.max(0, evalParam(params.throatExtLength ?? 0, 0));
         const slotLen = Math.max(0, evalParam(params.slotLength ?? 0, 0));
-        const offset = Number.isFinite(L) ? (L + extLen + slotLen) : 0;
+        const fallbackOffset = Number.isFinite(L) ? (L + extLen + slotLen) : 0;
+        const offset = Number.isFinite(inferredOffset) ? inferredOffset : fallbackOffset;
         output.push(
             'Infinite_Baffle',
             `  Subdomain=1; Position=z offset=${offset.toFixed(3)}mm`,
@@ -168,8 +210,59 @@ export function generateAbecObservationFile({
     angleRange = DEFAULT_POLAR_RANGE,
     distance = 2,
     normAngle = 5,
-    inclination = 0
+    inclination = 0,
+    polarBlocks = null,
+    allowDefaultPolars = true
 } = {}) {
+    const parsedPolarBlocks = extractPolarBlocks(polarBlocks);
+    if (parsedPolarBlocks.length > 0) {
+        const lines = [
+            'Driving_Values',
+            '  DrvType=Acceleration; Value=1.0',
+            '  401  DrvGroup=1001  Weight=1 Delay=0ms  // 0.00 dB',
+            '',
+            'Radiation_Impedance',
+            '  BodeType=Complex; GraphHeader="RadImp"',
+            '  Range_min=0; Range_max=2; RadImpType=Normalized',
+            '  402   1001 1001   ID=8001',
+            ''
+        ];
+
+        parsedPolarBlocks.forEach((block, idx) => {
+            lines.push(
+                'BE_Spectrum',
+                `  PlotType=Polar; GraphHeader="${block.graphHeader}"`,
+                '  BodeType=LeveldB; Range_max=5; Range_min=-45',
+                `  PolarRange=${block.angleRange}`,
+                '  BasePlane=zx',
+                `  Distance=${block.distance}m`
+            );
+            if (block.offset !== null) {
+                lines.push(`  Offset=${block.offset}mm`);
+            }
+            if (block.normAngle !== null) {
+                lines.push(`  NormalizingAngle=${block.normAngle}`);
+            }
+            lines.push(`  ${501 + idx}  Inclination=${block.inclination}  ID=${5001 + idx}`, '', '');
+        });
+
+        return lines.join('\n');
+    }
+
+    if (polarBlocks && !allowDefaultPolars) {
+        return [
+            'Driving_Values',
+            '  DrvType=Acceleration; Value=1.0',
+            '  401  DrvGroup=1001  Weight=1 Delay=0ms  // 0.00 dB',
+            '',
+            'Radiation_Impedance',
+            '  BodeType=Complex; GraphHeader=\"RadImp\"',
+            '  Range_min=0; Range_max=2; RadImpType=Normalized',
+            '  402   1001 1001   ID=8001',
+            ''
+        ].join('\n');
+    }
+
     return [
         'Driving_Values',
         '  DrvType=Acceleration; Value=1.0',

@@ -34,6 +34,14 @@ export function prepareMeshForSimulation(panel) {
         reject(new Error('Mesh payload is missing valid surface tags.'));
         return;
       }
+      if (typeof meshData.format !== 'string' || !meshData.format.trim()) {
+        reject(new Error('Mesh payload is missing a format value.'));
+        return;
+      }
+      if (!meshData.boundaryConditions || typeof meshData.boundaryConditions !== 'object') {
+        reject(new Error('Mesh payload is missing boundary conditions.'));
+        return;
+      }
       resolve(meshData);
     };
 

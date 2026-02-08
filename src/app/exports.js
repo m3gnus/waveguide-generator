@@ -39,8 +39,18 @@ function buildExportMesh(preparedParams) {
   const payload = buildCanonicalMeshPayload(preparedParams, {
     includeEnclosure: Number(preparedParams.encDepth || 0) > 0
   });
-  const msh = exportMSHContent(payload.vertices, payload.indices, payload.surfaceTags);
+  const msh = exportMSHContent(payload.vertices, payload.indices, payload.surfaceTags, {
+    verticalOffset: payload.metadata?.verticalOffset || 0
+  });
   return { payload, msh };
+}
+
+function getAxialMax(vertices) {
+  let maxY = -Infinity;
+  for (let i = 1; i < vertices.length; i += 3) {
+    if (vertices[i] > maxY) maxY = vertices[i];
+  }
+  return Number.isFinite(maxY) ? maxY : 0;
 }
 
 export function exportSTL(app) {
@@ -109,7 +119,9 @@ export async function exportGmshGeo(app) {
   });
   const geo = exportFullGeo(hornGeometry.vertices, preparedParams, {
     outputName: meshBase,
-    useSplines: true
+    useSplines: true,
+    ringCount: hornGeometry.ringCount,
+    fullCircle: hornGeometry.fullCircle
   });
   const starterScript = generateBemppStarterScript({
     meshFileName: `${meshBase}.msh`,
@@ -165,14 +177,6 @@ export async function exportABECProject(app) {
     observationFileName: 'observation.txt',
     meshFileName
   });
-  const solvingContent = generateAbecSolvingFile(preparedParams);
-  const observationContent = generateAbecObservationFile({
-    angleRange: polar.polarRange,
-    distance: polar.distance,
-    normAngle: polar.normAngle,
-    inclination: polar.inclination
-  });
-
   app.stats.innerText = 'Building ABEC bundle...';
 
   try {
@@ -181,11 +185,25 @@ export async function exportABECProject(app) {
       includeEnclosure: false,
       includeRearShape: false
     });
+    const solvingContent = generateAbecSolvingFile(preparedParams, {
+      interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
+      infiniteBaffleOffset: getAxialMax(hornGeometry.vertices)
+    });
+    const observationContent = generateAbecObservationFile({
+      angleRange: polar.polarRange,
+      distance: polar.distance,
+      normAngle: polar.normAngle,
+      inclination: polar.inclination,
+      polarBlocks: preparedParams._blocks,
+      allowDefaultPolars: !(preparedParams._blocks && Number(preparedParams.abecSimType || 2) === 1)
+    });
     const coordsContent = generateAbecCoordsFile(hornGeometry.vertices, hornGeometry.ringCount);
     const staticContent = generateAbecStaticFile(payload.vertices);
     const bemGeo = exportFullGeo(hornGeometry.vertices, preparedParams, {
       outputName: baseName,
-      useSplines: true
+      useSplines: true,
+      ringCount: hornGeometry.ringCount,
+      fullCircle: hornGeometry.fullCircle
     });
 
     const zip = new JSZip();

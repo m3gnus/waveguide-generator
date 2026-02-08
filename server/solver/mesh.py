@@ -71,16 +71,21 @@ def refine_mesh_with_gmsh(
 
         # Add physical groups for boundary conditions
         if surface_tags is not None:
-            throat_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 1]
-            wall_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 2]
-            mouth_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 3]
+            # Canonical tag contract:
+            # 1 = walls, 2 = source, 3 = secondary domain, 4 = interface/symmetry
+            wall_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 1]
+            source_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 2]
+            secondary_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 3]
+            interface_surfs = [triangle_surfaces[i] for i in range(num_triangles) if surface_tags[i] == 4]
 
-            if throat_surfs:
-                gmsh.model.addPhysicalGroup(2, throat_surfs, 1, "Throat")
             if wall_surfs:
-                gmsh.model.addPhysicalGroup(2, wall_surfs, 2, "Walls")
-            if mouth_surfs:
-                gmsh.model.addPhysicalGroup(2, mouth_surfs, 3, "Mouth")
+                gmsh.model.addPhysicalGroup(2, wall_surfs, 1, "SD1G0")
+            if source_surfs:
+                gmsh.model.addPhysicalGroup(2, source_surfs, 2, "SD1D1001")
+            if secondary_surfs:
+                gmsh.model.addPhysicalGroup(2, secondary_surfs, 3, "SD2G0")
+            if interface_surfs:
+                gmsh.model.addPhysicalGroup(2, interface_surfs, 4, "I1-2")
 
         # Set mesh options
         gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay

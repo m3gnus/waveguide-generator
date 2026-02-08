@@ -6,6 +6,7 @@ export {
   generateAbecProjectFile,
   generateAbecSolvingFile,
   generateAbecObservationFile,
+  extractPolarBlocks,
   generateAbecCoordsFile,
   generateAbecStaticFile
 } from './abecProject.js';

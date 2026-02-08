@@ -6,24 +6,36 @@
  */
 
 import {
-    EPS,
-    cleanNumber,
     formatNumber,
     evalParam,
     isFullCircle
 } from '../geometry/common.js';
 
+const toFiniteNumber = (value, fallback = 0) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+};
 
-const transformVerticesToAth = (vertices) => {
+export const mapVertexToAth = (x, y, z, { verticalOffset = 0, offsetSign = 1 } = {}) => {
+    return [
+        x,
+        z + (verticalOffset * offsetSign),
+        y
+    ];
+};
+
+const transformVerticesToAth = (vertices, options = {}) => {
+    const verticalOffset = toFiniteNumber(options.verticalOffset, 0);
+    const offsetSign = toFiniteNumber(options.offsetSign, 1);
     const out = new Array(vertices.length);
     for (let i = 0; i < vertices.length; i += 3) {
         const x = vertices[i];
         const y = vertices[i + 1];
         const z = vertices[i + 2];
-        // ATH axis convention: X = horizontal, Y = vertical, Z = axial
-        out[i] = x;
-        out[i + 1] = z;
-        out[i + 2] = y;
+        const [athX, athY, athZ] = mapVertexToAth(x, y, z, { verticalOffset, offsetSign });
+        out[i] = athX;
+        out[i + 1] = athY;
+        out[i + 2] = athZ;
     }
     return out;
 };
@@ -202,51 +214,42 @@ export function exportFullGeo(vertices, params, options = {}) {
     const outputName = options.outputName || 'output';
 
     const numRings = lengthSegments + 1;
-    const pointsPerRing = angularSegments;
-    const fullCircle = isFullCircle(params.quadrants);
+    const pointsPerRing = Math.max(1, Math.round(options.ringCount || angularSegments));
+    const fullCircle = options.fullCircle !== undefined
+        ? Boolean(options.fullCircle)
+        : isFullCircle(params.quadrants);
     const verticalOffset = Number(params.verticalOffset) || 0;
 
-    // Longitudinal Z-offset check (some ATH versions add extension)
-    // We'll peek at the first vertex vy to see if we need an adjustment
-    const firstVy = vertices[1] || 0;
-    const zAdjustment = useSplines ? firstVy : 0;
+    const pointIdAt = (ringIdx, pointIdx) => {
+        const wrapped = ((pointIdx % pointsPerRing) + pointsPerRing) % pointsPerRing;
+        return (ringIdx * pointsPerRing) + wrapped + 1;
+    };
+
+    const athVertexForGeo = (vx, vy, vz) => {
+        if (useSplines) {
+            return mapVertexToAth(vx, vy, vz, { verticalOffset, offsetSign: 1 });
+        }
+        return mapVertexToAth(vx, vy, vz, { verticalOffset, offsetSign: -1 });
+    };
 
     let geo = `Mesh.Algorithm = 2;\n`;
     geo += `Mesh.MshFileVersion = 2.2;\n`;
     geo += `General.Verbosity = 2;\n`;
 
-    // Output points (1-indexed)
-    for (let j = 0; j < numRings; j++) {
-        const t = j / (numRings - 1);
-        const meshSize = useSplines
-            ? throatResolution + (mouthResolution - throatResolution) * t
-            : meshSizeFixed;
-
-        for (let i = 0; i < pointsPerRing; i++) {
-            const idx = (j * pointsPerRing + i) * 3;
-            const vx = vertices[idx];
-            const vy = vertices[idx + 1];
-            const vz = vertices[idx + 2];
-
-            let geoX, geoY, geoZ;
-            if (useSplines) {
-                // bem_mesh.geo convention: X=vx, Y=vz, Z=vy
-                geoX = vx;
-                geoY = vz;
-                geoZ = vy;
-            } else {
-                // regular mesh.geo convention: X=vx, Y=vz-offset, Z=vy
-                geoX = vx;
-                geoY = vz - verticalOffset;
-                geoZ = vy;
-            }
-
-            const pointId = j * pointsPerRing + i + 1;
-            geo += `Point(${pointId})={${geoX.toFixed(3)},${geoY.toFixed(3)},${geoZ.toFixed(3)},${meshSize.toFixed(1)}};\n`;
-        }
-    }
-
     if (!useSplines) {
+        // Output points (1-indexed)
+        for (let j = 0; j < numRings; j++) {
+            for (let i = 0; i < pointsPerRing; i++) {
+                const idx = (j * pointsPerRing + i) * 3;
+                const vx = vertices[idx];
+                const vy = vertices[idx + 1];
+                const vz = vertices[idx + 2];
+                const [geoX, geoY, geoZ] = athVertexForGeo(vx, vy, vz);
+                const pointId = pointIdAt(j, i);
+                geo += `Point(${pointId})={${geoX.toFixed(3)},${geoY.toFixed(3)},${geoZ.toFixed(3)},${meshSizeFixed.toFixed(1)}};\n`;
+            }
+        }
+
         // Quad-based Line/Surface logic...
         const radialLineId = (j, i) => (j >= numRings - 1) ? null : j * pointsPerRing * 2 + 2 * i + 1;
         const angularLineId = (j, i) => {
@@ -291,61 +294,64 @@ export function exportFullGeo(vertices, params, options = {}) {
         }
         geo += `\nPhysical Surface("${outputName}", 1)={${surfaceIds.join(',')}};\n`;
     } else {
-        // Spline-based (Patch) logic...
+        // Spline-based logic with ring-wise interleaving to match ATH output structure.
         const ptsPerSpline = 10;
-        const numSplines = Math.ceil(pointsPerRing / ptsPerSpline);
         let splineId = 1;
-        const ringSplineIds = [];
-        for (let j = 0; j < numRings; j++) {
-            const ringSplines = [];
-            for (let s = 0; s < numSplines; s++) {
-                const startI = s * ptsPerSpline;
-                let count = ptsPerSpline;
-                const isLast = (s === numSplines - 1);
-                if (isLast && !fullCircle) count = (pointsPerRing - 1) - startI;
-                if (count <= 0) continue;
-                const pts = [];
-                for (let k = 0; k <= count; k++) pts.push(j * pointsPerRing + (startI + k) % pointsPerRing + 1);
-                geo += `Spline(${splineId})={${pts.join(',')}};\n`;
-                ringSplines.push({ id: splineId++, startI, endI: (startI + count) % pointsPerRing });
-            }
-            ringSplineIds.push(ringSplines);
-        }
-
-        let radialLineId = splineId + 100;
-        const radialLines = {};
-        for (let j = 0; j < numRings - 1; j++) {
-            for (const s of ringSplineIds[j]) {
-                const addLine = (pI) => {
-                    const key = `${j},${pI}`;
-                    if (!radialLines[key]) {
-                        geo += `Line(${radialLineId})={${j * pointsPerRing + pI + 1},${(j + 1) * pointsPerRing + pI + 1}};\n`;
-                        radialLines[key] = radialLineId++;
-                    }
-                };
-                addLine(s.startI);
-                if (!fullCircle) addLine(s.endI);
-            }
-        }
-
-        let loopId = radialLineId + 100;
+        let lineId = 2000;
+        let loopId = 6000;
         let surfaceId = 1;
         const surfaceIds = [];
-        for (let j = 0; j < numRings - 1; j++) {
-            for (let s = 0; s < ringSplineIds[j].length; s++) {
-                const s1 = ringSplineIds[j][s];
-                const s2 = ringSplineIds[j + 1][s];
-                const r1 = radialLines[`${j},${s1.startI}`];
-                const r2 = radialLines[`${j},${s1.endI}`];
-                if (r1 && r2) {
-                    geo += `Curve Loop(${loopId})={${s2.id},-${r2},-${s1.id},${r1}};\n`;
+        const ringSplineIds = [];
+
+        for (let j = 0; j < numRings; j++) {
+            const t = j / (numRings - 1);
+            const meshSize = throatResolution + (mouthResolution - throatResolution) * t;
+            for (let i = 0; i < pointsPerRing; i++) {
+                const idx = (j * pointsPerRing + i) * 3;
+                const vx = vertices[idx];
+                const vy = vertices[idx + 1];
+                const vz = vertices[idx + 2];
+                const [geoX, geoY, geoZ] = athVertexForGeo(vx, vy, vz);
+                geo += `Point(${pointIdAt(j, i)})={${geoX.toFixed(3)},${geoY.toFixed(3)},${geoZ.toFixed(3)},${meshSize.toFixed(1)}};\n`;
+            }
+
+            const ringSplines = [];
+            const splineSteps = fullCircle ? pointsPerRing : Math.max(1, pointsPerRing - 1);
+            for (let s = 0; s < splineSteps; s += ptsPerSpline) {
+                const startI = s;
+                let count = Math.min(ptsPerSpline, splineSteps - startI);
+                if (count <= 0) continue;
+                const pts = [];
+                for (let k = 0; k <= count; k++) {
+                    pts.push(pointIdAt(j, startI + k));
+                }
+                geo += `Spline(${splineId})={${pts.join(',')}};\n`;
+                ringSplines.push({ id: splineId++, startI, endI: startI + count });
+            }
+            ringSplineIds.push(ringSplines);
+
+            if (j > 0) {
+                const prev = ringSplineIds[j - 1];
+                const curr = ringSplineIds[j];
+                const patchCount = Math.min(prev.length, curr.length);
+                for (let s = 0; s < patchCount; s++) {
+                    const s1 = prev[s];
+                    const s2 = curr[s];
+                    const startLineId = lineId++;
+                    const endLineId = lineId++;
+                    geo += `Line(${startLineId})={${pointIdAt(j - 1, s1.startI)},${pointIdAt(j, s2.startI)}};\n`;
+                    geo += `Line(${endLineId})={${pointIdAt(j - 1, s1.endI)},${pointIdAt(j, s2.endI)}};\n`;
+                    geo += `Curve Loop(${loopId})={${s2.id},-${endLineId},-${s1.id},${startLineId}};\n`;
                     geo += `Surface(${surfaceId})={${loopId}};\n`;
-                    surfaceIds.push(surfaceId++);
-                    loopId++;
+                    surfaceIds.push(surfaceId);
+                    surfaceId += 1;
+                    loopId += 1;
                 }
             }
         }
-        geo += `\nPhysical Surface("SD1G0", 1)={${surfaceIds.join(',')}};\n`;
+        if (surfaceIds.length > 0) {
+            geo += `\nPhysical Surface("SD1G0", 1)={${surfaceIds.join(',')}};\n`;
+        }
     }
 
     geo += `\nMesh 2;\n`;
@@ -362,10 +368,13 @@ export function exportFullGeo(vertices, params, options = {}) {
  * 3 = optional secondary domain
  * 4 = symmetry/interface
  */
-export function exportMSH(vertices, indices, surfaceTags = null) {
+export function exportMSH(vertices, indices, surfaceTags = null, options = {}) {
     const vertexList = Array.from(vertices);
     const indexList = Array.from(indices);
-    const transformed = transformVerticesToAth(vertexList);
+    const transformed = transformVerticesToAth(vertexList, {
+        verticalOffset: options.verticalOffset || 0,
+        offsetSign: 1
+    });
     const triangleCount = indexList.length / 3;
 
     const physicalTags = Array.isArray(surfaceTags)
