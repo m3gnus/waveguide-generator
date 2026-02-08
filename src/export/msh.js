@@ -10,35 +10,12 @@ import {
     evalParam,
     isFullCircle
 } from '../geometry/common.js';
+import {
+    mapVertexToAth as mapVertexToAthTransform,
+    transformVerticesToAth
+} from '../geometry/transforms.js';
 
-const toFiniteNumber = (value, fallback = 0) => {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : fallback;
-};
-
-export const mapVertexToAth = (x, y, z, { verticalOffset = 0, offsetSign = 1 } = {}) => {
-    return [
-        x,
-        z + (verticalOffset * offsetSign),
-        y
-    ];
-};
-
-const transformVerticesToAth = (vertices, options = {}) => {
-    const verticalOffset = toFiniteNumber(options.verticalOffset, 0);
-    const offsetSign = toFiniteNumber(options.offsetSign, 1);
-    const out = new Array(vertices.length);
-    for (let i = 0; i < vertices.length; i += 3) {
-        const x = vertices[i];
-        const y = vertices[i + 1];
-        const z = vertices[i + 2];
-        const [athX, athY, athZ] = mapVertexToAth(x, y, z, { verticalOffset, offsetSign });
-        out[i] = athX;
-        out[i + 1] = athY;
-        out[i + 2] = athZ;
-    }
-    return out;
-};
+export const mapVertexToAth = mapVertexToAthTransform;
 
 const appendThroatCap = (vertices, indices, params, ringCount = null) => {
     let count = Number.isFinite(ringCount) && ringCount > 1 ? ringCount : null;

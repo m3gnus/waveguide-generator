@@ -6,7 +6,7 @@ import {
   createOrthoCamera,
   ZebraShader
 } from '../viewer/index.js';
-import { buildHornMesh } from '../geometry/index.js';
+import { buildGeometryArtifacts } from '../geometry/index.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -62,7 +62,10 @@ export function renderModel(app) {
   // Viewport always uses the formula-based mesh — evaluates profile math
   // directly at every grid point. Export and simulation flows use a
   // canonical tagged payload derived from the same geometry equations.
-  const { vertices, indices } = buildHornMesh(preparedParams);
+  const artifacts = buildGeometryArtifacts(preparedParams, {
+    forceRearClosure: false
+  });
+  const { vertices, indices } = artifacts.mesh;
   applyMeshToScene(app, vertices, indices, preparedParams);
 }
 

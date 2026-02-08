@@ -2,10 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { MWGConfigParser } from '../src/config/index.js';
 import { getDefaults } from '../src/config/defaults.js';
-import { PARAM_SCHEMA } from '../src/config/schema.js';
-import { parseExpression, buildHornMesh } from '../src/geometry/index.js';
+import {
+  buildGeometryArtifacts,
+  prepareGeometryParams,
+  coerceConfigParams,
+  applyAthImportDefaults,
+  isMWGConfig
+} from '../src/geometry/index.js';
 import { exportFullGeo, exportMSH } from '../src/export/msh.js';
-import { buildCanonicalMeshPayload } from '../src/simulation/payload.js';
 
 const root = process.argv[2] || '_references/testconfigs';
 const outRoot = process.argv[3] || '_references/testconfigs/_generated';
@@ -17,138 +21,6 @@ const THRESHOLDS = {
   stlCentroid: 0.5
 };
 
-const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
-
-function isNumericString(value) {
-  if (typeof value !== 'string') return false;
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  return NUMERIC_PATTERN.test(trimmed);
-}
-
-function applyAthImportDefaults(parsed, typedParams) {
-  if (!parsed || !parsed.type) return;
-
-  const isOSSE = parsed.type === 'OSSE';
-  if (typedParams.morphTarget === undefined) {
-    typedParams.morphTarget = 0;
-  }
-  const hasQuadrants =
-    typedParams.quadrants !== undefined &&
-    typedParams.quadrants !== null &&
-    typedParams.quadrants !== '';
-  if (!hasQuadrants) {
-    typedParams.quadrants = isOSSE ? '14' : '1';
-  }
-
-  const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
-  if (!hasMeshEnclosure && typedParams.encDepth === undefined) {
-    typedParams.encDepth = 0;
-  }
-
-  if (isOSSE) {
-    if (typedParams.k === undefined) {
-      typedParams.k = 1;
-    }
-    if (typedParams.h === undefined) {
-      typedParams.h = 0;
-    }
-  }
-}
-
-function prepareParamsForMesh(params, type, { forceFullQuadrants = false, applyVerticalOffset = true } = {}) {
-  const preparedParams = { ...params };
-
-  const rawExpressionKeys = new Set([
-    'subdomainSlices',
-    'interfaceOffset',
-    'interfaceDraw',
-    'gcurveSf',
-    'encFrontResolution',
-    'encBackResolution',
-    'sourceContours'
-  ]);
-
-  const applySchema = (schema) => {
-    if (!schema) return;
-    for (const [key, def] of Object.entries(schema)) {
-      const val = preparedParams[key];
-      if (val === undefined || val === null) continue;
-
-      if (def.type === 'expression') {
-        if (rawExpressionKeys.has(key)) continue;
-        if (typeof val !== 'string') continue;
-        const trimmed = val.trim();
-        if (!trimmed) continue;
-        if (isNumericString(trimmed)) {
-          preparedParams[key] = Number(trimmed);
-        } else {
-          preparedParams[key] = parseExpression(trimmed);
-        }
-      } else if ((def.type === 'number' || def.type === 'range') && typeof val === 'string') {
-        const trimmed = val.trim();
-        if (!trimmed) continue;
-        if (isNumericString(trimmed)) {
-          preparedParams[key] = Number(trimmed);
-        } else if (/[a-zA-Z]/.test(trimmed)) {
-          preparedParams[key] = parseExpression(trimmed);
-        }
-      }
-    }
-  };
-
-  applySchema(PARAM_SCHEMA[type] || {});
-  ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach(
-    (group) => {
-      applySchema(PARAM_SCHEMA[group] || {});
-    }
-  );
-
-  preparedParams.type = type;
-
-  const rawScale = preparedParams.scale ?? preparedParams.Scale ?? 1;
-  const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
-  const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
-  preparedParams.scale = scale;
-
-  if (scale !== 1) {
-    const lengthKeys = [
-      'L',
-      'R',
-      'r0',
-      'throatExtLength',
-      'slotLength',
-      'circArcRadius',
-      'morphCorner',
-      'morphWidth',
-      'morphHeight',
-      'gcurveWidth',
-      'sourceRadius'
-    ];
-
-    lengthKeys.forEach((key) => {
-      const value = preparedParams[key];
-      if (value === undefined || value === null || value === '') return;
-      if (typeof value === 'function') {
-        preparedParams[key] = (p) => scale * value(p);
-      } else if (typeof value === 'number' && Number.isFinite(value)) {
-        preparedParams[key] = value * scale;
-      } else if (typeof value === 'string' && isNumericString(value)) {
-        preparedParams[key] = Number(value) * scale;
-      }
-    });
-  }
-
-  if (!applyVerticalOffset) {
-    preparedParams.verticalOffset = 0;
-  }
-
-  if (forceFullQuadrants) {
-    preparedParams.quadrants = '1234';
-  }
-
-  return preparedParams;
-}
 
 function findFolderForConfig(rootDir, baseName, dirEntries) {
   const lower = baseName.toLowerCase();
@@ -550,21 +422,11 @@ function loadConfig(configPath) {
   if (!parsed.type) {
     throw new Error(`No type detected for ${configPath}`);
   }
-  const typedParams = {};
-  for (const [key, value] of Object.entries(parsed.params)) {
-    if (value === undefined || value === null) continue;
-    const stringValue = String(value).trim();
-    if (isNumericString(stringValue)) {
-      typedParams[key] = Number(stringValue);
-    } else {
-      typedParams[key] = stringValue;
-    }
-  }
+  const typedParams = coerceConfigParams(parsed.params);
   if (parsed.blocks && Object.keys(parsed.blocks).length > 0) {
     typedParams._blocks = parsed.blocks;
   }
-  const isMWG = /;\s*MWG config/i.test(content);
-  if (!isMWG) {
+  if (!isMWGConfig(content)) {
     applyAthImportDefaults(parsed, typedParams);
   }
 
@@ -626,14 +488,16 @@ function run() {
       continue;
     }
 
-    const geoParams = prepareParamsForMesh(params, type, {
+    const geoParams = prepareGeometryParams(params, {
+      type,
       forceFullQuadrants: false,
       applyVerticalOffset: true
     });
-    const geoMesh = buildHornMesh(geoParams, {
+    const geoArtifacts = buildGeometryArtifacts(geoParams, {
       includeEnclosure: false,
       includeRearShape: false
     });
+    const geoMesh = geoArtifacts.mesh;
 
     const geoOut = path.join(outDir, 'mesh.geo');
     const geoContent = exportFullGeo(geoMesh.vertices, geoParams, {
@@ -647,14 +511,16 @@ function run() {
     const stlOut = path.join(outDir, `${baseName}.stl`);
     writeBinaryStl(stlOut, geoMesh.vertices, geoMesh.indices);
 
-    const mshParams = prepareParamsForMesh(params, type, {
+    const mshParams = prepareGeometryParams(params, {
+      type,
       forceFullQuadrants: false,
       applyVerticalOffset: true
     });
     const mshOut = path.join(outDir, `${baseName}.msh`);
-    const mshPayload = buildCanonicalMeshPayload(mshParams, {
+    const mshArtifacts = buildGeometryArtifacts(mshParams, {
       includeEnclosure: Number(mshParams.encDepth || 0) > 0
     });
+    const mshPayload = mshArtifacts.simulation;
     fs.writeFileSync(
       mshOut,
       exportMSH(mshPayload.vertices, mshPayload.indices, mshPayload.surfaceTags, {

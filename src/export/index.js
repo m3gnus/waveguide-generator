@@ -18,4 +18,3 @@ export { exportSTLBinary, exportSTLAscii } from './stl.browser.js';
 // Node.js-only exports (require fs/child_process modules)
 // These are available in Node.js environments only:
 // - import { writeSTLFile } from './src/export/stl.js'
-// - import { meshHornWithGmsh, remeshSTL } from './src/export/gmshBridge.js'
