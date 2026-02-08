@@ -102,7 +102,7 @@ function applySchemaToParams(params, schema) {
       if (!trimmed) continue;
       if (isNumericString(trimmed)) {
         params[key] = Number(trimmed);
-      } else if (/[a-zA-Z]/.test(trimmed)) {
+      } else {
         params[key] = parseExpression(trimmed);
       }
     }

@@ -35,6 +35,25 @@ test('prepareGeometryParams parses values and applies normalization options', ()
   assert.equal(prepared.type, 'OSSE');
 });
 
+test('prepareGeometryParams parses arithmetic-only formulas for range and number fields', () => {
+  const raw = {
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    k: '5.7*1.1',
+    n: '(2+2)^2/4',
+    morphRate: '9/3'
+  };
+
+  const prepared = prepareGeometryParams(raw, { type: 'OSSE' });
+
+  assert.equal(typeof prepared.k, 'function');
+  assert.equal(typeof prepared.n, 'function');
+  assert.equal(typeof prepared.morphRate, 'function');
+  assert.ok(Math.abs(prepared.k(0) - 6.27) < 1e-12);
+  assert.equal(prepared.n(0), 4);
+  assert.equal(prepared.morphRate(0), 3);
+});
+
 test('coerceConfigParams and applyAthImportDefaults preserve ATH compatibility defaults', () => {
   const typed = coerceConfigParams({
     L: '120',
