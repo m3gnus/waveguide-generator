@@ -11,23 +11,41 @@ if [ ! -f "app.py" ]; then
 fi
 
 # Check if Python 3 is available
-if ! command -v python3 &> /dev/null; then
+if [ -x "../.venv/bin/python" ]; then
+    PYTHON_BIN="../.venv/bin/python"
+elif command -v python3 &> /dev/null; then
+    PYTHON_BIN="python3"
+else
     echo "❌ Error: Python 3 is not installed."
     exit 1
 fi
 
-echo "✅ Python 3 found: $(python3 --version)"
+echo "✅ Python found: $($PYTHON_BIN --version)"
+
+# Check minimum Python version
+$PYTHON_BIN - <<'PY'
+import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(f"❌ Python 3.10+ is required, found {sys.version}")
+PY
+
 echo ""
 
 # Check if bempp is installed
 echo "Checking for bempp-cl..."
-python3 -c "import bempp.api" 2>/dev/null
+$PYTHON_BIN - <<'PY'
+import importlib.util
+import sys
+has_new = importlib.util.find_spec("bempp_cl")
+has_old = importlib.util.find_spec("bempp_api")
+sys.exit(0 if (has_new or has_old) else 1)
+PY
 if [ $? -eq 0 ]; then
     echo "✅ bempp-cl is installed"
 else
     echo "⚠️  Warning: bempp-cl not found. Server will run with mock solver."
     echo "   To install bempp-cl, run:"
-    echo "   pip3 install git+https://github.com/bempp/bempp-cl.git"
+    echo "   $PYTHON_BIN -m pip install git+https://github.com/bempp/bempp-cl.git"
 fi
 
 echo ""
@@ -36,4 +54,4 @@ echo "Press Ctrl+C to stop"
 echo ""
 
 # Start the server
-python3 app.py
+$PYTHON_BIN app.py

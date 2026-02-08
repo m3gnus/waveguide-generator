@@ -26,7 +26,7 @@ Waveguide Generator is a browser-based tool for designing acoustic horns, previe
 
 - Node.js 18+
 - npm 9+
-- Python 3.10+ (Python 3.12 recommended for the widest backend package compatibility)
+- Python 3.10+ (Python 3.13 recommended on Linux; Python 3.12+ also supported)
 
 ## macOS Install (Step by Step)
 
@@ -84,6 +84,8 @@ If you skip this, the app still runs but solver features will report unavailable
 ```bash
 npm start
 ```
+
+`npm start` now prefers `./.venv/bin/python` for backend startup when that virtual environment exists.
 
 - Frontend: [http://localhost:3000](http://localhost:3000)
 - Backend: [http://localhost:8000](http://localhost:8000)
@@ -182,7 +184,7 @@ For Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl gmsh python3.12 python3.12-venv
+sudo apt install -y git curl gmsh python3 python3-venv
 ```
 
 ### 2. Install Node.js LTS (recommended via nvm)
@@ -199,7 +201,7 @@ Verify:
 ```bash
 node -v
 npm -v
-python3.12 --version
+python3 --version
 ```
 
 ### 3. Clone the repository
@@ -218,15 +220,36 @@ npm ci
 ### 5. Set up backend virtual environment
 
 ```bash
-python3.12 -m venv .venv
+if command -v python3.13 >/dev/null 2>&1; then
+  PYTHON_BIN=python3.13
+elif command -v python3.12 >/dev/null 2>&1; then
+  PYTHON_BIN=python3.12
+else
+  PYTHON_BIN=python3
+fi
+
+$PYTHON_BIN --version
+$PYTHON_BIN -c "import sys; assert sys.version_info >= (3, 10), f'Need Python >=3.10, found {sys.version}'"
+
+$PYTHON_BIN -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r server/requirements.txt
 ```
 
-If `python3.12` is not available in your distro repo, install it with your distro’s recommended method (or use `pyenv`) and then run the same `python3.12 -m venv ...` command.
+Python `3.10+` is supported. On Linux, use Python `3.13` when available.
 
 `gmsh` in `server/requirements.txt` is intentionally optional because wheels are not available on every Python/architecture combination.  
 `.geo -> .msh` generation still works with the system `gmsh` CLI installed above.
+
+If you want the latest Gmsh Python wheel snapshots (useful when PyPI has no matching wheel for your Linux/Python target):
+
+```bash
+# Standard Linux environments
+./.venv/bin/pip install -i https://gmsh.info/python-packages-dev --force-reinstall --no-cache-dir gmsh
+
+# Headless Linux (no X windows)
+./.venv/bin/pip install -i https://gmsh.info/python-packages-dev-nox --force-reinstall --no-cache-dir gmsh
+```
 
 ### 6. (Optional) Install full BEM solver
 
