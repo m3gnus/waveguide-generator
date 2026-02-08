@@ -21,7 +21,7 @@ venv/
 .agents/
 .cline/
 .gemini/
-# Keep .claude/ for Claude Code settings
+.claude/
 
 # Reference materials (large files, not part of program)
 _references/
