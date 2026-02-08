@@ -47,6 +47,8 @@ test('buildGmshGeo emits required mesh options and field controls', () => {
   assert.match(geoText, /Mesh 2;/);
   assert.match(geoText, /Background Field =/);
   assert.match(geoText, /Field\[\d+\] = Distance;/);
+  assert.match(geoText, /Field\[\d+\] = MathEval;/);
+  assert.match(geoText, /\.F = ".*z - \(.+\).*/);
   assert.doesNotMatch(geoText, /Field\(\d+\) = Distance;/);
 
   assert.equal(typeof geoStats.pointCount, 'number');

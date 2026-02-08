@@ -84,6 +84,7 @@ function normalizeAngularSegments(value, minSegments) {
 }
 
 function buildGmshExportParams(preparedParams) {
+  const hasEnclosure = Number(preparedParams.encDepth || 0) > 0;
   const baseAngular = toPositiveNumber(preparedParams.angularSegments, 120);
   const baseLength = toPositiveNumber(preparedParams.lengthSegments, 40);
   const coarseAngular = normalizeAngularSegments(
@@ -104,7 +105,10 @@ function buildGmshExportParams(preparedParams) {
     mouthResolution: toPositiveNumber(preparedParams.mouthResolution, 8) * scale,
     rearResolution: toPositiveNumber(preparedParams.rearResolution, 10) * scale,
     encFrontResolution: scaleResolutionValue(preparedParams.encFrontResolution, scale),
-    encBackResolution: scaleResolutionValue(preparedParams.encBackResolution, scale)
+    encBackResolution: scaleResolutionValue(preparedParams.encBackResolution, scale),
+    wallThickness: hasEnclosure
+      ? preparedParams.wallThickness
+      : toPositiveNumber(preparedParams.wallThickness, 5)
   };
 }
 

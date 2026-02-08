@@ -263,7 +263,9 @@ function appendResolutionFields(lines, context) {
     frontResolution,
     backResolution,
     rearResolution,
-    span
+    span,
+    zMin,
+    zMax
   } = context;
 
   let fieldId = 1;
@@ -289,14 +291,23 @@ function appendResolutionFields(lines, context) {
   };
 
   lines.push('// Mesh size fields');
+  const axialSpan = Math.max(1e-6, zMax - zMin);
+  const axialFieldId = fieldId++;
+  const axialBase = toPositive(throatResolution, 1);
+  const axialDelta = mouthResolution - axialBase;
+  lines.push(`Field[${axialFieldId}] = MathEval;`);
+  lines.push(
+    `Field[${axialFieldId}].F = "${formatNumber(axialBase)} + (${formatNumber(axialDelta)}) * ((z - (${formatNumber(zMin)})) / ${formatNumber(axialSpan)})";`
+  );
+  sizeFieldIds.push(axialFieldId);
 
-  const throatMouthSize = addDistanceThreshold(
+  const sourceRefine = addDistanceThreshold(
     sourcePointIds,
     throatResolution,
     mouthResolution,
-    span
+    Math.max(1, span * 0.2)
   );
-  if (throatMouthSize) sizeFieldIds.push(throatMouthSize);
+  if (sourceRefine) sizeFieldIds.push(sourceRefine);
 
   if (Number.isFinite(frontResolution) && frontResolution > 0) {
     const frontSize = addDistanceThreshold(
@@ -430,7 +441,9 @@ export function buildGmshGeo(preparedParams, mesh, simulation, options = {}) {
     frontResolution,
     backResolution,
     rearResolution,
-    span
+    span,
+    zMin,
+    zMax
   });
 
   lines.push('Mesh 2;');
