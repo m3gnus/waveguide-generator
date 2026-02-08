@@ -131,7 +131,7 @@ export const PARAM_SCHEMA = {
             default: '1234',
             tooltip: 'Simulation-only symmetry. The visible model stays full; simulation uses the selected quadrant.'
         },
-        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds an outward wall shell and a rear disc at one wall-thickness behind the throat.' },
+        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds a normal-offset wall shell one wall-thickness from the horn surface and a rear disc behind the throat.' },
         rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 10.0 },
     },
     'ENCLOSURE': {
