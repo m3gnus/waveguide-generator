@@ -39,7 +39,7 @@
                     <button id="load-config-btn" class="secondary">Load Config</button>
                     <button id="export-config-btn" class="secondary">Export Config</button>
                 </div>
-                <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
+                <input type="file" id="config-upload" class="is-hidden" accept=".txt,.cfg">
                 <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
                 <button id="export-btn" class="secondary">Export STL</button>
                 <button id="export-geo-btn" class="secondary">Export Gmsh GEO</button>
@@ -49,11 +49,11 @@
                 <hr>
                 <div class="input-row">
                     <label for="export-prefix">Prefix</label>
-                    <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
+                    <input type="text" id="export-prefix" class="input-full-width" value="horn_design">
                 </div>
                 <div class="input-row" id="output-folder-row">
-                    <button id="choose-folder-btn" class="secondary" style="font-size: 0.8em;">Choose Folder</button>
-                    <span id="output-folder-name" style="font-size: 0.8em; color: #888; margin-left: 8px;">No folder
+                    <button id="choose-folder-btn" class="secondary button-compact">Choose Folder</button>
+                    <span id="output-folder-name" class="output-folder-name">No folder
                         selected</span>
                 </div>
                 <div class="input-row">
@@ -61,7 +61,7 @@
                     <input type="number" id="export-counter" value="1" min="1" step="1">
                 </div>
 
-                <div class="checkbox-group" style="margin-top: 15px;">
+                <div class="checkbox-group">
                     <input type="checkbox" id="live-update" checked>
                     <label for="live-update">Real-time Updates</label>
                 </div>
@@ -93,7 +93,7 @@
                 <button id="run-simulation-btn">Start BEM Simulation</button>
                 <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
                 <button id="export-results-btn" class="secondary" disabled>Export Results</button>
-                <div id="simulation-progress" style="display: none;">
+                <div id="simulation-progress" class="is-hidden">
                     <div class="progress-bar">
                         <div id="progress-fill" class="progress-fill"></div>
                     </div>
@@ -134,7 +134,7 @@
                     <input type="number" id="circsym-profile" value="0" min="0" step="1">
                 </div>
                 <hr>
-                <h4 style="margin: 15px 0 10px 0; font-size: 0.9em; font-weight: 600; color: #999;">DIRECTIVITY MAP</h4>
+                <h4 class="section-subtitle">DIRECTIVITY MAP</h4>
                 <div class="input-row">
                     <label for="polar-angle-start">Angle Start (deg)</label>
                     <input type="number" id="polar-angle-start" value="0" min="0" max="360" step="1">
@@ -163,7 +163,7 @@
 
             <div id="simulation-param-container"></div>
 
-            <div id="results-container" style="display: none;">
+            <div id="results-container" class="is-hidden">
                 <div class="section">
                     <h3>SIMULATION RESULTS</h3>
                     <div class="input-row">

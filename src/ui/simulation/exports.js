@@ -1,40 +1,36 @@
 import { applySmoothing } from '../../results/smoothing.js';
+import { chooseExportFormat, showError, showMessage } from '../feedback.js';
 
-export function exportResults(panel) {
+export function applyExportSelection(panel, exportType, handlers = null) {
+  const actionMap = handlers || {
+    '1': () => exportAsImage(),
+    '2': () => exportAsCSV(panel),
+    '3': () => exportAsJSON(panel),
+    '4': () => exportAsText(panel)
+  };
+
+  const action = actionMap[exportType];
+  if (!action) {
+    showError('Invalid export selection.');
+    return false;
+  }
+
+  action();
+  return true;
+}
+
+export async function exportResults(panel) {
   if (!panel.lastResults) {
-    alert('No simulation results available to export');
+    showError('No simulation results available to export.');
     return;
   }
 
-  // Create export options dialog
-  const exportType = prompt(
-    'Export format:\n' +
-      '1 - PNG image of all charts\n' +
-      '2 - CSV data (frequency response)\n' +
-      '3 - JSON data (all results)\n' +
-      '4 - Text report\n\n' +
-      'Enter number (1-4):',
-    '1'
-  );
-
-  switch (exportType) {
-    case '1':
-      exportAsImage();
-      break;
-    case '2':
-      exportAsCSV(panel);
-      break;
-    case '3':
-      exportAsJSON(panel);
-      break;
-    case '4':
-      exportAsText(panel);
-      break;
-    default:
-      if (exportType !== null) {
-        alert('Invalid selection. Please enter 1, 2, 3, or 4.');
-      }
+  const exportType = await chooseExportFormat();
+  if (!exportType) {
+    return;
   }
+
+  applyExportSelection(panel, exportType);
 }
 
 /**
@@ -43,14 +39,14 @@ export function exportResults(panel) {
 export function exportAsImage() {
   const resultsCharts = document.getElementById('results-charts');
   if (!resultsCharts) {
-    alert('No charts to export');
+    showError('No charts to export.');
     return;
   }
 
   // Use html2canvas or similar library would be ideal, but for now use SVG export
   const svgs = resultsCharts.querySelectorAll('svg');
   if (svgs.length === 0) {
-    alert('No charts available to export');
+    showError('No charts available to export.');
     return;
   }
 
@@ -66,7 +62,10 @@ export function exportAsImage() {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  alert('PNG export requires html2canvas library. Exporting SVG data instead.');
+  showMessage('PNG export is not available yet. Exporting the first chart as SVG instead.', {
+    type: 'info',
+    duration: 3600
+  });
 
   // Export first SVG as example
   const svgData = new XMLSerializer().serializeToString(svgs[0]);

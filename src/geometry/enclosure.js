@@ -489,11 +489,41 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         }
     }
 
+    const TRI_EPSILON = 1e-10;
+    const pushTri = (a, b, c) => {
+        if (a === b || b === c || c === a) return;
+
+        const ax = vertices[a * 3];
+        const ay = vertices[a * 3 + 1];
+        const az = vertices[a * 3 + 2];
+        const bx = vertices[b * 3];
+        const by = vertices[b * 3 + 1];
+        const bz = vertices[b * 3 + 2];
+        const cx = vertices[c * 3];
+        const cy = vertices[c * 3 + 1];
+        const cz = vertices[c * 3 + 2];
+
+        const abx = bx - ax;
+        const aby = by - ay;
+        const abz = bz - az;
+        const acx = cx - ax;
+        const acy = cy - ay;
+        const acz = cz - az;
+
+        const nx = aby * acz - abz * acy;
+        const ny = abz * acx - abx * acz;
+        const nz = abx * acy - aby * acx;
+        const area2 = Math.hypot(nx, ny, nz);
+        if (area2 <= TRI_EPSILON) return;
+
+        indices.push(a, b, c);
+    };
+
     const stitch = (r1Start, r2Start) => {
         for (let i = 0; i < totalPts; i++) {
             const i2 = (i + 1) % totalPts;
-            indices.push(r1Start + i, r2Start + i, r2Start + i2);
-            indices.push(r1Start + i, r2Start + i2, r1Start + i2);
+            pushTri(r1Start + i, r2Start + i, r2Start + i2);
+            pushTri(r1Start + i, r2Start + i2, r1Start + i2);
         }
     };
 
@@ -610,10 +640,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         }
 
         if (advanceM) {
-            indices.push(idxM, idxMNext, idxE);
+            pushTri(idxM, idxE, idxMNext);
             m++;
         } else {
-            indices.push(idxM, idxENext, idxE);
+            pushTri(idxM, idxE, idxENext);
             e++;
         }
     }
@@ -644,6 +674,42 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     }
 
     const backInnerStart = prevRing;
+    let centerX = 0;
+    let centerY = 0;
+    let centerZ = 0;
+    for (let i = 0; i < totalPts; i++) {
+        const idx = backInnerStart + i;
+        centerX += vertices[idx * 3];
+        centerY += vertices[idx * 3 + 1];
+        centerZ += vertices[idx * 3 + 2];
+    }
+    centerX /= totalPts;
+    centerY /= totalPts;
+    centerZ /= totalPts;
+
+    const rearCenterIdx = vertices.length / 3;
+    vertices.push(centerX, centerY, centerZ);
+
+    let ringArea = 0;
+    for (let i = 0; i < totalPts; i++) {
+        const i2 = (i + 1) % totalPts;
+        const x1 = vertices[(backInnerStart + i) * 3];
+        const z1 = vertices[(backInnerStart + i) * 3 + 2];
+        const x2 = vertices[(backInnerStart + i2) * 3];
+        const z2 = vertices[(backInnerStart + i2) * 3 + 2];
+        ringArea += (x1 * z2) - (x2 * z1);
+    }
+
+    const isCounterClockwise = ringArea >= 0;
+    for (let i = 0; i < totalPts; i++) {
+        const i2 = (i + 1) % totalPts;
+        if (isCounterClockwise) {
+            pushTri(backInnerStart + i, backInnerStart + i2, rearCenterIdx);
+        } else {
+            pushTri(backInnerStart + i2, backInnerStart + i, rearCenterIdx);
+        }
+    }
+
     // No throat source in enclosure - it's now part of the horn geometry
 
     const enclosureEndTri = indices.length / 3;

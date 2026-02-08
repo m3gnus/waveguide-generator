@@ -1,6 +1,6 @@
 import { PARAM_SCHEMA } from '../config/schema.js';
 import { GlobalState } from '../state.js';
-import { validateParams } from '../config/validator.js';
+import { normalizeParamInput } from './paramInput.js';
 
 // Available mathematical functions from ATH user guide (Appendix A)
 const FORMULA_REFERENCE = {
@@ -305,14 +305,7 @@ export class ParamPanel {
             input.style.overflowY = 'auto';
 
             input.onchange = (e) => {
-                const value = e.target.value.trim();
-                // Try to parse as number first, otherwise treat as expression
-                const numVal = parseFloat(value);
-                if (!isNaN(numVal) && String(numVal) === value) {
-                    this.updateParam(key, numVal);
-                } else {
-                    this.updateParam(key, value);
-                }
+                this.updateParam(key, normalizeParamInput(e.target.value));
             };
 
             wrapper.appendChild(input);

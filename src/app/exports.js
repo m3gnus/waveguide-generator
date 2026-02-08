@@ -14,6 +14,7 @@ import {
 } from '../export/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
+import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
 
 function getJSZipCtor() {
@@ -100,7 +101,7 @@ export function exportMWGConfig() {
 
 export function exportProfileCSV(app) {
   if (!app.hornMesh) {
-    alert('Please generate a horn model first');
+    showError('Please generate a horn model first.');
     return;
   }
 
@@ -163,7 +164,7 @@ export async function exportMSH(app) {
   } catch (err) {
     console.error('[exports] MSH export failed:', err);
     app.stats.innerText = `MSH error: ${err.message}`;
-    alert(`MSH export failed: ${err.message}`);
+    showError(`MSH export failed: ${err.message}`);
   }
 }
 
@@ -234,6 +235,6 @@ export async function exportABECProject(app) {
   } catch (err) {
     console.error('[exports] ABEC export failed:', err);
     app.stats.innerText = `ABEC export failed: ${err.message}`;
-    alert(`ABEC export failed: ${err.message}`);
+    showError(`ABEC export failed: ${err.message}`);
   }
 }
