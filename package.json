@@ -11,6 +11,7 @@
     "dev": "node scripts/dev-server.js",
     "build": "webpack --mode production",
     "test": "node --test",
+    "test:ath": "node scripts/ath-parity.js",
     "test:server": "cd server && python3 -m unittest discover -s tests"
   },
   "keywords": [

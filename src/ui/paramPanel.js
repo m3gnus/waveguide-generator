@@ -164,8 +164,8 @@ export class ParamPanel {
         const meshSchema = PARAM_SCHEMA.MESH || {};
         const enclosureSection = this.createDetailsSection('Enclosure', 'enclosure-details');
 
-        // Wall thickness and rear shape (moved from Simulation → Geometry tab)
-        const geomMeshKeys = ['wallThickness', 'rearShape'];
+        // Wall thickness is controlled in the geometry tab.
+        const geomMeshKeys = ['wallThickness'];
         geomMeshKeys.forEach((key) => {
             const def = meshSchema[key];
             if (def) {
@@ -213,7 +213,7 @@ export class ParamPanel {
             const combinedMeshSection = this.createDetailsSection('Mesh Density', 'mesh-details');
 
             // Params moved to Geometry tab — skip here
-            const geomTabKeys = new Set(['wallThickness', 'rearShape']);
+            const geomTabKeys = new Set(['wallThickness']);
 
             // Mesh density parameters (affect tessellation, not geometry shape)
             const meshDensityOrder = [

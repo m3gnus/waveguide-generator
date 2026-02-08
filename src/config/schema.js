@@ -131,18 +131,8 @@ export const PARAM_SCHEMA = {
             default: '1234',
             tooltip: 'Simulation-only symmetry. The visible model stays full; simulation uses the selected quadrant.'
         },
-        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Thickness used when generating freestanding rear closure for simulation/export. Set to 0 for an open back. Does not affect the 3D viewer mesh.' },
+        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds an outward wall shell and a rear disc at one wall-thickness behind the throat.' },
         rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 10.0 },
-        rearShape: {
-            type: 'select',
-            label: 'Rear Shape',
-            options: [
-                { value: 0, label: 'None (Open)' },
-                { value: 1, label: 'Full Model' },
-                { value: 2, label: 'Flat Disc' }
-            ],
-            default: 0
-        },
     },
     'ENCLOSURE': {
         encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 280 },

@@ -272,6 +272,7 @@ git push
 
 ```bash
 npm test
+npm run test:ath
 npm run test:server
 npm run build
 ```

@@ -126,8 +126,7 @@ export function createPresetManager() {
         lengthSegments: 20,
         cornerSegments: 4,
         quadrants: '1234',
-        wallThickness: 5.0,
-        rearShape: 0
+        wallThickness: 5.0
       },
       bemSettings: {
         abecSimType: 1,

@@ -67,8 +67,7 @@ export function exportSTL(app) {
     applyVerticalOffset: false
   });
   const artifacts = buildGeometryArtifacts(preparedParams, {
-    includeEnclosure: false,
-    includeRearShape: false
+    includeEnclosure: false
   });
   const { vertices, indices } = artifacts.mesh;
 
@@ -123,8 +122,7 @@ export async function exportGmshGeo(app) {
   const baseName = getExportBaseName();
   const meshBase = `${baseName}`;
   const artifacts = buildGeometryArtifacts(preparedParams, {
-    includeEnclosure: false,
-    includeRearShape: false
+    includeEnclosure: false
   });
   const geo = exportFullGeo(artifacts.mesh.vertices, preparedParams, {
     outputName: meshBase,

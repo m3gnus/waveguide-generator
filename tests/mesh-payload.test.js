@@ -41,8 +41,7 @@ test('canonical mesh payload includes surface tags and source coverage', () => {
     ...makeBaseParams(),
     encDepth: 0,
     quadrants: '1234',
-    wallThickness: 5,
-    rearShape: 0
+    wallThickness: 5
   };
 
   const payload = quietBuild(params, { includeEnclosure: false });
@@ -60,8 +59,7 @@ test('interface mode emits secondary and interface tags', () => {
     encDepth: 260,
     interfaceOffset: '12',
     quadrants: '1',
-    wallThickness: 5,
-    rearShape: 0
+    wallThickness: 5
   });
   const payload = quietBuild(params, { includeEnclosure: true });
   assert.equal(payload.metadata.interfaceEnabled, true);
@@ -74,8 +72,7 @@ test('enclosure without interface keeps enclosure surfaces as wall tags', () => 
     encDepth: 260,
     interfaceOffset: '',
     quadrants: '1234',
-    wallThickness: 5,
-    rearShape: 0
+    wallThickness: 5
   });
   const payload = quietBuild(params, { includeEnclosure: true });
   assert.equal(payload.metadata.interfaceEnabled, false);
@@ -83,21 +80,19 @@ test('enclosure without interface keeps enclosure surfaces as wall tags', () => 
   assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.INTERFACE], 0);
 });
 
-test('freestanding export forces rear closure when wall thickness is set', () => {
+test('freestanding export does not force rear closure', () => {
   const params = makeBaseParams({
     encDepth: 0,
-    wallThickness: 8,
-    rearShape: 0
+    wallThickness: 8
   });
   const payload = quietBuild(params, { includeEnclosure: false });
-  assert.equal(payload.metadata.rearClosureForced, true);
+  assert.equal(payload.metadata.rearClosureForced, false);
 });
 
 test('enclosure mode does not force rear closure', () => {
   const params = makeBaseParams({
     encDepth: 220,
-    wallThickness: 8,
-    rearShape: 0
+    wallThickness: 8
   });
   const payload = quietBuild(params, { includeEnclosure: true });
   assert.equal(payload.metadata.rearClosureForced, false);

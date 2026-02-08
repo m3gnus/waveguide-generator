@@ -151,7 +151,6 @@ export function generateMWGConfigContent(params) {
     if (params.quadrants !== undefined) content += `Mesh.Quadrants = ${params.quadrants}\n`;
     if (params.wallThickness > 0) content += `Mesh.WallThickness = ${params.wallThickness}\n`;
     if (isNonZero(params.rearResolution)) content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;
-    if (params.rearShape !== undefined) content += `Mesh.RearShape = ${formatValue(params.rearShape)}\n`;
 
     if (params.outputABECProject !== undefined) {
         content += `Output.ABECProject = ${formatValue(params.outputABECProject)}\n`;

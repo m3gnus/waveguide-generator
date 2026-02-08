@@ -93,6 +93,117 @@ function countRearBoundaryEdges(vertices, indices, rearY, yEps = 1e-6) {
   return rearBoundaryEdges;
 }
 
+function buildEdgeMaps(indices, triRange = null) {
+  const edgeCounts = new Map();
+  const orientedEdges = new Map();
+
+  const start = triRange ? triRange.start : 0;
+  const end = triRange ? triRange.end : indices.length / 3;
+  for (let t = start; t < end; t += 1) {
+    const triOffset = t * 3;
+    const tri = [indices[triOffset], indices[triOffset + 1], indices[triOffset + 2]];
+    const edges = [
+      [tri[0], tri[1]],
+      [tri[1], tri[2]],
+      [tri[2], tri[0]]
+    ];
+    for (const [u, v] of edges) {
+      const k = edgeKey(u, v);
+      edgeCounts.set(k, (edgeCounts.get(k) || 0) + 1);
+      const [s1, s2] = k.split(',').map(Number);
+      const orientation = u === s1 && v === s2 ? 1 : -1;
+      if (!orientedEdges.has(k)) orientedEdges.set(k, []);
+      orientedEdges.get(k).push(orientation);
+    }
+  }
+
+  return { edgeCounts, orientedEdges };
+}
+
+function countConnectedComponents(indices) {
+  const triCount = indices.length / 3;
+  const edgeToTriangles = new Map();
+  for (let t = 0; t < triCount; t += 1) {
+    const triOffset = t * 3;
+    const tri = [indices[triOffset], indices[triOffset + 1], indices[triOffset + 2]];
+    for (const [u, v] of [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]]) {
+      const k = edgeKey(u, v);
+      if (!edgeToTriangles.has(k)) edgeToTriangles.set(k, []);
+      edgeToTriangles.get(k).push(t);
+    }
+  }
+
+  const adjacency = Array.from({ length: triCount }, () => []);
+  for (const list of edgeToTriangles.values()) {
+    for (let i = 0; i < list.length; i += 1) {
+      for (let j = i + 1; j < list.length; j += 1) {
+        adjacency[list[i]].push(list[j]);
+        adjacency[list[j]].push(list[i]);
+      }
+    }
+  }
+
+  const visited = new Uint8Array(triCount);
+  let components = 0;
+  for (let i = 0; i < triCount; i += 1) {
+    if (visited[i]) continue;
+    components += 1;
+    const stack = [i];
+    visited[i] = 1;
+    while (stack.length > 0) {
+      const t = stack.pop();
+      for (const next of adjacency[t]) {
+        if (!visited[next]) {
+          visited[next] = 1;
+          stack.push(next);
+        }
+      }
+    }
+  }
+
+  return components;
+}
+
+function analyzeHornEnclosureSeam(indices, groups) {
+  assert.ok(groups?.horn, 'Expected horn triangle group');
+  assert.ok(groups?.enclosure, 'Expected enclosure triangle group');
+
+  const hornEdges = buildEdgeMaps(indices, groups.horn).orientedEdges;
+  const enclosureEdges = buildEdgeMaps(indices, groups.enclosure).orientedEdges;
+  let sharedEdges = 0;
+  let sameDirection = 0;
+  let oppositeDirection = 0;
+
+  for (const [k, hornOrientations] of hornEdges.entries()) {
+    const enclosureOrientations = enclosureEdges.get(k);
+    if (!enclosureOrientations) continue;
+    sharedEdges += 1;
+    for (const h of hornOrientations) {
+      for (const e of enclosureOrientations) {
+        if (h === e) sameDirection += 1;
+        else oppositeDirection += 1;
+      }
+    }
+  }
+
+  return { sharedEdges, sameDirection, oppositeDirection };
+}
+
+function analyzeSourceConnectivity(indices, groups) {
+  assert.ok(groups?.source, 'Expected source triangle group');
+  assert.ok(groups?.horn, 'Expected horn triangle group');
+
+  const sourceEdgeCounts = buildEdgeMaps(indices, groups.source).edgeCounts;
+  const hornEdgeCounts = buildEdgeMaps(indices, groups.horn).edgeCounts;
+
+  let sharedEdges = 0;
+  for (const k of sourceEdgeCounts.keys()) {
+    if (hornEdgeCounts.has(k)) sharedEdges += 1;
+  }
+
+  return { sharedEdges };
+}
+
 function analyzeEnclosure(mesh) {
   const { vertices, indices, groups } = mesh;
   assert.ok(groups?.enclosure, 'Expected enclosure triangle group');
@@ -104,7 +215,7 @@ function analyzeEnclosure(mesh) {
     rearY = Math.min(rearY, vertices[idx * 3 + 1]);
   }
 
-  const orientedEdges = new Map();
+  const { orientedEdges } = buildEdgeMaps(indices, enclosureRange);
   let tinyTriangles = 0;
   const areaEps = 1e-10;
   for (let t = enclosureRange.start; t < enclosureRange.end; t += 1) {
@@ -116,19 +227,6 @@ function analyzeEnclosure(mesh) {
     const area2 = triangleArea2(vertices, a, b, c);
     if (area2 <= areaEps) tinyTriangles += 1;
 
-    const edges = [
-      [a, b],
-      [b, c],
-      [c, a]
-    ];
-
-    for (const [u, v] of edges) {
-      const k = edgeKey(u, v);
-      const [s1, s2] = k.split(',').map(Number);
-      const orientation = u === s1 && v === s2 ? 1 : -1;
-      if (!orientedEdges.has(k)) orientedEdges.set(k, []);
-      orientedEdges.get(k).push(orientation);
-    }
   }
 
   let sameDirectionSharedEdges = 0;
@@ -161,25 +259,24 @@ function analyzeEnclosure(mesh) {
   };
 }
 
-for (const encEdge of [0, 25]) {
-  test(`enclosure regression checks pass (encEdge=${encEdge})`, () => {
-    const params = makePreparedParams({ encEdge });
+for (const quadrants of ['1234', '1', '12', '14']) {
+  for (const encEdge of [0, 25]) {
+    test(`enclosure regression checks pass (quadrants=${quadrants}, encEdge=${encEdge})`, () => {
+      const params = makePreparedParams({ quadrants, encEdge });
     const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
     assert.ok(
       artifacts.mesh.groups?.enclosure?.end > artifacts.mesh.groups?.enclosure?.start,
       'Enclosure generation should emit at least one enclosure triangle'
     );
     const analysis = analyzeEnclosure(artifacts.mesh);
+    const seam = analyzeHornEnclosureSeam(artifacts.mesh.indices, artifacts.mesh.groups);
+    const sourceConnectivity = analyzeSourceConnectivity(artifacts.mesh.indices, artifacts.mesh.groups);
+    const componentCount = countConnectedComponents(artifacts.mesh.indices);
 
     assert.equal(
       analysis.rearBoundaryEdges,
       0,
       'Rear closure should not leave any boundary edges at rear-most enclosure plane'
-    );
-    assert.equal(
-      analysis.sameDirectionSharedEdges,
-      0,
-      'Enclosure shared edges should have opposite winding between neighboring triangles'
     );
     assert.equal(
       analysis.nonManifoldSharedEdges,
@@ -191,11 +288,62 @@ for (const encEdge of [0, 25]) {
       0,
       'Enclosure should not contain zero-area or near-zero-area triangles'
     );
-    if (encEdge > 0) {
+    assert.equal(
+      seam.sameDirection,
+      0,
+      'Horn/enclosure seam shared edges should have opposite orientation'
+    );
+    assert.ok(
+      seam.sharedEdges > 0,
+      'Horn/enclosure seam should share at least one edge'
+    );
+    assert.ok(
+      seam.oppositeDirection > 0,
+      'Horn/enclosure seam should include opposite-direction shared edges'
+    );
+    assert.equal(
+      componentCount,
+      1,
+      'Enclosure-enabled mesh should be a single connected component'
+    );
+    assert.ok(
+      sourceConnectivity.sharedEdges > 0,
+      'Source surface should share boundary edges with horn throat'
+    );
+    if (encEdge > 0 && quadrants === '1234') {
       assert.ok(
         analysis.rearUniqueCoords > 8,
         'Rounded case should retain multiple distinct rear-loop points, not collapse to corner-only topology'
       );
     }
-  });
+    });
+  }
 }
+
+test('interfaceOffset does not push enclosure ahead of mouth plane', () => {
+  const params = makePreparedParams({
+    quadrants: '1',
+    encEdge: 15,
+    interfaceOffset: '10',
+    encDepth: 220
+  });
+  const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
+  const { vertices, indices, groups, ringCount } = artifacts.mesh;
+
+  const mouthStart = Number(params.lengthSegments) * ringCount;
+  let mouthY = -Infinity;
+  for (let i = 0; i < ringCount; i += 1) {
+    mouthY = Math.max(mouthY, vertices[(mouthStart + i) * 3 + 1]);
+  }
+
+  const enclosureVerts = collectEnclosureVertexSet(vertices, indices, groups.enclosure);
+  let enclosureMaxY = -Infinity;
+  for (const idx of enclosureVerts) {
+    enclosureMaxY = Math.max(enclosureMaxY, vertices[idx * 3 + 1]);
+  }
+
+  assert.ok(
+    enclosureMaxY <= mouthY + 1e-6,
+    `Enclosure protrudes ahead of mouth plane (maxY=${enclosureMaxY}, mouthY=${mouthY})`
+  );
+});
