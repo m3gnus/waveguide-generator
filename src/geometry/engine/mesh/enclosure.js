@@ -1,3 +1,4 @@
+/* Enclosure mesh generation */
 // ===========================================================================
 // Enclosure Geometry (Rear Chamber for BEM Simulation)
 // ===========================================================================
@@ -277,6 +278,90 @@ function generateRoundedBoxOutline(maxX, minX, maxZ, minZ, params, quadrantInfo)
     return outline;
 }
 
+function dedupePerimeterPoints(outerPts, insetPts, eps = 1e-6) {
+    if (!Array.isArray(outerPts) || !Array.isArray(insetPts) || outerPts.length !== insetPts.length) {
+        return { outerPts, insetPts };
+    }
+
+    const kept = [];
+    for (let i = 0; i < outerPts.length; i++) {
+        if (kept.length === 0) {
+            kept.push(i);
+            continue;
+        }
+        const prev = kept[kept.length - 1];
+        const dox = outerPts[i].x - outerPts[prev].x;
+        const doz = outerPts[i].z - outerPts[prev].z;
+        const dix = insetPts[i].x - insetPts[prev].x;
+        const diz = insetPts[i].z - insetPts[prev].z;
+        if (Math.hypot(dox, doz) > eps || Math.hypot(dix, diz) > eps) {
+            kept.push(i);
+        }
+    }
+
+    if (kept.length > 2) {
+        const first = kept[0];
+        const last = kept[kept.length - 1];
+        const dox = outerPts[first].x - outerPts[last].x;
+        const doz = outerPts[first].z - outerPts[last].z;
+        const dix = insetPts[first].x - insetPts[last].x;
+        const diz = insetPts[first].z - insetPts[last].z;
+        if (Math.hypot(dox, doz) <= eps && Math.hypot(dix, diz) <= eps) {
+            kept.pop();
+        }
+    }
+
+    return {
+        outerPts: kept.map((idx) => outerPts[idx]),
+        insetPts: kept.map((idx) => insetPts[idx])
+    };
+}
+
+function resampleClosedLoop(points, targetCount, cx, cz) {
+    if (!Array.isArray(points) || points.length === 0 || targetCount <= 0) return [];
+    if (points.length === targetCount) {
+        return points.map((p) => ({ ...p }));
+    }
+
+    const cumulative = [0];
+    let total = 0;
+    for (let i = 0; i < points.length; i++) {
+        const next = (i + 1) % points.length;
+        const dx = points[next].x - points[i].x;
+        const dz = points[next].z - points[i].z;
+        total += Math.hypot(dx, dz);
+        cumulative.push(total);
+    }
+
+    if (total <= 1e-9) {
+        return Array.from({ length: targetCount }, () => ({ ...points[0] }));
+    }
+
+    const out = [];
+    for (let k = 0; k < targetCount; k++) {
+        const targetDist = (k / targetCount) * total;
+        let seg = 0;
+        while (seg + 1 < cumulative.length && cumulative[seg + 1] < targetDist) {
+            seg++;
+        }
+        const p0 = points[seg % points.length];
+        const p1 = points[(seg + 1) % points.length];
+        const segStart = cumulative[seg];
+        const segLen = Math.max(1e-12, cumulative[seg + 1] - segStart);
+        const t = (targetDist - segStart) / segLen;
+        const x = p0.x + (p1.x - p0.x) * t;
+        const z = p0.z + (p1.z - p0.z) * t;
+        const dx = x - cx;
+        const dz = z - cz;
+        const len = Math.hypot(dx, dz);
+        const nx = len > 0 ? dx / len : 0;
+        const nz = len > 0 ? dz / len : 0;
+        out.push({ x, z, nx, nz });
+    }
+
+    return out;
+}
+
 export function addEnclosureGeometry(vertices, indices, params, verticalOffset = 0, quadrantInfo = null, groupInfo = null, ringCount = null, angleList = null) {
     const ringSize = Number.isFinite(ringCount) && ringCount > 0
         ? ringCount
@@ -335,8 +420,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const cx = centerSumX / cleanOutline.length;
     const cz = centerSumZ / cleanOutline.length;
 
-    const outerPts = [];
-    const insetPts = [];
+    let outerPts = [];
+    let insetPts = [];
 
     for (let i = 0; i < cleanOutline.length; i++) {
         const pt = cleanOutline[i];
@@ -434,10 +519,20 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         }
     }
 
+    const dedupedPerimeter = dedupePerimeterPoints(outerPts, insetPts, collapseEps);
+    outerPts = dedupedPerimeter.outerPts;
+    insetPts = dedupedPerimeter.insetPts;
+
+    if (outerPts.length !== ringSize) {
+        outerPts = resampleClosedLoop(outerPts, ringSize, cx, cz);
+    }
+    if (insetPts.length !== ringSize) {
+        insetPts = resampleClosedLoop(insetPts, ringSize, cx, cz);
+    }
+
     const totalPts = insetPts.length;
     if (totalPts < 3) return;
 
-    const ringIndices = [];
     const mouthRing = [];
     for (let i = 0; i < ringSize; i++) {
         const idx = lastRowStart + i;
@@ -445,7 +540,6 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     }
 
     const ring0Start = vertices.length / 3;
-    ringIndices.push(ring0Start);
     for (let i = 0; i < totalPts; i++) {
         const ipt = insetPts[i];
 
@@ -462,19 +556,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         vertices.push(ipt.x, bestY, ipt.z);
     }
 
-    let roundoverStartRingIdx = ring0Start;
-
-    if (interfaceOffset > 0.001) {
-        const offsetRingStart = vertices.length / 3;
-        ringIndices.push(offsetRingStart);
-        for (let i = 0; i < totalPts; i++) {
-            const x = vertices[(ring0Start + i) * 3];
-            const y = vertices[(ring0Start + i) * 3 + 1];
-            const z = vertices[(ring0Start + i) * 3 + 2];
-            vertices.push(x, y + interfaceOffset, z);
-        }
-        roundoverStartRingIdx = offsetRingStart;
-    }
+    const roundoverStartRingIdx = ring0Start;
 
     const frontRings = [];
     if (edgeR > 0.001) {
@@ -508,18 +590,9 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
                 vertices.push(x, y, z);
             }
         }
-    } else {
-        const ringStart = vertices.length / 3;
-        frontRings.push(ringStart);
-        for (let i = 0; i < totalPts; i++) {
-            const opt = outerPts[i];
-            const yBase = vertices[(roundoverStartRingIdx + i) * 3 + 1];
-            vertices.push(opt.x, yBase, opt.z);
-        }
     }
 
     const backStartRing = vertices.length / 3;
-    ringIndices.push(backStartRing);
 
     for (let i = 0; i < totalPts; i++) {
         const opt = outerPts[i];
@@ -608,7 +681,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const m0 = mouthRing[0];
     const m0ang = Math.atan2(m0.z - cz, m0.x - cx);
     for (let j = 0; j < totalPts; j++) {
-        const pt = cleanOutline[j];
+        const pt = outerPts[j];
         const ang = Math.atan2(pt.z - cz, pt.x - cx);
         let diff = Math.abs(m0ang - ang);
         if (diff > Math.PI) diff = 2 * Math.PI - diff;
@@ -621,17 +694,6 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
     const getM = (i) => lastRowStart + (i % mouthLoop);
     const getE = (i) => ring0Start + ((ePsi + i) % totalPts);
-    const getMPos = (i) => {
-        const idx = i % mouthLoop;
-        return mouthRing[idx];
-    };
-    const getEPos = (i) => {
-        const idx = (ePsi + i) % totalPts;
-        const vIdx = ring0Start + idx;
-        return { x: vertices[vIdx * 3], y: vertices[vIdx * 3 + 1], z: vertices[vIdx * 3 + 2] };
-    };
-    const distSq = (p1, p2) => (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2;
-
     let m = 0;
     let e = 0;
     const maxSteps = (mLen + eLen) * 2;
@@ -656,82 +718,90 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     // We stop when M has completed its loop AND E has completed its loop.
     // For full circle, "completed" means wrapped around to start.
 
-    while ((m < limitM || e < limitE) && steps++ < maxSteps) {
-        // Indices need to respect "strip" vs "loop"
-        // If !fullCircle, indices don't wrap.
-        // getM and getE currently use modulo.
-
-        // Correct getM/getE for NON-Wrapping strip:
-        const idxM = fullCircle ? getM(m) : (lastRowStart + m);
-        const idxMNext = fullCircle ? getM(m + 1) : (lastRowStart + m + 1);
-        const idxE = fullCircle ? getE(e) : (ring0Start + (ePsi + e) % totalPts);
-        const idxENext = fullCircle ? getE(e + 1) : (ring0Start + (ePsi + e + 1) % totalPts);
-
-        const posM = fullCircle ? getMPos(m) : { x: vertices[idxM * 3], y: vertices[idxM * 3 + 1], z: vertices[idxM * 3 + 2] };
-        const posMNext = fullCircle ? getMPos(m + 1) : { x: vertices[idxMNext * 3], y: vertices[idxMNext * 3 + 1], z: vertices[idxMNext * 3 + 2] };
-        const posE = fullCircle ? getEPos(e) : { x: vertices[idxE * 3], y: vertices[idxE * 3 + 1], z: vertices[idxE * 3 + 2] };
-        const posENext = fullCircle ? getEPos(e + 1) : { x: vertices[idxENext * 3], y: vertices[idxENext * 3 + 1], z: vertices[idxENext * 3 + 2] };
-
-        let advanceM = false;
-
-        // Boundary checks for open strip
-        if (!fullCircle) {
-            if (m >= limitM) advanceM = false;      // M finished, force E
-            else if (e >= limitE) advanceM = true;  // E finished, force M
-            else {
-                const d1 = distSq(posMNext, posE);
-                const d2 = distSq(posM, posENext);
-                advanceM = d1 < d2;
-            }
-        } else {
-            // Closed loop - flexible
-            // If one is way ahead (more than 1 lap?), hold it?
-            // Usually not an issue with simple shapes.
-            // Just check diagonals.
-            const d1 = distSq(posMNext, posE);
-            const d2 = distSq(posM, posENext);
-
-            // Bias to keep progress balanced if ratios are extreme? 
-            // Simple distance check usually suffices for convex-ish shapes.
-            advanceM = d1 < d2;
-
-            // Safety: if m is done but e is not, force e?
-            // For loops, "done" is arbitrary start/end line.
-            // We just need to stitch until we cover the angular span.
-            // Since we use distance, it handles it.
-            // But we must stop!
-            // Condition (m < limitM || e < limitE) handles stops.
-            // But if d1 always < d2, M will wrap infinitely.
-            // We need to count "progress".
-            // If m has done > 1 lap, force E?
-            if (m > limitM + 5) advanceM = false;
-            if (e > limitE + 5) advanceM = true;
+    if (fullCircle && eLen === mouthLoop) {
+        for (let i = 0; i < mouthLoop; i++) {
+            const m0 = lastRowStart + i;
+            const m1 = lastRowStart + ((i + 1) % mouthLoop);
+            const e0 = ring0Start + ((ePsi + i) % totalPts);
+            const e1 = ring0Start + ((ePsi + i + 1) % totalPts);
+            // Shared mouth edges must run opposite orientation vs horn shell.
+            pushTri(m0, m1, e0);
+            pushTri(m1, e1, e0);
         }
+    } else {
+        while ((m < limitM || e < limitE) && steps++ < maxSteps) {
+            const idxM = fullCircle ? getM(m) : (lastRowStart + m);
+            const idxMNext = fullCircle ? getM(m + 1) : (lastRowStart + m + 1);
+            const idxE = fullCircle ? getE(e) : (ring0Start + (ePsi + e) % totalPts);
+            const idxENext = fullCircle ? getE(e + 1) : (ring0Start + (ePsi + e + 1) % totalPts);
 
-        if (advanceM) {
-            pushTri(idxM, idxE, idxMNext);
-            m++;
-        } else {
-            pushTri(idxM, idxE, idxENext);
-            e++;
+            let advanceM = false;
+            if (m >= limitM) {
+                advanceM = false;
+            } else if (e >= limitE) {
+                advanceM = true;
+            } else {
+                // Deterministic zipper progress avoids skipped mouth edges.
+                const mProgress = (m + 1) / Math.max(1, mLen);
+                const eProgress = (e + 1) / Math.max(1, eLen);
+                advanceM = mProgress < eProgress;
+            }
+
+            if (advanceM) {
+                // Shared mouth edges must run opposite orientation vs horn shell.
+                pushTri(idxM, idxMNext, idxE);
+                m++;
+            } else {
+                pushTri(idxM, idxE, idxENext);
+                e++;
+            }
         }
     }
 
+
+    const averageRingY = (ringStart) => {
+        let sumY = 0;
+        for (let i = 0; i < totalPts; i++) {
+            sumY += vertices[(ringStart + i) * 3 + 1];
+        }
+        return sumY / totalPts;
+    };
+
+    const createInterpolatedRing = (fromStart, toStart, t) => {
+        const ringStart = vertices.length / 3;
+        for (let i = 0; i < totalPts; i++) {
+            const fromIdx = (fromStart + i) * 3;
+            const toIdx = (toStart + i) * 3;
+            const x = vertices[fromIdx] + (vertices[toIdx] - vertices[fromIdx]) * t;
+            const y = vertices[fromIdx + 1] + (vertices[toIdx + 1] - vertices[fromIdx + 1]) * t;
+            const z = vertices[fromIdx + 2] + (vertices[toIdx + 2] - vertices[fromIdx + 2]) * t;
+            vertices.push(x, y, z);
+        }
+        return ringStart;
+    };
 
     let prevRing = ring0Start;
     let interfaceStartTri = null;
     let interfaceEndTri = null;
 
-    if (interfaceOffset > 0.001) {
-        interfaceStartTri = indices.length / 3;
-        stitch(prevRing, roundoverStartRingIdx);
-        interfaceEndTri = indices.length / 3;
-        prevRing = roundoverStartRingIdx;
-    }
-
     for (const rid of frontRings) {
         stitch(prevRing, rid);
         prevRing = rid;
+    }
+
+    if (interfaceOffset > 0.001) {
+        const frontY = averageRingY(prevRing);
+        const backYRing = averageRingY(backStartRing);
+        const availableDepth = frontY - backYRing;
+        if (availableDepth > 1e-6) {
+            const rawT = interfaceOffset / availableDepth;
+            const t = Math.min(1 - 1e-4, Math.max(1e-4, rawT));
+            const interfaceRingStart = createInterpolatedRing(prevRing, backStartRing, t);
+            interfaceStartTri = indices.length / 3;
+            stitch(prevRing, interfaceRingStart);
+            interfaceEndTri = indices.length / 3;
+            prevRing = interfaceRingStart;
+        }
     }
 
     stitch(prevRing, backStartRing);
@@ -760,62 +830,46 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     vertices.push(centerX, centerY, centerZ);
 
     const preCapTriEnd = indices.length / 3;
-    const capEps = 1e-6;
-    const capLoop = [];
-    for (let i = 0; i < totalPts; i++) {
-        const idx = backInnerStart + i;
-        const x = vertices[idx * 3];
-        const z = vertices[idx * 3 + 2];
-        let seen = false;
-        for (let j = 0; j < capLoop.length; j++) {
-            const ex = capLoop[j];
-            const dx = x - ex.x;
-            const dz = z - ex.z;
-            if (Math.hypot(dx, dz) <= capEps) {
-                seen = true;
-                break;
+    const edgeMatchesOrientation = (fromIdx, toIdx) => {
+        for (let t = enclosureStartTri; t < preCapTriEnd; t++) {
+            const off = t * 3;
+            const a = indices[off];
+            const b = indices[off + 1];
+            const c = indices[off + 2];
+            if ((a === fromIdx && b === toIdx) || (b === fromIdx && c === toIdx) || (c === fromIdx && a === toIdx)) {
+                return 1;
+            }
+            if ((a === toIdx && b === fromIdx) || (b === toIdx && c === fromIdx) || (c === toIdx && a === fromIdx)) {
+                return -1;
             }
         }
-        if (seen) continue;
-        capLoop.push({
-            idx,
-            x,
-            z,
-            angle: Math.atan2(z - centerZ, x - centerX)
-        });
+        return 0;
+    };
+
+    let useForward = true;
+    for (let i = 0; i < totalPts; i++) {
+        const i2 = (i + 1) % totalPts;
+        const idx1 = backInnerStart + i;
+        const idx2 = backInnerStart + i2;
+        const edgeOrientation = edgeMatchesOrientation(idx1, idx2);
+        if (edgeOrientation === 1) {
+            useForward = false;
+            break;
+        }
+        if (edgeOrientation === -1) {
+            useForward = true;
+            break;
+        }
     }
-    if (capLoop.length >= 3) {
-        capLoop.sort((a, b) => a.angle - b.angle);
 
-        const edgeMatchesOrientation = (fromIdx, toIdx) => {
-            for (let t = enclosureStartTri; t < preCapTriEnd; t++) {
-                const off = t * 3;
-                const a = indices[off];
-                const b = indices[off + 1];
-                const c = indices[off + 2];
-                if ((a === fromIdx && b === toIdx) || (b === fromIdx && c === toIdx) || (c === fromIdx && a === toIdx)) {
-                    return 1;
-                }
-                if ((a === toIdx && b === fromIdx) || (b === toIdx && c === fromIdx) || (c === toIdx && a === fromIdx)) {
-                    return -1;
-                }
-            }
-            return 0;
-        };
-
-        let useForward = true;
-        const firstEdgeMatch = edgeMatchesOrientation(capLoop[0].idx, capLoop[1].idx);
-        if (firstEdgeMatch === 1) useForward = false;
-
-        for (let i = 0; i < capLoop.length; i++) {
-            const i2 = (i + 1) % capLoop.length;
-            const idx1 = capLoop[i].idx;
-            const idx2 = capLoop[i2].idx;
-            if (useForward) {
-                pushTri(idx1, idx2, rearCenterIdx);
-            } else {
-                pushTri(idx2, idx1, rearCenterIdx);
-            }
+    for (let i = 0; i < totalPts; i++) {
+        const i2 = (i + 1) % totalPts;
+        const idx1 = backInnerStart + i;
+        const idx2 = backInnerStart + i2;
+        if (useForward) {
+            pushTri(idx1, idx2, rearCenterIdx);
+        } else {
+            pushTri(idx2, idx1, rearCenterIdx);
         }
     }
 

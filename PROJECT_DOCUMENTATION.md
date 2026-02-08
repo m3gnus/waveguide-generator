@@ -101,10 +101,11 @@ Source of truth on frontend: `src/geometry/tags.js`
 
 Key files:
 
-- `src/geometry/hornModels.js`: OSSE/R-OSSE profile math
-- `src/geometry/morphing.js`: circular-to-rectangular morphing
-- `src/geometry/meshBuilder.js`: triangle mesh construction and grouping
-- `src/geometry/enclosure.js`: enclosure and stitching logic
+- `src/geometry/engine/`: modular geometry engine
+  - `profiles/`: OSSE/R-OSSE/guiding-curve math and validation
+  - `mesh/`: angle/slice generation, horn shell, enclosure, source, freestanding wall shell
+  - `buildWaveguideMesh.js`: top-level geometry builder
+- `src/geometry/waveguide.js`: compatibility re-export facade over `src/geometry/engine/`
 - `src/geometry/pipeline.js`:
   - `buildGeometryArtifacts(...)`
   - `buildCanonicalMeshPayload(...)`
@@ -112,7 +113,10 @@ Key files:
 Important behavior:
 
 - A single geometry path feeds render/export/simulation to reduce drift.
-- Freestanding exports can force rear closure based on params (`shouldForceRearClosure(...)`).
+- `rearShape` is removed from active geometry generation.
+- `wallThickness` is applied only for freestanding horns (`encDepth = 0`):
+  - outward shell thickening
+  - rear disc at `throatY - wallThickness`
 - Interface/enclosure tagging is derived from mesh groups and interface offset.
 
 ## 6. Export System
@@ -164,16 +168,10 @@ Returns health status and solver availability indicator.
 Primary automated checks:
 
 - Frontend/unit tests: `npm test`
+- ATH parity checks (when `_references/testconfigs` exists): `npm run test:ath`
 - Backend tests (project Python): `cd server && ../.venv/bin/python -m unittest discover -s tests`
 - NPM backend script: `npm run test:server`
 - Frontend production bundle: `npm run build`
-
-Reference/parity utilities:
-
-- `scripts/ath-compare.js`
-- `scripts/abec-compare.js`
-- `scripts/gmsh-export.py`
-- `scripts/validate-geo.py`
 
 ## 9. Operational Notes
 

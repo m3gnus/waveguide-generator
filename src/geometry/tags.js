@@ -16,18 +16,11 @@ export function parseInterfaceOffset(value) {
 }
 
 export function shouldForceRearClosure(params, options = {}) {
-  if (options.forceRearClosure === false) return false;
-  if (Number(params.encDepth || 0) > 0) return false;
-  return Number(params.wallThickness || 0) > 0 && Number(params.rearShape || 0) === 0;
+  return false;
 }
 
 export function normalizeBuildParams(params, options = {}) {
-  const next = { ...params };
-  if (shouldForceRearClosure(next, options)) {
-    // Freestanding exports need a physical rear closure when wall thickness is used.
-    next.rearShape = 2;
-  }
-  return next;
+  return { ...params };
 }
 
 export function applyTagRange(tags, range, tagValue) {

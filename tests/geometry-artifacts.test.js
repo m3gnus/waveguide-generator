@@ -36,8 +36,7 @@ test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
   const params = makePreparedParams({
     encDepth: 0,
     quadrants: '1234',
-    wallThickness: 5,
-    rearShape: 0
+    wallThickness: 5
   });
 
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: false });

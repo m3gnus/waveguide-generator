@@ -1,4 +1,4 @@
-import { buildHornMesh } from './meshBuilder.js';
+import { buildWaveguideMesh } from './engine/index.js';
 import {
   SURFACE_TAGS,
   parseInterfaceOffset,
@@ -14,7 +14,6 @@ import { prepareGeometryParams } from './params.js';
 function resolveBuildOptions(buildParams, options = {}) {
   return {
     includeEnclosure: options.includeEnclosure ?? Number(buildParams.encDepth || 0) > 0,
-    includeRearShape: options.includeRearShape ?? true,
     collectGroups: true
   };
 }
@@ -59,7 +58,7 @@ export function buildCanonicalMeshPayload(params, options = {}) {
   const preparedParams = prepareGeometryParams(params, { type: params?.type });
   const rearClosureForced = shouldForceRearClosure(preparedParams, options);
   const buildParams = normalizeBuildParams(preparedParams, options);
-  const meshData = buildHornMesh(buildParams, resolveBuildOptions(buildParams, options));
+  const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
   return buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced });
 }
 
@@ -67,7 +66,7 @@ export function buildGeometryArtifacts(params, options = {}) {
   const preparedParams = prepareGeometryParams(params, { type: params?.type });
   const rearClosureForced = shouldForceRearClosure(preparedParams, options);
   const buildParams = normalizeBuildParams(preparedParams, options);
-  const meshData = buildHornMesh(buildParams, resolveBuildOptions(buildParams, options));
+  const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
   const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced });
 
   return {

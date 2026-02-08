@@ -2,7 +2,7 @@
  * Cross-section visualization utilities for horn profiles.
  * Provides SVG-based 2D cross-sections of horn geometry at any axial position.
  */
-import { calculateOSSE, calculateROSSE } from '../geometry/hornModels.js';
+import { calculateOSSE, calculateROSSE } from '../geometry/waveguide.js';
 
 import { evalParam } from '../geometry/common.js';
 

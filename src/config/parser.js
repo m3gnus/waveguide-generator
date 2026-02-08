@@ -122,7 +122,6 @@ export class MWGConfigParser {
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.RearResolution']) { p.rearResolution = p['Mesh.RearResolution']; }
-            if (p['Mesh.RearShape']) { p.rearShape = p['Mesh.RearShape']; }
 
             if (p['Source.Shape']) { p.sourceShape = p['Source.Shape']; }
             if (p['Source.Radius']) { p.sourceRadius = p['Source.Radius']; }
@@ -168,7 +167,6 @@ export class MWGConfigParser {
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.RearResolution']) { p.rearResolution = p['Mesh.RearResolution']; }
-            if (p['Mesh.RearShape']) { p.rearShape = p['Mesh.RearShape']; }
             if (p['Source.Shape']) { p.sourceShape = p['Source.Shape']; }
             if (p['Source.Radius']) { p.sourceRadius = p['Source.Radius']; }
             if (p['Source.Curv']) { p.sourceCurv = p['Source.Curv']; }
