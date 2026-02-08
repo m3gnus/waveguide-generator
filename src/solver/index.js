@@ -67,6 +67,34 @@ export function mockBEMSolver(meshData) {
 /**
  * Main BEM solver API (Phase 4.1)
  */
+export function validateCanonicalMeshPayload(meshData) {
+  if (!meshData || typeof meshData !== 'object') {
+    throw new Error('Invalid mesh payload: expected object.');
+  }
+  if (!Array.isArray(meshData.vertices) || !Array.isArray(meshData.indices)) {
+    throw new Error('Invalid mesh payload: missing vertices/indices arrays.');
+  }
+  if (meshData.vertices.length % 3 !== 0) {
+    throw new Error('Invalid mesh payload: vertices length must be divisible by 3.');
+  }
+  if (meshData.indices.length % 3 !== 0) {
+    throw new Error('Invalid mesh payload: indices length must be divisible by 3.');
+  }
+  if (!Array.isArray(meshData.surfaceTags)) {
+    throw new Error('Invalid mesh payload: missing surfaceTags array.');
+  }
+  if (meshData.surfaceTags.length !== meshData.indices.length / 3) {
+    throw new Error('Invalid mesh payload: surfaceTags length must match triangle count.');
+  }
+  if (!meshData.format) {
+    throw new Error('Invalid mesh payload: missing format.');
+  }
+  if (typeof meshData.boundaryConditions !== 'object' || meshData.boundaryConditions === null) {
+    throw new Error('Invalid mesh payload: missing boundaryConditions object.');
+  }
+  return true;
+}
+
 export class BemSolver {
   constructor() {
     this.backendUrl = 'http://localhost:8000';
@@ -89,15 +117,7 @@ export class BemSolver {
    * Submit a horn geometry for BEM simulation
    */
   async submitSimulation(config, meshData, options = {}) {
-    if (!meshData || !Array.isArray(meshData.vertices) || !Array.isArray(meshData.indices)) {
-      throw new Error('Invalid mesh payload: missing vertices/indices arrays.');
-    }
-    if (!Array.isArray(meshData.surfaceTags)) {
-      throw new Error('Invalid mesh payload: missing surfaceTags array.');
-    }
-    if (meshData.surfaceTags.length !== meshData.indices.length / 3) {
-      throw new Error('Invalid mesh payload: surfaceTags length must match triangle count.');
-    }
+    validateCanonicalMeshPayload(meshData);
 
     const payload = {
       mesh: {

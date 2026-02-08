@@ -470,21 +470,31 @@ export function buildHornMesh(params, options = {}) {
   }
 
   // Use throatSourceStartVertex as offset for throat source indices
+  const sourceStartTri = indices.length / 3;
   const throatSourceVertexOffset = throatSourceStartVertex;
   for (let i = 0; i < throatSourceMesh.indices.length; i++) {
     indices.push(throatSourceMesh.indices[i] + throatSourceVertexOffset);
+  }
+  const sourceEndTri = indices.length / 3;
+  if (groupInfo) {
+    groupInfo.source = { start: sourceStartTri, end: sourceEndTri };
   }
 
   // Add Enclosure for OSSE
   if (includeEnclosure && params.encDepth > 0) {
     addEnclosureGeometry(vertices, indices, params, verticalOffset, quadrantInfo, groupInfo, ringCount, angleList);
   } else if (includeRearShape && params.rearShape !== 0) {
+    const rearStartTri = indices.length / 3;
     addRearShapeGeometry(vertices, indices, params, lengthSteps, angleList, quadrantInfo.fullCircle);
+    if (groupInfo) {
+      groupInfo.rear = { start: rearStartTri, end: indices.length / 3 };
+    }
   }
 
   // Generate indices for the main horn body
   // For partial meshes, don't wrap around
   const indexRadialSteps = quadrantInfo.fullCircle ? ringCount : Math.max(0, ringCount - 1);
+  const hornStartTri = indices.length / 3;
   for (let j = 0; j < lengthSteps; j++) {
     for (let i = 0; i < indexRadialSteps; i++) {
       const row1 = j * ringCount;
@@ -494,6 +504,9 @@ export function buildHornMesh(params, options = {}) {
       indices.push(row1 + i, row1 + i2, row2 + i2);
       indices.push(row1 + i, row2 + i2, row2 + i);
     }
+  }
+  if (groupInfo) {
+    groupInfo.horn = { start: hornStartTri, end: indices.length / 3 };
   }
 
   // Validate mesh integrity before returning

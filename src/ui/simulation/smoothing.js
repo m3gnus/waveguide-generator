@@ -1,11 +1,15 @@
+export function applySmoothingSelection(panel, smoothingType) {
+  panel.currentSmoothing = smoothingType;
+  if (panel.lastResults) {
+    panel.displayResults(panel.lastResults);
+  }
+}
+
 export function setupSmoothingListener(panel) {
   const smoothingSelect = document.getElementById('smoothing-select');
   if (smoothingSelect) {
     smoothingSelect.addEventListener('change', (e) => {
-      panel.currentSmoothing = e.target.value;
-      if (panel.lastResults) {
-        panel.displayResults(panel.lastResults);
-      }
+      applySmoothingSelection(panel, e.target.value);
     });
   }
 }
@@ -64,14 +68,10 @@ export function setupKeyboardShortcuts(panel) {
           smoothingType = 'none';
         }
 
-        panel.currentSmoothing = smoothingType;
+        applySmoothingSelection(panel, smoothingType);
         const smoothingSelect = document.getElementById('smoothing-select');
         if (smoothingSelect) {
           smoothingSelect.value = smoothingType;
-        }
-
-        if (panel.lastResults) {
-          panel.displayResults(panel.lastResults);
         }
       }
     }
@@ -79,14 +79,10 @@ export function setupKeyboardShortcuts(panel) {
     // Ctrl+0 to remove smoothing
     if ((e.ctrlKey || e.metaKey) && e.key === '0' && !e.shiftKey) {
       e.preventDefault();
-      panel.currentSmoothing = 'none';
+      applySmoothingSelection(panel, 'none');
       const smoothingSelect = document.getElementById('smoothing-select');
       if (smoothingSelect) {
         smoothingSelect.value = 'none';
-      }
-
-      if (panel.lastResults) {
-        panel.displayResults(panel.lastResults);
       }
     }
   });

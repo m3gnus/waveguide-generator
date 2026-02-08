@@ -157,7 +157,7 @@ async def submit_simulation(request: SimulationRequest):
         "status": "queued",
         "progress": 0.0,
         "created_at": datetime.now().isoformat(),
-        "request": request.dict(),
+        "request": request.model_dump(),
         "results": None,
         "error": None
     }
@@ -276,7 +276,7 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             frequency_range=request.frequency_range,
             num_frequencies=request.num_frequencies,
             sim_type=request.sim_type,
-            polar_config=request.polar_config.dict() if request.polar_config else None,
+            polar_config=request.polar_config.model_dump() if request.polar_config else None,
             progress_callback=lambda p: update_progress(job_id, 0.3 + p * 0.6),
             use_optimized=request.use_optimized,
             enable_symmetry=request.enable_symmetry,

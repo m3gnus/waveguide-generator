@@ -92,6 +92,8 @@ export function prepareParamsForMesh(
         preparedParams[key] = (p) => scale * value(p);
       } else if (typeof value === 'number' && Number.isFinite(value)) {
         preparedParams[key] = value * scale;
+      } else if (typeof value === 'string' && isNumericString(value)) {
+        preparedParams[key] = Number(value) * scale;
       }
     });
   }

@@ -10,6 +10,13 @@ import { buildCanonicalMeshPayload } from '../src/simulation/payload.js';
 const root = process.argv[2] || '_references/testconfigs';
 const outRoot = process.argv[3] || '_references/testconfigs/_generated';
 
+const THRESHOLDS = {
+  geoPointCoord: 0.005,
+  geoPointMesh: 0.05,
+  stlBBox: 0.5,
+  stlCentroid: 0.5
+};
+
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 
 function isNumericString(value) {
@@ -235,31 +242,306 @@ function writeBinaryStl(outPath, vertices, indices, { rotateX = Math.PI / 2 } = 
   fs.writeFileSync(outPath, buffer);
 }
 
-function compareBuffers(aBuf, bBuf) {
-  if (aBuf.length !== bBuf.length) {
-    return { equal: false, reason: `size ${aBuf.length} != ${bBuf.length}` };
-  }
-  for (let i = 0; i < aBuf.length; i++) {
-    if (aBuf[i] !== bBuf[i]) {
-      return { equal: false, reason: `byte mismatch at ${i}: ${aBuf[i]} != ${bBuf[i]}` };
+function parseGeo(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  const lines = text.split(/\r?\n/);
+  const points = new Map();
+  let lineCount = 0;
+  let splineCount = 0;
+  let curveLoopCount = 0;
+  let surfaceCount = 0;
+  const physicalSurfaceDefs = [];
+  let saveTarget = null;
+
+  for (const line of lines) {
+    const pointMatch = line.match(/^Point\((\d+)\)=\{([^}]+)\};$/);
+    if (pointMatch) {
+      const id = Number(pointMatch[1]);
+      const vals = pointMatch[2].split(',').map((v) => Number(v.trim()));
+      points.set(id, {
+        x: vals[0] || 0,
+        y: vals[1] || 0,
+        z: vals[2] || 0,
+        mesh: vals[3] || 0
+      });
+      continue;
     }
+    if (/^Line\(/.test(line)) lineCount += 1;
+    if (/^Spline\(/.test(line)) splineCount += 1;
+    if (/^Curve Loop\(/.test(line)) curveLoopCount += 1;
+    if (/^(Plane Surface|Surface)\(/.test(line)) surfaceCount += 1;
+    if (/^Physical Surface\(/.test(line)) physicalSurfaceDefs.push(line.trim());
+
+    const saveMatch = line.match(/^Save\s+"([^"]+)";/);
+    if (saveMatch) saveTarget = saveMatch[1];
   }
-  return { equal: true };
+
+  return {
+    points,
+    lineCount,
+    splineCount,
+    curveLoopCount,
+    surfaceCount,
+    physicalSurfaceDefs,
+    saveTarget
+  };
 }
 
-function compareTextFiles(aPath, bPath) {
-  const aText = fs.readFileSync(aPath, 'utf8');
-  const bText = fs.readFileSync(bPath, 'utf8');
-  if (aText === bText) return { equal: true };
-  const aLines = aText.split(/\r?\n/);
-  const bLines = bText.split(/\r?\n/);
-  const max = Math.max(aLines.length, bLines.length);
-  for (let i = 0; i < max; i++) {
-    if (aLines[i] !== bLines[i]) {
-      return { equal: false, reason: `line ${i + 1} differs`, a: aLines[i], b: bLines[i] };
+function parseMsh(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8');
+  const lines = text.split(/\r?\n/);
+
+  const physicalNames = new Map();
+  let nodeCount = null;
+  let elementCount = null;
+  const tagCounts = new Map();
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line === '$PhysicalNames') {
+      const count = Number(lines[i + 1] || 0);
+      for (let j = 0; j < count; j += 1) {
+        const entry = lines[i + 2 + j];
+        const match = entry && entry.match(/^2\s+(\d+)\s+"([^"]+)"$/);
+        if (match) {
+          physicalNames.set(Number(match[1]), match[2]);
+        }
+      }
+      continue;
+    }
+    if (line === '$Nodes') {
+      nodeCount = Number(lines[i + 1] || 0);
+      continue;
+    }
+    if (line === '$Elements') {
+      elementCount = Number(lines[i + 1] || 0);
+      const start = i + 2;
+      for (let j = 0; j < elementCount; j += 1) {
+        const elLine = lines[start + j];
+        if (!elLine) continue;
+        const parts = elLine.trim().split(/\s+/);
+        if (parts.length < 6) continue;
+        const type = Number(parts[1]);
+        const numTags = Number(parts[2]);
+        if (type !== 2 || numTags < 1) continue;
+        const physical = Number(parts[3]);
+        tagCounts.set(physical, (tagCounts.get(physical) || 0) + 1);
+      }
+      continue;
     }
   }
-  return { equal: false, reason: 'text mismatch' };
+
+  return {
+    physicalNames,
+    nodeCount: Number.isFinite(nodeCount) ? nodeCount : 0,
+    elementCount: Number.isFinite(elementCount) ? elementCount : 0,
+    tagCounts
+  };
+}
+
+function parseBinaryStl(filePath) {
+  const buf = fs.readFileSync(filePath);
+  if (buf.length < 84) {
+    throw new Error('Invalid STL: too short');
+  }
+  const triCount = buf.readUInt32LE(80);
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let sumX = 0, sumY = 0, sumZ = 0;
+  let pointCount = 0;
+
+  let offset = 84;
+  for (let t = 0; t < triCount; t += 1) {
+    offset += 12; // normal
+    for (let k = 0; k < 3; k += 1) {
+      const x = buf.readFloatLE(offset); offset += 4;
+      const y = buf.readFloatLE(offset); offset += 4;
+      const z = buf.readFloatLE(offset); offset += 4;
+
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+      pointCount += 1;
+    }
+    offset += 2; // attr
+  }
+
+  const centroid = pointCount > 0
+    ? [sumX / pointCount, sumY / pointCount, sumZ / pointCount]
+    : [0, 0, 0];
+
+  return {
+    triangleCount: triCount,
+    bbox: {
+      min: [minX, minY, minZ],
+      max: [maxX, maxY, maxZ]
+    },
+    centroid
+  };
+}
+
+function compareGeoSemantic(oursPath, refPath) {
+  if (!fs.existsSync(refPath)) {
+    return { status: 'incomplete-reference', reason: 'missing reference GEO' };
+  }
+
+  const ours = parseGeo(oursPath);
+  const ref = parseGeo(refPath);
+
+  if (ours.points.size !== ref.points.size) {
+    return {
+      status: 'fail',
+      reason: `point count mismatch ${ours.points.size} != ${ref.points.size}`
+    };
+  }
+
+  let maxCoordDelta = 0;
+  let maxMeshDelta = 0;
+  const ids = [...ref.points.keys()].sort((a, b) => a - b);
+  for (const id of ids) {
+    const a = ours.points.get(id);
+    const b = ref.points.get(id);
+    if (!a || !b) {
+      return { status: 'fail', reason: `point id mismatch at ${id}` };
+    }
+    maxCoordDelta = Math.max(
+      maxCoordDelta,
+      Math.abs(a.x - b.x),
+      Math.abs(a.y - b.y),
+      Math.abs(a.z - b.z)
+    );
+    maxMeshDelta = Math.max(maxMeshDelta, Math.abs(a.mesh - b.mesh));
+  }
+
+  if (maxCoordDelta > THRESHOLDS.geoPointCoord) {
+    return {
+      status: 'fail',
+      reason: `max point delta ${maxCoordDelta.toFixed(6)} > ${THRESHOLDS.geoPointCoord}`
+    };
+  }
+  if (maxMeshDelta > THRESHOLDS.geoPointMesh) {
+    return {
+      status: 'fail',
+      reason: `max mesh-size delta ${maxMeshDelta.toFixed(6)} > ${THRESHOLDS.geoPointMesh}`
+    };
+  }
+
+  if (ours.lineCount !== ref.lineCount ||
+      ours.splineCount !== ref.splineCount ||
+      ours.curveLoopCount !== ref.curveLoopCount ||
+      ours.surfaceCount !== ref.surfaceCount) {
+    return {
+      status: 'fail',
+      reason: `curve/surface count mismatch lines:${ours.lineCount}/${ref.lineCount} splines:${ours.splineCount}/${ref.splineCount} loops:${ours.curveLoopCount}/${ref.curveLoopCount} surfaces:${ours.surfaceCount}/${ref.surfaceCount}`
+    };
+  }
+
+  if (ours.physicalSurfaceDefs.length !== ref.physicalSurfaceDefs.length) {
+    return {
+      status: 'fail',
+      reason: `physical surface definition count mismatch ${ours.physicalSurfaceDefs.length} != ${ref.physicalSurfaceDefs.length}`
+    };
+  }
+
+  const refSave = ref.saveTarget ? path.basename(ref.saveTarget) : null;
+  const oursSave = ours.saveTarget ? path.basename(ours.saveTarget) : null;
+  if (refSave && oursSave && refSave !== oursSave) {
+    return { status: 'fail', reason: `save target mismatch ${oursSave} != ${refSave}` };
+  }
+
+  return {
+    status: 'ok',
+    reason: `max point delta ${maxCoordDelta.toFixed(6)}, max mesh delta ${maxMeshDelta.toFixed(6)}`
+  };
+}
+
+function compareMshSemantic(oursPath, refPath) {
+  if (!fs.existsSync(refPath)) {
+    return { status: 'incomplete-reference', reason: 'missing reference MSH' };
+  }
+
+  const ours = parseMsh(oursPath);
+  const ref = parseMsh(refPath);
+
+  if (ours.nodeCount !== ref.nodeCount) {
+    return { status: 'fail', reason: `node count mismatch ${ours.nodeCount} != ${ref.nodeCount}` };
+  }
+  if (ours.elementCount !== ref.elementCount) {
+    return { status: 'fail', reason: `element count mismatch ${ours.elementCount} != ${ref.elementCount}` };
+  }
+
+  if (ours.physicalNames.size !== ref.physicalNames.size) {
+    return {
+      status: 'fail',
+      reason: `physical name count mismatch ${ours.physicalNames.size} != ${ref.physicalNames.size}`
+    };
+  }
+
+  for (const [id, name] of ref.physicalNames.entries()) {
+    if (ours.physicalNames.get(id) !== name) {
+      return {
+        status: 'fail',
+        reason: `physical name mismatch id ${id}: ${ours.physicalNames.get(id)} != ${name}`
+      };
+    }
+  }
+
+  const tags = new Set([...ref.tagCounts.keys(), ...ours.tagCounts.keys()]);
+  for (const tag of tags) {
+    const a = ours.tagCounts.get(tag) || 0;
+    const b = ref.tagCounts.get(tag) || 0;
+    if (a !== b) {
+      return { status: 'fail', reason: `tag ${tag} triangle count mismatch ${a} != ${b}` };
+    }
+  }
+
+  return { status: 'ok', reason: 'physical names and counts match' };
+}
+
+function compareStlSemantic(oursPath, refPath) {
+  if (!fs.existsSync(refPath)) {
+    return { status: 'incomplete-reference', reason: 'missing reference STL' };
+  }
+
+  const ours = parseBinaryStl(oursPath);
+  const ref = parseBinaryStl(refPath);
+
+  if (ours.triangleCount !== ref.triangleCount) {
+    return { status: 'fail', reason: `triangle count mismatch ${ours.triangleCount} != ${ref.triangleCount}` };
+  }
+
+  const bboxDelta = Math.max(
+    ...ours.bbox.min.map((v, i) => Math.abs(v - ref.bbox.min[i])),
+    ...ours.bbox.max.map((v, i) => Math.abs(v - ref.bbox.max[i]))
+  );
+  if (bboxDelta > THRESHOLDS.stlBBox) {
+    return {
+      status: 'fail',
+      reason: `bbox delta ${bboxDelta.toFixed(6)} > ${THRESHOLDS.stlBBox}`
+    };
+  }
+
+  const centroidDelta = Math.max(
+    ...ours.centroid.map((v, i) => Math.abs(v - ref.centroid[i]))
+  );
+  if (centroidDelta > THRESHOLDS.stlCentroid) {
+    return {
+      status: 'fail',
+      reason: `centroid delta ${centroidDelta.toFixed(6)} > ${THRESHOLDS.stlCentroid}`
+    };
+  }
+
+  return {
+    status: 'ok',
+    reason: `bbox delta ${bboxDelta.toFixed(6)}, centroid delta ${centroidDelta.toFixed(6)}`
+  };
 }
 
 function loadConfig(configPath) {
@@ -295,12 +577,27 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function findReferenceGeo(folderPath) {
+  const bemGeoRoot = path.join(folderPath, 'bem_mesh.geo');
+  const bemGeoAbecFs = path.join(folderPath, 'ABEC_FreeStanding', 'bem_mesh.geo');
+  const bemGeoAbecIb = path.join(folderPath, 'ABEC_InfiniteBaffle', 'bem_mesh.geo');
+  if (fs.existsSync(bemGeoRoot)) return { path: bemGeoRoot, spline: true };
+  if (fs.existsSync(bemGeoAbecFs)) return { path: bemGeoAbecFs, spline: true };
+  if (fs.existsSync(bemGeoAbecIb)) return { path: bemGeoAbecIb, spline: true };
+
+  const meshGeo = path.join(folderPath, 'mesh.geo');
+  if (fs.existsSync(meshGeo)) return { path: meshGeo, spline: false };
+
+  return { path: null, spline: true };
+}
+
 function run() {
   ensureDir(outRoot);
   const entries = fs.readdirSync(root, { withFileTypes: true });
-  const configFiles = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.txt'));
+  const configFiles = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.txt')).sort((a, b) => a.name.localeCompare(b.name));
 
   const results = [];
+  let blockingFailures = 0;
 
   for (const file of configFiles) {
     const configPath = path.join(root, file.name);
@@ -308,13 +605,14 @@ function run() {
     const folderName = findFolderForConfig(root, baseName, entries);
     if (!folderName) {
       results.push({ name: baseName, error: 'No matching folder' });
+      blockingFailures += 1;
       continue;
     }
 
     const folderPath = path.join(root, folderName);
     const referenceStl = findFirstFileWithExt(folderPath, '.stl');
     const referenceMsh = findFirstFileWithExt(folderPath, '.msh');
-    const referenceGeo = path.join(folderPath, 'mesh.geo');
+    const refGeoInfo = findReferenceGeo(folderPath);
 
     const outDir = path.join(outRoot, baseName);
     ensureDir(outDir);
@@ -324,19 +622,13 @@ function run() {
       ({ type, params } = loadConfig(configPath));
     } catch (err) {
       results.push({ name: baseName, error: err.message });
+      blockingFailures += 1;
       continue;
     }
 
-    const isSplineRef = fs.existsSync(path.join(folderPath, 'bem_mesh.geo')) ||
-      fs.existsSync(path.join(folderPath, 'ABEC_FreeStanding', 'bem_mesh.geo'));
-    const geoRefPath = isSplineRef
-      ? (fs.existsSync(path.join(folderPath, 'bem_mesh.geo')) ? path.join(folderPath, 'bem_mesh.geo') : path.join(folderPath, 'ABEC_FreeStanding', 'bem_mesh.geo'))
-      : referenceGeo;
-
-    // GEO (horn only, full quadrants, offset depends on ref type)
     const geoParams = prepareParamsForMesh(params, type, {
-      forceFullQuadrants: true,
-      applyVerticalOffset: isSplineRef
+      forceFullQuadrants: false,
+      applyVerticalOffset: true
     });
     const geoMesh = buildHornMesh(geoParams, {
       includeEnclosure: false,
@@ -346,78 +638,85 @@ function run() {
     const geoOut = path.join(outDir, 'mesh.geo');
     const geoContent = exportFullGeo(geoMesh.vertices, geoParams, {
       outputName: baseName,
-      useSplines: isSplineRef
+      useSplines: refGeoInfo.spline,
+      ringCount: geoMesh.ringCount,
+      fullCircle: geoMesh.fullCircle
     });
     fs.writeFileSync(geoOut, geoContent);
 
-    // STL (horn only, full quadrants, no vertical offset)
-    const stlParams = geoParams;  // Same as geo params
-    const stlMesh = geoMesh;  // Same mesh
     const stlOut = path.join(outDir, `${baseName}.stl`);
-    writeBinaryStl(stlOut, stlMesh.vertices, stlMesh.indices);
+    writeBinaryStl(stlOut, geoMesh.vertices, geoMesh.indices);
 
-    // MSH (with enclosure)
     const mshParams = prepareParamsForMesh(params, type, {
-      forceFullQuadrants: true,
+      forceFullQuadrants: false,
       applyVerticalOffset: true
     });
     const mshOut = path.join(outDir, `${baseName}.msh`);
     const mshPayload = buildCanonicalMeshPayload(mshParams, {
       includeEnclosure: Number(mshParams.encDepth || 0) > 0
     });
-    fs.writeFileSync(mshOut, exportMSH(mshPayload.vertices, mshPayload.indices, mshPayload.surfaceTags));
+    fs.writeFileSync(
+      mshOut,
+      exportMSH(mshPayload.vertices, mshPayload.indices, mshPayload.surfaceTags, {
+        verticalOffset: mshPayload.metadata?.verticalOffset || 0
+      })
+    );
 
     const record = { name: baseName };
 
-    // Compare GEO files
-    if (fs.existsSync(geoRefPath)) {
-      record.geo = compareTextFiles(geoOut, geoRefPath);
-    } else {
-      record.geo = { equal: false, reason: 'missing reference GEO' };
-    }
+    record.geo = refGeoInfo.path
+      ? compareGeoSemantic(geoOut, refGeoInfo.path)
+      : { status: 'incomplete-reference', reason: 'missing reference GEO' };
 
-    if (referenceStl) {
-      const refBuf = fs.readFileSync(referenceStl);
-      const outBuf = fs.readFileSync(stlOut);
-      record.stl = compareBuffers(outBuf, refBuf);
-    } else {
-      record.stl = { equal: false, reason: 'missing reference STL' };
-    }
+    record.stl = referenceStl
+      ? compareStlSemantic(stlOut, referenceStl)
+      : { status: 'incomplete-reference', reason: 'missing reference STL' };
 
-    if (referenceMsh) {
-      record.msh = compareTextFiles(mshOut, referenceMsh);
-    } else {
-      record.msh = { equal: false, reason: 'missing reference MSH' };
+    record.msh = referenceMsh
+      ? compareMshSemantic(mshOut, referenceMsh)
+      : { status: 'incomplete-reference', reason: 'missing reference MSH' };
+
+    for (const key of ['geo', 'stl', 'msh']) {
+      if (record[key]?.status === 'fail') {
+        blockingFailures += 1;
+      }
     }
 
     results.push(record);
   }
 
   for (const result of results) {
-    const geoStatus = result.geo?.equal ? 'GEO OK' : `GEO FAIL`;
-    const stlStatus = result.stl?.equal ? 'STL OK' : `STL FAIL`;
-    const mshStatus = result.msh?.equal ? 'MSH OK' : `MSH FAIL`;
-    console.log(`${result.name}: ${geoStatus}, ${stlStatus}, ${mshStatus}`);
-    if (result.geo && !result.geo.equal) {
-      console.log(`  GEO diff: ${result.geo.reason}`);
-      if (result.geo.a !== undefined || result.geo.b !== undefined) {
-        console.log(`  GEO ours: ${result.geo.a}`);
-        console.log(`  GEO ref : ${result.geo.b}`);
-      }
-    }
-    if (result.stl && !result.stl.equal) {
-      console.log(`  STL diff: ${result.stl.reason}`);
-    }
-    if (result.msh && !result.msh.equal) {
-      console.log(`  MSH diff: ${result.msh.reason}`);
-      if (result.msh.a !== undefined || result.msh.b !== undefined) {
-        console.log(`  MSH ours: ${result.msh.a}`);
-        console.log(`  MSH ref : ${result.msh.b}`);
-      }
-    }
     if (result.error) {
-      console.log(`  ERROR: ${result.error}`);
+      console.log(`${result.name}: ERROR`);
+      console.log(`  ${result.error}`);
+      continue;
     }
+
+    const render = (r) => {
+      if (!r) return 'UNKNOWN';
+      if (r.status === 'ok') return 'OK';
+      if (r.status === 'incomplete-reference') return 'INCOMPLETE';
+      return 'FAIL';
+    };
+
+    console.log(`${result.name}: GEO ${render(result.geo)}, STL ${render(result.stl)}, MSH ${render(result.msh)}`);
+
+    if (result.geo && result.geo.status !== 'ok') {
+      console.log(`  GEO: ${result.geo.reason}`);
+    }
+    if (result.stl && result.stl.status !== 'ok') {
+      console.log(`  STL: ${result.stl.reason}`);
+    }
+    if (result.msh && result.msh.status !== 'ok') {
+      console.log(`  MSH: ${result.msh.reason}`);
+    }
+  }
+
+  if (blockingFailures > 0) {
+    console.log(`\nBlocking parity failures: ${blockingFailures}`);
+    process.exitCode = 1;
+  } else {
+    console.log('\nParity gates passed (excluding incomplete references).');
   }
 }
 
