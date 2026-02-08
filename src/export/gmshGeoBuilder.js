@@ -94,50 +94,9 @@ function formatNumber(value) {
   return `${n}`;
 }
 
-function buildCurveTopology(indices) {
-  const lines = [];
-  const loopLineRefs = [];
-  const edgeMap = new Map();
-
-  const getOrCreateLine = (from, to) => {
-    const lo = Math.min(from, to);
-    const hi = Math.max(from, to);
-    const key = `${lo}_${hi}`;
-
-    let line = edgeMap.get(key);
-    if (!line) {
-      line = {
-        id: lines.length + 1,
-        from: lo + 1,
-        to: hi + 1,
-        canonicalFrom: lo,
-        canonicalTo: hi
-      };
-      edgeMap.set(key, line);
-      lines.push(line);
-    }
-
-    const sameDirection = from === line.canonicalFrom && to === line.canonicalTo;
-    return sameDirection ? line.id : -line.id;
-  };
-
-  for (let i = 0; i < indices.length; i += 3) {
-    const a = indices[i];
-    const b = indices[i + 1];
-    const c = indices[i + 2];
-
-    const l1 = getOrCreateLine(a, b);
-    const l2 = getOrCreateLine(b, c);
-    const l3 = getOrCreateLine(c, a);
-    loopLineRefs.push([l1, l2, l3]);
-  }
-
-  return { lines, loopLineRefs };
-}
-
 function appendMeshOptions(lines, mshVersion) {
   lines.push('// Gmsh-authoritative mesh options');
-  lines.push('Mesh.Algorithm = 1;');
+  lines.push('Mesh.Algorithm = 6;');
   lines.push('Mesh.Algorithm3D = 5;');
   lines.push('Mesh.RecombinationAlgorithm = 1;');
   lines.push('Mesh.SubdivisionAlgorithm = 0;');
@@ -169,27 +128,71 @@ function appendPoints(lines, vertices, pointSizes) {
   lines.push('');
 }
 
-function appendCurves(lines, topology) {
-  lines.push('// Curves (shared edges for manifold topology)');
-  topology.lines.forEach((line) => {
-    lines.push(`Line(${line.id}) = {${line.from}, ${line.to}};`);
-  });
-  lines.push('');
-}
+function createGeoSurfaceBuilder() {
+  const lineDefs = [];
+  const surfaceDefs = [];
+  const edgeMap = new Map();
+  let nextLineId = 1;
+  let nextLoopId = 1;
+  let nextSurfaceId = 1;
 
-function appendSurfaces(lines, topology) {
-  lines.push('// Surfaces (one per input triangle)');
-  const surfaceIds = [];
-  for (let i = 0; i < topology.loopLineRefs.length; i += 1) {
-    const loopId = i + 1;
-    const surfaceId = i + 1;
-    const loop = topology.loopLineRefs[i].join(', ');
-    lines.push(`Curve Loop(${loopId}) = {${loop}};`);
-    lines.push(`Plane Surface(${surfaceId}) = {${loopId}};`);
-    surfaceIds.push(surfaceId);
-  }
-  lines.push('');
-  return surfaceIds;
+  const getOrCreateLineRef = (from, to) => {
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const key = `${lo}_${hi}`;
+
+    let line = edgeMap.get(key);
+    if (!line) {
+      line = {
+        id: nextLineId++,
+        from: lo + 1,
+        to: hi + 1,
+        canonicalFrom: lo,
+        canonicalTo: hi
+      };
+      edgeMap.set(key, line);
+      lineDefs.push(`Line(${line.id}) = {${line.from}, ${line.to}};`);
+    }
+
+    const sameDirection = from === line.canonicalFrom && to === line.canonicalTo;
+    return sameDirection ? line.id : -line.id;
+  };
+
+  const addSurfaceFromCycle = (pointCycle, surfaceType = 'Plane Surface') => {
+    if (!Array.isArray(pointCycle) || pointCycle.length < 3) return null;
+    const refs = [];
+    for (let i = 0; i < pointCycle.length; i += 1) {
+      const from = pointCycle[i];
+      const to = pointCycle[(i + 1) % pointCycle.length];
+      refs.push(getOrCreateLineRef(from, to));
+    }
+
+    const loopId = nextLoopId++;
+    const surfaceId = nextSurfaceId++;
+    surfaceDefs.push(`Curve Loop(${loopId}) = {${refs.join(', ')}};`);
+    surfaceDefs.push(`${surfaceType}(${surfaceId}) = {${loopId}};`);
+    return surfaceId;
+  };
+
+  const appendTo = (lines) => {
+    lines.push('// Curves');
+    for (let i = 0; i < lineDefs.length; i += 1) lines.push(lineDefs[i]);
+    lines.push('');
+    lines.push('// Surfaces');
+    for (let i = 0; i < surfaceDefs.length; i += 1) lines.push(surfaceDefs[i]);
+    lines.push('');
+  };
+
+  return {
+    addSurfaceFromCycle,
+    appendTo,
+    getCounts() {
+      return {
+        curveCount: nextLineId - 1,
+        surfaceCount: nextSurfaceId - 1
+      };
+    }
+  };
 }
 
 function formatGeoEntitySet(entries, perLine = 24) {
@@ -232,20 +235,123 @@ function encodeEntityRanges(ids) {
   return formatGeoEntitySet(entries);
 }
 
-function appendPhysicalGroups(lines, surfaceTags) {
-  const grouped = new Map();
+function appendTaggedSurface(taggedSurfaces, tag, surfaceId) {
+  const cleanTag = Number(tag);
+  if (!TAG_NAMES[cleanTag] || !Number.isFinite(surfaceId)) return;
+  if (!taggedSurfaces.has(cleanTag)) taggedSurfaces.set(cleanTag, []);
+  taggedSurfaces.get(cleanTag).push(surfaceId);
+}
 
-  for (let tri = 0; tri < surfaceTags.length; tri += 1) {
-    const tag = Number(surfaceTags[tri] || 1);
-    if (!TAG_NAMES[tag]) continue;
-    if (!grouped.has(tag)) grouped.set(tag, []);
-    grouped.get(tag).push(tri + 1);
+function findSourceCenterVertex(indices, surfaceTags) {
+  const counts = new Map();
+  let sourceTriCount = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    if (Number(surfaceTags[i / 3]) !== 2) continue;
+    sourceTriCount += 1;
+    const a = indices[i];
+    const b = indices[i + 1];
+    const c = indices[i + 2];
+    counts.set(a, (counts.get(a) || 0) + 1);
+    counts.set(b, (counts.get(b) || 0) + 1);
+    counts.set(c, (counts.get(c) || 0) + 1);
   }
 
+  if (sourceTriCount === 0) return null;
+  let best = null;
+  let bestCount = -1;
+  for (const [vertexId, count] of counts.entries()) {
+    if (count === sourceTriCount && count > bestCount) {
+      best = vertexId;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function emitSurfaceGeometry(lines, context) {
+  const {
+    vertices,
+    indices,
+    surfaceTags,
+    ringCount,
+    lengthSteps,
+    fullCircle
+  } = context;
+
+  const taggedSurfaces = new Map();
+  const surfaceBuilder = createGeoSurfaceBuilder();
+  const vertexCount = Math.floor(vertices.length / 3);
+  const cleanRingCount = Math.max(0, Math.round(Number(ringCount)));
+  const cleanLengthSteps = Math.max(0, Math.round(Number(lengthSteps)));
+  const hornVertexCount = cleanRingCount * (cleanLengthSteps + 1);
+  const radialSteps = fullCircle ? cleanRingCount : Math.max(0, cleanRingCount - 1);
+
+  const hasStructuredHorn = cleanRingCount >= 2
+    && cleanLengthSteps >= 1
+    && radialSteps >= 1
+    && hornVertexCount <= vertexCount;
+
+  let hasStructuredSource = false;
+
+  if (hasStructuredHorn) {
+    for (let j = 0; j < cleanLengthSteps; j += 1) {
+      const row1 = j * cleanRingCount;
+      const row2 = (j + 1) * cleanRingCount;
+      for (let i = 0; i < radialSteps; i += 1) {
+        const i2 = fullCircle ? (i + 1) % cleanRingCount : i + 1;
+        const p00 = row1 + i;
+        const p01 = row1 + i2;
+        const p11 = row2 + i2;
+        const p10 = row2 + i;
+        const surfaceId = surfaceBuilder.addSurfaceFromCycle([p00, p01, p11, p10], 'Ruled Surface');
+        appendTaggedSurface(taggedSurfaces, 1, surfaceId);
+      }
+    }
+
+    const sourceCenter = findSourceCenterVertex(indices, surfaceTags);
+    const sourceSegments = fullCircle ? cleanRingCount : Math.max(0, cleanRingCount - 1);
+    if (Number.isInteger(sourceCenter) && sourceCenter >= 0 && sourceCenter < vertexCount && sourceSegments > 0) {
+      for (let i = 0; i < sourceSegments; i += 1) {
+        const a = fullCircle ? (i + 1) % cleanRingCount : i + 1;
+        const b = i;
+        const surfaceId = surfaceBuilder.addSurfaceFromCycle([sourceCenter, a, b], 'Plane Surface');
+        appendTaggedSurface(taggedSurfaces, 2, surfaceId);
+      }
+      hasStructuredSource = true;
+    }
+  }
+
+  for (let i = 0; i < indices.length; i += 3) {
+    const triTag = Number(surfaceTags[i / 3] || 1);
+    const a = indices[i];
+    const b = indices[i + 1];
+    const c = indices[i + 2];
+
+    const triangleIsInHornVertexGrid = hasStructuredHorn
+      && a < hornVertexCount
+      && b < hornVertexCount
+      && c < hornVertexCount;
+    if (triangleIsInHornVertexGrid) continue;
+    if (hasStructuredSource && triTag === 2) continue;
+
+    const surfaceId = surfaceBuilder.addSurfaceFromCycle([a, b, c], 'Plane Surface');
+    appendTaggedSurface(taggedSurfaces, triTag, surfaceId);
+  }
+
+  surfaceBuilder.appendTo(lines);
+  const counts = surfaceBuilder.getCounts();
+  return {
+    taggedSurfaces,
+    curveCount: counts.curveCount,
+    surfaceCount: counts.surfaceCount
+  };
+}
+
+function appendPhysicalGroups(lines, taggedSurfaces) {
   lines.push('// Physical groups (canonical tag contract)');
   const orderedTags = [1, 2, 3, 4];
   orderedTags.forEach((tag) => {
-    const surfaces = grouped.get(tag);
+    const surfaces = taggedSurfaces.get(tag);
     if (!surfaces || surfaces.length === 0) return;
     lines.push(`Physical Surface("${TAG_NAMES[tag]}", ${tag}) = {${encodeEntityRanges(surfaces)}};`);
   });
@@ -399,10 +505,12 @@ export function buildGmshGeo(preparedParams, mesh, simulation, options = {}) {
   const backResolution = parseResolutionValue(preparedParams.encBackResolution, null);
 
   const pointSizes = buildPointSizes(vertices, zMin, zMax, throatResolution, mouthResolution);
-  const topology = buildCurveTopology(indices);
   const vertexUsage = gatherTriangleVertexUsage(indices, surfaceTags);
   const enclosureVertices = selectEnclosureVertices(vertexUsage);
   const sourceVertexIds = gatherSourceVertexIds(indices, surfaceTags);
+  const ringCount = toFinite(simulation.metadata?.ringCount ?? mesh.ringCount, 0);
+  const fullCircle = Boolean(simulation.metadata?.fullCircle ?? mesh.fullCircle);
+  const lengthSteps = toPositive(simulation.metadata?.lengthSteps ?? preparedParams.lengthSegments, 0);
 
   const frontBand = Math.max(1, span * 0.05);
   const backBand = Math.max(1, span * 0.05);
@@ -427,9 +535,15 @@ export function buildGmshGeo(preparedParams, mesh, simulation, options = {}) {
   const lines = [];
   appendMeshOptions(lines, options.mshVersion || DEFAULTS.mshVersion);
   appendPoints(lines, vertices, pointSizes);
-  appendCurves(lines, topology);
-  appendSurfaces(lines, topology);
-  appendPhysicalGroups(lines, surfaceTags);
+  const surfaceGeo = emitSurfaceGeometry(lines, {
+    vertices,
+    indices,
+    surfaceTags,
+    ringCount,
+    lengthSteps,
+    fullCircle
+  });
+  appendPhysicalGroups(lines, surfaceGeo.taggedSurfaces);
 
   const fieldCount = appendResolutionFields(lines, {
     sourcePointIds: Array.from(sourceVertexIds).map((v) => v + 1),
@@ -452,8 +566,8 @@ export function buildGmshGeo(preparedParams, mesh, simulation, options = {}) {
     geoText: `${lines.join('\n')}\n`,
     geoStats: {
       pointCount: vertices.length / 3,
-      curveCount: topology.lines.length,
-      surfaceCount: indices.length / 3,
+      curveCount: surfaceGeo.curveCount,
+      surfaceCount: surfaceGeo.surfaceCount,
       fieldCount,
       zMin,
       zMax,

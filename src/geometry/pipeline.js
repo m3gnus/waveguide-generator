@@ -103,6 +103,7 @@ function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForc
     boundaryConditions: buildBoundaryConditions(),
     metadata: {
       ringCount: meshData.ringCount,
+      lengthSteps: Number(buildParams.lengthSegments || 0),
       fullCircle: Boolean(meshData.fullCircle),
       hasEnclosure,
       interfaceEnabled,
