@@ -59,7 +59,11 @@ ath-horn/
 │   │   ├── index.js                # Geometry module exports
 │   │   ├── common.js               # Utility functions (angle conversions, clamping)
 │   │   ├── hornModels.js           # OSSE and R-OSSEhorn profile formulas
+│   │   ├── params.js               # Shared parameter normalization/parsing
 │   │   ├── meshBuilder.js          # Generate triangle meshes from profiles
+│   │   ├── tags.js                 # Canonical simulation/export surface tags
+│   │   ├── transforms.js           # MWG <-> ATH coordinate transforms
+│   │   ├── pipeline.js             # Canonical artifact builders (mesh/simulation/export)
 │   │   ├── morphing.js             # Round rectangular mouth shaping logic
 │   │   ├── enclosure.js            # Enclosure/wall geometry generation
 │   │   └── rearShape.js            # Rear cap/shelf geometry
@@ -72,8 +76,8 @@ ath-horn/
 │   │   ├── App.js                  # Application class coordinating all components
 │   │   ├── events.js               # App-specific event handling
 │   │   ├── scene.js                # Three.js scene setup and rendering
-│   │   ├── params.js               # Prepare parameters for mesh generation
-│   │   ├── mesh.js                 # Provide mesh to simulation system
+│   │   ├── params.js               # Thin wrapper around geometry params pipeline
+│   │   ├── mesh.js                 # Provide canonical mesh payload to simulation
 │   │   ├── configImport.js         # Load .mwg config files from disk
 │   │   ├── exports.js              # Export functions (STL, CSV, Gmsh)
 │   │   └── logging.js              # Initialize change tracking logger

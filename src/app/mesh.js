@@ -1,11 +1,12 @@
 import { AppEvents } from '../events.js';
-import { buildCanonicalMeshPayload } from '../simulation/payload.js';
+import { buildGeometryArtifacts } from '../geometry/index.js';
 
 export function provideMeshForSimulation(app) {
   const preparedParams = app.prepareParamsForMesh({ applyVerticalOffset: true });
-  const payload = buildCanonicalMeshPayload(preparedParams, {
+  const artifacts = buildGeometryArtifacts(preparedParams, {
     includeEnclosure: Number(preparedParams.encDepth || 0) > 0
   });
+  const payload = artifacts.simulation;
 
   const vertexCount = payload.vertices.length / 3;
   const triangleCount = payload.indices.length / 3;

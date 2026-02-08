@@ -13,8 +13,7 @@ import {
   generateAbecStaticFile,
   generateBemppStarterScript
 } from '../export/index.js';
-import { buildHornMesh } from '../geometry/index.js';
-import { buildCanonicalMeshPayload } from '../simulation/payload.js';
+import { buildGeometryArtifacts } from '../geometry/index.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { GlobalState } from '../state.js';
 
@@ -36,13 +35,14 @@ function getPolarSettings() {
 }
 
 function buildExportMesh(preparedParams) {
-  const payload = buildCanonicalMeshPayload(preparedParams, {
+  const artifacts = buildGeometryArtifacts(preparedParams, {
     includeEnclosure: Number(preparedParams.encDepth || 0) > 0
   });
+  const payload = artifacts.simulation;
   const msh = exportMSHContent(payload.vertices, payload.indices, payload.surfaceTags, {
     verticalOffset: payload.metadata?.verticalOffset || 0
   });
-  return { payload, msh };
+  return { artifacts, payload, msh };
 }
 
 function getAxialMax(vertices) {
@@ -58,10 +58,11 @@ export function exportSTL(app) {
     forceFullQuadrants: true,
     applyVerticalOffset: false
   });
-  const { vertices, indices } = buildHornMesh(preparedParams, {
+  const artifacts = buildGeometryArtifacts(preparedParams, {
     includeEnclosure: false,
     includeRearShape: false
   });
+  const { vertices, indices } = artifacts.mesh;
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
@@ -113,15 +114,15 @@ export async function exportGmshGeo(app) {
   });
   const baseName = getExportBaseName();
   const meshBase = `${baseName}`;
-  const hornGeometry = buildHornMesh(preparedParams, {
+  const artifacts = buildGeometryArtifacts(preparedParams, {
     includeEnclosure: false,
     includeRearShape: false
   });
-  const geo = exportFullGeo(hornGeometry.vertices, preparedParams, {
+  const geo = exportFullGeo(artifacts.mesh.vertices, preparedParams, {
     outputName: meshBase,
     useSplines: true,
-    ringCount: hornGeometry.ringCount,
-    fullCircle: hornGeometry.fullCircle
+    ringCount: artifacts.mesh.ringCount,
+    fullCircle: artifacts.mesh.fullCircle
   });
   const starterScript = generateBemppStarterScript({
     meshFileName: `${meshBase}.msh`,
@@ -180,11 +181,8 @@ export async function exportABECProject(app) {
   app.stats.innerText = 'Building ABEC bundle...';
 
   try {
-    const { payload, msh } = buildExportMesh(preparedParams);
-    const hornGeometry = buildHornMesh(preparedParams, {
-      includeEnclosure: false,
-      includeRearShape: false
-    });
+    const { artifacts, payload, msh } = buildExportMesh(preparedParams);
+    const hornGeometry = artifacts.mesh;
     const solvingContent = generateAbecSolvingFile(preparedParams, {
       interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
       infiniteBaffleOffset: getAxialMax(hornGeometry.vertices)

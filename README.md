@@ -103,7 +103,7 @@ npm run start:backend    # Backend only (port 8000)
 
 ```
 ├── src/
-│   ├── geometry/       # Horn math and mesh generation
+│   ├── geometry/       # Canonical geometry pipeline (params -> mesh -> simulation/export artifacts)
 │   ├── viewer/         # Three.js 3D visualization
 │   ├── config/         # Parameter management
 │   ├── solver/         # BEM solver interface
@@ -111,6 +111,7 @@ npm run start:backend    # Backend only (port 8000)
 │   └── export/         # Export functionality (STL, MSH, GEO, CSV)
 ├── scripts/            # Development and testing scripts
 │   ├── ath-compare.js  # ATH reference comparison
+│   ├── abec-compare.js # ABEC bundle comparison
 │   └── gmsh-export.py  # Gmsh processing pipeline
 ├── server/             # Python BEM backend
 │   ├── app.py          # FastAPI application
@@ -121,6 +122,18 @@ npm run start:backend    # Backend only (port 8000)
 ├── _references/        # ATH reference configs and outputs
 └── tests/              # Unit tests
 ```
+
+### Canonical Geometry Pipeline
+
+Geometry generation is centralized in `src/geometry/`:
+
+- `params.js`: shared parameter normalization/parsing
+- `meshBuilder.js`: core horn/enclosure topology generation
+- `tags.js`: canonical surface tag assignment rules
+- `transforms.js`: coordinate frame transforms (MWG -> ATH/Gmsh)
+- `pipeline.js`: `buildGeometryArtifacts()` and `buildCanonicalMeshPayload()`
+
+App runtime (`src/app/scene.js`, `src/app/mesh.js`, `src/app/exports.js`) and comparison scripts now consume this shared pipeline.
 
 ## Testing
 
@@ -153,7 +166,13 @@ Reference configs are in `_references/testconfigs/` with matching folders contai
 Process .geo files through Gmsh for bitwise-identical output:
 
 ```bash
+python scripts/gmsh-export.py export <geo_file> [output_dir]
+
+# Legacy export form (still supported)
 python scripts/gmsh-export.py <geo_file> [output_dir]
+
+# Validate generated GEO files
+python scripts/gmsh-export.py validate <reference_root> <generated_root>
 ```
 
 Requires Gmsh 4.15+ with Python bindings (`pip install gmsh`).

@@ -2,8 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { MWGConfigParser } from '../src/config/index.js';
 import { getDefaults } from '../src/config/defaults.js';
-import { PARAM_SCHEMA } from '../src/config/schema.js';
-import { parseExpression, buildHornMesh } from '../src/geometry/index.js';
+import {
+  buildGeometryArtifacts,
+  prepareGeometryParams,
+  coerceConfigParams,
+  applyAthImportDefaults,
+  isMWGConfig
+} from '../src/geometry/index.js';
 import {
   exportFullGeo,
   exportMSH,
@@ -14,96 +19,22 @@ import {
   generateAbecStaticFile,
   generateBemppStarterScript
 } from '../src/export/index.js';
-import { buildCanonicalMeshPayload } from '../src/simulation/payload.js';
 
 const root = process.argv[2] || '_references/testconfigs';
 const outRoot = process.argv[3] || '/tmp/ath-generated-abec';
 
-const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
-
-function isNumericString(value) {
-  if (typeof value !== 'string') return false;
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  return NUMERIC_PATTERN.test(trimmed);
-}
-
-function applyAthImportDefaults(parsed, typedParams) {
-  if (!parsed || !parsed.type) return;
-
-  const isOSSE = parsed.type === 'OSSE';
-  if (typedParams.morphTarget === undefined) typedParams.morphTarget = 0;
-  const hasQuadrants = typedParams.quadrants !== undefined && typedParams.quadrants !== null && typedParams.quadrants !== '';
-  if (!hasQuadrants) typedParams.quadrants = isOSSE ? '14' : '1';
-
-  const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
-  if (!hasMeshEnclosure && typedParams.encDepth === undefined) typedParams.encDepth = 0;
-
-  if (isOSSE) {
-    if (typedParams.k === undefined) typedParams.k = 1;
-    if (typedParams.h === undefined) typedParams.h = 0;
-  }
-}
-
-function prepareParamsForMesh(params, type) {
-  const preparedParams = { ...params };
-
-  const rawExpressionKeys = new Set([
-    'subdomainSlices',
-    'interfaceOffset',
-    'interfaceDraw',
-    'gcurveSf',
-    'encFrontResolution',
-    'encBackResolution',
-    'sourceContours'
-  ]);
-
-  const applySchema = (schema) => {
-    if (!schema) return;
-    for (const [key, def] of Object.entries(schema)) {
-      const val = preparedParams[key];
-      if (val === undefined || val === null) continue;
-      if (def.type === 'expression') {
-        if (rawExpressionKeys.has(key) || typeof val !== 'string') continue;
-        const trimmed = val.trim();
-        if (!trimmed) continue;
-        preparedParams[key] = isNumericString(trimmed) ? Number(trimmed) : parseExpression(trimmed);
-      } else if ((def.type === 'number' || def.type === 'range') && typeof val === 'string') {
-        const trimmed = val.trim();
-        if (!trimmed) continue;
-        if (isNumericString(trimmed)) {
-          preparedParams[key] = Number(trimmed);
-        } else if (/[a-zA-Z]/.test(trimmed)) {
-          preparedParams[key] = parseExpression(trimmed);
-        }
-      }
-    }
-  };
-
-  applySchema(PARAM_SCHEMA[type] || {});
-  ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE', 'ABEC'].forEach((group) => applySchema(PARAM_SCHEMA[group] || {}));
-
-  preparedParams.type = type;
-  return preparedParams;
-}
 
 function loadConfig(configPath) {
   const content = fs.readFileSync(configPath, 'utf8');
   const parsed = MWGConfigParser.parse(content);
   if (!parsed.type) throw new Error(`No type detected for ${configPath}`);
 
-  const typedParams = {};
-  for (const [key, value] of Object.entries(parsed.params)) {
-    if (value === undefined || value === null) continue;
-    const stringValue = String(value).trim();
-    typedParams[key] = isNumericString(stringValue) ? Number(stringValue) : stringValue;
-  }
+  const typedParams = coerceConfigParams(parsed.params);
   if (parsed.blocks && Object.keys(parsed.blocks).length > 0) {
     typedParams._blocks = parsed.blocks;
   }
 
-  const isMWG = /;\s*MWG config/i.test(content);
-  if (!isMWG) applyAthImportDefaults(parsed, typedParams);
+  if (!isMWGConfig(content)) applyAthImportDefaults(parsed, typedParams);
 
   const defaults = getDefaults(parsed.type);
   const params = { ...defaults, ...typedParams };
@@ -256,14 +187,15 @@ function run() {
       continue;
     }
 
-    const prepared = prepareParamsForMesh(params, type);
-    const payload = buildCanonicalMeshPayload(prepared, {
+    const prepared = prepareGeometryParams(params, { type });
+    const artifacts = buildGeometryArtifacts(prepared, {
       includeEnclosure: Number(prepared.encDepth || 0) > 0
     });
-    const hornGeometry = buildHornMesh(prepared, {
+    const payload = artifacts.simulation;
+    const hornGeometry = buildGeometryArtifacts(prepared, {
       includeEnclosure: false,
       includeRearShape: false
-    });
+    }).mesh;
 
     const mshName = `${baseName}.msh`;
     const generated = {
