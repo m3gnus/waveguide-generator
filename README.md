@@ -2,10 +2,6 @@
 
 Waveguide Generator is a browser-based tool for designing acoustic horns, previewing geometry in 3D, running BEM simulations, and exporting manufacturing/simulation files.
 
-## App Screenshot
-
-![Waveguide Generator App Screenshot](docs/images/waveguide-generator-screenshot.png)
-
 ## Features
 
 - OSSE and R-OSSE horn profile generation with live parameter controls.
@@ -17,6 +13,8 @@ Waveguide Generator is a browser-based tool for designing acoustic horns, previe
   - `ABEC` project ZIP
   - `CSV` profiles
   - MWG config text
+
+![Waveguide Generator App Screenshot](docs/images/waveguide-generator-screenshot.png)
 
 ## Tech Stack
 
@@ -246,18 +244,6 @@ npm start
 
 ```bash
 curl http://localhost:8000/health
-```
-
-## Add a Screenshot to GitHub README
-
-1. Start the app (`npm start`) and open [http://localhost:3000](http://localhost:3000).
-2. On macOS, take a screenshot (`Shift + Command + 4`, then `Space`, then click browser window).
-3. Save the image as `waveguide-generator-screenshot.png`.
-4. Put it in `docs/images/`.
-5. Add this line near the top of `README.md`:
-
-```md
-![Waveguide Generator App Screenshot](docs/images/waveguide-generator-screenshot.png)
 ```
 
 6. Commit and push:
