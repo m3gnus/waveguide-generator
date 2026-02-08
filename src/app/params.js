@@ -19,7 +19,6 @@ export function prepareParamsForMesh(
   const type = state.type;
 
   const rawExpressionKeys = new Set([
-    'zMapPoints',
     'subdomainSlices',
     'interfaceOffset',
     'interfaceDraw',
@@ -70,8 +69,6 @@ export function prepareParamsForMesh(
   const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
   const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
   preparedParams.scale = scale;
-  const useAthZMap = preparedParams.useAthZMap ?? scale !== 1;
-  preparedParams.useAthZMap = Boolean(useAthZMap);
 
   if (scale !== 1) {
     const lengthKeys = [

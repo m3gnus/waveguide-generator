@@ -1,5 +1,5 @@
 /**
- * Validation module for MWG - Mathematical Waveguide Generator.
+ * Validation module for the Mathematical Waveguide Generator (MWG).
  * Builds trust in solver and optimization results through reference comparisons
  * and physical sanity checks.
  *

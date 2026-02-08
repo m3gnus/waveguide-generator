@@ -7,13 +7,15 @@
 export function exportProfilesCSV(vertices, params) {
     const { angularSegments, lengthSegments } = params;
     let csv = '';
+    const scale = 0.1;
 
     for (let j = 0; j <= lengthSegments; j++) {
-        for (let i = 0; i < angularSegments; i++) {
-            const idx = j * angularSegments + i;
-            const x = vertices[idx * 3];
-            const y = vertices[idx * 3 + 2];
-            const z = vertices[idx * 3 + 1];
+        for (let i = 0; i <= angularSegments; i++) {
+            const wrappedIndex = i % angularSegments;
+            const idx = j * angularSegments + wrappedIndex;
+            const x = vertices[idx * 3] * scale;
+            const y = vertices[idx * 3 + 2] * scale;
+            const z = vertices[idx * 3 + 1] * scale;
             csv += `${x.toFixed(6)};${y.toFixed(6)};${z.toFixed(6)}\r\n`;
         }
         csv += '\r\n'; // Blank line between cross-sections

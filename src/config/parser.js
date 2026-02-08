@@ -115,7 +115,6 @@ export class MWGConfigParser {
             if (p['Mesh.ThroatResolution']) { p.throatResolution = p['Mesh.ThroatResolution']; }
             if (p['Mesh.MouthResolution']) { p.mouthResolution = p['Mesh.MouthResolution']; }
             if (p['Mesh.VerticalOffset']) { p.verticalOffset = p['Mesh.VerticalOffset']; }
-            if (p['Mesh.ZMapPoints']) { p.zMapPoints = p['Mesh.ZMapPoints']; }
             if (p['Mesh.SubdomainSlices'] !== undefined) { p.subdomainSlices = p['Mesh.SubdomainSlices']; }
             if (p['Mesh.InterfaceOffset'] !== undefined) { p.interfaceOffset = p['Mesh.InterfaceOffset']; }
             if (p['Mesh.InterfaceDraw'] !== undefined) { p.interfaceDraw = p['Mesh.InterfaceDraw']; }
@@ -130,8 +129,8 @@ export class MWGConfigParser {
             if (p['Source.Curv']) { p.sourceCurv = p['Source.Curv']; }
             if (p['Source.Velocity']) { p.sourceVelocity = p['Source.Velocity']; }
             if (p['Source.Contours']) { p.sourceContours = p['Source.Contours']; }
-            if (p['ABEC.SimType']) { p.abecSimType = p['ABEC.SimType']; }
-            if (p['ABEC.SimProfile']) { p.abecSimProfile = p['ABEC.SimProfile']; }
+            if (p['ABEC.SimType'] !== undefined) { p.abecSimType = p['ABEC.SimType']; }
+            if (p['ABEC.SimProfile'] !== undefined) { p.abecSimProfile = p['ABEC.SimProfile']; }
             if (p['ABEC.f1']) { p.abecF1 = p['ABEC.f1']; }
             if (p['ABEC.f2']) { p.abecF2 = p['ABEC.f2']; }
             if (p['ABEC.NumFrequencies']) { p.abecNumFreq = p['ABEC.NumFrequencies']; }
@@ -162,7 +161,6 @@ export class MWGConfigParser {
             if (p['Mesh.ThroatResolution']) { p.throatResolution = p['Mesh.ThroatResolution']; }
             if (p['Mesh.MouthResolution']) { p.mouthResolution = p['Mesh.MouthResolution']; }
             if (p['Mesh.VerticalOffset']) { p.verticalOffset = p['Mesh.VerticalOffset']; }
-            if (p['Mesh.ZMapPoints']) { p.zMapPoints = p['Mesh.ZMapPoints']; }
             if (p['Mesh.SubdomainSlices'] !== undefined) { p.subdomainSlices = p['Mesh.SubdomainSlices']; }
             if (p['Mesh.InterfaceOffset'] !== undefined) { p.interfaceOffset = p['Mesh.InterfaceOffset']; }
             if (p['Mesh.InterfaceDraw'] !== undefined) { p.interfaceDraw = p['Mesh.InterfaceDraw']; }
@@ -176,8 +174,8 @@ export class MWGConfigParser {
             if (p['Source.Curv']) { p.sourceCurv = p['Source.Curv']; }
             if (p['Source.Velocity']) { p.sourceVelocity = p['Source.Velocity']; }
             if (p['Source.Contours']) { p.sourceContours = p['Source.Contours']; }
-            if (p['ABEC.SimType']) { p.abecSimType = p['ABEC.SimType']; }
-            if (p['ABEC.SimProfile']) { p.abecSimProfile = p['ABEC.SimProfile']; }
+            if (p['ABEC.SimType'] !== undefined) { p.abecSimType = p['ABEC.SimType']; }
+            if (p['ABEC.SimProfile'] !== undefined) { p.abecSimProfile = p['ABEC.SimProfile']; }
             if (p['ABEC.f1']) { p.abecF1 = p['ABEC.f1']; }
             if (p['ABEC.f2']) { p.abecF2 = p['ABEC.f2']; }
             if (p['ABEC.NumFrequencies']) { p.abecNumFreq = p['ABEC.NumFrequencies']; }

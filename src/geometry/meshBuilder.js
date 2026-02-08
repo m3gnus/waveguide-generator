@@ -8,63 +8,96 @@ import { applyMorphing } from './morphing.js';
 import { addRearShapeGeometry } from './rearShape.js';
 import { addEnclosureGeometry } from './enclosure.js';
 
+/**
+ * Generate a circular throat source (acoustic radiator) at the horn throat.
+ * Creates a flat circular surface that connects all throat edge vertices.
+ *
+ * @param {number[]} vertices - Array of vertex coordinates [x, y, z, ...]
+ * @param {Object} quadrantInfo - Information about which quadrants are included
+ * @param {number} ringCount - Number of angular segments in the horn
+ * @param {number} lengthSteps - Number of length segments in the horn
+ * @returns {{ vertices: number[], indices: number[] }} Throat source mesh data
+ */
+function generateThroatSource(vertices, quadrantInfo, ringCount, lengthSteps) {
+  const totalHornVerts = (lengthSteps + 1) * ringCount;
 
-// ===========================================================================
-// ATH Z-Mapping and Slice Distribution
-// ===========================================================================
+  // Throat is at j=0 (first row of vertices)
+  const throatStartIdx = 0;
+  const throatVertices = [];
 
-const ATH_ZMAP_20 = [
-  0.0,
-  0.01319,
-  0.03269,
-  0.05965,
-  0.094787,
-  0.139633,
-  0.195959,
-  0.263047,
-  0.340509,
-  0.427298,
-  0.518751,
-  0.610911,
-  0.695737,
-  0.770223,
-  0.833534,
-  0.88547,
-  0.925641,
-  0.955904,
-  0.977809,
-  0.992192,
-  1.0
-];
-
-const resampleZMap = (map, lengthSteps) => {
-  if (!map || map.length < 2 || lengthSteps <= 0) return null;
-  const maxIndex = map.length - 1;
-  if (maxIndex === lengthSteps) return map.slice();
-  const out = new Array(lengthSteps + 1);
-  for (let j = 0; j <= lengthSteps; j++) {
-    const t = (j / lengthSteps) * maxIndex;
-    const idx = Math.floor(t);
-    const frac = t - idx;
-    const v0 = map[idx];
-    const v1 = map[Math.min(idx + 1, maxIndex)];
-    out[j] = v0 + (v1 - v0) * frac;
+  for (let i = 0; i < ringCount; i++) {
+    const vIdx = (throatStartIdx + i) * 3;
+    throatVertices.push({
+      x: vertices[vIdx],
+      y: vertices[vIdx + 1],
+      z: vertices[vIdx + 2]
+    });
   }
-  return out;
-};
+
+  if (throatVertices.length === 0) {
+    return { vertices: [], indices: [] };
+  }
+
+  // Find center of throat opening
+  let centerX = 0, centerZ = 0;
+  for (const v of throatVertices) {
+    centerX += v.x;
+    centerZ += v.z;
+  }
+  centerX /= throatVertices.length;
+  centerZ /= throatVertices.length;
+
+  // Get throat Y position (should be consistent across all throat vertices)
+  const throatY = throatVertices[0].y;
+
+  // Calculate average radius
+  let totalRadius = 0;
+  for (const v of throatVertices) {
+    const r = Math.sqrt((v.x - centerX) ** 2 + (v.z - centerZ) ** 2);
+    totalRadius += r;
+  }
+  const avgRadius = totalRadius / throatVertices.length;
+
+  // Generate the throat cap as a circular disc
+  // Use enough segments to match or exceed the horn's angular resolution
+  const numSegments = Math.max(16, ringCount);
+
+  const sourceVertices = [];
+  const sourceIndices = [];
+
+  // Add center vertex
+  sourceVertices.push(centerX, throatY, centerZ);
+  const centerIdx = 0;
+
+  // Add ring vertices (same radius as average throat opening)
+  for (let i = 0; i < numSegments; i++) {
+    const angle = (i / numSegments) * Math.PI * 2;
+    const x = centerX + avgRadius * Math.cos(angle);
+    const z = centerZ + avgRadius * Math.sin(angle);
+    sourceVertices.push(x, throatY, z);
+  }
+
+  // Create triangles connecting all ring vertices to form a closed circular surface
+  // Each triangle connects the center to two adjacent ring vertices
+  for (let i = 0; i < numSegments; i++) {
+    const nextIdx = (i + 1) % numSegments;
+    // Triangle: center -> vertex[i] -> vertex[next]
+    sourceIndices.push(centerIdx, i + 1, nextIdx + 1);
+  }
+
+  return {
+    vertices: sourceVertices,
+    indices: sourceIndices
+  };
+}
+
+
+// ===========================================================================
+// Slice Distribution
+// ===========================================================================
 
 const buildSliceMap = (params, lengthSteps) => {
-  // 1. Explicit zMapPoints takes top priority
-  const zMap = parseList(params.zMapPoints);
-  if (zMap && zMap.length === lengthSteps + 1) {
-    const maxVal = Math.max(...zMap);
-    if (maxVal > 1.0) {
-      return zMap.map((z) => z / maxVal);
-    }
-    return zMap.map((z) => Math.max(0, Math.min(1, z)));
-  }
-
-  // 2. Resolution-based grading (throatResolution vs mouthResolution)
+  // 1. Resolution-based grading (throatResolution vs mouthResolution)
   // This allows the viewport to reflect the density intended for Gmsh
   const resT = Number(params.throatResolution);
   const resM = Number(params.mouthResolution);
@@ -82,13 +115,7 @@ const buildSliceMap = (params, lengthSteps) => {
     return map;
   }
 
-  // 3. Fallback to ATH defaults
-  if (params.useAthZMap) {
-    const athMap = resampleZMap(ATH_ZMAP_20, lengthSteps);
-    if (athMap) return athMap;
-  }
-
-  // 4. Throat extension/segment splitting
+  // 2. Throat extension/segment splitting
   const throatSegments = Number(params.throatSegments || 0);
   const extLen = Math.max(0, evalParam(params.throatExtLength || 0, 0));
   const slotLen = Math.max(0, evalParam(params.slotLength || 0, 0));
@@ -331,11 +358,24 @@ const selectAnglesForQuadrants = (fullAngles, quadrants) => {
  * @returns {{ vertices: number[], indices: number[] }} The flat arrays of coordinates and indices.
  */
 export function buildHornMesh(params, options = {}) {
+  // Ensure required parameters have defaults - handle cases where saved state lacks these values
+  let angularSegments = Number(params.angularSegments ?? 80);
+  if (!Number.isFinite(angularSegments) || angularSegments < 4) {
+    angularSegments = 80;
+  }
+  const lengthSteps = Number(params.lengthSegments ?? 40);
+  if (!Number.isFinite(lengthSteps) || lengthSteps <= 0) {
+    lengthSteps = 40;
+  }
+
+  // Validate parameter values and use safe defaults if invalid
+  const radialSteps = angularSegments;
+
   const includeEnclosure = options.includeEnclosure !== false;
+
+  // Generate throat source (acoustic radiator) - always added at horn throat
   const includeRearShape = options.includeRearShape !== false;
   const groupInfo = options.groupInfo ?? (options.collectGroups ? {} : null);
-  const radialSteps = params.angularSegments;
-  const lengthSteps = params.lengthSegments;
   const sliceMap = buildSliceMap(params, lengthSteps);
 
   const vertices = [];
@@ -345,12 +385,13 @@ export function buildHornMesh(params, options = {}) {
   const throatResolution = params.throatResolution || radialSteps;
   const mouthResolution = params.mouthResolution || radialSteps;
 
-  // Vertical offset (ATH Mesh.VerticalOffset) applied to Z axis (vertical)
-  const verticalOffset = parseFloat(params.verticalOffset) || 0;
+  // Vertical offset now only applies to exports, not the viewer mesh
+  const verticalOffset = 0;
 
   // Quadrant support for symmetry meshes
   const quadrantInfo = parseQuadrants(params.quadrants);
-  const { fullAngles } = buildAngleList(params);
+  const angleListData = buildAngleList({ ...params, angularSegments });
+  const { fullAngles } = angleListData;
   const angleList = selectAnglesForQuadrants(fullAngles, params.quadrants);
   const ringCount = angleList.length;
   const morphTarget = Number(params.morphTarget || 0);
@@ -365,6 +406,7 @@ export function buildHornMesh(params, options = {}) {
   const interfaceOffset = parseList(params.interfaceOffset);
   const interfaceDraw = parseList(params.interfaceDraw);
 
+  // Note: throat source is added after all horn vertices are generated
   for (let j = 0; j <= lengthSteps; j++) {
     const t = sliceMap ? sliceMap[j] : j / lengthSteps;
 
@@ -411,12 +453,27 @@ export function buildHornMesh(params, options = {}) {
 
       const vx = r * Math.cos(p);
       const vy = x + zOffset; // axial position (Y axis) + interface offset
-      const vz = r * Math.sin(p) + verticalOffset; // vertical offset (Z axis)
+      const vz = r * Math.sin(p); // vertical offset no longer applied to viewer mesh
 
       vertices.push(vx, vy, vz);
     }
   }
 
+
+  // Add throat source to vertices and indices (must be after horn geometry is generated)
+  const throatSourceStartVertex = vertices.length / 3;
+  const throatSourceMesh = generateThroatSource(vertices, quadrantInfo, ringCount, lengthSteps);
+
+  // Merge throat source vertices
+  for (let i = 0; i < throatSourceMesh.vertices.length; i++) {
+    vertices.push(throatSourceMesh.vertices[i]);
+  }
+
+  // Use throatSourceStartVertex as offset for throat source indices
+  const throatSourceVertexOffset = throatSourceStartVertex;
+  for (let i = 0; i < throatSourceMesh.indices.length; i++) {
+    indices.push(throatSourceMesh.indices[i] + throatSourceVertexOffset);
+  }
 
   // Add Enclosure for OSSE
   if (includeEnclosure && params.encDepth > 0) {

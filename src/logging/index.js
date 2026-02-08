@@ -1,5 +1,5 @@
 /**
- * Change Logging module for MWG - Mathematical Waveguide Generator.
+ * Change Logging module for the Mathematical Waveguide Generator (MWG).
  * Tracks all changes made by any AI agent or user interaction.
  * @module logging
  */

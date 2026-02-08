@@ -2,9 +2,7 @@
  * Export horn geometries to Gmsh .msh format suitable for BEM solvers
  * Supports all horn types (OSSE, R-OSSE) with proper boundary conditions
  *
- * Two export paths:
- * 1. Legacy: from raw vertices/indices (buildHornMesh)
- * 2. CAD: from tessellated B-Rep shapes (tessellateWithGroups)
+ * Uses canonical mesh payloads generated from geometry/meshBuilder.
  */
 
 import {
@@ -148,20 +146,6 @@ const buildMsh = (vertices, indices, physicalTags, physicalNames = null) => {
     return mshContent;
 };
 
-/**
- * Export horn geometry to Gmsh .msh format (version 2.2)
- * @param {Object} params - The complete parameter object
- * @param {Array<number>} vertices - Flat array of vertex coordinates [x,y,z, x,y,z, ...]
- * @param {Array<number>} indices - Triangle index array
- * @returns {string} Gmsh .msh file content
- */
-export function exportHornToMSH(vertices, indices, params, meshInfo = null) {
-    const vertexList = Array.isArray(vertices) ? vertices.slice() : Array.from(vertices);
-    const indexList = Array.isArray(indices) ? indices.slice() : Array.from(indices || []);
-    const transformed = transformVerticesToAth(vertexList);
-    const physicalTags = new Array(indexList.length / 3).fill(1);
-    return buildMsh(transformed, indexList, physicalTags);
-}
 
 /**
  * Export horn geometry to Gmsh .geo format (alternative for better compatibility)
@@ -370,101 +354,35 @@ export function exportFullGeo(vertices, params, options = {}) {
 }
 
 /**
- * Export horn to MSH from CAD tessellated data with face groups.
+ * Export horn mesh to Gmsh .msh using canonical surface tags.
  *
- * The CAD pipeline produces separate shapes (horn, source, enclosure) which are
- * tessellated with per-triangle face group IDs. This function maps those face groups
- * to the physical surface tags expected by ABEC/BEM solvers.
- *
- * @param {Float32Array} vertices - Flat vertex array from tessellateWithGroups
- * @param {Uint32Array} indices - Triangle index array from tessellateWithGroups
- * @param {Int32Array} faceGroups - Per-triangle face group ID from tessellateWithGroups
- * @param {Object} faceMapping - Maps face group IDs to physical surface tags
- * @param {number[]} faceMapping.hornFaces - Face group IDs belonging to horn walls (tag 1 = SD1G0)
- * @param {number[]} faceMapping.sourceFaces - Face group IDs for acoustic source (tag 2 = SD1D1001)
- * @param {number[]} faceMapping.enclosureFaces - Face group IDs for enclosure (tag 3 = SD2G0)
- * @param {number[]} faceMapping.interfaceFaces - Face group IDs for interfaces (tag 4 = I1-2)
- * @returns {string} Gmsh .msh file content
+ * Canonical tag map:
+ * 1 = rigid/walls
+ * 2 = source
+ * 3 = optional secondary domain
+ * 4 = symmetry/interface
  */
-export function exportHornToMSHFromCAD(vertices, indices, faceGroups, faceMapping = {}) {
+export function exportMSH(vertices, indices, surfaceTags = null) {
     const vertexList = Array.from(vertices);
     const indexList = Array.from(indices);
     const transformed = transformVerticesToAth(vertexList);
-
-    const hornFaces = new Set(faceMapping.hornFaces || []);
-    const sourceFaces = new Set(faceMapping.sourceFaces || []);
-    const enclosureFaces = new Set(faceMapping.enclosureFaces || []);
-    const interfaceFaces = new Set(faceMapping.interfaceFaces || []);
-
-    const hasEnclosure = enclosureFaces.size > 0;
-    const hasInterface = interfaceFaces.size > 0;
-
     const triangleCount = indexList.length / 3;
-    const physicalTags = new Array(triangleCount);
 
-    for (let i = 0; i < triangleCount; i++) {
-        const group = faceGroups[i];
-        if (sourceFaces.has(group)) {
-            physicalTags[i] = 2; // SD1D1001
-        } else if (enclosureFaces.has(group)) {
-            physicalTags[i] = 3; // SD2G0
-        } else if (interfaceFaces.has(group)) {
-            physicalTags[i] = 4; // I1-2
-        } else {
-            physicalTags[i] = 1; // SD1G0 (horn walls, default)
-        }
+    const physicalTags = Array.isArray(surfaceTags)
+        ? surfaceTags.slice(0, triangleCount).map((v) => Number(v) || 1)
+        : new Array(triangleCount).fill(1);
+
+    while (physicalTags.length < triangleCount) {
+        physicalTags.push(1);
     }
 
-    const physicalNames = [];
-    physicalNames.push({ id: 1, name: 'SD1G0' });
-    physicalNames.push({ id: 2, name: 'SD1D1001' });
-    if (hasEnclosure) physicalNames.push({ id: 3, name: 'SD2G0' });
-    if (hasInterface) physicalNames.push({ id: 4, name: 'I1-2' });
+    const tagSet = new Set(physicalTags);
+    const names = [
+        { id: 1, name: 'SD1G0' },
+        { id: 2, name: 'SD1D1001' }
+    ];
+    if (tagSet.has(3)) names.push({ id: 3, name: 'SD2G0' });
+    if (tagSet.has(4)) names.push({ id: 4, name: 'I1-2' });
 
-    return buildMsh(transformed, indexList, physicalTags, physicalNames);
-}
-
-/**
- * Generate Gmsh-compatible mesh with proper boundary conditions
- */
-export function exportHornToMSHWithBoundaries(vertices, indices, params, groups = null, meshInfo = null) {
-    const vertexList = Array.isArray(vertices) ? vertices.slice() : Array.from(vertices);
-    const indexList = Array.isArray(indices) ? indices.slice() : Array.from(indices || []);
-
-    const ringCount = meshInfo?.ringCount;
-    const { capTriangleCount } = appendThroatCap(vertexList, indexList, params, ringCount);
-    const transformed = transformVerticesToAth(vertexList);
-
-    const triangleCount = indexList.length / 3;
-    const physicalTags = new Array(triangleCount).fill(1);
-    const hasInterface = Boolean(
-        groups && groups.enclosure && groups.enclosureFront &&
-        params && params.encDepth > 0 &&
-        params.interfaceOffset !== undefined && params.interfaceOffset !== null &&
-        String(params.interfaceOffset).trim() !== ''
-    );
-
-    if (hasInterface) {
-        const { start, end } = groups.enclosure;
-        for (let i = start; i < end; i++) physicalTags[i] = 3;
-        const front = groups.enclosureFront;
-        for (let i = front.start; i < front.end; i++) physicalTags[i] = 4;
-    }
-
-    if (capTriangleCount > 0) {
-        for (let i = triangleCount - capTriangleCount; i < triangleCount; i++) {
-            if (i >= 0) physicalTags[i] = 2;
-        }
-    }
-
-    const physicalNames = hasInterface
-        ? [
-            { id: 1, name: 'SD1G0' },
-            { id: 2, name: 'SD1D1001' },
-            { id: 3, name: 'SD2G0' },
-            { id: 4, name: 'I1-2' }
-        ]
-        : null;
-
-    return buildMsh(transformed, indexList, physicalTags, physicalNames);
+    return buildMsh(transformed, indexList, physicalTags, names);
 }

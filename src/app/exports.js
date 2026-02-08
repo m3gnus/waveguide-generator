@@ -1,19 +1,47 @@
 import * as THREE from 'three';
+import JSZip from 'jszip';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import {
-  exportHornToMSHWithBoundaries,
-  exportHornToMSHFromCAD,
+  exportMSH as exportMSHContent,
   exportProfilesCSV,
-  exportGmshGeo as exportGmshGeoContent,
+  exportFullGeo,
   generateMWGConfigContent,
   generateAbecProjectFile,
   generateAbecSolvingFile,
-  generateAbecObservationFile
+  generateAbecObservationFile,
+  generateAbecCoordsFile,
+  generateAbecStaticFile,
+  generateBemppStarterScript
 } from '../export/index.js';
 import { buildHornMesh } from '../geometry/index.js';
-import { isCADReady, buildForMSH } from '../cad/index.js';
+import { buildCanonicalMeshPayload } from '../simulation/payload.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { GlobalState } from '../state.js';
+
+function getPolarSettings() {
+  const aStart = parseFloat(document.getElementById('polar-angle-start')?.value) || 0;
+  const aEnd = parseFloat(document.getElementById('polar-angle-end')?.value) || 180;
+  const aStep = parseFloat(document.getElementById('polar-angle-step')?.value) || 5;
+  const aCount = Math.max(2, Math.floor((aEnd - aStart) / aStep) + 1);
+  const polarRange = `${aStart},${aEnd},${aCount}`;
+  const polarDistance = Number(document.getElementById('polar-distance')?.value || 2);
+  const polarNormAngle = Number(document.getElementById('polar-norm-angle')?.value || 5);
+  const polarInclination = Number(document.getElementById('polar-inclination')?.value || 0);
+  return {
+    polarRange,
+    distance: Number.isFinite(polarDistance) ? polarDistance : 2,
+    normAngle: Number.isFinite(polarNormAngle) ? polarNormAngle : 5,
+    inclination: Number.isFinite(polarInclination) ? polarInclination : 0
+  };
+}
+
+function buildExportMesh(preparedParams) {
+  const payload = buildCanonicalMeshPayload(preparedParams, {
+    includeEnclosure: Number(preparedParams.encDepth || 0) > 0
+  });
+  const msh = exportMSHContent(payload.vertices, payload.indices, payload.surfaceTags);
+  return { payload, msh };
+}
 
 export function exportSTL(app) {
   const preparedParams = app.prepareParamsForMesh({
@@ -37,7 +65,6 @@ export function exportSTL(app) {
   const result = exporter.parse(exportMesh, { binary: true });
 
   saveFile(result, 'horn.stl', {
-    extension: '.stl',
     contentType: 'application/sla',
     typeInfo: { description: 'STL Model', accept: { 'model/stl': ['.stl'] } }
   });
@@ -48,7 +75,6 @@ export function exportMWGConfig() {
   const exportParams = { type: state.type, ...state.params };
   const content = generateMWGConfigContent(exportParams);
   saveFile(content, 'config.txt', {
-    extension: '.txt',
     contentType: 'text/plain',
     typeInfo: { description: 'MWG Config', accept: { 'text/plain': ['.txt'] } }
   });
@@ -65,198 +91,125 @@ export function exportProfileCSV(app) {
   const csv = exportProfilesCSV(vertices, state.params);
 
   saveFile(csv, 'profiles.csv', {
-    extension: '.csv',
     contentType: 'text/csv',
     typeInfo: { description: 'Profile Coordinates', accept: { 'text/csv': ['.csv'] } }
   });
 }
 
-export function exportGmshGeo(app) {
-  if (!app.hornMesh) {
-    alert('Please generate a horn model first');
-    return;
-  }
+export async function exportGmshGeo(app) {
+  const preparedParams = app.prepareParamsForMesh({
+    forceFullQuadrants: true,
+    applyVerticalOffset: true
+  });
+  const baseName = getExportBaseName();
+  const meshBase = `${baseName}`;
+  const hornGeometry = buildHornMesh(preparedParams, {
+    includeEnclosure: false,
+    includeRearShape: false
+  });
+  const geo = exportFullGeo(hornGeometry.vertices, preparedParams, {
+    outputName: meshBase,
+    useSplines: true
+  });
+  const starterScript = generateBemppStarterScript({
+    meshFileName: `${meshBase}.msh`,
+    sourceTag: 2
+  });
 
-  const vertices = app.hornMesh.geometry.attributes.position.array;
-  const state = GlobalState.get();
-  const geo = exportGmshGeoContent(vertices, state.params);
-
-  saveFile(geo, 'mesh.geo', {
-    extension: '.geo',
+  await saveFile(geo, `${meshBase}.geo`, {
+    incrementCounter: false,
     contentType: 'text/plain',
     typeInfo: { description: 'Gmsh Geometry', accept: { 'text/plain': ['.geo'] } }
   });
+  await saveFile(starterScript, `${meshBase}_bempp.py`, {
+    contentType: 'text/x-python',
+    typeInfo: { description: 'BEMPP Python', accept: { 'text/x-python': ['.py'] } }
+  });
 }
 
-/**
- * Export the horn mesh to Gmsh .msh format.
- * Uses the CAD pipeline when available, falls back to legacy mesh builder.
- * @param {Object} app
- */
 export async function exportMSH(app) {
-  if (app.useCAD && isCADReady()) {
-    return exportMSHFromCAD(app);
-  }
-  return exportMSHLegacy(app);
-}
-
-function exportMSHLegacy(app) {
   const preparedParams = app.prepareParamsForMesh({
     forceFullQuadrants: false,
     applyVerticalOffset: true
   });
-  const { vertices, indices, groups, ringCount } = buildHornMesh(preparedParams, {
-    includeEnclosure: true,
-    includeRearShape: true,
-    collectGroups: true
-  });
-  if (!indices || indices.length === 0) {
-    alert('Mesh indices are missing. Please re-render the model and try again.');
-    return;
-  }
-
-  const msh = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups, { ringCount });
-
-  saveFile(msh, 'mesh.msh', {
-    extension: '.msh',
-    contentType: 'text/plain',
-    typeInfo: { description: 'Gmsh Mesh', accept: { 'text/plain': ['.msh'] } }
-  });
-}
-
-async function exportMSHFromCAD(app) {
-  const preparedParams = app.prepareParamsForMesh({
-    forceFullQuadrants: false,
-    applyVerticalOffset: true
-  });
-
-  app.stats.innerText = 'Building CAD mesh for MSH export...';
+  app.stats.innerText = 'Building mesh for MSH export...';
   try {
-    const { vertices, indices, faceGroups, faceMapping } = await buildForMSH(preparedParams, {
-      numStations: preparedParams.lengthSegments || 30,
-      numAngles: preparedParams.angularSegments || 64,
-      includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
-      linearDeflection: 0.3,
-      angularDeflection: 0.2
-    });
-
-    const msh = exportHornToMSHFromCAD(vertices, indices, faceGroups, faceMapping);
-
-    saveFile(msh, 'mesh.msh', {
-      extension: '.msh',
+    const { msh } = buildExportMesh(preparedParams);
+    await saveFile(msh, 'mesh.msh', {
       contentType: 'text/plain',
       typeInfo: { description: 'Gmsh Mesh', accept: { 'text/plain': ['.msh'] } }
     });
-    app.stats.innerText = 'MSH export complete (CAD)';
+    app.stats.innerText = 'MSH export complete';
   } catch (err) {
-    console.error('[exports] CAD MSH export failed:', err);
-    app.stats.innerText = `CAD MSH error: ${err.message}`;
-    alert(`CAD MSH export failed: ${err.message}`);
+    console.error('[exports] MSH export failed:', err);
+    app.stats.innerText = `MSH error: ${err.message}`;
+    alert(`MSH export failed: ${err.message}`);
   }
 }
 
-/**
- * Export an ABEC project bundle (project + solving + observation + mesh files).
- * Uses the CAD pipeline for mesh generation when available.
- * @param {Object} app
- * @returns {Promise<void>}
- */
 export async function exportABECProject(app) {
   const preparedParams = app.prepareParamsForMesh({
     forceFullQuadrants: false,
     applyVerticalOffset: true
   });
 
-  // Generate the MSH content — CAD or legacy path
-  let meshContent;
-  if (app.useCAD && isCADReady()) {
-    try {
-      app.stats.innerText = 'Building CAD mesh for ABEC export...';
-      const { vertices, indices, faceGroups, faceMapping } = await buildForMSH(preparedParams, {
-        numStations: preparedParams.lengthSegments || 30,
-        numAngles: preparedParams.angularSegments || 64,
-        includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
-        linearDeflection: 0.3,
-        angularDeflection: 0.2
-      });
-      meshContent = exportHornToMSHFromCAD(vertices, indices, faceGroups, faceMapping);
-    } catch (err) {
-      console.error('[exports] CAD MSH failed for ABEC:', err);
-      app.stats.innerText = `CAD MSH error: ${err.message}`;
-      alert(`CAD MSH export failed for ABEC: ${err.message}`);
-      return;
-    }
-  } else {
-    // Legacy path (only when useCAD is false)
-    const { vertices, indices, groups, ringCount } = buildHornMesh(preparedParams, {
-      includeEnclosure: true,
-      includeRearShape: true,
-      collectGroups: true
-    });
-    if (!indices || indices.length === 0) {
-      alert('Mesh indices are missing. Please re-render the model and try again.');
-      return;
-    }
-    meshContent = exportHornToMSHWithBoundaries(vertices, indices, preparedParams, groups, { ringCount });
-  }
-
   const baseName = getExportBaseName();
-  const projectBase = `${baseName}_project`;
-  const solvingBase = `${baseName}_solving`;
-  const observationBase = `${baseName}_observation`;
-
   const meshFileName = `${baseName}.msh`;
-  const solvingFileName = `${solvingBase}.txt`;
-  const observationFileName = `${observationBase}.txt`;
-  const projectFileName = `${projectBase}.abec`;
+  const folderName = Number(preparedParams.abecSimType || 2) === 1
+    ? 'ABEC_InfiniteBaffle'
+    : 'ABEC_FreeStanding';
 
-  const polarRange = document.getElementById('polar-angle-range')?.value || '0,180,37';
-  const polarDistance = Number(document.getElementById('polar-distance')?.value || 2);
-  const polarNormAngle = Number(document.getElementById('polar-norm-angle')?.value || 5);
-  const polarInclination = Number(document.getElementById('polar-inclination')?.value || 0);
-
+  const polar = getPolarSettings();
   const projectContent = generateAbecProjectFile({
-    solvingFileName,
-    observationFileName,
+    solvingFileName: 'solving.txt',
+    observationFileName: 'observation.txt',
     meshFileName
   });
   const solvingContent = generateAbecSolvingFile(preparedParams);
   const observationContent = generateAbecObservationFile({
-    angleRange: polarRange,
-    distance: Number.isFinite(polarDistance) ? polarDistance : 2,
-    normAngle: Number.isFinite(polarNormAngle) ? polarNormAngle : 5,
-    inclination: Number.isFinite(polarInclination) ? polarInclination : 0
+    angleRange: polar.polarRange,
+    distance: polar.distance,
+    normAngle: polar.normAngle,
+    inclination: polar.inclination
   });
 
-  app.stats.innerText = 'Saving ABEC project files...';
+  app.stats.innerText = 'Building ABEC bundle...';
 
-  await saveFile(projectContent, projectFileName, {
-    baseName: projectBase,
-    extension: '.abec',
-    contentType: 'text/plain',
-    typeInfo: { description: 'ABEC Project', accept: { 'text/plain': ['.abec'] } },
-    incrementCounter: false
-  });
-  await saveFile(solvingContent, solvingFileName, {
-    baseName: solvingBase,
-    extension: '.txt',
-    contentType: 'text/plain',
-    typeInfo: { description: 'ABEC Solving', accept: { 'text/plain': ['.txt'] } },
-    incrementCounter: false
-  });
-  await saveFile(observationContent, observationFileName, {
-    baseName: observationBase,
-    extension: '.txt',
-    contentType: 'text/plain',
-    typeInfo: { description: 'ABEC Observation', accept: { 'text/plain': ['.txt'] } },
-    incrementCounter: false
-  });
-  await saveFile(meshContent, meshFileName, {
-    baseName,
-    extension: '.msh',
-    contentType: 'text/plain',
-    typeInfo: { description: 'Gmsh Mesh', accept: { 'text/plain': ['.msh'] } }
-  });
+  try {
+    const { payload, msh } = buildExportMesh(preparedParams);
+    const hornGeometry = buildHornMesh(preparedParams, {
+      includeEnclosure: false,
+      includeRearShape: false
+    });
+    const coordsContent = generateAbecCoordsFile(hornGeometry.vertices, hornGeometry.ringCount);
+    const staticContent = generateAbecStaticFile(payload.vertices);
+    const bemGeo = exportFullGeo(hornGeometry.vertices, preparedParams, {
+      outputName: baseName,
+      useSplines: true
+    });
 
-  app.stats.innerText = 'ABEC project exported';
+    const zip = new JSZip();
+    const root = zip.folder(folderName);
+    root.file('Project.abec', projectContent);
+    root.file('solving.txt', solvingContent);
+    root.file('observation.txt', observationContent);
+    root.file(meshFileName, msh);
+    root.file('bem_mesh.geo', bemGeo);
+    root.file(`${baseName}_bempp.py`, generateBemppStarterScript({ meshFileName, sourceTag: 2 }));
+    const resultsFolder = root.folder('Results');
+    resultsFolder.file('coords.txt', coordsContent);
+    resultsFolder.file('static.txt', staticContent);
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const zipName = `${baseName}_${folderName}.zip`;
+    await saveFile(zipBlob, zipName, {
+      contentType: 'application/zip',
+      typeInfo: { description: 'ABEC Project Zip', accept: { 'application/zip': ['.zip'] } }
+    });
+    app.stats.innerText = 'ABEC project exported';
+  } catch (err) {
+    console.error('[exports] ABEC export failed:', err);
+    app.stats.innerText = `ABEC export failed: ${err.message}`;
+    alert(`ABEC export failed: ${err.message}`);
+  }
 }

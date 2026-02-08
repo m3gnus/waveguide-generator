@@ -60,8 +60,8 @@ export function renderModel(app) {
   });
 
   // Viewport always uses the formula-based mesh — evaluates profile math
-  // directly at every grid point. CAD pipeline is used only for export
-  // (STEP, MSH, ABEC) where exact parametric geometry matters.
+  // directly at every grid point. Export and simulation flows use a
+  // canonical tagged payload derived from the same geometry equations.
   const { vertices, indices } = buildHornMesh(preparedParams);
   applyMeshToScene(app, vertices, indices, preparedParams);
 }

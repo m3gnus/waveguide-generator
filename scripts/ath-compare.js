@@ -4,7 +4,8 @@ import { MWGConfigParser } from '../src/config/index.js';
 import { getDefaults } from '../src/config/defaults.js';
 import { PARAM_SCHEMA } from '../src/config/schema.js';
 import { parseExpression, buildHornMesh } from '../src/geometry/index.js';
-import { exportHornToMSHWithBoundaries, exportFullGeo } from '../src/export/msh.js';
+import { exportFullGeo, exportMSH } from '../src/export/msh.js';
+import { buildCanonicalMeshPayload } from '../src/simulation/payload.js';
 
 const root = process.argv[2] || '_references/testconfigs';
 const outRoot = process.argv[3] || '_references/testconfigs/_generated';
@@ -22,7 +23,6 @@ function applyAthImportDefaults(parsed, typedParams) {
   if (!parsed || !parsed.type) return;
 
   const isOSSE = parsed.type === 'OSSE';
-  typedParams.useAthZMap = true;
   if (typedParams.morphTarget === undefined) {
     typedParams.morphTarget = 0;
   }
@@ -53,7 +53,6 @@ function prepareParamsForMesh(params, type, { forceFullQuadrants = false, applyV
   const preparedParams = { ...params };
 
   const rawExpressionKeys = new Set([
-    'zMapPoints',
     'subdomainSlices',
     'interfaceOffset',
     'interfaceDraw',
@@ -104,8 +103,6 @@ function prepareParamsForMesh(params, type, { forceFullQuadrants = false, applyV
   const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
   const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
   preparedParams.scale = scale;
-  const useAthZMap = preparedParams.useAthZMap ?? scale !== 1;
-  preparedParams.useAthZMap = Boolean(useAthZMap);
 
   if (scale !== 1) {
     const lengthKeys = [
@@ -364,39 +361,11 @@ function run() {
       forceFullQuadrants: true,
       applyVerticalOffset: true
     });
-    const mshMesh = buildHornMesh(mshParams, {
-      includeEnclosure: true,
-      includeRearShape: true,
-      collectGroups: true
-    });
     const mshOut = path.join(outDir, `${baseName}.msh`);
-
-    // Use Gmsh to generate MSH if we have a Spline reference
-    let mshGeneratedByGmsh = false;
-    if (isSplineRef) {
-      try {
-        const { execSync } = require('child_process');
-        const mesherTool = path.resolve(process.cwd(), 'scripts', 'gmsh_mesher.py');
-        const absGeoOut = path.resolve(geoOut);
-        const absMshOut = path.resolve(mshOut);
-        // We use a large element size to respect the values in the .geo points
-        execSync(`python3 "${mesherTool}" "${absGeoOut}" "${absMshOut}" --element-size 100`, { stdio: 'ignore' });
-        mshGeneratedByGmsh = true;
-      } catch (err) {
-        console.warn(`  Gmsh meshing failed for ${baseName}, falling back to structured export.`);
-      }
-    }
-
-    if (!mshGeneratedByGmsh) {
-      const mshContent = exportHornToMSHWithBoundaries(
-        mshMesh.vertices,
-        mshMesh.indices,
-        mshParams,
-        mshMesh.groups,
-        { ringCount: mshMesh.ringCount }
-      );
-      fs.writeFileSync(mshOut, mshContent);
-    }
+    const mshPayload = buildCanonicalMeshPayload(mshParams, {
+      includeEnclosure: Number(mshParams.encDepth || 0) > 0
+    });
+    fs.writeFileSync(mshOut, exportMSH(mshPayload.vertices, mshPayload.indices, mshPayload.surfaceTags));
 
     const record = { name: baseName };
 

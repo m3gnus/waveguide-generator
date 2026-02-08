@@ -120,7 +120,7 @@ def refine_mesh_with_gmsh(
 
         # Generate new surface tags based on physical groups
         num_refined_tris = refined_indices.shape[1]
-        refined_tags = np.full(num_refined_tris, 2, dtype=np.int32)  # Default: wall
+        refined_tags = np.full(num_refined_tris, 1, dtype=np.int32)  # Default: wall
 
         # Get physical group assignments
         for dim, tag in gmsh.model.getPhysicalGroups(2):
@@ -164,7 +164,7 @@ def prepare_mesh(
     Args:
         vertices: Flat list of vertex coordinates [x0,y0,z0, x1,y1,z1, ...]
         indices: Flat list of triangle indices [i0,i1,i2, i3,i4,i5, ...]
-        surface_tags: Per-triangle surface tags (1=throat, 2=wall, 3=mouth)
+        surface_tags: Per-triangle surface tags (1=wall, 2=source, 3=secondary, 4=interface)
         boundary_conditions: Boundary condition definitions
         use_gmsh: If True, use Gmsh to refine the mesh for better BEM accuracy
         target_frequency: Target frequency for mesh element sizing (Hz)
@@ -219,10 +219,14 @@ def prepare_mesh(
     # Create domain indices from surface tags if provided
     if surface_tags is not None:
         domain_indices = np.array(surface_tags, dtype=np.int32)
+        if domain_indices.shape[0] != num_triangles:
+            raise ValueError(
+                f"surface_tags length {domain_indices.shape[0]} does not match triangle count {num_triangles}."
+            )
         original_surface_tags = domain_indices.copy()
     else:
-        # Default: all elements are wall (tag 2)
-        domain_indices = np.full(indices_array.shape[1], 2, dtype=np.int32)
+        # Default: all elements are rigid walls (tag 1)
+        domain_indices = np.full(indices_array.shape[1], 1, dtype=np.int32)
         original_surface_tags = domain_indices.copy()
 
     # Optionally refine mesh with Gmsh
@@ -232,6 +236,9 @@ def prepare_mesh(
         )
 
     # Create bempp grid with domain indices
+    if np.count_nonzero(domain_indices == 2) == 0:
+        raise ValueError("Mesh has no source-tagged elements (tag 2).")
+
     grid = bempp_api.Grid(vertices_array, indices_array, domain_indices)
 
     # Store boundary info with the grid
@@ -241,12 +248,12 @@ def prepare_mesh(
         'surface_tags': domain_indices,
         'boundary_conditions': boundary_conditions
         or {
-            'throat': {'type': 'velocity', 'surfaceTag': 1, 'value': 1.0},
-            'wall': {'type': 'neumann', 'surfaceTag': 2, 'value': 0.0},
-            'mouth': {'type': 'robin', 'surfaceTag': 3, 'impedance': 'spherical'}
+            'throat': {'type': 'velocity', 'surfaceTag': 2, 'value': 1.0},
+            'wall': {'type': 'neumann', 'surfaceTag': 1, 'value': 0.0},
+            'mouth': {'type': 'robin', 'surfaceTag': 1, 'impedance': 'spherical'}
         },
-        'throat_elements': np.where(domain_indices == 1)[0],
-        'wall_elements': np.where(domain_indices == 2)[0],
+        'throat_elements': np.where(domain_indices == 2)[0],
+        'wall_elements': np.where(domain_indices == 1)[0],
         'mouth_elements': np.where(domain_indices == 3)[0],
         # Preserve original mesh for symmetry detection
         'original_vertices': original_vertices,

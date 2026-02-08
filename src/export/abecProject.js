@@ -73,7 +73,9 @@ export function generateAbecSolvingFile(params) {
     const meshFrequency = params.abecMeshFrequency ?? 1000;
     const abscissa = normalizeAbscissa(params.abecAbscissa);
     const scale = 1;
-    const sym = mapQuadrantsToSym(params.quadrants);
+    const circSymProfile = Number(params.abecSimProfile ?? -1);
+    const dim = circSymProfile >= 0 ? 'CircSym' : '3D';
+    const sym = dim === '3D' ? mapQuadrantsToSym(params.quadrants) : '';
     const symLine = sym ? `; Sym=${sym}` : '';
     const hasInterface = Boolean(
         params &&
@@ -87,7 +89,7 @@ export function generateAbecSolvingFile(params) {
     const output = [
         'Control_Solver',
         `  f1=${f1}; f2=${f2}; NumFrequencies=${numFreq}`,
-        `  Abscissa=${abscissa}; Dim=3D; MeshFrequency=${meshFrequency}${symLine}`,
+        `  Abscissa=${abscissa}; Dim=${dim}; MeshFrequency=${meshFrequency}${symLine}`,
         '',
         'MeshFile_Properties',
         `  MeshFileAlias="M1"; Scale=${scale}mm`,
@@ -179,13 +181,85 @@ export function generateAbecObservationFile({
         '  402   1001 1001   ID=8001',
         '',
         'BE_Spectrum',
-        '  PlotType=Polar; GraphHeader="PM_SPL"',
+        '  PlotType=Polar; GraphHeader="PM_SPL_H"',
         '  BodeType=LeveldB; Range_max=5; Range_min=-45',
         `  PolarRange=${angleRange}`,
         '  BasePlane=zx',
         `  Distance=${distance}m`,
         `  NormalizingAngle=${normAngle}`,
-        `  501  Inclination=${inclination}  ID=5001`,
+        '  501  Inclination=0  ID=5001',
+        '',
+        'BE_Spectrum',
+        '  PlotType=Polar; GraphHeader="PM_SPL_V"',
+        '  BodeType=LeveldB; Range_max=5; Range_min=-45',
+        `  PolarRange=${angleRange}`,
+        '  BasePlane=zx',
+        `  Distance=${distance}m`,
+        `  NormalizingAngle=${normAngle}`,
+        `  502  Inclination=${inclination}  ID=5002`,
+        ''
+    ].join('\n');
+}
+
+export function generateAbecCoordsFile(vertices, ringCount) {
+    if (!Array.isArray(vertices) || vertices.length === 0 || !Number.isFinite(ringCount) || ringCount <= 0) {
+        return '';
+    }
+    const vertexCount = vertices.length / 3;
+    const stationCount = Math.floor(vertexCount / ringCount);
+    const lines = [];
+    for (let j = 0; j < stationCount; j += 1) {
+        const idx = j * ringCount * 3;
+        const x = vertices[idx];
+        const y = vertices[idx + 1];
+        const z = vertices[idx + 2];
+        const r = Math.sqrt(x * x + z * z);
+        lines.push(`${y.toFixed(6)} ${r.toFixed(6)}`);
+    }
+    return lines.join('\n');
+}
+
+export function generateAbecStaticFile(vertices) {
+    if (!Array.isArray(vertices) || vertices.length === 0) {
+        return [
+            "R_DIM='0 x 0 x 0 mm'",
+            "R_DRIVER='N/A'",
+            "R_VRMS='2.83 V'",
+            "R_DIST='2 m'",
+            "LINE_1=''",
+            'R_XOFF=0',
+            ''
+        ].join('\n');
+    }
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    for (let i = 0; i < vertices.length; i += 3) {
+        const x = vertices[i];
+        const y = vertices[i + 1];
+        const z = vertices[i + 2];
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        minZ = Math.min(minZ, z);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+        maxZ = Math.max(maxZ, z);
+    }
+    const dx = Math.round(maxX - minX);
+    const dy = Math.round(maxY - minY);
+    const dz = Math.round(maxZ - minZ);
+
+    return [
+        `R_DIM='${dx} x ${dz} x ${dy} mm'`,
+        "R_DRIVER='N/A'",
+        "R_VRMS='2.83 V'",
+        "R_DIST='2 m'",
+        "LINE_1=''",
+        'R_XOFF=0',
         ''
     ].join('\n');
 }

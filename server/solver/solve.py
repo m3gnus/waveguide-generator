@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from .deps import bempp_api
 from .directivity import calculate_directivity_index_from_pressure, calculate_directivity_patterns
+from .units import m_to_mm
 
 
 def solve_frequency(
@@ -39,9 +40,9 @@ def solve_frequency(
     # P1 space for pressure (continuous piecewise linear)
     space_p = bempp_api.function_space(grid, "P", 1)
 
-    # DP0 space for velocity on throat only (discontinuous piecewise constant)
-    # segments=[1] selects only throat elements (domain_index == 1)
-    space_u = bempp_api.function_space(grid, "DP", 0, segments=[1])
+    # DP0 space for velocity on source only (discontinuous piecewise constant)
+    # segments=[2] selects source elements (domain_index == 2)
+    space_u = bempp_api.function_space(grid, "DP", 0, segments=[2])
 
     # Define boundary operators
     identity = bempp_api.operators.boundary.sparse.identity(space_p, space_p, space_p)
@@ -75,8 +76,8 @@ def solve_frequency(
     max_y = np.max(vertices[1, :])  # Mouth is at maximum Y
 
     # Calculate pressure at 1m on-axis from mouth
-    # Convert mm to meters for proper scaling (mesh is in mm)
-    R_far = 1000.0  # 1 meter = 1000 mm
+    # Convert at boundary: solver geometry is mm, acoustic distances specified in meters.
+    R_far = m_to_mm(1.0)
     obs_point = np.array([[0.0], [max_y + R_far], [0.0]])
 
     # Potential operators for far-field evaluation

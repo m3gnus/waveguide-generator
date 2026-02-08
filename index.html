@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MWG - Mathematical Waveguide Generator</title>
+    <title>Mathematical Waveguide Generator</title>
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +22,7 @@
 
 <body>
     <div id="ui-panel">
-        <h1>MWG - Mathematical Waveguide Generator</h1>
+        <h1>Mathematical Waveguide Generator</h1>
 
         <!-- Tab Navigation -->
         <div class="tab-navigation">
@@ -41,8 +41,8 @@
                 </div>
                 <input type="file" id="config-upload" accept=".txt,.cfg" style="display: none;">
                 <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
-                <button id="export-step-btn" class="secondary">Export STEP</button>
                 <button id="export-btn" class="secondary">Export STL</button>
+                <button id="export-geo-btn" class="secondary">Export Gmsh GEO</button>
                 <button id="export-msh-btn" class="secondary">Export MSH</button>
                 <button id="export-abec-btn" class="secondary">Export ABEC Project</button>
 
@@ -50,6 +50,11 @@
                 <div class="input-row">
                     <label for="export-prefix">Prefix</label>
                     <input type="text" id="export-prefix" value="horn_design" style="width: 100%;">
+                </div>
+                <div class="input-row" id="output-folder-row">
+                    <button id="choose-folder-btn" class="secondary" style="font-size: 0.8em;">Choose Folder</button>
+                    <span id="output-folder-name" style="font-size: 0.8em; color: #888; margin-left: 8px;">No folder
+                        selected</span>
                 </div>
                 <div class="input-row">
                     <label for="export-counter">Counter</label>
@@ -85,7 +90,8 @@
                     BEM solver requires Python backend running on localhost:8000
                 </p>
                 <hr>
-                <button id="run-simulation-btn">Run BEM Simulation</button>
+                <button id="run-simulation-btn">Start BEM Simulation</button>
+                <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
                 <button id="export-results-btn" class="secondary" disabled>Export Results</button>
                 <div id="simulation-progress" style="display: none;">
                     <div class="progress-bar">
@@ -116,11 +122,30 @@
                         <option value="2">Free-Standing</option>
                     </select>
                 </div>
+                <div class="input-row">
+                    <label for="circsym-mode">CircSym</label>
+                    <select id="circsym-mode">
+                        <option value="-1">Off (3D)</option>
+                        <option value="0">On</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label for="circsym-profile">CircSym Profile</label>
+                    <input type="number" id="circsym-profile" value="0" min="0" step="1">
+                </div>
                 <hr>
                 <h4 style="margin: 15px 0 10px 0; font-size: 0.9em; font-weight: 600; color: #999;">DIRECTIVITY MAP</h4>
                 <div class="input-row">
-                    <label for="polar-angle-range">Map Angle Range (deg)</label>
-                    <input type="text" id="polar-angle-range" value="0,180,37" placeholder="start,end,steps">
+                    <label for="polar-angle-start">Angle Start (deg)</label>
+                    <input type="number" id="polar-angle-start" value="0" min="0" max="360" step="1">
+                </div>
+                <div class="input-row">
+                    <label for="polar-angle-end">Angle End (deg)</label>
+                    <input type="number" id="polar-angle-end" value="180" min="0" max="360" step="1">
+                </div>
+                <div class="input-row">
+                    <label for="polar-angle-step">Angle Step (deg)</label>
+                    <input type="number" id="polar-angle-step" value="5" min="1" max="90" step="1">
                 </div>
                 <div class="input-row">
                     <label for="polar-norm-angle">Norm Angle (deg)</label>

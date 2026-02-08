@@ -1,4 +1,4 @@
-# MWG - Mathematical Waveguide Generator
+# Mathematical Waveguide Generator
 
 A web-based 3D visualization and design tool for acoustic horns (waveguides), supporting OSSE and R-OSSE profiles with integrated BEM acoustic simulation.
 
@@ -9,7 +9,7 @@ A web-based 3D visualization and design tool for acoustic horns (waveguides), su
 *   **Multiple Models:** Support for OSSE (Oblate Spheroid) and R-OSSE (Round-over) horn profiles
 *   **BEM Acoustic Simulation:** Run boundary element method simulations directly from the browser
 *   **Export:** STL for 3D printing, Gmsh .geo for meshing, MWG config files, and CSV profiles
-*   **Morphing:** Circular to rectangular throat morphing with customizable parameters
+*   **Morphing:** Circular to rectangular mouth morphing with customizable parameters
 
 ## Quick Start
 

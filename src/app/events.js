@@ -1,8 +1,15 @@
 import { GlobalState } from '../state.js';
+import { selectOutputFolder } from '../ui/fileOps.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
   bindButtonEvents(app);
+
+  // Hide folder selection button if not supported by the browser
+  if (!window.showDirectoryPicker) {
+    const folderRow = document.getElementById('output-folder-row');
+    if (folderRow) folderRow.style.display = 'none';
+  }
 
   // Undo/Redo keys
   document.addEventListener('keydown', (e) => {
@@ -22,6 +29,7 @@ export function bindButtonEvents(app) {
     { id: 'render-btn', handler: () => app.requestRender(), type: 'click' },
     { id: 'export-btn', handler: () => app.exportSTL(), type: 'click' },
     { id: 'export-config-btn', handler: () => app.exportMWGConfig(), type: 'click' },
+    { id: 'choose-folder-btn', handler: selectOutputFolder, type: 'click' },
     { id: 'display-mode', handler: () => app.requestRender(), type: 'change' },
     { id: 'zoom-in', handler: () => app.zoom(0.8), type: 'click' },
     { id: 'zoom-out', handler: () => app.zoom(1.2), type: 'click' },
@@ -37,8 +45,7 @@ export function bindButtonEvents(app) {
     { id: 'export-csv-btn', handler: () => app.exportProfileCSV(), type: 'click' },
     { id: 'export-geo-btn', handler: () => app.exportGmshGeo(), type: 'click' },
     { id: 'export-msh-btn', handler: () => app.exportMSH(), type: 'click' },
-    { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' },
-    { id: 'export-step-btn', handler: () => app.exportSTEP(), type: 'click' }
+    { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' }
   ];
 
   buttonBindings.forEach(({ id, handler, type }) => {

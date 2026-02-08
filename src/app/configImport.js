@@ -51,7 +51,6 @@ function applyAthImportDefaults(parsed, typedParams) {
   if (!parsed || !parsed.type) return;
 
   const isOSSE = parsed.type === 'OSSE';
-  typedParams.useAthZMap = true;
   if (typedParams.morphTarget === undefined) {
     typedParams.morphTarget = 0;
   }
