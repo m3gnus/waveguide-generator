@@ -1076,17 +1076,21 @@ def build_waveguide_mesh(params: dict) -> dict:
             with tempfile.TemporaryDirectory(prefix="mwg-occ-") as tmp_dir:
                 tmp = Path(tmp_dir)
                 msh_path = tmp / "output.msh"
+                stl_path = tmp / "output.stl"
 
                 gmsh.write(str(msh_path))
+                gmsh.write(str(stl_path))
 
                 if not msh_path.exists():
                     raise GmshMeshingError("Gmsh OCC builder did not produce a .msh file.")
 
                 msh_text = msh_path.read_text(encoding="utf-8", errors="replace")
+                stl_text = stl_path.read_text(encoding="utf-8", errors="replace") if stl_path.exists() else None
 
             stats = parse_msh_stats(msh_text)
             return {
                 "msh_text": msh_text,
+                "stl_text": stl_text,
                 "stats": stats,
             }
 
