@@ -417,12 +417,14 @@ function getAxialMax(vertices) {
 }
 
 export function exportSTL(app) {
+  const baseName = getExportBaseName();
   const preparedParams = app.prepareParamsForMesh({
     forceFullQuadrants: true,
     applyVerticalOffset: false
   });
   const artifacts = buildGeometryArtifacts(preparedParams, {
-    includeEnclosure: false
+    includeEnclosure: false,
+    adaptivePhi: true
   });
   const { vertices, indices } = artifacts.mesh;
 
@@ -437,7 +439,6 @@ export function exportSTL(app) {
   exportMesh.updateMatrixWorld(true);
   const result = exporter.parse(exportMesh, { binary: true });
 
-  const baseName = getExportBaseName();
   saveFile(result, `${baseName}.stl`, {
     contentType: 'application/sla',
     typeInfo: { description: 'STL Model', accept: { 'model/stl': ['.stl'] } }
