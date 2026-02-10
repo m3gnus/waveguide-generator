@@ -99,17 +99,20 @@ export function buildWaveguideMesh(params, options = {}) {
   }
 
   const sourceStartTri = indices.length / 3;
-  const throatSource = generateThroatSource(vertices, ringCount, quadrantInfo.fullCircle);
-  if (throatSource.center) {
-    const centerIdx = vertices.length / 3;
-    vertices.push(...throatSource.center);
-    for (const [a, b] of throatSource.edges) {
-      indices.push(centerIdx, a, b);
+  const hasThroatDisk = meshParams.type !== 'R-OSSE' && meshParams.type !== 'OSSE';
+  if (hasThroatDisk) {
+    const throatSource = generateThroatSource(vertices, ringCount, quadrantInfo.fullCircle);
+    if (throatSource.center) {
+      const centerIdx = vertices.length / 3;
+      vertices.push(...throatSource.center);
+      for (const [a, b] of throatSource.edges) {
+        indices.push(centerIdx, a, b);
+      }
     }
   }
   const sourceEndTri = indices.length / 3;
 
-  if (groupInfo) {
+  if (groupInfo && sourceEndTri > sourceStartTri) {
     groupInfo.source = { start: sourceStartTri, end: sourceEndTri };
   }
 

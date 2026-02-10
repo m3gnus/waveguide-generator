@@ -70,10 +70,16 @@ body {
     margin: 0;
     border-radius: 12px;
     border: 1px solid var(--border-color);
-    background: var(--panel-bg);
+    background: rgba(255, 255, 255, 0.6);
     backdrop-filter: var(--glass-effect);
     -webkit-backdrop-filter: var(--glass-effect);
     overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+    #actions-panel details {
+        background: rgba(25, 25, 25, 0.6);
+    }
 }
 
 #actions-panel summary {
@@ -86,6 +92,8 @@ body {
     color: var(--accent-color);
     cursor: pointer;
     user-select: none;
+    display: flex;
+    align-items: center;
 }
 
 #actions-panel summary::-webkit-details-marker {
@@ -94,7 +102,8 @@ body {
 
 #actions-panel summary::after {
     content: '▾';
-    float: right;
+    font-size: 1.1rem;
+    flex-shrink: 0;
     transition: transform 0.15s ease;
 }
 
@@ -347,7 +356,7 @@ h3 {
 .input-row {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 12px;
     margin-bottom: 12px;
 }
@@ -360,13 +369,34 @@ h3 {
 
 .input-row input[type="number"],
 .input-row input[type="text"] {
-    width: 70px;
+    width: 100%;
     background: var(--input-bg);
     border: 1px solid var(--border-color);
     color: var(--text-color);
     padding: 6px 8px;
     border-radius: 6px;
     font-size: 0.85rem;
+}
+
+.input-row-inline {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.input-row-inline label {
+    flex: 0 0 auto;
+    font-size: 0.85rem;
+    color: var(--text-color);
+}
+
+.input-row-inline select {
+    width: auto;
+    margin-bottom: 0;
+    flex: 0 1 auto;
 }
 
 /* Section header with action button */
@@ -790,16 +820,12 @@ button.secondary {
 }
 
 #stats {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: var(--panel-bg);
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 0.8rem;
-    border: 1px solid var(--border-color);
+    flex: 1;
+    text-align: right;
+    margin-right: 6px;
+    font-size: 0.75rem;
     color: var(--text-color);
-    z-index: 20;
+    opacity: 0.7;
     pointer-events: none;
 }
 
@@ -867,8 +893,4 @@ details[open] summary {
         max-height: calc(100vh - 250px);
     }
 
-    #stats {
-        top: 10px;
-        right: 10px;
-    }
 }

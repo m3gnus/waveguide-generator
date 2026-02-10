@@ -130,8 +130,17 @@ export function exportAsCSV(panel) {
  * Export results as JSON
  */
 export function exportAsJSON(panel) {
+  // Use local time format to match system clock
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  const second = String(now.getSeconds()).padStart(2, '0');
+  
   const exportData = {
-    timestamp: new Date().toISOString(),
+    timestamp: `${year}-${month}-${day} ${hour}:${minute}:${second}`,
     smoothing: panel.currentSmoothing,
     results: panel.lastResults
   };
@@ -152,6 +161,15 @@ export function exportAsJSON(panel) {
  * Export results as text report
  */
 export function exportAsText(panel) {
+  // Use local time format to match system clock
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  const second = String(now.getSeconds()).padStart(2, '0');
+
   const results = panel.lastResults;
   const splData = results.spl_on_axis || {};
   const frequencies = splData.frequencies || [];
@@ -161,7 +179,7 @@ export function exportAsText(panel) {
 
   let report = 'BEM SIMULATION RESULTS\n';
   report += '=====================\n\n';
-  report += `Generated: ${new Date().toISOString()}\n`;
+  report += `Generated: ${year}-${month}-${day} ${hour}:${minute}:${second}\n`;
   report += `Smoothing: ${panel.currentSmoothing}\n`;
   report += `Frequency range: ${Math.min(...frequencies).toFixed(0)} - ${Math.max(...frequencies).toFixed(0)} Hz\n`;
   report += `Number of points: ${frequencies.length}\n\n`;

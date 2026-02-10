@@ -34,6 +34,13 @@ except ImportError:
     class GmshMeshingError(RuntimeError):
         pass
 
+try:
+    from solver.waveguide_builder import build_waveguide_mesh
+    WAVEGUIDE_BUILDER_AVAILABLE = True
+except ImportError:
+    build_waveguide_mesh = None
+    WAVEGUIDE_BUILDER_AVAILABLE = False
+
 app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0")
 
 # Enable CORS for frontend communication
@@ -190,6 +197,93 @@ class GmshMeshRequest(BaseModel):
     binary: bool = False
 
 
+class WaveguideParamsRequest(BaseModel):
+    """ATH-format waveguide parameters for the Python OCC mesh builder.
+
+    Grid parameters (n_angular, n_length) control geometry sampling density.
+    Resolution parameters (throat_res, mouth_res, rear_res) control Gmsh
+    mesh element sizes, independently of the grid.
+    """
+    formula_type: str = "R-OSSE"
+
+    # ── R-OSSE formula parameters ──────────────────────────────────────────
+    R: Optional[str] = None         # Mouth radius expression [mm] (R-OSSE only)
+    r: float = 0.4                  # R-OSSE r parameter
+    b: float = 0.2                  # R-OSSE b parameter
+    m: float = 0.85                 # R-OSSE m (apex shift)
+    tmax: float = 1.0               # Truncation fraction of computed length
+
+    # ── OSSE formula parameters ────────────────────────────────────────────
+    L: Optional[str] = "120"        # Waveguide length expression [mm] (OSSE only)
+    s: Optional[str] = "0.58"       # Termination shape expression (OSSE only)
+    n: float = 4.158                # Termination curvature exponent (OSSE only)
+    h: float = 0.0                  # Extra shape factor (OSSE only)
+
+    # ── Shared formula parameters ──────────────────────────────────────────
+    a: Optional[str] = None         # Coverage angle expression [deg]
+    r0: float = 12.7               # Throat radius [mm]
+    a0: float = 15.5               # Throat half-angle [deg]
+    k: float = 2.0                  # Expansion factor / flare constant
+    q: float = 3.4                  # Shape factor
+
+    # ── Throat geometry ────────────────────────────────────────────────────
+    throat_profile: int = 1         # 1=OS-SE profile, 3=Circular Arc
+    throat_ext_angle: float = 0.0   # Conical throat extension half-angle [deg]
+    throat_ext_length: float = 0.0  # Conical throat extension axial length [mm]
+    slot_length: float = 0.0        # Straight slot length [mm]
+    rot: float = 0.0               # Profile rotation about [0, r0] [deg]
+
+    # ── Circular arc profile (throat_profile == 3) ─────────────────────────
+    circ_arc_term_angle: float = 1.0  # Mouth terminal tangent angle [deg]
+    circ_arc_radius: float = 0.0     # Explicit arc radius [mm] (0 = auto)
+
+    # ── Guiding curve ──────────────────────────────────────────────────────
+    gcurve_type: int = 0            # 0=none, 1=superellipse, 2=superformula
+    gcurve_dist: float = 0.5        # Distance from throat (fraction 0-1 or mm if >1)
+    gcurve_width: float = 0.0       # Width along X [mm]
+    gcurve_aspect_ratio: float = 1.0  # Height/width ratio
+    gcurve_se_n: float = 3.0        # Superellipse exponent
+    gcurve_sf: Optional[str] = None    # Superformula: packed "a,b,m,n1,n2,n3"
+    gcurve_sf_a: Optional[str] = None
+    gcurve_sf_b: Optional[str] = None
+    gcurve_sf_m1: Optional[str] = None
+    gcurve_sf_m2: Optional[str] = None
+    gcurve_sf_n1: Optional[str] = None
+    gcurve_sf_n2: Optional[str] = None
+    gcurve_sf_n3: Optional[str] = None
+    gcurve_rot: float = 0.0         # Guiding curve rotation [deg]
+
+    # ── Morph ──────────────────────────────────────────────────────────────
+    morph_target: int = 0           # 0=none, 1=rectangle, 2=circle
+    morph_width: float = 0.0        # Target width [mm]
+    morph_height: float = 0.0       # Target height [mm]
+    morph_corner: float = 0.0       # Corner radius [mm]
+    morph_rate: float = 3.0         # Morph rate exponent
+    morph_fixed: float = 0.0        # Fixed part 0-1 (no morph before this fraction)
+    morph_allow_shrinkage: int = 0  # 0=no, 1=yes
+
+    # ── Geometry grid (shape fidelity, NOT mesh element density) ───────────
+    n_angular: int = 100            # Mesh.AngularSegments (must be multiple of 4)
+    n_length: int = 20              # Mesh.LengthSegments
+    quadrants: int = 1234           # Mesh.Quadrants: 1, 12, 14, or 1234
+
+    # ── BEM mesh element sizes (Gmsh triangle size) ────────────────────────
+    throat_res: float = 5.0         # Mesh.ThroatResolution [mm]
+    mouth_res: float = 8.0          # Mesh.MouthResolution [mm]
+    rear_res: float = 25.0          # Mesh.RearResolution [mm] (free-standing only)
+    wall_thickness: float = 6.0     # Mesh.WallThickness [mm] (free-standing only)
+
+    # ── Subdomain interfaces (accepted, no geometry effect yet) ───────────
+    subdomain_slices: Optional[str] = None
+    interface_offset: Optional[str] = None
+    interface_draw: Optional[str] = None
+    interface_resolution: Optional[str] = None
+
+    # ── Simulation / output ────────────────────────────────────────────────
+    sim_type: int = 2               # ABEC.SimType: 1=infinite baffle, 2=free standing
+    msh_version: str = "2.2"        # Gmsh MSH format version
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -204,6 +298,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Health check requested", flush=True)
     return {
         "status": "ok",
         "solver": "bempp-cl" if SOLVER_AVAILABLE else "unavailable",
@@ -261,6 +356,66 @@ async def generate_mesh_with_gmsh(request: GmshMeshRequest):
     return {
         "msh": result["msh"],
         "generatedBy": "gmsh",
+        "stats": result["stats"]
+    }
+
+
+@app.post("/api/mesh/build")
+async def build_mesh_from_params(request: WaveguideParamsRequest):
+    """
+    Build .geo and .msh from ATH waveguide parameters using Gmsh OCC Python API.
+
+    Supports both R-OSSE and OSSE formula types with full ATH geometry features:
+    throat extension, slot, circular arc, profile rotation, guiding curves,
+    and morph (rectangular/circular target shape).
+
+    Builds geometry using Gmsh's OpenCASCADE kernel with BSpline curves and
+    ThruSections surfaces, producing a mesh that accurately follows the curved
+    waveguide geometry.
+
+    Returns the Gmsh .geo script (OCC-format), the .msh mesh, and mesh statistics.
+    Assigns ABEC-compatible physical group names: SD1G0, SD1D1001, SD2G0.
+
+    Returns 503 if the Gmsh Python API is not available.
+    """
+    if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Python OCC mesh builder unavailable. "
+                "Install gmsh Python API: pip install gmsh>=4.10.0"
+            )
+        )
+
+    if request.msh_version not in ("2.2", "4.1"):
+        raise HTTPException(status_code=422, detail="msh_version must be '2.2' or '4.1'.")
+
+    if request.formula_type not in ("R-OSSE", "OSSE"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"formula_type '{request.formula_type}' is not supported. "
+                "Supported types: 'R-OSSE', 'OSSE'."
+            )
+        )
+
+    try:
+        # Run directly on the request thread — gmsh Python API fails in worker threads
+        # (signal handlers can only be installed from the main thread).
+        result = build_waveguide_mesh(request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Waveguide build failed: {exc}"
+        ) from exc
+
+    return {
+        "msh": result["msh_text"],
+        "generatedBy": "gmsh-occ",
         "stats": result["stats"]
     }
 

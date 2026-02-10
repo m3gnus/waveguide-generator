@@ -102,7 +102,9 @@ def _run_with_gmsh_cli(geo_path: Path, msh_path: Path, msh_version: str, binary:
         cmd.insert(2, '-bin')
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired as exc:
+        raise GmshMeshingError('Gmsh CLI meshing timed out after 120 s.') from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or '').strip()
         stdout = (exc.stdout or '').strip()

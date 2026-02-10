@@ -19,10 +19,10 @@ meshio>=4.0.16
 
 # Mesh Processing
 trimesh==4.0.5
-# Optional: Gmsh Python API is not available on all Python/architecture combos.
-# The backend can also use the `gmsh` CLI if it is installed on the system PATH.
-# Install manually when available:
-# pip install gmsh>=4.10.0
+# Gmsh Python API — required for /api/mesh/build (Python OCC builder) and
+# used by /api/mesh/generate-msh when available.
+# Falls back to `gmsh` CLI if the Python package is not installed.
+gmsh>=4.10.0
 
 # Utilities
 pydantic>=2.10.0
