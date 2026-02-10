@@ -10,7 +10,7 @@ export const PARAM_SCHEMA = {
             tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
         },
         R: { type: 'expression', label: 'R - Mouth Radius', unit: 'mm', default: '140 * (abs(cos(p)/1.6)^3 + abs(sin(p)/1)^4)^(-1/4.5)', tooltip: 'Mouth radius as function of azimuthal angle p. Can be constant or expression.' },
-        a: { type: 'expression', label: 'a - Aperture Angle', unit: 'deg', default: '25 * (abs(cos(p)/1.2)^4 + abs(sin(p)/1)^3)^(-1/2.5)', tooltip: 'Aperture (coverage) angle as function of p. Controls horn flare rate.' },
+        a: { type: 'expression', label: 'a - Coverage Angle', unit: 'deg', default: '25 * (abs(cos(p)/1.2)^4 + abs(sin(p)/1)^3)^(-1/2.5)', tooltip: 'Coverage angle as function of p. Controls horn flare rate.' },
         a0: { type: 'expression', label: 'a0 - Throat Angle', unit: 'deg', default: 15.5, tooltip: 'Initial throat opening angle in degrees. Can be constant or expression like "15 + 2*sin(p)".' },
         r0: { type: 'expression', label: 'r0 - Throat Radius', unit: 'mm', default: 12.7, tooltip: 'Initial throat radius. Can be constant or expression like "12.7 + sin(p)".' },
         k: { type: 'range', label: 'k - Rounding', min: 0.1, max: 10, step: 0.1, default: 2.0, tooltip: 'Controls throat rounding/smoothness.' },

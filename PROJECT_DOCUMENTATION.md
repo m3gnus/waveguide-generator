@@ -99,6 +99,19 @@ Source of truth on frontend: `src/geometry/tags.js`
 
 ## 5. Geometry and Mesh Pipeline
 
+### 5.0 Two separate mesh pipelines
+
+| Pipeline | Purpose | Engine | Files |
+|---|---|---|---|
+| **JS viewport mesh** | Real-time Three.js rendering | JS geometry engine | `src/geometry/engine/`, `src/geometry/pipeline.js` |
+| **Python OCC export mesh** | BEM acoustic simulation (.geo/.msh) | Gmsh Python OCC API | `server/solver/waveguide_builder.py` |
+
+The viewport mesh and the export mesh are **not** derived from the same geometry representation.
+The viewport path uses a fast triangulated approximation; the export path uses Gmsh OCC BSplines
+so that Gmsh receives real curved geometry to mesh.
+
+### 5.1 JS viewport mesh (render path)
+
 Key files:
 
 - `src/geometry/engine/`: modular geometry engine
@@ -119,6 +132,43 @@ Important behavior:
   - rear disc at `throatY - wallThickness`
 - Interface/enclosure tagging is derived from mesh groups and interface offset.
 
+### 5.2 Python OCC export mesh (acoustic simulation path)
+
+Key file: `server/solver/waveguide_builder.py` -> `build_waveguide_mesh(params)`
+
+- Triggered by `POST /api/mesh/build` for R-OSSE configs.
+- Uses Gmsh OCC API: `addBSpline` wires + `addThruSections` for each adjacent ring pair.
+- Produces smooth curved surfaces that Gmsh can mesh correctly.
+- Returns both `.geo` (OCC format) and `.msh` text.
+- Falls back to JS `.geo` path if Gmsh Python API is unavailable (`503`).
+- OSSE support is deferred — OSSE configs use the legacy JS `.geo` path.
+
+See `docs/MSH_GEO_GENERATION.md` section 5 for detailed documentation.
+
+### 5.1 Mesh Parameters
+
+All `Mesh.*` config parameters from the MWG specification:
+
+| Config Key | Type | Default | Status |
+|---|---|---|---|
+| `Mesh.Quadrants` | int | `1` | Implemented. Controls BEM symmetry quadrant selection (1, 12, 14, 1234). |
+| `Mesh.AngularSegments` | int | `120` | Implemented. Profiles around waveguide, must be multiple of 4. |
+| `Mesh.LengthSegments` | int | `40` | Implemented. Axial slices along horn length. |
+| `Mesh.CornerSegments` | int | `4` | Implemented. Corner profiles for rounded rectangle morph. |
+| `Mesh.ThroatSegments` | int | `0` | Implemented. Slices for throat extension (fallback when resolutions are equal). |
+| `Mesh.ThroatResolution` | float | `5` | Implemented. BEM mesh resolution at z=0 [mm]. Controls both axial slice distribution and Gmsh element sizes. |
+| `Mesh.MouthResolution` | float | `8` | Implemented. BEM mesh resolution at z=Length [mm]. Interpolated with ThroatResolution. |
+| `Mesh.SubdomainSlices` | int[] | last slice | Implemented. Grid slice indices for subdomain interfaces. |
+| `Mesh.InterfaceOffset` | float[] | `0` | Implemented. Forward protrusions of interfaces [mm]. |
+| `Mesh.InterfaceDraw` | float[] | `0` | Implemented. Forward-draw depths of interfaces [mm]. |
+| `Mesh.InterfaceResolution` | float | — | Parsed from config. Not yet wired to Gmsh mesh size fields. |
+| `Mesh.WallThickness` | float | `5` | Implemented. Wall thickness for freestanding horns [mm]. |
+| `Mesh.RearResolution` | float | `10` | Implemented. Rear wall mesh resolution [mm]. Gmsh export only. |
+| `Mesh.RearShape` | int | `1` | Legacy, removed. Always flat disc. Old configs tolerated. |
+| `Mesh.ZMapPoints` | — | — | Not implemented. Axial distances set by resolution mapping. |
+
+User-specified segment counts and resolution values pass through 1:1 to the `.geo` file (no scaling). See `docs/MSH_GEO_GENERATION.md` section 4 for detailed per-parameter behavior.
+
 ## 6. Export System
 
 Frontend export entry points live in `src/app/exports.js`.
@@ -132,10 +182,24 @@ Supported exports:
 - CSV: horn profile coordinate export
 - MWG config text
 
-Mesh export policy:
+### Mesh export routing (R-OSSE vs OSSE)
 
-- `.msh` export is gmsh-authoritative: frontend generates `.geo`, backend gmsh generates `.msh`.
-- No direct frontend triangle-to-`.msh` serialization is used for export or ABEC bundle meshes.
+For R-OSSE configs:
+- `exportMSH` and `exportABECProject` call `buildExportMeshFromParams(...)` in `src/app/exports.js`.
+- This POSTs formula parameters to `POST /api/mesh/build`.
+- Backend constructs BSpline OCC geometry and returns `.geo` + `.msh`.
+- The `.geo` bundled in the ABEC project is the OCC format script, not a flat polyhedral script.
+- If the backend returns `503`, falls back to the legacy JS `.geo` path.
+
+For OSSE configs (and fallback):
+- `exportMSH` and `exportABECProject` call `buildExportMeshWithGmsh(...)`.
+- Frontend generates `.geo` via `buildGmshGeo(...)` from `src/export/gmshGeoBuilder.js`.
+- The `.geo` is sent to `POST /api/mesh/generate-msh` for Gmsh meshing.
+- The `.geo` bundled in the ABEC project is the flat polyhedral script from the JS builder.
+
+Mesh export invariant:
+- `.msh` output is always Gmsh-authoritative — no direct frontend triangle-to-`.msh` serialization.
+- User-specified segment counts and resolution values pass through 1:1 (no scaling).
 
 ABEC ZIP assembly uses `JSZip` in browser and includes simulation configuration files generated by:
 
@@ -156,11 +220,23 @@ Returns health status and solver availability indicator.
 - Creates job ID and schedules async solve task.
 - Returns `{"job_id": "..."}` on success.
 
+### `POST /api/mesh/build`
+
+- **Preferred path for R-OSSE configs.**
+- Accepts formula parameters (`WaveguideParamsRequest`) directly — no `.geo` text required.
+- Backend constructs BSpline OCC geometry using Gmsh Python API.
+- Returns `{ "geo": str, "msh": str, "generatedBy": "gmsh-occ", "stats": { nodeCount, elementCount } }`.
+- Returns `503` if Gmsh Python API is unavailable.
+- Returns `422` if `formula_type` is not `"R-OSSE"` or `msh_version` is not `"2.2"` or `"4.1"`.
+- Implemented in `server/solver/waveguide_builder.py`.
+
 ### `POST /api/mesh/generate-msh`
 
+- **Legacy / fallback path (OSSE or when Python API unavailable).**
 - Generates `.msh` from submitted `.geo` text using backend gmsh.
-- Returns gmsh-authored mesh text and mesh stats.
+- Returns `{ "msh": str, "generatedBy": "gmsh", "stats": { nodeCount, elementCount } }`.
 - Returns `503` if gmsh is unavailable.
+- Implemented in `server/solver/gmsh_geo_mesher.py`.
 
 ### `POST /api/stop/{job_id}`
 
@@ -212,4 +288,6 @@ These are release-quality risks, not blockers for local development flow.
 - Solver client: `src/solver/index.js`
 - Backend API: `server/app.py`
 - Backend mesh handling: `server/solver/mesh.py`
+- **Python OCC mesh builder**: `server/solver/waveguide_builder.py`
+- JS .geo text builder (legacy): `src/export/gmshGeoBuilder.js`
 - Backend tests: `server/tests/`

@@ -53,10 +53,11 @@ test('buildExportMeshWithGmsh requests backend gmsh meshing endpoint', async () 
     const result = await buildExportMeshWithGmsh(app, prepared);
 
     assert.equal(result.msh.includes('$MeshFormat'), true);
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, 'http://localhost:8000/api/mesh/generate-msh');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, 'http://localhost:8000/health');
+    assert.equal(requests[1].url, 'http://localhost:8000/api/mesh/generate-msh');
 
-    const payload = JSON.parse(requests[0].init.body);
+    const payload = JSON.parse(requests[1].init.body);
     assert.equal(typeof payload.geoText, 'string');
     assert.equal(payload.geoText.includes('Mesh 2;'), true);
     assert.equal(payload.geoText.includes('= MathEval;'), true);

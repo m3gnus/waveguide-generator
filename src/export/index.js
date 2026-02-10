@@ -11,7 +11,6 @@ export {
   generateAbecCoordsFile,
   generateAbecStaticFile
 } from './abecProject.js';
-export { generateBemppStarterScript } from './bempp.js';
 
 // Browser-compatible STL exports (binary/ASCII generation)
 export { exportSTLBinary, exportSTLAscii } from './stl.browser.js';

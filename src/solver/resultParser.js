@@ -155,9 +155,18 @@ export function generateAcousticSummary(parsedResults) {
  * @returns {Object} Results formatted for storage or export
  */
 export function formatForExport(parsedResults) {
+  // Use local time format to match system clock
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  const second = String(now.getSeconds()).padStart(2, '0');
+
   return {
     // JSON-serializable version of the results
-    timestamp: new Date().toISOString(),
+    timestamp: `${year}-${month}-${day} ${hour}:${minute}:${second}`,
     frequencyRange: parsedResults.acousticMetrics.frequencyRange,
     onAxisResponse: parsedResults.onAxisFrequencyResponse,
     polarData: parsedResults.polarData,

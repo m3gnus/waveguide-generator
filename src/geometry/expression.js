@@ -126,7 +126,9 @@ export function parseExpression(expr) {
         `;
 
         // Create function with 'p' as the standard polar angle variable
-        return new Function('p', helperFunctions + `return ${clean};`);
+        const fn = new Function('p', helperFunctions + `return ${clean};`);
+        fn._rawExpr = expr;
+        return fn;
 
     } catch (e) {
         console.warn("Expression parsing error:", expr, e);
@@ -138,7 +140,9 @@ export function parseExpression(expr) {
                 .replace(/\btan\b/g, 'Math.tan')
                 .replace(/\bsqrt\b/g, 'Math.sqrt')
                 .replace(/\^/g, '**');
-            return new Function('p', `return ${simple};`);
+            const fn2 = new Function('p', `return ${simple};`);
+            fn2._rawExpr = expr;
+            return fn2;
         } catch (e2) {
             return () => 0;
         }

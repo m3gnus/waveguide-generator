@@ -82,11 +82,26 @@ export class BemClient extends BemSolver {
       binary: Boolean(request?.binary)
     };
 
-    const response = await fetch(`${this.backendUrl}/api/mesh/generate-msh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const controller = new AbortController();
+    const timeoutMs = 90_000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response;
+    try {
+      response = await fetch(`${this.backendUrl}/api/mesh/generate-msh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err.name === 'AbortError') {
+        throw new Error(`Gmsh backend did not respond within ${timeoutMs / 1000}s. Is the server running?`);
+      }
+      throw new Error(`Cannot reach Gmsh backend at ${this.backendUrl}: ${err.message}`);
+    }
+    clearTimeout(timer);
 
     if (!response.ok) {
       let detail = `${response.status}`;

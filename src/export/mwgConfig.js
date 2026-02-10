@@ -6,7 +6,14 @@
  */
 export function generateMWGConfigContent(params) {
     let content = '; MWG config\n';
-    content += `; Generated: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}\n`;
+    // Use local time format to match system clock
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hour = String(now.getHours()).padStart(2, '0');
+    const minute = String(now.getMinutes()).padStart(2, '0');
+    content += `; Generated: ${year}-${month}-${day} ${hour}:${minute}\n`;
 
     const formatValue = (value) => {
         if (value === undefined || value === null) return '';

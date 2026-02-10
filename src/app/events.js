@@ -5,6 +5,15 @@ export function setupEventListeners(app) {
   // Bind all button events using a helper method
   bindButtonEvents(app);
 
+  // Toggle "Update Model" visibility based on real-time updates checkbox
+  const liveUpdateCheckbox = document.getElementById('live-update');
+  const renderBtn = document.getElementById('render-btn');
+  if (liveUpdateCheckbox && renderBtn) {
+    liveUpdateCheckbox.addEventListener('change', () => {
+      renderBtn.classList.toggle('is-hidden', liveUpdateCheckbox.checked);
+    });
+  }
+
   // Hide folder selection button if not supported by the browser
   if (!window.showDirectoryPicker) {
     const folderRow = document.getElementById('output-folder-row');
@@ -43,8 +52,6 @@ export function bindButtonEvents(app) {
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
     { id: 'export-csv-btn', handler: () => app.exportProfileCSV(), type: 'click' },
-    { id: 'export-geo-btn', handler: () => app.exportGmshGeo(), type: 'click' },
-    { id: 'export-msh-btn', handler: () => app.exportMSH(), type: 'click' },
     { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' },
     { id: 'check-updates-btn', handler: () => app.checkForUpdates(), type: 'click' }
   ];
