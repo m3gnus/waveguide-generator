@@ -12,6 +12,7 @@ import {
   generateAbecStaticFile
 } from '../export/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
+import { detectGeometrySymmetry } from '../geometry/symmetry.js';
 import { generateMeshFromGeo } from '../solver/client.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
@@ -206,6 +207,14 @@ function buildPythonBuilderPayload(preparedParams, mshVersion = '2.2') {
     interface_offset: preparedParams.interfaceOffset != null ? String(preparedParams.interfaceOffset) : undefined,
     interface_draw: preparedParams.interfaceDraw != null ? String(preparedParams.interfaceDraw) : undefined,
     interface_resolution: preparedParams.interfaceResolution != null ? String(preparedParams.interfaceResolution) : undefined,
+
+    // ── Enclosure (cabinet box geometry) ──────────────────────────────────
+    enc_depth:   Number(preparedParams.encDepth   || 0),
+    enc_space_l: Number(preparedParams.encSpaceL  ?? 25),
+    enc_space_t: Number(preparedParams.encSpaceT  ?? 25),
+    enc_space_r: Number(preparedParams.encSpaceR  ?? 25),
+    enc_space_b: Number(preparedParams.encSpaceB  ?? 25),
+    enc_edge:    Number(preparedParams.encEdge    ?? 18),
 
     // ── Simulation / output ───────────────────────────────────────────────
     sim_type: Number(preparedParams.abecSimType || 2),
@@ -468,6 +477,14 @@ export async function exportABECProject(app) {
     forceFullQuadrants: false,
     applyVerticalOffset: true
   });
+
+  // Auto-detect maximum valid geometric symmetry and update quadrants accordingly.
+  // This minimises the mesh domain before it is sent to the BEM solver.
+  const detectedQuadrants = detectGeometrySymmetry(preparedParams);
+  if (detectedQuadrants !== String(preparedParams.quadrants ?? '1234')) {
+    console.log(`[Symmetry] Auto-detected quadrants: ${detectedQuadrants} (was ${preparedParams.quadrants})`);
+    preparedParams.quadrants = detectedQuadrants;
+  }
 
   const baseName = getExportBaseName();
   const meshFileName = `${baseName}.msh`;

@@ -279,6 +279,16 @@ class WaveguideParamsRequest(BaseModel):
     interface_draw: Optional[str] = None
     interface_resolution: Optional[str] = None
 
+    # ── Enclosure (cabinet box geometry) ──────────────────────────────────
+    # enc_depth > 0 → generate enclosure box (ignores wall_thickness)
+    # enc_depth == 0 + wall_thickness > 0 → generate horn wall shell only
+    enc_depth:   float = 0.0        # Enclosure depth [mm] (0 = no enclosure)
+    enc_space_l: float = 25.0       # Extra space left of mouth bounding box [mm]
+    enc_space_t: float = 25.0       # Extra space top of mouth bounding box [mm]
+    enc_space_r: float = 25.0       # Extra space right of mouth bounding box [mm]
+    enc_space_b: float = 25.0       # Extra space bottom of mouth bounding box [mm]
+    enc_edge:    float = 18.0       # Edge rounding radius [mm] (reserved)
+
     # ── Simulation / output ────────────────────────────────────────────────
     sim_type: int = 2               # ABEC.SimType: 1=infinite baffle, 2=free standing
     msh_version: str = "2.2"        # Gmsh MSH format version

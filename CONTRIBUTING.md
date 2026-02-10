@@ -2,12 +2,20 @@
 
 ## Development Setup
 
-1. Install Node dependencies:
-   `npm ci`
-2. (Optional) Set up Python backend environment:
-   `python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt`
-3. Start app:
-   `npm start`
+1. Install all dependencies:
+   ```bash
+   bash install/install.sh
+   ```
+   Or manually:
+   ```bash
+   npm ci
+   python3 -m venv .venv && .venv/bin/pip install -r server/requirements.txt
+   ```
+
+2. Start the app:
+   ```bash
+   npm start
+   ```
 
 ## Branches and Commits
 

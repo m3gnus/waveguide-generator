@@ -136,14 +136,35 @@ Important behavior:
 
 Key file: `server/solver/waveguide_builder.py` -> `build_waveguide_mesh(params)`
 
-- Triggered by `POST /api/mesh/build` for R-OSSE configs.
-- Uses Gmsh OCC API: `addBSpline` wires + `addThruSections` for each adjacent ring pair.
+- Triggered by `POST /api/mesh/build` for R-OSSE and OSSE configs.
+- Uses Gmsh OCC API: one BSpline wire per phi angle (longitudinal, throat-to-mouth), then
+  `addThruSections` between adjacent phi wires to form ruled surface strips.
+- Longitudinal wires are correct for non-circular ATH profiles where axial length L varies with phi.
+  Cross-sectional wires (one ring per t-index) would be non-planar when L(phi) is non-constant,
+  producing twisted geometry — this is why longitudinal wires are used instead.
 - Produces smooth curved surfaces that Gmsh can mesh correctly.
 - Returns both `.geo` (OCC format) and `.msh` text.
 - Falls back to JS `.geo` path if Gmsh Python API is unavailable (`503`).
-- OSSE support is deferred — OSSE configs use the legacy JS `.geo` path.
 
-See `docs/MSH_GEO_GENERATION.md` section 5 for detailed documentation.
+**Outer geometry logic** — geometry presence is controlled by enclosure/wall parameters, not `sim_type`:
+
+| Condition | Outer geometry generated |
+|---|---|
+| `encDepth > 0` | Enclosure cabinet box (5 surfaces: 4 walls + back panel + front baffle rim with mouth cutout) |
+| `encDepth == 0` and `wallThickness > 0` | Horn wall shell (offset outer surface + rear wall disc + mouth rim ring) |
+| Both 0 | Bare horn only — no outer geometry |
+
+`sim_type` controls the BEM radiation condition only (1 = infinite baffle, 2 = free-standing) and has
+no effect on which outer geometry surfaces are generated.
+
+**Physical surface groups:**
+
+| Tag | Group | Description |
+|---|---|---|
+| SD1G0 (BEM group 1) | `horn` | Inner horn surface |
+| SD1D1001 (BEM group 2) | `source` | Throat source disc |
+| SD2G0 (BEM group 3) | `exterior` | Outer wall shell or enclosure surfaces (present when wallThickness>0 or encDepth>0) |
+
 
 ### 5.1 Mesh Parameters
 
@@ -167,7 +188,7 @@ All `Mesh.*` config parameters from the MWG specification:
 | `Mesh.RearShape` | int | `1` | Legacy, removed. Always flat disc. Old configs tolerated. |
 | `Mesh.ZMapPoints` | — | — | Not implemented. Axial distances set by resolution mapping. |
 
-User-specified segment counts and resolution values pass through 1:1 to the `.geo` file (no scaling). See `docs/MSH_GEO_GENERATION.md` section 4 for detailed per-parameter behavior.
+User-specified segment counts and resolution values pass through 1:1 to the `.geo` file (no scaling).
 
 ## 6. Export System
 
@@ -182,16 +203,26 @@ Supported exports:
 - CSV: horn profile coordinate export
 - MWG config text
 
-### Mesh export routing (R-OSSE vs OSSE)
+### Mesh export routing
 
-For R-OSSE configs:
+For R-OSSE and OSSE configs:
 - `exportMSH` and `exportABECProject` call `buildExportMeshFromParams(...)` in `src/app/exports.js`.
+- Before building the payload, `detectGeometrySymmetry(preparedParams)` from `src/geometry/symmetry.js`
+  is called to auto-detect the maximum valid symmetry domain and overwrite `quadrants` accordingly.
 - This POSTs formula parameters to `POST /api/mesh/build`.
 - Backend constructs BSpline OCC geometry and returns `.geo` + `.msh`.
 - The `.geo` bundled in the ABEC project is the OCC format script, not a flat polyhedral script.
 - If the backend returns `503`, falls back to the legacy JS `.geo` path.
 
-For OSSE configs (and fallback):
+**Symmetry auto-detection** (`src/geometry/symmetry.js`):
+- Samples phi-dependent parameters (R, a for R-OSSE; a for OSSE) at 8 angles.
+- Checks XZ-plane symmetry: f(φ) ≈ f(-φ) for all samples.
+- Checks YZ-plane symmetry: f(φ) ≈ f(π-φ) for all samples.
+- Returns the smallest valid domain: `'1'` (quarter) → `'14'` or `'12'` (half) → `'1234'` (full).
+- Conservative: returns `'1234'` if a guiding curve type other than 0 is active (gcurveType ≠ 0).
+- Constant expressions always yield quarter symmetry `'1'`.
+
+Legacy / fallback path (503 fallback only):
 - `exportMSH` and `exportABECProject` call `buildExportMeshWithGmsh(...)`.
 - Frontend generates `.geo` via `buildGmshGeo(...)` from `src/export/gmshGeoBuilder.js`.
 - The `.geo` is sent to `POST /api/mesh/generate-msh` for Gmsh meshing.
@@ -227,7 +258,7 @@ Returns health status and solver availability indicator.
 - Backend constructs BSpline OCC geometry using Gmsh Python API.
 - Returns `{ "geo": str, "msh": str, "generatedBy": "gmsh-occ", "stats": { nodeCount, elementCount } }`.
 - Returns `503` if Gmsh Python API is unavailable.
-- Returns `422` if `formula_type` is not `"R-OSSE"` or `msh_version` is not `"2.2"` or `"4.1"`.
+- Returns `422` if `formula_type` is not `"R-OSSE"` or `"OSSE"`, or `msh_version` is not `"2.2"` or `"4.1"`.
 - Implemented in `server/solver/waveguide_builder.py`.
 
 ### `POST /api/mesh/generate-msh`
@@ -268,8 +299,6 @@ Primary automated checks:
 
 ## 10. Known Constraints and Risks
 
-Current high-risk areas are tracked in `fixes.md`. As of 2026-02-08:
-
 - ATH parity for GEO/STL/MSH across full reference set is still incomplete.
 - ABEC parity requires more reference-level validation.
 - End-to-end runtime simulation verification needs broader fixture coverage.
@@ -284,6 +313,7 @@ These are release-quality risks, not blockers for local development flow.
 - Geometry pipeline: `src/geometry/pipeline.js`
 - Surface tags: `src/geometry/tags.js`
 - Export orchestration: `src/app/exports.js`
+- Symmetry auto-detection: `src/geometry/symmetry.js`
 - Simulation UI actions: `src/ui/simulation/actions.js`
 - Solver client: `src/solver/index.js`
 - Backend API: `server/app.py`
