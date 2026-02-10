@@ -9,8 +9,8 @@ export const PARAM_SCHEMA = {
             default: 1.0,
             tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
         },
-        R: { type: 'expression', label: 'R - Mouth Radius', unit: 'mm', default: '140 * (abs(cos(p)/1.6)^3 + abs(sin(p)/1)^4)^(-1/4.5)', tooltip: 'Mouth radius as function of azimuthal angle p. Can be constant or expression.' },
-        a: { type: 'expression', label: 'a - Coverage Angle', unit: 'deg', default: '25 * (abs(cos(p)/1.2)^4 + abs(sin(p)/1)^3)^(-1/2.5)', tooltip: 'Coverage angle as function of p. Controls horn flare rate.' },
+        R: { type: 'expression', label: 'R - Mouth Radius', unit: 'mm', default: 140, tooltip: 'Mouth radius as function of azimuthal angle p. Can be constant or expression.' },
+        a: { type: 'expression', label: 'a - Coverage Angle', unit: 'deg', default: 25, tooltip: 'Coverage angle as function of p. Controls horn flare rate.' },
         a0: { type: 'expression', label: 'a0 - Throat Angle', unit: 'deg', default: 15.5, tooltip: 'Initial throat opening angle in degrees. Can be constant or expression like "15 + 2*sin(p)".' },
         r0: { type: 'expression', label: 'r0 - Throat Radius', unit: 'mm', default: 12.7, tooltip: 'Initial throat radius. Can be constant or expression like "12.7 + sin(p)".' },
         k: { type: 'range', label: 'k - Rounding', min: 0.1, max: 10, step: 0.1, default: 2.0, tooltip: 'Controls throat rounding/smoothness.' },
@@ -30,13 +30,13 @@ export const PARAM_SCHEMA = {
             default: 1.0,
             tooltip: 'Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.'
         },
-        L: { type: 'expression', label: 'L - Length of the Waveguide', unit: 'mm', default: 120, tooltip: 'Length of the waveguide (axial length). Can be constant or expression.' },
-        a: { type: 'expression', label: 'a - Mouth Coverage Angle', unit: 'deg', default: '48.5 - 5.6*cos(2*p)^5 - 31*sin(p)^12', tooltip: 'Mouth coverage angle as function of p.' },
-        a0: { type: 'expression', label: 'a0 - Throat Coverage Angle', unit: 'deg', default: 15.5, tooltip: 'Initial throat coverage angle in degrees. Can be constant or expression.' },
+        L: { type: 'expression', label: 'L - Length of the Waveguide', unit: 'mm', default: 130, tooltip: 'Length of the waveguide (axial length). Can be constant or expression.' },
+        a: { type: 'expression', label: 'a - Mouth Coverage Angle', unit: 'deg', default: '45 - 5*cos(2*p)^5 - 2*sin(p)^12', tooltip: 'Mouth coverage angle as function of p.' },
+        a0: { type: 'expression', label: 'a0 - Throat Coverage Angle', unit: 'deg', default: 10, tooltip: 'Initial throat coverage angle in degrees. Can be constant or expression.' },
         r0: { type: 'expression', label: 'r0 - Throat Radius', unit: 'mm', default: 12.7, tooltip: 'Initial throat radius. Can be constant or expression like "12.7 + sin(p)".' },
         k: { type: 'range', label: 'k - Flare Constant', min: 0.1, max: 15, step: 0.1, default: 7.0, tooltip: 'Flare constant (rate of expansion).' },
-        s: { type: 'expression', label: 's - Termination Shape', default: '0.58 + 0.2*cos(p)^2', tooltip: 'Shape factor for the termination flare.' },
-        n: { type: 'range', label: 'n - Termination Curvature', min: 1, max: 10, step: 0.001, default: 4.158, tooltip: 'Curvature control exponent for the termination.' },
+        s: { type: 'expression', label: 's - Termination Shape', default: '0.85 + 0.3*cos(p)^2', tooltip: 'Shape factor for the termination flare.' },
+        n: { type: 'range', label: 'n - Termination Curvature', min: 1, max: 10, step: 0.001, default: 4, tooltip: 'Curvature control exponent for the termination.' },
         q: { type: 'range', label: 'q - Termination Smoothness', min: 0.1, max: 2, step: 0.001, default: 0.991, tooltip: 'Transition smoothness parameter at the termination.' },
         h: { type: 'range', label: 'h - Shape Factor', min: 0, max: 10, step: 0.1, default: 0.0, tooltip: 'Additional shape control parameter.' },
     },
@@ -109,12 +109,12 @@ export const PARAM_SCHEMA = {
         }
     },
     'MESH': {
-        angularSegments: { type: 'number', label: 'Angular Segs', default: 120 },
-        lengthSegments: { type: 'number', label: 'Length Segs', default: 40 },
+        angularSegments: { type: 'number', label: 'Angular Segs', default: 80 },
+        lengthSegments: { type: 'number', label: 'Length Segs', default: 20 },
         cornerSegments: { type: 'number', label: 'Corner Segs', default: 4 },
         throatSegments: { type: 'number', label: 'Throat Segs', default: 0 },
         throatResolution: { type: 'number', label: 'Throat Resolution', unit: 'mm', default: 5.0 },
-        mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 8.0 },
+        mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 10.0 },
         verticalOffset: { type: 'number', label: 'Vertical Offset', unit: 'mm', default: 0.0, tooltip: 'Vertical offset for simulation/export coordinate system. Does not affect the 3D viewer.' },
         subdomainSlices: { type: 'expression', label: 'Subdomain Slices', default: '', tooltip: 'Comma-separated slice indices for subdomain interfaces.' },
         interfaceOffset: { type: 'expression', label: 'Interface Offset', unit: 'mm', default: '', tooltip: 'Comma-separated interface offsets.' },
@@ -128,14 +128,14 @@ export const PARAM_SCHEMA = {
                 { value: '12', label: 'Half (12)' },
                 { value: '1', label: 'Quadrant (1)' }
             ],
-            default: '1234',
+            default: '14',
             tooltip: 'Simulation-only symmetry. The visible model stays full; simulation uses the selected quadrant.'
         },
-        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 5.0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds a normal-offset wall shell one wall-thickness from the horn surface and a rear disc behind the throat.' },
+        wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds a normal-offset wall shell one wall-thickness from the horn surface and a rear disc behind the throat.' },
         rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 10.0 },
     },
     'ENCLOSURE': {
-        encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 280 },
+        encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 0 },
         encEdge: { type: 'number', label: 'Edge Radius', unit: 'mm', default: 18 },
         encEdgeType: {
             type: 'select',

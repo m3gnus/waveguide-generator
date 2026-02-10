@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -81,3 +81,12 @@ console.log(`   Python:   ${backendPython}`);
 console.log('');
 console.log('Press Ctrl+C to stop both servers');
 console.log('');
+
+// Open browser after servers have had time to start
+setTimeout(() => {
+  const url = 'http://localhost:3000';
+  const cmd = process.platform === 'win32' ? `start ${url}`
+            : process.platform === 'darwin' ? `open ${url}`
+            : `xdg-open ${url}`;
+  exec(cmd);
+}, 3000);

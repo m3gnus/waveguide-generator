@@ -1,335 +1,165 @@
-# How `.geo` and `.msh` Are Generated
+# MSH / GEO Generation: Python OCC Builder
 
-This document describes the exact generation flows currently implemented in this repository.
+This document describes how the Python OCC mesh builder constructs `.geo` and `.msh` files for
+R-OSSE and OSSE waveguide types.
 
-## Overview: two export paths
+## Overview
 
-| Path | When used | Geometry type | Entry point |
-|---|---|---|---|
-| **Python OCC builder** (preferred) | R-OSSE configs, when Gmsh Python API is installed | BSpline curves + OCC ThruSections | `POST /api/mesh/build` |
-| **JS .geo builder** (legacy / fallback) | OSSE configs, or when Python API unavailable | Flat polyhedral triangulated surfaces | `POST /api/mesh/generate-msh` |
+Key file: `server/solver/waveguide_builder.py`
 
-The Python OCC path produces better meshes because Gmsh receives parametric curved geometry
-and can mesh it correctly. The JS path works but gives Gmsh flat triangles, limiting mesh quality.
+Entry point: `build_waveguide_mesh(params: dict) -> dict`
 
----
+The builder uses the Gmsh Python OCC API to construct smooth BSpline surfaces, which Gmsh then
+meshes with its 2D/3D meshing algorithms. The output is a tagged mesh in Gmsh `.msh` format v2.2.
 
-## 1) Primary Export Path (UI: Export MSH / Export ABEC Project)
+## 1. Surface Construction Algorithm
 
-Entry points:
-- `src/app/exports.js` -> `exportMSH(app)`
-- `src/app/exports.js` -> `exportABECProject(app)`
+### 1.1 Point Grid
 
-Both call:
-- `buildExportMeshWithGmsh(app, preparedParams, options)`
+`_compute_point_grids(params)` evaluates the ATH formulas at a grid of:
+- `n_phi` angular positions (`phi = 0 .. 2π`, or half for symmetric quadrant export)
+- `n_len` axial positions (`t = 0 .. 1`)
 
-### 1.1 Parameter preparation for Gmsh export
+This yields:
+- `inner_points[n_phi, n_len+1, 3]` — inner horn surface points (x, y, z)
+- `outer_points[n_phi, n_len+1, 3]` — outer wall shell points, only when `encDepth == 0` and `wallThickness > 0`
 
-`buildExportMeshWithGmsh` first applies `buildGmshExportParams(preparedParams)` in `src/app/exports.js`.
+### 1.2 Longitudinal Wires
 
-Current defaults:
-- `segmentDivisor: 1`
-- `resolutionScale: 1`
-- `minAngularSegments: 20`
-- `minLengthSegments: 10`
+`_build_surface_from_points(points, closed)` constructs the horn surface using **longitudinal wires**:
 
-Transform rules:
-- `angularSegments = round_to_multiple_of_4(max(minAngularSegments, round(baseAngular / segmentDivisor)))`
-- `lengthSegments = max(minLengthSegments, round(baseLength / segmentDivisor))`
-- `throatResolution *= resolutionScale`
-- `mouthResolution *= resolutionScale`
-- `rearResolution *= resolutionScale`
-- `encFrontResolution` / `encBackResolution` are scaled if numeric lists
-- `wallThickness` is clamped to positive fallback for freestanding export
+1. For each phi index `i` in `0..n_phi-1`:
+   - Create one BSpline wire from `points[i, :, :]` — a curve from throat to mouth at constant phi.
+   - This wire is `closed=False` (it is a profile along the horn axis, not a ring).
 
-With `segmentDivisor=1` and `resolutionScale=1`, user-specified values pass through to the `.geo` file as-is. The min-segment guards (20 angular, 10 length) remain as safety nets.
+2. For each adjacent pair of wires `(i, i+1)`:
+   - Call `addThruSections([wire_i, wire_{i+1}], makeSolid=False, makeRuled=True)`.
+   - This produces one ruled surface strip between two adjacent longitudinal profiles.
 
-### 1.2 Geometry artifact generation
+3. For full 360° closed models (`closed=True`):
+   - Add one final wrap-around strip between `wire[n_phi-1]` and `wire[0]`.
 
-`buildGeometryArtifacts(...)` from `src/geometry/pipeline.js` builds:
-- `mesh` (raw geometry arrays)
-- `simulation` payload (canonical surface tags and metadata)
+**Why longitudinal wires (not cross-sectional)?**
 
-Important simulation payload details:
-- `surfaceTags` are assigned by `buildSurfaceTags(...)` in `src/geometry/tags.js`
-  - `1=SD1G0`, `2=SD1D1001`, optional `3=SD2G0`, `4=I1-2`
-- split-plane symmetry triangles are removed for `quadrants` (`14`, `12`, `1`)
-- metadata includes:
-  - `ringCount`
-  - `lengthSteps`
-  - `fullCircle`
-  - `verticalOffset`
-  - `hasEnclosure`
-  - `interfaceEnabled`
+For non-circular ATH profiles where the axial length L varies with phi, cross-sections at the same
+parametric `t` value have different z-positions for different phi angles. A cross-sectional BSpline
+ring at constant `t` is therefore a non-planar 3D space curve. `addThruSections` on two non-planar
+rings can produce a twisted, self-intersecting surface. Longitudinal wires are well-behaved curves
+along the axis of the horn and always produce correct ruled strips regardless of whether L is
+phi-dependent.
 
-### 1.3 `.geo` text generation
+### 1.3 Throat and Mouth End Caps
 
-`buildGmshGeo(preparedParams, mesh, simulation, options)` in `src/export/gmshGeoBuilder.js` generates the `.geo` text.
+- `_build_throat_disc(inner_points)` — flat circular/elliptical disc at the throat (source surface).
+- `_build_rear_wall(inner_points, outer_points)` — annular ring at the throat connecting inner to outer.
+- `_build_mouth_rim(inner_points, outer_points)` — annular ring at the mouth connecting inner to outer.
 
-Exact behavior:
-1. Validates geometry arrays and tag counts.
-2. Converts simulation vertices to ATH coordinates with:
-   - `transformVerticesToAth(...)` in `src/geometry/transforms.js`
-   - mapping is `[x, z + verticalOffset, y]`.
-3. Emits fixed Gmsh options (algorithm, msh version, etc.).
-4. Emits all points with per-point local mesh sizes.
-5. Emits curve/surface topology:
-   - structured horn quads as `Ruled Surface`
-   - structured source fan as `Plane Surface`
-   - any remaining triangles as `Plane Surface`
-6. Emits physical groups with canonical names:
-   - `SD1G0`, `SD1D1001`, optionally `SD2G0`, `I1-2`
-7. Emits mesh-size fields:
-   - axial `MathEval` gradient
-   - distance/threshold refinement fields (source/front/back/rear)
-   - `Background Field = Min(...)`
-8. Appends `Mesh 2;`.
+These end caps are still constructed from cross-sectional wires (one ring at z=throat or z=mouth),
+which is correct because these end caps are always planar surfaces.
 
-Output:
-- `geoText` (string)
-- `geoStats` (counts and resolved resolutions)
+## 2. Outer Geometry
 
-### 1.4 `.msh` generation is Gmsh-authoritative
+Outer geometry presence is controlled by enclosure/wall parameters — **not by `sim_type`**.
 
-Client call:
-- `generateMeshFromGeo(...)` in `src/solver/client.js`
-- HTTP `POST` to `/api/mesh/generate-msh`
+`sim_type` only specifies the BEM radiation condition (1 = infinite baffle, 2 = free-standing)
+and has no effect on which surfaces are generated.
 
-Server endpoint:
-- `server/app.py` -> `generate_mesh_with_gmsh(request: GmshMeshRequest)`
+| Condition | What is built |
+|---|---|
+| `enc_depth > 0` | `_build_enclosure_box` — cabinet box with mouth cutout in front face |
+| `enc_depth == 0` and `wall_thickness > 0` | Outer wall shell via `_build_surface_from_points(outer_points)` + rear wall disc + mouth rim ring |
+| Both 0 | No outer geometry |
 
-Validation on server:
-- `geoText` must be non-empty
-- `mshVersion` must be `2.2` or `4.1`
+### 2.1 Enclosure Box (`_build_enclosure_box`)
 
-Actual meshing implementation:
-- `server/solver/gmsh_geo_mesher.py` -> `generate_msh_from_geo(...)`
-- writes temp `input.geo`
-- if Python Gmsh API is available:
-  - opens `.geo`
-  - sets `Mesh.MshFileVersion`, `Mesh.Binary`, `Mesh.SaveAll=0`
-  - `gmsh.model.mesh.generate(2)`
-  - writes `output.msh`
-- otherwise runs system `gmsh` CLI:
-  - `gmsh input.geo -2 -format msh2|msh4 -save_all 0 -o output.msh`
+When `enc_depth > 0`:
 
-Response payload returned to UI:
-- `msh` (text)
-- `generatedBy: "gmsh"`
-- `stats: { nodeCount, elementCount }`
+1. Compute the bounding box of the mouth profile from `inner_points[:, -1, :]`.
+2. Expand by space margins (`enc_space_l/r/t/b`) to get cabinet outer extents.
+3. `z_front = max(inner_points[:, -1, 2])` — front face of cabinet at the maximum mouth z-position.
+4. `z_back = z_front - enc_depth` — back panel position.
+5. Build a solid box: `gmsh.model.occ.addBox(x0, y0, z_back, dx, dy, enc_depth)`.
+6. Build a prism from the mouth ring profile (two coplanar wires at z_front ± ε, `makeSolid=True`).
+7. Cut the prism from the box using `gmsh.model.occ.cut([(3, box_tag)], [(3, prism_tag)])`.
+   This creates a through-hole in the front face where the waveguide mouth exits.
+8. Collect all boundary surfaces of the result and tag them as SD2G0.
 
-### 1.5 What is saved by export actions
+If prism solid creation fails (degenerate mouth profile), falls back to the box without a hole.
 
-`exportMSH(app)`:
-- saves only returned `.msh` text.
+**Build order:** The enclosure box boolean cut is always performed **before** any inner horn surfaces
+are created. This prevents the `cut` operation from accidentally removing horn OCC entities.
 
-`exportABECProject(app)`:
-- creates zip folder (`ABEC_FreeStanding` or `ABEC_InfiniteBaffle`) containing:
-  - `Project.abec`
-  - `solving.txt`
-  - `observation.txt`
-  - `<basename>.msh` (Gmsh-generated)
-  - `bem_mesh.geo` (from `buildGmshGeo`)
-  - `<basename>_bempp.py`
-  - `Results/coords.txt`
-  - `Results/static.txt`
+### 2.2 Wall Shell
 
-## 2) ATH Parity Script Path
+When `enc_depth == 0` and `wall_thickness > 0`:
 
-Entry point:
-- `scripts/ath-parity.js` -> `runParity(...)`
+- `_compute_point_grids` computes `outer_points` as the normal-offset of `inner_points`.
+- `_build_surface_from_points(outer_points)` builds the outer wall surface (same longitudinal
+  wire algorithm as the inner surface).
+- `_build_rear_wall` adds the annular rear disc.
+- `_build_mouth_rim` adds the annular mouth opening ring.
 
-For each config:
-1. Parse config and prepare params.
-2. Build geometry artifacts.
-3. Build `.geo` via `buildGmshGeo(...)`.
-4. Generate `.msh` using `generateMshWithGmsh(...)`:
-   - mode `auto` by default:
-     - backend API first (`http://localhost:8000` by default)
-     - fallback Python Gmsh API local call
-     - fallback `gmsh` CLI local call
-5. Compare generated `.msh` with ATH reference `.msh`:
-   - node/element counts
-   - physical groups
-   - per-tag triangle counts
-   - vertex-cloud distance metrics
+## 3. Physical Surface Groups
 
-Environment controls:
-- `ATH_PARITY_BACKEND_URL` (default `http://localhost:8000`)
-- `ATH_PARITY_GMSH_MODE` (`auto`, `backend`, `python`, `cli`)
+Surface group assignment is in `_assign_physical_groups`:
 
-## 3) Related but not primary path
-
-There is a direct mesh serializer in `src/export/msh.js` (`exportMSH(...)`), but the current UI `.msh` and ABEC bundle flow uses the Gmsh-authoritative backend path described above.
-
-## 4) Mesh Parameter Reference (MWG Specification)
-
-All `Mesh.*` config parameters and their role in mesh generation:
-
-| Config Key | Type | Default | Description |
-|---|---|---|---|
-| `Mesh.Quadrants` | int | `1` | Portion of 3D mesh for BEM analysis: `1` = quadrant 1 only (x>=0, y>=0), `12` = quadrants 1+2 (y>=0), `14` = quadrants 1+4 (x>=0), `1234` = full mesh. Controls angle selection in `mesh/angles.js` and split-plane triangle removal in `pipeline.js`. |
-| `Mesh.AngularSegments` | int | `120` | Total number of calculated profiles around the waveguide. Must be a multiple of 4 (auto-adjusted). Determines the number of vertices per ring in the horn mesh. Used by `mesh/angles.js` (snapped to multiple of 4 or 8 for symmetry). |
-| `Mesh.LengthSegments` | int | `40` | Total number of axial slices along the horn length. Controls how many rings of vertices are generated. Each ring pair creates a strip of quad faces (2 triangles each). |
-| `Mesh.CornerSegments` | int | `4` | Number of angular profiles reserved for the corner region of a rounded rectangle when `Morph.TargetShape=1`. Only affects morphed (rectangular) mouths. Used by `mesh/angles.js` to distribute extra angle samples in the corner arc. |
-| `Mesh.ThroatSegments` | int | `0` | Number of axial slices reserved for the throat extension region (if `Throat.Ext.*` is set). Only takes effect when `throatResolution == mouthResolution` (resolution-based distribution takes priority). Used by `mesh/sliceMap.js`. |
-| `Mesh.ThroatResolution` | float | `5` | Nominal BEM mesh resolution at z=0 [mm]. Dual role: (1) controls non-uniform axial slice distribution in internal mesh via `sliceMap.js` (concentrates slices near throat when smaller than `MouthResolution`), (2) sets per-point mesh sizes and MathEval background field base value in `.geo` export. |
-| `Mesh.MouthResolution` | float | `8` | Nominal BEM mesh resolution at z=Length [mm]. Element sizes between throat and mouth are smoothly interpolated. Same dual role as `ThroatResolution`. |
-| `Mesh.SubdomainSlices` | int[] | last slice | Indices of grid slices where subdomain interfaces are placed. Default behavior uses the last slice. Set to empty to disable (single exterior subdomain). Used by `mesh/horn.js` for vertex z-offsets at interface boundaries. |
-| `Mesh.InterfaceOffset` | float[] | `0` | Forward protrusions of subdomain interfaces [mm]. Array length should match `SubdomainSlices`. Used by `mesh/enclosure.js` to create interpolated interface rings. |
-| `Mesh.InterfaceDraw` | float[] | `0` | Forward-draw depths of subdomain interfaces [mm]. Array length should match `SubdomainSlices`. Added to interface offset for total z-displacement at interface slices. |
-| `Mesh.InterfaceResolution` | float | — | Mesh resolution near subdomain interfaces. Parsed from config but not yet wired to .geo mesh size fields. |
-| `Mesh.WallThickness` | float | `5` | Wall thickness for freestanding horns (when enclosure depth=0) [mm]. Builds a normal-offset shell and rear disc behind the throat. |
-| `Mesh.RearResolution` | float | `10` | Rear wall mesh resolution for freestanding horns [mm]. Controls a Distance/Threshold refinement field for vertices near zMin in the `.geo` export. |
-| `Mesh.RearShape` | int | `1` | Legacy parameter — removed from active generation. The rear is always a flat disc. Old configs containing this value are tolerated but the value is not exported. |
-
-### Parameters not implemented
-
-- `Mesh.ZMapPoints`: Referenced in the MWG spec for controlling distances between individual axial slices. Not implemented; axial distribution is controlled by the resolution-based or uniform mapping in `sliceMap.js`.
-
-### TODO
-
-- **`Mesh.InterfaceResolution`**: Parsed from config (`src/config/parser.js`) but not wired to any mesh size control. Needs research into how subdomain interfaces are treated in this project (when they are needed, when not) and then implementation of a Distance/Threshold Gmsh field for interface vertices (tag 4 / "I1-2") in `src/export/gmshGeoBuilder.js`, following the pattern used by `encFrontResolution`/`encBackResolution`. Also needs: schema entry in `src/config/schema.js`, UI entry in `src/ui/paramPanel.js`, round-trip export in `src/export/mwgConfig.js`.
-
----
-
-## 5) Python OCC Builder Path (preferred for R-OSSE)
-
-Entry point:
-- `src/app/exports.js` -> `buildExportMeshFromParams(app, preparedParams, options)`
-
-This path bypasses the JS `.geo` builder entirely. Instead of converting a triangle soup to `.geo`
-text, it sends formula parameters directly to the backend and lets Python + Gmsh OCC construct the
-geometry natively from BSpline wires.
-
-### 5.1 When this path is used
-
-`exportMSH` and `exportABECProject` in `src/app/exports.js` route to this path when:
-- `preparedParams.type === 'R-OSSE'`
-
-If the backend returns `503` (Gmsh Python API unavailable), the call automatically falls back to
-`buildExportMeshWithGmsh` (the legacy JS `.geo` path, section 1 above).
-
-For OSSE formula configs, the old JS path is always used (OSSE support in Python builder is
-deferred).
-
-### 5.2 Parameter mapping
-
-`buildPythonBuilderPayload(preparedParams, mshVersion)` in `src/app/exports.js` maps JS camelCase
-parameters to the `WaveguideParamsRequest` snake_case fields:
-
-| JS field | Python field | Notes |
+| Physical group | BEM tag | Description |
 |---|---|---|
-| `type` | `formula_type` | Always `"R-OSSE"` for this path |
-| `R` | `R` | ATH R-OSSE expression string |
-| `a` | `a` | ATH R-OSSE expression string |
-| `r0` | `r0` | Throat radius [mm] |
-| `a0` | `a0` | Throat half-angle [deg] |
-| `k` | `k` | Flare exponent |
-| `r` | `r` | Roundedness |
-| `b` | `b` | Asymmetry |
-| `m` | `m` | Mouth modifier |
-| `q` | `q` | Profile exponent |
-| `angularSegments` | `n_angular` | Sampling grid (shape fidelity) |
-| `lengthSegments` | `n_length` | Sampling grid (shape fidelity) |
-| `quadrants` | `quadrants` | 1, 12, 14, or 1234 |
-| `throatResolution` | `throat_res` | BEM element size at z=0 [mm] |
-| `mouthResolution` | `mouth_res` | BEM element size at z=Length [mm] |
-| `rearResolution` | `rear_res` | Rear wall element size [mm] |
-| `wallThickness` | `wall_thickness` | Freestanding wall thickness [mm] |
-| `simType` | `sim_type` | 1=infinite baffle, 2=freestanding |
-| — | `msh_version` | `"2.2"` (default) or `"4.1"` |
+| `"SD1G0"` | 1 | Inner horn surface |
+| `"SD1D1001"` | 2 | Throat source disc |
+| `"SD2G0"` | 3 | Outer wall shell or enclosure (present when wallThickness>0 or encDepth>0) |
 
-Note: `n_angular`/`n_length` control the number of **OCC profile points** (shape sampling). They
-are independent from the BEM element sizes (`throat_res`, `mouth_res`). More sampling points give
-Gmsh better curve information but do not directly set triangle counts.
+SD2G0 is emitted only when any exterior surface dimtags are present (non-empty `exterior_tags`).
+`sim_type` no longer gates SD2G0 generation.
 
-### 5.3 Backend endpoint
+## 4. Mesh Size Control
 
-`POST /api/mesh/build` in `server/app.py`
+`_configure_mesh_size(params)` assigns Gmsh field-based mesh size control:
 
-- Validates `formula_type === "R-OSSE"` (returns 422 for unsupported types)
-- Validates `msh_version` is `"2.2"` or `"4.1"` (returns 422 otherwise)
-- Returns `503` if Gmsh Python API is unavailable (`WAVEGUIDE_BUILDER_AVAILABLE = False`)
-- Runs `build_waveguide_mesh(params)` in `asyncio.to_thread` to avoid blocking the event loop
-- Returns `{ "geo": str, "msh": str, "generatedBy": "gmsh-occ", "stats": { nodeCount, elementCount } }`
+- `Distance` + `Threshold` fields map element size from `throatResolution` (at throat) to
+  `mouthResolution` (at mouth) using embedded geometry points.
+- `rearResolution` is applied to `rear` and `enclosure` surface groups.
+- All resolution values pass through 1:1 from config (no scaling).
 
-### 5.4 Python OCC geometry construction
+## 5. Parameters Passed to `build_waveguide_mesh`
 
-`server/solver/waveguide_builder.py` -> `build_waveguide_mesh(params: dict)`
+Key geometry parameters from `WaveguideParamsRequest` (defined in `server/app.py`):
 
-The builder acquires `gmsh_lock` (from `gmsh_geo_mesher.py`) to prevent concurrent Gmsh API calls.
-
-Geometry construction steps:
-1. Evaluate R-OSSE expressions `R(p)` and `a(p)` at each angular position `phi`.
-2. For each phi, compute the profile curve: `(t_array, R_expr, a_deg, r0, a0, k, r, b, m, q)` -> `(x_axial, y_radial)`.
-3. Convert `n_length` sample points along each profile to 3D `(x, y, z)` coordinates.
-4. For each adjacent pair of profile rings, build a `gmsh.model.occ.addBSpline` wire + `addThruSections` surface strip.
-5. Cap the throat end with a flat disc (`addDisk`).
-6. For freestanding configs (`sim_type == 2`):
-   - Build outer wall surface via normal-offset points and another set of ThruSections strips.
-   - Build rear wall disc.
-   - Build mouth rim surface connecting inner and outer mouth rings.
-
-### 5.5 Mesh sizing
-
-`_configure_mesh_size(gmsh, config, inner_points, surface_groups)`:
-
-- **MathEval gradient**: A `MathEval` background field interpolates element size from
-  `throat_res` at the throat end to `mouth_res` at the mouth, as a function of the axial
-  coordinate. This ensures the radial mesh density follows the horn's axial progression.
-- **Restrict fields**: Each physical surface group gets a `Restrict` field that limits the
-  MathEval field to that group's surfaces. Rear wall surfaces use `rear_res`.
-- **Background Field**: `Min(all Restrict fields)` so element sizes never exceed the target.
-
-This approach is fundamentally different from the JS `.geo` builder, which assigns per-point mesh
-sizes and uses `Distance`/`Threshold` fields based on tagged vertex subsets.
-
-### 5.6 Physical groups (ABEC-compatible names)
-
-`_assign_physical_groups(gmsh, surface_groups, sim_type)`:
-
-| ABEC name | Tag | Surfaces |
+| Parameter | Default | Description |
 |---|---|---|
-| `SD1G0` | 1 | Inner horn wall (all ThruSections strips) |
-| `SD1D1001` | 2 | Throat source disc |
-| `SD2G0` | 3 | Outer wall + rear disc + mouth rim (sim_type==2 only) |
-| `I1-2` | 4 | Subdomain interface surfaces (deferred, not yet implemented) |
+| `formula_type` | required | `"R-OSSE"` or `"OSSE"` |
+| `wall_thickness` | 0 | Horn wall shell thickness [mm]. Outer shell built when > 0 and enc_depth == 0 |
+| `enc_depth` | 0 | Enclosure cabinet depth [mm]. Box built when > 0 |
+| `enc_space_l/r/t/b` | 25 | Extra space around mouth bounding box [mm] |
+| `enc_edge` | 18 | Edge rounding radius [mm] (reserved for future rounded edges) |
+| `sim_type` | 1 | BEM radiation condition only: 1 = infinite baffle, 2 = free-standing |
+| `throat_resolution` | 5 | Gmsh element size at throat [mm] |
+| `mouth_resolution` | 10 | Gmsh element size at mouth [mm] |
+| `rear_resolution` | 10 | Gmsh element size at rear/enclosure surfaces [mm] |
+| `angular_segments` | 80 | Number of phi sampling angles for OCC surface construction |
+| `length_segments` | 20 | Number of axial sample points for OCC surface construction |
 
-### 5.7 Output from backend
+## 6. Symmetry
 
-The endpoint returns both `.geo` and `.msh` text:
-- `geo`: OCC-format `.geo` script (written by `gmsh.write("output.geo")` after OCC build).
-  This is a serialization of the OCC model in `.geo` format — it will contain `SetFactory("OpenCASCADE")`
-  and parametric surface definitions, not flat triangles.
-- `msh`: Text-format `.msh` file (version 2.2 or 4.1 as requested).
+The frontend (`src/geometry/symmetry.js`) auto-detects the maximum valid symmetry domain before
+submitting to the OCC builder:
 
-The `.geo` file returned here is **not** the same as the `.geo` file produced by `gmshGeoBuilder.js`
-(section 1.3). The OCC `.geo` represents the actual parametric geometry, while the JS `.geo`
-represents a flat polyhedral approximation.
+- Samples phi-dependent parameters (R, a) at 8 discrete angles.
+- Checks XZ-plane symmetry (f(φ) ≈ f(-φ)) and YZ-plane symmetry (f(φ) ≈ f(π-φ)).
+- Returns `'1'` (quarter), `'14'` / `'12'` (half), or `'1234'` (full).
+- Conservative: returns `'1234'` when a guiding curve is active (gcurveType ≠ 0).
 
-### 5.8 What is saved by export actions (Python OCC path)
+The backend (`server/solver/symmetry.py`) performs an independent symmetry reduction during the
+BEM solve stage (not during mesh generation).
 
-`exportMSH(app)` (R-OSSE):
-- saves the `.msh` text returned by `/api/mesh/build`.
+## 7. Legacy JS .geo Path (Fallback)
 
-`exportABECProject(app)` (R-OSSE):
-- creates zip folder containing:
-  - `Project.abec`
-  - `solving.txt`
-  - `observation.txt`
-  - `<basename>.msh` (from `/api/mesh/build`)
-  - `bem_mesh.geo` (OCC `.geo` from `/api/mesh/build`)
-  - `<basename>_bempp.py`
-  - `Results/coords.txt`
-  - `Results/static.txt`
+When the Python API is unavailable (returns 503), the frontend falls back to the JS `.geo` builder:
 
-### 5.9 Deferred features
+- `src/export/gmshGeoBuilder.js` → `buildGmshGeo(params)`: generates Gmsh script text with
+  polyhedral points, splines, and physical groups.
+- The `.geo` text is POSTed to `POST /api/mesh/generate-msh` for server-side meshing.
+- Parameters pass through `buildGmshExportParams()` in `src/app/exports.js` (1:1, no scaling).
+- Supports the same set of `Mesh.*` parameters as the Python OCC path.
 
-Not yet supported in the Python OCC builder:
-- **OSSE formula**: Only R-OSSE is implemented. OSSE configs fall back to the JS path.
-- **Subdomain interfaces** (`SubdomainSlices`, `InterfaceOffset`, `InterfaceDraw`): Physical group `I1-2` is not yet constructed.
-- **Morph** (rectangular target shape): Not yet ported.
-- **Rollback** (throat rollback): Not yet ported.
-- **Guiding curves**: Not yet ported.
-
+Symmetry auto-detection is **not** applied to the JS `.geo` fallback path.

@@ -1,319 +1,106 @@
 # Waveguide Generator
 
-Waveguide Generator is a browser-based tool for designing acoustic horns, previewing geometry in 3D, running BEM simulations, and exporting manufacturing/simulation files.
-
-## Features
-
-- OSSE and R-OSSE horn profile generation with live parameter controls.
-- Real-time 3D rendering (standard, zebra, wireframe, curvature).
-- Simulation workflow with backend job submission and result polling.
-- Export support for:
-  - `STL` (3D model)
-  - `GEO` and `MSH` (Gmsh/BEM workflow)
-  - `ABEC` project ZIP
-  - `CSV` profiles
-  - MWG config text
+A browser-based tool for designing acoustic horns — live 3D preview, parameter controls, BEM simulation, and file exports for manufacturing and simulation workflows.
 
 ![Waveguide Generator App Screenshot](docs/images/waveguide-generator-screenshot.png)
 
-## Tech Stack
-
-- Frontend: Vanilla JS + Three.js + Webpack
-- Backend: FastAPI (Python) with optional bempp-cl solver integration
-- Tests: Node.js built-in test runner + Python `unittest`
-
 ## Prerequisites
 
-- Node.js 18+
-- npm 9+
-- Python 3.10+ (Python 3.13 recommended on Linux; Python 3.12+ also supported)
+Two things need to be installed on your computer before you begin:
 
-## macOS Install (Step by Step)
+- **[Node.js 18+](https://nodejs.org/)** — download and install the LTS version
+- **[Python 3.10+](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
 
-### 1. Install Node.js and npm
+That's all. Everything else is handled by the install script.
 
-- Download and install Node.js LTS from [nodejs.org](https://nodejs.org/).
-- Verify:
+## Install
+
+Run this **once** from the project folder to install all dependencies:
+
+**macOS / Linux** — open a terminal in the project folder and run:
+```bash
+bash install/install.sh
+```
+
+**Windows** — double-click `install\install.bat`.
+
+The script checks your environment, installs all dependencies, and sets up a Python virtual environment. It will also ask whether you want to install the optional BEM acoustic solver (see below).
+
+## Run the app
+
+**macOS** — double-click `launch/mac.command`
+**Windows** — double-click `launch\windows.bat`
+**Linux** — run `bash launch/linux.sh`
+
+The app opens automatically in your browser at `http://localhost:3000`. Close the terminal window to stop it.
+
+## Optional: BEM Solver
+
+The install script will ask whether to install `bempp-cl`, a BEM acoustic solver. This enables the **Start BEM Simulation** feature. It is optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it. Installation can take 5–10 minutes the first time.
+
+To install it later:
 
 ```bash
-node -v
-npm -v
+# macOS / Linux
+.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
+
+# Windows
+.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
 ```
 
-### 2. Check Python 3
+## Features
 
-- macOS usually has Python 3. Verify:
+- R-OSSE and OSSE horn profile generation with live parameter controls
+- Real-time 3D rendering (standard, zebra, wireframe, curvature)
+- BEM simulation workflow with backend job submission and result plotting
+- Export: STL, GEO, MSH, ABEC project ZIP, CSV profiles, MWG config text
+
+## Project layout
+
+```
+src/          Frontend app modules (geometry, export, simulation, viewer, UI)
+server/       FastAPI backend and solver code
+tests/        Frontend and integration tests
+scripts/      Dev utilities
+install/      One-time setup scripts (mac/linux and windows)
+launch/       Double-click launchers (mac, windows, linux)
+docs/         Architecture and technical reference
+```
+
+## Development
 
 ```bash
-python3 --version
+npm test              # JS unit tests
+npm run test:server   # Python backend tests
+npm run test:ath      # ATH geometry parity check
+npm run build         # Production bundle
 ```
 
-If missing, install Python 3 from [python.org](https://www.python.org/downloads/macos/).
-
-### 3. Clone the repository
-
-```bash
-git clone https://github.com/m3gnus/waveguide-generator.git
-cd waveguide-generator
-```
-
-### 4. Install frontend dependencies
-
-```bash
-npm ci
-```
-
-### 5. Set up backend virtual environment
-
-```bash
-python3 -m venv .venv
-./.venv/bin/pip install --upgrade pip
-./.venv/bin/pip install -r server/requirements.txt
-```
-
-### 6. (Optional) Install full BEM solver
-
-```bash
-./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
-```
-
-If you skip this, the app still runs but solver features will report unavailable.
-
-### 7. Start the app
-
-```bash
-npm start
-```
-
-`npm start` now prefers `./.venv/bin/python` for backend startup when that virtual environment exists.
-
-- Frontend: [http://localhost:3000](http://localhost:3000)
-- Backend: [http://localhost:8000](http://localhost:8000)
-
-### 8. Verify backend health
-
-```bash
-curl http://localhost:8000/health
-```
-
-## Windows Install (Step by Step)
-
-### 1. Install Git
-
-- Install Git for Windows from [git-scm.com](https://git-scm.com/download/win).
-
-### 2. Install Node.js and npm
-
-- Install Node.js LTS from [nodejs.org](https://nodejs.org/).
-- Verify in PowerShell:
-
-```powershell
-node -v
-npm -v
-```
-
-### 3. Install Python 3
-
-- Install Python 3 from [python.org](https://www.python.org/downloads/windows/).
-- Enable `Add python.exe to PATH` during install.
-- Verify:
-
-```powershell
-py -3 --version
-```
-
-### 4. Clone the repository
-
-```powershell
-git clone https://github.com/m3gnus/waveguide-generator.git
-cd waveguide-generator
-```
-
-### 5. Install frontend dependencies
-
-```powershell
-npm ci
-```
-
-### 6. Set up backend virtual environment
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r server/requirements.txt
-```
-
-### 7. (Optional) Install full BEM solver
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
-```
-
-If you skip this, the app still runs but solver features will report unavailable.
-
-### 8. Start the app
-
-Open two PowerShell windows from the project root:
-
-- Window 1 (frontend):
-
-```powershell
-npm run start:frontend
-```
-
-- Window 2 (backend):
-
-```powershell
-.\.venv\Scripts\python.exe server\app.py
-```
-
-- Frontend: [http://localhost:3000](http://localhost:3000)
-- Backend: [http://localhost:8000](http://localhost:8000)
-
-### 9. Verify backend health
-
-```powershell
-Invoke-RestMethod http://localhost:8000/health
-```
-
-## Linux Install (Step by Step)
-
-### 1. Install system dependencies
-
-For Ubuntu/Debian:
-
-```bash
-sudo apt update
-sudo apt install -y git curl gmsh python3 python3-venv
-```
-
-### 2. Install Node.js LTS (recommended via nvm)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-nvm install --lts
-```
-
-Verify:
-
-```bash
-node -v
-npm -v
-python3 --version
-```
-
-### 3. Clone the repository
-
-```bash
-git clone https://github.com/m3gnus/waveguide-generator.git
-cd waveguide-generator
-```
-
-### 4. Install frontend dependencies
-
-```bash
-npm ci
-```
-
-### 5. Set up backend virtual environment
-
-```bash
-if command -v python3.13 >/dev/null 2>&1; then
-  PYTHON_BIN=python3.13
-elif command -v python3.12 >/dev/null 2>&1; then
-  PYTHON_BIN=python3.12
-else
-  PYTHON_BIN=python3
-fi
-
-$PYTHON_BIN --version
-$PYTHON_BIN -c "import sys; assert sys.version_info >= (3, 10), f'Need Python >=3.10, found {sys.version}'"
-
-$PYTHON_BIN -m venv .venv
-./.venv/bin/pip install --upgrade pip
-./.venv/bin/pip install -r server/requirements.txt
-```
-
-Python `3.10+` is supported. On Linux, use Python `3.13` when available.
-
-`gmsh` in `server/requirements.txt` is intentionally optional because wheels are not available on every Python/architecture combination.  
-`.geo -> .msh` generation still works with the system `gmsh` CLI installed above.
-
-If you want the latest Gmsh Python wheel snapshots (useful when PyPI has no matching wheel for your Linux/Python target):
-
-```bash
-# Standard Linux environments
-./.venv/bin/pip install -i https://gmsh.info/python-packages-dev --force-reinstall --no-cache-dir gmsh
-
-# Headless Linux (no X windows)
-./.venv/bin/pip install -i https://gmsh.info/python-packages-dev-nox --force-reinstall --no-cache-dir gmsh
-```
-
-### 6. (Optional) Install full BEM solver
-
-```bash
-./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
-```
-
-If you skip this, the app still runs but solver features will report unavailable.
-
-### 7. Start the app
-
-```bash
-npm start
-```
-
-- Frontend: [http://localhost:3000](http://localhost:3000)
-- Backend: [http://localhost:8000](http://localhost:8000)
-
-### 8. Verify backend health
-
-```bash
-curl http://localhost:8000/health
-```
-
-## Test and Build
-
-```bash
-npm test
-npm run test:ath
-npm run test:server
-npm run build
-```
-
-## Project Layout
-
-- `src/`: frontend app modules (geometry, export, simulation, viewer, UI)
-- `server/`: FastAPI backend and solver code
-- `tests/`: frontend and integration tests
-- `scripts/`: local dev and utility scripts
-- `PROJECT_DOCUMENTATION.md`: architecture and API details
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidelines.
+See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for architecture and API details.
 
 ## Troubleshooting
 
-- Backend not connected:
-  - Start backend on port `8000`
-  - Check `curl http://localhost:8000/health`
-- macOS Python command issues:
-  - Use `python3` and explicit venv paths (`./.venv/bin/python`)
-- bempp-cl install speed:
-  - Initial install/build can take several minutes
+**Backend not connected** — start the app via a launcher or `npm start`, then check:
+```bash
+curl http://localhost:8000/health
+```
 
-## Contributing
+**macOS: "cannot be opened because the developer cannot be verified"** — right-click `launch/mac.command` → Open → click Open in the security dialog.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, and PR expectations.
+**Python not found on Windows** — reinstall Python from [python.org](https://www.python.org/downloads/windows/) and tick *"Add python.exe to PATH"*.
 
-## Security
-
-See [SECURITY.md](SECURITY.md) for vulnerability reporting instructions.
+**bempp-cl install is slow** — this is normal. The first install can take several minutes.
 
 ## Acknowledgments
 
-- [ATH Horns](https://at-horns.eu/)
+- [AT-Horns](https://at-horns.eu/)
 - [bempp-cl](https://github.com/bempp/bempp-cl)
 - [Gmsh](https://gmsh.info/)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

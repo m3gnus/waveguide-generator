@@ -597,15 +597,18 @@ def _compute_point_grids(params: dict) -> Tuple[np.ndarray, Optional[np.ndarray]
     First pass: compute raw (pre-morph) profiles for all phi values.
     Second pass: apply morph and project to 3D.
 
+    Outer points are computed only for the wall-shell case (enc_depth == 0 and
+    wall_thickness > 0). Enclosure box geometry is built from inner_points only.
+
     Returns:
         inner_points: (n_phi, n_length+1, 3)
-        outer_points: (n_phi, n_length+1, 3) or None if sim_type==1
+        outer_points: (n_phi, n_length+1, 3) or None
     """
     formula_type = params.get("formula_type", "R-OSSE")
     n_angular = int(params.get("n_angular", 100))
     n_length = int(params.get("n_length", 20))
     quadrants = int(params.get("quadrants", 1234))
-    sim_type = int(params.get("sim_type", 2))
+    enc_depth = float(params.get("enc_depth", 0) or 0)
     wall_thickness = float(params.get("wall_thickness", 6.0))
     morph_target = int(float(params.get("morph_target", 0) or 0))
 
@@ -664,8 +667,10 @@ def _compute_point_grids(params: dict) -> Tuple[np.ndarray, Optional[np.ndarray]
             inner_points[i, j, 1] = y_m * math.sin(phi)
             inner_points[i, j, 2] = raw_x[i, j]
 
+    # Outer wall shell: only when wall_thickness > 0 AND no enclosure box is used.
+    # When enc_depth > 0, the enclosure box is built from inner_points directly.
     outer_points = None
-    if sim_type == 2:
+    if enc_depth == 0 and wall_thickness > 0:
         outer_points = _compute_outer_points(inner_points, wall_thickness, phi_values)
 
     return inner_points, outer_points
@@ -726,25 +731,38 @@ def _make_wire(points_2d: np.ndarray, closed: bool = True) -> int:
 def _build_surface_from_points(
     points: np.ndarray, closed: bool = True
 ) -> List[Tuple[int, int]]:
-    """Build a surface through cross-sectional slices using pairwise ruled strips.
+    """Build a surface using longitudinal BSpline strips between adjacent phi profiles.
 
-    Per ATH section 3.3.1: each pair of adjacent slices creates one strip,
-    meshed independently.
+    Uses one longitudinal wire per phi angle (from throat to mouth), then creates
+    ruled surface strips between adjacent phi wires. This correctly handles
+    non-circular ATH profiles where the axial length L varies with phi — each
+    phi has a different z-trajectory, so cross-sectional wires (one ring per
+    t-index) would be non-planar and produce twisted geometry.
 
-    points: (n_angular, n_length+1, 3)
+    points: (n_phi, n_length+1, 3)
+    closed: if True, adds a wrap-around strip connecting the last phi wire back
+            to the first (used for full 360° models, quadrants=1234).
     Returns list of (dim=2, tag) surface dimtags.
     """
-    n_len = points.shape[1]
+    n_phi = points.shape[0]
     wires = []
-    for j in range(n_len):
-        wires.append(_make_wire(points[:, j, :], closed=closed))
+    for i in range(n_phi):
+        wires.append(_make_wire(points[i, :, :], closed=False))
 
     all_dimtags = []
-    for j in range(n_len - 1):
+    for i in range(n_phi - 1):
         strip = gmsh.model.occ.addThruSections(
-            [wires[j], wires[j + 1]], makeSolid=False, makeRuled=True
+            [wires[i], wires[i + 1]], makeSolid=False, makeRuled=True
         )
         all_dimtags.extend(strip)
+
+    if closed:
+        # Wrap-around strip connecting last phi wire back to first (full circle)
+        strip = gmsh.model.occ.addThruSections(
+            [wires[n_phi - 1], wires[0]], makeSolid=False, makeRuled=True
+        )
+        all_dimtags.extend(strip)
+
     return all_dimtags
 
 
@@ -771,6 +789,84 @@ def _build_mouth_rim(
     w_inner = _make_wire(inner_points[:, j_mouth, :], closed=closed)
     w_outer = _make_wire(outer_points[:, j_mouth, :], closed=closed)
     return gmsh.model.occ.addThruSections([w_inner, w_outer], makeSolid=False, makeRuled=True)
+
+
+def _build_enclosure_box(
+    inner_points: np.ndarray, params: dict, closed: bool
+) -> List[Tuple[int, int]]:
+    """Build a rectangular enclosure cabinet box around the waveguide mouth.
+
+    Generates 6 surfaces (back panel, 4 side walls, front baffle with mouth hole)
+    all tagged as SD2G0.  Only valid for full-circle models (closed=True).
+
+    The front baffle has a hole matching the waveguide mouth cross-section so
+    that the horn bore connects directly to the enclosure cavity.
+
+    Returns list of (dim=2, tag) surface dimtags, or [] for partial models.
+    """
+    if not closed:
+        return []
+
+    enc_depth = float(params.get("enc_depth", 0) or 0)
+    if enc_depth <= 0:
+        return []
+
+    enc_space_l = float(params.get("enc_space_l", 25.0) or 25.0)
+    enc_space_t = float(params.get("enc_space_t", 25.0) or 25.0)
+    enc_space_r = float(params.get("enc_space_r", 25.0) or 25.0)
+    enc_space_b = float(params.get("enc_space_b", 25.0) or 25.0)
+
+    mouth_pts = inner_points[:, -1, :]  # (n_phi, 3)
+    x_min = float(mouth_pts[:, 0].min())
+    x_max = float(mouth_pts[:, 0].max())
+    y_min = float(mouth_pts[:, 1].min())
+    y_max = float(mouth_pts[:, 1].max())
+    z_front = float(mouth_pts[:, 2].max())
+    z_back = z_front - enc_depth
+
+    bx0 = x_min - enc_space_l
+    bx1 = x_max + enc_space_r
+    by0 = y_min - enc_space_b
+    by1 = y_max + enc_space_t
+
+    # --- Build enclosure box solid ---
+    box_tag = gmsh.model.occ.addBox(bx0, by0, z_back, bx1 - bx0, by1 - by0, enc_depth)
+
+    # --- Build mouth-opening prism to cut through the front face ---
+    # Project mouth ring to two z planes bracketing z_front so the prism
+    # slices cleanly through the box's front face.
+    eps = max(enc_depth * 0.01, 0.1)
+    mouth_lo = mouth_pts.copy()
+    mouth_lo[:, 2] = z_front - eps
+    mouth_hi = mouth_pts.copy()
+    mouth_hi[:, 2] = z_front + eps
+
+    w_lo = _make_wire(mouth_lo, closed=True)
+    w_hi = _make_wire(mouth_hi, closed=True)
+
+    mouth_prism = gmsh.model.occ.addThruSections(
+        [w_lo, w_hi], makeSolid=True, makeRuled=True
+    )
+    mouth_solid_tags = [tag for dim, tag in mouth_prism if dim == 3]
+
+    if not mouth_solid_tags:
+        # Fallback: return box surfaces without hole
+        gmsh.model.occ.synchronize()
+        box_surfs = gmsh.model.getBoundary(
+            [(3, box_tag)], oriented=False, combined=False
+        )
+        return [(2, tag) for dim, tag in box_surfs if dim == 2]
+
+    # Boolean difference: box minus mouth prism → box with hole in front face
+    result_dimtags, _ = gmsh.model.occ.cut(
+        [(3, box_tag)], [(3, mouth_solid_tags[0])]
+    )
+    gmsh.model.occ.synchronize()
+
+    enc_surfaces = gmsh.model.getBoundary(
+        result_dimtags, oriented=False, combined=False
+    )
+    return [(2, tag) for dim, tag in enc_surfaces if dim == 2]
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +910,7 @@ def _configure_mesh_size(
         if surface_groups.get(group_key):
             fields.append(add_restricted_matheval(f"{throat_res:.6g}", surface_groups[group_key]))
 
-    for group_key in ("outer", "rear", "mouth"):
+    for group_key in ("outer", "rear", "mouth", "enclosure"):
         if surface_groups.get(group_key):
             fields.append(add_restricted_matheval(f"{rear_res:.6g}", surface_groups[group_key]))
 
@@ -836,14 +932,13 @@ def _configure_mesh_size(
 
 def _assign_physical_groups(
     surface_groups: Dict[str, List[int]],
-    sim_type: int,
 ) -> None:
     """Assign ABEC-compatible physical group names to meshed surfaces.
 
     Tag contract:
         SD1G0     (1) - inner horn wall
         SD1D1001  (2) - throat source disc (driving element)
-        SD2G0     (3) - outer/rear/mouth (free-standing, sim_type==2)
+        SD2G0     (3) - outer wall shell or enclosure box surfaces
     """
     inner_tags = surface_groups.get("inner", [])
     if inner_tags:
@@ -855,15 +950,15 @@ def _assign_physical_groups(
         gmsh.model.addPhysicalGroup(2, disc_tags, tag=2)
         gmsh.model.setPhysicalName(2, 2, "SD1D1001")
 
-    if sim_type == 2:
-        exterior_tags = (
-            surface_groups.get("outer", [])
-            + surface_groups.get("rear", [])
-            + surface_groups.get("mouth", [])
-        )
-        if exterior_tags:
-            gmsh.model.addPhysicalGroup(2, exterior_tags, tag=3)
-            gmsh.model.setPhysicalName(2, 3, "SD2G0")
+    exterior_tags = (
+        surface_groups.get("outer", [])
+        + surface_groups.get("rear", [])
+        + surface_groups.get("mouth", [])
+        + surface_groups.get("enclosure", [])
+    )
+    if exterior_tags:
+        gmsh.model.addPhysicalGroup(2, exterior_tags, tag=3)
+        gmsh.model.setPhysicalName(2, 3, "SD2G0")
 
 
 # ---------------------------------------------------------------------------
@@ -898,12 +993,14 @@ def build_waveguide_mesh(params: dict) -> dict:
             f"Formula type '{formula_type}' is not supported. Use 'R-OSSE' or 'OSSE'."
         )
 
-    sim_type = int(params.get("sim_type", 2))
+    enc_depth = float(params.get("enc_depth", 0) or 0)
     msh_version = str(params.get("msh_version", "2.2"))
+    # sim_type is passed through to ABEC project files but does not affect geometry
     quadrants = int(params.get("quadrants", 1234))
     closed = (quadrants == 1234)
 
-    # Compute 3D point grids (includes morph)
+    # Compute 3D point grids (includes morph).
+    # outer_points is non-None only for the wall-shell case (enc_depth==0 + wall_thickness>0).
     inner_points, outer_points = _compute_point_grids(params)
 
     throat_res = float(params.get("throat_res", 5.0))
@@ -925,17 +1022,27 @@ def build_waveguide_mesh(params: dict) -> dict:
             gmsh.model.add("WaveguideOCC")
 
             # --- Build geometry ---
+            # Enclosure box must be built and cut BEFORE inner horn surfaces are created
+            # to avoid the OCC Boolean cut interfering with the horn surface entities.
+            enc_dimtags = []
+            if enc_depth > 0:
+                enc_dimtags = _build_enclosure_box(inner_points, params, closed=closed)
+                # _build_enclosure_box calls occ.synchronize() internally
+
             inner_dimtags = _build_surface_from_points(inner_points, closed=closed)
             throat_disc_dimtags = _build_throat_disc(r0_throat) if closed else []
 
             outer_dimtags = []
             rear_dimtags = []
             mouth_dimtags = []
-            if sim_type == 2 and outer_points is not None:
+            if enc_depth == 0 and outer_points is not None:
+                # Wall shell: offset outer surface + rear/mouth rim
                 outer_dimtags = _build_surface_from_points(outer_points, closed=closed)
                 rear_dimtags = _build_rear_wall(inner_points, outer_points, closed=closed)
                 mouth_dimtags = _build_mouth_rim(inner_points, outer_points, closed=closed)
 
+            # Final synchronize flushes horn + throat disc + outer shell entities.
+            # Safe to call after enclosure's internal synchronize — it is idempotent.
             gmsh.model.occ.synchronize()
 
             # --- Surface groups ---
@@ -944,7 +1051,9 @@ def build_waveguide_mesh(params: dict) -> dict:
             }
             if closed:
                 surface_groups["throat_disc"] = [tag for _, tag in throat_disc_dimtags]
-            if sim_type == 2:
+            if enc_depth > 0:
+                surface_groups["enclosure"] = [tag for _, tag in enc_dimtags]
+            elif outer_points is not None:
                 surface_groups["outer"] = [tag for _, tag in outer_dimtags]
                 surface_groups["rear"] = [tag for _, tag in rear_dimtags]
                 surface_groups["mouth"] = [tag for _, tag in mouth_dimtags]
@@ -953,7 +1062,7 @@ def build_waveguide_mesh(params: dict) -> dict:
             _configure_mesh_size(inner_points, surface_groups, throat_res, mouth_res, rear_res)
 
             # --- Physical groups (ABEC-compatible) ---
-            _assign_physical_groups(surface_groups, sim_type)
+            _assign_physical_groups(surface_groups)
 
             # --- Mesh algorithm (MeshAdapt handles complex curved surfaces well) ---
             gmsh.option.setNumber("Mesh.Algorithm", 1)
