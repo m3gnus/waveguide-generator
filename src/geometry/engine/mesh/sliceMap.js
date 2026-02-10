@@ -29,6 +29,13 @@ function buildThroatSegmentMap(lengthSteps, throatSegments, extLen, slotLen, L) 
 }
 
 export function buildSliceMap(params, lengthSteps) {
+  // If an explicit slice density override is provided, use it directly.
+  // This decouples viewport axial distribution from the BEM element-size params.
+  const density = parseFloat(params.throatSliceDensity);
+  if (Number.isFinite(density) && density > 0 && density < 1) {
+    return buildResolutionMap(lengthSteps, density, 1.0 - density);
+  }
+
   const resT = Number(params.throatResolution);
   const resM = Number(params.mouthResolution);
   const resolutionMap = buildResolutionMap(lengthSteps, resT, resM);

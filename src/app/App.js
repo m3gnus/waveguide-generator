@@ -124,7 +124,7 @@ export class App {
     return toggleCamera(this);
   }
 
-  exportSTL() {
+  async exportSTL() {
     return exportSTL(this);
   }
 

@@ -76,7 +76,8 @@ export function renderModel(app) {
   // directly at every grid point. Export and simulation flows use a
   // canonical tagged payload derived from the same geometry equations.
   const artifacts = buildGeometryArtifacts(preparedParams, {
-    forceRearClosure: false
+    forceRearClosure: false,
+    adaptivePhi: true
   });
   const { vertices, indices } = artifacts.mesh;
   applyMeshToScene(app, vertices, indices, preparedParams);

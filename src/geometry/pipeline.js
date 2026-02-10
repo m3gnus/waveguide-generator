@@ -14,7 +14,8 @@ import { prepareGeometryParams } from './params.js';
 function resolveBuildOptions(buildParams, options = {}) {
   return {
     includeEnclosure: options.includeEnclosure ?? Number(buildParams.encDepth || 0) > 0,
-    collectGroups: true
+    collectGroups: true,
+    adaptivePhi: options.adaptivePhi ?? false
   };
 }
 

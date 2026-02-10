@@ -6,7 +6,10 @@ import { addEnclosureGeometry } from './mesh/enclosure.js';
 import { addFreestandingWallGeometry } from './mesh/freestandingWall.js';
 import {
   buildMorphTargets,
+  computeAdaptivePhiCounts,
   computeMouthExtents,
+  createAdaptiveFanIndices,
+  createAdaptiveRingVertices,
   createHornIndices,
   createRingVertices
 } from './mesh/horn.js';
@@ -61,24 +64,46 @@ export function buildWaveguideMesh(params, options = {}) {
     ? buildMorphTargets(meshParams, lengthSteps, angleList, sliceMap, profileContext)
     : null;
 
-  const vertices = createRingVertices(
-    meshParams,
-    sliceMap,
-    angleList,
-    morphTargets,
-    ringCount,
-    lengthSteps,
-    profileContext
-  );
+  // Adaptive phi: only when the caller explicitly opts in AND the geometry is a plain
+  // full-circle horn (no enclosure/wall). Enclosure/wall functions assume uniform ring
+  // topology. ABEC/simulation exports rely on a consistent ringCount and must NOT opt in.
+  const hasEnclosure = includeEnclosure && Number(meshParams.encDepth || 0) > 0;
+  const hasWall = Number(meshParams.encDepth || 0) <= 0 && Number(meshParams.wallThickness || 0) > 0;
+  const useAdaptivePhi = (options.adaptivePhi === true)
+    && quadrantInfo.fullCircle
+    && !hasEnclosure
+    && !hasWall;
 
-  const indices = createHornIndices(ringCount, lengthSteps, quadrantInfo.fullCircle);
+  let vertices;
+  let indices;
+  let mouthRingCount; // phi count of the outermost (mouth) ring
+  let throatRingCount; // phi count of the innermost (throat) ring
+
+  if (useAdaptivePhi) {
+    const phiCounts = computeAdaptivePhiCounts(
+      meshParams, lengthSteps, sliceMap, angularSegments, profileContext
+    );
+    vertices = createAdaptiveRingVertices(
+      meshParams, sliceMap, morphTargets, phiCounts, lengthSteps, profileContext
+    );
+    indices = createAdaptiveFanIndices(phiCounts, lengthSteps);
+    mouthRingCount = phiCounts[lengthSteps];
+    throatRingCount = phiCounts[0];
+  } else {
+    vertices = createRingVertices(
+      meshParams, sliceMap, angleList, morphTargets, ringCount, lengthSteps, profileContext
+    );
+    indices = createHornIndices(ringCount, lengthSteps, quadrantInfo.fullCircle);
+    mouthRingCount = ringCount;
+    throatRingCount = ringCount;
+  }
 
   const hornEndTri = indices.length / 3;
   if (groupInfo) {
     groupInfo.horn = { start: 0, end: hornEndTri };
   }
 
-  if (includeEnclosure && Number(meshParams.encDepth || 0) > 0) {
+  if (hasEnclosure) {
     addEnclosureGeometry(
       vertices,
       indices,
@@ -86,12 +111,12 @@ export function buildWaveguideMesh(params, options = {}) {
       0,
       quadrantInfo,
       groupInfo,
-      ringCount,
+      mouthRingCount,
       angleList
     );
-  } else if (Number(meshParams.encDepth || 0) <= 0 && Number(meshParams.wallThickness || 0) > 0) {
+  } else if (hasWall) {
     addFreestandingWallGeometry(vertices, indices, meshParams, {
-      ringCount,
+      ringCount: mouthRingCount,
       lengthSteps,
       fullCircle: quadrantInfo.fullCircle,
       groupInfo
@@ -101,7 +126,7 @@ export function buildWaveguideMesh(params, options = {}) {
   const sourceStartTri = indices.length / 3;
   const hasThroatDisk = meshParams.type !== 'R-OSSE' && meshParams.type !== 'OSSE';
   if (hasThroatDisk) {
-    const throatSource = generateThroatSource(vertices, ringCount, quadrantInfo.fullCircle);
+    const throatSource = generateThroatSource(vertices, throatRingCount, quadrantInfo.fullCircle);
     if (throatSource.center) {
       const centerIdx = vertices.length / 3;
       vertices.push(...throatSource.center);
@@ -128,7 +153,7 @@ export function buildWaveguideMesh(params, options = {}) {
   const result = {
     vertices,
     indices,
-    ringCount,
+    ringCount: mouthRingCount,
     fullCircle: quadrantInfo.fullCircle
   };
 
