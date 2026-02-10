@@ -423,11 +423,14 @@ async def build_mesh_from_params(request: WaveguideParamsRequest):
             detail=f"Waveguide build failed: {exc}"
         ) from exc
 
-    return {
+    response = {
         "msh": result["msh_text"],
         "generatedBy": "gmsh-occ",
         "stats": result["stats"]
     }
+    if result.get("stl_text"):
+        response["stl"] = result["stl_text"]
+    return response
 
 
 @app.post("/api/solve")
