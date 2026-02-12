@@ -23,6 +23,10 @@
   ],
   "author": "Magnus Andersen",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m3gnus/waveguide-generator.git"
+  },
   "dependencies": {
     "express": "^5.2.1",
     "jszip": "^3.10.1",
