@@ -664,8 +664,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const stitch = (r1Start, r2Start) => {
         for (let i = 0; i < totalPts; i++) {
             const i2 = (i + 1) % totalPts;
-            pushTri(r1Start + i, r2Start + i, r2Start + i2);
-            pushTri(r1Start + i, r2Start + i2, r1Start + i2);
+            pushTri(r2Start + i, r1Start + i, r1Start + i2);
+            pushTri(r2Start + i, r1Start + i2, r2Start + i2);
         }
     };
 
