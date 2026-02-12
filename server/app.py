@@ -77,12 +77,24 @@ def _run_git(repo_root: Path, *args: str) -> str:
 def get_update_status() -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
     if not (repo_root / ".git").exists():
-        raise RuntimeError("Repository metadata not found (.git directory is missing).")
+        raise RuntimeError(
+            "Git repository not found (.git directory is missing). "
+            "If you downloaded the code as a ZIP file, please initialize a git repository or "
+            "clone from https://github.com/m3gnus/waveguide-generator"
+        )
+
+    try:
+        subprocess.run(["git", "--version"], check=True, capture_output=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise RuntimeError("Git is not installed or not in system PATH.")
 
     try:
         _run_git(repo_root, "remote", "get-url", "origin")
-    except RuntimeError as exc:
-        raise RuntimeError("Git remote 'origin' is not configured.") from exc
+    except RuntimeError:
+        raise RuntimeError(
+            "Git remote 'origin' is not configured. "
+            "Expected remote: https://github.com/m3gnus/waveguide-generator.git"
+        )
 
     try:
         _run_git(repo_root, "fetch", "origin", "--quiet")
