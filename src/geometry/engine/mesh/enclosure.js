@@ -675,14 +675,22 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const mouthLoop = ringSize;
 
     // Greedy Stitching Logic Mouth -> Enclosure
-    // Initialize start offset (find nearest Enclosure vertex to Mouth[0])
+    // Initialize start offset (find nearest Enclosure vertex to Mouth[0]).
+    // Use the mouth ring centroid as the angular reference, not the enclosure
+    // box centroid — the enclosure centroid shifts with asymmetric spacing
+    // (e.g. large bottom margin) and produces wrong angular alignment.
+    let mCx = 0, mCz = 0;
+    for (const mv of mouthRing) { mCx += mv.x; mCz += mv.z; }
+    mCx /= mouthRing.length;
+    mCz /= mouthRing.length;
+
     let bestIdx = 0;
     let minDiff = Infinity;
     const m0 = mouthRing[0];
-    const m0ang = Math.atan2(m0.z - cz, m0.x - cx);
+    const m0ang = Math.atan2(m0.z - mCz, m0.x - mCx);
     for (let j = 0; j < totalPts; j++) {
         const pt = outerPts[j];
-        const ang = Math.atan2(pt.z - cz, pt.x - cx);
+        const ang = Math.atan2(pt.z - mCz, pt.x - mCx);
         let diff = Math.abs(m0ang - ang);
         if (diff > Math.PI) diff = 2 * Math.PI - diff;
         if (diff < minDiff) { minDiff = diff; bestIdx = j; }
