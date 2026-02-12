@@ -26,6 +26,9 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSeg
 
   const theta1 = Math.atan2(halfH - clampedCorner, halfW);
   const theta2 = Math.atan2(halfH, halfW - clampedCorner);
+
+  // cornerSegments is the number of internal points for the corner arc.
+  // We need pointsPerQuadrant + 1 total points in the array.
   const remainingSegments = Math.max(1, pointsPerQuadrant - cornerSegments);
 
   const side1Seg = Math.max(1, Math.min(
@@ -35,19 +38,28 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSeg
   const side2Seg = Math.max(1, remainingSegments - side1Seg);
 
   const angles = [];
-  for (let i = 0; i <= side1Seg; i += 1) angles.push(theta1 * (i / side1Seg));
-
-  const cx = halfW - clampedCorner;
-  const cy = halfH - clampedCorner;
-  for (let i = 1; i < cornerSegments; i += 1) {
-    const phi = (i / (cornerSegments - 1)) * (Math.PI / 2);
-    angles.push(Math.atan2(cy + clampedCorner * Math.sin(phi), cx + clampedCorner * Math.cos(phi)));
+  // Loop 1: Start point to corner start
+  for (let i = 0; i <= side1Seg; i += 1) {
+    angles.push(theta1 * (i / side1Seg));
   }
 
+  // Loop 2: Corner internal points
+  const cx = halfW - clampedCorner;
+  const cy = halfH - clampedCorner;
+  if (cornerSegments > 0) {
+    for (let i = 1; i <= cornerSegments; i += 1) {
+      const phi = (i / (cornerSegments + 1)) * (Math.PI / 2);
+      angles.push(Math.atan2(cy + clampedCorner * Math.sin(phi), cx + clampedCorner * Math.cos(phi)));
+    }
+  }
+
+  // Loop 3: Corner end to 90 degrees
   for (let i = 1; i <= side2Seg; i += 1) {
     angles.push(theta2 + ((Math.PI / 2) - theta2) * (i / side2Seg));
   }
 
+  // Final length should be (side1Seg + 1) + cornerSegments + side2Seg
+  // = remainingSegments + 1 + cornerSegments = pointsPerQuadrant + 1.
   return angles;
 }
 
