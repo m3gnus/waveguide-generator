@@ -1,5 +1,9 @@
 # Waveguide Generator: Technical Documentation
 
+This is the primary technical source of truth and supersedes prior standalone docs for:
+- OCC/legacy `.msh`/`.geo` generation details
+- Geometry and meshing implementation analysis
+
 ## 1. Overview
 
 This project is a web application for acoustic horn design and simulation. It combines:
@@ -29,7 +33,7 @@ Primary entry points:
 - `src/geometry/`
   - Horn formulas, mesh generation, surface tags, transforms, and canonical payload assembly
 - `src/export/`
-  - File-format writers (MSH, GEO, CSV, STL, ABEC)
+  - File-format writers (MSH, GEO, CSV, STL, ABEC) and ABEC bundle validation
 - `src/solver/`
   - Backend client and mesh payload validation on the frontend side
 - `src/state.js`
@@ -45,6 +49,23 @@ Primary entry points:
   - BEM solver adapter and frequency-domain solve logic
   - Mesh preparation and optional Gmsh refinement
   - Directivity and supporting utilities
+
+### 2.3 Backend dependency matrix (P3-1)
+
+Runtime support is explicitly version-gated in `server/solver/deps.py`:
+
+| Component | Supported range | Required for |
+|---|---|---|
+| Python | `>=3.10,<3.14` | backend runtime |
+| gmsh Python package | `>=4.10,<5.0` | `/api/mesh/build` |
+| bempp-cl | `>=0.4,<0.5` | `/api/solve` |
+| legacy `bempp_api` fallback | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |
+
+Behavior:
+- `GET /health` reports live dependency status under `dependencies`.
+- `POST /api/mesh/build` returns `503` when Python/gmsh are outside the supported matrix.
+- `POST /api/solve` returns `503` when Python/bempp are outside the supported matrix.
+- `POST /api/mesh/generate-msh` can still work through system `gmsh` CLI when Python gmsh is unavailable.
 
 ## 3. Core Data Flow
 
@@ -104,7 +125,7 @@ Source of truth on frontend: `src/geometry/tags.js`
 | Pipeline | Purpose | Engine | Files |
 |---|---|---|---|
 | **JS viewport mesh** | Real-time Three.js rendering | JS geometry engine | `src/geometry/engine/`, `src/geometry/pipeline.js` |
-| **Python OCC export mesh** | BEM acoustic simulation (.geo/.msh) | Gmsh Python OCC API | `server/solver/waveguide_builder.py` |
+| **Python OCC export mesh** | BEM acoustic simulation (.msh) | Gmsh Python OCC API | `server/solver/waveguide_builder.py` |
 
 The viewport mesh and the export mesh are **not** derived from the same geometry representation.
 The viewport path uses a fast triangulated approximation; the export path uses Gmsh OCC BSplines
@@ -143,7 +164,7 @@ Key file: `server/solver/waveguide_builder.py` -> `build_waveguide_mesh(params)`
   Cross-sectional wires (one ring per t-index) would be non-planar when L(phi) is non-constant,
   producing twisted geometry — this is why longitudinal wires are used instead.
 - Produces smooth curved surfaces that Gmsh can mesh correctly.
-- Returns both `.geo` (OCC format) and `.msh` text.
+- Returns `.msh` text (plus optional `stl`), not `.geo`.
 - Falls back to JS `.geo` path if Gmsh Python API is unavailable (`503`).
 
 **Outer geometry logic** — geometry presence is controlled by enclosure/wall parameters, not `sim_type`:
@@ -166,7 +187,7 @@ no effect on which outer geometry surfaces are generated.
 | SD2G0 (BEM group 3) | `exterior` | Outer wall shell or enclosure surfaces (present when wallThickness>0 or encDepth>0) |
 
 
-### 5.1 Mesh Parameters
+### 5.3 Mesh Parameters
 
 All `Mesh.*` config parameters from the MWG specification:
 
@@ -188,7 +209,23 @@ All `Mesh.*` config parameters from the MWG specification:
 | `Mesh.RearShape` | int | `1` | Legacy, removed. Always flat disc. Old configs tolerated. |
 | `Mesh.ZMapPoints` | — | — | Not implemented. Axial distances set by resolution mapping. |
 
-User-specified segment counts and resolution values pass through 1:1 to the `.geo` file (no scaling).
+User-specified segment counts and resolution values pass through 1:1 to backend mesh generation (no scaling).
+
+### 5.4 Validated geometry/meshing findings
+
+Current validated findings from implementation and tests:
+
+- Dual-pipeline architecture is intentional: JS viewport tessellation and Python OCC meshing are separate by design.
+- Angular sampling + quadrant handling (`1`, `12`, `14`, `1234`) is implemented on both JS and Python paths.
+- Enclosure stitching now uses angularly aligned perimeter generation (not legacy perimeter remeshing heuristics).
+- Adaptive phi is intentionally constrained to full-circle horn-only meshes.
+- Quality diagnostics exist (`validateMeshQuality`) but are currently diagnostic-first, not strict blocking.
+
+Known implementation risks still tracked:
+
+- Symmetry split-plane seam handling remains heuristic and can be sensitive to near-plane numerical drift.
+- Simulation-grade quality policies (strict/warn/off style mesh gating) are not fully standardized across all paths.
+- Cross-path parity coverage (JS tessellation invariants vs OCC outputs) still needs expansion.
 
 ## 6. Export System
 
@@ -199,7 +236,7 @@ Supported exports:
 - STL: binary STL from Three.js geometry
 - GEO: full Gmsh geometry + generated BEMPP starter Python script
 - MSH: tagged mesh export using canonical tag rules
-- ABEC: ZIP bundle with project files, mesh, GEO, starter script, and results templates
+- ABEC: ZIP bundle with project files, mesh, `bem_mesh.geo`, and results templates
 - CSV: horn profile coordinate export
 - MWG config text
 
@@ -210,8 +247,8 @@ For R-OSSE and OSSE configs:
 - Before building the payload, `detectGeometrySymmetry(preparedParams)` from `src/geometry/symmetry.js`
   is called to auto-detect the maximum valid symmetry domain and overwrite `quadrants` accordingly.
 - This POSTs formula parameters to `POST /api/mesh/build`.
-- Backend constructs BSpline OCC geometry and returns `.geo` + `.msh`.
-- The `.geo` bundled in the ABEC project is the OCC format script, not a flat polyhedral script.
+- Backend constructs BSpline OCC geometry and returns `.msh`.
+- The ABEC bundle still includes `bem_mesh.geo`, generated by the JS geo builder for parity/debugging.
 - If the backend returns `503`, falls back to the legacy JS `.geo` path.
 
 **Symmetry auto-detection** (`src/geometry/symmetry.js`):
@@ -226,7 +263,7 @@ Legacy / fallback path (503 fallback only):
 - `exportMSH` and `exportABECProject` call `buildExportMeshWithGmsh(...)`.
 - Frontend generates `.geo` via `buildGmshGeo(...)` from `src/export/gmshGeoBuilder.js`.
 - The `.geo` is sent to `POST /api/mesh/generate-msh` for Gmsh meshing.
-- The `.geo` bundled in the ABEC project is the flat polyhedral script from the JS builder.
+- The same generated `.geo` is bundled as `bem_mesh.geo`.
 
 Mesh export invariant:
 - `.msh` output is always Gmsh-authoritative — no direct frontend triangle-to-`.msh` serialization.
@@ -235,7 +272,7 @@ Mesh export invariant:
 ABEC ZIP assembly uses `JSZip` in browser and includes simulation configuration files generated by:
 
 - `src/export/abecProject.js`
-- `src/export/bempp.js`
+- `src/export/abecBundleValidator.js` (validation/parity contract checks)
 
 ## 7. Backend API Contract
 
@@ -243,7 +280,7 @@ Base URL: `http://localhost:8000`
 
 ### `GET /health`
 
-Returns health status and solver availability indicator.
+Returns health status, solver readiness, OCC builder readiness, and dependency matrix/runtime status.
 
 ### `POST /api/solve`
 
@@ -256,7 +293,7 @@ Returns health status and solver availability indicator.
 - **Preferred path for R-OSSE configs.**
 - Accepts formula parameters (`WaveguideParamsRequest`) directly — no `.geo` text required.
 - Backend constructs BSpline OCC geometry using Gmsh Python API.
-- Returns `{ "geo": str, "msh": str, "generatedBy": "gmsh-occ", "stats": { nodeCount, elementCount } }`.
+- Returns `{ "msh": str, "generatedBy": "gmsh-occ", "stats": { nodeCount, elementCount }, "stl"?: str }`.
 - Returns `503` if Gmsh Python API is unavailable.
 - Returns `422` if `formula_type` is not `"R-OSSE"` or `"OSSE"`, or `msh_version` is not `"2.2"` or `"4.1"`.
 - Implemented in `server/solver/waveguide_builder.py`.
@@ -286,7 +323,12 @@ Returns health status and solver availability indicator.
 Primary automated checks:
 
 - Frontend/unit tests: `npm test`
-- ATH parity checks (when `_references/testconfigs` exists): `npm run test:ath`
+- ATH parity checks (when `_references/testconfigs` exists): `npm run test:ath` (strict infra mode by default)
+- ATH parity infrastructure policy:
+  - preflight probes and mesh smoke checks run for backend/python/cli methods before ATH comparisons.
+  - failures print reproducible local fix steps for backend reachability, gmsh Python runtime, and gmsh CLI wrapper setup.
+  - strict mode is enabled by default; set `ATH_PARITY_STRICT_INFRA=0` only when intentionally probing infrastructure behavior.
+- ABEC bundle parity validation: `npm run test:abec <bundle-path>`
 - Backend tests (project Python): `cd server && ../.venv/bin/python -m unittest discover -s tests`
 - NPM backend script: `npm run test:server`
 - Frontend production bundle: `npm run build`
@@ -300,7 +342,7 @@ Primary automated checks:
 ## 10. Known Constraints and Risks
 
 - ATH parity for GEO/STL/MSH across full reference set is still incomplete.
-- ABEC parity requires more reference-level validation.
+- ABEC parity contract currently anchors to `260112aolo1` and should be expanded if new ATH references are added.
 - End-to-end runtime simulation verification needs broader fixture coverage.
 
 These are release-quality risks, not blockers for local development flow.
@@ -313,6 +355,7 @@ These are release-quality risks, not blockers for local development flow.
 - Geometry pipeline: `src/geometry/pipeline.js`
 - Surface tags: `src/geometry/tags.js`
 - Export orchestration: `src/app/exports.js`
+- ABEC validator/parity contract: `src/export/abecBundleValidator.js`, `docs/ABEC_PARITY_CONTRACT.md`
 - Symmetry auto-detection: `src/geometry/symmetry.js`
 - Simulation UI actions: `src/ui/simulation/actions.js`
 - Solver client: `src/solver/index.js`

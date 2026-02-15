@@ -47,7 +47,7 @@ for %%p in (py python3 python) do (
     if not defined PYTHON_BIN (
         where %%p >nul 2>&1
         if not errorlevel 1 (
-            %%p -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
+            %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)" >nul 2>&1
             if not errorlevel 1 (
                 set PYTHON_BIN=%%p
             )
@@ -56,7 +56,7 @@ for %%p in (py python3 python) do (
 )
 
 if not defined PYTHON_BIN (
-    echo ERROR: Python 3.10 or newer is required.
+    echo ERROR: Python 3.10 through 3.13 is required.
     echo        Install from https://www.python.org/ ^(tick "Add python.exe to PATH"^)
     echo        and re-run this script.
     pause

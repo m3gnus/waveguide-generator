@@ -16,9 +16,27 @@ from datetime import datetime
 # Import solver module (will be created)
 try:
     from solver import BEMSolver
-    SOLVER_AVAILABLE = True
+    from solver.deps import (
+        BEMPP_RUNTIME_READY,
+        GMSH_OCC_RUNTIME_READY,
+        get_dependency_status
+    )
+    SOLVER_AVAILABLE = BEMPP_RUNTIME_READY
 except ImportError:
     SOLVER_AVAILABLE = False
+    BEMPP_RUNTIME_READY = False
+    GMSH_OCC_RUNTIME_READY = False
+
+    def get_dependency_status():
+        return {
+            "supportedMatrix": {},
+            "runtime": {
+                "python": {"version": None, "supported": False},
+                "gmsh_python": {"available": False, "version": None, "supported": False, "ready": False},
+                "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False}
+            }
+        }
+
     print("Warning: BEM solver not available. Install bempp-cl to enable simulations.")
 
 try:
@@ -321,9 +339,13 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Health check requested", flush=True)
+    dependency_status = get_dependency_status()
     return {
         "status": "ok",
         "solver": "bempp-cl" if SOLVER_AVAILABLE else "unavailable",
+        "solverReady": BEMPP_RUNTIME_READY,
+        "occBuilderReady": WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY,
+        "dependencies": dependency_status,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -385,7 +407,7 @@ async def generate_mesh_with_gmsh(request: GmshMeshRequest):
 @app.post("/api/mesh/build")
 async def build_mesh_from_params(request: WaveguideParamsRequest):
     """
-    Build .geo and .msh from ATH waveguide parameters using Gmsh OCC Python API.
+    Build a Gmsh-authored .msh from ATH waveguide parameters using the Gmsh OCC Python API.
 
     Supports both R-OSSE and OSSE formula types with full ATH geometry features:
     throat extension, slot, circular arc, profile rotation, guiding curves,
@@ -395,7 +417,7 @@ async def build_mesh_from_params(request: WaveguideParamsRequest):
     ThruSections surfaces, producing a mesh that accurately follows the curved
     waveguide geometry.
 
-    Returns the Gmsh .geo script (OCC-format), the .msh mesh, and mesh statistics.
+    Returns the generated .msh mesh and mesh statistics (and optional STL text).
     Assigns ABEC-compatible physical group names: SD1G0, SD1D1001, SD2G0.
 
     Returns 503 if the Gmsh Python API is not available.
@@ -406,6 +428,22 @@ async def build_mesh_from_params(request: WaveguideParamsRequest):
             detail=(
                 "Python OCC mesh builder unavailable. "
                 "Install gmsh Python API: pip install gmsh>=4.10.0"
+            )
+        )
+
+    if not GMSH_OCC_RUNTIME_READY:
+        dep = get_dependency_status()
+        gmsh_info = dep["runtime"]["gmsh_python"]
+        py_info = dep["runtime"]["python"]
+        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.10,<5.0")
+        py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.14")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Python OCC mesh builder dependency check failed. "
+                f"python={py_info.get('version')} supported={py_info.get('supported')}; "
+                f"gmsh={gmsh_info.get('version')} supported={gmsh_info.get('supported')}. "
+                f"Supported matrix: python {py_range}, gmsh {gmsh_range}."
             )
         )
 
@@ -464,9 +502,20 @@ async def submit_simulation(request: SimulationRequest):
         )
 
     if not SOLVER_AVAILABLE:
+        dep = get_dependency_status()
+        bempp_info = dep["runtime"]["bempp"]
+        py_info = dep["runtime"]["python"]
+        bempp_cl_range = dep["supportedMatrix"].get("bempp_cl", {}).get("range", ">=0.4,<0.5")
+        bempp_legacy_range = dep["supportedMatrix"].get("bempp_api_legacy", {}).get("range", ">=0.3,<0.4")
         raise HTTPException(
             status_code=503,
-            detail="BEM solver not available. Please install bempp-cl."
+            detail=(
+                "BEM solver not available. Please install bempp-cl. "
+                f"python={py_info.get('version')} supported={py_info.get('supported')}; "
+                f"bempp variant={bempp_info.get('variant')} version={bempp_info.get('version')} "
+                f"supported={bempp_info.get('supported')}. "
+                f"Supported matrix: bempp-cl {bempp_cl_range}, legacy bempp_api {bempp_legacy_range}."
+            )
         )
     
     # Generate unique job ID
@@ -629,6 +678,7 @@ if __name__ == "__main__":
     import uvicorn
     print("Starting MWG Horn BEM Solver Backend...")
     print(f"Solver available: {SOLVER_AVAILABLE}")
+    print(f"OCC builder ready: {WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY}")
     if not SOLVER_AVAILABLE:
         print("Warning: bempp-cl not installed. Install it to enable simulations.")
     uvicorn.run(app, host="0.0.0.0", port=8000)

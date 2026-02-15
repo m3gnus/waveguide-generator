@@ -9,7 +9,7 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 Two things need to be installed on your computer before you begin:
 
 - **[Node.js 18+](https://nodejs.org/)** — download and install the LTS version
-- **[Python 3.10+](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
+- **[Python 3.10 - 3.13](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
 
 That's all. Everything else is handled by the install script.
 
@@ -37,6 +37,12 @@ The app opens automatically in your browser at `http://localhost:3000`. Close th
 ## Optional: BEM Solver
 
 The install script will ask whether to install `bempp-cl`, a BEM acoustic solver. This enables the **Start BEM Simulation** feature. It is optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it. Installation can take 5–10 minutes the first time.
+
+Supported backend dependency matrix:
+- Python: `>=3.10,<3.14`
+- gmsh Python package: `>=4.10,<5.0`
+- bempp-cl: `>=0.4,<0.5` (`/api/solve`)
+- legacy `bempp_api` fallback: `>=0.3,<0.4` (`/api/solve (legacy fallback)`)
 
 To install it later:
 
@@ -72,7 +78,7 @@ docs/         Architecture and technical reference
 ```bash
 npm test              # JS unit tests
 npm run test:server   # Python backend tests
-npm run test:ath      # ATH geometry parity check
+npm run test:ath      # ATH parity check (strict infra diagnostics)
 npm run build         # Production bundle
 ```
 
@@ -83,6 +89,14 @@ See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for architect
 
 **Backend not connected** — start the app via a launcher or `npm start`, then check:
 ```bash
+curl http://localhost:8000/health
+```
+
+**ATH parity infra failures** — `npm run test:ath` runs in strict mode by default and prints concrete fix steps (`ATH_PARITY_STRICT_INFRA=0` disables strict mode).
+Typical checks:
+```bash
+python3 -c "import gmsh; print(gmsh.__version__)"
+gmsh -version
 curl http://localhost:8000/health
 ```
 

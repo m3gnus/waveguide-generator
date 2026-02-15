@@ -12,6 +12,7 @@
     "build": "webpack --mode production",
     "test": "node --test",
     "test:ath": "node scripts/ath-parity.js",
+    "test:abec": "node scripts/validate-abec-bundle.js",
     "test:server": "cd server && python3 -m unittest discover -s tests"
   },
   "keywords": [
