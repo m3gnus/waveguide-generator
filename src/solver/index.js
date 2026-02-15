@@ -1,17 +1,15 @@
 /**
- * BEM Solver Interface (Validation Phase)
+ * BEM Solver Interface
  *
  * ╔════════════════════════════════════════════════════════════════════════════╗
- * ║  WARNING: MOCK SOLVER - NO REAL PHYSICS                                    ║
+ * ║  Backend-first solver client                                                ║
  * ╠════════════════════════════════════════════════════════════════════════════╣
- * ║  This module currently returns FAKE deterministic data.                    ║
- * ║  Results are NOT physics-based and NOT suitable for acoustic design.       ║
+ * ║  submitSimulation/getJobStatus/getResults call the Python backend API.     ║
+ * ║  mockBEMSolver is a local fallback helper only and is not physics-based.   ║
  * ║                                                                            ║
- * ║  Real BEM integration requires:                                            ║
- * ║  - Python backend with BEM library (e.g., bempp, pybem)                   ║
- * ║  - Server running at localhost:8000                                        ║
+ * ║  Runtime requirement: backend running at localhost:8000                    ║
  * ║                                                                            ║
- * ║  Status: Phase 4 (BEM Integration) is DEFERRED                            ║
+ * ║  Use mock results only for UI/debug validation workflows.                  ║
  * ╚════════════════════════════════════════════════════════════════════════════╝
  *
  * This module provides the public API for BEM acoustic simulations.

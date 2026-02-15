@@ -24,6 +24,21 @@ Notes:
   - `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev --force-reinstall --no-cache-dir gmsh`
   - Headless Linux: `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev-nox --force-reinstall --no-cache-dir gmsh`
 
+## 1.1 Supported dependency matrix (P3-1)
+
+The backend now enforces a version matrix at runtime:
+
+| Component | Supported range | Required for |
+|---|---|---|
+| Python | `>=3.10,<3.14` | backend runtime |
+| gmsh Python package | `>=4.10,<5.0` | `/api/mesh/build` |
+| bempp-cl | `>=0.4,<0.5` | `/api/solve` |
+| legacy `bempp_api` fallback | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |
+
+Notes:
+- `POST /api/mesh/generate-msh` can still run with system `gmsh` CLI when Python gmsh is unavailable.
+- `GET /health` returns the live dependency status and matrix under `dependencies`.
+
 ## 2. Run Backend
 
 From repository root:

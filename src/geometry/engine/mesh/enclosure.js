@@ -416,11 +416,33 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const totalPts = ringSize;
 
     // --- Step 4: Align Enclosure Ring 0 with Mouth ---
-    const ring0Start = vertices.length / 3;
+    const mergeEps = 1e-6;
+    let reuseMouthAsRing0 = true;
     for (let i = 0; i < totalPts; i++) {
         const ipt = insetPts[i];
-        const mouthVY = vertices[(lastRowStart + i) * 3 + 1];
-        vertices.push(ipt.x, mouthVY, ipt.z);
+        const mouthX = vertices[(lastRowStart + i) * 3];
+        const mouthZ = vertices[(lastRowStart + i) * 3 + 2];
+        if (Math.hypot(ipt.x - mouthX, ipt.z - mouthZ) > mergeEps) {
+            reuseMouthAsRing0 = false;
+            break;
+        }
+    }
+
+    let ring0Start;
+    if (reuseMouthAsRing0) {
+        ring0Start = lastRowStart;
+    } else {
+        const seamNudge = 1e-4;
+        ring0Start = vertices.length / 3;
+        for (let i = 0; i < totalPts; i++) {
+            const ipt = insetPts[i];
+            const mouthVY = vertices[(lastRowStart + i) * 3 + 1];
+            vertices.push(
+                ipt.x - (ipt.nx || 0) * seamNudge,
+                mouthVY,
+                ipt.z - (ipt.nz || 0) * seamNudge
+            );
+        }
     }
 
     // Interface ring (optional)
@@ -441,7 +463,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const frontRings = [ring0Start];
     if (interfaceRingStart !== -1) frontRings.push(interfaceRingStart);
 
-    const edgeSlices = Math.max(1, axialSegs);
+    const edgeSlices = edgeR > 0 ? Math.max(1, axialSegs) : 0;
     for (let j = 1; j <= edgeSlices; j++) {
         const ringIdx = vertices.length / 3;
         frontRings.push(ringIdx);
@@ -483,21 +505,33 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const fullCircle = !quadrantInfo || quadrantInfo.fullCircle;
 
     // Mouth to Enclosure stitch (1:1 direct)
-    if (fullCircle) {
-        for (let i = 0; i < totalPts; i++) {
-            const i2 = (i + 1) % totalPts;
-            pushTri(lastRowStart + i, lastRowStart + i2, ring0Start + i);
-            pushTri(lastRowStart + i2, ring0Start + i2, ring0Start + i);
-        }
-    } else {
-        for (let i = 0; i < totalPts - 1; i++) {
-            pushTri(lastRowStart + i, lastRowStart + i + 1, ring0Start + i);
-            pushTri(lastRowStart + i + 1, ring0Start + i + 1, ring0Start + i);
+    if (!reuseMouthAsRing0) {
+        if (fullCircle) {
+            for (let i = 0; i < totalPts; i++) {
+                const i2 = (i + 1) % totalPts;
+                pushTri(lastRowStart + i, lastRowStart + i2, ring0Start + i);
+                pushTri(lastRowStart + i2, ring0Start + i2, ring0Start + i);
+            }
+        } else {
+            for (let i = 0; i < totalPts - 1; i++) {
+                pushTri(lastRowStart + i, lastRowStart + i + 1, ring0Start + i);
+                pushTri(lastRowStart + i + 1, ring0Start + i + 1, ring0Start + i);
+            }
         }
     }
 
+    let interfaceStartTri = -1;
+    let interfaceEndTri = -1;
+    let frontStitchStart = 0;
+    if (interfaceRingStart !== -1 && frontRings.length > 1) {
+        interfaceStartTri = indices.length / 3;
+        stitch(frontRings[0], frontRings[1]);
+        interfaceEndTri = indices.length / 3;
+        frontStitchStart = 1;
+    }
+
     // Front rings stitch
-    for (let i = 0; i < frontRings.length - 1; i++) {
+    for (let i = frontStitchStart; i < frontRings.length - 1; i++) {
         stitch(frontRings[i], frontRings[i + 1]);
     }
     stitch(mainFrontRing, backRingStart);
@@ -512,19 +546,16 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     avgX /= totalPts; avgZ /= totalPts;
     vertices.push(avgX, backY, avgZ);
 
-    if (fullCircle) {
-        for (let i = 0; i < totalPts; i++) {
-            const i2 = (i + 1) % totalPts;
-            pushTri(backRingStart + i, backRingStart + i2, capStart);
-        }
-    } else {
-        for (let i = 0; i < totalPts - 1; i++) {
-            pushTri(backRingStart + i, backRingStart + i + 1, capStart);
-        }
+    for (let i = 0; i < totalPts; i++) {
+        const i2 = (i + 1) % totalPts;
+        pushTri(backRingStart + i, backRingStart + i2, capStart);
     }
 
     const enclosureEndTri = indices.length / 3;
     if (groupInfo) {
-        groupInfo.enclosure = { start: enclosureStartTri * 3, end: enclosureEndTri * 3 };
+        groupInfo.enclosure = { start: enclosureStartTri, end: enclosureEndTri };
+        if (interfaceStartTri >= 0 && interfaceEndTri > interfaceStartTri) {
+            groupInfo.interface = { start: interfaceStartTri, end: interfaceEndTri };
+        }
     }
 }

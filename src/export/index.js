@@ -11,6 +11,10 @@ export {
   generateAbecCoordsFile,
   generateAbecStaticFile
 } from './abecProject.js';
+export {
+  ATH_ABEC_PARITY_CONTRACT,
+  validateAbecBundle
+} from './abecBundleValidator.js';
 
 // Browser-compatible STL exports (binary/ASCII generation)
 export { exportSTLBinary, exportSTLAscii } from './stl.browser.js';

@@ -39,11 +39,6 @@ export function buildSurfaceTags(meshData, { interfaceEnabled = false } = {}) {
 
   if (meshData.groups?.source) {
     applyTagRange(tags, meshData.groups.source, SURFACE_TAGS.SOURCE);
-  } else {
-    const sourceTriCount = Math.min(Math.max(16, Number(meshData.ringCount || 0)), triCount);
-    for (let i = 0; i < sourceTriCount; i += 1) {
-      tags[i] = SURFACE_TAGS.SOURCE;
-    }
   }
 
   if (interfaceEnabled) {

@@ -83,7 +83,10 @@ export class BemClient extends BemSolver {
     };
 
     const controller = new AbortController();
-    const timeoutMs = 90_000;
+    const requestedTimeout = Number(request?.timeoutMs);
+    const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+      ? Math.floor(requestedTimeout)
+      : 90_000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let response;
