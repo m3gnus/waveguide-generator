@@ -1,8 +1,8 @@
 """
 Waveguide mesh builder using Gmsh OCC (OpenCASCADE) Python API.
 
-Generates .geo and .msh files from ATH-format parameters directly inside
-Gmsh using parametric BSpline curves and ThruSections surfaces.
+Generates Gmsh-authored .msh (and optional STL) from ATH-format parameters
+directly inside Gmsh using parametric BSpline curves and ThruSections surfaces.
 
 This is the architecturally correct approach per ATH section 3.3.1:
   "for each slice a smooth spline curve is created (controlled by the grid

@@ -1,12 +1,12 @@
 # MWG Horn BEM Solver Backend Requirements
-# Python 3.10+ required
+# Supported runtime matrix: Python >=3.10,<3.14
 
 # Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 
-# BEM Solver (bempp-cl)
+# BEM Solver (bempp-cl, supported range >=0.4,<0.5)
 # Note: Install prerequisites first (see README.md)
 plotly
 numpy
@@ -15,14 +15,15 @@ numba
 meshio>=4.0.16
 
 # The bempp-cl package should be installed via:
-# pip install git+https://github.com/bempp/bempp-cl.git
+# pip install 'bempp-cl>=0.4,<0.5'
+# If your platform lacks wheels, use the upstream git repository pinned to a 0.4.x release.
 
 # Mesh Processing
 trimesh==4.0.5
 # Gmsh Python API — required for /api/mesh/build (Python OCC builder) and
 # used by /api/mesh/generate-msh when available.
 # Falls back to `gmsh` CLI if the Python package is not installed.
-gmsh>=4.10.0
+gmsh>=4.10.0,<5.0
 
 # Utilities
 pydantic>=2.10.0

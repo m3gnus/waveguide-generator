@@ -223,7 +223,7 @@ function buildPythonBuilderPayload(preparedParams, mshVersion = '2.2') {
 }
 
 /**
- * Build .geo and .msh using the Python OCC builder (POST /api/mesh/build).
+ * Build an OCC-based .msh using the Python builder (POST /api/mesh/build).
  * Supports R-OSSE and OSSE configs when the backend Gmsh Python API is installed.
  *
  * Falls back to buildExportMeshWithGmsh if the endpoint returns 503.
@@ -248,14 +248,14 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
   if (app?.stats) app.stats.innerText = 'Building mesh (Python OCC)\u2026';
 
   const mshVersion = options.mshVersion || '2.2';
-  const payload = buildPythonBuilderPayload(preparedParams, mshVersion);
+  const requestPayload = buildPythonBuilderPayload(preparedParams, mshVersion);
 
   let response;
   try {
     const res = await fetch(`${backendUrl}/api/mesh/build`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(requestPayload)
     });
 
     if (res.status === 503) {
@@ -285,10 +285,15 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
   const artifacts = buildGeometryArtifacts(gmshParams, {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0
   });
+  const payload = artifacts.simulation;
+  const { geoText } = buildGmshGeo(gmshParams, artifacts.mesh, payload, {
+    mshVersion: options.mshVersion || '2.2'
+  });
 
   return {
     artifacts,
-    payload: artifacts.simulation,
+    payload,
+    geoText,
     msh: response.msh,
     meshStats: response.stats || null
   };
@@ -403,6 +408,7 @@ export async function buildExportMeshWithGmsh(app, preparedParams, options = {})
   return {
     artifacts,
     payload,
+    geoText,
     msh: meshResponse.msh,
     meshStats: meshResponse.stats || null
   };
@@ -507,7 +513,10 @@ export async function exportABECProject(app) {
     const buildFn = (preparedParams.type === 'R-OSSE' || preparedParams.type === 'OSSE')
       ? buildExportMeshFromParams
       : buildExportMeshWithGmsh;
-    const { artifacts, payload, msh } = await buildFn(app, preparedParams);
+    const { artifacts, payload, msh, geoText } = await buildFn(app, preparedParams);
+    if (typeof geoText !== 'string' || geoText.trim().length === 0) {
+      throw new Error('ABEC export failed: bem_mesh.geo generation returned empty content.');
+    }
     const hornGeometry = artifacts.mesh;
     const solvingContent = generateAbecSolvingFile(preparedParams, {
       interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
@@ -531,6 +540,7 @@ export async function exportABECProject(app) {
     root.file('solving.txt', solvingContent);
     root.file('observation.txt', observationContent);
     root.file(meshFileName, msh);
+    root.file('bem_mesh.geo', geoText);
     const resultsFolder = root.folder('Results');
     resultsFolder.file('coords.txt', coordsContent);
     resultsFolder.file('static.txt', staticContent);

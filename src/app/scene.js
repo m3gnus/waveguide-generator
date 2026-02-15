@@ -77,7 +77,7 @@ export function renderModel(app) {
   // canonical tagged payload derived from the same geometry equations.
   const artifacts = buildGeometryArtifacts(preparedParams, {
     forceRearClosure: false,
-    adaptivePhi: true
+    adaptivePhi: false
   });
   const { vertices, indices } = artifacts.mesh;
   applyMeshToScene(app, vertices, indices, preparedParams);

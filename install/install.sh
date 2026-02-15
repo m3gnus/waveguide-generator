@@ -42,7 +42,7 @@ PYTHON_BIN=""
 for cmd in python3.13 python3.12 python3.11 python3.10 python3; do
     if command -v "$cmd" &>/dev/null; then
         VERSION=$("$cmd" -c "import sys; print(sys.version_info[:2])")
-        if "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+        if "$cmd" -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)" 2>/dev/null; then
             PYTHON_BIN="$cmd"
             break
         fi
@@ -50,7 +50,7 @@ for cmd in python3.13 python3.12 python3.11 python3.10 python3; do
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-    echo "ERROR: Python 3.10 or newer is required."
+    echo "ERROR: Python 3.10 through 3.13 is required."
     echo "       Install from https://www.python.org/ and re-run this script."
     exit 1
 fi
