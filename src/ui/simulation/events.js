@@ -22,6 +22,12 @@ export function setupEventListeners(panel) {
     runBtn.addEventListener('click', () => panel.runSimulation());
   }
 
+  // View results button
+  const viewBtn = document.getElementById('view-results-btn');
+  if (viewBtn) {
+    viewBtn.addEventListener('click', () => panel.openViewResults());
+  }
+
   // Export results button
   const exportBtn = document.getElementById('export-results-btn');
   if (exportBtn) {

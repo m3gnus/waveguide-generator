@@ -6,7 +6,9 @@ export function applyExportSelection(panel, exportType, handlers = null) {
     '1': () => exportAsImage(),
     '2': () => exportAsCSV(panel),
     '3': () => exportAsJSON(panel),
-    '4': () => exportAsText(panel)
+    '4': () => exportAsText(panel),
+    '5': () => exportAsPolarCSV(panel),
+    '6': () => exportAsImpedanceCSV(panel)
   };
 
   const action = actionMap[exportType];
@@ -221,16 +223,12 @@ export function exportAsText(panel) {
   report += 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Real(Ω)  Z_Imag(Ω)\n';
   report += '--------  -------  ------  ---------  ---------\n';
 
-  for (let i = 0; i < Math.min(frequencies.length, 50); i++) {
+  for (let i = 0; i < frequencies.length; i++) {
     report += `${frequencies[i].toString().padEnd(8)}  `;
     report += `${(splValues[i] || 0).toFixed(2).padEnd(7)}  `;
     report += `${((diData.di && diData.di[i]) || 0).toFixed(2).padEnd(6)}  `;
     report += `${((impedanceData.real && impedanceData.real[i]) || 0).toFixed(2).padEnd(9)}  `;
     report += `${((impedanceData.imaginary && impedanceData.imaginary[i]) || 0).toFixed(2)}\n`;
-  }
-
-  if (frequencies.length > 50) {
-    report += `\n... (${frequencies.length - 50} more rows) ...\n`;
   }
 
   // Download
@@ -239,6 +237,70 @@ export function exportAsText(panel) {
   const link = document.createElement('a');
   link.href = url;
   link.download = `bem_report_${Date.now()}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export polar directivity data as CSV
+ * Format: Frequency_Hz, Plane, Theta_deg, SPL_norm_dB
+ */
+export function exportAsPolarCSV(panel) {
+  const results = panel.lastResults;
+  if (!results) {
+    showError('No simulation results available.');
+    return;
+  }
+
+  const frequencies = results.spl_on_axis?.frequencies || [];
+  const directivity = results.directivity || {};
+
+  let csv = 'Frequency_Hz,Plane,Theta_deg,SPL_norm_dB\n';
+
+  for (const plane of ['horizontal', 'vertical', 'diagonal']) {
+    const patterns = directivity[plane] || [];
+    for (let fi = 0; fi < patterns.length; fi++) {
+      const freq = frequencies[Math.min(fi, frequencies.length - 1)];
+      for (const [angle, db] of patterns[fi]) {
+        csv += `${freq},${plane},${angle},${db.toFixed(2)}\n`;
+      }
+    }
+  }
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `polar_directivity_${Date.now()}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export impedance data as CSV
+ * Format: Freq_Hz, Z_Real, Z_Imag (matches reference impedance_curve.csv)
+ */
+export function exportAsImpedanceCSV(panel) {
+  const results = panel.lastResults;
+  if (!results) {
+    showError('No simulation results available.');
+    return;
+  }
+
+  const freqs = results.impedance?.frequencies || [];
+  const real = results.impedance?.real || [];
+  const imag = results.impedance?.imaginary || [];
+
+  let csv = 'Freq_Hz,Z_Real,Z_Imag\n';
+  for (let i = 0; i < freqs.length; i++) {
+    csv += `${freqs[i]},${real[i] ?? ''},${imag[i] ?? ''}\n`;
+  }
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `impedance_curve_${Date.now()}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }

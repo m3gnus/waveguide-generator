@@ -23,6 +23,18 @@ try:
         get_dependency_status
     )
     SOLVER_AVAILABLE = BEMPP_RUNTIME_READY
+    if SOLVER_AVAILABLE:
+        try:
+            from solver.device_interface import selected_device_interface, opencl_unavailable_reason
+            _device = selected_device_interface("opencl")
+            _reason = opencl_unavailable_reason()
+            if _device == "numba":
+                print(f"[BEM] WARNING: Running on Numba (CPU) backend. Reason: {_reason}")
+                print("[BEM] Simulations will be significantly slower without OpenCL.")
+            else:
+                print(f"[BEM] OpenCL backend active.")
+        except Exception:
+            pass
 except ImportError:
     SOLVER_AVAILABLE = False
     BEMPP_RUNTIME_READY = False
@@ -235,8 +247,9 @@ class SimulationRequest(BaseModel):
     # New optimization options
     use_optimized: bool = True  # Enable optimized solver with symmetry, caching, correct polars
     enable_symmetry: bool = True  # Enable automatic symmetry detection and reduction
-    verbose: bool = False  # Print detailed progress and validation
+    verbose: bool = True  # Print detailed progress and validation
     mesh_validation_mode: str = "warn"  # strict | warn | off
+    frequency_spacing: str = "linear"  # linear | log
 
 
 class JobStatus(BaseModel):
@@ -374,12 +387,23 @@ async def health_check():
     """Health check endpoint"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Health check requested", flush=True)
     dependency_status = get_dependency_status()
+
+    # Include BEM device interface diagnostics when solver is available
+    device_info = None
+    if SOLVER_AVAILABLE:
+        try:
+            from solver.device_interface import selected_device_metadata
+            device_info = selected_device_metadata()
+        except Exception:
+            pass
+
     return {
         "status": "ok",
         "solver": "bempp-cl" if SOLVER_AVAILABLE else "unavailable",
         "solverReady": BEMPP_RUNTIME_READY,
         "occBuilderReady": WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY,
         "dependencies": dependency_status,
+        "deviceInterface": device_info,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -649,6 +673,73 @@ async def get_results(job_id: str):
     return job["results"]
 
 
+class ChartsRenderRequest(BaseModel):
+    frequencies: List[float] = []
+    spl: List[float] = []
+    di: List[float] = []
+    di_frequencies: List[float] = []
+    impedance_frequencies: List[float] = []
+    impedance_real: List[float] = []
+    impedance_imaginary: List[float] = []
+    directivity: Dict[str, Any] = {}
+
+
+@app.post("/api/render-charts")
+async def render_charts(request: ChartsRenderRequest):
+    """
+    Render all result charts as PNG images using Matplotlib.
+    Returns base64-encoded PNGs for each chart type.
+    """
+    try:
+        from solver.charts import render_all_charts
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Chart renderer not available: {e}"
+        )
+
+    try:
+        charts = render_all_charts(request.model_dump())
+        result = {}
+        for key, b64 in charts.items():
+            if b64 is not None:
+                result[key] = f"data:image/png;base64,{b64}"
+        return {"charts": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chart rendering failed: {e}")
+
+
+class DirectivityRenderRequest(BaseModel):
+    frequencies: List[float]
+    directivity: Dict[str, Any]
+
+
+@app.post("/api/render-directivity")
+async def render_directivity(request: DirectivityRenderRequest):
+    """
+    Render directivity heatmap as a PNG image using Matplotlib.
+    Returns base64-encoded PNG.
+    """
+    try:
+        from solver.directivity_plot import render_directivity_plot
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Matplotlib not available: {e}"
+        )
+
+    if not request.frequencies or not request.directivity:
+        raise HTTPException(status_code=400, detail="Missing frequencies or directivity data")
+
+    try:
+        image_b64 = render_directivity_plot(request.frequencies, request.directivity)
+        if image_b64 is None:
+            raise HTTPException(status_code=400, detail="No directivity patterns to render")
+        return {"image": f"data:image/png;base64,{image_b64}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Rendering failed: {e}")
+
+
 async def run_simulation(job_id: str, request: SimulationRequest):
     """
     Run BEM simulation in background
@@ -750,6 +841,7 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             enable_symmetry=request.enable_symmetry,
             verbose=request.verbose,
             mesh_validation_mode=request.mesh_validation_mode,
+            frequency_spacing=request.frequency_spacing,
         )
         
         # Store results

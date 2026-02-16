@@ -29,6 +29,7 @@ import {
   exportAsJSON,
   exportAsText
 } from './exports.js';
+import { openViewResultsModal } from './viewResults.js';
 
 export class SimulationPanel {
   constructor() {
@@ -126,6 +127,10 @@ export class SimulationPanel {
 
   renderPolarDirectivityHeatmap(frequencies, directivityData) {
     return renderPolarDirectivityHeatmap(frequencies, directivityData);
+  }
+
+  openViewResults() {
+    return openViewResultsModal(this);
   }
 
   exportResults() {
