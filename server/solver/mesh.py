@@ -1,8 +1,50 @@
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .deps import GMSH_AVAILABLE, bempp_api, gmsh
 from .gmsh_geo_mesher import gmsh_lock
+
+
+def _resolve_unit_scale_to_meter(
+    vertices_array: np.ndarray, mesh_metadata: Optional[Dict[str, Any]]
+) -> Tuple[float, str, List[str], float]:
+    metadata = mesh_metadata or {}
+    warnings: List[str] = []
+
+    raw_scale = metadata.get("unitScaleToMeter")
+    if raw_scale is not None:
+        try:
+            parsed_scale = float(raw_scale)
+        except (TypeError, ValueError):
+            parsed_scale = float("nan")
+        if np.isfinite(parsed_scale) and parsed_scale > 0:
+            return parsed_scale, "metadata.unitScaleToMeter", warnings, float(
+                np.max(np.ptp(vertices_array, axis=1))
+            )
+        warnings.append(
+            "mesh.metadata.unitScaleToMeter was invalid; falling back to units/heuristic detection."
+        )
+
+    raw_units = str(metadata.get("units", "")).strip().lower()
+    if raw_units in {"m", "meter", "meters"}:
+        return 1.0, "metadata.units", warnings, float(np.max(np.ptp(vertices_array, axis=1)))
+    if raw_units in {"mm", "millimeter", "millimeters"}:
+        return 0.001, "metadata.units", warnings, float(np.max(np.ptp(vertices_array, axis=1)))
+    if raw_units:
+        warnings.append(
+            f"mesh.metadata.units='{raw_units}' is unsupported; falling back to heuristic unit detection."
+        )
+
+    max_extent = float(np.max(np.ptp(vertices_array, axis=1)))
+    if max_extent > 5.0:
+        return 0.001, "heuristic:max_extent_gt_5", warnings, max_extent
+    if max_extent < 2.0:
+        return 1.0, "heuristic:max_extent_lt_2", warnings, max_extent
+
+    warnings.append(
+        f"Mesh extent {max_extent:.3f} is ambiguous for unit detection; defaulting to millimeters."
+    )
+    return 0.001, "heuristic:ambiguous_default_mm", warnings, max_extent
 
 
 def refine_mesh_with_gmsh(
@@ -41,9 +83,9 @@ def refine_mesh_with_gmsh(
                 # Calculate target element size based on wavelength
                 # Rule of thumb: 6-10 elements per wavelength
                 c = 343.0  # Speed of sound m/s
-                wavelength = c / target_frequency * 1000  # Convert to mm
+                wavelength = c / target_frequency
                 target_size = wavelength / 8  # 8 elements per wavelength
-                print(f"[Gmsh] Target element size: {target_size:.1f} mm (for {target_frequency} Hz)")
+                print(f"[Gmsh] Target element size: {target_size:.6f} m (for {target_frequency} Hz)")
 
                 # Add vertices to Gmsh
                 num_vertices = vertices.shape[1]
@@ -162,6 +204,7 @@ def prepare_mesh(
     indices: List[int],
     surface_tags: List[int] = None,
     boundary_conditions: Dict = None,
+    mesh_metadata: Optional[Dict[str, Any]] = None,
     use_gmsh: bool = False,
     target_frequency: float = 1000.0
 ) -> Dict:
@@ -173,6 +216,7 @@ def prepare_mesh(
         indices: Flat list of triangle indices [i0,i1,i2, i3,i4,i5, ...]
         surface_tags: Per-triangle surface tags (1=wall, 2=source, 3=secondary, 4=interface)
         boundary_conditions: Boundary condition definitions
+        mesh_metadata: Optional metadata with units/unitScaleToMeter hints
         use_gmsh: If True, use Gmsh to refine the mesh for better BEM accuracy
         target_frequency: Target frequency for mesh element sizing (Hz)
 
@@ -219,6 +263,17 @@ def prepare_mesh(
         f"index range [{min_index}, {max_index}]"
     )
 
+    unit_scale_to_meter, unit_source, unit_warnings, max_extent = _resolve_unit_scale_to_meter(
+        vertices_array, mesh_metadata
+    )
+    vertices_array = vertices_array * unit_scale_to_meter
+    print(
+        f"[BEM] Unit normalization: source={unit_source}, "
+        f"scale={unit_scale_to_meter:g}, input_extent={max_extent:.4f}"
+    )
+    for warning in unit_warnings:
+        print(f"[BEM] Unit warning: {warning}")
+
     # Store original mesh for symmetry detection (before any refinement)
     original_vertices = vertices_array.copy()
     original_indices = indices_array.copy()
@@ -262,6 +317,13 @@ def prepare_mesh(
         'throat_elements': np.where(domain_indices == 2)[0],
         'wall_elements': np.where(domain_indices == 1)[0],
         'mouth_elements': np.where(domain_indices == 3)[0],
+        'mesh_metadata': mesh_metadata or {},
+        'unit_scale_to_meter': unit_scale_to_meter,
+        'unit_detection': {
+            'source': unit_source,
+            'input_max_extent': max_extent,
+            'warnings': unit_warnings,
+        },
         # Preserve original mesh for symmetry detection
         'original_vertices': original_vertices,
         'original_indices': original_indices,

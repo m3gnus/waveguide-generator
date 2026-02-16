@@ -35,8 +35,10 @@ export class SimulationPanel {
     this.solver = new BemSolver();
     this.currentJobId = null;
     this.pollInterval = null;
+    this.connectionPollTimer = null;
     this.pendingMeshResolve = null;
     this.lastResults = null;
+    this.stageStatusActive = false;
     this.currentSmoothing = 'none';
     this.simulationParamBindings = [
       { id: 'freq-start', key: 'abecF1', parse: (value) => parseFloat(value) },

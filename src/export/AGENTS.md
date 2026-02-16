@@ -7,7 +7,7 @@
 
 ## Invariants
 - `/api/mesh/build` is `.msh`-first (`generatedBy: "gmsh-occ"`); do not expect `.geo` in its response.
-- OCC route fallback to JS `.geo` route happens only when `/api/mesh/build` returns `503`.
+- ABEC export uses `/api/mesh/build` only; a `503` is surfaced as an export failure (no JS `.geo` fallback).
 - ABEC export must include:
   - `Project.abec`, `solving.txt`, `observation.txt`
   - `<basename>.msh`

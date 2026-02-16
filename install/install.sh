@@ -93,4 +93,9 @@ echo "To start the app:"
 echo "  • Double-click  launch/mac.command   (macOS)"
 echo "  • Run           launch/linux.sh      (Linux)"
 echo "  • Or:           npm start"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo ""
+    echo "For true bempp OpenCL on Apple Silicon:"
+    echo "  • Run           ./scripts/setup-opencl-backend.sh"
+fi
 echo ""

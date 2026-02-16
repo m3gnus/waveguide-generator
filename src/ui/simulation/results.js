@@ -11,6 +11,7 @@ export function displayResults(panel, results = null) {
   const resultsContainer = document.getElementById('results-container');
   const chartsDiv = document.getElementById('results-charts');
 
+  resultsContainer.classList.remove('is-hidden');
   resultsContainer.style.display = 'block';
 
   if (!results) {

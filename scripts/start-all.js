@@ -1,6 +1,7 @@
 import { spawn, exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -8,7 +9,10 @@ const rootDir = path.join(__dirname, '..');
 const serverDir = path.join(rootDir, 'server');
 const venvPythonUnix = path.join(rootDir, '.venv', 'bin', 'python');
 const venvPythonWindows = path.join(rootDir, '.venv', 'Scripts', 'python.exe');
+const openclCpuEnvPython = path.join(os.homedir(), '.waveguide-generator', 'opencl-cpu-env', 'bin', 'python');
 const backendPython = process.env.PYTHON_BIN
+  || process.env.WG_BACKEND_PYTHON
+  || (fs.existsSync(openclCpuEnvPython) ? openclCpuEnvPython : null)
   || (fs.existsSync(venvPythonUnix) ? venvPythonUnix : null)
   || (fs.existsSync(venvPythonWindows) ? venvPythonWindows : null)
   || 'python3';
@@ -53,8 +57,9 @@ backend.on('error', (err) => {
   console.error('');
   console.error('💡 Backend failed to start. This might be because:');
   console.error(`   - Python command is not available: ${backendPython}`);
-  console.error('   - Backend dependencies are not installed in .venv');
-  console.error('   - Run: python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt');
+  console.error('   - Backend dependencies are not installed for that interpreter');
+  console.error('   - Run: ./scripts/setup-opencl-backend.sh (macOS OpenCL CPU env)');
+  console.error('   - Or: python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt');
   console.error('');
   console.error('The frontend will still work, but simulations will use mock data.');
 });

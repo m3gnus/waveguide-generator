@@ -180,17 +180,17 @@
                 <p id="solver-status-help" class="status-help">
                     BEM solver requires Python backend running on localhost:8000
                 </p>
-                <div class="button-row">
-                    <button id="run-simulation-btn">Start BEM Simulation (not working)</button>
-                    <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
-                </div>
-                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
                 <div id="simulation-progress" class="is-hidden">
                     <div class="progress-bar">
                         <div id="progress-fill" class="progress-fill"></div>
                     </div>
-                    <p id="progress-text" class="progress-text">Initializing...</p>
+                    <p id="progress-text" class="progress-text"></p>
                 </div>
+                <div class="button-row">
+                    <button id="run-simulation-btn">Start BEM Simulation</button>
+                    <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
+                </div>
+                <button id="export-results-btn" class="secondary" disabled>Export Results</button>
             </div>
         </details>
     </div>

@@ -109,6 +109,8 @@ function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForc
       hasEnclosure,
       interfaceEnabled,
       tagCounts,
+      units: 'mm',
+      unitScaleToMeter: 0.001,
       verticalOffset: Number(buildParams.verticalOffset || 0),
       rearClosureForced,
       splitPlaneTrianglesRemoved: filtered.removedTriangles

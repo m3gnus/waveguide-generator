@@ -12,7 +12,7 @@
 - Clearly separate:
   - JS geometry/payload path
   - OCC `.msh` builder path
-  - legacy `.geo -> .msh` fallback path
+  - legacy `.geo -> .msh` meshing endpoint
 
 ## Required Validation Before Merge
 - `npm test`
