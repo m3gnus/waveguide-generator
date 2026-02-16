@@ -3,7 +3,6 @@ from typing import Dict, List, Optional
 from scipy import special
 
 from .deps import bempp_api
-from .units import mm_to_m, m_to_mm
 
 
 def calculate_directivity_index_from_pressure(
@@ -27,7 +26,7 @@ def calculate_directivity_index_from_pressure(
     vertices = grid.vertices
     max_y = np.max(vertices[1, :])
 
-    R_far = m_to_mm(1.0)
+    R_far = 1.0
 
     # Sample points on a hemisphere (front half)
     n_theta = 9  # 0 to 90 degrees in 10-degree steps
@@ -89,7 +88,7 @@ def calculate_directivity_index_from_pressure(
         mouth_verts = vertices[:, np.abs(vertices[1, :] - mouth_y) < 1.0]
         if mouth_verts.shape[1] > 0:
             mouth_radius = np.max(np.sqrt(mouth_verts[0, :] ** 2 + mouth_verts[2, :] ** 2))
-            ka = k * mm_to_m(mouth_radius)
+            ka = k * mouth_radius
             # Approximate DI for circular piston: DI ≈ (ka)² for ka < 1, increases slower after
             if ka < 1:
                 di = max(0, 10 * np.log10(1 + ka ** 2))
@@ -208,8 +207,8 @@ def calculate_directivity_patterns(
         k = 2 * np.pi * freq / c
 
         # ka products for horizontal and vertical
-        ka_h = k * mm_to_m(mouth_radius_h)
-        ka_v = k * mm_to_m(mouth_radius_v)
+        ka_h = k * mouth_radius_h
+        ka_v = k * mouth_radius_v
 
         horizontal = []
         vertical = []

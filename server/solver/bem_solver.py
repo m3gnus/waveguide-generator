@@ -2,6 +2,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 
 from .deps import BEMPP_AVAILABLE, bempp_api
+from .device_interface import selected_device_metadata
 from .mesh import refine_mesh_with_gmsh, prepare_mesh
 from .solve import solve, solve_frequency
 from .solve_optimized import solve_optimized  # NEW: Optimized solver
@@ -43,10 +44,19 @@ class BEMSolver:
         indices: List[int],
         surface_tags: List[int] = None,
         boundary_conditions: Dict = None,
+        mesh_metadata: Dict = None,
         use_gmsh: bool = False,
         target_frequency: float = 1000.0
     ) -> Dict:
-        return prepare_mesh(vertices, indices, surface_tags, boundary_conditions, use_gmsh, target_frequency)
+        return prepare_mesh(
+            vertices,
+            indices,
+            surface_tags,
+            boundary_conditions,
+            mesh_metadata,
+            use_gmsh,
+            target_frequency,
+        )
 
     def solve(
         self,
@@ -56,9 +66,11 @@ class BEMSolver:
         sim_type: str,
         polar_config: Optional[Dict] = None,
         progress_callback: Optional[callable] = None,
+        stage_callback: Optional[callable] = None,
         use_optimized: bool = True,
         enable_symmetry: bool = True,
-        verbose: bool = False
+        verbose: bool = False,
+        mesh_validation_mode: str = "warn",
     ) -> Dict:
         """
         Run BEM simulation with optional optimizations.
@@ -77,17 +89,27 @@ class BEMSolver:
         Returns:
             Results dictionary with simulation data and metadata
         """
+        device_info = selected_device_metadata()
+        selected = device_info.get("selected", "unknown")
+        fallback_reason = device_info.get("fallback_reason")
+        if fallback_reason:
+            print(f"[BEM] Device interface: {selected} (requested=opencl, reason: {fallback_reason})")
+        else:
+            print(f"[BEM] Device interface: {selected} (requested=opencl)")
+
         if use_optimized:
             return solve_optimized(
                 mesh, frequency_range, num_frequencies, sim_type,
-                polar_config, progress_callback,
-                enable_symmetry, verbose=verbose
+                polar_config, progress_callback, stage_callback,
+                enable_symmetry, verbose=verbose,
+                mesh_validation_mode=mesh_validation_mode,
             )
         else:
             # Legacy solver (no symmetry, analytical piston directivity)
             return solve(
                 mesh, frequency_range, num_frequencies, sim_type,
-                polar_config, progress_callback
+                polar_config, progress_callback, stage_callback,
+                mesh_validation_mode=mesh_validation_mode,
             )
 
     def _solve_frequency(

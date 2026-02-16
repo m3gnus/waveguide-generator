@@ -332,7 +332,7 @@ def apply_symmetry_reduction(
     elif indices.shape[0] == 3:
         indices = indices.T
 
-    # Tag for symmetry plane faces (use 4 to not conflict with 1=throat, 2=wall, 3=mouth)
+    # Tag for symmetry plane faces (canonical contract: 1=wall, 2=source, 3=secondary, 4=interface/symmetry)
     SYMMETRY_TAG = 4
 
     # Determine which vertices to keep
@@ -384,7 +384,7 @@ def apply_symmetry_reduction(
             elif surface_tags is not None and tri_idx < len(surface_tags):
                 reduced_tags.append(surface_tags[tri_idx])
             else:
-                reduced_tags.append(2)  # Default to wall
+                reduced_tags.append(1)  # Default to wall
 
     if len(reduced_triangles) == 0:
         raise ValueError("Symmetry reduction resulted in empty mesh")

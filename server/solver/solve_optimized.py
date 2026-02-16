@@ -2,103 +2,92 @@
 Optimized BEM solver with:
 - Automatic symmetry detection and reduction
 - Operator caching and reuse
-- Frequency-adaptive mesh validation
+- Configurable mesh/frequency safety policy
 - Correct far-field polar evaluation
-- Performance monitoring
+- Explicit failure reporting
 """
 
-import numpy as np
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .deps import bempp_api
-from .symmetry import (
-    detect_geometric_symmetry, check_excitation_symmetry,
-    find_throat_center, apply_symmetry_reduction,
-    validate_symmetry_reduction, SymmetryType
-)
+import numpy as np
 
-from .directivity_correct import (
-    calculate_directivity_patterns_correct,
-    calculate_directivity_index_correct
+from .axisymmetric import evaluate_axisymmetric_eligibility
+from .contract import frequency_failure, normalize_mesh_validation_mode
+from .deps import bempp_api
+from .device_interface import (
+    boundary_device_interface,
+    configure_opencl_safe_profile,
+    is_opencl_buffer_error,
+    potential_device_interface,
+    selected_device_metadata,
 )
-from .units import m_to_mm
+from .directivity_correct import (
+    calculate_directivity_index_correct,
+    calculate_directivity_patterns_correct,
+)
+from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
+from .symmetry import (
+    SymmetryType,
+    apply_symmetry_reduction,
+    check_excitation_symmetry,
+    detect_geometric_symmetry,
+    find_throat_center,
+    validate_symmetry_reduction,
+)
 
 
 class CachedOperators:
-    """Cache for BEMPP operators to reuse across frequencies"""
+    """Cache for BEMPP operators to reuse across frequencies."""
 
-    def __init__(self):
+    def __init__(self, boundary_interface: str, potential_interface: str):
         self.grid = None
         self.space_p = None
         self.space_u = None
         self.identity = None
-        # Frequency-dependent operators stored by wavenumber
+        self.boundary_interface = boundary_interface
+        self.potential_interface = potential_interface
         self.dlp_cache = {}
         self.slp_cache = {}
 
     def get_or_create_spaces(self, grid):
-        """Get or create function spaces (frequency-independent)"""
         if self.grid is not grid or self.space_p is None:
             self.grid = grid
-            # P1 space for pressure (continuous piecewise linear)
             self.space_p = bempp_api.function_space(grid, "P", 1)
-            # DP0 space for velocity on source only
-            # Note: segments=[2] selects source elements (domain_index == 2)
-            # If symmetry faces are tagged as 4, they won't be in source space
+            # segments=[2] is the canonical source-tag space contract.
             self.space_u = bempp_api.function_space(grid, "DP", 0, segments=[2])
-            # Identity operator (frequency-independent)
             self.identity = bempp_api.operators.boundary.sparse.identity(
                 self.space_p, self.space_p, self.space_p
             )
         return self.space_p, self.space_u, self.identity
 
     def get_or_create_operators(self, space_p, space_u, k: float):
-        """Get or create boundary operators for wavenumber k"""
         k_key = f"{k:.6f}"
-
         if k_key not in self.dlp_cache:
-            # Create operators
             self.dlp_cache[k_key] = bempp_api.operators.boundary.helmholtz.double_layer(
-                space_p, space_p, space_p, k
+                space_p, space_p, space_p, k, device_interface=self.boundary_interface
             )
             self.slp_cache[k_key] = bempp_api.operators.boundary.helmholtz.single_layer(
-                space_u, space_p, space_p, k
+                space_u, space_p, space_p, k, device_interface=self.boundary_interface
             )
-
         return self.dlp_cache[k_key], self.slp_cache[k_key]
 
-    def clear(self):
-        """Clear all cached operators"""
-        self.dlp_cache.clear()
-        self.slp_cache.clear()
+
+def _build_source_velocity(space_u, amplitude: float = 1.0):
+    dof_count = getattr(space_u, "grid_dof_count", None)
+    if dof_count is None:
+        dof_count = getattr(space_u, "global_dof_count", 0)
+    if int(dof_count) <= 0:
+        raise ValueError("Source velocity space contains no DOFs (segments=[2] is empty).")
+    coeffs = np.full(int(dof_count), complex(amplitude, 0.0), dtype=np.complex128)
+    return bempp_api.GridFunction(space_u, coefficients=coeffs)
 
 
 def apply_neumann_bc_on_symmetry_planes(grid, symmetry_info: Optional[Dict]) -> None:
-    """
-    Apply Neumann boundary conditions on symmetry planes.
-
-    In BEMPP with exterior Helmholtz, symmetry planes with zero normal velocity
-    are handled implicitly - we just don't place sources on those faces and
-    they act as rigid boundaries (zero normal derivative of pressure).
-
-    The key is that symmetry faces (tagged as 4) should NOT be in the source
-    velocity space (segments=[2]), which is already handled by mesh tagging.
-
-    Args:
-        grid: BEMPP grid
-        symmetry_info: Dictionary from apply_symmetry_reduction
-    """
-    if symmetry_info is None or symmetry_info.get('symmetry_face_tag') is None:
+    if symmetry_info is None or symmetry_info.get("symmetry_face_tag") is None:
         return
-
-    # Symmetry boundary conditions are implicit in BEMPP:
-    # - Symmetry faces are NOT in the velocity function space (segments=[2])
-    # - They have zero normal velocity (rigid boundary)
-    # - This gives the correct Neumann BC (∂p/∂n = 0 on symmetry plane)
-
     print(f"[BEM] Symmetry planes detected (tag {symmetry_info['symmetry_face_tag']})")
-    print(f"[BEM] Neumann BC (rigid) applied implicitly on symmetry planes")
+    print("[BEM] Neumann BC (rigid) applied implicitly on symmetry planes")
 
 
 def solve_frequency_cached(
@@ -108,78 +97,53 @@ def solve_frequency_cached(
     rho: float,
     sim_type: str,
     cached_ops: CachedOperators,
-    throat_elements: np.ndarray = None
+    throat_elements: np.ndarray = None,
 ) -> Tuple[float, complex, float, tuple]:
-    """
-    Solve BEM for single frequency with operator caching.
-
-    Returns:
-        (spl_on_axis, throat_impedance, directivity_index, solution_tuple)
-
-        solution_tuple = (p_total, u_total, space_p, space_u) for directivity evaluation
-    """
+    """Solve one frequency using cached operators and SI units."""
     omega = k * c
 
-    # Get or create function spaces (cached)
     space_p, space_u, identity = cached_ops.get_or_create_spaces(grid)
-
-    # Get or create operators for this wavenumber (cached)
     dlp, slp = cached_ops.get_or_create_operators(space_p, space_u, k)
 
-    # Define velocity boundary condition at throat
-    @bempp_api.complex_callable
-    def throat_velocity(x, n, domain_index, result):
-        # Unit normal velocity into horn (positive Y)
-        result[0] = n[1]
+    u_total = _build_source_velocity(space_u, amplitude=1.0)
 
-    u_total = bempp_api.GridFunction(space_u, fun=throat_velocity)
-
-    # Solve BIE: (D - 0.5*I) * p_total = i*ω*ρ₀*S*u_total
     lhs = dlp - 0.5 * identity
     rhs = 1j * omega * rho * slp * u_total
 
     p_total, info = bempp_api.linalg.gmres(lhs, rhs, tol=1e-5)
-
     if info != 0:
         print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
 
-    # Calculate on-axis SPL
     vertices = grid.vertices
     max_y = np.max(vertices[1, :])
-    R_far = m_to_mm(1.0)
-    obs_point = np.array([[0.0], [max_y + R_far], [0.0]])
+    obs_point = np.array([[0.0], [max_y + 1.0], [0.0]])
 
-    dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(space_p, obs_point, k)
-    slp_pot = bempp_api.operators.potential.helmholtz.single_layer(space_u, obs_point, k)
-
+    dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
+        space_p, obs_point, k, device_interface=cached_ops.potential_interface
+    )
+    slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
+        space_u, obs_point, k, device_interface=cached_ops.potential_interface
+    )
     pressure_far = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
 
     p_ref = 20e-6 * np.sqrt(2)
     p_amplitude = np.abs(pressure_far[0, 0])
     spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
 
-    # Throat impedance (approximate)
-    throat_coeffs = []
-    for coeff in p_total.coefficients:
-        throat_coeffs.append(coeff)
-
-    if len(throat_coeffs) > 0:
-        mean_throat_pressure = np.mean(np.abs(throat_coeffs))
+    coeffs = np.asarray(p_total.coefficients)
+    if coeffs.size > 0:
+        mean_throat_pressure = float(np.mean(np.abs(coeffs)))
         z_real = mean_throat_pressure * rho * c
         z_imag = mean_throat_pressure * rho * c * 0.1
         impedance = complex(z_real, z_imag)
     else:
-        impedance = complex(rho * c, 0)
+        impedance = complex(0.0, 0.0)
 
-    # Calculate DI using correct method
     di = calculate_directivity_index_correct(
         grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl
     )
 
-    # Return solution tuple for directivity calculation
-    solution_tuple = (p_total, u_total, space_p, space_u)
-
-    return spl, impedance, di, solution_tuple
+    return float(spl), impedance, float(di), (p_total, u_total, space_p, space_u)
 
 
 def solve_optimized(
@@ -189,64 +153,51 @@ def solve_optimized(
     sim_type: str,
     polar_config: Optional[Dict] = None,
     progress_callback: Optional[Callable[[float], None]] = None,
+    stage_callback: Optional[Callable[[str, Optional[float], Optional[str]], None]] = None,
     enable_symmetry: bool = True,
     symmetry_tolerance: float = 1e-3,
-    verbose: bool = True
+    verbose: bool = True,
+    mesh_validation_mode: str = "warn",
 ) -> Dict:
-    """
-    Run optimized BEM simulation with all improvements.
-
-    Args:
-        mesh: dict containing bempp grid and boundary info
-        frequency_range: [start_freq, end_freq] in Hz
-        num_frequencies: Number of frequency points
-        sim_type: "1" for infinite baffle, "2" for free-standing
-        polar_config: Polar directivity configuration
-        progress_callback: Optional progress callback
-        enable_symmetry: Enable automatic symmetry detection and reduction
-        symmetry_tolerance: Tolerance for symmetry detection (fraction of max dimension)
-        verbose: Print detailed progress and validation
-
-    Returns:
-        Dictionary with simulation results including metadata
-    """
+    """Run optimized BEM simulation with explicit metadata and failure reporting."""
     start_time = time.time()
+    mesh_validation_mode = normalize_mesh_validation_mode(mesh_validation_mode)
 
-    # Extract mesh data
     if isinstance(mesh, dict):
-        grid = mesh['grid']
-        throat_elements = mesh.get('throat_elements', np.array([]))
-        wall_elements = mesh.get('wall_elements', np.array([]))
-        mouth_elements = mesh.get('mouth_elements', np.array([]))
-        original_vertices = mesh.get('original_vertices')
-        original_indices = mesh.get('original_indices')
-        original_tags = mesh.get('original_surface_tags')
+        grid = mesh["grid"]
+        throat_elements = mesh.get("throat_elements", np.array([]))
+        original_vertices = mesh.get("original_vertices")
+        original_indices = mesh.get("original_indices")
+        original_tags = mesh.get("original_surface_tags")
+        unit_detection = mesh.get("unit_detection", {})
+        mesh_metadata = mesh.get("mesh_metadata", {})
     else:
         grid = mesh
         throat_elements = np.array([])
-        wall_elements = np.array([])
-        mouth_elements = np.array([])
-        original_vertices = grid.vertices
-        original_indices = grid.elements
-        original_tags = grid.domain_indices if hasattr(grid, 'domain_indices') else None
+        original_vertices = getattr(grid, "vertices", None)
+        original_indices = getattr(grid, "elements", None)
+        original_tags = getattr(grid, "domain_indices", None)
+        unit_detection = {}
+        mesh_metadata = {}
 
-    # Physics constants
-    c = 343.0  # m/s
-    rho = 1.21  # kg/m³
+    c = 343.0
+    rho = 1.21
+    boundary_interface = boundary_device_interface()
+    potential_interface = potential_device_interface()
 
-    # Generate frequency array (ensure num_frequencies is int)
     num_frequencies = int(num_frequencies)
     frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
 
-    # Symmetry detection and reduction
     symmetry_info = None
     reduction_factor = 1.0
+    if stage_callback:
+        stage_callback("setup", 0.0, "Preparing optimized solver")
 
     if enable_symmetry and original_vertices is not None:
         if verbose:
-            print("\n" + "="*70)
+            print("\n" + "=" * 70)
             print("SYMMETRY DETECTION")
-            print("="*70)
+            print("=" * 70)
 
         try:
             symmetry_type, symmetry_planes = detect_geometric_symmetry(
@@ -254,59 +205,75 @@ def solve_optimized(
             )
 
             if symmetry_type != SymmetryType.FULL:
-                # Check throat centering
                 throat_center = find_throat_center(
                     original_vertices, throat_elements, original_indices
                 )
                 excitation_ok = check_excitation_symmetry(
-                    throat_center, symmetry_planes, tolerance=1.0  # 1mm tolerance
+                    throat_center, symmetry_planes, tolerance=1e-3
                 )
 
                 if excitation_ok:
                     if verbose:
-                        print(f"✓ Symmetry detected: {symmetry_type.value}")
-                        print(f"✓ Excitation centered: {throat_center}")
-                        print(f"✓ Applying {symmetry_type.value} reduction...")
+                        print(f"[BEM] Symmetry detected: {symmetry_type.value}")
+                        print(f"[BEM] Excitation centered: {throat_center}")
 
-                    # Apply reduction
                     reduced_v, reduced_i, reduced_tags, symmetry_info = apply_symmetry_reduction(
-                        original_vertices, original_indices, original_tags,
-                        symmetry_type, symmetry_planes
+                        original_vertices, original_indices, original_tags, symmetry_type, symmetry_planes
                     )
-
-                    # Rebuild BEMPP grid with reduced mesh
-                    grid = bempp_api.grid_from_element_data(
-                        reduced_v, reduced_i, reduced_tags
-                    )
-
-                    reduction_factor = symmetry_info['reduction_factor']
+                    grid = bempp_api.grid_from_element_data(reduced_v, reduced_i, reduced_tags)
+                    reduction_factor = float(symmetry_info["reduction_factor"])
                     validate_symmetry_reduction(symmetry_info, verbose=verbose)
-
-                    # Apply Neumann BC on symmetry planes
                     apply_neumann_bc_on_symmetry_planes(grid, symmetry_info)
-                else:
-                    if verbose:
-                        print(f"✗ Symmetry detected but excitation not centered: {throat_center}")
-                        print(f"  Falling back to full model")
-            else:
-                if verbose:
-                    print("No symmetry detected - using full model")
-
-        except Exception as e:
+                elif verbose:
+                    print(f"[BEM] Symmetry rejected: excitation not centered ({throat_center})")
+            elif verbose:
+                print("[BEM] No symmetry detected - using full model")
+        except Exception as exc:
             if verbose:
-                print(f"Symmetry detection failed: {e}")
-                print("Falling back to full model")
+                print(f"[BEM] Symmetry detection failed: {exc}")
+                print("[BEM] Falling back to full model")
 
-    # Validation and filtering disabled per user request
-    # mesh_stats = calculate_mesh_statistics(grid.vertices, grid.elements)
-    # validation = validate_frequency_range(
-    #     mesh_stats, frequency_range, c, elements_per_wavelength=6.0
-    # )
-    
-    # Simulate all frequencies regardless of mesh capability
-    # The user wants pure bempp/gmsh behavior without "safety wheels"
+    mesh_validation = {
+        "mode": mesh_validation_mode,
+        "enabled": mesh_validation_mode != "off",
+        "is_valid": True,
+        "warnings": [],
+        "recommendations": [],
+        "max_valid_frequency": None,
+        "recommended_max_frequency": None,
+        "elements_per_wavelength_at_max": None,
+    }
 
-    # Initialize results
+    if mesh_validation_mode != "off":
+        try:
+            mesh_stats = calculate_mesh_statistics(grid.vertices, grid.elements)
+            validation = validate_frequency_range(
+                mesh_stats, (frequency_range[0], frequency_range[1]), c, elements_per_wavelength=6.0
+            )
+            mesh_validation.update(
+                {
+                    "is_valid": bool(validation.get("is_valid", True)),
+                    "warnings": list(validation.get("warnings", [])),
+                    "recommendations": list(validation.get("recommendations", [])),
+                    "max_valid_frequency": validation.get("max_valid_frequency"),
+                    "recommended_max_frequency": validation.get("recommended_max_frequency"),
+                    "elements_per_wavelength_at_max": validation.get("elements_per_wavelength_at_max"),
+                }
+            )
+            if mesh_validation_mode == "strict" and not mesh_validation["is_valid"]:
+                warning_text = " | ".join(mesh_validation["warnings"]) or "mesh/frequency safety validation failed"
+                raise ValueError(warning_text)
+        except Exception as exc:
+            if mesh_validation_mode == "strict":
+                raise
+            mesh_validation["warnings"].append(f"mesh validation unavailable: {exc}")
+
+    axisymmetric_info = evaluate_axisymmetric_eligibility(
+        sim_type=sim_type,
+        mesh_metadata=mesh_metadata,
+        feature_enabled=False,
+    ).to_dict()
+
     results = {
         "frequencies": frequencies.tolist(),
         "directivity": {"horizontal": [], "vertical": [], "diagonal": []},
@@ -315,25 +282,42 @@ def solve_optimized(
         "di": {"frequencies": frequencies.tolist(), "di": []},
         "metadata": {
             "symmetry": symmetry_info if symmetry_info else {"symmetry_type": "full", "reduction_factor": 1.0},
-            "performance": {}
-        }
+            "axisymmetric": axisymmetric_info,
+            "device_interface": selected_device_metadata(),
+            "mesh_validation": mesh_validation,
+            "unit_detection": unit_detection,
+            "warnings": [],
+            "warning_count": 0,
+            "failures": [],
+            "failure_count": 0,
+            "partial_success": False,
+            "performance": {},
+        },
     }
 
-    # Create operator cache
-    cached_ops = CachedOperators()
+    cached_ops = CachedOperators(
+        boundary_interface=boundary_interface,
+        potential_interface=potential_interface,
+    )
+    solutions: List[Optional[tuple]] = []
+    opencl_safe_retry_consumed = False
 
-    # Store solutions for directivity calculation
-    solutions = []
-
-    # Solve each frequency
     freq_start_time = time.time()
+    success_count = 0
+    device_metadata = results.get("metadata", {}).get("device_interface")
 
     for i, freq in enumerate(frequencies):
         if progress_callback:
             progress_callback(i / len(frequencies))
+        if stage_callback:
+            stage_callback(
+                "frequency_solve",
+                (i / len(frequencies)) if len(frequencies) > 0 else 1.0,
+                f"Solving frequency {i + 1}/{len(frequencies)}",
+            )
 
         if verbose:
-            print(f"[BEM] Solving {i+1}/{len(frequencies)}: {freq:.1f} Hz", end='')
+            print(f"[BEM] Solving {i + 1}/{len(frequencies)}: {freq:.1f} Hz", end="")
 
         k = 2 * np.pi * freq / c
 
@@ -343,68 +327,169 @@ def solve_optimized(
                 grid, k, c, rho, sim_type, cached_ops, throat_elements
             )
             iter_time = time.time() - iter_start
+            success_count += 1
 
             if verbose:
-                print(f" → {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
+                print(f" -> {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
 
             results["spl_on_axis"]["spl"].append(float(spl))
             results["impedance"]["real"].append(float(impedance.real))
             results["impedance"]["imaginary"].append(float(impedance.imag))
             results["di"]["di"].append(float(di))
-
             solutions.append(solution)
+        except Exception as exc:
+            if boundary_interface == "opencl" and is_opencl_buffer_error(exc):
+                if isinstance(device_metadata, dict):
+                    device_metadata["runtime_retry_attempted"] = True
+                if not opencl_safe_retry_consumed:
+                    opencl_safe_retry_consumed = True
+                    safe_profile = configure_opencl_safe_profile()
+                    if isinstance(device_metadata, dict):
+                        device_metadata["runtime_profile"] = str(safe_profile.get("profile") or "safe_cpu")
+                    cached_ops = CachedOperators(
+                        boundary_interface=boundary_interface,
+                        potential_interface=potential_interface,
+                    )
+                    print(
+                        f"[BEM] OpenCL runtime error at {freq:.1f} Hz; "
+                        "retrying with OpenCL safe CPU profile."
+                    )
+                    try:
+                        iter_start = time.time()
+                        spl, impedance, di, solution = solve_frequency_cached(
+                            grid, k, c, rho, sim_type, cached_ops, throat_elements
+                        )
+                        iter_time = time.time() - iter_start
+                        success_count += 1
+                        if isinstance(device_metadata, dict):
+                            device_metadata["runtime_retry_outcome"] = "opencl_recovered"
+                            device_metadata["runtime_selected"] = "opencl"
+                            retry_detail = safe_profile.get("detail")
+                            if retry_detail:
+                                device_metadata["runtime_retry_detail"] = str(retry_detail)
+                        if verbose:
+                            print(f" -> {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
+                        results["spl_on_axis"]["spl"].append(float(spl))
+                        results["impedance"]["real"].append(float(impedance.real))
+                        results["impedance"]["imaginary"].append(float(impedance.imag))
+                        results["di"]["di"].append(float(di))
+                        solutions.append(solution)
+                        continue
+                    except Exception as retry_exc:
+                        exc = retry_exc
 
-        except Exception as e:
-            print(f" ERROR: {e}")
-            # Fallback values
-            results["spl_on_axis"]["spl"].append(90.0)
-            results["impedance"]["real"].append(rho * c)
-            results["impedance"]["imaginary"].append(0.0)
-            results["di"]["di"].append(6.0)
+                warning = {
+                    "frequency_hz": float(freq),
+                    "stage": "frequency_solve",
+                    "code": "opencl_runtime_fallback_to_numba",
+                    "detail": f"OpenCL buffer allocation failed; retrying this frequency with numba ({exc}).",
+                    "original_interface": "opencl",
+                    "fallback_interface": "numba",
+                }
+                results["metadata"]["warnings"].append(warning)
+                results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
+                print(
+                    f"[BEM] OpenCL runtime error at {freq:.1f} Hz; "
+                    "falling back to numba and retrying."
+                )
+                boundary_interface = "numba"
+                potential_interface = "numba"
+                cached_ops = CachedOperators(
+                    boundary_interface=boundary_interface,
+                    potential_interface=potential_interface,
+                )
+                if isinstance(device_metadata, dict):
+                    device_metadata["runtime_selected"] = "numba"
+                    device_metadata["runtime_fallback_reason"] = str(exc)
+                    device_metadata["runtime_retry_outcome"] = "fell_back_to_numba"
+                try:
+                    iter_start = time.time()
+                    spl, impedance, di, solution = solve_frequency_cached(
+                        grid, k, c, rho, sim_type, cached_ops, throat_elements
+                    )
+                    iter_time = time.time() - iter_start
+                    success_count += 1
+                    if verbose:
+                        print(f" -> {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
+                    results["spl_on_axis"]["spl"].append(float(spl))
+                    results["impedance"]["real"].append(float(impedance.real))
+                    results["impedance"]["imaginary"].append(float(impedance.imag))
+                    results["di"]["di"].append(float(di))
+                    solutions.append(solution)
+                    continue
+                except Exception as retry_exc:
+                    exc = retry_exc
+
+            print(f" ERROR: {exc}")
+            results["metadata"]["failures"].append(
+                frequency_failure(freq, "frequency_solve", "frequency_solve_failed", str(exc))
+            )
+            results["spl_on_axis"]["spl"].append(None)
+            results["impedance"]["real"].append(None)
+            results["impedance"]["imaginary"].append(None)
+            results["di"]["di"].append(None)
             solutions.append(None)
 
     freq_solve_time = time.time() - freq_start_time
 
-    # Calculate directivity patterns using correct method
     if verbose:
         print("\n[BEM] Computing directivity patterns...")
+    if stage_callback:
+        stage_callback(
+            "directivity",
+            0.0,
+            "Generating polar maps (horizontal/vertical/diagonal) and deriving DI from solved frequencies",
+        )
 
     directivity_start = time.time()
 
-    # Filter out None solutions
     valid_solutions = [(i, sol) for i, sol in enumerate(solutions) if sol is not None]
     if len(valid_solutions) > 0:
         indices, filtered_solutions = zip(*valid_solutions)
         filtered_freqs = frequencies[list(indices)]
-
-        results["directivity"] = calculate_directivity_patterns_correct(
-            grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config
-        )
+        try:
+            results["directivity"] = calculate_directivity_patterns_correct(
+                grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config
+            )
+        except Exception as exc:
+            results["metadata"]["failures"].append(
+                frequency_failure(
+                    float(filtered_freqs[0]), "directivity", "directivity_failed", str(exc)
+                )
+            )
 
     directivity_time = time.time() - directivity_start
     total_time = time.time() - start_time
 
-    # Performance metadata
+    results["metadata"]["failure_count"] = len(results["metadata"]["failures"])
+    results["metadata"]["partial_success"] = success_count > 0 and results["metadata"]["failure_count"] > 0
     results["metadata"]["performance"] = {
         "total_time_seconds": total_time,
         "frequency_solve_time": freq_solve_time,
         "directivity_compute_time": directivity_time,
         "time_per_frequency": freq_solve_time / len(frequencies) if len(frequencies) > 0 else 0,
-        "reduction_speedup": reduction_factor
+        "reduction_speedup": reduction_factor,
     }
 
     if verbose:
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("SIMULATION COMPLETE")
-        print("="*70)
+        print("=" * 70)
         print(f"Total time: {total_time:.1f}s")
-        print(f"Frequency solve: {freq_solve_time:.1f}s ({freq_solve_time/len(frequencies):.2f}s per frequency)")
+        if len(frequencies) > 0:
+            print(
+                f"Frequency solve: {freq_solve_time:.1f}s "
+                f"({freq_solve_time / len(frequencies):.2f}s per frequency)"
+            )
         print(f"Directivity compute: {directivity_time:.1f}s")
         if reduction_factor > 1.0:
-            print(f"Symmetry speedup: {reduction_factor:.1f}×")
-        print("="*70 + "\n")
+            print(f"Symmetry speedup: {reduction_factor:.1f}x")
+        print("=" * 70 + "\n")
 
     if progress_callback:
         progress_callback(1.0)
+    if stage_callback:
+        stage_callback("directivity", 1.0, "Polar map and DI aggregation complete")
+        stage_callback("finalizing", 1.0, "Packaging optimized solver results")
 
     return results

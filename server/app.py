@@ -16,6 +16,7 @@ from datetime import datetime
 # Import solver module (will be created)
 try:
     from solver import BEMSolver
+    from solver.contract import normalize_mesh_validation_mode
     from solver.deps import (
         BEMPP_RUNTIME_READY,
         GMSH_OCC_RUNTIME_READY,
@@ -26,6 +27,12 @@ except ImportError:
     SOLVER_AVAILABLE = False
     BEMPP_RUNTIME_READY = False
     GMSH_OCC_RUNTIME_READY = False
+
+    def normalize_mesh_validation_mode(value: Any) -> str:
+        mode = str(value or "warn").strip().lower()
+        if mode not in {"strict", "warn", "off"}:
+            raise ValueError("mesh_validation_mode must be one of: off, strict, warn.")
+        return mode
 
     def get_dependency_status():
         return {
@@ -72,6 +79,30 @@ app.add_middleware(
 
 # Job storage (in production, use Redis or database)
 jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _is_terminal_status(status: str) -> bool:
+    return status in {"complete", "error", "cancelled"}
+
+
+def update_job_stage(
+    job_id: str,
+    stage: str,
+    *,
+    progress: Optional[float] = None,
+    stage_message: Optional[str] = None,
+) -> None:
+    """Update non-terminal job stage metadata."""
+    job = jobs.get(job_id)
+    if not job:
+        return
+    if _is_terminal_status(job.get("status", "")):
+        return
+    job["stage"] = stage
+    if stage_message is not None:
+        job["stage_message"] = stage_message
+    if progress is not None:
+        update_progress(job_id, progress)
 
 
 def _run_git(repo_root: Path, *args: str) -> str:
@@ -205,11 +236,14 @@ class SimulationRequest(BaseModel):
     use_optimized: bool = True  # Enable optimized solver with symmetry, caching, correct polars
     enable_symmetry: bool = True  # Enable automatic symmetry detection and reduction
     verbose: bool = False  # Print detailed progress and validation
+    mesh_validation_mode: str = "warn"  # strict | warn | off
 
 
 class JobStatus(BaseModel):
     status: str
     progress: float
+    stage: Optional[str] = None
+    stage_message: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -500,6 +534,15 @@ async def submit_simulation(request: SimulationRequest):
             status_code=422,
             detail=f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) must match triangle count ({triangle_count})."
         )
+    if str(request.sim_type) != "2":
+        raise HTTPException(
+            status_code=422,
+            detail="sim_type '1' (infinite baffle) is currently deferred in the hardened solver path. Use sim_type='2'.",
+        )
+    try:
+        normalize_mesh_validation_mode(request.mesh_validation_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if not SOLVER_AVAILABLE:
         dep = get_dependency_status()
@@ -525,6 +568,8 @@ async def submit_simulation(request: SimulationRequest):
     jobs[job_id] = {
         "status": "queued",
         "progress": 0.0,
+        "stage": "queued",
+        "stage_message": "Job queued",
         "created_at": datetime.now().isoformat(),
         "request": request.model_dump(),
         "results": None,
@@ -556,6 +601,8 @@ async def stop_simulation(job_id: str):
     
     job["status"] = "cancelled"
     job["progress"] = 0.0
+    job["stage"] = "cancelled"
+    job["stage_message"] = "Simulation cancelled"
     job["error"] = "Simulation cancelled by user"
     job["stopped_at"] = datetime.now().isoformat()
     
@@ -574,6 +621,8 @@ async def get_job_status(job_id: str):
     return JobStatus(
         status=job["status"],
         progress=job["progress"],
+        stage=job.get("stage"),
+        stage_message=job.get("stage_message"),
         message=job.get("error")
     )
 
@@ -607,18 +656,19 @@ async def run_simulation(job_id: str, request: SimulationRequest):
     try:
         # Update status
         jobs[job_id]["status"] = "running"
-        jobs[job_id]["progress"] = 0.1
+        update_job_stage(job_id, "initializing", progress=0.05, stage_message="Initializing BEM solver")
         
         # Initialize solver
         solver = BEMSolver()
         
         # Extract mesh generation options
-        mesh_opts = request.options.get("mesh", {})
+        options = request.options or {}
+        mesh_opts = options.get("mesh", {})
         
         # Check if options are flat or nested
-        if "use_gmsh" in request.options:
-            use_gmsh = request.options.get("use_gmsh", False)
-            target_freq = request.options.get("target_frequency", 
+        if "use_gmsh" in options:
+            use_gmsh = options.get("use_gmsh", False)
+            target_freq = options.get("target_frequency", 
                                             max(request.frequency_range) if request.frequency_range else 1000.0)
         else:
             use_gmsh = mesh_opts.get("use_gmsh", False)
@@ -626,18 +676,66 @@ async def run_simulation(job_id: str, request: SimulationRequest):
                                         max(request.frequency_range) if request.frequency_range else 1000.0)
 
         # Convert mesh data with surface tags
-        jobs[job_id]["progress"] = 0.2
+        update_job_stage(job_id, "mesh_prepare", progress=0.15, stage_message="Preparing canonical mesh")
         mesh = solver.prepare_mesh(
             request.mesh.vertices,
             request.mesh.indices,
             surface_tags=request.mesh.surfaceTags,
             boundary_conditions=request.mesh.boundaryConditions,
+            mesh_metadata=request.mesh.metadata,
             use_gmsh=use_gmsh,
             target_frequency=target_freq
         )
         
         # Run simulation
-        jobs[job_id]["progress"] = 0.3
+        update_job_stage(job_id, "solver_setup", progress=0.30, stage_message="Configuring BEM solve")
+
+        def _solver_stage_callback(stage: str, progress: Optional[float] = None, message: Optional[str] = None) -> None:
+            normalized_progress = 0.0 if progress is None else max(0.0, min(1.0, float(progress)))
+
+            if stage in {"setup", "solver_setup"}:
+                update_job_stage(
+                    job_id,
+                    "solver_setup",
+                    progress=0.30 + (normalized_progress * 0.05),
+                    stage_message=message or "Configuring BEM solve",
+                )
+                return
+
+            if stage == "frequency_solve":
+                update_job_stage(
+                    job_id,
+                    "bem_solve",
+                    progress=0.35 + (normalized_progress * 0.50),
+                    stage_message=message or "Solving BEM frequencies",
+                )
+                return
+
+            if stage == "directivity":
+                update_job_stage(
+                    job_id,
+                    "directivity",
+                    progress=0.85 + (normalized_progress * 0.13),
+                    stage_message=message or (
+                        "Generating polar maps (horizontal/vertical/diagonal) and deriving DI from solved frequencies"
+                    ),
+                )
+                return
+
+            if stage == "finalizing":
+                update_job_stage(
+                    job_id,
+                    "finalizing",
+                    progress=0.98 + (normalized_progress * 0.01),
+                    stage_message=message or "Finalizing results",
+                )
+                return
+
+            update_job_stage(
+                job_id,
+                str(stage),
+                stage_message=message,
+            )
         
         results = await asyncio.to_thread(
             solver.solve,
@@ -646,13 +744,22 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             num_frequencies=request.num_frequencies,
             sim_type=request.sim_type,
             polar_config=request.polar_config.model_dump() if request.polar_config else None,
-            progress_callback=lambda p: update_progress(job_id, 0.3 + p * 0.6),
+            progress_callback=lambda p: _solver_stage_callback("frequency_solve", progress=p),
+            stage_callback=_solver_stage_callback,
             use_optimized=request.use_optimized,
             enable_symmetry=request.enable_symmetry,
-            verbose=request.verbose
+            verbose=request.verbose,
+            mesh_validation_mode=request.mesh_validation_mode,
         )
         
         # Store results
+        if jobs[job_id]["status"] == "cancelled":
+            jobs[job_id]["stage"] = "cancelled"
+            jobs[job_id]["stage_message"] = "Simulation cancelled"
+            return
+
+        jobs[job_id]["stage"] = "complete"
+        jobs[job_id]["stage_message"] = "Simulation complete"
         jobs[job_id]["progress"] = 1.0
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["results"] = results
@@ -661,6 +768,8 @@ async def run_simulation(job_id: str, request: SimulationRequest):
     except Exception as e:
         import traceback
         jobs[job_id]["status"] = "error"
+        jobs[job_id]["stage"] = "error"
+        jobs[job_id]["stage_message"] = "Simulation failed"
         jobs[job_id]["error"] = str(e)
         jobs[job_id]["failed_at"] = datetime.now().isoformat()
         print(f"Simulation error for job {job_id}: {e}")
@@ -670,8 +779,12 @@ async def run_simulation(job_id: str, request: SimulationRequest):
 
 def update_progress(job_id: str, progress: float):
     """Update job progress"""
-    if job_id in jobs:
-        jobs[job_id]["progress"] = min(0.95, progress)
+    job = jobs.get(job_id)
+    if not job:
+        return
+    if _is_terminal_status(job.get("status", "")):
+        return
+    jobs[job_id]["progress"] = max(0.0, min(1.0, float(progress)))
 
 
 if __name__ == "__main__":

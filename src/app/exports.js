@@ -13,7 +13,6 @@ import {
 } from '../export/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
 import { detectGeometrySymmetry } from '../geometry/symmetry.js';
-import { generateMeshFromGeo } from '../solver/client.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
@@ -225,8 +224,6 @@ function buildPythonBuilderPayload(preparedParams, mshVersion = '2.2') {
 /**
  * Build an OCC-based .msh using the Python builder (POST /api/mesh/build).
  * Supports R-OSSE and OSSE configs when the backend Gmsh Python API is installed.
- *
- * Falls back to buildExportMeshWithGmsh if the endpoint returns 503.
  */
 export async function buildExportMeshFromParams(app, preparedParams, options = {}) {
   const backendUrl = getBackendUrl(app);
@@ -257,13 +254,6 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestPayload)
     });
-
-    if (res.status === 503) {
-      // Python OCC builder not available — fall back to JS .geo path
-      console.warn('[Export] Python OCC builder unavailable (503), falling back to JS .geo path');
-      if (app?.stats) app.stats.innerText = 'Falling back to JS mesh path\u2026';
-      return buildExportMeshWithGmsh(app, preparedParams, options);
-    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
@@ -349,69 +339,6 @@ async function checkBackendReachable(backendUrl) {
     
     return false;
   }
-}
-
-export async function buildExportMeshWithGmsh(app, preparedParams, options = {}) {
-  const backendUrl = getBackendUrl(app);
-
-  if (app?.stats) app.stats.innerText = 'Connecting to Gmsh backend\u2026';
-  
-  console.log(`[Export] Attempting backend connection (try 1/2)...`);
-  let reachable = await checkBackendReachable(backendUrl);
-  
-  if (!reachable) {
-    // Retry once after brief delay
-    console.log(`[Export] First attempt failed, retrying after 500ms...`);
-    await new Promise(resolve => setTimeout(resolve, 500));
-    reachable = await checkBackendReachable(backendUrl);
-  }
-  
-  if (!reachable) {
-    const errorMsg = 
-      `Gmsh backend health check failed at ${backendUrl}.\n\n` +
-      `🔍 Check browser console (F12 → Console tab) for detailed error.\n\n` +
-      `Possible causes:\n` +
-      `• Backend not running → Start with: npm start\n` +
-      `• Port conflict → Check if port 8000 is available\n` +
-      `• Network/CORS issue → See console for details`;
-    
-    console.error(`[Export] ❌ EXPORT FAILED - Backend unreachable after 2 attempts`);
-    throw new Error(errorMsg);
-  }
-  
-  console.log(`[Export] ✅ Backend connection verified`);
-
-  if (app?.stats) app.stats.innerText = 'Preparing geometry\u2026';
-  const gmshParams = buildGmshExportParams(preparedParams);
-  const artifacts = buildGeometryArtifacts(gmshParams, {
-    includeEnclosure: Number(gmshParams.encDepth || 0) > 0
-  });
-  const payload = artifacts.simulation;
-  const { geoText } = buildGmshGeo(gmshParams, artifacts.mesh, payload, {
-    mshVersion: options.mshVersion || '2.2'
-  });
-
-  if (app?.stats) app.stats.innerText = 'Meshing with Gmsh\u2026';
-  const meshResponse = await generateMeshFromGeo(
-    {
-      geoText,
-      mshVersion: options.mshVersion || '2.2',
-      binary: Boolean(options.binary)
-    },
-    backendUrl
-  );
-
-  if (!meshResponse || meshResponse.generatedBy !== 'gmsh' || typeof meshResponse.msh !== 'string') {
-    throw new Error('Invalid mesh service response: gmsh-authored mesh data is missing.');
-  }
-
-  return {
-    artifacts,
-    payload,
-    geoText,
-    msh: meshResponse.msh,
-    meshStats: meshResponse.stats || null
-  };
 }
 
 function getAxialMax(vertices) {
@@ -508,12 +435,8 @@ export async function exportABECProject(app) {
   app.stats.innerText = 'Building ABEC bundle...';
 
   try {
-    // Use Python OCC builder for R-OSSE and OSSE configs (preferred — smooth OCC geometry).
-    // Falls back automatically to JS .geo path if builder is unavailable (503).
-    const buildFn = (preparedParams.type === 'R-OSSE' || preparedParams.type === 'OSSE')
-      ? buildExportMeshFromParams
-      : buildExportMeshWithGmsh;
-    const { artifacts, payload, msh, geoText } = await buildFn(app, preparedParams);
+    // Use Python OCC builder for ABEC mesh export.
+    const { artifacts, payload, msh, geoText } = await buildExportMeshFromParams(app, preparedParams);
     if (typeof geoText !== 'string' || geoText.trim().length === 0) {
       throw new Error('ABEC export failed: bem_mesh.geo generation returned empty content.');
     }

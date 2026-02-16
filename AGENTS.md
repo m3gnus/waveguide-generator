@@ -30,7 +30,7 @@
 ## Source-of-Truth Docs
 - Architecture and runtime behavior: `docs/PROJECT_DOCUMENTATION.md`
 - ABEC bundle contract/parity: `docs/ABEC_PARITY_CONTRACT.md`
-- Execution sequencing/backlog context: `docs/AI_EXECUTION_PLAN.md`
+- Roadmap/backlog context: `docs/FUTURE_ADDITIONS.md`
 - Backend operational details: `server/README.md`
 
 ## Coding and Testing Guardrails

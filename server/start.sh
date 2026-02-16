@@ -11,7 +11,11 @@ if [ ! -f "app.py" ]; then
 fi
 
 # Check if Python 3 is available
-if [ -x "../.venv/bin/python" ]; then
+if [ -n "${WG_BACKEND_PYTHON:-}" ] && [ -x "${WG_BACKEND_PYTHON}" ]; then
+    PYTHON_BIN="${WG_BACKEND_PYTHON}"
+elif [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
+    PYTHON_BIN="$HOME/.waveguide-generator/opencl-cpu-env/bin/python"
+elif [ -x "../.venv/bin/python" ]; then
     PYTHON_BIN="../.venv/bin/python"
 elif command -v python3 &> /dev/null; then
     PYTHON_BIN="python3"

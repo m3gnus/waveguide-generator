@@ -2,7 +2,11 @@ import { AppEvents } from '../events.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
 
 export function provideMeshForSimulation(app) {
-  const preparedParams = app.prepareParamsForMesh({ applyVerticalOffset: true });
+  // Always submit full-domain geometry to /api/solve; backend symmetry handles reduction.
+  const preparedParams = app.prepareParamsForMesh({
+    applyVerticalOffset: true,
+    forceFullQuadrants: true
+  });
   const artifacts = buildGeometryArtifacts(preparedParams, {
     includeEnclosure: Number(preparedParams.encDepth || 0) > 0
   });

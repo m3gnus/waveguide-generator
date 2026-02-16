@@ -1,14 +1,16 @@
-# ABEC Export Parity Contract (Phase 2)
+# ABEC Export Parity Contract
 
-## Reference Anchor
+This is the current enforced ABEC bundle contract.
 
-Primary ATH reference bundle:
+Validation/enforcement:
+- `src/export/abecBundleValidator.js`
+- `scripts/validate-abec-bundle.js`
+- `tests/abec-bundle-parity.test.js`
 
+Reference anchor:
 - `_references/testconfigs/260112aolo1/ABEC_FreeStanding`
 
-This folder defines the baseline structure and semantic contract for ABEC export parity.
-
-## Required Bundle Structure
+## Required bundle structure
 
 Every generated ABEC bundle must contain:
 
@@ -20,36 +22,32 @@ Every generated ABEC bundle must contain:
 - `Results/coords.txt`
 - `Results/static.txt`
 
-## Contract Rules
+## Contract rules
 
 ### 1. Project wiring
 
 `Project.abec` must provide:
-
 - `[Solving]` with `Scriptname_Solving=solving.txt`
 - `[Observation]` with `C0=observation.txt`
 - `[MeshFiles]` with `C0=<basename>.msh,M1`
 
 Referenced files must exist in the bundle.
 
-### 2. Solving file semantics
+### 2. Solving semantics
 
 `solving.txt` must include:
-
 - `Control_Solver`
 - `MeshFile_Properties`
 - `Driving "S1001"`
 - mesh includes for `SD1G0` and `SD1D1001`
 
 Mode-specific behavior:
-
 - `ABEC_FreeStanding`: must not include `Infinite_Baffle`
 - `ABEC_InfiniteBaffle`: must include `Infinite_Baffle`
 
 ### 3. Mesh physical groups
 
 The referenced `.msh` must contain `$PhysicalNames` entries for:
-
 - `SD1G0`
 - `SD1D1001`
 
@@ -58,38 +56,17 @@ Any group referenced by `Mesh Include ...` in `solving.txt` must exist in mesh p
 ### 4. Observation structure
 
 `observation.txt` must include:
-
 - `Driving_Values`
 - `Radiation_Impedance`
 - at least one `BE_Spectrum` polar block
 
 Each `BE_Spectrum` must provide:
-
 - `GraphHeader`
 - `PolarRange`
 - `Inclination`
 
-## `bem_mesh.geo` Policy (Decision)
+## Notes
 
-Policy: **include `bem_mesh.geo` in every ABEC bundle**.
-
-Rationale:
-
-- Matches ATH folder expectations and improves parity tooling.
-- Provides a deterministic debug artifact even when runtime meshing uses OCC (`/api/mesh/build`).
-- Does not alter `.msh` authority: solver/export still use Gmsh-authored `.msh` as source of truth.
-
-Implementation note:
-
-- `bem_mesh.geo` is generated in frontend export (`buildGmshGeo`) from prepared params.
+- ABEC bundles include `bem_mesh.geo` generated in frontend export (`buildGmshGeo`).
 - `/api/mesh/build` remains `.msh`-only (plus optional `stl`) and does not return `.geo`.
-
-## Automation / Validation Hooks
-
-- Validator module: `src/export/abecBundleValidator.js`
-- CLI validator: `scripts/validate-abec-bundle.js`
-- Regression tests: `tests/abec-bundle-parity.test.js`
-- Golden fixtures:
-  - `tests/fixtures/abec/ABEC_FreeStanding`
-  - `tests/fixtures/abec/ABEC_InfiniteBaffle`
-
+- Future parity expansion items live in `docs/FUTURE_ADDITIONS.md`.
