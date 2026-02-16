@@ -25,5 +25,8 @@ trimesh==4.0.5
 # Falls back to `gmsh` CLI if the Python package is not installed.
 gmsh>=4.10.0,<5.0
 
+# Plotting
+matplotlib
+
 # Utilities
 pydantic>=2.10.0

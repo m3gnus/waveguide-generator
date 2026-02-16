@@ -1,0 +1,213 @@
+"""
+Matplotlib-based chart rendering for BEM simulation results.
+
+Produces publication-quality charts with dark background styling
+matching the directivity plot in directivity_plot.py.
+
+All renderers return base64-encoded PNG strings (without data URI prefix).
+"""
+
+import io
+import base64
+import numpy as np
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+
+from .directivity_plot import _log_grid_lines, _freq_formatter
+
+
+def _setup_dark_axes(ax, xlabel, ylabel, title):
+    """Apply dark theme styling to axes."""
+    ax.set_facecolor('#1a1a1a')
+    ax.set_xlabel(xlabel, color='#cccccc', fontsize=11)
+    ax.set_ylabel(ylabel, color='#cccccc', fontsize=11)
+    ax.set_title(title, color='#e0e0e0', fontsize=13, fontweight='600', pad=8)
+    ax.tick_params(colors='#aaaaaa', labelsize=9)
+    ax.spines['bottom'].set_color('#555555')
+    ax.spines['left'].set_color('#555555')
+    ax.spines['top'].set_color('#333333')
+    ax.spines['right'].set_color('#333333')
+    ax.grid(True, alpha=0.15, color='white', linewidth=0.5)
+
+
+def _add_log_grid(ax, freq_min, freq_max):
+    """Add log-frequency grid lines matching directivity_plot style."""
+    for freq in _log_grid_lines(freq_min, freq_max):
+        ax.axvline(freq, color='white', alpha=0.12, linewidth=0.5)
+
+
+def _fig_to_base64(fig, dpi=150):
+    """Export figure to base64-encoded PNG."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=dpi, facecolor=fig.get_facecolor(),
+                edgecolor='none', bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('ascii')
+
+
+def render_frequency_response(frequencies, spl, dpi=150):
+    """
+    Render frequency response (SPL on-axis) chart.
+
+    Args:
+        frequencies: List of frequencies in Hz
+        spl: List of SPL values in dB
+        dpi: Image resolution
+
+    Returns:
+        Base64-encoded PNG string
+    """
+    freqs = np.array(frequencies, dtype=float)
+    spl_vals = np.array(spl, dtype=float)
+
+    if len(freqs) == 0 or len(spl_vals) == 0:
+        return None
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4))
+    fig.patch.set_facecolor('#1a1a1a')
+
+    ax.semilogx(freqs, spl_vals, color='#4fc3f7', linewidth=1.5)
+
+    _setup_dark_axes(ax, 'Frequency [Hz]', 'SPL [dB]', 'Frequency Response (On-Axis)')
+    ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
+
+    ax.set_xlim(freqs[0], freqs[-1])
+    spl_min, spl_max = np.nanmin(spl_vals), np.nanmax(spl_vals)
+    margin = max(2, (spl_max - spl_min) * 0.1)
+    ax.set_ylim(spl_min - margin, spl_max + margin)
+
+    _add_log_grid(ax, freqs[0], freqs[-1])
+
+    fig.tight_layout(pad=1.5)
+    return _fig_to_base64(fig, dpi)
+
+
+def render_directivity_index(frequencies, di, dpi=150):
+    """
+    Render directivity index chart.
+
+    Args:
+        frequencies: List of frequencies in Hz
+        di: List of DI values in dB
+        dpi: Image resolution
+
+    Returns:
+        Base64-encoded PNG string
+    """
+    freqs = np.array(frequencies, dtype=float)
+    di_vals = np.array(di, dtype=float)
+
+    if len(freqs) == 0 or len(di_vals) == 0:
+        return None
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4))
+    fig.patch.set_facecolor('#1a1a1a')
+
+    ax.semilogx(freqs, di_vals, color='#81c784', linewidth=1.5)
+
+    _setup_dark_axes(ax, 'Frequency [Hz]', 'DI [dB]', 'Directivity Index')
+    ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
+
+    ax.set_xlim(freqs[0], freqs[-1])
+    di_min, di_max = np.nanmin(di_vals), np.nanmax(di_vals)
+    margin = max(2, (di_max - di_min) * 0.1)
+    ax.set_ylim(min(0, di_min - margin), di_max + margin)
+
+    _add_log_grid(ax, freqs[0], freqs[-1])
+
+    fig.tight_layout(pad=1.5)
+    return _fig_to_base64(fig, dpi)
+
+
+def render_impedance(frequencies, real, imaginary, dpi=150):
+    """
+    Render acoustic impedance chart (real + imaginary).
+
+    Args:
+        frequencies: List of frequencies in Hz
+        real: List of real impedance values
+        imaginary: List of imaginary impedance values
+        dpi: Image resolution
+
+    Returns:
+        Base64-encoded PNG string
+    """
+    freqs = np.array(frequencies, dtype=float)
+    re_vals = np.array(real, dtype=float)
+    im_vals = np.array(imaginary, dtype=float)
+
+    if len(freqs) == 0 or len(re_vals) == 0:
+        return None
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4))
+    fig.patch.set_facecolor('#1a1a1a')
+
+    ax.semilogx(freqs, re_vals, color='#64b5f6', linewidth=1.5, label='Re(Z)')
+    if len(im_vals) > 0:
+        ax.semilogx(freqs, im_vals, color='#ffb74d', linewidth=1.5, label='Im(Z)')
+
+    _setup_dark_axes(ax, 'Frequency [Hz]', u'Z [\u03A9]', 'Acoustic Impedance')
+    ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
+
+    ax.set_xlim(freqs[0], freqs[-1])
+
+    all_vals = np.concatenate([re_vals, im_vals]) if len(im_vals) > 0 else re_vals
+    z_min, z_max = np.nanmin(all_vals), np.nanmax(all_vals)
+    margin = max(50, (z_max - z_min) * 0.1)
+    ax.set_ylim(z_min - margin, z_max + margin)
+
+    _add_log_grid(ax, freqs[0], freqs[-1])
+
+    legend = ax.legend(loc='upper right', fontsize=10,
+                       facecolor='#2a2a2a', edgecolor='#555555',
+                       labelcolor='#cccccc')
+    legend.get_frame().set_alpha(0.9)
+
+    fig.tight_layout(pad=1.5)
+    return _fig_to_base64(fig, dpi)
+
+
+def render_all_charts(payload, dpi=150):
+    """
+    Render all charts from a combined results payload.
+
+    Args:
+        payload: Dict with keys: frequencies, spl, di, di_frequencies,
+                 impedance_frequencies, impedance_real, impedance_imaginary,
+                 directivity
+        dpi: Image resolution
+
+    Returns:
+        Dict with keys: frequency_response, directivity_index, impedance,
+        directivity_map — each a base64 PNG or None
+    """
+    from .directivity_plot import render_directivity_plot
+
+    freqs = payload.get('frequencies', [])
+    spl = payload.get('spl', [])
+    di = payload.get('di', [])
+    di_freqs = payload.get('di_frequencies', []) or freqs
+    imp_freqs = payload.get('impedance_frequencies', []) or freqs
+    imp_real = payload.get('impedance_real', [])
+    imp_imag = payload.get('impedance_imaginary', [])
+    directivity = payload.get('directivity', {})
+
+    charts = {}
+
+    charts['frequency_response'] = render_frequency_response(freqs, spl, dpi) if spl else None
+    charts['directivity_index'] = render_directivity_index(di_freqs, di, dpi) if di else None
+    charts['impedance'] = render_impedance(imp_freqs, imp_real, imp_imag, dpi) if imp_real else None
+
+    dir_b64 = None
+    if directivity and freqs:
+        try:
+            dir_b64 = render_directivity_plot(freqs, directivity, dpi)
+        except Exception:
+            pass
+    charts['directivity_map'] = dir_b64
+
+    return charts

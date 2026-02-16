@@ -71,6 +71,7 @@ class BEMSolver:
         enable_symmetry: bool = True,
         verbose: bool = False,
         mesh_validation_mode: str = "warn",
+        frequency_spacing: str = "linear",
     ) -> Dict:
         """
         Run BEM simulation with optional optimizations.
@@ -103,6 +104,7 @@ class BEMSolver:
                 polar_config, progress_callback, stage_callback,
                 enable_symmetry, verbose=verbose,
                 mesh_validation_mode=mesh_validation_mode,
+                frequency_spacing=frequency_spacing,
             )
         else:
             # Legacy solver (no symmetry, analytical piston directivity)
@@ -110,6 +112,7 @@ class BEMSolver:
                 mesh, frequency_range, num_frequencies, sim_type,
                 polar_config, progress_callback, stage_callback,
                 mesh_validation_mode=mesh_validation_mode,
+                frequency_spacing=frequency_spacing,
             )
 
     def _solve_frequency(

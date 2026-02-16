@@ -91,7 +91,9 @@ export function chooseExportFormat() {
       { id: '1', label: 'PNG/SVG Image' },
       { id: '2', label: 'CSV Data' },
       { id: '3', label: 'JSON Data' },
-      { id: '4', label: 'Text Report' }
+      { id: '4', label: 'Text Report' },
+      { id: '5', label: 'Polar Directivity CSV' },
+      { id: '6', label: 'Impedance CSV' }
     ];
 
     let settled = false;

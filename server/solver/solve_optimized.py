@@ -22,9 +22,10 @@ from .device_interface import (
     potential_device_interface,
     selected_device_metadata,
 )
+from .impedance import calculate_throat_impedance
 from .directivity_correct import (
-    calculate_directivity_index_correct,
     calculate_directivity_patterns_correct,
+    estimate_di_from_ka,
 )
 from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
 from .symmetry import (
@@ -45,10 +46,13 @@ class CachedOperators:
         self.space_p = None
         self.space_u = None
         self.identity = None
+        self.rhs_identity = None
         self.boundary_interface = boundary_interface
         self.potential_interface = potential_interface
         self.dlp_cache = {}
         self.slp_cache = {}
+        self.hyp_cache = {}
+        self.adlp_cache = {}
 
     def get_or_create_spaces(self, grid):
         if self.grid is not grid or self.space_p is None:
@@ -59,9 +63,12 @@ class CachedOperators:
             self.identity = bempp_api.operators.boundary.sparse.identity(
                 self.space_p, self.space_p, self.space_p
             )
+            self.rhs_identity = bempp_api.operators.boundary.sparse.identity(
+                self.space_u, self.space_p, self.space_p
+            )
         return self.space_p, self.space_u, self.identity
 
-    def get_or_create_operators(self, space_p, space_u, k: float):
+    def get_or_create_operators(self, space_p, space_u, k: float, use_burton_miller: bool = True):
         k_key = f"{k:.6f}"
         if k_key not in self.dlp_cache:
             self.dlp_cache[k_key] = bempp_api.operators.boundary.helmholtz.double_layer(
@@ -70,7 +77,19 @@ class CachedOperators:
             self.slp_cache[k_key] = bempp_api.operators.boundary.helmholtz.single_layer(
                 space_u, space_p, space_p, k, device_interface=self.boundary_interface
             )
-        return self.dlp_cache[k_key], self.slp_cache[k_key]
+            if use_burton_miller:
+                self.hyp_cache[k_key] = bempp_api.operators.boundary.helmholtz.hypersingular(
+                    space_p, space_p, space_p, k, device_interface=self.boundary_interface
+                )
+                self.adlp_cache[k_key] = bempp_api.operators.boundary.helmholtz.adjoint_double_layer(
+                    space_u, space_p, space_p, k, device_interface=self.boundary_interface
+                )
+        return (
+            self.dlp_cache[k_key],
+            self.slp_cache[k_key],
+            self.hyp_cache.get(k_key),
+            self.adlp_cache.get(k_key),
+        )
 
 
 def _build_source_velocity(space_u, amplitude: float = 1.0):
@@ -98,17 +117,26 @@ def solve_frequency_cached(
     sim_type: str,
     cached_ops: CachedOperators,
     throat_elements: np.ndarray = None,
+    use_burton_miller: bool = True,
 ) -> Tuple[float, complex, float, tuple]:
     """Solve one frequency using cached operators and SI units."""
     omega = k * c
 
     space_p, space_u, identity = cached_ops.get_or_create_spaces(grid)
-    dlp, slp = cached_ops.get_or_create_operators(space_p, space_u, k)
+    ops = cached_ops.get_or_create_operators(space_p, space_u, k, use_burton_miller)
 
     u_total = _build_source_velocity(space_u, amplitude=1.0)
+    neumann_fun = 1j * omega * rho * u_total
 
-    lhs = dlp - 0.5 * identity
-    rhs = 1j * omega * rho * slp * u_total
+    if use_burton_miller and len(ops) == 4:
+        dlp, slp, hyp, adlp = ops
+        coupling = 1j / k
+        lhs = 0.5 * identity - dlp - coupling * (-hyp)
+        rhs = (-slp - coupling * (adlp + 0.5 * cached_ops.rhs_identity)) * neumann_fun
+    else:
+        dlp, slp = ops[:2]
+        lhs = dlp - 0.5 * identity
+        rhs = slp * neumann_fun
 
     p_total, info = bempp_api.linalg.gmres(lhs, rhs, tol=1e-5)
     if info != 0:
@@ -126,22 +154,15 @@ def solve_frequency_cached(
     )
     pressure_far = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
 
-    p_ref = 20e-6 * np.sqrt(2)
+    p_ref = 20e-6
     p_amplitude = np.abs(pressure_far[0, 0])
     spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
 
-    coeffs = np.asarray(p_total.coefficients)
-    if coeffs.size > 0:
-        mean_throat_pressure = float(np.mean(np.abs(coeffs)))
-        z_real = mean_throat_pressure * rho * c
-        z_imag = mean_throat_pressure * rho * c * 0.1
-        impedance = complex(z_real, z_imag)
-    else:
-        impedance = complex(0.0, 0.0)
+    impedance = calculate_throat_impedance(grid, p_total.coefficients, throat_elements)
 
-    di = calculate_directivity_index_correct(
-        grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl
-    )
+    # Quick ka-based DI estimate (no potential operators needed).
+    # Accurate DI is computed later from the batched directivity patterns.
+    di = estimate_di_from_ka(grid, k)
 
     return float(spl), impedance, float(di), (p_total, u_total, space_p, space_u)
 
@@ -158,6 +179,8 @@ def solve_optimized(
     symmetry_tolerance: float = 1e-3,
     verbose: bool = True,
     mesh_validation_mode: str = "warn",
+    use_burton_miller: bool = True,
+    frequency_spacing: str = "linear",
 ) -> Dict:
     """Run optimized BEM simulation with explicit metadata and failure reporting."""
     start_time = time.time()
@@ -186,7 +209,12 @@ def solve_optimized(
     potential_interface = potential_device_interface()
 
     num_frequencies = int(num_frequencies)
-    frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
+    if frequency_spacing == "log":
+        frequencies = np.logspace(
+            np.log10(frequency_range[0]), np.log10(frequency_range[1]), num_frequencies
+        )
+    else:
+        frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
 
     symmetry_info = None
     reduction_factor = 1.0
@@ -224,6 +252,8 @@ def solve_optimized(
                     reduction_factor = float(symmetry_info["reduction_factor"])
                     validate_symmetry_reduction(symmetry_info, verbose=verbose)
                     apply_neumann_bc_on_symmetry_planes(grid, symmetry_info)
+                    # Re-identify throat elements in reduced grid
+                    throat_elements = np.where(reduced_tags == 2)[0]
                 elif verbose:
                     print(f"[BEM] Symmetry rejected: excitation not centered ({throat_center})")
             elif verbose:
@@ -324,7 +354,7 @@ def solve_optimized(
         try:
             iter_start = time.time()
             spl, impedance, di, solution = solve_frequency_cached(
-                grid, k, c, rho, sim_type, cached_ops, throat_elements
+                grid, k, c, rho, sim_type, cached_ops, throat_elements, use_burton_miller
             )
             iter_time = time.time() - iter_start
             success_count += 1
@@ -451,6 +481,44 @@ def solve_optimized(
             results["directivity"] = calculate_directivity_patterns_correct(
                 grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config
             )
+
+            # Refine DI from batched directivity patterns (replaces ka-based estimate).
+            # Uses the on-axis SPL and the horizontal polar pattern that was already computed.
+            for vi, global_i in enumerate(indices):
+                spl_on_axis_val = results["spl_on_axis"]["spl"][global_i]
+                if spl_on_axis_val is None:
+                    continue
+                h_pattern = results["directivity"]["horizontal"][vi]
+                if not h_pattern:
+                    continue
+                try:
+                    # h_pattern is [[angle, dB_normalized], ...]; extract un-normalized SPL
+                    angles_deg = np.array([pt[0] for pt in h_pattern])
+                    spl_norm = np.array([pt[1] for pt in h_pattern])
+                    # spl_norm is relative to norm_angle; recover absolute by adding on-axis SPL
+                    # The norm_angle entry is 0 dB, and on-axis (0°) offset gives the shift
+                    on_axis_idx = np.argmin(np.abs(angles_deg))
+                    spl_abs = spl_norm - spl_norm[on_axis_idx] + spl_on_axis_val
+
+                    # Integrate over hemisphere assuming axial symmetry of horizontal cut
+                    theta_rad = np.deg2rad(angles_deg)
+                    p_ref = 20e-6
+                    p_vals = p_ref * 10 ** (spl_abs / 20)
+                    intensities = p_vals ** 2
+                    sin_theta = np.sin(theta_rad)
+                    sin_theta = np.maximum(sin_theta, 0.01)
+
+                    # Trapezoidal integration weighted by sin(theta)
+                    avg_intensity = np.trapz(intensities * sin_theta, theta_rad)
+                    total_weight = np.trapz(sin_theta, theta_rad)
+                    if total_weight > 0 and avg_intensity > 0:
+                        avg_i = avg_intensity / total_weight
+                        p_on_axis = p_ref * 10 ** (spl_on_axis_val / 20)
+                        di = 10 * np.log10(p_on_axis ** 2 / avg_i)
+                        results["di"]["di"][global_i] = float(max(0.0, min(30.0, di)))
+                except Exception:
+                    pass  # Keep the ka-based estimate
+
         except Exception as exc:
             results["metadata"]["failures"].append(
                 frequency_failure(
