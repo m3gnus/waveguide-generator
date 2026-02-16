@@ -13,7 +13,6 @@ Replaces the incorrect piston approximation in directivity.py
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from .deps import bempp_api
-from .units import mm_to_m, m_to_mm
 
 
 def evaluate_far_field_sphere(
@@ -53,10 +52,9 @@ def evaluate_far_field_sphere(
         - 'spl': 2D array of SPL in dB
         - 'observation_points': 3D array (len(phi), len(theta), 3) of XYZ coordinates
     """
-    # Find mouth position (maximum Y coordinate)
+    # Find mouth position (maximum Y coordinate), coordinates are in meters.
     vertices = grid.vertices
-    max_y_mm = np.max(vertices[1, :])
-    max_y_m = mm_to_m(max_y_mm)
+    max_y_m = np.max(vertices[1, :])
 
     # Generate theta angles
     theta_start, theta_end, theta_points = theta_range
@@ -91,10 +89,7 @@ def evaluate_far_field_sphere(
             z_m = radius_m * np.sin(theta) * np.sin(phi)
             y_m = max_y_m + radius_m * np.cos(theta)
 
-            # Convert to mm for BEMPP (mesh is in mm)
-            obs_point = np.array([[m_to_mm(x_m)],
-                                  [m_to_mm(y_m)],
-                                  [m_to_mm(z_m)]])
+            obs_point = np.array([[x_m], [y_m], [z_m]])
 
             observation_points[i_phi, i_theta, :] = [x_m, y_m, z_m]
 
@@ -377,7 +372,7 @@ def calculate_directivity_index_correct(
         mouth_verts = vertices[:, np.abs(vertices[1, :] - max_y) < 1.0]
         if mouth_verts.shape[1] > 0:
             mouth_radius = np.max(np.sqrt(mouth_verts[0, :] ** 2 + mouth_verts[2, :] ** 2))
-            ka = k * mm_to_m(mouth_radius)
+            ka = k * mouth_radius
             di = max(3.0, min(20.0, 10 * np.log10(1 + ka ** 2)))
         else:
             di = 6.0

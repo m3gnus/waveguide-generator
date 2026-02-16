@@ -100,12 +100,23 @@ export class BemSolver {
   }
 
   /**
-   * Check if BEM solver backend is available
+   * Fetch backend health payload.
+   */
+  async getHealthStatus() {
+    const response = await fetch(`${this.backendUrl}/health`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch health: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Check if BEM solver runtime is ready (not just backend reachable).
    */
   async checkConnection() {
     try {
-      const response = await fetch(`${this.backendUrl}/health`);
-      return response.ok;
+      const health = await this.getHealthStatus();
+      return Boolean(health?.solverReady);
     } catch (error) {
       return false;
     }
@@ -130,7 +141,8 @@ export class BemSolver {
       num_frequencies: config.numFrequencies,
       sim_type: config.simulationType,
       options: options,
-      polar_config: config.polarConfig || null
+      polar_config: config.polarConfig || null,
+      mesh_validation_mode: config.meshValidationMode || 'warn'
     };
 
     const response = await fetch(`${this.backendUrl}/api/solve`, {

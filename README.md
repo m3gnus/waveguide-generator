@@ -4,6 +4,12 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 
 ![Waveguide Generator App Screenshot](docs/images/waveguide-generator-screenshot.png)
 
+## Documentation
+
+- [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - architecture and runtime behavior
+- [ABEC Parity Contract](docs/ABEC_PARITY_CONTRACT.md) - enforced ABEC bundle structure and semantics
+- [Future Additions](docs/FUTURE_ADDITIONS.md) - planned or partial features not yet in production runtime
+
 ## Prerequisites
 
 Two things need to be installed on your computer before you begin:
@@ -53,6 +59,20 @@ To install it later:
 # Windows
 .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
 ```
+
+For macOS Apple Silicon, use the OpenCL CPU helper to get true bempp OpenCL runtime:
+
+```bash
+./scripts/setup-opencl-backend.sh
+```
+
+This creates and configures:
+
+```bash
+$HOME/.waveguide-generator/opencl-cpu-env/bin/python
+```
+
+`npm start` will automatically prefer that interpreter when it exists.
 
 ## Features
 

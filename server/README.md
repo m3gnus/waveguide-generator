@@ -24,6 +24,22 @@ Notes:
   - `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev --force-reinstall --no-cache-dir gmsh`
   - Headless Linux: `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev-nox --force-reinstall --no-cache-dir gmsh`
 
+### 1.0 macOS OpenCL CPU setup (recommended for bempp-cl OpenCL)
+
+On Apple Silicon, bempp-cl `0.4.x` OpenCL requires a CPU OpenCL device. The helper below creates a no-space conda environment with `pocl` (Portable OpenCL CPU runtime):
+
+From repository root:
+
+```bash
+./scripts/setup-opencl-backend.sh
+```
+
+After that, `npm start` and `server/start.sh` will automatically prefer:
+
+```bash
+$HOME/.waveguide-generator/opencl-cpu-env/bin/python
+```
+
 ## 1.1 Supported dependency matrix (P3-1)
 
 The backend now enforces a version matrix at runtime:
@@ -45,6 +61,12 @@ From repository root:
 
 ```bash
 ./.venv/bin/python server/app.py
+```
+
+Or explicitly use the OpenCL CPU environment:
+
+```bash
+$HOME/.waveguide-generator/opencl-cpu-env/bin/python server/app.py
 ```
 
 This starts Uvicorn on `0.0.0.0:8000`.
@@ -76,20 +98,38 @@ Required payload fields:
 Optional:
 
 - `mesh.boundaryConditions`
-- `mesh.metadata`
+- `mesh.metadata` (supports `units` and `unitScaleToMeter`)
 - `polar_config`
 - optimization flags (`use_optimized`, `enable_symmetry`, `verbose`)
+- `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 
 Validation behavior:
 
 - `vertices.length` must be divisible by 3
 - `indices.length` must be divisible by 3
 - `surfaceTags.length` must equal triangle count (`indices.length / 3`)
+- `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
 - malformed payloads return `422`
+
+Runtime metadata behavior:
+
+- If mesh unit metadata is missing, backend auto-detects scale with heuristic fallback.
+- `/api/results/{job_id}` includes:
+  - `metadata.failures`
+  - `metadata.failure_count`
+  - `metadata.partial_success`
+  - `metadata.mesh_validation`
+  - `metadata.unit_detection`
 
 ### `GET /api/status/{job_id}`
 
-Returns job status and progress.
+Returns live job status payload:
+
+- `status`: `queued` | `running` | `complete` | `error` | `cancelled`
+- `progress`: normalized `0.0..1.0`
+- `stage`: current pipeline stage (for example `mesh_prepare`, `bem_solve`, `directivity`, `finalizing`)
+- `stage_message`: human-readable stage detail
+- `message`: terminal error/cancellation message (when applicable)
 
 ### `GET /api/results/{job_id}`
 

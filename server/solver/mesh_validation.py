@@ -85,10 +85,7 @@ def calculate_max_valid_frequency(
     """
     # Use maximum edge length to be conservative
     # (worst case: large elements limit high frequency accuracy)
-    max_edge = mesh_stats['max_edge_length']  # in mm
-
-    # Convert to meters
-    max_edge_m = max_edge / 1000.0
+    max_edge_m = mesh_stats['max_edge_length']  # in meters
 
     # Wavelength must be at least elements_per_wavelength * max_edge
     min_wavelength = elements_per_wavelength * max_edge_m
@@ -132,8 +129,7 @@ def validate_frequency_range(
 
     # Calculate actual elements per wavelength at requested max frequency
     wavelength_at_max = c / max_freq
-    wavelength_at_max_mm = wavelength_at_max * 1000.0
-    elements_at_max = wavelength_at_max_mm / mesh_stats['max_edge_length']
+    elements_at_max = wavelength_at_max / mesh_stats['max_edge_length']
 
     warnings = []
     recommendations = []
@@ -154,11 +150,11 @@ def validate_frequency_range(
         )
 
         # Calculate target element size
-        target_wavelength = c / max_freq * 1000.0  # mm
+        target_wavelength = c / max_freq
         target_edge = target_wavelength / elements_per_wavelength
 
         recommendations.append(
-            f"RECOMMENDED: Refine mesh to ~{target_edge:.1f} mm max element size "
+            f"RECOMMENDED: Refine mesh to ~{target_edge:.5f} m max element size "
             f"(use use_gmsh=True with target_frequency={max_freq:.0f})"
         )
         recommendations.append(
@@ -211,7 +207,7 @@ def suggest_target_refinement(
 
     Returns:
         Refinement suggestion dictionary:
-        - target_edge_length: Target maximum edge length in mm
+        - target_edge_length: Target maximum edge length in meters
         - refinement_factor: Approximate refinement factor needed
         - estimated_elements: Estimated number of elements after refinement
     """
@@ -224,10 +220,9 @@ def suggest_target_refinement(
 
     # Required wavelength at desired frequency
     wavelength_m = c / desired_max_freq
-    wavelength_mm = wavelength_m * 1000.0
 
     # Target edge length
-    target_edge = wavelength_mm / elements_per_wavelength
+    target_edge = wavelength_m / elements_per_wavelength
 
     # Refinement factor (linear dimension)
     refinement_factor = current_mesh_stats['max_edge_length'] / target_edge
@@ -338,8 +333,8 @@ def print_mesh_validation_report(
     stats = validation['mesh_stats']
     print(f"\nMesh Statistics:")
     print(f"  Elements: {stats['num_elements']}")
-    print(f"  Edge length: {stats['min_edge_length']:.2f} - {stats['max_edge_length']:.2f} mm")
-    print(f"  Mean edge: {stats['mean_edge_length']:.2f} mm")
+    print(f"  Edge length: {stats['min_edge_length']:.5f} - {stats['max_edge_length']:.5f} m")
+    print(f"  Mean edge: {stats['mean_edge_length']:.5f} m")
 
     if symmetry_factor > 1.0:
         print(f"\nSymmetry Reduction: {symmetry_factor:.1f}× → {int(stats['num_elements']/symmetry_factor)} effective elements")
