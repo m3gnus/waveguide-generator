@@ -4,7 +4,6 @@ import {
   renderFrequencyResponseChart,
   renderDirectivityIndexChart,
   renderImpedanceChart,
-  renderPolarDirectivityHeatmap
 } from './charts.js';
 
 export function displayResults(panel, results = null) {
@@ -52,10 +51,19 @@ export function displayResults(panel, results = null) {
   } else {
     // Display real BEM results
     chartsDiv.innerHTML = renderBemResults(panel, results);
+
+    // Fetch server-rendered Matplotlib directivity plot (async, replaces SVG fallback).
+    // Must run AFTER innerHTML assignment so #directivity-plot-container exists in the DOM.
+    const splData = results.spl_on_axis || {};
+    const freqs = results.frequencies || splData.frequencies || [];
+    const directivity = results.directivity || {};
+    _fetchDirectivityPlot(freqs, directivity);
   }
 
-  // Enable export button
+  // Enable results buttons
   document.getElementById('export-results-btn').disabled = false;
+  const viewBtn = document.getElementById('view-results-btn');
+  if (viewBtn) viewBtn.disabled = false;
 }
 
 export function renderBemResults(panel, results) {
@@ -96,9 +104,8 @@ export function renderBemResults(panel, results) {
   // Generate impedance chart
   const impedanceChart = renderImpedanceChart(impedanceFrequencies, impedanceReal, impedanceImag);
 
-  // Generate polar directivity heatmap (like reference image)
-  const directivityData = results.directivity || {};
-  const polarHeatmap = renderPolarDirectivityHeatmap(frequencies, directivityData);
+  // NOTE: _fetchDirectivityPlot is called from displayResults() after DOM insertion
+  // (the container #directivity-plot-container doesn't exist until innerHTML is assigned)
 
   // Run validation on results
   const validationReport = validationManager.runFullValidation(results);
@@ -128,7 +135,11 @@ export function renderBemResults(panel, results) {
             </div>
             <div class="chart-container" style="width: 100%;">
                 <div class="chart-title">Polar Directivity Map (ABEC.Polars)</div>
-                ${polarHeatmap}
+                <div id="directivity-plot-container">
+                    <div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">
+                        Rendering directivity plot...
+                    </div>
+                </div>
             </div>
             ${metadataHtml}
             ${validationHtml}
@@ -315,4 +326,47 @@ export function renderBackendMetadata(metadata) {
       </div>
     </div>
   `;
+}
+
+function _setPlotMessage(container, msg) {
+  container.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">${msg}</div>`;
+}
+
+async function _fetchDirectivityPlot(frequencies, directivity) {
+  const container = document.getElementById('directivity-plot-container');
+  if (!container) {
+    console.warn('[directivity-plot] #directivity-plot-container not found in DOM');
+    return;
+  }
+  if (!frequencies?.length || !directivity?.horizontal?.length) {
+    console.warn('[directivity-plot] Missing frequencies or directivity.horizontal data');
+    _setPlotMessage(container, 'No directivity data available.');
+    return;
+  }
+
+  try {
+    const response = await fetch('http://localhost:8000/api/render-directivity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frequencies, directivity }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.warn(`[directivity-plot] Server returned ${response.status}: ${detail}`);
+      _setPlotMessage(container, 'Directivity plot unavailable (server error).');
+      return;
+    }
+
+    const data = await response.json();
+    if (data.image) {
+      container.innerHTML = `<img src="${data.image}" alt="Directivity Plot" style="width: 100%; border-radius: 4px;" />`;
+    } else {
+      console.warn('[directivity-plot] Response missing image field');
+      _setPlotMessage(container, 'Directivity plot unavailable (empty response).');
+    }
+  } catch (err) {
+    console.warn('[directivity-plot] Fetch failed (server unavailable):', err.message);
+    _setPlotMessage(container, 'Directivity plot unavailable (backend not running).');
+  }
 }

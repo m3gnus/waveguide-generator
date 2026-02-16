@@ -7,7 +7,7 @@ This module computes physically accurate directivity patterns by:
 3. Proper normalization and SPL calculation
 4. No approximations - uses actual computed field
 
-Replaces the incorrect piston approximation in directivity.py
+All observation points are batched into single operator calls for performance.
 """
 
 import numpy as np
@@ -30,6 +30,9 @@ def evaluate_far_field_sphere(
 ) -> Dict[str, np.ndarray]:
     """
     Evaluate pressure field on spherical surface at multiple angles.
+
+    All observation points are batched into a single bempp potential operator
+    call for performance (2 operator constructions total instead of 2*N).
 
     Args:
         grid: BEMPP grid
@@ -68,49 +71,50 @@ def evaluate_far_field_sphere(
     phi_deg = np.array(phi_angles)
     phi_rad = np.deg2rad(phi_deg)
 
-    # Prepare output arrays
     n_phi = len(phi_deg)
     n_theta = len(theta_deg)
+    n_total = n_phi * n_theta
 
-    pressures = np.zeros((n_phi, n_theta), dtype=complex)
+    # Build all observation points at once: shape (3, N)
+    obs_array = np.zeros((3, n_total))
     observation_points = np.zeros((n_phi, n_theta, 3))
 
-    # Reference pressure for SPL calculation
-    p_ref = 20e-6 * np.sqrt(2)  # 20 μPa RMS, peak amplitude
-
-    # Evaluate at each angle
+    idx = 0
     for i_phi, phi in enumerate(phi_rad):
+        sin_phi = np.sin(phi)
+        cos_phi = np.cos(phi)
         for i_theta, theta in enumerate(theta_rad):
-            # Spherical to Cartesian
-            # Theta = 0 is on-axis (positive Y), theta = 90 is lateral
-            # Standard spherical: (r, theta, phi) where theta is from +Y axis
-
-            x_m = radius_m * np.sin(theta) * np.cos(phi)
-            z_m = radius_m * np.sin(theta) * np.sin(phi)
+            x_m = radius_m * np.sin(theta) * cos_phi
+            z_m = radius_m * np.sin(theta) * sin_phi
             y_m = max_y_m + radius_m * np.cos(theta)
 
-            obs_point = np.array([[x_m], [y_m], [z_m]])
-
+            obs_array[0, idx] = x_m
+            obs_array[1, idx] = y_m
+            obs_array[2, idx] = z_m
             observation_points[i_phi, i_theta, :] = [x_m, y_m, z_m]
+            idx += 1
 
-            try:
-                # Create potential operators for this point
-                dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
-                    space_p, obs_point, k
-                )
-                slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
-                    space_u, obs_point, k
-                )
+    # Reference pressure for SPL calculation
+    p_ref = 20e-6  # 20 µPa standard reference pressure
 
-                # Evaluate far-field pressure
-                # P(x) = D*p_total - i*ω*ρ₀*S*u_total
-                pressure = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
-                pressures[i_phi, i_theta] = pressure[0, 0]
+    try:
+        # TWO operator constructions for ALL points (instead of 2*N)
+        dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
+            space_p, obs_array, k
+        )
+        slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
+            space_u, obs_array, k
+        )
 
-            except Exception as e:
-                # Numerical issues at this point
-                print(f"[Directivity] Warning: Failed to evaluate at theta={np.rad2deg(theta):.1f}°, phi={np.rad2deg(phi):.1f}°: {e}")
-                pressures[i_phi, i_theta] = 0.0
+        # Evaluate far-field pressure at all points at once
+        # P(x) = D*p_total - i*omega*rho_0*S*u_total
+        pressure_flat = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
+        # pressure_flat shape: (1, n_total) — reshape to (n_phi, n_theta)
+        pressures = pressure_flat[0, :].reshape(n_phi, n_theta)
+
+    except Exception as e:
+        print(f"[Directivity] Warning: Batched evaluation failed: {e}")
+        pressures = np.zeros((n_phi, n_theta), dtype=complex)
 
     # Calculate SPL
     p_amplitude = np.abs(pressures)
@@ -140,7 +144,8 @@ def calculate_directivity_patterns_correct(
     """
     Calculate correct directivity patterns using BEM far-field evaluation.
 
-    This replaces the analytical piston approximation with actual field evaluation.
+    All three polar cuts (horizontal, vertical, diagonal) are evaluated in a
+    single batched operator call per frequency for performance.
 
     Args:
         grid: BEMPP grid
@@ -185,7 +190,7 @@ def calculate_directivity_patterns_correct(
         print(f"[Directivity] Error: Solution count ({len(p_solutions)}) != frequency count ({len(frequencies)})")
         return patterns
 
-    # Process each frequency
+    # Process each frequency — all 3 phi cuts batched into one call
     for freq_idx, freq in enumerate(frequencies):
         k = 2 * np.pi * freq / c
         omega = k * c
@@ -193,54 +198,26 @@ def calculate_directivity_patterns_correct(
         # Unpack solution
         p_total, u_total, space_p, space_u = p_solutions[freq_idx]
 
-        # Evaluate three polar cuts:
-        # 1. Horizontal: phi=0° (XY plane, Z=0)
-        # 2. Vertical: phi=90° (YZ plane, X=0)
-        # 3. Diagonal: phi=inclination° (user-defined)
-
         try:
-            # Horizontal cut (phi = 0°)
-            h_result = evaluate_far_field_sphere(
+            # Evaluate all three polar cuts in ONE batched call
+            result = evaluate_far_field_sphere(
                 grid, p_total, u_total, space_p, space_u,
                 k, omega, rho,
                 radius_m=distance_m,
                 theta_range=(angle_start, angle_end, angle_points),
-                phi_angles=[0.0]
+                phi_angles=[0.0, 90.0, inclination]  # H, V, D in one batch
             )
-            h_spl = h_result['spl'][0, :]  # Extract single phi slice
-            h_theta = h_result['theta_degrees']
 
-            # Normalize
-            h_spl_norm = normalize_polar(h_spl, h_theta, norm_angle)
+            theta = result['theta_degrees']
 
-            # Format as [[angle, dB], ...]
-            horizontal = [[float(angle), float(db)] for angle, db in zip(h_theta, h_spl_norm)]
+            # Extract and normalize each cut
+            h_spl_norm = normalize_polar(result['spl'][0, :], theta, norm_angle)
+            v_spl_norm = normalize_polar(result['spl'][1, :], theta, norm_angle)
+            d_spl_norm = normalize_polar(result['spl'][2, :], theta, norm_angle)
 
-            # Vertical cut (phi = 90°)
-            v_result = evaluate_far_field_sphere(
-                grid, p_total, u_total, space_p, space_u,
-                k, omega, rho,
-                radius_m=distance_m,
-                theta_range=(angle_start, angle_end, angle_points),
-                phi_angles=[90.0]
-            )
-            v_spl = v_result['spl'][0, :]
-            v_theta = v_result['theta_degrees']
-            v_spl_norm = normalize_polar(v_spl, v_theta, norm_angle)
-            vertical = [[float(angle), float(db)] for angle, db in zip(v_theta, v_spl_norm)]
-
-            # Diagonal cut (phi = inclination°)
-            d_result = evaluate_far_field_sphere(
-                grid, p_total, u_total, space_p, space_u,
-                k, omega, rho,
-                radius_m=distance_m,
-                theta_range=(angle_start, angle_end, angle_points),
-                phi_angles=[inclination]
-            )
-            d_spl = d_result['spl'][0, :]
-            d_theta = d_result['theta_degrees']
-            d_spl_norm = normalize_polar(d_spl, d_theta, norm_angle)
-            diagonal = [[float(angle), float(db)] for angle, db in zip(d_theta, d_spl_norm)]
+            horizontal = [[float(a), float(db)] for a, db in zip(theta, h_spl_norm)]
+            vertical = [[float(a), float(db)] for a, db in zip(theta, v_spl_norm)]
+            diagonal = [[float(a), float(db)] for a, db in zip(theta, d_spl_norm)]
 
         except Exception as e:
             print(f"[Directivity] Error computing directivity at {freq:.0f} Hz: {e}")
@@ -281,6 +258,31 @@ def normalize_polar(
     return spl - reference_spl
 
 
+def estimate_di_from_ka(grid, k: float) -> float:
+    """
+    Quick DI estimate from ka (no BEM potential operators needed).
+
+    Uses the standard approximation DI = 10*log10(1 + (ka)^2) which is
+    valid for circular pistons and provides a reasonable estimate for horns.
+
+    Args:
+        grid: BEMPP grid
+        k: Wavenumber
+
+    Returns:
+        Approximate Directivity Index in dB
+    """
+    vertices = grid.vertices
+    max_y = np.max(vertices[1, :])
+    # Find vertices near the mouth (within 1mm tolerance)
+    mouth_verts = vertices[:, np.abs(vertices[1, :] - max_y) < 1e-3]
+    if mouth_verts.shape[1] > 0:
+        mouth_radius = np.max(np.sqrt(mouth_verts[0, :] ** 2 + mouth_verts[2, :] ** 2))
+        ka = k * mouth_radius
+        return float(max(0.0, min(30.0, 10 * np.log10(1 + ka ** 2))))
+    return 6.0
+
+
 def calculate_directivity_index_correct(
     grid,
     k: float,
@@ -299,6 +301,8 @@ def calculate_directivity_index_correct(
     DI = SPL_on_axis - SPL_average
     where SPL_average is the spatial average over a hemisphere.
 
+    Uses batched evaluation for all hemisphere points in a single operator call.
+
     Args:
         grid: BEMPP grid
         k: Wavenumber
@@ -315,7 +319,6 @@ def calculate_directivity_index_correct(
         Directivity Index in dB
     """
     # Sample hemisphere (front half)
-    # Use sparse sampling for DI (more points = more accurate but slower)
     theta_points = 9  # 0-90° in ~10° steps
     phi_points = 12  # Around axis
 
@@ -328,15 +331,15 @@ def calculate_directivity_index_correct(
     )
 
     # Integrate intensity over hemisphere
-    # Solid angle element: dΩ = sin(θ) dθ dφ
+    # Solid angle element: dOmega = sin(theta) dtheta dphi
     spl_field = result['spl']  # Shape: (n_phi, n_theta)
     theta_deg = result['theta_degrees']
     theta_rad = np.deg2rad(theta_deg)
 
     # Convert SPL to intensity
-    p_ref = 20e-6 * np.sqrt(2)
+    p_ref = 20e-6
     pressures = p_ref * 10 ** (spl_field / 20)
-    intensities = pressures ** 2  # I ∝ p²
+    intensities = pressures ** 2  # I proportional to p^2
 
     # Integrate with solid angle weighting
     total_intensity = 0.0
@@ -367,14 +370,6 @@ def calculate_directivity_index_correct(
         di = max(0.0, min(di, 30.0))
     else:
         # Fallback: use approximate DI based on ka
-        vertices = grid.vertices
-        max_y = np.max(vertices[1, :])
-        mouth_verts = vertices[:, np.abs(vertices[1, :] - max_y) < 1.0]
-        if mouth_verts.shape[1] > 0:
-            mouth_radius = np.max(np.sqrt(mouth_verts[0, :] ** 2 + mouth_verts[2, :] ** 2))
-            ka = k * mouth_radius
-            di = max(3.0, min(20.0, 10 * np.log10(1 + ka ** 2)))
-        else:
-            di = 6.0
+        di = estimate_di_from_ka(grid, k)
 
     return di

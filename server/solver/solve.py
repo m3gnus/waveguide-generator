@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from .contract import frequency_failure
 from .deps import bempp_api
+from .impedance import calculate_throat_impedance
 from .device_interface import (
     boundary_device_interface,
     configure_opencl_safe_profile,
@@ -33,6 +34,7 @@ def solve_frequency(
     throat_elements: np.ndarray = None,
     boundary_interface: Optional[str] = None,
     potential_interface: Optional[str] = None,
+    use_burton_miller: bool = True,
 ) -> Tuple[float, complex, float]:
     """
     Solve BEM for a single frequency using exterior Helmholtz BIE in SI units.
@@ -44,6 +46,7 @@ def solve_frequency(
         rho: air density (kg/m^3)
         sim_type: simulation type
         throat_elements: indices of throat elements for source
+        use_burton_miller: use Burton-Miller formulation (avoids irregular frequencies)
 
     Returns:
         (spl_on_axis, throat_impedance, directivity_index)
@@ -66,9 +69,24 @@ def solve_frequency(
 
     # Explicit source-DOF excitation avoids orientation cancellation on symmetric meshes.
     u_total = _build_source_velocity(space_u, amplitude=1.0)
+    neumann_fun = 1j * omega * rho * u_total
 
-    lhs = dlp - 0.5 * identity
-    rhs = 1j * omega * rho * slp * u_total
+    if use_burton_miller:
+        hyp = bempp_api.operators.boundary.helmholtz.hypersingular(
+            space_p, space_p, space_p, k, device_interface=boundary_interface
+        )
+        adlp = bempp_api.operators.boundary.helmholtz.adjoint_double_layer(
+            space_u, space_p, space_p, k, device_interface=boundary_interface
+        )
+        rhs_identity = bempp_api.operators.boundary.sparse.identity(
+            space_u, space_p, space_p
+        )
+        coupling = 1j / k
+        lhs = 0.5 * identity - dlp - coupling * (-hyp)
+        rhs = (-slp - coupling * (adlp + 0.5 * rhs_identity)) * neumann_fun
+    else:
+        lhs = dlp - 0.5 * identity
+        rhs = slp * neumann_fun
 
     p_total, info = bempp_api.linalg.gmres(lhs, rhs, tol=1e-5)
     if info != 0:
@@ -89,18 +107,11 @@ def solve_frequency(
 
     pressure_far = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
 
-    p_ref = 20e-6 * np.sqrt(2)
+    p_ref = 20e-6
     p_amplitude = np.abs(pressure_far[0, 0])
     spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
 
-    coeffs = np.asarray(p_total.coefficients)
-    if coeffs.size > 0:
-        mean_throat_pressure = float(np.mean(np.abs(coeffs)))
-        z_real = mean_throat_pressure * rho * c
-        z_imag = mean_throat_pressure * rho * c * 0.1
-        impedance = complex(z_real, z_imag)
-    else:
-        impedance = complex(0.0, 0.0)
+    impedance = calculate_throat_impedance(grid, p_total.coefficients, throat_elements)
 
     di = calculate_directivity_index_from_pressure(
         grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl
@@ -118,6 +129,7 @@ def solve(
     progress_callback: Optional[Callable[[float], None]] = None,
     stage_callback: Optional[Callable[[str, Optional[float], Optional[str]], None]] = None,
     mesh_validation_mode: str = "warn",
+    frequency_spacing: str = "linear",
 ) -> Dict:
     """Run legacy BEM simulation path with explicit failure reporting."""
     if isinstance(mesh, dict):
@@ -136,7 +148,12 @@ def solve(
         unit_detection = {}
 
     num_frequencies = int(num_frequencies)
-    frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
+    if frequency_spacing == "log":
+        frequencies = np.logspace(
+            np.log10(frequency_range[0]), np.log10(frequency_range[1]), num_frequencies
+        )
+    else:
+        frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
 
     results = {
         "frequencies": frequencies.tolist(),

@@ -358,7 +358,7 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
                 <text x="${legendX + legendWidth + 35}" y="${padding.top + legendHeight / 2}" text-anchor="middle" fill="var(--text-color)" font-size="10" font-weight="600" transform="rotate(90, ${legendX + legendWidth + 35}, ${padding.top + legendHeight / 2})">dB rel 0°</text>
 
                 <!-- Title -->
-                <text x="${width / 2}" y="20" text-anchor="middle" fill="var(--text-color)" font-size="14" font-weight="600">Vertical Directivity</text>
+                <text x="${width / 2}" y="20" text-anchor="middle" fill="var(--text-color)" font-size="14" font-weight="600">Horizontal Directivity</text>
             </svg>
         `;
 }

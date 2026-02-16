@@ -70,7 +70,7 @@ def calculate_directivity_index_from_pressure(
         avg_intensity = total_intensity / total_weight
 
         # On-axis intensity (from SPL)
-        p_ref = 20e-6 * np.sqrt(2)
+        p_ref = 20e-6
         p_on_axis = p_ref * 10 ** (spl_on_axis / 20)
         i_on_axis = p_on_axis ** 2
 
