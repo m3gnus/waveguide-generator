@@ -57,7 +57,16 @@ export function displayResults(panel, results = null) {
     const splData = results.spl_on_axis || {};
     const freqs = results.frequencies || splData.frequencies || [];
     const directivity = results.directivity || {};
-    _fetchDirectivityPlot(freqs, directivity);
+    const refSelect = document.getElementById('directivity-ref-level');
+    const refLevel = refSelect ? parseFloat(refSelect.value) : -6;
+    _fetchDirectivityPlot(freqs, directivity, refLevel);
+
+    // Re-render when reference level changes
+    if (refSelect) {
+      refSelect.addEventListener('change', () => {
+        _fetchDirectivityPlot(freqs, directivity, parseFloat(refSelect.value));
+      });
+    }
   }
 
   // Enable results buttons
@@ -67,6 +76,28 @@ export function displayResults(panel, results = null) {
 }
 
 export function renderBemResults(panel, results) {
+  // Surface partial-failure information from solver metadata
+  const metadata = results.metadata || {};
+  const failureCount = metadata.failure_count || 0;
+  const totalFreqs = (results.frequencies || []).length;
+  let failureBanner = '';
+  if (failureCount > 0 && totalFreqs > 0) {
+    const successCount = totalFreqs - failureCount;
+    const failures = (metadata.failures || []).slice(0, 3);
+    const failureDetails = failures.map(f =>
+      `${f.frequency_hz ? f.frequency_hz.toFixed(0) + ' Hz: ' : ''}${f.detail || f.code || 'unknown'}`
+    ).join('<br>');
+    const color = successCount === 0 ? '#f44336' : '#ff9800';
+    const icon = successCount === 0 ? 'ERROR' : 'WARNING';
+    failureBanner = `
+      <div class="chart-container" style="border-left: 3px solid ${color}; margin-bottom: 12px;">
+        <div class="chart-title" style="color: ${color};">${icon}: ${failureCount} of ${totalFreqs} frequencies failed</div>
+        <div style="color: var(--text-color); font-size: 0.8rem; opacity: 0.9; padding: 4px 0;">
+          ${failureDetails || 'Check backend logs for details.'}
+        </div>
+      </div>`;
+  }
+
   const splData = results.spl_on_axis || {};
   const frequencies = splData.frequencies || [];
   let splValues = splData.spl || [];
@@ -121,6 +152,7 @@ export function renderBemResults(panel, results) {
       : '';
 
   return `
+            ${failureBanner}
             <div class="chart-container">
                 <div class="chart-title">Frequency Response (BEM)${smoothingLabel}</div>
                 ${freqChart}
@@ -134,7 +166,18 @@ export function renderBemResults(panel, results) {
                 ${impedanceChart}
             </div>
             <div class="chart-container" style="width: 100%;">
-                <div class="chart-title">Polar Directivity Map (ABEC.Polars)</div>
+                <div class="chart-title" style="display: flex; align-items: center; gap: 12px;">
+                    Polar Directivity Map (ABEC.Polars)
+                    <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-color); opacity: 0.8; display: flex; align-items: center; gap: 4px; margin-left: auto;">
+                        Reference dB level
+                        <select id="directivity-ref-level" style="background: var(--input-bg, #2a2a2a); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 3px; padding: 2px 4px; font-size: 0.8rem;">
+                            <option value="-3">-3 dB</option>
+                            <option value="-6" selected>-6 dB</option>
+                            <option value="-9">-9 dB</option>
+                            <option value="-12">-12 dB</option>
+                        </select>
+                    </span>
+                </div>
                 <div id="directivity-plot-container">
                     <div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">
                         Rendering directivity plot...
@@ -332,7 +375,7 @@ function _setPlotMessage(container, msg) {
   container.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">${msg}</div>`;
 }
 
-async function _fetchDirectivityPlot(frequencies, directivity) {
+async function _fetchDirectivityPlot(frequencies, directivity, referenceLevel = -6) {
   const container = document.getElementById('directivity-plot-container');
   if (!container) {
     console.warn('[directivity-plot] #directivity-plot-container not found in DOM');
@@ -348,7 +391,7 @@ async function _fetchDirectivityPlot(frequencies, directivity) {
     const response = await fetch('http://localhost:8000/api/render-directivity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ frequencies, directivity }),
+      body: JSON.stringify({ frequencies, directivity, reference_level: referenceLevel }),
     });
 
     if (!response.ok) {

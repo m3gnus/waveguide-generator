@@ -8,7 +8,8 @@ export function applyExportSelection(panel, exportType, handlers = null) {
     '3': () => exportAsJSON(panel),
     '4': () => exportAsText(panel),
     '5': () => exportAsPolarCSV(panel),
-    '6': () => exportAsImpedanceCSV(panel)
+    '6': () => exportAsImpedanceCSV(panel),
+    '7': () => exportAsVACSSpectrum(panel)
   };
 
   const action = actionMap[exportType];
@@ -280,6 +281,160 @@ export function exportAsPolarCSV(panel) {
  * Export impedance data as CSV
  * Format: Freq_Hz, Z_Real, Z_Imag (matches reference impedance_curve.csv)
  */
+/**
+ * Export results in VACS Data Text format (ABEC Spectrum).
+ * Compatible with VituixCAD and other ABEC-aware tools.
+ * Produces two data blocks:
+ *   1. Radiation impedance (complex)
+ *   2. Horizontal polar directivity (complex pressure, magnitude-only from normalized dB)
+ */
+export function exportAsVACSSpectrum(panel) {
+  const results = panel.lastResults;
+  if (!results) {
+    showError('No simulation results available.');
+    return;
+  }
+
+  const now = new Date();
+  const dateStr = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()} `
+    + now.toLocaleTimeString('en-US');
+
+  const frequencies = results.spl_on_axis?.frequencies || [];
+  const impedanceData = results.impedance || {};
+  const impFreqs = impedanceData.frequencies || frequencies;
+  const impReal = impedanceData.real || [];
+  const impImag = impedanceData.imaginary || [];
+  const directivity = results.directivity || {};
+  const hPatterns = directivity.horizontal || [];
+
+  // --- File header ---
+  let out = '';
+  out += '// ************************************************************\n';
+  out += '//\n';
+  out += `// Waveguide Generator   Spectrum Data  ${dateStr}\n`;
+  out += '//\n';
+  out += '// ************************************************************\n';
+  out += ' \n';
+  out += 'SourceDesc=VACS_Data_Text\n';
+  out += 'Version=1.0.0\n';
+  out += 'Author="Waveguide Generator"\n';
+  out += 'SourceDesc="BEM Solver"\n';
+  out += 'IsInterface=true\n';
+  out += 'Command=NoInheritance\n';
+  out += 'StartString_Absc=Abscissa\n';
+  out += 'EndString_Absc=Abscissa_End\n';
+  out += 'StartString_Data=Data\n';
+  out += 'EndString_Data=Data_End\n';
+  out += ' \n';
+
+  // --- Block 1: Radiation impedance ---
+  if (impReal.length > 0) {
+    out += '// ------------------------------------------------------------\n';
+    out += ' \n';
+    out += 'Data_Format=Complex\n';
+    out += 'Data_LevelType=Impedance10\n';
+    out += 'Data_Domain=Frequency\n';
+    out += 'Data_AbscUnit=Hz\n';
+    out += 'Data_BaseUnit=\n';
+    out += 'Data_IsContPhase=false\n';
+    out += 'Data_Legend="Radiation Impedance, Normalized"\n';
+    out += 'Param_Drv=1001\n';
+    out += 'Param_Param=1001\n';
+    out += 'Graph_Caption="RadImp"\n';
+    out += 'Graph_Type=Cartesian\n';
+    out += 'Graph_New=true\n';
+    out += 'Graph_BodeType=Complex\n';
+    out += 'Graph_zAxis_Range="0, 2"\n';
+    out += 'Graph_zAxis_Units=\n';
+    out += 'Graph_Param_AsYAxis=Param\n';
+    out += 'Param_Identifier="WG_RadImp"\n';
+    out += 'Graph_Group="Waveguide Generator"\n';
+    out += 'Data\n';
+
+    for (let i = 0; i < impFreqs.length; i++) {
+      const f = impFreqs[i];
+      const re = impReal[i] ?? 0;
+      const im = impImag[i] ?? 0;
+      if (f == null || !Number.isFinite(f)) continue;
+      out += `${f}   ${re} ${im}\n`;
+    }
+    out += 'Data_End\n';
+    out += ' \n';
+  }
+
+  // --- Block 2: Horizontal polar directivity ---
+  if (hPatterns.length > 0) {
+    // Extract angle list from first valid pattern
+    let angles = null;
+    for (const pat of hPatterns) {
+      if (pat && Array.isArray(pat) && pat.length > 0 && pat[0][1] != null) {
+        angles = pat.map(p => p[0]);
+        break;
+      }
+    }
+
+    if (angles) {
+      const paramIndices = angles.map((_, i) => i + 1).join(',');
+
+      out += '// ------------------------------------------------------------\n';
+      out += ' \n';
+      out += 'Data_Format=Complex\n';
+      out += 'Data_LevelType=Peak\n';
+      out += 'Data_Domain=Frequency\n';
+      out += 'Data_AbscUnit=Hz\n';
+      out += 'Data_BaseUnit=\n';
+      out += 'Data_IsContPhase=false\n';
+      out += 'Data_Legend="Polar, Pressure, Horizontal (far-field)"\n';
+      out += 'Param_Coord_Type=Spherical\n';
+      out += 'Param_Coord_x1=1\n';
+      out += `Param_Coord_x2=${angles.join(',')}\n`;
+      out += 'Param_Coord_x3=0\n';
+      out += `Param_Param=${paramIndices}\n`;
+      out += 'Graph_Caption="PM_SPL"\n';
+      out += 'Graph_Type=Contour\n';
+      out += 'Graph_New=true\n';
+      out += 'Graph_BodeType=LeveldB\n';
+      out += 'Graph_zAxis_Range="-45, 5"\n';
+      out += 'Graph_zAxis_Units=\n';
+      out += 'Graph_Param_AsYAxis=x2\n';
+      out += 'Param_Identifier="WG_Polar_H"\n';
+      out += 'Graph_Group="Waveguide Generator"\n';
+      out += 'Data\n';
+
+      for (let fi = 0; fi < hPatterns.length; fi++) {
+        const freq = frequencies[Math.min(fi, frequencies.length - 1)];
+        if (freq == null || !Number.isFinite(freq)) continue;
+
+        const pattern = hPatterns[fi];
+        if (!pattern || !Array.isArray(pattern)) continue;
+
+        let row = `${freq}`;
+        for (const [, db] of pattern) {
+          // Convert normalized dB to complex magnitude (phase=0 since we lack phase data)
+          if (db == null || !Number.isFinite(db)) {
+            row += '   0 0';
+          } else {
+            const mag = Math.pow(10, db / 20);
+            row += `   ${mag} 0`;
+          }
+        }
+        out += row + '\n';
+      }
+      out += 'Data_End\n';
+      out += ' \n';
+    }
+  }
+
+  // Download
+  const blob = new Blob([out], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Spectrum_WG_${Date.now()}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export function exportAsImpedanceCSV(panel) {
   const results = panel.lastResults;
   if (!results) {

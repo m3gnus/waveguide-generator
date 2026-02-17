@@ -54,7 +54,7 @@ export function syncSimulationSettings(panel, state) {
     const element = document.getElementById(id);
     if (!element) return;
 
-    const value = state.params[key];
+    const value = key === 'abecSimType' ? 2 : state.params[key];
     if (value === undefined || value === null) return;
 
     const nextValue = String(value);

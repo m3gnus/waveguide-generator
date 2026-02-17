@@ -111,7 +111,7 @@ def solve_frequency(
     p_amplitude = np.abs(pressure_far[0, 0])
     spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
 
-    impedance = calculate_throat_impedance(grid, p_total.coefficients, throat_elements)
+    impedance = calculate_throat_impedance(grid, p_total, throat_elements)
 
     di = calculate_directivity_index_from_pressure(
         grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl

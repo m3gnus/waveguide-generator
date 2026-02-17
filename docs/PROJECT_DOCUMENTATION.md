@@ -63,9 +63,11 @@ Primary entry points:
 1. Simulation UI emits `simulation:mesh-requested`.
 2. `src/app/mesh.js` builds canonical payload through `buildGeometryArtifacts(...)` and emits `simulation:mesh-ready`.
    - For `/api/solve`, frontend forces `quadrants='1234'` so backend symmetry detection/reduction is the source of truth.
-3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve`.
+3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
+   - `options.mesh.strategy = "occ_adaptive"`
+   - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
-5. If backend is unreachable, simulation UI can run mock results for UI validation.
+5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 ABEC export flow
 
@@ -98,8 +100,9 @@ Important behavior:
 - Source triangles are explicit geometry and required; payload build throws if none are tagged.
 - Interface tags are only emitted when enclosure exists and `interfaceOffset` is positive.
 - Symmetry-domain payloads remove triangles that lie on split planes.
-- Live `/api/solve` payload generation currently forces full quadrants and delegates symmetry reduction to backend solver logic.
+- Live `/api/solve` submission forces full quadrants and delegates symmetry reduction to backend solver logic.
 - Adaptive phi tessellation is restricted to full-circle horn-only render usage.
+- The canonical frontend payload remains a validation/contract artifact; active simulation meshing is OCC-adaptive in backend.
 
 ### 4.2 OCC parameter-to-`.msh` pipeline (`/api/mesh/build`)
 
@@ -136,6 +139,15 @@ OCC geometry logic:
 - both zero: bare horn
 - `sim_type` does not control geometry generation in OCC builder
 - `subdomain_slices` / `interface_*` fields are accepted in request payload but are not currently used to create OCC interface geometry
+
+OCC mesh-resolution semantics:
+- `throat_res`: nominal element size at throat plane.
+- `mouth_res`: nominal element size at mouth plane.
+- Horn surfaces use smooth axial interpolation `throat_res -> mouth_res`.
+- `rear_res`: rear-wall size for freestanding thickened horns (no enclosure).
+- `enc_front_resolution` / `enc_back_resolution`:
+  comma list (`q1,q2,q3,q4`) or scalar broadcast for enclosure front/back baffle corners.
+  Quadrant mapping: `Q1(+x,+y)`, `Q2(-x,+y)`, `Q3(-x,-y)`, `Q4(+x,-y)`.
 
 Physical groups written by OCC builder:
 - tag 1: `SD1G0`
@@ -221,6 +233,8 @@ Base URL: `http://localhost:8000`
 - `POST /api/solve`
   - Validates mesh array lengths and `surfaceTags` triangle parity
   - Validates `sim_type == "2"` (infinite-baffle path currently deferred)
+  - Supports adaptive OCC simulation meshing through `options.mesh.strategy="occ_adaptive"`
+    with required `options.mesh.waveguide_params`
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Creates async job and returns `{ job_id }`
 
@@ -240,7 +254,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Component | Supported range | Required for |
 |---|---|---|
 | Python | `>=3.10,<3.14` | backend runtime |
-| gmsh Python package | `>=4.10,<5.0` | `/api/mesh/build` |
+| gmsh Python package | `>=4.15,<5.0` | `/api/mesh/build` |
 | bempp-cl | `>=0.4,<0.5` | `/api/solve` |
 | legacy `bempp_api` | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |
 

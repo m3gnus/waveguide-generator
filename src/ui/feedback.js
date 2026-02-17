@@ -93,7 +93,8 @@ export function chooseExportFormat() {
       { id: '3', label: 'JSON Data' },
       { id: '4', label: 'Text Report' },
       { id: '5', label: 'Polar Directivity CSV' },
-      { id: '6', label: 'Impedance CSV' }
+      { id: '6', label: 'Impedance CSV' },
+      { id: '7', label: 'ABEC Spectrum (VACS)' }
     ];
 
     let settled = false;

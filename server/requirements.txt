@@ -23,7 +23,7 @@ trimesh==4.0.5
 # Gmsh Python API — required for /api/mesh/build (Python OCC builder) and
 # used by /api/mesh/generate-msh when available.
 # Falls back to `gmsh` CLI if the Python package is not installed.
-gmsh>=4.10.0,<5.0
+gmsh>=4.15.0,<5.0
 
 # Plotting
 matplotlib
