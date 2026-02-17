@@ -54,8 +54,8 @@
                 <div class="input-row">
                     <label for="sim-type">Simulation Type</label>
                     <select id="sim-type">
-                        <option value="1">Infinite Baffle</option>
-                        <option value="2">Free-Standing</option>
+                        <option value="2" selected>Free-Standing</option>
+                        <option value="1" disabled>Infinite Baffle (deferred)</option>
                     </select>
                 </div>
                 <div class="input-row">
@@ -180,6 +180,10 @@
                 <p id="solver-status-help" class="status-help">
                     BEM solver requires Python backend running on localhost:8000
                 </p>
+                <div class="input-row-inline">
+                    <label for="download-sim-mesh">Download simulation mesh on start</label>
+                    <input type="checkbox" id="download-sim-mesh">
+                </div>
                 <div id="simulation-progress" class="is-hidden">
                     <div class="progress-bar">
                         <div id="progress-fill" class="progress-fill"></div>

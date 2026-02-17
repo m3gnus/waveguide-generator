@@ -3,8 +3,9 @@ Matplotlib-based directivity heatmap rendering.
 
 Produces publication-quality directivity plots with:
 - Viridis colormap, -20 to 0 dB range
-- White contour lines at -3, -6, -9, -12 dB
-- Log frequency axis
+- Prominent white reference contour at configurable dB level (default -6)
+- Subtle contour lines at -3, -6, -9, -12 dB
+- Log frequency axis with sub-decade grid
 - H and V subplots (or single plot if symmetric)
 """
 
@@ -18,7 +19,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 
-def render_directivity_plot(frequencies, directivity, dpi=150):
+def render_directivity_plot(frequencies, directivity, dpi=150,
+                            reference_level=-6.0):
     """
     Render directivity heatmap(s) as a PNG image.
 
@@ -27,6 +29,7 @@ def render_directivity_plot(frequencies, directivity, dpi=150):
         directivity: Dict with keys 'horizontal', 'vertical', 'diagonal'.
             Each is a list of [[angle_deg, dB], ...] per frequency.
         dpi: Image resolution
+        reference_level: Reference dB level for prominent contour (default -6)
 
     Returns:
         Base64-encoded PNG string (without data URI prefix)
@@ -46,15 +49,15 @@ def render_directivity_plot(frequencies, directivity, dpi=150):
     # Detect symmetry (H == V)
     symmetric = _check_symmetry(h_values, v_values)
 
-    # Create figure
+    # Create figure — larger for better detail
     if symmetric or v_values is None:
-        fig, axes = plt.subplots(1, 1, figsize=(10, 4))
+        fig, axes = plt.subplots(1, 1, figsize=(11, 5))
         axes = [axes]
-        titles = ['Directivity (H = V, Symmetric)' if symmetric else 'Horizontal Directivity']
+        titles = ['Directivity (H = V, Symmetric)' if symmetric else 'H Normalized Directivity']
         all_angles = [h_angles]
         all_values = [h_values]
     else:
-        fig, axes = plt.subplots(2, 1, figsize=(10, 7))
+        fig, axes = plt.subplots(2, 1, figsize=(11, 8))
         axes = list(axes)
         titles = ['H Normalized Directivity', 'V Normalized Directivity']
         all_angles = [h_angles, v_angles]
@@ -64,7 +67,8 @@ def render_directivity_plot(frequencies, directivity, dpi=150):
     fig.patch.set_facecolor('#1a1a1a')
 
     for ax, title, angles, values in zip(axes, titles, all_angles, all_values):
-        _render_single_heatmap(ax, freqs, angles, values, title)
+        _render_single_heatmap(ax, freqs, angles, values, title,
+                               reference_level=reference_level)
 
     fig.tight_layout(pad=1.5)
 
@@ -117,7 +121,8 @@ def _check_symmetry(h_values, v_values):
     return relative_diff < 0.01
 
 
-def _render_single_heatmap(ax, freqs, angles, values, title):
+def _render_single_heatmap(ax, freqs, angles, values, title,
+                            reference_level=-6.0):
     """Render a single directivity heatmap on the given axes."""
     ax.set_facecolor('#1a1a1a')
 
@@ -154,17 +159,32 @@ def _render_single_heatmap(ax, freqs, angles, values, title):
         shading='flat'
     )
 
-    # Contour lines at -3, -6, -9, -12 dB
+    # Contour lines — subtle lines at standard levels, prominent at reference
     X, Y = np.meshgrid(freqs, angles)
+    contour_levels = [-12, -9, -6, -3]
+
+    # Draw subtle contour lines at all standard levels
     try:
         ax.contour(
             X, Y, values,
-            levels=[-12, -9, -6, -3],
+            levels=contour_levels,
             colors='white',
-            linewidths=1.0
+            linewidths=0.6,
+            alpha=0.4
         )
     except Exception:
-        pass  # Skip if data doesn't support contours
+        pass
+
+    # Draw prominent reference contour
+    try:
+        ref_contour = ax.contour(
+            X, Y, values,
+            levels=[reference_level],
+            colors='white',
+            linewidths=1.5
+        )
+    except Exception:
+        ref_contour = None
 
     # Log frequency axis
     ax.set_xscale('log')
@@ -173,7 +193,19 @@ def _render_single_heatmap(ax, freqs, angles, values, title):
 
     # Grid lines at log decade boundaries
     for freq in _log_grid_lines(freqs[0], freqs[-1]):
-        ax.axvline(freq, color='white', alpha=0.12, linewidth=0.5)
+        ax.axvline(freq, color='white', alpha=0.15, linewidth=0.5)
+
+    # Horizontal grid lines at angle ticks
+    angle_range = angles[-1] - angles[0]
+    if angle_range > 120:
+        angle_step = 30
+    elif angle_range > 60:
+        angle_step = 15
+    else:
+        angle_step = 10
+    for a in np.arange(0, angles[-1] + 1, angle_step):
+        if angles[0] < a < angles[-1]:
+            ax.axhline(a, color='white', alpha=0.15, linewidth=0.5)
 
     # Frequency tick formatting
     ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
@@ -186,14 +218,28 @@ def _render_single_heatmap(ax, freqs, angles, values, title):
     # Tick styling
     ax.tick_params(colors='#aaaaaa', labelsize=9)
 
+    # Spine styling
+    for spine in ax.spines.values():
+        spine.set_color('#444444')
+
     # Colorbar
     cbar = plt.colorbar(mesh, ax=ax, shrink=0.85, pad=0.02)
     cbar.set_label('dB', color='#cccccc', fontsize=10)
     cbar.ax.tick_params(colors='#aaaaaa', labelsize=9)
+    cbar.outline.set_edgecolor('#444444')
+
+    # Legend for reference contour
+    if ref_contour is not None:
+        from matplotlib.lines import Line2D
+        legend_line = Line2D([0], [0], color='white', linewidth=1.5,
+                             label=f'ref @ {reference_level:g} dB')
+        ax.legend(handles=[legend_line], loc='upper right',
+                  fontsize=8, facecolor='#2a2a2a', edgecolor='#555555',
+                  labelcolor='#cccccc', framealpha=0.85)
 
 
 def _log_grid_lines(freq_min, freq_max):
-    """Generate frequencies at decade sub-boundaries: 1, 2, 3, 5 × 10^n."""
+    """Generate frequencies at decade sub-boundaries: 1, 2, 3, 5 x 10^n."""
     min_log = np.log10(freq_min)
     max_log = np.log10(freq_max)
     lines = []

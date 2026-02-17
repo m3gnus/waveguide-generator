@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 import { BemSolver, validateCanonicalMeshPayload } from '../src/solver/index.js';
 import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
+import { filterValidPairs } from '../src/ui/simulation/charts.js';
+import { downloadMeshArtifact } from '../src/ui/simulation/actions.js';
 
-test('submitSimulation sends canonical mesh payload shape', async () => {
+test('submitSimulation sends canonical mesh payload shape and adaptive mesh options', async () => {
   const originalFetch = global.fetch;
   const calls = [];
 
@@ -35,6 +37,18 @@ test('submitSimulation sends canonical mesh payload shape', async () => {
       metadata: { ringCount: 3, fullCircle: true }
     };
 
+    const options = {
+      mesh: {
+        strategy: 'occ_adaptive',
+        waveguide_params: {
+          formula_type: 'OSSE',
+          throat_res: 4,
+          mouth_res: 9,
+          rear_res: 12
+        }
+      }
+    };
+
     const jobId = await solver.submitSimulation(
       {
         frequencyStart: 100,
@@ -42,7 +56,8 @@ test('submitSimulation sends canonical mesh payload shape', async () => {
         numFrequencies: 4,
         simulationType: '2'
       },
-      mesh
+      mesh,
+      options
     );
 
     assert.equal(jobId, 'job-test-1');
@@ -59,6 +74,8 @@ test('submitSimulation sends canonical mesh payload shape', async () => {
       'vertices'
     ]);
     assert.equal(payload.mesh.surfaceTags.length, payload.mesh.indices.length / 3);
+    assert.equal(payload.options.mesh.strategy, 'occ_adaptive');
+    assert.equal(payload.options.mesh.waveguide_params.formula_type, 'OSSE');
   } finally {
     global.fetch = originalFetch;
   }
@@ -100,4 +117,90 @@ test('validateCanonicalMeshPayload rejects malformed canonical mesh', () => {
       }),
     /surfaceTags length must match triangle count/
   );
+});
+
+// --- P0 regression tests: null-value chart handling ---
+
+test('filterValidPairs strips null and non-finite values from parallel arrays', () => {
+  const { freqs, vals } = filterValidPairs(
+    [100, 200, 300, 400, 500],
+    [90, null, NaN, undefined, 85]
+  );
+  assert.deepEqual(freqs, [100, 500]);
+  assert.deepEqual(vals, [90, 85]);
+});
+
+test('filterValidPairs returns empty arrays when all values are null', () => {
+  const { freqs, vals } = filterValidPairs(
+    [100, 200, 300],
+    [null, null, null]
+  );
+  assert.deepEqual(freqs, []);
+  assert.deepEqual(vals, []);
+});
+
+test('filterValidPairs strips entries where frequency is null', () => {
+  const { freqs, vals } = filterValidPairs(
+    [100, null, 300],
+    [90, 85, 80]
+  );
+  assert.deepEqual(freqs, [100, 300]);
+  assert.deepEqual(vals, [90, 80]);
+});
+
+test('filterValidPairs preserves all valid pairs', () => {
+  const { freqs, vals } = filterValidPairs(
+    [100, 200, 300],
+    [90, 85, 80]
+  );
+  assert.deepEqual(freqs, [100, 200, 300]);
+  assert.deepEqual(vals, [90, 85, 80]);
+});
+
+// --- Check 5: mesh artifact download ---
+
+test('downloadMeshArtifact fetches mesh and triggers download', async () => {
+  const originalFetch = global.fetch;
+  const originalCreateElement = global.document?.createElement;
+
+  // Minimal DOM stubs for download anchor
+  const clickedLinks = [];
+  const removedChildren = [];
+  const revokedUrls = [];
+
+  global.document = {
+    createElement(tag) {
+      const el = { href: '', download: '', click() { clickedLinks.push(this); } };
+      return el;
+    },
+    body: {
+      appendChild() {},
+      removeChild(el) { removedChildren.push(el); }
+    }
+  };
+  global.URL = {
+    createObjectURL() { return 'blob:test'; },
+    revokeObjectURL(u) { revokedUrls.push(u); }
+  };
+  global.Blob = class { constructor(parts, opts) { this.parts = parts; this.opts = opts; } };
+
+  global.fetch = async (url) => {
+    assert.match(url, /\/api\/mesh-artifact\/job-42$/);
+    return {
+      ok: true,
+      async text() { return '$MeshFormat\n2.2 0 8\n$EndMeshFormat'; }
+    };
+  };
+
+  try {
+    await downloadMeshArtifact('job-42');
+    assert.equal(clickedLinks.length, 1);
+    assert.match(clickedLinks[0].download, /simulation_mesh_job-42\.msh/);
+    assert.equal(revokedUrls.length, 1);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalCreateElement) {
+      global.document.createElement = originalCreateElement;
+    }
+  }
 });

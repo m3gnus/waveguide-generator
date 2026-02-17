@@ -5,8 +5,8 @@ FastAPI application for running acoustic simulations
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Dict, List, Optional, Any
+from pydantic import BaseModel, ValidationError
+from typing import Dict, List, Optional, Any, Union
 import uuid
 import asyncio
 import subprocess
@@ -285,23 +285,23 @@ class WaveguideParamsRequest(BaseModel):
 
     # ── R-OSSE formula parameters ──────────────────────────────────────────
     R: Optional[str] = None         # Mouth radius expression [mm] (R-OSSE only)
-    r: float = 0.4                  # R-OSSE r parameter
-    b: float = 0.2                  # R-OSSE b parameter
-    m: float = 0.85                 # R-OSSE m (apex shift)
-    tmax: float = 1.0               # Truncation fraction of computed length
+    r: Union[float, str] = 0.4     # R-OSSE apex radius (constant or expression in p)
+    b: Union[float, str] = 0.2     # R-OSSE bending (constant or expression in p)
+    m: Union[float, str] = 0.85    # R-OSSE apex shift (constant or expression in p)
+    tmax: Union[float, str] = 1.0  # Truncation fraction (constant or expression in p)
 
     # ── OSSE formula parameters ────────────────────────────────────────────
     L: Optional[str] = "120"        # Waveguide length expression [mm] (OSSE only)
     s: Optional[str] = "0.58"       # Termination shape expression (OSSE only)
-    n: float = 4.158                # Termination curvature exponent (OSSE only)
-    h: float = 0.0                  # Extra shape factor (OSSE only)
+    n: Union[float, str] = 4.158   # Termination curvature (constant or expression in p)
+    h: Union[float, str] = 0.0     # Extra shape factor (constant or expression in p)
 
     # ── Shared formula parameters ──────────────────────────────────────────
     a: Optional[str] = None         # Coverage angle expression [deg]
-    r0: float = 12.7               # Throat radius [mm]
-    a0: float = 15.5               # Throat half-angle [deg]
-    k: float = 2.0                  # Expansion factor / flare constant
-    q: float = 3.4                  # Shape factor
+    r0: Union[float, str] = 12.7   # Throat radius [mm] (constant or expression in p)
+    a0: Union[float, str] = 15.5   # Throat half-angle [deg] (constant or expression in p)
+    k: Union[float, str] = 2.0     # Flare constant (constant or expression in p)
+    q: Union[float, str] = 3.4     # Shape factor (constant or expression in p)
 
     # ── Throat geometry ────────────────────────────────────────────────────
     throat_profile: int = 1         # 1=OS-SE profile, 3=Circular Arc
@@ -364,7 +364,11 @@ class WaveguideParamsRequest(BaseModel):
     enc_space_t: float = 25.0       # Extra space top of mouth bounding box [mm]
     enc_space_r: float = 25.0       # Extra space right of mouth bounding box [mm]
     enc_space_b: float = 25.0       # Extra space bottom of mouth bounding box [mm]
-    enc_edge:    float = 18.0       # Edge rounding radius [mm] (reserved)
+    enc_edge:    float = 18.0       # Edge rounding radius [mm]
+    enc_edge_type: int = 1          # 1=rounded fillet, 2=chamfer
+    corner_segments: int = 4        # Axial segments for edge rounding
+    enc_front_resolution: Optional[str] = None  # Front baffle corner resolutions q1,q2,q3,q4 [mm]
+    enc_back_resolution: Optional[str] = None   # Back baffle corner resolutions q1,q2,q3,q4 [mm]
 
     # ── Simulation / output ────────────────────────────────────────────────
     sim_type: int = 2               # ABEC.SimType: 1=infinite baffle, 2=free standing
@@ -485,7 +489,7 @@ async def build_mesh_from_params(request: WaveguideParamsRequest):
             status_code=503,
             detail=(
                 "Python OCC mesh builder unavailable. "
-                "Install gmsh Python API: pip install gmsh>=4.10.0"
+                "Install gmsh Python API: pip install gmsh>=4.15.0"
             )
         )
 
@@ -493,7 +497,7 @@ async def build_mesh_from_params(request: WaveguideParamsRequest):
         dep = get_dependency_status()
         gmsh_info = dep["runtime"]["gmsh_python"]
         py_info = dep["runtime"]["python"]
-        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.10,<5.0")
+        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.15,<5.0")
         py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.14")
         raise HTTPException(
             status_code=503,
@@ -567,6 +571,54 @@ async def submit_simulation(request: SimulationRequest):
         normalize_mesh_validation_mode(request.mesh_validation_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    options = request.options if isinstance(request.options, dict) else {}
+    mesh_opts = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
+    mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
+
+    if mesh_strategy == "occ_adaptive":
+        waveguide_params = mesh_opts.get("waveguide_params")
+        if not isinstance(waveguide_params, dict):
+            raise HTTPException(
+                status_code=422,
+                detail="options.mesh.waveguide_params must be an object when options.mesh.strategy='occ_adaptive'."
+            )
+        try:
+            validated_waveguide = WaveguideParamsRequest(**waveguide_params)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid options.mesh.waveguide_params: {exc.errors()}"
+            ) from exc
+        # BEM solve path always builds full-domain geometry.
+        # Backend symmetry optimization can still reduce internally when safe.
+        if int(validated_waveguide.quadrants) != 1234:
+            waveguide_params["quadrants"] = 1234
+
+        if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Python OCC mesh builder unavailable. "
+                    "Install gmsh Python API: pip install gmsh>=4.15.0"
+                )
+            )
+
+        if not GMSH_OCC_RUNTIME_READY:
+            dep = get_dependency_status()
+            gmsh_info = dep["runtime"]["gmsh_python"]
+            py_info = dep["runtime"]["python"]
+            gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.15,<5.0")
+            py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.14")
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Adaptive OCC mesh builder dependency check failed. "
+                    f"python={py_info.get('version')} supported={py_info.get('supported')}; "
+                    f"gmsh={gmsh_info.get('version')} supported={gmsh_info.get('supported')}. "
+                    f"Supported matrix: python {py_range}, gmsh {gmsh_range}."
+                )
+            )
 
     if not SOLVER_AVAILABLE:
         dep = get_dependency_status()
@@ -673,6 +725,23 @@ async def get_results(job_id: str):
     return job["results"]
 
 
+@app.get("/api/mesh-artifact/{job_id}")
+async def get_mesh_artifact(job_id: str):
+    """
+    Download the simulation mesh artifact (.msh text) for a given job.
+    Returns plain text suitable for saving as a .msh file.
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    msh_text = jobs[job_id].get("mesh_artifact")
+    if not msh_text:
+        raise HTTPException(status_code=404, detail="No mesh artifact available for this job")
+
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(content=msh_text, media_type="text/plain")
+
+
 class ChartsRenderRequest(BaseModel):
     frequencies: List[float] = []
     spl: List[float] = []
@@ -712,6 +781,7 @@ async def render_charts(request: ChartsRenderRequest):
 class DirectivityRenderRequest(BaseModel):
     frequencies: List[float]
     directivity: Dict[str, Any]
+    reference_level: float = -6.0
 
 
 @app.post("/api/render-directivity")
@@ -732,7 +802,8 @@ async def render_directivity(request: DirectivityRenderRequest):
         raise HTTPException(status_code=400, detail="Missing frequencies or directivity data")
 
     try:
-        image_b64 = render_directivity_plot(request.frequencies, request.directivity)
+        image_b64 = render_directivity_plot(request.frequencies, request.directivity,
+                                                   reference_level=request.reference_level)
         if image_b64 is None:
             raise HTTPException(status_code=400, detail="No directivity patterns to render")
         return {"image": f"data:image/png;base64,{image_b64}"}
@@ -753,9 +824,10 @@ async def run_simulation(job_id: str, request: SimulationRequest):
         solver = BEMSolver()
         
         # Extract mesh generation options
-        options = request.options or {}
-        mesh_opts = options.get("mesh", {})
-        
+        options = request.options if isinstance(request.options, dict) else {}
+        mesh_opts = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
+        mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
+
         # Check if options are flat or nested
         if "use_gmsh" in options:
             use_gmsh = options.get("use_gmsh", False)
@@ -766,17 +838,69 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             target_freq = mesh_opts.get("target_frequency", 
                                         max(request.frequency_range) if request.frequency_range else 1000.0)
 
-        # Convert mesh data with surface tags
-        update_job_stage(job_id, "mesh_prepare", progress=0.15, stage_message="Preparing canonical mesh")
-        mesh = solver.prepare_mesh(
-            request.mesh.vertices,
-            request.mesh.indices,
-            surface_tags=request.mesh.surfaceTags,
-            boundary_conditions=request.mesh.boundaryConditions,
-            mesh_metadata=request.mesh.metadata,
-            use_gmsh=use_gmsh,
-            target_frequency=target_freq
-        )
+        if mesh_strategy == "occ_adaptive":
+            waveguide_params = mesh_opts.get("waveguide_params")
+            if not isinstance(waveguide_params, dict):
+                raise ValueError(
+                    "options.mesh.waveguide_params must be provided for options.mesh.strategy='occ_adaptive'."
+                )
+            if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None or not GMSH_OCC_RUNTIME_READY:
+                raise RuntimeError("Adaptive OCC mesh builder is unavailable.")
+
+            update_job_stage(job_id, "mesh_prepare", progress=0.15, stage_message="Building adaptive OCC mesh")
+            validated = WaveguideParamsRequest(**waveguide_params)
+            validated_payload = validated.model_dump()
+            requested_quadrants = int(validated_payload.get("quadrants", 1234))
+            # Ensure OCC adaptive simulation mesh is always generated as full domain.
+            validated_payload["quadrants"] = 1234
+            occ_result = build_waveguide_mesh(validated_payload, include_canonical=True)
+            canonical = occ_result.get("canonical_mesh") or {}
+
+            vertices = canonical.get("vertices")
+            indices = canonical.get("indices")
+            surface_tags = canonical.get("surfaceTags")
+            if not isinstance(vertices, list) or not isinstance(indices, list) or not isinstance(surface_tags, list):
+                raise RuntimeError("Adaptive OCC mesh generation did not return canonical mesh arrays.")
+            if len(indices) % 3 != 0:
+                raise RuntimeError("Adaptive OCC mesh returned invalid triangle index data.")
+            if len(surface_tags) != len(indices) // 3:
+                raise RuntimeError("Adaptive OCC mesh returned mismatched surface tag count.")
+
+            # Store mesh artifact for optional download via /api/mesh-artifact/{job_id}
+            jobs[job_id]["mesh_artifact"] = occ_result.get("msh_text")
+
+            mesh_metadata = dict(request.mesh.metadata or {})
+            mesh_metadata.update({
+                "units": "mm",
+                "unitScaleToMeter": 0.001,
+                "meshStrategy": "occ_adaptive",
+                "generatedBy": "gmsh-occ",
+                "requestedQuadrants": requested_quadrants,
+                "effectiveQuadrants": 1234,
+                "occStats": occ_result.get("stats") or {},
+            })
+
+            mesh = solver.prepare_mesh(
+                vertices,
+                indices,
+                surface_tags=surface_tags,
+                boundary_conditions=request.mesh.boundaryConditions,
+                mesh_metadata=mesh_metadata,
+                use_gmsh=False,
+                target_frequency=target_freq
+            )
+        else:
+            # Convert mesh data with surface tags (legacy canonical path)
+            update_job_stage(job_id, "mesh_prepare", progress=0.15, stage_message="Preparing canonical mesh")
+            mesh = solver.prepare_mesh(
+                request.mesh.vertices,
+                request.mesh.indices,
+                surface_tags=request.mesh.surfaceTags,
+                boundary_conditions=request.mesh.boundaryConditions,
+                mesh_metadata=request.mesh.metadata,
+                use_gmsh=use_gmsh,
+                target_frequency=target_freq
+            )
         
         # Run simulation
         update_job_stage(job_id, "solver_setup", progress=0.30, stage_message="Configuring BEM solve")

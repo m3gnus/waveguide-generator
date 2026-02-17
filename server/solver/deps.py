@@ -11,7 +11,7 @@ from typing import Dict, Optional, Tuple
 
 SUPPORTED_PYTHON_MIN = (3, 10, 0)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14, 0)
-SUPPORTED_GMSH_MIN = (4, 10, 0)
+SUPPORTED_GMSH_MIN = (4, 15, 0)
 SUPPORTED_GMSH_MAX_EXCLUSIVE = (5, 0, 0)
 SUPPORTED_BEMPP_CL_MIN = (0, 4, 0)
 SUPPORTED_BEMPP_CL_MAX_EXCLUSIVE = (0, 5, 0)
@@ -20,7 +20,7 @@ SUPPORTED_BEMPP_LEGACY_MAX_EXCLUSIVE = (0, 4, 0)
 
 SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     "python": {"range": ">=3.10,<3.14"},
-    "gmsh_python": {"range": ">=4.10,<5.0", "required_for": "/api/mesh/build"},
+    "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
     "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
     "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
 }
@@ -146,7 +146,7 @@ if not PYTHON_SUPPORTED:
 if GMSH_AVAILABLE and not GMSH_SUPPORTED:
     print(
         "Warning: unsupported gmsh Python package version "
-        f"{GMSH_VERSION or 'unknown'}; supported range is >=4.10,<5.0."
+        f"{GMSH_VERSION or 'unknown'}; supported range is >=4.15,<5.0."
     )
 if BEMPP_AVAILABLE and not BEMPP_SUPPORTED:
     if BEMPP_VARIANT == "bempp_api":

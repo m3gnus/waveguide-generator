@@ -111,12 +111,12 @@ export class BemSolver {
   }
 
   /**
-   * Check if BEM solver runtime is ready (not just backend reachable).
+   * Check if adaptive BEM runtime is fully ready (solver + OCC mesher).
    */
   async checkConnection() {
     try {
       const health = await this.getHealthStatus();
-      return Boolean(health?.solverReady);
+      return Boolean(health?.solverReady) && Boolean(health?.occBuilderReady);
     } catch (error) {
       return false;
     }
@@ -152,7 +152,20 @@ export class BemSolver {
     });
 
     if (!response.ok) {
-      throw new Error(`BEM solver error: ${response.status}`);
+      let detail = '';
+      try {
+        const errorPayload = await response.json();
+        if (typeof errorPayload?.detail === 'string') {
+          detail = errorPayload.detail;
+        } else if (Array.isArray(errorPayload?.detail)) {
+          detail = JSON.stringify(errorPayload.detail);
+        }
+      } catch (_error) {
+        // Ignore JSON decode failures and fallback to status-only message.
+      }
+      throw new Error(detail
+        ? `BEM solver error: ${response.status} (${detail})`
+        : `BEM solver error: ${response.status}`);
     }
 
     const result = await response.json();

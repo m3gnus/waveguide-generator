@@ -1,4 +1,7 @@
-import { showError, showMessage, showSuccess } from '../feedback.js';
+import { showError, showMessage } from '../feedback.js';
+import { GlobalState } from '../../state.js';
+import { prepareGeometryParams } from '../../geometry/index.js';
+import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 
 const STAGE_LABELS = {
   mesh_generation: 'Mesh generation',
@@ -238,6 +241,10 @@ export async function runSimulation(panel) {
     showError(validationError);
     return;
   }
+  if (String(config.simulationType) !== '2') {
+    showError('BEM simulation currently supports Free-Standing only (sim_type=2).');
+    return;
+  }
 
   // Show progress
   runBtn.disabled = true;
@@ -256,6 +263,20 @@ export async function runSimulation(panel) {
     if (!meshData.surfaceTags || meshData.surfaceTags.length !== meshData.indices.length / 3) {
       throw new Error('Mesh payload is invalid: missing canonical surface tags.');
     }
+    const state = GlobalState.get();
+    const preparedParams = prepareGeometryParams(state.params, {
+      type: state.type,
+      forceFullQuadrants: true,
+      applyVerticalOffset: true
+    });
+    const waveguidePayload = buildWaveguidePayload(preparedParams, '2.2');
+    waveguidePayload.sim_type = Number(config.simulationType || 2);
+    const submitOptions = {
+      mesh: {
+        strategy: 'occ_adaptive',
+        waveguide_params: waveguidePayload
+      }
+    };
 
     updateStageUi(panel, progressFill, progressText, {
       progress: 0.2,
@@ -269,49 +290,31 @@ export async function runSimulation(panel) {
       stopBtn.disabled = true;
     }
 
-    // Check if real solver is available
-    const isConnected = await panel.solver.checkConnection();
+    const health = await panel.solver.getHealthStatus();
+    if (!health?.solverReady || !health?.occBuilderReady) {
+      throw new Error('Backend solver and OCC mesher must be ready to run adaptive BEM simulation.');
+    }
 
-    if (isConnected) {
-      // Submit to real solver
-      panel.currentJobId = await panel.solver.submitSimulation(config, meshData);
+    panel.currentJobId = await panel.solver.submitSimulation(config, meshData, submitOptions);
 
-      updateStageUi(panel, progressFill, progressText, {
-        progress: 0.3,
-        stage: 'solver_setup',
-        message: 'Job accepted by backend'
+    updateStageUi(panel, progressFill, progressText, {
+      progress: 0.3,
+      stage: 'solver_setup',
+      message: 'Job accepted by backend'
+    });
+
+    if (stopBtn) {
+      stopBtn.disabled = false;
+    }
+
+    panel.pollSimulationStatus();
+
+    // Non-blocking: download simulation mesh artifact if toggle is on
+    const downloadMeshToggle = document.getElementById('download-sim-mesh');
+    if (downloadMeshToggle && downloadMeshToggle.checked && panel.currentJobId) {
+      downloadMeshArtifact(panel.currentJobId).catch(err => {
+        console.warn('Mesh artifact download failed (non-blocking):', err.message);
       });
-
-      // Enable stop button when simulation starts
-      if (stopBtn) {
-        stopBtn.disabled = false;
-      }
-
-      // Poll for results
-      panel.pollSimulationStatus();
-    } else {
-      // Use mock solver for demonstration
-      updateStageUi(panel, progressFill, progressText, {
-        progress: 0.5,
-        stage: 'bem_solve',
-        message: 'Running mock simulation'
-      });
-
-      await panel.runMockSimulation(config);
-
-      updateStageUi(panel, progressFill, progressText, {
-        progress: 1,
-        stage: 'complete',
-        message: 'Mock simulation complete'
-      });
-      showSuccess('Mock simulation complete.');
-
-      setTimeout(() => {
-        setProgressVisible(progressDiv, false);
-        panel.displayResults();
-        runBtn.disabled = false;
-        restoreConnectionStatus(panel);
-      }, 1000);
     }
   } catch (error) {
     console.error('Simulation error:', error);
@@ -426,3 +429,29 @@ export function pollSimulationStatus(panel) {
     }
   }, 1000);
 }
+
+/**
+ * Download the simulation mesh artifact (.msh) for a job.
+ * Fire-and-forget — does not block simulation progress.
+ */
+async function downloadMeshArtifact(jobId) {
+  // Brief delay to allow backend to finish mesh generation and store artifact
+  await new Promise(r => setTimeout(r, 2000));
+
+  const resp = await fetch(`http://localhost:8000/api/mesh-artifact/${jobId}`);
+  if (!resp.ok) {
+    throw new Error(`Mesh artifact not available (${resp.status})`);
+  }
+  const mshText = await resp.text();
+  const blob = new Blob([mshText], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `simulation_mesh_${jobId}.msh`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export { downloadMeshArtifact };

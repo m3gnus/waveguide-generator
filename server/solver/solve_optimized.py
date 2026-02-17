@@ -158,7 +158,7 @@ def solve_frequency_cached(
     p_amplitude = np.abs(pressure_far[0, 0])
     spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
 
-    impedance = calculate_throat_impedance(grid, p_total.coefficients, throat_elements)
+    impedance = calculate_throat_impedance(grid, p_total, throat_elements)
 
     # Quick ka-based DI estimate (no potential operators needed).
     # Accurate DI is computed later from the batched directivity patterns.
@@ -473,14 +473,47 @@ def solve_optimized(
 
     directivity_start = time.time()
 
+    # Detect total failure: if no frequency solved successfully, raise so that
+    # the job is marked as 'error' instead of 'complete' with all-null arrays.
+    if success_count == 0:
+        failure_msgs = [f.get("detail", "unknown") for f in results["metadata"]["failures"][:3]]
+        raise RuntimeError(
+            f"All {len(frequencies)} frequencies failed to solve. "
+            f"First failure(s): {'; '.join(failure_msgs)}"
+        )
+
     valid_solutions = [(i, sol) for i, sol in enumerate(solutions) if sol is not None]
     if len(valid_solutions) > 0:
         indices, filtered_solutions = zip(*valid_solutions)
         filtered_freqs = frequencies[list(indices)]
         try:
-            results["directivity"] = calculate_directivity_patterns_correct(
+            filtered_directivity = calculate_directivity_patterns_correct(
                 grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config
             )
+
+            # Expand filtered directivity back to full frequency array so that
+            # results["directivity"][plane][i] corresponds to results["frequencies"][i].
+            # Failed frequencies get a null-placeholder pattern.
+            _angle_count = 37
+            _angle_start = 0.0
+            _angle_end = 180.0
+            if polar_config:
+                ar = polar_config.get("angle_range", [0, 180, 37])
+                _angle_start, _angle_end, _angle_count = float(ar[0]), float(ar[1]), int(ar[2])
+
+            for plane in ("horizontal", "vertical", "diagonal"):
+                filtered_patterns = filtered_directivity.get(plane, [])
+                full_patterns = [None] * len(frequencies)
+                for vi, global_i in enumerate(indices):
+                    if vi < len(filtered_patterns):
+                        full_patterns[global_i] = filtered_patterns[vi]
+                # Fill gaps with null-placeholder so frontend can detect and skip
+                placeholder_angles = np.linspace(_angle_start, _angle_end, _angle_count)
+                placeholder = [[float(a), None] for a in placeholder_angles]
+                for fi in range(len(full_patterns)):
+                    if full_patterns[fi] is None:
+                        full_patterns[fi] = placeholder
+                results["directivity"][plane] = full_patterns
 
             # Refine DI from batched directivity patterns (replaces ka-based estimate).
             # Uses the on-axis SPL and the horizontal polar pattern that was already computed.
@@ -488,8 +521,11 @@ def solve_optimized(
                 spl_on_axis_val = results["spl_on_axis"]["spl"][global_i]
                 if spl_on_axis_val is None:
                     continue
-                h_pattern = results["directivity"]["horizontal"][vi]
+                h_pattern = results["directivity"]["horizontal"][global_i]
                 if not h_pattern:
+                    continue
+                # Skip placeholder patterns (contain None dB values)
+                if any(pt[1] is None for pt in h_pattern):
                     continue
                 try:
                     # h_pattern is [[angle, dB_normalized], ...]; extract un-normalized SPL
