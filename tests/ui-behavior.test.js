@@ -64,3 +64,19 @@ test('applyExportSelection routes to expected handler', () => {
     console.error = originalError;
   }
 });
+
+test('applyExportSelection includes VACS spectrum option 7', () => {
+  const calls = [];
+  const handlers = {
+    '1': () => calls.push('image'),
+    '2': () => calls.push('csv'),
+    '3': () => calls.push('json'),
+    '4': () => calls.push('text'),
+    '5': () => calls.push('polar'),
+    '6': () => calls.push('impedance'),
+    '7': () => calls.push('vacs')
+  };
+
+  assert.equal(applyExportSelection({}, '7', handlers), true);
+  assert.deepEqual(calls, ['vacs']);
+});

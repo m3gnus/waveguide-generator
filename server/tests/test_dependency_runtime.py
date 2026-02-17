@@ -13,7 +13,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.14"},
-                "gmsh_python": {"range": ">=4.10,<5.0", "required_for": "/api/mesh/build"},
+                "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
                 "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
             },
@@ -40,7 +40,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.14"},
-                "gmsh_python": {"range": ">=4.10,<5.0", "required_for": "/api/mesh/build"},
+                "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
@@ -63,7 +63,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("python=3.13.1 supported=True", detail)
         self.assertIn("gmsh=5.1.0 supported=False", detail)
         self.assertIn("python >=3.10,<3.14", detail)
-        self.assertIn("gmsh >=4.10,<5.0", detail)
+        self.assertIn("gmsh >=4.15,<5.0", detail)
 
     def test_solve_dependency_gate_returns_matrix_details(self):
         dependency_status = {

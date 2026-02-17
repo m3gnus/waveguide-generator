@@ -46,7 +46,7 @@ The install script will ask whether to install `bempp-cl`, a BEM acoustic solver
 
 Supported backend dependency matrix:
 - Python: `>=3.10,<3.14`
-- gmsh Python package: `>=4.10,<5.0`
+- gmsh Python package: `>=4.15,<5.0`
 - bempp-cl: `>=0.4,<0.5` (`/api/solve`)
 - legacy `bempp_api` fallback: `>=0.3,<0.4` (`/api/solve (legacy fallback)`)
 

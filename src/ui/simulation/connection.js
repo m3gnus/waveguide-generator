@@ -18,18 +18,20 @@ export async function checkSolverConnection(panel) {
 
   try {
     const health = await panel.solver.getHealthStatus();
-    const isConnected = Boolean(health?.solverReady);
+    const solverReady = Boolean(health?.solverReady);
+    const occReady = Boolean(health?.occBuilderReady);
+    const isConnected = solverReady && occReady;
 
     statusDot.className = isConnected ? 'status-dot connected' : 'status-dot disconnected';
 
     // Preserve live stage text while simulation is running.
     if (!panel.stageStatusActive) {
       if (isConnected) {
-        statusText.textContent = 'Connected to BEM solver';
+        statusText.textContent = 'Connected to adaptive BEM solver';
         runButton.disabled = false;
         if (statusHelp) statusHelp.classList.add('is-hidden');
       } else {
-        statusText.textContent = 'Backend online, solver runtime unavailable';
+        statusText.textContent = 'Backend online, adaptive solver runtime unavailable';
         runButton.disabled = true;
         if (statusHelp) statusHelp.classList.remove('is-hidden');
       }
@@ -37,9 +39,8 @@ export async function checkSolverConnection(panel) {
   } catch (error) {
     statusDot.className = 'status-dot disconnected';
     if (!panel.stageStatusActive) {
-      statusText.textContent = 'BEM solver not available (using mock data)';
-      // Don't disable button - allow mock simulation
-      runButton.disabled = false;
+      statusText.textContent = 'BEM solver backend unavailable';
+      runButton.disabled = true;
       if (statusHelp) statusHelp.classList.remove('is-hidden');
     }
   }

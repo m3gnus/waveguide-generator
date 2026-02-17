@@ -1,5 +1,24 @@
+/**
+ * Filter parallel frequency/value arrays to only include valid (non-null, finite) pairs.
+ * Prevents NaN coordinates in SVG charts when the solver returns null for failed frequencies.
+ */
+export function filterValidPairs(frequencies, values) {
+  const freqs = [];
+  const vals = [];
+  for (let i = 0; i < frequencies.length; i++) {
+    const f = frequencies[i];
+    const v = values[i];
+    if (f != null && Number.isFinite(f) && v != null && Number.isFinite(v)) {
+      freqs.push(f);
+      vals.push(v);
+    }
+  }
+  return { freqs, vals };
+}
+
 export function renderFrequencyResponseChart(frequencies, splValues) {
-  if (!frequencies.length || !splValues.length) {
+  const valid = filterValidPairs(frequencies, splValues);
+  if (!valid.freqs.length) {
     return '<p style="color: var(--text-color);">No frequency response data available</p>';
   }
 
@@ -10,21 +29,21 @@ export function renderFrequencyResponseChart(frequencies, splValues) {
   const chartHeight = height - padding.top - padding.bottom;
 
   // Calculate scales
-  const minFreq = Math.min(...frequencies);
-  const maxFreq = Math.max(...frequencies);
-  const minSpl = Math.min(...splValues) - 5;
-  const maxSpl = Math.max(...splValues) + 5;
+  const minFreq = Math.min(...valid.freqs);
+  const maxFreq = Math.max(...valid.freqs);
+  const minSpl = Math.min(...valid.vals) - 5;
+  const maxSpl = Math.max(...valid.vals) + 5;
 
   // Use log scale for frequency
   const logMinFreq = Math.log10(minFreq);
   const logMaxFreq = Math.log10(maxFreq);
 
   // Generate path points
-  const points = frequencies
+  const points = valid.freqs
     .map((freq, i) => {
       const logFreq = Math.log10(freq);
       const x = padding.left + ((logFreq - logMinFreq) / (logMaxFreq - logMinFreq)) * chartWidth;
-      const y = padding.top + (1 - (splValues[i] - minSpl) / (maxSpl - minSpl)) * chartHeight;
+      const y = padding.top + (1 - (valid.vals[i] - minSpl) / (maxSpl - minSpl)) * chartHeight;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
@@ -69,7 +88,8 @@ export function renderFrequencyResponseChart(frequencies, splValues) {
 }
 
 export function renderDirectivityIndexChart(frequencies, diValues) {
-  if (!frequencies.length || !diValues.length) {
+  const valid = filterValidPairs(frequencies, diValues);
+  if (!valid.freqs.length) {
     return '<p style="color: var(--text-color);">No directivity data available</p>';
   }
 
@@ -79,19 +99,19 @@ export function renderDirectivityIndexChart(frequencies, diValues) {
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  const minFreq = Math.min(...frequencies);
-  const maxFreq = Math.max(...frequencies);
-  const minDi = Math.min(0, Math.min(...diValues) - 2);
-  const maxDi = Math.max(...diValues) + 2;
+  const minFreq = Math.min(...valid.freqs);
+  const maxFreq = Math.max(...valid.freqs);
+  const minDi = Math.min(0, Math.min(...valid.vals) - 2);
+  const maxDi = Math.max(...valid.vals) + 2;
 
   const logMinFreq = Math.log10(minFreq);
   const logMaxFreq = Math.log10(maxFreq);
 
-  const points = frequencies
+  const points = valid.freqs
     .map((freq, i) => {
       const logFreq = Math.log10(freq);
       const x = padding.left + ((logFreq - logMinFreq) / (logMaxFreq - logMinFreq)) * chartWidth;
-      const y = padding.top + (1 - (diValues[i] - minDi) / (maxDi - minDi)) * chartHeight;
+      const y = padding.top + (1 - (valid.vals[i] - minDi) / (maxDi - minDi)) * chartHeight;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
@@ -113,7 +133,9 @@ export function renderDirectivityIndexChart(frequencies, diValues) {
 }
 
 export function renderImpedanceChart(frequencies, realValues, imagValues) {
-  if (!frequencies.length || !realValues.length) {
+  const validReal = filterValidPairs(frequencies, realValues);
+  const validImag = filterValidPairs(frequencies, imagValues);
+  if (!validReal.freqs.length) {
     return '<p style="color: var(--text-color);">No impedance data available</p>';
   }
 
@@ -123,29 +145,29 @@ export function renderImpedanceChart(frequencies, realValues, imagValues) {
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  const minFreq = Math.min(...frequencies);
-  const maxFreq = Math.max(...frequencies);
-  const allValues = [...realValues, ...imagValues];
+  const minFreq = Math.min(...validReal.freqs);
+  const maxFreq = Math.max(...validReal.freqs);
+  const allValues = [...validReal.vals, ...validImag.vals];
   const minZ = Math.min(...allValues) - 50;
   const maxZ = Math.max(...allValues) + 50;
 
   const logMinFreq = Math.log10(minFreq);
   const logMaxFreq = Math.log10(maxFreq);
 
-  const realPoints = frequencies
+  const realPoints = validReal.freqs
     .map((freq, i) => {
       const logFreq = Math.log10(freq);
       const x = padding.left + ((logFreq - logMinFreq) / (logMaxFreq - logMinFreq)) * chartWidth;
-      const y = padding.top + (1 - (realValues[i] - minZ) / (maxZ - minZ)) * chartHeight;
+      const y = padding.top + (1 - (validReal.vals[i] - minZ) / (maxZ - minZ)) * chartHeight;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
 
-  const imagPoints = frequencies
+  const imagPoints = validImag.freqs
     .map((freq, i) => {
       const logFreq = Math.log10(freq);
       const x = padding.left + ((logFreq - logMinFreq) / (logMaxFreq - logMinFreq)) * chartWidth;
-      const y = padding.top + (1 - (imagValues[i] - minZ) / (maxZ - minZ)) * chartHeight;
+      const y = padding.top + (1 - (validImag.vals[i] - minZ) / (maxZ - minZ)) * chartHeight;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
@@ -170,7 +192,7 @@ export function renderImpedanceChart(frequencies, realValues, imagValues) {
                 <text x="${width - 62}" y="27" fill="var(--text-color)" font-size="8">Im(Z)</text>
 
                 <text x="${width / 2}" y="${height - 2}" text-anchor="middle" fill="var(--text-color)" font-size="10">Frequency (Hz)</text>
-                <text x="8" y="${height / 2}" text-anchor="middle" fill="var(--text-color)" font-size="10" transform="rotate(-90, 8, ${height / 2})">Z (Ω)</text>
+                <text x="8" y="${height / 2}" text-anchor="middle" fill="var(--text-color)" font-size="10" transform="rotate(-90, 8, ${height / 2})">Z (Ohm)</text>
             </svg>
         `;
 }
@@ -186,10 +208,28 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  // Get horizontal directivity patterns (array of [angle, spl_db] pairs for each frequency)
-  const patterns = directivityData.horizontal;
-  if (!patterns || patterns.length === 0) {
+  // Get horizontal directivity patterns, filtering out entries with null dB values
+  const allPatterns = directivityData.horizontal;
+  if (!allPatterns || allPatterns.length === 0) {
     return '<p style="color: var(--text-color);">No polar directivity data available</p>';
+  }
+
+  // Build parallel arrays of valid frequencies and patterns (skip null-placeholder entries)
+  const validFreqs = [];
+  const patterns = [];
+  for (let i = 0; i < allPatterns.length; i++) {
+    const pat = allPatterns[i];
+    if (!pat || pat.length === 0) continue;
+    const hasNullDb = pat.some(pt => pt[1] == null || !Number.isFinite(pt[1]));
+    if (hasNullDb) continue;
+    const freq = i < frequencies.length ? frequencies[i] : null;
+    if (freq == null || !Number.isFinite(freq)) continue;
+    validFreqs.push(freq);
+    patterns.push(pat);
+  }
+
+  if (!patterns.length) {
+    return '<p style="color: var(--text-color);">No valid polar directivity data available</p>';
   }
 
   // Extract angle range from first pattern
@@ -199,8 +239,8 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
   const maxAngle = Math.max(...angles);
 
   // Use log scale for frequency
-  const minFreq = Math.min(...frequencies);
-  const maxFreq = Math.max(...frequencies);
+  const minFreq = Math.min(...validFreqs);
+  const maxFreq = Math.max(...validFreqs);
   const logMinFreq = Math.log10(minFreq);
   const logMaxFreq = Math.log10(maxFreq);
 
@@ -247,7 +287,7 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
 
   for (let fi = 0; fi < numFreqBands; fi++) {
     const pattern = patterns[fi];
-    const freq = frequencies[Math.floor((fi * frequencies.length) / numFreqBands)];
+    const freq = validFreqs[fi];
     const logFreq = Math.log10(freq);
 
     for (let ai = 0; ai < numAngleBands; ai++) {
@@ -258,21 +298,13 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
       // Calculate rectangle position
       const x1 = padding.left + ((logFreq - logMinFreq) / (logMaxFreq - logMinFreq)) * chartWidth;
       const y1 = padding.top + ((angle1 - minAngle) / (maxAngle - minAngle)) * chartHeight;
-      const x2 =
-        fi < numFreqBands - 1
-          ? padding.left +
-            ((Math.log10(
-              frequencies[Math.floor(((fi + 1) * frequencies.length) / numFreqBands)]
-            ) -
-              logMinFreq) /
-              (logMaxFreq - logMinFreq)) *
-              chartWidth
-          : width - padding.right;
+      const nextFreq = fi < numFreqBands - 1 ? validFreqs[fi + 1] : maxFreq * 1.01;
+      const x2 = padding.left + ((Math.log10(nextFreq) - logMinFreq) / (logMaxFreq - logMinFreq)) * chartWidth;
       const y2 = padding.top + ((angle2 - minAngle) / (maxAngle - minAngle)) * chartHeight;
 
       const color = getColor(splDb);
       rects.push(
-        `<rect x="${x1}" y="${y1}" width="${x2 - x1}" height="${y2 - y1}" fill="${color}" stroke="none"/>`
+        `<rect x="${x1}" y="${y1}" width="${Math.max(1, x2 - x1)}" height="${y2 - y1}" fill="${color}" stroke="none"/>`
       );
     }
   }
@@ -301,7 +333,7 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
       const y = padding.top + ((angle - minAngle) / (maxAngle - minAngle)) * chartHeight;
       return `
                 <line x1="${padding.left - 5}" y1="${y}" x2="${padding.left}" y2="${y}" stroke="var(--text-color)" stroke-width="1"/>
-                <text x="${padding.left - 10}" y="${y + 3}" text-anchor="end" fill="var(--text-color)" font-size="10">${angle}°</text>
+                <text x="${padding.left - 10}" y="${y + 3}" text-anchor="end" fill="var(--text-color)" font-size="10">${angle}</text>
             `;
     })
     .join('');
@@ -354,8 +386,8 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
 
                 <!-- Axis labels -->
                 <text x="${padding.left + chartWidth / 2}" y="${height - 5}" text-anchor="middle" fill="var(--text-color)" font-size="12" font-weight="600">Frequency [kHz]</text>
-                <text x="15" y="${padding.top + chartHeight / 2}" text-anchor="middle" fill="var(--text-color)" font-size="12" font-weight="600" transform="rotate(-90, 15, ${padding.top + chartHeight / 2})">Angle [°]</text>
-                <text x="${legendX + legendWidth + 35}" y="${padding.top + legendHeight / 2}" text-anchor="middle" fill="var(--text-color)" font-size="10" font-weight="600" transform="rotate(90, ${legendX + legendWidth + 35}, ${padding.top + legendHeight / 2})">dB rel 0°</text>
+                <text x="15" y="${padding.top + chartHeight / 2}" text-anchor="middle" fill="var(--text-color)" font-size="12" font-weight="600" transform="rotate(-90, 15, ${padding.top + chartHeight / 2})">Angle [deg]</text>
+                <text x="${legendX + legendWidth + 35}" y="${padding.top + legendHeight / 2}" text-anchor="middle" fill="var(--text-color)" font-size="10" font-weight="600" transform="rotate(90, ${legendX + legendWidth + 35}, ${padding.top + legendHeight / 2})">dB rel 0 deg</text>
 
                 <!-- Title -->
                 <text x="${width / 2}" y="20" text-anchor="middle" fill="var(--text-color)" font-size="14" font-weight="600">Horizontal Directivity</text>

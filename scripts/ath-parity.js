@@ -422,7 +422,7 @@ function printInfrastructureFixSteps(generationContext, { gmshTimeoutMs, strictI
   }
   if (!python.available || !python.smoke.ok) {
     console.log(`  - python gmsh: probe=${python.detail}; smoke=${python.smoke.detail}`);
-    console.log('    fix: install gmsh Python package in active interpreter: `python3 -m pip install "gmsh>=4.10,<5.0"`.');
+    console.log('    fix: install gmsh Python package in active interpreter: `python3 -m pip install "gmsh>=4.15,<5.0"`.');
   }
   if (!cli.available || !cli.smoke.ok || cli.detail.includes('missing `python` command on PATH')) {
     console.log(`  - gmsh CLI: probe=${cli.detail}; smoke=${cli.smoke.detail}`);

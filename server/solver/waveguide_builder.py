@@ -37,7 +37,7 @@ import math
 import re
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -620,22 +620,22 @@ def _compute_point_grids(params: dict) -> Tuple[np.ndarray, Optional[np.ndarray]
     raw_y = np.zeros((n_phi, n_length + 1))
 
     if formula_type == "R-OSSE":
-        r0 = float(params.get("r0", 12.7))
-        a0 = float(params.get("a0", 15.5))
-        k = float(params.get("k", 2.0))
-        r_p = float(params.get("r", 0.4))
-        b_p = float(params.get("b", 0.2))
-        m_p = float(params.get("m", 0.85))
-        q_p = float(params.get("q", 3.4))
-
+        r0_fn = _make_callable(params.get("r0", 12.7), default=12.7)
+        a0_fn = _make_callable(params.get("a0", 15.5), default=15.5)
+        k_fn = _make_callable(params.get("k", 2.0), default=2.0)
+        r_fn = _make_callable(params.get("r", 0.4), default=0.4)
+        m_fn = _make_callable(params.get("m", 0.85), default=0.85)
+        q_fn = _make_callable(params.get("q", 3.4), default=3.4)
         R_func = _make_callable(params["R"])
         a_func = _make_callable(params["a"])
+        b_func = _make_callable(params.get("b", 0.2), default=0.2)
         tmax_fn = _make_callable(params.get("tmax", 1.0), default=1.0)
 
         for i, phi in enumerate(phi_values):
             x_arr, y_arr, _ = _compute_rosse_profile(
                 t_values, R_func(phi), a_func(phi),
-                r0, a0, k, r_p, b_p, m_p, q_p,
+                r0_fn(phi), a0_fn(phi), k_fn(phi),
+                r_fn(phi), b_func(phi), m_fn(phi), q_fn(phi),
                 tmax=tmax_fn(phi),
             )
             raw_x[i] = x_arr
@@ -731,45 +731,69 @@ def _make_wire(points_2d: np.ndarray, closed: bool = True) -> int:
 def _build_surface_from_points(
     points: np.ndarray, closed: bool = True
 ) -> List[Tuple[int, int]]:
-    """Build a surface using longitudinal BSpline strips between adjacent phi profiles.
+    """Build horn surface as BSpline surface patches fitted to the point grid.
 
-    Uses one longitudinal wire per phi angle (from throat to mouth), then creates
-    ruled surface strips between adjacent phi wires. This correctly handles
-    non-circular ATH profiles where the axial length L varies with phi — each
-    phi has a different z-trajectory, so cross-sectional wires (one ring per
-    t-index) would be non-planar and produce twisted geometry.
+    Creates continuous BSpline surface(s) directly from the (n_phi, n_len, 3)
+    point grid using ``addBSplineSurface``.  This replaces the previous
+    per-phi longitudinal-wire strip approach which imposed n_phi angular
+    constraint edges on the mesh.  With BSpline patches the mesher is free
+    to triangulate based purely on size-field control.
+
+    For closed (full-circle) surfaces two half-patches are created
+    (0 → π and π → 2π) and OCC-fragmented so the two seam edges share
+    topology and the resulting mesh is watertight.
 
     points: (n_phi, n_length+1, 3)
-    closed: if True, adds a wrap-around strip connecting the last phi wire back
-            to the first (used for full 360° models, quadrants=1234).
+    closed: True for full-circle (quadrants == 1234)
     Returns list of (dim=2, tag) surface dimtags.
     """
-    n_phi = points.shape[0]
-    wires = []
-    for i in range(n_phi):
-        wires.append(_make_wire(points[i, :, :], closed=False))
+    n_phi, n_len, _ = points.shape
+    deg_v = min(3, max(1, n_len - 1))
 
-    all_dimtags = []
-    for i in range(n_phi - 1):
-        strip = gmsh.model.occ.addThruSections(
-            [wires[i], wires[i + 1]], makeSolid=False, makeRuled=True
+    def _make_patch(col_indices: List[int]) -> int:
+        """Create a single BSpline surface from the given phi-column indices."""
+        n_u = len(col_indices)
+        deg_u = min(3, max(1, n_u - 1))
+        pt_tags: List[int] = []
+        for j in range(n_len):
+            for ci in col_indices:
+                pt_tags.append(gmsh.model.occ.addPoint(
+                    float(points[ci, j, 0]),
+                    float(points[ci, j, 1]),
+                    float(points[ci, j, 2]),
+                ))
+        return gmsh.model.occ.addBSplineSurface(
+            pt_tags, n_u, degreeU=deg_u, degreeV=deg_v,
         )
-        all_dimtags.extend(strip)
 
-    if closed:
-        # Wrap-around strip connecting last phi wire back to first (full circle)
-        strip = gmsh.model.occ.addThruSections(
-            [wires[n_phi - 1], wires[0]], makeSolid=False, makeRuled=True
-        )
-        all_dimtags.extend(strip)
+    if not closed:
+        tag = _make_patch(list(range(n_phi)))
+        return [(2, tag)]
 
-    return all_dimtags
+    # Closed: two half-patches with shared seam columns at φ=0 and φ=π.
+    half = n_phi // 2
+    tag1 = _make_patch(list(range(0, half + 1)))
+    tag2 = _make_patch(list(range(half, n_phi)) + [0])
+
+    # OCC fragment merges the coincident seam edges so the mesh is watertight.
+    result, _ = gmsh.model.occ.fragment([(2, tag1), (2, tag2)], [])
+    return [(d, t) for d, t in result if d == 2]
 
 
 def _build_throat_disc(r0: float) -> List[Tuple[int, int]]:
-    """Build a flat disc surface closing the throat at z=0 (the source/piston)."""
+    """Build a flat circular throat disc (legacy helper)."""
     disk_tag = gmsh.model.occ.addDisk(0.0, 0.0, 0.0, r0, r0)
     return [(2, disk_tag)]
+
+
+def _build_throat_disc_from_ring(
+    throat_ring_points: np.ndarray,
+    closed: bool,
+) -> List[Tuple[int, int]]:
+    """Build the source/piston disc from the exact throat ring wire."""
+    wire = _make_wire(throat_ring_points, closed=closed)
+    fill = gmsh.model.occ.addSurfaceFilling(wire)
+    return [(2, fill)]
 
 
 def _build_rear_wall(
@@ -791,25 +815,126 @@ def _build_mouth_rim(
     return gmsh.model.occ.addThruSections([w_inner, w_outer], makeSolid=False, makeRuled=True)
 
 
+def _parse_quadrant_resolutions(value: Optional[str], fallback: float) -> List[float]:
+    """Parse per-quadrant resolution list q1..q4 with scalar broadcast support."""
+    fallback = float(fallback)
+    if value is None:
+        return [fallback, fallback, fallback, fallback]
+
+    text = str(value).strip()
+    if not text:
+        return [fallback, fallback, fallback, fallback]
+
+    try:
+        scalar = float(text)
+    except ValueError:
+        scalar = float("nan")
+    if math.isfinite(scalar) and scalar > 0:
+        return [scalar, scalar, scalar, scalar]
+
+    parts = _parse_number_list(text)
+    if not parts:
+        return [fallback, fallback, fallback, fallback]
+
+    out: List[float] = []
+    for i in range(4):
+        if i < len(parts) and math.isfinite(parts[i]) and parts[i] > 0:
+            out.append(float(parts[i]))
+        else:
+            out.append(fallback)
+    return out
+
+
+def _axial_interpolated_size(
+    z: float, z_throat: float, z_mouth: float, throat_res: float, mouth_res: float
+) -> float:
+    span = max(abs(z_mouth - z_throat), 1e-6)
+    t = (z - z_throat) / span
+    t = max(0.0, min(1.0, t))
+    return float(throat_res + (mouth_res - throat_res) * t)
+
+
+def _rear_resolution_active(enc_depth: float, wall_thickness: float) -> bool:
+    return float(enc_depth) <= 0.0 and float(wall_thickness) > 0.0
+
+
+def _panel_corner_points_by_quadrant(
+    bx0: float, bx1: float, by0: float, by1: float, z_plane: float
+) -> List[Tuple[float, float, float]]:
+    # Quadrant order: Q1(+x,+y), Q2(-x,+y), Q3(-x,-y), Q4(+x,-y)
+    return [
+        (bx1, by1, z_plane),
+        (bx0, by1, z_plane),
+        (bx0, by0, z_plane),
+        (bx1, by0, z_plane),
+    ]
+
+
+def _classify_enclosure_surfaces(
+    dimtags: List[Tuple[int, int]], z_front: float, z_back: float
+) -> Dict[str, List[int]]:
+    """Split enclosure surfaces into front/back/side groups by z-plane bounding boxes."""
+    front: List[int] = []
+    back: List[int] = []
+    sides: List[int] = []
+    eps = max(1e-6, abs(z_front - z_back) * 1e-3)
+
+    for dim, tag in dimtags:
+        if dim != 2:
+            continue
+        _, _, z0, _, _, z1 = gmsh.model.getBoundingBox(dim, tag)
+        if abs(z0 - z_front) <= eps and abs(z1 - z_front) <= eps:
+            front.append(tag)
+        elif abs(z0 - z_back) <= eps and abs(z1 - z_back) <= eps:
+            back.append(tag)
+        else:
+            sides.append(tag)
+
+    return {
+        "front": front,
+        "back": back,
+        "sides": sides,
+    }
+
+
+def _collect_boundary_curves(surface_tags: List[int]) -> List[int]:
+    """Return unique boundary curve tags for the given surface tags."""
+    if len(surface_tags) == 0:
+        return []
+
+    ordered: List[int] = []
+    seen: Set[int] = set()
+    for surface_tag in surface_tags:
+        boundary_dimtags = gmsh.model.getBoundary(
+            [(2, int(surface_tag))], oriented=False, combined=False
+        )
+        for dim, curve_tag in boundary_dimtags:
+            if dim != 1:
+                continue
+            curve_tag_i = int(curve_tag)
+            if curve_tag_i not in seen:
+                seen.add(curve_tag_i)
+                ordered.append(curve_tag_i)
+    return ordered
+
+
 def _build_enclosure_box(
     inner_points: np.ndarray, params: dict, closed: bool
-) -> List[Tuple[int, int]]:
-    """Build a rectangular enclosure cabinet box around the waveguide mouth.
-
-    Generates 6 surfaces (back panel, 4 side walls, front baffle with mouth hole)
-    all tagged as SD2G0.  Only valid for full-circle models (closed=True).
-
-    The front baffle has a hole matching the waveguide mouth cross-section so
-    that the horn bore connects directly to the enclosure cavity.
-
-    Returns list of (dim=2, tag) surface dimtags, or [] for partial models.
-    """
+) -> Dict[str, Any]:
+    """Build enclosure surfaces and classify front/back/sides for mesh-field control."""
+    empty = {
+        "dimtags": [],
+        "front": [],
+        "back": [],
+        "sides": [],
+        "bounds": None,
+    }
     if not closed:
-        return []
+        return empty
 
     enc_depth = float(params.get("enc_depth", 0) or 0)
     if enc_depth <= 0:
-        return []
+        return empty
 
     enc_space_l = float(params.get("enc_space_l", 25.0) or 25.0)
     enc_space_t = float(params.get("enc_space_t", 25.0) or 25.0)
@@ -828,6 +953,17 @@ def _build_enclosure_box(
     bx1 = x_max + enc_space_r
     by0 = y_min - enc_space_b
     by1 = y_max + enc_space_t
+
+    bounds = {
+        "bx0": bx0,
+        "bx1": bx1,
+        "by0": by0,
+        "by1": by1,
+        "z_front": z_front,
+        "z_back": z_back,
+        "cx": 0.5 * (bx0 + bx1),
+        "cy": 0.5 * (by0 + by1),
+    }
 
     # --- Build enclosure box solid ---
     box_tag = gmsh.model.occ.addBox(bx0, by0, z_back, bx1 - bx0, by1 - by0, enc_depth)
@@ -855,18 +991,99 @@ def _build_enclosure_box(
         box_surfs = gmsh.model.getBoundary(
             [(3, box_tag)], oriented=False, combined=False
         )
-        return [(2, tag) for dim, tag in box_surfs if dim == 2]
+        dimtags = [(2, tag) for dim, tag in box_surfs if dim == 2]
+        split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
+        return {
+            "dimtags": dimtags,
+            "front": split["front"],
+            "back": split["back"],
+            "sides": split["sides"],
+            "bounds": bounds,
+        }
 
     # Boolean difference: box minus mouth prism → box with hole in front face
     result_dimtags, _ = gmsh.model.occ.cut(
         [(3, box_tag)], [(3, mouth_solid_tags[0])]
     )
+
+    # --- Apply fillet or chamfer to mouth-opening edges on the front face ---
+    enc_edge = float(params.get("enc_edge", 0) or 0)
+    enc_edge_type = int(params.get("enc_edge_type", 1) or 1)
+    solid_tags = [tag for dim, tag in result_dimtags if dim == 3]
+
+    if enc_edge > 0 and solid_tags:
+        # Synchronize so we can query edge geometry
+        gmsh.model.occ.synchronize()
+
+        # Find edges at the mouth opening: those lying on the z_front plane
+        # (created by the boolean cut, not the box's own straight edges).
+        all_edges = gmsh.model.getBoundary(
+            result_dimtags, oriented=False, combined=False, recursive=True
+        )
+        mouth_edge_tags = []
+        front_eps = max(1e-3, abs(z_front) * 1e-4)
+        for dim, tag in all_edges:
+            if dim != 1:
+                continue
+            try:
+                ex0, ey0, ez0, ex1, ey1, ez1 = gmsh.model.getBoundingBox(dim, tag)
+            except Exception:
+                continue
+            # Edge must lie on the front z-plane
+            if abs(ez0 - z_front) > front_eps or abs(ez1 - z_front) > front_eps:
+                continue
+            # Exclude straight box edges (aligned with a single axis)
+            dx = abs(ex1 - ex0)
+            dy = abs(ey1 - ey0)
+            is_straight = (dx < front_eps or dy < front_eps)
+            if is_straight:
+                continue
+            mouth_edge_tags.append(tag)
+
+        if mouth_edge_tags:
+            try:
+                if enc_edge_type == 2:
+                    # Chamfer: find a front-face surface adjacent to each edge
+                    # for the chamfer reference direction.
+                    ref_surfs = []
+                    for etag in mouth_edge_tags:
+                        edge_surfs = gmsh.model.getAdjacencies(1, etag)[1]
+                        ref = edge_surfs[0] if len(edge_surfs) > 0 else mouth_edge_tags[0]
+                        ref_surfs.append(int(ref))
+                    out, _ = gmsh.model.occ.chamfer(
+                        solid_tags,
+                        mouth_edge_tags,
+                        ref_surfs,
+                        [enc_edge] * len(mouth_edge_tags),
+                    )
+                else:
+                    # Fillet (rounded)
+                    out, _ = gmsh.model.occ.fillet(
+                        solid_tags,
+                        mouth_edge_tags,
+                        [enc_edge],
+                    )
+                # Update result_dimtags with the new solid(s) from fillet/chamfer
+                new_solids = [(d, t) for d, t in out if d == 3]
+                if new_solids:
+                    result_dimtags = new_solids
+            except Exception:
+                pass  # If fillet/chamfer fails, proceed with un-filleted geometry
+
     gmsh.model.occ.synchronize()
 
     enc_surfaces = gmsh.model.getBoundary(
         result_dimtags, oriented=False, combined=False
     )
-    return [(2, tag) for dim, tag in enc_surfaces if dim == 2]
+    dimtags = [(2, tag) for dim, tag in enc_surfaces if dim == 2]
+    split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
+    return {
+        "dimtags": dimtags,
+        "front": split["front"],
+        "back": split["back"],
+        "sides": split["sides"],
+        "bounds": bounds,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -879,48 +1096,204 @@ def _configure_mesh_size(
     throat_res: float,
     mouth_res: float,
     rear_res: float,
+    *,
+    enc_front_resolution: Optional[str] = None,
+    enc_back_resolution: Optional[str] = None,
+    enclosure_bounds: Optional[Dict[str, float]] = None,
 ) -> None:
     """Set per-surface mesh resolution using Gmsh Restrict fields.
 
-    Inner surface: interpolated throat_res → mouth_res by radial distance.
+    Inner horn surface: interpolated throat_res → mouth_res by axial distance.
+    Outer wall shell (free-standing only): constant rear_res.
+    Mouth rim: interpolated throat_res → mouth_res by axial distance.
     Throat disc: constant throat_res.
-    Outer/rear/mouth surfaces: constant rear_res.
+    Rear wall (free-standing only): constant rear_res.
+    Enclosure sides: constant mouth_res.
+    Enclosure front/back panels: per-quadrant corner refinement fields.
     """
     fields: List[int] = []
+    z_throat = float(np.mean(inner_points[:, 0, 2]))
+    z_mouth = float(np.mean(inner_points[:, -1, 2]))
+    z_span = max(abs(z_mouth - z_throat), 1e-6)
 
-    r_throat = float(np.sqrt(inner_points[:, 0, 0] ** 2 + inner_points[:, 0, 1] ** 2).max())
-    r_mouth = float(np.sqrt(inner_points[:, -1, 0] ** 2 + inner_points[:, -1, 1] ** 2).max())
-    r_range = max(r_mouth - r_throat, 1e-6)
-    slope = (mouth_res - throat_res) / r_range
-    intercept = throat_res - slope * r_throat
+    curve_groups: Dict[str, List[int]] = {}
+    for group_name, group_surfaces in surface_groups.items():
+        if group_surfaces:
+            curve_groups[group_name] = _collect_boundary_curves(group_surfaces)
 
-    def add_restricted_matheval(formula: str, surface_tags: List[int]) -> int:
+    def add_restricted_matheval(
+        formula: str,
+        surface_tags: List[int],
+        curve_tags: List[int],
+    ) -> Optional[int]:
+        if len(surface_tags) == 0 and len(curve_tags) == 0:
+            return None
         f_base = gmsh.model.mesh.field.add("MathEval")
         gmsh.model.mesh.field.setString(f_base, "F", formula)
         f_restrict = gmsh.model.mesh.field.add("Restrict")
         gmsh.model.mesh.field.setNumber(f_restrict, "InField", f_base)
-        gmsh.model.mesh.field.setNumbers(f_restrict, "SurfacesList", surface_tags)
+        gmsh.model.mesh.field.setNumber(f_restrict, "IncludeBoundary", 0)
+        if surface_tags:
+            gmsh.model.mesh.field.setNumbers(f_restrict, "SurfacesList", surface_tags)
+        if curve_tags:
+            gmsh.model.mesh.field.setNumbers(f_restrict, "CurvesList", curve_tags)
         return f_restrict
 
-    if surface_groups.get("inner"):
-        formula = f"{intercept:.6g} + {slope:.6g} * Sqrt(x*x + y*y)"
-        fields.append(add_restricted_matheval(formula, surface_groups["inner"]))
+    def add_restricted_threshold_from_points(
+        point_tags: List[int],
+        surface_tags: List[int],
+        curve_tags: List[int],
+        size_min: float,
+        size_max: float,
+        dist_max: float,
+    ) -> Optional[int]:
+        if len(point_tags) == 0 or (len(surface_tags) == 0 and len(curve_tags) == 0):
+            return None
+        f_dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(f_dist, "PointsList", point_tags)
+        f_threshold = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(f_threshold, "InField", f_dist)
+        gmsh.model.mesh.field.setNumber(f_threshold, "SizeMin", float(size_min))
+        gmsh.model.mesh.field.setNumber(f_threshold, "SizeMax", float(size_max))
+        gmsh.model.mesh.field.setNumber(f_threshold, "DistMin", 0.0)
+        gmsh.model.mesh.field.setNumber(f_threshold, "DistMax", max(float(dist_max), 1e-6))
+        f_restrict = gmsh.model.mesh.field.add("Restrict")
+        gmsh.model.mesh.field.setNumber(f_restrict, "InField", f_threshold)
+        gmsh.model.mesh.field.setNumber(f_restrict, "IncludeBoundary", 0)
+        if surface_tags:
+            gmsh.model.mesh.field.setNumbers(f_restrict, "SurfacesList", surface_tags)
+        if curve_tags:
+            gmsh.model.mesh.field.setNumbers(f_restrict, "CurvesList", curve_tags)
+        return f_restrict
 
-    for group_key in ("throat_disc",):
-        if surface_groups.get(group_key):
-            fields.append(add_restricted_matheval(f"{throat_res:.6g}", surface_groups[group_key]))
+    # Horn surfaces (throat -> mouth interpolation by axial coordinate z)
+    slope = (mouth_res - throat_res) / z_span
+    intercept = throat_res - slope * z_throat
+    axial_formula = f"{intercept:.6g} + ({slope:.6g}) * z"
+    for group_key in ("inner", "mouth"):
+        field = add_restricted_matheval(
+            axial_formula,
+            surface_groups.get(group_key, []),
+            curve_groups.get(group_key, []),
+        )
+        if field:
+            fields.append(field)
 
-    for group_key in ("outer", "rear", "mouth", "enclosure"):
-        if surface_groups.get(group_key):
-            fields.append(add_restricted_matheval(f"{rear_res:.6g}", surface_groups[group_key]))
+    # In free-standing thickened mode, the outer shell is part of the rear-domain
+    # resolution policy and should not inherit the inner horn axial interpolation.
+    free_standing_wall_mode = bool(surface_groups.get("outer")) and not bool(
+        surface_groups.get("enclosure")
+    )
+    outer_formula = f"{rear_res:.6g}" if free_standing_wall_mode else axial_formula
+    outer_field = add_restricted_matheval(
+        outer_formula,
+        surface_groups.get("outer", []),
+        curve_groups.get("outer", []),
+    )
+    if outer_field:
+        fields.append(outer_field)
+
+    # Source disc fixed to throat resolution
+    throat_field = add_restricted_matheval(
+        f"{throat_res:.6g}",
+        surface_groups.get("throat_disc", []),
+        curve_groups.get("throat_disc", []),
+    )
+    if throat_field:
+        fields.append(throat_field)
+
+    # Free-standing rear wall fixed to rear resolution
+    rear_field = add_restricted_matheval(
+        f"{rear_res:.6g}",
+        surface_groups.get("rear", []),
+        curve_groups.get("rear", []),
+    )
+    if rear_field:
+        fields.append(rear_field)
+
+    # Enclosure side walls baseline mouth resolution
+    side_field = add_restricted_matheval(
+        f"{mouth_res:.6g}",
+        surface_groups.get("enclosure_sides", []),
+        curve_groups.get("enclosure_sides", []),
+    )
+    if side_field:
+        fields.append(side_field)
+
+    # Enclosure front/back with per-quadrant corner controls
+    if enclosure_bounds:
+        bx0 = float(enclosure_bounds["bx0"])
+        bx1 = float(enclosure_bounds["bx1"])
+        by0 = float(enclosure_bounds["by0"])
+        by1 = float(enclosure_bounds["by1"])
+        z_front = float(enclosure_bounds["z_front"])
+        z_back = float(enclosure_bounds["z_back"])
+        panel_diag = math.hypot(bx1 - bx0, by1 - by0)
+        corner_dist = max(1.0, panel_diag * 0.35)
+
+        front_q = _parse_quadrant_resolutions(enc_front_resolution, mouth_res)
+        back_q = _parse_quadrant_resolutions(enc_back_resolution, mouth_res)
+        front_base = max(mouth_res, max(front_q))
+        back_base = max(mouth_res, max(back_q))
+
+        front_tags = surface_groups.get("enclosure_front", [])
+        back_tags = surface_groups.get("enclosure_back", [])
+        front_curves = curve_groups.get("enclosure_front", [])
+        back_curves = curve_groups.get("enclosure_back", [])
+
+        front_base_field = add_restricted_matheval(
+            f"{front_base:.6g}", front_tags, front_curves
+        )
+        if front_base_field:
+            fields.append(front_base_field)
+
+        back_base_field = add_restricted_matheval(
+            f"{back_base:.6g}", back_tags, back_curves
+        )
+        if back_base_field:
+            fields.append(back_base_field)
+
+        front_corners = _panel_corner_points_by_quadrant(bx0, bx1, by0, by1, z_front)
+        back_corners = _panel_corner_points_by_quadrant(bx0, bx1, by0, by1, z_back)
+
+        corner_points: List[int] = []
+        for x, y, z in front_corners + back_corners:
+            corner_points.append(gmsh.model.occ.addPoint(float(x), float(y), float(z)))
+        if corner_points:
+            gmsh.model.occ.synchronize()
+
+        for q_idx in range(4):
+            front_point_tag = corner_points[q_idx]
+            back_point_tag = corner_points[4 + q_idx]
+            front_corner_field = add_restricted_threshold_from_points(
+                [front_point_tag],
+                front_tags,
+                front_curves,
+                front_q[q_idx],
+                front_base,
+                corner_dist,
+            )
+            if front_corner_field:
+                fields.append(front_corner_field)
+
+            back_corner_field = add_restricted_threshold_from_points(
+                [back_point_tag],
+                back_tags,
+                back_curves,
+                back_q[q_idx],
+                back_base,
+                corner_dist,
+            )
+            if back_corner_field:
+                fields.append(back_corner_field)
 
     if fields:
         f_min = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
 
-    gmsh.option.setNumber("Mesh.MeshSizeMin", min(throat_res, mouth_res) * 0.5)
-    gmsh.option.setNumber("Mesh.MeshSizeMax", rear_res * 1.5)
+    gmsh.option.setNumber("Mesh.MeshSizeMin", min(throat_res, mouth_res, rear_res) * 0.5)
+    gmsh.option.setNumber("Mesh.MeshSizeMax", max(throat_res, mouth_res, rear_res) * 1.5)
     gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
@@ -961,11 +1334,71 @@ def _assign_physical_groups(
         gmsh.model.setPhysicalName(2, 3, "SD2G0")
 
 
+def _extract_triangle_block(
+    elem_types: List[int], elem_tags: List[List[int]], elem_nodes: List[List[int]]
+) -> Tuple[List[int], List[int]]:
+    for i, etype in enumerate(elem_types):
+        if int(etype) == 2:
+            return [int(tag) for tag in elem_tags[i]], [int(node) for node in elem_nodes[i]]
+    return [], []
+
+
+def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str, List[float]]:
+    """Extract flat canonical mesh arrays (vertices, indices, surfaceTags) from current gmsh model."""
+    node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+    if len(node_tags) == 0 or len(node_coords) == 0:
+        return {"vertices": [], "indices": [], "surfaceTags": []}
+
+    node_tags_i = [int(tag) for tag in node_tags]
+    node_coords_f = [float(v) for v in node_coords]
+    node_to_index = {tag: i for i, tag in enumerate(node_tags_i)}
+
+    tri_elem_types_all, tri_elem_tags_all, tri_elem_nodes_all = gmsh.model.mesh.getElements(2)
+    tri_tags, tri_nodes = _extract_triangle_block(tri_elem_types_all, tri_elem_tags_all, tri_elem_nodes_all)
+    if not tri_tags:
+        return {"vertices": node_coords_f, "indices": [], "surfaceTags": []}
+    if len(tri_nodes) != len(tri_tags) * 3:
+        raise GmshMeshingError("Unexpected triangle node buffer size while extracting canonical mesh.")
+
+    element_surface_tag: Dict[int, int] = {}
+    for _, physical_tag in gmsh.model.getPhysicalGroups(2):
+        entities = gmsh.model.getEntitiesForPhysicalGroup(2, physical_tag)
+        for entity in entities:
+            etypes_e, etags_e, enodes_e = gmsh.model.mesh.getElements(2, entity)
+            tri_tags_e, _ = _extract_triangle_block(etypes_e, etags_e, enodes_e)
+            for elem_tag in tri_tags_e:
+                element_surface_tag[int(elem_tag)] = int(physical_tag)
+
+    indices: List[int] = []
+    surface_tags: List[int] = []
+    for tri_idx, elem_tag in enumerate(tri_tags):
+        n0 = tri_nodes[tri_idx * 3]
+        n1 = tri_nodes[tri_idx * 3 + 1]
+        n2 = tri_nodes[tri_idx * 3 + 2]
+        try:
+            indices.extend([
+                node_to_index[int(n0)],
+                node_to_index[int(n1)],
+                node_to_index[int(n2)],
+            ])
+        except KeyError as exc:
+            raise GmshMeshingError(
+                f"Missing node mapping for triangle element tag {elem_tag}."
+            ) from exc
+        surface_tags.append(int(element_surface_tag.get(int(elem_tag), default_surface_tag)))
+
+    return {
+        "vertices": node_coords_f,
+        "indices": indices,
+        "surfaceTags": surface_tags,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_waveguide_mesh(params: dict) -> dict:
+def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> dict:
     """Build a .msh from ATH parameters using Gmsh OCC Python API.
 
     Accepts both R-OSSE and OSSE formula types. See WaveguideParamsRequest
@@ -974,7 +1407,8 @@ def build_waveguide_mesh(params: dict) -> dict:
     Returns:
         {
             "msh_text": str,    Gmsh .msh file content
-            "stats": {nodeCount, elementCount}
+            "stats": {nodeCount, elementCount},
+            "canonical_mesh": {vertices, indices, surfaceTags} (optional)
         }
 
     Raises:
@@ -984,7 +1418,7 @@ def build_waveguide_mesh(params: dict) -> dict:
     """
     if not GMSH_AVAILABLE:
         raise RuntimeError(
-            "Gmsh Python API is not available. Install gmsh: pip install gmsh>=4.10.0"
+            "Gmsh Python API is not available. Install gmsh: pip install gmsh>=4.15.0"
         )
 
     formula_type = params.get("formula_type", "R-OSSE")
@@ -1006,9 +1440,8 @@ def build_waveguide_mesh(params: dict) -> dict:
     throat_res = float(params.get("throat_res", 5.0))
     mouth_res = float(params.get("mouth_res", 8.0))
     rear_res = float(params.get("rear_res", 25.0))
-
-    # Use mean throat radius across all phi for the throat disc
-    r0_throat = float(np.sqrt(inner_points[:, 0, 0] ** 2 + inner_points[:, 0, 1] ** 2).mean())
+    enc_front_resolution = params.get("enc_front_resolution")
+    enc_back_resolution = params.get("enc_back_resolution")
 
     with gmsh_lock:
         initialized_here = False
@@ -1018,27 +1451,37 @@ def build_waveguide_mesh(params: dict) -> dict:
                 initialized_here = True
 
             gmsh.option.setNumber("General.Terminal", 0)
+            gmsh.option.setNumber("Geometry.Tolerance", 1e-8)
+            gmsh.option.setNumber("Geometry.ToleranceBoolean", 1e-8)
             gmsh.clear()
             gmsh.model.add("WaveguideOCC")
 
             # --- Build geometry ---
             # Enclosure box must be built and cut BEFORE inner horn surfaces are created
             # to avoid the OCC Boolean cut interfering with the horn surface entities.
-            enc_dimtags = []
+            enc_data: Dict[str, Any] = {
+                "dimtags": [],
+                "front": [],
+                "back": [],
+                "sides": [],
+                "bounds": None,
+            }
             if enc_depth > 0:
-                enc_dimtags = _build_enclosure_box(inner_points, params, closed=closed)
+                enc_data = _build_enclosure_box(inner_points, params, closed=closed)
                 # _build_enclosure_box calls occ.synchronize() internally
 
             inner_dimtags = _build_surface_from_points(inner_points, closed=closed)
-            throat_disc_dimtags = _build_throat_disc(r0_throat) if closed else []
+
+            throat_disc_dimtags = (
+                _build_throat_disc_from_ring(inner_points[:, 0, :], closed=closed) if closed else []
+            )
 
             outer_dimtags = []
-            rear_dimtags = []
             mouth_dimtags = []
             if enc_depth == 0 and outer_points is not None:
-                # Wall shell: offset outer surface + rear/mouth rim
+                # Wall shell: offset outer surface + mouth rim.
+                # Keep throat plate and rear-throat ring disconnected: no rear connector surface.
                 outer_dimtags = _build_surface_from_points(outer_points, closed=closed)
-                rear_dimtags = _build_rear_wall(inner_points, outer_points, closed=closed)
                 mouth_dimtags = _build_mouth_rim(inner_points, outer_points, closed=closed)
 
             # Final synchronize flushes horn + throat disc + outer shell entities.
@@ -1052,14 +1495,34 @@ def build_waveguide_mesh(params: dict) -> dict:
             if closed:
                 surface_groups["throat_disc"] = [tag for _, tag in throat_disc_dimtags]
             if enc_depth > 0:
-                surface_groups["enclosure"] = [tag for _, tag in enc_dimtags]
+                surface_groups["enclosure"] = [tag for _, tag in enc_data.get("dimtags", [])]
+                surface_groups["enclosure_front"] = list(enc_data.get("front", []))
+                surface_groups["enclosure_back"] = list(enc_data.get("back", []))
+                surface_groups["enclosure_sides"] = list(enc_data.get("sides", []))
             elif outer_points is not None:
-                surface_groups["outer"] = [tag for _, tag in outer_dimtags]
-                surface_groups["rear"] = [tag for _, tag in rear_dimtags]
-                surface_groups["mouth"] = [tag for _, tag in mouth_dimtags]
+                surface_groups["outer"] = [tag for dim, tag in outer_dimtags if dim == 2]
+                surface_groups["rear"] = []
+                surface_groups["mouth"] = [tag for dim, tag in mouth_dimtags if dim == 2]
+
+            # --- Validate surface tags survived synchronize ---
+            all_model_surfaces = {tag for _, tag in gmsh.model.getEntities(2)}
+            for group_name, tags in surface_groups.items():
+                missing = [t for t in tags if t not in all_model_surfaces]
+                if missing:
+                    print(f"[MWG] WARNING: surface_groups['{group_name}'] has "
+                          f"invalid tags {missing} after occ.synchronize()")
 
             # --- Mesh size fields ---
-            _configure_mesh_size(inner_points, surface_groups, throat_res, mouth_res, rear_res)
+            _configure_mesh_size(
+                inner_points,
+                surface_groups,
+                throat_res,
+                mouth_res,
+                rear_res,
+                enc_front_resolution=enc_front_resolution,
+                enc_back_resolution=enc_back_resolution,
+                enclosure_bounds=enc_data.get("bounds"),
+            )
 
             # --- Physical groups (ABEC-compatible) ---
             _assign_physical_groups(surface_groups)
@@ -1071,6 +1534,16 @@ def build_waveguide_mesh(params: dict) -> dict:
 
             # --- Generate mesh ---
             gmsh.model.mesh.generate(2)
+            gmsh.model.mesh.removeDuplicateNodes()
+            canonical_mesh = _extract_canonical_mesh_from_model() if include_canonical else None
+            if canonical_mesh is not None:
+                tri_count = len(canonical_mesh["indices"]) // 3
+                if len(canonical_mesh["surfaceTags"]) != tri_count:
+                    raise GmshMeshingError(
+                        "Canonical extraction surface tag count does not match triangle count."
+                    )
+                if tri_count > 0 and not any(tag == 2 for tag in canonical_mesh["surfaceTags"]):
+                    raise GmshMeshingError("Canonical extraction produced no source-tagged triangles.")
 
             # --- Write outputs ---
             with tempfile.TemporaryDirectory(prefix="mwg-occ-") as tmp_dir:
@@ -1088,11 +1561,14 @@ def build_waveguide_mesh(params: dict) -> dict:
                 stl_text = stl_path.read_text(encoding="utf-8", errors="replace") if stl_path.exists() else None
 
             stats = parse_msh_stats(msh_text)
-            return {
+            result = {
                 "msh_text": msh_text,
                 "stl_text": stl_text,
                 "stats": stats,
             }
+            if canonical_mesh is not None:
+                result["canonical_mesh"] = canonical_mesh
+            return result
 
         except (GmshMeshingError, ValueError, RuntimeError):
             raise
