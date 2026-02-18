@@ -40,6 +40,9 @@ export class SimulationPanel {
     this.pendingMeshResolve = null;
     this.lastResults = null;
     this.stageStatusActive = false;
+    this.completedStatusMessage = null;
+    this.simulationStartedAtMs = null;
+    this.lastSimulationDurationMs = null;
     this.currentSmoothing = 'none';
     this.simulationParamBindings = [
       { id: 'freq-start', key: 'abecF1', parse: (value) => parseFloat(value) },
