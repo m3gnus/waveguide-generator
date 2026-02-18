@@ -27,10 +27,11 @@ export async function checkSolverConnection(panel) {
     // Preserve live stage text while simulation is running.
     if (!panel.stageStatusActive) {
       if (isConnected) {
-        statusText.textContent = 'Connected to adaptive BEM solver';
+        statusText.textContent = panel.completedStatusMessage || 'Connected to adaptive BEM solver';
         runButton.disabled = false;
         if (statusHelp) statusHelp.classList.add('is-hidden');
       } else {
+        panel.completedStatusMessage = null;
         statusText.textContent = 'Backend online, adaptive solver runtime unavailable';
         runButton.disabled = true;
         if (statusHelp) statusHelp.classList.remove('is-hidden');
@@ -39,6 +40,7 @@ export async function checkSolverConnection(panel) {
   } catch (error) {
     statusDot.className = 'status-dot disconnected';
     if (!panel.stageStatusActive) {
+      panel.completedStatusMessage = null;
       statusText.textContent = 'BEM solver backend unavailable';
       runButton.disabled = true;
       if (statusHelp) statusHelp.classList.remove('is-hidden');

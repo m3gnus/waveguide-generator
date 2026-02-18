@@ -51,6 +51,32 @@ function setProgressVisible(progressDiv, visible) {
   }
 }
 
+function formatElapsedDuration(durationMs) {
+  const numericDuration = Number(durationMs);
+  if (!Number.isFinite(numericDuration) || numericDuration < 0) {
+    return null;
+  }
+
+  const totalSeconds = numericDuration / 1000;
+  if (totalSeconds < 10) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+
+  if (totalSeconds < 60) {
+    return `${Math.round(totalSeconds)}s`;
+  }
+
+  const roundedSeconds = Math.round(totalSeconds);
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
 function resolveStageDetail(stage, message, pct) {
   const key = normalizeStage(stage);
   const raw = typeof message === 'string' ? message.trim() : '';
@@ -187,6 +213,9 @@ export async function stopSimulation(panel) {
   }
 
   // Update UI to show cancellation
+  panel.completedStatusMessage = null;
+  panel.simulationStartedAtMs = null;
+  panel.lastSimulationDurationMs = null;
   updateStageUi(panel, progressFill, progressText, {
     progress: 0,
     stage: 'cancelled',
@@ -212,6 +241,7 @@ export async function runSimulation(panel) {
   const progressFill = document.getElementById('progress-fill');
   const progressText = document.getElementById('progress-text');
   const resultsContainer = document.getElementById('results-container');
+  panel.completedStatusMessage = null;
 
   // Get simulation settings
   const config = {
@@ -248,6 +278,8 @@ export async function runSimulation(panel) {
   }
 
   // Show progress
+  panel.simulationStartedAtMs = Date.now();
+  panel.lastSimulationDurationMs = null;
   runBtn.disabled = true;
   setProgressVisible(progressDiv, true);
   resultsContainer.classList.add('is-hidden');
@@ -319,6 +351,9 @@ export async function runSimulation(panel) {
     }
   } catch (error) {
     console.error('Simulation error:', error);
+    panel.completedStatusMessage = null;
+    panel.simulationStartedAtMs = null;
+    panel.lastSimulationDurationMs = null;
     updateStageUi(panel, progressFill, progressText, {
       progress: 1,
       stage: 'error',
@@ -357,6 +392,9 @@ export function pollSimulationStatus(panel) {
       if (status.status === 'cancelled' || status.status === 'error') {
         clearInterval(panel.pollInterval);
         panel.pollInterval = null;
+        panel.completedStatusMessage = null;
+        panel.simulationStartedAtMs = null;
+        panel.lastSimulationDurationMs = null;
         updateStageUi(panel, progressFill, progressText, {
           progress: status.status === 'cancelled' ? 0 : 1,
           stage: status.status,
@@ -398,6 +436,16 @@ export function pollSimulationStatus(panel) {
           stage: 'complete',
           message: 'Results ready'
         });
+        const completedAtMs = Date.now();
+        const elapsedMs = Number.isFinite(panel.simulationStartedAtMs)
+          ? Math.max(0, completedAtMs - panel.simulationStartedAtMs)
+          : null;
+        const elapsedLabel = formatElapsedDuration(elapsedMs);
+        panel.lastSimulationDurationMs = elapsedMs;
+        panel.simulationStartedAtMs = null;
+        panel.completedStatusMessage = elapsedLabel
+          ? `BEM solving finished in ${elapsedLabel}`
+          : 'BEM solving finished';
 
         setTimeout(() => {
           setProgressVisible(progressDiv, false);
@@ -407,6 +455,9 @@ export function pollSimulationStatus(panel) {
       } else if (status.status === 'error') {
         clearInterval(panel.pollInterval);
         panel.pollInterval = null;
+        panel.completedStatusMessage = null;
+        panel.simulationStartedAtMs = null;
+        panel.lastSimulationDurationMs = null;
         updateStageUi(panel, progressFill, progressText, {
           progress: 1,
           stage: 'error',
@@ -418,6 +469,9 @@ export function pollSimulationStatus(panel) {
     } catch (error) {
       clearInterval(panel.pollInterval);
       panel.pollInterval = null;
+      panel.completedStatusMessage = null;
+      panel.simulationStartedAtMs = null;
+      panel.lastSimulationDurationMs = null;
       console.error('Status polling error:', error);
       updateStageUi(panel, progressFill, progressText, {
         progress: 1,

@@ -1,12 +1,8 @@
 """
 Matplotlib-based directivity heatmap rendering.
 
-Produces publication-quality directivity plots with:
-- Viridis colormap, -20 to 0 dB range
-- Prominent white reference contour at configurable dB level (default -6)
-- Subtle contour lines at -3, -6, -9, -12 dB
-- Log frequency axis with sub-decade grid
-- H and V subplots (or single plot if symmetric)
+Uses log-frequency interpolation and light fractional-octave smoothing to
+produce stable, readable polar maps from per-frequency angle slices.
 """
 
 import io
@@ -19,8 +15,14 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 
-def render_directivity_plot(frequencies, directivity, dpi=150,
-                            reference_level=-6.0):
+MIN_DB = -30.0
+MAX_DB = 0.0
+FRACTIONAL_OCTAVE = 24.0
+ANGLE_SAMPLES = 361
+FREQ_SAMPLES = 500
+
+
+def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-6.0):
     """
     Render directivity heatmap(s) as a PNG image.
 
@@ -34,51 +36,65 @@ def render_directivity_plot(frequencies, directivity, dpi=150,
     Returns:
         Base64-encoded PNG string (without data URI prefix)
     """
-    h_patterns = directivity.get('horizontal', [])
-    v_patterns = directivity.get('vertical', [])
-
+    h_patterns = directivity.get("horizontal", [])
+    v_patterns = directivity.get("vertical", [])
     if not h_patterns:
         return None
 
     freqs = np.array(frequencies, dtype=float)
+    if freqs.size == 0:
+        return None
 
-    # Build 2D grids
-    h_angles, h_values = _build_grid(freqs, h_patterns)
-    v_angles, v_values = _build_grid(freqs, v_patterns) if v_patterns else (None, None)
+    h_angles_raw, h_freqs_raw, h_values_raw = _build_grid(freqs, h_patterns)
+    if h_values_raw is None:
+        return None
+    h_angles, h_freqs, h_values = _prepare_heatmap_data(h_angles_raw, h_freqs_raw, h_values_raw)
 
-    # Detect symmetry (H == V)
-    symmetric = _check_symmetry(h_values, v_values)
+    v_angles = v_freqs = v_values = None
+    v_values_raw = None
+    if v_patterns:
+        v_angles_raw, v_freqs_raw, v_values_raw = _build_grid(freqs, v_patterns)
+        if v_values_raw is not None:
+            v_angles, v_freqs, v_values = _prepare_heatmap_data(v_angles_raw, v_freqs_raw, v_values_raw)
 
-    # Create figure — larger for better detail
+    symmetric = _check_symmetry(h_values_raw, v_values_raw)
+
     if symmetric or v_values is None:
         fig, axes = plt.subplots(1, 1, figsize=(11, 5))
         axes = [axes]
-        titles = ['Directivity (H = V, Symmetric)' if symmetric else 'H Normalized Directivity']
-        all_angles = [h_angles]
-        all_values = [h_values]
+        titles = ["Directivity (H = V, Symmetric)" if symmetric else "H Normalized Directivity"]
+        datasets = [(h_freqs, h_angles, h_values)]
     else:
         fig, axes = plt.subplots(2, 1, figsize=(11, 8))
         axes = list(axes)
-        titles = ['H Normalized Directivity', 'V Normalized Directivity']
-        all_angles = [h_angles, v_angles]
-        all_values = [h_values, v_values]
+        titles = ["H Normalized Directivity", "V Normalized Directivity"]
+        datasets = [(h_freqs, h_angles, h_values), (v_freqs, v_angles, v_values)]
 
-    # Dark background
-    fig.patch.set_facecolor('#1a1a1a')
-
-    for ax, title, angles, values in zip(axes, titles, all_angles, all_values):
-        _render_single_heatmap(ax, freqs, angles, values, title,
-                               reference_level=reference_level)
+    fig.patch.set_facecolor("#1a1a1a")
+    for ax, title, (plot_freqs, plot_angles, plot_values) in zip(axes, titles, datasets):
+        _render_single_heatmap(
+            ax,
+            plot_freqs,
+            plot_angles,
+            plot_values,
+            title,
+            reference_level=reference_level,
+        )
 
     fig.tight_layout(pad=1.5)
 
-    # Export to PNG
     buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=dpi, facecolor=fig.get_facecolor(),
-                edgecolor='none', bbox_inches='tight')
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=dpi,
+        facecolor=fig.get_facecolor(),
+        edgecolor="none",
+        bbox_inches="tight",
+    )
     plt.close(fig)
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode('ascii')
+    return base64.b64encode(buf.read()).decode("ascii")
 
 
 def _build_grid(freqs, patterns):
@@ -87,49 +103,173 @@ def _build_grid(freqs, patterns):
 
     Returns:
         angles: 1D array of angle values
+        freqs: 1D array of frequencies (with empty columns removed)
         values: 2D array (n_angles x n_freqs)
     """
-    if not patterns or not patterns[0]:
-        return None, None
+    if not patterns:
+        return None, None, None
 
-    # Extract angles from first pattern
-    angles = np.array([p[0] for p in patterns[0]], dtype=float)
-    n_angles = len(angles)
-    n_freqs = len(patterns)
+    n_freqs = min(len(patterns), len(freqs))
+    if n_freqs == 0:
+        return None, None, None
 
-    values = np.full((n_angles, n_freqs), np.nan)
-    for fi, pattern in enumerate(patterns):
-        for ai, point in enumerate(pattern):
-            if ai < n_angles:
-                values[ai, fi] = point[1]
+    angles = None
+    for pattern in patterns[:n_freqs]:
+        candidate = _extract_angles(pattern)
+        if candidate is not None and candidate.size > 0:
+            angles = candidate
+            break
+    if angles is None or angles.size == 0:
+        return None, None, None
 
-    return angles, values
+    values = np.full((angles.size, n_freqs), np.nan, dtype=float)
+    for fi in range(n_freqs):
+        pattern = patterns[fi]
+        if not isinstance(pattern, list):
+            continue
+        for ai, point in enumerate(pattern[: angles.size]):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            db = _safe_float(point[1])
+            if db is not None:
+                values[ai, fi] = db
+
+    keep_cols = np.any(np.isfinite(values), axis=0)
+    if not np.any(keep_cols):
+        return None, None, None
+
+    return angles, freqs[:n_freqs][keep_cols], values[:, keep_cols]
+
+
+def _extract_angles(pattern):
+    if not isinstance(pattern, list):
+        return None
+    out = []
+    for point in pattern:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        ang = _safe_float(point[0])
+        if ang is not None:
+            out.append(ang)
+    if not out:
+        return None
+    return np.array(out, dtype=float)
+
+
+def _safe_float(value):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(out):
+        return None
+    return out
+
+
+def _prepare_heatmap_data(angles, freqs, values):
+    values_filled = _fill_missing_values(values)
+    values_smooth = _fractional_octave_smooth(values_filled, freqs, FRACTIONAL_OCTAVE)
+    interp_angles, interp_freqs, interp_values = _interpolate_heatmap_grid(
+        angles, freqs, values_smooth, ANGLE_SAMPLES, FREQ_SAMPLES
+    )
+    return interp_angles, interp_freqs, np.clip(interp_values, MIN_DB, MAX_DB)
+
+
+def _fill_missing_values(values):
+    filled = np.array(values, dtype=float, copy=True)
+
+    # Fill missing values along angle for each frequency.
+    for col in range(filled.shape[1]):
+        y = filled[:, col]
+        finite = np.isfinite(y)
+        if np.all(finite):
+            continue
+        if np.count_nonzero(finite) == 0:
+            continue
+        x = np.arange(y.size)
+        if np.count_nonzero(finite) == 1:
+            filled[:, col] = y[finite][0]
+        else:
+            filled[:, col] = np.interp(x, x[finite], y[finite])
+
+    # Fill remaining gaps across frequency.
+    for row in range(filled.shape[0]):
+        y = filled[row, :]
+        finite = np.isfinite(y)
+        if np.all(finite):
+            continue
+        if np.count_nonzero(finite) == 0:
+            filled[row, :] = MIN_DB
+            continue
+        x = np.arange(y.size)
+        if np.count_nonzero(finite) == 1:
+            filled[row, :] = y[finite][0]
+        else:
+            filled[row, :] = np.interp(x, x[finite], y[finite])
+
+    filled[~np.isfinite(filled)] = MIN_DB
+    return filled
+
+
+def _fractional_octave_smooth(values, freqs, fraction):
+    if fraction is None or fraction <= 0 or len(freqs) < 2:
+        return values
+
+    log2_freqs = np.log2(freqs)
+    half_band = 1.0 / (2.0 * float(fraction))
+    smoothed = np.empty_like(values)
+    for i in range(freqs.size):
+        mask = np.abs(log2_freqs - log2_freqs[i]) <= half_band
+        smoothed[:, i] = np.mean(values[:, mask], axis=1)
+    return smoothed
+
+
+def _interpolate_heatmap_grid(angles, freqs, values, angle_samples, freq_samples):
+    if len(angles) < 2 or len(freqs) < 2:
+        return angles, freqs, values
+
+    target_angles = np.linspace(float(angles[0]), float(angles[-1]), max(int(angle_samples), len(angles)))
+    log_freqs = np.log10(freqs)
+    target_log_freqs = np.linspace(
+        float(log_freqs[0]),
+        float(log_freqs[-1]),
+        max(int(freq_samples), len(freqs)),
+    )
+
+    angle_interp = np.empty((target_angles.size, freqs.size), dtype=float)
+    for i in range(freqs.size):
+        angle_interp[:, i] = np.interp(target_angles, angles, values[:, i])
+
+    full_interp = np.empty((target_angles.size, target_log_freqs.size), dtype=float)
+    for j in range(target_angles.size):
+        full_interp[j, :] = np.interp(target_log_freqs, log_freqs, angle_interp[j, :])
+
+    return target_angles, np.power(10.0, target_log_freqs), full_interp
 
 
 def _check_symmetry(h_values, v_values):
-    """Check if H and V patterns are identical within 1% tolerance."""
-    if v_values is None or h_values is None:
+    """Check if H and V patterns are effectively identical."""
+    if h_values is None or v_values is None:
         return False
     if h_values.shape != v_values.shape:
         return False
 
-    max_val = max(np.nanmax(np.abs(h_values)), np.nanmax(np.abs(v_values)))
-    if max_val < 1e-10:
-        return True
+    finite = np.isfinite(h_values) & np.isfinite(v_values)
+    if not np.any(finite):
+        return False
 
-    relative_diff = np.nanmax(np.abs(h_values - v_values)) / max_val
-    return relative_diff < 0.01
+    h_ref = np.nanmax(np.abs(h_values[finite]))
+    v_ref = np.nanmax(np.abs(v_values[finite]))
+    scale = max(h_ref, v_ref, 1e-9)
+    rel_diff = np.nanmax(np.abs(h_values[finite] - v_values[finite])) / scale
+    return rel_diff < 0.01
 
 
-def _render_single_heatmap(ax, freqs, angles, values, title,
-                            reference_level=-6.0):
+def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.0):
     """Render a single directivity heatmap on the given axes."""
-    ax.set_facecolor('#1a1a1a')
+    ax.set_facecolor("#1a1a1a")
 
-    # Pcolormesh — needs edge arrays for correct cell boundaries
-    # Use log-spaced frequency edges
     log_freqs = np.log10(freqs)
-    # Build bin edges in log space, then convert back
     if len(log_freqs) > 1:
         d_log = np.diff(log_freqs)
         freq_edges = np.zeros(len(freqs) + 1)
@@ -140,7 +280,6 @@ def _render_single_heatmap(ax, freqs, angles, values, title,
     else:
         freq_edges = np.array([freqs[0] * 0.9, freqs[0] * 1.1])
 
-    # Angle edges
     if len(angles) > 1:
         d_ang = np.diff(angles)
         angle_edges = np.zeros(len(angles) + 1)
@@ -152,50 +291,49 @@ def _render_single_heatmap(ax, freqs, angles, values, title,
         angle_edges = np.array([angles[0] - 1, angles[0] + 1])
 
     mesh = ax.pcolormesh(
-        freq_edges, angle_edges, values,
-        cmap='viridis',
-        vmin=-20,
-        vmax=0,
-        shading='flat'
+        freq_edges,
+        angle_edges,
+        values,
+        cmap="viridis",
+        vmin=MIN_DB,
+        vmax=MAX_DB,
+        shading="flat",
     )
 
-    # Contour lines — subtle lines at standard levels, prominent at reference
     X, Y = np.meshgrid(freqs, angles)
-    contour_levels = [-12, -9, -6, -3]
-
-    # Draw subtle contour lines at all standard levels
+    contour_levels = [-24, -18, -12, -9, -6, -3]
     try:
         ax.contour(
-            X, Y, values,
+            X,
+            Y,
+            values,
             levels=contour_levels,
-            colors='white',
+            colors="white",
             linewidths=0.6,
-            alpha=0.4
+            alpha=0.35,
         )
     except Exception:
         pass
 
-    # Draw prominent reference contour
     try:
         ref_contour = ax.contour(
-            X, Y, values,
+            X,
+            Y,
+            values,
             levels=[reference_level],
-            colors='white',
-            linewidths=1.5
+            colors="white",
+            linewidths=1.5,
         )
     except Exception:
         ref_contour = None
 
-    # Log frequency axis
-    ax.set_xscale('log')
+    ax.set_xscale("log")
     ax.set_xlim(freqs[0], freqs[-1])
     ax.set_ylim(angles[0], angles[-1])
 
-    # Grid lines at log decade boundaries
     for freq in _log_grid_lines(freqs[0], freqs[-1]):
-        ax.axvline(freq, color='white', alpha=0.15, linewidth=0.5)
+        ax.axvline(freq, color="white", alpha=0.15, linewidth=0.5)
 
-    # Horizontal grid lines at angle ticks
     angle_range = angles[-1] - angles[0]
     if angle_range > 120:
         angle_step = 30
@@ -203,39 +341,38 @@ def _render_single_heatmap(ax, freqs, angles, values, title,
         angle_step = 15
     else:
         angle_step = 10
-    for a in np.arange(0, angles[-1] + 1, angle_step):
+    start = np.ceil(angles[0] / angle_step) * angle_step
+    for a in np.arange(start, angles[-1] + angle_step * 0.5, angle_step):
         if angles[0] < a < angles[-1]:
-            ax.axhline(a, color='white', alpha=0.15, linewidth=0.5)
+            ax.axhline(a, color="white", alpha=0.15, linewidth=0.5)
 
-    # Frequency tick formatting
     ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
+    ax.set_xlabel("Frequency [Hz]", color="#cccccc", fontsize=11)
+    ax.set_ylabel("Angle [deg]", color="#cccccc", fontsize=11)
+    ax.set_title(title, color="#e0e0e0", fontsize=13, fontweight="600", pad=8)
+    ax.tick_params(colors="#aaaaaa", labelsize=9)
 
-    # Labels and title
-    ax.set_xlabel('Frequency [Hz]', color='#cccccc', fontsize=11)
-    ax.set_ylabel('Angle [deg]', color='#cccccc', fontsize=11)
-    ax.set_title(title, color='#e0e0e0', fontsize=13, fontweight='600', pad=8)
-
-    # Tick styling
-    ax.tick_params(colors='#aaaaaa', labelsize=9)
-
-    # Spine styling
     for spine in ax.spines.values():
-        spine.set_color('#444444')
+        spine.set_color("#444444")
 
-    # Colorbar
     cbar = plt.colorbar(mesh, ax=ax, shrink=0.85, pad=0.02)
-    cbar.set_label('dB', color='#cccccc', fontsize=10)
-    cbar.ax.tick_params(colors='#aaaaaa', labelsize=9)
-    cbar.outline.set_edgecolor('#444444')
+    cbar.set_label("dB", color="#cccccc", fontsize=10)
+    cbar.ax.tick_params(colors="#aaaaaa", labelsize=9)
+    cbar.outline.set_edgecolor("#444444")
 
-    # Legend for reference contour
     if ref_contour is not None:
         from matplotlib.lines import Line2D
-        legend_line = Line2D([0], [0], color='white', linewidth=1.5,
-                             label=f'ref @ {reference_level:g} dB')
-        ax.legend(handles=[legend_line], loc='upper right',
-                  fontsize=8, facecolor='#2a2a2a', edgecolor='#555555',
-                  labelcolor='#cccccc', framealpha=0.85)
+
+        legend_line = Line2D([0], [0], color="white", linewidth=1.5, label=f"ref @ {reference_level:g} dB")
+        ax.legend(
+            handles=[legend_line],
+            loc="upper right",
+            fontsize=8,
+            facecolor="#2a2a2a",
+            edgecolor="#555555",
+            labelcolor="#cccccc",
+            framealpha=0.85,
+        )
 
 
 def _log_grid_lines(freq_min, freq_max):
@@ -255,6 +392,6 @@ def _freq_formatter(x, pos):
     """Format frequency ticks: 100, 200, 1k, 2k, 10k, 20k."""
     if x >= 1000:
         if x % 1000 == 0:
-            return f'{int(x / 1000)}k'
-        return f'{x / 1000:.1f}k'
-    return f'{int(x)}'
+            return f"{int(x / 1000)}k"
+        return f"{x / 1000:.1f}k"
+    return f"{int(x)}"
