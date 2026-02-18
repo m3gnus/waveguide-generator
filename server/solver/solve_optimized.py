@@ -58,7 +58,9 @@ class CachedOperators:
         if self.grid is not grid or self.space_p is None:
             self.grid = grid
             self.space_p = bempp_api.function_space(grid, "P", 1)
-            # segments=[2] is the canonical source-tag space contract.
+            # DP0 velocity restricted to tag=2 (throat disc) only.
+            # segments=[2] → rigid walls (tag=1) and outer surfaces (tag=3) have no
+            # velocity DOFs → implicit zero Neumann BC → only throat radiates.
             self.space_u = bempp_api.function_space(grid, "DP", 0, segments=[2])
             self.identity = bempp_api.operators.boundary.sparse.identity(
                 self.space_p, self.space_p, self.space_p

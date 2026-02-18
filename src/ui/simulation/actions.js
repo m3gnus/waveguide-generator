@@ -219,7 +219,8 @@ export async function runSimulation(panel) {
     frequencyEnd: Number(document.getElementById('freq-end').value),
     numFrequencies: Number(document.getElementById('freq-steps').value),
     simulationType: document.getElementById('sim-type').value,
-    circSymProfile: parseInt(document.getElementById('circsym-profile')?.value ?? '-1', 10)
+    circSymProfile: parseInt(document.getElementById('circsym-profile')?.value ?? '-1', 10),
+    frequencySpacing: 'log'
   };
 
   // Get polar directivity configuration
@@ -230,9 +231,9 @@ export async function runSimulation(panel) {
 
   config.polarConfig = {
     angle_range: [angleStart, angleEnd, angleCount],
-    norm_angle: parseFloat(document.getElementById('polar-norm-angle').value),
-    distance: parseFloat(document.getElementById('polar-distance').value),
-    inclination: parseFloat(document.getElementById('polar-inclination').value)
+    norm_angle: parseFloat(document.getElementById('polar-norm-angle').value) || 5.0,
+    distance: parseFloat(document.getElementById('polar-distance').value) || 2.0,
+    inclination: parseFloat(document.getElementById('polar-inclination').value) || 35.0
   };
 
   // Validate settings

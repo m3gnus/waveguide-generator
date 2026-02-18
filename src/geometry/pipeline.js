@@ -2,12 +2,12 @@ import { buildWaveguideMesh } from './engine/index.js';
 import {
   SURFACE_TAGS,
   parseInterfaceOffset,
-  shouldForceRearClosure,
   normalizeBuildParams,
   buildSurfaceTags,
   countTags,
   buildBoundaryConditions
 } from './tags.js';
+import { assertBemMeshIntegrity } from './meshIntegrity.js';
 import { mapVertexToAth, transformVerticesToAth } from './transforms.js';
 import { prepareGeometryParams } from './params.js';
 
@@ -73,7 +73,11 @@ function removeSplitPlaneTriangles(vertices, indices, surfaceTags, quadrants) {
   };
 }
 
-function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced = false } = {}) {
+function buildSimulationPayloadFromMesh(
+  meshData,
+  buildParams,
+  { validateIntegrity = true } = {}
+) {
   const hasEnclosure = Boolean(meshData.groups?.enclosure);
   const interfaceOffset = parseInterfaceOffset(buildParams.interfaceOffset);
   const interfaceEnabled = hasEnclosure && interfaceOffset > 0;
@@ -89,6 +93,14 @@ function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForc
 
   if (filtered.surfaceTags.length !== filtered.indices.length / 3) {
     throw new Error('Mesh payload generation failed: filtered surface tag count mismatch.');
+  }
+
+  if (validateIntegrity) {
+    const requireClosed = Boolean(meshData.fullCircle && (meshData.groups?.freestandingWall || meshData.groups?.enclosure));
+    assertBemMeshIntegrity(vertices, filtered.indices, {
+      requireClosed,
+      requireSingleComponent: true
+    });
   }
 
   const tagCounts = countTags(filtered.surfaceTags);
@@ -112,7 +124,6 @@ function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForc
       units: 'mm',
       unitScaleToMeter: 0.001,
       verticalOffset: Number(buildParams.verticalOffset || 0),
-      rearClosureForced,
       splitPlaneTrianglesRemoved: filtered.removedTriangles
     }
   };
@@ -120,18 +131,20 @@ function buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForc
 
 export function buildCanonicalMeshPayload(params, options = {}) {
   const preparedParams = prepareGeometryParams(params, { type: params?.type });
-  const rearClosureForced = shouldForceRearClosure(preparedParams, options);
   const buildParams = normalizeBuildParams(preparedParams, options);
   const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
-  return buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced });
+  return buildSimulationPayloadFromMesh(meshData, buildParams, {
+    validateIntegrity: true
+  });
 }
 
 export function buildGeometryArtifacts(params, options = {}) {
   const preparedParams = prepareGeometryParams(params, { type: params?.type });
-  const rearClosureForced = shouldForceRearClosure(preparedParams, options);
   const buildParams = normalizeBuildParams(preparedParams, options);
   const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
-  const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, { rearClosureForced });
+  const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, {
+    validateIntegrity: options.validateIntegrity === true
+  });
 
   return {
     mesh: {

@@ -55,7 +55,9 @@ def solve_frequency(
     boundary_interface = boundary_interface or boundary_device_interface()
     potential_interface = potential_interface or potential_device_interface()
 
-    # P1 pressure and source-only DP0 velocity (segments=[2] contract)
+    # P1 pressure everywhere; DP0 velocity restricted to tag=2 (throat disc) only.
+    # segments=[2] means rigid walls (tag=1) and outer surfaces (tag=3) have no
+    # velocity DOFs → implicit zero Neumann BC → only throat radiates.
     space_p = bempp_api.function_space(grid, "P", 1)
     space_u = bempp_api.function_space(grid, "DP", 0, segments=[2])
 

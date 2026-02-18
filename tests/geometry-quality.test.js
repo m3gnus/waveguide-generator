@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams, buildGeometryArtifacts } from '../src/geometry/index.js';
+import { analyzeBemMeshIntegrity } from '../src/geometry/meshIntegrity.js';
 import { validateMeshQuality } from '../src/geometry/quality.js';
 
 function makePreparedParams(overrides = {}) {
@@ -48,7 +49,7 @@ test('freestanding wall thickness adds shell and rear disc behind throat', () =>
 
   const innerVertexCount = (Number(thickParams.lengthSegments) + 1) * thick.ringCount;
   const outerStart = innerVertexCount;
-  for (let idx = 0; idx < innerVertexCount; idx += 1) {
+  for (let idx = thick.ringCount; idx < innerVertexCount; idx += 1) {
     const ix = thick.vertices[idx * 3];
     const iy = thick.vertices[idx * 3 + 1];
     const iz = thick.vertices[idx * 3 + 2];
@@ -61,15 +62,22 @@ test('freestanding wall thickness adds shell and rear disc behind throat', () =>
 
   const throatY = thick.vertices[1];
   const targetRearY = throatY - 8;
-  let foundRear = false;
-  for (let i = 1; i < thick.vertices.length; i += 3) {
-    if (Math.abs(thick.vertices[i] - targetRearY) < 1e-6) {
-      foundRear = true;
-      break;
-    }
+  for (let i = 0; i < thick.ringCount; i += 1) {
+    const rearRingY = thick.vertices[(outerStart + i) * 3 + 1];
+    assert.ok(Math.abs(rearRingY - targetRearY) < 1e-6);
   }
+  const rearCenterIdx = outerStart + innerVertexCount;
+  assert.ok(Math.abs(thick.vertices[rearCenterIdx * 3 + 1] - targetRearY) < 1e-6);
 
-  assert.equal(foundRear, true, 'rear disc vertices should exist at throatY - wallThickness');
+  const integrity = analyzeBemMeshIntegrity(thick.vertices, thick.indices, {
+    requireClosed: true,
+    requireSingleComponent: true
+  });
+  assert.equal(integrity.boundaryEdges, 0);
+  assert.equal(integrity.nonManifoldEdges, 0);
+  assert.equal(integrity.sameDirectionSharedEdges, 0);
+  assert.equal(integrity.duplicateTrianglesByIndex, 0);
+  assert.equal(integrity.duplicateTrianglesByGeometry, 0);
 });
 
 test('wall thickness is ignored when enclosure depth is enabled', () => {

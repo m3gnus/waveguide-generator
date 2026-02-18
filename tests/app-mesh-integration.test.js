@@ -58,3 +58,27 @@ test('app mesh provider emits canonical payload from shared geometry artifacts p
     AppEvents.emit = originalEmit;
   }
 });
+
+test('app mesh provider emits explicit simulation:mesh-error on generation failure', () => {
+  const emitted = [];
+  const originalEmit = AppEvents.emit;
+  AppEvents.emit = (event, data) => {
+    emitted.push({ event, data });
+  };
+
+  try {
+    const app = {
+      prepareParamsForMesh: () => {
+        throw new Error('intentional mesh setup failure');
+      }
+    };
+
+    provideMeshForSimulation(app);
+
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].event, 'simulation:mesh-error');
+    assert.match(emitted[0].data.message, /intentional mesh setup failure/);
+  } finally {
+    AppEvents.emit = originalEmit;
+  }
+});
