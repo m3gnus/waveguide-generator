@@ -1,17 +1,35 @@
 import { AppEvents } from '../../events.js';
 
 let pendingMeshResolve = null;
+let pendingMeshReject = null;
 
 export function setupMeshListener(panel) {
   AppEvents.on('simulation:mesh-ready', (meshData) => {
     if (pendingMeshResolve) {
       pendingMeshResolve(meshData);
       pendingMeshResolve = null;
+      pendingMeshReject = null;
       return;
     }
     if (panel.pendingMeshResolve) {
       panel.pendingMeshResolve(meshData);
       panel.pendingMeshResolve = null;
+      panel.pendingMeshReject = null;
+    }
+  });
+
+  AppEvents.on('simulation:mesh-error', (errorData) => {
+    const message = errorData?.message || 'Simulation mesh generation failed.';
+    if (pendingMeshReject) {
+      pendingMeshReject(new Error(message));
+      pendingMeshResolve = null;
+      pendingMeshReject = null;
+      return;
+    }
+    if (panel.pendingMeshReject) {
+      panel.pendingMeshReject(new Error(message));
+      panel.pendingMeshResolve = null;
+      panel.pendingMeshReject = null;
     }
   });
 }
@@ -20,7 +38,9 @@ export function prepareMeshForSimulation(panel) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingMeshResolve = null;
+      pendingMeshReject = null;
       panel.pendingMeshResolve = null;
+      panel.pendingMeshReject = null;
       reject(new Error('Timeout waiting for mesh data'));
     }, 10000);
 
@@ -44,6 +64,12 @@ export function prepareMeshForSimulation(panel) {
       }
       resolve(meshData);
     };
+    pendingMeshReject = (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    };
+    panel.pendingMeshResolve = pendingMeshResolve;
+    panel.pendingMeshReject = pendingMeshReject;
 
     AppEvents.emit('simulation:mesh-requested');
   });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { buildCanonicalMeshPayload, SURFACE_TAGS } from '../src/simulation/payload.js';
+import { assertBemMeshIntegrity } from '../src/geometry/meshIntegrity.js';
 
 function quietBuild(params, options = {}) {
   const originalWarn = console.warn;
@@ -52,6 +53,10 @@ test('canonical mesh payload includes surface tags and source coverage', () => {
   assert.ok(payload.surfaceTags.includes(SURFACE_TAGS.SOURCE));
   assert.ok(payload.metadata.tagCounts[SURFACE_TAGS.SOURCE] > 0);
   assert.equal(payload.format, 'msh');
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(payload.metadata, 'rearClosureForced'),
+    false
+  );
 });
 
 test('interface mode emits secondary and interface tags', () => {
@@ -80,20 +85,21 @@ test('enclosure without interface keeps enclosure surfaces as wall tags', () => 
   assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.INTERFACE], 0);
 });
 
-test('freestanding export does not force rear closure', () => {
-  const params = makeBaseParams({
-    encDepth: 0,
-    wallThickness: 8
-  });
-  const payload = quietBuild(params, { includeEnclosure: false });
-  assert.equal(payload.metadata.rearClosureForced, false);
-});
+test('integrity failures report explicit aggregated messages', () => {
+  const vertices = [
+    0, 0, 0,
+    1, 0, 0,
+    0, 1, 0,
+    0, 0, 1
+  ];
+  const indices = [
+    0, 1, 2,
+    0, 1, 2,
+    0, 1, 3
+  ];
 
-test('enclosure mode does not force rear closure', () => {
-  const params = makeBaseParams({
-    encDepth: 220,
-    wallThickness: 8
-  });
-  const payload = quietBuild(params, { includeEnclosure: true });
-  assert.equal(payload.metadata.rearClosureForced, false);
+  assert.throws(
+    () => assertBemMeshIntegrity(vertices, indices, { requireClosed: true, requireSingleComponent: true }),
+    /BEM mesh integrity validation failed:/
+  );
 });

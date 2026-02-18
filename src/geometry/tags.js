@@ -15,10 +15,6 @@ export function parseInterfaceOffset(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-export function shouldForceRearClosure(params, options = {}) {
-  return false;
-}
-
 export function normalizeBuildParams(params, options = {}) {
   return { ...params };
 }

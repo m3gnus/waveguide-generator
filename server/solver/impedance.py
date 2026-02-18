@@ -38,12 +38,13 @@ def _pressure_on_throat_elements(grid, pressure_solution, throat_elements):
 
 def calculate_throat_impedance(grid, pressure_solution, throat_elements):
     """
-    Calculate throat impedance from BEM surface pressure solution.
+    Specific acoustic radiation impedance: Z_s = <p> / u_n [Pa·s/m]
 
-    Integrates complex pressure over throat surface triangles using
-    area weighting.  Z = F / (u * S_throat).  Since source velocity
-    u = 1 m/s, the total force *is* the impedance times the total
-    throat area.
+    Area-weighted average pressure over throat divided by source velocity
+    (u_n = 1 m/s). Equivalent to (∫p dA) / (u * S_throat).
+
+    At low frequency (ka << 1): Re(Z_s) ≈ 0 (reactive mass-loading).
+    At high frequency (ka >> 1): Re(Z_s) / (ρc) → 1 (full radiation resistance).
 
     Args:
         grid: bempp grid with .vertices (3, N), .elements (3, M), .volumes (M,)
@@ -51,7 +52,7 @@ def calculate_throat_impedance(grid, pressure_solution, throat_elements):
         throat_elements: Array of triangle indices belonging to throat (tag 2)
 
     Returns:
-        complex: Impedance as complex(Re(force), -Im(force))
+        complex: Specific acoustic impedance Z_s [Pa·s/m]
     """
     if throat_elements is None or len(throat_elements) == 0:
         return complex(0.0, 0.0)
@@ -59,8 +60,12 @@ def calculate_throat_impedance(grid, pressure_solution, throat_elements):
     areas = grid.volumes           # (num_triangles,)
     p_avg = _pressure_on_throat_elements(grid, pressure_solution, throat_elements)
 
-    # Area-weighted force integral
     throat_areas = areas[throat_elements]                   # (num_throat_tris,)
-    total_force = np.sum(p_avg * throat_areas) * 10
+    S_throat = np.sum(throat_areas)
+    if S_throat == 0:
+        return complex(0.0, 0.0)
 
-    return complex(np.real(total_force), -np.imag(total_force))
+    total_force = np.sum(p_avg * throat_areas)              # F = ∫p dA [Pa·m² = N]
+    Z_specific = total_force / S_throat                     # Z_s = F / (u·S) [Pa·s/m]
+
+    return complex(np.real(Z_specific), np.imag(Z_specific))
