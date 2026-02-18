@@ -1,10 +1,5 @@
 import validationManager from '../../validation/index.js';
 import { applySmoothing } from '../../results/smoothing.js';
-import {
-  renderFrequencyResponseChart,
-  renderDirectivityIndexChart,
-  renderImpedanceChart,
-} from './charts.js';
 
 export function displayResults(panel, results = null) {
   const resultsContainer = document.getElementById('results-container');
@@ -49,17 +44,18 @@ export function displayResults(panel, results = null) {
                 </div>
             `;
   } else {
-    // Display real BEM results
+    // Display real BEM results with Matplotlib-rendered charts
     chartsDiv.innerHTML = renderBemResults(panel, results);
 
-    // Fetch server-rendered Matplotlib directivity plot (async, replaces SVG fallback).
-    // Must run AFTER innerHTML assignment so #directivity-plot-container exists in the DOM.
+    // Fetch all charts from Matplotlib backend (async)
+    // Must run AFTER innerHTML assignment so containers exist in the DOM.
     const splData = results.spl_on_axis || {};
     const freqs = results.frequencies || splData.frequencies || [];
     const directivity = results.directivity || {};
     const refSelect = document.getElementById('directivity-ref-level');
     const refLevel = refSelect ? parseFloat(refSelect.value) : -6;
     _fetchDirectivityPlot(freqs, directivity, refLevel);
+    _fetchInlineCharts(panel, results);
 
     // Re-render when reference level changes
     if (refSelect) {
@@ -98,52 +94,9 @@ export function renderBemResults(panel, results) {
       </div>`;
   }
 
-  const splData = results.spl_on_axis || {};
-  const frequencies = splData.frequencies || [];
-  let splValues = splData.spl || [];
-  const diData = results.di || {};
-
-  // Apply smoothing to SPL data
-  if (panel.currentSmoothing !== 'none') {
-    splValues = applySmoothing(frequencies, splValues, panel.currentSmoothing);
-  }
-
-  // Generate frequency response chart
-  const freqChart = renderFrequencyResponseChart(frequencies, splValues);
-
-  // Apply smoothing to directivity index
-  let diValues = diData.di || [];
-  const diFrequencies = diData.frequencies || frequencies;
-  if (panel.currentSmoothing !== 'none') {
-    diValues = applySmoothing(diFrequencies, diValues, panel.currentSmoothing);
-  }
-
-  // Generate directivity index chart
-  const diChart = renderDirectivityIndexChart(diFrequencies, diValues);
-
-  // Apply smoothing to impedance data
-  const impedanceData = results.impedance || {};
-  const impedanceFrequencies = impedanceData.frequencies || frequencies;
-  let impedanceReal = impedanceData.real || [];
-  let impedanceImag = impedanceData.imaginary || [];
-
-  if (panel.currentSmoothing !== 'none') {
-    impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
-    impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
-  }
-
-  // Generate impedance chart
-  const impedanceChart = renderImpedanceChart(impedanceFrequencies, impedanceReal, impedanceImag);
-
-  // NOTE: _fetchDirectivityPlot is called from displayResults() after DOM insertion
-  // (the container #directivity-plot-container doesn't exist until innerHTML is assigned)
-
   // Run validation on results
   const validationReport = validationManager.runFullValidation(results);
   const validationHtml = renderValidationReport(validationReport);
-
-  // Render backend metadata (removed per user request)
-  const metadataHtml = '';
 
   // Smoothing indicator
   const smoothingLabel =
@@ -151,20 +104,10 @@ export function renderBemResults(panel, results) {
       ? ` <span style="color: #4CAF50; font-size: 0.85rem;">[${panel.currentSmoothing} smoothed]</span>`
       : '';
 
+  const loadingPlaceholder = '<div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">Rendering...</div>';
+
   return `
             ${failureBanner}
-            <div class="chart-container">
-                <div class="chart-title">Frequency Response (BEM)${smoothingLabel}</div>
-                ${freqChart}
-            </div>
-            <div class="chart-container">
-                <div class="chart-title">Directivity Index (BEM)${smoothingLabel}</div>
-                ${diChart}
-            </div>
-            <div class="chart-container">
-                <div class="chart-title">Acoustic Impedance (BEM)${smoothingLabel}</div>
-                ${impedanceChart}
-            </div>
             <div class="chart-container" style="width: 100%;">
                 <div class="chart-title" style="display: flex; align-items: center; gap: 12px;">
                     Polar Directivity Map (ABEC.Polars)
@@ -179,12 +122,21 @@ export function renderBemResults(panel, results) {
                     </span>
                 </div>
                 <div id="directivity-plot-container">
-                    <div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">
-                        Rendering directivity plot...
-                    </div>
+                    ${loadingPlaceholder}
                 </div>
             </div>
-            ${metadataHtml}
+            <div class="chart-container">
+                <div class="chart-title">Acoustic Impedance (BEM)${smoothingLabel}</div>
+                <div id="inline-chart-impedance">${loadingPlaceholder}</div>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">Directivity Index (BEM)${smoothingLabel}</div>
+                <div id="inline-chart-directivity_index">${loadingPlaceholder}</div>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">Frequency Response (BEM)${smoothingLabel}</div>
+                <div id="inline-chart-frequency_response">${loadingPlaceholder}</div>
+            </div>
             ${validationHtml}
         `;
 }
@@ -375,6 +327,88 @@ function _setPlotMessage(container, msg) {
   container.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">${msg}</div>`;
 }
 
+function _matplotlibRequiredHtml() {
+  return `<div style="text-align: center; padding: 32px; color: var(--text-color);">
+    <div style="font-weight: 600; margin-bottom: 8px;">Matplotlib is required for chart rendering</div>
+    <div style="opacity: 0.8; font-size: 0.8rem;">Install it with: <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">pip install matplotlib</code></div>
+    <div style="opacity: 0.6; font-size: 0.75rem; margin-top: 6px;">Then restart the backend server.</div>
+  </div>`;
+}
+
+async function _fetchInlineCharts(panel, results) {
+  const splData = results.spl_on_axis || {};
+  const frequencies = splData.frequencies || [];
+  let spl = splData.spl || [];
+  const diData = results.di || {};
+  let di = diData.di || [];
+  const diFrequencies = diData.frequencies || frequencies;
+  const impedanceData = results.impedance || {};
+  const impedanceFrequencies = impedanceData.frequencies || frequencies;
+  let impedanceReal = impedanceData.real || [];
+  let impedanceImag = impedanceData.imaginary || [];
+  const directivity = results.directivity || {};
+
+  if (panel.currentSmoothing !== 'none') {
+    spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
+    di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
+    impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
+    impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
+  }
+
+  const payload = {
+    frequencies,
+    spl,
+    di,
+    di_frequencies: diFrequencies,
+    impedance_frequencies: impedanceFrequencies,
+    impedance_real: impedanceReal,
+    impedance_imaginary: impedanceImag,
+    directivity,
+  };
+
+  const containerIds = {
+    frequency_response: 'inline-chart-frequency_response',
+    directivity_index: 'inline-chart-directivity_index',
+    impedance: 'inline-chart-impedance',
+  };
+
+  try {
+    const response = await fetch('http://localhost:8000/api/render-charts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      for (const id of Object.values(containerIds)) {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = _matplotlibRequiredHtml();
+      }
+      return;
+    }
+
+    const data = await response.json();
+    const charts = data.charts || {};
+
+    for (const [key, containerId] of Object.entries(containerIds)) {
+      const el = document.getElementById(containerId);
+      if (!el) continue;
+      const imgData = charts[key];
+      if (imgData) {
+        el.innerHTML = `<img src="${imgData}" alt="${key}" style="width: 100%; border-radius: 4px;" />`;
+      } else {
+        el.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">No data available</div>';
+      }
+    }
+  } catch (err) {
+    console.warn('[inline-charts] Fetch failed:', err.message);
+    for (const id of Object.values(containerIds)) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = _matplotlibRequiredHtml();
+    }
+  }
+}
+
 async function _fetchDirectivityPlot(frequencies, directivity, referenceLevel = -6) {
   const container = document.getElementById('directivity-plot-container');
   if (!container) {
@@ -412,6 +446,10 @@ async function _fetchDirectivityPlot(frequencies, directivity, referenceLevel = 
     }
   } catch (err) {
     console.warn('[directivity-plot] Fetch failed (server unavailable):', err.message);
-    _setPlotMessage(container, 'Directivity plot unavailable (backend not running).');
+    container.innerHTML = `<div style="text-align: center; padding: 32px; color: var(--text-color);">
+      <div style="font-weight: 600; margin-bottom: 8px;">Matplotlib is required for directivity rendering</div>
+      <div style="opacity: 0.8; font-size: 0.8rem;">Install it with: <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">pip install matplotlib</code></div>
+      <div style="opacity: 0.6; font-size: 0.75rem; margin-top: 6px;">Then restart the backend server.</div>
+    </div>`;
   }
 }

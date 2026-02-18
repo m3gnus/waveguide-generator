@@ -3,6 +3,7 @@ import { STLExporter } from '../../node_modules/three/examples/jsm/exporters/STL
 import {
   buildGmshGeo,
   exportProfilesCSV,
+  exportSlicesCSV,
   exportFullGeo,
   generateMWGConfigContent,
   generateAbecProjectFile,
@@ -272,12 +273,18 @@ export function exportProfileCSV(app) {
 
   const vertices = app.hornMesh.geometry.attributes.position.array;
   const state = GlobalState.get();
-  const csv = exportProfilesCSV(vertices, state.params);
-
   const baseName = getExportBaseName();
-  saveFile(csv, `${baseName}.csv`, {
+
+  const profilesCsv = exportProfilesCSV(vertices, state.params);
+  saveFile(profilesCsv, `${baseName}_profiles.csv`, {
     contentType: 'text/csv',
-    typeInfo: { description: 'Profile Coordinates', accept: { 'text/csv': ['.csv'] } }
+    typeInfo: { description: 'Angular Profiles', accept: { 'text/csv': ['.csv'] } }
+  });
+
+  const slicesCsv = exportSlicesCSV(vertices, state.params);
+  saveFile(slicesCsv, `${baseName}_slices.csv`, {
+    contentType: 'text/csv',
+    typeInfo: { description: 'Length Slices', accept: { 'text/csv': ['.csv'] } }
   });
 }
 

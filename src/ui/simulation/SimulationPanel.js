@@ -17,14 +17,8 @@ import { checkSolverConnection } from './connection.js';
 import { runSimulation, pollSimulationStatus, runMockSimulation } from './actions.js';
 import { displayResults, renderBemResults, renderValidationReport } from './results.js';
 import {
-  renderFrequencyResponseChart,
-  renderDirectivityIndexChart,
-  renderImpedanceChart,
-  renderPolarDirectivityHeatmap
-} from './charts.js';
-import {
   exportResults,
-  exportAsImage,
+  exportAsMatplotlibPNG,
   exportAsCSV,
   exportAsJSON,
   exportAsText
@@ -116,22 +110,6 @@ export class SimulationPanel {
     return renderValidationReport(report);
   }
 
-  renderFrequencyResponseChart(frequencies, splValues) {
-    return renderFrequencyResponseChart(frequencies, splValues);
-  }
-
-  renderDirectivityIndexChart(frequencies, diValues) {
-    return renderDirectivityIndexChart(frequencies, diValues);
-  }
-
-  renderImpedanceChart(frequencies, realValues, imagValues) {
-    return renderImpedanceChart(frequencies, realValues, imagValues);
-  }
-
-  renderPolarDirectivityHeatmap(frequencies, directivityData) {
-    return renderPolarDirectivityHeatmap(frequencies, directivityData);
-  }
-
   openViewResults() {
     return openViewResultsModal(this);
   }
@@ -140,8 +118,8 @@ export class SimulationPanel {
     return exportResults(this);
   }
 
-  exportAsImage() {
-    return exportAsImage();
+  exportAsMatplotlibPNG() {
+    return exportAsMatplotlibPNG(this);
   }
 
   exportAsCSV() {
