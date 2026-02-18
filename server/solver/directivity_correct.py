@@ -13,6 +13,7 @@ All observation points are batched into single operator calls for performance.
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from .deps import bempp_api
+from .device_interface import is_opencl_buffer_error, potential_device_interface
 
 
 def evaluate_far_field_sphere(
@@ -26,7 +27,8 @@ def evaluate_far_field_sphere(
     rho: float,
     radius_m: float = 2.0,
     theta_range: Tuple[float, float, int] = (0, 180, 37),
-    phi_angles: Optional[List[float]] = None
+    phi_angles: Optional[List[float]] = None,
+    device_interface: Optional[str] = None,
 ) -> Dict[str, np.ndarray]:
     """
     Evaluate pressure field on spherical surface at multiple angles.
@@ -61,6 +63,7 @@ def evaluate_far_field_sphere(
 
     # Generate theta angles
     theta_start, theta_end, theta_points = theta_range
+    theta_points = max(2, int(theta_points))
     theta_deg = np.linspace(theta_start, theta_end, theta_points)
     theta_rad = np.deg2rad(theta_deg)
 
@@ -97,24 +100,44 @@ def evaluate_far_field_sphere(
     # Reference pressure for SPL calculation
     p_ref = 20e-6  # 20 µPa standard reference pressure
 
-    try:
-        # TWO operator constructions for ALL points (instead of 2*N)
-        dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
-            space_p, obs_array, k
-        )
-        slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
-            space_u, obs_array, k
-        )
+    selected_interface = str(device_interface or potential_device_interface()).strip().lower()
+    if selected_interface == "opencl":
+        interface_order = ["opencl", "numba"]
+    elif selected_interface == "numba":
+        interface_order = ["numba"]
+    else:
+        interface_order = [selected_interface, "numba"]
 
-        # Evaluate far-field pressure at all points at once
-        # P(x) = D*p_total - i*omega*rho_0*S*u_total
-        pressure_flat = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
-        # pressure_flat shape: (1, n_total) — reshape to (n_phi, n_theta)
-        pressures = pressure_flat[0, :].reshape(n_phi, n_theta)
+    pressures = None
+    last_error = None
+    for interface_name in interface_order:
+        try:
+            # TWO operator constructions for ALL points (instead of 2*N)
+            dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
+                space_p, obs_array, k, device_interface=interface_name
+            )
+            slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
+                space_u, obs_array, k, device_interface=interface_name
+            )
 
-    except Exception as e:
-        print(f"[Directivity] Warning: Batched evaluation failed: {e}")
-        pressures = np.zeros((n_phi, n_theta), dtype=complex)
+            # Evaluate far-field pressure at all points at once
+            # P(x) = D*p_total - i*omega*rho_0*S*u_total
+            pressure_flat = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
+            # pressure_flat shape: (1, n_total) — reshape to (n_phi, n_theta)
+            pressures = pressure_flat[0, :].reshape(n_phi, n_theta)
+            break
+        except Exception as exc:
+            last_error = exc
+            if interface_name == "opencl" and is_opencl_buffer_error(exc):
+                print("[Directivity] OpenCL potential operator failed; retrying with numba.")
+                continue
+            if interface_name == "opencl":
+                print("[Directivity] OpenCL directivity evaluation failed; retrying with numba.")
+                continue
+            break
+
+    if pressures is None:
+        raise RuntimeError(f"Batched far-field evaluation failed: {last_error}")
 
     # Calculate SPL
     p_amplitude = np.abs(pressures)
@@ -221,11 +244,11 @@ def calculate_directivity_patterns_correct(
 
         except Exception as e:
             print(f"[Directivity] Error computing directivity at {freq:.0f} Hz: {e}")
-            # Fallback: create flat response
+            # Preserve shape for this frequency but mark values missing.
             angles = np.linspace(angle_start, angle_end, angle_points)
-            horizontal = [[float(a), 0.0] for a in angles]
-            vertical = [[float(a), 0.0] for a in angles]
-            diagonal = [[float(a), 0.0] for a in angles]
+            horizontal = [[float(a), None] for a in angles]
+            vertical = [[float(a), None] for a in angles]
+            diagonal = [[float(a), None] for a in angles]
 
         patterns["horizontal"].append(horizontal)
         patterns["vertical"].append(vertical)
@@ -250,11 +273,22 @@ def normalize_polar(
     Returns:
         Normalized SPL (0 dB at norm_angle)
     """
-    # Find closest angle to norm_angle
-    idx = np.argmin(np.abs(theta - norm_angle))
-    reference_spl = spl[idx]
+    if spl.size == 0 or theta.size == 0:
+        return spl
 
-    # Normalize
+    finite_mask = np.isfinite(spl) & np.isfinite(theta)
+    if not np.any(finite_mask):
+        return spl
+
+    valid_theta = theta[finite_mask]
+    valid_spl = spl[finite_mask]
+    order = np.argsort(valid_theta)
+    valid_theta = valid_theta[order]
+    valid_spl = valid_spl[order]
+
+    # Interpolate reference level at requested normalization angle.
+    ref_angle = float(np.clip(norm_angle, valid_theta[0], valid_theta[-1]))
+    reference_spl = float(np.interp(ref_angle, valid_theta, valid_spl))
     return spl - reference_spl
 
 
