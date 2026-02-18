@@ -23,7 +23,6 @@ function buildViewportArtifacts(rawParams) {
   });
 
   return buildGeometryArtifacts(prepared, {
-    forceRearClosure: false,
     adaptivePhi: false
   });
 }

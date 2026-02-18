@@ -249,7 +249,7 @@ class SimulationRequest(BaseModel):
     enable_symmetry: bool = True  # Enable automatic symmetry detection and reduction
     verbose: bool = True  # Print detailed progress and validation
     mesh_validation_mode: str = "warn"  # strict | warn | off
-    frequency_spacing: str = "linear"  # linear | log
+    frequency_spacing: str = "log"  # linear | log
 
 
 class JobStatus(BaseModel):
@@ -865,6 +865,9 @@ async def run_simulation(job_id: str, request: SimulationRequest):
                 raise RuntimeError("Adaptive OCC mesh returned invalid triangle index data.")
             if len(surface_tags) != len(indices) // 3:
                 raise RuntimeError("Adaptive OCC mesh returned mismatched surface tag count.")
+            # BEM solve semantics: every non-source surface is rigid wall.
+            # Keep tag 2 (source) and normalize all other tags to 1.
+            surface_tags = [2 if int(tag) == 2 else 1 for tag in surface_tags]
 
             # Store mesh artifact for optional download via /api/mesh-artifact/{job_id}
             jobs[job_id]["mesh_artifact"] = occ_result.get("msh_text")

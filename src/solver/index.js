@@ -142,7 +142,8 @@ export class BemSolver {
       sim_type: config.simulationType,
       options: options,
       polar_config: config.polarConfig || null,
-      mesh_validation_mode: config.meshValidationMode || 'warn'
+      mesh_validation_mode: config.meshValidationMode || 'warn',
+      frequency_spacing: config.frequencySpacing || 'log'
     };
 
     const response = await fetch(`${this.backendUrl}/api/solve`, {

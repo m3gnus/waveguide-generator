@@ -681,7 +681,16 @@ def _compute_outer_points(
     wall_thickness: float,
     phi_values: np.ndarray,
 ) -> np.ndarray:
-    """Offset inner surface by wall_thickness in the 2D profile plane per slice."""
+    """Offset inner surface by wall_thickness in the 2D profile plane per slice.
+
+    Throat row (j=0): offset is purely radial (XY only), axial z unchanged.
+    This matches the JS fix in freestandingWall.js: the outer throat ring sits
+    exactly one wall_thickness radially outward from the inner throat ring at the
+    same z.  The axial step to z_rear is a separate surface in _build_rear_disc_assembly,
+    keeping the outer BSpline surface well-conditioned (no steep throat kink).
+
+    All other rows: normal offset in the full 2D profile plane (axial + radial).
+    """
     outer_points = np.zeros_like(inner_points)
     for i, phi in enumerate(phi_values):
         cos_phi = math.cos(phi)
@@ -694,15 +703,32 @@ def _compute_outer_points(
         norms = np.maximum(np.sqrt(normals_x ** 2 + normals_y ** 2), 1e-12)
         normals_x /= norms
         normals_y /= norms
-        for j in range(len(x_axial)):
-            if normals_y[j] < 0:
-                normals_x[j] = -normals_x[j]
-                normals_y[j] = -normals_y[j]
+        # Single per-slice sign: majority vote of normals_y against the radial
+        # outward direction (+y in the 2D profile plane). Mirrors JS
+        # resolveOffsetSign() in freestandingWall.js. Per-point flipping
+        # causes inconsistent offset directions at the mouth edge due to
+        # np.gradient() endpoint artefacts.
+        offset_sign = 1.0 if np.sum(normals_y) >= 0.0 else -1.0
+        normals_x *= offset_sign
+        normals_y *= offset_sign
         x_outer = x_axial + wall_thickness * normals_x
         y_outer = y_radial + wall_thickness * normals_y
         outer_points[i, :, 0] = y_outer * cos_phi
         outer_points[i, :, 1] = y_outer * sin_phi
         outer_points[i, :, 2] = x_outer
+
+        # Throat row (j=0): snap to purely radial offset, same axial z as inner throat.
+        # The JS throat row uses only the XZ (radial) component of the surface normal
+        # so the outer throat ring is exactly one wall_thickness radially outward from
+        # the inner throat ring.  The axial step back to z_rear is a separate surface
+        # (built in _build_rear_disc_assembly), keeping the outer BSpline well-conditioned.
+        z_throat_i = float(x_axial[0])
+        r_throat_i = float(y_radial[0])
+        if r_throat_i > 1e-12:
+            outer_points[i, 0, 0] = (r_throat_i + wall_thickness) * cos_phi
+            outer_points[i, 0, 1] = (r_throat_i + wall_thickness) * sin_phi
+        outer_points[i, 0, 2] = z_throat_i  # same z as inner throat, not z_rear
+
     return outer_points
 
 
@@ -796,6 +822,103 @@ def _build_throat_disc_from_ring(
     return [(2, fill)]
 
 
+def _build_throat_disc_from_inner_boundary(
+    inner_dimtags: List[Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    """Build throat disc from the inner-surface throat boundary curves.
+
+    This keeps the source disc topologically attached to the inner wall by
+    reusing the same OCC boundary curves instead of creating an independent
+    wire from control points.
+    """
+    if not inner_dimtags:
+        return []
+
+    boundary = gmsh.model.getBoundary(inner_dimtags, oriented=False, combined=False)
+    curve_tags: List[int] = []
+    seen: Set[int] = set()
+    for dim, tag in boundary:
+        if int(dim) != 1:
+            continue
+        ctag = int(tag)
+        if ctag in seen:
+            continue
+        seen.add(ctag)
+        curve_tags.append(ctag)
+
+    if not curve_tags:
+        return []
+
+    z_bounds: Dict[int, Tuple[float, float]] = {}
+    z_min = float("inf")
+    z_max = float("-inf")
+    for ctag in curve_tags:
+        _, _, z0, _, _, z1 = gmsh.model.getBoundingBox(1, ctag)
+        lo = float(min(z0, z1))
+        hi = float(max(z0, z1))
+        z_bounds[ctag] = (lo, hi)
+        z_min = min(z_min, lo)
+        z_max = max(z_max, hi)
+
+    if not math.isfinite(z_min):
+        return []
+
+    eps = max(1e-6, abs(z_max - z_min) * 1e-3)
+    throat_curves = [
+        ctag
+        for ctag in curve_tags
+        if abs(z_bounds[ctag][0] - z_min) <= eps and abs(z_bounds[ctag][1] - z_min) <= eps
+    ]
+    if not throat_curves:
+        return []
+
+    try:
+        loop = gmsh.model.occ.addCurveLoop(throat_curves, reorient=True)
+    except TypeError:
+        loop = gmsh.model.occ.addCurveLoop(throat_curves)
+    fill = gmsh.model.occ.addSurfaceFilling(loop)
+    return [(2, fill)]
+
+
+def _boundary_curves_at_z_extreme(
+    dimtags: List[Tuple[int, int]], want_min_z: bool
+) -> List[int]:
+    """Return boundary curve tags lying at the min or max z-extent of dimtags.
+
+    Requires a prior synchronize() so getBoundary and getBoundingBox are valid.
+    Curves shared by two surfaces (internal seam edges) are excluded — only
+    exterior boundary curves are returned (combined=True).
+
+    A curve is considered to lie at the z-extreme if its z midpoint is within
+    a tolerance of the global z-extreme.  Uses midpoint to handle BSpline surfaces
+    whose throat/mouth boundary curves have small numerical noise (±1e-7 mm).
+    """
+    boundary = gmsh.model.getBoundary(dimtags, oriented=False, combined=True)
+    curve_tags: List[int] = [int(abs(tag)) for dim, tag in boundary if int(dim) == 1]
+    if not curve_tags:
+        return []
+
+    z_mid_map: Dict[int, float] = {}
+    z_extreme = float("inf") if want_min_z else float("-inf")
+    for ctag in curve_tags:
+        _, _, z0, _, _, z1 = gmsh.model.getBoundingBox(1, ctag)
+        z_mid = 0.5 * (float(z0) + float(z1))
+        z_mid_map[ctag] = z_mid
+        if want_min_z:
+            z_extreme = min(z_extreme, z_mid)
+        else:
+            z_extreme = max(z_extreme, z_mid)
+
+    if not math.isfinite(z_extreme):
+        return []
+
+    # Use a tolerance proportional to the overall z-span of all curves.
+    z_mids = list(z_mid_map.values())
+    z_span = max(abs(max(z_mids) - min(z_mids)), 1e-6)
+    eps = 0.01 * z_span  # 1% of z-span
+    return [ctag for ctag in curve_tags if abs(z_mid_map[ctag] - z_extreme) <= eps]
+
+
 def _build_rear_wall(
     inner_points: np.ndarray, outer_points: np.ndarray, closed: bool
 ) -> List[Tuple[int, int]]:
@@ -803,6 +926,46 @@ def _build_rear_wall(
     w_inner = _make_wire(inner_points[:, 0, :], closed=closed)
     w_outer = _make_wire(outer_points[:, 0, :], closed=closed)
     return gmsh.model.occ.addThruSections([w_inner, w_outer], makeSolid=False, makeRuled=True)
+
+
+def _build_annular_surface_from_boundaries(
+    inner_dimtags: List[Tuple[int, int]],
+    outer_dimtags: List[Tuple[int, int]],
+    want_min_z: bool,
+) -> List[Tuple[int, int]]:
+    """Build a ruled annular surface using actual OCC boundary curves at min or max z.
+
+    Connects the z-extreme boundary curves of inner_dimtags to those of outer_dimtags.
+    Reuses the existing OCC curve entities so the resulting surface shares topology with
+    both surfaces without a fragment call.
+    Requires a prior synchronize() so getBoundary and getBoundingBox are valid.
+    Returns empty list if boundary curves cannot be resolved.
+    """
+    inner_curves = _boundary_curves_at_z_extreme(inner_dimtags, want_min_z=want_min_z)
+    outer_curves = _boundary_curves_at_z_extreme(outer_dimtags, want_min_z=want_min_z)
+    if not inner_curves or not outer_curves:
+        return []
+    try:
+        iw = gmsh.model.occ.addCurveLoop(inner_curves, reorient=True)
+    except TypeError:
+        iw = gmsh.model.occ.addCurveLoop(inner_curves)
+    try:
+        ow = gmsh.model.occ.addCurveLoop(outer_curves, reorient=True)
+    except TypeError:
+        ow = gmsh.model.occ.addCurveLoop(outer_curves)
+    result = gmsh.model.occ.addThruSections([iw, ow], makeSolid=False, makeRuled=True)
+    return list(result)
+
+
+def _build_mouth_rim_from_boundaries(
+    inner_dimtags: List[Tuple[int, int]],
+    outer_dimtags: List[Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    """Build mouth rim annular surface using actual OCC boundary curves at the mouth (max z).
+
+    Requires a prior synchronize().  Returns empty list if boundary curves cannot be resolved.
+    """
+    return _build_annular_surface_from_boundaries(inner_dimtags, outer_dimtags, want_min_z=False)
 
 
 def _build_mouth_rim(
@@ -813,6 +976,53 @@ def _build_mouth_rim(
     w_inner = _make_wire(inner_points[:, j_mouth, :], closed=closed)
     w_outer = _make_wire(outer_points[:, j_mouth, :], closed=closed)
     return gmsh.model.occ.addThruSections([w_inner, w_outer], makeSolid=False, makeRuled=True)
+
+
+def _build_rear_disc_assembly(
+    outer_points: np.ndarray, wall_thickness: float, closed: bool
+) -> List[Tuple[int, int]]:
+    """Build the rear closure of the outer wall shell: axial step face + flat disc.
+
+    outer_points[:, 0, :] is the outer throat ring at z_throat (same z as inner throat,
+    purely radially offset by wall_thickness).  The rear disc sits at z_rear = z_throat
+    - wall_thickness.
+
+    Two surfaces, matching JS freestandingWall.js geometry:
+      1. Ruled axial step face: outer throat ring → disc edge ring (same XY, z moved to z_rear).
+         Corresponds to the JS outer-shell row-0→row-1 strip at the throat.
+      2. Flat disc at z_rear: filled with addPlaneSurface (fast, exact for planar rings).
+         Corresponds to JS addRearThroatDisc fan.
+
+    Using addPlaneSurface instead of addSurfaceFilling avoids the slow OCC curved-surface
+    solver for what is always a flat planar region.
+    """
+    throat_ring = outer_points[:, 0, :].copy()  # (n_phi, 3) at z_throat
+    z_rear = float(np.mean(throat_ring[:, 2])) - wall_thickness
+
+    disc_ring = throat_ring.copy()
+    disc_ring[:, 2] = z_rear
+
+    # Surface 1: ruled axial step face (outer throat ring → disc ring)
+    w_front = _make_wire(throat_ring, closed=closed)
+    w_rear = _make_wire(disc_ring, closed=closed)
+    annular_dimtags = gmsh.model.occ.addThruSections(
+        [w_front, w_rear], makeSolid=False, makeRuled=True
+    )
+
+    # Surface 2: flat disc at z_rear using addPlaneSurface (fast for planar rings)
+    pt_tags = []
+    n = disc_ring.shape[0]
+    for k in range(n):
+        pt_tags.append(gmsh.model.occ.addPoint(
+            float(disc_ring[k, 0]), float(disc_ring[k, 1]), float(disc_ring[k, 2])
+        ))
+    if closed:
+        pt_tags.append(pt_tags[0])
+    spline = gmsh.model.occ.addBSpline(pt_tags)
+    cl = gmsh.model.occ.addCurveLoop([spline])
+    disc_fill = gmsh.model.occ.addPlaneSurface([cl])
+
+    return list(annular_dimtags) + [(2, disc_fill)]
 
 
 def _parse_quadrant_resolutions(value: Optional[str], fallback: float) -> List[float]:
@@ -1308,14 +1518,27 @@ def _assign_physical_groups(
 ) -> None:
     """Assign ABEC-compatible physical group names to meshed surfaces.
 
-    Tag contract:
-        SD1G0     (1) - inner horn wall
+    Tag contract (matching reference mesh convention):
+        SD1G0     (1) - all rigid wall surfaces: inner horn + outer shell +
+                        rear disc + mouth rim (everything except source disc)
         SD1D1001  (2) - throat source disc (driving element)
-        SD2G0     (3) - outer wall shell or enclosure box surfaces
+        SD2G0     (3) - enclosure box exterior surfaces only (enc_depth > 0 path)
+
+    The outer wall shell, rear disc, and mouth rim are part of SD1G0 in
+    free-standing wall mode — same as the reference ABEC/ATH mesh convention.
+    SD2G0 is only used for enclosure box exports (enc_depth > 0).
     """
-    inner_tags = surface_groups.get("inner", [])
-    if inner_tags:
-        gmsh.model.addPhysicalGroup(2, inner_tags, tag=1)
+    # All rigid wall surfaces share tag 1 (SD1G0): inner horn + outer shell +
+    # rear disc + mouth rim.  This matches the reference .msh topology where
+    # the entire connected shell is one physical group.
+    wall_tags = (
+        surface_groups.get("inner", [])
+        + surface_groups.get("outer", [])
+        + surface_groups.get("rear", [])
+        + surface_groups.get("mouth", [])
+    )
+    if wall_tags:
+        gmsh.model.addPhysicalGroup(2, wall_tags, tag=1)
         gmsh.model.setPhysicalName(2, 1, "SD1G0")
 
     disc_tags = surface_groups.get("throat_disc", [])
@@ -1323,14 +1546,9 @@ def _assign_physical_groups(
         gmsh.model.addPhysicalGroup(2, disc_tags, tag=2)
         gmsh.model.setPhysicalName(2, 2, "SD1D1001")
 
-    exterior_tags = (
-        surface_groups.get("outer", [])
-        + surface_groups.get("rear", [])
-        + surface_groups.get("mouth", [])
-        + surface_groups.get("enclosure", [])
-    )
-    if exterior_tags:
-        gmsh.model.addPhysicalGroup(2, exterior_tags, tag=3)
+    enclosure_tags = surface_groups.get("enclosure", [])
+    if enclosure_tags:
+        gmsh.model.addPhysicalGroup(2, enclosure_tags, tag=3)
         gmsh.model.setPhysicalName(2, 3, "SD2G0")
 
 
@@ -1472,21 +1690,92 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
 
             inner_dimtags = _build_surface_from_points(inner_points, closed=closed)
 
+            # Synchronize so we can query boundary curves from inner surfaces.
+            gmsh.model.occ.synchronize()
             throat_disc_dimtags = (
-                _build_throat_disc_from_ring(inner_points[:, 0, :], closed=closed) if closed else []
+                _build_throat_disc_from_inner_boundary(inner_dimtags) if closed else []
             )
+            if not throat_disc_dimtags and closed:
+                # Fallback to the legacy ring-based source disc if boundary extraction fails.
+                throat_disc_dimtags = _build_throat_disc_from_ring(inner_points[:, 0, :], closed=closed)
 
             outer_dimtags = []
             mouth_dimtags = []
+            rear_dimtags: List[Tuple[int, int]] = []
             if enc_depth == 0 and outer_points is not None:
-                # Wall shell: offset outer surface + mouth rim.
-                # Keep throat plate and rear-throat ring disconnected: no rear connector surface.
-                outer_dimtags = _build_surface_from_points(outer_points, closed=closed)
-                mouth_dimtags = _build_mouth_rim(inner_points, outer_points, closed=closed)
+                wall_thickness = float(params.get("wall_thickness", 6.0))
 
-            # Final synchronize flushes horn + throat disc + outer shell entities.
+                # Outer shell BSpline surface (two half-patches, internally fragmented).
+                outer_dimtags = _build_surface_from_points(outer_points, closed=closed)
+
+                # Synchronize so boundary curves of both inner and outer surfaces are
+                # queryable — needed to build a mouth rim that is topologically shared
+                # with both inner and outer surfaces.
+                gmsh.model.occ.synchronize()
+
+                # Build mouth rim using actual OCC boundary curves from inner + outer horn.
+                # This guarantees that the mouth rim shares the same curve entities as both
+                # surfaces, so the resulting mesh is topologically connected at the mouth.
+                mouth_dimtags = _build_mouth_rim_from_boundaries(inner_dimtags, outer_dimtags)
+                if not mouth_dimtags:
+                    # Fallback: build from control points (will rely on removeDuplicateNodes).
+                    mouth_dimtags = _build_mouth_rim(inner_points, outer_points, closed=closed)
+
+                # Rear disc assembly: axial step face + flat disc at z_rear.
+                # Mirrors JS freestandingWall.js (outer shell throat strip + addRearThroatDisc).
+                # Important: we intentionally omit any inner-throat -> outer-throat rear
+                # annular connector here. This keeps a hollow throat cavity in thickened
+                # wall mode so the source disc remains connected only to the inner horn,
+                # not directly to shell/rear-closure surfaces.
+                rear_shell_dimtags = _build_rear_disc_assembly(
+                    outer_points, wall_thickness, closed=closed
+                )
+
+                # Fragment outer shell + mouth rim + rear shell together
+                # so coincident boundary edges are merged into shared topology.
+                # inner_dimtags is excluded — its BSpline seam periodicity conflicts
+                # with re-fragmentation; source disc and inner horn remain the only
+                # surfaces sharing the throat boundary.
+                all_wall_dimtags = outer_dimtags + mouth_dimtags + rear_shell_dimtags
+                n_outer = len(outer_dimtags)
+                n_mouth = len(mouth_dimtags)
+                n_rear_shell = len(rear_shell_dimtags)
+                if len(all_wall_dimtags) > 1:
+                    frag_result, frag_map = gmsh.model.occ.fragment(all_wall_dimtags, [])
+
+                    # Rebuild per-group lists from fragment map.
+                    # frag_map[i] = output dimtags from the i-th input entity.
+                    def _collect_frag(start: int, count: int) -> List[Tuple[int, int]]:
+                        out: List[Tuple[int, int]] = []
+                        for i in range(start, start + count):
+                            if i < len(frag_map):
+                                out.extend(dt for dt in frag_map[i] if dt[0] == 2)
+                        return out
+
+                    outer_dimtags = _collect_frag(0, n_outer)
+                    mouth_dimtags = _collect_frag(n_outer, n_mouth)
+                    rear_shell_dimtags = _collect_frag(n_outer + n_mouth, n_rear_shell)
+                    rear_dimtags = rear_shell_dimtags
+                else:
+                    rear_dimtags = rear_shell_dimtags
+
+            # Final synchronize flushes all fragmented entities.
             # Safe to call after enclosure's internal synchronize — it is idempotent.
             gmsh.model.occ.synchronize()
+
+            # Orient surface normals to match ABEC/ATH reference convention:
+            #   - Inner horn: normals point INWARD (toward the horn axis / cavity).
+            #     Gmsh OCC BSpline surfaces default to outward; setReverse flips them.
+            #   - Rear disc: normals point rearward (−z direction).
+            # setReverse must be called after synchronize() and before generate().
+            if enc_depth == 0 and outer_points is not None:
+                all_model_surfaces = {tag for _, tag in gmsh.model.getEntities(2)}
+                for _, tag in inner_dimtags:
+                    if tag in all_model_surfaces:
+                        gmsh.model.mesh.setReverse(2, tag)
+                for _, tag in rear_dimtags:
+                    if tag in all_model_surfaces:
+                        gmsh.model.mesh.setReverse(2, tag)
 
             # --- Surface groups ---
             surface_groups: Dict[str, List[int]] = {
@@ -1500,8 +1789,9 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
                 surface_groups["enclosure_back"] = list(enc_data.get("back", []))
                 surface_groups["enclosure_sides"] = list(enc_data.get("sides", []))
             elif outer_points is not None:
+                # After fragment, per-group lists track their own post-fragment tags.
                 surface_groups["outer"] = [tag for dim, tag in outer_dimtags if dim == 2]
-                surface_groups["rear"] = []
+                surface_groups["rear"] = [tag for dim, tag in rear_dimtags if dim == 2]
                 surface_groups["mouth"] = [tag for dim, tag in mouth_dimtags if dim == 2]
 
             # --- Validate surface tags survived synchronize ---

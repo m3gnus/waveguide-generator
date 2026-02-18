@@ -1,4 +1,5 @@
 import { parseQuadrants } from '../common.js';
+import { orientMeshConsistently } from '../meshIntegrity.js';
 import { validateMeshQuality } from '../quality.js';
 import { DEFAULTS, MORPH_TARGETS } from './constants.js';
 import { buildAngleList, selectAnglesForQuadrants } from './mesh/angles.js';
@@ -143,6 +144,10 @@ export function buildWaveguideMesh(params, options = {}) {
   if (maxIndex >= vertexCount) {
     console.error(`[Geometry] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`);
   }
+
+  orientMeshConsistently(vertices, indices, {
+    preferOutward: quadrantInfo.fullCircle
+  });
 
   const quality = validateMeshQuality(vertices, indices, groupInfo);
   logQualityIssues(quality);
