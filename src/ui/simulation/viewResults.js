@@ -1,10 +1,4 @@
 import { applySmoothing } from '../../results/smoothing.js';
-import {
-  renderFrequencyResponseChart,
-  renderDirectivityIndexChart,
-  renderImpedanceChart,
-  renderPolarDirectivityHeatmap,
-} from './charts.js';
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -69,10 +63,10 @@ export async function openViewResultsModal(panel) {
 
   // Chart containers with loading placeholders
   const chartNames = [
-    { key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
-    { key: 'directivity_index', label: 'Directivity Index' },
-    { key: 'impedance', label: 'Acoustic Impedance' },
     { key: 'directivity_map', label: 'Polar Directivity Map' },
+    { key: 'impedance', label: 'Acoustic Impedance' },
+    { key: 'directivity_index', label: 'Directivity Index' },
+    { key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   ];
 
   for (const chart of chartNames) {
@@ -142,7 +136,7 @@ export async function openViewResultsModal(panel) {
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
-      _renderClientFallback();
+      _showMatplotlibRequired();
       return;
     }
 
@@ -162,21 +156,18 @@ export async function openViewResultsModal(panel) {
     }
   } catch (err) {
     console.warn('[view-results] Fetch failed:', err.message);
-    _renderClientFallback();
+    _showMatplotlibRequired();
   }
 
-  function _renderClientFallback() {
-    const fallbackCharts = {
-      frequency_response: renderFrequencyResponseChart(frequencies, spl),
-      directivity_index: renderDirectivityIndexChart(diFrequencies, di),
-      impedance: renderImpedanceChart(impedanceFrequencies, impedanceReal, impedanceImag),
-      directivity_map: renderPolarDirectivityHeatmap(frequencies, directivity),
-    };
-
+  function _showMatplotlibRequired() {
     for (const chart of chartNames) {
       const container = document.getElementById(`vr-${chart.key}`);
       if (!container) continue;
-      container.innerHTML = fallbackCharts[chart.key] || '<div class="view-results-loading">No data available</div>';
+      container.innerHTML = `<div class="view-results-loading" style="padding: 32px;">
+        <div style="font-weight: 600; margin-bottom: 8px;">Matplotlib is required for chart rendering</div>
+        <div style="opacity: 0.8; font-size: 0.8rem;">Install it with: <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">pip install matplotlib</code></div>
+        <div style="opacity: 0.6; font-size: 0.75rem; margin-top: 6px;">Then restart the backend server.</div>
+      </div>`;
     }
   }
 }

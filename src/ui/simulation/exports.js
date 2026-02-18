@@ -3,7 +3,7 @@ import { chooseExportFormat, showError, showMessage } from '../feedback.js';
 
 export function applyExportSelection(panel, exportType, handlers = null) {
   const actionMap = handlers || {
-    '1': () => exportAsImage(),
+    '1': () => exportAsMatplotlibPNG(panel),
     '2': () => exportAsCSV(panel),
     '3': () => exportAsJSON(panel),
     '4': () => exportAsText(panel),
@@ -37,50 +37,95 @@ export async function exportResults(panel) {
 }
 
 /**
- * Export results as PNG image
+ * Export all result charts as PNG images via Matplotlib backend rendering.
  */
-export function exportAsImage() {
-  const resultsCharts = document.getElementById('results-charts');
-  if (!resultsCharts) {
-    showError('No charts to export.');
+export async function exportAsMatplotlibPNG(panel) {
+  const results = panel.lastResults;
+  if (!results) {
+    showError('No simulation results available.');
     return;
   }
 
-  // Use html2canvas or similar library would be ideal, but for now use SVG export
-  const svgs = resultsCharts.querySelectorAll('svg');
-  if (svgs.length === 0) {
-    showError('No charts available to export.');
-    return;
+  const splData = results.spl_on_axis || {};
+  const frequencies = splData.frequencies || [];
+  let spl = splData.spl || [];
+  const diData = results.di || {};
+  let di = diData.di || [];
+  const diFrequencies = diData.frequencies || frequencies;
+  const impedanceData = results.impedance || {};
+  const impedanceFrequencies = impedanceData.frequencies || frequencies;
+  let impedanceReal = impedanceData.real || [];
+  let impedanceImag = impedanceData.imaginary || [];
+  const directivity = results.directivity || {};
+
+  if (panel.currentSmoothing !== 'none') {
+    const { applySmoothing } = await import('../../results/smoothing.js');
+    spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
+    di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
+    impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
+    impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
   }
 
-  // Create a canvas to combine all SVGs
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  const payload = {
+    frequencies,
+    spl,
+    di,
+    di_frequencies: diFrequencies,
+    impedance_frequencies: impedanceFrequencies,
+    impedance_real: impedanceReal,
+    impedance_imaginary: impedanceImag,
+    directivity,
+  };
 
-  // Set canvas size (approximate)
-  canvas.width = 1200;
-  canvas.height = 400 * svgs.length;
+  try {
+    const response = await fetch('http://localhost:8000/api/render-charts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-  // White background
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      if (response.status === 503) {
+        showError('Matplotlib is not installed on the backend. Install it with: pip install matplotlib');
+      } else {
+        showError(`Chart rendering failed: ${detail || response.status}`);
+      }
+      return;
+    }
 
-  showMessage('PNG export is not available yet. Exporting the first chart as SVG instead.', {
-    type: 'info',
-    duration: 3600
-  });
+    const data = await response.json();
+    const charts = data.charts || {};
+    const chartKeys = Object.keys(charts);
 
-  // Export first SVG as example
-  const svgData = new XMLSerializer().serializeToString(svgs[0]);
-  const blob = new Blob([svgData], { type: 'image/svg+xml' });
-  const url = URL.createObjectURL(blob);
+    if (chartKeys.length === 0) {
+      showError('No charts were rendered by the backend.');
+      return;
+    }
 
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `bem_results_${Date.now()}.svg`;
-  link.click();
+    // Download each chart as a separate PNG
+    for (const key of chartKeys) {
+      const b64 = charts[key];
+      if (!b64) continue;
+      const byteString = atob(b64.split(',')[1]);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+      }
+      const blob = new Blob([ab], { type: 'image/png' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `bem_${key}_${Date.now()}.png`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
 
-  URL.revokeObjectURL(url);
+    showMessage(`Exported ${chartKeys.length} chart(s) as PNG.`, { type: 'info', duration: 3000 });
+  } catch (err) {
+    showError('Chart export failed. Ensure the backend server is running with Matplotlib installed.');
+  }
 }
 
 /**
