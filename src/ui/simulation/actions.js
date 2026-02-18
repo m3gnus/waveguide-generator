@@ -2,6 +2,7 @@ import { showError, showMessage } from '../feedback.js';
 import { GlobalState } from '../../state.js';
 import { prepareGeometryParams } from '../../geometry/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
+import { readPolarUiSettings } from './polarSettings.js';
 
 const STAGE_LABELS = {
   mesh_generation: 'Mesh generation',
@@ -253,17 +254,17 @@ export async function runSimulation(panel) {
     frequencySpacing: 'log'
   };
 
-  // Get polar directivity configuration
-  const angleStart = parseFloat(document.getElementById('polar-angle-start').value) || 0;
-  const angleEnd = parseFloat(document.getElementById('polar-angle-end').value) || 180;
-  const angleStep = parseFloat(document.getElementById('polar-angle-step').value) || 5;
-  const angleCount = Math.floor((angleEnd - angleStart) / angleStep) + 1;
-
+  const polarSettings = readPolarUiSettings();
+  if (!polarSettings.ok) {
+    showError(polarSettings.validationError);
+    return;
+  }
   config.polarConfig = {
-    angle_range: [angleStart, angleEnd, angleCount],
-    norm_angle: parseFloat(document.getElementById('polar-norm-angle').value) || 5.0,
-    distance: parseFloat(document.getElementById('polar-distance').value) || 2.0,
-    inclination: parseFloat(document.getElementById('polar-inclination').value) || 35.0
+    angle_range: polarSettings.angleRangeArray,
+    norm_angle: polarSettings.normAngle,
+    distance: polarSettings.distance,
+    inclination: polarSettings.diagonalAngle,
+    enabled_axes: polarSettings.enabledAxes
   };
 
   // Validate settings

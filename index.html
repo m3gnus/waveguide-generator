@@ -92,8 +92,25 @@
                     <input type="number" id="polar-distance" value="2" min="0.1" max="10" step="0.1">
                 </div>
                 <div class="input-row">
-                    <label for="polar-inclination">Inclination (deg)</label>
-                    <input type="number" id="polar-inclination" value="35" min="0" max="90" step="1">
+                    <label>Polar Axes</label>
+                    <div class="polar-axis-options">
+                        <label class="polar-axis-option">
+                            <input type="checkbox" id="polar-axis-horizontal" checked>
+                            horizontal (0 degree)
+                        </label>
+                        <label class="polar-axis-option">
+                            <input type="checkbox" id="polar-axis-vertical" checked>
+                            vertical (90 degree)
+                        </label>
+                        <label class="polar-axis-option">
+                            <input type="checkbox" id="polar-axis-diagonal" checked>
+                            diagonal
+                        </label>
+                    </div>
+                </div>
+                <div class="input-row">
+                    <label for="polar-inclination">Diagonal Angle (deg)</label>
+                    <input type="number" id="polar-inclination" value="45" min="0" max="360" step="1">
                 </div>
             </div>
 

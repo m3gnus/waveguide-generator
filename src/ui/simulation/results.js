@@ -381,8 +381,10 @@ async function _fetchDirectivityPlot(frequencies, directivity, referenceLevel = 
     console.warn('[directivity-plot] #directivity-plot-container not found in DOM');
     return;
   }
-  if (!frequencies?.length || !directivity?.horizontal?.length) {
-    console.warn('[directivity-plot] Missing frequencies or directivity.horizontal data');
+  const hasPlaneData = ['horizontal', 'vertical', 'diagonal']
+    .some((plane) => Array.isArray(directivity?.[plane]) && directivity[plane].length > 0);
+  if (!frequencies?.length || !hasPlaneData) {
+    console.warn('[directivity-plot] Missing frequencies or directivity plane data');
     _setPlotMessage(container, 'No directivity data available.');
     return;
   }

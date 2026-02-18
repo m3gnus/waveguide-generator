@@ -5,6 +5,7 @@ import {
   generateAbecSolvingFile,
   generateAbecObservationFile
 } from '../src/export/abecProject.js';
+import { buildCanonicalPolarBlocks } from '../src/ui/simulation/polarSettings.js';
 
 test('ABEC solving file uses 3D when CircSym profile is off', () => {
   const text = generateAbecSolvingFile({
@@ -65,6 +66,22 @@ test('ABEC observation file can be generated from imported ABEC.Polars blocks', 
   assert.match(text, /Offset=140mm/);
   assert.match(text, /NormalizingAngle=20/);
   assert.match(text, /Inclination=45/);
+});
+
+test('ABEC observation file can be generated from canonical selected axes with custom diagonal angle', () => {
+  const polarBlocks = buildCanonicalPolarBlocks({
+    enabledAxes: ['horizontal', 'vertical', 'diagonal'],
+    polarRange: '0,180,37',
+    distance: 2,
+    normAngle: 5,
+    diagonalAngle: 33
+  });
+  const text = generateAbecObservationFile({ polarBlocks });
+
+  assert.match(text, /GraphHeader="PM_SPL_H"/);
+  assert.match(text, /GraphHeader="PM_SPL_V"/);
+  assert.match(text, /GraphHeader="PM_SPL_D"/);
+  assert.match(text, /Inclination=33/);
 });
 
 test('ABEC solving file uses explicit interface metadata when provided', () => {

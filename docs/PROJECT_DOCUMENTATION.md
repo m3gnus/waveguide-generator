@@ -198,10 +198,15 @@ Runtime parity semantics:
 - `Project.abec` wiring must reference existing `solving.txt`, `observation.txt`, and `<basename>.msh`.
 - `solving.txt` must include `Control_Solver`, `MeshFile_Properties`, `Driving "S1001"`, and mesh includes for `SD1G0` and `SD1D1001`.
 - ABEC mode behavior is explicit:
-  - `ABEC_FreeStanding`: no `Infinite_Baffle` block
-  - `ABEC_InfiniteBaffle`: requires `Infinite_Baffle` block
+- `ABEC_FreeStanding`: no `Infinite_Baffle` block
+- `ABEC_InfiniteBaffle`: requires `Infinite_Baffle` block
 - `<basename>.msh` must expose required physical groups in `$PhysicalNames`, including `SD1G0` and `SD1D1001`.
 - `observation.txt` must include `Driving_Values`, `Radiation_Impedance`, and at least one `BE_Spectrum` block with `GraphHeader`, `PolarRange`, and `Inclination`.
+- UI-driven polar export uses canonical ATH block names `ABEC.Polars:SPL_H`, `ABEC.Polars:SPL_V`, `ABEC.Polars:SPL_D`.
+- UI axis-to-inclination mapping:
+  - horizontal: `0`/`180`
+  - vertical: `90`/`270`
+  - diagonal: any other angle (user-configurable, default `45`)
 - Regression coverage: `tests/abec-bundle-parity.test.js`
 
 ### 5.3 Internal/library export utilities
@@ -235,6 +240,8 @@ Base URL: `http://localhost:8000`
   - Validates `sim_type == "2"` (infinite-baffle path currently deferred)
   - Supports adaptive OCC simulation meshing through `options.mesh.strategy="occ_adaptive"`
     with required `options.mesh.waveguide_params`
+  - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
+    and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Creates async job and returns `{ job_id }`
 
@@ -285,6 +292,20 @@ Frontend payload shape sent to `/api/solve`:
 }
 ```
 
+Optional directivity payload for `/api/solve`:
+
+```json
+{
+  "polar_config": {
+    "angle_range": [0, 180, 37],
+    "norm_angle": 5,
+    "distance": 2,
+    "inclination": 45,
+    "enabled_axes": ["horizontal", "vertical", "diagonal"]
+  }
+}
+```
+
 Validation points:
 - Frontend: `src/solver/index.js` (`validateCanonicalMeshPayload`)
 - Backend request validation: `server/app.py`
@@ -302,8 +323,8 @@ Primary commands:
 
 High-signal test suites:
 - Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
-- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/gmsh-geo-builder.test.js`, `tests/abec-bundle-parity.test.js`
-- Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`
+- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/gmsh-geo-builder.test.js`, `tests/abec-bundle-parity.test.js`, `tests/polar-settings.test.js`
+- Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_directivity_plot.py`
 
 ## 10. Operational Notes and Constraints
 
@@ -321,11 +342,13 @@ High-signal test suites:
 - Geometry artifacts/payload: `src/geometry/pipeline.js`
 - Surface tag rules: `src/geometry/tags.js`
 - Export orchestration: `src/app/exports.js`
+- Polar UI/helpers: `src/ui/simulation/polarSettings.js`
 - `.geo` builder: `src/export/gmshGeoBuilder.js`
 - ABEC generation: `src/export/abecProject.js`
 - ABEC validator: `src/export/abecBundleValidator.js`
 - API routes: `server/app.py`
 - OCC builder: `server/solver/waveguide_builder.py`
+- Directivity render: `server/solver/directivity_plot.py`
 - Legacy gmsh mesher: `server/solver/gmsh_geo_mesher.py`
 - Solver dependency matrix: `server/solver/deps.py`
 

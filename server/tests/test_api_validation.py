@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app import MeshData, SimulationRequest, submit_simulation
 
@@ -224,6 +225,40 @@ class ApiValidationTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertIn("Adaptive OCC mesh builder dependency check failed", str(ctx.exception.detail))
+
+
+class PolarConfigValidationTest(unittest.TestCase):
+    def _mesh(self):
+        return MeshData(
+            vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            indices=[0, 1, 2],
+            surfaceTags=[2],
+            format='msh',
+            boundaryConditions={},
+            metadata={}
+        )
+
+    def test_empty_enabled_axes_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            SimulationRequest(
+                mesh=self._mesh(),
+                frequency_range=[100.0, 1000.0],
+                num_frequencies=8,
+                sim_type='2',
+                options={},
+                polar_config={"enabled_axes": []}
+            )
+
+    def test_valid_enabled_axes_subset_is_accepted(self):
+        request = SimulationRequest(
+            mesh=self._mesh(),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=8,
+            sim_type='2',
+            options={},
+            polar_config={"enabled_axes": ["vertical"]}
+        )
+        self.assertEqual(request.polar_config.enabled_axes, ["vertical"])
 
 
 class OccAdaptiveBemMeshContractTest(unittest.TestCase):
