@@ -88,7 +88,7 @@ export function chooseExportFormat() {
     dialog.appendChild(actions);
 
     const options = [
-      { id: '1', label: 'PNG/SVG Image' },
+      { id: '1', label: 'Charts (PNG via Matplotlib)' },
       { id: '2', label: 'CSV Data' },
       { id: '3', label: 'JSON Data' },
       { id: '4', label: 'Text Report' },
