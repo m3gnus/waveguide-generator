@@ -65,6 +65,18 @@ Each `BE_Spectrum` must provide:
 - `PolarRange`
 - `Inclination`
 
+Canonical UI-driven polar behavior:
+- Axis selection may emit any subset of `SPL_H`, `SPL_V`, `SPL_D`, but at least one polar block is required.
+- Generated graph headers are `PM_SPL_H`, `PM_SPL_V`, `PM_SPL_D`.
+- Inclination semantics:
+  - `SPL_H`: horizontal (`Inclination=0`)
+  - `SPL_V`: vertical (`Inclination=90`)
+  - `SPL_D`: diagonal (`Inclination=<custom diagonal angle>`, default `45`)
+- ATH import mapping in UI:
+  - horizontal: `angle % 180 == 0`
+  - vertical: `angle % 180 == 90`
+  - diagonal: all other inclinations
+
 ## Notes
 
 - ABEC bundles include `bem_mesh.geo` generated in frontend export (`buildGmshGeo`).

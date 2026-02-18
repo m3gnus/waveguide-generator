@@ -1,6 +1,13 @@
 import { GlobalState } from '../../state.js';
+import {
+  bindPolarUiToggleHandlers,
+  getPolarBlocksSignature,
+  syncPolarControlsFromBlocks
+} from './polarSettings.js';
 
 export function setupSimulationParamBindings(panel) {
+  bindPolarUiToggleHandlers();
+
   panel.simulationParamBindings.forEach(({ id, key, parse }) => {
     const element = document.getElementById(id);
     if (!element) return;
@@ -76,5 +83,12 @@ export function syncSimulationSettings(panel, state) {
       circsymProfileEl.disabled = true;
       circsymProfileEl.value = '0';
     }
+  }
+
+  const blocks = state.params._blocks;
+  const signature = getPolarBlocksSignature(blocks);
+  if (panel._lastPolarBlocksSignature !== signature) {
+    syncPolarControlsFromBlocks(blocks);
+    panel._lastPolarBlocksSignature = signature;
   }
 }

@@ -99,7 +99,16 @@ Optional:
 
 - `mesh.boundaryConditions`
 - `mesh.metadata` (supports `units` and `unitScaleToMeter`)
-- `polar_config`
+- `polar_config`:
+  - `angle_range` (`[start_deg, end_deg, num_points]`)
+  - `norm_angle`
+  - `distance`
+  - `inclination` (diagonal plane angle)
+  - `enabled_axes` (array of `horizontal|vertical|diagonal`, at least one required)
+  - axis semantics:
+    - `horizontal`: 0° plane
+    - `vertical`: 90° plane
+    - `diagonal`: `inclination` plane
 - optimization flags (`use_optimized`, `enable_symmetry`, `verbose`)
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 

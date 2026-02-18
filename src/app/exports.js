@@ -17,6 +17,7 @@ import { buildWaveguidePayload } from '../solver/waveguidePayload.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
+import { buildCanonicalPolarBlocks, readPolarUiSettings } from '../ui/simulation/polarSettings.js';
 
 function getJSZipCtor() {
   const JSZipCtor = globalThis.JSZip;
@@ -24,23 +25,6 @@ function getJSZipCtor() {
     throw new Error('JSZip failed to load. Reload the page and try again.');
   }
   return JSZipCtor;
-}
-
-function getPolarSettings() {
-  const aStart = parseFloat(document.getElementById('polar-angle-start')?.value) || 0;
-  const aEnd = parseFloat(document.getElementById('polar-angle-end')?.value) || 180;
-  const aStep = parseFloat(document.getElementById('polar-angle-step')?.value) || 5;
-  const aCount = Math.max(2, Math.floor((aEnd - aStart) / aStep) + 1);
-  const polarRange = `${aStart},${aEnd},${aCount}`;
-  const polarDistance = Number(document.getElementById('polar-distance')?.value || 2);
-  const polarNormAngle = Number(document.getElementById('polar-norm-angle')?.value || 5);
-  const polarInclination = Number(document.getElementById('polar-inclination')?.value || 0);
-  return {
-    polarRange,
-    distance: Number.isFinite(polarDistance) ? polarDistance : 2,
-    normAngle: Number.isFinite(polarNormAngle) ? polarNormAngle : 5,
-    inclination: Number.isFinite(polarInclination) ? polarInclination : 0
-  };
 }
 
 function getBackendUrl(app) {
@@ -317,7 +301,12 @@ export async function exportABECProject(app) {
     ? 'ABEC_InfiniteBaffle'
     : 'ABEC_FreeStanding';
 
-  const polar = getPolarSettings();
+  const polarSettings = readPolarUiSettings();
+  if (!polarSettings.ok) {
+    showError(polarSettings.validationError);
+    return;
+  }
+  const polarBlocks = buildCanonicalPolarBlocks(polarSettings);
   const projectContent = generateAbecProjectFile({
     solvingFileName: 'solving.txt',
     observationFileName: 'observation.txt',
@@ -337,11 +326,11 @@ export async function exportABECProject(app) {
       infiniteBaffleOffset: getAxialMax(hornGeometry.vertices)
     });
     const observationContent = generateAbecObservationFile({
-      angleRange: polar.polarRange,
-      distance: polar.distance,
-      normAngle: polar.normAngle,
-      inclination: polar.inclination,
-      polarBlocks: preparedParams._blocks,
+      angleRange: polarSettings.polarRange,
+      distance: polarSettings.distance,
+      normAngle: polarSettings.normAngle,
+      inclination: polarSettings.diagonalAngle,
+      polarBlocks,
       allowDefaultPolars: !(preparedParams._blocks && Number(preparedParams.abecSimType || 2) === 1)
     });
     const coordsContent = generateAbecCoordsFile(hornGeometry.vertices, hornGeometry.ringCount);
