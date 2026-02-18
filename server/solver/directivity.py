@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from scipy import special
 
 from .deps import bempp_api
+from .observation import infer_observation_frame, point_from_polar
 
 
 def calculate_directivity_index_from_pressure(
@@ -15,7 +16,8 @@ def calculate_directivity_index_from_pressure(
     space_p,
     space_u,
     omega: float,
-    spl_on_axis: float
+    spl_on_axis: float,
+    observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> float:
     """
     Calculate Directivity Index by comparing on-axis to average SPL.
@@ -23,8 +25,11 @@ def calculate_directivity_index_from_pressure(
     DI = SPL_on_axis - SPL_average
     where SPL_average is computed from power integration over a sphere.
     """
-    vertices = grid.vertices
-    max_y = np.max(vertices[1, :])
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+    axis = frame["axis"]
+    mouth_center = frame["mouth_center"]
+    u = frame["u"]
+    v = frame["v"]
 
     R_far = 1.0
 
@@ -38,7 +43,6 @@ def calculate_directivity_index_from_pressure(
     for i_theta in range(n_theta):
         theta = (i_theta / (n_theta - 1)) * (np.pi / 2)  # 0 to 90 degrees
         sin_theta = np.sin(theta)
-        cos_theta = np.cos(theta)
 
         # Weight by solid angle element (sin(theta) for spherical integration)
         weight = sin_theta if sin_theta > 0.01 else 0.01
@@ -46,12 +50,16 @@ def calculate_directivity_index_from_pressure(
         for i_phi in range(n_phi):
             phi = (i_phi / n_phi) * 2 * np.pi
 
-            # Point on sphere centered at mouth
-            x = R_far * sin_theta * np.cos(phi)
-            y = max_y + R_far * cos_theta
-            z = R_far * sin_theta * np.sin(phi)
-
-            obs_point = np.array([[x], [y], [z]])
+            obs_xyz = point_from_polar(
+                mouth_center=mouth_center,
+                axis=axis,
+                u=u,
+                v=v,
+                radius_m=R_far,
+                theta_rad=theta,
+                phi_rad=phi,
+            )
+            obs_point = obs_xyz.reshape(3, 1)
 
             try:
                 dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(space_p, obs_point, k)
@@ -84,10 +92,18 @@ def calculate_directivity_index_from_pressure(
     else:
         # Fallback: estimate DI from ka (mouth radius * wavenumber)
         # Find approximate mouth radius
-        mouth_y = max_y
-        mouth_verts = vertices[:, np.abs(vertices[1, :] - mouth_y) < 1.0]
+        vertices = grid.vertices
+        rel = vertices - mouth_center.reshape(3, 1)
+        axial = axis @ rel
+        max_axial = float(np.max(axial))
+        min_axial = float(np.min(axial))
+        tol = max(1e-6, 0.02 * max(abs(max_axial - min_axial), 1e-6))
+        mouth_verts = vertices[:, axial >= (max_axial - tol)]
         if mouth_verts.shape[1] > 0:
-            mouth_radius = np.max(np.sqrt(mouth_verts[0, :] ** 2 + mouth_verts[2, :] ** 2))
+            rel_mouth = mouth_verts - mouth_center.reshape(3, 1)
+            proj_u = np.abs(u @ rel_mouth)
+            proj_v = np.abs(v @ rel_mouth)
+            mouth_radius = float(max(np.max(proj_u), np.max(proj_v)))
             ka = k * mouth_radius
             # Approximate DI for circular piston: DI ≈ (ka)² for ka < 1, increases slower after
             if ka < 1:
@@ -142,7 +158,8 @@ def calculate_directivity_patterns(
     c: float,
     rho: float,
     sim_type: str,
-    polar_config: Optional[Dict] = None
+    polar_config: Optional[Dict] = None,
+    observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, List[List[float]]]:
     """
     Calculate directivity patterns at key frequencies.
@@ -164,6 +181,8 @@ def calculate_directivity_patterns(
 
     Returns patterns for horizontal, vertical, and diagonal planes
     """
+    enabled_axes = {"horizontal", "vertical", "diagonal"}
+
     # Parse polar config with defaults matching ABEC.Polars format
     if polar_config:
         angle_start, angle_end, angle_points = polar_config.get('angle_range', [0, 180, 37])
@@ -171,29 +190,40 @@ def calculate_directivity_patterns(
         norm_angle = polar_config.get('norm_angle', 5.0)
         distance_m = polar_config.get('distance', 2.0)
         inclination = polar_config.get('inclination', 35.0)
+        raw_enabled_axes = polar_config.get('enabled_axes', ["horizontal", "vertical", "diagonal"])
+        parsed_axes = {
+            str(axis).strip().lower() for axis in (raw_enabled_axes or []) if str(axis).strip()
+        }
+        enabled_axes = parsed_axes.intersection({"horizontal", "vertical", "diagonal"}) or enabled_axes
     else:
         # Defaults matching reference script
         angle_start, angle_end, angle_points = 0, 180, 37
         norm_angle = 5.0
         distance_m = 2.0
         inclination = 35.0
-    # Find mouth dimensions from grid
-    vertices = grid.vertices
-    max_y = np.max(vertices[1, :])
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+    axis = frame["axis"]
+    mouth_center = frame["mouth_center"]
+    u = frame["u"]
+    v = frame["v"]
 
-    # Get mouth vertices (at max Y)
-    mouth_mask = np.abs(vertices[1, :] - max_y) < 1.0
-    mouth_verts = vertices[:, mouth_mask]
+    # Get vertices near mouth plane (furthest along axis).
+    vertices = grid.vertices
+    rel = vertices - mouth_center.reshape(3, 1)
+    axial = axis @ rel
+    max_axial = float(np.max(axial))
+    min_axial = float(np.min(axial))
+    tol = max(1e-6, 0.02 * max(abs(max_axial - min_axial), 1e-6))
+    mouth_verts = vertices[:, axial >= (max_axial - tol)]
 
     if mouth_verts.shape[1] > 0:
-        # Calculate mouth dimensions (may be elliptical)
-        mouth_width = np.max(mouth_verts[0, :]) - np.min(mouth_verts[0, :])  # X extent
-        mouth_height = np.max(mouth_verts[2, :]) - np.min(mouth_verts[2, :])  # Z extent
-        mouth_radius_h = mouth_width / 2  # Horizontal
-        mouth_radius_v = mouth_height / 2  # Vertical
+        # Estimate mouth dimensions in transverse (u,v) directions.
+        rel_mouth = mouth_verts - mouth_center.reshape(3, 1)
+        mouth_radius_h = float(np.max(np.abs(u @ rel_mouth)))
+        mouth_radius_v = float(np.max(np.abs(v @ rel_mouth)))
     else:
-        mouth_radius_h = 100.0  # Default 100mm
-        mouth_radius_v = 100.0
+        mouth_radius_h = 0.1  # Default 100 mm
+        mouth_radius_v = 0.1
 
     # Calculate directivity for ALL frequencies (not just 3 key frequencies)
     # This is needed for the polar heatmap visualization
@@ -201,6 +231,9 @@ def calculate_directivity_patterns(
 
     # Angles for directivity using polar config
     angles = np.linspace(angle_start, angle_end, int(angle_points))
+    include_horizontal = "horizontal" in enabled_axes
+    include_vertical = "vertical" in enabled_axes
+    include_diagonal = "diagonal" in enabled_axes
 
     for freq_idx in range(len(frequencies)):
         freq = frequencies[freq_idx]
@@ -223,21 +256,26 @@ def calculate_directivity_patterns(
             sin_theta = np.sin(theta_rad)
 
             # Horizontal pattern (uses horizontal ka)
-            h_pattern = piston_directivity(ka_h, sin_theta)
+            if include_horizontal:
+                h_pattern = piston_directivity(ka_h, sin_theta)
+                horizontal.append([angle, h_pattern])
 
             # Vertical pattern (uses vertical ka)
-            v_pattern = piston_directivity(ka_v, sin_theta)
+            if include_vertical:
+                v_pattern = piston_directivity(ka_v, sin_theta)
+                vertical.append([angle, v_pattern])
 
             # Diagonal (average of h and v)
-            ka_d = (ka_h + ka_v) / 2
-            d_pattern = piston_directivity(ka_d, sin_theta)
+            if include_diagonal:
+                ka_d = (ka_h + ka_v) / 2
+                d_pattern = piston_directivity(ka_d, sin_theta)
+                diagonal.append([angle, d_pattern])
 
-            horizontal.append([angle, h_pattern])
-            vertical.append([angle, v_pattern])
-            diagonal.append([angle, d_pattern])
-
-        patterns["horizontal"].append(horizontal)
-        patterns["vertical"].append(vertical)
-        patterns["diagonal"].append(diagonal)
+        if include_horizontal:
+            patterns["horizontal"].append(horizontal)
+        if include_vertical:
+            patterns["vertical"].append(vertical)
+        if include_diagonal:
+            patterns["diagonal"].append(diagonal)
 
     return patterns

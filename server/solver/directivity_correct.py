@@ -14,6 +14,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from .deps import bempp_api
 from .device_interface import is_opencl_buffer_error, potential_device_interface
+from .observation import infer_observation_frame, point_from_polar
 
 
 def evaluate_far_field_sphere(
@@ -29,6 +30,7 @@ def evaluate_far_field_sphere(
     theta_range: Tuple[float, float, int] = (0, 180, 37),
     phi_angles: Optional[List[float]] = None,
     device_interface: Optional[str] = None,
+    observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, np.ndarray]:
     """
     Evaluate pressure field on spherical surface at multiple angles.
@@ -57,9 +59,11 @@ def evaluate_far_field_sphere(
         - 'spl': 2D array of SPL in dB
         - 'observation_points': 3D array (len(phi), len(theta), 3) of XYZ coordinates
     """
-    # Find mouth position (maximum Y coordinate), coordinates are in meters.
-    vertices = grid.vertices
-    max_y_m = np.max(vertices[1, :])
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+    axis = frame["axis"]
+    mouth_center = frame["mouth_center"]
+    u = frame["u"]
+    v = frame["v"]
 
     # Generate theta angles
     theta_start, theta_end, theta_points = theta_range
@@ -69,7 +73,7 @@ def evaluate_far_field_sphere(
 
     # Default phi angles (single plane cut)
     if phi_angles is None:
-        phi_angles = [0.0]  # Horizontal plane (XY)
+        phi_angles = [0.0]  # Horizontal cut in the inferred transverse basis
 
     phi_deg = np.array(phi_angles)
     phi_rad = np.deg2rad(phi_deg)
@@ -84,17 +88,18 @@ def evaluate_far_field_sphere(
 
     idx = 0
     for i_phi, phi in enumerate(phi_rad):
-        sin_phi = np.sin(phi)
-        cos_phi = np.cos(phi)
         for i_theta, theta in enumerate(theta_rad):
-            x_m = radius_m * np.sin(theta) * cos_phi
-            z_m = radius_m * np.sin(theta) * sin_phi
-            y_m = max_y_m + radius_m * np.cos(theta)
-
-            obs_array[0, idx] = x_m
-            obs_array[1, idx] = y_m
-            obs_array[2, idx] = z_m
-            observation_points[i_phi, i_theta, :] = [x_m, y_m, z_m]
+            obs_xyz = point_from_polar(
+                mouth_center=mouth_center,
+                axis=axis,
+                u=u,
+                v=v,
+                radius_m=radius_m,
+                theta_rad=theta,
+                phi_rad=phi,
+            )
+            obs_array[:, idx] = obs_xyz
+            observation_points[i_phi, i_theta, :] = obs_xyz
             idx += 1
 
     # Reference pressure for SPL calculation
@@ -162,12 +167,13 @@ def calculate_directivity_patterns_correct(
     c: float,
     rho: float,
     p_solutions: List,  # List of (p_total, u_total, space_p, space_u) per frequency
-    polar_config: Optional[Dict] = None
+    polar_config: Optional[Dict] = None,
+    observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, List[List[float]]]:
     """
     Calculate correct directivity patterns using BEM far-field evaluation.
 
-    All three polar cuts (horizontal, vertical, diagonal) are evaluated in a
+    Enabled polar cuts (horizontal, vertical, diagonal) are evaluated in a
     single batched operator call per frequency for performance.
 
     Args:
@@ -181,18 +187,25 @@ def calculate_directivity_patterns_correct(
             - norm_angle: Normalization angle in degrees (default: 5.0)
             - distance: Measurement distance in meters (default: 2.0)
             - inclination: Inclination angle for diagonal (default: 35.0)
+            - enabled_axes: Requested cuts among horizontal|vertical|diagonal
 
     Returns:
         patterns dict with keys 'horizontal', 'vertical', 'diagonal'
         Each contains list of [[angle, dB], ...] per frequency
     """
     # Parse config
+    enabled_axes = {"horizontal", "vertical", "diagonal"}
     if polar_config:
         angle_start, angle_end, angle_points = polar_config.get('angle_range', [0, 180, 37])
         angle_points = int(angle_points)  # Ensure integer for np.linspace
         norm_angle = polar_config.get('norm_angle', 5.0)
         distance_m = polar_config.get('distance', 2.0)
         inclination = polar_config.get('inclination', 35.0)
+        raw_enabled_axes = polar_config.get('enabled_axes', ["horizontal", "vertical", "diagonal"])
+        parsed_axes = {
+            str(axis).strip().lower() for axis in (raw_enabled_axes or []) if str(axis).strip()
+        }
+        enabled_axes = parsed_axes.intersection({"horizontal", "vertical", "diagonal"}) or enabled_axes
     else:
         angle_start, angle_end, angle_points = 0, 180, 37
         norm_angle = 5.0
@@ -213,7 +226,15 @@ def calculate_directivity_patterns_correct(
         print(f"[Directivity] Error: Solution count ({len(p_solutions)}) != frequency count ({len(frequencies)})")
         return patterns
 
-    # Process each frequency — all 3 phi cuts batched into one call
+    axis_phi = {
+        "horizontal": 0.0,
+        "vertical": 90.0,
+        "diagonal": inclination
+    }
+    active_axes = [axis for axis in ("horizontal", "vertical", "diagonal") if axis in enabled_axes]
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+
+    # Process each frequency — all requested phi cuts batched into one call
     for freq_idx, freq in enumerate(frequencies):
         k = 2 * np.pi * freq / c
         omega = k * c
@@ -222,37 +243,29 @@ def calculate_directivity_patterns_correct(
         p_total, u_total, space_p, space_u = p_solutions[freq_idx]
 
         try:
-            # Evaluate all three polar cuts in ONE batched call
+            # Evaluate requested polar cuts in ONE batched call
             result = evaluate_far_field_sphere(
                 grid, p_total, u_total, space_p, space_u,
                 k, omega, rho,
                 radius_m=distance_m,
                 theta_range=(angle_start, angle_end, angle_points),
-                phi_angles=[0.0, 90.0, inclination]  # H, V, D in one batch
+                phi_angles=[axis_phi[axis] for axis in active_axes],
+                observation_frame=frame,
             )
 
             theta = result['theta_degrees']
-
-            # Extract and normalize each cut
-            h_spl_norm = normalize_polar(result['spl'][0, :], theta, norm_angle)
-            v_spl_norm = normalize_polar(result['spl'][1, :], theta, norm_angle)
-            d_spl_norm = normalize_polar(result['spl'][2, :], theta, norm_angle)
-
-            horizontal = [[float(a), float(db)] for a, db in zip(theta, h_spl_norm)]
-            vertical = [[float(a), float(db)] for a, db in zip(theta, v_spl_norm)]
-            diagonal = [[float(a), float(db)] for a, db in zip(theta, d_spl_norm)]
+            for axis_idx, axis in enumerate(active_axes):
+                spl_norm = normalize_polar(result['spl'][axis_idx, :], theta, norm_angle)
+                axis_pattern = [[float(a), float(db)] for a, db in zip(theta, spl_norm)]
+                patterns[axis].append(axis_pattern)
 
         except Exception as e:
             print(f"[Directivity] Error computing directivity at {freq:.0f} Hz: {e}")
             # Preserve shape for this frequency but mark values missing.
             angles = np.linspace(angle_start, angle_end, angle_points)
-            horizontal = [[float(a), None] for a in angles]
-            vertical = [[float(a), None] for a in angles]
-            diagonal = [[float(a), None] for a in angles]
-
-        patterns["horizontal"].append(horizontal)
-        patterns["vertical"].append(vertical)
-        patterns["diagonal"].append(diagonal)
+            placeholder = [[float(a), None] for a in angles]
+            for axis in active_axes:
+                patterns[axis].append(placeholder)
 
     return patterns
 
@@ -292,7 +305,9 @@ def normalize_polar(
     return spl - reference_spl
 
 
-def estimate_di_from_ka(grid, k: float) -> float:
+def estimate_di_from_ka(
+    grid, k: float, observation_frame: Optional[Dict[str, np.ndarray]] = None
+) -> float:
     """
     Quick DI estimate from ka (no BEM potential operators needed).
 
@@ -306,12 +321,22 @@ def estimate_di_from_ka(grid, k: float) -> float:
     Returns:
         Approximate Directivity Index in dB
     """
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+    axis = frame["axis"]
+    mouth_center = frame["mouth_center"]
+    u = frame["u"]
+    v = frame["v"]
+
     vertices = grid.vertices
-    max_y = np.max(vertices[1, :])
-    # Find vertices near the mouth (within 1mm tolerance)
-    mouth_verts = vertices[:, np.abs(vertices[1, :] - max_y) < 1e-3]
+    rel = vertices - mouth_center.reshape(3, 1)
+    axial = axis @ rel
+    max_axial = float(np.max(axial))
+    min_axial = float(np.min(axial))
+    tol = max(1e-6, 0.02 * max(abs(max_axial - min_axial), 1e-6))
+    mouth_verts = vertices[:, axial >= (max_axial - tol)]
     if mouth_verts.shape[1] > 0:
-        mouth_radius = np.max(np.sqrt(mouth_verts[0, :] ** 2 + mouth_verts[2, :] ** 2))
+        rel_mouth = mouth_verts - mouth_center.reshape(3, 1)
+        mouth_radius = float(max(np.max(np.abs(u @ rel_mouth)), np.max(np.abs(v @ rel_mouth))))
         ka = k * mouth_radius
         return float(max(0.0, min(30.0, 10 * np.log10(1 + ka ** 2))))
     return 6.0

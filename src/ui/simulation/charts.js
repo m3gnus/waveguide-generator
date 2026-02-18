@@ -198,7 +198,7 @@ export function renderImpedanceChart(frequencies, realValues, imagValues) {
 }
 
 export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
-  if (!frequencies.length || !directivityData.horizontal) {
+  if (!frequencies.length || !directivityData) {
     return '<p style="color: var(--text-color);">No directivity map data available</p>';
   }
 
@@ -208,27 +208,42 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  // Get horizontal directivity patterns, filtering out entries with null dB values
-  const allPatterns = directivityData.horizontal;
-  if (!allPatterns || allPatterns.length === 0) {
-    return '<p style="color: var(--text-color);">No polar directivity data available</p>';
+  const planeChoices = [
+    { key: 'horizontal', label: 'Horizontal' },
+    { key: 'vertical', label: 'Vertical' },
+    { key: 'diagonal', label: 'Diagonal' }
+  ];
+
+  let selectedPlane = null;
+  let validFreqs = [];
+  let patterns = [];
+
+  for (const plane of planeChoices) {
+    const allPatterns = directivityData[plane.key];
+    if (!allPatterns || allPatterns.length === 0) continue;
+
+    const planeFreqs = [];
+    const planePatterns = [];
+    for (let i = 0; i < allPatterns.length; i++) {
+      const pat = allPatterns[i];
+      if (!pat || pat.length === 0) continue;
+      const hasNullDb = pat.some(pt => pt[1] == null || !Number.isFinite(pt[1]));
+      if (hasNullDb) continue;
+      const freq = i < frequencies.length ? frequencies[i] : null;
+      if (freq == null || !Number.isFinite(freq)) continue;
+      planeFreqs.push(freq);
+      planePatterns.push(pat);
+    }
+
+    if (planePatterns.length > 0) {
+      selectedPlane = plane;
+      validFreqs = planeFreqs;
+      patterns = planePatterns;
+      break;
+    }
   }
 
-  // Build parallel arrays of valid frequencies and patterns (skip null-placeholder entries)
-  const validFreqs = [];
-  const patterns = [];
-  for (let i = 0; i < allPatterns.length; i++) {
-    const pat = allPatterns[i];
-    if (!pat || pat.length === 0) continue;
-    const hasNullDb = pat.some(pt => pt[1] == null || !Number.isFinite(pt[1]));
-    if (hasNullDb) continue;
-    const freq = i < frequencies.length ? frequencies[i] : null;
-    if (freq == null || !Number.isFinite(freq)) continue;
-    validFreqs.push(freq);
-    patterns.push(pat);
-  }
-
-  if (!patterns.length) {
+  if (!selectedPlane || !patterns.length) {
     return '<p style="color: var(--text-color);">No valid polar directivity data available</p>';
   }
 
@@ -390,7 +405,7 @@ export function renderPolarDirectivityHeatmap(frequencies, directivityData) {
                 <text x="${legendX + legendWidth + 35}" y="${padding.top + legendHeight / 2}" text-anchor="middle" fill="var(--text-color)" font-size="10" font-weight="600" transform="rotate(90, ${legendX + legendWidth + 35}, ${padding.top + legendHeight / 2})">dB rel 0 deg</text>
 
                 <!-- Title -->
-                <text x="${width / 2}" y="20" text-anchor="middle" fill="var(--text-color)" font-size="14" font-weight="600">Horizontal Directivity</text>
+                <text x="${width / 2}" y="20" text-anchor="middle" fill="var(--text-color)" font-size="14" font-weight="600">${selectedPlane.label} Directivity</text>
             </svg>
         `;
 }

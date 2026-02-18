@@ -378,6 +378,20 @@ h3 {
     font-size: 0.85rem;
 }
 
+.polar-axis-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.polar-axis-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: var(--text-color);
+}
+
 .input-row-inline {
     display: flex;
     flex-direction: row;

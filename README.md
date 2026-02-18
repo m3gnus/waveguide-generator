@@ -79,6 +79,7 @@ $HOME/.waveguide-generator/opencl-cpu-env/bin/python
 - R-OSSE and OSSE horn profile generation with live parameter controls
 - Real-time 3D rendering (standard, zebra, wireframe, curvature)
 - BEM simulation workflow with backend job submission and result plotting
+- Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
 - Export: STL, GEO, MSH, ABEC project ZIP, CSV profiles, MWG config text
 
 ## Project layout

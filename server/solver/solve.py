@@ -12,6 +12,19 @@ from .device_interface import (
     selected_device_metadata,
 )
 from .directivity import calculate_directivity_index_from_pressure, calculate_directivity_patterns
+from .observation import infer_observation_frame
+
+
+def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float = 1.0) -> float:
+    if not isinstance(polar_config, dict):
+        return float(default)
+    try:
+        distance = float(polar_config.get("distance", default))
+    except (TypeError, ValueError):
+        return float(default)
+    if not np.isfinite(distance) or distance <= 0:
+        return float(default)
+    return float(distance)
 
 
 def _build_source_velocity(space_u, amplitude: float = 1.0):
@@ -35,6 +48,8 @@ def solve_frequency(
     boundary_interface: Optional[str] = None,
     potential_interface: Optional[str] = None,
     use_burton_miller: bool = True,
+    observation_distance_m: float = 1.0,
+    observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Tuple[float, complex, float]:
     """
     Solve BEM for a single frequency using exterior Helmholtz BIE in SI units.
@@ -94,11 +109,9 @@ def solve_frequency(
     if info != 0:
         print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
 
-    vertices = grid.vertices
-    max_y = np.max(vertices[1, :])
-
-    # On-axis SPL at 1 meter from mouth plane.
-    obs_point = np.array([[0.0], [max_y + 1.0], [0.0]])
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+    obs_xyz = frame["mouth_center"] + frame["axis"] * float(observation_distance_m)
+    obs_point = obs_xyz.reshape(3, 1)
 
     dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
         space_p, obs_point, k, device_interface=potential_interface
@@ -116,7 +129,8 @@ def solve_frequency(
     impedance = calculate_throat_impedance(grid, p_total, throat_elements)
 
     di = calculate_directivity_index_from_pressure(
-        grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl
+        grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl,
+        observation_frame=frame,
     )
 
     return float(spl), impedance, float(di)
@@ -180,6 +194,8 @@ def solve(
     rho = 1.21
     boundary_interface = boundary_device_interface()
     potential_interface = potential_device_interface()
+    observation_distance_m = _resolve_observation_distance_m(polar_config, default=1.0)
+    observation_frame = infer_observation_frame(grid)
 
     success_count = 0
     opencl_safe_retry_consumed = False
@@ -210,6 +226,8 @@ def solve(
                 throat_elements=throat_elements,
                 boundary_interface=boundary_interface,
                 potential_interface=potential_interface,
+                observation_distance_m=observation_distance_m,
+                observation_frame=observation_frame,
             )
             success_count += 1
             results["spl_on_axis"]["spl"].append(float(spl))
@@ -239,6 +257,8 @@ def solve(
                             throat_elements=throat_elements,
                             boundary_interface=boundary_interface,
                             potential_interface=potential_interface,
+                            observation_distance_m=observation_distance_m,
+                            observation_frame=observation_frame,
                         )
                         success_count += 1
                         if isinstance(device_metadata, dict):
@@ -285,6 +305,8 @@ def solve(
                         throat_elements=throat_elements,
                         boundary_interface=boundary_interface,
                         potential_interface=potential_interface,
+                        observation_distance_m=observation_distance_m,
+                        observation_frame=observation_frame,
                     )
                     success_count += 1
                     results["spl_on_axis"]["spl"].append(float(spl))
@@ -313,7 +335,8 @@ def solve(
 
     try:
         results["directivity"] = calculate_directivity_patterns(
-            grid, frequencies, c, rho, sim_type, polar_config
+            grid, frequencies, c, rho, sim_type, polar_config,
+            observation_frame=observation_frame,
         )
     except Exception as exc:
         results["metadata"]["failures"].append(

@@ -36,39 +36,56 @@ def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-
     Returns:
         Base64-encoded PNG string (without data URI prefix)
     """
-    h_patterns = directivity.get("horizontal", [])
-    v_patterns = directivity.get("vertical", [])
-    if not h_patterns:
-        return None
-
     freqs = np.array(frequencies, dtype=float)
     if freqs.size == 0:
         return None
 
-    h_angles_raw, h_freqs_raw, h_values_raw = _build_grid(freqs, h_patterns)
-    if h_values_raw is None:
+    planes = []
+    for key in ("horizontal", "vertical", "diagonal"):
+        patterns = directivity.get(key, [])
+        if not patterns:
+            continue
+        angles_raw, freqs_raw, values_raw = _build_grid(freqs, patterns)
+        if values_raw is None:
+            continue
+        angles, plane_freqs, values = _prepare_heatmap_data(angles_raw, freqs_raw, values_raw)
+        planes.append({
+            "key": key,
+            "angles": angles,
+            "freqs": plane_freqs,
+            "values": values,
+            "values_raw": values_raw,
+        })
+
+    if not planes:
         return None
-    h_angles, h_freqs, h_values = _prepare_heatmap_data(h_angles_raw, h_freqs_raw, h_values_raw)
 
-    v_angles = v_freqs = v_values = None
-    v_values_raw = None
-    if v_patterns:
-        v_angles_raw, v_freqs_raw, v_values_raw = _build_grid(freqs, v_patterns)
-        if v_values_raw is not None:
-            v_angles, v_freqs, v_values = _prepare_heatmap_data(v_angles_raw, v_freqs_raw, v_values_raw)
+    by_key = {entry["key"]: entry for entry in planes}
+    has_only_hv = set(by_key.keys()) == {"horizontal", "vertical"}
+    symmetric = has_only_hv and _check_symmetry(
+        by_key["horizontal"]["values_raw"],
+        by_key["vertical"]["values_raw"],
+    )
 
-    symmetric = _check_symmetry(h_values_raw, v_values_raw)
-
-    if symmetric or v_values is None:
+    if symmetric:
         fig, axes = plt.subplots(1, 1, figsize=(11, 5))
         axes = [axes]
-        titles = ["Directivity (H = V, Symmetric)" if symmetric else "H Normalized Directivity"]
-        datasets = [(h_freqs, h_angles, h_values)]
+        titles = ["Directivity (H = V, Symmetric)"]
+        datasets = [(
+            by_key["horizontal"]["freqs"],
+            by_key["horizontal"]["angles"],
+            by_key["horizontal"]["values"],
+        )]
     else:
-        fig, axes = plt.subplots(2, 1, figsize=(11, 8))
-        axes = list(axes)
-        titles = ["H Normalized Directivity", "V Normalized Directivity"]
-        datasets = [(h_freqs, h_angles, h_values), (v_freqs, v_angles, v_values)]
+        plane_count = len(planes)
+        fig_height = 5 if plane_count == 1 else (4 * plane_count)
+        fig, axes = plt.subplots(plane_count, 1, figsize=(11, fig_height))
+        if not isinstance(axes, (list, np.ndarray)):
+            axes = [axes]
+        else:
+            axes = list(np.atleast_1d(axes))
+        titles = [_plane_title(entry["key"]) for entry in planes]
+        datasets = [(entry["freqs"], entry["angles"], entry["values"]) for entry in planes]
 
     fig.patch.set_facecolor("#1a1a1a")
     for ax, title, (plot_freqs, plot_angles, plot_values) in zip(axes, titles, datasets):
@@ -95,6 +112,16 @@ def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-
     plt.close(fig)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("ascii")
+
+
+def _plane_title(key):
+    if key == "horizontal":
+        return "H Normalized Directivity"
+    if key == "vertical":
+        return "V Normalized Directivity"
+    if key == "diagonal":
+        return "D Normalized Directivity"
+    return "Normalized Directivity"
 
 
 def _build_grid(freqs, patterns):

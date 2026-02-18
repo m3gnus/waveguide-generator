@@ -28,6 +28,7 @@ from .directivity_correct import (
     estimate_di_from_ka,
 )
 from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
+from .observation import infer_observation_frame
 from .symmetry import (
     SymmetryType,
     apply_symmetry_reduction,
@@ -94,6 +95,18 @@ class CachedOperators:
         )
 
 
+def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float = 1.0) -> float:
+    if not isinstance(polar_config, dict):
+        return float(default)
+    try:
+        distance = float(polar_config.get("distance", default))
+    except (TypeError, ValueError):
+        return float(default)
+    if not np.isfinite(distance) or distance <= 0:
+        return float(default)
+    return float(distance)
+
+
 def _build_source_velocity(space_u, amplitude: float = 1.0):
     dof_count = getattr(space_u, "grid_dof_count", None)
     if dof_count is None:
@@ -120,6 +133,8 @@ def solve_frequency_cached(
     cached_ops: CachedOperators,
     throat_elements: np.ndarray = None,
     use_burton_miller: bool = True,
+    observation_distance_m: float = 1.0,
+    observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Tuple[float, complex, float, tuple]:
     """Solve one frequency using cached operators and SI units."""
     omega = k * c
@@ -144,9 +159,9 @@ def solve_frequency_cached(
     if info != 0:
         print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
 
-    vertices = grid.vertices
-    max_y = np.max(vertices[1, :])
-    obs_point = np.array([[0.0], [max_y + 1.0], [0.0]])
+    frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
+    obs_xyz = frame["mouth_center"] + frame["axis"] * float(observation_distance_m)
+    obs_point = obs_xyz.reshape(3, 1)
 
     dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
         space_p, obs_point, k, device_interface=cached_ops.potential_interface
@@ -164,7 +179,7 @@ def solve_frequency_cached(
 
     # Quick ka-based DI estimate (no potential operators needed).
     # Accurate DI is computed later from the batched directivity patterns.
-    di = estimate_di_from_ka(grid, k)
+    di = estimate_di_from_ka(grid, k, observation_frame=frame)
 
     return float(spl), impedance, float(di), (p_total, u_total, space_p, space_u)
 
@@ -209,6 +224,7 @@ def solve_optimized(
     rho = 1.21
     boundary_interface = boundary_device_interface()
     potential_interface = potential_device_interface()
+    observation_distance_m = _resolve_observation_distance_m(polar_config, default=1.0)
 
     num_frequencies = int(num_frequencies)
     if frequency_spacing == "log":
@@ -305,6 +321,7 @@ def solve_optimized(
         mesh_metadata=mesh_metadata,
         feature_enabled=False,
     ).to_dict()
+    observation_frame = infer_observation_frame(grid)
 
     results = {
         "frequencies": frequencies.tolist(),
@@ -356,7 +373,9 @@ def solve_optimized(
         try:
             iter_start = time.time()
             spl, impedance, di, solution = solve_frequency_cached(
-                grid, k, c, rho, sim_type, cached_ops, throat_elements, use_burton_miller
+                grid, k, c, rho, sim_type, cached_ops, throat_elements, use_burton_miller,
+                observation_distance_m=observation_distance_m,
+                observation_frame=observation_frame,
             )
             iter_time = time.time() - iter_start
             success_count += 1
@@ -389,7 +408,9 @@ def solve_optimized(
                     try:
                         iter_start = time.time()
                         spl, impedance, di, solution = solve_frequency_cached(
-                            grid, k, c, rho, sim_type, cached_ops, throat_elements
+                            grid, k, c, rho, sim_type, cached_ops, throat_elements,
+                            observation_distance_m=observation_distance_m,
+                            observation_frame=observation_frame,
                         )
                         iter_time = time.time() - iter_start
                         success_count += 1
@@ -437,7 +458,9 @@ def solve_optimized(
                 try:
                     iter_start = time.time()
                     spl, impedance, di, solution = solve_frequency_cached(
-                        grid, k, c, rho, sim_type, cached_ops, throat_elements
+                        grid, k, c, rho, sim_type, cached_ops, throat_elements,
+                        observation_distance_m=observation_distance_m,
+                        observation_frame=observation_frame,
                     )
                     iter_time = time.time() - iter_start
                     success_count += 1
@@ -490,7 +513,8 @@ def solve_optimized(
         filtered_freqs = frequencies[list(indices)]
         try:
             filtered_directivity = calculate_directivity_patterns_correct(
-                grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config
+                grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config,
+                observation_frame=observation_frame,
             )
 
             # Expand filtered directivity back to full frequency array so that

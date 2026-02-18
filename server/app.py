@@ -5,7 +5,7 @@ FastAPI application for running acoustic simulations
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 from typing import Dict, List, Optional, Any, Union
 import uuid
 import asyncio
@@ -230,11 +230,37 @@ class PolarConfig(BaseModel):
         norm_angle: Reference angle in degrees for normalization
         distance: Measurement distance from horn mouth in meters
         inclination: Inclination angle in degrees for measurement plane
+        enabled_axes: Requested directivity planes (horizontal|vertical|diagonal)
     """
     angle_range: List[float] = [0, 180, 37]  # [start, end, num_points]
     norm_angle: float = 5.0  # Normalization angle in degrees
     distance: float = 2.0  # Measurement distance in meters
     inclination: float = 35.0  # Inclination angle in degrees
+    enabled_axes: List[str] = ["horizontal", "vertical", "diagonal"]
+
+    @field_validator("enabled_axes")
+    @classmethod
+    def validate_enabled_axes(cls, value: List[str]) -> List[str]:
+        allowed = {"horizontal", "vertical", "diagonal"}
+        if not isinstance(value, list) or len(value) == 0:
+            raise ValueError("polar_config.enabled_axes must contain at least one axis.")
+
+        normalized = []
+        seen = set()
+        for axis in value:
+            name = str(axis).strip().lower()
+            if name not in allowed:
+                raise ValueError(
+                    "polar_config.enabled_axes values must be one of: horizontal, vertical, diagonal."
+                )
+            if name in seen:
+                continue
+            seen.add(name)
+            normalized.append(name)
+
+        if len(normalized) == 0:
+            raise ValueError("polar_config.enabled_axes must contain at least one axis.")
+        return normalized
 
 
 class SimulationRequest(BaseModel):
