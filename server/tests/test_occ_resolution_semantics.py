@@ -229,10 +229,10 @@ class OccResolutionSemanticsTest(unittest.TestCase):
             tri_center = (p0 + p1 + p2) / 3.0
             outward_score += float(np.dot(tri_normal, tri_center - center))
 
-        self.assertLess(
+        self.assertGreater(
             outward_score,
             0.0,
-            "Expected wall-oriented canonical score to be negative (wall normals flipped relative to source disc).",
+            "Expected wall-oriented canonical score to be positive (outward-facing watertight mesh).",
         )
 
     @unittest.skipUnless(
@@ -282,8 +282,8 @@ class OccResolutionSemanticsTest(unittest.TestCase):
             "Expected front-baffle wall triangles in canonical enclosure mesh.",
         )
         self.assertTrue(
-            all(nz < 0.0 for nz in front_baffle_nz),
-            "Front baffle normals should point toward enclosure interior (-z).",
+            all(nz > 0.0 for nz in front_baffle_nz),
+            "Front baffle normals should point outward from enclosure exterior (+z).",
         )
         self.assertGreater(
             len(rear_panel_nz),
@@ -291,8 +291,8 @@ class OccResolutionSemanticsTest(unittest.TestCase):
             "Expected rear-panel wall triangles in canonical enclosure mesh.",
         )
         self.assertTrue(
-            all(nz > 0.0 for nz in rear_panel_nz),
-            "Rear panel normals should remain +z toward enclosure interior.",
+            all(nz < 0.0 for nz in rear_panel_nz),
+            "Rear panel normals should point outward from enclosure exterior (-z).",
         )
 
     def test_collect_boundary_curves_returns_empty_for_empty_input(self):

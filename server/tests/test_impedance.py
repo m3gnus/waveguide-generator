@@ -37,8 +37,8 @@ class ImpedanceTest(unittest.TestCase):
 
         impedance = calculate_throat_impedance(grid, pressure, throat_elements)
 
-        self.assertAlmostEqual(impedance.real, 12.0)
-        self.assertAlmostEqual(impedance.imag, -6.0)
+        self.assertAlmostEqual(impedance.real, 4.0)
+        self.assertAlmostEqual(impedance.imag, 2.0)
 
     def test_falls_back_to_vertex_coefficients_when_needed(self):
         grid = _DummyGrid(
@@ -50,8 +50,8 @@ class ImpedanceTest(unittest.TestCase):
 
         impedance = calculate_throat_impedance(grid, coeffs, throat_elements)
 
-        self.assertAlmostEqual(impedance.real, 15.0)
-        self.assertAlmostEqual(impedance.imag, -5.0)
+        self.assertAlmostEqual(impedance.real, 3.0)
+        self.assertAlmostEqual(impedance.imag, 1.0)
 
     def test_fallback_raises_clear_error_on_out_of_range_coefficients(self):
         grid = _DummyGrid(

@@ -45,18 +45,11 @@ from .deps import GMSH_AVAILABLE, gmsh
 from .gmsh_geo_mesher import gmsh_lock, parse_msh_stats, GmshMeshingError
 
 
-# ---------------------------------------------------------------------------
 # ATH expression evaluation
 # ---------------------------------------------------------------------------
 
 def _expression_to_callable(expr_str: str):
-    """Convert an ATH math expression (may contain parameter 'p') to a Python callable.
-
-    ATH syntax uses ^ for power. 'p' represents the angle phi around the
-    waveguide axis in [0, 2*pi).
-
-    Returns a callable(p: float) -> float.
-    """
+    """Convert ATH math expression (may contain 'p' for phi) to callable."""
     expr = expr_str.strip().replace("^", "**")
     ns = {
         "abs": abs, "cos": math.cos, "sin": math.sin, "tan": math.tan,
@@ -70,20 +63,14 @@ def _expression_to_callable(expr_str: str):
     def fn(p: float) -> float:
         local_ns = dict(ns)
         local_ns["p"] = p
-        return float(eval(expr, {"__builtins__": {}}, local_ns))  # noqa: S307
+        return float(eval(expr, {"__builtins__": {}}, local_ns))
 
-    try:
-        fn(0.0)
-    except Exception as exc:
-        raise ValueError(f"Failed to evaluate ATH expression '{expr_str}': {exc}") from exc
+    fn(0.0)
     return fn
 
 
 def _make_callable(value, default: float = 0.0):
-    """Return a callable(p) from a numeric value, ATH expression string, or None.
-
-    If value is None or empty string, returns a callable that returns default.
-    """
+    """Convert numeric value or ATH expression string to callable(p)."""
     if value is None or value == "":
         return lambda p, _d=default: _d
     if callable(value):
@@ -94,7 +81,6 @@ def _make_callable(value, default: float = 0.0):
     text = str(value).strip()
     if not text:
         return lambda p, _d=default: _d
-    # Check for 'p' as a variable token (not inside 'exp', 'pi', etc.)
     if re.search(r"(?<![a-zA-Z])p(?![a-zA-Z])", text):
         return _expression_to_callable(text)
     try:
@@ -104,13 +90,49 @@ def _make_callable(value, default: float = 0.0):
         return _expression_to_callable(text)
 
 
+# ---------------------------------------------------------------------------
+# Parameter extraction helpers
+# ---------------------------------------------------------------------------
+
+def _get_float(params: dict, key: str, default: float = 0.0) -> float:
+    """Get float param with default, handling various falsy values."""
+    val = params.get(key, default)
+    if val is None or val == "":
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _get_int(params: dict, key: str, default: int = 0) -> int:
+    """Get int param with default, handling various falsy values."""
+    val = params.get(key, default)
+    if val is None or val == "":
+        return default
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return default
+
+
+def _get_bool(params: dict, key: str, default: bool = False) -> bool:
+    """Get bool param with default."""
+    val = params.get(key)
+    if val is None or val == "":
+        return default
+    try:
+        return bool(int(float(val)))
+    except (ValueError, TypeError):
+        return default
+
+
 def _parse_number_list(text) -> List[float]:
-    """Parse comma-separated number list, returns [] if empty or invalid."""
+    """Parse comma-separated number list."""
     if not text or not str(text).strip():
         return []
-    parts = [p.strip() for p in str(text).split(",")]
     try:
-        return [float(p) for p in parts if p]
+        return [float(p.strip()) for p in str(text).split(",") if p.strip()]
     except ValueError:
         return []
 
@@ -159,16 +181,12 @@ def _compute_rosse_profile(
     sqrt_r2_m2 = math.sqrt(r ** 2 + m ** 2)
     x_scale2 = b * L * (math.sqrt(r ** 2 + (1.0 - m) ** 2) - sqrt_r2_m2)
 
-    x_arr = np.empty_like(t_actual)
-    y_arr = np.empty_like(t_actual)
-
-    for i, t in enumerate(t_actual):
-        x_val = L * (sqrt_r2_m2 - math.sqrt(r ** 2 + (t - m) ** 2)) + x_scale2 * t ** 2
-        tq = t ** q
-        y_os = math.sqrt(c1 + c2 * L * t + c3 * L ** 2 * t ** 2) + r0 * (1.0 - k)
-        y_term = R + L * (1.0 - math.sqrt(1.0 + c3 * (t - 1.0) ** 2))
-        y_arr[i] = (1.0 - tq) * y_os + tq * y_term
-        x_arr[i] = x_val
+    # Vectorised: all operations are element-wise NumPy, no Python loop.
+    x_arr = L * (sqrt_r2_m2 - np.sqrt(r ** 2 + (t_actual - m) ** 2)) + x_scale2 * t_actual ** 2
+    tq = t_actual ** q
+    y_os = np.sqrt(np.maximum(0.0, c1 + c2 * L * t_actual + c3 * L ** 2 * t_actual ** 2)) + r0 * (1.0 - k)
+    y_term = R + L * (1.0 - np.sqrt(1.0 + c3 * (t_actual - 1.0) ** 2))
+    y_arr = (1.0 - tq) * y_os + tq * y_term
 
     return x_arr, y_arr, L
 
@@ -284,13 +302,13 @@ def _evaluate_circular_arc(z_main: float, r0_main: float, mouth_r: float,
 
 def _parse_superformula_params(params: dict) -> dict:
     """Parse superformula parameters from gcurve_sf string or individual fields."""
-    a = float(params.get("gcurve_sf_a") or 1)
-    b = float(params.get("gcurve_sf_b") or 1)
-    m1 = float(params.get("gcurve_sf_m1") or 0)
-    m2 = float(params.get("gcurve_sf_m2") or 0)
-    n1 = float(params.get("gcurve_sf_n1") or 1)
-    n2 = float(params.get("gcurve_sf_n2") or 1)
-    n3 = float(params.get("gcurve_sf_n3") or 1)
+    a = _get_float(params, "gcurve_sf_a", 1.0)
+    b = _get_float(params, "gcurve_sf_b", 1.0)
+    m1 = _get_float(params, "gcurve_sf_m1", 0.0)
+    m2 = _get_float(params, "gcurve_sf_m2", 0.0)
+    n1 = _get_float(params, "gcurve_sf_n1", 1.0)
+    n2 = _get_float(params, "gcurve_sf_n2", 1.0)
+    n3 = _get_float(params, "gcurve_sf_n3", 1.0)
 
     lst = _parse_number_list(params.get("gcurve_sf", ""))
     if len(lst) >= 6:
@@ -302,22 +320,22 @@ def _parse_superformula_params(params: dict) -> dict:
 
 def _compute_guiding_curve_radius(phi: float, params: dict) -> Optional[float]:
     """Guiding curve radius at azimuthal angle phi. Returns None if disabled."""
-    gcurve_type = int(float(params.get("gcurve_type", 0) or 0))
+    gcurve_type = _get_int(params, "gcurve_type", 0)
     if gcurve_type == 0:
         return None
 
-    width = float(params.get("gcurve_width", 0) or 0)
+    width = _get_float(params, "gcurve_width", 0.0)
     if width <= 0:
         return None
 
-    aspect = float(params.get("gcurve_aspect_ratio", 1) or 1)
-    rot = math.radians(float(params.get("gcurve_rot", 0) or 0))
+    aspect = _get_float(params, "gcurve_aspect_ratio", 1.0)
+    rot = math.radians(_get_float(params, "gcurve_rot", 0.0))
     pr = phi - rot
     cos_pr = math.cos(pr)
     sin_pr = math.sin(pr)
 
     if gcurve_type == 1:  # superellipse
-        n = max(2.0, float(params.get("gcurve_se_n", 3) or 3))
+        n = max(2.0, _get_float(params, "gcurve_se_n", 3.0))
         a = width / 2.0
         b_val = a * aspect
         if a <= 0 or b_val <= 0:
@@ -365,29 +383,67 @@ def _compute_coverage_from_guiding_curve(
     return _invert_osse_coverage_angle(target_r, z_main, r0_main, a0_deg, k, s, n, q, L)
 
 
+def _build_osse_callables(params: dict) -> dict:
+    """Pre-build all OSSE parameter callables from the params dict.
+
+    Call once per params dict (outside the phi loop) and pass the result to
+    _compute_osse_profile_arrays via the `callables` argument.  This avoids
+    repeated regex + eval compilation (≈500-1000 calls per mesh build).
+    """
+    return {
+        "L":                  _make_callable(params.get("L", 120), default=120.0),
+        "throat_ext_length":  _make_callable(params.get("throat_ext_length", 0)),
+        "slot_length":        _make_callable(params.get("slot_length", 0)),
+        "throat_ext_angle":   _make_callable(params.get("throat_ext_angle", 0)),
+        "r0":                 _make_callable(params.get("r0", 12.7), default=12.7),
+        "a0":                 _make_callable(params.get("a0", 15.5), default=15.5),
+        "k":                  _make_callable(params.get("k", 1.0), default=1.0),
+        "s":                  _make_callable(params.get("s", 0.0)),
+        "n":                  _make_callable(params.get("n", 4.0), default=4.0),
+        "q":                  _make_callable(params.get("q", 0.995), default=0.995),
+        "h":                  _make_callable(params.get("h", 0.0)),
+        "a":                  _make_callable(params.get("a", "60"), default=60.0),
+        "rot":                _make_callable(params.get("rot", 0)),
+        "gcurve_dist":        _make_callable(params.get("gcurve_dist", 0.5), default=0.5),
+    }
+
+
 def _compute_osse_profile_arrays(
-    t_values: np.ndarray, phi: float, params: dict
+    t_values: np.ndarray, phi: float, params: dict,
+    callables: Optional[dict] = None,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """Compute OSSE profile (x_axial, y_radial) for t ∈ [0, 1].
 
     Returns (x_arr, y_arr, total_length).
-    """
-    L_fn = _make_callable(params.get("L", 120), default=120.0)
-    L = L_fn(phi)
-    ext_len = max(0.0, _make_callable(params.get("throat_ext_length", 0))(phi))
-    slot_len = max(0.0, _make_callable(params.get("slot_length", 0))(phi))
-    total_length = L + ext_len + slot_len
-    ext_angle_rad = math.radians(_make_callable(params.get("throat_ext_angle", 0))(phi))
 
-    r0_base = _make_callable(params.get("r0", 12.7), default=12.7)(phi)
-    a0_deg = _make_callable(params.get("a0", 15.5), default=15.5)(phi)
+    Args:
+        callables: Pre-built callable dict from _build_osse_callables().  When
+                   provided, no _make_callable calls are made inside this
+                   function, eliminating regex/eval overhead per phi slice.
+    """
+    _c = callables  # shorthand
+
+    def _get(key, *args, **kwargs):
+        """Evaluate pre-built callable or fall back to building one inline."""
+        if _c is not None and key in _c:
+            return _c[key](phi)
+        return _make_callable(params.get(key, *args), **kwargs)(phi)
+
+    L = _get("L", 120, default=120.0)
+    ext_len = max(0.0, _get("throat_ext_length", 0))
+    slot_len = max(0.0, _get("slot_length", 0))
+    total_length = L + ext_len + slot_len
+    ext_angle_rad = math.radians(_get("throat_ext_angle", 0))
+
+    r0_base = _get("r0", 12.7, default=12.7)
+    a0_deg = _get("a0", 15.5, default=15.5)
     r0_main = r0_base + ext_len * math.tan(ext_angle_rad)
 
-    k = _make_callable(params.get("k", 1.0), default=1.0)(phi)
-    s_val = _make_callable(params.get("s", 0.0))(phi)
-    n_val = _make_callable(params.get("n", 4.0), default=4.0)(phi)
-    q_val = _make_callable(params.get("q", 0.995), default=0.995)(phi)
-    h_val = _make_callable(params.get("h", 0.0))(phi)
+    k = _get("k", 1.0, default=1.0)
+    s_val = _get("s", 0.0)
+    n_val = _get("n", 4.0, default=4.0)
+    q_val = _get("q", 0.995, default=0.995)
+    h_val = _get("h", 0.0)
 
     # Coverage angle — from guiding curve or direct expression
     gcurve_type = int(float(params.get("gcurve_type", 0) or 0))
@@ -396,10 +452,9 @@ def _compute_osse_profile_arrays(
             phi, params, r0_main, a0_deg, k, s_val, n_val, q_val, L,
             ext_len, slot_len, total_length,
         )
-        a_fn = _make_callable(params.get("a", "60"), default=60.0)
-        coverage_angle = cov_from_gcurve if cov_from_gcurve is not None else a_fn(phi)
+        coverage_angle = cov_from_gcurve if cov_from_gcurve is not None else _get("a", "60", default=60.0)
     else:
-        coverage_angle = _make_callable(params.get("a", "60"), default=60.0)(phi)
+        coverage_angle = _get("a", "60", default=60.0)
 
     a_cov_rad = math.radians(coverage_angle)
 
@@ -408,7 +463,7 @@ def _compute_osse_profile_arrays(
     circ_arc_term_angle = float(params.get("circ_arc_term_angle", 1) or 1)
     mouth_r_for_arc = r0_main + L * math.tan(a_cov_rad)
 
-    rot_deg = _make_callable(params.get("rot", 0))(phi)
+    rot_deg = _get("rot", 0)
     do_rot = abs(rot_deg) > 1e-9
 
     x_arr = np.empty_like(t_values)
@@ -642,8 +697,10 @@ def _compute_point_grids(params: dict) -> Tuple[np.ndarray, Optional[np.ndarray]
             raw_y[i] = y_arr
 
     elif formula_type == "OSSE":
+        # Pre-build all callables once — avoids regex/eval inside the phi loop.
+        osse_callables = _build_osse_callables(params)
         for i, phi in enumerate(phi_values):
-            x_arr, y_arr, _ = _compute_osse_profile_arrays(t_values, phi, params)
+            x_arr, y_arr, _ = _compute_osse_profile_arrays(t_values, phi, params, callables=osse_callables)
             raw_x[i] = x_arr
             raw_y[i] = y_arr
 
@@ -652,19 +709,33 @@ def _compute_point_grids(params: dict) -> Tuple[np.ndarray, Optional[np.ndarray]
             f"Unsupported formula_type '{formula_type}'. Use 'R-OSSE' or 'OSSE'."
         )
 
-    # Precompute per-slice morph target extents (two-pass approach matching JS engine)
-    morph_info = _compute_morph_target_info(raw_y, phi_values, params, morph_target)
+    # Morph: when explicit morph_width AND morph_height are both provided, the
+    # target radius is fully determined per-point (no cross-phi max needed), so
+    # we can skip the two-pass approach and apply morph in a single pass below.
+    # When only one or neither is explicit, the two-pass is still needed to
+    # compute per-slice half_w/half_h from the cross-phi radial extents.
+    morph_width = float(params.get("morph_width", 0) or 0)
+    morph_height = float(params.get("morph_height", 0) or 0)
+    has_explicit_morph_dims = morph_target != 0 and morph_width > 0 and morph_height > 0
+
+    if has_explicit_morph_dims:
+        morph_info = None  # _apply_morph handles explicit dims without morph_target_info
+    else:
+        # Precompute per-slice morph target extents (two-pass approach matching JS engine)
+        morph_info = _compute_morph_target_info(raw_y, phi_values, params, morph_target)
 
     # Build 3D inner points with morph applied to the radial (y) coordinate
     inner_points = np.zeros((n_phi, n_length + 1, 3))
     for i, phi in enumerate(phi_values):
+        cos_phi = math.cos(phi)
+        sin_phi = math.sin(phi)
         for j, t in enumerate(t_values):
             y_m = _apply_morph(
                 raw_y[i, j], t, phi, params,
                 morph_info[j] if morph_info is not None else None,
             )
-            inner_points[i, j, 0] = y_m * math.cos(phi)
-            inner_points[i, j, 1] = y_m * math.sin(phi)
+            inner_points[i, j, 0] = y_m * cos_phi
+            inner_points[i, j, 1] = y_m * sin_phi
             inner_points[i, j, 2] = raw_x[i, j]
 
     # Outer wall shell: only when wall_thickness > 0 AND no enclosure box is used.
@@ -732,42 +803,30 @@ def _compute_outer_points(
     return outer_points
 
 
-# ---------------------------------------------------------------------------
 # Gmsh geometry construction (OCC kernel)
 # ---------------------------------------------------------------------------
 
 def _make_wire(points_2d: np.ndarray, closed: bool = True) -> int:
-    """Create a BSpline wire from an (n, 3) array of 3D points.
-
-    closed=True creates a closed loop (full 360° profiles).
-    Returns Gmsh wire tag.
-    """
+    """Create a BSpline wire from an (n, 3) array of 3D points."""
     n = points_2d.shape[0]
-    pt_tags = []
-    for i in range(n):
-        x, y, z = float(points_2d[i, 0]), float(points_2d[i, 1]), float(points_2d[i, 2])
-        pt_tags.append(gmsh.model.occ.addPoint(x, y, z))
+    pt_tags = [gmsh.model.occ.addPoint(float(points_2d[i, 0]), float(points_2d[i, 1]), float(points_2d[i, 2])) for i in range(n)]
     if closed:
         pt_tags.append(pt_tags[0])
     spline = gmsh.model.occ.addBSpline(pt_tags)
-    wire = gmsh.model.occ.addWire([spline])
-    return wire
+    return gmsh.model.occ.addWire([spline])
 
 
 def _make_closed_wire_and_loop(points_2d: np.ndarray) -> Tuple[int, int]:
     """Create a closed BSpline wire and its curve loop tag."""
     n = points_2d.shape[0]
-    pt_tags = []
-    for i in range(n):
-        x, y, z = float(points_2d[i, 0]), float(points_2d[i, 1]), float(points_2d[i, 2])
-        pt_tags.append(gmsh.model.occ.addPoint(x, y, z))
+    pt_tags = [gmsh.model.occ.addPoint(float(points_2d[i, 0]), float(points_2d[i, 1]), float(points_2d[i, 2])) for i in range(n)]
     pt_tags.append(pt_tags[0])
     spline = gmsh.model.occ.addBSpline(pt_tags)
     wire = gmsh.model.occ.addWire([spline])
     try:
-        loop = gmsh.model.occ.addCurveLoop([int(spline)], reorient=True)
+        loop = gmsh.model.occ.addCurveLoop([spline], reorient=True)
     except TypeError:
-        loop = gmsh.model.occ.addCurveLoop([int(spline)])
+        loop = gmsh.model.occ.addCurveLoop([spline])
     return int(wire), int(loop)
 
 
@@ -1406,7 +1465,7 @@ def _generate_enclosure_points_from_angles(
         )
     return outer_pts, inset_pts, clamped_edge
 
-
+# This is a part of the front baffle build process for closed (full-circle) horns.  The "enclosure box" is a viewport-aligned rectangular box that fully contains the horn mouth and extends back along the z-axis by enc_depth.
 def _ring_points_from_xy_plan(
     plan_pts: List[Tuple[float, float, float, float]],
     *,
@@ -1539,8 +1598,11 @@ def _build_enclosure_box(
             reuse_mouth_as_ring0 = False
             break
 
+# This builds the front baffle
     ring0_wire: Optional[int] = None
+    ring0_loop: Optional[int] = None
     if not reuse_mouth_as_ring0:
+        # Build front baffle with inset ring (when enc_edge > 0)
         ring0_pts = _ring_points_from_xy_plan(inset_pts, z=z_front)
         ring0_wire, ring0_loop = _make_closed_wire_and_loop(ring0_pts)
         try:
@@ -1550,6 +1612,18 @@ def _build_enclosure_box(
             # Fallback for non-planar tolerance issues: ruled patch.
             generated_dimtags.extend(_add_ruled_section(current_profile, ring0_wire))
         current_profile = ring0_wire
+    else:
+        # Build front baffle without inset ring (when enc_edge == 0)
+        # Create a front plane surface from the outer boundary box points at z_front
+        # This creates a flat front baffle that seals the enclosure at the horn mouth
+        front_pts = _ring_points_from_xy_plan(outer_pts, z=z_front)
+        front_wire, front_loop = _make_closed_wire_and_loop(front_pts)
+        try:
+            front_tag = int(gmsh.model.occ.addPlaneSurface([int(front_loop)]))
+            generated_dimtags.append((2, front_tag))
+        except Exception:
+            # Fallback: ruled surface from mouth to front
+            generated_dimtags.extend(_add_ruled_section(mouth_loop, front_wire))
 
     edge_slices = max(1, axial_segs) if edge_depth > 0.0 else 0
     for j in range(1, edge_slices + 1):
@@ -1864,7 +1938,7 @@ def _extract_triangle_block(
 
 
 def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str, List[float]]:
-    """Extract flat canonical mesh arrays (vertices, indices, surfaceTags) from current gmsh model."""
+    """Extract flat canonical mesh arrays (vertices, indices, surfaceTags, elementTags) from current gmsh model."""
     node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
     if len(node_tags) == 0 or len(node_coords) == 0:
         return {"vertices": [], "indices": [], "surfaceTags": []}
@@ -1891,6 +1965,7 @@ def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str
 
     indices: List[int] = []
     surface_tags: List[int] = []
+    element_tags: List[int] = []
     for tri_idx, elem_tag in enumerate(tri_tags):
         n0 = tri_nodes[tri_idx * 3]
         n1 = tri_nodes[tri_idx * 3 + 1]
@@ -1906,11 +1981,13 @@ def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str
                 f"Missing node mapping for triangle element tag {elem_tag}."
             ) from exc
         surface_tags.append(int(element_surface_tag.get(int(elem_tag), default_surface_tag)))
+        element_tags.append(int(elem_tag))
 
     return {
         "vertices": node_coords_f,
         "indices": indices,
         "surfaceTags": surface_tags,
+        "elementTags": element_tags,
     }
 
 
@@ -1921,12 +1998,12 @@ def _orient_and_validate_canonical_mesh(
     require_single_boundary_loop: bool,
     allow_tagged_loop_bridge: bool = False,
     flip_surface_tags: Optional[Set[int]] = None,
-    fix_front_baffle_normals: bool = False,
-) -> Dict[str, List[float]]:
+) -> Dict[str, Any]:
     """Orient canonical triangles consistently and validate topology."""
     vertices = canonical_mesh.get("vertices", [])
     indices = list(canonical_mesh.get("indices", []))
     surface_tags = list(canonical_mesh.get("surfaceTags", []))
+    element_tags = list(canonical_mesh.get("elementTags", []))
 
     if len(vertices) % 3 != 0:
         raise GmshMeshingError("Canonical mesh has invalid vertex buffer length.")
@@ -1958,6 +2035,7 @@ def _orient_and_validate_canonical_mesh(
 
     welded_indices: List[int] = []
     welded_surface_tags: List[int] = []
+    welded_element_tags: List[int] = []
     for tri_idx in range(tri_count):
         a = int(old_to_new[int(indices[tri_idx * 3])])
         b = int(old_to_new[int(indices[tri_idx * 3 + 1])])
@@ -1966,14 +2044,19 @@ def _orient_and_validate_canonical_mesh(
             continue
         welded_indices.extend([a, b, c])
         welded_surface_tags.append(int(surface_tags[tri_idx]))
+        if element_tags:
+            welded_element_tags.append(int(element_tags[tri_idx]))
 
     vertices = np.asarray(welded_points, dtype=float).reshape(-1).tolist()
     indices = welded_indices
     surface_tags = welded_surface_tags
+    element_tags = welded_element_tags
     vertex_count = len(vertices) // 3
     tri_count = len(indices) // 3
     if tri_count == 0:
         raise GmshMeshingError("Canonical mesh collapsed after node welding.")
+    # Tracks element tags that should be flipped in the underlying Gmsh model.
+    flipped_mask = np.zeros(tri_count, dtype=bool)
 
     def build_edge_uses(
         in_indices: List[int],
@@ -2067,7 +2150,7 @@ def _orient_and_validate_canonical_mesh(
         tag_a: int,
         tag_b: int,
         bridge_tag: int,
-    ) -> bool:
+    ) -> List[int]:
         loops_with_tags = extract_boundary_loops_with_tags(in_edge_uses, in_surface_tags)
         loop_a: Optional[List[int]] = None
         loop_b: Optional[List[int]] = None
@@ -2160,7 +2243,7 @@ def _orient_and_validate_canonical_mesh(
             in_surface_tags.append(int(bridge_tag))
             added += 1
 
-        return added > 0
+        return [added]  # Legacy placeholder
 
     edge_uses = build_edge_uses(indices, vertex_count)
     if require_watertight and allow_tagged_loop_bridge:
@@ -2174,6 +2257,11 @@ def _orient_and_validate_canonical_mesh(
             bridge_tag=1,
         ):
             tri_count = len(indices) // 3
+            # If we stitch, the new triangles don't have element tags matching
+            # the Gmsh model yet, so we don't track them in flipped_mask for reverseElements.
+            old_mask_len = len(flipped_mask)
+            if tri_count > old_mask_len:
+                flipped_mask = np.append(flipped_mask, np.zeros(tri_count - old_mask_len, dtype=bool))
             edge_uses = build_edge_uses(indices, vertex_count)
 
     adjacency: Dict[int, List[Tuple[int, int]]] = {i: [] for i in range(tri_count)}
@@ -2260,6 +2348,7 @@ def _orient_and_validate_canonical_mesh(
             continue
         i0 = tri_idx * 3
         indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+        flipped_mask[tri_idx] = not flipped_mask[tri_idx]
 
     if require_watertight:
         coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
@@ -2277,6 +2366,7 @@ def _orient_and_validate_canonical_mesh(
             for tri_idx in range(tri_count):
                 i0 = tri_idx * 3
                 indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+                flipped_mask[tri_idx] = not flipped_mask[tri_idx]
     else:
         coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
         center = np.mean(coords, axis=0)
@@ -2293,6 +2383,7 @@ def _orient_and_validate_canonical_mesh(
             for tri_idx in range(tri_count):
                 i0 = tri_idx * 3
                 indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+                flipped_mask[tri_idx] = not flipped_mask[tri_idx]
 
     if flip_surface_tags:
         flip_tags = {int(tag) for tag in flip_surface_tags}
@@ -2301,39 +2392,21 @@ def _orient_and_validate_canonical_mesh(
                 continue
             i0 = tri_idx * 3
             indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+            flipped_mask[tri_idx] = not flipped_mask[tri_idx]
 
-    if fix_front_baffle_normals:
-        coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
-        z_top = float(np.max(coords[:, 2]))
-        z_bot = float(np.min(coords[:, 2]))
-        z_span = max(abs(z_top - z_bot), 1e-6)
-        z_eps = max(1e-4, z_span * 1e-3)
-        for tri_idx in range(tri_count):
-            if int(surface_tags[tri_idx]) != 1:
-                continue
-            i0 = tri_idx * 3
-            p0 = coords[int(indices[i0])]
-            p1 = coords[int(indices[i0 + 1])]
-            p2 = coords[int(indices[i0 + 2])]
-            tri_centroid_z = float((p0[2] + p1[2] + p2[2]) / 3.0)
-            if abs(tri_centroid_z - z_top) > z_eps:
-                continue
-            tri_normal = np.cross(p1 - p0, p2 - p0)
-            nlen = float(np.linalg.norm(tri_normal))
-            if not math.isfinite(nlen) or nlen <= 1e-12:
-                continue
-            # Restrict to near-planar top baffle triangles (not horn sidewall near mouth).
-            if abs(float(tri_normal[2])) < 0.8 * nlen:
-                continue
-            # Enclosure canonical convention keeps wall normals facing enclosure interior.
-            # On the front baffle plane (max z), that means normal z should be negative.
-            if float(tri_normal[2]) > 0.0:
-                indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+    flipped_element_tags = []
+    if element_tags:
+        # We only return tags that exist in the original Gmsh model.
+        # Stitched triangles (if any) won't have matching tags.
+        for tri_idx, is_flipped in enumerate(flipped_mask):
+            if is_flipped and tri_idx < len(element_tags):
+                flipped_element_tags.append(element_tags[tri_idx])
 
     return {
         "vertices": vertices,
         "indices": indices,
         "surfaceTags": surface_tags,
+        "flippedElementTags": flipped_element_tags,
     }
 
 
@@ -2477,34 +2550,6 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             # Safe to call after enclosure's internal synchronize — it is idempotent.
             gmsh.model.occ.synchronize()
 
-            # Orient surface normals to match ABEC/ATH reference convention:
-            #   - Inner horn: normals point INWARD (toward the horn axis / cavity).
-            #     Gmsh OCC BSpline surfaces default to outward; setReverse flips them.
-            #   - Rear disc: normals point rearward (−z direction).
-            # setReverse must be called after synchronize() and before generate().
-            if enc_depth == 0 and outer_points is not None:
-                all_model_surfaces = {tag for _, tag in gmsh.model.getEntities(2)}
-                for _, tag in inner_dimtags:
-                    if tag in all_model_surfaces:
-                        gmsh.model.mesh.setReverse(2, tag)
-                for _, tag in rear_dimtags:
-                    if tag in all_model_surfaces:
-                        gmsh.model.mesh.setReverse(2, tag)
-            elif enc_depth > 0 and closed:
-                # Enclosure mode: keep wall normals aligned with viewport convention.
-                all_model_surfaces = {tag for _, tag in gmsh.model.getEntities(2)}
-                for _, tag in inner_dimtags:
-                    if tag in all_model_surfaces:
-                        gmsh.model.mesh.setReverse(2, tag)
-                # The front baffle (addPlaneSurface) naturally produces -z normals
-                # (correct: pointing toward the enclosure interior). The swept
-                # side/back surfaces (addThruSections) naturally point outward and
-                # need setReverse. Exclude front baffle tags to avoid double-flip.
-                front_baffle_tags = set(enc_data.get("front", []))
-                for _, tag in enc_data.get("dimtags", []):
-                    if tag in all_model_surfaces and tag not in front_baffle_tags:
-                        gmsh.model.mesh.setReverse(2, tag)
-
             # --- Surface groups ---
             surface_groups: Dict[str, List[int]] = {
                 "inner": [tag for _, tag in inner_dimtags],
@@ -2554,16 +2599,19 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             gmsh.model.mesh.generate(2)
             gmsh.model.mesh.removeDuplicateNodes()
             canonical_mesh = _extract_canonical_mesh_from_model() if include_canonical else None
+
             if canonical_mesh is not None:
-                require_closed_mesh = bool(closed and enc_depth > 0)
                 canonical_mesh = _orient_and_validate_canonical_mesh(
                     canonical_mesh,
-                    require_watertight=require_closed_mesh,
+                    require_watertight=True,
                     require_single_boundary_loop=False,
-                    allow_tagged_loop_bridge=bool(closed and enc_depth > 0),
-                    flip_surface_tags={1} if (closed and enc_depth > 0) else None,
-                    fix_front_baffle_normals=bool(closed and enc_depth > 0),
                 )
+                flipped_tags = canonical_mesh.get("flippedElementTags", [])
+                if flipped_tags:
+                    gmsh.model.mesh.reverseElements(flipped_tags)
+
+            # Trust Gmsh to produce valid, consistently-oriented mesh
+            if canonical_mesh is not None:
                 tri_count = len(canonical_mesh["indices"]) // 3
                 if len(canonical_mesh["surfaceTags"]) != tri_count:
                     raise GmshMeshingError(
