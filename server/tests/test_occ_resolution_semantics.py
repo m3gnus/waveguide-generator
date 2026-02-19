@@ -586,6 +586,26 @@ class OccBemMeshTopologyTest(unittest.TestCase):
         "sim_type": 2,
         "msh_version": "2.2",
     }
+    _OSSE_BASE_PARAMS = {
+        "formula_type": "OSSE",
+        "L": "130",
+        "a": "45 - 5*cos(2*p)^5 - 2*sin(p)^12",
+        "a0": 10.0,
+        "r0": 12.7,
+        "k": 7.0,
+        "s": "0.85 + 0.3*cos(p)^2",
+        "n": 4.0,
+        "q": 0.991,
+        "h": 0.0,
+        "n_angular": 80,
+        "n_length": 20,
+        "throat_res": 5.0,
+        "mouth_res": 10.0,
+        "rear_res": 10.0,
+        "quadrants": 1234,
+        "sim_type": 2,
+        "msh_version": "2.2",
+    }
 
     @staticmethod
     def _iter_msh_triangles(msh_text):
@@ -652,6 +672,27 @@ class OccBemMeshTopologyTest(unittest.TestCase):
         )
         self.assertIn(1, tag_counts, "Mesh must have tag 1 (SD1G0: all rigid wall surfaces).")
         self.assertIn(2, tag_counts, "Mesh must have tag 2 (SD1D1001: throat source disc).")
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_osse_freestanding_wall_mesh_builds_without_loop_errors(self):
+        """OSSE thickened free-standing OCC builds must mesh without loop failures."""
+        from collections import Counter
+        from solver.waveguide_builder import build_waveguide_mesh
+
+        params = dict(self._OSSE_BASE_PARAMS)
+        params["wall_thickness"] = 6.0
+        params["enc_depth"] = 0.0
+
+        result = build_waveguide_mesh(params, include_canonical=True)
+        canonical = result["canonical_mesh"]
+        tag_counts = Counter(canonical["surfaceTags"])
+
+        self.assertGreater(len(canonical["indices"]), 0, "Expected non-empty OSSE canonical triangle mesh.")
+        self.assertIn(1, tag_counts, "OSSE freestanding wall mesh must include wall tag 1.")
+        self.assertIn(2, tag_counts, "OSSE freestanding wall mesh must include source tag 2.")
 
     @unittest.skipUnless(
         GMSH_OCC_RUNTIME_READY,

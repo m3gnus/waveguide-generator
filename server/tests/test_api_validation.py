@@ -98,6 +98,37 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn("waveguide_params", str(ctx.exception.detail))
 
+    def test_occ_adaptive_requires_enclosure_or_wall_shell(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            options={
+                "mesh": {
+                    "strategy": "occ_adaptive",
+                    "waveguide_params": {
+                        "formula_type": "OSSE",
+                        "enc_depth": 0.0,
+                        "wall_thickness": 0.0,
+                    },
+                }
+            },
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(submit_simulation(request))
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn("Increase enclosure depth or wall thickness", str(ctx.exception.detail))
+
     def test_occ_adaptive_runtime_gate_returns_503(self):
         request = SimulationRequest(
             mesh=MeshData(
