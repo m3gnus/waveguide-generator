@@ -93,6 +93,15 @@ app.add_middleware(
 jobs: Dict[str, Dict[str, Any]] = {}
 
 
+def _validate_occ_adaptive_bem_shell(enc_depth: float, wall_thickness: float) -> None:
+    """Adaptive BEM requires either enclosure volume or wall shell thickness."""
+    if float(enc_depth) <= 0.0 and float(wall_thickness) <= 0.0:
+        raise ValueError(
+            "Adaptive BEM simulation requires a closed shell. "
+            "Increase enclosure depth or wall thickness."
+        )
+
+
 def _is_terminal_status(status: str) -> bool:
     return status in {"complete", "error", "cancelled"}
 
@@ -616,6 +625,13 @@ async def submit_simulation(request: SimulationRequest):
                 status_code=422,
                 detail=f"Invalid options.mesh.waveguide_params: {exc.errors()}"
             ) from exc
+        try:
+            _validate_occ_adaptive_bem_shell(
+                validated_waveguide.enc_depth,
+                validated_waveguide.wall_thickness,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         # BEM solve path always builds full-domain geometry.
         # Backend symmetry optimization can still reduce internally when safe.
         if int(validated_waveguide.quadrants) != 1234:
@@ -875,6 +891,7 @@ async def run_simulation(job_id: str, request: SimulationRequest):
 
             update_job_stage(job_id, "mesh_prepare", progress=0.15, stage_message="Building adaptive OCC mesh")
             validated = WaveguideParamsRequest(**waveguide_params)
+            _validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
             requested_quadrants = int(validated_payload.get("quadrants", 1234))
             # Ensure OCC adaptive simulation mesh is always generated as full domain.
