@@ -996,7 +996,11 @@ def _build_mouth_rim(
 
 
 def _build_rear_disc_assembly(
-    outer_points: np.ndarray, wall_thickness: float, closed: bool
+    outer_points: np.ndarray,
+    wall_thickness: float,
+    closed: bool,
+    *,
+    outer_dimtags: Optional[List[Tuple[int, int]]] = None,
 ) -> List[Tuple[int, int]]:
     """Build the rear closure of the outer wall shell: axial step face + flat disc.
 
@@ -1013,6 +1017,32 @@ def _build_rear_disc_assembly(
     Using addPlaneSurface instead of addSurfaceFilling avoids the slow OCC curved-surface
     solver for what is always a flat planar region.
     """
+    # Preferred path: reuse actual outer-surface throat boundary curves so the rear
+    # closure is topologically attached to the outer wall without OCC boolean fragment.
+    # This avoids loop failures from fragment-induced tiny self-intersections.
+    if outer_dimtags:
+        throat_curves = _boundary_curves_at_z_extreme(outer_dimtags, want_min_z=True)
+        if throat_curves:
+            front_loop = _add_curve_loop_from_curves(throat_curves)
+            copied_dimtags = gmsh.model.occ.copy([(1, int(curve)) for curve in throat_curves])
+            copied_curves = [int(tag) for dim, tag in copied_dimtags if int(dim) == 1]
+            if copied_curves:
+                gmsh.model.occ.translate(
+                    [(1, int(curve)) for curve in copied_curves],
+                    0.0,
+                    0.0,
+                    -float(wall_thickness),
+                )
+                rear_loop = _add_curve_loop_from_curves(copied_curves)
+                annular_dimtags = gmsh.model.occ.addThruSections(
+                    [int(front_loop), int(rear_loop)],
+                    makeSolid=False,
+                    makeRuled=True,
+                )
+                disc_fill = gmsh.model.occ.addPlaneSurface([int(rear_loop)])
+                return list(annular_dimtags) + [(2, int(disc_fill))]
+
+    # Fallback path: build rear closure from control-point wires.
     throat_ring = outer_points[:, 0, :].copy()  # (n_phi, 3) at z_throat
     z_rear = float(np.mean(throat_ring[:, 2])) - wall_thickness
 
@@ -2428,36 +2458,20 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
                 # wall mode so the source disc remains connected only to the inner horn,
                 # not directly to shell/rear-closure surfaces.
                 rear_shell_dimtags = _build_rear_disc_assembly(
-                    outer_points, wall_thickness, closed=closed
+                    outer_points,
+                    wall_thickness,
+                    closed=closed,
+                    outer_dimtags=outer_dimtags,
                 )
 
-                # Fragment outer shell + mouth rim + rear shell together
-                # so coincident boundary edges are merged into shared topology.
-                # inner_dimtags is excluded — its BSpline seam periodicity conflicts
-                # with re-fragmentation; source disc and inner horn remain the only
-                # surfaces sharing the throat boundary.
-                all_wall_dimtags = outer_dimtags + mouth_dimtags + rear_shell_dimtags
-                n_outer = len(outer_dimtags)
-                n_mouth = len(mouth_dimtags)
-                n_rear_shell = len(rear_shell_dimtags)
-                if len(all_wall_dimtags) > 1:
-                    frag_result, frag_map = gmsh.model.occ.fragment(all_wall_dimtags, [])
-
-                    # Rebuild per-group lists from fragment map.
-                    # frag_map[i] = output dimtags from the i-th input entity.
-                    def _collect_frag(start: int, count: int) -> List[Tuple[int, int]]:
-                        out: List[Tuple[int, int]] = []
-                        for i in range(start, start + count):
-                            if i < len(frag_map):
-                                out.extend(dt for dt in frag_map[i] if dt[0] == 2)
-                        return out
-
-                    outer_dimtags = _collect_frag(0, n_outer)
-                    mouth_dimtags = _collect_frag(n_outer, n_mouth)
-                    rear_shell_dimtags = _collect_frag(n_outer + n_mouth, n_rear_shell)
-                    rear_dimtags = rear_shell_dimtags
-                else:
-                    rear_dimtags = rear_shell_dimtags
+                # Keep wall surfaces as-authored. OCC boolean fragment on this
+                # assembly can introduce tiny self-intersections in thickened OSSE
+                # builds, which then fails meshing with:
+                # "The 1D mesh seems not to be forming a closed loop."
+                # Mouth rims are already built from actual boundary curves when
+                # possible; any remaining coincident seams are merged by
+                # mesh.removeDuplicateNodes() after surface meshing.
+                rear_dimtags = [dt for dt in rear_shell_dimtags if dt[0] == 2]
 
             # Final synchronize flushes all fragmented entities.
             # Safe to call after enclosure's internal synchronize — it is idempotent.
