@@ -110,7 +110,8 @@ def solve_frequency(
         print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
 
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
-    obs_xyz = frame["mouth_center"] + frame["axis"] * float(observation_distance_m)
+    origin_center = frame["origin_center"]
+    obs_xyz = origin_center + frame["axis"] * float(observation_distance_m)
     obs_point = obs_xyz.reshape(3, 1)
 
     dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
