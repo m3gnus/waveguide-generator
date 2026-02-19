@@ -61,7 +61,7 @@ def evaluate_far_field_sphere(
     """
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
     axis = frame["axis"]
-    mouth_center = frame["mouth_center"]
+    origin_center = frame["origin_center"]
     u = frame["u"]
     v = frame["v"]
 
@@ -90,7 +90,7 @@ def evaluate_far_field_sphere(
     for i_phi, phi in enumerate(phi_rad):
         for i_theta, theta in enumerate(theta_rad):
             obs_xyz = point_from_polar(
-                mouth_center=mouth_center,
+                origin_center=origin_center,
                 axis=axis,
                 u=u,
                 v=v,

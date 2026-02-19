@@ -69,7 +69,7 @@ class ObservationFrameTest(unittest.TestCase):
 
         frame = infer_observation_frame(grid)
         obs = point_from_polar(
-            mouth_center=frame["mouth_center"],
+            origin_center=frame["origin_center"],
             axis=frame["axis"],
             u=frame["u"],
             v=frame["v"],
@@ -78,7 +78,7 @@ class ObservationFrameTest(unittest.TestCase):
             phi_rad=0.0,
         )
 
-        self.assertGreater(float(np.dot(obs - frame["mouth_center"], frame["axis"])), 0.99)
+        self.assertGreater(float(np.dot(obs - frame["origin_center"], frame["axis"])), 0.99)
 
 
 if __name__ == "__main__":

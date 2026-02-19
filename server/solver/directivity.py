@@ -28,6 +28,7 @@ def calculate_directivity_index_from_pressure(
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
     axis = frame["axis"]
     mouth_center = frame["mouth_center"]
+    origin_center = frame["origin_center"]
     u = frame["u"]
     v = frame["v"]
 
@@ -51,7 +52,7 @@ def calculate_directivity_index_from_pressure(
             phi = (i_phi / n_phi) * 2 * np.pi
 
             obs_xyz = point_from_polar(
-                mouth_center=mouth_center,
+                origin_center=origin_center,
                 axis=axis,
                 u=u,
                 v=v,

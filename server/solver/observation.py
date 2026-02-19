@@ -80,6 +80,7 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
     Returns:
         {
             "axis": forward unit vector (throat -> mouth),
+            "origin_center": center point of source origin (throat disc centroid),
             "mouth_center": center point near mouth plane,
             "u": transverse unit vector (horizontal reference),
             "v": transverse unit vector orthogonal to u (vertical reference)
@@ -89,6 +90,7 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
     if vertices.ndim != 2 or vertices.shape[0] != 3 or vertices.shape[1] == 0:
         return {
             "axis": np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            "origin_center": np.array([0.0, 0.0, 0.0], dtype=np.float64),
             "mouth_center": np.array([0.0, 0.0, 0.0], dtype=np.float64),
             "u": np.array([1.0, 0.0, 0.0], dtype=np.float64),
             "v": np.array([0.0, 0.0, 1.0], dtype=np.float64),
@@ -142,6 +144,7 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
 
     return {
         "axis": axis_candidate,
+        "origin_center": source_center,
         "mouth_center": mouth_center,
         "u": u,
         "v": v,
@@ -149,7 +152,7 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
 
 
 def point_from_polar(
-    mouth_center: np.ndarray,
+    origin_center: np.ndarray,
     axis: np.ndarray,
     u: np.ndarray,
     v: np.ndarray,
@@ -161,4 +164,4 @@ def point_from_polar(
         np.cos(theta_rad) * axis
         + np.sin(theta_rad) * (np.cos(phi_rad) * u + np.sin(phi_rad) * v)
     )
-    return mouth_center + float(radius_m) * direction
+    return origin_center + float(radius_m) * direction
