@@ -174,9 +174,12 @@ export class ParamPanel {
         });
 
         // All enclosure parameters (now visible for both OSSE and R-OSSE)
+        // Resolution params are in Simulation tab — skip here
+        const encGeomExclude = new Set(['encFrontResolution', 'encBackResolution']);
         const encSchema = PARAM_SCHEMA.ENCLOSURE;
         if (encSchema) {
             for (const [key, def] of Object.entries(encSchema)) {
+                if (encGeomExclude.has(key)) continue;
                 enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
             }
         }
