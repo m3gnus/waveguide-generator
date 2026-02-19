@@ -754,6 +754,23 @@ def _make_wire(points_2d: np.ndarray, closed: bool = True) -> int:
     return wire
 
 
+def _make_closed_wire_and_loop(points_2d: np.ndarray) -> Tuple[int, int]:
+    """Create a closed BSpline wire and its curve loop tag."""
+    n = points_2d.shape[0]
+    pt_tags = []
+    for i in range(n):
+        x, y, z = float(points_2d[i, 0]), float(points_2d[i, 1]), float(points_2d[i, 2])
+        pt_tags.append(gmsh.model.occ.addPoint(x, y, z))
+    pt_tags.append(pt_tags[0])
+    spline = gmsh.model.occ.addBSpline(pt_tags)
+    wire = gmsh.model.occ.addWire([spline])
+    try:
+        loop = gmsh.model.occ.addCurveLoop([int(spline)], reorient=True)
+    except TypeError:
+        loop = gmsh.model.occ.addCurveLoop([int(spline)])
+    return int(wire), int(loop)
+
+
 def _build_surface_from_points(
     points: np.ndarray, closed: bool = True
 ) -> List[Tuple[int, int]]:
@@ -1080,6 +1097,56 @@ def _panel_corner_points_by_quadrant(
     ]
 
 
+def _panel_bilinear_resolution_formula(
+    q_values: List[float],
+    *,
+    bx0: float,
+    bx1: float,
+    by0: float,
+    by1: float,
+) -> str:
+    """Return MathEval formula for bilinear corner interpolation over panel x/y."""
+    dx = max(abs(bx1 - bx0), 1e-6)
+    dy = max(abs(by1 - by0), 1e-6)
+    u = f"((x - ({bx0:.12g})) / ({dx:.12g}))"
+    v = f"((y - ({by0:.12g})) / ({dy:.12g}))"
+
+    q1 = float(q_values[0])  # (+x,+y)
+    q2 = float(q_values[1])  # (-x,+y)
+    q3 = float(q_values[2])  # (-x,-y)
+    q4 = float(q_values[3])  # (+x,-y)
+
+    return (
+        f"({q3:.12g})*(1-({u}))*(1-({v})) + "
+        f"({q4:.12g})*({u})*(1-({v})) + "
+        f"({q2:.12g})*(1-({u}))*({v}) + "
+        f"({q1:.12g})*({u})*({v})"
+    )
+
+
+def _enclosure_resolution_formula(
+    front_q: List[float],
+    back_q: List[float],
+    *,
+    bx0: float,
+    bx1: float,
+    by0: float,
+    by1: float,
+    z_front: float,
+    z_back: float,
+) -> str:
+    """Return MathEval formula for continuous enclosure front/back interpolation."""
+    dz = max(abs(z_front - z_back), 1e-6)
+    t = f"(({z_front:.12g}) - z) / ({dz:.12g})"
+    front_expr = _panel_bilinear_resolution_formula(
+        front_q, bx0=bx0, bx1=bx1, by0=by0, by1=by1
+    )
+    back_expr = _panel_bilinear_resolution_formula(
+        back_q, bx0=bx0, bx1=bx1, by0=by0, by1=by1
+    )
+    return f"(({front_expr})*(1-({t})) + ({back_expr})*({t}))"
+
+
 def _classify_enclosure_surfaces(
     dimtags: List[Tuple[int, int]], z_front: float, z_back: float
 ) -> Dict[str, List[int]]:
@@ -1128,18 +1195,239 @@ def _collect_boundary_curves(surface_tags: List[int]) -> List[int]:
     return ordered
 
 
+def _intersect_ray_with_rounded_box(
+    *,
+    angle: float,
+    cx: float,
+    cy: float,
+    bx0: float,
+    bx1: float,
+    by0: float,
+    by1: float,
+    corner_radius: float,
+    edge_type: int,
+) -> Tuple[float, float, float, float]:
+    """Viewport-equivalent ray intersection against rounded/chamfered rectangle."""
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    eps = 1e-12
+
+    best_t = float("inf")
+    hit_x = cx + cos_a
+    hit_y = cy + sin_a
+    hit_nx = cos_a
+    hit_ny = sin_a
+
+    def try_segment(x1: float, y1: float, x2: float, y2: float, nx: float, ny: float) -> None:
+        nonlocal best_t, hit_x, hit_y, hit_nx, hit_ny
+        ex = x2 - x1
+        ey = y2 - y1
+        det = cos_a * (-ey) - sin_a * (-ex)
+        if abs(det) <= eps:
+            return
+
+        rhs_x = x1 - cx
+        rhs_y = y1 - cy
+        t = (rhs_x * (-ey) - rhs_y * (-ex)) / det
+        u = (cos_a * rhs_y - sin_a * rhs_x) / det
+        if t > eps and -eps <= u <= 1.0 + eps and t < best_t:
+            best_t = t
+            hit_x = cx + cos_a * t
+            hit_y = cy + sin_a * t
+            hit_nx = nx
+            hit_ny = ny
+
+    def try_arc(acx: float, acy: float, r: float, start_angle: float, end_angle: float) -> None:
+        nonlocal best_t, hit_x, hit_y, hit_nx, hit_ny
+        ox = cx - acx
+        oy = cy - acy
+        b = 2.0 * (ox * cos_a + oy * sin_a)
+        c = ox * ox + oy * oy - r * r
+        disc = b * b - 4.0 * c
+        if disc < 0.0:
+            return
+        sqrt_disc = math.sqrt(disc)
+        for t in ((-b - sqrt_disc) / 2.0, (-b + sqrt_disc) / 2.0):
+            if t <= eps or t >= best_t:
+                continue
+            px = cx + cos_a * t
+            py = cy + sin_a * t
+            pa = math.atan2(py - acy, px - acx)
+            swept = end_angle - start_angle
+            rel = pa - start_angle
+            while rel < -eps:
+                rel += 2.0 * math.pi
+            while rel > 2.0 * math.pi + eps:
+                rel -= 2.0 * math.pi
+            if rel <= swept + eps:
+                best_t = t
+                hit_x = px
+                hit_y = py
+                dx = px - acx
+                dy = py - acy
+                nlen = math.hypot(dx, dy)
+                if nlen > 0.0:
+                    hit_nx = dx / nlen
+                    hit_ny = dy / nlen
+
+    def try_chamfer(acx: float, acy: float, r: float, start_angle: float, end_angle: float) -> None:
+        x1 = acx + r * math.cos(start_angle)
+        y1 = acy + r * math.sin(start_angle)
+        x2 = acx + r * math.cos(end_angle)
+        y2 = acy + r * math.sin(end_angle)
+        mid = 0.5 * (start_angle + end_angle)
+        try_segment(x1, y1, x2, y2, math.cos(mid), math.sin(mid))
+
+    half_w = 0.5 * (bx1 - bx0)
+    half_h = 0.5 * (by1 - by0)
+    box_cx = 0.5 * (bx1 + bx0)
+    box_cy = 0.5 * (by1 + by0)
+    r = max(0.0, min(float(corner_radius), half_w - 0.1, half_h - 0.1))
+    use_corners = r > 1e-3
+
+    try_segment(
+        bx1,
+        box_cy - half_h + (r if use_corners else 0.0),
+        bx1,
+        box_cy + half_h - (r if use_corners else 0.0),
+        1.0,
+        0.0,
+    )
+    try_segment(
+        box_cx + half_w - (r if use_corners else 0.0),
+        by1,
+        box_cx - half_w + (r if use_corners else 0.0),
+        by1,
+        0.0,
+        1.0,
+    )
+    try_segment(
+        bx0,
+        box_cy + half_h - (r if use_corners else 0.0),
+        bx0,
+        box_cy - half_h + (r if use_corners else 0.0),
+        -1.0,
+        0.0,
+    )
+    try_segment(
+        box_cx - half_w + (r if use_corners else 0.0),
+        by0,
+        box_cx + half_w - (r if use_corners else 0.0),
+        by0,
+        0.0,
+        -1.0,
+    )
+
+    if use_corners:
+        corners = [
+            (box_cx + half_w - r, box_cy - half_h + r, -math.pi / 2.0, 0.0),
+            (box_cx + half_w - r, box_cy + half_h - r, 0.0, math.pi / 2.0),
+            (box_cx - half_w + r, box_cy + half_h - r, math.pi / 2.0, math.pi),
+            (box_cx - half_w + r, box_cy - half_h + r, math.pi, 1.5 * math.pi),
+        ]
+        for acx, acy, start_angle, end_angle in corners:
+            if int(edge_type) == 2:
+                try_chamfer(acx, acy, r, start_angle, end_angle)
+            else:
+                try_arc(acx, acy, r, start_angle, end_angle)
+
+    return hit_x, hit_y, hit_nx, hit_ny
+
+
+def _generate_enclosure_points_from_angles(
+    *,
+    angles: List[float],
+    cx: float,
+    cy: float,
+    bx0: float,
+    bx1: float,
+    by0: float,
+    by1: float,
+    edge_radius: float,
+    edge_type: int,
+) -> Tuple[List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]], float]:
+    """Generate outer/inset enclosure loops aligned to horn mouth angular sampling."""
+    half_w = 0.5 * (bx1 - bx0)
+    half_h = 0.5 * (by1 - by0)
+    clamped_edge = max(0.0, min(float(edge_radius), half_w - 0.1, half_h - 0.1))
+
+    outer_pts: List[Tuple[float, float, float, float]] = []
+    inset_pts: List[Tuple[float, float, float, float]] = []
+    for angle in angles:
+        hx, hy, nx, ny = _intersect_ray_with_rounded_box(
+            angle=float(angle),
+            cx=float(cx),
+            cy=float(cy),
+            bx0=float(bx0),
+            bx1=float(bx1),
+            by0=float(by0),
+            by1=float(by1),
+            corner_radius=float(clamped_edge),
+            edge_type=int(edge_type),
+        )
+        outer_pts.append((hx, hy, nx, ny))
+        inset_pts.append(
+            (
+                hx - nx * clamped_edge,
+                hy - ny * clamped_edge,
+                nx,
+                ny,
+            )
+        )
+    return outer_pts, inset_pts, clamped_edge
+
+
+def _ring_points_from_xy_plan(
+    plan_pts: List[Tuple[float, float, float, float]],
+    *,
+    z: float,
+) -> np.ndarray:
+    out = np.empty((len(plan_pts), 3), dtype=float)
+    for i, (x, y, _, _) in enumerate(plan_pts):
+        out[i, 0] = float(x)
+        out[i, 1] = float(y)
+        out[i, 2] = float(z)
+    return out
+
+
+def _add_curve_loop_from_curves(curve_tags: List[int]) -> int:
+    try:
+        return int(gmsh.model.occ.addCurveLoop([int(c) for c in curve_tags], reorient=True))
+    except TypeError:
+        return int(gmsh.model.occ.addCurveLoop([int(c) for c in curve_tags]))
+
+
+def _add_ruled_section(loop_a: int, loop_b: int) -> List[Tuple[int, int]]:
+    return list(
+        gmsh.model.occ.addThruSections(
+            [int(loop_a), int(loop_b)],
+            makeSolid=False,
+            makeRuled=True,
+        )
+    )
+
+
 def _build_enclosure_box(
-    inner_points: np.ndarray, params: dict, closed: bool
+    inner_points: np.ndarray,
+    params: dict,
+    closed: bool,
+    *,
+    inner_dimtags: Optional[List[Tuple[int, int]]] = None,
 ) -> Dict[str, Any]:
-    """Build enclosure surfaces and classify front/back/sides for mesh-field control."""
+    """Build viewport-equivalent enclosure surfaces and classify front/back/sides."""
     empty = {
         "dimtags": [],
         "front": [],
         "back": [],
         "sides": [],
         "bounds": None,
+        "opening_curves": [],
+        "opening_ring_points": None,
     }
     if not closed:
+        return empty
+
+    if not inner_dimtags:
         return empty
 
     enc_depth = float(params.get("enc_depth", 0) or 0)
@@ -1175,117 +1463,132 @@ def _build_enclosure_box(
         "cy": 0.5 * (by0 + by1),
     }
 
-    # --- Build enclosure box solid ---
-    box_tag = gmsh.model.occ.addBox(bx0, by0, z_back, bx1 - bx0, by1 - by0, enc_depth)
-
-    # --- Build mouth-opening prism to cut through the front face ---
-    # Project mouth ring to two z planes bracketing z_front so the prism
-    # slices cleanly through the box's front face.
-    eps = max(enc_depth * 0.01, 0.1)
-    mouth_lo = mouth_pts.copy()
-    mouth_lo[:, 2] = z_front - eps
-    mouth_hi = mouth_pts.copy()
-    mouth_hi[:, 2] = z_front + eps
-
-    w_lo = _make_wire(mouth_lo, closed=True)
-    w_hi = _make_wire(mouth_hi, closed=True)
-
-    mouth_prism = gmsh.model.occ.addThruSections(
-        [w_lo, w_hi], makeSolid=True, makeRuled=True
-    )
-    mouth_solid_tags = [tag for dim, tag in mouth_prism if dim == 3]
-
-    if not mouth_solid_tags:
-        # Fallback: return box surfaces without hole
-        gmsh.model.occ.synchronize()
-        box_surfs = gmsh.model.getBoundary(
-            [(3, box_tag)], oriented=False, combined=False
-        )
-        dimtags = [(2, tag) for dim, tag in box_surfs if dim == 2]
-        split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
-        return {
-            "dimtags": dimtags,
-            "front": split["front"],
-            "back": split["back"],
-            "sides": split["sides"],
-            "bounds": bounds,
-        }
-
-    # Boolean difference: box minus mouth prism → box with hole in front face
-    result_dimtags, _ = gmsh.model.occ.cut(
-        [(3, box_tag)], [(3, mouth_solid_tags[0])]
-    )
-
-    # --- Apply fillet or chamfer to mouth-opening edges on the front face ---
     enc_edge = float(params.get("enc_edge", 0) or 0)
     enc_edge_type = int(params.get("enc_edge_type", 1) or 1)
-    solid_tags = [tag for dim, tag in result_dimtags if dim == 3]
+    corner_segments = int(params.get("corner_segments", 4) or 4)
+    axial_segs = max(4, corner_segments) if enc_edge > 0 else 1
 
-    if enc_edge > 0 and solid_tags:
-        # Synchronize so we can query edge geometry
-        gmsh.model.occ.synchronize()
+    mouth_curves = _boundary_curves_at_z_extreme(inner_dimtags, want_min_z=False)
+    if not mouth_curves:
+        return empty
 
-        # Find edges at the mouth opening: those lying on the z_front plane
-        # (created by the boolean cut, not the box's own straight edges).
-        all_edges = gmsh.model.getBoundary(
-            result_dimtags, oriented=False, combined=False, recursive=True
-        )
-        mouth_edge_tags = []
-        front_eps = max(1e-3, abs(z_front) * 1e-4)
-        for dim, tag in all_edges:
-            if dim != 1:
-                continue
-            try:
-                ex0, ey0, ez0, ex1, ey1, ez1 = gmsh.model.getBoundingBox(dim, tag)
-            except Exception:
-                continue
-            # Edge must lie on the front z-plane
-            if abs(ez0 - z_front) > front_eps or abs(ez1 - z_front) > front_eps:
-                continue
-            # Exclude straight box edges (aligned with a single axis)
-            dx = abs(ex1 - ex0)
-            dy = abs(ey1 - ey0)
-            is_straight = (dx < front_eps or dy < front_eps)
-            if is_straight:
-                continue
-            mouth_edge_tags.append(tag)
+    cx = float(np.mean(mouth_pts[:, 0]))
+    cy = float(np.mean(mouth_pts[:, 1]))
+    angles = [
+        float(math.atan2(float(mouth_pts[i, 1]) - cy, float(mouth_pts[i, 0]) - cx))
+        for i in range(mouth_pts.shape[0])
+    ]
 
-        if mouth_edge_tags:
-            try:
-                if enc_edge_type == 2:
-                    # Chamfer: find a front-face surface adjacent to each edge
-                    # for the chamfer reference direction.
-                    ref_surfs = []
-                    for etag in mouth_edge_tags:
-                        edge_surfs = gmsh.model.getAdjacencies(1, etag)[1]
-                        ref = edge_surfs[0] if len(edge_surfs) > 0 else mouth_edge_tags[0]
-                        ref_surfs.append(int(ref))
-                    out, _ = gmsh.model.occ.chamfer(
-                        solid_tags,
-                        mouth_edge_tags,
-                        ref_surfs,
-                        [enc_edge] * len(mouth_edge_tags),
-                    )
-                else:
-                    # Fillet (rounded)
-                    out, _ = gmsh.model.occ.fillet(
-                        solid_tags,
-                        mouth_edge_tags,
-                        [enc_edge],
-                    )
-                # Update result_dimtags with the new solid(s) from fillet/chamfer
-                new_solids = [(d, t) for d, t in out if d == 3]
-                if new_solids:
-                    result_dimtags = new_solids
-            except Exception:
-                pass  # If fillet/chamfer fails, proceed with un-filleted geometry
+    outer_pts, inset_pts, clamped_edge = _generate_enclosure_points_from_angles(
+        angles=angles,
+        cx=cx,
+        cy=cy,
+        bx0=bx0,
+        bx1=bx1,
+        by0=by0,
+        by1=by1,
+        edge_radius=enc_edge,
+        edge_type=enc_edge_type,
+    )
+    if not outer_pts or not inset_pts:
+        return empty
+
+    generated_dimtags: List[Tuple[int, int]] = []
+    edge_depth = min(clamped_edge, max(0.0, enc_depth * 0.49))
+
+    mouth_loop = _add_curve_loop_from_curves(mouth_curves)
+    current_profile = mouth_loop
+
+    merge_eps = 1e-6
+    reuse_mouth_as_ring0 = True
+    for i in range(mouth_pts.shape[0]):
+        if math.hypot(
+            inset_pts[i][0] - float(mouth_pts[i, 0]),
+            inset_pts[i][1] - float(mouth_pts[i, 1]),
+        ) > merge_eps:
+            reuse_mouth_as_ring0 = False
+            break
+
+    ring0_wire: Optional[int] = None
+    if not reuse_mouth_as_ring0:
+        ring0_pts = _ring_points_from_xy_plan(inset_pts, z=z_front)
+        ring0_wire, ring0_loop = _make_closed_wire_and_loop(ring0_pts)
+        try:
+            front_tag = int(gmsh.model.occ.addPlaneSurface([int(ring0_loop), int(mouth_loop)]))
+            generated_dimtags.append((2, front_tag))
+        except Exception:
+            # Fallback for non-planar tolerance issues: ruled patch.
+            generated_dimtags.extend(_add_ruled_section(current_profile, ring0_wire))
+        current_profile = ring0_wire
+
+    edge_slices = max(1, axial_segs) if edge_depth > 0.0 else 0
+    for j in range(1, edge_slices + 1):
+        t = float(j) / float(edge_slices)
+        if enc_edge_type == 1:
+            angle = t * (math.pi / 2.0)
+            axial_t = 1.0 - math.cos(angle)
+            radial_t = math.sin(angle)
+        else:
+            axial_t = t
+            radial_t = t
+        z_ring = z_front - axial_t * edge_depth
+        ring_plan: List[Tuple[float, float, float, float]] = []
+        for i in range(len(outer_pts)):
+            ix, iy, nx, ny = inset_pts[i]
+            ox, oy, _, _ = outer_pts[i]
+            ring_plan.append(
+                (
+                    ix + (ox - ix) * radial_t,
+                    iy + (oy - iy) * radial_t,
+                    nx,
+                    ny,
+                )
+            )
+        ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
+        ring_wire = _make_wire(ring_pts, closed=True)
+        generated_dimtags.extend(_add_ruled_section(current_profile, ring_wire))
+        current_profile = ring_wire
+
+    z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
+    back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
+    back_outer_wire = _make_wire(back_outer_pts, closed=True)
+    generated_dimtags.extend(_add_ruled_section(current_profile, back_outer_wire))
+    current_profile = back_outer_wire
+
+    for j in range(1, edge_slices + 1):
+        t = float(j) / float(edge_slices)
+        if enc_edge_type == 1:
+            angle = t * (math.pi / 2.0)
+            # Rear fillet: convex roll from side wall tangent to back panel tangent.
+            axial_t = math.sin(angle)
+            radial_t = math.cos(angle)
+        else:
+            axial_t = t
+            radial_t = 1.0 - t
+        z_ring = z_back + (1.0 - axial_t) * edge_depth
+        ring_plan: List[Tuple[float, float, float, float]] = []
+        for i in range(len(outer_pts)):
+            ix, iy, nx, ny = inset_pts[i]
+            ox, oy, _, _ = outer_pts[i]
+            ring_plan.append(
+                (
+                    ix + (ox - ix) * radial_t,
+                    iy + (oy - iy) * radial_t,
+                    nx,
+                    ny,
+                )
+            )
+        ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
+        ring_wire = _make_wire(ring_pts, closed=True)
+        generated_dimtags.extend(_add_ruled_section(current_profile, ring_wire))
+        current_profile = ring_wire
+
+    back_cap = gmsh.model.occ.addSurfaceFilling(current_profile)
+    generated_dimtags.append((2, int(back_cap)))
 
     gmsh.model.occ.synchronize()
+    dimtags = [(2, int(tag)) for dim, tag in generated_dimtags if int(dim) == 2]
 
-    enc_surfaces = gmsh.model.getBoundary(
-        result_dimtags, oriented=False, combined=False
-    )
-    dimtags = [(2, tag) for dim, tag in enc_surfaces if dim == 2]
     split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
     return {
         "dimtags": dimtags,
@@ -1293,6 +1596,8 @@ def _build_enclosure_box(
         "back": split["back"],
         "sides": split["sides"],
         "bounds": bounds,
+        "opening_curves": [],
+        "opening_ring_points": None,
     }
 
 
@@ -1318,8 +1623,7 @@ def _configure_mesh_size(
     Mouth rim: interpolated throat_res → mouth_res by axial distance.
     Throat disc: constant throat_res.
     Rear wall (free-standing only): constant rear_res.
-    Enclosure sides: constant mouth_res.
-    Enclosure front/back panels: per-quadrant corner refinement fields.
+    Enclosure: continuous front/back bilinear corner interpolation over x/y/z.
     """
     fields: List[int] = []
     z_throat = float(np.mean(inner_points[:, 0, 2]))
@@ -1421,16 +1725,9 @@ def _configure_mesh_size(
     if rear_field:
         fields.append(rear_field)
 
-    # Enclosure side walls baseline mouth resolution
-    side_field = add_restricted_matheval(
-        f"{mouth_res:.6g}",
-        surface_groups.get("enclosure_sides", []),
-        curve_groups.get("enclosure_sides", []),
-    )
-    if side_field:
-        fields.append(side_field)
+    enclosure_resolution_values: List[float] = []
 
-    # Enclosure front/back with per-quadrant corner controls
+    # Enclosure uses a continuous interpolation between front/back corner resolutions.
     if enclosure_bounds:
         bx0 = float(enclosure_bounds["bx0"])
         bx1 = float(enclosure_bounds["bx1"])
@@ -1438,72 +1735,53 @@ def _configure_mesh_size(
         by1 = float(enclosure_bounds["by1"])
         z_front = float(enclosure_bounds["z_front"])
         z_back = float(enclosure_bounds["z_back"])
-        panel_diag = math.hypot(bx1 - bx0, by1 - by0)
-        corner_dist = max(1.0, panel_diag * 0.35)
 
         front_q = _parse_quadrant_resolutions(enc_front_resolution, mouth_res)
         back_q = _parse_quadrant_resolutions(enc_back_resolution, mouth_res)
-        front_base = max(mouth_res, max(front_q))
-        back_base = max(mouth_res, max(back_q))
+        enclosure_resolution_values.extend(front_q)
+        enclosure_resolution_values.extend(back_q)
 
-        front_tags = surface_groups.get("enclosure_front", [])
-        back_tags = surface_groups.get("enclosure_back", [])
-        front_curves = curve_groups.get("enclosure_front", [])
-        back_curves = curve_groups.get("enclosure_back", [])
-
-        front_base_field = add_restricted_matheval(
-            f"{front_base:.6g}", front_tags, front_curves
+        enclosure_formula = _enclosure_resolution_formula(
+            front_q,
+            back_q,
+            bx0=bx0,
+            bx1=bx1,
+            by0=by0,
+            by1=by1,
+            z_front=z_front,
+            z_back=z_back,
         )
-        if front_base_field:
-            fields.append(front_base_field)
-
-        back_base_field = add_restricted_matheval(
-            f"{back_base:.6g}", back_tags, back_curves
+        enclosure_field = add_restricted_matheval(
+            enclosure_formula,
+            surface_groups.get("enclosure", []),
+            curve_groups.get("enclosure", []),
         )
-        if back_base_field:
-            fields.append(back_base_field)
-
-        front_corners = _panel_corner_points_by_quadrant(bx0, bx1, by0, by1, z_front)
-        back_corners = _panel_corner_points_by_quadrant(bx0, bx1, by0, by1, z_back)
-
-        corner_points: List[int] = []
-        for x, y, z in front_corners + back_corners:
-            corner_points.append(gmsh.model.occ.addPoint(float(x), float(y), float(z)))
-        if corner_points:
-            gmsh.model.occ.synchronize()
-
-        for q_idx in range(4):
-            front_point_tag = corner_points[q_idx]
-            back_point_tag = corner_points[4 + q_idx]
-            front_corner_field = add_restricted_threshold_from_points(
-                [front_point_tag],
-                front_tags,
-                front_curves,
-                front_q[q_idx],
-                front_base,
-                corner_dist,
-            )
-            if front_corner_field:
-                fields.append(front_corner_field)
-
-            back_corner_field = add_restricted_threshold_from_points(
-                [back_point_tag],
-                back_tags,
-                back_curves,
-                back_q[q_idx],
-                back_base,
-                corner_dist,
-            )
-            if back_corner_field:
-                fields.append(back_corner_field)
+        if enclosure_field:
+            fields.append(enclosure_field)
+    else:
+        # Fallback for partial/no-enclosure metadata in reduced-domain modes.
+        side_field = add_restricted_matheval(
+            f"{mouth_res:.6g}",
+            surface_groups.get("enclosure_sides", []),
+            curve_groups.get("enclosure_sides", []),
+        )
+        if side_field:
+            fields.append(side_field)
 
     if fields:
         f_min = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
 
-    gmsh.option.setNumber("Mesh.MeshSizeMin", min(throat_res, mouth_res, rear_res) * 0.5)
-    gmsh.option.setNumber("Mesh.MeshSizeMax", max(throat_res, mouth_res, rear_res) * 1.5)
+    mesh_sizes = [float(throat_res), float(mouth_res), float(rear_res)]
+    mesh_sizes.extend(
+        float(v) for v in enclosure_resolution_values if math.isfinite(v) and float(v) > 0.0
+    )
+    mesh_sizes = [v for v in mesh_sizes if math.isfinite(v) and v > 0.0]
+    if not mesh_sizes:
+        mesh_sizes = [1.0]
+    gmsh.option.setNumber("Mesh.MeshSizeMin", min(mesh_sizes) * 0.5)
+    gmsh.option.setNumber("Mesh.MeshSizeMax", max(mesh_sizes) * 1.5)
     gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
@@ -1519,20 +1797,19 @@ def _assign_physical_groups(
     """Assign ABEC-compatible physical group names to meshed surfaces.
 
     Tag contract (matching reference mesh convention):
-        SD1G0     (1) - all rigid wall surfaces: inner horn + outer shell +
+        SD1G0     (1) - all rigid wall surfaces: inner horn + enclosure/outer shell +
                         rear disc + mouth rim (everything except source disc)
         SD1D1001  (2) - throat source disc (driving element)
-        SD2G0     (3) - enclosure box exterior surfaces only (enc_depth > 0 path)
 
     The outer wall shell, rear disc, and mouth rim are part of SD1G0 in
     free-standing wall mode — same as the reference ABEC/ATH mesh convention.
-    SD2G0 is only used for enclosure box exports (enc_depth > 0).
+    Enclosure surfaces also share SD1G0 so all rigid boundaries use one wall tag.
     """
-    # All rigid wall surfaces share tag 1 (SD1G0): inner horn + outer shell +
-    # rear disc + mouth rim.  This matches the reference .msh topology where
-    # the entire connected shell is one physical group.
+    # All rigid wall surfaces share tag 1 (SD1G0): inner horn + enclosure/outer shell +
+    # rear disc + mouth rim.
     wall_tags = (
         surface_groups.get("inner", [])
+        + surface_groups.get("enclosure", [])
         + surface_groups.get("outer", [])
         + surface_groups.get("rear", [])
         + surface_groups.get("mouth", [])
@@ -1545,11 +1822,6 @@ def _assign_physical_groups(
     if disc_tags:
         gmsh.model.addPhysicalGroup(2, disc_tags, tag=2)
         gmsh.model.setPhysicalName(2, 2, "SD1D1001")
-
-    enclosure_tags = surface_groups.get("enclosure", [])
-    if enclosure_tags:
-        gmsh.model.addPhysicalGroup(2, enclosure_tags, tag=3)
-        gmsh.model.setPhysicalName(2, 3, "SD2G0")
 
 
 def _extract_triangle_block(
@@ -1607,6 +1879,429 @@ def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str
 
     return {
         "vertices": node_coords_f,
+        "indices": indices,
+        "surfaceTags": surface_tags,
+    }
+
+
+def _orient_and_validate_canonical_mesh(
+    canonical_mesh: Dict[str, List[float]],
+    *,
+    require_watertight: bool,
+    require_single_boundary_loop: bool,
+    allow_tagged_loop_bridge: bool = False,
+    flip_surface_tags: Optional[Set[int]] = None,
+    fix_front_baffle_normals: bool = False,
+) -> Dict[str, List[float]]:
+    """Orient canonical triangles consistently and validate topology."""
+    vertices = canonical_mesh.get("vertices", [])
+    indices = list(canonical_mesh.get("indices", []))
+    surface_tags = list(canonical_mesh.get("surfaceTags", []))
+
+    if len(vertices) % 3 != 0:
+        raise GmshMeshingError("Canonical mesh has invalid vertex buffer length.")
+    if len(indices) % 3 != 0:
+        raise GmshMeshingError("Canonical mesh has invalid triangle index buffer length.")
+
+    vertex_count = len(vertices) // 3
+    tri_count = len(indices) // 3
+    if tri_count == 0:
+        return {"vertices": vertices, "indices": indices, "surfaceTags": surface_tags}
+
+    # OCC seams can retain numerically-near duplicate nodes after meshing.
+    # Weld by position before topology checks so connectivity/watertightness
+    # are evaluated on the effective simulation mesh.
+    weld_tol = 1e-6
+    coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
+    quantized = np.round(coords / weld_tol).astype(np.int64)
+    key_to_new: Dict[Tuple[int, int, int], int] = {}
+    old_to_new = np.empty(vertex_count, dtype=np.int64)
+    welded_points: List[np.ndarray] = []
+    for old_idx, key_arr in enumerate(quantized):
+        key = (int(key_arr[0]), int(key_arr[1]), int(key_arr[2]))
+        mapped = key_to_new.get(key)
+        if mapped is None:
+            mapped = len(welded_points)
+            key_to_new[key] = mapped
+            welded_points.append(coords[old_idx])
+        old_to_new[old_idx] = mapped
+
+    welded_indices: List[int] = []
+    welded_surface_tags: List[int] = []
+    for tri_idx in range(tri_count):
+        a = int(old_to_new[int(indices[tri_idx * 3])])
+        b = int(old_to_new[int(indices[tri_idx * 3 + 1])])
+        c = int(old_to_new[int(indices[tri_idx * 3 + 2])])
+        if a == b or b == c or c == a:
+            continue
+        welded_indices.extend([a, b, c])
+        welded_surface_tags.append(int(surface_tags[tri_idx]))
+
+    vertices = np.asarray(welded_points, dtype=float).reshape(-1).tolist()
+    indices = welded_indices
+    surface_tags = welded_surface_tags
+    vertex_count = len(vertices) // 3
+    tri_count = len(indices) // 3
+    if tri_count == 0:
+        raise GmshMeshingError("Canonical mesh collapsed after node welding.")
+
+    def build_edge_uses(
+        in_indices: List[int],
+        in_vertex_count: int,
+    ) -> Dict[Tuple[int, int], List[Tuple[int, int]]]:
+        out: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+        in_tri_count = len(in_indices) // 3
+        for tri_idx_local in range(in_tri_count):
+            a = int(in_indices[tri_idx_local * 3])
+            b = int(in_indices[tri_idx_local * 3 + 1])
+            c = int(in_indices[tri_idx_local * 3 + 2])
+            if (
+                a < 0 or b < 0 or c < 0
+                or a >= in_vertex_count or b >= in_vertex_count or c >= in_vertex_count
+            ):
+                raise GmshMeshingError(
+                    f"Canonical mesh triangle {tri_idx_local} references out-of-range vertex indices."
+                )
+            if a == b or b == c or c == a:
+                raise GmshMeshingError(f"Canonical mesh triangle {tri_idx_local} is degenerate.")
+            for u, v in ((a, b), (b, c), (c, a)):
+                lo, hi = (u, v) if u < v else (v, u)
+                direction = 1 if (u == lo and v == hi) else -1
+                out.setdefault((lo, hi), []).append((tri_idx_local, direction))
+        return out
+
+    def extract_boundary_loops_with_tags(
+        in_edge_uses: Dict[Tuple[int, int], List[Tuple[int, int]]],
+        in_surface_tags: List[int],
+    ) -> List[Tuple[List[int], int]]:
+        boundary_adj: Dict[int, List[int]] = {}
+        boundary_edge_tag: Dict[Tuple[int, int], int] = {}
+        for (u, v), uses in in_edge_uses.items():
+            if len(uses) != 1:
+                continue
+            tri_idx_local = int(uses[0][0])
+            tri_tag = int(in_surface_tags[tri_idx_local]) if tri_idx_local < len(in_surface_tags) else 1
+            boundary_adj.setdefault(int(u), []).append(int(v))
+            boundary_adj.setdefault(int(v), []).append(int(u))
+            boundary_edge_tag[(int(u), int(v)) if u < v else (int(v), int(u))] = tri_tag
+
+        loops: List[Tuple[List[int], int]] = []
+        visited_edges: Set[Tuple[int, int]] = set()
+        for start, neighbors in boundary_adj.items():
+            for nb in neighbors:
+                e0 = (start, nb) if start < nb else (nb, start)
+                if e0 in visited_edges:
+                    continue
+
+                loop: List[int] = [int(start)]
+                prev = -1
+                cur = int(start)
+                while True:
+                    nbrs = boundary_adj.get(cur, [])
+                    if len(nbrs) == 0:
+                        break
+                    if len(nbrs) == 1:
+                        nxt = int(nbrs[0])
+                    else:
+                        nxt = int(nbrs[0] if nbrs[0] != prev else nbrs[1])
+                    ek = (cur, nxt) if cur < nxt else (nxt, cur)
+                    if ek in visited_edges and nxt == start:
+                        break
+                    visited_edges.add(ek)
+                    prev, cur = cur, nxt
+                    if cur == start:
+                        break
+                    loop.append(cur)
+
+                if len(loop) < 3:
+                    continue
+
+                tag_counts: Dict[int, int] = {}
+                m = len(loop)
+                for i in range(m):
+                    u = int(loop[i])
+                    v = int(loop[(i + 1) % m])
+                    ek = (u, v) if u < v else (v, u)
+                    tag_i = int(boundary_edge_tag.get(ek, 1))
+                    tag_counts[tag_i] = int(tag_counts.get(tag_i, 0) + 1)
+                dominant_tag = max(tag_counts.items(), key=lambda kv: kv[1])[0]
+                loops.append((loop, int(dominant_tag)))
+        return loops
+
+    def stitch_tagged_boundary_loops(
+        in_vertices: List[float],
+        in_indices: List[int],
+        in_surface_tags: List[int],
+        in_edge_uses: Dict[Tuple[int, int], List[Tuple[int, int]]],
+        *,
+        tag_a: int,
+        tag_b: int,
+        bridge_tag: int,
+    ) -> bool:
+        loops_with_tags = extract_boundary_loops_with_tags(in_edge_uses, in_surface_tags)
+        loop_a: Optional[List[int]] = None
+        loop_b: Optional[List[int]] = None
+
+        if int(tag_a) == int(tag_b):
+            same_tag_loops = sorted(
+                [loop for loop, tag in loops_with_tags if tag == int(tag_a)],
+                key=len,
+                reverse=True,
+            )
+            if len(same_tag_loops) >= 2:
+                loop_a = list(same_tag_loops[0])
+                loop_b = list(same_tag_loops[1])
+        else:
+            loops_a = [loop for loop, tag in loops_with_tags if tag == int(tag_a)]
+            loops_b = [loop for loop, tag in loops_with_tags if tag == int(tag_b)]
+            if len(loops_a) > 0 and len(loops_b) > 0:
+                loop_a = list(max(loops_a, key=len))
+                loop_b = list(max(loops_b, key=len))
+
+        # Fallback: if tags do not split loops cleanly, connect the two largest loops.
+        if loop_a is None or loop_b is None:
+            all_loops = sorted([list(loop) for loop, _ in loops_with_tags], key=len, reverse=True)
+            if len(all_loops) < 2:
+                return False
+            loop_a, loop_b = all_loops[0], all_loops[1]
+
+        if len(loop_a) < 3 or len(loop_b) < 3:
+            return False
+
+        xyz = np.asarray(in_vertices, dtype=float).reshape((-1, 3))
+
+        a0 = xyz[int(loop_a[0])]
+        dists = [float(np.linalg.norm(xyz[int(vb)] - a0)) for vb in loop_b]
+        if len(dists) == 0:
+            return False
+        start_b = int(np.argmin(np.asarray(dists, dtype=float)))
+        loop_b = loop_b[start_b:] + loop_b[:start_b]
+
+        def alignment_cost(candidate_b: List[int]) -> float:
+            m = len(loop_a)
+            n = len(candidate_b)
+            if n == 0:
+                return float("inf")
+            total = 0.0
+            for k in range(m):
+                idx_b = int(round((k * n) / max(m, 1))) % n
+                total += float(np.linalg.norm(xyz[int(loop_a[k])] - xyz[int(candidate_b[idx_b])]))
+            return total
+
+        rev_b = [loop_b[0]] + list(reversed(loop_b[1:])) if len(loop_b) > 1 else list(loop_b)
+        if alignment_cost(rev_b) < alignment_cost(loop_b):
+            loop_b = rev_b
+
+        m = len(loop_a)
+        n = len(loop_b)
+        i = 0
+        j = 0
+        added = 0
+        while i < m or j < n:
+            can_i = i < m
+            can_j = j < n
+            if not can_i and not can_j:
+                break
+
+            ai = int(loop_a[i % m])
+            bi = int(loop_b[j % n])
+            a_next = int(loop_a[(i + 1) % m])
+            b_next = int(loop_b[(j + 1) % n])
+
+            if can_i and not can_j:
+                tri = (ai, a_next, bi)
+                i += 1
+            elif can_j and not can_i:
+                tri = (ai, b_next, bi)
+                j += 1
+            else:
+                da = float(np.linalg.norm(xyz[a_next] - xyz[bi]))
+                db = float(np.linalg.norm(xyz[ai] - xyz[b_next]))
+                if da <= db:
+                    tri = (ai, a_next, bi)
+                    i += 1
+                else:
+                    tri = (ai, b_next, bi)
+                    j += 1
+
+            if len({int(tri[0]), int(tri[1]), int(tri[2])}) != 3:
+                continue
+            in_indices.extend([int(tri[0]), int(tri[1]), int(tri[2])])
+            in_surface_tags.append(int(bridge_tag))
+            added += 1
+
+        return added > 0
+
+    edge_uses = build_edge_uses(indices, vertex_count)
+    if require_watertight and allow_tagged_loop_bridge:
+        if stitch_tagged_boundary_loops(
+            vertices,
+            indices,
+            surface_tags,
+            edge_uses,
+            tag_a=1,
+            tag_b=1,
+            bridge_tag=1,
+        ):
+            tri_count = len(indices) // 3
+            edge_uses = build_edge_uses(indices, vertex_count)
+
+    adjacency: Dict[int, List[Tuple[int, int]]] = {i: [] for i in range(tri_count)}
+    boundary_edges = 0
+    non_manifold_edges = 0
+    for uses in edge_uses.values():
+        if len(uses) == 1:
+            boundary_edges += 1
+            continue
+        if len(uses) > 2:
+            non_manifold_edges += 1
+            continue
+        (t0, d0), (t1, d1) = uses
+        flip_needed = 1 if d0 == d1 else 0
+        adjacency[t0].append((t1, flip_needed))
+        adjacency[t1].append((t0, flip_needed))
+
+    if non_manifold_edges > 0:
+        raise GmshMeshingError(
+            f"Canonical mesh is non-manifold ({non_manifold_edges} edges shared by >2 triangles)."
+        )
+    if require_watertight and boundary_edges > 0:
+        raise GmshMeshingError(
+            f"Canonical mesh is not watertight ({boundary_edges} boundary edges)."
+        )
+    if require_single_boundary_loop and boundary_edges > 0:
+        boundary_adj: Dict[int, Set[int]] = {}
+        for (u, v), uses in edge_uses.items():
+            if len(uses) != 1:
+                continue
+            boundary_adj.setdefault(int(u), set()).add(int(v))
+            boundary_adj.setdefault(int(v), set()).add(int(u))
+        if not boundary_adj:
+            raise GmshMeshingError("Canonical mesh boundary loop analysis failed: no boundary adjacency.")
+        degree_errors = [vid for vid, nbrs in boundary_adj.items() if len(nbrs) != 2]
+        if degree_errors:
+            raise GmshMeshingError(
+                "Canonical mesh has cracked aperture boundary (boundary vertices not degree-2)."
+            )
+        start = next(iter(boundary_adj))
+        visited_v: Set[int] = set()
+        stack_v = [start]
+        while stack_v:
+            vid = stack_v.pop()
+            if vid in visited_v:
+                continue
+            visited_v.add(vid)
+            stack_v.extend(n for n in boundary_adj[vid] if n not in visited_v)
+        if len(visited_v) != len(boundary_adj):
+            raise GmshMeshingError(
+                "Canonical mesh has multiple disjoint aperture boundaries; expected one continuous loop."
+            )
+
+    flips = [-1] * tri_count
+    component_count = 0
+    for start in range(tri_count):
+        if flips[start] != -1:
+            continue
+        component_count += 1
+        flips[start] = 0
+        stack = [start]
+        while stack:
+            tri = stack.pop()
+            tri_flip = flips[tri]
+            for nbr, flip_needed in adjacency.get(tri, []):
+                expected = tri_flip ^ flip_needed
+                if flips[nbr] == -1:
+                    flips[nbr] = expected
+                    stack.append(nbr)
+                elif flips[nbr] != expected:
+                    raise GmshMeshingError(
+                        "Canonical mesh has inconsistent triangle winding constraints."
+                    )
+
+    if component_count != 1:
+        print(f"[MWG] WARNING: Canonical mesh has {component_count} disconnected components.")
+    if require_watertight and component_count != 1:
+        raise GmshMeshingError(
+            f"Canonical mesh is disconnected ({component_count} triangle components)."
+        )
+
+    for tri_idx, flip in enumerate(flips):
+        if flip != 1:
+            continue
+        i0 = tri_idx * 3
+        indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+
+    if require_watertight:
+        coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
+        signed_six_volume = 0.0
+        for tri_idx in range(tri_count):
+            i0 = tri_idx * 3
+            p0 = coords[int(indices[i0])]
+            p1 = coords[int(indices[i0 + 1])]
+            p2 = coords[int(indices[i0 + 2])]
+            signed_six_volume += float(np.dot(p0, np.cross(p1, p2)))
+
+        if not math.isfinite(signed_six_volume) or abs(signed_six_volume) <= 1e-12:
+            raise GmshMeshingError("Canonical mesh has invalid enclosed volume for outward orientation.")
+        if signed_six_volume < 0.0:
+            for tri_idx in range(tri_count):
+                i0 = tri_idx * 3
+                indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+    else:
+        coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
+        center = np.mean(coords, axis=0)
+        outward_score = 0.0
+        for tri_idx in range(tri_count):
+            i0 = tri_idx * 3
+            p0 = coords[int(indices[i0])]
+            p1 = coords[int(indices[i0 + 1])]
+            p2 = coords[int(indices[i0 + 2])]
+            tri_normal = np.cross(p1 - p0, p2 - p0)
+            tri_centroid = (p0 + p1 + p2) / 3.0
+            outward_score += float(np.dot(tri_normal, tri_centroid - center))
+        if math.isfinite(outward_score) and outward_score < 0.0:
+            for tri_idx in range(tri_count):
+                i0 = tri_idx * 3
+                indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+
+    if flip_surface_tags:
+        flip_tags = {int(tag) for tag in flip_surface_tags}
+        for tri_idx in range(tri_count):
+            if int(surface_tags[tri_idx]) not in flip_tags:
+                continue
+            i0 = tri_idx * 3
+            indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+
+    if fix_front_baffle_normals:
+        coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
+        z_top = float(np.max(coords[:, 2]))
+        z_bot = float(np.min(coords[:, 2]))
+        z_span = max(abs(z_top - z_bot), 1e-6)
+        z_eps = max(1e-4, z_span * 1e-3)
+        for tri_idx in range(tri_count):
+            if int(surface_tags[tri_idx]) != 1:
+                continue
+            i0 = tri_idx * 3
+            p0 = coords[int(indices[i0])]
+            p1 = coords[int(indices[i0 + 1])]
+            p2 = coords[int(indices[i0 + 2])]
+            tri_centroid_z = float((p0[2] + p1[2] + p2[2]) / 3.0)
+            if abs(tri_centroid_z - z_top) > z_eps:
+                continue
+            tri_normal = np.cross(p1 - p0, p2 - p0)
+            nlen = float(np.linalg.norm(tri_normal))
+            if not math.isfinite(nlen) or nlen <= 1e-12:
+                continue
+            # Restrict to near-planar top baffle triangles (not horn sidewall near mouth).
+            if abs(float(tri_normal[2])) < 0.8 * nlen:
+                continue
+            # Enclosure canonical convention keeps wall normals facing enclosure interior.
+            # On the front baffle plane (max z), that means normal z should be negative.
+            if float(tri_normal[2]) > 0.0:
+                indices[i0 + 1], indices[i0 + 2] = indices[i0 + 2], indices[i0 + 1]
+
+    return {
+        "vertices": vertices,
         "indices": indices,
         "surfaceTags": surface_tags,
     }
@@ -1675,29 +2370,34 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             gmsh.model.add("WaveguideOCC")
 
             # --- Build geometry ---
-            # Enclosure box must be built and cut BEFORE inner horn surfaces are created
-            # to avoid the OCC Boolean cut interfering with the horn surface entities.
             enc_data: Dict[str, Any] = {
                 "dimtags": [],
                 "front": [],
                 "back": [],
                 "sides": [],
                 "bounds": None,
+                "opening_curves": [],
+                "opening_ring_points": None,
             }
-            if enc_depth > 0:
-                enc_data = _build_enclosure_box(inner_points, params, closed=closed)
-                # _build_enclosure_box calls occ.synchronize() internally
-
             inner_dimtags = _build_surface_from_points(inner_points, closed=closed)
 
             # Synchronize so we can query boundary curves from inner surfaces.
             gmsh.model.occ.synchronize()
+
             throat_disc_dimtags = (
                 _build_throat_disc_from_inner_boundary(inner_dimtags) if closed else []
             )
             if not throat_disc_dimtags and closed:
                 # Fallback to the legacy ring-based source disc if boundary extraction fails.
                 throat_disc_dimtags = _build_throat_disc_from_ring(inner_points[:, 0, :], closed=closed)
+
+            if enc_depth > 0:
+                enc_data = _build_enclosure_box(
+                    inner_points,
+                    params,
+                    closed=closed,
+                    inner_dimtags=inner_dimtags,
+                )
 
             outer_dimtags = []
             mouth_dimtags = []
@@ -1776,6 +2476,20 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
                 for _, tag in rear_dimtags:
                     if tag in all_model_surfaces:
                         gmsh.model.mesh.setReverse(2, tag)
+            elif enc_depth > 0 and closed:
+                # Enclosure mode: keep wall normals aligned with viewport convention.
+                all_model_surfaces = {tag for _, tag in gmsh.model.getEntities(2)}
+                for _, tag in inner_dimtags:
+                    if tag in all_model_surfaces:
+                        gmsh.model.mesh.setReverse(2, tag)
+                # The front baffle (addPlaneSurface) naturally produces -z normals
+                # (correct: pointing toward the enclosure interior). The swept
+                # side/back surfaces (addThruSections) naturally point outward and
+                # need setReverse. Exclude front baffle tags to avoid double-flip.
+                front_baffle_tags = set(enc_data.get("front", []))
+                for _, tag in enc_data.get("dimtags", []):
+                    if tag in all_model_surfaces and tag not in front_baffle_tags:
+                        gmsh.model.mesh.setReverse(2, tag)
 
             # --- Surface groups ---
             surface_groups: Dict[str, List[int]] = {
@@ -1827,6 +2541,15 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             gmsh.model.mesh.removeDuplicateNodes()
             canonical_mesh = _extract_canonical_mesh_from_model() if include_canonical else None
             if canonical_mesh is not None:
+                require_closed_mesh = bool(closed and enc_depth > 0)
+                canonical_mesh = _orient_and_validate_canonical_mesh(
+                    canonical_mesh,
+                    require_watertight=require_closed_mesh,
+                    require_single_boundary_loop=False,
+                    allow_tagged_loop_bridge=bool(closed and enc_depth > 0),
+                    flip_surface_tags={1} if (closed and enc_depth > 0) else None,
+                    fix_front_baffle_normals=bool(closed and enc_depth > 0),
+                )
                 tri_count = len(canonical_mesh["indices"]) // 3
                 if len(canonical_mesh["surfaceTags"]) != tri_count:
                     raise GmshMeshingError(

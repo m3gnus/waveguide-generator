@@ -6,17 +6,20 @@ import numpy as np
 
 from solver.deps import GMSH_OCC_RUNTIME_READY, gmsh
 from solver.waveguide_builder import (
+    _build_enclosure_box,
     _build_mouth_rim,
     _build_surface_from_points,
     _build_throat_disc_from_ring,
     _collect_boundary_curves,
     _compute_point_grids,
     _configure_mesh_size,
+    _enclosure_resolution_formula,
     gmsh_lock,
     _axial_interpolated_size,
     _panel_corner_points_by_quadrant,
     _parse_quadrant_resolutions,
     _rear_resolution_active,
+    build_waveguide_mesh,
 )
 
 
@@ -46,6 +49,251 @@ class OccResolutionSemanticsTest(unittest.TestCase):
         self.assertEqual(corners[1], (-2.0, 5.0, 100.0))
         self.assertEqual(corners[2], (-2.0, -4.0, 100.0))
         self.assertEqual(corners[3], (3.0, -4.0, 100.0))
+
+    def test_enclosure_resolution_formula_hits_front_back_corner_targets(self):
+        formula = _enclosure_resolution_formula(
+            [2.0, 3.0, 4.0, 5.0],
+            [12.0, 13.0, 14.0, 15.0],
+            bx0=-10.0,
+            bx1=10.0,
+            by0=-20.0,
+            by1=20.0,
+            z_front=100.0,
+            z_back=40.0,
+        )
+
+        def eval_formula(x, y, z):
+            return float(eval(formula, {"__builtins__": {}}, {"x": x, "y": y, "z": z}))  # noqa: S307
+
+        # Front panel corners (Q1..Q4)
+        self.assertAlmostEqual(eval_formula(10.0, 20.0, 100.0), 2.0)
+        self.assertAlmostEqual(eval_formula(-10.0, 20.0, 100.0), 3.0)
+        self.assertAlmostEqual(eval_formula(-10.0, -20.0, 100.0), 4.0)
+        self.assertAlmostEqual(eval_formula(10.0, -20.0, 100.0), 5.0)
+        # Back panel corners (Q1..Q4)
+        self.assertAlmostEqual(eval_formula(10.0, 20.0, 40.0), 12.0)
+        self.assertAlmostEqual(eval_formula(-10.0, 20.0, 40.0), 13.0)
+        self.assertAlmostEqual(eval_formula(-10.0, -20.0, 40.0), 14.0)
+        self.assertAlmostEqual(eval_formula(10.0, -20.0, 40.0), 15.0)
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_osse_enclosure_side_mesh_responds_to_front_back_resolution(self):
+        coarse = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="22,22,22,22",
+            enc_back_resolution="22,22,22,22",
+        )
+        fine = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="2,2,2,2",
+            enc_back_resolution="2,2,2,2",
+        )
+
+        self.assertGreater(
+            fine["enclosure_sides"],
+            coarse["enclosure_sides"] * 5,
+            "Enclosure side walls should refine significantly when front/back resolution is tightened.",
+        )
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_osse_enclosure_front_mesh_responds_to_front_resolution(self):
+        coarse = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="22,22,22,22",
+            enc_back_resolution="22,22,22,22",
+        )
+        fine_front = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="2,2,2,2",
+            enc_back_resolution="22,22,22,22",
+        )
+
+        self.assertGreater(
+            coarse["enclosure_front"],
+            0,
+            "Expected explicit front baffle triangles for enclosure meshes.",
+        )
+        self.assertGreater(
+            fine_front["enclosure_front"],
+            coarse["enclosure_front"] * 5,
+            "Front baffle should refine significantly when front resolution is tightened.",
+        )
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_osse_enclosure_edge_radius_and_type_affect_occ_mesh_geometry(self):
+        base = self._build_osse_enclosure_mesh(enc_edge=0.0, enc_edge_type=1)
+        rounded = self._build_osse_enclosure_mesh(enc_edge=6.0, enc_edge_type=1)
+        chamfered = self._build_osse_enclosure_mesh(enc_edge=6.0, enc_edge_type=2)
+
+        self.assertNotEqual(
+            rounded["canonical_triangles"],
+            base["canonical_triangles"],
+            "Rounded enclosure edge must change OCC simulation mesh geometry.",
+        )
+        self.assertNotEqual(
+            chamfered["canonical_triangles"],
+            base["canonical_triangles"],
+            "Chamfered enclosure edge must change OCC simulation mesh geometry.",
+        )
+        self.assertNotEqual(
+            rounded["canonical_triangles"],
+            chamfered["canonical_triangles"],
+            "Rounded and chamfered edge modes should produce distinct OCC meshes.",
+        )
+        base_counts = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="6,7,8,9",
+            enc_back_resolution="12,13,14,15",
+            enc_edge=0.0,
+            enc_edge_type=1,
+        )
+        rounded_counts = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="6,7,8,9",
+            enc_back_resolution="12,13,14,15",
+            enc_edge=6.0,
+            enc_edge_type=1,
+        )
+        chamfered_counts = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="6,7,8,9",
+            enc_back_resolution="12,13,14,15",
+            enc_edge=6.0,
+            enc_edge_type=2,
+        )
+        self.assertNotEqual(
+            rounded_counts["enclosure_back"],
+            base_counts["enclosure_back"],
+            "Back enclosure geometry should change when edge radius is enabled.",
+        )
+        self.assertNotEqual(
+            rounded_counts["enclosure_back"],
+            chamfered_counts["enclosure_back"],
+            "Back enclosure geometry should differ between rounded and chamfered edge modes.",
+        )
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_osse_enclosure_mesh_is_connected_watertight_and_outward_oriented(self):
+        mesh = self._build_osse_enclosure_mesh(enc_edge=6.0, enc_edge_type=1)
+        vertices = mesh["vertices"]
+        indices = mesh["indices"]
+
+        edge_to_tris: Dict[tuple, list] = {}
+        tri_count = len(indices) // 3
+        self.assertGreater(tri_count, 0, "Expected enclosure mesh triangles.")
+        for tri_idx in range(tri_count):
+            a = int(indices[tri_idx * 3])
+            b = int(indices[tri_idx * 3 + 1])
+            c = int(indices[tri_idx * 3 + 2])
+            for u, v in ((a, b), (b, c), (c, a)):
+                key = (u, v) if u < v else (v, u)
+                edge_to_tris.setdefault(key, []).append(tri_idx)
+
+        boundary_edges = [edge for edge, uses in edge_to_tris.items() if len(uses) == 1]
+        non_manifold_edges = [edge for edge, uses in edge_to_tris.items() if len(uses) > 2]
+        self.assertEqual(len(non_manifold_edges), 0, "Expected manifold enclosure mesh (no >2-use edges).")
+        self.assertEqual(len(boundary_edges), 0, "Expected watertight enclosure mesh (no boundary edges).")
+
+        tri_adj = [[] for _ in range(tri_count)]
+        for uses in edge_to_tris.values():
+            if len(uses) != 2:
+                continue
+            t0, t1 = uses
+            tri_adj[t0].append(t1)
+            tri_adj[t1].append(t0)
+
+        visited = set()
+        queue = [0] if tri_count > 0 else []
+        while queue:
+            tri = queue.pop()
+            if tri in visited:
+                continue
+            visited.add(tri)
+            queue.extend(n for n in tri_adj[tri] if n not in visited)
+        self.assertEqual(len(visited), tri_count, "Expected one connected triangle component.")
+
+        coords = np.asarray(vertices, dtype=float).reshape((-1, 3))
+        center = np.mean(coords, axis=0)
+        outward_score = 0.0
+        for tri_idx in range(tri_count):
+            i0 = tri_idx * 3
+            p0 = coords[int(indices[i0])]
+            p1 = coords[int(indices[i0 + 1])]
+            p2 = coords[int(indices[i0 + 2])]
+            tri_normal = np.cross(p1 - p0, p2 - p0)
+            tri_center = (p0 + p1 + p2) / 3.0
+            outward_score += float(np.dot(tri_normal, tri_center - center))
+
+        self.assertLess(
+            outward_score,
+            0.0,
+            "Expected wall-oriented canonical score to be negative (wall normals flipped relative to source disc).",
+        )
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_osse_enclosure_front_baffle_normals_face_enclosure_interior(self):
+        mesh = self._build_osse_enclosure_mesh(enc_edge=6.0, enc_edge_type=1)
+        vertices = np.asarray(mesh["vertices"], dtype=float).reshape((-1, 3))
+        indices = np.asarray(mesh["indices"], dtype=int).reshape((-1, 3))
+        surface_tags = np.asarray(mesh["surfaceTags"], dtype=int)
+
+        self.assertSetEqual(
+            set(surface_tags.tolist()),
+            {1, 2},
+            "OCC enclosure canonical tags must remain wall/source only ({1,2}).",
+        )
+
+        z_top = float(np.max(vertices[:, 2]))
+        z_bot = float(np.min(vertices[:, 2]))
+        z_span = max(abs(z_top - z_bot), 1e-6)
+        z_eps = max(1e-4, z_span * 1e-3)
+
+        front_baffle_nz = []
+        rear_panel_nz = []
+        for tri_idx, (a, b, c) in enumerate(indices):
+            if int(surface_tags[tri_idx]) != 1:
+                continue
+            p0 = vertices[int(a)]
+            p1 = vertices[int(b)]
+            p2 = vertices[int(c)]
+            tri_normal = np.cross(p1 - p0, p2 - p0)
+            nlen = float(np.linalg.norm(tri_normal))
+            if not np.isfinite(nlen) or nlen <= 1e-12:
+                continue
+            if abs(float(tri_normal[2])) < 0.8 * nlen:
+                continue
+            tri_center_z = float((p0[2] + p1[2] + p2[2]) / 3.0)
+            if abs(tri_center_z - z_top) <= z_eps:
+                front_baffle_nz.append(float(tri_normal[2]))
+            if abs(tri_center_z - z_bot) <= z_eps:
+                rear_panel_nz.append(float(tri_normal[2]))
+
+        self.assertGreater(
+            len(front_baffle_nz),
+            0,
+            "Expected front-baffle wall triangles in canonical enclosure mesh.",
+        )
+        self.assertTrue(
+            all(nz < 0.0 for nz in front_baffle_nz),
+            "Front baffle normals should point toward enclosure interior (-z).",
+        )
+        self.assertGreater(
+            len(rear_panel_nz),
+            0,
+            "Expected rear-panel wall triangles in canonical enclosure mesh.",
+        )
+        self.assertTrue(
+            all(nz > 0.0 for nz in rear_panel_nz),
+            "Rear panel normals should remain +z toward enclosure interior.",
+        )
 
     def test_collect_boundary_curves_returns_empty_for_empty_input(self):
         self.assertEqual(_collect_boundary_curves([]), [])
@@ -178,6 +426,124 @@ class OccResolutionSemanticsTest(unittest.TestCase):
                     gmsh.clear()
                 if initialized_here and gmsh.isInitialized():
                     gmsh.finalize()
+
+    @staticmethod
+    def _osse_enclosure_base_params() -> Dict[str, float]:
+        return {
+            "formula_type": "OSSE",
+            "L": "140",
+            "s": "0.58",
+            "n": 4.158,
+            "h": 0.0,
+            "a": "55",
+            "r0": 12.7,
+            "a0": 15.5,
+            "k": 2.0,
+            "q": 3.4,
+            "quadrants": 1234,
+            "n_angular": 48,
+            "n_length": 16,
+            "throat_res": 5.0,
+            "mouth_res": 8.0,
+            "rear_res": 25.0,
+            "enc_depth": 160.0,
+            "enc_space_l": 25.0,
+            "enc_space_t": 25.0,
+            "enc_space_r": 25.0,
+            "enc_space_b": 25.0,
+            "morph_target": 1,
+            "morph_width": 220.0,
+            "morph_height": 150.0,
+            "morph_corner": 0.0,
+            "enc_edge": 6.0,
+            "enc_edge_type": 1,
+        }
+
+    @staticmethod
+    def _mesh_osse_enclosure_triangle_counts(
+        *,
+        enc_front_resolution: str,
+        enc_back_resolution: str,
+        enc_edge: float = 6.0,
+        enc_edge_type: int = 1,
+    ) -> Dict[str, int]:
+        params = OccResolutionSemanticsTest._osse_enclosure_base_params()
+        params["enc_front_resolution"] = enc_front_resolution
+        params["enc_back_resolution"] = enc_back_resolution
+        params["enc_edge"] = float(enc_edge)
+        params["enc_edge_type"] = int(enc_edge_type)
+
+        with gmsh_lock:
+            initialized_here = False
+            try:
+                if not gmsh.isInitialized():
+                    gmsh.initialize()
+                    initialized_here = True
+
+                gmsh.option.setNumber("General.Terminal", 0)
+                gmsh.clear()
+                gmsh.model.add("OccOsseEnclosureResolutionSemantics")
+
+                inner_points, _ = _compute_point_grids(params)
+                inner_dimtags = _build_surface_from_points(inner_points, closed=True)
+                gmsh.model.occ.synchronize()
+                enc_data = _build_enclosure_box(
+                    inner_points,
+                    params,
+                    closed=True,
+                    inner_dimtags=inner_dimtags,
+                )
+                gmsh.model.occ.synchronize()
+
+                surface_groups = {
+                    "inner": [tag for _, tag in inner_dimtags],
+                    "enclosure": [tag for _, tag in enc_data.get("dimtags", [])],
+                    "enclosure_front": list(enc_data.get("front", [])),
+                    "enclosure_back": list(enc_data.get("back", [])),
+                    "enclosure_sides": list(enc_data.get("sides", [])),
+                }
+
+                _configure_mesh_size(
+                    inner_points,
+                    surface_groups,
+                    throat_res=float(params["throat_res"]),
+                    mouth_res=float(params["mouth_res"]),
+                    rear_res=float(params["rear_res"]),
+                    enc_front_resolution=enc_front_resolution,
+                    enc_back_resolution=enc_back_resolution,
+                    enclosure_bounds=enc_data.get("bounds"),
+                )
+                gmsh.option.setNumber("Mesh.Algorithm", 1)
+                gmsh.model.mesh.generate(2)
+
+                return {
+                    group_key: OccResolutionSemanticsTest._triangle_count(surface_tags)
+                    for group_key, surface_tags in surface_groups.items()
+                    if group_key.startswith("enclosure")
+                }
+            finally:
+                if gmsh.isInitialized():
+                    gmsh.clear()
+                if initialized_here and gmsh.isInitialized():
+                    gmsh.finalize()
+
+    @staticmethod
+    def _build_osse_enclosure_mesh(*, enc_edge: float, enc_edge_type: int) -> Dict[str, object]:
+        params = OccResolutionSemanticsTest._osse_enclosure_base_params()
+        params["enc_edge"] = float(enc_edge)
+        params["enc_edge_type"] = int(enc_edge_type)
+        params["enc_front_resolution"] = "6,7,8,9"
+        params["enc_back_resolution"] = "12,13,14,15"
+
+        result = build_waveguide_mesh(params, include_canonical=True)
+        canonical = result["canonical_mesh"]
+        return {
+            "vertices": list(canonical["vertices"]),
+            "indices": list(canonical["indices"]),
+            "surfaceTags": list(canonical["surfaceTags"]),
+            "canonical_vertices": len(canonical["vertices"]) // 3,
+            "canonical_triangles": len(canonical["indices"]) // 3,
+        }
 
     @staticmethod
     def _triangle_count(surface_tags):
