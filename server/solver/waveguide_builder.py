@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from .deps import GMSH_AVAILABLE, gmsh
-from .gmsh_geo_mesher import gmsh_lock, parse_msh_stats, GmshMeshingError
+from .gmsh_utils import gmsh_lock, parse_msh_stats, GmshMeshingError
 
 
 # ATH expression evaluation
@@ -175,7 +175,15 @@ def _compute_rosse_profile(
             f"Negative discriminant in R-OSSE profile: R={R:.2f}, a={a_deg:.2f}, "
             f"r0={r0}, a0={a0_deg}, k={k}. Check formula parameters."
         )
-    L = (math.sqrt(discriminant) - c2) / (2.0 * c3)
+    if abs(c3) < 1e-12:
+        if abs(c2) < 1e-12:
+            # Degenerate case: r0=R, a0=0, a=0 -> cylinder or something.
+            # Avoid division by zero by setting a small L or handling it based on context.
+            L = 0.0
+        else:
+            L = (target**2 - c1) / c2
+    else:
+        L = (math.sqrt(discriminant) - c2) / (2.0 * c3)
 
     r, m, b, q = r_param, m_param, b_param, q_param
     sqrt_r2_m2 = math.sqrt(r ** 2 + m ** 2)
@@ -806,14 +814,16 @@ def _compute_outer_points(
 # Gmsh geometry construction (OCC kernel)
 # ---------------------------------------------------------------------------
 
-def _make_wire(points_2d: np.ndarray, closed: bool = True) -> int:
-    """Create a BSpline wire from an (n, 3) array of 3D points."""
+def _make_wire(points_2d: np.ndarray, closed: bool = True) -> Tuple[int, List[int], Tuple[int, int]]:
+    """Create a BSpline wire from an (n, 3) array of 3D points. Returns (wire_tag, curve_tags, (first_pt, last_pt))."""
     n = points_2d.shape[0]
     pt_tags = [gmsh.model.occ.addPoint(float(points_2d[i, 0]), float(points_2d[i, 1]), float(points_2d[i, 2])) for i in range(n)]
+    first_pt = pt_tags[0]
+    last_pt = pt_tags[-1]
     if closed:
         pt_tags.append(pt_tags[0])
     spline = gmsh.model.occ.addBSpline(pt_tags)
-    return gmsh.model.occ.addWire([spline])
+    return gmsh.model.occ.addWire([spline]), [spline], (first_pt, last_pt)
 
 
 def _make_closed_wire_and_loop(points_2d: np.ndarray) -> Tuple[int, int]:
@@ -893,13 +903,19 @@ def _build_throat_disc_from_ring(
     closed: bool,
 ) -> List[Tuple[int, int]]:
     """Build the source/piston disc from the exact throat ring wire."""
-    wire = _make_wire(throat_ring_points, closed=closed)
-    fill = gmsh.model.occ.addSurfaceFilling(wire)
-    return [(2, fill)]
+    wire, curves, eps = _make_wire(throat_ring_points, closed=closed)
+    if closed:
+        loop = gmsh.model.occ.addCurveLoop([int(c) for c in curves])
+    else:
+        line_tag = gmsh.model.occ.addLine(eps[1], eps[0])
+        loop = gmsh.model.occ.addCurveLoop([int(c) for c in curves] + [int(line_tag)])
+    fill = gmsh.model.occ.addPlaneSurface([loop])
+    return [(2, int(fill))]
 
 
 def _build_throat_disc_from_inner_boundary(
     inner_dimtags: List[Tuple[int, int]],
+    closed: bool,
 ) -> List[Tuple[int, int]]:
     """Build throat disc from the inner-surface throat boundary curves.
 
@@ -948,12 +964,28 @@ def _build_throat_disc_from_inner_boundary(
     if not throat_curves:
         return []
 
-    try:
-        loop = gmsh.model.occ.addCurveLoop(throat_curves, reorient=True)
-    except TypeError:
+    if closed:
         loop = gmsh.model.occ.addCurveLoop(throat_curves)
-    fill = gmsh.model.occ.addSurfaceFilling(loop)
-    return [(2, fill)]
+    else:
+        # For partial symmetry (e.g. half-disc), find the endpoints of the throat arc
+        # and connect them with a straight chord.
+        try:
+            boundary_pts = gmsh.model.getBoundary([(1, t) for t in throat_curves], oriented=False, combined=True)
+            pt_tags = [int(abs(t)) for d, t in boundary_pts if d == 0]
+            if len(pt_tags) >= 2:
+                line_tag = gmsh.model.occ.addLine(pt_tags[0], pt_tags[1])
+                loop = gmsh.model.occ.addCurveLoop(throat_curves + [int(line_tag)])
+            else:
+                loop = gmsh.model.occ.addCurveLoop(throat_curves)
+        except Exception:
+            loop = gmsh.model.occ.addCurveLoop(throat_curves)
+
+    try:
+        fill = gmsh.model.occ.addPlaneSurface([loop])
+    except Exception:
+        # Planar filling failed? fallback to general filling.
+        fill = gmsh.model.occ.addSurfaceFilling(loop)
+    return [(2, int(fill))]
 
 
 def _boundary_curves_at_z_extreme(
@@ -1513,7 +1545,7 @@ def _build_enclosure_box(
         "opening_curves": [],
         "opening_ring_points": None,
     }
-    if not closed:
+    if not inner_dimtags:
         return empty
 
     if not inner_dimtags:
@@ -1585,8 +1617,24 @@ def _build_enclosure_box(
     generated_dimtags: List[Tuple[int, int]] = []
     edge_depth = min(clamped_edge, max(0.0, enc_depth * 0.49))
 
-    mouth_loop = _add_curve_loop_from_curves(mouth_curves)
-    current_profile = mouth_loop
+    if closed:
+        mouth_loop = _add_curve_loop_from_curves(mouth_curves)
+    else:
+        # Cut the front baffle hole: adding the straight symmetry line to close the loop.
+        # Use existing boundary points from the mouth_curves chain to ensure topological connectivity.
+        try:
+            boundary_pts = gmsh.model.getBoundary([(1, t) for t in mouth_curves], oriented=False, combined=True)
+            pt_tags = [int(abs(t)) for d, t in boundary_pts if d == 0]
+            if len(pt_tags) >= 2:
+                # Chain has two end points.
+                line_tag = gmsh.model.occ.addLine(pt_tags[0], pt_tags[1])
+                mouth_loop = _add_curve_loop_from_curves(mouth_curves + [int(line_tag)])
+            else:
+                mouth_loop = _add_curve_loop_from_curves(mouth_curves)
+        except Exception:
+            mouth_loop = _add_curve_loop_from_curves(mouth_curves)
+
+    current_profile, mouth_curves_list, profile_pts = _make_wire(mouth_pts, closed=closed)
 
     merge_eps = 1e-6
     reuse_mouth_as_ring0 = True
@@ -1598,13 +1646,22 @@ def _build_enclosure_box(
             reuse_mouth_as_ring0 = False
             break
 
-# This builds the front baffle
     ring0_wire: Optional[int] = None
     ring0_loop: Optional[int] = None
+
+    def _close_wire_for_surface(orig_curves: List[int], first_pt: int, last_pt: int) -> int:
+        if closed:
+            return int(gmsh.model.occ.addCurveLoop([int(c) for c in orig_curves]))
+        # Explicitly connect the last point back to the first point with a straight line
+        # using the existing topological points used by the bspline
+        line_tag = gmsh.model.occ.addLine(last_pt, first_pt)
+        return int(gmsh.model.occ.addCurveLoop([int(c) for c in orig_curves] + [int(line_tag)]))
+
     if not reuse_mouth_as_ring0:
         # Build front baffle with inset ring (when enc_edge > 0)
         ring0_pts = _ring_points_from_xy_plan(inset_pts, z=z_front)
-        ring0_wire, ring0_loop = _make_closed_wire_and_loop(ring0_pts)
+        ring0_wire, ring0_curves, ring0_eps = _make_wire(ring0_pts, closed=closed)
+        ring0_loop = _close_wire_for_surface(ring0_curves, ring0_eps[0], ring0_eps[1])
         try:
             front_tag = int(gmsh.model.occ.addPlaneSurface([int(ring0_loop), int(mouth_loop)]))
             generated_dimtags.append((2, front_tag))
@@ -1617,7 +1674,8 @@ def _build_enclosure_box(
         # Create a front plane surface from the outer boundary box points at z_front
         # This creates a flat front baffle that seals the enclosure at the horn mouth
         front_pts = _ring_points_from_xy_plan(outer_pts, z=z_front)
-        front_wire, front_loop = _make_closed_wire_and_loop(front_pts)
+        front_wire, front_curves, front_eps = _make_wire(front_pts, closed=closed)
+        front_loop = _close_wire_for_surface(front_curves, front_eps[0], front_eps[1])
         try:
             front_tag = int(gmsh.model.occ.addPlaneSurface([int(front_loop)]))
             generated_dimtags.append((2, front_tag))
@@ -1649,13 +1707,13 @@ def _build_enclosure_box(
                 )
             )
         ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
-        ring_wire = _make_wire(ring_pts, closed=True)
+        ring_wire, _, _ = _make_wire(ring_pts, closed=closed)
         generated_dimtags.extend(_add_ruled_section(current_profile, ring_wire))
         current_profile = ring_wire
 
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
     back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
-    back_outer_wire = _make_wire(back_outer_pts, closed=True)
+    back_outer_wire, _, _ = _make_wire(back_outer_pts, closed=closed)
     generated_dimtags.extend(_add_ruled_section(current_profile, back_outer_wire))
     current_profile = back_outer_wire
 
@@ -1683,11 +1741,17 @@ def _build_enclosure_box(
                 )
             )
         ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
-        ring_wire = _make_wire(ring_pts, closed=True)
+        ring_wire, ring_curves, ring_eps = _make_wire(ring_pts, closed=closed)
         generated_dimtags.extend(_add_ruled_section(current_profile, ring_wire))
         current_profile = ring_wire
+        current_curves = ring_curves
+        profile_pts = ring_eps
 
-    back_cap = gmsh.model.occ.addSurfaceFilling(current_profile)
+    back_cap_loop = _close_wire_for_surface(current_curves, profile_pts[0], profile_pts[1])
+    try:
+        back_cap = gmsh.model.occ.addPlaneSurface([int(back_cap_loop)])
+    except Exception:
+        back_cap = gmsh.model.occ.addSurfaceFilling(current_profile)
     generated_dimtags.append((2, int(back_cap)))
 
     gmsh.model.occ.synchronize()
@@ -2487,9 +2551,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             # Synchronize so we can query boundary curves from inner surfaces.
             gmsh.model.occ.synchronize()
 
-            throat_disc_dimtags = (
-                _build_throat_disc_from_inner_boundary(inner_dimtags) if closed else []
-            )
+            throat_disc_dimtags = _build_throat_disc_from_inner_boundary(inner_dimtags, closed=closed)
             if not throat_disc_dimtags and closed:
                 # Fallback to the legacy ring-based source disc if boundary extraction fails.
                 throat_disc_dimtags = _build_throat_disc_from_ring(inner_points[:, 0, :], closed=closed)
@@ -2554,7 +2616,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             surface_groups: Dict[str, List[int]] = {
                 "inner": [tag for _, tag in inner_dimtags],
             }
-            if closed:
+            if throat_disc_dimtags:
                 surface_groups["throat_disc"] = [tag for _, tag in throat_disc_dimtags]
             if enc_depth > 0:
                 surface_groups["enclosure"] = [tag for _, tag in enc_data.get("dimtags", [])]
@@ -2603,7 +2665,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             if canonical_mesh is not None:
                 canonical_mesh = _orient_and_validate_canonical_mesh(
                     canonical_mesh,
-                    require_watertight=True,
+                    require_watertight=closed,
                     require_single_boundary_loop=False,
                 )
                 flipped_tags = canonical_mesh.get("flippedElementTags", [])

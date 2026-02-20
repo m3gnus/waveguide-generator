@@ -26,7 +26,18 @@ const SCALE_LENGTH_KEYS = [
   'morphWidth',
   'morphHeight',
   'gcurveWidth',
-  'sourceRadius'
+  'sourceRadius',
+  'wallThickness',
+  'verticalOffset',
+  'encDepth',
+  'encEdge',
+  'encSpaceL',
+  'encSpaceT',
+  'encSpaceR',
+  'encSpaceB',
+  'throatResolution',
+  'mouthResolution',
+  'rearResolution'
 ];
 
 export function isNumericString(value) {
@@ -137,7 +148,11 @@ export function prepareGeometryParams(
       const value = preparedParams[key];
       if (value === undefined || value === null || value === '') return;
       if (typeof value === 'function') {
-        preparedParams[key] = (p) => scale * value(p);
+        const scaledFn = (p) => scale * value(p);
+        if (value._rawExpr !== undefined) {
+          scaledFn._rawExpr = `(${value._rawExpr}) * ${scale}`;
+        }
+        preparedParams[key] = scaledFn;
       } else if (typeof value === 'number' && Number.isFinite(value)) {
         preparedParams[key] = value * scale;
       } else if (typeof value === 'string' && isNumericString(value)) {

@@ -58,18 +58,7 @@ except ImportError:
 
     print("Warning: BEM solver not available. Install bempp-cl to enable simulations.")
 
-try:
-    from solver.gmsh_geo_mesher import (
-        generate_msh_from_geo,
-        gmsh_mesher_available,
-        GmshMeshingError
-    )
-except ImportError:
-    generate_msh_from_geo = None
-    gmsh_mesher_available = lambda: False
 
-    class GmshMeshingError(RuntimeError):
-        pass
 
 try:
     from solver.waveguide_builder import build_waveguide_mesh
@@ -303,12 +292,6 @@ class SimulationResults(BaseModel):
     di: Optional[Dict[str, List[float]]] = None
 
 
-class GmshMeshRequest(BaseModel):
-    geoText: str
-    mshVersion: str = "2.2"
-    binary: bool = False
-
-
 class WaveguideParamsRequest(BaseModel):
     """ATH-format waveguide parameters for the Python OCC mesh builder.
 
@@ -453,52 +436,6 @@ async def check_updates():
         return get_update_status()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@app.post("/api/mesh/generate-msh")
-async def generate_mesh_with_gmsh(request: GmshMeshRequest):
-    """
-    Generate a .msh file from .geo input using Gmsh.
-
-    This endpoint is intentionally strict: .msh content must be authored by Gmsh.
-    """
-    if not request.geoText or not request.geoText.strip():
-        raise HTTPException(status_code=422, detail="geoText must be a non-empty string.")
-
-    if request.mshVersion not in ("2.2", "4.1"):
-        raise HTTPException(status_code=422, detail="mshVersion must be '2.2' or '4.1'.")
-
-    if generate_msh_from_geo is None or not gmsh_mesher_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Gmsh meshing service unavailable. .msh export requires a working Gmsh backend."
-        )
-
-    try:
-        # Run gmsh generation on the request thread; gmsh Python API may fail in worker threads.
-        result = generate_msh_from_geo(
-            request.geoText,
-            request.mshVersion,
-            request.binary
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except GmshMeshingError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Gmsh meshing failed: {exc}"
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error during Gmsh meshing: {exc}"
-        ) from exc
-
-    return {
-        "msh": result["msh"],
-        "generatedBy": "gmsh",
-        "stats": result["stats"]
-    }
 
 
 @app.post("/api/mesh/build")

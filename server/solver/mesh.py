@@ -2,7 +2,7 @@ import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 
 from .deps import GMSH_AVAILABLE, bempp_api, gmsh
-from .gmsh_geo_mesher import gmsh_lock
+from .gmsh_utils import gmsh_lock
 
 
 def _resolve_unit_scale_to_meter(

@@ -20,7 +20,7 @@ function printUsage() {
 function parseArgs(argv) {
     const options = {
         mode: 'auto',
-        requireBemMeshGeo: true
+        requireBemMeshGeo: false
     };
     const positional = [];
 

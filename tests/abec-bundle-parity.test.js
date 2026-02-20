@@ -12,13 +12,10 @@ import {
     applyAthImportDefaults,
     isMWGConfig
 } from '../src/geometry/index.js';
-import { buildGmshGeo } from '../src/export/gmshGeoBuilder.js';
 import {
     generateAbecProjectFile,
     generateAbecSolvingFile,
-    generateAbecObservationFile,
-    generateAbecCoordsFile,
-    generateAbecStaticFile
+    generateAbecObservationFile
 } from '../src/export/abecProject.js';
 import { validateAbecBundle } from '../src/export/abecBundleValidator.js';
 
@@ -84,7 +81,6 @@ function buildGeneratedBundleEntries(simType) {
     });
     const payload = artifacts.simulation;
     const meshFileName = '260112aolo1.msh';
-    const { geoText } = buildGmshGeo(prepared, artifacts.mesh, payload, { mshVersion: '2.2' });
 
     return {
         'Project.abec': generateAbecProjectFile({
@@ -104,10 +100,7 @@ function buildGeneratedBundleEntries(simType) {
             polarBlocks: prepared._blocks,
             allowDefaultPolars: !(prepared._blocks && Number(prepared.abecSimType || 2) === 1)
         }),
-        '260112aolo1.msh': fs.readFileSync(REFERENCE_MSH_PATH, 'utf8'),
-        'bem_mesh.geo': geoText,
-        'Results/coords.txt': generateAbecCoordsFile(artifacts.mesh.vertices, artifacts.mesh.ringCount),
-        'Results/static.txt': generateAbecStaticFile(payload.vertices)
+        '260112aolo1.msh': fs.readFileSync(REFERENCE_MSH_PATH, 'utf8')
     };
 }
 
@@ -144,7 +137,7 @@ test('generated ABEC_FreeStanding bundle matches golden files and parity contrac
 
     const result = validateAbecBundle(entries, {
         mode: 'ABEC_FreeStanding',
-        requireBemMeshGeo: true
+        requireBemMeshGeo: false
     });
     assert.equal(result.ok, true, result.errors.join('\n'));
 });
@@ -160,7 +153,7 @@ test('generated ABEC_InfiniteBaffle bundle matches golden files and parity contr
 
     const result = validateAbecBundle(entries, {
         mode: 'ABEC_InfiniteBaffle',
-        requireBemMeshGeo: true
+        requireBemMeshGeo: false
     });
     assert.equal(result.ok, true, result.errors.join('\n'));
 });
