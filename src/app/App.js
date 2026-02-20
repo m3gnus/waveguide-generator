@@ -99,10 +99,6 @@ export class App {
     }
   }
 
-  toggleModelType() {
-    // Legacy support function called by legacy listeners if any.
-    this.requestRender();
-  }
 
   handleFileUpload(event) {
     return handleFileUpload(event);

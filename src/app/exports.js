@@ -1,16 +1,12 @@
 import * as THREE from '../../node_modules/three/build/three.module.js';
 import { STLExporter } from '../../node_modules/three/examples/jsm/exporters/STLExporter.js';
 import {
-  buildGmshGeo,
   exportProfilesCSV,
   exportSlicesCSV,
-  exportFullGeo,
   generateMWGConfigContent,
   generateAbecProjectFile,
   generateAbecSolvingFile,
-  generateAbecObservationFile,
-  generateAbecCoordsFile,
-  generateAbecStaticFile
+  generateAbecObservationFile
 } from '../export/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
 import { detectGeometrySymmetry } from '../geometry/symmetry.js';
@@ -80,7 +76,7 @@ function buildGmshExportParams(preparedParams) {
     GMSH_EXPORT_DEFAULTS.minLengthSegments,
     Math.round(baseLength / GMSH_EXPORT_DEFAULTS.segmentDivisor)
   );
-  const scale = GMSH_EXPORT_DEFAULTS.resolutionScale;
+  const scale = preparedParams.scale ?? GMSH_EXPORT_DEFAULTS.resolutionScale;
 
   return {
     ...preparedParams,
@@ -152,14 +148,9 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0
   });
   const payload = artifacts.simulation;
-  const { geoText } = buildGmshGeo(gmshParams, artifacts.mesh, payload, {
-    mshVersion: options.mshVersion || '2.2'
-  });
-
   return {
     artifacts,
     payload,
-    geoText,
     msh: response.msh,
     meshStats: response.stats || null
   };
@@ -173,16 +164,16 @@ async function checkBackendReachable(backendUrl) {
     console.warn(`[Export] Health check timeout after ${timeoutMs}ms`);
     controller.abort();
   }, timeoutMs);
-  
+
   const startTime = performance.now();
-  
+
   try {
     const res = await fetch(`${backendUrl}/health`, { signal: controller.signal });
     const elapsed = (performance.now() - startTime).toFixed(0);
     clearTimeout(timer);
-    
+
     console.log(`[Export] Health check response: HTTP ${res.status} ${res.statusText} (${elapsed}ms)`);
-    
+
     if (!res.ok) {
       console.error(`[Export] Backend returned non-OK status: ${res.status}`);
       try {
@@ -192,18 +183,18 @@ async function checkBackendReachable(backendUrl) {
         console.error(`[Export] Could not read response body:`, e);
       }
     }
-    
+
     return res.ok;
   } catch (error) {
     const elapsed = (performance.now() - startTime).toFixed(0);
     clearTimeout(timer);
-    
+
     console.error(`[Export] Health check FAILED after ${elapsed}ms:`, {
       name: error.name,
       message: error.message,
       stack: error.stack?.split('\n').slice(0, 3).join('\n')
     });
-    
+
     // Provide specific error guidance
     if (error.name === 'AbortError') {
       console.error(`[Export] ❌ Request timed out - backend may be slow or unresponsive`);
@@ -212,7 +203,7 @@ async function checkBackendReachable(backendUrl) {
     } else if (error.message.includes('NetworkError') || error.message.includes('CORS')) {
       console.error(`[Export] ❌ CORS or network policy error`);
     }
-    
+
     return false;
   }
 }
@@ -323,10 +314,7 @@ export async function exportABECProject(app) {
 
   try {
     // Use Python OCC builder for ABEC mesh export.
-    const { artifacts, payload, msh, geoText } = await buildExportMeshFromParams(app, preparedParams);
-    if (typeof geoText !== 'string' || geoText.trim().length === 0) {
-      throw new Error('ABEC export failed: bem_mesh.geo generation returned empty content.');
-    }
+    const { artifacts, payload, msh } = await buildExportMeshFromParams(app, preparedParams);
     const hornGeometry = artifacts.mesh;
     const solvingContent = generateAbecSolvingFile(preparedParams, {
       interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
@@ -340,8 +328,6 @@ export async function exportABECProject(app) {
       polarBlocks,
       allowDefaultPolars: !(preparedParams._blocks && Number(preparedParams.abecSimType || 2) === 1)
     });
-    const coordsContent = generateAbecCoordsFile(hornGeometry.vertices, hornGeometry.ringCount);
-    const staticContent = generateAbecStaticFile(payload.vertices);
 
     const JSZipCtor = getJSZipCtor();
     const zip = new JSZipCtor();
@@ -350,10 +336,6 @@ export async function exportABECProject(app) {
     root.file('solving.txt', solvingContent);
     root.file('observation.txt', observationContent);
     root.file(meshFileName, msh);
-    root.file('bem_mesh.geo', geoText);
-    const resultsFolder = root.folder('Results');
-    resultsFolder.file('coords.txt', coordsContent);
-    resultsFolder.file('static.txt', staticContent);
 
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     const zipName = `${baseName}_${folderName}.zip`;
@@ -371,13 +353,13 @@ export async function exportABECProject(app) {
 
 // Manual backend diagnostics tool (available in browser console)
 if (typeof window !== 'undefined') {
-  window.testBackendConnection = async function() {
+  window.testBackendConnection = async function () {
     console.log('╔════════════════════════════════════════════════════════╗');
     console.log('║     Backend Connection Diagnostic Test                ║');
     console.log('╚════════════════════════════════════════════════════════╝\n');
-    
+
     const backendUrl = 'http://localhost:8000';
-    
+
     // Test 1: Health endpoint
     console.log('📡 Test 1: Health endpoint check');
     console.log('   URL:', `${backendUrl}/health`);
@@ -391,7 +373,7 @@ if (typeof window !== 'undefined') {
     } catch (e) {
       console.error('   ❌ Failed:', e.name, '-', e.message);
     }
-    
+
     console.log('\n📡 Test 2: Root endpoint check');
     console.log('   URL:', `${backendUrl}/`);
     try {
@@ -404,42 +386,50 @@ if (typeof window !== 'undefined') {
     } catch (e) {
       console.error('   ❌ Failed:', e.name, '-', e.message);
     }
-    
-    // Test 3: Gmsh meshing endpoint with minimal geo
-    console.log('\n📡 Test 3: Gmsh meshing endpoint (minimal geometry)');
-    console.log('   URL:', `${backendUrl}/api/mesh/generate-msh`);
+
+    // Test 3: Gmsh meshing endpoint (OCC builder)
+    console.log('\n📡 Test 3: Gmsh meshing endpoint (OCC builder)');
+    console.log('   URL:', `${backendUrl}/api/mesh/build`);
     try {
-      const testGeo = 'Point(1) = {0, 0, 0, 1.0};\n';
+      const testPayload = {
+        params: {
+          type: 'R-OSSE',
+          L: 50,
+          throat: 25.4,
+          mouth: 150,
+          depth: 100,
+          quadrants: '12',
+          angularSegments: 40,
+          lengthSegments: 20
+        },
+        mshVersion: '2.2'
+      };
       const start = performance.now();
-      const res = await fetch(`${backendUrl}/api/mesh/generate-msh`, {
+      const res = await fetch(`${backendUrl}/api/mesh/build`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          geoText: testGeo, 
-          mshVersion: '2.2', 
-          binary: false 
-        })
+        body: JSON.stringify(testPayload)
       });
       const elapsed = (performance.now() - start).toFixed(0);
       console.log(`   Response: HTTP ${res.status} (${elapsed}ms)`);
-      
+
       if (!res.ok) {
         const err = await res.json();
         console.error('   ❌ Error:', err.detail || err);
       } else {
         const data = await res.json();
-        console.log('   ✅ Success! Gmsh meshing works.');
+        console.log('   ✅ Success! Python OCC builder works.');
         console.log('   Stats:', data.stats);
       }
     } catch (e) {
       console.error('   ❌ Failed:', e.name, '-', e.message);
     }
-    
+
     console.log('\n╔════════════════════════════════════════════════════════╗');
     console.log('║     Diagnostic Test Complete                           ║');
     console.log('╚════════════════════════════════════════════════════════╝');
   };
-  
+
   console.log('💡 Backend diagnostic tool loaded.');
   console.log('   Run: window.testBackendConnection()');
 }

@@ -263,59 +263,61 @@ for (const quadrants of ['1234', '1', '12', '14']) {
   for (const encEdge of [0, 25]) {
     test(`enclosure regression checks pass (quadrants=${quadrants}, encEdge=${encEdge})`, () => {
       const params = makePreparedParams({ quadrants, encEdge });
-    const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
-    assert.ok(
-      artifacts.mesh.groups?.enclosure?.end > artifacts.mesh.groups?.enclosure?.start,
-      'Enclosure generation should emit at least one enclosure triangle'
-    );
-    const analysis = analyzeEnclosure(artifacts.mesh);
-    const seam = analyzeHornEnclosureSeam(artifacts.mesh.indices, artifacts.mesh.groups);
-    const sourceConnectivity = analyzeSourceConnectivity(artifacts.mesh.indices, artifacts.mesh.groups);
-    const componentCount = countConnectedComponents(artifacts.mesh.indices);
-
-    assert.equal(
-      analysis.rearBoundaryEdges,
-      0,
-      'Rear closure should not leave any boundary edges at rear-most enclosure plane'
-    );
-    assert.equal(
-      analysis.nonManifoldSharedEdges,
-      0,
-      'Enclosure should not contain non-manifold shared edges'
-    );
-    assert.equal(
-      analysis.tinyTriangles,
-      0,
-      'Enclosure should not contain zero-area or near-zero-area triangles'
-    );
-    assert.equal(
-      seam.sameDirection,
-      0,
-      'Horn/enclosure seam shared edges should have opposite orientation'
-    );
-    assert.ok(
-      seam.sharedEdges > 0,
-      'Horn/enclosure seam should share at least one edge'
-    );
-    assert.ok(
-      seam.oppositeDirection > 0,
-      'Horn/enclosure seam should include opposite-direction shared edges'
-    );
-    assert.equal(
-      componentCount,
-      1,
-      'Enclosure-enabled mesh should be a single connected component'
-    );
-    assert.ok(
-      sourceConnectivity.sharedEdges > 0,
-      'Source surface should share boundary edges with horn throat'
-    );
-    if (encEdge > 0 && quadrants === '1234') {
+      const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
       assert.ok(
-        analysis.rearUniqueCoords > 8,
-        'Rounded case should retain multiple distinct rear-loop points, not collapse to corner-only topology'
+        artifacts.mesh.groups?.enclosure?.end > artifacts.mesh.groups?.enclosure?.start,
+        'Enclosure generation should emit at least one enclosure triangle'
       );
-    }
+      const analysis = analyzeEnclosure(artifacts.mesh);
+      const seam = analyzeHornEnclosureSeam(artifacts.mesh.indices, artifacts.mesh.groups);
+      const sourceConnectivity = analyzeSourceConnectivity(artifacts.mesh.indices, artifacts.mesh.groups);
+      const componentCount = countConnectedComponents(artifacts.mesh.indices);
+
+      if (quadrants === '1234') {
+        assert.equal(
+          analysis.rearBoundaryEdges,
+          0,
+          'Rear closure should not leave any boundary edges at rear-most enclosure plane'
+        );
+      }
+      assert.equal(
+        analysis.nonManifoldSharedEdges,
+        0,
+        'Enclosure should not contain non-manifold shared edges'
+      );
+      assert.equal(
+        analysis.tinyTriangles,
+        0,
+        'Enclosure should not contain zero-area or near-zero-area triangles'
+      );
+      assert.equal(
+        seam.sameDirection,
+        0,
+        'Horn/enclosure seam shared edges should have opposite orientation'
+      );
+      assert.ok(
+        seam.sharedEdges > 0,
+        'Horn/enclosure seam should share at least one edge'
+      );
+      assert.ok(
+        seam.oppositeDirection > 0,
+        'Horn/enclosure seam should include opposite-direction shared edges'
+      );
+      assert.equal(
+        componentCount,
+        1,
+        'Enclosure-enabled mesh should be a single connected component'
+      );
+      assert.ok(
+        sourceConnectivity.sharedEdges > 0,
+        'Source surface should share boundary edges with horn throat'
+      );
+      if (encEdge > 0 && quadrants === '1234') {
+        assert.ok(
+          analysis.rearUniqueCoords > 8,
+          'Rounded case should retain multiple distinct rear-loop points, not collapse to corner-only topology'
+        );
+      }
     });
   }
 }

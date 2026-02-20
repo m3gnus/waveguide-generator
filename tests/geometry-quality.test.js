@@ -64,10 +64,17 @@ test('freestanding wall thickness adds shell and rear disc behind throat', () =>
   const targetRearY = throatY - 8;
   for (let i = 0; i < thick.ringCount; i += 1) {
     const rearRingY = thick.vertices[(outerStart + i) * 3 + 1];
-    assert.ok(Math.abs(rearRingY - targetRearY) < 1e-6);
+    assert.ok(Math.abs(rearRingY - throatY) < 1e-6); // Outer throat ring is at throatY
   }
-  const rearCenterIdx = outerStart + innerVertexCount;
-  assert.ok(Math.abs(thick.vertices[rearCenterIdx * 3 + 1] - targetRearY) < 1e-6);
+  // The rear disc rim starts after the outer shell
+  const radialSteps = thick.ringCount;
+  const lengthSteps = Number(thickParams.lengthSegments);
+  const outerShellVerts = (lengthSteps + 1) * radialSteps;
+  const discRimStart = outerStart + outerShellVerts;
+  for (let i = 0; i < thick.ringCount; i += 1) {
+    const rimY = thick.vertices[(discRimStart + i) * 3 + 1];
+    assert.ok(Math.abs(rimY - targetRearY) < 1e-6);
+  }
 
   const integrity = analyzeBemMeshIntegrity(thick.vertices, thick.indices, {
     requireClosed: true,

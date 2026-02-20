@@ -75,6 +75,3 @@ export function prepareMeshForSimulation(panel) {
   });
 }
 
-export function prepareLegacyBemMesh(meshData) {
-  return Promise.resolve(meshData);
-}

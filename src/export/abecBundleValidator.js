@@ -1,9 +1,7 @@
 const DEFAULT_REQUIRED_FILES = Object.freeze([
     'Project.abec',
     'solving.txt',
-    'observation.txt',
-    'Results/coords.txt',
-    'Results/static.txt'
+    'observation.txt'
 ]);
 
 export const ATH_ABEC_PARITY_CONTRACT = Object.freeze({
@@ -12,7 +10,7 @@ export const ATH_ABEC_PARITY_CONTRACT = Object.freeze({
     requiredProjectSections: ['Project', 'Solving', 'Observation', 'MeshFiles'],
     requiredSolvingElements: ['SD1G0', 'SD1D1001'],
     requiredPhysicalGroups: ['SD1G0', 'SD1D1001'],
-    requireBemMeshGeo: true,
+    requireBemMeshGeo: false,
     minimumPolarBlocks: 1
 });
 

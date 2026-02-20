@@ -28,20 +28,34 @@
 - Frontend simulation falls back to mock results only when backend is unreachable.
 
 ## Source-of-Truth Docs
-- Architecture and runtime behavior: `docs/PROJECT_DOCUMENTATION.md`
-- ABEC bundle contract/parity: `docs/ABEC_PARITY_CONTRACT.md`
-- Roadmap/backlog context: `docs/FUTURE_ADDITIONS.md`
-- Backend operational details: `server/README.md`
+- Architecture and runtime behavior: [docs/PROJECT_DOCUMENTATION.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/PROJECT_DOCUMENTATION.md)
+- ABEC bundle contract/parity: [docs/ABEC_PARITY_CONTRACT.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/ABEC_PARITY_CONTRACT.md)
+- Roadmap/backlog context: [docs/FUTURE_ADDITIONS.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/FUTURE_ADDITIONS.md)
+- Backend operational details: [server/README.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/server/README.md)
 
 ## Coding and Testing Guardrails
+- **Invariants**:
+  - Keep canonical surface-tag mapping consistent with code (`1/2/3/4`).
+  - Source tag (`2`) must be present in every simulation payload.
+  - Interface tags (`4`) only applied when enclosure exists and `interfaceOffset` > 0.
+  - Do not state that `/api/mesh/build` returns `.geo` unless code changes to do so.
+  - Document ABEC bundles as including `bem_mesh.geo` (current required parity contract).
 - Keep module edits local; do not rewrite unrelated stacks opportunistically.
-- Preserve canonical tag contract across frontend and backend:
-  - `1 = wall`, `2 = source`, `3 = secondary`, `4 = interface`.
-- Never document `/api/mesh/build` as returning `.geo` unless code is changed to do so.
-- Keep ABEC bundle structure aligned with parity contract (including `bem_mesh.geo`).
 - Run relevant tests for every behavior change; run full suites before merge:
   - `npm test`
   - `npm run test:server`
+
+## Module-Specific Guidance
+
+### Geometry (`src/geometry/`)
+- **Responsibilities**: Param preparation, mesh topology generation, canonical payload assembly.
+- **Invariants**: Group ranges are triangle indices. `surfaceTags.length` must equal triangle count.
+- **Pitfalls**: `interfaceOffset` might be a list. Avoid scalar-only assumptions.
+
+### Export (`src/export/`)
+- **Responsibilities**: Build export artifacts, orchestrate backend meshing, enforce ABEC parity.
+- **Invariants**: ABEC export uses `/api/mesh/build` only (no JS `.geo` fallback).
+- **Pitfalls**: Keep `Project.abec` mesh references in sync with zip entries.
 
 ## Do Not Change Without Parity Tests
 - `src/geometry/tags.js`, `src/geometry/pipeline.js`, `src/geometry/engine/mesh/enclosure.js`
@@ -55,13 +69,6 @@
 - `server/solver/mesh.py`, `server/solver/solve.py`, `server/solver/solve_optimized.py`
   - Required: `server/tests/test_mesh_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_api_validation.py`
 
-## Execution Order (Token-Efficient)
-1. Fix P0 geometry/tagging defects and red tests.
-2. Immediately update docs/comments that contradict runtime.
-3. Freeze ABEC parity contract and validators before large export changes.
-4. Stabilize/benchmark the current 3D solver stack.
-5. Keep any axisymmetric spike behind feature flags.
-
 ## Definition of Done
 - JS tests pass: `npm test`.
 - Server tests pass: `npm run test:server`.
@@ -70,6 +77,6 @@
 - Solver support matrix in docs matches `server/solver/deps.py`.
 
 ## Multi-Agent Handoff Rules
-- Start from the nearest local `AGENTS.md` in the module you edit.
+- Start from this root `AGENTS.md`.
 - Avoid cross-module edits unless required by a contract break.
 - If a contract break is unavoidable, update both sides and tests in one change.

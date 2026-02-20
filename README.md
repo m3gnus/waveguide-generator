@@ -6,9 +6,9 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 
 ## Documentation
 
-- [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - architecture and runtime behavior
+- [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - architecture, runtime behavior, and recent refactor history
 - [ABEC Parity Contract](docs/ABEC_PARITY_CONTRACT.md) - enforced ABEC bundle structure and semantics
-- [Future Additions](docs/FUTURE_ADDITIONS.md) - planned or partial features not yet in production runtime
+- [Future Additions](docs/FUTURE_ADDITIONS.md) - planned features, BEM acceleration roadmap, and partial features
 
 ## Prerequisites
 
