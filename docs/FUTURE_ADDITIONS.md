@@ -169,3 +169,23 @@ Current state:
 Future addition:
 - Add a server test lane/config that simulates Gmsh-unavailable runtime and verifies solve-path readiness and error behavior remain correct.
 - Keep this lane required while ABEC/Gmsh deprecation decisions are pending.
+
+### 12. BEM Solver Acceleration Roadmap
+
+This section defines the execution strategy for accelerating the backend BEM solve path (`/api/solve`).
+
+#### Strategy (Ranked by Impact)
+1. **Assembler Policy**: Add `auto|dense|fmm` policy with dense fallback.
+2. **Matrix-Free Iterative**: Leverage FMM-backed operators.
+3. **Device Policy**: Harden `auto|opencl_cpu|opencl_gpu|numba` selection for predictable behavior.
+4. **CUDA Optimization**: Deferred until post-FMM benchmarks.
+
+#### Execution Phases
+- **Phase 0: Baseline & Harness**: Create reproducible benchmark harness and record current performance.
+- **Phase 1: FMM Integration**: Add assembler policy plumbing and deterministic fallback.
+- **Phase 2: Matrix-Free Policy**: Finalize `auto` threshold selection and capture iteration telemetry.
+- **Phase 3: Device Policy Hardening**: Implement explicit device selection and OpenCL recovery.
+
+### 13. Remaining Architecture Audit
+
+- [ ] Audit the JavaScript mesh engine (`buildWaveguideMesh.js`) for further simplifications now that it's decoupled from ABEC export requirements.

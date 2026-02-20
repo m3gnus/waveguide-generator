@@ -494,7 +494,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     // Helpers
     const pushTri = (a, b, c) => { indices.push(a, b, c); };
     const stitch = (r1Start, r2Start) => {
-        for (let i = 0; i < totalPts; i++) {
+        const limit = fullCircle ? totalPts : totalPts - 1;
+        for (let i = 0; i < limit; i++) {
             const i2 = (i + 1) % totalPts;
             pushTri(r2Start + i, r1Start + i, r1Start + i2);
             pushTri(r2Start + i, r1Start + i2, r2Start + i2);
@@ -546,7 +547,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     avgX /= totalPts; avgZ /= totalPts;
     vertices.push(avgX, backY, avgZ);
 
-    for (let i = 0; i < totalPts; i++) {
+    const capLimit = fullCircle ? totalPts : totalPts - 1;
+    for (let i = 0; i < capLimit; i++) {
         const i2 = (i + 1) % totalPts;
         pushTri(backRingStart + i, backRingStart + i2, capStart);
     }
