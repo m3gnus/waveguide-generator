@@ -168,6 +168,7 @@ def calculate_directivity_patterns_correct(
     rho: float,
     p_solutions: List,  # List of (p_total, u_total, space_p, space_u) per frequency
     polar_config: Optional[Dict] = None,
+    device_interface: Optional[str] = None,
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, List[List[float]]]:
     """
@@ -250,6 +251,7 @@ def calculate_directivity_patterns_correct(
                 radius_m=distance_m,
                 theta_range=(angle_start, angle_end, angle_points),
                 phi_angles=[axis_phi[axis] for axis in active_axes],
+                device_interface=device_interface,
                 observation_frame=frame,
             )
 

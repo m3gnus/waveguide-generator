@@ -65,6 +65,37 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("python >=3.10,<3.14", detail)
         self.assertIn("gmsh >=4.15,<5.0", detail)
 
+    def test_health_includes_device_interface_metadata_when_solver_available(self):
+        dependency_status = {
+            "supportedMatrix": {},
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
+            },
+        }
+        device_info = {
+            "requested_mode": "auto",
+            "selected_mode": "opencl_gpu",
+            "interface": "opencl",
+            "device_type": "gpu",
+            "device_name": "Fake GPU",
+            "fallback_reason": None,
+            "available_modes": ["auto", "opencl_cpu", "opencl_gpu", "numba"],
+        }
+
+        with patch("app.get_dependency_status", return_value=dependency_status), patch(
+            "app.SOLVER_AVAILABLE", True
+        ), patch("app.BEMPP_RUNTIME_READY", True), patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "app.GMSH_OCC_RUNTIME_READY", True
+        ), patch(
+            "solver.device_interface.selected_device_metadata", return_value=device_info
+        ):
+            response = asyncio.run(app.health_check())
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["deviceInterface"], device_info)
+
     def test_solve_dependency_gate_returns_matrix_details(self):
         dependency_status = {
             "supportedMatrix": {

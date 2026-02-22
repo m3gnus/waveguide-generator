@@ -199,6 +199,7 @@ def solve_optimized(
     mesh_validation_mode: str = "warn",
     use_burton_miller: bool = True,
     frequency_spacing: str = "linear",
+    device_mode: str = "auto",
 ) -> Dict:
     """Run optimized BEM simulation with explicit metadata and failure reporting."""
     start_time = time.time()
@@ -223,8 +224,8 @@ def solve_optimized(
 
     c = 343.0
     rho = 1.21
-    boundary_interface = boundary_device_interface()
-    potential_interface = potential_device_interface()
+    boundary_interface = boundary_device_interface(device_mode)
+    potential_interface = potential_device_interface(device_mode)
     observation_distance_m = _resolve_observation_distance_m(polar_config, default=1.0)
 
     num_frequencies = int(num_frequencies)
@@ -333,7 +334,7 @@ def solve_optimized(
         "metadata": {
             "symmetry": symmetry_info if symmetry_info else {"symmetry_type": "full", "reduction_factor": 1.0},
             "axisymmetric": axisymmetric_info,
-            "device_interface": selected_device_metadata(),
+            "device_interface": selected_device_metadata(device_mode),
             "mesh_validation": mesh_validation,
             "unit_detection": unit_detection,
             "warnings": [],
@@ -418,6 +419,12 @@ def solve_optimized(
                         if isinstance(device_metadata, dict):
                             device_metadata["runtime_retry_outcome"] = "opencl_recovered"
                             device_metadata["runtime_selected"] = "opencl"
+                            device_metadata["interface"] = "opencl"
+                            device_metadata["selected"] = "opencl"
+                            device_metadata["selected_mode"] = "opencl_cpu"
+                            device_metadata["device_type"] = "cpu"
+                            if safe_profile.get("device_name"):
+                                device_metadata["device_name"] = str(safe_profile.get("device_name"))
                             retry_detail = safe_profile.get("detail")
                             if retry_detail:
                                 device_metadata["runtime_retry_detail"] = str(retry_detail)
@@ -456,6 +463,12 @@ def solve_optimized(
                     device_metadata["runtime_selected"] = "numba"
                     device_metadata["runtime_fallback_reason"] = str(exc)
                     device_metadata["runtime_retry_outcome"] = "fell_back_to_numba"
+                    device_metadata["selected_mode"] = "numba"
+                    device_metadata["interface"] = "numba"
+                    device_metadata["selected"] = "numba"
+                    device_metadata["device_type"] = "cpu"
+                    device_metadata["device_name"] = "Numba CPU"
+                    device_metadata["fallback_reason"] = str(exc)
                 try:
                     iter_start = time.time()
                     spl, impedance, di, solution = solve_frequency_cached(
@@ -515,6 +528,7 @@ def solve_optimized(
         try:
             filtered_directivity = calculate_directivity_patterns_correct(
                 grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config,
+                device_interface=potential_interface,
                 observation_frame=observation_frame,
             )
 
