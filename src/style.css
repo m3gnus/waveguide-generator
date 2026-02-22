@@ -166,7 +166,7 @@ body {
 h1 {
     font-size: 1.5rem;
     font-weight: 700;
-    margin-bottom: 20px;
+    margin-bottom: 14px;
     color: var(--accent-color);
 }
 
@@ -361,11 +361,10 @@ h1 {
 
 .simulation-job-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
     justify-content: flex-end;
-    align-content: start;
-    max-width: 182px;
+    align-items: center;
 }
 
 .simulation-job-actions button {
@@ -377,7 +376,7 @@ h1 {
 }
 
 .simulation-job-remove {
-    min-width: 56px;
+    min-width: unset;
     font-weight: 600;
     line-height: 1;
 }
@@ -455,8 +454,8 @@ hr {
     background: var(--input-bg);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    padding: 15px;
-    margin-bottom: 20px;
+    padding: 14px;
+    margin-bottom: 14px;
 }
 
 h3 {
@@ -464,16 +463,16 @@ h3 {
     text-transform: uppercase;
     letter-spacing: 1px;
     color: var(--text-color);
-    opacity: 0.6;
-    margin-bottom: 15px;
+    opacity: 0.7;
+    margin-bottom: 12px;
 }
 
 .input-row {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: 6px;
+    margin-bottom: 10px;
 }
 
 .input-row label {
@@ -491,6 +490,21 @@ h3 {
     padding: 6px 8px;
     border-radius: 6px;
     font-size: 0.85rem;
+    transition: border-color 0.15s;
+}
+
+.input-row input[type="number"]:focus,
+.input-row input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.15);
+}
+
+@media (prefers-color-scheme: dark) {
+    .input-row input[type="number"]:focus,
+    .input-row input[type="text"]:focus {
+        box-shadow: 0 0 0 2px rgba(0, 255, 204, 0.15);
+    }
 }
 
 .polar-axis-options {
@@ -513,7 +527,7 @@ h3 {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .input-row-inline label {
@@ -574,6 +588,12 @@ h3 {
     outline: none;
     border-color: var(--accent-color);
     box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.15);
+}
+
+@media (prefers-color-scheme: dark) {
+    .formula-input:focus {
+        box-shadow: 0 0 0 2px rgba(0, 255, 204, 0.15);
+    }
 }
 
 .formula-input.valid {
@@ -782,6 +802,11 @@ label[title] {
     position: relative;
 }
 
+label.has-tooltip {
+    cursor: help;
+    border-bottom: 1px dotted var(--text-secondary);
+}
+
 .input-row input[type="range"] {
     flex: 2;
     accent-color: var(--accent-color);
@@ -796,7 +821,7 @@ select {
     padding: 10px;
     border-radius: 8px;
     font-size: 0.9rem;
-    margin-bottom: 15px;
+    margin-bottom: 0;
     outline: none;
 }
 
@@ -817,7 +842,16 @@ button {
     font-weight: 600;
     cursor: pointer;
     margin-bottom: 10px;
-    transition: opacity 0.2s, transform 0.1s;
+    transition: opacity 0.2s, transform 0.1s, background 0.15s, color 0.15s;
+}
+
+button:hover:not(:disabled) {
+    opacity: 0.88;
+}
+
+button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 button:focus-visible {
@@ -835,6 +869,18 @@ button.secondary {
     background: transparent;
     border: 1px solid var(--accent-color);
     color: var(--accent-color);
+}
+
+button.secondary:hover:not(:disabled) {
+    background: var(--accent-color);
+    color: #fff;
+    border-color: var(--accent-color);
+}
+
+@media (prefers-color-scheme: dark) {
+    button.secondary:hover:not(:disabled) {
+        color: #000;
+    }
 }
 
 .button-row {

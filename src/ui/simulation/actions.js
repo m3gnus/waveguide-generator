@@ -384,13 +384,13 @@ export function renderJobList(panel) {
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
         </div>
         <div class="simulation-job-actions">
-          <button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" ${job.status === 'complete' ? '' : 'disabled'}>View</button>
-          <button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" ${job.status === 'complete' ? '' : 'disabled'}>Export</button>
-          <button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" ${job.script ? '' : 'disabled'}>Script</button>
+          <button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" ${job.status === 'complete' ? '' : 'disabled'} title="View results for this simulation">View</button>
+          <button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" ${job.status === 'complete' ? '' : 'disabled'} title="Export simulation results to file">Export</button>
+          <button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" ${job.script ? '' : 'disabled'} title="Restore geometry and solver parameters from this simulation">Script</button>
           ${job.status === 'queued' || job.status === 'running'
-            ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}">Stop</button>`
+            ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop this running simulation">Stop</button>`
             : ''}
-          <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove simulation from feed" title="Remove from feed">Remove</button>
+          <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove simulation from feed" title="Remove this simulation from the feed">&#x2715;</button>
         </div>
       </div>
     </div>

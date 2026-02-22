@@ -1,6 +1,6 @@
 # Future Additions
 
-Last updated: February 22, 2026
+Last updated: February 22, 2026 (ABEC removal complete, CSV export fixed)
 
 This document tracks roadmap work by status.
 
@@ -9,25 +9,15 @@ Implemented runtime behavior belongs in:
 
 ## New Backlog (Simulation Feed UX, Feb 2026)
 
-### Failed-task retention policy (decision pending)
-Current state:
-- UI now supports manual `Clear Failed` cleanup in the simulation task feed.
-- Failed tasks are not auto-deleted on app/backend restart.
-
-Next addition:
-- Decide and implement lifecycle policy for failed tasks:
-- auto-clear on reboot, or
-- retain until explicit user cleanup.
-- If auto-clear is chosen, add a user-facing toggle and document default behavior.
-
 ### Script snapshot compatibility hardening
 Current state:
 - Simulation tasks can store/load parameter snapshots (`Load Script`) from feed entries.
 - Snapshot schema is versionless and assumes local UI field compatibility.
 
-Next addition:
-- Add schema versioning/migration guards for stored task scripts to avoid breakage across UI/config updates.
-- Add explicit stale-script warnings when fields no longer map cleanly to current controls.
+Next addition (lightweight approach recommended):
+- Add a `schemaVersion` integer field to each snapshot on save; bump it whenever params are renamed or removed.
+- On load, if the stored version doesn't match the current version, show a one-line warning in the feed entry (e.g. "Script saved with an older schema — some fields may not apply").
+- No migration logic needed: unknown keys already silently no-op on load, which prevents hard failures. The warning covers the real risk (user confusion when a renamed field is silently dropped).
 
 ## Completed (Implemented)
 
@@ -49,7 +39,6 @@ Next addition:
 - Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
 - Collapse rarely-used `collectGroups`/`groupInfo` branching if external callers do not depend on group suppression.
 - Move adaptive-phi branch into a dedicated helper/export-only wrapper to reduce branching in canonical horn build path.
-- Remove stale ABEC wording in adaptive-phi comments.
 
 ## In Progress (Partially Implemented)
 
@@ -81,20 +70,19 @@ Remaining for Phase 3:
 ### High priority documentation maintenance
 - Conduct periodic audits of `docs/PROJECT_DOCUMENTATION.md` to keep it aligned with unified-mesh and solver runtime refactors.
 
-### Simulation management and persistence
+### Simulation management enhancements
 Current state:
-- `stopSimulation` in `src/ui/simulation/actions.js` calls `/api/stop/${jobId}`, but full multi-simulation management is not implemented.
-- Simulation tracking is not persisted across browser reload/close.
+- Multi-job management is implemented with backend job persistence and frontend session recovery.
+- Simulation task feed supports queued/running/history workflows with manual cleanup actions.
 
 Next additions:
-- Add queued simulation support (sequential or concurrent) with configurable limits.
-- Implement a simulation manager persistence layer (browser storage and/or backend DB).
-- Add session recovery for ongoing and historical jobs/results.
+- Add configurable retention/cleanup policies for historical and failed tasks.
+- Add richer feed filtering/grouping controls for larger job histories.
+- Add lightweight run labels/annotations to improve traceability across repeated experiments.
 
 ### UI simplification and cleanup
 Current state:
 - Simulation results are partially displayed in the left panel, creating clutter.
-- UI still exposes unsupported controls (for example `circsym`, interface).
 
 Next additions:
 - Move results out of left panel into dedicated workspace/modal.
@@ -159,64 +147,18 @@ Next addition:
 
 ## Decision-Dependent / Optional Tracks
 
-### ABEC parity expansion (optional)
+### Potential deprecation: Gmsh meshing stack
 Current state:
-- Required structure/semantics are enforced by `src/export/abecBundleValidator.js`.
-- Golden parity validation is covered by `tests/export-gmsh-pipeline.test.js`.
-- Obsolete suites `tests/abec-bundle-parity.test.js` and `tests/abec-circsym.test.js` are removed.
-
-Potential additions:
-- Add stricter value-range checks where ATH references are stable.
-- Add additional ATH reference bundles when available.
-
-### Potential deprecation: ABEC export and Gmsh meshing stack
-Current state:
-- ABEC export remains supported and depends on `POST /api/mesh/build`.
-- `/api/mesh/build` and `/api/mesh/generate-msh` are Gmsh-backed meshing paths.
+- `/api/mesh/build` and `/api/mesh/generate-msh` are Gmsh-backed meshing paths used for MSH/STL export.
 - `/api/solve` can run from canonical frontend mesh payloads without requiring Gmsh.
+- ABEC export pipeline has been removed (Feb 2026).
 
 Decision framework:
-1. Discovery and impact audit.
-- Inventory ABEC/Gmsh touchpoints in frontend, backend, docs, tests, and install scripts.
-- Add temporary instrumentation to measure usage of ABEC export, `/api/mesh/build`, `/api/mesh/generate-msh`, and `/api/solve` with `use_gmsh=true`.
-- Define go/no-go threshold window (for example low usage over N releases).
-2. Prepare opt-out controls before removal.
-- Add feature flags for ABEC export and Gmsh meshing paths.
-- Hide ABEC UI actions when flag is off.
-- Return clear `410/503`-style API responses with migration guidance when endpoints are disabled.
-- Keep canonical `/api/solve` path as baseline.
-3. Migration and parity safeguards.
-- Ensure remaining workflows do not require ABEC artifacts (`bem_mesh.geo`, ABEC text files).
-- Add/expand end-to-end tests proving simulation without ABEC/Gmsh endpoints.
-- Provide compatibility guidance for ABEC-dependent users (pin last supported release or separate plugin/package).
-4. Removal phase (only after go decision).
-- Frontend: remove ABEC export UI/actions and unused ABEC modules; remove production calls to meshing endpoints.
-- Backend: remove `/api/mesh/build` and `/api/mesh/generate-msh` routes/builders; remove Gmsh runtime checks if policy is no-Gmsh.
-- Packaging/runtime: remove `gmsh` from dependency matrix, scripts, requirements, and health payload.
-- CI: remove ABEC/Gmsh-only jobs/tests.
-5. Documentation and contract cleanup.
-- Update `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `server/README.md`, and API docs.
-- Update AGENTS guidance to supported runtime surface.
-6. Acceptance criteria.
-- `npm test` and `npm run test:server` pass with ABEC/Gmsh removed or fully disabled.
-- UI contains no ABEC export controls.
-- Backend exposes no Gmsh meshing routes in final removal state.
-- Solver support matrix and health output match runtime reality.
-7. Rollback strategy.
-- Use staged commits (`flags -> default-off -> deletion`).
-- Tag last ABEC+Gmsh-capable release.
-- Prefer feature-flag re-enable for regressions instead of emergency code resurrection.
+- Audit remaining Gmsh touchpoints (MSH export, STL export via OCC path).
+- Evaluate whether JS-based mesher can reach parity for remaining export needs.
+- If Gmsh can be fully replaced, remove from dependency matrix, scripts, and requirements.
 
 ## Deferred Removal Candidate
-
-### Deprecated/unsupported frontend feature cleanup
-Current state:
-- `circsym` and interface functions (`interface_offset`, `interface_draw`) exist in `src/solver/waveguidePayload.js` and UI schema, but are not officially supported.
-- ABEC export deprecation has been proposed but is not approved as of February 22, 2026.
-
-Next additions:
-- Remove unsupported payload/UI paths for `circsym`, `interface_offset`, and `interface_draw` when compatibility window closes.
-- If ABEC deprecation receives a go decision, remove `src/export/abecProject.js` and related UI controls as part of the staged deprecation plan.
 
 ### Code sanitization and dead-code removal
 Current state:
