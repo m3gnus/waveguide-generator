@@ -131,6 +131,7 @@ def solve_frequency(
 
     di = calculate_directivity_index_from_pressure(
         grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl,
+        device_interface=potential_interface,
         observation_frame=frame,
     )
 
@@ -147,6 +148,7 @@ def solve(
     stage_callback: Optional[Callable[[str, Optional[float], Optional[str]], None]] = None,
     mesh_validation_mode: str = "warn",
     frequency_spacing: str = "linear",
+    device_mode: str = "auto",
 ) -> Dict:
     """Run legacy BEM simulation path with explicit failure reporting."""
     if isinstance(mesh, dict):
@@ -180,7 +182,7 @@ def solve(
         "di": {"frequencies": frequencies.tolist(), "di": []},
         "metadata": {
             "solver_path": "legacy",
-            "device_interface": selected_device_metadata(),
+            "device_interface": selected_device_metadata(device_mode),
             "mesh_validation_mode": mesh_validation_mode,
             "unit_detection": unit_detection,
             "warnings": [],
@@ -193,8 +195,8 @@ def solve(
 
     c = 343.0
     rho = 1.21
-    boundary_interface = boundary_device_interface()
-    potential_interface = potential_device_interface()
+    boundary_interface = boundary_device_interface(device_mode)
+    potential_interface = potential_device_interface(device_mode)
     observation_distance_m = _resolve_observation_distance_m(polar_config, default=1.0)
     observation_frame = infer_observation_frame(grid)
 
@@ -265,6 +267,12 @@ def solve(
                         if isinstance(device_metadata, dict):
                             device_metadata["runtime_retry_outcome"] = "opencl_recovered"
                             device_metadata["runtime_selected"] = "opencl"
+                            device_metadata["interface"] = "opencl"
+                            device_metadata["selected"] = "opencl"
+                            device_metadata["selected_mode"] = "opencl_cpu"
+                            device_metadata["device_type"] = "cpu"
+                            if safe_profile.get("device_name"):
+                                device_metadata["device_name"] = str(safe_profile.get("device_name"))
                             retry_detail = safe_profile.get("detail")
                             if retry_detail:
                                 device_metadata["runtime_retry_detail"] = str(retry_detail)
@@ -296,6 +304,12 @@ def solve(
                     device_metadata["runtime_selected"] = "numba"
                     device_metadata["runtime_fallback_reason"] = str(exc)
                     device_metadata["runtime_retry_outcome"] = "fell_back_to_numba"
+                    device_metadata["selected_mode"] = "numba"
+                    device_metadata["interface"] = "numba"
+                    device_metadata["selected"] = "numba"
+                    device_metadata["device_type"] = "cpu"
+                    device_metadata["device_name"] = "Numba CPU"
+                    device_metadata["fallback_reason"] = str(exc)
                 try:
                     spl, impedance, di = solve_frequency(
                         grid,

@@ -6,6 +6,31 @@ Implemented runtime behavior belongs in:
 - `docs/PROJECT_DOCUMENTATION.md`
 - `docs/ABEC_PARITY_CONTRACT.md`
 
+## Critical Evaluation & Research Items (High Priority)
+
+### Audit: Gmsh and Bempp Requirements
+- **Bempp-cl**: Currently mandatory for the BEM solver (`/api/solve`). Investigate if a lighter fallback or 2D axisymmetric path can reduce this dependency.
+- **Gmsh**: Required for Python OCC backend meshing and ABEC export. Audit if the JS-based mesher can eventually reach parity to remove Gmsh from the runtime matrix.
+
+### Infrastructure: OpenCL Driver Deployment
+- **Requirement**: `pyopencl` is required for `bempp-cl` performance.
+- **Recommendations for installation**:
+    - **macOS (Apple Silicon)**: Use `./scripts/setup-opencl-backend.sh` (installs `pocl` CPU runtime).
+    - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications".
+    - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
+- **Status (Implemented Feb 2026)**:
+    - `/health` now returns `deviceInterface` metadata including `available_modes`, selected mode/interface, device type/name, fallback reason, plus per-mode availability/reason diagnostics (`mode_availability`, `opencl_diagnostics`).
+    - `/api/solve` now accepts explicit `device_mode` (`auto|opencl_cpu|opencl_gpu|numba`).
+    - Frontend now defaults to backend-managed `auto` mode (no device-mode selector in Actions panel).
+
+### Dependency Consolidation
+- Review `requirements.txt` for redundant packages (e.g., overlapping plotting libs like `matplotlib`/`plotly`).
+- Ensure all required sub-dependencies (e.g., `numba`, `meshio`) are explicitly pinned.
+
+### Documentation & Agent Stewardship
+- **AGENTS.md**: Update to reflect the **Acceleration Roadmap** (FMM/OpenCL) to guide future automated refactors.
+- **Product Docs**: Conduct periodic audits of `PROJECT_DOCUMENTATION.md` to ensure it matches recent unified-mesh refactors (Feb 2026).
+
 ## Open Items
 
 ### 1. Fix CSV Export format
@@ -33,7 +58,7 @@ Future additions:
 
 Current state:
 - Simulation results are partially displayed in the left panel, creating clutter.
-- UI elements for unsupported features are still visible.
+- UI elements for unsupported features are still visible. Like circsym and interface. 
 
 Future additions:
 - **Result Panel Refactor**: Remove the simulation result view from the left panel; transition to a dedicated workspace or modal.
@@ -235,6 +260,13 @@ This section defines the execution strategy for accelerating the backend BEM sol
 - **Phase 1: FMM Integration**: Add assembler policy plumbing and deterministic fallback.
 - **Phase 2: Matrix-Free Policy**: Finalize `auto` threshold selection and capture iteration telemetry.
 - **Phase 3: Device Policy Hardening**: Implement explicit device selection and OpenCL recovery.
+  - **Status (Partially implemented Feb 2026)**:
+    - Added explicit modes `auto|opencl_cpu|opencl_gpu|numba`.
+    - `auto` selection now uses deterministic priority (`opencl_gpu -> opencl_cpu -> numba`) with no startup benchmark.
+    - Added runtime fallback metadata to `/health` and result metadata.
+  - **Remaining**:
+    - Expand runtime diagnostics and hardware-class guidance for OpenCL GPU setup.
+    - Add regression/performance baselines per hardware class.
 
 ### 18. Remaining Architecture Audit
 

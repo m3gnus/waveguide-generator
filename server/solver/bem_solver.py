@@ -72,6 +72,7 @@ class BEMSolver:
         verbose: bool = False,
         mesh_validation_mode: str = "warn",
         frequency_spacing: str = "linear",
+        device_mode: str = "auto",
     ) -> Dict:
         """
         Run BEM simulation with optional optimizations.
@@ -90,13 +91,19 @@ class BEMSolver:
         Returns:
             Results dictionary with simulation data and metadata
         """
-        device_info = selected_device_metadata()
+        device_info = selected_device_metadata(device_mode)
         selected = device_info.get("selected", "unknown")
         fallback_reason = device_info.get("fallback_reason")
         if fallback_reason:
-            print(f"[BEM] Device interface: {selected} (requested=opencl, reason: {fallback_reason})")
+            print(
+                f"[BEM] Device interface: {selected} "
+                f"(requested={device_mode}, selected_mode={device_info.get('selected_mode')}, reason: {fallback_reason})"
+            )
         else:
-            print(f"[BEM] Device interface: {selected} (requested=opencl)")
+            print(
+                f"[BEM] Device interface: {selected} "
+                f"(requested={device_mode}, selected_mode={device_info.get('selected_mode')})"
+            )
 
         if use_optimized:
             return solve_optimized(
@@ -105,6 +112,7 @@ class BEMSolver:
                 enable_symmetry, verbose=verbose,
                 mesh_validation_mode=mesh_validation_mode,
                 frequency_spacing=frequency_spacing,
+                device_mode=device_mode,
             )
         else:
             # Legacy solver (no symmetry, analytical piston directivity)
@@ -113,6 +121,7 @@ class BEMSolver:
                 polar_config, progress_callback, stage_callback,
                 mesh_validation_mode=mesh_validation_mode,
                 frequency_spacing=frequency_spacing,
+                device_mode=device_mode,
             )
 
     def _solve_frequency(
