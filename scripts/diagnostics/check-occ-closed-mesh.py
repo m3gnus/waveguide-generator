@@ -1,8 +1,10 @@
 import sys
 import os
-import json
 
-sys.path.insert(0, os.path.abspath('server'))
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
+
+sys.path.insert(0, os.path.join(REPO_ROOT, 'server'))
 
 from server.solver.waveguide_builder import build_waveguide_mesh
 from server.app import WaveguideParamsRequest

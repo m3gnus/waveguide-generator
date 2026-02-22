@@ -34,7 +34,6 @@ def evaluate_axisymmetric_eligibility(
         "feature_enabled": bool(feature_enabled),
         "sim_type": str(sim_type),
         "full_circle": bool(metadata.get("fullCircle", False)),
-        "interface_enabled": bool(metadata.get("interfaceEnabled", False)),
     }
 
     if not checks["feature_enabled"]:
@@ -43,9 +42,6 @@ def evaluate_axisymmetric_eligibility(
         return AxisymmetricEligibility(False, "sim_type_not_supported", checks)
     if not checks["full_circle"]:
         return AxisymmetricEligibility(False, "geometry_not_full_circle", checks)
-    if checks["interface_enabled"]:
-        return AxisymmetricEligibility(False, "interface_subdomains_not_supported", checks)
-
     return AxisymmetricEligibility(True, "eligible_for_axisymmetric_spike", checks)
 
 

@@ -1,4 +1,4 @@
-import { evalParam, parseList } from '../../common.js';
+import { evalParam } from '../../common.js';
 import { DEFAULTS, MORPH_TARGETS } from '../constants.js';
 import { applyMorphing } from '../morphing.js';
 import { calculateOSSE } from '../profiles/osse.js';
@@ -83,20 +83,8 @@ export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, cont
 export function createRingVertices(params, sliceMap, angleList, morphTargets, ringCount, lengthSteps, context) {
   const vertices = [];
 
-  const subdomainSlices = parseList(params.subdomainSlices);
-  const interfaceOffset = parseList(params.interfaceOffset);
-  const interfaceDraw = parseList(params.interfaceDraw);
-
   for (let j = 0; j <= lengthSteps; j += 1) {
     const t = sliceMap ? sliceMap[j] : j / lengthSteps;
-
-    let zOffset = 0;
-    if (subdomainSlices) {
-      const sdIdx = subdomainSlices.indexOf(j);
-      if (sdIdx !== -1) {
-        zOffset = (interfaceOffset?.[sdIdx] || 0) + (interfaceDraw?.[sdIdx] || 0);
-      }
-    }
 
     for (let i = 0; i < ringCount; i += 1) {
       const p = angleList[i];
@@ -114,7 +102,7 @@ export function createRingVertices(params, sliceMap, angleList, morphTargets, ri
 
       vertices.push(
         r * Math.cos(p),
-        profile.x + zOffset,
+        profile.x,
         r * Math.sin(p)
       );
     }
@@ -235,21 +223,10 @@ export function computeAdaptivePhiCounts(params, lengthSteps, sliceMap, userMax,
  */
 export function createAdaptiveRingVertices(params, sliceMap, morphTargets, phiCounts, lengthSteps, context) {
   const vertices = [];
-  const subdomainSlices = parseList(params.subdomainSlices);
-  const interfaceOffset = parseList(params.interfaceOffset);
-  const interfaceDraw = parseList(params.interfaceDraw);
 
   for (let j = 0; j <= lengthSteps; j += 1) {
     const t = sliceMap ? sliceMap[j] : j / lengthSteps;
     const N = phiCounts[j];
-
-    let zOffset = 0;
-    if (subdomainSlices) {
-      const sdIdx = subdomainSlices.indexOf(j);
-      if (sdIdx !== -1) {
-        zOffset = (interfaceOffset?.[sdIdx] || 0) + (interfaceDraw?.[sdIdx] || 0);
-      }
-    }
 
     for (let i = 0; i < N; i += 1) {
       const p = (i / N) * Math.PI * 2;
@@ -267,7 +244,7 @@ export function createAdaptiveRingVertices(params, sliceMap, morphTargets, phiCo
 
       vertices.push(
         r * Math.cos(p),
-        profile.x + zOffset,
+        profile.x,
         r * Math.sin(p)
       );
     }

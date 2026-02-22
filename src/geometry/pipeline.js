@@ -1,7 +1,6 @@
 import { buildWaveguideMesh } from './engine/index.js';
 import {
   SURFACE_TAGS,
-  parseInterfaceOffset,
   normalizeBuildParams,
   buildSurfaceTags,
   countTags,
@@ -79,12 +78,10 @@ function buildSimulationPayloadFromMesh(
   { validateIntegrity = true } = {}
 ) {
   const hasEnclosure = Boolean(meshData.groups?.enclosure);
-  const interfaceOffset = parseInterfaceOffset(buildParams.interfaceOffset);
-  const interfaceEnabled = hasEnclosure && interfaceOffset > 0;
 
   const vertices = Array.from(meshData.vertices);
   const indices = Array.from(meshData.indices);
-  const surfaceTags = buildSurfaceTags(meshData, { interfaceEnabled });
+  const surfaceTags = buildSurfaceTags(meshData);
   const filtered = removeSplitPlaneTriangles(vertices, indices, surfaceTags, buildParams.quadrants);
 
   if (surfaceTags.length !== indices.length / 3) {
@@ -119,7 +116,6 @@ function buildSimulationPayloadFromMesh(
       lengthSteps: Number(buildParams.lengthSegments || 0),
       fullCircle: Boolean(meshData.fullCircle),
       hasEnclosure,
-      interfaceEnabled,
       tagCounts,
       units: 'mm',
       unitScaleToMeter: 0.001,

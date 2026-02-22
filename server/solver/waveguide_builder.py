@@ -1031,9 +1031,9 @@ def _build_rear_wall(
     inner_points: np.ndarray, outer_points: np.ndarray, closed: bool
 ) -> List[Tuple[int, int]]:
     """Annular surface connecting inner and outer surfaces at the throat (z≈0)."""
-    w_inner = _make_wire(inner_points[:, 0, :], closed=closed)
-    w_outer = _make_wire(outer_points[:, 0, :], closed=closed)
-    return gmsh.model.occ.addThruSections([w_inner, w_outer], makeSolid=False, makeRuled=True)
+    w_inner, _, _ = _make_wire(inner_points[:, 0, :], closed=closed)
+    w_outer, _, _ = _make_wire(outer_points[:, 0, :], closed=closed)
+    return gmsh.model.occ.addThruSections([int(w_inner), int(w_outer)], makeSolid=False, makeRuled=True)
 
 
 def _build_annular_surface_from_boundaries(
@@ -1081,9 +1081,9 @@ def _build_mouth_rim(
 ) -> List[Tuple[int, int]]:
     """Annular surface connecting inner and outer surfaces at the mouth end."""
     j_mouth = inner_points.shape[1] - 1
-    w_inner = _make_wire(inner_points[:, j_mouth, :], closed=closed)
-    w_outer = _make_wire(outer_points[:, j_mouth, :], closed=closed)
-    return gmsh.model.occ.addThruSections([w_inner, w_outer], makeSolid=False, makeRuled=True)
+    w_inner, _, _ = _make_wire(inner_points[:, j_mouth, :], closed=closed)
+    w_outer, _, _ = _make_wire(outer_points[:, j_mouth, :], closed=closed)
+    return gmsh.model.occ.addThruSections([int(w_inner), int(w_outer)], makeSolid=False, makeRuled=True)
 
 
 def _build_rear_disc_assembly(
@@ -1141,10 +1141,10 @@ def _build_rear_disc_assembly(
     disc_ring[:, 2] = z_rear
 
     # Surface 1: ruled axial step face (outer throat ring → disc ring)
-    w_front = _make_wire(throat_ring, closed=closed)
-    w_rear = _make_wire(disc_ring, closed=closed)
+    w_front, _, _ = _make_wire(throat_ring, closed=closed)
+    w_rear, _, _ = _make_wire(disc_ring, closed=closed)
     annular_dimtags = gmsh.model.occ.addThruSections(
-        [w_front, w_rear], makeSolid=False, makeRuled=True
+        [int(w_front), int(w_rear)], makeSolid=False, makeRuled=True
     )
 
     # Surface 2: flat disc at z_rear using addPlaneSurface (fast for planar rings)
@@ -1713,9 +1713,11 @@ def _build_enclosure_box(
 
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
     back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
-    back_outer_wire, _, _ = _make_wire(back_outer_pts, closed=closed)
+    back_outer_wire, back_outer_curves, back_outer_eps = _make_wire(back_outer_pts, closed=closed)
     generated_dimtags.extend(_add_ruled_section(current_profile, back_outer_wire))
     current_profile = back_outer_wire
+    current_curves = back_outer_curves
+    profile_pts = back_outer_eps
 
     for j in range(1, edge_slices + 1):
         t = float(j) / float(edge_slices)

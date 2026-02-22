@@ -97,12 +97,6 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     rear_res: Number(preparedParams.rearResolution) || 25.0,
     wall_thickness: Number(preparedParams.wallThickness) || 6.0,
 
-    // Subdomain interfaces (accepted by backend)
-    subdomain_slices: preparedParams.subdomainSlices != null ? String(preparedParams.subdomainSlices) : undefined,
-    interface_offset: preparedParams.interfaceOffset != null ? String(preparedParams.interfaceOffset) : undefined,
-    interface_draw: preparedParams.interfaceDraw != null ? String(preparedParams.interfaceDraw) : undefined,
-    interface_resolution: preparedParams.interfaceResolution != null ? String(preparedParams.interfaceResolution) : undefined,
-
     // Enclosure
     enc_depth: Number(preparedParams.encDepth || 0),
     enc_space_l: Number(preparedParams.encSpaceL ?? 25),

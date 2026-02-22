@@ -78,7 +78,9 @@ test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
 test('buildGeometryArtifacts simulation payload matches buildCanonicalMeshPayload', () => {
   const params = makePreparedParams({
     encDepth: 220,
+    subdomainSlices: '3',
     interfaceOffset: '12',
+    interfaceDraw: '4',
     quadrants: '1',
     wallThickness: 5
   });
@@ -89,27 +91,32 @@ test('buildGeometryArtifacts simulation payload matches buildCanonicalMeshPayloa
   assert.deepEqual(artifacts.simulation.surfaceTags, payload.surfaceTags);
   assert.equal(artifacts.simulation.vertices.length, payload.vertices.length);
   assert.equal(artifacts.simulation.indices.length, payload.indices.length);
-  assert.equal(artifacts.simulation.metadata.interfaceEnabled, true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(artifacts.simulation.metadata, 'interfaceEnabled'),
+    false
+  );
 });
 
-test('exportMSH preserves canonical interface and secondary domain tags', () => {
+test('exportMSH omits interface/secondary physical groups', () => {
   const params = makePreparedParams({
     encDepth: 240,
+    subdomainSlices: '2',
     interfaceOffset: '10',
+    interfaceDraw: '3',
     quadrants: '1'
   });
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
   const payload = artifacts.simulation;
 
-  assert.ok(payload.surfaceTags.includes(SURFACE_TAGS.SECONDARY));
-  assert.ok(payload.surfaceTags.includes(SURFACE_TAGS.INTERFACE));
+  assert.equal(payload.surfaceTags.includes(SURFACE_TAGS.SECONDARY), false);
+  assert.equal(payload.surfaceTags.includes(SURFACE_TAGS.INTERFACE), false);
 
   const msh = exportMSH(payload.vertices, payload.indices, payload.surfaceTags, {
     verticalOffset: payload.metadata?.verticalOffset || 0
   });
 
-  assert.match(msh, /2 3 "SD2G0"/);
-  assert.match(msh, /2 4 "I1-2"/);
+  assert.equal(/2 3 "SD2G0"/.test(msh), false);
+  assert.equal(/2 4 "I1-2"/.test(msh), false);
 });
 
 test('simulation payload removes split-plane faces for quadrant symmetry exports', () => {

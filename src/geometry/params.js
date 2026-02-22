@@ -4,9 +4,6 @@ import { parseExpression } from './expression.js';
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 
 const RAW_EXPRESSION_KEYS = new Set([
-  'subdomainSlices',
-  'interfaceOffset',
-  'interfaceDraw',
   'gcurveSf',
   'encFrontResolution',
   'encBackResolution',

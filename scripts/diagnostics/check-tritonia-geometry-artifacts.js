@@ -1,8 +1,14 @@
 import fs from 'fs';
-import { parseConfig } from './src/config/index.js';
-import { prepareGeometryParams, buildGeometryArtifacts } from './src/geometry/index.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { parseConfig } from '../../src/config/index.js';
+import { prepareGeometryParams, buildGeometryArtifacts } from '../../src/geometry/index.js';
 
-const configText = fs.readFileSync('_references/testconfigs/tritonia.txt', 'utf8');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const configPath = path.join(__dirname, '../../_references/testconfigs/tritonia.txt');
+const configText = fs.readFileSync(configPath, 'utf8');
 const rawConfig = parseConfig(configText);
 rawConfig.params.encDepth = 100;
 rawConfig.params.encEdge = 20;

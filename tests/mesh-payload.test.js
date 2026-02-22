@@ -59,28 +59,31 @@ test('canonical mesh payload includes surface tags and source coverage', () => {
   );
 });
 
-test('interface mode emits secondary and interface tags', () => {
+test('legacy interface params are ignored for enclosure payload tagging', () => {
   const params = makeBaseParams({
     encDepth: 260,
+    subdomainSlices: '3',
     interfaceOffset: '12',
+    interfaceDraw: '5',
     quadrants: '1',
     wallThickness: 5
   });
   const payload = quietBuild(params, { includeEnclosure: true });
-  assert.equal(payload.metadata.interfaceEnabled, true);
-  assert.ok(payload.metadata.tagCounts[SURFACE_TAGS.SECONDARY] > 0);
-  assert.ok(payload.metadata.tagCounts[SURFACE_TAGS.INTERFACE] > 0);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(payload.metadata, 'interfaceEnabled'),
+    false
+  );
+  assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.SECONDARY], 0);
+  assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.INTERFACE], 0);
 });
 
-test('enclosure without interface keeps enclosure surfaces as wall tags', () => {
+test('enclosure surfaces remain wall-tagged', () => {
   const params = makeBaseParams({
     encDepth: 260,
-    interfaceOffset: '',
     quadrants: '1234',
     wallThickness: 5
   });
   const payload = quietBuild(params, { includeEnclosure: true });
-  assert.equal(payload.metadata.interfaceEnabled, false);
   assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.SECONDARY], 0);
   assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.INTERFACE], 0);
 });
