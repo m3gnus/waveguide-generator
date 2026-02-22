@@ -79,7 +79,6 @@ function buildGeneratedBundleEntries(simType) {
     const artifacts = buildGeometryArtifacts(prepared, {
         includeEnclosure: Number(prepared.encDepth || 0) > 0
     });
-    const payload = artifacts.simulation;
     const meshFileName = '260112aolo1.msh';
 
     return {
@@ -89,7 +88,6 @@ function buildGeneratedBundleEntries(simType) {
             meshFileName
         }),
         'solving.txt': generateAbecSolvingFile(prepared, {
-            interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
             infiniteBaffleOffset: getAxialMax(artifacts.mesh.vertices)
         }),
         'observation.txt': generateAbecObservationFile({
@@ -157,4 +155,3 @@ test('generated ABEC_InfiniteBaffle bundle matches golden files and parity contr
     });
     assert.equal(result.ok, true, result.errors.join('\n'));
 });
-

@@ -5,16 +5,6 @@ export const SURFACE_TAGS = Object.freeze({
   INTERFACE: 4
 });
 
-export function parseInterfaceOffset(value) {
-  if (value === undefined || value === null) return 0;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const text = String(value).trim();
-  if (!text) return 0;
-  const first = text.split(',')[0].trim();
-  const numeric = Number(first);
-  return Number.isFinite(numeric) ? numeric : 0;
-}
-
 export function normalizeBuildParams(params, options = {}) {
   return { ...params };
 }
@@ -29,17 +19,12 @@ export function applyTagRange(tags, range, tagValue) {
   }
 }
 
-export function buildSurfaceTags(meshData, { interfaceEnabled = false } = {}) {
+export function buildSurfaceTags(meshData) {
   const triCount = meshData.indices.length / 3;
   const tags = new Array(triCount).fill(SURFACE_TAGS.WALL);
 
   if (meshData.groups?.source) {
     applyTagRange(tags, meshData.groups.source, SURFACE_TAGS.SOURCE);
-  }
-
-  if (interfaceEnabled) {
-    applyTagRange(tags, meshData.groups?.enclosure, SURFACE_TAGS.SECONDARY);
-    applyTagRange(tags, meshData.groups?.interface, SURFACE_TAGS.INTERFACE);
   }
 
   return tags;

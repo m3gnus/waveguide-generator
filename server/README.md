@@ -40,6 +40,11 @@ After that, `npm start` and `server/start.sh` will automatically prefer:
 $HOME/.waveguide-generator/opencl-cpu-env/bin/python
 ```
 
+Cross-platform notes:
+- Windows/Linux GPU OpenCL relies on vendor driver packages (NVIDIA/AMD/Intel).
+- This repository does not currently provide a fully automatic cross-vendor GPU driver installer.
+- Linux CPU fallback is typically `pocl-opencl-icd` from your distro packages.
+
 ### 1.1 Device mode policy (`/api/solve`)
 
 The solver now supports explicit device mode selection:
@@ -189,6 +194,8 @@ The backend expects this tag mapping:
 The solver requires at least one source-tagged triangle (`2`).
 
 ## 5. Backend Tests
+
+Cross-repo test inventory (frontend + backend + diagnostics): [`../tests/TESTING.md`](../tests/TESTING.md).
 
 From repository root:
 

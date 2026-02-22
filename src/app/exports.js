@@ -3,25 +3,21 @@ import { STLExporter } from '../../node_modules/three/examples/jsm/exporters/STL
 import {
   exportProfilesCSV,
   exportSlicesCSV,
-  generateMWGConfigContent,
-  generateAbecProjectFile,
-  generateAbecSolvingFile,
-  generateAbecObservationFile
+  generateMWGConfigContent
 } from '../export/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
-import { detectGeometrySymmetry } from '../geometry/symmetry.js';
 import { buildWaveguidePayload } from '../solver/waveguidePayload.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
-import { buildCanonicalPolarBlocks, readPolarUiSettings } from '../ui/simulation/polarSettings.js';
 
-function getJSZipCtor() {
-  const JSZipCtor = globalThis.JSZip;
-  if (!JSZipCtor) {
-    throw new Error('JSZip failed to load. Reload the page and try again.');
-  }
-  return JSZipCtor;
+// Mirrors normalizeAngularSegments() in geometry/engine/mesh/angles.js —
+// the mesh builder snaps angularSegments to a multiple of 8 when it isn't
+// already a multiple of 4, so CSV export must use the same effective count.
+function getMeshRingCount(rawAngularSegments) {
+  const count = Math.max(4, Math.round(Number(rawAngularSegments) || 0));
+  if (count % 4 === 0) return count;
+  return Math.max(8, Math.ceil(count / 8) * 8);
 }
 
 function getBackendUrl(app) {
@@ -208,14 +204,6 @@ async function checkBackendReachable(backendUrl) {
   }
 }
 
-function getAxialMax(vertices) {
-  let maxY = -Infinity;
-  for (let i = 1; i < vertices.length; i += 3) {
-    if (vertices[i] > maxY) maxY = vertices[i];
-  }
-  return Number.isFinite(maxY) ? maxY : 0;
-}
-
 export function exportSTL(app) {
   const baseName = getExportBaseName();
   const preparedParams = app.prepareParamsForMesh({
@@ -266,89 +254,24 @@ export function exportProfileCSV(app) {
   const state = GlobalState.get();
   const baseName = getExportBaseName();
 
-  const profilesCsv = exportProfilesCSV(vertices, state.params);
+  // The mesh builder normalizes angularSegments (snaps to nearest multiple of 8
+  // when not already a multiple of 4), so we must use the same normalized value
+  // as the stride when indexing into the vertex array.
+  const ringCount = getMeshRingCount(state.params.angularSegments);
+  const lengthSteps = Math.max(1, Math.round(Number(state.params.lengthSegments) || 40));
+  const meshParams = { angularSegments: ringCount, lengthSegments: lengthSteps };
+
+  const profilesCsv = exportProfilesCSV(vertices, meshParams);
   saveFile(profilesCsv, `${baseName}_profiles.csv`, {
     contentType: 'text/csv',
     typeInfo: { description: 'Angular Profiles', accept: { 'text/csv': ['.csv'] } }
   });
 
-  const slicesCsv = exportSlicesCSV(vertices, state.params);
+  const slicesCsv = exportSlicesCSV(vertices, meshParams);
   saveFile(slicesCsv, `${baseName}_slices.csv`, {
     contentType: 'text/csv',
     typeInfo: { description: 'Length Slices', accept: { 'text/csv': ['.csv'] } }
   });
-}
-
-export async function exportABECProject(app) {
-  const preparedParams = app.prepareParamsForMesh({
-    forceFullQuadrants: false,
-    applyVerticalOffset: true
-  });
-
-  // Auto-detect maximum valid geometric symmetry and update quadrants accordingly.
-  // This minimises the mesh domain before it is sent to the BEM solver.
-  const detectedQuadrants = detectGeometrySymmetry(preparedParams);
-  if (detectedQuadrants !== String(preparedParams.quadrants ?? '1234')) {
-    console.log(`[Symmetry] Auto-detected quadrants: ${detectedQuadrants} (was ${preparedParams.quadrants})`);
-    preparedParams.quadrants = detectedQuadrants;
-  }
-
-  const baseName = getExportBaseName();
-  const meshFileName = `${baseName}.msh`;
-  const folderName = Number(preparedParams.abecSimType || 2) === 1
-    ? 'ABEC_InfiniteBaffle'
-    : 'ABEC_FreeStanding';
-
-  const polarSettings = readPolarUiSettings();
-  if (!polarSettings.ok) {
-    showError(polarSettings.validationError);
-    return;
-  }
-  const polarBlocks = buildCanonicalPolarBlocks(polarSettings);
-  const projectContent = generateAbecProjectFile({
-    solvingFileName: 'solving.txt',
-    observationFileName: 'observation.txt',
-    meshFileName
-  });
-  app.stats.innerText = 'Building ABEC bundle...';
-
-  try {
-    // Use Python OCC builder for ABEC mesh export.
-    const { artifacts, payload, msh } = await buildExportMeshFromParams(app, preparedParams);
-    const hornGeometry = artifacts.mesh;
-    const solvingContent = generateAbecSolvingFile(preparedParams, {
-      interfaceEnabled: Boolean(payload.metadata?.interfaceEnabled),
-      infiniteBaffleOffset: getAxialMax(hornGeometry.vertices)
-    });
-    const observationContent = generateAbecObservationFile({
-      angleRange: polarSettings.polarRange,
-      distance: polarSettings.distance,
-      normAngle: polarSettings.normAngle,
-      inclination: polarSettings.diagonalAngle,
-      polarBlocks,
-      allowDefaultPolars: !(preparedParams._blocks && Number(preparedParams.abecSimType || 2) === 1)
-    });
-
-    const JSZipCtor = getJSZipCtor();
-    const zip = new JSZipCtor();
-    const root = zip.folder(folderName);
-    root.file('Project.abec', projectContent);
-    root.file('solving.txt', solvingContent);
-    root.file('observation.txt', observationContent);
-    root.file(meshFileName, msh);
-
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
-    const zipName = `${baseName}_${folderName}.zip`;
-    await saveFile(zipBlob, zipName, {
-      contentType: 'application/zip',
-      typeInfo: { description: 'ABEC Project Zip', accept: { 'application/zip': ['.zip'] } }
-    });
-    app.stats.innerText = 'ABEC project exported';
-  } catch (err) {
-    console.error('[exports] ABEC export failed:', err);
-    app.stats.innerText = `ABEC export failed: ${err.message}`;
-    showError(`ABEC export failed: ${err.message}. Gmsh backend meshing is required for ABEC mesh export.`);
-  }
 }
 
 // Manual backend diagnostics tool (available in browser console)

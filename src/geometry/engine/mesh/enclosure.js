@@ -349,7 +349,6 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
     const depth = parseFloat(params.encDepth) || 0;
     const edgeR = parseFloat(params.encEdge) || 0;
-    const interfaceOffset = parseFloat(params.interfaceOffset) || 0;
     const edgeType = parseInt(params.encEdgeType) || 1;
     const axialSegs = edgeR > 0 ? Math.max(4, parseInt(params.cornerSegments) || 4) : 1;
     const backY = mouthY - depth;
@@ -445,23 +444,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         }
     }
 
-    // Interface ring (optional)
-    let interfaceRingStart = -1;
-    if (interfaceOffset > 0) {
-        interfaceRingStart = vertices.length / 3;
-        const t = interfaceOffset / depth;
-        for (let i = 0; i < totalPts; i++) {
-            const ipt = insetPts[i];
-            const opt = outerPts[i];
-            const px = ipt.x + (opt.x - ipt.x) * t;
-            const pz = ipt.z + (opt.z - ipt.z) * t;
-            vertices.push(px, mouthY, pz);
-        }
-    }
-
     // Intermediate rings (roundover/chamfer)
     const frontRings = [ring0Start];
-    if (interfaceRingStart !== -1) frontRings.push(interfaceRingStart);
 
     const edgeSlices = edgeR > 0 ? Math.max(1, axialSegs) : 0;
     for (let j = 1; j <= edgeSlices; j++) {
@@ -521,18 +505,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         }
     }
 
-    let interfaceStartTri = -1;
-    let interfaceEndTri = -1;
-    let frontStitchStart = 0;
-    if (interfaceRingStart !== -1 && frontRings.length > 1) {
-        interfaceStartTri = indices.length / 3;
-        stitch(frontRings[0], frontRings[1]);
-        interfaceEndTri = indices.length / 3;
-        frontStitchStart = 1;
-    }
-
     // Front rings stitch
-    for (let i = frontStitchStart; i < frontRings.length - 1; i++) {
+    for (let i = 0; i < frontRings.length - 1; i++) {
         stitch(frontRings[i], frontRings[i + 1]);
     }
     stitch(mainFrontRing, backRingStart);
@@ -556,8 +530,5 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const enclosureEndTri = indices.length / 3;
     if (groupInfo) {
         groupInfo.enclosure = { start: enclosureStartTri, end: enclosureEndTri };
-        if (interfaceStartTri >= 0 && interfaceEndTri > interfaceStartTri) {
-            groupInfo.interface = { start: interfaceStartTri, end: interfaceEndTri };
-        }
     }
 }

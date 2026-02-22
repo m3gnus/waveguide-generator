@@ -52,7 +52,6 @@ export function bindButtonEvents(app) {
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
     { id: 'export-csv-btn', handler: () => app.exportProfileCSV(), type: 'click' },
-    { id: 'export-abec-btn', handler: () => app.exportABECProject(), type: 'click' },
     { id: 'check-updates-btn', handler: () => app.checkForUpdates(), type: 'click' }
   ];
 

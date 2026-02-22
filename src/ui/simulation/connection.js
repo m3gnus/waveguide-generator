@@ -22,7 +22,10 @@ function _selectedDeviceText(health) {
   const selectedMode = _modeLabel(deviceInfo.selected_mode || deviceInfo.requested_mode || 'auto');
   const deviceName = String(deviceInfo.device_name || '').trim();
   const hasDeviceName = deviceName && deviceName.toLowerCase() !== 'none';
-  return hasDeviceName
+  const modeAlreadyMentionsCpu = selectedMode.toLowerCase().includes('cpu');
+  const deviceNameIsCpuLabel = /^cpu$/i.test(deviceName);
+  const shouldShowDeviceSuffix = hasDeviceName && !(modeAlreadyMentionsCpu && deviceNameIsCpuLabel);
+  return shouldShowDeviceSuffix
     ? `Selected solver backend: ${selectedMode} (${deviceName})`
     : `Selected solver backend: ${selectedMode}`;
 }

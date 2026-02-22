@@ -9,7 +9,7 @@ import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } f
 import { setupEventListeners } from './events.js';
 import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
-import { exportSTL, exportMWGConfig, exportProfileCSV, exportABECProject } from './exports.js';
+import { exportSTL, exportMWGConfig, exportProfileCSV } from './exports.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
 import { markParametersChanged } from '../ui/fileOps.js';
@@ -130,10 +130,6 @@ export class App {
 
   exportProfileCSV() {
     return exportProfileCSV(this);
-  }
-
-  exportABECProject() {
-    return exportABECProject(this);
   }
 
   async provideMeshForSimulation() {

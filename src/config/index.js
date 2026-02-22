@@ -114,10 +114,6 @@ export class MWGConfigParser {
             if (p['Mesh.ThroatResolution']) { p.throatResolution = p['Mesh.ThroatResolution']; }
             if (p['Mesh.MouthResolution']) { p.mouthResolution = p['Mesh.MouthResolution']; }
             if (p['Mesh.VerticalOffset']) { p.verticalOffset = p['Mesh.VerticalOffset']; }
-            if (p['Mesh.SubdomainSlices'] !== undefined) { p.subdomainSlices = p['Mesh.SubdomainSlices']; }
-            if (p['Mesh.InterfaceOffset'] !== undefined) { p.interfaceOffset = p['Mesh.InterfaceOffset']; }
-            if (p['Mesh.InterfaceDraw'] !== undefined) { p.interfaceDraw = p['Mesh.InterfaceDraw']; }
-            if (p['Mesh.InterfaceResolution'] !== undefined) { p.interfaceResolution = p['Mesh.InterfaceResolution']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.RearResolution']) { p.rearResolution = p['Mesh.RearResolution']; }
@@ -159,10 +155,6 @@ export class MWGConfigParser {
             if (p['Mesh.ThroatResolution']) { p.throatResolution = p['Mesh.ThroatResolution']; }
             if (p['Mesh.MouthResolution']) { p.mouthResolution = p['Mesh.MouthResolution']; }
             if (p['Mesh.VerticalOffset']) { p.verticalOffset = p['Mesh.VerticalOffset']; }
-            if (p['Mesh.SubdomainSlices'] !== undefined) { p.subdomainSlices = p['Mesh.SubdomainSlices']; }
-            if (p['Mesh.InterfaceOffset'] !== undefined) { p.interfaceOffset = p['Mesh.InterfaceOffset']; }
-            if (p['Mesh.InterfaceDraw'] !== undefined) { p.interfaceDraw = p['Mesh.InterfaceDraw']; }
-            if (p['Mesh.InterfaceResolution'] !== undefined) { p.interfaceResolution = p['Mesh.InterfaceResolution']; }
             if (p['Mesh.WallThickness']) { p.wallThickness = p['Mesh.WallThickness']; }
             if (p['Mesh.Quadrants']) { p.quadrants = p['Mesh.Quadrants']; }
             if (p['Mesh.RearResolution']) { p.rearResolution = p['Mesh.RearResolution']; }
@@ -203,7 +195,6 @@ export class MWGConfigParser {
             if (encBlock._items.EdgeType) { p.encEdgeType = encBlock._items.EdgeType; }
             if (encBlock._items.FrontResolution) { p.encFrontResolution = encBlock._items.FrontResolution; }
             if (encBlock._items.BackResolution) { p.encBackResolution = encBlock._items.BackResolution; }
-            if (encBlock._items.InterfaceOffset !== undefined) { p.interfaceOffset = encBlock._items.InterfaceOffset; }
             if (encBlock._items.Spacing) {
                 const parts = encBlock._items.Spacing.split(',').map(s => s.trim());
                 if (parts.length >= 4) {
@@ -267,10 +258,6 @@ export const CONFIG_DEFAULTS = {
         throatResolution: 5.0,
         mouthResolution: 8.0,
         verticalOffset: 0.0,
-        subdomainSlices: '',
-        interfaceOffset: '',
-        interfaceDraw: '',
-        interfaceResolution: '',
         quadrants: '1234',
         wallThickness: 5.0,
         rearResolution: 10.0,
@@ -343,10 +330,6 @@ export const CONFIG_DEFAULTS = {
         throatResolution: 5.0,
         mouthResolution: 8.0,
         verticalOffset: 0.0,
-        subdomainSlices: '',
-        interfaceOffset: '',
-        interfaceDraw: '',
-        interfaceResolution: '',
         quadrants: '1234',
         wallThickness: 5.0,
         rearResolution: 10.0,
