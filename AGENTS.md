@@ -68,7 +68,7 @@
 - `src/app/exports.js`, `src/solver/waveguidePayload.js`
   - Required: `tests/export-gmsh-pipeline.test.js`, `tests/waveguide-payload.test.js`
 - `src/export/abecProject.js`, `src/export/abecBundleValidator.js`
-  - Required: `tests/abec-bundle-parity.test.js`, `tests/abec-circsym.test.js`, `npm run test:abec`
+  - Required: `npm run test:abec`
 - `server/solver/waveguide_builder.py`, `server/app.py`
   - Required: `server/tests/test_dependency_runtime.py`, `server/tests/test_gmsh_endpoint.py`, `server/tests/test_occ_resolution_semantics.py`, `server/tests/test_updates_endpoint.py`
 - `server/solver/mesh.py`, `server/solver/solve.py`, `server/solver/solve_optimized.py`
