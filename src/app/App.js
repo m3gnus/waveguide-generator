@@ -26,6 +26,10 @@ export class App {
     // Init UI
     this.paramPanel = new ParamPanel('param-container');
     this.simulationPanel = new SimulationPanel();
+    this.simulationPanel.app = this;
+    if (typeof window !== 'undefined') {
+      window.__waveguideApp = this;
+    }
 
     this.setupScene();
     this.setupEventListeners();

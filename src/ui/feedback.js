@@ -88,13 +88,60 @@ export function chooseExportFormat() {
     dialog.appendChild(actions);
 
     const options = [
-      { id: '1', label: 'Charts (PNG via Matplotlib)' },
-      { id: '2', label: 'CSV Data' },
-      { id: '3', label: 'JSON Data' },
-      { id: '4', label: 'Text Report' },
-      { id: '5', label: 'Polar Directivity CSV' },
-      { id: '6', label: 'Impedance CSV' },
-      { id: '7', label: 'ABEC Spectrum (VACS)' }
+      {
+        id: '1',
+        label: 'Chart Images (PNG)',
+        help: 'Renders all plots as PNG images via backend Matplotlib.',
+        tooltip: 'Exports Frequency Response, DI, Impedance and Polar charts as PNG images rendered by the backend.'
+      },
+      {
+        id: '2',
+        label: 'Frequency Data CSV',
+        help: 'Single CSV with frequency, SPL, DI and impedance columns.',
+        tooltip: 'Exports simulation result curves to CSV for spreadsheet or analysis workflows.'
+      },
+      {
+        id: '3',
+        label: 'Full Results JSON',
+        help: 'Complete raw simulation payload in JSON format.',
+        tooltip: 'Exports all available result arrays and metadata for scripting or custom post-processing.'
+      },
+      {
+        id: '4',
+        label: 'Summary Text Report',
+        help: 'Human-readable simulation report with key stats.',
+        tooltip: 'Exports a readable text summary including frequency span and response statistics.'
+      },
+      {
+        id: '5',
+        label: 'Polar Directivity CSV',
+        help: 'Angle/frequency directivity data in CSV format.',
+        tooltip: 'Exports directivity map data for external plotting or custom directivity analysis.'
+      },
+      {
+        id: '6',
+        label: 'Impedance CSV',
+        help: 'Impedance real/imaginary values vs frequency.',
+        tooltip: 'Exports impedance response (real and imaginary components) for electrical/acoustic analysis.'
+      },
+      {
+        id: '7',
+        label: 'ABEC Spectrum (VACS)',
+        help: 'ABEC-compatible VACS spectrum text export.',
+        tooltip: 'Exports spectrum data in ABEC VACS format for ABEC-based workflows.'
+      },
+      {
+        id: '8',
+        label: 'Waveguide STL (CAD Preview)',
+        help: 'Exports STL mesh of the horn surface.',
+        tooltip: 'Useful for quick visual inspection in STL viewers. For high-quality CAD surfaces, use the CSV curves with Fusion 360 import scripts.'
+      },
+      {
+        id: '9',
+        label: 'Fusion 360 CSV Curves',
+        help: 'Exports profiles + slices CSV for CAD surfacing.',
+        tooltip: 'Creates *_profiles.csv and *_slices.csv (GridExport-style) for Fusion 360 CurvesImport and SurfaceImport scripts.'
+      }
     ];
 
     let settled = false;
@@ -117,7 +164,18 @@ export function chooseExportFormat() {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'ui-choice-btn';
-      button.textContent = opt.label;
+      button.title = opt.tooltip || opt.help || opt.label;
+      button.setAttribute('aria-label', opt.tooltip || opt.label);
+      const labelEl = document.createElement('span');
+      labelEl.className = 'ui-choice-btn-label';
+      labelEl.textContent = opt.label;
+      button.appendChild(labelEl);
+      if (opt.help) {
+        const helpEl = document.createElement('span');
+        helpEl.className = 'ui-choice-btn-help';
+        helpEl.textContent = opt.help;
+        button.appendChild(helpEl);
+      }
       button.addEventListener('click', () => finalize(opt.id));
       actions.appendChild(button);
     });

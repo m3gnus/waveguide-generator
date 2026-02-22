@@ -1,236 +1,227 @@
 # Future Additions
 
-This document tracks planned or partially implemented work.
+Last updated: February 22, 2026
+
+This document tracks roadmap work by status.
 
 Implemented runtime behavior belongs in:
 - `docs/PROJECT_DOCUMENTATION.md`
-- `docs/ABEC_PARITY_CONTRACT.md`
 
-## Critical Evaluation & Research Items (High Priority)
+## New Backlog (Simulation Feed UX, Feb 2026)
 
-### Documentation & Agent Stewardship
-- **Status (Implemented Feb 2026)**: `AGENTS.md` now references the **BEM Solver Acceleration Roadmap** (FMM/OpenCL) for future automated refactors.
-- **Product Docs**: Conduct periodic audits of `PROJECT_DOCUMENTATION.md` to ensure it matches recent unified-mesh refactors (Feb 2026).
-
-## Open Items
-
-### 1. Enhanced Simulation Management and Persistence
-
+### Failed-task retention policy (decision pending)
 Current state:
-- `stopSimulation` in `src/ui/simulation/actions.js` attempts to hit `/api/stop/${jobId}` but multi-simulation logic is missing.
-- Simulations are lost if the window is closed; no persistent tracking exists.
+- UI now supports manual `Clear Failed` cleanup in the simulation task feed.
+- Failed tasks are not auto-deleted on app/backend restart.
 
-Future additions:
-- **Multiple Simulations**: Add support for queuing simulations (sequential or concurrent) with limit settings.
-- **Persistence Layer**: Implement a "Simulation Manager" service that reads/writes job metadata to persistent storage (local or backend DB).
-- **Session Recovery**: Allow users to retrieve and view results for both ongoing and past simulations even after a page reload.
+Next addition:
+- Decide and implement lifecycle policy for failed tasks:
+- auto-clear on reboot, or
+- retain until explicit user cleanup.
+- If auto-clear is chosen, add a user-facing toggle and document default behavior.
 
-### 1. UI Simplification and Cleanup
-
+### Script snapshot compatibility hardening
 Current state:
-- Simulation results are partially displayed in the left panel, creating clutter.
-- UI elements for unsupported features are still visible. Like circsym and interface. 
+- Simulation tasks can store/load parameter snapshots (`Load Script`) from feed entries.
+- Snapshot schema is versionless and assumes local UI field compatibility.
 
-Future additions:
-- **Result Panel Refactor**: Remove the simulation result view from the left panel; transition to a dedicated workspace or modal.
-- **Condense Layout**: Audit `SimulationPanel.js` and `ParamPanel.js` to tighten spacing and improve information density.
+Next addition:
+- Add schema versioning/migration guards for stored task scripts to avoid breakage across UI/config updates.
+- Add explicit stale-script warnings when fields no longer map cleanly to current controls.
 
-### 1. Deprecate and Remove Unsupported Features
+## Completed (Implemented)
 
-Current state:
-- `circsym` and interface functions (`interface_offset`, `interface_draw`) exist in `src/solver/waveguidePayload.js` and UI schemas but are not officially supported.
-- ABEC project export is legacy and no longer required.
+### Documentation and agent stewardship
+- **Implemented (Feb 2026)**: `AGENTS.md` now references the **BEM Solver Acceleration Roadmap** (FMM/OpenCL) for future automated refactors.
 
-Future additions:
-- **Delete Features**: Scrub the codebase for `circsym`, `interface_offset`, and `interface_draw`.
-- **Remove ABEC Export**: Delete `src/export/abecProject.js` and remove the "Export ABEC" button from the UI.
-
-### 1. Code Sanitization and Dead Code Removal
-
-Current state:
-- The codebase contains fallback paths like `mockBEMSolver` and several utility functions that aren't hooked up to the UI.
-
-Future additions:
-- **Delete Fallbacks**: Remove mock solvers and "pending" placeholders once real BEM integration is fully stabilized.
-- **Code Audit**: Systematically remove dead code and old features. Scan for functions in the `src/` directory that lack UI representation.
-
-### 1. Frontend solver status messaging cleanup
-
-- **Status (Implemented Feb 2026)**:
-- `src/solver/index.js` mock warning now states backend-unavailable fallback behavior (non-physics/debug-only).
-- `src/ui/simulation/results.js` fallback panel text now labels mock output as preview-only and backend BEM as default runtime.
+### Frontend solver UX messaging
+- **Implemented (Feb 2026)**:
+- `src/solver/index.js` warning text now makes clear that mock output is backend-unavailable fallback only.
+- `src/ui/simulation/results.js` labels mock output as preview-only and backend BEM as default runtime.
+- Simulation UI/log wording now presents backend BEM as default behavior and mock output as fallback only.
 - Backend solve integration remains the primary path in `BemSolver.submitSimulation(...)`.
 
-### 1. OCC interface/subdomain geometry in `/api/mesh/build`
+### Architecture audit
+- **Implemented (Audited Feb 22, 2026)**: JavaScript mesh engine audit completed for `buildWaveguideMesh.js`.
+- Current runtime callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/app/exports.js`, `src/app/mesh.js`).
+- `adaptivePhi` is effectively STL-only in current UI behavior; viewport and simulation disable it.
+- Follow-up simplification candidates (not yet implemented):
+- Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
+- Collapse rarely-used `collectGroups`/`groupInfo` branching if external callers do not depend on group suppression.
+- Move adaptive-phi branch into a dedicated helper/export-only wrapper to reduce branching in canonical horn build path.
+- Remove stale ABEC wording in adaptive-phi comments.
 
+## In Progress (Partially Implemented)
+
+### BEM solver acceleration roadmap
+
+Execution strategy for accelerating backend `/api/solve`:
+1. Assembler policy: `auto|dense|fmm` with dense fallback.
+2. Matrix-free iterative path using FMM-backed operators.
+3. Device policy hardening for `auto|opencl_cpu|opencl_gpu|numba`.
+4. CUDA optimization (deferred until post-FMM benchmarks).
+
+Progress by phase:
+- **Phase 0: Baseline and harness**: pending.
+- **Phase 1: FMM integration**: pending.
+- **Phase 2: Matrix-free policy**: pending.
+- **Phase 3: Device policy hardening**: partially implemented (Feb 2026).
+
+Implemented in Phase 3:
+- Added explicit modes `auto|opencl_cpu|opencl_gpu|numba`.
+- `auto` mode now uses deterministic priority: `opencl_gpu -> opencl_cpu -> numba`.
+- Added runtime fallback metadata to `/health` and solve result metadata.
+
+Remaining for Phase 3:
+- Expand hardware-class guidance for OpenCL GPU setup (especially Windows/Linux driver onboarding).
+- Add regression/performance baselines per hardware class.
+
+## Remaining Backlog
+
+### High priority documentation maintenance
+- Conduct periodic audits of `docs/PROJECT_DOCUMENTATION.md` to keep it aligned with unified-mesh and solver runtime refactors.
+
+### Simulation management and persistence
 Current state:
-- `subdomain_slices`, `interface_offset`, `interface_draw`, and `interface_resolution` are accepted in request payloads.
-- OCC builder currently does not use those fields to generate interface/subdomain geometry.
+- `stopSimulation` in `src/ui/simulation/actions.js` calls `/api/stop/${jobId}`, but full multi-simulation management is not implemented.
+- Simulation tracking is not persisted across browser reload/close.
 
-Future addition:
-- Implement OCC interface/subdomain surface generation and map the result into explicit physical groups.
+Next additions:
+- Add queued simulation support (sequential or concurrent) with configurable limits.
+- Implement a simulation manager persistence layer (browser storage and/or backend DB).
+- Add session recovery for ongoing and historical jobs/results.
 
-### 1. Symmetry benchmark harness
-
+### UI simplification and cleanup
 Current state:
-- Symmetry reduction is implemented in the optimized solver path.
-- `/api/solve` now receives full-domain frontend payloads (`quadrants=1234`) and delegates half/quarter reduction to backend symmetry detection + reduction.
-- Repository does not yet include a benchmark harness with committed thresholds for full vs half vs quarter domain performance/error.
+- Simulation results are partially displayed in the left panel, creating clutter.
+- UI still exposes unsupported controls (for example `circsym`, interface).
 
-Future addition:
-- Add repeatable benchmark cases, runtime/error baselines, and pass/fail thresholds to CI-facing docs/tests.
-- Add explicit solver-facing symmetry policy controls (for example: `auto`, `force_full`) with validation so unsupported reductions fail loudly instead of silently producing inconsistent behavior.
-- Surface solver symmetry decisions and rejection reasons in UI metadata (detected type, reduction factor, centered-excitation check result) so users can verify when quarter/half acceleration is actually active.
+Next additions:
+- Move results out of left panel into dedicated workspace/modal.
+- Tighten spacing and improve information density in `SimulationPanel.js` and `ParamPanel.js`.
 
-### 1. ABEC parity expansion (optional)
-
+### OCC interface/subdomain geometry in `/api/mesh/build`
 Current state:
-- Required structure and semantics are enforced by `src/export/abecBundleValidator.js`.
-- Golden parity validation is enforced via `npm run test:abec`.
-- Obsolete JS suites `tests/abec-bundle-parity.test.js` and `tests/abec-circsym.test.js` were removed.
+- `subdomain_slices`, `interface_offset`, `interface_draw`, and `interface_resolution` are accepted by request schema.
+- OCC builder does not yet generate interface/subdomain geometry from these fields.
 
-Future additions:
-- Add stricter value-range checks (not only structural checks) where ATH references are stable.
-- Add additional ATH reference bundles when available.
+Next addition:
+- Implement OCC interface/subdomain surface generation and explicit physical-group mapping.
 
-### 1. Potential deprecation: ABEC export and Gmsh meshing stack
-
+### Symmetry benchmark harness and policy visibility
 Current state:
-- ABEC export is a supported user-facing workflow and currently depends on `POST /api/mesh/build`.
-- `/api/mesh/build` and `/api/mesh/generate-msh` are Gmsh-backed meshing paths.
-- BEM solve (`/api/solve`) can run from canonical frontend mesh payloads without requiring Gmsh.
+- Symmetry reduction exists in optimized solver path.
+- `/api/solve` receives full-domain frontend payload (`quadrants=1234`) and backend performs symmetry detection/reduction.
+- No committed benchmark harness with full/half/quarter thresholds.
 
-Implementation plan (go/no-go):
+Next additions:
+- Add repeatable benchmark cases, error/runtime baselines, and pass/fail thresholds.
+- Add explicit solver symmetry policy controls (for example `auto`, `force_full`) with validation.
+- Surface solver symmetry decisions/rejection reasons in UI metadata (detected type, reduction factor, centered-excitation check).
 
-1. Discovery and impact audit
-- Inventory all ABEC and Gmsh touchpoints in frontend, backend, install scripts, docs, and tests.
-- Add temporary runtime instrumentation to measure real usage of:
-- `exportABECProject` and ABEC bundle generation.
-- `/api/mesh/build` and `/api/mesh/generate-msh`.
-- `/api/solve` with `use_gmsh=true`.
-- Define a decision window and explicit go/no-go thresholds (for example: low usage for N releases).
-
-2. Prepare opt-out controls before removal
-- Add feature flags to disable ABEC export and Gmsh meshing paths without deleting code.
-- Hide or disable ABEC UI actions when the ABEC flag is off.
-- Return clear `410/503` style API errors with migration guidance when Gmsh endpoints are disabled.
-- Keep `/api/solve` working through canonical payloads as the baseline path.
-
-3. Migration and parity safeguards
-- Ensure remaining exports and simulation flows do not rely on ABEC artifacts (`bem_mesh.geo`, ABEC text files).
-- Add/expand tests proving BEM simulation works end-to-end without ABEC or Gmsh endpoints.
-- Add compatibility notes for users who still need ABEC:
-- Pin to last ABEC-capable version, or
-- Maintain a separate optional plugin/package for ABEC + Gmsh tooling.
-
-4. Removal phase (only after go decision)
-- Frontend:
-- Remove ABEC export UI/actions and unused ABEC export modules.
-- Remove frontend calls to `/api/mesh/build` and `/api/mesh/generate-msh` for production flows.
-- Backend:
-- Remove `/api/mesh/build` and `/api/mesh/generate-msh` routes and related builders.
-- Remove Gmsh runtime checks and optional solve refinement path if policy is "no Gmsh anywhere".
-- Packaging/runtime:
-- Drop `gmsh` from dependency matrix, requirements, install/startup scripts, and health payload.
-- Clean up CI jobs and tests that only validate ABEC/Gmsh behavior.
-
-5. Documentation and contract cleanup
-- Update `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `server/README.md`, and API docs to remove ABEC/Gmsh claims.
-- Archive `docs/ABEC_PARITY_CONTRACT.md` as historical, or replace with a short deprecation notice.
-- Update AGENTS guidance to reflect the new supported surface area.
-
-6. Acceptance criteria
-- `npm test` and `npm run test:server` pass with ABEC/Gmsh removed or fully disabled.
-- No UI element references ABEC export.
-- No backend route exposes Gmsh meshing APIs in the final removal state.
-- BEM solver support matrix and health endpoint output match the new runtime.
-
-7. Rollback strategy
-- Keep removal as a sequence of small commits (flags -> disable default -> code deletion).
-- Tag the last ABEC+Gmsh-supported release for users with legacy workflows.
-- If regressions appear, re-enable by feature flag first; avoid reintroducing deleted code in emergency patches.
-
-### 1. Clarify BEM mesh controls in UI/docs
-
+### Clarify BEM mesh controls in UI and docs
 Current state:
-- Live simulation submissions request backend OCC-adaptive meshing (`options.mesh.strategy="occ_adaptive"` with `waveguide_params`).
-- Frontend still sends canonical mesh arrays as contract/validation payload, but solve-time meshing is backend-owned in the adaptive path.
-- `throatResolution`/`mouthResolution`/`rearResolution`/`encFrontResolution`/`encBackResolution` are not all surfaced to users with clear "solve mesh vs export mesh" impact semantics.
+- Live solves default to backend OCC-adaptive meshing (`options.mesh.strategy="occ_adaptive"` with `waveguide_params`).
+- Frontend still sends canonical mesh arrays for contract/validation.
+- Resolution controls are not all clearly explained as solve-mesh vs export-mesh behavior.
 
-Future additions:
-- Update parameter labels/tooltips to clearly distinguish:
-- controls that affect live BEM solve mesh,
-- controls that are export-specific or legacy-path specific.
-- Add a short “mesh-control matrix” section to `README.md` and `docs/PROJECT_DOCUMENTATION.md`.
+Next additions:
+- Update labels/tooltips to distinguish live-solve controls from export/legacy controls.
+- Add a mesh-control matrix to `README.md` and `docs/PROJECT_DOCUMENTATION.md`.
 
-### 1. Explicit simulation mesh mode in UI
-
+### Explicit simulation mesh mode in UI
 Current state:
-- Simulation panel currently submits adaptive OCC solve requests by default (`options.mesh.strategy="occ_adaptive"`).
-- Backend still supports non-default/legacy mesh paths, but mesh strategy selection is not exposed as a first-class UI control.
+- Simulation panel defaults to adaptive OCC solve requests.
+- Backend supports non-default/legacy mesh paths, but no explicit UI mesh-mode selector exists.
 
-Future addition:
-- Add an explicit mesh mode control/status in the simulation panel:
+Next addition:
+- Add mesh mode control/status in simulation panel:
 - canonical mesh only, or
 - canonical mesh + backend Gmsh refinement.
-- Show selected mode in run status/progress messaging.
+- Display selected mode in run status/progress messages.
 
-### 1. Pre-submit canonical tag diagnostics
-
+### Pre-submit canonical tag diagnostics
 Current state:
-- Tag validity is enforced in frontend and backend, and solve fails when source tag coverage is missing.
-- Users do not currently get a concise pre-submit tag summary in simulation UI.
+- Tag validity is enforced in frontend/backend; solve fails when source tag coverage is missing.
+- Simulation UI does not show concise pre-submit tag summary.
 
-Future addition:
-- Add a pre-submit diagnostics panel with tag counts (`1/2/3/4`) and a clear warning when source-tagged elements are absent.
-- Include lightweight checks for common payload issues (triangle/tag length mismatch, missing boundary metadata).
+Next addition:
+- Add pre-submit diagnostics for tag counts (`1/2/3/4`) and warnings for missing source-tagged elements.
+- Add lightweight checks for triangle/tag length mismatch and missing boundary metadata.
 
-### 1. Remove stale mock/pending wording in solver UX
-
-- **Status (Implemented Feb 2026)**:
-- Simulation UI/log wording now presents backend BEM as default behavior and mock output as fallback only.
-
-### 1. Add no-Gmsh regression lane for solve path
-
+### No-Gmsh regression lane for solve path
 Current state:
-- `/api/solve` can run without Gmsh in default canonical-payload mode.
-- Test coverage verifies tag contracts but does not explicitly enforce a “Gmsh unavailable” solve-path lane in CI.
+- `/api/solve` can run without Gmsh in canonical-payload mode.
+- Existing tests verify tag contracts but do not explicitly enforce a Gmsh-unavailable solve lane.
 
-Future addition:
-- Add a server test lane/config that simulates Gmsh-unavailable runtime and verifies solve-path readiness and error behavior remain correct.
-- Keep this lane required while ABEC/Gmsh deprecation decisions are pending.
+Next addition:
+- Add required server test lane/config simulating Gmsh-unavailable runtime and validating solve-path readiness/error behavior.
 
-### 1. BEM Solver Acceleration Roadmap
+## Decision-Dependent / Optional Tracks
 
-This section defines the execution strategy for accelerating the backend BEM solve path (`/api/solve`).
+### ABEC parity expansion (optional)
+Current state:
+- Required structure/semantics are enforced by `src/export/abecBundleValidator.js`.
+- Golden parity validation is covered by `tests/export-gmsh-pipeline.test.js`.
+- Obsolete suites `tests/abec-bundle-parity.test.js` and `tests/abec-circsym.test.js` are removed.
 
-#### Strategy (Ranked by Impact)
-1. **Assembler Policy**: Add `auto|dense|fmm` policy with dense fallback.
-2. **Matrix-Free Iterative**: Leverage FMM-backed operators.
-3. **Device Policy**: Harden `auto|opencl_cpu|opencl_gpu|numba` selection for predictable behavior.
-4. **CUDA Optimization**: Deferred until post-FMM benchmarks.
+Potential additions:
+- Add stricter value-range checks where ATH references are stable.
+- Add additional ATH reference bundles when available.
 
-#### Execution Phases
-- **Phase 0: Baseline & Harness**: Create reproducible benchmark harness and record current performance.
-- **Phase 1: FMM Integration**: Add assembler policy plumbing and deterministic fallback.
-- **Phase 2: Matrix-Free Policy**: Finalize `auto` threshold selection and capture iteration telemetry.
-- **Phase 3: Device Policy Hardening**: Implement explicit device selection and OpenCL recovery.
-  - **Status (Partially implemented Feb 2026)**:
-    - Added explicit modes `auto|opencl_cpu|opencl_gpu|numba`.
-    - `auto` selection now uses deterministic priority (`opencl_gpu -> opencl_cpu -> numba`) with no startup benchmark.
-    - Added runtime fallback metadata to `/health` and result metadata.
-  - **Remaining**:
-    - Expand hardware-class guidance for OpenCL GPU setup (especially Windows/Linux driver onboarding).
-    - Add regression/performance baselines per hardware class.
+### Potential deprecation: ABEC export and Gmsh meshing stack
+Current state:
+- ABEC export remains supported and depends on `POST /api/mesh/build`.
+- `/api/mesh/build` and `/api/mesh/generate-msh` are Gmsh-backed meshing paths.
+- `/api/solve` can run from canonical frontend mesh payloads without requiring Gmsh.
 
-### 1. Remaining Architecture Audit
+Decision framework:
+1. Discovery and impact audit.
+- Inventory ABEC/Gmsh touchpoints in frontend, backend, docs, tests, and install scripts.
+- Add temporary instrumentation to measure usage of ABEC export, `/api/mesh/build`, `/api/mesh/generate-msh`, and `/api/solve` with `use_gmsh=true`.
+- Define go/no-go threshold window (for example low usage over N releases).
+2. Prepare opt-out controls before removal.
+- Add feature flags for ABEC export and Gmsh meshing paths.
+- Hide ABEC UI actions when flag is off.
+- Return clear `410/503`-style API responses with migration guidance when endpoints are disabled.
+- Keep canonical `/api/solve` path as baseline.
+3. Migration and parity safeguards.
+- Ensure remaining workflows do not require ABEC artifacts (`bem_mesh.geo`, ABEC text files).
+- Add/expand end-to-end tests proving simulation without ABEC/Gmsh endpoints.
+- Provide compatibility guidance for ABEC-dependent users (pin last supported release or separate plugin/package).
+4. Removal phase (only after go decision).
+- Frontend: remove ABEC export UI/actions and unused ABEC modules; remove production calls to meshing endpoints.
+- Backend: remove `/api/mesh/build` and `/api/mesh/generate-msh` routes/builders; remove Gmsh runtime checks if policy is no-Gmsh.
+- Packaging/runtime: remove `gmsh` from dependency matrix, scripts, requirements, and health payload.
+- CI: remove ABEC/Gmsh-only jobs/tests.
+5. Documentation and contract cleanup.
+- Update `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `server/README.md`, and API docs.
+- Update AGENTS guidance to supported runtime surface.
+6. Acceptance criteria.
+- `npm test` and `npm run test:server` pass with ABEC/Gmsh removed or fully disabled.
+- UI contains no ABEC export controls.
+- Backend exposes no Gmsh meshing routes in final removal state.
+- Solver support matrix and health output match runtime reality.
+7. Rollback strategy.
+- Use staged commits (`flags -> default-off -> deletion`).
+- Tag last ABEC+Gmsh-capable release.
+- Prefer feature-flag re-enable for regressions instead of emergency code resurrection.
 
-- [x] Audit the JavaScript mesh engine (`buildWaveguideMesh.js`) for further simplifications now that it's decoupled from ABEC export requirements.
-  - **Status (Audited Feb 22, 2026)**:
-  - Current UI runtime mesh callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/app/exports.js`, `src/app/mesh.js`).
-  - `adaptivePhi` is effectively an STL-only path in current UI behavior; viewport and simulation explicitly disable it.
-  - `buildWaveguideMesh` still carries some legacy flexibility that can be simplified without changing mesh contracts:
-  - Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
-  - Collapse rarely-used `collectGroups`/`groupInfo` option branching if external callers are no longer depending on group suppression.
-  - Move adaptive-phi branch into a dedicated helper (or dedicated export-only wrapper) to reduce branching in the canonical horn build path.
-  - Remove stale ABEC wording in adaptive-phi comments to reflect current caller semantics.
+## Deferred Removal Candidate
+
+### Deprecated/unsupported frontend feature cleanup
+Current state:
+- `circsym` and interface functions (`interface_offset`, `interface_draw`) exist in `src/solver/waveguidePayload.js` and UI schema, but are not officially supported.
+- ABEC export deprecation has been proposed but is not approved as of February 22, 2026.
+
+Next additions:
+- Remove unsupported payload/UI paths for `circsym`, `interface_offset`, and `interface_draw` when compatibility window closes.
+- If ABEC deprecation receives a go decision, remove `src/export/abecProject.js` and related UI controls as part of the staged deprecation plan.
+
+### Code sanitization and dead-code removal
+Current state:
+- Codebase still contains fallback paths (for example `mockBEMSolver`) and utility paths not fully wired to UI.
+
+Next additions:
+- Remove mock/pending fallback code once backend BEM integration hardening is complete.
+- Run structured dead-code audit in `src/` for functions with no runtime UI path.

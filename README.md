@@ -7,7 +7,6 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 ## Documentation
 
 - [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - architecture, runtime behavior, and recent refactor history
-- [ABEC Parity Contract](docs/ABEC_PARITY_CONTRACT.md) - enforced ABEC bundle structure and semantics
 - [Future Additions](docs/FUTURE_ADDITIONS.md) - planned features, BEM acceleration roadmap, and partial features
 - [Testing Guide](tests/TESTING.md) - canonical test map, commands, and diagnostics
 
@@ -105,7 +104,6 @@ docs/         Architecture and technical reference
 ```bash
 npm test              # JS tests in tests/
 npm run test:server   # Python backend tests
-npm run test:ath      # ATH parity check (strict infra diagnostics)
 npm run build         # Production bundle
 ```
 
@@ -120,8 +118,7 @@ See [tests/TESTING.md](tests/TESTING.md) for the full test inventory and diagnos
 curl http://localhost:8000/health
 ```
 
-**ATH parity infra failures** — `npm run test:ath` runs in strict mode by default and prints concrete fix steps (`ATH_PARITY_STRICT_INFRA=0` disables strict mode).
-Typical checks:
+**Backend meshing/runtime checks**:
 ```bash
 python3 -c "import gmsh; print(gmsh.__version__)"
 gmsh -version

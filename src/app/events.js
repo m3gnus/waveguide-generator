@@ -36,7 +36,6 @@ export function setupEventListeners(app) {
 export function bindButtonEvents(app) {
   const buttonBindings = [
     { id: 'render-btn', handler: () => app.requestRender(), type: 'click' },
-    { id: 'export-btn', handler: () => app.exportSTL(), type: 'click' },
     { id: 'export-config-btn', handler: () => app.exportMWGConfig(), type: 'click' },
     { id: 'choose-folder-btn', handler: selectOutputFolder, type: 'click' },
     { id: 'display-mode', handler: () => app.requestRender(), type: 'change' },
@@ -51,7 +50,6 @@ export function bindButtonEvents(app) {
       type: 'click'
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
-    { id: 'export-csv-btn', handler: () => app.exportProfileCSV(), type: 'click' },
     { id: 'check-updates-btn', handler: () => app.checkForUpdates(), type: 'click' }
   ];
 

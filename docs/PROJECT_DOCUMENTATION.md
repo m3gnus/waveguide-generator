@@ -69,6 +69,7 @@ Primary entry points:
    - `device_mode = auto` (UI always delegates selection to backend policy)
    - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu -> numba`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
+   - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 ABEC export flow
@@ -193,7 +194,6 @@ ABEC export writes:
 - `Results/static.txt`
 
 Contract and validator:
-- `docs/ABEC_PARITY_CONTRACT.md`
 - `src/export/abecBundleValidator.js`
 
 Runtime parity semantics:
@@ -209,7 +209,7 @@ Runtime parity semantics:
   - horizontal: `0`/`180`
   - vertical: `90`/`270`
   - diagonal: any other angle (user-configurable, default `45`)
-- Regression coverage: `npm run test:abec`
+- Regression coverage: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
 
 ### 5.3 Internal/library export utilities
 
@@ -256,6 +256,15 @@ Base URL: `http://localhost:8000`
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`, `numba`)
   - Creates async job and returns `{ job_id }`
+  - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
+
+- `GET /api/jobs`
+  - Lists jobs with optional `status` filter and `limit`/`offset` pagination
+  - Returns compact job metadata, status/progress/stage timestamps, and `has_results`/`has_mesh_artifact`
+
+- `DELETE /api/jobs/{job_id}`
+  - Deletes terminal jobs (`complete|error|cancelled`)
+  - Returns `409` for active jobs (`queued|running`)
 
 - `POST /api/stop/{job_id}`
   - Cancels queued/running job
@@ -341,13 +350,11 @@ Canonical inventory and test-location map: `tests/TESTING.md`.
 Primary commands:
 - `npm test`
 - `npm run test:server`
-- `npm run test:abec <bundle-path>`
-- `npm run test:ath`
 - `npm run build`
 
 High-signal test suites:
 - Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
-- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`, `npm run test:abec`
+- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
 - Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_directivity_plot.py`
 
 ## 10. Operational Notes and Constraints
@@ -378,8 +385,6 @@ If OpenCL is unavailable the backend falls back to `numba`; fallback reason is s
 - Export orchestration: `src/app/exports.js`
 - Polar UI/helpers: `src/ui/simulation/polarSettings.js`
 - Legacy `.geo` request helper: `src/solver/client.js` (`generateMeshFromGeo`)
-- ABEC generation: `src/export/abecProject.js`
-- ABEC validator: `src/export/abecBundleValidator.js`
 - API routes: `server/app.py`
 - OCC builder: `server/solver/waveguide_builder.py`
 - Directivity render: `server/solver/directivity_plot.py`

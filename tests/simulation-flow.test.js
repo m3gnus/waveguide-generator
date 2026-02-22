@@ -84,6 +84,7 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.options.mesh.strategy, 'occ_adaptive');
     assert.equal(payload.options.mesh.waveguide_params.formula_type, 'OSSE');
     assert.deepEqual(payload.polar_config.enabled_axes, ['horizontal', 'diagonal']);
+    assert.equal(payload.sim_type, '2');
   } finally {
     global.fetch = originalFetch;
   }

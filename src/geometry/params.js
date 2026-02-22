@@ -10,7 +10,7 @@ const RAW_EXPRESSION_KEYS = new Set([
   'sourceContours'
 ]);
 
-const SCHEMA_GROUPS = ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE', 'ABEC'];
+const SCHEMA_GROUPS = ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE', 'SIMULATION'];
 
 const SCALE_LENGTH_KEYS = [
   'L',

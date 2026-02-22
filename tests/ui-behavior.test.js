@@ -80,3 +80,15 @@ test('applyExportSelection includes VACS spectrum option 7', () => {
   assert.equal(applyExportSelection({}, '7', handlers), true);
   assert.deepEqual(calls, ['vacs']);
 });
+
+test('applyExportSelection includes CAD exports options 8 and 9', () => {
+  const calls = [];
+  const handlers = {
+    '8': () => calls.push('stl'),
+    '9': () => calls.push('fusion-csv')
+  };
+
+  assert.equal(applyExportSelection({}, '8', handlers), true);
+  assert.equal(applyExportSelection({}, '9', handlers), true);
+  assert.deepEqual(calls, ['stl', 'fusion-csv']);
+});
