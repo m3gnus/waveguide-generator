@@ -5,9 +5,11 @@ import { applySmoothing } from '../../results/smoothing.js';
  * by Matplotlib as high-quality PNG images.
  */
 export async function openViewResultsModal(panel) {
-  if (!panel.lastResults) return;
-
-  const results = panel.lastResults;
+  const preferredJobId = panel.activeJobId || panel.currentJobId;
+  const results = preferredJobId && panel.resultCache?.has(preferredJobId)
+    ? panel.resultCache.get(preferredJobId)
+    : panel.lastResults;
+  if (!results) return;
   const splData = results.spl_on_axis || {};
   const frequencies = splData.frequencies || [];
   let spl = splData.spl || [];

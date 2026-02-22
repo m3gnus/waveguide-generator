@@ -148,9 +148,6 @@ export function generateMWGConfigContent(params) {
     if (params.wallThickness > 0) content += `Mesh.WallThickness = ${params.wallThickness}\n`;
     if (isNonZero(params.rearResolution)) content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;
 
-    if (params.outputABECProject !== undefined) {
-        content += `Output.ABECProject = ${formatValue(params.outputABECProject)}\n`;
-    }
     if (params.outputSTL !== undefined) {
         content += `Output.STL = ${formatValue(params.outputSTL)}\n`;
     }
@@ -166,13 +163,9 @@ export function generateMWGConfigContent(params) {
     if (params.sourceVelocity !== undefined) content += `Source.Velocity = ${params.sourceVelocity}\n`;
     if (params.sourceContours) content += `Source.Contours = ${formatValue(params.sourceContours)}\n`;
 
-    if (params.abecSimType !== undefined) content += `ABEC.SimType = ${params.abecSimType}\n`;
-    if (params.abecSimProfile !== undefined) content += `ABEC.SimProfile = ${formatValue(params.abecSimProfile)}\n`;
-    if (params.abecF1 !== undefined) content += `ABEC.f1 = ${params.abecF1}\n`;
-    if (params.abecF2 !== undefined) content += `ABEC.f2 = ${params.abecF2}\n`;
-    if (params.abecNumFreq !== undefined) content += `ABEC.NumFrequencies = ${params.abecNumFreq}\n`;
-    if (params.abecAbscissa !== undefined) content += `ABEC.Abscissa = ${formatValue(params.abecAbscissa)}\n`;
-    if (params.abecMeshFrequency !== undefined) content += `ABEC.MeshFrequency = ${formatValue(params.abecMeshFrequency)}\n`;
+    if (params.freqStart !== undefined) content += `Simulation.F1 = ${params.freqStart}\n`;
+    if (params.freqEnd !== undefined) content += `Simulation.F2 = ${params.freqEnd}\n`;
+    if (params.numFreqs !== undefined) content += `Simulation.NumFrequencies = ${params.numFreqs}\n`;
 
     const blocks = params._blocks || {};
     for (const [blockName, block] of Object.entries(blocks)) {

@@ -66,7 +66,8 @@ export function displayResults(panel, results = null) {
   }
 
   // Enable results buttons
-  document.getElementById('export-results-btn').disabled = false;
+  const exportBtn = document.getElementById('export-results-btn');
+  if (exportBtn) exportBtn.disabled = false;
   const viewBtn = document.getElementById('view-results-btn');
   if (viewBtn) viewBtn.disabled = false;
 }

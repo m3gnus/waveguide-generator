@@ -9,7 +9,9 @@ export function applyExportSelection(panel, exportType, handlers = null) {
     '4': () => exportAsText(panel),
     '5': () => exportAsPolarCSV(panel),
     '6': () => exportAsImpedanceCSV(panel),
-    '7': () => exportAsVACSSpectrum(panel)
+    '7': () => exportAsVACSSpectrum(panel),
+    '8': () => exportAsWaveguideSTL(panel),
+    '9': () => exportAsFusionCurvesCSV(panel)
   };
 
   const action = actionMap[exportType];
@@ -20,6 +22,28 @@ export function applyExportSelection(panel, exportType, handlers = null) {
 
   action();
   return true;
+}
+
+function resolveApp(panel) {
+  return panel?.app || window?.__waveguideApp || null;
+}
+
+export function exportAsWaveguideSTL(panel) {
+  const app = resolveApp(panel);
+  if (!app || typeof app.exportSTL !== 'function') {
+    showError('STL export is unavailable right now.');
+    return;
+  }
+  app.exportSTL();
+}
+
+export function exportAsFusionCurvesCSV(panel) {
+  const app = resolveApp(panel);
+  if (!app || typeof app.exportProfileCSV !== 'function') {
+    showError('CSV profile export is unavailable right now.');
+    return;
+  }
+  app.exportProfileCSV();
 }
 
 export async function exportResults(panel) {

@@ -129,10 +129,9 @@ export function createPresetManager() {
         wallThickness: 5.0
       },
       bemSettings: {
-        abecSimType: 1,
-        abecF1: 400,
-        abecF2: 16000,
-        abecNumFreq: 40
+        freqStart: 400,
+        freqEnd: 16000,
+        numFreqs: 40
       },
       createdAt: new Date(),
       updatedAt: new Date()
@@ -154,10 +153,9 @@ export function createPresetManager() {
         ...params
       },
       bemSettings: {
-        abecSimType: 1,
-        abecF1: 400,
-        abecF2: 16000,
-        abecNumFreq: 40
+        freqStart: 400,
+        freqEnd: 16000,
+        numFreqs: 40
       },
       createdAt: new Date(),
       updatedAt: new Date()

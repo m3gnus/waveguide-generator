@@ -9,14 +9,11 @@ Run from repository root:
 ```bash
 npm test
 npm run test:server
-npm run test:ath
-npm run test:abec <bundle-path>
 ```
 
 Command behavior:
 - `npm test` runs Node tests from `tests/` only.
 - `npm run test:server` runs Python `unittest` discovery in `server/tests/`.
-- `npm run test:ath` and `npm run test:abec` run parity/contract checks.
 
 ## JS test suites (`tests/`)
 

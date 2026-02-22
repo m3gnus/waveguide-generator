@@ -47,3 +47,27 @@ test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
 
   assert.equal(payload.b, '0.2+0.1*sin(p)');
 });
+
+test('buildWaveguidePayload coerces non-finite numeric fields to finite defaults', () => {
+  const payload = buildWaveguidePayload(
+    {
+      type: 'OSSE',
+      throatExtAngle: 'sin(p)',
+      gcurveDist: 'bad-value',
+      morphRate: 'nan-value',
+      angularSegments: 'oops',
+      wallThickness: 'invalid',
+      encDepth: 'none',
+      encEdgeType: 'bad'
+    },
+    '2.2'
+  );
+
+  assert.equal(payload.throat_ext_angle, 0);
+  assert.equal(payload.gcurve_dist, 0.5);
+  assert.equal(payload.morph_rate, 3.0);
+  assert.equal(payload.n_angular, 100);
+  assert.equal(payload.wall_thickness, 6.0);
+  assert.equal(payload.enc_depth, 0);
+  assert.equal(payload.enc_edge_type, 1);
+});

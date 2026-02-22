@@ -368,8 +368,6 @@ No Phase 4 work before Phases 1-3 are complete and stable.
 From repo root:
 - `npm test`
 - `npm run test:server`
-- `npm run test:abec`
-- `npm run test:ath`
 
 ---
 

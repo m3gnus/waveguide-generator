@@ -5,7 +5,7 @@ import { MWGConfigParser } from '../src/config/index.js';
 import { getDefaults } from '../src/config/defaults.js';
 import { generateMWGConfigContent } from '../src/export/mwgConfig.js';
 
-test('ABEC.SimProfile=0 round-trips and unknown blocks are preserved', () => {
+test('legacy ABEC frequency keys round-trip to simulation frequency keys and unknown blocks are preserved', () => {
   const source = [
     'Coverage.Angle = 45',
     'Length = 120',
@@ -16,7 +16,9 @@ test('ABEC.SimProfile=0 round-trips and unknown blocks are preserved', () => {
     'Throat.Diameter = 25.4',
     'OS.k = 7',
     'ABEC.SimType = 2',
-    'ABEC.SimProfile = 0',
+    'ABEC.f1 = 300',
+    'ABEC.f2 = 12000',
+    'ABEC.NumFrequencies = 55',
     'Unknown.Block = {',
     'Foo = Bar',
     '}'
@@ -24,7 +26,9 @@ test('ABEC.SimProfile=0 round-trips and unknown blocks are preserved', () => {
 
   const parsed = MWGConfigParser.parse(source);
   assert.equal(parsed.type, 'OSSE');
-  assert.equal(parsed.params.abecSimProfile, '0');
+  assert.equal(parsed.params.freqStart, '300');
+  assert.equal(parsed.params.freqEnd, '12000');
+  assert.equal(parsed.params.numFreqs, '55');
   assert.ok(parsed.blocks['Unknown.Block']);
 
   const params = {
@@ -36,7 +40,9 @@ test('ABEC.SimProfile=0 round-trips and unknown blocks are preserved', () => {
   const regenerated = generateMWGConfigContent(params);
   const reparsed = MWGConfigParser.parse(regenerated);
 
-  assert.equal(String(reparsed.params.abecSimProfile), '0');
+  assert.equal(String(reparsed.params.freqStart), '300');
+  assert.equal(String(reparsed.params.freqEnd), '12000');
+  assert.equal(String(reparsed.params.numFreqs), '55');
   assert.ok(reparsed.blocks['Unknown.Block']);
 });
 
