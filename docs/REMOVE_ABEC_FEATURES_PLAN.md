@@ -34,8 +34,6 @@ The following research was performed to inform this plan:
 **Delete files:**
 - `src/export/abecProject.js` — all ABEC generators
 - `src/export/abecBundleValidator.js` — bundle validator
-- `scripts/validate-abec-bundle.js` — CLI validator
-- `docs/ABEC_PARITY_CONTRACT.md` — contract doc
 - `src/geometry/symmetry.js` — only used by ABEC export (backend has its own)
 
 **Delete test files:**
@@ -166,8 +164,6 @@ When importing old `.mwg` config files that contain now-removed params:
 - `src/export/abecProject.js`
 - `src/export/abecBundleValidator.js`
 - `src/geometry/symmetry.js`
-- `scripts/validate-abec-bundle.js`
-- `docs/ABEC_PARITY_CONTRACT.md`
 - `tests/abec-bundle-parity.test.js`
 - `tests/abec-circsym.test.js`
 - `tests/fixtures/abec/` (entire directory)

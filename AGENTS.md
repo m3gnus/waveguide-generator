@@ -30,7 +30,6 @@
 ## Source-of-Truth Docs
 - Architecture and runtime behavior: [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
 - Test inventory and commands: [tests/TESTING.md](tests/TESTING.md)
-- ABEC bundle contract/parity: [docs/ABEC_PARITY_CONTRACT.md](docs/ABEC_PARITY_CONTRACT.md)
 - Roadmap/backlog context: [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md)
   - Includes **BEM Solver Acceleration Roadmap** (FMM, Device Policy, OpenCL).
 - Backend operational details: [server/README.md](server/README.md)
@@ -41,14 +40,12 @@
   - Source tag (`2`) must be present in every simulation payload.
   - Interface tags (`4`) only applied when enclosure exists and `interfaceOffset` > 0.
   - Do not state that `/api/mesh/build` returns `.geo` unless code changes to do so.
-  - Document ABEC bundles as including `bem_mesh.geo` (current required parity contract).
 - Keep module edits local; do not rewrite unrelated stacks opportunistically.
 - Run relevant targeted tests first, then full suites before merge:
   - JS targeted: `node --test tests/<file>.test.js`
   - Server targeted: `cd server && python3 -m unittest tests.<module_name>`
   - `npm test`
   - `npm run test:server`
-  - For parity/export changes also run: `npm run test:abec`, `npm run test:ath`
 
 ## Module-Specific Guidance
 
@@ -67,8 +64,6 @@
   - Required: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
 - `src/app/exports.js`, `src/solver/waveguidePayload.js`
   - Required: `tests/export-gmsh-pipeline.test.js`, `tests/waveguide-payload.test.js`
-- `src/export/abecProject.js`, `src/export/abecBundleValidator.js`
-  - Required: `npm run test:abec`
 - `server/solver/waveguide_builder.py`, `server/app.py`
   - Required: `server/tests/test_dependency_runtime.py`, `server/tests/test_gmsh_endpoint.py`, `server/tests/test_occ_resolution_semantics.py`, `server/tests/test_updates_endpoint.py`
 - `server/solver/mesh.py`, `server/solver/solve.py`, `server/solver/solve_optimized.py`

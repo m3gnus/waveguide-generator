@@ -25,18 +25,20 @@
         <h1>Waveguide Generator</h1>
 
         <!-- Tab Navigation -->
-        <div class="tab-navigation">
-            <button class="tab-btn active" data-tab="geometry">Geometry</button>
-            <button class="tab-btn" data-tab="simulation">Simulation</button>
+        <div class="tab-navigation" role="tablist" aria-label="Main panels">
+            <button class="tab-btn active" id="geometry-tab-btn" data-tab="geometry" role="tab"
+                aria-controls="geometry-tab" aria-selected="true" tabindex="0">Geometry</button>
+            <button class="tab-btn" id="simulation-tab-btn" data-tab="simulation" role="tab"
+                aria-controls="simulation-tab" aria-selected="false" tabindex="-1">Simulation</button>
         </div>
 
         <!-- Geometry Tab Content -->
-        <div id="geometry-tab" class="tab-content active">
+        <div id="geometry-tab" class="tab-content active" role="tabpanel" aria-labelledby="geometry-tab-btn">
             <div id="param-container"></div>
         </div>
 
         <!-- Simulation Tab Content -->
-        <div id="simulation-tab" class="tab-content">
+        <div id="simulation-tab" class="tab-content" role="tabpanel" aria-labelledby="simulation-tab-btn" hidden>
             <div class="section">
                 <h3>SIMULATION SETTINGS</h3>
                 <div class="input-row">
@@ -50,24 +52,6 @@
                 <div class="input-row">
                     <label for="freq-steps">Num Frequencies</label>
                     <input type="number" id="freq-steps" value="50" min="10" max="200" step="1">
-                </div>
-                <div class="input-row">
-                    <label for="sim-type">Simulation Type</label>
-                    <select id="sim-type">
-                        <option value="2" selected>Free-Standing</option>
-                        <option value="1" disabled>Infinite Baffle (deferred)</option>
-                    </select>
-                </div>
-                <div class="input-row">
-                    <label for="circsym-mode">CircSym</label>
-                    <select id="circsym-mode">
-                        <option value="-1">Off (3D)</option>
-                        <option value="0">On</option>
-                    </select>
-                </div>
-                <div class="input-row">
-                    <label for="circsym-profile">CircSym Profile</label>
-                    <input type="number" id="circsym-profile" value="0" min="0" step="1">
                 </div>
                 <hr>
                 <h4 class="section-subtitle">DIRECTIVITY MAP</h4>
@@ -146,20 +130,19 @@
             <summary>Actions <span id="stats">Vertices: 0 | Triangles: 0</span></summary>
             <div class="section actions-section">
                 <button id="render-btn" class="is-hidden">Update Model</button>
+
+                <h4 class="actions-group-title">Project</h4>
                 <div class="button-row">
                     <button id="load-config-btn" class="secondary">Load Config</button>
                     <button id="export-config-btn" class="secondary">Export Config</button>
                 </div>
                 <input type="file" id="config-upload" class="is-hidden" accept=".txt,.cfg">
                 <div class="button-row">
-                    <button id="export-csv-btn" class="secondary">Export CSV Profiles</button>
-                    <button id="export-btn" class="secondary">Export STL</button>
-                </div>
-                <div class="button-row">
                     <button id="check-updates-btn" class="secondary">Check for App Updates</button>
                 </div>
 
                 <hr>
+                <h4 class="actions-group-title">Output & Viewer</h4>
                 <div class="button-row">
                     <div class="input-row">
                         <label for="export-prefix">Output Name</label>
@@ -189,7 +172,8 @@
                 </div>
 
                 <hr>
-                <div class="status-indicator">
+                <h4 class="actions-group-title">Simulation</h4>
+                <div class="status-indicator" role="status" aria-live="polite" aria-atomic="true">
                     <span id="solver-status" class="status-dot"></span>
                     <span id="solver-status-text">Checking connection...</span>
                 </div>
@@ -197,10 +181,12 @@
                     BEM solver requires Python backend running on localhost:8000
                 </p>
                 <div id="simulation-progress" class="is-hidden">
-                    <div class="progress-bar">
+                    <div id="simulation-progressbar" class="progress-bar" role="progressbar"
+                        aria-label="Simulation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+                        aria-valuetext="Not started">
                         <div id="progress-fill" class="progress-fill"></div>
                     </div>
-                    <p id="progress-text" class="progress-text"></p>
+                    <p id="progress-text" class="progress-text" role="status" aria-live="polite"></p>
                 </div>
                 <div class="input-row-inline">
                     <label for="download-sim-mesh">Download simulation mesh on start</label>
@@ -208,11 +194,16 @@
                 </div>
                 <div class="button-row">
                     <button id="run-simulation-btn">Start BEM Simulation</button>
-                    <button id="stop-simulation-btn" class="secondary">Stop Simulation</button>
                 </div>
-                <div class="button-row">
-                    <button id="view-results-btn" class="secondary" disabled>View Results</button>
-                    <button id="export-results-btn" class="secondary" disabled>Export Results</button>
+                <div id="simulation-jobs" class="simulation-jobs">
+                    <div class="simulation-jobs-header">
+                        <span>Simulation Jobs</span>
+                        <div class="simulation-jobs-header-actions">
+                            <button id="clear-failed-jobs-btn" class="secondary button-compact" type="button">Clear Failed</button>
+                            <button id="refresh-jobs-btn" class="secondary button-compact" type="button">Refresh</button>
+                        </div>
+                    </div>
+                    <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
                 </div>
             </div>
         </details>

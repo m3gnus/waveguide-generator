@@ -123,20 +123,20 @@ export class MWGConfigParser {
             if (p['Source.Curv']) { p.sourceCurv = p['Source.Curv']; }
             if (p['Source.Velocity']) { p.sourceVelocity = p['Source.Velocity']; }
             if (p['Source.Contours']) { p.sourceContours = p['Source.Contours']; }
-            if (p['ABEC.SimType'] !== undefined) { p.abecSimType = p['ABEC.SimType']; }
-            if (p['ABEC.SimProfile'] !== undefined) { p.abecSimProfile = p['ABEC.SimProfile']; }
-            if (p['ABEC.f1']) { p.abecF1 = p['ABEC.f1']; }
-            if (p['ABEC.f2']) { p.abecF2 = p['ABEC.f2']; }
-            if (p['ABEC.NumFrequencies']) { p.abecNumFreq = p['ABEC.NumFrequencies']; }
-            if (p['ABEC.Abscissa']) { p.abecAbscissa = p['ABEC.Abscissa']; }
-            if (p['ABEC.MeshFrequency']) { p.abecMeshFrequency = p['ABEC.MeshFrequency']; }
+            if (p['ABEC.f1']) { p.freqStart = p['ABEC.f1']; }
+            if (p['ABEC.F1']) { p.freqStart = p['ABEC.F1']; }
+            if (p['ABEC.f2']) { p.freqEnd = p['ABEC.f2']; }
+            if (p['ABEC.F2']) { p.freqEnd = p['ABEC.F2']; }
+            if (p['ABEC.NumFrequencies']) { p.numFreqs = p['ABEC.NumFrequencies']; }
+            if (p['Simulation.F1']) { p.freqStart = p['Simulation.F1']; }
+            if (p['Simulation.F2']) { p.freqEnd = p['Simulation.F2']; }
+            if (p['Simulation.NumFrequencies']) { p.numFreqs = p['Simulation.NumFrequencies']; }
 
             if (p['Output.STL'] !== undefined) { p.outputSTL = p['Output.STL']; }
             if (p['Output.MSH'] !== undefined) { p.outputMSH = p['Output.MSH']; }
-            if (p['Output.ABECProject'] !== undefined) { p.outputABECProject = p['Output.ABECProject']; }
         }
 
-        // Normalize R-OSSE mesh/source/abec params too
+        // Normalize R-OSSE mesh/source/simulation params too
         if (result.type === 'R-OSSE') {
             const p = result.params;
             if (p['Morph.TargetShape']) { p.morphTarget = p['Morph.TargetShape']; }
@@ -163,18 +163,18 @@ export class MWGConfigParser {
             if (p['Source.Curv']) { p.sourceCurv = p['Source.Curv']; }
             if (p['Source.Velocity']) { p.sourceVelocity = p['Source.Velocity']; }
             if (p['Source.Contours']) { p.sourceContours = p['Source.Contours']; }
-            if (p['ABEC.SimType'] !== undefined) { p.abecSimType = p['ABEC.SimType']; }
-            if (p['ABEC.SimProfile'] !== undefined) { p.abecSimProfile = p['ABEC.SimProfile']; }
-            if (p['ABEC.f1']) { p.abecF1 = p['ABEC.f1']; }
-            if (p['ABEC.f2']) { p.abecF2 = p['ABEC.f2']; }
-            if (p['ABEC.NumFrequencies']) { p.abecNumFreq = p['ABEC.NumFrequencies']; }
-            if (p['ABEC.Abscissa']) { p.abecAbscissa = p['ABEC.Abscissa']; }
-            if (p['ABEC.MeshFrequency']) { p.abecMeshFrequency = p['ABEC.MeshFrequency']; }
+            if (p['ABEC.f1']) { p.freqStart = p['ABEC.f1']; }
+            if (p['ABEC.F1']) { p.freqStart = p['ABEC.F1']; }
+            if (p['ABEC.f2']) { p.freqEnd = p['ABEC.f2']; }
+            if (p['ABEC.F2']) { p.freqEnd = p['ABEC.F2']; }
+            if (p['ABEC.NumFrequencies']) { p.numFreqs = p['ABEC.NumFrequencies']; }
+            if (p['Simulation.F1']) { p.freqStart = p['Simulation.F1']; }
+            if (p['Simulation.F2']) { p.freqEnd = p['Simulation.F2']; }
+            if (p['Simulation.NumFrequencies']) { p.numFreqs = p['Simulation.NumFrequencies']; }
 
             // Output
             if (p['Output.STL'] !== undefined) { p.outputSTL = p['Output.STL']; }
             if (p['Output.MSH'] !== undefined) { p.outputMSH = p['Output.MSH']; }
-            if (p['Output.ABECProject'] !== undefined) { p.outputABECProject = p['Output.ABECProject']; }
         }
 
         // Normalize params (both types, flat keys)
@@ -275,13 +275,9 @@ export const CONFIG_DEFAULTS = {
         sourceCurv: 0,
         sourceVelocity: 1,
         sourceContours: '',
-        abecSimType: 1,
-        abecSimProfile: -1,
-        abecF1: 400,
-        abecF2: 16000,
-        abecNumFreq: 40,
-        abecAbscissa: 1,
-        abecMeshFrequency: 1000
+        freqStart: 400,
+        freqEnd: 16000,
+        numFreqs: 40
     },
     'R-OSSE': {
         scale: 1.0,
@@ -347,13 +343,9 @@ export const CONFIG_DEFAULTS = {
         sourceCurv: 0,
         sourceVelocity: 1,
         sourceContours: '',
-        abecSimType: 1,
-        abecSimProfile: -1,
-        abecF1: 400,
-        abecF2: 16000,
-        abecNumFreq: 40,
-        abecAbscissa: 1,
-        abecMeshFrequency: 1000
+        freqStart: 400,
+        freqEnd: 16000,
+        numFreqs: 40
     }
 };
 

@@ -139,7 +139,7 @@ export class BemSolver {
       },
       frequency_range: [config.frequencyStart, config.frequencyEnd],
       num_frequencies: config.numFrequencies,
-      sim_type: config.simulationType,
+      sim_type: String(config.simulationType ?? '2'),
       options: options,
       polar_config: config.polarConfig || null,
       mesh_validation_mode: config.meshValidationMode || 'warn',
@@ -197,6 +197,66 @@ export class BemSolver {
       throw new Error(`Failed to retrieve results: ${response.status}`);
     }
 
+    return await response.json();
+  }
+
+  /**
+   * List simulation jobs with optional filtering and pagination.
+   */
+  async listJobs({ status = null, limit = 50, offset = 0 } = {}) {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    if (typeof status === 'string' && status.trim()) {
+      params.set('status', status.trim());
+    }
+
+    const response = await fetch(`${this.backendUrl}/api/jobs?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Failed to list jobs: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Request cancellation of a queued/running simulation job.
+   */
+  async stopJob(jobId) {
+    const response = await fetch(`${this.backendUrl}/api/stop/${jobId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to stop job: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Delete terminal job metadata/results/artifacts.
+   */
+  async deleteJob(jobId) {
+    const response = await fetch(`${this.backendUrl}/api/jobs/${jobId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete job: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Delete all failed jobs (status=error) from backend persistence.
+   */
+  async clearFailedJobs() {
+    const response = await fetch(`${this.backendUrl}/api/jobs/clear-failed`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to clear failed jobs: ${response.status}`);
+    }
     return await response.json();
   }
 }

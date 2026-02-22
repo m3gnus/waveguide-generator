@@ -183,30 +183,10 @@ export const PARAM_SCHEMA = {
         },
         sourceContours: { type: 'expression', label: 'Source Contours', default: '', tooltip: 'Path or inline script for source contours.' }
     },
-    'ABEC': {
-        abecSimType: {
-            type: 'select',
-            label: 'ABEC SimType',
-            options: [
-                { value: 1, label: 'Infinite Baffle' },
-                { value: 2, label: 'Free Standing' }
-            ],
-            default: 1
-        },
-        abecSimProfile: { type: 'number', label: 'CircSym Profile', default: -1 },
-        abecF1: { type: 'number', label: 'Start Freq', unit: 'Hz', default: 400 },
-        abecF2: { type: 'number', label: 'End Freq', unit: 'Hz', default: 16000 },
-        abecNumFreq: { type: 'number', label: 'Num Freqs', default: 40 },
-        abecAbscissa: {
-            type: 'select',
-            label: 'Abscissa',
-            options: [
-                { value: 1, label: 'Log' },
-                { value: 2, label: 'Linear' }
-            ],
-            default: 1
-        },
-        abecMeshFrequency: { type: 'number', label: 'Mesh Freq', unit: 'Hz', default: 1000 }
+    'SIMULATION': {
+        freqStart: { type: 'number', label: 'Start Freq', unit: 'Hz', default: 400 },
+        freqEnd: { type: 'number', label: 'End Freq', unit: 'Hz', default: 16000 },
+        numFreqs: { type: 'number', label: 'Num Freqs', default: 40 }
     },
     // Output actions are handled via export buttons in the UI.
 };
