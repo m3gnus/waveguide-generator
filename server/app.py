@@ -64,6 +64,16 @@ except ImportError:
     build_waveguide_mesh = None
     WAVEGUIDE_BUILDER_AVAILABLE = False
 
+try:
+    from solver.gmsh_utils import gmsh_mesher_available
+    from solver.gmsh_geo_mesher import generate_msh_from_geo
+except ImportError:
+    def gmsh_mesher_available() -> bool:
+        return False
+
+    def generate_msh_from_geo(*_args, **_kwargs):
+        raise RuntimeError("Legacy .geo mesher backend is unavailable.")
+
 app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0")
 
 # Enable CORS for frontend communication
@@ -374,12 +384,6 @@ class WaveguideParamsRequest(BaseModel):
     rear_res: float = 25.0          # Mesh.RearResolution [mm] (free-standing only)
     wall_thickness: float = 6.0     # Mesh.WallThickness [mm] (free-standing only)
 
-    # ── Subdomain interfaces (accepted, no geometry effect yet) ───────────
-    subdomain_slices: Optional[str] = None
-    interface_offset: Optional[str] = None
-    interface_draw: Optional[str] = None
-    interface_resolution: Optional[str] = None
-
     # ── Enclosure (cabinet box geometry) ──────────────────────────────────
     # enc_depth > 0 → generate enclosure box (ignores wall_thickness)
     # enc_depth == 0 + wall_thickness > 0 → generate horn wall shell only
@@ -397,6 +401,44 @@ class WaveguideParamsRequest(BaseModel):
     # ── Simulation / output ────────────────────────────────────────────────
     sim_type: int = 2               # ABEC.SimType: 1=infinite baffle, 2=free standing
     msh_version: str = "2.2"        # Gmsh MSH format version
+
+
+class GmshMeshRequest(BaseModel):
+    geoText: str
+    mshVersion: str = "2.2"
+    binary: bool = False
+
+
+async def generate_mesh_with_gmsh(request: GmshMeshRequest):
+    """Legacy `.geo -> .msh` compatibility shim used by server tests."""
+    geo_text = str(request.geoText or "")
+    if not geo_text.strip():
+        raise HTTPException(status_code=422, detail="geoText must be a non-empty .geo script.")
+
+    if not gmsh_mesher_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Legacy /api/mesh/generate-msh requires a working Gmsh backend.",
+        )
+
+    try:
+        result = generate_msh_from_geo(
+            geo_text,
+            msh_version=request.mshVersion,
+            binary=bool(request.binary),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f".geo meshing failed: {exc}") from exc
+
+    return {
+        "msh": result["msh"],
+        "generatedBy": "gmsh",
+        "stats": result["stats"],
+    }
 
 
 @app.get("/")

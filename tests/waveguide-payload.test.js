@@ -23,6 +23,10 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   assert.equal(payload.rear_res, 12);
   assert.equal(payload.enc_front_resolution, '6,7,8,9');
   assert.equal(payload.enc_back_resolution, '11,12,13,14');
+  assert.equal(payload.subdomain_slices, undefined);
+  assert.equal(payload.interface_offset, undefined);
+  assert.equal(payload.interface_draw, undefined);
+  assert.equal(payload.interface_resolution, undefined);
   assert.equal(payload.quadrants, 1234);
   assert.equal(payload.msh_version, '2.2');
 });

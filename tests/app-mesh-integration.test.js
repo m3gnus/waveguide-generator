@@ -29,7 +29,7 @@ test('app mesh provider emits canonical payload from shared geometry artifacts p
   };
 
   try {
-    const preparedInput = makePreparedParams({ encDepth: 200, interfaceOffset: '8', quadrants: '1' });
+    const preparedInput = makePreparedParams({ encDepth: 200, quadrants: '1' });
     const app = {
       prepareParamsForMesh: (options = {}) => prepareGeometryParams(preparedInput, { type: 'OSSE', ...options })
     };

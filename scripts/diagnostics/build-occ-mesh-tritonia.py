@@ -1,8 +1,12 @@
 import sys
 import os
-import json
 
-sys.path.insert(0, os.path.abspath('server'))
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
+OUTPUT_DIR = os.path.join(THIS_DIR, 'out')
+OUTPUT_PATH = os.path.join(OUTPUT_DIR, 'test_tritonia.msh')
+
+sys.path.insert(0, os.path.join(REPO_ROOT, 'server'))
 
 from server.solver.waveguide_builder import build_waveguide_mesh
 from server.app import WaveguideParamsRequest
@@ -34,11 +38,11 @@ try:
     result = build_waveguide_mesh(request.model_dump(), include_canonical=True)
     print("Success! Mesh built.")
     print("Stats:", result["stats"])
-    
-    # Save the msh to a file so we can inspect it
-    with open('test_tritonia.msh', 'w') as f:
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(OUTPUT_PATH, 'w') as f:
         f.write(result["msh_text"])
-    print("Saved to test_tritonia.msh")
+    print(f"Saved to {OUTPUT_PATH}")
     
 except Exception as e:
     print("Failed!")

@@ -117,9 +117,6 @@ export const PARAM_SCHEMA = {
         mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 10.0 },
         throatSliceDensity: { type: 'number', label: 'Throat Slice Density', default: null, tooltip: 'Viewport slice clustering (0.5=uniform, lower=cluster at throat). When set, overrides the throat/mouth resolution ratio for viewport slice distribution only. Does not affect BEM mesh element sizes.' },
         verticalOffset: { type: 'number', label: 'Vertical Offset', unit: 'mm', default: 0.0, tooltip: 'Vertical offset for simulation/export coordinate system. Does not affect the 3D viewer.' },
-        subdomainSlices: { type: 'expression', label: 'Subdomain Slices', default: '', tooltip: 'Comma-separated slice indices for subdomain interfaces.' },
-        interfaceOffset: { type: 'expression', label: 'Interface Offset', unit: 'mm', default: '', tooltip: 'Comma-separated interface offsets.' },
-        interfaceDraw: { type: 'expression', label: 'Interface Draw', unit: 'mm', default: '', tooltip: 'Comma-separated interface draw depths.' },
         quadrants: {
             type: 'select',
             label: 'Quadrants',

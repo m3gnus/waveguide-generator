@@ -22,12 +22,6 @@ export function generateMWGConfigContent(params) {
         return String(value);
     };
 
-    const formatList = (value) => {
-        if (value === undefined || value === null) return '';
-        if (Array.isArray(value)) return value.join(',');
-        return String(value);
-    };
-
     const isNonZero = (value) => {
         if (value === undefined || value === null) return false;
         if (typeof value === 'boolean') return value;
@@ -150,11 +144,6 @@ export function generateMWGConfigContent(params) {
     if (isNonZero(params.throatResolution)) content += `Mesh.ThroatResolution = ${formatValue(params.throatResolution)}\n`;
     if (isNonZero(params.mouthResolution)) content += `Mesh.MouthResolution = ${formatValue(params.mouthResolution)}\n`;
     if (isNonZero(params.verticalOffset)) content += `Mesh.VerticalOffset = ${formatValue(params.verticalOffset)}\n`;
-    if (params.subdomainSlices !== undefined && params.subdomainSlices !== null) {
-        content += `Mesh.SubdomainSlices = ${formatList(params.subdomainSlices)}\n`;
-    }
-    if (isNonZero(params.interfaceOffset)) content += `Mesh.InterfaceOffset = ${formatList(params.interfaceOffset)}\n`;
-    if (isNonZero(params.interfaceDraw)) content += `Mesh.InterfaceDraw = ${formatList(params.interfaceDraw)}\n`;
     if (params.quadrants !== undefined) content += `Mesh.Quadrants = ${params.quadrants}\n`;
     if (params.wallThickness > 0) content += `Mesh.WallThickness = ${params.wallThickness}\n`;
     if (isNonZero(params.rearResolution)) content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;

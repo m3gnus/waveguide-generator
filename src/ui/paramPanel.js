@@ -229,10 +229,7 @@ export class ParamPanel {
                 'mouthResolution',
                 'encFrontResolution',
                 'encBackResolution',
-                'rearResolution',
-                'subdomainSlices',
-                'interfaceOffset',
-                'interfaceDraw'
+                'rearResolution'
             ];
 
             meshDensityOrder.forEach((key) => {

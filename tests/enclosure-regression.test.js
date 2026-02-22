@@ -22,7 +22,6 @@ function makePreparedParams(overrides = {}) {
       lengthSegments: 40,
       quadrants: '1234',
       encDepth: 220,
-      interfaceOffset: '',
       ...overrides
     },
     { type: 'OSSE' }
@@ -322,11 +321,13 @@ for (const quadrants of ['1234', '1', '12', '14']) {
   }
 }
 
-test('interfaceOffset does not push enclosure ahead of mouth plane', () => {
+test('legacy interface params do not push enclosure ahead of mouth plane', () => {
   const params = makePreparedParams({
     quadrants: '1',
     encEdge: 15,
+    subdomainSlices: '4',
     interfaceOffset: '10',
+    interfaceDraw: '6',
     encDepth: 220
   });
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });

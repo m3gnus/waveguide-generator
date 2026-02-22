@@ -84,21 +84,17 @@ test('ABEC observation file can be generated from canonical selected axes with c
   assert.match(text, /Inclination=33/);
 });
 
-test('ABEC solving file uses explicit interface metadata when provided', () => {
-  const text = generateAbecSolvingFile(
-    {
-      abecF1: 100,
-      abecF2: 2000,
-      abecNumFreq: 20,
-      abecSimProfile: -1,
-      quadrants: '1234',
-      encDepth: 0,
-      interfaceOffset: ''
-    },
-    { interfaceEnabled: true }
-  );
+test('ABEC solving file ignores legacy interface metadata', () => {
+  const text = generateAbecSolvingFile({
+    abecF1: 100,
+    abecF2: 2000,
+    abecNumFreq: 20,
+    abecSimProfile: -1,
+    quadrants: '1234',
+    encDepth: 0
+  });
 
-  assert.match(text, /SubDomain=1; ElType=Interior/);
-  assert.match(text, /Elements \"SD2G0\"/);
-  assert.match(text, /Elements \"I1-2\"/);
+  assert.match(text, /SubDomain=1; ElType=Exterior/);
+  assert.equal(/Elements \"SD2G0\"/.test(text), false);
+  assert.equal(/Elements \"I1-2\"/.test(text), false);
 });

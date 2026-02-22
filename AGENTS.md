@@ -20,7 +20,7 @@
 - Does not return `.geo`.
 
 3. Legacy `.geo -> .msh` pipeline (`/api/mesh/generate-msh`)
-- `.geo` built in frontend (`src/export/gmshGeoBuilder.js`), meshed in backend.
+- Accepts prebuilt `.geo` text payloads, meshed in backend.
 - Uses gmsh Python API when present, otherwise gmsh CLI fallback.
 
 4. BEM solve pipeline (`/api/solve`)
@@ -28,11 +28,12 @@
 - Frontend simulation falls back to mock results only when backend is unreachable.
 
 ## Source-of-Truth Docs
-- Architecture and runtime behavior: [docs/PROJECT_DOCUMENTATION.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/PROJECT_DOCUMENTATION.md)
-- ABEC bundle contract/parity: [docs/ABEC_PARITY_CONTRACT.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/ABEC_PARITY_CONTRACT.md)
-- Roadmap/backlog context: [docs/FUTURE_ADDITIONS.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/FUTURE_ADDITIONS.md)
+- Architecture and runtime behavior: [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
+- Test inventory and commands: [tests/TESTING.md](tests/TESTING.md)
+- ABEC bundle contract/parity: [docs/ABEC_PARITY_CONTRACT.md](docs/ABEC_PARITY_CONTRACT.md)
+- Roadmap/backlog context: [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md)
   - Includes **BEM Solver Acceleration Roadmap** (FMM, Device Policy, OpenCL).
-- Backend operational details: [server/README.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/server/README.md)
+- Backend operational details: [server/README.md](server/README.md)
 
 ## Coding and Testing Guardrails
 - **Invariants**:
@@ -42,9 +43,12 @@
   - Do not state that `/api/mesh/build` returns `.geo` unless code changes to do so.
   - Document ABEC bundles as including `bem_mesh.geo` (current required parity contract).
 - Keep module edits local; do not rewrite unrelated stacks opportunistically.
-- Run relevant tests for every behavior change; run full suites before merge:
+- Run relevant targeted tests first, then full suites before merge:
+  - JS targeted: `node --test tests/<file>.test.js`
+  - Server targeted: `cd server && python3 -m unittest tests.<module_name>`
   - `npm test`
   - `npm run test:server`
+  - For parity/export changes also run: `npm run test:abec`, `npm run test:ath`
 
 ## Module-Specific Guidance
 
@@ -61,14 +65,14 @@
 ## Do Not Change Without Parity Tests
 - `src/geometry/tags.js`, `src/geometry/pipeline.js`, `src/geometry/engine/mesh/enclosure.js`
   - Required: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
-- `src/app/exports.js`, `src/export/gmshGeoBuilder.js`
-  - Required: `tests/export-gmsh-pipeline.test.js`, `tests/gmsh-geo-builder.test.js`
+- `src/app/exports.js`, `src/solver/waveguidePayload.js`
+  - Required: `tests/export-gmsh-pipeline.test.js`, `tests/waveguide-payload.test.js`
 - `src/export/abecProject.js`, `src/export/abecBundleValidator.js`
-  - Required: `tests/abec-bundle-parity.test.js`, `tests/abec-circsym.test.js`
+  - Required: `tests/abec-bundle-parity.test.js`, `tests/abec-circsym.test.js`, `npm run test:abec`
 - `server/solver/waveguide_builder.py`, `server/app.py`
-  - Required: `server/tests/test_dependency_runtime.py`, `server/tests/test_gmsh_endpoint.py`
+  - Required: `server/tests/test_dependency_runtime.py`, `server/tests/test_gmsh_endpoint.py`, `server/tests/test_occ_resolution_semantics.py`, `server/tests/test_updates_endpoint.py`
 - `server/solver/mesh.py`, `server/solver/solve.py`, `server/solver/solve_optimized.py`
-  - Required: `server/tests/test_mesh_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_api_validation.py`
+  - Required: `server/tests/test_mesh_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_solver_hardening.py`, `server/tests/test_api_validation.py`
 
 ## Definition of Done
 - JS tests pass: `npm test`.
@@ -79,5 +83,7 @@
 
 ## Multi-Agent Handoff Rules
 - Start from this root `AGENTS.md`.
+- When both root and scoped AGENTS apply, the scoped AGENTS for the edited directory takes precedence.
 - Avoid cross-module edits unless required by a contract break.
 - If a contract break is unavoidable, update both sides and tests in one change.
+- Keep AGENTS test maps in sync when adding/removing contract-critical tests.

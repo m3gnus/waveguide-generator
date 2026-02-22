@@ -67,7 +67,7 @@ test('buildExportMeshFromParams requests backend OCC meshing endpoint', async ()
       }
     };
 
-    const prepared = makePreparedParams({ encDepth: 180, interfaceOffset: '6' });
+    const prepared = makePreparedParams({ encDepth: 180 });
     const result = await buildExportMeshFromParams(app, prepared);
 
     assert.equal(result.msh.includes('$MeshFormat'), true);
@@ -80,10 +80,14 @@ test('buildExportMeshFromParams requests backend OCC meshing endpoint', async ()
     assert.equal(payload.n_angular, 20);
     assert.equal(payload.n_length, 10);
 
-    assert.equal(typeof result.geoText, 'string');
-    assert.equal(result.geoText.includes('Mesh 2;'), true);
-    assert.equal(result.geoText.includes('= MathEval;'), true);
-    assert.equal(result.geoText.includes('.F = "'), true);
+    assert.equal(typeof result.msh, 'string');
+    assert.equal(result.msh.includes('$MeshFormat'), true);
+    assert.equal(typeof result.meshStats, 'object');
+    assert.equal(result.meshStats.nodeCount, 3);
+    assert.equal(result.meshStats.elementCount, 1);
+    assert.equal(typeof result.artifacts, 'object');
+    assert.equal(typeof result.payload, 'object');
+    assert.ok(Array.isArray(result.payload.surfaceTags));
 
     const usedLegacyRoute = requests.some((request) => request.url.endsWith('/api/mesh/generate-msh'));
     assert.equal(usedLegacyRoute, false);

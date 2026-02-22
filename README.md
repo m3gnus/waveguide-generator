@@ -9,6 +9,7 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 - [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - architecture, runtime behavior, and recent refactor history
 - [ABEC Parity Contract](docs/ABEC_PARITY_CONTRACT.md) - enforced ABEC bundle structure and semantics
 - [Future Additions](docs/FUTURE_ADDITIONS.md) - planned features, BEM acceleration roadmap, and partial features
+- [Testing Guide](tests/TESTING.md) - canonical test map, commands, and diagnostics
 
 ## Prerequisites
 
@@ -74,6 +75,10 @@ $HOME/.waveguide-generator/opencl-cpu-env/bin/python
 
 `npm start` will automatically prefer that interpreter when it exists.
 
+Windows/Linux note:
+- GPU OpenCL runtime setup depends on vendor drivers (NVIDIA/AMD/Intel) and is not fully automated by this repository.
+- Linux CPU fallback can use distro packages such as `pocl-opencl-icd`.
+
 ## Features
 
 - R-OSSE and OSSE horn profile generation with live parameter controls
@@ -87,7 +92,8 @@ $HOME/.waveguide-generator/opencl-cpu-env/bin/python
 ```
 src/          Frontend app modules (geometry, export, simulation, viewer, UI)
 server/       FastAPI backend and solver code
-tests/        Frontend and integration tests
+tests/        Frontend and integration tests (Node test runner)
+server/tests/ Backend unittest suites
 scripts/      Dev utilities
 install/      One-time setup scripts (mac/linux and windows)
 launch/       Double-click launchers (mac, windows, linux)
@@ -97,7 +103,7 @@ docs/         Architecture and technical reference
 ## Development
 
 ```bash
-npm test              # JS unit tests
+npm test              # JS tests in tests/
 npm run test:server   # Python backend tests
 npm run test:ath      # ATH parity check (strict infra diagnostics)
 npm run build         # Production bundle
@@ -105,6 +111,7 @@ npm run build         # Production bundle
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidelines.
 See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for architecture and API details.
+See [tests/TESTING.md](tests/TESTING.md) for the full test inventory and diagnostics scripts.
 
 ## Troubleshooting
 

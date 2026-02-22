@@ -10,10 +10,14 @@
     "start:backend": "cd server && python3 app.py",
     "dev": "node scripts/dev-server.js",
     "build": "webpack --mode production",
-    "test": "node --test",
+    "test": "node --test \"tests/**/*.test.js\"",
     "test:ath": "node scripts/ath-parity.js",
     "test:abec": "node scripts/validate-abec-bundle.js",
-    "test:server": "cd server && python3 -m unittest discover -s tests"
+    "test:server": "cd server && python3 -m unittest discover -s tests",
+    "diag:payload": "node scripts/diagnostics/build-canonical-payload-from-reference.js",
+    "diag:geometry": "node scripts/diagnostics/check-tritonia-geometry-artifacts.js",
+    "diag:occ:tritonia": "python3 scripts/diagnostics/build-occ-mesh-tritonia.py",
+    "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py"
   },
   "keywords": [
     "3d",
