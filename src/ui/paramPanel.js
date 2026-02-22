@@ -276,8 +276,7 @@ export class ParamPanel {
         // Add tooltip if available
         if (def.tooltip) {
             label.title = def.tooltip;
-            label.style.cursor = 'help';
-            label.style.borderBottom = '1px dotted #666';
+            label.classList.add('has-tooltip');
         }
 
         row.appendChild(label);

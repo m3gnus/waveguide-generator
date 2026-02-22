@@ -179,41 +179,27 @@ Behavior:
 Buttons wired in `src/app/events.js` currently export:
 - STL (`exportSTL`)
 - MWG config text (`exportMWGConfig`)
-- Profile CSV (`exportProfileCSV`)
-- ABEC ZIP (`exportABECProject`)
+- Profile CSV (`exportProfileCSV`) — writes `_profiles.csv` and `_slices.csv`
+- MSH (`exportMSH`)
 
-### 5.2 ABEC bundle contents and parity semantics
+ABEC export was removed in Feb 2026. The BEM solver is now fully backend-driven via `/api/solve`.
 
-ABEC export writes:
-- `Project.abec`
-- `solving.txt`
-- `observation.txt`
-- `<basename>.msh`
-- `bem_mesh.geo`
-- `Results/coords.txt`
-- `Results/static.txt`
+### 5.2 CSV profile/slice export
 
-Contract and validator:
-- `src/export/abecBundleValidator.js`
+`exportProfileCSV` in `src/app/exports.js` reads the viewport horn mesh and writes two CSV files via `src/export/profiles.js`:
 
-Runtime parity semantics:
-- `Project.abec` wiring must reference existing `solving.txt`, `observation.txt`, and `<basename>.msh`.
-- `solving.txt` must include `Control_Solver`, `MeshFile_Properties`, `Driving "S1001"`, and mesh includes for `SD1G0` and `SD1D1001`.
-- ABEC mode behavior is explicit:
-- `ABEC_FreeStanding`: no `Infinite_Baffle` block
-- `ABEC_InfiniteBaffle`: requires `Infinite_Baffle` block
-- `<basename>.msh` must expose required physical groups in `$PhysicalNames`, including `SD1G0` and `SD1D1001`.
-- `observation.txt` must include `Driving_Values`, `Radiation_Impedance`, and at least one `BE_Spectrum` block with `GraphHeader`, `PolarRange`, and `Inclination`.
-- UI-driven polar export uses canonical ATH block names `ABEC.Polars:SPL_H`, `ABEC.Polars:SPL_V`, `ABEC.Polars:SPL_D`.
-- UI axis-to-inclination mapping:
-  - horizontal: `0`/`180`
-  - vertical: `90`/`270`
-  - diagonal: any other angle (user-configurable, default `45`)
-- Regression coverage: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
+- **`_profiles.csv`**: For each angular position (fixed phi), lists all points from throat to mouth along the horn axis. Sections separated by blank lines.
+- **`_slices.csv`**: For each axial position (fixed z), lists all points around the circumference (closing back to phi=0). Sections separated by blank lines.
+
+Format: `x;y;z` (semicolon-delimited, no header), scaled by 0.1 (matching ATH `GridExport` convention). Coordinates are x=r·cos(phi), y=r·sin(phi), z=axial.
+
+The mesh builder normalizes `angularSegments` to the nearest compatible multiple (via `normalizeAngularSegments` in `src/geometry/engine/mesh/angles.js`). The export must use this normalized ring count as the vertex stride, not the raw config value.
+
+Regression coverage: `tests/csv-export.test.js`
 
 ### 5.3 Internal/library export utilities
 
-Additional export utilities exist in `src/export/*` (tests/tooling/legacy helpers), including `.geo` and direct `.msh` builders. The ABEC/OCC runtime export flow remains backend-meshed and Gmsh-authored.
+Additional export utilities exist in `src/export/*` (tests/tooling/legacy helpers), including `.geo` and direct `.msh` builders. The OCC runtime export flow remains backend-meshed and Gmsh-authored.
 
 ## 6. Backend API Contract
 
