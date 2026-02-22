@@ -138,7 +138,7 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
     throw new Error('Invalid response from /api/mesh/build: expected gmsh-occ mesh data.');
   }
 
-  // Build geometry artifacts for the ABEC bundle (coords, static, solving params)
+  // Build geometry artifacts (coords, static, solving params)
   const gmshParams = buildGmshExportParams(preparedParams);
   const artifacts = buildGeometryArtifacts(gmshParams, {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0

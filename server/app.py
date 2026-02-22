@@ -834,11 +834,7 @@ async def submit_simulation(request: SimulationRequest):
             status_code=422,
             detail=f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) must match triangle count ({triangle_count})."
         )
-    if str(request.sim_type) != "2":
-        raise HTTPException(
-            status_code=422,
-            detail="sim_type '1' (infinite baffle) is currently deferred in the hardened solver path. Use sim_type='2'.",
-        )
+    # sim_type is always 2 (free-standing); infinite baffle was removed.
     try:
         normalize_mesh_validation_mode(request.mesh_validation_mode)
     except ValueError as exc:
