@@ -5,7 +5,7 @@ This is the current enforced ABEC bundle contract.
 Validation/enforcement:
 - `src/export/abecBundleValidator.js`
 - `scripts/validate-abec-bundle.js`
-- `tests/abec-bundle-parity.test.js`
+- `npm run test:abec`
 
 Reference anchor:
 - `_references/testconfigs/260112aolo1/ABEC_FreeStanding`
