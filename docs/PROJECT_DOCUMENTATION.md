@@ -209,7 +209,7 @@ Runtime parity semantics:
   - horizontal: `0`/`180`
   - vertical: `90`/`270`
   - diagonal: any other angle (user-configurable, default `45`)
-- Regression coverage: `tests/abec-bundle-parity.test.js`
+- Regression coverage: `npm run test:abec`
 
 ### 5.3 Internal/library export utilities
 
@@ -347,7 +347,7 @@ Primary commands:
 
 High-signal test suites:
 - Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
-- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/abec-bundle-parity.test.js`, `tests/polar-settings.test.js`
+- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`, `npm run test:abec`
 - Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_directivity_plot.py`
 
 ## 10. Operational Notes and Constraints

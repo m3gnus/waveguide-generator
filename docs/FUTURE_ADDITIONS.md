@@ -56,12 +56,10 @@ Future additions:
 
 ### 1. Frontend solver status messaging cleanup
 
-Current state:
-- `src/solver/index.js` still logs `Using MOCK solver ... Real BEM integration pending` in `mockBEMSolver(...)`.
-- Backend solve integration is already live in `BemSolver.submitSimulation(...)`.
-
-Future addition:
-- Update solver messaging so mock mode is clearly labeled as optional fallback, not primary runtime status.
+- **Status (Implemented Feb 2026)**:
+- `src/solver/index.js` mock warning now states backend-unavailable fallback behavior (non-physics/debug-only).
+- `src/ui/simulation/results.js` fallback panel text now labels mock output as preview-only and backend BEM as default runtime.
+- Backend solve integration remains the primary path in `BemSolver.submitSimulation(...)`.
 
 ### 1. OCC interface/subdomain geometry in `/api/mesh/build`
 
@@ -84,22 +82,12 @@ Future addition:
 - Add explicit solver-facing symmetry policy controls (for example: `auto`, `force_full`) with validation so unsupported reductions fail loudly instead of silently producing inconsistent behavior.
 - Surface solver symmetry decisions and rejection reasons in UI metadata (detected type, reduction factor, centered-excitation check result) so users can verify when quarter/half acceleration is actually active.
 
-### 1. Axisymmetric fast path (scaffold only)
-
-Current state:
-- Eligibility checks and adapter scaffold exist (`server/solver/axisymmetric.py`).
-- Production solver remains 3D `bempp-cl`; axisymmetric compute path is not enabled.
-
-Future additions:
-- Implement an axisymmetric solver adapter behind a feature flag.
-- Validate numerical error and runtime against the 3D baseline on canonical cases.
-- Make a go/no-go decision for production enablement after benchmarks.
-
 ### 1. ABEC parity expansion (optional)
 
 Current state:
 - Required structure and semantics are enforced by `src/export/abecBundleValidator.js`.
-- Golden parity coverage exists for `ABEC_FreeStanding` and `ABEC_InfiniteBaffle`.
+- Golden parity validation is enforced via `npm run test:abec`.
+- Obsolete JS suites `tests/abec-bundle-parity.test.js` and `tests/abec-circsym.test.js` were removed.
 
 Future additions:
 - Add stricter value-range checks (not only structural checks) where ATH references are stable.
@@ -199,12 +187,8 @@ Future addition:
 
 ### 1. Remove stale mock/pending wording in solver UX
 
-Current state:
-- Some messaging/log text still implies mock mode is primary or that real BEM integration is pending.
-- Runtime behavior already uses backend BEM solver when available.
-
-Future addition:
-- Normalize simulation UI/log strings so real backend BEM is presented as default behavior and mock mode as fallback only.
+- **Status (Implemented Feb 2026)**:
+- Simulation UI/log wording now presents backend BEM as default behavior and mock output as fallback only.
 
 ### 1. Add no-Gmsh regression lane for solve path
 
@@ -241,4 +225,12 @@ This section defines the execution strategy for accelerating the backend BEM sol
 
 ### 1. Remaining Architecture Audit
 
-- [ ] Audit the JavaScript mesh engine (`buildWaveguideMesh.js`) for further simplifications now that it's decoupled from ABEC export requirements.
+- [x] Audit the JavaScript mesh engine (`buildWaveguideMesh.js`) for further simplifications now that it's decoupled from ABEC export requirements.
+  - **Status (Audited Feb 22, 2026)**:
+  - Current UI runtime mesh callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/app/exports.js`, `src/app/mesh.js`).
+  - `adaptivePhi` is effectively an STL-only path in current UI behavior; viewport and simulation explicitly disable it.
+  - `buildWaveguideMesh` still carries some legacy flexibility that can be simplified without changing mesh contracts:
+  - Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
+  - Collapse rarely-used `collectGroups`/`groupInfo` option branching if external callers are no longer depending on group suppression.
+  - Move adaptive-phi branch into a dedicated helper (or dedicated export-only wrapper) to reduce branching in the canonical horn build path.
+  - Remove stale ABEC wording in adaptive-phi comments to reflect current caller semantics.

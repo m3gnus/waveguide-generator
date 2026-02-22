@@ -12,7 +12,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .axisymmetric import evaluate_axisymmetric_eligibility
 from .contract import frequency_failure, normalize_mesh_validation_mode
 from .deps import bempp_api
 from .device_interface import (
@@ -318,11 +317,15 @@ def solve_optimized(
                 raise
             mesh_validation["warnings"].append(f"mesh validation unavailable: {exc}")
 
-    axisymmetric_info = evaluate_axisymmetric_eligibility(
-        sim_type=sim_type,
-        mesh_metadata=mesh_metadata,
-        feature_enabled=False,
-    ).to_dict()
+    axisymmetric_info = {
+        "eligible": False,
+        "reason": "feature_flag_disabled",
+        "checks": {
+            "feature_enabled": False,
+            "sim_type": str(sim_type),
+            "full_circle": bool((mesh_metadata or {}).get("fullCircle", False)),
+        },
+    }
     observation_frame = infer_observation_frame(grid)
 
     results = {

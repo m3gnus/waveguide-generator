@@ -32,7 +32,7 @@
  * Returns deterministic fake data - NO numerical correctness validation yet
  */
 export function mockBEMSolver(meshData) {
-  console.warn('[BEM Solver] Using MOCK solver - results are NOT physics-based. Real BEM integration pending.');
+  console.warn('[BEM Solver] Backend unavailable: using mock fallback (non-physics) results for UI/debug only.');
 
   // Generate deterministic fake frequency response (flat for validation)
   const numFrequencies = 50;

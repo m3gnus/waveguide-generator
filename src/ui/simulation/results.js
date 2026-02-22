@@ -9,12 +9,12 @@ export function displayResults(panel, results = null) {
   resultsContainer.style.display = 'block';
 
   if (!results) {
-    // Display mock results
+    // Display fallback mock results when backend BEM data is unavailable
     chartsDiv.innerHTML = `
                 <div class="chart-container">
                     <div class="chart-title">Frequency Response (Mock Data)</div>
                     <p style="color: var(--text-color); opacity: 0.7; font-size: 0.85rem;">
-                        Mock simulation complete. Connect to Python BEM backend for real results.
+                        Fallback preview only. Start the backend solver to run full BEM results.
                     </p>
                     <svg width="100%" height="200" style="margin-top: 10px;">
                         <line x1="10%" y1="90%" x2="90%" y2="90%" stroke="var(--border-color)" stroke-width="2"/>
