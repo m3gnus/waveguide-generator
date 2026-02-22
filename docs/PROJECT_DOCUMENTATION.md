@@ -66,6 +66,8 @@ Primary entry points:
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
+   - `device_mode = auto` (UI always delegates selection to backend policy)
+   - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu -> numba`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
@@ -222,6 +224,15 @@ Base URL: `http://localhost:8000`
 
 - `GET /health`
   - Health status + dependency matrix/runtime payload from `deps.py`
+  - Includes `deviceInterface` metadata for current device policy resolution:
+    - `requested_mode`, `selected_mode`
+    - `interface` (`opencl` or `numba`)
+    - `device_type` (`cpu` or `gpu`)
+    - `device_name`
+    - `fallback_reason`
+    - `available_modes`
+    - `mode_availability` (per-mode `available` + `reason`)
+    - `opencl_diagnostics` (base/platform/cpu/gpu OpenCL detection details)
 
 - `GET /api/updates/check`
   - Git remote/update check against `origin`
@@ -243,6 +254,7 @@ Base URL: `http://localhost:8000`
   - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
     and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
+  - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`, `numba`)
   - Creates async job and returns `{ job_id }`
 
 - `POST /api/stop/{job_id}`
@@ -269,6 +281,8 @@ Notes:
 - `/api/mesh/generate-msh` can still operate via gmsh CLI even when Python gmsh package is absent.
 - Backend solve path defaults to optimized solve mode (`use_optimized=True` in request model).
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
+- Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`, then `numba`.
+- Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 
 ## 8. Canonical Mesh Payload Contract
 
@@ -303,6 +317,14 @@ Optional directivity payload for `/api/solve`:
     "inclination": 45,
     "enabled_axes": ["horizontal", "vertical", "diagonal"]
   }
+}
+```
+
+Optional device selection payload for `/api/solve`:
+
+```json
+{
+  "device_mode": "auto"
 }
 ```
 

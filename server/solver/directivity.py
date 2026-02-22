@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from scipy import special
 
 from .deps import bempp_api
+from .device_interface import potential_device_interface
 from .observation import infer_observation_frame, point_from_polar
 
 
@@ -17,6 +18,7 @@ def calculate_directivity_index_from_pressure(
     space_u,
     omega: float,
     spl_on_axis: float,
+    device_interface: Optional[str] = None,
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> float:
     """
@@ -40,6 +42,7 @@ def calculate_directivity_index_from_pressure(
 
     total_intensity = 0.0
     total_weight = 0.0
+    selected_interface = str(device_interface or potential_device_interface()).strip().lower()
 
     for i_theta in range(n_theta):
         theta = (i_theta / (n_theta - 1)) * (np.pi / 2)  # 0 to 90 degrees
@@ -63,8 +66,12 @@ def calculate_directivity_index_from_pressure(
             obs_point = obs_xyz.reshape(3, 1)
 
             try:
-                dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(space_p, obs_point, k)
-                slp_pot = bempp_api.operators.potential.helmholtz.single_layer(space_u, obs_point, k)
+                dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
+                    space_p, obs_point, k, device_interface=selected_interface
+                )
+                slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
+                    space_u, obs_point, k, device_interface=selected_interface
+                )
 
                 pressure = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
                 intensity = np.abs(pressure[0, 0]) ** 2

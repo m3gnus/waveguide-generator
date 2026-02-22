@@ -143,7 +143,8 @@ export class BemSolver {
       options: options,
       polar_config: config.polarConfig || null,
       mesh_validation_mode: config.meshValidationMode || 'warn',
-      frequency_spacing: config.frequencySpacing || 'log'
+      frequency_spacing: config.frequencySpacing || 'log',
+      device_mode: config.deviceMode || 'auto'
     };
 
     const response = await fetch(`${this.backendUrl}/api/solve`, {

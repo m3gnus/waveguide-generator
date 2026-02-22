@@ -22,19 +22,10 @@ try:
         GMSH_OCC_RUNTIME_READY,
         get_dependency_status
     )
+    from solver.device_interface import normalize_device_mode
     SOLVER_AVAILABLE = BEMPP_RUNTIME_READY
     if SOLVER_AVAILABLE:
-        try:
-            from solver.device_interface import selected_device_interface, opencl_unavailable_reason
-            _device = selected_device_interface("opencl")
-            _reason = opencl_unavailable_reason()
-            if _device == "numba":
-                print(f"[BEM] WARNING: Running on Numba (CPU) backend. Reason: {_reason}")
-                print("[BEM] Simulations will be significantly slower without OpenCL.")
-            else:
-                print(f"[BEM] OpenCL backend active.")
-        except Exception:
-            pass
+        print("[BEM] Device auto policy: opencl_gpu -> opencl_cpu -> numba")
 except ImportError:
     SOLVER_AVAILABLE = False
     BEMPP_RUNTIME_READY = False
@@ -44,6 +35,12 @@ except ImportError:
         mode = str(value or "warn").strip().lower()
         if mode not in {"strict", "warn", "off"}:
             raise ValueError("mesh_validation_mode must be one of: off, strict, warn.")
+        return mode
+
+    def normalize_device_mode(value: Any) -> str:
+        mode = str(value or "auto").strip().lower()
+        if mode not in {"auto", "opencl_cpu", "opencl_gpu", "numba"}:
+            raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu, numba.")
         return mode
 
     def get_dependency_status():
@@ -274,6 +271,15 @@ class SimulationRequest(BaseModel):
     verbose: bool = True  # Print detailed progress and validation
     mesh_validation_mode: str = "warn"  # strict | warn | off
     frequency_spacing: str = "log"  # linear | log
+    device_mode: str = "auto"  # auto | opencl_cpu | opencl_gpu | numba
+
+    @field_validator("device_mode")
+    @classmethod
+    def validate_device_mode(cls, value: str) -> str:
+        raw = str(value or "auto").strip().lower()
+        if raw not in {"auto", "opencl_cpu", "opencl_gpu", "numba", "opencl", "cpu_opencl", "gpu_opencl"}:
+            raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu, numba.")
+        return normalize_device_mode(raw)
 
 
 class JobStatus(BaseModel):
@@ -415,7 +421,7 @@ async def health_check():
     if SOLVER_AVAILABLE:
         try:
             from solver.device_interface import selected_device_metadata
-            device_info = selected_device_metadata()
+            device_info = selected_device_metadata("auto")
         except Exception:
             pass
 
@@ -949,6 +955,7 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             verbose=request.verbose,
             mesh_validation_mode=request.mesh_validation_mode,
             frequency_spacing=request.frequency_spacing,
+            device_mode=request.device_mode,
         )
         
         # Store results

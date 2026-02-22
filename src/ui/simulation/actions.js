@@ -251,7 +251,8 @@ export async function runSimulation(panel) {
     numFrequencies: Number(document.getElementById('freq-steps').value),
     simulationType: document.getElementById('sim-type').value,
     circSymProfile: parseInt(document.getElementById('circsym-profile')?.value ?? '-1', 10),
-    frequencySpacing: 'log'
+    frequencySpacing: 'log',
+    deviceMode: 'auto'
   };
 
   const polarSettings = readPolarUiSettings();

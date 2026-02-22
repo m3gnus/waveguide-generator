@@ -40,7 +40,21 @@ After that, `npm start` and `server/start.sh` will automatically prefer:
 $HOME/.waveguide-generator/opencl-cpu-env/bin/python
 ```
 
-## 1.1 Supported dependency matrix (P3-1)
+### 1.1 Device mode policy (`/api/solve`)
+
+The solver now supports explicit device mode selection:
+
+- `auto`
+- `opencl_cpu`
+- `opencl_gpu`
+- `numba`
+
+Notes:
+- `auto` is deterministic and fast: `opencl_gpu` if available, else `opencl_cpu`, else `numba`.
+- If OpenCL modes are unavailable, runtime falls back to `numba`.
+- With current bempp-cl `0.4.x`, OpenCL runtime availability still depends on a CPU OpenCL driver for safe operator assembly.
+
+## 1.2 Supported dependency matrix (P3-1)
 
 The backend now enforces a version matrix at runtime:
 
@@ -77,6 +91,19 @@ This starts Uvicorn on `0.0.0.0:8000`.
 
 Health check and solver status.
 
+Includes:
+- dependency matrix/runtime payload under `dependencies`
+- selected BEM device metadata under `deviceInterface`, including:
+  - `requested_mode`
+  - `selected_mode`
+  - `interface` (`opencl` or `numba`)
+  - `device_type` (`cpu` or `gpu`)
+  - `device_name`
+  - `fallback_reason`
+  - `available_modes`
+  - `mode_availability` (per-mode availability/reason for `auto|opencl_cpu|opencl_gpu|numba`)
+  - `opencl_diagnostics` (base/runtime/cpu/gpu detection details)
+
 ### `GET /api/updates/check`
 
 Checks local repository state against `origin` and reports whether updates are available.
@@ -111,6 +138,7 @@ Optional:
     - `diagonal`: `inclination` plane
 - optimization flags (`use_optimized`, `enable_symmetry`, `verbose`)
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
+- `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu` | `numba`, default `auto`)
 
 Validation behavior:
 
@@ -129,6 +157,7 @@ Runtime metadata behavior:
   - `metadata.partial_success`
   - `metadata.mesh_validation`
   - `metadata.unit_detection`
+  - `metadata.device_interface` (selected interface/device information and fallback details)
 
 ### `GET /api/status/{job_id}`
 

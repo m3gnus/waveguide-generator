@@ -31,6 +31,7 @@
 - Architecture and runtime behavior: [docs/PROJECT_DOCUMENTATION.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/PROJECT_DOCUMENTATION.md)
 - ABEC bundle contract/parity: [docs/ABEC_PARITY_CONTRACT.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/ABEC_PARITY_CONTRACT.md)
 - Roadmap/backlog context: [docs/FUTURE_ADDITIONS.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/FUTURE_ADDITIONS.md)
+  - Includes **BEM Solver Acceleration Roadmap** (FMM, Device Policy, OpenCL).
 - Backend operational details: [server/README.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/server/README.md)
 
 ## Coding and Testing Guardrails

@@ -1,8 +1,38 @@
+function _modeLabel(mode) {
+  switch (String(mode || '').trim().toLowerCase()) {
+    case 'opencl_gpu':
+      return 'OpenCL GPU';
+    case 'opencl_cpu':
+      return 'OpenCL CPU';
+    case 'numba':
+      return 'Numba CPU';
+    case 'auto':
+      return 'Auto';
+    default:
+      return String(mode || 'Unknown').trim();
+  }
+}
+
+function _selectedDeviceText(health) {
+  const deviceInfo = health?.deviceInterface;
+  if (!deviceInfo || typeof deviceInfo !== 'object') {
+    return '';
+  }
+
+  const selectedMode = _modeLabel(deviceInfo.selected_mode || deviceInfo.requested_mode || 'auto');
+  const deviceName = String(deviceInfo.device_name || '').trim();
+  const hasDeviceName = deviceName && deviceName.toLowerCase() !== 'none';
+  return hasDeviceName
+    ? `Selected solver backend: ${selectedMode} (${deviceName})`
+    : `Selected solver backend: ${selectedMode}`;
+}
+
 export async function checkSolverConnection(panel) {
   const statusDot = document.getElementById('solver-status');
   const statusText = document.getElementById('solver-status-text');
   const statusHelp = document.getElementById('solver-status-help');
   const runButton = document.getElementById('run-simulation-btn');
+  const defaultHelpText = 'BEM solver requires Python backend running on localhost:8000';
 
   const scheduleNextCheck = () => {
     if (panel.connectionPollTimer) {
@@ -29,12 +59,23 @@ export async function checkSolverConnection(panel) {
       if (isConnected) {
         statusText.textContent = panel.completedStatusMessage || 'Connected to adaptive BEM solver';
         runButton.disabled = false;
-        if (statusHelp) statusHelp.classList.add('is-hidden');
+        const deviceText = _selectedDeviceText(health);
+        if (statusHelp) {
+          if (deviceText) {
+            statusHelp.textContent = deviceText;
+            statusHelp.classList.remove('is-hidden');
+          } else {
+            statusHelp.classList.add('is-hidden');
+          }
+        }
       } else {
         panel.completedStatusMessage = null;
         statusText.textContent = 'Backend online, adaptive solver runtime unavailable';
         runButton.disabled = true;
-        if (statusHelp) statusHelp.classList.remove('is-hidden');
+        if (statusHelp) {
+          statusHelp.textContent = defaultHelpText;
+          statusHelp.classList.remove('is-hidden');
+        }
       }
     }
   } catch (error) {
@@ -43,7 +84,10 @@ export async function checkSolverConnection(panel) {
       panel.completedStatusMessage = null;
       statusText.textContent = 'BEM solver backend unavailable';
       runButton.disabled = true;
-      if (statusHelp) statusHelp.classList.remove('is-hidden');
+      if (statusHelp) {
+        statusHelp.textContent = defaultHelpText;
+        statusHelp.classList.remove('is-hidden');
+      }
     }
   }
 
