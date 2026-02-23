@@ -589,7 +589,6 @@ export async function runSimulation(panel) {
   const progressDiv = document.getElementById('simulation-progress');
   const progressFill = document.getElementById('progress-fill');
   const progressText = document.getElementById('progress-text');
-  const resultsContainer = document.getElementById('results-container');
   panel.completedStatusMessage = null;
 
   // Get simulation settings
@@ -625,8 +624,6 @@ export async function runSimulation(panel) {
   panel.lastSimulationDurationMs = null;
   runBtn.disabled = true;
   setProgressVisible(progressDiv, true);
-  resultsContainer.classList.add('is-hidden');
-  resultsContainer.style.display = 'none';
   updateStageUi(panel, progressFill, progressText, {
     progress: 0.05,
     stage: 'mesh_generation',
@@ -642,7 +639,6 @@ export async function runSimulation(panel) {
     const state = GlobalState.get();
     const preparedParams = prepareGeometryParams(state.params, {
       type: state.type,
-      forceFullQuadrants: true,
       applyVerticalOffset: true
     });
     const waveguidePayload = buildWaveguidePayload(preparedParams, '2.2');

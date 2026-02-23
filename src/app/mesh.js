@@ -3,10 +3,8 @@ import { buildCanonicalMeshPayload } from '../geometry/index.js';
 
 export function provideMeshForSimulation(app) {
   try {
-    // Always submit full-domain geometry to /api/solve; backend symmetry handles reduction.
     const preparedParams = app.prepareParamsForMesh({
-      applyVerticalOffset: true,
-      forceFullQuadrants: true
+      applyVerticalOffset: true
     });
     const payload = buildCanonicalMeshPayload(preparedParams, {
       includeEnclosure: Number(preparedParams.encDepth || 0) > 0,

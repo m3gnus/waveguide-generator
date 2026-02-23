@@ -10,25 +10,6 @@ export async function openViewResultsModal(panel) {
     ? panel.resultCache.get(preferredJobId)
     : panel.lastResults;
   if (!results) return;
-  const splData = results.spl_on_axis || {};
-  const frequencies = splData.frequencies || [];
-  let spl = splData.spl || [];
-  const diData = results.di || {};
-  let di = diData.di || [];
-  const diFrequencies = diData.frequencies || frequencies;
-  const impedanceData = results.impedance || {};
-  const impedanceFrequencies = impedanceData.frequencies || frequencies;
-  let impedanceReal = impedanceData.real || [];
-  let impedanceImag = impedanceData.imaginary || [];
-  const directivity = results.directivity || {};
-
-  // Apply current smoothing
-  if (panel.currentSmoothing !== 'none') {
-    spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
-    di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
-    impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
-    impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
-  }
 
   // Build modal DOM
   const backdrop = document.createElement('div');
@@ -45,11 +26,41 @@ export async function openViewResultsModal(panel) {
 
   const title = document.createElement('h4');
   title.className = 'ui-choice-title';
-  const smoothingLabel = panel.currentSmoothing !== 'none'
-    ? ` [${panel.currentSmoothing} smoothed]`
-    : '';
-  title.textContent = `Simulation Results${smoothingLabel}`;
+  title.textContent = 'Simulation Results';
   header.appendChild(title);
+
+  // Smoothing dropdown in header
+  const smoothingContainer = document.createElement('div');
+  smoothingContainer.className = 'view-results-smoothing';
+  const smoothingLabel = document.createElement('label');
+  smoothingLabel.textContent = 'Smoothing';
+  smoothingLabel.setAttribute('for', 'vr-smoothing-select');
+  smoothingContainer.appendChild(smoothingLabel);
+
+  const smoothingSelect = document.createElement('select');
+  smoothingSelect.id = 'vr-smoothing-select';
+  const smoothingOptions = [
+    ['none', 'None'],
+    ['1/1', '1/1 Oct'],
+    ['1/2', '1/2 Oct'],
+    ['1/3', '1/3 Oct'],
+    ['1/6', '1/6 Oct'],
+    ['1/12', '1/12 Oct'],
+    ['1/24', '1/24 Oct'],
+    ['1/48', '1/48 Oct'],
+    ['variable', 'Variable'],
+    ['psychoacoustic', 'Psychoacoustic'],
+    ['erb', 'ERB'],
+  ];
+  for (const [value, text] of smoothingOptions) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = text;
+    if (value === panel.currentSmoothing) opt.selected = true;
+    smoothingSelect.appendChild(opt);
+  }
+  smoothingContainer.appendChild(smoothingSelect);
+  header.appendChild(smoothingContainer);
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
@@ -116,50 +127,85 @@ export async function openViewResultsModal(panel) {
 
   document.body.appendChild(backdrop);
 
-  // Fetch charts from backend
-  const payload = {
-    frequencies,
-    spl,
-    di,
-    di_frequencies: diFrequencies,
-    impedance_frequencies: impedanceFrequencies,
-    impedance_real: impedanceReal,
-    impedance_imaginary: impedanceImag,
-    directivity,
-  };
+  // Fetch and render charts (called on open and on smoothing change)
+  async function fetchCharts() {
+    const splData = results.spl_on_axis || {};
+    const frequencies = splData.frequencies || [];
+    let spl = splData.spl || [];
+    const diData = results.di || {};
+    let di = diData.di || [];
+    const diFrequencies = diData.frequencies || frequencies;
+    const impedanceData = results.impedance || {};
+    const impedanceFrequencies = impedanceData.frequencies || frequencies;
+    let impedanceReal = impedanceData.real || [];
+    let impedanceImag = impedanceData.imaginary || [];
+    const directivity = results.directivity || {};
 
-  try {
-    const response = await fetch('http://localhost:8000/api/render-charts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
-      _showMatplotlibRequired();
-      return;
+    if (panel.currentSmoothing !== 'none') {
+      spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
+      di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
+      impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
+      impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
     }
 
-    const data = await response.json();
-    const charts = data.charts || {};
-
+    // Show loading state
     for (const chart of chartNames) {
       const container = document.getElementById(`vr-${chart.key}`);
-      if (!container) continue;
-
-      const imgData = charts[chart.key];
-      if (imgData) {
-        container.innerHTML = `<img src="${imgData}" alt="${chart.label}" style="width: 100%; border-radius: 4px;" />`;
-      } else {
-        container.innerHTML = '<div class="view-results-loading">No data available</div>';
-      }
+      if (container) container.innerHTML = '<div class="view-results-loading">Rendering...</div>';
     }
-  } catch (err) {
-    console.warn('[view-results] Fetch failed:', err.message);
-    _showMatplotlibRequired();
+
+    const payload = {
+      frequencies,
+      spl,
+      di,
+      di_frequencies: diFrequencies,
+      impedance_frequencies: impedanceFrequencies,
+      impedance_real: impedanceReal,
+      impedance_imaginary: impedanceImag,
+      directivity,
+    };
+
+    try {
+      const response = await fetch('http://localhost:8000/api/render-charts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
+        _showMatplotlibRequired();
+        return;
+      }
+
+      const data = await response.json();
+      const charts = data.charts || {};
+
+      for (const chart of chartNames) {
+        const container = document.getElementById(`vr-${chart.key}`);
+        if (!container) continue;
+
+        const imgData = charts[chart.key];
+        if (imgData) {
+          container.innerHTML = `<img src="${imgData}" alt="${chart.label}" style="width: 100%; border-radius: 4px;" />`;
+        } else {
+          container.innerHTML = '<div class="view-results-loading">No data available</div>';
+        }
+      }
+    } catch (err) {
+      console.warn('[view-results] Fetch failed:', err.message);
+      _showMatplotlibRequired();
+    }
   }
+
+  // Re-fetch charts when smoothing changes
+  smoothingSelect.addEventListener('change', (e) => {
+    panel.currentSmoothing = e.target.value;
+    fetchCharts();
+  });
+
+  fetchCharts();
 
   function _showMatplotlibRequired() {
     for (const chart of chartNames) {

@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import Dict, List, Optional, Any, Union
+from contextlib import asynccontextmanager
 import uuid
 import asyncio
 import subprocess
@@ -77,7 +78,13 @@ except ImportError:
     def generate_msh_from_geo(*_args, **_kwargs):
         raise RuntimeError("Legacy .geo mesher backend is unavailable.")
 
-app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0")
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    await startup_jobs_runtime()
+    yield
+
+
+app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0", lifespan=app_lifespan)
 
 # Enable CORS for frontend communication
 app.add_middleware(
@@ -694,13 +701,14 @@ async def check_updates():
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.on_event("startup")
 async def startup_jobs_runtime():
     ensure_db_ready()
     db.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1000)
 
     queued_rows = db.recover_on_startup("Server restarted during execution")
+    should_schedule = False
     with jobs_lock:
+        queued_job_ids = set(job_queue)
         for row in queued_rows:
             request_obj = None
             request_dump = row.get("config_json")
@@ -732,9 +740,12 @@ async def startup_jobs_runtime():
                 "has_mesh_artifact": row.get("has_mesh_artifact", False),
                 "label": row.get("label"),
             }
-            job_queue.append(row["id"])
+            if row["id"] not in queued_job_ids:
+                job_queue.append(row["id"])
+                queued_job_ids.add(row["id"])
+                should_schedule = True
 
-    if queued_rows:
+    if should_schedule:
         asyncio.create_task(_drain_scheduler_queue())
 
 

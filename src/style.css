@@ -50,7 +50,7 @@ body {
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    padding: 20px;
+    padding: 14px;
     z-index: 10;
     overflow-y: auto;
     overflow-x: hidden;
@@ -85,7 +85,7 @@ body {
 #actions-panel summary {
     list-style: none;
     margin: 0;
-    padding: 12px 14px;
+    padding: 10px 12px;
     font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -166,7 +166,7 @@ body {
 h1 {
     font-size: 1.5rem;
     font-weight: 700;
-    margin-bottom: 14px;
+    margin-bottom: 10px;
     color: var(--accent-color);
 }
 
@@ -174,7 +174,7 @@ h1 {
 .tab-navigation {
     display: flex;
     gap: 8px;
-    margin-bottom: 20px;
+    margin-bottom: 14px;
     border-bottom: 2px solid var(--border-color);
     padding-bottom: 0;
 }
@@ -223,11 +223,11 @@ h1 {
 .status-indicator {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px;
+    gap: 8px;
+    padding: 8px;
     background: var(--input-bg);
     border-radius: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .status-dot {
@@ -269,7 +269,7 @@ h1 {
 }
 
 .section-subtitle {
-    margin: 15px 0 10px 0;
+    margin: 10px 0 6px 0;
     font-size: 0.9em;
     font-weight: 600;
     color: var(--text-secondary);
@@ -289,12 +289,12 @@ h1 {
     background: var(--input-bg);
     border-radius: 4px;
     overflow: hidden;
-    margin: 15px 0 10px 0;
+    margin: 10px 0 8px 0;
 }
 
 .simulation-jobs {
-    margin-top: 12px;
-    padding: 10px;
+    margin-top: 8px;
+    padding: 8px;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     background: var(--input-bg);
@@ -406,10 +406,6 @@ h1 {
     text-align: center;
 }
 
-#results-charts {
-    min-height: 200px;
-}
-
 .chart-container {
     margin-bottom: 20px;
     padding: 15px;
@@ -445,7 +441,7 @@ h1 {
 }
 
 hr {
-    margin: 15px 0;
+    margin: 10px 0;
     border: 0;
     border-top: 1px solid var(--border-color);
 }
@@ -453,9 +449,9 @@ hr {
 .section {
     background: var(--input-bg);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 14px;
-    margin-bottom: 14px;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
 }
 
 h3 {
@@ -464,15 +460,15 @@ h3 {
     letter-spacing: 1px;
     color: var(--text-color);
     opacity: 0.7;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 
 .input-row {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 6px;
-    margin-bottom: 10px;
+    gap: 4px;
+    margin-bottom: 7px;
 }
 
 .input-row label {
@@ -526,8 +522,8 @@ h3 {
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 10px;
+    gap: 10px;
+    margin-bottom: 7px;
 }
 
 .input-row-inline label {
@@ -547,8 +543,8 @@ h3 {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 15px;
+    gap: 8px;
+    margin-bottom: 10px;
 }
 
 .section-header h3 {
@@ -818,9 +814,9 @@ select {
     background: var(--input-bg);
     border: 1px solid var(--border-color);
     color: var(--text-color);
-    padding: 10px;
-    border-radius: 8px;
-    font-size: 0.9rem;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 0.85rem;
     margin-bottom: 0;
     outline: none;
 }
@@ -834,14 +830,14 @@ summary:focus-visible {
 
 button {
     width: 100%;
-    padding: 12px;
+    padding: 8px;
     background: var(--accent-color);
     border: none;
     border-radius: 8px;
     color: #fff;
     font-weight: 600;
     cursor: pointer;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     transition: opacity 0.2s, transform 0.1s, background 0.15s, color 0.15s;
 }
 
@@ -886,8 +882,8 @@ button.secondary:hover:not(:disabled) {
 .button-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin-bottom: 10px;
+    gap: 8px;
+    margin-bottom: 8px;
 }
 
 .button-row button {
@@ -907,8 +903,8 @@ button.secondary:hover:not(:disabled) {
 .checkbox-group {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin: 15px 0;
+    gap: 8px;
+    margin: 10px 0;
     font-size: 0.9rem;
 }
 
@@ -1077,7 +1073,7 @@ button.secondary:hover:not(:disabled) {
 }
 
 .section details {
-    margin-bottom: 10px;
+    margin-bottom: 7px;
 }
 
 .section summary {
@@ -1085,12 +1081,12 @@ button.secondary:hover:not(:disabled) {
     font-weight: 600;
     cursor: pointer;
     color: var(--accent-color);
-    padding: 5px 0;
+    padding: 4px 0;
     outline: none;
 }
 
 .section details[open] summary {
-    margin-bottom: 10px;
+    margin-bottom: 7px;
 }
 
 @media (max-width: 900px) {
@@ -1114,8 +1110,27 @@ button.secondary:hover:not(:disabled) {
 .view-results-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 16px;
     margin-bottom: 12px;
+}
+
+.view-results-smoothing {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-color);
+    margin-left: auto;
+    margin-right: 32px;
+}
+
+.view-results-smoothing select {
+    background: var(--input-bg, #2a2a2a);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 0.8rem;
 }
 
 .view-results-close {

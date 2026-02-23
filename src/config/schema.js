@@ -117,18 +117,6 @@ export const PARAM_SCHEMA = {
         mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 10.0 },
         throatSliceDensity: { type: 'number', label: 'Throat Slice Density', default: null, tooltip: 'Viewport slice clustering (0.5=uniform, lower=cluster at throat). When set, overrides the throat/mouth resolution ratio for viewport slice distribution only. Does not affect BEM mesh element sizes.' },
         verticalOffset: { type: 'number', label: 'Vertical Offset', unit: 'mm', default: 0.0, tooltip: 'Vertical offset for simulation/export coordinate system. Does not affect the 3D viewer.' },
-        quadrants: {
-            type: 'select',
-            label: 'Quadrants',
-            options: [
-                { value: '1234', label: 'Full (1234)' },
-                { value: '14', label: 'Half (14)' },
-                { value: '12', label: 'Half (12)' },
-                { value: '1', label: 'Quadrant (1)' }
-            ],
-            default: '14',
-            tooltip: 'Simulation-only symmetry. The visible model stays full; simulation uses the selected quadrant.'
-        },
         wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds a normal-offset wall shell one wall-thickness from the horn surface and a rear disc behind the throat.' },
         rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 10.0 },
     },
