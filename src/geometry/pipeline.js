@@ -18,60 +18,6 @@ function resolveBuildOptions(buildParams, options = {}) {
   };
 }
 
-function getSymmetryAxes(quadrants) {
-  const q = String(quadrants ?? '1234').trim();
-  if (q === '14') return ['x'];
-  if (q === '12') return ['z'];
-  if (q === '1') return ['x', 'z'];
-  return [];
-}
-
-function triangleLiesOnAxisPlane(vertices, a, b, c, axis, epsilon = 1e-7) {
-  const coordOffset = axis === 'x' ? 0 : 2;
-  const av = vertices[a * 3 + coordOffset];
-  const bv = vertices[b * 3 + coordOffset];
-  const cv = vertices[c * 3 + coordOffset];
-  return Math.abs(av) <= epsilon && Math.abs(bv) <= epsilon && Math.abs(cv) <= epsilon;
-}
-
-function removeSplitPlaneTriangles(vertices, indices, surfaceTags, quadrants) {
-  const symmetryAxes = getSymmetryAxes(quadrants);
-  if (symmetryAxes.length === 0) {
-    return {
-      indices,
-      surfaceTags,
-      removedTriangles: 0
-    };
-  }
-
-  const filteredIndices = [];
-  const filteredSurfaceTags = [];
-  let removedTriangles = 0;
-
-  for (let i = 0; i < indices.length; i += 3) {
-    const a = indices[i];
-    const b = indices[i + 1];
-    const c = indices[i + 2];
-    const liesOnSplitPlane = symmetryAxes.some((axis) =>
-      triangleLiesOnAxisPlane(vertices, a, b, c, axis)
-    );
-
-    if (liesOnSplitPlane) {
-      removedTriangles += 1;
-      continue;
-    }
-
-    filteredIndices.push(a, b, c);
-    filteredSurfaceTags.push(surfaceTags[i / 3]);
-  }
-
-  return {
-    indices: filteredIndices,
-    surfaceTags: filteredSurfaceTags,
-    removedTriangles
-  };
-}
-
 function buildSimulationPayloadFromMesh(
   meshData,
   buildParams,
@@ -82,33 +28,28 @@ function buildSimulationPayloadFromMesh(
   const vertices = Array.from(meshData.vertices);
   const indices = Array.from(meshData.indices);
   const surfaceTags = buildSurfaceTags(meshData);
-  const filtered = removeSplitPlaneTriangles(vertices, indices, surfaceTags, buildParams.quadrants);
 
   if (surfaceTags.length !== indices.length / 3) {
     throw new Error('Mesh payload generation failed: surface tag count does not match triangle count.');
   }
 
-  if (filtered.surfaceTags.length !== filtered.indices.length / 3) {
-    throw new Error('Mesh payload generation failed: filtered surface tag count mismatch.');
-  }
-
   if (validateIntegrity) {
     const requireClosed = Boolean(meshData.fullCircle && (meshData.groups?.freestandingWall || meshData.groups?.enclosure));
-    assertBemMeshIntegrity(vertices, filtered.indices, {
+    assertBemMeshIntegrity(vertices, indices, {
       requireClosed,
       requireSingleComponent: true
     });
   }
 
-  const tagCounts = countTags(filtered.surfaceTags);
+  const tagCounts = countTags(surfaceTags);
   if (tagCounts[SURFACE_TAGS.SOURCE] === 0) {
     throw new Error('Mesh payload generation failed: no source-tagged triangles were produced.');
   }
 
   return {
     vertices,
-    indices: filtered.indices,
-    surfaceTags: filtered.surfaceTags,
+    indices,
+    surfaceTags,
     format: 'msh',
     boundaryConditions: buildBoundaryConditions(),
     metadata: {
@@ -119,8 +60,7 @@ function buildSimulationPayloadFromMesh(
       tagCounts,
       units: 'mm',
       unitScaleToMeter: 0.001,
-      verticalOffset: Number(buildParams.verticalOffset || 0),
-      splitPlaneTrianglesRemoved: filtered.removedTriangles
+      verticalOffset: Number(buildParams.verticalOffset || 0)
     }
   };
 }

@@ -207,7 +207,6 @@ async function checkBackendReachable(backendUrl) {
 export function exportSTL(app) {
   const baseName = getExportBaseName();
   const preparedParams = app.prepareParamsForMesh({
-    forceFullQuadrants: true,
     applyVerticalOffset: false
   });
   const artifacts = buildGeometryArtifacts(preparedParams, {

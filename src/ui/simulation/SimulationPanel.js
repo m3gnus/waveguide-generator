@@ -22,7 +22,7 @@ import {
   setJobsFromEntries,
   persistPanelJobs
 } from './jobTracker.js';
-import { displayResults, renderBemResults, renderValidationReport } from './results.js';
+import { displayResults } from './results.js';
 import {
   exportResults,
   exportAsMatplotlibPNG,
@@ -142,14 +142,6 @@ export class SimulationPanel {
 
   displayResults(results = null) {
     return displayResults(this, results);
-  }
-
-  renderBemResults(results) {
-    return renderBemResults(this, results);
-  }
-
-  renderValidationReport(report) {
-    return renderValidationReport(report);
   }
 
   openViewResults() {

@@ -68,7 +68,6 @@ export function renderModel(app) {
   }
 
   const preparedParams = app.prepareParamsForMesh({
-    forceFullQuadrants: true,
     applyVerticalOffset: true
   });
 

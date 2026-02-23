@@ -1,17 +1,10 @@
 export function applySmoothingSelection(panel, smoothingType) {
   panel.currentSmoothing = smoothingType;
-  if (panel.lastResults) {
-    panel.displayResults(panel.lastResults);
-  }
 }
 
-export function setupSmoothingListener(panel) {
-  const smoothingSelect = document.getElementById('smoothing-select');
-  if (smoothingSelect) {
-    smoothingSelect.addEventListener('change', (e) => {
-      applySmoothingSelection(panel, e.target.value);
-    });
-  }
+export function setupSmoothingListener(_panel) {
+  // Smoothing dropdown is now inside the view-results modal.
+  // No persistent DOM element to listen on.
 }
 
 export function setupKeyboardShortcuts(panel) {
@@ -69,7 +62,7 @@ export function setupKeyboardShortcuts(panel) {
         }
 
         applySmoothingSelection(panel, smoothingType);
-        const smoothingSelect = document.getElementById('smoothing-select');
+        const smoothingSelect = document.getElementById('vr-smoothing-select');
         if (smoothingSelect) {
           smoothingSelect.value = smoothingType;
         }
@@ -80,7 +73,7 @@ export function setupKeyboardShortcuts(panel) {
     if ((e.ctrlKey || e.metaKey) && e.key === '0' && !e.shiftKey) {
       e.preventDefault();
       applySmoothingSelection(panel, 'none');
-      const smoothingSelect = document.getElementById('smoothing-select');
+      const smoothingSelect = document.getElementById('vr-smoothing-select');
       if (smoothingSelect) {
         smoothingSelect.value = 'none';
       }

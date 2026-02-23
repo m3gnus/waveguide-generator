@@ -18,7 +18,6 @@ function makeParams(type, overrides = {}) {
 function buildViewportArtifacts(rawParams) {
   const prepared = prepareGeometryParams(rawParams, {
     type: rawParams.type,
-    forceFullQuadrants: true,
     applyVerticalOffset: true
   });
 
@@ -30,7 +29,6 @@ function buildViewportArtifacts(rawParams) {
 function buildMesh(rawParams, options = {}) {
   const prepared = prepareGeometryParams(rawParams, {
     type: rawParams.type,
-    forceFullQuadrants: true,
     applyVerticalOffset: true
   });
 

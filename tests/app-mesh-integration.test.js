@@ -42,15 +42,13 @@ test('app mesh provider emits canonical payload from shared geometry artifacts p
 
     const expectedPrepared = prepareGeometryParams(preparedInput, {
       type: 'OSSE',
-      applyVerticalOffset: true,
-      forceFullQuadrants: true
+      applyVerticalOffset: true
     });
     const expected = buildGeometryArtifacts(expectedPrepared, {
       includeEnclosure: Number(expectedPrepared.encDepth || 0) > 0
     }).simulation;
 
     assert.equal(emitted[0].data.metadata.fullCircle, true);
-    assert.equal(emitted[0].data.metadata.splitPlaneTrianglesRemoved, 0);
     assert.deepEqual(emitted[0].data.surfaceTags, expected.surfaceTags);
     assert.equal(emitted[0].data.indices.length, expected.indices.length);
     assert.equal(emitted[0].data.vertices.length, expected.vertices.length);

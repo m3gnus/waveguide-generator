@@ -1,8 +1,7 @@
-import { parseQuadrants } from '../common.js';
 import { orientMeshConsistently } from '../meshIntegrity.js';
 import { validateMeshQuality } from '../quality.js';
 import { DEFAULTS, MORPH_TARGETS } from './constants.js';
-import { buildAngleList, selectAnglesForQuadrants } from './mesh/angles.js';
+import { buildAngleList } from './mesh/angles.js';
 import { addEnclosureGeometry } from './mesh/enclosure.js';
 import { addFreestandingWallGeometry } from './mesh/freestandingWall.js';
 import {
@@ -52,10 +51,10 @@ export function buildWaveguideMesh(params, options = {}) {
   const sliceMap = buildSliceMap(meshParams, lengthSteps);
   const mouthExtents = computeMouthExtents(meshParams, profileContext);
 
-  const quadrantInfo = parseQuadrants(meshParams.quadrants);
   const angleListData = buildAngleList(meshParams, mouthExtents);
-  const angleList = selectAnglesForQuadrants(angleListData.fullAngles, meshParams.quadrants);
+  const angleList = angleListData.fullAngles;
   const ringCount = angleList.length;
+  const fullCircle = true;
 
   const morphTarget = Number(meshParams.morphTarget || MORPH_TARGETS.NONE);
   const needsMorphTargets = meshParams.type === 'OSSE'
@@ -71,7 +70,7 @@ export function buildWaveguideMesh(params, options = {}) {
   const hasEnclosure = includeEnclosure && Number(meshParams.encDepth || 0) > 0;
   const hasWall = Number(meshParams.encDepth || 0) <= 0 && Number(meshParams.wallThickness || 0) > 0;
   const useAdaptivePhi = (options.adaptivePhi === true)
-    && quadrantInfo.fullCircle
+    && fullCircle
     && !hasEnclosure
     && !hasWall;
 
@@ -94,7 +93,7 @@ export function buildWaveguideMesh(params, options = {}) {
     vertices = createRingVertices(
       meshParams, sliceMap, angleList, morphTargets, ringCount, lengthSteps, profileContext
     );
-    indices = createHornIndices(ringCount, lengthSteps, quadrantInfo.fullCircle);
+    indices = createHornIndices(ringCount, lengthSteps, fullCircle);
     mouthRingCount = ringCount;
     throatRingCount = ringCount;
   }
@@ -110,7 +109,7 @@ export function buildWaveguideMesh(params, options = {}) {
       indices,
       meshParams,
       0,
-      quadrantInfo,
+      null,
       groupInfo,
       mouthRingCount,
       angleList
@@ -119,13 +118,13 @@ export function buildWaveguideMesh(params, options = {}) {
     addFreestandingWallGeometry(vertices, indices, meshParams, {
       ringCount: mouthRingCount,
       lengthSteps,
-      fullCircle: quadrantInfo.fullCircle,
+      fullCircle,
       groupInfo
     });
   }
 
   const sourceStartTri = indices.length / 3;
-  const throatSource = generateThroatSource(vertices, throatRingCount, quadrantInfo.fullCircle);
+  const throatSource = generateThroatSource(vertices, throatRingCount, fullCircle);
   if (throatSource.center) {
     const centerIdx = vertices.length / 3;
     vertices.push(...throatSource.center);
@@ -146,7 +145,7 @@ export function buildWaveguideMesh(params, options = {}) {
   }
 
   orientMeshConsistently(vertices, indices, {
-    preferOutward: quadrantInfo.fullCircle
+    preferOutward: fullCircle
   });
 
   const quality = validateMeshQuality(vertices, indices, groupInfo);
@@ -156,7 +155,7 @@ export function buildWaveguideMesh(params, options = {}) {
     vertices,
     indices,
     ringCount: mouthRingCount,
-    fullCircle: quadrantInfo.fullCircle
+    fullCircle
   };
 
   if (groupInfo) {

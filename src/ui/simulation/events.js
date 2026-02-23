@@ -81,18 +81,6 @@ export function setupEventListeners(panel) {
     });
   }
 
-  // View results button
-  const viewBtn = document.getElementById('view-results-btn');
-  if (viewBtn) {
-    viewBtn.addEventListener('click', () => panel.openViewResults());
-  }
-
-  // Export results button
-  const exportBtn = document.getElementById('export-results-btn');
-  if (exportBtn) {
-    exportBtn.addEventListener('click', () => panel.exportResults());
-  }
-
   AppEvents.on('state:updated', (state) => {
     panel.syncSimulationSettings(state);
   });

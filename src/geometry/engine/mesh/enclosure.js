@@ -377,14 +377,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const sR = parseFloat(params.encSpaceR) || 25;
     const sB = parseFloat(params.encSpaceB) || 25;
 
-    const quadrantKey = String(params.quadrants ?? '').trim();
-    const restrictX = quadrantKey === '14' || quadrantKey === '1' || quadrantKey === '14.0' || quadrantKey === '1.0';
-    const restrictZ = quadrantKey === '12' || quadrantKey === '1' || quadrantKey === '12.0' || quadrantKey === '1.0';
-
     let boxRight = maxX + sR;
-    let boxLeft = restrictX ? 0 : minX - sL;
+    let boxLeft = minX - sL;
     let boxTop = maxZ + sT;
-    let boxBot = restrictZ ? 0 : minZ - sB;
+    let boxBot = minZ - sB;
 
     // Centroid for ray-casting
     let mCx = 0, mCz = 0;
