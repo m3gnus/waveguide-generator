@@ -19,6 +19,7 @@ Command behavior:
 
 - `tests/app-mesh-integration.test.js`
 - `tests/bem-mesh-integrity.test.js`
+- `tests/config-import.test.js`
 - `tests/config-roundtrip.test.js`
 - `tests/csv-export.test.js`
 - `tests/enclosure-regression.test.js`
