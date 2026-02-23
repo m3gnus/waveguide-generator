@@ -3,6 +3,7 @@ import {
   clearFailedSimulations,
   exportJobResults,
   loadJobScript,
+  redoJob,
   removeJobFromFeed,
   stopSimulation,
   viewJobResults
@@ -68,6 +69,10 @@ export function setupEventListeners(panel) {
 
       if (action === 'load-script') {
         loadJobScript(panel, jobId);
+      }
+
+      if (action === 'redo') {
+        redoJob(panel, jobId);
       }
 
       if (action === 'remove') {
