@@ -4,6 +4,11 @@ import assert from 'node:assert/strict';
 import { normalizeParamInput } from '../src/ui/paramInput.js';
 import { validateSimulationConfig } from '../src/ui/simulation/actions.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
+import {
+  deriveExportFieldsFromFileName,
+  markParametersChanged,
+  resetParameterChangeTracking
+} from '../src/ui/fileOps.js';
 
 test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('1.0'), 1);
@@ -91,4 +96,61 @@ test('applyExportSelection includes CAD exports options 8 and 9', () => {
   assert.equal(applyExportSelection({}, '8', handlers), true);
   assert.equal(applyExportSelection({}, '9', handlers), true);
   assert.deepEqual(calls, ['stl', 'fusion-csv']);
+});
+
+test('deriveExportFieldsFromFileName parses output name and counter from file names', () => {
+  assert.deepEqual(
+    deriveExportFieldsFromFileName('horn.cfg'),
+    { outputName: 'horn', counter: 1 }
+  );
+  assert.deepEqual(
+    deriveExportFieldsFromFileName('horn_design_12.cfg'),
+    { outputName: 'horn_design', counter: 12 }
+  );
+  assert.deepEqual(
+    deriveExportFieldsFromFileName('horn_design_0.cfg'),
+    { outputName: 'horn_design_0', counter: 1 }
+  );
+  assert.deepEqual(
+    deriveExportFieldsFromFileName('my file name_3.txt'),
+    { outputName: 'my file name', counter: 3 }
+  );
+  assert.deepEqual(
+    deriveExportFieldsFromFileName('260219superhorn35.cfg'),
+    { outputName: '260219superhorn', counter: 35 }
+  );
+  assert.deepEqual(
+    deriveExportFieldsFromFileName('   '),
+    { outputName: 'horn_design', counter: 1 }
+  );
+});
+
+test('markParametersChanged increments counter once per change cycle and skips import baseline update', () => {
+  const originalDocument = global.document;
+  const counterEl = { value: '35' };
+  global.document = {
+    getElementById(id) {
+      if (id === 'export-counter') return counterEl;
+      return null;
+    }
+  };
+
+  try {
+    resetParameterChangeTracking({ skipNext: true });
+    markParametersChanged();
+    assert.equal(counterEl.value, '35');
+
+    markParametersChanged();
+    assert.equal(counterEl.value, '36');
+
+    markParametersChanged();
+    assert.equal(counterEl.value, '36');
+
+    resetParameterChangeTracking();
+    markParametersChanged();
+    assert.equal(counterEl.value, '37');
+  } finally {
+    global.document = originalDocument;
+    resetParameterChangeTracking();
+  }
 });
