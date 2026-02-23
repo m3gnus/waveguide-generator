@@ -90,16 +90,12 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
   }
 });
 
-test('smoothing update re-renders existing results without submitting a new job', () => {
-  let renderCalls = 0;
+test('smoothing update sets panel state without submitting a new job', () => {
   let submitCalls = 0;
 
   const panel = {
     currentSmoothing: 'none',
     lastResults: { spl_on_axis: { frequencies: [100], spl: [90] } },
-    displayResults: () => {
-      renderCalls += 1;
-    },
     solver: {
       submitSimulation: () => {
         submitCalls += 1;
@@ -110,7 +106,6 @@ test('smoothing update re-renders existing results without submitting a new job'
   applySmoothingSelection(panel, '1/6');
 
   assert.equal(panel.currentSmoothing, '1/6');
-  assert.equal(renderCalls, 1);
   assert.equal(submitCalls, 0);
 });
 

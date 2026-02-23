@@ -1,44 +1,11 @@
 # Future Additions
 
-Last updated: February 22, 2026 (ABEC removal complete, CSV export fixed)
+Last updated: February 23, 2026
 
 This document tracks roadmap work by status.
 
 Implemented runtime behavior belongs in:
 - `docs/PROJECT_DOCUMENTATION.md`
-
-## New Backlog (Simulation Feed UX, Feb 2026)
-
-### Script snapshot compatibility hardening
-Current state:
-- Simulation tasks can store/load parameter snapshots (`Load Script`) from feed entries.
-- Snapshot schema is versionless and assumes local UI field compatibility.
-
-Next addition (lightweight approach recommended):
-- Add a `schemaVersion` integer field to each snapshot on save; bump it whenever params are renamed or removed.
-- On load, if the stored version doesn't match the current version, show a one-line warning in the feed entry (e.g. "Script saved with an older schema — some fields may not apply").
-- No migration logic needed: unknown keys already silently no-op on load, which prevents hard failures. The warning covers the real risk (user confusion when a renamed field is silently dropped).
-
-## Completed (Implemented)
-
-### Documentation and agent stewardship
-- **Implemented (Feb 2026)**: `AGENTS.md` now references the **BEM Solver Acceleration Roadmap** (FMM/OpenCL) for future automated refactors.
-
-### Frontend solver UX messaging
-- **Implemented (Feb 2026)**:
-- `src/solver/index.js` warning text now makes clear that mock output is backend-unavailable fallback only.
-- `src/ui/simulation/results.js` labels mock output as preview-only and backend BEM as default runtime.
-- Simulation UI/log wording now presents backend BEM as default behavior and mock output as fallback only.
-- Backend solve integration remains the primary path in `BemSolver.submitSimulation(...)`.
-
-### Architecture audit
-- **Implemented (Audited Feb 22, 2026)**: JavaScript mesh engine audit completed for `buildWaveguideMesh.js`.
-- Current runtime callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/app/exports.js`, `src/app/mesh.js`).
-- `adaptivePhi` is effectively STL-only in current UI behavior; viewport and simulation disable it.
-- Follow-up simplification candidates (not yet implemented):
-- Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
-- Collapse rarely-used `collectGroups`/`groupInfo` branching if external callers do not depend on group suppression.
-- Move adaptive-phi branch into a dedicated helper/export-only wrapper to reduce branching in canonical horn build path.
 
 ## In Progress (Partially Implemented)
 
@@ -65,7 +32,17 @@ Remaining for Phase 3:
 - Expand hardware-class guidance for OpenCL GPU setup (especially Windows/Linux driver onboarding).
 - Add regression/performance baselines per hardware class.
 
-## Remaining Backlog
+## Backlog
+
+### Script snapshot compatibility hardening
+Current state:
+- Simulation tasks can store/load parameter snapshots (`Load Script`) from feed entries.
+- Snapshot schema is versionless and assumes local UI field compatibility.
+
+Next addition (lightweight approach recommended):
+- Add a `schemaVersion` integer field to each snapshot on save; bump it whenever params are renamed or removed.
+- On load, if the stored version doesn't match the current version, show a one-line warning in the feed entry (e.g. "Script saved with an older schema — some fields may not apply").
+- No migration logic needed: unknown keys already silently no-op on load, which prevents hard failures. The warning covers the real risk (user confusion when a renamed field is silently dropped).
 
 ### High priority documentation maintenance
 - Conduct periodic audits of `docs/PROJECT_DOCUMENTATION.md` to keep it aligned with unified-mesh and solver runtime refactors.
@@ -80,26 +57,11 @@ Next additions:
 - Add richer feed filtering/grouping controls for larger job histories.
 - Add lightweight run labels/annotations to improve traceability across repeated experiments.
 
-### UI simplification and cleanup
-Current state:
-- Simulation results are partially displayed in the left panel, creating clutter.
-
-Next additions:
-- Move results out of left panel into dedicated workspace/modal.
-- Tighten spacing and improve information density in `SimulationPanel.js` and `ParamPanel.js`.
-
-### OCC interface/subdomain geometry in `/api/mesh/build`
-Current state:
-- `subdomain_slices`, `interface_offset`, `interface_draw`, and `interface_resolution` are accepted by request schema.
-- OCC builder does not yet generate interface/subdomain geometry from these fields.
-
-Next addition:
-- Implement OCC interface/subdomain surface generation and explicit physical-group mapping.
-
 ### Symmetry benchmark harness and policy visibility
 Current state:
 - Symmetry reduction exists in optimized solver path.
-- `/api/solve` receives full-domain frontend payload (`quadrants=1234`) and backend performs symmetry detection/reduction.
+- `quadrants` is retained for legacy/import compatibility; frontend viewport and canonical mesh generation no longer use it to trim geometry.
+- `/api/solve` may still receive `waveguide_params.quadrants` from imported configs, but backend coerces OCC-adaptive solve builds to full domain before meshing.
 - No committed benchmark harness with full/half/quarter thresholds.
 
 Next additions:
@@ -158,8 +120,6 @@ Decision framework:
 - Evaluate whether JS-based mesher can reach parity for remaining export needs.
 - If Gmsh can be fully replaced, remove from dependency matrix, scripts, and requirements.
 
-## Deferred Removal Candidate
-
 ### Code sanitization and dead-code removal
 Current state:
 - Codebase still contains fallback paths (for example `mockBEMSolver`) and utility paths not fully wired to UI.
@@ -167,3 +127,24 @@ Current state:
 Next additions:
 - Remove mock/pending fallback code once backend BEM integration hardening is complete.
 - Run structured dead-code audit in `src/` for functions with no runtime UI path.
+
+## Completed (Implemented)
+
+### Documentation and agent stewardship
+- **Implemented (Feb 2026)**: `AGENTS.md` now references the **BEM Solver Acceleration Roadmap** (FMM/OpenCL) for future automated refactors.
+
+### Frontend solver UX messaging
+- **Implemented (Feb 2026)**:
+- `src/solver/index.js` warning text now makes clear that mock output is backend-unavailable fallback only.
+- `src/ui/simulation/results.js` is now a thin data-caching stub (left-panel inline charts removed).
+- Simulation UI/log wording now presents backend BEM as default behavior and mock output as fallback only.
+- Backend solve integration remains the primary path in `BemSolver.submitSimulation(...)`.
+
+### Architecture audit
+- **Implemented (Audited Feb 22, 2026)**: JavaScript mesh engine audit completed for `buildWaveguideMesh.js`.
+- Current runtime callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/app/exports.js`, `src/app/mesh.js`).
+- `adaptivePhi` is effectively STL-only in current UI behavior; viewport and simulation disable it.
+- Follow-up simplification candidates (not yet implemented):
+- Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
+- Collapse rarely-used `collectGroups`/`groupInfo` branching if external callers do not depend on group suppression.
+- Move adaptive-phi branch into a dedicated helper/export-only wrapper to reduce branching in canonical horn build path.

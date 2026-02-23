@@ -66,13 +66,6 @@ export function applyAthImportDefaults(parsed, typedParams) {
   if (typedParams.morphTarget === undefined) {
     typedParams.morphTarget = 0;
   }
-  const hasQuadrants =
-    typedParams.quadrants !== undefined &&
-    typedParams.quadrants !== null &&
-    typedParams.quadrants !== '';
-  if (!hasQuadrants) {
-    typedParams.quadrants = isOSSE ? '14' : '1';
-  }
 
   const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
   if (!hasMeshEnclosure && typedParams.encDepth === undefined) {
@@ -119,7 +112,7 @@ function applySchemaToParams(params, schema) {
 
 export function prepareGeometryParams(
   rawParams = {},
-  { type = rawParams.type, forceFullQuadrants = false, applyVerticalOffset = true } = {}
+  { type = rawParams.type, applyVerticalOffset = true } = {}
 ) {
   const preparedParams = { ...rawParams };
   const resolvedType = type || preparedParams.type;
@@ -160,10 +153,6 @@ export function prepareGeometryParams(
 
   if (!applyVerticalOffset) {
     preparedParams.verticalOffset = 0;
-  }
-
-  if (forceFullQuadrants) {
-    preparedParams.quadrants = '1234';
   }
 
   return preparedParams;

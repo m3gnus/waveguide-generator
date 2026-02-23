@@ -15,21 +15,18 @@ test('prepareGeometryParams parses values and applies normalization options', ()
     L: '120',
     a: '30 + p',
     scale: '2',
-    quadrants: '14',
     verticalOffset: 17,
     gcurveSf: '1,2,3,4'
   };
 
   const prepared = prepareGeometryParams(raw, {
     type: 'OSSE',
-    forceFullQuadrants: true,
     applyVerticalOffset: false
   });
 
   assert.equal(prepared.L, 240);
   assert.equal(typeof prepared.a, 'function');
   assert.equal(prepared.a(0), 30);
-  assert.equal(prepared.quadrants, '1234');
   assert.equal(prepared.verticalOffset, 0);
   assert.equal(prepared.gcurveSf, '1,2,3,4');
   assert.equal(prepared.type, 'OSSE');
@@ -67,7 +64,6 @@ test('coerceConfigParams and applyAthImportDefaults preserve ATH compatibility d
   applyAthImportDefaults(parsed, typed);
 
   assert.equal(typed.morphTarget, 0);
-  assert.equal(typed.quadrants, '14');
   assert.equal(typed.encDepth, 0);
   assert.equal(typed.k, 1);
   assert.equal(typed.h, 0);

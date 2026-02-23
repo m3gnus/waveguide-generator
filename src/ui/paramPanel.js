@@ -223,7 +223,6 @@ export class ParamPanel {
                 'angularSegments',
                 'lengthSegments',
                 'cornerSegments',
-                'quadrants',
                 'throatSegments',
                 'throatResolution',
                 'mouthResolution',

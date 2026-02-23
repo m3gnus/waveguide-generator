@@ -119,7 +119,11 @@ test('exportMSH omits interface/secondary physical groups', () => {
   assert.equal(/2 4 "I1-2"/.test(msh), false);
 });
 
-test('simulation payload removes split-plane faces for quadrant symmetry exports', () => {
+test('simulation payload ignores quadrants and keeps full-domain topology', () => {
+  const fullParams = makePreparedParams({
+    encDepth: 220,
+    quadrants: '1234'
+  });
   const q14Params = makePreparedParams({
     encDepth: 220,
     quadrants: '14'
@@ -133,14 +137,26 @@ test('simulation payload removes split-plane faces for quadrant symmetry exports
     quadrants: '1'
   });
 
+  const full = buildGeometryArtifacts(fullParams, { includeEnclosure: true }).simulation;
   const q14 = buildGeometryArtifacts(q14Params, { includeEnclosure: true }).simulation;
   const q12 = buildGeometryArtifacts(q12Params, { includeEnclosure: true }).simulation;
   const q1 = buildGeometryArtifacts(q1Params, { includeEnclosure: true }).simulation;
 
-  assert.equal(countTrianglesOnPlane(q14.vertices, q14.indices, 'x'), 0);
-  assert.equal(countTrianglesOnPlane(q12.vertices, q12.indices, 'z'), 0);
-  assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'x'), 0);
-  assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'z'), 0);
+  assert.equal(q14.indices.length, full.indices.length);
+  assert.equal(q12.indices.length, full.indices.length);
+  assert.equal(q1.indices.length, full.indices.length);
+  assert.equal(q14.surfaceTags.length, full.surfaceTags.length);
+  assert.equal(q12.surfaceTags.length, full.surfaceTags.length);
+  assert.equal(q1.surfaceTags.length, full.surfaceTags.length);
+
+  const fullX = countTrianglesOnPlane(full.vertices, full.indices, 'x');
+  const fullZ = countTrianglesOnPlane(full.vertices, full.indices, 'z');
+  assert.equal(countTrianglesOnPlane(q14.vertices, q14.indices, 'x'), fullX);
+  assert.equal(countTrianglesOnPlane(q14.vertices, q14.indices, 'z'), fullZ);
+  assert.equal(countTrianglesOnPlane(q12.vertices, q12.indices, 'x'), fullX);
+  assert.equal(countTrianglesOnPlane(q12.vertices, q12.indices, 'z'), fullZ);
+  assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'x'), fullX);
+  assert.equal(countTrianglesOnPlane(q1.vertices, q1.indices, 'z'), fullZ);
 });
 
 test('non-divisible angular segments still include symmetry boundary vertices', () => {
