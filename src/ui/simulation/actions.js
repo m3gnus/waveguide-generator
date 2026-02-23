@@ -384,9 +384,10 @@ export function renderJobList(panel) {
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
         </div>
         <div class="simulation-job-actions">
-          <button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" ${job.status === 'complete' ? '' : 'disabled'} title="View results for this simulation">View</button>
-          <button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" ${job.status === 'complete' ? '' : 'disabled'} title="Export simulation results to file">Export</button>
-          <button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" ${job.script ? '' : 'disabled'} title="Restore geometry and solver parameters from this simulation">Script</button>
+          ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results for this simulation">View</button>` : ''}
+          ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export simulation results to file">Export</button>` : ''}
+          ${job.script ? `<button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Restore geometry and solver parameters from this simulation">Script</button>` : ''}
+          ${(job.status === 'error' || job.status === 'cancelled') && job.script ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Restore parameters and re-run this simulation">Redo</button>` : ''}
           ${job.status === 'queued' || job.status === 'running'
             ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop this running simulation">Stop</button>`
             : ''}
@@ -428,6 +429,23 @@ export function loadJobScript(panel, jobId) {
 
   setSimulationInputsFromScript(script);
   showMessage(`Loaded parameters from ${job.label || jobId}.`, { type: 'info', duration: 2500 });
+}
+
+export async function redoJob(panel, jobId) {
+  const job = panel.jobs?.get(jobId);
+  if (!job?.script) {
+    showError('No saved parameters found for this simulation.');
+    return;
+  }
+  loadJobScript(panel, jobId);
+
+  // Remove the failed/cancelled job before re-running
+  try { await panel.solver.deleteJob(jobId); } catch (_) { /* best-effort */ }
+  removeJob(panel, jobId);
+  persistPanelJobs(panel);
+  renderJobList(panel);
+
+  panel.runSimulation();
 }
 
 export async function removeJobFromFeed(panel, jobId) {
