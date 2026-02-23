@@ -31,7 +31,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn('surfaceTags length', str(ctx.exception.detail))
 
-    def test_sim_type_one_is_explicitly_deferred(self):
+    def test_sim_type_one_is_rejected_as_unsupported(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -51,7 +51,8 @@ class ApiValidationTest(unittest.TestCase):
             asyncio.run(submit_simulation(request))
 
         self.assertEqual(ctx.exception.status_code, 422)
-        self.assertIn("deferred", str(ctx.exception.detail))
+        self.assertIn("sim_type='2'", str(ctx.exception.detail))
+        self.assertIn("removed", str(ctx.exception.detail))
 
     def test_invalid_mesh_validation_mode_is_rejected(self):
         request = SimulationRequest(

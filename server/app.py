@@ -835,6 +835,11 @@ async def submit_simulation(request: SimulationRequest):
             detail=f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) must match triangle count ({triangle_count})."
         )
     # sim_type is always 2 (free-standing); infinite baffle was removed.
+    if str(request.sim_type).strip() != "2":
+        raise HTTPException(
+            status_code=422,
+            detail="Only sim_type='2' (free-standing) is supported; infinite-baffle sim_type='1' was removed."
+        )
     try:
         normalize_mesh_validation_mode(request.mesh_validation_mode)
     except ValueError as exc:
