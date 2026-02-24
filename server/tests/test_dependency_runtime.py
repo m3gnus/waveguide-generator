@@ -24,10 +24,10 @@ class DependencyRuntimeTest(unittest.TestCase):
             },
         }
 
-        with patch("app.get_dependency_status", return_value=dependency_status), patch(
-            "app.SOLVER_AVAILABLE", False
-        ), patch("app.BEMPP_RUNTIME_READY", False), patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
-            "app.GMSH_OCC_RUNTIME_READY", True
+        with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.SOLVER_AVAILABLE", False
+        ), patch("api.routes_misc.BEMPP_RUNTIME_READY", False), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "api.routes_misc.GMSH_OCC_RUNTIME_READY", True
         ):
             response = asyncio.run(app.health_check())
 
@@ -50,10 +50,10 @@ class DependencyRuntimeTest(unittest.TestCase):
         }
         request = WaveguideParamsRequest(formula_type="OSSE")
 
-        with patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
-            "app.build_waveguide_mesh", return_value={}
-        ), patch("app.GMSH_OCC_RUNTIME_READY", False), patch(
-            "app.get_dependency_status", return_value=dependency_status
+        with patch("api.routes_mesh.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "api.routes_mesh.build_waveguide_mesh", return_value={}
+        ), patch("api.routes_mesh.GMSH_OCC_RUNTIME_READY", False), patch(
+            "api.routes_mesh.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(app.build_mesh_from_params(request))
@@ -84,10 +84,10 @@ class DependencyRuntimeTest(unittest.TestCase):
             "available_modes": ["auto", "opencl_cpu", "opencl_gpu", "numba"],
         }
 
-        with patch("app.get_dependency_status", return_value=dependency_status), patch(
-            "app.SOLVER_AVAILABLE", True
-        ), patch("app.BEMPP_RUNTIME_READY", True), patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
-            "app.GMSH_OCC_RUNTIME_READY", True
+        with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.SOLVER_AVAILABLE", True
+        ), patch("api.routes_misc.BEMPP_RUNTIME_READY", True), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "api.routes_misc.GMSH_OCC_RUNTIME_READY", True
         ), patch(
             "solver.device_interface.selected_device_metadata", return_value=device_info
         ):
@@ -123,8 +123,8 @@ class DependencyRuntimeTest(unittest.TestCase):
             options={},
         )
 
-        with patch("app.SOLVER_AVAILABLE", False), patch(
-            "app.get_dependency_status", return_value=dependency_status
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", False), patch(
+            "api.routes_simulation.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(app.submit_simulation(request))

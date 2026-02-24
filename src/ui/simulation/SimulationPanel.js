@@ -9,6 +9,7 @@
  */
 
 import { BemSolver } from '../../solver/index.js';
+import { AppEvents } from '../../events.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
 import { setupSmoothingListener, setupKeyboardShortcuts } from './smoothing.js';
@@ -166,5 +167,41 @@ export class SimulationPanel {
 
   exportAsText() {
     return exportAsText(this);
+  }
+
+  /**
+   * Release all timers and EventBus listeners registered by this panel.
+   * Call when the panel is being unmounted or replaced.
+   */
+  dispose() {
+    // Stop simulation status polling.
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+      this.pollInterval = null;
+      this.isPolling = false;
+    }
+
+    // Stop connection-check polling.
+    if (this.connectionPollTimer) {
+      clearTimeout(this.connectionPollTimer);
+      this.connectionPollTimer = null;
+    }
+
+    // Remove EventBus listeners stored by setupEventListeners.
+    if (this._onStateUpdated) {
+      AppEvents.off('state:updated', this._onStateUpdated);
+      this._onStateUpdated = null;
+    }
+
+    // Remove EventBus listeners stored by setupMeshListener.
+    if (this._onMeshReady) {
+      AppEvents.off('simulation:mesh-ready', this._onMeshReady);
+      this._onMeshReady = null;
+    }
+    if (this._onMeshError) {
+      AppEvents.off('simulation:mesh-error', this._onMeshError);
+      this._onMeshError = null;
+    }
   }
 }

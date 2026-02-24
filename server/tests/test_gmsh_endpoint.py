@@ -20,7 +20,7 @@ class GmshEndpointTest(unittest.TestCase):
     def test_unavailable_mesher_returns_503(self):
         request = GmshMeshRequest(geoText='Point(1) = {0,0,0,1};\nMesh 2;\n', mshVersion='2.2', binary=False)
 
-        with patch('app.gmsh_mesher_available', return_value=False):
+        with patch('api.routes_mesh.gmsh_mesher_available', return_value=False):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(generate_mesh_with_gmsh(request))
 
@@ -42,8 +42,8 @@ class GmshEndpointTest(unittest.TestCase):
             '$EndPhysicalNames'
         ])
 
-        with patch('app.gmsh_mesher_available', return_value=True), patch(
-            'app.generate_msh_from_geo',
+        with patch('api.routes_mesh.gmsh_mesher_available', return_value=True), patch(
+            'api.routes_mesh.generate_msh_from_geo',
             return_value={
                 'msh': mocked_msh,
                 'stats': {'nodeCount': 42, 'elementCount': 64}
