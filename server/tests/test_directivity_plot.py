@@ -1,5 +1,6 @@
 import unittest
 import importlib.util
+import numpy as np
 
 
 MATPLOTLIB_AVAILABLE = importlib.util.find_spec("matplotlib") is not None
@@ -68,6 +69,22 @@ class DirectivityPlotTest(unittest.TestCase):
         image = self._render(self._mixed())
         self.assertIsInstance(image, str)
         self.assertGreater(len(image), 100)
+
+
+@unittest.skipUnless(MATPLOTLIB_AVAILABLE, "matplotlib is not installed")
+class DirectivityTickGenerationTest(unittest.TestCase):
+    def test_preferred_frequency_ticks_default_directivity_span(self):
+        from solver.directivity_plot import _preferred_frequency_ticks
+
+        ticks = _preferred_frequency_ticks(100.0, 10000.0)
+        expected = list(np.arange(100.0, 1000.0 + 0.1, 100.0)) + list(np.arange(2000.0, 10000.0 + 0.1, 1000.0))
+        self.assertEqual(ticks, expected)
+
+    def test_preferred_frequency_ticks_clips_to_visible_range(self):
+        from solver.directivity_plot import _preferred_frequency_ticks
+
+        ticks = _preferred_frequency_ticks(350.0, 4500.0)
+        self.assertEqual(ticks, [400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0, 2000.0, 3000.0, 4000.0])
 
 
 if __name__ == "__main__":

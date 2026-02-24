@@ -43,6 +43,37 @@ class MeshValidationTest(unittest.TestCase):
         self.assertEqual(mesh["unit_detection"]["source"], "heuristic:ambiguous_default_mm")
         self.assertGreater(len(mesh["unit_detection"]["warnings"]), 0)
 
+    def test_empty_vertices_raises_actionable_error(self):
+        """Empty vertices must produce a clear ValueError, not a vague numpy internal error."""
+        with self.assertRaises(ValueError) as ctx:
+            prepare_mesh(vertices=[], indices=[], surface_tags=[])
+        msg = str(ctx.exception)
+        self.assertIn("no vertices", msg.lower())
+        # Must not expose numpy internals
+        self.assertNotIn("zero-size array", msg)
+        self.assertNotIn("reduction operation", msg)
+
+    def test_empty_indices_raises_actionable_error(self):
+        """Empty indices must produce a clear ValueError, not a vague numpy internal error."""
+        with self.assertRaises(ValueError) as ctx:
+            prepare_mesh(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[],
+                surface_tags=[],
+            )
+        msg = str(ctx.exception)
+        self.assertIn("no triangles", msg.lower())
+        self.assertNotIn("zero-size array", msg)
+        self.assertNotIn("reduction operation", msg)
+
+    def test_empty_mesh_error_message_is_actionable(self):
+        """Error message for empty mesh must guide the caller toward a fix."""
+        with self.assertRaises(ValueError) as ctx:
+            prepare_mesh(vertices=[], indices=[], surface_tags=[])
+        msg = str(ctx.exception)
+        # Message must mention the payload/list so the caller knows what to fix
+        self.assertIn("vertices", msg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

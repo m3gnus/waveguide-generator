@@ -278,6 +278,23 @@ Notes:
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`, then `numba`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
+- Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
+
+### 7.1 Solver performance metadata
+
+Every `/api/solve` result includes `metadata.performance`:
+
+| Field | Type | Description |
+|---|---|---|
+| `total_time_seconds` | float | Wall time for full solve |
+| `frequency_solve_time` | float | Time spent in frequency loop |
+| `directivity_compute_time` | float | Time for directivity post-processing |
+| `time_per_frequency` | float | Average per-frequency solve time |
+| `warmup_time_seconds` | float | Warm-up pass duration (0 if skipped) |
+| `gmres_iterations_per_frequency` | list[int\|null] | GMRES iteration count per frequency; `null` for failed frequencies |
+| `avg_gmres_iterations` | float | Mean iteration count across successful frequencies |
+| `gmres_strong_form_supported` | bool | Whether strong-form preconditioner was active for this run |
+| `reduction_speedup` | float | Symmetry reduction factor applied (1.0 = no reduction) |
 
 ## 8. Canonical Mesh Payload Contract
 

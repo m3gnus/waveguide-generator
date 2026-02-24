@@ -12,6 +12,8 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import FuncFormatter
 
 
@@ -20,6 +22,21 @@ MAX_DB = 0.0
 FRACTIONAL_OCTAVE = 24.0
 ANGLE_SAMPLES = 361
 FREQ_SAMPLES = 500
+FIGURE_BG = "#101820"
+AXES_BG = "#16212d"
+TEXT_COLOR = "#e2e8f0"
+TICK_COLOR = "#cbd5e1"
+SPINE_COLOR = "#4a5d73"
+GRID_COLOR = "white"
+PRIMARY_GRID_ALPHA = 0.24
+SECONDARY_GRID_ALPHA = 0.10
+HEATMAP_CMAP = LinearSegmentedColormap.from_list(
+    "waveguide_dark_red",
+    ["#07121d", "#0f2742", "#1b3f63", "#3d2a4f", "#6b1f2e", "#99161d"],
+    N=256,
+)
+CONTOUR_OUTLINE = "#0b1118"
+REFERENCE_CONTOUR_COLOR = "#ff4d4d"
 
 
 def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-6.0):
@@ -87,7 +104,7 @@ def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-
         titles = [_plane_title(entry["key"]) for entry in planes]
         datasets = [(entry["freqs"], entry["angles"], entry["values"]) for entry in planes]
 
-    fig.patch.set_facecolor("#1a1a1a")
+    fig.patch.set_facecolor(FIGURE_BG)
     for ax, title, (plot_freqs, plot_angles, plot_values) in zip(axes, titles, datasets):
         _render_single_heatmap(
             ax,
@@ -294,7 +311,7 @@ def _check_symmetry(h_values, v_values):
 
 def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.0):
     """Render a single directivity heatmap on the given axes."""
-    ax.set_facecolor("#1a1a1a")
+    ax.set_facecolor(AXES_BG)
 
     log_freqs = np.log10(freqs)
     if len(log_freqs) > 1:
@@ -321,7 +338,7 @@ def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.
         freq_edges,
         angle_edges,
         values,
-        cmap="viridis",
+        cmap=HEATMAP_CMAP,
         vmin=MIN_DB,
         vmax=MAX_DB,
         shading="flat",
@@ -330,15 +347,20 @@ def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.
     X, Y = np.meshgrid(freqs, angles)
     contour_levels = [-24, -18, -12, -9, -6, -3]
     try:
-        ax.contour(
+        contour = ax.contour(
             X,
             Y,
             values,
             levels=contour_levels,
-            colors="white",
+            colors=GRID_COLOR,
             linewidths=0.6,
-            alpha=0.35,
+            alpha=0.45,
         )
+        for collection in contour.collections:
+            collection.set_path_effects([
+                pe.Stroke(linewidth=1.2, foreground=CONTOUR_OUTLINE, alpha=0.8),
+                pe.Normal(),
+            ])
     except Exception:
         pass
 
@@ -348,9 +370,14 @@ def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.
             Y,
             values,
             levels=[reference_level],
-            colors="white",
+            colors=REFERENCE_CONTOUR_COLOR,
             linewidths=1.5,
         )
+        for collection in ref_contour.collections:
+            collection.set_path_effects([
+                pe.Stroke(linewidth=2.6, foreground=CONTOUR_OUTLINE, alpha=0.85),
+                pe.Normal(),
+            ])
     except Exception:
         ref_contour = None
 
@@ -358,8 +385,19 @@ def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.
     ax.set_xlim(freqs[0], freqs[-1])
     ax.set_ylim(angles[0], angles[-1])
 
+    detailed_ticks = _preferred_frequency_ticks(freqs[0], freqs[-1])
+    if detailed_ticks:
+        ax.set_xticks(detailed_ticks)
+    else:
+        detailed_ticks = _log_grid_lines(freqs[0], freqs[-1])
+        ax.set_xticks(detailed_ticks)
+
+    for freq in detailed_ticks:
+        ax.axvline(freq, color=GRID_COLOR, alpha=PRIMARY_GRID_ALPHA, linewidth=0.7)
+
     for freq in _log_grid_lines(freqs[0], freqs[-1]):
-        ax.axvline(freq, color="white", alpha=0.15, linewidth=0.5)
+        if not _contains_frequency(detailed_ticks, freq):
+            ax.axvline(freq, color=GRID_COLOR, alpha=SECONDARY_GRID_ALPHA, linewidth=0.5)
 
     angle_range = angles[-1] - angles[0]
     if angle_range > 120:
@@ -371,33 +409,39 @@ def _render_single_heatmap(ax, freqs, angles, values, title, reference_level=-6.
     start = np.ceil(angles[0] / angle_step) * angle_step
     for a in np.arange(start, angles[-1] + angle_step * 0.5, angle_step):
         if angles[0] < a < angles[-1]:
-            ax.axhline(a, color="white", alpha=0.15, linewidth=0.5)
+            ax.axhline(a, color=GRID_COLOR, alpha=SECONDARY_GRID_ALPHA, linewidth=0.5)
 
     ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
-    ax.set_xlabel("Frequency [Hz]", color="#cccccc", fontsize=11)
-    ax.set_ylabel("Angle [deg]", color="#cccccc", fontsize=11)
-    ax.set_title(title, color="#e0e0e0", fontsize=13, fontweight="600", pad=8)
-    ax.tick_params(colors="#aaaaaa", labelsize=9)
+    ax.set_xlabel("Frequency [Hz]", color=TEXT_COLOR, fontsize=11)
+    ax.set_ylabel("Angle [deg]", color=TEXT_COLOR, fontsize=11)
+    ax.set_title(title, color=TEXT_COLOR, fontsize=13, fontweight="600", pad=8)
+    ax.tick_params(colors=TICK_COLOR, labelsize=8)
 
     for spine in ax.spines.values():
-        spine.set_color("#444444")
+        spine.set_color(SPINE_COLOR)
 
     cbar = plt.colorbar(mesh, ax=ax, shrink=0.85, pad=0.02)
-    cbar.set_label("dB", color="#cccccc", fontsize=10)
-    cbar.ax.tick_params(colors="#aaaaaa", labelsize=9)
-    cbar.outline.set_edgecolor("#444444")
+    cbar.set_label("dB", color=TEXT_COLOR, fontsize=10)
+    cbar.ax.tick_params(colors=TICK_COLOR, labelsize=9)
+    cbar.outline.set_edgecolor(SPINE_COLOR)
 
     if ref_contour is not None:
         from matplotlib.lines import Line2D
 
-        legend_line = Line2D([0], [0], color="white", linewidth=1.5, label=f"ref @ {reference_level:g} dB")
+        legend_line = Line2D(
+            [0],
+            [0],
+            color=REFERENCE_CONTOUR_COLOR,
+            linewidth=1.5,
+            label=f"ref @ {reference_level:g} dB",
+        )
         ax.legend(
             handles=[legend_line],
             loc="upper right",
             fontsize=8,
-            facecolor="#2a2a2a",
-            edgecolor="#555555",
-            labelcolor="#cccccc",
+            facecolor=AXES_BG,
+            edgecolor=SPINE_COLOR,
+            labelcolor=TEXT_COLOR,
             framealpha=0.85,
         )
 
@@ -413,6 +457,51 @@ def _log_grid_lines(freq_min, freq_max):
             if freq_min <= freq <= freq_max:
                 lines.append(freq)
     return sorted(set(lines))
+
+
+def _preferred_frequency_ticks(freq_min, freq_max):
+    """
+    Build denser frequency ticks for directivity charts.
+
+    Requested density:
+    - every 100 Hz between 100 and 1000
+    - every 1 kHz between 1 kHz and 10 kHz
+    """
+    if freq_max <= freq_min:
+        return []
+
+    ticks = []
+    ticks.extend(_linear_tick_range(freq_min, freq_max, 100.0, 1000.0, 100.0))
+    ticks.extend(_linear_tick_range(freq_min, freq_max, 1000.0, 10000.0, 1000.0))
+
+    # Outside the requested ranges, retain sparse log boundaries for orientation.
+    if freq_min < 100.0:
+        ticks.extend(_log_grid_lines(freq_min, min(freq_max, 100.0)))
+    if freq_max > 10000.0:
+        ticks.extend(_log_grid_lines(max(freq_min, 10000.0), freq_max))
+
+    if not ticks:
+        return _log_grid_lines(freq_min, freq_max)
+
+    return sorted({round(float(tick), 6) for tick in ticks})
+
+
+def _linear_tick_range(freq_min, freq_max, domain_min, domain_max, step):
+    lo = max(float(freq_min), float(domain_min))
+    hi = min(float(freq_max), float(domain_max))
+    if hi < lo:
+        return []
+    start = np.ceil(lo / step) * step
+    if start > hi + (step * 1e-9):
+        return []
+    return list(np.arange(start, hi + (step * 0.5), step))
+
+
+def _contains_frequency(freqs, target):
+    for freq in freqs:
+        if np.isclose(freq, target, rtol=1e-6, atol=1e-6):
+            return True
+    return False
 
 
 def _freq_formatter(x, pos):

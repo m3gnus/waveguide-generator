@@ -7,8 +7,12 @@ Ensures mesh resolution is appropriate for frequency range:
 - Provides warnings when frequency exceeds mesh capability
 """
 
+import logging
+
 import numpy as np
 from typing import Dict, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_mesh_statistics(
@@ -321,45 +325,48 @@ def print_mesh_validation_report(
         verbose: Print detailed statistics
     """
     if not verbose:
-        # Print only warnings
+        # Log only warnings even in non-verbose mode.
         for warning in validation['warnings']:
-            print(f"[Mesh] WARNING: {warning}")
+            logger.warning("[Mesh] WARNING: %s", warning)
         return
 
-    print("\n" + "="*70)
-    print("MESH VALIDATION REPORT")
-    print("="*70)
-
     stats = validation['mesh_stats']
-    print(f"\nMesh Statistics:")
-    print(f"  Elements: {stats['num_elements']}")
-    print(f"  Edge length: {stats['min_edge_length']:.5f} - {stats['max_edge_length']:.5f} m")
-    print(f"  Mean edge: {stats['mean_edge_length']:.5f} m")
+    logger.info("=" * 70)
+    logger.info("MESH VALIDATION REPORT")
+    logger.info("=" * 70)
+    logger.info(
+        "Mesh Statistics: elements=%d, edge_length=%.5f-%.5f m, mean=%.5f m",
+        stats['num_elements'], stats['min_edge_length'], stats['max_edge_length'],
+        stats['mean_edge_length'],
+    )
 
     if symmetry_factor > 1.0:
-        print(f"\nSymmetry Reduction: {symmetry_factor:.1f}× → {int(stats['num_elements']/symmetry_factor)} effective elements")
+        logger.info(
+            "Symmetry Reduction: %.1fx -> %d effective elements",
+            symmetry_factor, int(stats['num_elements'] / symmetry_factor),
+        )
 
-    print(f"\nFrequency Range: {frequency_range[0]:.0f} - {frequency_range[1]:.0f} Hz ({num_frequencies} points)")
-
-    print(f"\nMesh Capability:")
-    print(f"  Max valid frequency: {validation['max_valid_frequency']:.0f} Hz")
-    print(f"  Recommended max: {validation['recommended_max_frequency']:.0f} Hz (80% of limit)")
-    print(f"  Elements/wavelength @ {frequency_range[1]:.0f} Hz: {validation['elements_per_wavelength_at_max']:.1f}")
+    logger.info(
+        "Frequency Range: %.0f - %.0f Hz (%d points)",
+        frequency_range[0], frequency_range[1], num_frequencies,
+    )
+    logger.info(
+        "Mesh Capability: max_valid=%.0f Hz, recommended_max=%.0f Hz, elements/wavelength=%.1f",
+        validation['max_valid_frequency'],
+        validation['recommended_max_frequency'],
+        validation['elements_per_wavelength_at_max'],
+    )
 
     cost = estimate_simulation_cost(stats, num_frequencies, symmetry_factor)
-    print(f"\nEstimated Runtime: {cost['estimated_minutes']:.1f} minutes")
+    logger.info("Estimated Runtime: %.1f minutes", cost['estimated_minutes'])
 
     if len(validation['warnings']) > 0:
-        print(f"\nWARNINGS:")
         for warning in validation['warnings']:
-            print(f"  ⚠ {warning}")
-
-        # Show recommendations
-        if 'recommendations' in validation and len(validation['recommendations']) > 0:
-            print(f"\nRECOMMENDATIONS:")
+            logger.warning("[Mesh] WARNING: %s", warning)
+        if 'recommendations' in validation:
             for rec in validation['recommendations']:
-                print(f"  → {rec}")
+                logger.info("[Mesh] RECOMMENDATION: %s", rec)
     else:
-        print(f"\n✓ Mesh resolution is adequate for requested frequency range")
+        logger.info("[Mesh] Mesh resolution is adequate for requested frequency range")
 
-    print("="*70 + "\n")
+    logger.info("=" * 70)

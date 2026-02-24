@@ -1,7 +1,11 @@
+import logging
+
 import numpy as np
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .contract import frequency_failure
+
+logger = logging.getLogger(__name__)
 from .deps import bempp_api
 from .impedance import calculate_throat_impedance
 from .device_interface import (
@@ -107,7 +111,7 @@ def solve_frequency(
 
     p_total, info = bempp_api.linalg.gmres(lhs, rhs, tol=1e-5)
     if info != 0:
-        print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
+        logger.warning("[BEM] GMRES did not converge (info=%d) at k=%.3f", info, k)
 
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
     origin_center = frame["origin_center"]
@@ -157,9 +161,9 @@ def solve(
         wall_elements = mesh.get("wall_elements", np.array([]))
         mouth_elements = mesh.get("mouth_elements", np.array([]))
         unit_detection = mesh.get("unit_detection", {})
-        print(
-            f"[BEM] Mesh loaded: {len(throat_elements)} throat, "
-            f"{len(wall_elements)} wall, {len(mouth_elements)} mouth elements"
+        logger.info(
+            "[BEM] Mesh loaded: %d throat, %d wall, %d mouth elements",
+            len(throat_elements), len(wall_elements), len(mouth_elements),
         )
     else:
         grid = mesh
@@ -216,7 +220,7 @@ def solve(
                 f"Solving frequency {i + 1}/{len(frequencies)}",
             )
 
-        print(f"[BEM] Solving frequency {i + 1}/{len(frequencies)}: {freq:.1f} Hz")
+        logger.info("[BEM] Solving frequency %d/%d: %.1f Hz", i + 1, len(frequencies), freq)
         k = 2 * np.pi * freq / c
 
         try:
@@ -246,9 +250,8 @@ def solve(
                     safe_profile = configure_opencl_safe_profile()
                     if isinstance(device_metadata, dict):
                         device_metadata["runtime_profile"] = str(safe_profile.get("profile") or "safe_cpu")
-                    print(
-                        f"[BEM] OpenCL runtime error at {freq:.1f} Hz; "
-                        "retrying with OpenCL safe CPU profile."
+                    logger.warning(
+                        "[BEM] OpenCL runtime error at %.1f Hz; retrying with OpenCL safe CPU profile.", freq
                     )
                     try:
                         spl, impedance, di = solve_frequency(
@@ -294,9 +297,8 @@ def solve(
                 }
                 results["metadata"]["warnings"].append(warning)
                 results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
-                print(
-                    f"[BEM] OpenCL runtime error at {freq:.1f} Hz; "
-                    "falling back to numba and retrying."
+                logger.warning(
+                    "[BEM] OpenCL runtime error at %.1f Hz; falling back to numba and retrying.", freq
                 )
                 boundary_interface = "numba"
                 potential_interface = "numba"
@@ -332,7 +334,7 @@ def solve(
                 except Exception as retry_exc:
                     exc = retry_exc
 
-            print(f"[BEM] Error at {freq:.1f} Hz: {exc}")
+            logger.error("[BEM] Error at %.1f Hz: %s", freq, exc)
             results["metadata"]["failures"].append(
                 frequency_failure(freq, "frequency_solve", "frequency_solve_failed", str(exc))
             )

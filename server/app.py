@@ -10,12 +10,20 @@ from typing import Dict, List, Optional, Any, Union
 from contextlib import asynccontextmanager
 import uuid
 import asyncio
+import logging
+import os
 import subprocess
 import threading
 from collections import deque
 from pathlib import Path
 from datetime import datetime
 from db import SimulationDB
+
+logging.basicConfig(
+    level=getattr(logging, os.getenv("MWG_LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # Import solver module (will be created)
 try:
@@ -29,7 +37,7 @@ try:
     from solver.device_interface import normalize_device_mode
     SOLVER_AVAILABLE = BEMPP_RUNTIME_READY
     if SOLVER_AVAILABLE:
-        print("[BEM] Device auto policy: opencl_gpu -> opencl_cpu -> numba")
+        logger.info("[BEM] Device auto policy: opencl_gpu -> opencl_cpu -> numba")
 except ImportError:
     SOLVER_AVAILABLE = False
     BEMPP_RUNTIME_READY = False
@@ -57,7 +65,7 @@ except ImportError:
             }
         }
 
-    print("Warning: BEM solver not available. Install bempp-cl to enable simulations.")
+    logger.warning("BEM solver not available. Install bempp-cl to enable simulations.")
 
 
 
@@ -176,8 +184,8 @@ def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
         merged["request"] = config
         try:
             merged["request_obj"] = SimulationRequest(**config)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("Could not reconstruct SimulationRequest for job %s: %s", job_id, _exc)
     with jobs_lock:
         jobs[job_id] = merged
     return merged
@@ -268,10 +276,10 @@ def _remove_from_queue(job_id: str) -> None:
 
 async def _drain_scheduler_queue() -> None:
     global scheduler_loop_running
-    if scheduler_loop_running:
-        return
-
-    scheduler_loop_running = True
+    with jobs_lock:
+        if scheduler_loop_running:
+            return
+        scheduler_loop_running = True
     try:
         while True:
             with jobs_lock:
@@ -334,7 +342,8 @@ async def _drain_scheduler_queue() -> None:
 
             asyncio.create_task(run_simulation(job_id, request_obj))
     finally:
-        scheduler_loop_running = False
+        with jobs_lock:
+            scheduler_loop_running = False
 
 
 def _run_git(repo_root: Path, *args: str) -> str:
@@ -670,7 +679,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Health check requested", flush=True)
+    logger.info("Health check requested")
     dependency_status = get_dependency_status()
 
     # Include BEM device interface diagnostics when solver is available
@@ -1066,7 +1075,7 @@ async def get_results(job_id: str):
 
     stored = db.get_results(job_id)
     if stored is None:
-        raise HTTPException(status_code=500, detail="Results not available")
+        raise HTTPException(status_code=404, detail="Results not available")
     _set_job_fields(job_id, results=stored)
     return stored
 
@@ -1247,7 +1256,7 @@ async def render_directivity(request: DirectivityRenderRequest):
         )
 
     if not request.frequencies or not request.directivity:
-        raise HTTPException(status_code=400, detail="Missing frequencies or directivity data")
+        raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
 
     try:
         image_b64 = render_directivity_plot(request.frequencies, request.directivity,
@@ -1332,7 +1341,12 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             msh_artifact = occ_result.get("msh_text")
             _set_job_fields(job_id, mesh_artifact=msh_artifact, has_mesh_artifact=bool(msh_artifact))
             if msh_artifact:
-                db.store_mesh_artifact(job_id, msh_artifact)
+                try:
+                    db.store_mesh_artifact(job_id, msh_artifact)
+                except Exception as _artifact_persist_exc:
+                    # Artifact is for optional download only; do not abort the simulation.
+                    logger.warning("Mesh artifact persistence failed for job %s: %s", job_id, _artifact_persist_exc)
+                    _set_job_fields(job_id, has_mesh_artifact=False)
 
             mesh_metadata = dict(request.mesh.metadata or {})
             mesh_metadata.update({
@@ -1440,6 +1454,21 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             _set_job_fields(job_id, stage="cancelled", stage_message="Simulation cancelled")
             return
 
+        # Persist results before marking complete — prevents false-complete state if persistence fails.
+        try:
+            db.store_results(job_id, results)
+        except Exception as persist_exc:
+            _set_job_fields(
+                job_id,
+                status="error",
+                stage="error",
+                stage_message="Simulation failed",
+                error_message="Results could not be saved. The simulation completed but persistence failed.",
+                completed_at=_now_iso(),
+            )
+            logger.error("Persistence error for job %s: %s", job_id, persist_exc)
+            return
+
         completed_at = _now_iso()
         _set_job_fields(
             job_id,
@@ -1453,10 +1482,10 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             cancellation_requested=False,
             error_message=None,
         )
-        db.store_results(job_id, results)
 
     except Exception as e:
-        import traceback
+        # Top-level catch-all: any unhandled exception from the solver must transition the
+        # job to error state rather than leaving it stuck in 'running'.
         _set_job_fields(
             job_id,
             status="error",
@@ -1465,9 +1494,7 @@ async def run_simulation(job_id: str, request: SimulationRequest):
             error_message=str(e),
             completed_at=_now_iso(),
         )
-        print(f"Simulation error for job {job_id}: {e}")
-        print(f"Full traceback:")
-        traceback.print_exc()
+        logger.error("Simulation error for job %s: %s", job_id, e, exc_info=True)
     finally:
         with jobs_lock:
             running_jobs.discard(job_id)
