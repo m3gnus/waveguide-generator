@@ -1,8 +1,12 @@
+import logging
+
 import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 
 from .deps import GMSH_AVAILABLE, bempp_api, gmsh
 from .gmsh_utils import gmsh_lock
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_unit_scale_to_meter(
@@ -66,7 +70,7 @@ def refine_mesh_with_gmsh(
         Tuple of (refined_vertices, refined_indices, refined_tags)
     """
     if not GMSH_AVAILABLE:
-        print("[Gmsh] Not available, using original mesh")
+        logger.info("[Gmsh] Not available, using original mesh")
         return vertices, indices, surface_tags
 
     try:
@@ -85,7 +89,7 @@ def refine_mesh_with_gmsh(
                 c = 343.0  # Speed of sound m/s
                 wavelength = c / target_frequency
                 target_size = wavelength / 8  # 8 elements per wavelength
-                print(f"[Gmsh] Target element size: {target_size:.6f} m (for {target_frequency} Hz)")
+                logger.debug("[Gmsh] Target element size: %.6f m (for %.0f Hz)", target_size, target_frequency)
 
                 # Add vertices to Gmsh
                 num_vertices = vertices.shape[1]
@@ -152,7 +156,7 @@ def refine_mesh_with_gmsh(
                 elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
                 if len(elem_types) == 0:
-                    print("[Gmsh] No elements generated, using original mesh")
+                    logger.warning("[Gmsh] No elements generated, using original mesh")
                     return vertices, indices, surface_tags
 
                 # Find triangles (type 2)
@@ -165,7 +169,7 @@ def refine_mesh_with_gmsh(
                         break
 
                 if refined_indices is None:
-                    print("[Gmsh] No triangles found, using original mesh")
+                    logger.warning("[Gmsh] No triangles found, using original mesh")
                     return vertices, indices, surface_tags
 
                 # Generate new surface tags based on physical groups
@@ -185,9 +189,9 @@ def refine_mesh_with_gmsh(
                                     if len(idx) > 0:
                                         refined_tags[idx[0]] = tag
 
-                print(
-                    f"[Gmsh] Mesh refined: {num_vertices} -> {refined_vertices.shape[1]} vertices, "
-                    f"{num_triangles} -> {num_refined_tris} triangles"
+                logger.info(
+                    "[Gmsh] Mesh refined: %d -> %d vertices, %d -> %d triangles",
+                    num_vertices, refined_vertices.shape[1], num_triangles, num_refined_tris,
                 )
 
                 return refined_vertices, refined_indices, refined_tags
@@ -195,7 +199,8 @@ def refine_mesh_with_gmsh(
                 if initialized_here and gmsh.isInitialized():
                     gmsh.finalize()
     except Exception as e:
-        print(f"[Gmsh] Error during mesh refinement: {e}")
+        # Gmsh refinement is best-effort; fall back to original mesh on any error.
+        logger.warning("[Gmsh] Error during mesh refinement: %s", e, exc_info=True)
         return vertices, indices, surface_tags
 
 
@@ -228,25 +233,37 @@ def prepare_mesh(
         - original_surface_tags: (M,) array - preserved for symmetry detection
         - throat_elements, wall_elements, mouth_elements: element indices per boundary
     """
-    print(f"[BEM prepare_mesh] Called with {len(vertices)} vertex values, {len(indices)} index values")
-    print(f"[BEM prepare_mesh] surface_tags provided: {surface_tags is not None}")
+    logger.debug("[BEM prepare_mesh] Called with %d vertex values, %d index values", len(vertices), len(indices))
+    logger.debug("[BEM prepare_mesh] surface_tags provided: %s", surface_tags is not None)
     if surface_tags is not None:
-        print(f"[BEM prepare_mesh] surface_tags length: {len(surface_tags)}")
+        logger.debug("[BEM prepare_mesh] surface_tags length: %d", len(surface_tags))
 
     # Reshape vertices to (3, N) array
     vertices_array = np.array(vertices).reshape(-1, 3).T
     num_vertices = vertices_array.shape[1]
-    print(f"[BEM prepare_mesh] Reshaped vertices: {vertices_array.shape} -> {num_vertices} vertices")
+    logger.debug("[BEM prepare_mesh] Reshaped vertices: %s -> %d vertices", vertices_array.shape, num_vertices)
+
+    if num_vertices == 0:
+        raise ValueError(
+            "Mesh has no vertices. The mesh payload must contain at least one vertex "
+            "(vertices list is empty)."
+        )
 
     # Reshape indices to (3, M) array
     indices_array = np.array(indices, dtype=np.int32).reshape(-1, 3).T
     num_triangles = indices_array.shape[1]
-    print(f"[BEM prepare_mesh] Reshaped indices: {indices_array.shape} -> {num_triangles} triangles")
+    logger.debug("[BEM prepare_mesh] Reshaped indices: %s -> %d triangles", indices_array.shape, num_triangles)
+
+    if num_triangles == 0:
+        raise ValueError(
+            "Mesh has no triangles. The mesh payload must contain at least one triangle "
+            "(indices list is empty)."
+        )
 
     # Validate indices are within bounds
     max_index = int(np.max(indices_array))
     min_index = int(np.min(indices_array))
-    print(f"[BEM prepare_mesh] Index range: [{min_index}, {max_index}]")
+    logger.debug("[BEM prepare_mesh] Index range: [%d, %d]", min_index, max_index)
     if max_index >= num_vertices:
         raise ValueError(
             f"Mesh index out of bounds: max index {max_index} >= vertex count {num_vertices}. "
@@ -258,21 +275,21 @@ def prepare_mesh(
             f"This indicates corrupted mesh data from the frontend."
         )
 
-    print(
-        f"[BEM] Mesh validated: {num_vertices} vertices, {indices_array.shape[1]} triangles, "
-        f"index range [{min_index}, {max_index}]"
+    logger.debug(
+        "[BEM] Mesh validated: %d vertices, %d triangles, index range [%d, %d]",
+        num_vertices, indices_array.shape[1], min_index, max_index,
     )
 
     unit_scale_to_meter, unit_source, unit_warnings, max_extent = _resolve_unit_scale_to_meter(
         vertices_array, mesh_metadata
     )
     vertices_array = vertices_array * unit_scale_to_meter
-    print(
-        f"[BEM] Unit normalization: source={unit_source}, "
-        f"scale={unit_scale_to_meter:g}, input_extent={max_extent:.4f}"
+    logger.debug(
+        "[BEM] Unit normalization: source=%s, scale=%g, input_extent=%.4f",
+        unit_source, unit_scale_to_meter, max_extent,
     )
     for warning in unit_warnings:
-        print(f"[BEM] Unit warning: {warning}")
+        logger.warning("[BEM] Unit warning: %s", warning)
 
     # Store original mesh for symmetry detection (before any refinement)
     original_vertices = vertices_array.copy()

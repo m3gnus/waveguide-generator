@@ -9,7 +9,11 @@ Detects whether horn geometry supports:
 Applies Neumann boundary conditions on symmetry planes for proper BEM formulation.
 """
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 from typing import Dict, List, Tuple, Optional
 from enum import Enum
 
@@ -430,7 +434,7 @@ def validate_symmetry_reduction(
     """
     if reduction_info['reduction_factor'] <= 1.0:
         if verbose:
-            print("[Symmetry] No reduction applied (full model)")
+            logger.info("[Symmetry] No reduction applied (full model)")
         return True
 
     expected_reduction = reduction_info['reduction_factor']
@@ -440,12 +444,20 @@ def validate_symmetry_reduction(
     # Allow some tolerance (mesh boundaries may not reduce perfectly)
     if actual_tri_reduction < expected_reduction * 0.7:
         if verbose:
-            print(f"[Symmetry] Warning: Expected {expected_reduction}× reduction, got {actual_tri_reduction:.2f}×")
+            logger.warning(
+                "[Symmetry] Expected %.1fx reduction, got %.2fx", expected_reduction, actual_tri_reduction
+            )
         return False
 
     if verbose:
-        print(f"[Symmetry] Reduction validated: {actual_tri_reduction:.2f}× triangle reduction")
-        print(f"[Symmetry] Vertices: {reduction_info['original_vertices']} → {reduction_info['reduced_vertices']}")
-        print(f"[Symmetry] Triangles: {reduction_info['original_triangles']} → {reduction_info['reduced_triangles']}")
+        logger.info("[Symmetry] Reduction validated: %.2fx triangle reduction", actual_tri_reduction)
+        logger.info(
+            "[Symmetry] Vertices: %d -> %d",
+            reduction_info['original_vertices'], reduction_info['reduced_vertices'],
+        )
+        logger.info(
+            "[Symmetry] Triangles: %d -> %d",
+            reduction_info['original_triangles'], reduction_info['reduced_triangles'],
+        )
 
     return True

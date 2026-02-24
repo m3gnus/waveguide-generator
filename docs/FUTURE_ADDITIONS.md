@@ -7,31 +7,6 @@ This document tracks roadmap work by status.
 Implemented runtime behavior belongs in:
 - `docs/PROJECT_DOCUMENTATION.md`
 
-## In Progress (Partially Implemented)
-
-### BEM solver acceleration roadmap
-
-Execution strategy for accelerating backend `/api/solve`:
-1. Assembler policy: `auto|dense|fmm` with dense fallback.
-2. Matrix-free iterative path using FMM-backed operators.
-3. Device policy hardening for `auto|opencl_cpu|opencl_gpu|numba`.
-4. CUDA optimization (deferred until post-FMM benchmarks).
-
-Progress by phase:
-- **Phase 0: Baseline and harness**: pending.
-- **Phase 1: FMM integration**: pending.
-- **Phase 2: Matrix-free policy**: pending.
-- **Phase 3: Device policy hardening**: partially implemented (Feb 2026).
-
-Implemented in Phase 3:
-- Added explicit modes `auto|opencl_cpu|opencl_gpu|numba`.
-- `auto` mode now uses deterministic priority: `opencl_gpu -> opencl_cpu -> numba`.
-- Added runtime fallback metadata to `/health` and solve result metadata.
-
-Remaining for Phase 3:
-- Expand hardware-class guidance for OpenCL GPU setup (especially Windows/Linux driver onboarding).
-- Add regression/performance baselines per hardware class.
-
 ## Backlog
 
 ### Script snapshot compatibility hardening
@@ -129,6 +104,13 @@ Next additions:
 - Run structured dead-code audit in `src/` for functions with no runtime UI path.
 
 ## Completed (Implemented)
+
+### BEM solver acceleration
+- **Implemented (Feb 2026)**: Strong-form GMRES enabled via `use_strong_form=True` (inverse mass matrix preconditioner). Reduces GMRES iteration count per frequency.
+- `return_iteration_count=True` surfaces per-frequency iteration counts; both kwargs are feature-detected at import time via `inspect.signature` so the solver degrades cleanly on legacy `bempp_api` runtimes without a try/except fallback per frequency.
+- Warm-up pass before frequency loop front-loads JIT/OpenCL kernel compilation costs. Controllable via `enable_warmup` parameter; benchmark CLI exposes `--no-warmup` for A/B measurement.
+- Performance metadata added to every `/api/solve` result: `warmup_time_seconds`, `gmres_iterations_per_frequency`, `avg_gmres_iterations`, `gmres_strong_form_supported`.
+- Benchmark script: `server/scripts/benchmark_solver.py`.
 
 ### Documentation and agent stewardship
 - **Implemented (Feb 2026)**: `AGENTS.md` now references the **BEM Solver Acceleration Roadmap** (FMM/OpenCL) for future automated refactors.

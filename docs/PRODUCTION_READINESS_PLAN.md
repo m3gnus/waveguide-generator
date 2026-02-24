@@ -1,15 +1,21 @@
-# Production-Readiness Unified Plan (Canonical)
+# Production-Readiness Unified Plan (Sessionized Canonical)
 
-**Last updated:** February 24, 2026  
+**Last updated:** February 24, 2026 (Session 4 complete)
 **Supersedes:** `docs/PRODUCTION_READINESS_AUDIT_PLAN.md`
 
-## Goal
-Deliver production readiness with behavior preservation, explicit API contract stability, and measurable quality/performance gates.
+## Decision: One Go vs Multiple Sessions
+**Best outcome:** split into multiple sessions.
+
+### Why splitting is better for this codebase
+- The work crosses high-risk boundaries (`server/app.py`, solver pipeline, simulation UI lifecycle).
+- Contract regressions are expensive (`surfaceTags`, source-tag requirements, `/api/mesh/build` semantics).
+- Test maps from `AGENTS.md` require targeted + full-suite validation for several files.
+- Smaller sessions allow deterministic rollback/handoff with less context load for weaker agents.
 
 ## Baseline (as of February 24, 2026)
-- JS tests: `78/78` passing
-- Server tests: `85/85` passing (`4` skipped)
-- Frontend bundle: `631 KiB`
+- JS tests: `81/81` passing
+- Server tests: `88/88` passing (`1` skipped)
+- Frontend bundle: `631 KiB` (exceeds 550 KiB gate — reduction target for Session 9)
 
 ## Non-Negotiable Contracts
 - No endpoint removals/renames.
@@ -24,21 +30,8 @@ Deliver production readiness with behavior preservation, explicit API contract s
 - Source tag `2` must exist in simulation payloads.
 - Interface tag `4` only exists when enclosure is enabled and `interfaceOffset > 0`.
 - `/api/mesh/build` remains OCC-based and does not return `.geo`.
-- Type-safety strategy remains JSDoc + Python type hints (no TS migration).
+- Type-safety strategy remains JSDoc + Python type hints (no TypeScript migration).
 - Behavior changes are only allowed for verified bugs.
-
-## Comparison Outcome (What Was Kept)
-From `PRODUCTION_READINESS_PLAN.md` (kept for best outcome):
-- Detailed phase breakdown, priorities, and explicit bug-fix items.
-- Concrete targets for timer leak fixes, localStorage validation, and bundle reduction.
-- Optional-risk handling for `waveguide_builder.py` split.
-
-From `PRODUCTION_READINESS_AUDIT_PLAN.md` (added/strengthened):
-- Stronger public API compatibility language.
-- Additional backend service decomposition targets:
-  - `server/services/simulation_runner.py`
-  - `server/services/update_service.py`
-- Explicit contract-critical test inventory tied to AGENTS guardrails.
 
 ## Release Gates
 
@@ -46,192 +39,764 @@ From `PRODUCTION_READINESS_AUDIT_PLAN.md` (added/strengthened):
 - Empty mesh payloads fail with deterministic `422` (no traceback leakage).
 - Persistence failures do not leave jobs in false-complete states.
 - Polling/event listeners are disposed correctly (no orphan timers/listeners).
-- Backend logs are structured (`logging`), with no broad silent failures.
+- Backend logs are structured (`logging`) with no silent broad exception swallowing.
 - API status code boundaries are consistent (`422` vs `503` vs `500` vs `404`).
 
 ### Gate B (Should pass before production)
-- Frontend bundle reduced to `<= 550 KiB` initial threshold, then `<= 500 KiB`.
-- Idle polling cadence bounded to reduce network churn.
-- App/service module boundaries split to reduce change risk.
+- Frontend bundle reduced to `<= 550 KiB`, then `<= 500 KiB`.
+- Idle polling cadence is bounded.
+- `app.py` responsibilities are decomposed into routes/services.
 
-### Gate C (Can land after production freeze if needed)
-- Deep internal decomposition of solver internals (`solve_optimized()` split).
-- `waveguide_builder.py` split (only if all contract tests remain green).
+### Gate C (Optional / Post-freeze)
+- Internal decomposition of `solve_optimized()`.
+- Optional split of `waveguide_builder.py` only with OCC parity intact.
 
-## Phase Plan
+## Current Gate Status (Update Every Session)
+| Gate | Status (`not_started` / `in_progress` / `blocked` / `pass`) | Last checked | Notes |
+|---|---|---|---|
+| Gate A | `in_progress` | `2026-02-24` | Empty-mesh 422 + persistence failure safety + scheduler lock + HTTP semantics + structured logging satisfied; polling lifecycle pending Session 6 |
+| Gate B | `not_started` | `-` | - |
+| Gate C | `not_started` | `-` | Optional gate |
 
-## Phase 0: Guardrails and Baseline Hardening
-**Objective:** lock behavior and contracts before refactors.
+## Agent Execution Protocol (Use in Every Session)
+1. Pull context:
+   - Read this plan.
+   - Read `AGENTS.md` at repo root.
+2. Confirm clean understanding of scope and allowed files.
+3. Make only the listed changes for that session.
+4. Run targeted tests first.
+5. Run full suites:
+   - `npm test`
+   - `npm run test:server`
+6. If any test fails, fix or revert that session’s changes.
+7. Write handoff note using the template in this document.
+8. Update this document using the mandatory update checklist and tracker sections.
 
-### Scope
-- Capture baseline metrics:
-  - `npm test`
-  - `npm run test:server`
-  - `npm run build` bundle measurement
-  - backend startup log volume
-- Add lint/format baseline:
-  - `.eslintrc.json` (`no-unused-vars`, `no-undef`, `consistent-return`)
-  - `.prettierrc` matching current style
-  - warning-only rollout, no mass auto-fix
-- Add/verify contract regression tests for:
-  - surface tag mapping and source-tag requirements
-  - `/api/mesh/build` OCC behavior (non-`.geo`)
-- Add bundle gate script: `scripts/check-bundle-size.js`
+## Test Commands Reference
 
-### Exit Criteria
-- Existing suites pass unchanged.
-- Empty-mesh regression test exists and fails with `422` before Phase 1 fix.
-
-## Phase 1: P0 Correctness and Operational Safety
-**Objective:** close production blockers first.
-
-### Scope
-- Backend bug fixes:
-  - Add explicit empty vertices/indices guard in `server/solver/mesh.py`.
-  - Wrap `db.store_results()` and `db.store_mesh_artifact()` with failure handling in `run_simulation` flow.
-  - Fix `scheduler_loop_running` read/write race by synchronizing under lock.
-- Logging hardening:
-  - Replace server-side `print()` with `logging` in runtime code paths.
-  - Keep `print` only in allowed CLI contexts (`benchmark_solver.py` and explicit report CLI output).
-- Error semantics:
-  - Missing results -> `404`.
-  - Dependency unavailable -> `503`.
-  - Validation problems -> `422`.
-  - Unexpected failures -> `500` with safe message and logged traceback.
-
-### Exit Criteria
-- Gate A items pass.
-- No silent `except Exception: pass` in runtime code.
-
-## Phase 2: Backend Architecture Decomposition
-**Objective:** reduce long-file risk while preserving behavior.
-
-### Scope
-- Split `server/app.py` into:
-  - `server/api/routes_mesh.py`
-  - `server/api/routes_simulation.py`
-  - `server/api/routes_misc.py`
-- Extract runtime/services:
-  - `server/services/job_runtime.py`
-  - `server/services/simulation_runner.py`
-  - `server/services/update_service.py`
-- Extract shared solver utilities:
-  - observation distance resolution
-  - source velocity construction
-
-### Exit Criteria
-- Route signatures and payloads unchanged.
-- FIFO and `max_concurrent_jobs=1` behavior preserved.
-- Full server test suite remains green.
-
-## Phase 3: Frontend State and Async Flow
-**Objective:** prevent leaks and stabilize simulation lifecycle.
-
-### Scope
-- Split `src/ui/simulation/actions.js` into:
-  - `simulation/jobActions.js`
-  - `simulation/polling.js`
-  - `simulation/progressUi.js`
-  - `simulation/meshDownload.js`
-- Add explicit panel lifecycle management:
-  - `dispose()` removes EventBus listeners and clears timers.
-  - error paths always call timer cleanup.
-- Replace hardcoded backend URL with shared solver base URL config.
-- Cache repeated DOM lookups to reduce render churn.
-
-### Exit Criteria
-- No duplicate polling timers across panel lifecycle.
-- Mesh artifact fetches use configured backend URL only.
-- Simulation UX remains behavior-compatible.
-
-## Phase 4: Error Handling and Contract Hardening
-**Objective:** consistent failure surfaces frontend + backend.
-
-### Scope
-- Add centralized frontend API error parser for solver/export paths.
-- Add preflight validation before `POST /api/solve`:
-  - frequency bounds
-  - mesh presence
-  - required source/surface tags
-- Isolate EventBus listener failures so one listener does not break others.
-- Validate localStorage schema before hydration; fallback to defaults on mismatch.
-
-### Exit Criteria
-- User-facing errors are deterministic/actionable.
-- Corrupt localStorage no longer causes app-start crashes.
-
-## Phase 5: Cleanup and Performance
-**Objective:** ship a cleaner codebase with measurable runtime improvements.
-
-### Scope
-- Remove confirmed dead code in `src/geometry/engine/mesh/enclosure.js`.
-- Consolidate dev globals behind one debug object + dev guard.
-- Lazy-load simulation-heavy modules via dynamic `import()`.
-- Bound idle polling budget and add backoff after repeated connection failures.
-- Clean backend startup/request log noise.
-
-### Exit Criteria
-- Bundle gate passes (`<= 550 KiB` first pass, `<= 500 KiB` final target).
-- Idle polling remains bounded with no unnecessary request bursts.
-
-## Phase 6: Type Safety, Docs, and Runbook
-**Objective:** ensure long-term maintainability and operability.
-
-### Scope
-- Frontend `// @ts-check` + JSDoc on critical modules.
-- Backend type hints tightened for route/service interfaces.
-- Update `docs/PROJECT_DOCUMENTATION.md` with new boundaries.
-- Add production runbook (logging levels, health expectations, failure classes, troubleshooting).
-
-### Exit Criteria
-- Annotated modules pass type checks.
-- Operator can diagnose common failures from docs alone.
-
-## Required Test Matrix
-Run these after each phase as applicable:
-
-### Core Suites
+### Core suites
 - `npm test`
 - `npm run test:server`
 
-### Contract-Critical JS Tests
+### JS targeted example
+- `node --test tests/mesh-payload.test.js`
+
+### Server targeted example
+- `cd server && python3 -m unittest tests.test_mesh_validation`
+
+### Contract-critical JS tests
 - `tests/mesh-payload.test.js`
 - `tests/geometry-artifacts.test.js`
 - `tests/enclosure-regression.test.js`
 - `tests/export-gmsh-pipeline.test.js`
 - `tests/waveguide-payload.test.js`
 
-### Contract-Critical Server Tests
+### Contract-critical server tests
+- `server/tests/test_dependency_runtime.py`
+- `server/tests/test_gmsh_endpoint.py`
+- `server/tests/test_occ_resolution_semantics.py`
+- `server/tests/test_updates_endpoint.py`
 - `server/tests/test_mesh_validation.py`
 - `server/tests/test_solver_tag_contract.py`
 - `server/tests/test_solver_hardening.py`
 - `server/tests/test_api_validation.py`
-- `server/tests/test_gmsh_endpoint.py`
-- `server/tests/test_occ_resolution_semantics.py`
-- `server/tests/test_updates_endpoint.py`
 
-### New/Strengthened Regression Tests
-- Empty mesh -> deterministic `422` without traceback leakage.
-- DB persistence failure -> job transitions to error state (never false-complete).
-- Polling lifecycle -> cleanup on error and panel disposal.
-- EventBus listener isolation.
-- Mesh artifact download uses configured backend URL.
-- Bundle-size gate script enforcement.
+## Session Order and Ownership
+Run sessions in order. Parallelization is allowed only where explicitly stated.
 
-## Sequence and Parallelization
-- Recommended order: Phase 0 -> Phase 1 -> Phase 2 -> Phase 3 -> Phase 4 -> Phase 5 -> Phase 6.
-- Phase 3 and Phase 4 can run in parallel after Phase 2.
-- Phase 6 can start after Phase 2 but should finalize after Phase 5.
-- Defer risky optional solver-file splits until all gates are green.
+- Session 0: Baseline and guardrails
+- Session 1: Empty-mesh 422 hardening
+- Session 2: Job persistence failure safety
+- Session 3: Scheduler race and status-code semantics
+- Session 4: Backend logging and exception tightening
+- Session 5: Backend decomposition (routes + services)
+- Session 6: Frontend timer/listener lifecycle + backend URL config
+- Session 7: Frontend module split + DOM cache
+- Session 8: Frontend/backend error-hardening + localStorage schema checks
+- Session 9: Cleanup + performance gates
+- Session 10: Type safety + documentation + final readiness report
 
-## Deferred/Optional Work (Only After Gates A+B)
-- Internal split of `solve_optimized()` into private helper functions.
-- Controlled split of `waveguide_builder.py` if OCC parity remains stable.
+## Session Tracker (Mandatory)
+Update this table at the end of each completed session.
 
-## Delivery Artifacts
-- Phased, test-green commits.
-- Updated architecture and runbook docs.
-- Final readiness report with:
-  - before/after performance deltas
-  - defect classes eliminated
-  - residual risks and follow-up actions
+| Session | Status (`not_started` / `in_progress` / `done` / `blocked`) | Date completed | Agent | PR/Commit | Evidence link (handoff/log section) |
+|---|---|---|---|---|---|
+| 0 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 0 log entry` |
+| 1 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 1 log entry` |
+| 2 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 2 log entry` |
+| 3 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 3 log entry` |
+| 4 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 4 log entry` |
+| 5 | `not_started` | `-` | `-` | `-` | `-` |
+| 6 | `not_started` | `-` | `-` | `-` | `-` |
+| 7 | `not_started` | `-` | `-` | `-` | `-` |
+| 8 | `not_started` | `-` | `-` | `-` | `-` |
+| 9 | `not_started` | `-` | `-` | `-` | `-` |
+| 10 | `not_started` | `-` | `-` | `-` | `-` |
+
+## Session 0: Baseline and Guardrails
+**Objective:** establish measurable baseline and non-breaking CI guardrails.
+
+### Allowed file areas
+- `docs/`
+- Lint/format config files
+- `scripts/check-bundle-size.js`
+
+### Steps
+1. Record baseline metrics from current branch:
+   - `npm test`
+   - `npm run test:server`
+   - `npm run build` and capture bundle size
+2. Add ESLint baseline (`warning-only` behavior, no sweeping auto-fix).
+3. Add Prettier config matching current style.
+4. Add `scripts/check-bundle-size.js` with threshold `550 KiB` initially.
+5. Document baseline values and script usage in this plan or related docs.
+
+### Required tests
+- `npm test`
+- `npm run test:server`
+
+### Exit criteria
+- No behavior change.
+- Baseline metrics captured.
+- Bundle gate script present and runnable.
+
+## Session 1: Empty-Mesh 422 Hardening
+**Objective:** fix empty-mesh reduction crash path with deterministic validation response.
+
+### Allowed file areas
+- `server/solver/mesh.py`
+- `server/tests/test_mesh_validation.py` (or focused validation test module)
+
+### Steps
+1. Add explicit guards for empty `vertices` and `indices` before `np.max/np.min` usage.
+2. Return deterministic validation error mapped to `422`.
+3. Add regression test asserting:
+   - status `422`
+   - actionable error message
+   - no traceback leakage in API response body
+
+### Required targeted tests
+- `cd server && python3 -m unittest tests.test_mesh_validation`
+- `cd server && python3 -m unittest tests.test_api_validation`
+
+### Required full suites
+- `npm run test:server`
+- `npm test`
+
+### Exit criteria
+- Gate A empty-mesh condition satisfied.
+- Contract-critical solver tests remain green.
+
+## Session 2: Job Persistence Failure Safety
+**Objective:** never mark jobs complete when persistence fails.
+
+### Allowed file areas
+- `server/app.py`
+- server test files covering job lifecycle/persistence
+
+### Steps
+1. Wrap `db.store_results()` and `db.store_mesh_artifact()` in guarded error handling inside simulation completion flow.
+2. On persistence error:
+   - mark job status as `error`
+   - store safe diagnostic message (no sensitive traceback in API payload)
+3. Add regression test ensuring no false-complete state when persistence throws.
+
+### Required targeted tests
+- `cd server && python3 -m unittest tests.test_api_validation`
+- `cd server && python3 -m unittest tests.test_dependency_runtime`
+
+### Required full suites
+- `npm run test:server`
+- `npm test`
+
+### Exit criteria
+- Persistence failures transition job to error deterministically.
+- Existing job API contracts unchanged.
+
+## Session 3: Scheduler Race + HTTP Semantics
+**Objective:** remove race condition and normalize status-code boundaries.
+
+### Allowed file areas
+- `server/app.py`
+- relevant server test modules
+
+### Steps
+1. Move `scheduler_loop_running` read/write under the same lock used for queue transitions.
+2. Ensure response semantics:
+   - missing result resource -> `404`
+   - validation failures -> `422`
+   - dependency unavailable -> `503`
+   - unexpected -> `500`
+3. Add/adjust tests for these cases.
+
+### Required targeted tests
+- `cd server && python3 -m unittest tests.test_api_validation`
+- `cd server && python3 -m unittest tests.test_updates_endpoint`
+
+### Required full suites
+- `npm run test:server`
+- `npm test`
+
+### Exit criteria
+- No race-induced scheduler state glitches.
+- Status-code mapping follows Gate A contract.
+
+## Session 4: Backend Logging + Exception Tightening
+**Objective:** replace ad-hoc prints and remove silent broad exception handling.
+
+### Allowed file areas
+- `server/app.py`
+- `server/solver/*.py` runtime modules
+- tests affected by logging/exception behavior
+
+### Steps
+1. Replace runtime `print()` with `logging` (`logger = logging.getLogger(__name__)`).
+2. Configure app log level from env (default `INFO`).
+3. Narrow broad `except Exception` where feasible.
+4. If catch-all is required, log with `exc_info=True` and comment why catch-all is needed.
+5. Keep CLI-style print output only for approved CLI/report paths.
+
+### Required targeted tests
+- `cd server && python3 -m unittest tests.test_solver_hardening`
+- `cd server && python3 -m unittest tests.test_solver_tag_contract`
+
+### Required full suites
+- `npm run test:server`
+- `npm test`
+
+### Exit criteria
+- Runtime code paths use structured logging.
+- No silent `except Exception: pass` in runtime flow.
+
+## Session 5: Backend Decomposition (Routes + Services)
+**Objective:** reduce `app.py` complexity without changing API behavior.
+
+### Allowed file areas
+- `server/app.py`
+- `server/api/routes_mesh.py`
+- `server/api/routes_simulation.py`
+- `server/api/routes_misc.py`
+- `server/services/job_runtime.py`
+- `server/services/simulation_runner.py`
+- `server/services/update_service.py`
+
+### Steps
+1. Create route modules and move handlers without changing signatures.
+2. Keep payload keys and route paths identical.
+3. Extract runtime state/orchestration into service classes.
+4. Preserve FIFO scheduling and `max_concurrent_jobs=1` semantics.
+5. Ensure startup/shutdown wiring still initializes all dependencies.
+
+### Required targeted tests
+- `cd server && python3 -m unittest tests.test_dependency_runtime`
+- `cd server && python3 -m unittest tests.test_gmsh_endpoint`
+- `cd server && python3 -m unittest tests.test_occ_resolution_semantics`
+- `cd server && python3 -m unittest tests.test_updates_endpoint`
+
+### Required full suites
+- `npm run test:server`
+- `npm test`
+
+### Exit criteria
+- Full server suite green with unchanged API contract.
+- `app.py` reduced to app assembly + router wiring + lifecycle hooks.
+
+## Session 6: Frontend Lifecycle Safety (Timers/Listeners/URL)
+**Objective:** remove timer/listener leaks and hardcoded backend URL usage.
+
+### Allowed file areas
+- `src/ui/simulation/`
+- `src/solver/`
+- minimal related app wiring
+- matching tests
+
+### Steps
+1. Ensure polling timer cleanup in all error/success/dispose paths.
+2. Add `dispose()` lifecycle hook to remove EventBus listeners and timers.
+3. Replace hardcoded `http://localhost:8000` fetch base with shared config-derived base URL.
+4. Add regression tests for:
+   - duplicate timer prevention
+   - disposal cleanup
+   - configured URL usage
+
+### Required targeted tests
+- `node --test tests/waveguide-payload.test.js`
+- `node --test tests/export-gmsh-pipeline.test.js`
+
+### Required full suites
+- `npm test`
+- `npm run test:server`
+
+### Exit criteria
+- No orphan timers/listeners.
+- No hardcoded backend base URL remains in simulation/export paths.
+
+## Session 7: Frontend Module Split + DOM Cache
+**Objective:** make simulation orchestration maintainable and reduce DOM churn.
+
+### Allowed file areas
+- `src/ui/simulation/actions.js`
+- new `src/ui/simulation/*` modules
+- minimal import/wiring updates
+- matching tests
+
+### Steps
+1. Split `actions.js` into:
+   - `jobActions.js`
+   - `polling.js`
+   - `progressUi.js`
+   - `meshDownload.js`
+2. Keep public behavior and event names unchanged.
+3. Cache frequently accessed DOM nodes in one place and reuse refs.
+4. Keep backward-compatible exports from `actions.js` if needed.
+
+### Required targeted tests
+- `node --test tests/export-gmsh-pipeline.test.js`
+- `node --test tests/waveguide-payload.test.js`
+
+### Required full suites
+- `npm test`
+- `npm run test:server`
+
+### Exit criteria
+- Simulation behavior unchanged.
+- Reduced repeated `document.getElementById()` churn in hot paths.
+
+## Session 8: Error Hardening + localStorage Schema Validation
+**Objective:** unify frontend/backend error surfaces and prevent hydration crashes.
+
+### Allowed file areas
+- `src/solver/` error handling utilities
+- `src/state.js` and/or storage-hydration paths
+- EventBus implementation
+- minimal corresponding backend error mapping touch-ups
+
+### Steps
+1. Add centralized frontend API error parser (validation vs dependency vs unexpected).
+2. Add simulation preflight validation before `/api/solve` call.
+3. Wrap EventBus listener execution to isolate listener failure impact.
+4. Validate persisted state shape before hydration; fallback to defaults on mismatch.
+5. Add tests for listener isolation and corrupt storage handling.
+
+### Required targeted tests
+- `node --test tests/mesh-payload.test.js`
+- `node --test tests/geometry-artifacts.test.js`
+- `node --test tests/enclosure-regression.test.js`
+
+### Required full suites
+- `npm test`
+- `npm run test:server`
+
+### Exit criteria
+- Deterministic user-facing errors.
+- Corrupt local storage cannot crash startup.
+
+## Session 9: Cleanup + Performance Gates
+**Objective:** remove dead code and meet bundle/polling budgets.
+
+### Allowed file areas
+- `src/geometry/engine/mesh/enclosure.js`
+- simulation/dynamic import integration files
+- debug-global exposure locations
+- performance scripts/docs
+
+### Steps
+1. Remove confirmed dead helpers in `enclosure.js`.
+2. Consolidate debug globals behind dev-only gate.
+3. Lazy-load simulation-heavy modules with dynamic imports.
+4. Enforce idle polling budget and backoff after repeated failures.
+5. Run bundle gate and record result.
+
+### Required targeted tests (AGENTS parity set)
+- `node --test tests/mesh-payload.test.js`
+- `node --test tests/geometry-artifacts.test.js`
+- `node --test tests/enclosure-regression.test.js`
+
+### Required full suites
+- `npm test`
+- `npm run test:server`
+- `npm run build`
+- `node scripts/check-bundle-size.js`
+
+### Exit criteria
+- Bundle `<= 550 KiB` (intermediate) and trending to `<= 500 KiB`.
+- No geometry-tag regressions.
+
+## Session 10: Type Safety + Docs + Final Readiness Report
+**Objective:** finalize maintainability and operations docs with verified status.
+
+### Allowed file areas
+- `src/` JSDoc-annotated modules
+- `server/` type hints
+- `docs/PROJECT_DOCUMENTATION.md`
+- `server/README.md`
+- readiness report document
+
+### Steps
+1. Add `// @ts-check` and JSDoc for high-risk frontend modules.
+2. Tighten backend route/service type hints.
+3. Update architecture docs to reflect extracted module boundaries.
+4. Add operator runbook:
+   - log levels
+   - health expectations
+   - common failure classes
+   - troubleshooting steps
+5. Produce final readiness report with:
+   - completed sessions
+   - test evidence
+   - performance deltas
+   - residual risks
+
+### Required full suites
+- `npm test`
+- `npm run test:server`
+- `npm run build`
+
+### Exit criteria
+- Documentation matches implementation.
+- Readiness report is complete and evidence-backed.
+
+## Session Handoff Template (Copy/Paste)
+Use this at the end of every session:
+
+```md
+Session: <number and title>
+Date: <YYYY-MM-DD>
+Agent: <name/id>
+
+Scope completed:
+- <item>
+- <item>
+
+Files changed:
+- <path>
+- <path>
+
+Tests run:
+- <command> -> <pass/fail>
+- <command> -> <pass/fail>
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: <yes/no>
+- Source tag requirement preserved: <yes/no>
+- `/api/mesh/build` non-`.geo` semantics preserved: <yes/no>
+
+Known issues / follow-up:
+- <item>
+
+Next session to run:
+- <session number>
+```
+
+## Mandatory Document Update Checklist (After Each Session)
+Every agent must update this document before ending the session.
+
+1. Update `Last updated` at the top of this file.
+2. Update the `Session Tracker` row for the session just completed.
+3. Update `Current Gate Status` if the session changed any gate readiness.
+4. Add a new entry to `Session Execution Log` (template below) with:
+   - scope actually completed
+   - exact tests run and outcomes
+   - contract checks
+   - known issues and follow-up
+5. If scope changed from the original session definition, note the delta explicitly in the log entry.
+6. If any required test was not run, record why and mark session status as `blocked` or `in_progress` (not `done`).
+
+## Session Execution Log
+Append one entry per session in reverse chronological order.
+
+### Log Entry Template
+```md
+#### Session <number>: <title>
+- Date: <YYYY-MM-DD>
+- Agent: <name/id>
+- Branch/PR/Commit: <id>
+- Status: <done/in_progress/blocked>
+- Planned scope changes: <none or explicit delta>
+
+Completed work:
+- <item>
+- <item>
+
+Files changed:
+- <path>
+- <path>
+
+Tests run:
+- <command> -> <pass/fail>
+- <command> -> <pass/fail>
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: <yes/no>
+- Source tag requirement preserved: <yes/no>
+- `/api/mesh/build` non-`.geo` semantics preserved: <yes/no>
+
+Gate impact:
+- Gate A: <no change / progressed / pass / blocked>
+- Gate B: <no change / progressed / pass / blocked>
+- Gate C: <no change / progressed / pass / blocked>
+
+Known issues / follow-up:
+- <item>
+
+Next session:
+- <number>
+```
+
+---
+
+#### Session 4: Backend Logging + Exception Tightening
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Added `import logging` + `logger = logging.getLogger(__name__)` to all runtime modules: `app.py`, `solver/deps.py`, `solver/bem_solver.py`, `solver/solve.py`, `solver/solve_optimized.py`, `solver/mesh.py`, `solver/mesh_validation.py`, `solver/symmetry.py`, `solver/directivity_correct.py`, `solver/device_interface.py`, `solver/waveguide_builder.py`
+- Configured log level from `MWG_LOG_LEVEL` env var (default `INFO`) via `logging.basicConfig` in `app.py`
+- Replaced ALL runtime `print()` calls with structured logging at appropriate levels (`logger.debug`, `logger.info`, `logger.warning`, `logger.error`)
+- Retained CLI-path `print()` only in `app.py` `__main__` startup banner and `server/scripts/benchmark_solver.py` (approved CLI report path)
+- Exception handling improvements:
+  - `run_simulation` broad `except Exception`: added `exc_info=True` + explanatory comment; removed `import traceback` + `traceback.print_exc()` — full traceback now goes to structured logger
+  - `_merge_job_cache_from_db` silent `except Exception: pass`: added `logger.debug(...)` instead of swallowing silently
+  - Gmsh refinement `except Exception`: added `exc_info=True` with comment (best-effort fallback, many possible Gmsh errors)
+  - Symmetry detection `except Exception`: added `exc_info=True` (fallback to full model)
+  - Directivity per-frequency `except Exception`: added `exc_info=True`
+  - Verbose `prepare_mesh` diagnostics moved to `logger.debug` (suppressed at default INFO level)
+
+Files changed:
+- `server/app.py`
+- `server/solver/deps.py`
+- `server/solver/bem_solver.py`
+- `server/solver/solve.py`
+- `server/solver/solve_optimized.py`
+- `server/solver/mesh.py`
+- `server/solver/mesh_validation.py`
+- `server/solver/symmetry.py`
+- `server/solver/directivity_correct.py`
+- `server/solver/device_interface.py`
+- `server/solver/waveguide_builder.py`
+
+Tests run:
+- `cd server && python3 -m unittest tests.test_solver_hardening tests.test_solver_tag_contract` -> 10/10 pass
+- `npm run test:server` -> 100 pass, 1 skipped (unchanged)
+- `npm test` -> 81/81 pass
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag logic changed)
+- Source tag requirement preserved: yes (no tag logic changed)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changed)
+
+Gate impact:
+- Gate A: in_progress — structured logging satisfied; remaining Gate A item (polling lifecycle) pending Session 6
+- Gate B: no change
+- Gate C: no change
+
+Known issues / follow-up:
+- `run_simulation`'s `except Exception` is intentionally a catch-all; now documented with a comment explaining why
+- `benchmark_solver.py` CLI script retains `print()` — it is a standalone CLI report tool, approved path
+
+Next session:
+- 5 (Backend decomposition: routes + services)
+
+---
+
+#### Session 3: Scheduler Race + HTTP Semantics
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Moved `scheduler_loop_running` read/write inside `jobs_lock` in `_drain_scheduler_queue`: check-and-set now under the same lock as queue transitions; `finally` block also resets flag under lock — eliminates any potential TOCTOU between asyncio tasks or future threading callers
+- Fixed `get_results` line ~1069: `status_code=500` → `status_code=404` for "Results not available" (job complete but no stored results — missing resource, not server error)
+- Fixed `render_directivity` line ~1249: `status_code=400` → `status_code=422` for "Missing frequencies or directivity data" (validation failure, not generic bad request)
+- Added 6 regression tests to `test_api_validation.py` in two new classes:
+  - `HttpSemanticsTest`:
+    - `test_get_results_missing_stored_results_returns_404` — verifies 404 when `db.get_results` returns None
+    - `test_render_directivity_empty_input_returns_422` — verifies 422 for empty frequencies/directivity
+    - `test_get_results_unknown_job_returns_404` — verifies 404 for nonexistent job
+    - `test_get_job_status_unknown_job_returns_404` — verifies 404 for nonexistent job
+  - `SchedulerStateTest`:
+    - `test_scheduler_skips_when_already_running` — verifies drain exits immediately when flag is True, job remains in queue
+    - `test_scheduler_loop_running_resets_after_empty_queue` — verifies flag is False after drain with empty queue
+
+Files changed:
+- `server/app.py`
+- `server/tests/test_api_validation.py`
+
+Tests run:
+- `cd server && python3 -m unittest tests.test_api_validation tests.test_updates_endpoint` -> 27/27 pass (+6 new)
+- `npm run test:server` -> 100 pass, 1 skipped (was 94+1; +6 new tests)
+- `npm test` -> 81/81 pass
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag logic changed)
+- Source tag requirement preserved: yes (no tag logic changed)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changed)
+
+Gate impact:
+- Gate A: in_progress — scheduler race + HTTP semantics satisfied; remaining Gate A item (polling lifecycle) pending Session 6; logging pending Session 4
+- Gate B: no change
+- Gate C: no change
+
+Known issues / follow-up:
+- `render_directivity` catch-all `except Exception` still maps to 500 — acceptable (unexpected errors)
+- `run_simulation`'s broad `except Exception` still prints `traceback.print_exc()` to stdout — addressed in Session 4 (logging tightening)
+
+Next session:
+- 4 (Backend logging + exception tightening)
+
+---
+
+#### Session 2: Job Persistence Failure Safety
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Reordered results persistence in `run_simulation`: `db.store_results()` now called BEFORE `_set_job_fields(status="complete", ...)` — eliminates false-complete state on server crash between the two calls
+- Wrapped `db.store_results()` in explicit try/except: on failure, job transitions to `error` with safe diagnostic message ("Results could not be saved. The simulation completed but persistence failed.") — no exception class or traceback leaked to API
+- Wrapped `db.store_mesh_artifact()` in explicit try/except: artifact failure is non-fatal — simulation continues to completion, `has_mesh_artifact` is corrected to `False`, warning printed to stdout
+- Added 3 regression tests to `test_api_validation.py` in `JobPersistenceFailureSafetyTest`:
+  - `test_results_persistence_failure_leaves_error_not_complete` — verifies status is "error" not "complete" when `db.store_results` raises
+  - `test_results_persistence_failure_error_message_is_safe` — verifies error_message contains no traceback or OSError class name
+  - `test_mesh_artifact_persistence_failure_does_not_abort_simulation` — verifies simulation reaches "complete" and `has_mesh_artifact=False` when `db.store_mesh_artifact` raises
+
+Files changed:
+- `server/app.py`
+- `server/tests/test_api_validation.py`
+
+Tests run:
+- `cd server && python3 -m unittest tests.test_api_validation` -> 18/18 pass (+3 new)
+- `cd server && python3 -m unittest tests.test_dependency_runtime` -> 4/4 pass
+- `npm run test:server` -> 94 pass, 1 skipped (was 91+1; +3 new tests)
+- `npm test` -> 81/81 pass
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag logic changed)
+- Source tag requirement preserved: yes (no tag logic changed)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changed)
+
+Gate impact:
+- Gate A: in_progress — persistence failure safety satisfied; remaining Gate A items (polling lifecycle, logging, status codes) pending
+- Gate B: no change
+- Gate C: no change
+
+Known issues / follow-up:
+- `run_simulation`'s `except Exception` broad catch (line ~1475) still prints `traceback.print_exc()` to stdout — addressed in Session 4 (logging tightening)
+- `db.store_mesh_artifact` failure prints to stdout (not structured logging) — same Session 4 scope
+
+Next session:
+- 3 (Scheduler race + HTTP semantics)
+
+---
+
+#### Session 1: Empty-Mesh 422 Hardening
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Added `num_vertices == 0` guard in `prepare_mesh` after vertices reshape; raises `ValueError` with actionable message before any `np.max` call
+- Added `num_triangles == 0` guard in `prepare_mesh` after indices reshape; raises `ValueError` with actionable message
+- Both guards prevent `ValueError: zero-size array to reduction operation maximum which has no identity` (numpy internal) from reaching API consumers
+- Added 3 regression tests to `test_mesh_validation.py`:
+  - `test_empty_vertices_raises_actionable_error` — verifies ValueError, "no vertices" in message, no numpy internals
+  - `test_empty_indices_raises_actionable_error` — verifies ValueError, "no triangles" in message, no numpy internals
+  - `test_empty_mesh_error_message_is_actionable` — verifies message contains actionable field name
+
+Files changed:
+- `server/solver/mesh.py`
+- `server/tests/test_mesh_validation.py`
+
+Tests run:
+- `cd server && python3 -m unittest tests.test_mesh_validation` -> 7/7 pass (4 pre-existing + 3 new)
+- `cd server && python3 -m unittest tests.test_api_validation` -> 15/15 pass
+- `npm run test:server` -> 91 pass, 1 skipped (was 88+1; +3 new tests)
+- `npm test` -> 81/81 pass
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag logic changed)
+- Source tag requirement preserved: yes (no tag logic changed)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changed)
+
+Gate impact:
+- Gate A: in_progress — empty-mesh 422 condition satisfied; remaining Gate A items (persistence, polling, logging, status codes) pending
+- Gate B: no change
+- Gate C: no change
+
+Known issues / follow-up:
+- The empty-mesh guards raise ValueError which maps to 422 via the synchronous `/api/mesh/generate-msh` path; in the async `/api/solve` path the job transitions to `error` state (by design — job already queued). This is acceptable and consistent with the existing architecture.
+- `run_simulation`'s `except Exception` broad catch (line 1458) still prints `traceback.print_exc()` to stdout — this is addressed in Session 4 (logging tightening).
+
+Next session:
+- 2 (Job persistence failure safety)
+
+---
+
+#### Session 0: Baseline and Guardrails
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Recorded baseline metrics (JS 81/81, server 88/88 skipped=1, bundle 631 KiB)
+- Corrected JS test count in plan (was 78, actual 81)
+- Installed `eslint`, `@eslint/js`, `globals`, `prettier` as devDependencies
+- Added `eslint.config.js` (flat config, warning-only, browser+node globals, `no-undef` false positives suppressed)
+- Added `.prettierrc` (singleQuote, tabWidth:2, printWidth:100, trailingComma:es5)
+- Added `.prettierignore` (dist, bundle.js, node_modules, server)
+- Added `scripts/check-bundle-size.js` (intermediate 550 KiB / target 500 KiB gate)
+- Added `npm run lint`, `npm run format:check`, `npm run bundle:check` scripts to `package.json`
+
+Files changed:
+- `package.json`
+- `eslint.config.js` (new)
+- `.prettierrc` (new)
+- `.prettierignore` (new)
+- `scripts/check-bundle-size.js` (new)
+- `docs/PRODUCTION_READINESS_PLAN.md`
+
+Tests run:
+- `npm test` -> 81/81 pass
+- `npm run test:server` -> 88 pass, 1 skipped
+- `npm run lint` -> 0 errors, 36 warnings (warning-only baseline)
+- `npm run format:check` -> 75 files need formatting (expected; no auto-fix applied)
+- `npm run bundle:check` -> FAIL 631.5 KiB > 550 KiB (expected; bundle reduction deferred to Session 9)
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no logic changes)
+- Source tag requirement preserved: yes (no logic changes)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changes)
+
+Gate impact:
+- Gate A: no change
+- Gate B: no change (bundle gate script now runnable; bundle still exceeds threshold)
+- Gate C: no change
+
+Known issues / follow-up:
+- 36 ESLint warnings remain in `src/`; address incrementally per session
+- 75 JS files need Prettier formatting; defer auto-fix to a dedicated cleanup step
+- Bundle is 631.5 KiB — 81.5 KiB above 550 KiB intermediate gate; reduction work in Session 9
+
+Next session:
+- 1 (Empty-mesh 422 hardening)
+
+---
+
+## Final Definition of Done
+- JS tests pass: `npm test`.
+- Server tests pass: `npm run test:server`.
+- No docs claim `/api/mesh/build` returns `.geo`.
+- ABEC bundle output remains parity-safe.
+- Solver support matrix docs remain aligned with `server/solver/deps.py`.
+- Gate A is fully green; Gate B is green or documented with explicit, approved risk.

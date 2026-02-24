@@ -16,7 +16,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-from .directivity_plot import _log_grid_lines, _freq_formatter
+from .directivity_plot import _log_grid_lines, _freq_formatter, _preferred_frequency_ticks
 
 
 def _setup_dark_axes(ax, xlabel, ylabel, title):
@@ -33,8 +33,19 @@ def _setup_dark_axes(ax, xlabel, ylabel, title):
     ax.grid(True, alpha=0.15, color='white', linewidth=0.5)
 
 
-def _add_log_grid(ax, freq_min, freq_max):
+def _add_log_grid(ax, freq_min, freq_max, *, detailed=False):
     """Add log-frequency grid lines matching directivity_plot style."""
+    if detailed:
+        ticks = _preferred_frequency_ticks(freq_min, freq_max)
+        if ticks:
+            ax.set_xticks(ticks)
+        for freq in ticks:
+            ax.axvline(freq, color='white', alpha=0.22, linewidth=0.7)
+        for freq in _log_grid_lines(freq_min, freq_max):
+            if not any(np.isclose(freq, tick, rtol=1e-6, atol=1e-6) for tick in ticks):
+                ax.axvline(freq, color='white', alpha=0.08, linewidth=0.5)
+        return
+
     for freq in _log_grid_lines(freq_min, freq_max):
         ax.axvline(freq, color='white', alpha=0.12, linewidth=0.5)
 
@@ -117,7 +128,8 @@ def render_directivity_index(frequencies, di, dpi=150):
     margin = max(2, (di_max - di_min) * 0.1)
     ax.set_ylim(min(0, di_min - margin), di_max + margin)
 
-    _add_log_grid(ax, freqs[0], freqs[-1])
+    _add_log_grid(ax, freqs[0], freqs[-1], detailed=True)
+    ax.tick_params(axis='x', labelsize=8)
 
     fig.tight_layout(pad=1.5)
     return _fig_to_base64(fig, dpi)

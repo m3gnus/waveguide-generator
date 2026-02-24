@@ -1,7 +1,11 @@
+import logging
+
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
 from .deps import BEMPP_AVAILABLE, bempp_api
+
+logger = logging.getLogger(__name__)
 from .device_interface import selected_device_metadata
 from .mesh import refine_mesh_with_gmsh, prepare_mesh
 from .solve import solve, solve_frequency
@@ -95,14 +99,14 @@ class BEMSolver:
         selected = device_info.get("selected", "unknown")
         fallback_reason = device_info.get("fallback_reason")
         if fallback_reason:
-            print(
-                f"[BEM] Device interface: {selected} "
-                f"(requested={device_mode}, selected_mode={device_info.get('selected_mode')}, reason: {fallback_reason})"
+            logger.info(
+                "[BEM] Device interface: %s (requested=%s, selected_mode=%s, reason: %s)",
+                selected, device_mode, device_info.get("selected_mode"), fallback_reason,
             )
         else:
-            print(
-                f"[BEM] Device interface: {selected} "
-                f"(requested={device_mode}, selected_mode={device_info.get('selected_mode')})"
+            logger.info(
+                "[BEM] Device interface: %s (requested=%s, selected_mode=%s)",
+                selected, device_mode, device_info.get("selected_mode"),
             )
 
         if use_optimized:

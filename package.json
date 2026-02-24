@@ -12,6 +12,9 @@
     "build": "webpack --mode production",
     "test": "node --test \"tests/**/*.test.js\"",
     "test:server": "cd server && python3 -m unittest discover -s tests",
+    "lint": "eslint src/",
+    "format:check": "prettier --check src/",
+    "bundle:check": "node scripts/check-bundle-size.js",
     "diag:payload": "node scripts/diagnostics/build-canonical-payload-from-reference.js",
     "diag:geometry": "node scripts/diagnostics/check-tritonia-geometry-artifacts.js",
     "diag:occ:tritonia": "python3 scripts/diagnostics/build-occ-mesh-tritonia.py",
@@ -36,6 +39,10 @@
     "three": "^0.160.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1",
     "webpack": "^5.88.0",
     "webpack-cli": "^5.1.4"
   }

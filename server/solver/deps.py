@@ -4,10 +4,13 @@ Dependency discovery and compatibility checks for backend solver components.
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 from importlib import metadata
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_PYTHON_MIN = (3, 10, 0)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14, 0)
@@ -139,27 +142,27 @@ BEMPP_RUNTIME_READY = BEMPP_AVAILABLE and BEMPP_SUPPORTED
 GMSH_OCC_RUNTIME_READY = GMSH_AVAILABLE and GMSH_SUPPORTED
 
 if not PYTHON_SUPPORTED:
-    print(
-        "Warning: unsupported Python runtime "
-        f"{PYTHON_VERSION}; supported range is >=3.10,<3.14."
+    logger.warning(
+        "Unsupported Python runtime %s; supported range is >=3.10,<3.14.", PYTHON_VERSION
     )
 if GMSH_AVAILABLE and not GMSH_SUPPORTED:
-    print(
-        "Warning: unsupported gmsh Python package version "
-        f"{GMSH_VERSION or 'unknown'}; supported range is >=4.15,<5.0."
+    logger.warning(
+        "Unsupported gmsh Python package version %s; supported range is >=4.15,<5.0.",
+        GMSH_VERSION or "unknown",
     )
 if BEMPP_AVAILABLE and not BEMPP_SUPPORTED:
     if BEMPP_VARIANT == "bempp_api":
         range_text = ">=0.3,<0.4"
     else:
         range_text = ">=0.4,<0.5"
-    print(
-        "Warning: unsupported bempp runtime "
-        f"{BEMPP_VARIANT or 'unknown'} {BEMPP_VERSION or 'unknown'}; "
-        f"supported range is {range_text}."
+    logger.warning(
+        "Unsupported bempp runtime %s %s; supported range is %s.",
+        BEMPP_VARIANT or "unknown",
+        BEMPP_VERSION or "unknown",
+        range_text,
     )
 if not BEMPP_AVAILABLE:
-    print("Warning: bempp runtime not available (install bempp-cl >=0.4,<0.5).")
+    logger.warning("bempp runtime not available (install bempp-cl >=0.4,<0.5).")
 
 
 def get_dependency_status() -> Dict[str, Dict[str, object]]:
