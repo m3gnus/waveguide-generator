@@ -8,7 +8,7 @@ from app import check_updates, get_update_status
 
 
 class UpdatesEndpointTest(unittest.TestCase):
-    @patch("app._run_git")
+    @patch("services.update_service._run_git")
     def test_get_update_status_reports_behind_remote(self, mock_run_git):
         mock_run_git.side_effect = [
             "git@github.com:m3gnus/waveguide-generator.git",
@@ -26,7 +26,7 @@ class UpdatesEndpointTest(unittest.TestCase):
         self.assertEqual(status["aheadCount"], 0)
         self.assertEqual(status["defaultBranch"], "main")
 
-    @patch("app._run_git")
+    @patch("services.update_service._run_git")
     def test_get_update_status_uses_main_when_origin_head_missing(self, mock_run_git):
         def run_git_side_effect(_repo_root, *args):
             command = tuple(args)
@@ -55,7 +55,7 @@ class UpdatesEndpointTest(unittest.TestCase):
         self.assertEqual(status["aheadCount"], 0)
 
     def test_check_updates_maps_runtime_error_to_http_503(self):
-        with patch("app.get_update_status", side_effect=RuntimeError("network unavailable")):
+        with patch("api.routes_misc.get_update_status", side_effect=RuntimeError("network unavailable")):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(check_updates())
 

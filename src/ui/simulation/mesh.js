@@ -4,7 +4,8 @@ let pendingMeshResolve = null;
 let pendingMeshReject = null;
 
 export function setupMeshListener(panel) {
-  AppEvents.on('simulation:mesh-ready', (meshData) => {
+  // Store references on panel so dispose() can remove these listeners.
+  panel._onMeshReady = (meshData) => {
     if (pendingMeshResolve) {
       pendingMeshResolve(meshData);
       pendingMeshResolve = null;
@@ -16,9 +17,9 @@ export function setupMeshListener(panel) {
       panel.pendingMeshResolve = null;
       panel.pendingMeshReject = null;
     }
-  });
+  };
 
-  AppEvents.on('simulation:mesh-error', (errorData) => {
+  panel._onMeshError = (errorData) => {
     const message = errorData?.message || 'Simulation mesh generation failed.';
     if (pendingMeshReject) {
       pendingMeshReject(new Error(message));
@@ -31,7 +32,10 @@ export function setupMeshListener(panel) {
       panel.pendingMeshResolve = null;
       panel.pendingMeshReject = null;
     }
-  });
+  };
+
+  AppEvents.on('simulation:mesh-ready', panel._onMeshReady);
+  AppEvents.on('simulation:mesh-error', panel._onMeshError);
 }
 
 export function prepareMeshForSimulation(panel) {

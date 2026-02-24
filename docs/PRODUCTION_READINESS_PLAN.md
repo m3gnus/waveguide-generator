@@ -1,6 +1,6 @@
 # Production-Readiness Unified Plan (Sessionized Canonical)
 
-**Last updated:** February 24, 2026 (Session 4 complete)
+**Last updated:** February 24, 2026 (Session 6 complete)
 **Supersedes:** `docs/PRODUCTION_READINESS_AUDIT_PLAN.md`
 
 ## Decision: One Go vs Multiple Sessions
@@ -13,8 +13,8 @@
 - Smaller sessions allow deterministic rollback/handoff with less context load for weaker agents.
 
 ## Baseline (as of February 24, 2026)
-- JS tests: `81/81` passing
-- Server tests: `88/88` passing (`1` skipped)
+- JS tests: `81/81` passing (Session 0); `84/84` after Session 6 (+3 new lifecycle regression tests)
+- Server tests: `88/88` passing (`1` skipped) (Session 0); `102/102` after Session 5 (unchanged in Session 6)
 - Frontend bundle: `631 KiB` (exceeds 550 KiB gate — reduction target for Session 9)
 
 ## Non-Negotiable Contracts
@@ -54,8 +54,8 @@
 ## Current Gate Status (Update Every Session)
 | Gate | Status (`not_started` / `in_progress` / `blocked` / `pass`) | Last checked | Notes |
 |---|---|---|---|
-| Gate A | `in_progress` | `2026-02-24` | Empty-mesh 422 + persistence failure safety + scheduler lock + HTTP semantics + structured logging satisfied; polling lifecycle pending Session 6 |
-| Gate B | `not_started` | `-` | - |
+| Gate A | `pass` | `2026-02-24` | All Gate A conditions satisfied: empty-mesh 422, persistence failure safety, scheduler lock, HTTP semantics, structured logging, polling lifecycle |
+| Gate B | `in_progress` | `2026-02-24` | `app.py` decomposition done (Session 5); bundle reduction pending Session 9 |
 | Gate C | `not_started` | `-` | Optional gate |
 
 ## Agent Execution Protocol (Use in Every Session)
@@ -126,8 +126,8 @@ Update this table at the end of each completed session.
 | 2 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 2 log entry` |
 | 3 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 3 log entry` |
 | 4 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 4 log entry` |
-| 5 | `not_started` | `-` | `-` | `-` | `-` |
-| 6 | `not_started` | `-` | `-` | `-` | `-` |
+| 5 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 5 log entry` |
+| 6 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 6 log entry` |
 | 7 | `not_started` | `-` | `-` | `-` | `-` |
 | 8 | `not_started` | `-` | `-` | `-` | `-` |
 | 9 | `not_started` | `-` | `-` | `-` | `-` |
@@ -542,6 +542,140 @@ Known issues / follow-up:
 Next session:
 - <number>
 ```
+
+---
+
+#### Session 6: Frontend Lifecycle Safety (Timers/Listeners/URL)
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Created `src/config/backendUrl.js`: single `DEFAULT_BACKEND_URL` constant (`http://localhost:8000`) as the shared config source
+- Updated `src/solver/index.js`: `BemSolver` constructor now imports and uses `DEFAULT_BACKEND_URL` instead of inline literal
+- Fixed `src/ui/simulation/actions.js`:
+  - Moved `isPolling` guard to be the FIRST statement in `pollSimulationStatus` (before any DOM access) — fixes bug where duplicate guard check failed in non-DOM environments and guard didn't prevent DOM access
+  - `clearPollTimer` now resets `panel.isPolling = false` so polling loop can be restarted after being stopped (fixes re-run-after-stop regression)
+  - `finally` block in `pollSimulationStatus` now uses inline timer management (not `clearPollTimer`) to reschedule without triggering `isPolling` reset mid-loop
+  - `downloadMeshArtifact` accepts `backendUrl` parameter (default: `DEFAULT_BACKEND_URL`); call site in `runSimulation` passes `panel.solver.backendUrl`
+- Fixed `src/ui/simulation/exports.js`: `exportAsMatplotlibPNG` uses `panel?.solver?.backendUrl` instead of hardcoded URL
+- Fixed `src/ui/simulation/viewResults.js`: `fetchCharts` closure uses `panel?.solver?.backendUrl` instead of hardcoded URL
+- Fixed `src/ui/simulation/events.js`: `state:updated` listener stored as `panel._onStateUpdated` for removal in `dispose()`
+- Fixed `src/ui/simulation/mesh.js`: `simulation:mesh-ready` and `simulation:mesh-error` listeners stored as `panel._onMeshReady` / `panel._onMeshError` for removal in `dispose()`
+- Added `SimulationPanel.dispose()`: clears `pollTimer`, `connectionPollTimer`, resets `isPolling`, removes all three AppEvents listeners (`state:updated`, `simulation:mesh-ready`, `simulation:mesh-error`)
+- Added 3 regression tests to `tests/simulation-flow.test.js`:
+  - `downloadMeshArtifact uses the provided backendUrl instead of hardcoded default`
+  - `pollSimulationStatus guard: second call returns immediately when isPolling is true`
+  - `dispose() clears poll timers, connection timer, and resets isPolling`
+
+Files changed:
+- `src/config/backendUrl.js` (new)
+- `src/solver/index.js`
+- `src/ui/simulation/actions.js`
+- `src/ui/simulation/exports.js`
+- `src/ui/simulation/viewResults.js`
+- `src/ui/simulation/events.js`
+- `src/ui/simulation/mesh.js`
+- `src/ui/simulation/SimulationPanel.js`
+- `tests/simulation-flow.test.js`
+
+Tests run:
+- `node --test tests/waveguide-payload.test.js` -> 3/3 pass
+- `node --test tests/export-gmsh-pipeline.test.js` -> 2/2 pass
+- `node --test tests/simulation-flow.test.js` -> 11/11 pass (+3 new)
+- `npm test` -> 84/84 pass (was 81/81; +3 new regression tests)
+- `npm run test:server` -> 102 pass, 1 skipped (unchanged)
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag logic changed)
+- Source tag requirement preserved: yes (no tag logic changed)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changed)
+
+Gate impact:
+- Gate A: pass — polling lifecycle condition now satisfied; all Gate A conditions met
+- Gate B: no change (bundle reduction pending Session 9)
+- Gate C: no change
+
+Known issues / follow-up:
+- `src/app/updates.js` retains its own `DEFAULT_BACKEND_URL` constant (not in Session 6 scope; planned cleanup in Session 9/10)
+- `src/app/exports.js` debug `testBackendConnection` function retains hardcoded URL (console diagnostic, not a simulation/export path)
+- `src/solver/status.js` `BemStatusManager.checkConnection` retains hardcoded URL — class appears unused by main code path; cleanup in Session 9
+
+Next session:
+- 7 (Frontend module split + DOM cache)
+
+---
+
+#### Session 5: Backend Decomposition (Routes + Services)
+- Date: 2026-02-24
+- Agent: claude-sonnet-4-6
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Extracted all Pydantic models from `app.py` into `server/models.py`
+- Extracted solver conditional imports and availability flags into `server/solver_bootstrap.py`
+- Created `server/services/` package:
+  - `job_runtime.py`: global runtime state (`jobs`, `job_queue`, `running_jobs`, `jobs_lock`, `scheduler_loop_running`, `db`, `db_initialized`), FIFO scheduler (`_drain_scheduler_queue`), DB helpers, startup lifecycle (`startup_jobs_runtime`)
+  - `simulation_runner.py`: `run_simulation` coroutine and `_validate_occ_adaptive_bem_shell`
+  - `update_service.py`: `_run_git` and `get_update_status`
+- Created `server/api/` package:
+  - `routes_misc.py`: `APIRouter` with `/`, `/health`, `/api/updates/check`, `/api/render-charts`, `/api/render-directivity`
+  - `routes_mesh.py`: `APIRouter` with `/api/mesh/build`, `/api/mesh/generate-msh`
+  - `routes_simulation.py`: `APIRouter` with all simulation lifecycle endpoints (`/api/solve`, `/api/stop`, `/api/status`, `/api/results`, `/api/mesh-artifact`, `/api/jobs`, etc.)
+- Rewrote `server/app.py` as thin assembly layer (~120 lines vs original ~1511): re-exports all public symbols for backward compat, registers routers via `include_router`, manages lifespan
+- Updated all 5 server test files to use correct patch targets in new module locations:
+  - `test_updates_endpoint.py`: `services.update_service._run_git`, `api.routes_misc.get_update_status`
+  - `test_dependency_runtime.py`: `api.routes_misc.*`, `api.routes_mesh.*`, `api.routes_simulation.*`
+  - `test_gmsh_endpoint.py`: `api.routes_mesh.gmsh_mesher_available`, `api.routes_mesh.generate_msh_from_geo`
+  - `test_api_validation.py`: `api.routes_simulation.*`, `services.simulation_runner.*`, `services.job_runtime.*`
+  - `test_job_persistence.py`: added `import services.job_runtime as _jrt` to setUp/tearDown to ensure test DB is consistently applied across all modules; `services.job_runtime.asyncio.create_task`
+- Fixed routes_simulation.py to access `_jrt.db` via module reference (not import-time binding) so setUp DB replacement propagates correctly to all route handlers
+- Circular import between `job_runtime` and `simulation_runner` resolved via lazy import inside `_drain_scheduler_queue` function body
+
+Files changed:
+- `server/app.py` (rewritten — ~1511 → ~120 lines)
+- `server/models.py` (new)
+- `server/solver_bootstrap.py` (new)
+- `server/services/__init__.py` (new)
+- `server/services/job_runtime.py` (new)
+- `server/services/simulation_runner.py` (new)
+- `server/services/update_service.py` (new)
+- `server/api/__init__.py` (new)
+- `server/api/routes_misc.py` (new)
+- `server/api/routes_mesh.py` (new)
+- `server/api/routes_simulation.py` (new)
+- `server/tests/test_updates_endpoint.py`
+- `server/tests/test_dependency_runtime.py`
+- `server/tests/test_gmsh_endpoint.py`
+- `server/tests/test_api_validation.py`
+- `server/tests/test_job_persistence.py`
+
+Tests run:
+- `cd server && python3 -m unittest tests.test_updates_endpoint tests.test_gmsh_endpoint tests.test_dependency_runtime` -> 10/10 pass
+- `cd server && python3 -m unittest tests.test_api_validation tests.test_job_persistence` -> 29/29 pass
+- `npm run test:server` -> 102 pass, 1 skipped (unchanged logic, 2 new tests from prior server count due to discover picking up models test)
+- `npm test` -> 81/81 pass
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag logic changed)
+- Source tag requirement preserved: yes (no tag logic changed)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no logic changed)
+
+Gate impact:
+- Gate A: no change (all existing Gate A checks remain satisfied)
+- Gate B: in_progress — `app.py` decomposition condition satisfied; bundle reduction pending Session 9
+- Gate C: no change
+
+Known issues / follow-up:
+- `routes_simulation.py` uses `import services.job_runtime as _jrt` for direct DB calls; this is intentional to allow test DB injection via `_jrt.db`
+- `ResourceWarning: unclosed database` appears in `test_occ_adaptive_preserves_wall_thickness_in_build_call` — pre-existing (mock patching creates temporary SimulationDB instances in prune call); non-blocking
+
+Next session:
+- 6 (Frontend lifecycle safety: timers/listeners/URL)
 
 ---
 
