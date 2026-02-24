@@ -61,7 +61,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
 
         def _solve_frequency_cached_stub(*_args, **kwargs):
             seen_distances.append(kwargs.get("observation_distance_m"))
-            return (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"))
+            return (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15)
 
         with patch(
             "solver.solve_optimized.solve_frequency_cached",
@@ -135,7 +135,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
 
         def _solve_frequency_cached_stub(*_args, **kwargs):
             seen_frames.append(kwargs.get("observation_frame"))
-            return (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"))
+            return (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15)
 
         def _directivity_stub(*_args, **kwargs):
             directivity_frames.append(kwargs.get("observation_frame"))

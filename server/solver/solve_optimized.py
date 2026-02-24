@@ -154,9 +154,19 @@ def solve_frequency_cached(
         lhs = dlp - 0.5 * identity
         rhs = slp * neumann_fun
 
-    p_total, info = bempp_api.linalg.gmres(lhs, rhs, tol=1e-5)
-    if info != 0:
-        print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
+    try:
+        p_total, info, iter_count = bempp_api.linalg.gmres(
+            lhs, rhs, tol=1e-5, use_strong_form=True, return_iteration_count=True
+        )
+        if info != 0:
+            print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
+    except Exception as _sf_exc:
+        print(f"[BEM] Warning: strong-form GMRES failed ({_sf_exc}), retrying with weak-form")
+        p_total, info, iter_count = bempp_api.linalg.gmres(
+            lhs, rhs, tol=1e-5, use_strong_form=False, return_iteration_count=True
+        )
+        if info != 0:
+            print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
 
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
     origin_center = frame["origin_center"]
@@ -181,7 +191,7 @@ def solve_frequency_cached(
     # Accurate DI is computed later from the batched directivity patterns.
     di = estimate_di_from_ka(grid, k, observation_frame=frame)
 
-    return float(spl), impedance, float(di), (p_total, u_total, space_p, space_u)
+    return float(spl), impedance, float(di), (p_total, u_total, space_p, space_u), int(iter_count)
 
 
 def solve_optimized(
@@ -354,7 +364,34 @@ def solve_optimized(
         potential_interface=potential_interface,
     )
     solutions: List[Optional[tuple]] = []
+    gmres_iterations: List[Optional[int]] = []
     opencl_safe_retry_consumed = False
+
+    # Warm-up: front-load one-time JIT/OpenCL kernel compilation costs before
+    # the timed frequency loop by assembling operators at a representative wavenumber.
+    warmup_time_seconds = 0.0
+    if len(frequencies) > 0:
+        _warmup_start = time.time()
+        try:
+            _k_warmup = 2 * np.pi * frequencies[len(frequencies) // 2] / c
+            _sp, _su, _id = cached_ops.get_or_create_spaces(grid)
+            _ops = cached_ops.get_or_create_operators(_sp, _su, _k_warmup, use_burton_miller)
+            _dlp = _ops[0]
+            _slp = _ops[1]
+            if use_burton_miller and _ops[2] is not None:
+                _hyp = _ops[2]
+                _coupling = 1j / _k_warmup
+                _lhs = 0.5 * _id - _dlp - _coupling * (-_hyp)
+            else:
+                _lhs = _dlp - 0.5 * _id
+            _ = _lhs.strong_form()  # triggers assembly + OpenCL/numba compilation
+            warmup_time_seconds = time.time() - _warmup_start
+            if verbose:
+                print(f"[BEM] Warm-up complete ({warmup_time_seconds:.2f}s)")
+        except Exception as _warmup_exc:
+            warmup_time_seconds = time.time() - _warmup_start
+            if verbose:
+                print(f"[BEM] Warm-up skipped ({_warmup_exc})")
 
     freq_start_time = time.time()
     success_count = 0
@@ -377,7 +414,7 @@ def solve_optimized(
 
         try:
             iter_start = time.time()
-            spl, impedance, di, solution = solve_frequency_cached(
+            spl, impedance, di, solution, iter_count = solve_frequency_cached(
                 grid, k, c, rho, sim_type, cached_ops, throat_elements, use_burton_miller,
                 observation_distance_m=observation_distance_m,
                 observation_frame=observation_frame,
@@ -386,13 +423,14 @@ def solve_optimized(
             success_count += 1
 
             if verbose:
-                print(f" -> {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
+                print(f" -> {spl:.1f} dB, DI={di:.1f} dB, iters={iter_count} ({iter_time:.2f}s)")
 
             results["spl_on_axis"]["spl"].append(float(spl))
             results["impedance"]["real"].append(float(impedance.real))
             results["impedance"]["imaginary"].append(float(impedance.imag))
             results["di"]["di"].append(float(di))
             solutions.append(solution)
+            gmres_iterations.append(iter_count)
         except Exception as exc:
             if boundary_interface == "opencl" and is_opencl_buffer_error(exc):
                 if isinstance(device_metadata, dict):
@@ -412,7 +450,7 @@ def solve_optimized(
                     )
                     try:
                         iter_start = time.time()
-                        spl, impedance, di, solution = solve_frequency_cached(
+                        spl, impedance, di, solution, iter_count = solve_frequency_cached(
                             grid, k, c, rho, sim_type, cached_ops, throat_elements,
                             observation_distance_m=observation_distance_m,
                             observation_frame=observation_frame,
@@ -432,12 +470,13 @@ def solve_optimized(
                             if retry_detail:
                                 device_metadata["runtime_retry_detail"] = str(retry_detail)
                         if verbose:
-                            print(f" -> {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
+                            print(f" -> {spl:.1f} dB, DI={di:.1f} dB, iters={iter_count} ({iter_time:.2f}s)")
                         results["spl_on_axis"]["spl"].append(float(spl))
                         results["impedance"]["real"].append(float(impedance.real))
                         results["impedance"]["imaginary"].append(float(impedance.imag))
                         results["di"]["di"].append(float(di))
                         solutions.append(solution)
+                        gmres_iterations.append(iter_count)
                         continue
                     except Exception as retry_exc:
                         exc = retry_exc
@@ -474,7 +513,7 @@ def solve_optimized(
                     device_metadata["fallback_reason"] = str(exc)
                 try:
                     iter_start = time.time()
-                    spl, impedance, di, solution = solve_frequency_cached(
+                    spl, impedance, di, solution, iter_count = solve_frequency_cached(
                         grid, k, c, rho, sim_type, cached_ops, throat_elements,
                         observation_distance_m=observation_distance_m,
                         observation_frame=observation_frame,
@@ -482,12 +521,13 @@ def solve_optimized(
                     iter_time = time.time() - iter_start
                     success_count += 1
                     if verbose:
-                        print(f" -> {spl:.1f} dB, DI={di:.1f} dB ({iter_time:.2f}s)")
+                        print(f" -> {spl:.1f} dB, DI={di:.1f} dB, iters={iter_count} ({iter_time:.2f}s)")
                     results["spl_on_axis"]["spl"].append(float(spl))
                     results["impedance"]["real"].append(float(impedance.real))
                     results["impedance"]["imaginary"].append(float(impedance.imag))
                     results["di"]["di"].append(float(di))
                     solutions.append(solution)
+                    gmres_iterations.append(iter_count)
                     continue
                 except Exception as retry_exc:
                     exc = retry_exc
@@ -501,6 +541,7 @@ def solve_optimized(
             results["impedance"]["imaginary"].append(None)
             results["di"]["di"].append(None)
             solutions.append(None)
+            gmres_iterations.append(None)
 
     freq_solve_time = time.time() - freq_start_time
 
@@ -611,12 +652,17 @@ def solve_optimized(
 
     results["metadata"]["failure_count"] = len(results["metadata"]["failures"])
     results["metadata"]["partial_success"] = success_count > 0 and results["metadata"]["failure_count"] > 0
+    valid_iterations = [n for n in gmres_iterations if n is not None]
+    avg_gmres = sum(valid_iterations) / len(valid_iterations) if valid_iterations else 0.0
     results["metadata"]["performance"] = {
         "total_time_seconds": total_time,
         "frequency_solve_time": freq_solve_time,
         "directivity_compute_time": directivity_time,
         "time_per_frequency": freq_solve_time / len(frequencies) if len(frequencies) > 0 else 0,
         "reduction_speedup": reduction_factor,
+        "warmup_time_seconds": warmup_time_seconds,
+        "gmres_iterations_per_frequency": gmres_iterations,
+        "avg_gmres_iterations": round(avg_gmres, 1),
     }
 
     if verbose:
@@ -624,11 +670,15 @@ def solve_optimized(
         print("SIMULATION COMPLETE")
         print("=" * 70)
         print(f"Total time: {total_time:.1f}s")
+        if warmup_time_seconds > 0:
+            print(f"Warm-up: {warmup_time_seconds:.2f}s")
         if len(frequencies) > 0:
             print(
                 f"Frequency solve: {freq_solve_time:.1f}s "
                 f"({freq_solve_time / len(frequencies):.2f}s per frequency)"
             )
+        if valid_iterations:
+            print(f"GMRES iterations: avg={avg_gmres:.1f}, min={min(valid_iterations)}, max={max(valid_iterations)}")
         print(f"Directivity compute: {directivity_time:.1f}s")
         if reduction_factor > 1.0:
             print(f"Symmetry speedup: {reduction_factor:.1f}x")
