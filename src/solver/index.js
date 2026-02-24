@@ -18,6 +18,7 @@
  */
 
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
+import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
 
 /**
  * @typedef {Object} BemSimulationConfig
@@ -95,6 +96,42 @@ export function validateCanonicalMeshPayload(meshData) {
   return true;
 }
 
+export function validateSimulationPreflight(config, meshData) {
+  validateCanonicalMeshPayload(meshData);
+
+  const frequencyStart = Number(config?.frequencyStart);
+  const frequencyEnd = Number(config?.frequencyEnd);
+  const numFrequencies = Number(config?.numFrequencies);
+
+  if (!Number.isFinite(frequencyStart) || !Number.isFinite(frequencyEnd)) {
+    throw new Error('Simulation preflight failed: frequency range must contain valid numbers.');
+  }
+  if (frequencyStart >= frequencyEnd) {
+    throw new Error('Simulation preflight failed: start frequency must be less than end frequency.');
+  }
+  if (!Number.isFinite(numFrequencies) || numFrequencies < 1) {
+    throw new Error('Simulation preflight failed: numFrequencies must be at least 1.');
+  }
+  if (!meshData.surfaceTags.includes(2)) {
+    throw new Error('Simulation preflight failed: source surface tag (2) missing from mesh payload.');
+  }
+}
+
+async function fetchOrApiError(url, options, operation) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    throw createNetworkApiError(operation, error);
+  }
+
+  if (!response.ok) {
+    throw await parseApiErrorResponse(response, { operation });
+  }
+
+  return response;
+}
+
 export class BemSolver {
   constructor() {
     this.backendUrl = DEFAULT_BACKEND_URL;
@@ -105,10 +142,11 @@ export class BemSolver {
    * Fetch backend health payload.
    */
   async getHealthStatus() {
-    const response = await fetch(`${this.backendUrl}/health`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch health: ${response.status}`);
-    }
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/health`,
+      undefined,
+      'Health check'
+    );
     return await response.json();
   }
 
@@ -128,7 +166,7 @@ export class BemSolver {
    * Submit a horn geometry for BEM simulation
    */
   async submitSimulation(config, meshData, options = {}) {
-    validateCanonicalMeshPayload(meshData);
+    validateSimulationPreflight(config, meshData);
 
     const payload = {
       mesh: {
@@ -149,28 +187,11 @@ export class BemSolver {
       device_mode: config.deviceMode || 'auto'
     };
 
-    const response = await fetch(`${this.backendUrl}/api/solve`, {
+    const response = await fetchOrApiError(`${this.backendUrl}/api/solve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      let detail = '';
-      try {
-        const errorPayload = await response.json();
-        if (typeof errorPayload?.detail === 'string') {
-          detail = errorPayload.detail;
-        } else if (Array.isArray(errorPayload?.detail)) {
-          detail = JSON.stringify(errorPayload.detail);
-        }
-      } catch (_error) {
-        // Ignore JSON decode failures and fallback to status-only message.
-      }
-      throw new Error(detail
-        ? `BEM solver error: ${response.status} (${detail})`
-        : `BEM solver error: ${response.status}`);
-    }
+    }, 'Submit simulation');
 
     const result = await response.json();
     return result.job_id;
@@ -180,11 +201,11 @@ export class BemSolver {
    * Check the status of a simulation job
    */
   async getJobStatus(jobId) {
-    const response = await fetch(`${this.backendUrl}/api/status/${jobId}`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to get job status: ${response.status}`);
-    }
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/status/${jobId}`,
+      undefined,
+      'Fetch simulation status'
+    );
 
     return await response.json();
   }
@@ -193,11 +214,11 @@ export class BemSolver {
    * Retrieve simulation results
    */
   async getResults(jobId) {
-    const response = await fetch(`${this.backendUrl}/api/results/${jobId}`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to retrieve results: ${response.status}`);
-    }
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/results/${jobId}`,
+      undefined,
+      'Fetch simulation results'
+    );
 
     return await response.json();
   }
@@ -213,10 +234,11 @@ export class BemSolver {
       params.set('status', status.trim());
     }
 
-    const response = await fetch(`${this.backendUrl}/api/jobs?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error(`Failed to list jobs: ${response.status}`);
-    }
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/jobs?${params.toString()}`,
+      undefined,
+      'List simulation jobs'
+    );
     return await response.json();
   }
 
@@ -224,13 +246,10 @@ export class BemSolver {
    * Request cancellation of a queued/running simulation job.
    */
   async stopJob(jobId) {
-    const response = await fetch(`${this.backendUrl}/api/stop/${jobId}`, {
+    const response = await fetchOrApiError(`${this.backendUrl}/api/stop/${jobId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to stop job: ${response.status}`);
-    }
+    }, 'Stop simulation');
     return await response.json();
   }
 
@@ -238,13 +257,10 @@ export class BemSolver {
    * Delete terminal job metadata/results/artifacts.
    */
   async deleteJob(jobId) {
-    const response = await fetch(`${this.backendUrl}/api/jobs/${jobId}`, {
+    const response = await fetchOrApiError(`${this.backendUrl}/api/jobs/${jobId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to delete job: ${response.status}`);
-    }
+    }, 'Delete simulation job');
     return await response.json();
   }
 
@@ -252,13 +268,10 @@ export class BemSolver {
    * Delete all failed jobs (status=error) from backend persistence.
    */
   async clearFailedJobs() {
-    const response = await fetch(`${this.backendUrl}/api/jobs/clear-failed`, {
+    const response = await fetchOrApiError(`${this.backendUrl}/api/jobs/clear-failed`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to clear failed jobs: ${response.status}`);
-    }
+    }, 'Clear failed simulation jobs');
     return await response.json();
   }
 }

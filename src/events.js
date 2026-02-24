@@ -42,14 +42,29 @@ export class EventBus {
             }
         }
 
-        // Notify listeners
-        if (this.listeners[event]) {
-            this.listeners[event].forEach(cb => cb(processedData));
+        // Notify listeners. Isolate callback failures so one bad listener does not
+        // prevent other listeners from receiving the same event.
+        const listeners = this.listeners[event];
+        if (Array.isArray(listeners)) {
+            for (const cb of [...listeners]) {
+                try {
+                    cb(processedData);
+                } catch (e) {
+                    console.warn(`Listener error for event "${event}":`, e);
+                }
+            }
         }
 
-        // Also notify wildcard listeners
-        if (this.listeners['*']) {
-            this.listeners['*'].forEach(cb => cb({ event, data: processedData }));
+        // Also notify wildcard listeners with the same isolation behavior.
+        const wildcardListeners = this.listeners['*'];
+        if (Array.isArray(wildcardListeners)) {
+            for (const cb of [...wildcardListeners]) {
+                try {
+                    cb({ event, data: processedData });
+                } catch (e) {
+                    console.warn(`Wildcard listener error for event "${event}":`, e);
+                }
+            }
         }
     }
 

@@ -1,6 +1,47 @@
 import { AppEvents } from './events.js';
 import { getDefaults } from './config/defaults.js';
 import { getAgent } from './logging/index.js';
+import { PARAM_SCHEMA } from './config/schema.js';
+
+const STORAGE_KEY = 'ath_state';
+const SHARED_SCHEMA_GROUPS = new Set(['GEOMETRY', 'MORPH', 'MESH', 'SOURCE', 'SIMULATION', 'ENCLOSURE']);
+const SUPPORTED_MODEL_TYPES = new Set(
+    Object.keys(PARAM_SCHEMA).filter((key) => !SHARED_SCHEMA_GROUPS.has(key))
+);
+
+function getStorage() {
+    const storage = globalThis?.localStorage;
+    if (!storage) return null;
+    if (typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
+        return null;
+    }
+    return storage;
+}
+
+export function normalizePersistedState(candidate) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        return null;
+    }
+
+    const modelType = typeof candidate.type === 'string' ? candidate.type : '';
+    const params = candidate.params;
+    if (!modelType || !params || typeof params !== 'object' || Array.isArray(params)) {
+        return null;
+    }
+    if (!SUPPORTED_MODEL_TYPES.has(modelType)) {
+        return null;
+    }
+
+    const defaults = getDefaults(modelType);
+    if (!defaults || Object.keys(defaults).length === 0) {
+        return null;
+    }
+
+    return {
+        type: modelType,
+        params: { ...defaults, ...params }
+    };
+}
 
 export class AppState {
     constructor() {
@@ -104,18 +145,31 @@ export class AppState {
     }
 
     saveToStorage() {
+        const storage = getStorage();
+        if (!storage) return;
         try {
-            localStorage.setItem('ath_state', JSON.stringify(this.current));
+            storage.setItem(STORAGE_KEY, JSON.stringify(this.current));
         } catch (e) {
             console.warn('LocalStorage save failed', e);
         }
     }
 
     loadFromStorage() {
+        const storage = getStorage();
+        if (!storage) return;
         try {
-            const saved = localStorage.getItem('ath_state');
-            if (saved) {
-                this.current = JSON.parse(saved);
+            const saved = storage.getItem(STORAGE_KEY);
+            if (!saved) return;
+
+            const parsed = JSON.parse(saved);
+            const normalized = normalizePersistedState(parsed);
+            if (normalized) {
+                this.current = normalized;
+            } else {
+                console.warn('LocalStorage state schema mismatch; using defaults.');
+                if (typeof storage.removeItem === 'function') {
+                    storage.removeItem(STORAGE_KEY);
+                }
             }
         } catch (e) {
             console.warn('LocalStorage load failed', e);
