@@ -7,6 +7,7 @@ Optimized BEM solver with:
 - Explicit failure reporting
 """
 
+import inspect
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -36,6 +37,23 @@ from .symmetry import (
     find_throat_center,
     validate_symmetry_reduction,
 )
+
+
+def _detect_gmres_kwargs() -> Dict[str, bool]:
+    """Probe bempp_api.linalg.gmres signature once at import time."""
+    if bempp_api is None:
+        return {"use_strong_form": False, "return_iteration_count": False}
+    try:
+        params = inspect.signature(bempp_api.linalg.gmres).parameters
+        return {
+            "use_strong_form": "use_strong_form" in params,
+            "return_iteration_count": "return_iteration_count" in params,
+        }
+    except (AttributeError, ValueError, TypeError):
+        return {"use_strong_form": False, "return_iteration_count": False}
+
+
+_GMRES_KWARGS = _detect_gmres_kwargs()
 
 
 class CachedOperators:
@@ -134,7 +152,7 @@ def solve_frequency_cached(
     use_burton_miller: bool = True,
     observation_distance_m: float = 1.0,
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
-) -> Tuple[float, complex, float, tuple]:
+) -> Tuple[float, complex, float, tuple, Optional[int]]:
     """Solve one frequency using cached operators and SI units."""
     omega = k * c
 
@@ -154,19 +172,20 @@ def solve_frequency_cached(
         lhs = dlp - 0.5 * identity
         rhs = slp * neumann_fun
 
-    try:
-        p_total, info, iter_count = bempp_api.linalg.gmres(
-            lhs, rhs, tol=1e-5, use_strong_form=True, return_iteration_count=True
-        )
-        if info != 0:
-            print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
-    except Exception as _sf_exc:
-        print(f"[BEM] Warning: strong-form GMRES failed ({_sf_exc}), retrying with weak-form")
-        p_total, info, iter_count = bempp_api.linalg.gmres(
-            lhs, rhs, tol=1e-5, use_strong_form=False, return_iteration_count=True
-        )
-        if info != 0:
-            print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
+    gmres_call_kwargs: Dict = {"tol": 1e-5}
+    if _GMRES_KWARGS["use_strong_form"]:
+        gmres_call_kwargs["use_strong_form"] = True
+    if _GMRES_KWARGS["return_iteration_count"]:
+        gmres_call_kwargs["return_iteration_count"] = True
+
+    gmres_result = bempp_api.linalg.gmres(lhs, rhs, **gmres_call_kwargs)
+    if _GMRES_KWARGS["return_iteration_count"]:
+        p_total, info, iter_count = gmres_result
+    else:
+        p_total, info = gmres_result
+        iter_count = None
+    if info != 0:
+        print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
 
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
     origin_center = frame["origin_center"]
@@ -209,6 +228,7 @@ def solve_optimized(
     use_burton_miller: bool = True,
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
+    enable_warmup: bool = True,
 ) -> Dict:
     """Run optimized BEM simulation with explicit metadata and failure reporting."""
     start_time = time.time()
@@ -370,7 +390,7 @@ def solve_optimized(
     # Warm-up: front-load one-time JIT/OpenCL kernel compilation costs before
     # the timed frequency loop by assembling operators at a representative wavenumber.
     warmup_time_seconds = 0.0
-    if len(frequencies) > 0:
+    if enable_warmup and len(frequencies) > 0:
         _warmup_start = time.time()
         try:
             _k_warmup = 2 * np.pi * frequencies[len(frequencies) // 2] / c
@@ -663,6 +683,7 @@ def solve_optimized(
         "warmup_time_seconds": warmup_time_seconds,
         "gmres_iterations_per_frequency": gmres_iterations,
         "avg_gmres_iterations": round(avg_gmres, 1),
+        "gmres_strong_form_supported": _GMRES_KWARGS["use_strong_form"],
     }
 
     if verbose:

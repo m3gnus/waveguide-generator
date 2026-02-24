@@ -79,6 +79,8 @@ def run_benchmark(args):
     print()
 
     t0 = time.time()
+    enable_warmup = not args.no_warmup
+    print(f"  Warm-up: {'enabled' if enable_warmup else 'disabled (--no-warmup)'}")
     results = solve_optimized(
         mesh=mesh,
         frequency_range=[args.freq_min, args.freq_max],
@@ -89,6 +91,7 @@ def run_benchmark(args):
         mesh_validation_mode="warn",
         frequency_spacing=args.spacing,
         device_mode=args.device,
+        enable_warmup=enable_warmup,
     )
     wall_time = time.time() - t0
 
@@ -154,6 +157,12 @@ def main():
         default="log",
         choices=["log", "linear"],
         help="Frequency spacing",
+    )
+    parser.add_argument(
+        "--no-warmup",
+        action="store_true",
+        default=False,
+        help="Skip the warm-up pass (measures first-solve penalty for A/B comparison)",
     )
     args = parser.parse_args()
     run_benchmark(args)
