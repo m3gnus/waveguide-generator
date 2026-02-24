@@ -52,7 +52,7 @@ class SolverHardeningTest(unittest.TestCase):
             },
         ), patch(
             "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su")),
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
@@ -85,7 +85,7 @@ class SolverHardeningTest(unittest.TestCase):
             },
         ), patch(
             "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su")),
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
@@ -110,7 +110,7 @@ class SolverHardeningTest(unittest.TestCase):
             "solver.solve_optimized.validate_frequency_range"
         ) as validate_freq, patch(
             "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su")),
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
@@ -136,7 +136,7 @@ class SolverHardeningTest(unittest.TestCase):
             if calls["count"] == 0:
                 calls["count"] += 1
                 raise RuntimeError("forced failure")
-            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"))
+            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 12)
 
         with patch(
             "solver.solve_optimized.solve_frequency_cached",
@@ -171,7 +171,7 @@ class SolverHardeningTest(unittest.TestCase):
             attempted_interfaces.append(cached_ops.boundary_interface)
             if len(attempted_interfaces) <= 2:
                 raise RuntimeError("create_buffer failed: INVALID_BUFFER_SIZE")
-            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"))
+            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 10)
 
         with patch(
             "solver.solve_optimized.solve_frequency_cached",
@@ -221,7 +221,7 @@ class SolverHardeningTest(unittest.TestCase):
             attempted_interfaces.append(cached_ops.boundary_interface)
             if len(attempted_interfaces) == 1:
                 raise RuntimeError("create_buffer failed: INVALID_BUFFER_SIZE")
-            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"))
+            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 10)
 
         with patch(
             "solver.solve_optimized.solve_frequency_cached",
@@ -257,6 +257,91 @@ class SolverHardeningTest(unittest.TestCase):
         self.assertEqual(device_meta["runtime_profile"], "safe_cpu")
         self.assertEqual(device_meta["runtime_retry_outcome"], "opencl_recovered")
         self.assertEqual(device_meta["runtime_selected"], "opencl")
+
+
+class StrongFormGmresTest(unittest.TestCase):
+    def test_gmres_iteration_count_in_metadata(self):
+        mesh = _mesh_stub()
+        with patch(
+            "solver.solve_optimized.solve_frequency_cached",
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 18),
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value=_directivity_stub(),
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 400.0],
+                num_frequencies=2,
+                sim_type="2",
+                enable_symmetry=False,
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        perf = results["metadata"]["performance"]
+        self.assertIn("gmres_iterations_per_frequency", perf)
+        self.assertIn("avg_gmres_iterations", perf)
+        self.assertIn("warmup_time_seconds", perf)
+        self.assertEqual(perf["gmres_iterations_per_frequency"], [18, 18])
+        self.assertEqual(perf["avg_gmres_iterations"], 18.0)
+
+    def test_failed_frequency_has_none_in_iteration_list(self):
+        mesh = _mesh_stub()
+        calls = {"count": 0}
+
+        def _solve_side_effect(*_args, **_kwargs):
+            if calls["count"] == 0:
+                calls["count"] += 1
+                raise RuntimeError("forced failure")
+            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 20)
+
+        with patch(
+            "solver.solve_optimized.solve_frequency_cached",
+            side_effect=_solve_side_effect,
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value=_directivity_stub(),
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 300.0],
+                num_frequencies=2,
+                sim_type="2",
+                enable_symmetry=False,
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        iters = results["metadata"]["performance"]["gmres_iterations_per_frequency"]
+        self.assertIsNone(iters[0])
+        self.assertEqual(iters[1], 20)
+        self.assertEqual(results["metadata"]["performance"]["avg_gmres_iterations"], 20.0)
+
+    def test_warmup_failure_does_not_abort_solve(self):
+        """Warm-up failing (e.g. bad grid in tests) must not prevent frequency solve."""
+        mesh = _mesh_stub()
+        with patch(
+            "solver.solve_optimized.solve_frequency_cached",
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value=_directivity_stub(),
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 200.0],
+                num_frequencies=1,
+                sim_type="2",
+                enable_symmetry=False,
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        # Solve succeeded despite warm-up failing on the dummy grid
+        self.assertEqual(results["metadata"]["failure_count"], 0)
+        self.assertEqual(len(results["spl_on_axis"]["spl"]), 1)
+        self.assertIsNotNone(results["spl_on_axis"]["spl"][0])
 
 
 if __name__ == "__main__":
