@@ -94,13 +94,13 @@ async def render_directivity(request: DirectivityRenderRequest):
     Render directivity heatmap as a PNG image using Matplotlib.
     Returns base64-encoded PNG.
     """
+    if not request.frequencies or not request.directivity:
+        raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
+
     try:
         from solver.directivity_plot import render_directivity_plot  # noqa: PLC0415
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"Matplotlib not available: {e}")
-
-    if not request.frequencies or not request.directivity:
-        raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
 
     try:
         image_b64 = render_directivity_plot(

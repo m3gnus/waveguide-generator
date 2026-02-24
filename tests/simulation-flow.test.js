@@ -5,6 +5,8 @@ import { BemSolver, validateCanonicalMeshPayload } from '../src/solver/index.js'
 import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
 import { filterValidPairs } from '../src/ui/simulation/charts.js';
 import { downloadMeshArtifact, pollSimulationStatus } from '../src/ui/simulation/actions.js';
+import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
+import { pollSimulationStatus as pollFromSubModule, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { AppEvents } from '../src/events.js';
 
 test('submitSimulation sends canonical mesh payload shape and adaptive mesh options', async () => {
@@ -122,6 +124,89 @@ test('validateCanonicalMeshPayload rejects malformed canonical mesh', () => {
       }),
     /surfaceTags length must match triangle count/
   );
+});
+
+test('submitSimulation preflight rejects mesh missing source tag before any API call', async () => {
+  const originalFetch = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    return { ok: true, async json() { return { job_id: 'should-not-happen' }; } };
+  };
+
+  try {
+    const solver = new BemSolver();
+    await assert.rejects(
+      () => solver.submitSimulation(
+        {
+          frequencyStart: 100,
+          frequencyEnd: 1000,
+          numFrequencies: 3,
+          simulationType: '2'
+        },
+        {
+          vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 2],
+          surfaceTags: [1],
+          format: 'msh',
+          boundaryConditions: { throat: { type: 'velocity', surfaceTag: 2, value: 1.0 } },
+          metadata: {}
+        }
+      ),
+      /source surface tag \(2\) missing/i
+    );
+    assert.equal(fetchCalls, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('submitSimulation maps backend 422 responses to typed validation ApiError', async () => {
+  const originalFetch = global.fetch;
+
+  global.fetch = async () => ({
+    ok: false,
+    status: 422,
+    async json() {
+      return {
+        detail: [
+          { loc: ['body', 'mesh'], msg: 'field required' }
+        ]
+      };
+    }
+  });
+
+  try {
+    const solver = new BemSolver();
+    await assert.rejects(
+      () => solver.submitSimulation(
+        {
+          frequencyStart: 100,
+          frequencyEnd: 1000,
+          numFrequencies: 3,
+          simulationType: '2'
+        },
+        {
+          vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 2],
+          surfaceTags: [2],
+          format: 'msh',
+          boundaryConditions: { throat: { type: 'velocity', surfaceTag: 2, value: 1.0 } },
+          metadata: {}
+        }
+      ),
+      (error) => {
+        assert.equal(error.name, 'ApiError');
+        assert.equal(error.category, 'validation');
+        assert.equal(error.status, 422);
+        assert.match(error.message, /submit simulation failed validation \(422\)/i);
+        assert.match(error.message, /body\.mesh: field required/i);
+        return true;
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 // --- P0 regression tests: null-value chart handling ---
@@ -312,5 +397,45 @@ test('dispose() clears poll timers, connection timer, and resets isPolling', () 
   } finally {
     global.clearTimeout = origClearTimeout;
     AppEvents.off = originalOff;
+  }
+});
+
+// --- Session 7 regression tests: module split + DOM cache ---
+
+test('formatJobSummary is accessible from jobActions.js sub-module', () => {
+  assert.strictEqual(typeof formatJobSummary, 'function');
+  // Verify it produces expected output for a complete job
+  const job = { status: 'complete', progress: 1, completedAt: '2026-02-24T12:00:00Z', startedAt: '2026-02-24T11:59:00Z' };
+  const summary = formatJobSummary(job);
+  assert.ok(summary.startsWith('Complete'), `Expected summary starting with Complete, got: ${summary}`);
+});
+
+test('renderJobList is accessible from jobActions.js sub-module', () => {
+  assert.strictEqual(typeof renderJobList, 'function');
+});
+
+test('pollSimulationStatus from polling.js sub-module is the same export as from actions.js barrel', () => {
+  // Both imports should resolve to the same function reference via the barrel re-export.
+  assert.strictEqual(pollSimulationStatus, pollFromSubModule);
+});
+
+test('clearPollTimer from polling.js resets isPolling and clears timer refs', () => {
+  const clearedIds = [];
+  const origClearTimeout = global.clearTimeout;
+  global.clearTimeout = (id) => { clearedIds.push(id); if (origClearTimeout) origClearTimeout(id); };
+
+  try {
+    const panel = {
+      pollTimer: 9001,
+      pollInterval: 9001,
+      isPolling: true
+    };
+    clearPollTimer(panel);
+    assert.ok(clearedIds.includes(9001), 'pollTimer was cleared via clearTimeout');
+    assert.equal(panel.pollTimer, null);
+    assert.equal(panel.pollInterval, null);
+    assert.equal(panel.isPolling, false);
+  } finally {
+    global.clearTimeout = origClearTimeout;
   }
 });
