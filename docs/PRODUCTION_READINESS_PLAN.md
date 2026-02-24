@@ -1,6 +1,6 @@
 # Production-Readiness Unified Plan (Sessionized Canonical)
 
-**Last updated:** February 24, 2026 (Session 6 complete)
+**Last updated:** February 24, 2026 (Session 8 complete)
 **Supersedes:** `docs/PRODUCTION_READINESS_AUDIT_PLAN.md`
 
 ## Decision: One Go vs Multiple Sessions
@@ -13,8 +13,8 @@
 - Smaller sessions allow deterministic rollback/handoff with less context load for weaker agents.
 
 ## Baseline (as of February 24, 2026)
-- JS tests: `81/81` passing (Session 0); `84/84` after Session 6 (+3 new lifecycle regression tests)
-- Server tests: `88/88` passing (`1` skipped) (Session 0); `102/102` after Session 5 (unchanged in Session 6)
+- JS tests: `81/81` passing (Session 0); `88/88` after Session 7 (+4 module-split regression tests); `95/95` after Session 8 (+7 error-hardening tests)
+- Server tests: `88/88` passing (`1` skipped) (Session 0); `102/102` passing (`6` skipped) after Session 8
 - Frontend bundle: `631 KiB` (exceeds 550 KiB gate — reduction target for Session 9)
 
 ## Non-Negotiable Contracts
@@ -128,8 +128,8 @@ Update this table at the end of each completed session.
 | 4 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 4 log entry` |
 | 5 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 5 log entry` |
 | 6 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 6 log entry` |
-| 7 | `not_started` | `-` | `-` | `-` | `-` |
-| 8 | `not_started` | `-` | `-` | `-` | `-` |
+| 7 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 7 log entry` |
+| 8 | `done` | `2026-02-24` | `gpt-5-codex` | `-` | `Session 8 log entry` |
 | 9 | `not_started` | `-` | `-` | `-` | `-` |
 | 10 | `not_started` | `-` | `-` | `-` | `-` |
 
@@ -542,6 +542,117 @@ Known issues / follow-up:
 Next session:
 - <number>
 ```
+
+---
+
+#### Session 8: Error Hardening + localStorage Schema Validation
+- Date: 2026-02-24
+- Agent: gpt-5-codex
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Added centralized frontend API error parsing/classification in `src/solver/apiErrors.js` (`validation` vs `dependency` vs `not_found` vs `unexpected` vs `network`)
+- Updated `src/solver/index.js` to route backend calls through the centralized parser and expose typed `ApiError` surfaces with status/category metadata
+- Added `validateSimulationPreflight` in `src/solver/index.js` and enforced source-tag (`2`) + frequency sanity checks before `/api/solve`
+- Hardened EventBus dispatch in `src/events.js` so listener failures are isolated and do not prevent other listeners from executing
+- Hardened state hydration in `src/state.js`:
+  - localStorage availability checks for non-browser/test runtimes
+  - persisted-state schema validation (`type` + `params`) with model-type allowlist
+  - fallback to defaults plus invalid persisted payload removal on mismatch
+- Fixed backend HTTP semantics in `server/api/routes_misc.py`: `/api/render-directivity` now validates missing input (`422`) before dependency import checks (`503`)
+- Added regression tests for Session 8 hardening:
+  - `tests/error-hardening.test.js` (EventBus listener isolation + storage schema fallback)
+  - `tests/simulation-flow.test.js` (`submitSimulation` preflight + typed `422` API error mapping)
+
+Files changed:
+- `src/solver/apiErrors.js` (new)
+- `src/solver/index.js`
+- `src/events.js`
+- `src/state.js`
+- `server/api/routes_misc.py`
+- `tests/error-hardening.test.js` (new)
+- `tests/simulation-flow.test.js`
+
+Tests run:
+- `node --test tests/mesh-payload.test.js` -> 4/4 pass
+- `node --test tests/geometry-artifacts.test.js` -> 5/5 pass
+- `node --test tests/enclosure-regression.test.js` -> 9/9 pass
+- `node --test tests/simulation-flow.test.js` -> 17/17 pass
+- `node --test tests/error-hardening.test.js` -> 5/5 pass
+- `cd server && python3 -m unittest tests.test_api_validation.HttpSemanticsTest.test_render_directivity_empty_input_returns_422 -v` -> pass
+- `npm test` -> 95/95 pass
+- `npm run test:server` -> 102 pass, 6 skipped
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no geometry tag mapping changes)
+- Source tag requirement preserved: yes (added explicit preflight enforcement for tag `2`)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no `/api/mesh/build` changes)
+
+Gate impact:
+- Gate A: pass (maintained), with improved deterministic error surfaces and startup resilience to corrupt local state
+- Gate B: no change (bundle reduction still pending Session 9)
+- Gate C: no change
+
+Known issues / follow-up:
+- Bundle-size reduction gate remains outstanding for Session 9 (`<= 550 KiB`)
+
+Next session:
+- 9
+
+---
+
+#### Session 7: Frontend Module Split + DOM Cache
+- Date: 2026-02-24
+- Agent: gpt-5-codex (verification + log completion)
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Verified module split of `src/ui/simulation/actions.js` into focused sub-modules:
+  - `jobActions.js`
+  - `polling.js`
+  - `progressUi.js`
+  - `meshDownload.js`
+- Verified backward-compatible barrel exports remain available from `actions.js`
+- Verified DOM-cache centralization via `getSimulationDom()` in `progressUi.js` and reuse across polling/job flows
+- Verified module-split regression coverage in `tests/simulation-flow.test.js`:
+  - sub-module export availability (`formatJobSummary`, `renderJobList`)
+  - barrel/sub-module function identity (`pollSimulationStatus`)
+  - `clearPollTimer` state-reset behavior
+
+Files changed:
+- `src/ui/simulation/actions.js`
+- `src/ui/simulation/jobActions.js` (new)
+- `src/ui/simulation/polling.js` (new)
+- `src/ui/simulation/progressUi.js` (new)
+- `src/ui/simulation/meshDownload.js` (new)
+- `tests/simulation-flow.test.js`
+
+Tests run:
+- `node --test tests/waveguide-payload.test.js` -> 3/3 pass
+- `node --test tests/export-gmsh-pipeline.test.js` -> 2/2 pass
+- `node --test tests/simulation-flow.test.js` -> 17/17 pass (includes Session 7 regression coverage)
+- `npm test` -> pass
+- `npm run test:server` -> pass
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no geometry/tag code changes)
+- Source tag requirement preserved: yes (no payload tagging regressions)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no export/backend meshing path changes)
+
+Gate impact:
+- Gate A: no change (already pass from Session 6; maintained)
+- Gate B: no change (bundle reduction pending Session 9)
+- Gate C: no change
+
+Known issues / follow-up:
+- Session 7 execution-log entry was missing and is now backfilled for tracker parity
+
+Next session:
+- 8
 
 ---
 
