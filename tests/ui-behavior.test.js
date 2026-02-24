@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { normalizeParamInput } from '../src/ui/paramInput.js';
-import { validateSimulationConfig } from '../src/ui/simulation/actions.js';
+import { formatJobSummary, validateSimulationConfig } from '../src/ui/simulation/actions.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
   deriveExportFieldsFromFileName,
@@ -45,6 +45,33 @@ test('validateSimulationConfig catches invalid ranges and counts', () => {
     }),
     null
   );
+});
+
+test('formatJobSummary appends complete duration in m:ss', () => {
+  const summary = formatJobSummary({
+    status: 'complete',
+    startedAt: '2026-02-24T12:00:00.000Z',
+    completedAt: '2026-02-24T12:02:53.000Z'
+  });
+  assert.equal(summary, 'Complete (2:53)');
+});
+
+test('formatJobSummary appends complete duration in h:mm:ss', () => {
+  const summary = formatJobSummary({
+    status: 'complete',
+    startedAt: '2026-02-24T12:00:00.000Z',
+    completedAt: '2026-02-24T13:04:32.000Z'
+  });
+  assert.equal(summary, 'Complete (1:04:32)');
+});
+
+test('formatJobSummary falls back to Complete when duration is unavailable', () => {
+  const summary = formatJobSummary({
+    status: 'complete',
+    startedAt: 'not-a-date',
+    completedAt: null
+  });
+  assert.equal(summary, 'Complete');
 });
 
 test('applyExportSelection routes to expected handler', () => {

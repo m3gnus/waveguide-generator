@@ -33,11 +33,14 @@ Physical group names follow the ABEC/ATH convention:
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -2403,7 +2406,7 @@ def _orient_and_validate_canonical_mesh(
                     )
 
     if component_count != 1:
-        print(f"[MWG] WARNING: Canonical mesh has {component_count} disconnected components.")
+        logger.warning("[MWG] Canonical mesh has %d disconnected components.", component_count)
     if require_watertight and component_count != 1:
         raise GmshMeshingError(
             f"Canonical mesh is disconnected ({component_count} triangle components)."
@@ -2636,8 +2639,10 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             for group_name, tags in surface_groups.items():
                 missing = [t for t in tags if t not in all_model_surfaces]
                 if missing:
-                    print(f"[MWG] WARNING: surface_groups['{group_name}'] has "
-                          f"invalid tags {missing} after occ.synchronize()")
+                    logger.warning(
+                        "[MWG] surface_groups['%s'] has invalid tags %s after occ.synchronize()",
+                        group_name, missing,
+                    )
 
             # --- Mesh size fields ---
             _configure_mesh_size(

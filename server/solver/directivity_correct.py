@@ -10,9 +10,13 @@ This module computes physically accurate directivity patterns by:
 All observation points are batched into single operator calls for performance.
 """
 
+import logging
+
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from .deps import bempp_api
+
+logger = logging.getLogger(__name__)
 from .device_interface import is_opencl_buffer_error, potential_device_interface
 from .observation import infer_observation_frame, point_from_polar
 
@@ -134,10 +138,10 @@ def evaluate_far_field_sphere(
         except Exception as exc:
             last_error = exc
             if interface_name == "opencl" and is_opencl_buffer_error(exc):
-                print("[Directivity] OpenCL potential operator failed; retrying with numba.")
+                logger.warning("[Directivity] OpenCL potential operator failed; retrying with numba.")
                 continue
             if interface_name == "opencl":
-                print("[Directivity] OpenCL directivity evaluation failed; retrying with numba.")
+                logger.warning("[Directivity] OpenCL directivity evaluation failed; retrying with numba.")
                 continue
             break
 
@@ -220,11 +224,14 @@ def calculate_directivity_patterns_correct(
     }
 
     if len(p_solutions) == 0:
-        print("[Directivity] Warning: No solutions provided, returning empty patterns")
+        logger.warning("[Directivity] No solutions provided, returning empty patterns")
         return patterns
 
     if len(p_solutions) != len(frequencies):
-        print(f"[Directivity] Error: Solution count ({len(p_solutions)}) != frequency count ({len(frequencies)})")
+        logger.error(
+            "[Directivity] Solution count (%d) != frequency count (%d)",
+            len(p_solutions), len(frequencies),
+        )
         return patterns
 
     axis_phi = {
@@ -262,7 +269,7 @@ def calculate_directivity_patterns_correct(
                 patterns[axis].append(axis_pattern)
 
         except Exception as e:
-            print(f"[Directivity] Error computing directivity at {freq:.0f} Hz: {e}")
+            logger.error("[Directivity] Error computing directivity at %.0f Hz: %s", freq, e, exc_info=True)
             # Preserve shape for this frequency but mark values missing.
             angles = np.linspace(angle_start, angle_end, angle_points)
             placeholder = [[float(a), None] for a in angles]

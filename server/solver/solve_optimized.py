@@ -8,8 +8,11 @@ Optimized BEM solver with:
 """
 
 import inspect
+import logging
 import time
 from typing import Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -137,8 +140,8 @@ def _build_source_velocity(space_u, amplitude: float = 1.0):
 def apply_neumann_bc_on_symmetry_planes(grid, symmetry_info: Optional[Dict]) -> None:
     if symmetry_info is None or symmetry_info.get("symmetry_face_tag") is None:
         return
-    print(f"[BEM] Symmetry planes detected (tag {symmetry_info['symmetry_face_tag']})")
-    print("[BEM] Neumann BC (rigid) applied implicitly on symmetry planes")
+    logger.info("[BEM] Symmetry planes detected (tag %s)", symmetry_info['symmetry_face_tag'])
+    logger.info("[BEM] Neumann BC (rigid) applied implicitly on symmetry planes")
 
 
 def solve_frequency_cached(
@@ -185,7 +188,7 @@ def solve_frequency_cached(
         p_total, info = gmres_result
         iter_count = None
     if info != 0:
-        print(f"[BEM] Warning: GMRES did not converge (info={info}) at k={k:.3f}")
+        logger.warning("[BEM] GMRES did not converge (info=%d) at k=%.3f", info, k)
 
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
     origin_center = frame["origin_center"]
@@ -272,9 +275,9 @@ def solve_optimized(
 
     if enable_symmetry and original_vertices is not None:
         if verbose:
-            print("\n" + "=" * 70)
-            print("SYMMETRY DETECTION")
-            print("=" * 70)
+            logger.info("=" * 70)
+            logger.info("SYMMETRY DETECTION")
+            logger.info("=" * 70)
 
         try:
             symmetry_type, symmetry_planes = detect_geometric_symmetry(
@@ -291,8 +294,8 @@ def solve_optimized(
 
                 if excitation_ok:
                     if verbose:
-                        print(f"[BEM] Symmetry detected: {symmetry_type.value}")
-                        print(f"[BEM] Excitation centered: {throat_center}")
+                        logger.info("[BEM] Symmetry detected: %s", symmetry_type.value)
+                        logger.info("[BEM] Excitation centered: %s", throat_center)
 
                     reduced_v, reduced_i, reduced_tags, symmetry_info = apply_symmetry_reduction(
                         original_vertices, original_indices, original_tags, symmetry_type, symmetry_planes
@@ -304,13 +307,13 @@ def solve_optimized(
                     # Re-identify throat elements in reduced grid
                     throat_elements = np.where(reduced_tags == 2)[0]
                 elif verbose:
-                    print(f"[BEM] Symmetry rejected: excitation not centered ({throat_center})")
+                    logger.info("[BEM] Symmetry rejected: excitation not centered (%s)", throat_center)
             elif verbose:
-                print("[BEM] No symmetry detected - using full model")
+                logger.info("[BEM] No symmetry detected - using full model")
         except Exception as exc:
             if verbose:
-                print(f"[BEM] Symmetry detection failed: {exc}")
-                print("[BEM] Falling back to full model")
+                logger.warning("[BEM] Symmetry detection failed: %s", exc, exc_info=True)
+                logger.info("[BEM] Falling back to full model")
 
     mesh_validation = {
         "mode": mesh_validation_mode,
@@ -407,11 +410,11 @@ def solve_optimized(
             _ = _lhs.strong_form()  # triggers assembly + OpenCL/numba compilation
             warmup_time_seconds = time.time() - _warmup_start
             if verbose:
-                print(f"[BEM] Warm-up complete ({warmup_time_seconds:.2f}s)")
+                logger.info("[BEM] Warm-up complete (%.2fs)", warmup_time_seconds)
         except Exception as _warmup_exc:
             warmup_time_seconds = time.time() - _warmup_start
             if verbose:
-                print(f"[BEM] Warm-up skipped ({_warmup_exc})")
+                logger.info("[BEM] Warm-up skipped (%s)", _warmup_exc)
 
     freq_start_time = time.time()
     success_count = 0
@@ -428,7 +431,7 @@ def solve_optimized(
             )
 
         if verbose:
-            print(f"[BEM] Solving {i + 1}/{len(frequencies)}: {freq:.1f} Hz", end="")
+            logger.info("[BEM] Solving %d/%d: %.1f Hz", i + 1, len(frequencies), freq)
 
         k = 2 * np.pi * freq / c
 
@@ -443,7 +446,7 @@ def solve_optimized(
             success_count += 1
 
             if verbose:
-                print(f" -> {spl:.1f} dB, DI={di:.1f} dB, iters={iter_count} ({iter_time:.2f}s)")
+                logger.info(" -> %.1f dB, DI=%.1f dB, iters=%s (%.2fs)", spl, di, iter_count, iter_time)
 
             results["spl_on_axis"]["spl"].append(float(spl))
             results["impedance"]["real"].append(float(impedance.real))
@@ -464,9 +467,8 @@ def solve_optimized(
                         boundary_interface=boundary_interface,
                         potential_interface=potential_interface,
                     )
-                    print(
-                        f"[BEM] OpenCL runtime error at {freq:.1f} Hz; "
-                        "retrying with OpenCL safe CPU profile."
+                    logger.warning(
+                        "[BEM] OpenCL runtime error at %.1f Hz; retrying with OpenCL safe CPU profile.", freq
                     )
                     try:
                         iter_start = time.time()
@@ -490,7 +492,9 @@ def solve_optimized(
                             if retry_detail:
                                 device_metadata["runtime_retry_detail"] = str(retry_detail)
                         if verbose:
-                            print(f" -> {spl:.1f} dB, DI={di:.1f} dB, iters={iter_count} ({iter_time:.2f}s)")
+                            logger.info(
+                                " -> %.1f dB, DI=%.1f dB, iters=%s (%.2fs)", spl, di, iter_count, iter_time
+                            )
                         results["spl_on_axis"]["spl"].append(float(spl))
                         results["impedance"]["real"].append(float(impedance.real))
                         results["impedance"]["imaginary"].append(float(impedance.imag))
@@ -511,9 +515,8 @@ def solve_optimized(
                 }
                 results["metadata"]["warnings"].append(warning)
                 results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
-                print(
-                    f"[BEM] OpenCL runtime error at {freq:.1f} Hz; "
-                    "falling back to numba and retrying."
+                logger.warning(
+                    "[BEM] OpenCL runtime error at %.1f Hz; falling back to numba and retrying.", freq
                 )
                 boundary_interface = "numba"
                 potential_interface = "numba"
@@ -541,7 +544,9 @@ def solve_optimized(
                     iter_time = time.time() - iter_start
                     success_count += 1
                     if verbose:
-                        print(f" -> {spl:.1f} dB, DI={di:.1f} dB, iters={iter_count} ({iter_time:.2f}s)")
+                        logger.info(
+                            " -> %.1f dB, DI=%.1f dB, iters=%s (%.2fs)", spl, di, iter_count, iter_time
+                        )
                     results["spl_on_axis"]["spl"].append(float(spl))
                     results["impedance"]["real"].append(float(impedance.real))
                     results["impedance"]["imaginary"].append(float(impedance.imag))
@@ -552,7 +557,7 @@ def solve_optimized(
                 except Exception as retry_exc:
                     exc = retry_exc
 
-            print(f" ERROR: {exc}")
+            logger.error("[BEM] Frequency solve error at %.1f Hz: %s", freq, exc)
             results["metadata"]["failures"].append(
                 frequency_failure(freq, "frequency_solve", "frequency_solve_failed", str(exc))
             )
@@ -566,7 +571,7 @@ def solve_optimized(
     freq_solve_time = time.time() - freq_start_time
 
     if verbose:
-        print("\n[BEM] Computing directivity patterns...")
+        logger.info("[BEM] Computing directivity patterns...")
     if stage_callback:
         stage_callback(
             "directivity",
@@ -687,23 +692,26 @@ def solve_optimized(
     }
 
     if verbose:
-        print("\n" + "=" * 70)
-        print("SIMULATION COMPLETE")
-        print("=" * 70)
-        print(f"Total time: {total_time:.1f}s")
+        logger.info("=" * 70)
+        logger.info("SIMULATION COMPLETE")
+        logger.info("=" * 70)
+        logger.info("Total time: %.1fs", total_time)
         if warmup_time_seconds > 0:
-            print(f"Warm-up: {warmup_time_seconds:.2f}s")
+            logger.info("Warm-up: %.2fs", warmup_time_seconds)
         if len(frequencies) > 0:
-            print(
-                f"Frequency solve: {freq_solve_time:.1f}s "
-                f"({freq_solve_time / len(frequencies):.2f}s per frequency)"
+            logger.info(
+                "Frequency solve: %.1fs (%.2fs per frequency)",
+                freq_solve_time, freq_solve_time / len(frequencies),
             )
         if valid_iterations:
-            print(f"GMRES iterations: avg={avg_gmres:.1f}, min={min(valid_iterations)}, max={max(valid_iterations)}")
-        print(f"Directivity compute: {directivity_time:.1f}s")
+            logger.info(
+                "GMRES iterations: avg=%.1f, min=%d, max=%d",
+                avg_gmres, min(valid_iterations), max(valid_iterations),
+            )
+        logger.info("Directivity compute: %.1fs", directivity_time)
         if reduction_factor > 1.0:
-            print(f"Symmetry speedup: {reduction_factor:.1f}x")
-        print("=" * 70 + "\n")
+            logger.info("Symmetry speedup: %.1fx", reduction_factor)
+        logger.info("=" * 70)
 
     if progress_callback:
         progress_callback(1.0)

@@ -62,29 +62,43 @@ function setProgressVisible(progressDiv, visible) {
 }
 
 function formatElapsedDuration(durationMs) {
+  if (durationMs === null || durationMs === undefined || durationMs === '') {
+    return null;
+  }
   const numericDuration = Number(durationMs);
   if (!Number.isFinite(numericDuration) || numericDuration < 0) {
     return null;
   }
 
-  const totalSeconds = numericDuration / 1000;
-  if (totalSeconds < 10) {
-    return `${totalSeconds.toFixed(1)}s`;
-  }
-
-  if (totalSeconds < 60) {
-    return `${Math.round(totalSeconds)}s`;
-  }
-
-  const roundedSeconds = Math.round(totalSeconds);
+  const roundedSeconds = Math.round(numericDuration / 1000);
   const hours = Math.floor(roundedSeconds / 3600);
   const minutes = Math.floor((roundedSeconds % 3600) / 60);
   const seconds = roundedSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}h ${minutes}m ${seconds}s`;
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
-  return `${minutes}m ${seconds}s`;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function parseTimestampMs(raw) {
+  if (!raw) return null;
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function resolveJobDurationMs(job) {
+  const startedAtMs = parseTimestampMs(job.startedAt || job.queuedAt || job.createdAt);
+  const completedAtMs = parseTimestampMs(job.completedAt);
+  if (startedAtMs === null || completedAtMs === null) {
+    return null;
+  }
+  const durationMs = completedAtMs - startedAtMs;
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  return durationMs;
 }
 
 function resolveStageDetail(stage, message, pct) {
@@ -207,12 +221,15 @@ function clearPollTimer(panel) {
   panel.pollInterval = null;
 }
 
-function formatJobSummary(job) {
+export function formatJobSummary(job) {
   const status = String(job.status || '').toLowerCase();
   const progress = Math.round((Number(job.progress) || 0) * 100);
   const detail = String(job.stageMessage || job.errorMessage || '').trim();
 
-  if (status === 'complete') return 'Complete';
+  if (status === 'complete') {
+    const duration = formatElapsedDuration(resolveJobDurationMs(job));
+    return duration ? `Complete (${duration})` : 'Complete';
+  }
   if (status === 'cancelled') return 'Cancelled';
   if (status === 'queued') return 'Queued';
   if (status === 'running') {

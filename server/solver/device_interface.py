@@ -10,9 +10,12 @@ Supported modes:
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional, Tuple
 
 from .deps import BEMPP_VARIANT, bempp_api
@@ -316,7 +319,7 @@ def selected_device_interface(preferred: str = DEFAULT_DEVICE_MODE) -> str:
         reason_text = str(fallback_reason)
         if reason_text not in _LOGGED_FALLBACK_REASONS:
             _LOGGED_FALLBACK_REASONS.add(reason_text)
-            print(f"[BEM] Falling back to numba backend. Reason: {reason_text}")
+            logger.warning("[BEM] Falling back to numba backend. Reason: %s", reason_text)
     return interface
 
 
