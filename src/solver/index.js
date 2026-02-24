@@ -7,7 +7,7 @@
  * ║  submitSimulation/getJobStatus/getResults call the Python backend API.     ║
  * ║  mockBEMSolver is a local fallback helper only and is not physics-based.   ║
  * ║                                                                            ║
- * ║  Runtime requirement: backend running at localhost:8000                    ║
+ * ║  Runtime requirement: backend running at localhost:8000 (default)          ║
  * ║                                                                            ║
  * ║  Use mock results only for UI/debug validation workflows.                  ║
  * ╚════════════════════════════════════════════════════════════════════════════╝
@@ -16,6 +16,8 @@
  * It handles communication with the Python backend and manages
  * the simulation pipeline from geometry to acoustic results.
  */
+
+import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 
 /**
  * @typedef {Object} BemSimulationConfig
@@ -95,7 +97,7 @@ export function validateCanonicalMeshPayload(meshData) {
 
 export class BemSolver {
   constructor() {
-    this.backendUrl = 'http://localhost:8000';
+    this.backendUrl = DEFAULT_BACKEND_URL;
     this.isConnected = false;
   }
 

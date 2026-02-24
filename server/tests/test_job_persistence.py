@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
+import services.job_runtime as _jrt
 from db import SimulationDB
 from fastapi import HTTPException
 
@@ -12,25 +13,28 @@ from fastapi import HTTPException
 class JobPersistenceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.original_db = app.db
-        self.original_db_initialized = app.db_initialized
+        self.original_db = _jrt.db
+        self.original_db_initialized = _jrt.db_initialized
 
         app.jobs.clear()
         app.job_queue.clear()
         app.running_jobs.clear()
-        app.scheduler_loop_running = False
+        _jrt.scheduler_loop_running = False
 
-        app.db = SimulationDB(Path(self.tmp.name) / "simulations.db")
-        app.db_initialized = False
+        new_db = SimulationDB(Path(self.tmp.name) / "simulations.db")
+        app.db = new_db
+        _jrt.db = new_db
+        _jrt.db_initialized = False
         app.ensure_db_ready()
 
     def tearDown(self):
         app.db = self.original_db
-        app.db_initialized = self.original_db_initialized
+        _jrt.db = self.original_db
+        _jrt.db_initialized = self.original_db_initialized
         app.jobs.clear()
         app.job_queue.clear()
         app.running_jobs.clear()
-        app.scheduler_loop_running = False
+        _jrt.scheduler_loop_running = False
         self.tmp.cleanup()
 
     def _request_dump(self):
@@ -89,7 +93,7 @@ class JobPersistenceTest(unittest.TestCase):
         self._create_db_job("job-running", "running")
         self._create_db_job("job-queued", "queued")
 
-        with patch("app.asyncio.create_task") as create_task:
+        with patch("services.job_runtime.asyncio.create_task") as create_task:
             create_task.side_effect = lambda coro: (coro.close(), None)[1]
             asyncio.run(app.startup_jobs_runtime())
 

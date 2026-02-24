@@ -4,6 +4,7 @@ import { prepareGeometryParams } from '../../geometry/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { syncPolarControlsFromBlocks } from './polarSettings.js';
 import { readPolarUiSettings } from './polarSettings.js';
+import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import {
   allJobs,
   hasActiveJobs,
@@ -219,6 +220,8 @@ function clearPollTimer(panel) {
   }
   panel.pollTimer = null;
   panel.pollInterval = null;
+  // Reset isPolling so pollSimulationStatus() can restart the loop if needed.
+  panel.isPolling = false;
 }
 
 export function formatJobSummary(job) {
@@ -739,7 +742,7 @@ export async function runSimulation(panel) {
     // Non-blocking: download simulation mesh artifact if toggle is on
     const downloadMeshToggle = document.getElementById('download-sim-mesh');
     if (downloadMeshToggle && downloadMeshToggle.checked && panel.activeJobId) {
-      downloadMeshArtifact(panel.activeJobId).catch(err => {
+      downloadMeshArtifact(panel.activeJobId, panel.solver.backendUrl).catch(err => {
         console.warn('Mesh artifact download failed (non-blocking):', err.message);
       });
     }
@@ -773,15 +776,16 @@ export async function runMockSimulation(config) {
 }
 
 export function pollSimulationStatus(panel) {
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
-  const runBtn = document.getElementById('run-simulation-btn');
-  const progressDiv = document.getElementById('simulation-progress');
-
+  // Guard must run before any DOM access to support test environments.
   if (panel.isPolling) {
     return;
   }
   panel.isPolling = true;
+
+  const progressFill = document.getElementById('progress-fill');
+  const progressText = document.getElementById('progress-text');
+  const runBtn = document.getElementById('run-simulation-btn');
+  const progressDiv = document.getElementById('simulation-progress');
 
   const pollOnce = async () => {
     try {
@@ -878,13 +882,13 @@ export function pollSimulationStatus(panel) {
       runBtn.disabled = false;
       restoreConnectionStatus(panel);
     } finally {
-      clearPollTimer(panel);
-      setPollTimer(
-        panel,
-        setTimeout(() => {
-          pollOnce().catch(() => {});
-        }, panel.pollDelayMs)
-      );
+      // Internal reschedule: clear previous timer ref and set new one without
+      // resetting isPolling (clearPollTimer resets isPolling; use inline here
+      // so the loop guard remains active while the next tick is pending).
+      if (panel.pollTimer) clearTimeout(panel.pollTimer);
+      const nextTimer = setTimeout(() => { pollOnce().catch(() => {}); }, panel.pollDelayMs);
+      panel.pollTimer = nextTimer;
+      panel.pollInterval = nextTimer;
     }
   };
 
@@ -894,12 +898,14 @@ export function pollSimulationStatus(panel) {
 /**
  * Download the simulation mesh artifact (.msh) for a job.
  * Fire-and-forget — does not block simulation progress.
+ * @param {string} jobId
+ * @param {string} [backendUrl] - Backend base URL (defaults to DEFAULT_BACKEND_URL)
  */
-async function downloadMeshArtifact(jobId) {
+async function downloadMeshArtifact(jobId, backendUrl = DEFAULT_BACKEND_URL) {
   // Brief delay to allow backend to finish mesh generation and store artifact
   await new Promise(r => setTimeout(r, 2000));
 
-  const resp = await fetch(`http://localhost:8000/api/mesh-artifact/${jobId}`);
+  const resp = await fetch(`${backendUrl}/api/mesh-artifact/${jobId}`);
   if (!resp.ok) {
     throw new Error(`Mesh artifact not available (${resp.status})`);
   }

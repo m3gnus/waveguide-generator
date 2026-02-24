@@ -183,10 +183,10 @@ class ApiValidationTest(unittest.TestCase):
             },
         }
 
-        with patch("app.SOLVER_AVAILABLE", True), patch("app.BEMPP_RUNTIME_READY", True), patch(
-            "app.WAVEGUIDE_BUILDER_AVAILABLE", True
-        ), patch("app.GMSH_OCC_RUNTIME_READY", False), patch(
-            "app.get_dependency_status", return_value=dependency_status
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch("api.routes_simulation.BEMPP_RUNTIME_READY", True), patch(
+            "api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True
+        ), patch("api.routes_simulation.GMSH_OCC_RUNTIME_READY", False), patch(
+            "api.routes_simulation.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(submit_simulation(request))
@@ -215,9 +215,9 @@ class ApiValidationTest(unittest.TestCase):
             }
         )
 
-        with patch("app.SOLVER_AVAILABLE", True), patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
-            "app.GMSH_OCC_RUNTIME_READY", True
-        ), patch("app.asyncio.create_task") as create_task:
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch("api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "api.routes_simulation.GMSH_OCC_RUNTIME_READY", True
+        ), patch("api.routes_simulation.asyncio.create_task") as create_task:
             create_task.side_effect = lambda coro: (coro.close(), None)[1]
             result = asyncio.run(submit_simulation(request))
 
@@ -265,10 +265,10 @@ class ApiValidationTest(unittest.TestCase):
             },
         }
 
-        with patch("app.SOLVER_AVAILABLE", True), patch("app.BEMPP_RUNTIME_READY", True), patch(
-            "app.WAVEGUIDE_BUILDER_AVAILABLE", True
-        ), patch("app.GMSH_OCC_RUNTIME_READY", False), patch(
-            "app.get_dependency_status", return_value=dependency_status
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch("api.routes_simulation.BEMPP_RUNTIME_READY", True), patch(
+            "api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True
+        ), patch("api.routes_simulation.GMSH_OCC_RUNTIME_READY", False), patch(
+            "api.routes_simulation.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(submit_simulation(request))
@@ -385,9 +385,9 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "stage_message": "", "results": None, "error": None,
         }
         try:
-            with patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
-                "app.GMSH_OCC_RUNTIME_READY", True
-            ), patch("app.build_waveguide_mesh", side_effect=fake_build):
+            with patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+            ), patch("services.simulation_runner.build_waveguide_mesh", side_effect=fake_build):
                 asyncio.run(run_simulation(job_id, request))
         finally:
             jobs.pop(job_id, None)
@@ -490,7 +490,7 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
                 return {"frequencies": [100.0], "directivity": {}}
 
         try:
-            with patch("app.BEMSolver", MockSolver), \
+            with patch("services.simulation_runner.BEMSolver", MockSolver), \
                  patch.object(app_module.db, "store_results", side_effect=OSError("disk full")):
                 asyncio.run(run_simulation(job_id, self._make_minimal_request()))
 
@@ -521,7 +521,7 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
                 return {"frequencies": [100.0], "directivity": {}}
 
         try:
-            with patch("app.BEMSolver", MockSolver), \
+            with patch("services.simulation_runner.BEMSolver", MockSolver), \
                  patch.object(app_module.db, "store_results", side_effect=OSError("disk full")):
                 asyncio.run(run_simulation(job_id, self._make_minimal_request()))
 
@@ -577,10 +577,10 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
         )
 
         try:
-            with patch("app.BEMSolver", MockSolver), \
-                 patch("app.WAVEGUIDE_BUILDER_AVAILABLE", True), \
-                 patch("app.GMSH_OCC_RUNTIME_READY", True), \
-                 patch("app.build_waveguide_mesh", return_value=fake_occ_result), \
+            with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), \
+                 patch("services.simulation_runner.GMSH_OCC_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result), \
                  patch.object(app_module.db, "store_mesh_artifact", side_effect=OSError("disk full")):
                 asyncio.run(run_simulation(job_id, request))
 
@@ -653,36 +653,36 @@ class SchedulerStateTest(unittest.TestCase):
 
     def test_scheduler_skips_when_already_running(self):
         """_drain_scheduler_queue must exit immediately if scheduler_loop_running is True."""
-        import app as app_module
+        import services.job_runtime as _jrt
         from app import _drain_scheduler_queue, job_queue, jobs_lock
 
-        original = app_module.scheduler_loop_running
+        original = _jrt.scheduler_loop_running
         sentinel = "test-sentinel-job-id"
         try:
             with jobs_lock:
-                app_module.scheduler_loop_running = True
+                _jrt.scheduler_loop_running = True
             job_queue.append(sentinel)
             asyncio.run(_drain_scheduler_queue())
             # Sentinel job must still be in the queue — scheduler did not consume it
             self.assertIn(sentinel, job_queue, "Scheduler must not process jobs when already running.")
         finally:
             with jobs_lock:
-                app_module.scheduler_loop_running = original
+                _jrt.scheduler_loop_running = original
             if sentinel in job_queue:
                 job_queue.remove(sentinel)
 
     def test_scheduler_loop_running_resets_after_empty_queue(self):
         """scheduler_loop_running must be False after drain completes with empty queue."""
-        import app as app_module
+        import services.job_runtime as _jrt
         from app import _drain_scheduler_queue, jobs_lock
 
         with jobs_lock:
-            app_module.scheduler_loop_running = False
+            _jrt.scheduler_loop_running = False
 
         asyncio.run(_drain_scheduler_queue())
 
         with jobs_lock:
-            running = app_module.scheduler_loop_running
+            running = _jrt.scheduler_loop_running
         self.assertFalse(running, "scheduler_loop_running must be reset to False after drain finishes.")
 
 

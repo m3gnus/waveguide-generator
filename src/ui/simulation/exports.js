@@ -101,8 +101,9 @@ export async function exportAsMatplotlibPNG(panel) {
     directivity,
   };
 
+  const backendUrl = panel?.solver?.backendUrl || 'http://localhost:8000';
   try {
-    const response = await fetch('http://localhost:8000/api/render-charts', {
+    const response = await fetch(`${backendUrl}/api/render-charts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

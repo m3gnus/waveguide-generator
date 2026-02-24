@@ -81,9 +81,9 @@ export function setupEventListeners(panel) {
     });
   }
 
-  AppEvents.on('state:updated', (state) => {
-    panel.syncSimulationSettings(state);
-  });
+  // Store reference so dispose() can remove the listener.
+  panel._onStateUpdated = (state) => { panel.syncSimulationSettings(state); };
+  AppEvents.on('state:updated', panel._onStateUpdated);
 
   function switchTab(tabName) {
     // Update tab buttons
