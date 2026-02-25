@@ -5,6 +5,7 @@
  */
 
 import { BemSolver } from './index.js';
+import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 
 /**
  * HTTP client for BEM solver backend
@@ -121,7 +122,7 @@ export class BemClient extends BemSolver {
   }
 }
 
-export async function generateMeshFromGeo(request, backendUrl = 'http://localhost:8000') {
+export async function generateMeshFromGeo(request, backendUrl = DEFAULT_BACKEND_URL) {
   const client = new BemClient();
   client.setBackendUrl(backendUrl);
   return client.generateMeshFromGeo(request);

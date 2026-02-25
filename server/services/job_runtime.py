@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 # ── Global runtime state ───────────────────────────────────────────────────────
 jobs: Dict[str, Dict[str, Any]] = {}
-job_queue: deque = deque()
-running_jobs: set = set()
+job_queue: deque[str] = deque()
+running_jobs: set[str] = set()
 jobs_lock = threading.RLock()
 scheduler_loop_running: bool = False
 max_concurrent_jobs: int = 1

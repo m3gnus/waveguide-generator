@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * BEM Solver Interface
  *
@@ -19,6 +21,28 @@
 
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
+
+/**
+ * @typedef {Object} CanonicalMeshPayload
+ * @property {number[]} vertices
+ * @property {number[]} indices
+ * @property {number[]} surfaceTags
+ * @property {string} format
+ * @property {Record<string, unknown>} boundaryConditions
+ * @property {Record<string, unknown>} [metadata]
+ */
+
+/**
+ * @typedef {Object} SimulationPreflightConfig
+ * @property {number|string} frequencyStart
+ * @property {number|string} frequencyEnd
+ * @property {number|string} numFrequencies
+ * @property {number|string} [simulationType]
+ * @property {Record<string, unknown>|null} [polarConfig]
+ * @property {'strict'|'warn'|'off'} [meshValidationMode]
+ * @property {'linear'|'log'} [frequencySpacing]
+ * @property {'auto'|'opencl_cpu'|'opencl_gpu'|'numba'} [deviceMode]
+ */
 
 /**
  * @typedef {Object} BemSimulationConfig
@@ -68,6 +92,11 @@ export function mockBEMSolver(meshData) {
 /**
  * Main BEM solver API (Phase 4.1)
  */
+/**
+ * Validate canonical solver mesh payload shape before backend submission.
+ * @param {CanonicalMeshPayload} meshData
+ * @returns {true}
+ */
 export function validateCanonicalMeshPayload(meshData) {
   if (!meshData || typeof meshData !== 'object') {
     throw new Error('Invalid mesh payload: expected object.');
@@ -96,6 +125,11 @@ export function validateCanonicalMeshPayload(meshData) {
   return true;
 }
 
+/**
+ * Validate simulation inputs before sending any backend request.
+ * @param {SimulationPreflightConfig} config
+ * @param {CanonicalMeshPayload} meshData
+ */
 export function validateSimulationPreflight(config, meshData) {
   validateCanonicalMeshPayload(meshData);
 
@@ -117,6 +151,12 @@ export function validateSimulationPreflight(config, meshData) {
   }
 }
 
+/**
+ * @param {string} url
+ * @param {RequestInit|undefined} options
+ * @param {string} operation
+ * @returns {Promise<Response>}
+ */
 async function fetchOrApiError(url, options, operation) {
   let response;
   try {
@@ -134,7 +174,9 @@ async function fetchOrApiError(url, options, operation) {
 
 export class BemSolver {
   constructor() {
+    /** @type {string} */
     this.backendUrl = DEFAULT_BACKEND_URL;
+    /** @type {boolean} */
     this.isConnected = false;
   }
 
@@ -164,6 +206,10 @@ export class BemSolver {
 
   /**
    * Submit a horn geometry for BEM simulation
+   * @param {SimulationPreflightConfig} config
+   * @param {CanonicalMeshPayload} meshData
+   * @param {Record<string, unknown>} [options]
+   * @returns {Promise<string>}
    */
   async submitSimulation(config, meshData, options = {}) {
     validateSimulationPreflight(config, meshData);
@@ -199,6 +245,7 @@ export class BemSolver {
 
   /**
    * Check the status of a simulation job
+   * @param {string} jobId
    */
   async getJobStatus(jobId) {
     const response = await fetchOrApiError(
@@ -212,6 +259,7 @@ export class BemSolver {
 
   /**
    * Retrieve simulation results
+   * @param {string} jobId
    */
   async getResults(jobId) {
     const response = await fetchOrApiError(
@@ -225,6 +273,7 @@ export class BemSolver {
 
   /**
    * List simulation jobs with optional filtering and pagination.
+   * @param {{ status?: string|null, limit?: number, offset?: number }} [query]
    */
   async listJobs({ status = null, limit = 50, offset = 0 } = {}) {
     const params = new URLSearchParams();
@@ -244,6 +293,7 @@ export class BemSolver {
 
   /**
    * Request cancellation of a queued/running simulation job.
+   * @param {string} jobId
    */
   async stopJob(jobId) {
     const response = await fetchOrApiError(`${this.backendUrl}/api/stop/${jobId}`, {
@@ -255,6 +305,7 @@ export class BemSolver {
 
   /**
    * Delete terminal job metadata/results/artifacts.
+   * @param {string} jobId
    */
   async deleteJob(jobId) {
     const response = await fetchOrApiError(`${this.backendUrl}/api/jobs/${jobId}`, {

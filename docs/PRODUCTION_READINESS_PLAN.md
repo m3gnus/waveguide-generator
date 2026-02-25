@@ -1,7 +1,9 @@
 # Production-Readiness Unified Plan (Sessionized Canonical)
 
-**Last updated:** February 24, 2026 (Session 8 complete)
+**Status: COMPLETE** — All sessions (0–10) finished. Gates A and B passing.
+**Last updated:** February 25, 2026
 **Supersedes:** `docs/PRODUCTION_READINESS_AUDIT_PLAN.md`
+**Final report:** `docs/PRODUCTION_READINESS_REPORT.md`
 
 ## Decision: One Go vs Multiple Sessions
 **Best outcome:** split into multiple sessions.
@@ -12,10 +14,12 @@
 - Test maps from `AGENTS.md` require targeted + full-suite validation for several files.
 - Smaller sessions allow deterministic rollback/handoff with less context load for weaker agents.
 
-## Baseline (as of February 24, 2026)
-- JS tests: `81/81` passing (Session 0); `88/88` after Session 7 (+4 module-split regression tests); `95/95` after Session 8 (+7 error-hardening tests)
-- Server tests: `88/88` passing (`1` skipped) (Session 0); `102/102` passing (`6` skipped) after Session 8
-- Frontend bundle: `631 KiB` (exceeds 550 KiB gate — reduction target for Session 9)
+## Final Metrics
+| Metric | Baseline (Session 0) | Final (Session 10) | Delta |
+|---|---|---|---|
+| JS tests | 81/81 passing | 96/96 passing | +15 regression tests |
+| Server tests | 88/88 passing (1 skipped) | 102/102 passing (6 skipped) | +14 tests |
+| Frontend bundle | 631 KiB | 89.7 KiB | -541.3 KiB (85.8% reduction) |
 
 ## Non-Negotiable Contracts
 - No endpoint removals/renames.
@@ -55,7 +59,7 @@
 | Gate | Status (`not_started` / `in_progress` / `blocked` / `pass`) | Last checked | Notes |
 |---|---|---|---|
 | Gate A | `pass` | `2026-02-24` | All Gate A conditions satisfied: empty-mesh 422, persistence failure safety, scheduler lock, HTTP semantics, structured logging, polling lifecycle |
-| Gate B | `in_progress` | `2026-02-24` | `app.py` decomposition done (Session 5); bundle reduction pending Session 9 |
+| Gate B | `pass` | `2026-02-24` | `app.py` decomposition complete, idle polling budget/backoff enforced, bundle reduced to `89.7 KiB` (`<= 500 KiB`) |
 | Gate C | `not_started` | `-` | Optional gate |
 
 ## Agent Execution Protocol (Use in Every Session)
@@ -130,8 +134,8 @@ Update this table at the end of each completed session.
 | 6 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 6 log entry` |
 | 7 | `done` | `2026-02-24` | `claude-sonnet-4-6` | `-` | `Session 7 log entry` |
 | 8 | `done` | `2026-02-24` | `gpt-5-codex` | `-` | `Session 8 log entry` |
-| 9 | `not_started` | `-` | `-` | `-` | `-` |
-| 10 | `not_started` | `-` | `-` | `-` | `-` |
+| 9 | `done` | `2026-02-24` | `gpt-5-codex` | `-` | `Session 9 log entry` |
+| 10 | `done` | `2026-02-24` | `gpt-5-codex` | `-` | `Session 10 log entry` |
 
 ## Session 0: Baseline and Guardrails
 **Objective:** establish measurable baseline and non-breaking CI guardrails.
@@ -542,6 +546,153 @@ Known issues / follow-up:
 Next session:
 - <number>
 ```
+
+---
+
+#### Session 10: Type Safety + Docs + Final Readiness Report
+- Date: 2026-02-24
+- Agent: gpt-5-codex
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Added `// @ts-check` and JSDoc contract typing to high-risk frontend modules:
+  - `src/solver/index.js`
+  - `src/ui/simulation/polling.js`
+  - `src/ui/simulation/SimulationPanel.js`
+- Tightened backend route/service type hints without changing API behavior:
+  - `server/api/routes_mesh.py`
+  - `server/api/routes_misc.py`
+  - `server/api/routes_simulation.py`
+  - `server/services/job_runtime.py`
+- Updated architecture and operations docs to match runtime decomposition:
+  - `docs/PROJECT_DOCUMENTATION.md` now reflects `server/app.py` as assembly + router/service boundaries
+  - `server/README.md` now includes operator runbook sections (log levels, health expectations, failure classes, troubleshooting)
+- Added final readiness report:
+  - `docs/PRODUCTION_READINESS_REPORT.md` with completed sessions, verification evidence, performance delta, residual risks
+
+Files changed:
+- `src/solver/index.js`
+- `src/ui/simulation/polling.js`
+- `src/ui/simulation/SimulationPanel.js`
+- `server/api/routes_mesh.py`
+- `server/api/routes_misc.py`
+- `server/api/routes_simulation.py`
+- `server/services/job_runtime.py`
+- `docs/PROJECT_DOCUMENTATION.md`
+- `server/README.md`
+- `docs/PRODUCTION_READINESS_REPORT.md` (new)
+- `docs/PRODUCTION_READINESS_PLAN.md`
+
+Tests run:
+- `node --test tests/simulation-flow.test.js` -> 18/18 pass
+- `cd server && python3 -m unittest tests.test_api_validation tests.test_dependency_runtime` -> 28 tests pass
+- `npm test` -> 96/96 pass
+- `npm run test:server` -> 102 pass, 6 skipped
+- `npm run build` -> pass (`bundle.js` 89.7 KiB)
+- `node scripts/check-bundle-size.js` -> pass (`89.7 KiB <= 550 KiB`, target `500 KiB`)
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag mapping changes)
+- Source tag requirement preserved: yes (frontend preflight + backend validation unchanged)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no endpoint contract changes)
+
+Gate impact:
+- Gate A: no change (remains pass)
+- Gate B: no change (remains pass)
+- Gate C: no change (optional, not started)
+
+Known issues / follow-up:
+- `npm run test:server` still emits pre-existing sqlite `ResourceWarning` noise (non-blocking, suites pass)
+
+Next session:
+- none (sessionized production-readiness plan complete)
+
+---
+
+#### Session 9: Cleanup + Performance Gates
+- Date: 2026-02-24
+- Agent: gpt-5-codex
+- Branch/PR/Commit: main
+- Status: done
+- Planned scope changes: none
+
+Completed work:
+- Removed unused legacy enclosure plan helpers from `src/geometry/engine/mesh/enclosure.js` (the active enclosure path remains angular rounded-box ray casting)
+- Consolidated debug globals behind local/dev runtime guard (`src/config/runtimeMode.js`) and applied gating in:
+  - `src/app/logging.js` (`window.ChangeLog`, `window.setAgent`, etc.)
+  - `src/app/exports.js` (`window.testBackendConnection`)
+  - `src/geometry/expression.js` (`window.testExpressionParser`)
+  - `src/app/App.js` (`window.__waveguideApp`)
+- Added lazy-load integration for heavy frontend paths:
+  - `SimulationPanel` is now loaded via dynamic import from `src/app/App.js`
+  - `src/app/exports.js` is loaded on-demand via dynamic import from `src/app/App.js` export handlers
+- Fixed Three.js imports to package specifiers so webpack externals apply:
+  - `src/app/scene.js`
+  - `src/viewer/index.js`
+  - `src/app/exports.js`
+- Enforced polling budget/backoff semantics in `src/ui/simulation/polling.js`:
+  - active polling cadence `1s`
+  - idle polling cadence `15s`
+  - repeated-failure backoff doubling up to `30s`
+  - idle floor retained during failure mode
+  - failure counter reset in `clearPollTimer`
+- Added/updated regression coverage:
+  - `tests/simulation-flow.test.js` adds idle-polling-budget error-path assertion and validates failure-counter reset in `clearPollTimer`
+- Completed URL cleanup follow-through using shared backend config:
+  - `src/ui/simulation/viewResults.js`
+  - `src/solver/client.js`
+  - `src/solver/status.js`
+  - `src/app/updates.js`
+  - `src/ui/simulation/exports.js`
+
+Files changed:
+- `src/config/runtimeMode.js` (new)
+- `src/app/App.js`
+- `src/app/logging.js`
+- `src/app/exports.js`
+- `src/app/scene.js`
+- `src/viewer/index.js`
+- `src/geometry/expression.js`
+- `src/geometry/engine/mesh/enclosure.js`
+- `src/ui/simulation/polling.js`
+- `src/ui/simulation/SimulationPanel.js`
+- `src/ui/simulation/jobTracker.js`
+- `src/ui/simulation/viewResults.js`
+- `src/ui/simulation/exports.js`
+- `src/solver/client.js`
+- `src/solver/status.js`
+- `src/app/updates.js`
+- `tests/simulation-flow.test.js`
+- `docs/PRODUCTION_READINESS_PLAN.md`
+
+Tests run:
+- `node --test tests/mesh-payload.test.js` -> 4/4 pass
+- `node --test tests/geometry-artifacts.test.js` -> 5/5 pass
+- `node --test tests/enclosure-regression.test.js` -> 9/9 pass
+- `node --test tests/simulation-flow.test.js` -> 18/18 pass
+- `node --test tests/export-gmsh-pipeline.test.js` -> 2/2 pass
+- `npm test` -> 96/96 pass
+- `npm run test:server` -> 102 pass, 6 skipped
+- `npm run build` -> pass (`bundle.js` 89.7 KiB, async chunks generated)
+- `node scripts/check-bundle-size.js` -> pass (`89.7 KiB <= 550 KiB`)
+
+Contract checks:
+- Surface tags 1/2/3/4 preserved: yes (no tag mapping changes)
+- Source tag requirement preserved: yes (no source-tag contract regressions)
+- `/api/mesh/build` non-`.geo` semantics preserved: yes (no endpoint contract changes)
+
+Gate impact:
+- Gate A: no change (remains pass)
+- Gate B: pass (bundle target + polling budget + app decomposition now all satisfied)
+- Gate C: no change
+
+Known issues / follow-up:
+- `npm run test:server` still reports pre-existing sqlite `ResourceWarning` noise in test output (non-blocking, tests pass)
+
+Next session:
+- 10
 
 ---
 

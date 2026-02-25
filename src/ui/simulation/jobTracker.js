@@ -77,6 +77,7 @@ export function createJobTracker() {
     pollTimer: null,
     pollDelayMs: 1000,
     pollBackoffMs: 1000,
+    consecutivePollFailures: 0,
     isPolling: false
   };
 }

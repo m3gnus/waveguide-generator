@@ -4,6 +4,8 @@
  * Handles connection status, job tracking, and UI state for BEM simulations.
  */
 
+import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
+
 /**
  * BEM Solver Status Manager
  * 
@@ -33,7 +35,7 @@ export class BemStatusManager {
    */
   async checkConnection() {
     try {
-      const response = await fetch('http://localhost:8000/health');
+      const response = await fetch(`${DEFAULT_BACKEND_URL}/health`);
       const isConnected = response.ok;
       
       if (isConnected !== this.isConnected) {

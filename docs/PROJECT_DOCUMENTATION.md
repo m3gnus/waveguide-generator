@@ -37,7 +37,19 @@ Primary entry points:
 ### 2.2 Backend
 
 - `server/app.py`
-  - FastAPI routes, request/response validation, job lifecycle
+  - FastAPI app assembly, router registration, lifecycle wiring
+- `server/api/routes_simulation.py`
+  - Simulation/job routes (`/api/solve`, `/api/status/{job_id}`, `/api/results/{job_id}`, `/api/jobs*`)
+- `server/api/routes_mesh.py`
+  - Mesh routes (`/api/mesh/build`, `/api/mesh/generate-msh`)
+- `server/api/routes_misc.py`
+  - Misc routes (`/`, `/health`, `/api/updates/check`, chart/directivity rendering)
+- `server/services/job_runtime.py`
+  - In-memory job cache, queue, scheduler loop, DB merge helpers
+- `server/services/simulation_runner.py`
+  - Async single-job execution and persistence flow
+- `server/services/update_service.py`
+  - Git-backed update status checks
 - `server/solver/waveguide_builder.py`
   - OCC-based mesh construction from ATH parameters (`/api/mesh/build`)
 - `server/solver/gmsh_geo_mesher.py`
@@ -342,7 +354,7 @@ Optional device selection payload for `/api/solve`:
 
 Validation points:
 - Frontend: `src/solver/index.js` (`validateCanonicalMeshPayload`)
-- Backend request validation: `server/app.py`
+- Backend request validation: `server/api/routes_simulation.py`
 - Backend mesh integrity checks: `server/solver/mesh.py`
 - Backend results surface failures in `metadata.failures`, `metadata.failure_count`, and `metadata.partial_success`
 
@@ -388,7 +400,12 @@ If OpenCL is unavailable the backend falls back to `numba`; fallback reason is s
 - Export orchestration: `src/app/exports.js`
 - Polar UI/helpers: `src/ui/simulation/polarSettings.js`
 - Legacy `.geo` request helper: `src/solver/client.js` (`generateMeshFromGeo`)
-- API routes: `server/app.py`
+- FastAPI app wiring: `server/app.py`
+- Simulation routes: `server/api/routes_simulation.py`
+- Mesh routes: `server/api/routes_mesh.py`
+- Misc routes: `server/api/routes_misc.py`
+- Job runtime scheduler/state: `server/services/job_runtime.py`
+- Simulation runner: `server/services/simulation_runner.py`
 - OCC builder: `server/solver/waveguide_builder.py`
 - Directivity render: `server/solver/directivity_plot.py`
 - Legacy gmsh mesher: `server/solver/gmsh_geo_mesher.py`
@@ -412,8 +429,13 @@ The project underwent a significant architectural cleanup to streamline mesh gen
 - Deleted unused Node.js-only STL export scripts.
 - Pruned unused imports and diagnostic functions across the core application.
 
+### 12.4 Backend Router/Service Decomposition
+- `server/app.py` was reduced to app assembly, CORS setup, router registration, and lifecycle startup.
+- Route handlers now live in `server/api/routes_*.py`.
+- Runtime orchestration/state and job execution moved into `server/services/*`.
+
 ---
 
 ## 13. Future Work Tracking
 
-Planned or partial features are tracked in [docs/FUTURE_ADDITIONS.md](file:///Users/magnus/IM%20Dropbox/Magnus%20Andersen/DOCS/code/260127%20-%20Waveguide%20Generator/docs/FUTURE_ADDITIONS.md).
+Planned or partial features are tracked in [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md).

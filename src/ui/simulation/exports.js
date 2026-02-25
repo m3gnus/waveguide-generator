@@ -1,4 +1,5 @@
 import { applySmoothing } from '../../results/smoothing.js';
+import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { chooseExportFormat, showError, showMessage } from '../feedback.js';
 
 export function applyExportSelection(panel, exportType, handlers = null) {
@@ -25,7 +26,13 @@ export function applyExportSelection(panel, exportType, handlers = null) {
 }
 
 function resolveApp(panel) {
-  return panel?.app || window?.__waveguideApp || null;
+  if (panel?.app) {
+    return panel.app;
+  }
+  if (typeof window !== 'undefined' && window.__waveguideApp) {
+    return window.__waveguideApp;
+  }
+  return null;
 }
 
 export function exportAsWaveguideSTL(panel) {
@@ -101,7 +108,7 @@ export async function exportAsMatplotlibPNG(panel) {
     directivity,
   };
 
-  const backendUrl = panel?.solver?.backendUrl || 'http://localhost:8000';
+  const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
   try {
     const response = await fetch(`${backendUrl}/api/render-charts`, {
       method: 'POST',

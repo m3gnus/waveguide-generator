@@ -1,5 +1,5 @@
-import * as THREE from '../../node_modules/three/build/three.module.js';
-import { STLExporter } from '../../node_modules/three/examples/jsm/exporters/STLExporter.js';
+import * as THREE from 'three';
+import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import {
   exportProfilesCSV,
   exportSlicesCSV,
@@ -10,6 +10,8 @@ import { buildWaveguidePayload } from '../solver/waveguidePayload.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
+import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
+import { isDevRuntime } from '../config/runtimeMode.js';
 
 // Mirrors normalizeAngularSegments() in geometry/engine/mesh/angles.js —
 // the mesh builder snaps angularSegments to a multiple of 8 when it isn't
@@ -21,7 +23,7 @@ function getMeshRingCount(rawAngularSegments) {
 }
 
 function getBackendUrl(app) {
-  return app?.simulationPanel?.solver?.backendUrl || 'http://localhost:8000';
+  return app?.simulationPanel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
 }
 
 const GMSH_EXPORT_DEFAULTS = Object.freeze({
@@ -273,14 +275,14 @@ export function exportProfileCSV(app) {
   });
 }
 
-// Manual backend diagnostics tool (available in browser console)
-if (typeof window !== 'undefined') {
+// Manual backend diagnostics tool (available in browser console in local/dev runtime only)
+if (typeof window !== 'undefined' && isDevRuntime()) {
   window.testBackendConnection = async function () {
     console.log('╔════════════════════════════════════════════════════════╗');
     console.log('║     Backend Connection Diagnostic Test                ║');
     console.log('╚════════════════════════════════════════════════════════╝\n');
 
-    const backendUrl = 'http://localhost:8000';
+    const backendUrl = DEFAULT_BACKEND_URL;
 
     // Test 1: Health endpoint
     console.log('📡 Test 1: Health endpoint check');

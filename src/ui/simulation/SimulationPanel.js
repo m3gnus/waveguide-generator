@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Simulation Panel UI Module
  *
@@ -33,6 +35,13 @@ import {
 } from './exports.js';
 import { openViewResultsModal } from './viewResults.js';
 
+/**
+ * @typedef {Object} SimulationBinding
+ * @property {string} id
+ * @property {string} key
+ * @property {(value: string) => number} parse
+ */
+
 export class SimulationPanel {
   constructor() {
     this.solver = new BemSolver();
@@ -41,18 +50,22 @@ export class SimulationPanel {
     this.connectionPollTimer = null;
     this.pendingMeshResolve = null;
     this.lastResults = null;
+    /** @type {Map<string, any>} */
     this.jobs = new Map();
+    /** @type {Map<string, any>} */
     this.resultCache = new Map();
     this.activeJobId = null;
     this.pollTimer = null;
     this.pollDelayMs = 1000;
     this.pollBackoffMs = 1000;
+    this.consecutivePollFailures = 0;
     this.isPolling = false;
     this.stageStatusActive = false;
     this.completedStatusMessage = null;
     this.simulationStartedAtMs = null;
     this.lastSimulationDurationMs = null;
     this.currentSmoothing = 'none';
+    /** @type {SimulationBinding[]} */
     this.simulationParamBindings = [
       { id: 'freq-start', key: 'freqStart', parse: (value) => parseFloat(value) },
       { id: 'freq-end', key: 'freqEnd', parse: (value) => parseFloat(value) },
@@ -76,6 +89,7 @@ export class SimulationPanel {
     this.pollTimer = tracker.pollTimer;
     this.pollDelayMs = tracker.pollDelayMs;
     this.pollBackoffMs = tracker.pollBackoffMs;
+    this.consecutivePollFailures = Number(tracker.consecutivePollFailures) || 0;
     this.isPolling = tracker.isPolling;
 
     const local = loadLocalIndex();
