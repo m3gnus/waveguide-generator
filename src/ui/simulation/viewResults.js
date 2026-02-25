@@ -1,4 +1,5 @@
 import { applySmoothing } from '../../results/smoothing.js';
+import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -165,7 +166,7 @@ export async function openViewResultsModal(panel) {
       directivity,
     };
 
-    const backendUrl = panel?.solver?.backendUrl || 'http://localhost:8000';
+    const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
     try {
       const response = await fetch(`${backendUrl}/api/render-charts`, {
         method: 'POST',

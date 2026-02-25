@@ -224,3 +224,54 @@ curl -i -X POST http://localhost:8000/api/solve \
   -H 'Content-Type: application/json' \
   -d '{"mesh":{"vertices":[0,0,0,1,0,0,0,1,0],"indices":[0,1,2],"format":"msh"},"frequency_range":[100,1000],"num_frequencies":5,"sim_type":"2"}'
 ```
+
+## 7. Operator Runbook
+
+### 7.1 Log levels
+
+- The backend uses Python `logging` with `MWG_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
+- Default level is `INFO` when `MWG_LOG_LEVEL` is unset.
+- Example:
+
+```bash
+MWG_LOG_LEVEL=DEBUG ./.venv/bin/python server/app.py
+```
+
+### 7.2 Health expectations
+
+- `GET /health` should return:
+  - `status: "ok"`
+  - `solverReady`: `true` when BEM runtime is available
+  - `occBuilderReady`: `true` when OCC gmsh runtime is available
+  - `dependencies`: supported matrix + runtime status payload
+- For production-like runs where simulation and OCC meshing must work, both `solverReady` and `occBuilderReady` should be `true`.
+
+### 7.3 Common failure classes
+
+- `422` validation failures:
+  - malformed mesh arrays (`vertices/indices/surfaceTags`)
+  - unsupported request values (`sim_type`, `msh_version`, etc.)
+- `503` dependency/runtime unavailable:
+  - missing or unsupported `gmsh` Python runtime for OCC mesh build
+  - missing/unsupported `bempp` runtime for solve
+- `404` missing resource:
+  - unknown `job_id`
+  - results/artifacts not present
+- `500` unexpected server errors:
+  - unhandled runtime exception
+
+### 7.4 Troubleshooting workflow
+
+1. Check health and dependency payload:
+
+```bash
+curl http://localhost:8000/health
+```
+
+2. Confirm runtime versions against supported matrix (`python`, `gmsh`, `bempp`).
+3. Reproduce with a minimal request (for `422`/contract debugging use the payload-validation curl above).
+4. For `503`, inspect `detail` from response and install/fix missing runtime.
+5. For job-state issues, inspect:
+  - `GET /api/jobs?limit=200&offset=0`
+  - `GET /api/status/{job_id}`
+6. Increase logging signal with `MWG_LOG_LEVEL=DEBUG` and retry.

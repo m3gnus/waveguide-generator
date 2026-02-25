@@ -1,6 +1,5 @@
 import { showCommandSuggestion, showError, showMessage, showSuccess } from '../ui/feedback.js';
-
-const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 
 function shortCommit(sha) {
   const text = String(sha || '').trim();

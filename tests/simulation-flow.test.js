@@ -428,14 +428,65 @@ test('clearPollTimer from polling.js resets isPolling and clears timer refs', ()
     const panel = {
       pollTimer: 9001,
       pollInterval: 9001,
+      consecutivePollFailures: 3,
       isPolling: true
     };
     clearPollTimer(panel);
     assert.ok(clearedIds.includes(9001), 'pollTimer was cleared via clearTimeout');
     assert.equal(panel.pollTimer, null);
     assert.equal(panel.pollInterval, null);
+    assert.equal(panel.consecutivePollFailures, 0);
     assert.equal(panel.isPolling, false);
   } finally {
     global.clearTimeout = origClearTimeout;
+  }
+});
+
+test('pollSimulationStatus enforces idle polling budget after status-fetch error', async () => {
+  const originalDocument = global.document;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+
+  const scheduledDelays = [];
+  let timeoutId = 0;
+  global.document = { getElementById() { return null; } };
+  global.setTimeout = (_fn, delay) => {
+    scheduledDelays.push(delay);
+    timeoutId += 1;
+    return timeoutId;
+  };
+  global.clearTimeout = () => {};
+
+  try {
+    const panel = {
+      isPolling: false,
+      pollTimer: null,
+      pollInterval: null,
+      pollDelayMs: 1000,
+      pollBackoffMs: 1000,
+      consecutivePollFailures: 0,
+      activeJobId: null,
+      jobs: new Map(),
+      resultCache: new Map(),
+      solver: {
+        async listJobs() {
+          throw new Error('backend unavailable');
+        }
+      },
+      checkSolverConnection() {}
+    };
+
+    pollSimulationStatus(panel);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(panel.consecutivePollFailures, 1);
+    assert.equal(panel.pollBackoffMs, 2000);
+    assert.equal(panel.pollDelayMs, 15000);
+    assert.ok(scheduledDelays.includes(15000), `expected scheduled delay to include 15000ms, got ${scheduledDelays.join(',')}`);
+  } finally {
+    global.document = originalDocument;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
   }
 });

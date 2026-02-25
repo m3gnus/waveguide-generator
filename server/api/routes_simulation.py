@@ -5,7 +5,7 @@ Simulation lifecycle routes: submit, status, results, jobs list, cancel, delete.
 import asyncio
 import logging
 import uuid
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -50,7 +50,7 @@ router = APIRouter()
 
 
 @router.post("/api/solve")
-async def submit_simulation(request: SimulationRequest):
+async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     """Submit a new BEM simulation job. Returns a job ID for tracking progress."""
     triangle_count = len(request.mesh.indices) // 3
     if len(request.mesh.vertices) % 3 != 0:
@@ -220,7 +220,7 @@ async def submit_simulation(request: SimulationRequest):
 
 
 @router.post("/api/stop/{job_id}")
-async def stop_simulation(job_id: str):
+async def stop_simulation(job_id: str) -> Dict[str, str]:
     """Stop a running simulation job."""
     job = _merge_job_cache_from_db(job_id)
     if not job:
@@ -260,7 +260,7 @@ async def stop_simulation(job_id: str):
 
 
 @router.get("/api/status/{job_id}")
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str) -> JobStatus:
     """Get the status of a simulation job."""
     job = _merge_job_cache_from_db(job_id)
     if not job:
@@ -276,7 +276,7 @@ async def get_job_status(job_id: str):
 
 
 @router.get("/api/results/{job_id}")
-async def get_results(job_id: str):
+async def get_results(job_id: str) -> Dict[str, Any]:
     """Retrieve simulation results."""
     job = _merge_job_cache_from_db(job_id)
     if not job:
@@ -300,7 +300,7 @@ async def get_results(job_id: str):
 
 
 @router.get("/api/mesh-artifact/{job_id}")
-async def get_mesh_artifact(job_id: str):
+async def get_mesh_artifact(job_id: str) -> PlainTextResponse:
     """Download the simulation mesh artifact (.msh text) for a given job."""
     job = _merge_job_cache_from_db(job_id)
     if not job:
@@ -322,7 +322,7 @@ async def list_jobs(
     status: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-):
+) -> Dict[str, Any]:
     ensure_db_ready()
     statuses = _parse_status_filters(status)
     rows, total = _jrt.db.list_jobs(statuses=statuses, limit=limit, offset=offset)
@@ -335,7 +335,7 @@ async def list_jobs(
 
 
 @router.delete("/api/jobs/clear-failed")
-async def clear_failed_jobs():
+async def clear_failed_jobs() -> Dict[str, Any]:
     ensure_db_ready()
     deleted_ids = _jrt.db.delete_jobs_by_status(["error"])
     with jobs_lock:
@@ -352,7 +352,7 @@ async def clear_failed_jobs():
 
 
 @router.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job(job_id: str) -> Dict[str, Any]:
     ensure_db_ready()
     job = _merge_job_cache_from_db(job_id)
     if not job:
