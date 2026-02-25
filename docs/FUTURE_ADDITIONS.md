@@ -1,6 +1,6 @@
 # Future Additions
 
-Last updated: February 23, 2026
+Last updated: February 25, 2026
 
 This document tracks roadmap work by status.
 
@@ -19,8 +19,14 @@ Next addition (lightweight approach recommended):
 - On load, if the stored version doesn't match the current version, show a one-line warning in the feed entry (e.g. "Script saved with an older schema — some fields may not apply").
 - No migration logic needed: unknown keys already silently no-op on load, which prevents hard failures. The warning covers the real risk (user confusion when a renamed field is silently dropped).
 
-### High priority documentation maintenance
-- Conduct periodic audits of `docs/PROJECT_DOCUMENTATION.md` to keep it aligned with unified-mesh and solver runtime refactors.
+### Pre-submit canonical tag diagnostics
+Current state:
+- Tag validity is enforced in frontend/backend; solve fails when source tag coverage is missing.
+- Simulation UI does not show concise pre-submit tag summary.
+
+Next addition:
+- Add pre-submit diagnostics for tag counts (`1/2/3/4`) and warnings for missing source-tagged elements.
+- Add lightweight checks for triangle/tag length mismatch and missing boundary metadata.
 
 ### Simulation management enhancements
 Current state:
@@ -53,26 +59,6 @@ Current state:
 Next additions:
 - Update labels/tooltips to distinguish live-solve controls from export/legacy controls.
 - Add a mesh-control matrix to `README.md` and `docs/PROJECT_DOCUMENTATION.md`.
-
-### Explicit simulation mesh mode in UI
-Current state:
-- Simulation panel defaults to adaptive OCC solve requests.
-- Backend supports non-default/legacy mesh paths, but no explicit UI mesh-mode selector exists.
-
-Next addition:
-- Add mesh mode control/status in simulation panel:
-- canonical mesh only, or
-- canonical mesh + backend Gmsh refinement.
-- Display selected mode in run status/progress messages.
-
-### Pre-submit canonical tag diagnostics
-Current state:
-- Tag validity is enforced in frontend/backend; solve fails when source tag coverage is missing.
-- Simulation UI does not show concise pre-submit tag summary.
-
-Next addition:
-- Add pre-submit diagnostics for tag counts (`1/2/3/4`) and warnings for missing source-tagged elements.
-- Add lightweight checks for triangle/tag length mismatch and missing boundary metadata.
 
 ### No-Gmsh regression lane for solve path
 Current state:
