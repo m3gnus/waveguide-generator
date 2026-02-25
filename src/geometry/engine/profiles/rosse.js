@@ -1,6 +1,5 @@
 import { evalParam, toRad } from '../../common.js';
 import { DEFAULTS } from '../constants.js';
-import { safeDiv } from '../math.js';
 import { validateParameters } from './validation.js';
 
 function calculateRossConstants(p, params) {
@@ -18,8 +17,15 @@ function calculateRossConstants(p, params) {
 
 function calculateRossLength(constants, R, r0, k) {
   const { c1, c2, c3 } = constants;
-  const termInside = c2 ** 2 - 4 * c3 * (c1 - (R + r0 * (k - 1)) ** 2);
-  return safeDiv(Math.sqrt(Math.max(0, termInside)) - c2, 2 * c3, 0);
+  const target = R + r0 * (k - 1);
+  const discriminant = c2 ** 2 - 4 * c3 * (c1 - target ** 2);
+
+  if (Math.abs(c3) < 1e-12) {
+    if (Math.abs(c2) < 1e-12) return 0;
+    return (target ** 2 - c1) / c2;
+  }
+
+  return (Math.sqrt(Math.max(0, discriminant)) - c2) / (2 * c3);
 }
 
 export function calculateROSSE(t, p, params) {
