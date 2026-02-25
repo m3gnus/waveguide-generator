@@ -1,3 +1,5 @@
+// @ts-check
+
 import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
 import { showError } from '../feedback.js';
 import {
@@ -12,11 +14,60 @@ import {
 // bodies (never at module init time), so ESM live bindings resolve correctly at runtime.
 import { renderJobList } from './jobActions.js';
 
+const ACTIVE_POLL_MS = 1000;
+const IDLE_POLL_MS = 15000;
+const MAX_POLL_BACKOFF_MS = 30000;
+
+/**
+ * @typedef {Object} SolverPollingApi
+ * @property {(query?: {limit?: number, offset?: number}) => Promise<{items?: unknown[]}>} listJobs
+ * @property {(jobId: string) => Promise<unknown>} getResults
+ */
+
+/**
+ * @typedef {Object} PollingPanel
+ * @property {ReturnType<typeof setTimeout>|null} pollTimer
+ * @property {ReturnType<typeof setTimeout>|null} pollInterval
+ * @property {boolean} isPolling
+ * @property {number} consecutivePollFailures
+ * @property {number} pollBackoffMs
+ * @property {number} pollDelayMs
+ * @property {string|null} activeJobId
+ * @property {string|null} currentJobId
+ * @property {Map<string, any>} jobs
+ * @property {Map<string, any>} resultCache
+ * @property {unknown} lastResults
+ * @property {SolverPollingApi} solver
+ * @property {(results: unknown) => void} displayResults
+ * @property {string|null} completedStatusMessage
+ * @property {number|null} simulationStartedAtMs
+ * @property {number|null} lastSimulationDurationMs
+ */
+
+/**
+ * @param {number} currentBackoffMs
+ * @returns {number}
+ */
+function nextBackoffMs(currentBackoffMs) {
+  const current = Number(currentBackoffMs);
+  if (!Number.isFinite(current) || current < ACTIVE_POLL_MS) {
+    return ACTIVE_POLL_MS * 2;
+  }
+  return Math.min(MAX_POLL_BACKOFF_MS, current * 2);
+}
+
+/**
+ * @param {PollingPanel} panel
+ * @param {ReturnType<typeof setTimeout>} timer
+ */
 export function setPollTimer(panel, timer) {
   panel.pollTimer = timer;
   panel.pollInterval = timer;
 }
 
+/**
+ * @param {PollingPanel} panel
+ */
 export function clearPollTimer(panel) {
   if (panel.pollTimer) {
     clearTimeout(panel.pollTimer);
@@ -25,13 +76,21 @@ export function clearPollTimer(panel) {
   panel.pollInterval = null;
   // Reset isPolling so pollSimulationStatus() can restart the loop if needed.
   panel.isPolling = false;
+  panel.consecutivePollFailures = 0;
 }
 
+/**
+ * @param {PollingPanel} panel
+ * @param {string|null|undefined} jobId
+ */
 export function setActiveJob(panel, jobId) {
   panel.activeJobId = jobId || null;
   panel.currentJobId = panel.activeJobId;
 }
 
+/**
+ * @param {PollingPanel} panel
+ */
 export function pollSimulationStatus(panel) {
   // Guard must run before any DOM access to support test environments.
   if (panel.isPolling) {
@@ -109,8 +168,9 @@ export function pollSimulationStatus(panel) {
       }
 
       const anyActive = hasActiveJobs(panel);
-      panel.pollBackoffMs = 1000;
-      panel.pollDelayMs = anyActive ? 1000 : 10000;
+      panel.pollBackoffMs = ACTIVE_POLL_MS;
+      panel.consecutivePollFailures = 0;
+      panel.pollDelayMs = anyActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
 
       if (!anyActive) {
         if (runBtn) runBtn.disabled = false;
@@ -123,8 +183,11 @@ export function pollSimulationStatus(panel) {
       persistPanelJobs(panel);
       renderJobList(panel);
     } catch (error) {
-      panel.pollBackoffMs = Math.min(10000, panel.pollBackoffMs === 1000 ? 2000 : panel.pollBackoffMs === 2000 ? 5000 : 10000);
-      panel.pollDelayMs = panel.pollBackoffMs;
+      panel.consecutivePollFailures = (Number(panel.consecutivePollFailures) || 0) + 1;
+      panel.pollBackoffMs = nextBackoffMs(panel.pollBackoffMs);
+      panel.pollDelayMs = hasActiveJobs(panel)
+        ? panel.pollBackoffMs
+        : Math.max(IDLE_POLL_MS, panel.pollBackoffMs);
       console.error('Status polling error:', error);
       updateStageUi(panel, {
         progress: 1,

@@ -1,3 +1,4 @@
+import { isDevRuntime } from '../config/runtimeMode.js';
 
 // --- MATH UTILS ---
 
@@ -149,8 +150,8 @@ export function parseExpression(expr) {
     }
 }
 
-// Helper for debugging/validation in console
-if (typeof window !== 'undefined') {
+// Helper for debugging/validation in console (dev/local runtime only)
+if (typeof window !== 'undefined' && isDevRuntime()) {
     window.testExpressionParser = (expr, pVal = 1) => {
         try {
             const fn = parseExpression(expr);

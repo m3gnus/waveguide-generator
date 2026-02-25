@@ -3,6 +3,7 @@ Mesh building routes: OCC waveguide builder and legacy .geo mesher.
 """
 
 import logging
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def generate_mesh_with_gmsh(request: GmshMeshRequest):
+async def generate_mesh_with_gmsh(request: GmshMeshRequest) -> Dict[str, Any]:
     """Legacy `.geo -> .msh` compatibility shim used by server tests."""
     geo_text = str(request.geoText or "")
     if not geo_text.strip():
@@ -54,12 +55,12 @@ async def generate_mesh_with_gmsh(request: GmshMeshRequest):
 
 
 @router.post("/api/mesh/generate-msh")
-async def _generate_msh_route(request: GmshMeshRequest):
+async def _generate_msh_route(request: GmshMeshRequest) -> Dict[str, Any]:
     return await generate_mesh_with_gmsh(request)
 
 
 @router.post("/api/mesh/build")
-async def build_mesh_from_params(request: WaveguideParamsRequest):
+async def build_mesh_from_params(request: WaveguideParamsRequest) -> Dict[str, Any]:
     """
     Build a Gmsh-authored .msh from ATH waveguide parameters using the Gmsh OCC Python API.
     Returns 503 if the Gmsh Python API is not available.
