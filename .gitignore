@@ -22,7 +22,15 @@ venv/
 .cline/
 .gemini/
 .claude/
+.codex/
+.opencode/
 
 # Reference materials (large files, not part of program)
 _references/
 ATHequivalent/
+
+# Local GSD installations
+get-shit-done/
+gsd-project/
+
+.planning/
