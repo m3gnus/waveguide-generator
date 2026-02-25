@@ -9,15 +9,8 @@ Implemented runtime behavior belongs in:
 
 ## Backlog
 
-### Script snapshot compatibility hardening
-Current state:
-- Simulation tasks can store/load parameter snapshots (`Load Script`) from feed entries.
-- Snapshot schema is versionless and assumes local UI field compatibility.
-
-Next addition (lightweight approach recommended):
-- Add a `schemaVersion` integer field to each snapshot on save; bump it whenever params are renamed or removed.
-- On load, if the stored version doesn't match the current version, show a one-line warning in the feed entry (e.g. "Script saved with an older schema — some fields may not apply").
-- No migration logic needed: unknown keys already silently no-op on load, which prevents hard failures. The warning covers the real risk (user confusion when a renamed field is silently dropped).
+Simulation management planning is tracked in:
+- `docs/SIMULATION_MANAGEMENT_PLAN.md`
 
 ### Pre-submit canonical tag diagnostics
 Current state:
@@ -27,16 +20,6 @@ Current state:
 Next addition:
 - Add pre-submit diagnostics for tag counts (`1/2/3/4`) and warnings for missing source-tagged elements.
 - Add lightweight checks for triangle/tag length mismatch and missing boundary metadata.
-
-### Simulation management enhancements
-Current state:
-- Multi-job management is implemented with backend job persistence and frontend session recovery.
-- Simulation task feed supports queued/running/history workflows with manual cleanup actions.
-
-Next additions:
-- Add configurable retention/cleanup policies for historical and failed tasks.
-- Add richer feed filtering/grouping controls for larger job histories.
-- Add lightweight run labels/annotations to improve traceability across repeated experiments.
 
 ### Symmetry benchmark harness and policy visibility
 Current state:
