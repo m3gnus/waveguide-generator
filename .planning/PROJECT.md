@@ -40,10 +40,20 @@ A user can reliably run, manage, and reuse waveguide simulations with clear cont
 - The repository is brownfield with established frontend (`src/`) and backend (`server/`) stacks and a strict simulation payload contract.
 - Canonical architecture and runtime behavior are documented in `docs/PROJECT_DOCUMENTATION.md`.
 - Current planning inputs for this milestone come from:
-  - `docs/BEM_SETTINGS_MENU_PLAN.md`
+  - `docs/archive/BEM_SETTINGS_MENU_PLAN_2026-02-25.md`
   - `docs/SIMULATION_MANAGEMENT_PLAN.md`
   - `docs/FUTURE_ADDITIONS.md`
 - A codebase map is available in `.planning/codebase/` and should be used as supporting context for planning decisions.
+
+## Extracted Decisions From Archived Docs
+
+The following implementation-critical points were extracted from archived docs and retained here for active planning:
+
+- Settings entry replaces the prior update-check button action and opens a modal with Viewer Controls, Simulation Basic, Simulation Advanced, and System sections.
+- Settings UX includes reset-to-recommended actions at section scope and global scope.
+- Simulation Basic settings map directly to existing `/api/solve` fields (`device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, `verbose`) in v1.
+- Advanced and expert simulation controls remain gated/deferred until backend capability and scope allow rollout.
+- Production-readiness baseline work completed Gate A and Gate B while preserving contract invariants (`surfaceTags` `1/2/3/4`, source tag enforcement, OCC `/api/mesh/build` semantics with no `.geo` response).
 
 ## Constraints
 
@@ -57,7 +67,7 @@ A user can reliably run, manage, and reuse waveguide simulations with clear cont
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Treat Settings + Simulation Management as one milestone scope | Both plans are tightly connected through settings persistence and simulation UX operations | — Pending |
-| Use docs as initialization source of truth (`BEM_SETTINGS_MENU_PLAN`, `SIMULATION_MANAGEMENT_PLAN`, `FUTURE_ADDITIONS`) | User explicitly provided docs-driven direction and brownfield context is already mapped | — Pending |
+| Use docs as initialization source of truth (`BEM_SETTINGS_MENU_PLAN`, `SIMULATION_MANAGEMENT_PLAN`, `FUTURE_ADDITIONS`) | User explicitly provided docs-driven direction and brownfield context is already mapped | Captured in this file; archived source retained for traceability |
 | Defer non-selected FUTURE_ADDITIONS items to later milestones | Maintain focused scope and reduce cross-cutting risk during this milestone | — Pending |
 
 ---

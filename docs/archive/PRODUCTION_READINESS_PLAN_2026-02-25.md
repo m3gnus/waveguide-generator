@@ -3,7 +3,7 @@
 **Status: COMPLETE** — All sessions (0–10) finished. Gates A and B passing.
 **Last updated:** February 25, 2026
 **Supersedes:** `docs/PRODUCTION_READINESS_AUDIT_PLAN.md`
-**Final report:** `docs/PRODUCTION_READINESS_REPORT.md`
+**Final report:** `docs/archive/PRODUCTION_READINESS_REPORT_2026-02-25.md`
 
 ## Decision: One Go vs Multiple Sessions
 **Best outcome:** split into multiple sessions.
@@ -570,7 +570,7 @@ Completed work:
   - `docs/PROJECT_DOCUMENTATION.md` now reflects `server/app.py` as assembly + router/service boundaries
   - `server/README.md` now includes operator runbook sections (log levels, health expectations, failure classes, troubleshooting)
 - Added final readiness report:
-  - `docs/PRODUCTION_READINESS_REPORT.md` with completed sessions, verification evidence, performance delta, residual risks
+  - `docs/archive/PRODUCTION_READINESS_REPORT_2026-02-25.md` with completed sessions, verification evidence, performance delta, residual risks
 
 Files changed:
 - `src/solver/index.js`
@@ -582,8 +582,8 @@ Files changed:
 - `server/services/job_runtime.py`
 - `docs/PROJECT_DOCUMENTATION.md`
 - `server/README.md`
-- `docs/PRODUCTION_READINESS_REPORT.md` (new)
-- `docs/PRODUCTION_READINESS_PLAN.md`
+- `docs/archive/PRODUCTION_READINESS_REPORT_2026-02-25.md` (new)
+- `docs/archive/PRODUCTION_READINESS_PLAN_2026-02-25.md`
 
 Tests run:
 - `node --test tests/simulation-flow.test.js` -> 18/18 pass
@@ -665,7 +665,7 @@ Files changed:
 - `src/solver/status.js`
 - `src/app/updates.js`
 - `tests/simulation-flow.test.js`
-- `docs/PRODUCTION_READINESS_PLAN.md`
+- `docs/archive/PRODUCTION_READINESS_PLAN_2026-02-25.md`
 
 Tests run:
 - `node --test tests/mesh-payload.test.js` -> 4/4 pass
@@ -1160,7 +1160,7 @@ Files changed:
 - `.prettierrc` (new)
 - `.prettierignore` (new)
 - `scripts/check-bundle-size.js` (new)
-- `docs/PRODUCTION_READINESS_PLAN.md`
+- `docs/archive/PRODUCTION_READINESS_PLAN_2026-02-25.md`
 
 Tests run:
 - `npm test` -> 81/81 pass
