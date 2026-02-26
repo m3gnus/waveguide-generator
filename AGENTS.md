@@ -27,12 +27,13 @@
 - Backend validates mesh shape and source tags before solving.
 - Frontend simulation falls back to mock results only when backend is unreachable.
 
-## Source-of-Truth Docs
-- Architecture and runtime behavior: [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
+## Source-of-Truth and Governance
+- Runtime behavior truth: code + tests in `src/`, `server/`, `tests/`, and `server/tests/`.
+- Architecture reference (maintained, concise): [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
 - Test inventory and commands: [tests/TESTING.md](tests/TESTING.md)
-- Roadmap/backlog context: [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md)
-  - Includes **BEM Solver Acceleration Roadmap** (FMM, Device Policy, OpenCL).
 - Backend operational details: [server/README.md](server/README.md)
+- Backlog/ideas (reviewed regularly, not immutable truth): [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md)
+- Historical plans/reports/spec snapshots: [docs/archive/README.md](docs/archive/README.md)
 
 ## Coding and Testing Guardrails
 - **Invariants**:

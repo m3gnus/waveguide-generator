@@ -1,7 +1,7 @@
 # Production Readiness Report
 
 Date: 2026-02-25
-Plan basis: `docs/PRODUCTION_READINESS_PLAN.md` (Sessions 0–10)
+Plan basis: `docs/archive/PRODUCTION_READINESS_PLAN_2026-02-25.md` (Sessions 0–10)
 
 ## 1. Executive Summary
 
