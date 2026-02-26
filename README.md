@@ -11,6 +11,23 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 - [Future Additions](docs/FUTURE_ADDITIONS.md) - working backlog (periodically reviewed/pruned)
 - [Archive Index](docs/archive/README.md) - superseded plans and historical reports
 
+## Get the project files
+
+Choose one method:
+
+- **Git users**:
+  ```bash
+  git clone https://github.com/m3gnus/waveguide-generator.git
+  cd waveguide-generator
+  ```
+- **No Git (ZIP download)**:
+  1. Open [github.com/m3gnus/waveguide-generator](https://github.com/m3gnus/waveguide-generator)
+  2. Click **Code** → **Download ZIP**
+  3. Extract the ZIP completely
+  4. Open the extracted folder (usually `waveguide-generator-main`)
+
+The **project folder** means the folder that contains `package.json`.
+
 ## Prerequisites
 
 Two things need to be installed on your computer before you begin:
@@ -18,20 +35,21 @@ Two things need to be installed on your computer before you begin:
 - **[Node.js 18+](https://nodejs.org/)** — download and install the LTS version
 - **[Python 3.10 - 3.13](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
 
-That's all. Everything else is handled by the install script.
+That's all. Everything else is handled by the setup script.
 
 ## Install
 
 Run this **once** from the project folder to install all dependencies:
 
-**macOS / Linux** — open a terminal in the project folder and run:
-```bash
-bash install/install.sh
-```
+- **Windows** — double-click `SETUP-WINDOWS.bat`
+- **macOS** — double-click `SETUP-MAC.command`
+- **Linux** — run:
+  ```bash
+  ./SETUP-LINUX.sh
+  ```
 
-**Windows** — double-click `install\install.bat`.
-
-The script checks your environment, installs all dependencies, and sets up a Python virtual environment. It will also ask whether you want to install the optional BEM acoustic solver (see below).
+These setup entrypoints validate that you are in the full project folder, then run the platform installer in `install/`.
+The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It will also ask whether you want to install the optional BEM acoustic solver (see below).
 
 ## Run the app
 
@@ -97,6 +115,7 @@ server/tests/ Backend unittest suites
 scripts/      Dev utilities
 install/      One-time setup scripts (mac/linux and windows)
 launch/       Double-click launchers (mac, windows, linux)
+SETUP-*       Root setup entrypoints for first-time installation
 docs/         Architecture and technical reference
 ```
 
@@ -128,9 +147,14 @@ curl http://localhost:8000/health
 
 **macOS: "cannot be opened because the developer cannot be verified"** — right-click `launch/mac.command` → Open → click Open in the security dialog.
 
+**Wrong folder / missing `package.json`** — run setup from the extracted project root (the folder containing `package.json`). Use `SETUP-WINDOWS.bat`, `SETUP-MAC.command`, or `./SETUP-LINUX.sh` from that folder.
+
+**`npm ci` says `package-lock.json` is missing** — make sure you extracted or cloned the full project folder before running `SETUP-WINDOWS.bat`, `SETUP-MAC.command`, or `./SETUP-LINUX.sh`. If the lockfile is missing, the installer falls back to `npm install`, but re-downloading a complete project copy is recommended.
+
 **Python not found on Windows** — reinstall Python from [python.org](https://www.python.org/downloads/windows/) and tick *"Add python.exe to PATH"*.
 
-**`npm ci` says `package-lock.json` is missing** — make sure you extracted or cloned the full project folder before running `install\install.bat` / `install/install.sh`. If the lockfile is missing, the installer now falls back to `npm install`, but re-downloading a complete project copy is recommended.
+**Windows shows Python but installer still fails** — open Command Prompt and run `py -0p` to inspect installed interpreters. If the detected path is under `WindowsApps`, disable `python.exe` / `python3.exe` aliases in:
+`Settings > Apps > Advanced app settings > App execution aliases`.
 
 **bempp-cl install is slow** — this is normal. The first install can take several minutes.
 
