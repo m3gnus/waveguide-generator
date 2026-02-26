@@ -31,8 +31,21 @@ echo "  npm:     $(npm --version)"
 echo ""
 
 # ── Frontend dependencies ──────────────────────────────────────────
+if [ ! -f "package.json" ]; then
+    echo "ERROR: package.json not found in this folder."
+    echo "       Make sure you are running install/install.sh from the full project folder."
+    exit 1
+fi
+
 echo "Installing frontend dependencies..."
-npm ci
+if [ -f "package-lock.json" ]; then
+    npm ci
+else
+    echo "WARNING: package-lock.json was not found."
+    echo "         This usually means the project was not downloaded or extracted completely."
+    echo "         Falling back to npm install..."
+    npm install
+fi
 echo "  Done."
 echo ""
 

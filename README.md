@@ -129,6 +129,8 @@ curl http://localhost:8000/health
 
 **Python not found on Windows** — reinstall Python from [python.org](https://www.python.org/downloads/windows/) and tick *"Add python.exe to PATH"*.
 
+**`npm ci` says `package-lock.json` is missing** — make sure you extracted or cloned the full project folder before running `install\install.bat` / `install/install.sh`. If the lockfile is missing, the installer now falls back to `npm install`, but re-downloading a complete project copy is recommended.
+
 **bempp-cl install is slow** — this is normal. The first install can take several minutes.
 
 ## Acknowledgments
