@@ -2,11 +2,40 @@
 :: Waveguide Generator — one-time installer for Windows
 :: Run from the project root: install\install.bat
 
+setlocal EnableExtensions EnableDelayedExpansion
+
 cd /d "%~dp0\.."
 
 echo ╔══════════════════════════════════════════════════════════════╗
 echo ║  WG - Waveguide Generator — Setup                           ║
 echo ╚══════════════════════════════════════════════════════════════╝
+echo.
+
+:: ── Project folder sanity check ───────────────────────────────────
+echo Verifying project folder...
+set ROOT_INVALID=
+for %%f in (package.json install\install.bat server\requirements.txt launch\windows.bat) do (
+    if not exist "%%f" (
+        echo   - Missing: %%f
+        set ROOT_INVALID=1
+    )
+)
+if defined ROOT_INVALID (
+    echo.
+    echo ERROR: This does not look like the full Waveguide Generator project folder.
+    echo Current folder: %CD%
+    echo.
+    echo Fix steps:
+    echo   1. Download the full project ZIP from GitHub.
+    echo   2. Extract the ZIP completely.
+    echo   3. Open the extracted folder ^(usually waveguide-generator-main^).
+    echo   4. Run install\install.bat again.
+    echo.
+    echo GitHub: https://github.com/m3gnus/waveguide-generator
+    pause
+    exit /b 1
+)
+echo   Project folder looks good.
 echo.
 
 :: ── Node.js ────────────────────────────────────────────────────────
@@ -62,13 +91,37 @@ echo.
 :: ── Python ─────────────────────────────────────────────────────────
 echo Checking Python 3...
 set PYTHON_BIN=
+set PYTHON_VERSION=
+set PYTHON_PATH=
+set FIRST_PYTHON_CMD=
+set FIRST_PYTHON_VERSION=
+set FIRST_PYTHON_PATH=
+
 for %%p in (py python3 python) do (
     if not defined PYTHON_BIN (
         where %%p >nul 2>&1
         if not errorlevel 1 (
+            set CANDIDATE_PATH=
+            for /f "delims=" %%w in ('where %%p 2^>nul') do (
+                if not defined CANDIDATE_PATH set CANDIDATE_PATH=%%w
+            )
+
+            set CANDIDATE_VERSION=
+            for /f "delims=" %%v in ('%%p -c "import sys; print('{}.{}.{}'.format(*sys.version_info[:3]))" 2^>nul') do (
+                if not defined CANDIDATE_VERSION set CANDIDATE_VERSION=%%v
+            )
+
+            if not defined FIRST_PYTHON_CMD (
+                set FIRST_PYTHON_CMD=%%p
+                set FIRST_PYTHON_PATH=!CANDIDATE_PATH!
+                set FIRST_PYTHON_VERSION=!CANDIDATE_VERSION!
+            )
+
             %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)" >nul 2>&1
             if not errorlevel 1 (
                 set PYTHON_BIN=%%p
+                set PYTHON_PATH=!CANDIDATE_PATH!
+                set PYTHON_VERSION=!CANDIDATE_VERSION!
             )
         )
     )
@@ -76,12 +129,39 @@ for %%p in (py python3 python) do (
 
 if not defined PYTHON_BIN (
     echo ERROR: Python 3.10 through 3.13 is required.
-    echo        Install from https://www.python.org/ ^(tick "Add python.exe to PATH"^)
-    echo        and re-run this script.
+    if defined FIRST_PYTHON_CMD (
+        echo        Detected command: !FIRST_PYTHON_CMD!
+        if defined FIRST_PYTHON_PATH echo        Detected path: !FIRST_PYTHON_PATH!
+        if defined FIRST_PYTHON_VERSION (
+            echo        Detected version: !FIRST_PYTHON_VERSION!
+            echo        This version is outside the supported range.
+        )
+    ) else (
+        echo        No Python command was detected in PATH.
+    )
+
+    if defined FIRST_PYTHON_PATH (
+        echo !FIRST_PYTHON_PATH! | findstr /I "\\WindowsApps\\" >nul
+        if not errorlevel 1 (
+            echo.
+            echo NOTE: Detected Windows Store App Execution Alias path.
+            echo       Disable aliases for python.exe/python3.exe in:
+            echo       Settings ^> Apps ^> Advanced app settings ^> App execution aliases
+        )
+    )
+
+    echo.
+    echo Recommended checks:
+    echo   1. Open Command Prompt and run: py -0p
+    echo   2. If Python is missing, install from https://www.python.org/downloads/windows/
+    echo      and tick "Add python.exe to PATH"
     pause
     exit /b 1
 )
-for /f "tokens=*" %%v in ('%PYTHON_BIN% --version') do echo   Python: %%v
+
+echo   Python command: %PYTHON_BIN%
+if defined PYTHON_VERSION echo   Python version: %PYTHON_VERSION%
+if defined PYTHON_PATH echo   Python path: %PYTHON_PATH%
 echo.
 
 :: ── Virtual environment ────────────────────────────────────────────
@@ -90,6 +170,11 @@ if exist ".venv\" (
     echo   .venv already exists, skipping creation.
 ) else (
     %PYTHON_BIN% -m venv .venv
+    if errorlevel 1 (
+        echo ERROR: Failed to create .venv using %PYTHON_BIN%.
+        pause
+        exit /b 1
+    )
     echo   Created.
 )
 
