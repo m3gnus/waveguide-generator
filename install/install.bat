@@ -30,12 +30,31 @@ for /f "tokens=*" %%v in ('npm --version') do echo   npm:     %%v
 echo.
 
 :: ── Frontend dependencies ──────────────────────────────────────────
-echo Installing frontend dependencies...
-call npm ci
-if errorlevel 1 (
-    echo ERROR: npm ci failed.
+if not exist "package.json" (
+    echo ERROR: package.json not found in this folder.
+    echo        Make sure you are running install\install.bat from the full project folder.
     pause
     exit /b 1
+)
+
+echo Installing frontend dependencies...
+if exist "package-lock.json" (
+    call npm ci
+    if errorlevel 1 (
+        echo ERROR: npm ci failed.
+        pause
+        exit /b 1
+    )
+) else (
+    echo WARNING: package-lock.json was not found.
+    echo          This usually means the project was not downloaded or extracted completely.
+    echo          Falling back to npm install...
+    call npm install
+    if errorlevel 1 (
+        echo ERROR: npm install failed.
+        pause
+        exit /b 1
+    )
 )
 echo   Done.
 echo.
