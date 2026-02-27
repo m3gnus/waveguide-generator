@@ -28,7 +28,7 @@ print_project_folder_help() {
 # ── Project folder sanity check ───────────────────────────────────
 echo "Verifying project folder..."
 missing=0
-for file in package.json install/install.sh server/requirements.txt launch/mac.command launch/linux.sh; do
+for file in package.json install/install.sh server/requirements.txt server/requirements-gmsh.txt launch/mac.command launch/linux.sh; do
     if [[ ! -f "$file" ]]; then
         echo "  - Missing: $file"
         missing=1
@@ -139,19 +139,41 @@ fi
 echo "Installing backend dependencies..."
 .venv/bin/pip install --quiet --upgrade pip
 .venv/bin/pip install --quiet -r server/requirements.txt
-echo "  Done."
+echo "  Core backend requirements installed."
+
+echo "Installing gmsh Python package (required for /api/mesh/build)..."
+if .venv/bin/pip install --quiet -r server/requirements-gmsh.txt; then
+    echo "  gmsh installed from default index."
+else
+    echo "  Default gmsh install failed. Retrying with gmsh.info snapshot index..."
+    if [[ "$(uname -s)" == "Linux" ]] && .venv/bin/pip install --quiet --pre --force-reinstall --no-cache-dir \
+        --extra-index-url https://gmsh.info/python-packages-dev-nox \
+        -r server/requirements-gmsh.txt; then
+        echo "  gmsh installed from gmsh.info headless Linux snapshot index."
+    elif .venv/bin/pip install --quiet --pre --force-reinstall --no-cache-dir \
+        --extra-index-url https://gmsh.info/python-packages-dev \
+        -r server/requirements-gmsh.txt; then
+        echo "  gmsh installed from gmsh.info snapshot index."
+    else
+        echo "  WARNING: Could not install gmsh Python package automatically."
+        echo "           Backend setup will continue, but /api/mesh/build needs gmsh."
+        echo "           Try manually:"
+        echo "             .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt"
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            echo "             .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt"
+        fi
+    fi
+fi
 echo ""
 
-# ── Optional: bempp-cl ─────────────────────────────────────────────
-echo "Skip BEM solver install? (needed only for acoustic simulations)"
-read -r -p "  Install bempp-cl? This can take 5-10 minutes. [y/N] " REPLY
-if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-    echo "Installing bempp-cl..."
-    .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
-    echo "  Done."
+# ── Automatic: bempp-cl ────────────────────────────────────────────
+echo "Installing bempp-cl (needed for acoustic simulations)..."
+if .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git; then
+    echo "  bempp-cl installed."
 else
-    echo "  Skipped. You can install later:"
-    echo "    .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git"
+    echo "  WARNING: bempp-cl automatic install failed."
+    echo "           You can retry later with:"
+    echo "             .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git"
 fi
 echo ""
 
