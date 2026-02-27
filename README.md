@@ -63,7 +63,8 @@ The app opens automatically in your browser at `http://localhost:3000`. Close th
 
 The setup script now automatically attempts to install `bempp-cl` (a BEM acoustic solver) without a Y/N prompt. This enables the **Start BEM Simulation** feature. It remains optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it.
 
-If automatic install fails, setup continues and prints a manual retry command.
+If automatic `gmsh` install fails, setup stops and prints manual retry commands because `/api/mesh/build` requires Python `gmsh`.
+If automatic `bempp-cl` install fails, setup continues and prints a manual retry command.
 
 Supported backend dependency matrix:
 - Python: `>=3.10,<3.15`
@@ -83,7 +84,7 @@ To install it later:
 
 ## Gmsh install fallback
 
-Setup first tries default package indexes for `gmsh>=4.15,<5.0`. If that fails, it retries with the official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/), including the Linux headless (`-nox`) index.
+Setup first tries default package indexes for `gmsh>=4.15,<5.0`. If that fails, it retries with the official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/), including the Linux headless (`-nox`) index. If all retries fail or `import gmsh` still fails, setup exits with an error.
 
 Manual retry:
 
