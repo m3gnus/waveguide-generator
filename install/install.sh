@@ -143,27 +143,34 @@ echo "  Core backend requirements installed."
 
 echo "Installing gmsh Python package (required for /api/mesh/build)..."
 if .venv/bin/pip install --quiet -r server/requirements-gmsh.txt; then
-    echo "  gmsh installed from default index."
+    echo "  gmsh Python package installed from default index."
 else
     echo "  Default gmsh install failed. Retrying with gmsh.info snapshot index..."
     if [[ "$(uname -s)" == "Linux" ]] && .venv/bin/pip install --quiet --pre --force-reinstall --no-cache-dir \
         --extra-index-url https://gmsh.info/python-packages-dev-nox \
         -r server/requirements-gmsh.txt; then
-        echo "  gmsh installed from gmsh.info headless Linux snapshot index."
+        echo "  gmsh Python package installed from gmsh.info headless Linux snapshot index."
     elif .venv/bin/pip install --quiet --pre --force-reinstall --no-cache-dir \
         --extra-index-url https://gmsh.info/python-packages-dev \
         -r server/requirements-gmsh.txt; then
-        echo "  gmsh installed from gmsh.info snapshot index."
+        echo "  gmsh Python package installed from gmsh.info snapshot index."
     else
-        echo "  WARNING: Could not install gmsh Python package automatically."
-        echo "           Backend setup will continue, but /api/mesh/build needs gmsh."
-        echo "           Try manually:"
-        echo "             .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt"
+        echo "ERROR: Could not install gmsh Python package automatically."
+        echo "Try manually:"
+        echo "  .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt"
         if [[ "$(uname -s)" == "Linux" ]]; then
-            echo "             .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt"
+            echo "  .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt"
         fi
+        exit 1
     fi
 fi
+
+if ! .venv/bin/python -c "import gmsh; print(gmsh.__version__)" >/dev/null 2>&1; then
+    echo "ERROR: gmsh Python package is still not importable in .venv."
+    echo "/api/mesh/build requires Python gmsh."
+    exit 1
+fi
+echo "  gmsh Python version: $(.venv/bin/python -c "import gmsh; print(gmsh.__version__)")"
 echo ""
 
 # ── Automatic: bempp-cl ────────────────────────────────────────────

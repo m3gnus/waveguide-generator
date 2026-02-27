@@ -20,8 +20,8 @@ python3 -m venv .venv
 
 Notes:
 - The root setup scripts (`SETUP-*`) automatically attempt gmsh+bempp installation with fallback handling.
+- `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
-- The `/api/mesh/generate-msh` endpoint also supports the system `gmsh` CLI, so install `gmsh` on PATH if the Python package cannot be installed.
 - For snapshot Gmsh wheels, use:
   - `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt`
   - Headless Linux: `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt`
@@ -73,7 +73,6 @@ The backend now enforces a version matrix at runtime:
 | legacy `bempp_api` fallback | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |
 
 Notes:
-- `POST /api/mesh/generate-msh` can still run with system `gmsh` CLI when Python gmsh is unavailable.
 - `GET /health` returns the live dependency status and matrix under `dependencies`.
 
 ## 2. Run Backend
