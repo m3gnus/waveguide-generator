@@ -3,32 +3,32 @@ setlocal EnableExtensions
 
 cd /d "%~dp0"
 
-echo ╔══════════════════════════════════════════════════════════════╗
-echo ║  WG - Waveguide Generator — Quick Setup                    ║
-echo ╚══════════════════════════════════════════════════════════════╝
+echo ===============================================================
+echo WG - Waveguide Generator Quick Setup
+echo ===============================================================
 echo.
 
 echo Verifying project folder...
-set HAS_ERROR=
+set "HAS_ERROR="
 if not exist "package.json" (
     echo   - Missing: package.json
-    set HAS_ERROR=1
+    set "HAS_ERROR=1"
 )
 if not exist "install\install.bat" (
     echo   - Missing: install\install.bat
-    set HAS_ERROR=1
+    set "HAS_ERROR=1"
 )
 if not exist "server\requirements.txt" (
     echo   - Missing: server\requirements.txt
-    set HAS_ERROR=1
+    set "HAS_ERROR=1"
 )
 if not exist "server\requirements-gmsh.txt" (
     echo   - Missing: server\requirements-gmsh.txt
-    set HAS_ERROR=1
+    set "HAS_ERROR=1"
 )
 if not exist "launch\windows.bat" (
     echo   - Missing: launch\windows.bat
-    set HAS_ERROR=1
+    set "HAS_ERROR=1"
 )
 
 if defined HAS_ERROR (
@@ -43,13 +43,14 @@ if defined HAS_ERROR (
     echo   4. Double-click SETUP-WINDOWS.bat again.
     echo.
     echo GitHub: https://github.com/m3gnus/waveguide-generator
-    pause
     exit /b 1
 )
 
 echo   Project folder looks good.
 echo.
-call install\install.bat
+
+echo Starting installer...
+cmd /c install\install.bat
 if errorlevel 1 (
     echo.
     echo Setup ended with an error.
@@ -57,3 +58,4 @@ if errorlevel 1 (
 )
 
 exit /b 0
+
