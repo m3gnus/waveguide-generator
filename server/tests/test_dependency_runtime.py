@@ -12,7 +12,7 @@ class DependencyRuntimeTest(unittest.TestCase):
     def test_health_reports_dependency_payload(self):
         dependency_status = {
             "supportedMatrix": {
-                "python": {"range": ">=3.10,<3.14"},
+                "python": {"range": ">=3.10,<3.15"},
                 "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
                 "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
@@ -39,7 +39,7 @@ class DependencyRuntimeTest(unittest.TestCase):
     def test_mesh_build_dependency_gate_returns_matrix_details(self):
         dependency_status = {
             "supportedMatrix": {
-                "python": {"range": ">=3.10,<3.14"},
+                "python": {"range": ">=3.10,<3.15"},
                 "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
             },
             "runtime": {
@@ -62,7 +62,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         detail = str(ctx.exception.detail)
         self.assertIn("python=3.13.1 supported=True", detail)
         self.assertIn("gmsh=5.1.0 supported=False", detail)
-        self.assertIn("python >=3.10,<3.14", detail)
+        self.assertIn("python >=3.10,<3.15", detail)
         self.assertIn("gmsh >=4.15,<5.0", detail)
 
     def test_health_includes_device_interface_metadata_when_solver_available(self):

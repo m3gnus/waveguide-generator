@@ -130,7 +130,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
             gmsh_info = dep["runtime"]["gmsh_python"]
             py_info = dep["runtime"]["python"]
             gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.15,<5.0")
-            py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.14")
+            py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.15")
             raise HTTPException(
                 status_code=503,
                 detail=(
