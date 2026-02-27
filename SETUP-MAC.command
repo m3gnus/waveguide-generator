@@ -13,7 +13,7 @@ echo ""
 
 echo "Verifying project folder..."
 missing=0
-for file in package.json install/install.sh server/requirements.txt launch/mac.command; do
+for file in package.json install/install.sh server/requirements.txt server/requirements-gmsh.txt launch/mac.command; do
     if [[ ! -f "$file" ]]; then
         echo "  - Missing: $file"
         missing=1

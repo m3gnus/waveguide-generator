@@ -49,7 +49,7 @@ Run this **once** from the project folder to install all dependencies:
   ```
 
 These setup entrypoints validate that you are in the full project folder, then run the platform installer in `install/`.
-The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It will also ask whether you want to install the optional BEM acoustic solver (see below).
+The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It now automatically attempts to install both `gmsh` and `bempp-cl`, with fallback handling if platform wheels are missing.
 
 ## Run the app
 
@@ -61,7 +61,9 @@ The app opens automatically in your browser at `http://localhost:3000`. Close th
 
 ## Optional: BEM Solver
 
-The install script will ask whether to install `bempp-cl`, a BEM acoustic solver. This enables the **Start BEM Simulation** feature. It is optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it. Installation can take 5–10 minutes the first time.
+The setup script now automatically attempts to install `bempp-cl` (a BEM acoustic solver) without a Y/N prompt. This enables the **Start BEM Simulation** feature. It remains optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it.
+
+If automatic install fails, setup continues and prints a manual retry command.
 
 Supported backend dependency matrix:
 - Python: `>=3.10,<3.15`
@@ -77,6 +79,23 @@ To install it later:
 
 # Windows
 .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+```
+
+## Gmsh install fallback
+
+Setup first tries default package indexes for `gmsh>=4.15,<5.0`. If that fails, it retries with the official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/), including the Linux headless (`-nox`) index.
+
+Manual retry:
+
+```bash
+# macOS / Linux
+.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt
+
+# Headless Linux fallback
+.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt
+
+# Windows
+.venv\Scripts\python.exe -m pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server\requirements-gmsh.txt
 ```
 
 For macOS Apple Silicon, use the OpenCL CPU helper to get true bempp OpenCL runtime:

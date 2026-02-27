@@ -14,15 +14,17 @@ From repository root:
 python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r server/requirements.txt
+./.venv/bin/pip install -r server/requirements-gmsh.txt
 ./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
 ```
 
 Notes:
+- The root setup scripts (`SETUP-*`) automatically attempt gmsh+bempp installation with fallback handling.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
 - The `/api/mesh/generate-msh` endpoint also supports the system `gmsh` CLI, so install `gmsh` on PATH if the Python package cannot be installed.
 - For snapshot Gmsh wheels, use:
-  - `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev --force-reinstall --no-cache-dir gmsh`
-  - Headless Linux: `./.venv/bin/pip install -i https://gmsh.info/python-packages-dev-nox --force-reinstall --no-cache-dir gmsh`
+  - `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt`
+  - Headless Linux: `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt`
 
 ### 1.0 macOS OpenCL CPU setup (recommended for bempp-cl OpenCL)
 

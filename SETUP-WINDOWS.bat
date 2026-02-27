@@ -22,6 +22,10 @@ if not exist "server\requirements.txt" (
     echo   - Missing: server\requirements.txt
     set HAS_ERROR=1
 )
+if not exist "server\requirements-gmsh.txt" (
+    echo   - Missing: server\requirements-gmsh.txt
+    set HAS_ERROR=1
+)
 if not exist "launch\windows.bat" (
     echo   - Missing: launch\windows.bat
     set HAS_ERROR=1
