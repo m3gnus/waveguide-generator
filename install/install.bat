@@ -14,7 +14,7 @@ echo.
 :: ── Project folder sanity check ───────────────────────────────────
 echo Verifying project folder...
 set ROOT_INVALID=
-for %%f in (package.json install\install.bat server\requirements.txt launch\windows.bat) do (
+for %%f in (package.json install\install.bat server\requirements.txt server\requirements-gmsh.txt launch\windows.bat) do (
     if not exist "%%f" (
         echo   - Missing: %%f
         set ROOT_INVALID=1
@@ -182,22 +182,41 @@ echo Installing backend dependencies...
 .venv\Scripts\python.exe -m pip install --quiet --upgrade pip
 .venv\Scripts\python.exe -m pip install --quiet -r server\requirements.txt
 if errorlevel 1 (
-    echo ERROR: Failed to install backend dependencies.
+    echo ERROR: Failed to install core backend dependencies.
     pause
     exit /b 1
 )
-echo   Done.
+echo   Core backend requirements installed.
 echo.
 
-:: ── Optional: bempp-cl ─────────────────────────────────────────────
-set /p INSTALL_BEM="Install bempp-cl BEM solver? (needed for simulations, takes 5-10 min) [y/N]: "
-if /i "%INSTALL_BEM%"=="y" (
-    echo Installing bempp-cl...
-    .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
-    echo   Done.
+:: Install gmsh separately with fallbacks so setup does not fail on wheel gaps
+echo Installing gmsh Python package (required for /api/mesh/build)...
+.venv\Scripts\python.exe -m pip install --quiet -r server\requirements-gmsh.txt
+if errorlevel 1 (
+    echo   Default gmsh install failed. Retrying with gmsh.info snapshot index...
+    .venv\Scripts\python.exe -m pip install --quiet --pre --force-reinstall --no-cache-dir --extra-index-url https://gmsh.info/python-packages-dev -r server\requirements-gmsh.txt
+    if errorlevel 1 (
+        echo   WARNING: Could not install gmsh Python package automatically.
+        echo            Backend setup will continue, but /api/mesh/build needs gmsh.
+        echo            Try manually:
+        echo              .venv\Scripts\python.exe -m pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server\requirements-gmsh.txt
+    ) else (
+        echo   gmsh installed from gmsh.info snapshot index.
+    )
 ) else (
-    echo   Skipped. Install later with:
-    echo     .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+    echo   gmsh installed from default index.
+)
+echo.
+
+:: ── Automatic: bempp-cl ────────────────────────────────────────────
+echo Installing bempp-cl (needed for simulations)...
+.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+if errorlevel 1 (
+    echo   WARNING: bempp-cl automatic install failed.
+    echo            You can retry later with:
+    echo              .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+) else (
+    echo   bempp-cl installed.
 )
 echo.
 
