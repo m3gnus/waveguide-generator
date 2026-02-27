@@ -76,14 +76,3 @@ except ImportError:
     build_waveguide_mesh = None  # type: ignore[assignment]
     WAVEGUIDE_BUILDER_AVAILABLE = False
 
-
-# ── Legacy .geo mesher ────────────────────────────────────────────────────────
-try:
-    from solver.gmsh_utils import gmsh_mesher_available
-    from solver.gmsh_geo_mesher import generate_msh_from_geo
-except ImportError:
-    def gmsh_mesher_available() -> bool:  # type: ignore[misc]
-        return False
-
-    def generate_msh_from_geo(*_args: Any, **_kwargs: Any) -> Any:  # type: ignore[misc]
-        raise RuntimeError("Legacy .geo mesher backend is unavailable.")
