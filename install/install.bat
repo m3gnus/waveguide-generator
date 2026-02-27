@@ -117,7 +117,7 @@ for %%p in (py python3 python) do (
                 set FIRST_PYTHON_VERSION=!CANDIDATE_VERSION!
             )
 
-            %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)" >nul 2>&1
+            %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
             if not errorlevel 1 (
                 set PYTHON_BIN=%%p
                 set PYTHON_PATH=!CANDIDATE_PATH!
@@ -128,7 +128,7 @@ for %%p in (py python3 python) do (
 )
 
 if not defined PYTHON_BIN (
-    echo ERROR: Python 3.10 through 3.13 is required.
+    echo ERROR: Python 3.10 through 3.14 is required.
     if defined FIRST_PYTHON_CMD (
         echo        Detected command: !FIRST_PYTHON_CMD!
         if defined FIRST_PYTHON_PATH echo        Detected path: !FIRST_PYTHON_PATH!

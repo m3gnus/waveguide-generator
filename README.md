@@ -33,7 +33,7 @@ The **project folder** means the folder that contains `package.json`.
 Two things need to be installed on your computer before you begin:
 
 - **[Node.js 18+](https://nodejs.org/)** — download and install the LTS version
-- **[Python 3.10 - 3.13](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
+- **[Python 3.10 - 3.14](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
 
 That's all. Everything else is handled by the setup script.
 
@@ -64,7 +64,7 @@ The app opens automatically in your browser at `http://localhost:3000`. Close th
 The install script will ask whether to install `bempp-cl`, a BEM acoustic solver. This enables the **Start BEM Simulation** feature. It is optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it. Installation can take 5–10 minutes the first time.
 
 Supported backend dependency matrix:
-- Python: `>=3.10,<3.14`
+- Python: `>=3.10,<3.15`
 - gmsh Python package: `>=4.15,<5.0`
 - bempp-cl: `>=0.4,<0.5` (`/api/solve`)
 - legacy `bempp_api` fallback: `>=0.3,<0.4` (`/api/solve (legacy fallback)`)

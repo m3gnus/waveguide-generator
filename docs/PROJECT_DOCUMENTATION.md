@@ -279,7 +279,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 
 | Component | Supported range | Required for |
 |---|---|---|
-| Python | `>=3.10,<3.14` | backend runtime |
+| Python | `>=3.10,<3.15` | backend runtime |
 | gmsh Python package | `>=4.15,<5.0` | `/api/mesh/build` |
 | bempp-cl | `>=0.4,<0.5` | `/api/solve` |
 | legacy `bempp_api` | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |

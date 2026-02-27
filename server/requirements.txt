@@ -1,5 +1,5 @@
 # MWG Horn BEM Solver Backend Requirements
-# Supported runtime matrix: Python >=3.10,<3.14
+# Supported runtime matrix: Python >=3.10,<3.15
 
 # Web Framework
 fastapi==0.104.1
