@@ -86,7 +86,7 @@ FIRST_PYTHON_BIN=""
 FIRST_PYTHON_VERSION=""
 FIRST_PYTHON_PATH=""
 
-for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
+for cmd in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python; do
     if command -v "$cmd" >/dev/null 2>&1; then
         candidate_path="$(command -v "$cmd")"
         candidate_version="$($cmd -c "import sys; print('{}.{}.{}'.format(*sys.version_info[:3]))" 2>/dev/null || true)"
@@ -97,7 +97,7 @@ for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
             FIRST_PYTHON_VERSION="$candidate_version"
         fi
 
-        if "$cmd" -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)" >/dev/null 2>&1; then
+        if "$cmd" -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >/dev/null 2>&1; then
             PYTHON_BIN="$cmd"
             PYTHON_PATH="$candidate_path"
             PYTHON_VERSION="$candidate_version"
@@ -107,7 +107,7 @@ for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
 done
 
 if [[ -z "$PYTHON_BIN" ]]; then
-    echo "ERROR: Python 3.10 through 3.13 is required."
+    echo "ERROR: Python 3.10 through 3.14 is required."
     if [[ -n "$FIRST_PYTHON_BIN" ]]; then
         echo "       Detected command: $FIRST_PYTHON_BIN"
         [[ -n "$FIRST_PYTHON_PATH" ]] && echo "       Detected path: $FIRST_PYTHON_PATH"
