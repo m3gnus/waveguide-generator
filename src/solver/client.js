@@ -5,7 +5,6 @@
  */
 
 import { BemSolver } from './index.js';
-import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 
 /**
  * HTTP client for BEM solver backend
@@ -70,60 +69,4 @@ export class BemClient extends BemSolver {
 
     return await this.getResults(jobId);
   }
-
-  /**
-   * Generate a Gmsh-authored .msh from .geo text via backend service.
-   * @param {{ geoText: string, mshVersion?: '2.2' | '4.1', binary?: boolean }} request
-   * @returns {Promise<{ msh: string, generatedBy: string, stats: { nodeCount: number, elementCount: number } }>}
-   */
-  async generateMeshFromGeo(request) {
-    const payload = {
-      geoText: String(request?.geoText || ''),
-      mshVersion: request?.mshVersion || '2.2',
-      binary: Boolean(request?.binary)
-    };
-
-    const controller = new AbortController();
-    const requestedTimeout = Number(request?.timeoutMs);
-    const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
-      ? Math.floor(requestedTimeout)
-      : 90_000;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    let response;
-    try {
-      response = await fetch(`${this.backendUrl}/api/mesh/generate-msh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-    } catch (err) {
-      clearTimeout(timer);
-      if (err.name === 'AbortError') {
-        throw new Error(`Gmsh backend did not respond within ${timeoutMs / 1000}s. Is the server running?`);
-      }
-      throw new Error(`Cannot reach Gmsh backend at ${this.backendUrl}: ${err.message}`);
-    }
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      let detail = `${response.status}`;
-      try {
-        const err = await response.json();
-        if (err?.detail) detail = String(err.detail);
-      } catch {
-        // Keep default detail fallback.
-      }
-      throw new Error(`Gmsh mesh generation failed: ${detail}`);
-    }
-
-    return response.json();
-  }
-}
-
-export async function generateMeshFromGeo(request, backendUrl = DEFAULT_BACKEND_URL) {
-  const client = new BemClient();
-  client.setBackendUrl(backendUrl);
-  return client.generateMeshFromGeo(request);
 }

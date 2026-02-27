@@ -1,62 +1,21 @@
-"""
-Mesh building routes: OCC waveguide builder and legacy .geo mesher.
-"""
+"""Mesh building routes for OCC waveguide meshing."""
 
 import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from models import GmshMeshRequest, WaveguideParamsRequest
+from models import WaveguideParamsRequest
 from solver_bootstrap import (
     WAVEGUIDE_BUILDER_AVAILABLE,
     GMSH_OCC_RUNTIME_READY,
     build_waveguide_mesh,
-    gmsh_mesher_available,
-    generate_msh_from_geo,
     get_dependency_status,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-async def generate_mesh_with_gmsh(request: GmshMeshRequest) -> Dict[str, Any]:
-    """Legacy `.geo -> .msh` compatibility shim used by server tests."""
-    geo_text = str(request.geoText or "")
-    if not geo_text.strip():
-        raise HTTPException(status_code=422, detail="geoText must be a non-empty .geo script.")
-
-    if not gmsh_mesher_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Legacy /api/mesh/generate-msh requires a working Gmsh backend.",
-        )
-
-    try:
-        result = generate_msh_from_geo(
-            geo_text,
-            msh_version=request.mshVersion,
-            binary=bool(request.binary),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f".geo meshing failed: {exc}") from exc
-
-    return {
-        "msh": result["msh"],
-        "generatedBy": "gmsh",
-        "stats": result["stats"],
-    }
-
-
-@router.post("/api/mesh/generate-msh")
-async def _generate_msh_route(request: GmshMeshRequest) -> Dict[str, Any]:
-    return await generate_mesh_with_gmsh(request)
 
 
 @router.post("/api/mesh/build")

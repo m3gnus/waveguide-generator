@@ -44,8 +44,6 @@ Supporting fixtures:
 - `server/tests/test_dependency_runtime.py`
 - `server/tests/test_device_interface.py`
 - `server/tests/test_directivity_plot.py`
-- `server/tests/test_gmsh_endpoint.py`
-- `server/tests/test_gmsh_geo_mesher.py`
 - `server/tests/test_impedance.py`
 - `server/tests/test_mesh_validation.py`
 - `server/tests/test_observation.py`

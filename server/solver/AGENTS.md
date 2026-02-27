@@ -4,7 +4,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 
 ## Responsibilities
 - Backend mesh conversion, validation, and optional refinement (`mesh.py`).
-- Gmsh meshing endpoints and OCC mesh builder support (`gmsh_geo_mesher.py`, `waveguide_builder.py`).
+- OCC mesh builder support (`waveguide_builder.py`).
 - BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve*.py`).
 - Runtime dependency gating and reporting (`deps.py`).
 - Unit handling and normalization behavior used by solver paths (`units.py`).
@@ -23,7 +23,6 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 ## Required Tests Before Merge
 - For `waveguide_builder.py` and OCC meshing changes:
   - `server/tests/test_dependency_runtime.py`
-  - `server/tests/test_gmsh_endpoint.py`
   - `server/tests/test_occ_resolution_semantics.py`
 - For `mesh.py` changes:
   - `server/tests/test_mesh_validation.py`
@@ -36,7 +35,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
   - `server/tests/test_observation_distance.py`
 - For API contract changes touching solver integration:
   - `server/tests/test_api_validation.py`
-  - `server/tests/test_gmsh_geo_mesher.py`
+  - `server/tests/test_dependency_runtime.py`
 - Always run full server suite before merge (from repo root): `npm run test:server`
 
 ## Known Pitfalls

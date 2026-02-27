@@ -27,8 +27,6 @@ from solver_bootstrap import (  # noqa: E402
     WAVEGUIDE_BUILDER_AVAILABLE,
     BEMSolver,
     build_waveguide_mesh,
-    gmsh_mesher_available,
-    generate_msh_from_geo,
     normalize_mesh_validation_mode,
     normalize_device_mode,
     get_dependency_status,
@@ -43,7 +41,6 @@ from models import (  # noqa: E402
     JobStatus,
     SimulationResults,
     WaveguideParamsRequest,
-    GmshMeshRequest,
     ChartsRenderRequest,
     DirectivityRenderRequest,
 )
@@ -95,7 +92,6 @@ from api.routes_misc import (  # noqa: E402
 )
 from api.routes_mesh import (  # noqa: E402
     build_mesh_from_params,
-    generate_mesh_with_gmsh,
 )
 from api.routes_simulation import (  # noqa: E402
     submit_simulation,

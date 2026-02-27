@@ -55,7 +55,7 @@ Next addition:
 
 ### Potential deprecation: Gmsh meshing stack
 Current state:
-- `/api/mesh/build` and `/api/mesh/generate-msh` are Gmsh-backed meshing paths used for MSH/STL export.
+- `/api/mesh/build` is the Gmsh-backed meshing path used for MSH/STL export.
 - `/api/solve` can run from canonical frontend mesh payloads without requiring Gmsh.
 - ABEC export pipeline has been removed (Feb 2026).
 
