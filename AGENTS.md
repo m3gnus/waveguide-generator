@@ -19,11 +19,7 @@
 - Accepts ATH parameters and returns Gmsh-authored `.msh` (plus optional `stl` text).
 - Does not return `.geo`.
 
-3. Legacy `.geo -> .msh` pipeline (`/api/mesh/generate-msh`)
-- Accepts prebuilt `.geo` text payloads, meshed in backend.
-- Uses gmsh Python API when present, otherwise gmsh CLI fallback.
-
-4. BEM solve pipeline (`/api/solve`)
+3. BEM solve pipeline (`/api/solve`)
 - Backend validates mesh shape and source tags before solving.
 - Frontend simulation falls back to mock results only when backend is unreachable.
 
@@ -66,7 +62,7 @@
 - `src/app/exports.js`, `src/solver/waveguidePayload.js`
   - Required: `tests/export-gmsh-pipeline.test.js`, `tests/waveguide-payload.test.js`
 - `server/solver/waveguide_builder.py`, `server/app.py`
-  - Required: `server/tests/test_dependency_runtime.py`, `server/tests/test_gmsh_endpoint.py`, `server/tests/test_occ_resolution_semantics.py`, `server/tests/test_updates_endpoint.py`
+  - Required: `server/tests/test_dependency_runtime.py`, `server/tests/test_occ_resolution_semantics.py`, `server/tests/test_updates_endpoint.py`
 - `server/solver/mesh.py`, `server/solver/solve.py`, `server/solver/solve_optimized.py`
   - Required: `server/tests/test_mesh_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_solver_hardening.py`, `server/tests/test_api_validation.py`
 

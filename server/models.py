@@ -205,12 +205,6 @@ class WaveguideParamsRequest(BaseModel):
     msh_version: str = "2.2"
 
 
-class GmshMeshRequest(BaseModel):
-    geoText: str
-    mshVersion: str = "2.2"
-    binary: bool = False
-
-
 class ChartsRenderRequest(BaseModel):
     frequencies: List[float] = []
     spl: List[float] = []
