@@ -41,14 +41,13 @@ That's all. Everything else is handled by the setup script.
 
 Run this **once** from the project folder to install all dependencies:
 
-- **Windows** — double-click `SETUP-WINDOWS.bat`
-- **macOS** — double-click `SETUP-MAC.command`
-- **Linux** — run:
+- **Windows** — double-click `install/install.bat`
+- **macOS / Linux** — run:
   ```bash
-  ./SETUP-LINUX.sh
+  bash install/install.sh
   ```
 
-These setup entrypoints validate that you are in the full project folder, then run the platform installer in `install/`.
+These setup scripts validate that you are in the full project folder before installing dependencies.
 The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It now automatically attempts to install both `gmsh` and `bempp-cl`, with fallback handling if platform wheels are missing.
 
 ## Run the app
@@ -135,7 +134,6 @@ server/tests/ Backend unittest suites
 scripts/      Dev utilities
 install/      One-time setup scripts (mac/linux and windows)
 launch/       Double-click launchers (mac, windows, linux)
-SETUP-*       Root setup entrypoints for first-time installation
 docs/         Architecture and technical reference
 ```
 
@@ -167,9 +165,9 @@ curl http://localhost:8000/health
 
 **macOS: "cannot be opened because the developer cannot be verified"** — right-click `launch/mac.command` → Open → click Open in the security dialog.
 
-**Wrong folder / missing `package.json`** — run setup from the extracted project root (the folder containing `package.json`). Use `SETUP-WINDOWS.bat`, `SETUP-MAC.command`, or `./SETUP-LINUX.sh` from that folder.
+**Wrong folder / missing `package.json`** — run setup from the extracted project root (the folder containing `package.json`). Use `install/install.bat` or `bash install/install.sh` from that folder.
 
-**`npm ci` says `package-lock.json` is missing** — make sure you extracted or cloned the full project folder before running `SETUP-WINDOWS.bat`, `SETUP-MAC.command`, or `./SETUP-LINUX.sh`. If the lockfile is missing, the installer falls back to `npm install`, but re-downloading a complete project copy is recommended.
+**`npm ci` says `package-lock.json` is missing** — make sure you extracted or cloned the full project folder before running `install/install.bat` or `bash install/install.sh`. If the lockfile is missing, the installer falls back to `npm install`, but re-downloading a complete project copy is recommended.
 
 **Python not found on Windows** — reinstall Python from [python.org](https://www.python.org/downloads/windows/) and tick *"Add python.exe to PATH"*.
 

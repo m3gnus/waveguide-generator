@@ -4,16 +4,12 @@
 
 1. Install all dependencies:
    ```bash
-   # Linux
-   ./SETUP-LINUX.sh
-   ```
-   ```bash
-   # macOS
-   ./SETUP-MAC.command
+   # macOS / Linux
+   bash install/install.sh
    ```
    ```bat
    :: Windows
-   SETUP-WINDOWS.bat
+   install\install.bat
    ```
    Or manually:
    ```bash
