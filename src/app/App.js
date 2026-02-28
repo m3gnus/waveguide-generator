@@ -181,7 +181,7 @@ export class App {
     return provideMeshForSimulation(this);
   }
 
-  async checkForUpdates() {
-    return checkForUpdates();
+  async checkForUpdates(buttonEl) {
+    return checkForUpdates(buttonEl);
   }
 }
