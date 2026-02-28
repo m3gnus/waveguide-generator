@@ -11,7 +11,7 @@ This milestone delivers a reliable simulation operations layer on top of the exi
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Settings Modal Entry + System Migration** - Replace update-check entry behavior with the new Settings shell and system actions. (completed 2026-02-28)
-- [ ] **Phase 2: Viewer Controls Persistence + Reset UX** - Implement viewer settings model, apply-on-load behavior, and recommended resets.
+- [x] **Phase 2: Viewer Controls Persistence + Reset UX** - Implement viewer settings model, apply-on-load behavior, and recommended resets. (completed 2026-02-28)
 - [ ] **Phase 3: Simulation Basic Payload Wiring** - Connect Basic simulation controls to `/api/solve` contract fields.
 - [ ] **Phase 4: Folder Workspace Data Model** - Introduce folder index/task manifest model with tolerant rebuild behavior.
 - [ ] **Phase 5: Export Bundle + Auto-Export Engine** - Deliver selected-format bundle exports and idempotent auto-export behavior.
@@ -47,10 +47,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 02-01: Implement versioned settings schema and local persistence service.
-- [ ] 02-02: Wire viewer settings into scene/control runtime application.
-- [ ] 02-03: Implement recommended badges and reset handlers.
-- [ ] 02-04: Add frontend tests for persistence and reset behavior.
+- [x] 02-01: Implement versioned settings schema and local persistence service.
+- [x] 02-02: Wire viewer settings into scene/control runtime application.
+- [x] 02-03: Implement recommended badges and reset handlers.
+- [x] 02-04: Add frontend tests for persistence and reset behavior.
 
 ### Phase 3: Simulation Basic Payload Wiring
 **Goal**: Ensure Simulation Basic controls reliably affect submitted solve requests.
@@ -149,7 +149,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Settings Modal Entry + System Migration | 3/3 | Complete   | 2026-02-28 |
-| 2. Viewer Controls Persistence + Reset UX | 2/4 | In Progress|  |
+| 2. Viewer Controls Persistence + Reset UX | 4/4 | Complete   | 2026-02-28 |
 | 3. Simulation Basic Payload Wiring | 0/3 | Not started | - |
 | 4. Folder Workspace Data Model | 0/4 | Not started | - |
 | 5. Export Bundle + Auto-Export Engine | 0/4 | Not started | - |
