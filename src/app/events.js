@@ -1,6 +1,7 @@
 import { GlobalState } from '../state.js';
 import { selectOutputFolder } from '../ui/fileOps.js';
 import { openSettingsModal } from '../ui/settings/modal.js';
+import { supportsFolderSelection } from '../ui/workspace/folderWorkspace.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
@@ -21,7 +22,7 @@ export function setupEventListeners(app) {
   });
 
   // Hide folder selection button if not supported by the browser
-  if (!window.showDirectoryPicker) {
+  if (!supportsFolderSelection(window)) {
     const folderRow = document.getElementById('output-folder-row');
     if (folderRow) folderRow.style.display = 'none';
   }
