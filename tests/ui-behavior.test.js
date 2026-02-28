@@ -9,6 +9,13 @@ import {
   markParametersChanged,
   resetParameterChangeTracking
 } from '../src/ui/fileOps.js';
+import {
+  SETTINGS_CONTROL_IDS,
+  getLiveUpdateEnabled,
+  getDisplayMode,
+  getDownloadSimMeshEnabled,
+  openSettingsModal,
+} from '../src/ui/settings/modal.js';
 
 test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('1.0'), 1);
@@ -179,5 +186,243 @@ test('markParametersChanged increments counter once per change cycle and skips i
   } finally {
     global.document = originalDocument;
     resetParameterChangeTracking();
+  }
+});
+
+// --- Phase 1 migration regression tests: Settings modal entry ---
+
+test('SETTINGS_CONTROL_IDS maps all migrated controls to their element IDs', () => {
+  // Verifies the canonical ID map exists so consumers can reference controls
+  // that now live inside the dynamically-created settings modal.
+  assert.equal(SETTINGS_CONTROL_IDS.liveUpdate, 'live-update');
+  assert.equal(SETTINGS_CONTROL_IDS.displayMode, 'display-mode');
+  assert.equal(SETTINGS_CONTROL_IDS.downloadSimMesh, 'download-sim-mesh');
+  assert.equal(SETTINGS_CONTROL_IDS.checkUpdates, 'check-updates-btn');
+});
+
+test('settings getters return in-memory defaults when modal is not open', () => {
+  // When the modal is closed there are no DOM elements for these controls.
+  // Getters must return stored defaults rather than null/undefined.
+  const originalDocument = global.document;
+  global.document = { getElementById: () => null };
+
+  try {
+    // Default: live-update = true
+    assert.equal(getLiveUpdateEnabled(), true);
+    // Default: display-mode = standard
+    assert.equal(getDisplayMode(), 'standard');
+    // Default: download-sim-mesh = false
+    assert.equal(getDownloadSimMeshEnabled(), false);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test('settings getters read DOM values when elements are present', () => {
+  const originalDocument = global.document;
+
+  const liveUpdateEl = { checked: false };
+  const displayModeEl = { value: 'zebra' };
+  const downloadMeshEl = { checked: true };
+
+  global.document = {
+    getElementById(id) {
+      if (id === 'live-update') return liveUpdateEl;
+      if (id === 'display-mode') return displayModeEl;
+      if (id === 'download-sim-mesh') return downloadMeshEl;
+      return null;
+    }
+  };
+
+  try {
+    assert.equal(getLiveUpdateEnabled(), false);
+    assert.equal(getDisplayMode(), 'zebra');
+    assert.equal(getDownloadSimMeshEnabled(), true);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test('openSettingsModal creates modal with all four required section names', () => {
+  // Minimal DOM environment for on-demand modal construction.
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+
+  const appendedChildren = [];
+  const createdElements = [];
+
+  global.window = { addEventListener: () => {}, removeEventListener: () => {} };
+  global.document = {
+    getElementById: () => null,
+    createElement(tag) {
+      const el = {
+        _tag: tag,
+        _children: [],
+        _attrs: {},
+        _eventListeners: {},
+        id: '',
+        className: '',
+        textContent: '',
+        innerHTML: '',
+        hidden: false,
+        type: '',
+        title: '',
+        dataset: {},
+        setAttribute(k, v) { this._attrs[k] = v; },
+        getAttribute(k) { return this._attrs[k]; },
+        addEventListener(evt, fn) {
+          this._eventListeners[evt] = this._eventListeners[evt] || [];
+          this._eventListeners[evt].push(fn);
+        },
+        appendChild(child) {
+          this._children.push(child);
+          return child;
+        },
+        querySelectorAll(selector) {
+          // Return nav buttons or section divs based on class
+          const results = [];
+          const walk = (node) => {
+            if (!node || !node._children) return;
+            for (const child of node._children) {
+              if (selector === '.settings-nav-btn' && child.className && child.className.includes('settings-nav-btn')) {
+                results.push(child);
+              }
+              if (selector === '.settings-section' && child.className && child.className.includes('settings-section')) {
+                results.push(child);
+              }
+              walk(child);
+            }
+          };
+          walk(this);
+          return results;
+        },
+        querySelector(selector) {
+          if (selector === '[role="dialog"]') {
+            const walk = (node) => {
+              if (!node || !node._children) return null;
+              for (const child of node._children) {
+                if (child._attrs && child._attrs['role'] === 'dialog') return child;
+                const found = walk(child);
+                if (found) return found;
+              }
+              return null;
+            };
+            return walk(this);
+          }
+          return null;
+        },
+        focus() {},
+        remove() {},
+        classList: {
+          _list: new Set(),
+          toggle(cls, force) {
+            if (force === undefined) {
+              if (this._list.has(cls)) this._list.delete(cls); else this._list.add(cls);
+            } else if (force) {
+              this._list.add(cls);
+            } else {
+              this._list.delete(cls);
+            }
+          },
+          includes(cls) { return this._list.has(cls); }
+        },
+      };
+      createdElements.push(el);
+      return el;
+    },
+    body: {
+      appendChild(child) {
+        appendedChildren.push(child);
+        return child;
+      }
+    }
+  };
+
+  try {
+    openSettingsModal();
+
+    // The backdrop div should have been appended to body
+    assert.equal(appendedChildren.length, 1, 'One element should be appended to body');
+
+    // Collect all textContent values from created elements to find section headings
+    const allText = createdElements.map((el) => el.textContent).filter(Boolean);
+
+    // All four required section nav labels must be present
+    assert.ok(allText.some(t => t === 'Viewer'), 'Viewer section must be present');
+    assert.ok(allText.some(t => t === 'Simulation Basic'), 'Simulation Basic section must be present');
+    assert.ok(allText.some(t => t === 'Simulation Advanced'), 'Simulation Advanced section must be present');
+    assert.ok(allText.some(t => t === 'System'), 'System section must be present');
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+  }
+});
+
+test('openSettingsModal places check-updates-btn inside the modal, not in the actions panel', () => {
+  // Regression: check-updates-btn must only exist inside the dynamically-created
+  // settings modal. If it were found in the static DOM at startup (via getElementById
+  // before modal open), the binding in events.js would attach the old direct handler
+  // pattern instead of the delegation chain.
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+
+  const appendedChildren = [];
+  const createdElements = [];
+
+  global.window = { addEventListener: () => {}, removeEventListener: () => {} };
+  global.document = {
+    getElementById: () => null,
+    createElement(tag) {
+      const el = {
+        _tag: tag,
+        _children: [],
+        _attrs: {},
+        _eventListeners: {},
+        id: '',
+        className: '',
+        textContent: '',
+        innerHTML: '',
+        hidden: false,
+        type: '',
+        title: '',
+        dataset: {},
+        setAttribute(k, v) { this._attrs[k] = v; },
+        getAttribute(k) { return this._attrs[k]; },
+        addEventListener(evt, fn) {
+          this._eventListeners[evt] = this._eventListeners[evt] || [];
+          this._eventListeners[evt].push(fn);
+        },
+        appendChild(child) { this._children.push(child); return child; },
+        querySelectorAll() { return []; },
+        querySelector() { return null; },
+        focus() {},
+        remove() {},
+        classList: {
+          _list: new Set(),
+          toggle() {},
+          includes() { return false; }
+        },
+      };
+      createdElements.push(el);
+      return el;
+    },
+    body: {
+      appendChild(child) { appendedChildren.push(child); return child; }
+    }
+  };
+
+  try {
+    openSettingsModal();
+
+    // check-updates-btn must be created inside the modal (within the appended backdrop)
+    const updateBtnElements = createdElements.filter(el => el.id === 'check-updates-btn');
+    assert.equal(updateBtnElements.length, 1, 'Exactly one check-updates-btn should be created');
+
+    // Verify it is NOT directly in the static DOM (getElementById returns null before modal open)
+    const staticBtn = global.document.getElementById('check-updates-btn');
+    assert.equal(staticBtn, null, 'check-updates-btn should not exist in static DOM before modal is opened');
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
   }
 });
