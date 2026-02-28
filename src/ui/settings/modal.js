@@ -297,12 +297,23 @@ function _buildSystemSection() {
 
   _appendSectionHeading(sec, 'System', 'Application updates and system information.');
 
+  const updateRow = document.createElement('div');
+  updateRow.className = 'settings-action-row';
+
   const updateBtn = document.createElement('button');
   updateBtn.type = 'button';
   updateBtn.id = 'check-updates-btn';
   updateBtn.className = 'secondary';
   updateBtn.textContent = 'Check for App Updates';
-  sec.appendChild(updateBtn);
+  updateRow.appendChild(updateBtn);
+
+  const updateHelp = document.createElement('p');
+  updateHelp.className = 'settings-action-help';
+  updateHelp.textContent =
+    'Queries the backend for the latest commit on the default remote branch and reports whether the local copy is behind, ahead, or up to date.';
+  updateRow.appendChild(updateHelp);
+
+  sec.appendChild(updateRow);
 
   return sec;
 }
