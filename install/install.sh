@@ -97,7 +97,7 @@ for cmd in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python
             FIRST_PYTHON_VERSION="$candidate_version"
         fi
 
-        if "$cmd" -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >/dev/null 2>&1; then
+        if "$cmd" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3,10) else 1)" >/dev/null 2>&1; then
             PYTHON_BIN="$cmd"
             PYTHON_PATH="$candidate_path"
             PYTHON_VERSION="$candidate_version"
@@ -107,7 +107,7 @@ for cmd in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python
 done
 
 if [[ -z "$PYTHON_BIN" ]]; then
-    echo "ERROR: Python 3.10 through 3.14 is required."
+    echo "ERROR: Python 3.10 or newer is required."
     if [[ -n "$FIRST_PYTHON_BIN" ]]; then
         echo "       Detected command: $FIRST_PYTHON_BIN"
         [[ -n "$FIRST_PYTHON_PATH" ]] && echo "       Detected path: $FIRST_PYTHON_PATH"
