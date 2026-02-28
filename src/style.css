@@ -1418,3 +1418,98 @@ button.secondary:hover:not(:disabled) {
     margin: 0;
     line-height: 1.4;
 }
+
+/* ======================================================
+   Settings Modal — Viewer Sub-sections + Badges + Sliders
+   ====================================================== */
+
+/* Sub-section header: title on left, Reset button on right */
+.settings-subsection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 16px 0 6px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.settings-subsection-header:first-child {
+    margin-top: 4px;
+}
+
+.settings-subsection-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin: 0;
+}
+
+/* Reset button inside sub-section header */
+.settings-reset-btn {
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 2px 8px;
+    cursor: pointer;
+    margin: 0;
+    min-width: unset;
+    width: auto;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    opacity: 0.75;
+}
+
+.settings-reset-btn:hover {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    background: transparent;
+    opacity: 1;
+}
+
+/* Recommended badge — inline pill next to control value */
+.settings-recommended-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--input-bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    margin-left: 6px;
+    white-space: nowrap;
+    vertical-align: middle;
+    opacity: 0.85;
+}
+
+/* Slider + readout wrapper inside .settings-control-value */
+.settings-slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.settings-slider-group input[type="range"] {
+    width: 100px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+    margin: 0;
+}
+
+.settings-slider-readout {
+    font-size: 0.82rem;
+    color: var(--text-color);
+    min-width: 30px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Reset all settings action row button — align-self: flex-start */
+.settings-action-row button#reset-all-settings-btn {
+    width: auto;
+    align-self: flex-start;
+}
