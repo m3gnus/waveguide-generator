@@ -5,10 +5,25 @@ Dependency discovery and compatibility checks for backend solver components.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 from importlib import metadata
 from typing import Dict, Optional, Tuple
+
+# On Windows, Python 3.8+ no longer searches PATH for DLL dependencies.
+# If the VC++ Redistributable is not installed system-wide, numba (and
+# therefore bempp-cl) will fail to load with "DLL load failed".  As a
+# workaround, add directories on PATH that contain the required MSVC
+# runtime DLLs (e.g. MSVCP140.dll, api-ms-win-crt-*) to the DLL search
+# list so the extension modules can find them.
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    for _dir in os.environ.get("PATH", "").split(os.pathsep):
+        if _dir and os.path.isfile(os.path.join(_dir, "MSVCP140.dll")):
+            try:
+                os.add_dll_directory(_dir)
+            except OSError:
+                pass
 
 logger = logging.getLogger(__name__)
 
