@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-28T17:28:37.000Z"
+last_updated: "2026-02-28T18:40:02.000Z"
 progress:
   total_phases: 8
-  completed_phases: 2
-  total_plans: 7
-  completed_plans: 7
+  completed_phases: 3
+  total_plans: 11
+  completed_plans: 11
 ---
 
 # Project State
@@ -18,23 +18,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** A user can reliably run, manage, and reuse waveguide simulations with clear controls and traceable outputs.
-**Current focus:** Phase 3 — Simulation Basic Payload Wiring
+**Current focus:** Phase 5 — Export Bundle + Auto-Export Engine
 
 ## Current Position
 
-Phase: 2 of 8 (Viewer Controls Persistence and Reset UX) — Complete
-Plan: 4 of 4 in current phase (02-04-PLAN.md complete)
-Status: Phase complete — ready to start Phase 3
-Last activity: 2026-02-28 — Completed 02-04: add viewer settings persistence/reset test coverage
+Phase: 4 of 8 (Folder Workspace Data Model) — Complete
+Plan: 4 of 4 in current phase (04-04-PLAN.md complete)
+Status: Phase complete — ready to start Phase 5
+Last activity: 2026-02-28 — Completed 04-04: add folder workspace/index/manifest regression coverage
 
-Progress: [█████░░░░░] 25%
+Progress: [████████░░] 38%
 
 ## Performance Metrics
 
 **Velocity:**
 - Total plans completed: 7
-- Average duration: 3 min
-- Total execution time: 0.20 hours
+- Average duration: 11 min
+- Total execution time: 2.03 hours
 
 **By Phase:**
 
@@ -42,14 +42,15 @@ Progress: [█████░░░░░] 25%
 |-------|-------|-------|----------|
 | 01-settings-modal-entry-system-migration | 3/3 | 9 min | 3 min |
 | 02-viewer-controls-persistence-and-reset-ux | 4/4 | 12 min | 3 min |
+| 04-folder-workspace-data-model | 4/4 | 131 min | 33 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min, 2 min, 3 min, 2 min
-- Last 5 plans: 4 min, 2 min, 3 min, 2 min, 4 min
-- Trend: Stable
-| Phase 02-viewer-controls-persistence-and-reset-ux P02 | 3 | 1 tasks | 1 files |
-| Phase 02-viewer-controls-persistence-and-reset-ux P03 | 3 | 2 tasks | 2 files |
-| Phase 02-viewer-controls-persistence-and-reset-ux P04 | 4 | 2 tasks | 2 files |
+- Last 5 plans: 26 min, 34 min, 29 min, 42 min, 4 min
+- Trend: Increased scope in phase 4
+| Phase 04-folder-workspace-data-model P01 | 26 | 3 tasks | 3 files |
+| Phase 04-folder-workspace-data-model P02 | 34 | 3 tasks | 5 files |
+| Phase 04-folder-workspace-data-model P03 | 29 | 3 tasks | 3 files |
+| Phase 04-folder-workspace-data-model P04 | 42 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,10 @@ Recent decisions affecting current work:
 - [Phase 02-viewer-controls-persistence-and-reset-ux]: Camera sub-section reset does NOT call _applyLive — startupCameraMode takes effect on next launch only
 - [Phase 02-viewer-controls-persistence-and-reset-ux]: New viewerSettings unit suite isolates localStorage/control application/wheel inversion/reset behavior with node:test stubs (15 tests)
 - [Phase 02-viewer-controls-persistence-and-reset-ux]: Recommended-badge visibility behavior is now regression-tested in ui-behavior using modal construction stubs
+- [Phase 04-folder-workspace-data-model]: Folder handle ownership centralized in `src/ui/workspace/folderWorkspace.js`; `fileOps` no longer owns hidden folder globals.
+- [Phase 04-folder-workspace-data-model]: Per-task manifest schema includes required fields (`rating`, `exportedFiles`, `scriptSchemaVersion`, `scriptSnapshot`) and non-blocking write behavior.
+- [Phase 04-folder-workspace-data-model]: Restore flow is index-first with manifest rebuild fallback and repaired index persistence.
+- [Phase 04-folder-workspace-data-model]: Regression suites added for folder workspace, task manifest, index rebuild, and reconciliation metadata retention.
 
 ### Pending Todos
 
@@ -104,5 +109,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 02-viewer-controls-persistence-and-reset-ux/02-04-PLAN.md
+Stopped at: Completed 04-folder-workspace-data-model/04-04-PLAN.md
 Resume file: None
