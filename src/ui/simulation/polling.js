@@ -2,6 +2,8 @@
 
 import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
 import { showError } from '../feedback.js';
+import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
+import { updateTaskManifestForJob } from '../workspace/taskManifest.js';
 import {
   allJobs,
   hasActiveJobs,
@@ -17,6 +19,17 @@ import { renderJobList } from './jobActions.js';
 const ACTIVE_POLL_MS = 1000;
 const IDLE_POLL_MS = 15000;
 const MAX_POLL_BACKOFF_MS = 30000;
+
+async function syncManifestForRemoteUpdate(item) {
+  const workspaceHandle = getSelectedFolderHandle();
+  if (!workspaceHandle || !item?.id) {
+    return;
+  }
+  const result = await updateTaskManifestForJob(workspaceHandle, item);
+  if (result.warning) {
+    console.warn(result.warning);
+  }
+}
 
 /**
  * @typedef {Object} SolverPollingApi
@@ -106,6 +119,9 @@ export function pollSimulationStatus(panel) {
       const knownIds = new Set();
       for (const item of remoteItems) {
         upsertJob(panel, item);
+        syncManifestForRemoteUpdate(item).catch((error) => {
+          console.warn('Task manifest sync failed during polling:', error);
+        });
         knownIds.add(item.id);
       }
 
