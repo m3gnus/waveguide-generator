@@ -184,6 +184,70 @@ else
 fi
 echo ""
 
+# ── OpenCL runtime check ───────────────────────────────────────────
+echo "Checking OpenCL runtime for bempp-cl simulations..."
+_OS="$(uname -s)"
+_ARCH="$(uname -m)"
+_OPENCL_OK=0
+
+if .venv/bin/python -c "import pyopencl; assert pyopencl.get_platforms()" 2>/dev/null; then
+    echo "  OpenCL is available."
+    _OPENCL_OK=1
+else
+    echo "  No OpenCL platform found."
+
+    if [[ "$_OS" == "Linux" ]]; then
+        _POCL_INSTALLED=0
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "  Installing pocl-opencl-icd via apt-get..."
+            sudo apt-get install -y pocl-opencl-icd >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
+        elif command -v dnf >/dev/null 2>&1; then
+            echo "  Installing pocl via dnf..."
+            sudo dnf install -y pocl >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
+        elif command -v pacman >/dev/null 2>&1; then
+            echo "  Installing pocl via pacman..."
+            sudo pacman -S --noconfirm pocl >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
+        fi
+
+        if [[ "$_POCL_INSTALLED" -eq 1 ]] && .venv/bin/python -c "import pyopencl; assert pyopencl.get_platforms()" 2>/dev/null; then
+            echo "  OpenCL (pocl CPU runtime) is now available."
+            _OPENCL_OK=1
+        else
+            echo ""
+            echo "  WARNING: No OpenCL runtime available. Acoustic simulations will not work."
+            echo "           To fix, install a CPU or GPU OpenCL runtime:"
+            echo "             sudo apt-get install pocl-opencl-icd   # Debian/Ubuntu"
+            echo "             sudo dnf install pocl                   # Fedora/RHEL"
+            echo "             sudo pacman -S pocl                     # Arch Linux"
+            echo "           Or install proprietary GPU drivers that include OpenCL."
+        fi
+
+    elif [[ "$_OS" == "Darwin" ]]; then
+        _POCL_INSTALLED=0
+        if command -v brew >/dev/null 2>&1; then
+            echo "  Installing pocl via Homebrew..."
+            brew install pocl >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
+        fi
+
+        if [[ "$_POCL_INSTALLED" -eq 1 ]] && .venv/bin/python -c "import pyopencl; assert pyopencl.get_platforms()" 2>/dev/null; then
+            echo "  OpenCL (pocl CPU runtime) is now available."
+            _OPENCL_OK=1
+        else
+            echo ""
+            echo "  WARNING: No OpenCL runtime available. Acoustic simulations will not work."
+            if command -v brew >/dev/null 2>&1; then
+                echo "           To fix: brew install pocl"
+            else
+                echo "           To fix: install Homebrew (https://brew.sh/), then: brew install pocl"
+            fi
+            if [[ "$_ARCH" == "arm64" ]]; then
+                echo "           Apple Silicon alternative: bash scripts/setup-opencl-backend.sh"
+            fi
+        fi
+    fi
+fi
+echo ""
+
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Setup complete!                                             ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
@@ -192,9 +256,4 @@ echo "To start the app:"
 echo "  - macOS: double-click launch/mac.command"
 echo "  - Linux: run bash launch/linux.sh"
 echo "  - Or run npm start"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo ""
-    echo "For true bempp OpenCL on Apple Silicon:"
-    echo "  - Run ./scripts/setup-opencl-backend.sh"
-fi
 echo ""
