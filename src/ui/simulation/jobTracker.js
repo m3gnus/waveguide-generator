@@ -18,6 +18,12 @@ function safeJsonParse(raw) {
 }
 
 function normalizeItem(raw = {}) {
+  const exportedFilesInput = raw.exportedFiles ?? raw.exported_files;
+  const exportedFiles = Array.isArray(exportedFilesInput)
+    ? exportedFilesInput.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const scriptSnapshot = raw.scriptSnapshot ?? raw.script_snapshot ?? raw.script ?? null;
+
   return {
     id: String(raw.id || ''),
     status: String(raw.status || 'error'),
@@ -33,7 +39,13 @@ function normalizeItem(raw = {}) {
     hasMeshArtifact: Boolean(raw.hasMeshArtifact ?? raw.has_mesh_artifact),
     label: raw.label ?? null,
     errorMessage: raw.errorMessage ?? raw.error_message ?? null,
-    script: raw.script ?? null
+    script: raw.script ?? scriptSnapshot,
+    rating: raw.rating ?? null,
+    exportedFiles,
+    scriptSchemaVersion: Number.isFinite(Number(raw.scriptSchemaVersion ?? raw.script_schema_version))
+      ? Number(raw.scriptSchemaVersion ?? raw.script_schema_version)
+      : 1,
+    scriptSnapshot
   };
 }
 
@@ -53,7 +65,13 @@ function toStorageItem(item) {
     has_mesh_artifact: item.hasMeshArtifact,
     label: item.label,
     error_message: item.errorMessage,
-    script: item.script
+    script: item.script,
+    rating: item.rating ?? null,
+    exported_files: Array.isArray(item.exportedFiles) ? item.exportedFiles : [],
+    script_schema_version: Number.isFinite(Number(item.scriptSchemaVersion))
+      ? Number(item.scriptSchemaVersion)
+      : 1,
+    script_snapshot: item.scriptSnapshot ?? item.script ?? null
   };
 }
 
@@ -130,7 +148,15 @@ export function mergeJobs(localItems, remoteItems) {
       merged.set(normalized.id, {
         ...normalized,
         label: normalized.label ?? existing.label ?? null,
-        script: normalized.script ?? existing.script ?? null
+        script: normalized.script ?? existing.script ?? null,
+        rating: normalized.rating ?? existing.rating ?? null,
+        exportedFiles: normalized.exportedFiles?.length
+          ? normalized.exportedFiles
+          : (existing.exportedFiles ?? []),
+        scriptSchemaVersion: Number.isFinite(Number(normalized.scriptSchemaVersion))
+          ? Number(normalized.scriptSchemaVersion)
+          : (existing.scriptSchemaVersion ?? 1),
+        scriptSnapshot: normalized.scriptSnapshot ?? existing.scriptSnapshot ?? null
       });
     } else {
       merged.set(normalized.id, normalized);
@@ -182,7 +208,15 @@ export function upsertJob(panel, rawEntry) {
     ...(existing || {}),
     ...next,
     label: next.label ?? existing?.label ?? null,
-    script: next.script ?? existing?.script ?? null
+    script: next.script ?? existing?.script ?? null,
+    rating: next.rating ?? existing?.rating ?? null,
+    exportedFiles: next.exportedFiles?.length
+      ? next.exportedFiles
+      : (existing?.exportedFiles ?? []),
+    scriptSchemaVersion: Number.isFinite(Number(next.scriptSchemaVersion))
+      ? Number(next.scriptSchemaVersion)
+      : (existing?.scriptSchemaVersion ?? 1),
+    scriptSnapshot: next.scriptSnapshot ?? existing?.scriptSnapshot ?? null
   });
   if (!panel.activeJobId && ACTIVE.has(next.status)) {
     panel.activeJobId = next.id;
