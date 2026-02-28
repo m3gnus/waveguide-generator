@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-28T14:32:23.961Z"
+last_updated: "2026-02-28T16:51:02Z"
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 4
+  completed_plans: 4
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** A user can reliably run, manage, and reuse waveguide simulations with clear controls and traceable outputs.
-**Current focus:** Phase 1 — Settings Modal Entry + System Migration
+**Current focus:** Phase 2 — Viewer Controls Persistence and Reset UX
 
 ## Current Position
 
-Phase: 1 of 8 (Settings Modal Entry + System Migration) — COMPLETE
-Plan: 3 of 3 in current phase (01-03-PLAN.md complete)
-Status: In Progress (Phase 1 done, advancing to Phase 2)
-Last activity: 2026-02-28 — Completed 01-03: Migration regression tests + phase completion checks
+Phase: 2 of 8 (Viewer Controls Persistence and Reset UX) — In Progress
+Plan: 1 of 3 in current phase (02-01-PLAN.md complete)
+Status: In Progress
+Last activity: 2026-02-28 — Completed 02-01: viewerSettings.js persistence service
 
-Progress: [███░░░░░░░] 12%
+Progress: [████░░░░░░] 16%
 
 ## Performance Metrics
 
@@ -41,9 +41,10 @@ Progress: [███░░░░░░░] 12%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-settings-modal-entry-system-migration | 3/3 | 9 min | 3 min |
+| 02-viewer-controls-persistence-and-reset-ux | 1/3 | 2 min | 2 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min, 2 min, 3 min
+- Last 5 plans: 4 min, 2 min, 3 min, 2 min
 - Trend: Stable
 
 ## Accumulated Context
@@ -62,6 +63,9 @@ Recent decisions affecting current work:
 - [Phase 01-settings-modal-entry-system-migration]: settings-action-row pattern established for button + help text in settings sections
 - [Phase 01-settings-modal-entry-system-migration]: No changes to test_updates_endpoint.py — backend contract already fully verified; 3 existing tests pass unchanged
 - [Phase 01-settings-modal-entry-system-migration]: Minimal DOM stubs used in openSettingsModal tests — no jsdom dependency introduced; consistent with existing test patterns
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: invertWheelZoom NOT applied in applyViewerSettingsToControls — handled separately via setInvertWheelZoom() to keep OrbitControls setup clean
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: Module-level _current cache lazily populated by loadViewerSettings(); getCurrentViewerSettings() avoids double localStorage read
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: debouncedSaveViewerSettings exported alongside saveViewerSettings — callers choose immediate vs debounced based on intent
 
 ### Pending Todos
 
@@ -90,5 +94,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 01-settings-modal-entry-system-migration/01-03-PLAN.md (Phase 1 complete)
+Stopped at: Completed 02-viewer-controls-persistence-and-reset-ux/02-01-PLAN.md
 Resume file: None
