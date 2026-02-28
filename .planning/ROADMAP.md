@@ -13,7 +13,7 @@ This milestone delivers a reliable simulation operations layer on top of the exi
 - [x] **Phase 1: Settings Modal Entry + System Migration** - Replace update-check entry behavior with the new Settings shell and system actions. (completed 2026-02-28)
 - [x] **Phase 2: Viewer Controls Persistence + Reset UX** - Implement viewer settings model, apply-on-load behavior, and recommended resets. (completed 2026-02-28)
 - [ ] **Phase 3: Simulation Basic Payload Wiring** - Connect Basic simulation controls to `/api/solve` contract fields.
-- [ ] **Phase 4: Folder Workspace Data Model** - Introduce folder index/task manifest model with tolerant rebuild behavior.
+- [x] **Phase 4: Folder Workspace Data Model** - Introduce folder index/task manifest model with tolerant rebuild behavior. (completed 2026-02-28)
 - [ ] **Phase 5: Export Bundle + Auto-Export Engine** - Deliver selected-format bundle exports and idempotent auto-export behavior.
 - [ ] **Phase 6: Completed Task Source Modes** - Implement folder-only viewer mode with backend-source fallback.
 - [ ] **Phase 7: Ratings + Sorting + Filtering** - Add rating persistence and quality-of-life task list controls.
@@ -78,10 +78,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 04-01: Implement folder workspace service and handle lifecycle.
-- [ ] 04-02: Implement task manifest writer/reader with schema versioning.
-- [ ] 04-03: Implement root index writer/reader and recovery scan logic.
-- [ ] 04-04: Add tests for index load/rebuild and schema-warning behavior.
+- [x] 04-01: Implement folder workspace service and handle lifecycle.
+- [x] 04-02: Implement task manifest writer/reader with schema versioning.
+- [x] 04-03: Implement root index writer/reader and recovery scan logic.
+- [x] 04-04: Add tests for index load/rebuild and schema-warning behavior.
 
 ### Phase 5: Export Bundle + Auto-Export Engine
 **Goal**: Deliver reliable selected-format bundle export and idempotent auto-export behavior.
@@ -151,7 +151,7 @@ Plans:
 | 1. Settings Modal Entry + System Migration | 3/3 | Complete   | 2026-02-28 |
 | 2. Viewer Controls Persistence + Reset UX | 4/4 | Complete   | 2026-02-28 |
 | 3. Simulation Basic Payload Wiring | 0/3 | Not started | - |
-| 4. Folder Workspace Data Model | 0/4 | Not started | - |
+| 4. Folder Workspace Data Model | 4/4 | Complete   | 2026-02-28 |
 | 5. Export Bundle + Auto-Export Engine | 0/4 | Not started | - |
 | 6. Completed Task Source Modes | 0/3 | Not started | - |
 | 7. Ratings + Sorting + Filtering | 0/3 | Not started | - |
