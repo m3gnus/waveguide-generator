@@ -13,8 +13,15 @@ function parseErrorDetail(payload) {
   return '';
 }
 
-export async function checkForUpdates() {
-  const button = document.getElementById('check-updates-btn');
+/**
+ * Check for available application updates via the backend `/api/updates/check` endpoint.
+ *
+ * @param {HTMLElement|null} [buttonEl] - Optional reference to the triggering button element.
+ *   When provided, the button is disabled and its label updated while the request is in flight.
+ *   Falls back to `document.getElementById('check-updates-btn')` for backwards compatibility.
+ */
+export async function checkForUpdates(buttonEl) {
+  const button = buttonEl ?? document.getElementById('check-updates-btn');
   const originalLabel = button?.textContent || 'Check for App Updates';
 
   if (button) {

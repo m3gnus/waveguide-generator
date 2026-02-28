@@ -70,9 +70,11 @@ export function bindButtonEvents(app) {
 
   // check-updates-btn lives inside the dynamically-created settings modal.
   // Use document-level delegation so it works regardless of when the modal is opened.
+  // Pass the clicked element directly so checkForUpdates can disable it without a
+  // secondary getElementById lookup.
   document.addEventListener('click', (e) => {
     if (e.target && e.target.id === 'check-updates-btn') {
-      app.checkForUpdates();
+      app.checkForUpdates(e.target);
     }
   });
 
