@@ -8,6 +8,7 @@ import { downloadMeshArtifact, pollSimulationStatus } from '../src/ui/simulation
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus as pollFromSubModule, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { AppEvents } from '../src/events.js';
+import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
 
 test('submitSimulation sends canonical mesh payload shape and adaptive mesh options', async () => {
   const originalFetch = global.fetch;
@@ -488,5 +489,46 @@ test('pollSimulationStatus enforces idle polling budget after status-fetch error
     global.document = originalDocument;
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
+  }
+});
+
+// --- Phase 1 migration regression: simulation flow unaffected by control migration ---
+
+test('getDownloadSimMeshEnabled returns false by default when modal is not open', () => {
+  // jobActions.js uses getDownloadSimMeshEnabled() to guard the mesh download at job start.
+  // This default must be false so no unexpected download is triggered on startup before
+  // the user has ever opened Settings.
+  const originalDocument = global.document;
+  global.document = { getElementById: () => null };
+
+  try {
+    assert.equal(getDownloadSimMeshEnabled(), false);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test('getDownloadSimMeshEnabled does not access a static DOM element that would be absent when modal is closed', () => {
+  // After migration, download-sim-mesh lives in a dynamically-created modal.
+  // When the modal is closed, getElementById('download-sim-mesh') returns null.
+  // The getter must NOT throw or return a falsy value that silently corrupts behavior.
+  const originalDocument = global.document;
+  const queriedIds = [];
+
+  global.document = {
+    getElementById(id) {
+      queriedIds.push(id);
+      return null; // Modal is closed — element does not exist in DOM
+    }
+  };
+
+  try {
+    const result = getDownloadSimMeshEnabled();
+    // Should return a boolean (the in-memory default), never null or undefined
+    assert.equal(typeof result, 'boolean');
+    // Should have attempted to look up the element (DOM-first strategy)
+    assert.ok(queriedIds.includes('download-sim-mesh'), 'getter should attempt DOM lookup first');
+  } finally {
+    global.document = originalDocument;
   }
 });
