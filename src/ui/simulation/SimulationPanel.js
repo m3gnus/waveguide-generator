@@ -12,12 +12,20 @@
 
 import { BemSolver } from '../../solver/index.js';
 import { AppEvents } from '../../events.js';
+import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
 import { setupSmoothingListener, setupKeyboardShortcuts } from './smoothing.js';
 import { setupSimulationParamBindings, syncSimulationSettings } from './settings.js';
 import { checkSolverConnection } from './connection.js';
 import { runSimulation, pollSimulationStatus, runMockSimulation, renderJobList } from './actions.js';
+import {
+  buildTaskIndexEntriesFromJobs,
+  loadTaskIndex,
+  rebuildIndexFromManifests,
+  writeTaskIndex
+} from '../workspace/taskIndex.js';
+import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
 import {
   createJobTracker,
   loadLocalIndex,
@@ -93,14 +101,36 @@ export class SimulationPanel {
     this.isPolling = tracker.isPolling;
 
     const local = loadLocalIndex();
-    setJobsFromEntries(this, local);
+    let seedItems = local;
+
+    const folderHandle = getSelectedFolderHandle();
+    if (folderHandle) {
+      const indexResult = await loadTaskIndex(folderHandle);
+      if (indexResult.items.length > 0) {
+        seedItems = mergeJobs(local, indexResult.items);
+      } else {
+        const rebuilt = await rebuildIndexFromManifests(folderHandle);
+        if (rebuilt.items.length > 0) {
+          seedItems = mergeJobs(local, rebuilt.items);
+          await writeTaskIndex(folderHandle, rebuilt.items);
+        }
+        if (indexResult.warning || rebuilt.warnings.length > 0) {
+          showMessage('Recovered folder task history from manifests.', { type: 'warning', duration: 2800 });
+        }
+      }
+    }
+
+    setJobsFromEntries(this, seedItems);
     renderJobList(this);
 
     try {
       const remote = await this.solver.listJobs({ limit: 200, offset: 0 });
-      const merged = mergeJobs(local, remote.items || []);
+      const merged = mergeJobs(seedItems, remote.items || []);
       setJobsFromEntries(this, merged);
       persistPanelJobs(this);
+      if (folderHandle) {
+        await writeTaskIndex(folderHandle, buildTaskIndexEntriesFromJobs(merged));
+      }
       renderJobList(this);
       if (this.activeJobId || merged.some((job) => job.status === 'queued' || job.status === 'running')) {
         this.pollSimulationStatus();
