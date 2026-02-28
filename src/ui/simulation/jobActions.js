@@ -4,6 +4,8 @@ import { prepareGeometryParams } from '../../geometry/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
+import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
+import { updateTaskManifestForJob } from '../workspace/taskManifest.js';
 import {
   allJobs,
   hasActiveJobs,
@@ -24,6 +26,20 @@ import {
 // function bodies (never at module init time), so ESM live bindings resolve correctly at runtime.
 import { clearPollTimer, setActiveJob } from './polling.js';
 import { downloadMeshArtifact } from './meshDownload.js';
+
+async function syncTaskManifestForJob(job, updates = null) {
+  const workspaceHandle = getSelectedFolderHandle();
+  if (!workspaceHandle || !job?.id) {
+    return null;
+  }
+
+  const nextUpdates = updates && typeof updates === 'object' ? updates : {};
+  const result = await updateTaskManifestForJob(workspaceHandle, job, nextUpdates);
+  if (result.warning) {
+    console.warn(result.warning);
+  }
+  return result.manifest;
+}
 
 export function formatJobSummary(job) {
   const status = String(job.status || '').toLowerCase();
@@ -229,7 +245,23 @@ export async function viewJobResults(panel, jobId) {
 export async function exportJobResults(panel, jobId) {
   const results = await ensureJobResults(panel, jobId, { display: true });
   if (!results) return;
-  await panel.exportResults();
+  const selectedExport = await panel.exportResults();
+  if (selectedExport) {
+    const current = panel.jobs?.get(jobId);
+    if (current) {
+      const exportedFiles = Array.isArray(current.exportedFiles) ? [...current.exportedFiles] : [];
+      exportedFiles.push(`export-${selectedExport}:${new Date().toISOString()}`);
+      const next = upsertJob(panel, {
+        ...current,
+        id: current.id,
+        exportedFiles
+      });
+      persistPanelJobs(panel);
+      if (next) {
+        await syncTaskManifestForJob(next, { exportedFiles: next.exportedFiles });
+      }
+    }
+  }
   panel.pollSimulationStatus();
 }
 
@@ -483,7 +515,7 @@ export async function runSimulation(panel) {
     const { name: outputName, counter } = readOutputNameAndCounter();
     const jobId = await panel.solver.submitSimulation(config, meshData, submitOptions);
     setActiveJob(panel, jobId);
-    upsertJob(panel, {
+    const createdJob = upsertJob(panel, {
       id: jobId,
       status: 'queued',
       progress: 0,
@@ -502,6 +534,9 @@ export async function runSimulation(panel) {
       hasMeshArtifact: false,
       label: `${outputName}_${counter}`,
       errorMessage: null,
+      rating: null,
+      exportedFiles: [],
+      scriptSchemaVersion: 1,
       script: {
         outputName,
         counter,
@@ -518,6 +553,9 @@ export async function runSimulation(panel) {
     incrementOutputCounter();
     persistPanelJobs(panel);
     renderJobList(panel);
+    if (createdJob) {
+      await syncTaskManifestForJob(createdJob);
+    }
 
     updateStageUi(panel, {
       progress: 0.3,
