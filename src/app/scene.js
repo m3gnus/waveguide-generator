@@ -7,6 +7,7 @@ import {
   ZebraShader
 } from '../viewer/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
+import { getDisplayMode } from '../ui/settings/modal.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -101,7 +102,7 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
     geometry.computeVertexNormals();
   }
 
-  const displayMode = document.getElementById('display-mode')?.value || 'standard';
+  const displayMode = getDisplayMode();
   let material;
 
   if (displayMode === 'zebra') {

@@ -12,6 +12,7 @@ import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
 import { markParametersChanged } from '../ui/fileOps.js';
 import { isDevRuntime } from '../config/runtimeMode.js';
+import { getLiveUpdateEnabled } from '../ui/settings/modal.js';
 
 let simulationPanelModulePromise = null;
 function loadSimulationPanelModule() {
@@ -125,7 +126,7 @@ export class App {
     this.schedulePanelAutoSize();
 
     // 2. Render
-    if (document.getElementById('live-update')?.checked !== false) {
+    if (getLiveUpdateEnabled()) {
       this.requestRender();
     }
   }

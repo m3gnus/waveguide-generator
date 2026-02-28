@@ -3,6 +3,7 @@ import { GlobalState } from '../../state.js';
 import { prepareGeometryParams } from '../../geometry/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
+import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import {
   allJobs,
   hasActiveJobs,
@@ -531,8 +532,7 @@ export async function runSimulation(panel) {
     panel.pollSimulationStatus();
 
     // Non-blocking: download simulation mesh artifact if toggle is on
-    const downloadMeshToggle = document.getElementById('download-sim-mesh');
-    if (downloadMeshToggle && downloadMeshToggle.checked && panel.activeJobId) {
+    if (getDownloadSimMeshEnabled() && panel.activeJobId) {
       downloadMeshArtifact(panel.activeJobId, panel.solver.backendUrl).catch(err => {
         console.warn('Mesh artifact download failed (non-blocking):', err.message);
       });
