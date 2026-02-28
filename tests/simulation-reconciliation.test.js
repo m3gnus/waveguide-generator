@@ -70,3 +70,26 @@ test('persistPanelJobs writes bounded local index payload', () => {
   assert.equal(saved.items.length, JOB_TRACKER_CONSTANTS.MAX_LOCAL_ITEMS);
   assert.equal(allJobs(panel).length, 60);
 });
+
+test('mergeJobs preserves manifest metadata when backend omits fields', () => {
+  const merged = mergeJobs(
+    [
+      {
+        id: 'job-1',
+        status: 'queued',
+        rating: 4,
+        exportedFiles: ['first.csv'],
+        scriptSchemaVersion: 2,
+        scriptSnapshot: { outputName: 'horn' }
+      }
+    ],
+    [{ id: 'job-1', status: 'running', progress: 0.4 }]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'running');
+  assert.equal(merged[0].rating, 4);
+  assert.deepEqual(merged[0].exportedFiles, ['first.csv']);
+  assert.equal(merged[0].scriptSchemaVersion, 2);
+  assert.deepEqual(merged[0].scriptSnapshot, { outputName: 'horn' });
+});
