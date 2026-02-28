@@ -1399,8 +1399,22 @@ button.secondary:hover:not(:disabled) {
     margin: 0;
 }
 
-/* System section button override — full-width not needed */
-#settings-section-system button#check-updates-btn {
+/* System section action row: button + description stacked vertically */
+.settings-action-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.settings-action-row button#check-updates-btn {
     width: auto;
-    display: inline-block;
+    align-self: flex-start;
+}
+
+.settings-action-help {
+    font-size: 0.78rem;
+    color: var(--text-muted, #888);
+    margin: 0;
+    line-height: 1.4;
 }
