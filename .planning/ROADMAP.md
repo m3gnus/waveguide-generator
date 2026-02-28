@@ -149,7 +149,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Settings Modal Entry + System Migration | 3/3 | Complete   | 2026-02-28 |
-| 2. Viewer Controls Persistence + Reset UX | 1/4 | In Progress|  |
+| 2. Viewer Controls Persistence + Reset UX | 2/4 | In Progress|  |
 | 3. Simulation Basic Payload Wiring | 0/3 | Not started | - |
 | 4. Folder Workspace Data Model | 0/4 | Not started | - |
 | 5. Export Bundle + Auto-Export Engine | 0/4 | Not started | - |
