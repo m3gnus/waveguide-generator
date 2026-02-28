@@ -1,10 +1,31 @@
 import { showError } from './feedback.js';
+import {
+    ensureFolderWritePermission,
+    getSelectedFolderHandle,
+    requestFolderSelection,
+    resetSelectedFolder,
+    subscribeFolderWorkspace,
+    supportsFolderSelection
+} from './workspace/folderWorkspace.js';
 
-let outputDirHandle = null;
 let hasPendingParameterChanges = false;
 let skipNextParameterChange = false;
 const DEFAULT_OUTPUT_NAME = 'horn_design';
 const DEFAULT_COUNTER = 1;
+let folderWorkspaceBound = false;
+
+function bindFolderWorkspaceLabel() {
+    if (folderWorkspaceBound || typeof document === 'undefined') {
+        return;
+    }
+    folderWorkspaceBound = true;
+    subscribeFolderWorkspace(({ label }) => {
+        const nameEl = document.getElementById('output-folder-name');
+        if (nameEl) {
+            nameEl.textContent = label;
+        }
+    });
+}
 
 function normalizeOutputName(value, fallback = DEFAULT_OUTPUT_NAME) {
     const text = String(value ?? '').trim();
@@ -126,27 +147,29 @@ function finalizeExportCounter(options = {}) {
 }
 
 export async function selectOutputFolder() {
-    if (!window.showDirectoryPicker) {
+    bindFolderWorkspaceLabel();
+    if (!supportsFolderSelection(window)) {
         showError('Your browser does not support folder selection.');
         return;
     }
-    try {
-        outputDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-        const nameEl = document.getElementById('output-folder-name');
-        if (nameEl) nameEl.textContent = outputDirHandle.name;
-    } catch (err) {
-        if (err.name !== 'AbortError') {
-            console.error('Folder selection failed:', err);
-        }
+    const handle = await requestFolderSelection(window);
+    if (!handle) {
+        return;
     }
 }
 
 export async function saveFile(content, fileName, options = {}) {
+    bindFolderWorkspaceLabel();
     const finalName = fileName || `${getExportBaseName()}${options.extension || ''}`;
+    const outputDirHandle = getSelectedFolderHandle();
 
     // If a folder is selected, write directly to it
     if (outputDirHandle) {
         try {
+            const permissionGranted = await ensureFolderWritePermission(outputDirHandle);
+            if (!permissionGranted) {
+                throw new Error('Write permission for selected folder was denied.');
+            }
             const fileHandle = await outputDirHandle.getFileHandle(finalName, { create: true });
             const writable = await fileHandle.createWritable();
             const blob = content instanceof Blob
@@ -158,9 +181,7 @@ export async function saveFile(content, fileName, options = {}) {
             return;
         } catch (err) {
             console.warn('Direct folder write failed, falling back to file picker:', err);
-            outputDirHandle = null;
-            const nameEl = document.getElementById('output-folder-name');
-            if (nameEl) nameEl.textContent = 'No folder selected';
+            resetSelectedFolder();
         }
     }
 
