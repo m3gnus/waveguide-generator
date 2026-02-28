@@ -31,6 +31,11 @@ Command behavior:
 - `tests/polar-settings.test.js`
 - `tests/references-guard.test.js`
 - `tests/simulation-flow.test.js`
+- `tests/simulation-job-tracker.test.js`
+- `tests/simulation-reconciliation.test.js`
+- `tests/folder-workspace.test.js`
+- `tests/task-manifest.test.js`
+- `tests/task-index-rebuild.test.js`
 - `tests/ui-behavior.test.js`
 - `tests/viewport-tessellation-consistency.test.js`
 - `tests/waveguide-payload.test.js`
