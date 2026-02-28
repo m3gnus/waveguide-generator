@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-28T16:55:35.474Z"
+last_updated: "2026-02-28T17:28:37.000Z"
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 5
+  completed_plans: 7
 ---
 
 # Project State
@@ -18,35 +18,38 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** A user can reliably run, manage, and reuse waveguide simulations with clear controls and traceable outputs.
-**Current focus:** Phase 2 — Viewer Controls Persistence and Reset UX
+**Current focus:** Phase 3 — Simulation Basic Payload Wiring
 
 ## Current Position
 
-Phase: 2 of 8 (Viewer Controls Persistence and Reset UX) — In Progress
-Plan: 2 of 3 in current phase (02-02-PLAN.md complete)
-Status: In Progress
-Last activity: 2026-02-28 — Completed 02-02: wire viewerSettings into scene.js startup and camera toggle
+Phase: 2 of 8 (Viewer Controls Persistence and Reset UX) — Complete
+Plan: 4 of 4 in current phase (02-04-PLAN.md complete)
+Status: Phase complete — ready to start Phase 3
+Last activity: 2026-02-28 — Completed 02-04: add viewer settings persistence/reset test coverage
 
-Progress: [████░░░░░░] 16%
+Progress: [█████░░░░░] 25%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 7
 - Average duration: 3 min
-- Total execution time: 0.15 hours
+- Total execution time: 0.20 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-settings-modal-entry-system-migration | 3/3 | 9 min | 3 min |
-| 02-viewer-controls-persistence-and-reset-ux | 1/3 | 2 min | 2 min |
+| 02-viewer-controls-persistence-and-reset-ux | 4/4 | 12 min | 3 min |
 
 **Recent Trend:**
 - Last 5 plans: 4 min, 2 min, 3 min, 2 min
+- Last 5 plans: 4 min, 2 min, 3 min, 2 min, 4 min
 - Trend: Stable
 | Phase 02-viewer-controls-persistence-and-reset-ux P02 | 3 | 1 tasks | 1 files |
+| Phase 02-viewer-controls-persistence-and-reset-ux P03 | 3 | 2 tasks | 2 files |
+| Phase 02-viewer-controls-persistence-and-reset-ux P04 | 4 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -68,6 +71,11 @@ Recent decisions affecting current work:
 - [Phase 02-viewer-controls-persistence-and-reset-ux]: Module-level _current cache lazily populated by loadViewerSettings(); getCurrentViewerSettings() avoids double localStorage read
 - [Phase 02-viewer-controls-persistence-and-reset-ux]: debouncedSaveViewerSettings exported alongside saveViewerSettings — callers choose immediate vs debounced based on intent
 - [Phase 02-viewer-controls-persistence-and-reset-ux]: Camera creation in setupScene now conditional on startupCameraMode — orthographic uses getOrthoSize() consistent with toggleCamera
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: Return {row,badge,checkbox} from _buildToggleRow so reset handlers use result.checkbox instead of querySelector (test-compatible)
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: Use setAttribute('style') not .style.cssText for test-stub compatibility — minimal DOM stubs lack style property
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: Camera sub-section reset does NOT call _applyLive — startupCameraMode takes effect on next launch only
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: New viewerSettings unit suite isolates localStorage/control application/wheel inversion/reset behavior with node:test stubs (15 tests)
+- [Phase 02-viewer-controls-persistence-and-reset-ux]: Recommended-badge visibility behavior is now regression-tested in ui-behavior using modal construction stubs
 
 ### Pending Todos
 
@@ -96,5 +104,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 02-viewer-controls-persistence-and-reset-ux/02-02-PLAN.md
+Stopped at: Completed 02-viewer-controls-persistence-and-reset-ux/02-04-PLAN.md
 Resume file: None

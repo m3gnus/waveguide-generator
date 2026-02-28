@@ -16,6 +16,11 @@ import {
   getDownloadSimMeshEnabled,
   openSettingsModal,
 } from '../src/ui/settings/modal.js';
+import {
+  RECOMMENDED_DEFAULTS,
+  resetAllViewerSettings,
+  saveViewerSettings,
+} from '../src/ui/settings/viewerSettings.js';
 
 test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('1.0'), 1);
@@ -424,5 +429,148 @@ test('openSettingsModal places check-updates-btn inside the modal, not in the ac
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;
+  }
+});
+
+function createSettingsModalDocument(createdElements, appendedChildren) {
+  return {
+    getElementById: () => null,
+    createElement(tag) {
+      const el = {
+        _tag: tag,
+        _children: [],
+        _attrs: {},
+        _eventListeners: {},
+        id: '',
+        className: '',
+        textContent: '',
+        innerHTML: '',
+        hidden: false,
+        type: '',
+        title: '',
+        name: '',
+        value: '',
+        checked: false,
+        dataset: {},
+        min: '',
+        max: '',
+        step: '',
+        setAttribute(k, v) { this._attrs[k] = v; },
+        getAttribute(k) { return this._attrs[k]; },
+        addEventListener(evt, fn) {
+          this._eventListeners[evt] = this._eventListeners[evt] || [];
+          this._eventListeners[evt].push(fn);
+        },
+        appendChild(child) {
+          this._children.push(child);
+          return child;
+        },
+        querySelectorAll() { return []; },
+        querySelector(selector) {
+          if (selector === '[role="dialog"]') {
+            const walk = (node) => {
+              if (!node || !node._children) return null;
+              for (const child of node._children) {
+                if (child._attrs && child._attrs.role === 'dialog') return child;
+                const found = walk(child);
+                if (found) return found;
+              }
+              return null;
+            };
+            return walk(this);
+          }
+          return null;
+        },
+        focus() {},
+        remove() {},
+        classList: { toggle() {}, includes() { return false; } },
+      };
+      createdElements.push(el);
+      return el;
+    },
+    body: {
+      appendChild(child) {
+        appendedChildren.push(child);
+        return child;
+      }
+    }
+  };
+}
+
+test('recommended badges are visible when viewer values match defaults', () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const originalLocalStorage = global.localStorage;
+
+  const store = {};
+  const createdElements = [];
+  const appendedChildren = [];
+
+  global.window = { addEventListener: () => {}, removeEventListener: () => {} };
+  global.localStorage = {
+    getItem: (key) => store[key] ?? null,
+    setItem: (key, value) => { store[key] = value; },
+    removeItem: (key) => { delete store[key]; },
+    clear: () => Object.keys(store).forEach((key) => delete store[key]),
+  };
+  resetAllViewerSettings();
+  global.document = createSettingsModalDocument(createdElements, appendedChildren);
+
+  try {
+    openSettingsModal();
+    const badges = createdElements.filter((el) => el.className === 'settings-recommended-badge');
+    assert.ok(badges.length > 0, 'Expected recommended badges to be created');
+    assert.ok(
+      badges.every((badge) => badge.hidden === false),
+      'All badges should be visible when values are recommended'
+    );
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+    global.localStorage = originalLocalStorage;
+  }
+});
+
+test('recommended badge hides when a viewer value differs from default', () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const originalLocalStorage = global.localStorage;
+
+  const store = {};
+  const createdElements = [];
+  const appendedChildren = [];
+
+  global.window = { addEventListener: () => {}, removeEventListener: () => {} };
+  global.localStorage = {
+    getItem: (key) => store[key] ?? null,
+    setItem: (key, value) => { store[key] = value; },
+    removeItem: (key) => { delete store[key]; },
+    clear: () => Object.keys(store).forEach((key) => delete store[key]),
+  };
+  saveViewerSettings({ ...RECOMMENDED_DEFAULTS, rotateSpeed: 2.5 });
+  global.document = createSettingsModalDocument(createdElements, appendedChildren);
+
+  try {
+    openSettingsModal();
+    const badges = createdElements.filter((el) => el.className === 'settings-recommended-badge');
+    assert.ok(badges.length > 0, 'Expected recommended badges to be created');
+    assert.ok(
+      badges.some((badge) => badge.hidden === true),
+      'At least one badge should hide for non-recommended values'
+    );
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+    global.localStorage = originalLocalStorage;
+  }
+});
+
+test('recommended badge rule remains stable for all default values', () => {
+  for (const key of Object.keys(RECOMMENDED_DEFAULTS)) {
+    assert.equal(
+      RECOMMENDED_DEFAULTS[key] !== RECOMMENDED_DEFAULTS[key],
+      false,
+      `Expected default value for ${key} to match itself`
+    );
   }
 });
