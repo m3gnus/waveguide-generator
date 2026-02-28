@@ -8,15 +8,27 @@ import {
 } from '../viewer/index.js';
 import { buildGeometryArtifacts } from '../geometry/index.js';
 import { getDisplayMode } from '../ui/settings/modal.js';
+import {
+  loadViewerSettings,
+  applyViewerSettingsToControls,
+  setInvertWheelZoom,
+  getCurrentViewerSettings,
+} from '../ui/settings/viewerSettings.js';
 
 export function setupScene(app) {
   app.scene = createScene();
-  app.cameraMode = 'perspective';
+  const viewerSettings = loadViewerSettings();
+  app.cameraMode = viewerSettings.startupCameraMode || 'perspective';
 
   const width = Math.max(1, app.container.clientWidth);
   const height = Math.max(1, app.container.clientHeight);
   const aspect = width / height;
-  app.camera = createPerspectiveCamera(aspect);
+  if (app.cameraMode === 'orthographic') {
+    const size = getOrthoSize();
+    app.camera = createOrthoCamera(aspect, size);
+  } else {
+    app.camera = createPerspectiveCamera(aspect);
+  }
 
   try {
     app.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -33,7 +45,8 @@ export function setupScene(app) {
   }
 
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
-  app.controls.enableDamping = true;
+  applyViewerSettingsToControls(app.controls, viewerSettings);
+  setInvertWheelZoom(app.renderer.domElement, viewerSettings.invertWheelZoom);
   window.addEventListener('resize', () => onResize(app));
   animate(app);
   return true;
@@ -217,7 +230,9 @@ export function toggleCamera(app) {
   const oldControls = app.controls;
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
   app.controls.target.copy(target);
-  app.controls.enableDamping = true;
+  const vs = getCurrentViewerSettings();
+  applyViewerSettingsToControls(app.controls, vs);
+  setInvertWheelZoom(app.renderer.domElement, vs.invertWheelZoom);
   app.controls.update();
   oldControls.dispose();
 }
