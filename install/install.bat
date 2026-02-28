@@ -179,6 +179,51 @@ if errorlevel 1 (
 )
 echo.
 
+:: ── OpenCL runtime check ──────────────────────────────────────────
+echo Checking OpenCL runtime for bempp-cl simulations...
+.venv\Scripts\python.exe -c "import pyopencl; assert pyopencl.get_platforms()" >nul 2>&1
+if not errorlevel 1 (
+    echo   OpenCL is available.
+    goto :opencl_done
+)
+echo   No OpenCL platform found.
+
+:: Check whether any OpenCL ICD is registered (GPU drivers present but pyopencl failed)
+reg query "HKLM\SOFTWARE\Khronos\OpenCL\Vendors" >nul 2>&1
+if not errorlevel 1 (
+    echo.
+    echo   WARNING: OpenCL vendor entries exist in registry but pyopencl could not use them.
+    echo            Try updating your GPU drivers, then restart and re-run a simulation.
+    goto :opencl_done
+)
+
+:: No ICDs at all — try winget to install Intel CPU OpenCL runtime
+where winget >nul 2>&1
+if errorlevel 1 goto :opencl_warn
+
+echo   Attempting to install Intel OpenCL CPU Runtime via winget...
+winget install --id Intel.OpenCLRuntimeForIntel --silent --accept-package-agreements --accept-source-agreements >nul 2>&1
+if errorlevel 1 goto :opencl_warn
+
+:: Re-test after winget install
+.venv\Scripts\python.exe -c "import pyopencl; assert pyopencl.get_platforms()" >nul 2>&1
+if not errorlevel 1 (
+    echo   OpenCL ^(Intel CPU runtime^) is now available.
+    goto :opencl_done
+)
+
+:opencl_warn
+echo.
+echo   WARNING: No OpenCL runtime is available. Acoustic simulations will not work.
+echo   To fix, choose one of:
+echo     1. Update your GPU drivers ^(NVIDIA/AMD drivers include OpenCL^)
+echo     2. Install Intel OpenCL CPU Runtime ^(works on Intel CPUs^):
+echo          winget install Intel.OpenCLRuntimeForIntel
+echo     3. On a VM: enable GPU passthrough or use a physical machine.
+
+:opencl_done
+echo.
+
 echo ===============================================================
 echo Setup complete.
 echo ===============================================================
