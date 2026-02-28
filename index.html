@@ -115,7 +115,7 @@
                 </div>
                 <input type="file" id="config-upload" class="is-hidden" accept=".txt,.cfg">
                 <div class="button-row">
-                    <button id="check-updates-btn" class="secondary">Check for App Updates</button>
+                    <button id="settings-btn" class="secondary">Settings</button>
                 </div>
 
                 <hr>
@@ -134,20 +134,6 @@
                     <button id="choose-folder-btn" class="secondary button-compact">Choose Folder</button>
                     <span id="output-folder-name" class="output-folder-name">No folder selected</span>
                 </div>
-                <div class="input-row-inline">
-                    <label for="live-update">Real-time Updates</label>
-                    <input type="checkbox" id="live-update" checked>
-                </div>
-                <div class="input-row-inline">
-                    <label for="display-mode">Display Mode</label>
-                    <select id="display-mode">
-                        <option value="standard">Standard (Metal)</option>
-                        <option value="zebra">Zebra Stripes</option>
-                        <option value="grid">Grid / Wireframe</option>
-                        <option value="curvature">Curvature Map</option>
-                    </select>
-                </div>
-
                 <hr>
                 <h4 class="actions-group-title">Simulation</h4>
                 <div class="status-indicator" role="status" aria-live="polite" aria-atomic="true">
@@ -164,10 +150,6 @@
                         <div id="progress-fill" class="progress-fill"></div>
                     </div>
                     <p id="progress-text" class="progress-text" role="status" aria-live="polite"></p>
-                </div>
-                <div class="input-row-inline">
-                    <label for="download-sim-mesh">Download simulation mesh on start</label>
-                    <input type="checkbox" id="download-sim-mesh">
                 </div>
                 <div class="button-row">
                     <button id="run-simulation-btn">Start BEM Simulation</button>

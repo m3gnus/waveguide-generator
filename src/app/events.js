@@ -1,18 +1,24 @@
 import { GlobalState } from '../state.js';
 import { selectOutputFolder } from '../ui/fileOps.js';
+import { openSettingsModal } from '../ui/settings/modal.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
   bindButtonEvents(app);
 
-  // Toggle "Update Model" visibility based on real-time updates checkbox
-  const liveUpdateCheckbox = document.getElementById('live-update');
+  // live-update and display-mode are now inside the settings modal (created on demand).
+  // Use document-level event delegation so the handlers fire regardless of when the
+  // elements are inserted into the DOM.
   const renderBtn = document.getElementById('render-btn');
-  if (liveUpdateCheckbox && renderBtn) {
-    liveUpdateCheckbox.addEventListener('change', () => {
-      renderBtn.classList.toggle('is-hidden', liveUpdateCheckbox.checked);
-    });
-  }
+
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'live-update') {
+      if (renderBtn) renderBtn.classList.toggle('is-hidden', e.target.checked);
+    }
+    if (e.target && e.target.id === 'display-mode') {
+      app.requestRender();
+    }
+  });
 
   // Hide folder selection button if not supported by the browser
   if (!window.showDirectoryPicker) {
@@ -38,7 +44,6 @@ export function bindButtonEvents(app) {
     { id: 'render-btn', handler: () => app.requestRender(), type: 'click' },
     { id: 'export-config-btn', handler: () => app.exportMWGConfig(), type: 'click' },
     { id: 'choose-folder-btn', handler: selectOutputFolder, type: 'click' },
-    { id: 'display-mode', handler: () => app.requestRender(), type: 'change' },
     { id: 'zoom-in', handler: () => app.zoom(0.8), type: 'click' },
     { id: 'zoom-out', handler: () => app.zoom(1.2), type: 'click' },
     { id: 'camera-toggle', handler: () => app.toggleCamera(), type: 'click' },
@@ -50,7 +55,7 @@ export function bindButtonEvents(app) {
       type: 'click'
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
-    { id: 'check-updates-btn', handler: () => app.checkForUpdates(), type: 'click' }
+    { id: 'settings-btn', handler: () => openSettingsModal(), type: 'click' }
   ];
 
   buttonBindings.forEach(({ id, handler, type }) => {
@@ -60,6 +65,14 @@ export function bindButtonEvents(app) {
       console.log(`Bound ${type} listener to ${id}`);
     } else {
       console.warn(`Element ${id} not found in DOM - ${type} listener not attached`);
+    }
+  });
+
+  // check-updates-btn lives inside the dynamically-created settings modal.
+  // Use document-level delegation so it works regardless of when the modal is opened.
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'check-updates-btn') {
+      app.checkForUpdates();
     }
   });
 
