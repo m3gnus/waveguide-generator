@@ -21,7 +21,8 @@ export function applyExportSelection(panel, exportType, handlers = null) {
     return false;
   }
 
-  return action();
+  action();
+  return true;
 }
 
 function resolveApp(panel) {
@@ -63,11 +64,9 @@ export async function exportResults(panel) {
     return;
   }
 
-  const result = applyExportSelection(panel, exportType);
-  if (result === false) {
+  if (!applyExportSelection(panel, exportType)) {
     return null;
   }
-  await Promise.resolve(result);
   return exportType;
 }
 
