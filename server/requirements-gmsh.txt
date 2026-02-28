@@ -1,3 +1,2 @@
 # Gmsh Python API — required for /api/mesh/build (Python OCC builder)
-# Runtime support matrix expects: >=4.15,<5.0
-gmsh>=4.15.0,<5.0
+gmsh>=4.11.0

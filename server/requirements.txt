@@ -1,24 +1,19 @@
 # MWG Horn BEM Solver Backend Requirements
-# Supported runtime matrix: Python >=3.10,<3.15
+# Supported runtime matrix: Python >=3.10
 
 # Web Framework
-fastapi>=0.104.1,<1.0
-uvicorn[standard]>=0.24.0,<1.0
-python-multipart>=0.0.6,<1.0
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
 
-# BEM Solver (bempp-cl, supported range >=0.4,<0.5)
-# Note: Install prerequisites first (see README.md)
+# Scientific computing (also prerequisites for bempp-cl if installed separately)
 numpy
 scipy
 numba
 meshio>=4.0.16
 
-# The bempp-cl package should be installed via:
-# pip install 'bempp-cl>=0.4,<0.5'
-# If your platform lacks wheels, use the upstream git repository pinned to a 0.4.x release.
-
 # Mesh Processing
-trimesh>=4.0.5,<5.0
+trimesh>=4.0.5
 # Gmsh Python API is managed separately in server/requirements-gmsh.txt
 # because wheel availability can vary by platform.
 
