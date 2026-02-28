@@ -27,6 +27,7 @@ function normalizeItem(raw = {}) {
     ? exportedFilesInput.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
   const scriptSnapshot = raw.scriptSnapshot ?? raw.script_snapshot ?? raw.script ?? null;
+  const scriptSchemaInput = raw.scriptSchemaVersion ?? raw.script_schema_version;
 
   return {
     id: String(raw.id || ''),
@@ -46,9 +47,9 @@ function normalizeItem(raw = {}) {
     script: raw.script ?? scriptSnapshot,
     rating: raw.rating ?? null,
     exportedFiles,
-    scriptSchemaVersion: Number.isFinite(Number(raw.scriptSchemaVersion ?? raw.script_schema_version))
-      ? Number(raw.scriptSchemaVersion ?? raw.script_schema_version)
-      : 1,
+    scriptSchemaVersion: Number.isFinite(Number(scriptSchemaInput))
+      ? Number(scriptSchemaInput)
+      : null,
     scriptSnapshot
   };
 }
@@ -72,7 +73,9 @@ function toStorageItem(item) {
     script: item.script,
     rating: item.rating ?? null,
     exported_files: Array.isArray(item.exportedFiles) ? item.exportedFiles : [],
-    script_schema_version: Number.isFinite(Number(item.scriptSchemaVersion))
+    script_schema_version: item.scriptSchemaVersion !== null
+      && item.scriptSchemaVersion !== undefined
+      && Number.isFinite(Number(item.scriptSchemaVersion))
       ? Number(item.scriptSchemaVersion)
       : 1,
     script_snapshot: item.scriptSnapshot ?? item.script ?? null
@@ -157,7 +160,9 @@ export function mergeJobs(localItems, remoteItems) {
         exportedFiles: normalized.exportedFiles?.length
           ? normalized.exportedFiles
           : (existing.exportedFiles ?? []),
-        scriptSchemaVersion: Number.isFinite(Number(normalized.scriptSchemaVersion))
+        scriptSchemaVersion: normalized.scriptSchemaVersion !== null
+          && normalized.scriptSchemaVersion !== undefined
+          && Number.isFinite(Number(normalized.scriptSchemaVersion))
           ? Number(normalized.scriptSchemaVersion)
           : (existing.scriptSchemaVersion ?? 1),
         scriptSnapshot: normalized.scriptSnapshot ?? existing.scriptSnapshot ?? null
@@ -217,7 +222,9 @@ export function upsertJob(panel, rawEntry) {
     exportedFiles: next.exportedFiles?.length
       ? next.exportedFiles
       : (existing?.exportedFiles ?? []),
-    scriptSchemaVersion: Number.isFinite(Number(next.scriptSchemaVersion))
+    scriptSchemaVersion: next.scriptSchemaVersion !== null
+      && next.scriptSchemaVersion !== undefined
+      && Number.isFinite(Number(next.scriptSchemaVersion))
       ? Number(next.scriptSchemaVersion)
       : (existing?.scriptSchemaVersion ?? 1),
     scriptSnapshot: next.scriptSnapshot ?? existing?.scriptSnapshot ?? null
