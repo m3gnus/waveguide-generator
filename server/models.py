@@ -183,9 +183,9 @@ class WaveguideParamsRequest(BaseModel):
     quadrants: int = 1234
 
     # ── BEM mesh element sizes (Gmsh triangle size) ────────────────────────
-    throat_res: float = 5.0
-    mouth_res: float = 8.0
-    rear_res: float = 25.0
+    throat_res: float = 6.0
+    mouth_res: float = 15.0
+    rear_res: float = 40.0
     wall_thickness: float = 6.0
 
     # ── Enclosure (cabinet box geometry) ──────────────────────────────────
@@ -197,8 +197,8 @@ class WaveguideParamsRequest(BaseModel):
     enc_edge:    float = 18.0
     enc_edge_type: int = 1
     corner_segments: int = 4
-    enc_front_resolution: Optional[str] = None
-    enc_back_resolution: Optional[str] = None
+    enc_front_resolution: Optional[str] = "25,25,25,25"
+    enc_back_resolution: Optional[str] = "40,40,40,40"
 
     # ── Simulation / output ────────────────────────────────────────────────
     sim_type: int = 2

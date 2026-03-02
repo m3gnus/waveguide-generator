@@ -113,12 +113,12 @@ export const PARAM_SCHEMA = {
         lengthSegments: { type: 'number', label: 'Length Segs', default: 20 },
         cornerSegments: { type: 'number', label: 'Corner Segs', default: 4 },
         throatSegments: { type: 'number', label: 'Throat Segs', default: 0 },
-        throatResolution: { type: 'number', label: 'Throat Resolution', unit: 'mm', default: 5.0 },
-        mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 10.0 },
+        throatResolution: { type: 'number', label: 'Throat Resolution', unit: 'mm', default: 6.0 },
+        mouthResolution: { type: 'number', label: 'Mouth Resolution', unit: 'mm', default: 15.0 },
         throatSliceDensity: { type: 'number', label: 'Throat Slice Density', default: null, tooltip: 'Viewport slice clustering (0.5=uniform, lower=cluster at throat). When set, overrides the throat/mouth resolution ratio for viewport slice distribution only. Does not affect BEM mesh element sizes.' },
         verticalOffset: { type: 'number', label: 'Vertical Offset', unit: 'mm', default: 0.0, tooltip: 'Vertical offset for simulation/export coordinate system. Does not affect the 3D viewer.' },
         wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds a normal-offset wall shell one wall-thickness from the horn surface and a rear disc behind the throat.' },
-        rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 10.0 },
+        rearResolution: { type: 'number', label: 'Rear Resolution', unit: 'mm', default: 40.0 },
     },
     'ENCLOSURE': {
         encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 0 },
@@ -136,8 +136,8 @@ export const PARAM_SCHEMA = {
         encSpaceT: { type: 'number', label: 'Space T', default: 25 },
         encSpaceR: { type: 'number', label: 'Space R', default: 25 },
         encSpaceB: { type: 'number', label: 'Space B', default: 25 },
-        encFrontResolution: { type: 'expression', label: 'Front Resolution', unit: 'mm', default: '', tooltip: 'Comma-separated front baffle resolutions (q1..q4).' },
-        encBackResolution: { type: 'expression', label: 'Back Resolution', unit: 'mm', default: '', tooltip: 'Comma-separated back baffle resolutions (q1..q4).' },
+        encFrontResolution: { type: 'expression', label: 'Front Resolution', unit: 'mm', default: '25,25,25,25', tooltip: 'Comma-separated front baffle resolutions (q1..q4).' },
+        encBackResolution: { type: 'expression', label: 'Back Resolution', unit: 'mm', default: '40,40,40,40', tooltip: 'Comma-separated back baffle resolutions (q1..q4).' },
     },
     'SOURCE': {
         sourceShape: {
