@@ -54,11 +54,10 @@ The solver now supports explicit device mode selection:
 - `auto`
 - `opencl_cpu`
 - `opencl_gpu`
-- `numba`
 
 Notes:
-- `auto` is deterministic and fast: `opencl_gpu` if available, else `opencl_cpu`, else `numba`.
-- If OpenCL modes are unavailable, runtime falls back to `numba`.
+- `auto` is deterministic and fast: `opencl_gpu` if available, else `opencl_cpu`.
+- OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
 - With current bempp-cl `0.4.x`, OpenCL runtime availability still depends on a CPU OpenCL driver for safe operator assembly.
 
 ## 1.2 Supported dependency matrix (P3-1)
@@ -102,12 +101,12 @@ Includes:
 - selected BEM device metadata under `deviceInterface`, including:
   - `requested_mode`
   - `selected_mode`
-  - `interface` (`opencl` or `numba`)
+  - `interface` (`opencl` when available)
   - `device_type` (`cpu` or `gpu`)
   - `device_name`
   - `fallback_reason`
   - `available_modes`
-  - `mode_availability` (per-mode availability/reason for `auto|opencl_cpu|opencl_gpu|numba`)
+  - `mode_availability` (per-mode availability/reason for `auto|opencl_cpu|opencl_gpu`)
   - `opencl_diagnostics` (base/runtime/cpu/gpu detection details)
 
 ### `GET /api/updates/check`
@@ -144,7 +143,7 @@ Optional:
     - `diagonal`: `inclination` plane
 - optimization flags (`use_optimized`, `enable_symmetry`, `verbose`)
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
-- `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu` | `numba`, default `auto`)
+- `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu`, default `auto`)
 
 Validation behavior:
 

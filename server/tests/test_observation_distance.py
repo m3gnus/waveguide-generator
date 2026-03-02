@@ -32,6 +32,58 @@ def _mesh_stub():
 
 
 class ObservationDistanceForwardingTest(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self._patchers = [
+            patch("solver.solve.boundary_device_interface", return_value="opencl"),
+            patch("solver.solve.potential_device_interface", return_value="opencl"),
+            patch("solver.solve_optimized.boundary_device_interface", return_value="opencl"),
+            patch("solver.solve_optimized.potential_device_interface", return_value="opencl"),
+            patch(
+                "solver.solve_optimized.selected_device_metadata",
+                return_value={
+                    "requested_mode": "auto",
+                    "selected_mode": "opencl_cpu",
+                    "interface": "opencl",
+                    "device_type": "cpu",
+                    "device_name": "Fake CPU",
+                    "fallback_reason": None,
+                    "available_modes": ["auto", "opencl_cpu", "opencl_gpu"],
+                    "requested": "auto",
+                    "selected": "opencl",
+                    "runtime_selected": "opencl",
+                    "runtime_retry_attempted": False,
+                    "runtime_retry_outcome": "not_needed",
+                    "runtime_profile": "default",
+                },
+            ),
+            patch(
+                "solver.solve.selected_device_metadata",
+                return_value={
+                    "requested_mode": "auto",
+                    "selected_mode": "opencl_cpu",
+                    "interface": "opencl",
+                    "device_type": "cpu",
+                    "device_name": "Fake CPU",
+                    "fallback_reason": None,
+                    "available_modes": ["auto", "opencl_cpu", "opencl_gpu"],
+                    "requested": "auto",
+                    "selected": "opencl",
+                    "runtime_selected": "opencl",
+                    "runtime_retry_attempted": False,
+                    "runtime_retry_outcome": "not_needed",
+                    "runtime_profile": "default",
+                },
+            ),
+        ]
+        for patcher in self._patchers:
+            patcher.start()
+
+    def tearDown(self):
+        for patcher in reversed(self._patchers):
+            patcher.stop()
+        super().tearDown()
+
     def test_legacy_solver_forwards_polar_distance_to_on_axis_observer(self):
         mesh = _mesh_stub()
         seen_distances = []

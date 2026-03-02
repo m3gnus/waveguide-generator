@@ -12,8 +12,8 @@ from importlib import metadata
 from typing import Dict, Optional, Tuple
 
 # On Windows, Python 3.8+ no longer searches PATH for DLL dependencies.
-# If the VC++ Redistributable is not installed system-wide, numba (and
-# therefore bempp-cl) will fail to load with "DLL load failed".  As a
+# If the VC++ Redistributable is not installed system-wide, bempp-cl can fail
+# to load with "DLL load failed". As a
 # workaround, add directories on PATH that contain the required MSVC
 # runtime DLLs (e.g. MSVCP140.dll, api-ms-win-crt-*) to the DLL search
 # list so the extension modules can find them.
