@@ -97,9 +97,9 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     quadrants: normalizeQuadrants(preparedParams.quadrants),
 
     // BEM mesh element sizes
-    throat_res: toFiniteNumber(preparedParams.throatResolution, 5.0),
-    mouth_res: toFiniteNumber(preparedParams.mouthResolution, 8.0),
-    rear_res: toFiniteNumber(preparedParams.rearResolution, 25.0),
+    throat_res: toFiniteNumber(preparedParams.throatResolution, 6.0),
+    mouth_res: toFiniteNumber(preparedParams.mouthResolution, 15.0),
+    rear_res: toFiniteNumber(preparedParams.rearResolution, 40.0),
     wall_thickness: toFiniteNumber(preparedParams.wallThickness, 6.0),
 
     // Enclosure
@@ -113,10 +113,10 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     corner_segments: toFiniteNumber(preparedParams.cornerSegments, 4),
     enc_front_resolution: preparedParams.encFrontResolution != null
       ? String(preparedParams.encFrontResolution)
-      : undefined,
+      : '25,25,25,25',
     enc_back_resolution: preparedParams.encBackResolution != null
       ? String(preparedParams.encBackResolution)
-      : undefined,
+      : '40,40,40,40',
 
     // Simulation / output
     sim_type: 2,
