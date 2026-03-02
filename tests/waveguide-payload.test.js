@@ -31,6 +31,22 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   assert.equal(payload.msh_version, '2.2');
 });
 
+test('buildWaveguidePayload applies requested mesh defaults when fields are omitted', () => {
+  const payload = buildWaveguidePayload(
+    {
+      type: 'OSSE',
+      quadrants: '1234'
+    },
+    '2.2'
+  );
+
+  assert.equal(payload.throat_res, 6);
+  assert.equal(payload.mouth_res, 15);
+  assert.equal(payload.rear_res, 40);
+  assert.equal(payload.enc_front_resolution, '25,25,25,25');
+  assert.equal(payload.enc_back_resolution, '40,40,40,40');
+});
+
 test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
   const bExpr = () => 0;
   bExpr._rawExpr = '0.2+0.1*sin(p)';

@@ -80,11 +80,11 @@ function buildGmshExportParams(preparedParams) {
     ...preparedParams,
     angularSegments: coarseAngular,
     lengthSegments: coarseLength,
-    throatResolution: toPositiveNumber(preparedParams.throatResolution, 5) * scale,
-    mouthResolution: toPositiveNumber(preparedParams.mouthResolution, 8) * scale,
-    rearResolution: toPositiveNumber(preparedParams.rearResolution, 10) * scale,
-    encFrontResolution: scaleResolutionValue(preparedParams.encFrontResolution, scale),
-    encBackResolution: scaleResolutionValue(preparedParams.encBackResolution, scale),
+    throatResolution: toPositiveNumber(preparedParams.throatResolution, 6) * scale,
+    mouthResolution: toPositiveNumber(preparedParams.mouthResolution, 15) * scale,
+    rearResolution: toPositiveNumber(preparedParams.rearResolution, 40) * scale,
+    encFrontResolution: scaleResolutionValue(preparedParams.encFrontResolution ?? '25,25,25,25', scale),
+    encBackResolution: scaleResolutionValue(preparedParams.encBackResolution ?? '40,40,40,40', scale),
     wallThickness: hasEnclosure
       ? preparedParams.wallThickness
       : toPositiveNumber(preparedParams.wallThickness, 5)
