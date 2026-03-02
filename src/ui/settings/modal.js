@@ -15,6 +15,13 @@ import {
   resetAllViewerSettings,
 } from './viewerSettings.js';
 
+import {
+  RECOMMENDED_DEFAULTS as SIM_BASIC_DEFAULTS,
+  getCurrentSimBasicSettings,
+  saveSimBasicSettings,
+  resetSimBasicSettings,
+} from './simBasicSettings.js';
+
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
   liveUpdate: 'live-update',
@@ -134,6 +141,18 @@ function _buildModal() {
     if (t.id === 'live-update') _state.liveUpdate = t.checked;
     if (t.id === 'display-mode') _state.displayMode = t.value;
     if (t.id === 'download-sim-mesh') _state.downloadSimMesh = t.checked;
+
+    // Sim Basic settings: save on any simbasic-* control change
+    if (t.id && t.id.startsWith('simbasic-')) {
+      const settings = getCurrentSimBasicSettings();
+      settings.deviceMode = document.getElementById('simbasic-deviceMode')?.value ?? settings.deviceMode;
+      settings.meshValidationMode = document.getElementById('simbasic-meshValidationMode')?.value ?? settings.meshValidationMode;
+      settings.frequencySpacing = document.getElementById('simbasic-frequencySpacing')?.value ?? settings.frequencySpacing;
+      settings.useOptimized = document.getElementById('simbasic-useOptimized')?.checked ?? settings.useOptimized;
+      settings.enableSymmetry = document.getElementById('simbasic-enableSymmetry')?.checked ?? settings.enableSymmetry;
+      settings.verbose = document.getElementById('simbasic-verbose')?.checked ?? settings.verbose;
+      saveSimBasicSettings(settings);
+    }
   });
 
   // --- Close handlers ---
@@ -575,15 +594,218 @@ function _buildSimBasicSection() {
   _appendSectionHeading(
     sec,
     'Simulation Basic',
-    'BEM solver and meshing startup options.'
+    'BEM solver and meshing settings.'
   );
 
-  // Download simulation mesh on start
+  // Keep existing "Download simulation mesh on start" checkbox
   _appendInlineRow(sec, {
     labelText: 'Download simulation mesh on start',
     labelFor: 'download-sim-mesh',
     controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
   });
+
+  // --- Solver Settings sub-section ---
+  const currentSimBasic = getCurrentSimBasicSettings();
+
+  // Sub-section header with Reset button
+  const solverHeader = document.createElement('div');
+  solverHeader.className = 'settings-subsection-header';
+
+  const solverTitle = document.createElement('h4');
+  solverTitle.className = 'settings-subsection-title';
+  solverTitle.textContent = 'Solver Settings';
+  solverHeader.appendChild(solverTitle);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'settings-reset-btn';
+  resetBtn.textContent = 'Reset';
+  resetBtn.addEventListener('click', () => {
+    resetSimBasicSettings();
+    // Sync all Sim Basic DOM controls to RECOMMENDED_DEFAULTS
+    const dm = document.getElementById('simbasic-deviceMode');
+    if (dm) dm.value = SIM_BASIC_DEFAULTS.deviceMode;
+    const mvm = document.getElementById('simbasic-meshValidationMode');
+    if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
+    const fs = document.getElementById('simbasic-frequencySpacing');
+    if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
+    const uo = document.getElementById('simbasic-useOptimized');
+    if (uo) uo.checked = SIM_BASIC_DEFAULTS.useOptimized;
+    const es = document.getElementById('simbasic-enableSymmetry');
+    if (es) es.checked = SIM_BASIC_DEFAULTS.enableSymmetry;
+    const vb = document.getElementById('simbasic-verbose');
+    if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
+    // Update badge visibility
+    if (dmBadge) dmBadge.hidden = true;
+    if (mvmBadge) mvmBadge.hidden = true;
+    if (fsBadge) fsBadge.hidden = true;
+    if (uoBadge) uoBadge.hidden = true;
+    if (esBadge) esBadge.hidden = true;
+    if (vbBadge) vbBadge.hidden = true;
+  });
+  solverHeader.appendChild(resetBtn);
+  sec.appendChild(solverHeader);
+
+  // Helper: create a subtle "Default" badge
+  function _makeDefaultBadge(currentValue, defaultValue) {
+    const badge = document.createElement('span');
+    badge.setAttribute('style', 'font-size:0.7rem;opacity:0.6;margin-left:6px;');
+    badge.textContent = 'Default';
+    badge.hidden = currentValue === defaultValue;
+    return badge;
+  }
+
+  // Helper: build a select control row for Sim Basic
+  function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, defaultValue) {
+    const row = document.createElement('div');
+    row.className = 'settings-control-row';
+
+    const label = document.createElement('label');
+    label.setAttribute('for', selectId);
+    label.textContent = labelText;
+    row.appendChild(label);
+
+    const valueWrapper = document.createElement('div');
+    valueWrapper.className = 'settings-control-value';
+
+    const select = document.createElement('select');
+    select.id = selectId;
+
+    for (const { value, label: optLabel } of options) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = optLabel;
+      if (value === currentValue) opt.selected = true;
+      select.appendChild(opt);
+    }
+
+    const badge = _makeDefaultBadge(currentValue, defaultValue);
+
+    select.addEventListener('change', () => {
+      badge.hidden = select.value === defaultValue;
+    });
+
+    valueWrapper.appendChild(select);
+    valueWrapper.appendChild(badge);
+    row.appendChild(valueWrapper);
+
+    return { row, badge, select };
+  }
+
+  // Helper: build a checkbox control row for Sim Basic
+  function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultValue) {
+    const row = document.createElement('div');
+    row.className = 'settings-control-row';
+
+    const label = document.createElement('label');
+    label.setAttribute('for', checkboxId);
+    label.textContent = labelText;
+    row.appendChild(label);
+
+    const valueWrapper = document.createElement('div');
+    valueWrapper.className = 'settings-control-value';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = checkboxId;
+    checkbox.checked = currentValue;
+
+    const badge = _makeDefaultBadge(currentValue, defaultValue);
+
+    checkbox.addEventListener('change', () => {
+      badge.hidden = checkbox.checked === defaultValue;
+    });
+
+    valueWrapper.appendChild(checkbox);
+    valueWrapper.appendChild(badge);
+    row.appendChild(valueWrapper);
+
+    return { row, badge, checkbox };
+  }
+
+  // 1. Device Mode select
+  const dmResult = _buildSimBasicSelectRow(
+    'Device Mode',
+    'simbasic-deviceMode',
+    [
+      { value: 'auto', label: 'Auto' },
+      { value: 'opencl_gpu', label: 'OpenCL GPU' },
+      { value: 'opencl_cpu', label: 'OpenCL CPU' },
+      { value: 'numba', label: 'Numba CPU' },
+    ],
+    currentSimBasic.deviceMode,
+    SIM_BASIC_DEFAULTS.deviceMode
+  );
+  sec.appendChild(dmResult.row);
+  let dmBadge = dmResult.badge;
+
+  // Inline device mode availability status span (starts empty, populated async)
+  const dmStatusSpan = document.createElement('span');
+  dmStatusSpan.id = 'simbasic-deviceMode-status';
+  dmStatusSpan.setAttribute('style', 'font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;');
+  dmResult.row.appendChild(dmStatusSpan);
+
+  // 2. Mesh Validation Mode select
+  const mvmResult = _buildSimBasicSelectRow(
+    'Mesh Validation',
+    'simbasic-meshValidationMode',
+    [
+      { value: 'warn', label: 'Warn' },
+      { value: 'strict', label: 'Strict' },
+      { value: 'off', label: 'Off' },
+    ],
+    currentSimBasic.meshValidationMode,
+    SIM_BASIC_DEFAULTS.meshValidationMode
+  );
+  sec.appendChild(mvmResult.row);
+  let mvmBadge = mvmResult.badge;
+
+  // 3. Frequency Spacing select
+  const fsResult = _buildSimBasicSelectRow(
+    'Frequency Spacing',
+    'simbasic-frequencySpacing',
+    [
+      { value: 'log', label: 'Logarithmic' },
+      { value: 'linear', label: 'Linear' },
+    ],
+    currentSimBasic.frequencySpacing,
+    SIM_BASIC_DEFAULTS.frequencySpacing
+  );
+  sec.appendChild(fsResult.row);
+  let fsBadge = fsResult.badge;
+
+  // 4. Use Optimized checkbox
+  const uoResult = _buildSimBasicCheckboxRow(
+    'Use Optimized',
+    'simbasic-useOptimized',
+    currentSimBasic.useOptimized,
+    SIM_BASIC_DEFAULTS.useOptimized
+  );
+  sec.appendChild(uoResult.row);
+  let uoBadge = uoResult.badge;
+
+  // 5. Enable Symmetry checkbox
+  const esResult = _buildSimBasicCheckboxRow(
+    'Enable Symmetry',
+    'simbasic-enableSymmetry',
+    currentSimBasic.enableSymmetry,
+    SIM_BASIC_DEFAULTS.enableSymmetry
+  );
+  sec.appendChild(esResult.row);
+  let esBadge = esResult.badge;
+
+  // 6. Verbose Logging checkbox
+  const vbResult = _buildSimBasicCheckboxRow(
+    'Verbose Logging',
+    'simbasic-verbose',
+    currentSimBasic.verbose,
+    SIM_BASIC_DEFAULTS.verbose
+  );
+  sec.appendChild(vbResult.row);
+  let vbBadge = vbResult.badge;
+
+  // Fire non-blocking device availability poll after section renders
+  void _pollSimBasicDeviceAvailability();
 
   return sec;
 }
@@ -663,6 +885,69 @@ function _buildSystemSection() {
   sec.appendChild(resetAllRow);
 
   return sec;
+}
+
+// ---------------------------------------------------------------------------
+// Sim Basic device availability poll
+// ---------------------------------------------------------------------------
+
+/**
+ * Non-blocking async health poll that marks unavailable device mode options
+ * and populates the inline status element.
+ *
+ * Called fire-and-forget after _buildSimBasicSection renders.
+ * Fails silently on any error — the UI remains fully functional with all
+ * options enabled if the health check cannot be completed.
+ */
+async function _pollSimBasicDeviceAvailability() {
+  const statusEl = document.getElementById('simbasic-deviceMode-status');
+  const select = document.getElementById('simbasic-deviceMode');
+  if (!statusEl || !select) return; // section not visible
+
+  try {
+    const res = await fetch('http://localhost:8000/health');
+    if (!res.ok) throw new Error('health fetch failed');
+    const health = await res.json();
+    const di = health?.deviceInterface;
+
+    if (!di || !di.mode_availability) {
+      // Solver unavailable — mark concrete modes disabled
+      for (const opt of select.options) {
+        if (opt.value !== 'auto') {
+          opt.disabled = true;
+          opt.text = opt.text.replace(' (unavailable)', '') + ' (unavailable)';
+        }
+      }
+      statusEl.textContent = 'Solver runtime unavailable. Auto mode only.';
+      return;
+    }
+
+    // Mark per-mode availability
+    let unavailableCount = 0;
+    for (const opt of select.options) {
+      const info = di.mode_availability[opt.value];
+      if (info && !info.available) {
+        opt.disabled = true;
+        opt.text = opt.value === 'auto' ? opt.text : opt.text.replace(' (unavailable)', '') + ' (unavailable)';
+        unavailableCount++;
+      } else {
+        opt.disabled = false;
+        // Strip any previously-added suffix on refresh
+        opt.text = opt.text.replace(' (unavailable)', '');
+      }
+    }
+
+    // Populate inline status: show selected_mode for auto, or blank if all available
+    if (di.selected_mode && di.selected_mode !== 'auto') {
+      statusEl.textContent = `Auto resolves to: ${di.selected_mode}`;
+    } else {
+      statusEl.textContent = unavailableCount > 0 ? `${unavailableCount} mode(s) unavailable on this machine` : '';
+    }
+
+  } catch {
+    // Health poll failed — fail silently, leave all options enabled
+    statusEl.textContent = '';
+  }
 }
 
 // ---------------------------------------------------------------------------
