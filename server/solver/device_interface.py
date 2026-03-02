@@ -5,7 +5,6 @@ Supported modes:
 - auto
 - opencl_cpu
 - opencl_gpu
-- numba
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .deps import BEMPP_VARIANT, bempp_api
 
-VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu", "numba"}
+VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
 _MODE_ALIASES = {
     "opencl": "opencl_cpu",
     "cpu_opencl": "opencl_cpu",
@@ -28,7 +27,7 @@ _MODE_ALIASES = {
 }
 DEFAULT_DEVICE_MODE = str(os.environ.get("WG_DEVICE_MODE", "auto") or "auto").strip().lower()
 _LOGGED_FALLBACK_REASONS: set[str] = set()
-_AUTO_MODE_PRIORITY: Tuple[str, ...] = ("opencl_gpu", "opencl_cpu", "numba")
+_AUTO_MODE_PRIORITY: Tuple[str, ...] = ("opencl_gpu", "opencl_cpu")
 
 
 def _path_contains_whitespace(path: Path) -> bool:
@@ -109,11 +108,6 @@ def _opencl_inventory() -> Dict[str, object]:
 
 def _mode_unavailable_reason(mode: str) -> Optional[str]:
     normalized = normalize_device_mode(mode)
-    if normalized == "numba":
-        if bempp_api is None:
-            return "bempp runtime is unavailable."
-        return None
-
     info = _opencl_inventory()
     base_reason = info.get("base_reason")
     if base_reason:
@@ -148,14 +142,13 @@ def _available_concrete_modes() -> List[str]:
         modes.append("opencl_cpu")
     if _mode_unavailable_reason("opencl_gpu") is None:
         modes.append("opencl_gpu")
-    modes.append("numba")
     return modes
 
 
 def available_mode_options() -> List[str]:
     concrete = _available_concrete_modes()
-    if len(concrete) <= 1:
-        return concrete
+    if len(concrete) == 0:
+        return ["auto"]
     return ["auto", *concrete]
 
 
@@ -164,7 +157,6 @@ def _mode_availability() -> Dict[str, Dict[str, object]]:
 
     cpu_reason = _mode_unavailable_reason("opencl_cpu")
     gpu_reason = _mode_unavailable_reason("opencl_gpu")
-    numba_reason = _mode_unavailable_reason("numba")
 
     return {
         "auto": {
@@ -181,11 +173,6 @@ def _mode_availability() -> Dict[str, Dict[str, object]]:
             "available": gpu_reason is None,
             "reason": gpu_reason,
             "device_name": inventory.get("gpu_device_name"),
-        },
-        "numba": {
-            "available": numba_reason is None,
-            "reason": numba_reason,
-            "device_name": "Numba CPU",
         },
     }
 
@@ -236,7 +223,7 @@ def _auto_mode_choice(concrete_modes: List[str]) -> str:
     for candidate in _AUTO_MODE_PRIORITY:
         if candidate in concrete_modes:
             return candidate
-    return concrete_modes[0] if concrete_modes else "numba"
+    return concrete_modes[0] if concrete_modes else "opencl_cpu"
 
 
 def _auto_fallback_reason(mode_availability: Dict[str, Dict[str, object]]) -> Optional[str]:
@@ -262,22 +249,27 @@ def _selected_device_profile(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
     fallback_reason: Optional[str] = None
 
     if len(concrete_modes) == 0:
-        selected_mode = "numba"
-        fallback_reason = _auto_fallback_reason(mode_availability) or "bempp runtime is unavailable."
+        selected_mode = None
+        fallback_reason = _auto_fallback_reason(mode_availability) or "OpenCL runtime is unavailable."
     elif requested_mode == "auto":
         selected_mode = _auto_mode_choice(concrete_modes)
-        if selected_mode == "numba":
-            fallback_reason = _auto_fallback_reason(mode_availability)
     elif requested_mode in concrete_modes:
         selected_mode = requested_mode
     else:
-        selected_mode = "numba" if "numba" in concrete_modes else concrete_modes[0]
+        selected_mode = None
         unavailable = _mode_unavailable_reason(requested_mode)
         if unavailable:
             fallback_reason = f"requested mode '{requested_mode}' unavailable: {unavailable}"
+        else:
+            fallback_reason = f"requested mode '{requested_mode}' unavailable."
 
-    selected_interface = "numba" if selected_mode == "numba" else "opencl"
-    selected_device_type = "cpu" if selected_mode in {"numba", "opencl_cpu"} else "gpu"
+    selected_interface = "opencl" if selected_mode in {"opencl_cpu", "opencl_gpu"} else "unavailable"
+    if selected_mode == "opencl_cpu":
+        selected_device_type: Optional[str] = "cpu"
+    elif selected_mode == "opencl_gpu":
+        selected_device_type = "gpu"
+    else:
+        selected_device_type = None
 
     return {
         "requested_mode": requested_mode,
@@ -299,27 +291,39 @@ def _selected_device_profile(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
     }
 
 
+def _opencl_unavailable_warning(profile: Dict[str, object]) -> str:
+    requested = str(profile.get("requested_mode") or "auto")
+    fallback_reason = str(profile.get("fallback_reason") or "OpenCL runtime is unavailable.")
+    return (
+        f"OpenCL drivers are not available for requested mode '{requested}'. "
+        f"{fallback_reason} Install/enable OpenCL drivers and verify pyopencl platform discovery."
+    )
+
+
 def _ensure_selected_mode_applied(profile: Dict[str, object]) -> Tuple[str, Optional[str], Optional[str]]:
-    selected_mode = str(profile.get("selected_mode") or "numba")
-    if selected_mode == "numba":
-        return "numba", "cpu", "Numba CPU"
+    selected_mode = str(profile.get("selected_mode") or "")
+    if selected_mode not in {"opencl_cpu", "opencl_gpu"}:
+        raise RuntimeError(_opencl_unavailable_warning(profile))
 
     applied, interface, device_type, device_name = _apply_opencl_mode(selected_mode)
     if not applied:
-        return "numba", "cpu", "Numba CPU"
+        raise RuntimeError(
+            f"OpenCL mode '{selected_mode}' is available but could not be initialized for bempp-cl operators."
+        )
     return str(interface or "opencl"), device_type, device_name
 
 
 def selected_device_interface(preferred: str = DEFAULT_DEVICE_MODE) -> str:
-    """Select solver operator interface (`opencl` or `numba`) with fallback."""
+    """Select solver operator interface (`opencl`) with explicit OpenCL requirement."""
     profile = _selected_device_profile(preferred)
-    interface, _device_type, _device_name = _ensure_selected_mode_applied(profile)
-    fallback_reason = profile.get("fallback_reason")
-    if interface == "numba" and fallback_reason:
-        reason_text = str(fallback_reason)
+    try:
+        interface, _device_type, _device_name = _ensure_selected_mode_applied(profile)
+    except RuntimeError as exc:
+        reason_text = str(exc)
         if reason_text not in _LOGGED_FALLBACK_REASONS:
             _LOGGED_FALLBACK_REASONS.add(reason_text)
-            logger.warning("[BEM] Falling back to numba backend. Reason: %s", reason_text)
+            logger.warning("[BEM] OpenCL requirement warning: %s", reason_text)
+        raise
     return interface
 
 
@@ -377,9 +381,18 @@ def configure_opencl_safe_profile() -> Dict[str, object]:
 
 def selected_device_metadata(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, object]:
     profile = _selected_device_profile(preferred)
-    interface, device_type, device_name = _ensure_selected_mode_applied(profile)
+    warning_text: Optional[str] = None
+    try:
+        interface, device_type, device_name = _ensure_selected_mode_applied(profile)
+    except RuntimeError as exc:
+        warning_text = str(exc)
+        interface = "unavailable"
+        device_type = None
+        device_name = None
 
     fallback_reason = profile.get("fallback_reason")
+    if fallback_reason is None and warning_text:
+        fallback_reason = warning_text
     selected_mode = profile.get("selected_mode")
     requested_mode = profile.get("requested_mode")
     concrete_modes = list(profile.get("concrete_modes") or [])
@@ -401,11 +414,12 @@ def selected_device_metadata(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
         "mode_availability": mode_availability,
         "opencl_diagnostics": opencl_diagnostics,
         "benchmark": benchmark,
+        "warning": warning_text,
         "opencl_available": any(mode.startswith("opencl_") for mode in concrete_modes),
         # Backward-compatible fields.
         "requested": requested_mode,
-        "selected": interface,
-        "runtime_selected": interface,
+        "selected": interface if interface != "unavailable" else "opencl_unavailable",
+        "runtime_selected": interface if interface != "unavailable" else "opencl_unavailable",
         "runtime_retry_attempted": False,
         "runtime_retry_outcome": "not_needed",
         "runtime_profile": "default",

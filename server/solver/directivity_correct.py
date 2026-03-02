@@ -110,12 +110,7 @@ def evaluate_far_field_sphere(
     p_ref = 20e-6  # 20 µPa standard reference pressure
 
     selected_interface = str(device_interface or potential_device_interface()).strip().lower()
-    if selected_interface == "opencl":
-        interface_order = ["opencl", "numba"]
-    elif selected_interface == "numba":
-        interface_order = ["numba"]
-    else:
-        interface_order = [selected_interface, "numba"]
+    interface_order = [selected_interface]
 
     pressures = None
     last_error = None
@@ -138,11 +133,11 @@ def evaluate_far_field_sphere(
         except Exception as exc:
             last_error = exc
             if interface_name == "opencl" and is_opencl_buffer_error(exc):
-                logger.warning("[Directivity] OpenCL potential operator failed; retrying with numba.")
-                continue
+                logger.warning("[Directivity] OpenCL potential operator failed; no numba fallback is enabled.")
+                break
             if interface_name == "opencl":
-                logger.warning("[Directivity] OpenCL directivity evaluation failed; retrying with numba.")
-                continue
+                logger.warning("[Directivity] OpenCL directivity evaluation failed; no numba fallback is enabled.")
+                break
             break
 
     if pressures is None:

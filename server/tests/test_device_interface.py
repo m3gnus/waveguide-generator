@@ -9,75 +9,77 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
     def tearDown(self):
         di.clear_device_selection_caches()
 
-    def test_falls_back_to_numba_when_requested_mode_unavailable(self):
+    def test_raises_when_requested_mode_unavailable(self):
         di.clear_device_selection_caches()
-        with patch("solver.device_interface._available_concrete_modes", return_value=["numba"]), patch(
-            "solver.device_interface._mode_unavailable_reason", return_value="no cpu driver"
+        with patch("solver.device_interface._available_concrete_modes", return_value=[]), patch(
+            "solver.device_interface._mode_unavailable_reason", return_value="no suitable OpenCL CPU driver."
         ), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu", "numba"]},
-                "opencl_cpu": {"available": False, "reason": "no cpu driver"},
-                "opencl_gpu": {"available": False, "reason": "no gpu driver"},
-                "numba": {"available": True, "reason": None},
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "opencl_cpu": {"available": False, "reason": "no suitable OpenCL CPU driver."},
+                "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
         ):
-            self.assertEqual(di.selected_device_interface("opencl_cpu"), "numba")
+            with self.assertRaises(RuntimeError) as ctx:
+                di.selected_device_interface("opencl_cpu")
+        self.assertIn("OpenCL drivers are not available", str(ctx.exception))
 
     def test_reports_selected_opencl_when_available(self):
         di.clear_device_selection_caches()
-        with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu", "numba"]), patch(
+        with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu"]), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu", "numba"]},
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
                 "opencl_cpu": {"available": True, "reason": None},
-                "opencl_gpu": {"available": False, "reason": "no gpu driver"},
-                "numba": {"available": True, "reason": None},
+                "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
         ), patch(
             "solver.device_interface._ensure_selected_mode_applied", return_value=("opencl", "cpu", "Fake CPU")
         ):
             self.assertEqual(di.selected_device_interface("opencl_cpu"), "opencl")
 
-    def test_auto_prefers_opencl_gpu_then_cpu_then_numba(self):
+    def test_auto_prefers_opencl_gpu_then_cpu(self):
         di.clear_device_selection_caches()
-        with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu", "opencl_gpu", "numba"]), patch(
+        with patch(
+            "solver.device_interface._available_concrete_modes",
+            return_value=["opencl_cpu", "opencl_gpu"],
+        ), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu", "numba"]},
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
                 "opencl_cpu": {"available": True, "reason": None},
                 "opencl_gpu": {"available": True, "reason": None},
-                "numba": {"available": True, "reason": None},
             },
         ):
             profile = di._selected_device_profile("auto")
         self.assertEqual(profile["selected_mode"], "opencl_gpu")
 
         di.clear_device_selection_caches()
-        with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu", "numba"]), patch(
+        with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu"]), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu", "numba"]},
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
                 "opencl_cpu": {"available": True, "reason": None},
-                "opencl_gpu": {"available": False, "reason": "no gpu driver"},
-                "numba": {"available": True, "reason": None},
+                "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
         ):
             profile = di._selected_device_profile("auto")
         self.assertEqual(profile["selected_mode"], "opencl_cpu")
 
+    def test_auto_with_no_opencl_modes_marks_unavailable(self):
         di.clear_device_selection_caches()
-        with patch("solver.device_interface._available_concrete_modes", return_value=["numba"]), patch(
+        with patch("solver.device_interface._available_concrete_modes", return_value=[]), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu", "numba"]},
-                "opencl_cpu": {"available": False, "reason": "no cpu driver"},
-                "opencl_gpu": {"available": False, "reason": "no gpu driver"},
-                "numba": {"available": True, "reason": None},
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "opencl_cpu": {"available": False, "reason": "no suitable OpenCL CPU driver."},
+                "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
         ):
             profile = di._selected_device_profile("auto")
-        self.assertEqual(profile["selected_mode"], "numba")
+        self.assertIsNone(profile["selected_mode"])
+        self.assertIn("OpenCL", str(profile["fallback_reason"]))
 
     def test_metadata_contains_runtime_retry_defaults(self):
         di.clear_device_selection_caches()
@@ -87,13 +89,12 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             "selected_interface": "opencl",
             "selected_device_type": "cpu",
             "fallback_reason": None,
-            "concrete_modes": ["opencl_cpu", "numba"],
-            "available_modes": ["auto", "opencl_cpu", "numba"],
+            "concrete_modes": ["opencl_cpu"],
+            "available_modes": ["auto", "opencl_cpu"],
             "mode_availability": {
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu", "numba"]},
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
                 "opencl_cpu": {"available": True, "reason": None},
-                "opencl_gpu": {"available": False, "reason": "no gpu driver"},
-                "numba": {"available": True, "reason": None},
+                "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
             "opencl_diagnostics": {"base_ready": True, "gpu_available": False, "gpu_reason": "no gpu driver"},
             "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "deterministic_priority"},
@@ -111,6 +112,32 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         self.assertEqual(info["runtime_profile"], "default")
         self.assertIn("mode_availability", info)
         self.assertIn("opencl_diagnostics", info)
+
+    def test_metadata_surfaces_warning_when_opencl_unavailable(self):
+        mocked_profile = {
+            "requested_mode": "auto",
+            "selected_mode": None,
+            "selected_interface": "unavailable",
+            "selected_device_type": None,
+            "fallback_reason": "OpenCL runtime is unavailable.",
+            "concrete_modes": [],
+            "available_modes": ["auto"],
+            "mode_availability": {
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "opencl_cpu": {"available": False, "reason": "no cpu driver"},
+                "opencl_gpu": {"available": False, "reason": "no gpu driver"},
+            },
+            "opencl_diagnostics": {"base_ready": False, "base_reason": "no OpenCL platforms found."},
+            "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "deterministic_priority"},
+        }
+        with patch("solver.device_interface._selected_device_profile", return_value=mocked_profile), patch(
+            "solver.device_interface._ensure_selected_mode_applied",
+            side_effect=RuntimeError("OpenCL drivers are not available."),
+        ):
+            info = di.selected_device_metadata("auto")
+        self.assertEqual(info["interface"], "unavailable")
+        self.assertEqual(info["selected"], "opencl_unavailable")
+        self.assertIn("OpenCL", str(info["warning"]))
 
     def test_configure_opencl_safe_profile_returns_unavailable_when_runtime_missing(self):
         with patch("solver.device_interface.bempp_api", None):

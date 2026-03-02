@@ -9,7 +9,6 @@ python-multipart>=0.0.6
 # Scientific computing (also prerequisites for bempp-cl if installed separately)
 numpy
 scipy
-numba
 meshio>=4.0.16
 
 # Mesh Processing

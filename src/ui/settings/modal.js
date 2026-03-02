@@ -731,7 +731,6 @@ function _buildSimBasicSection() {
       { value: 'auto', label: 'Auto' },
       { value: 'opencl_gpu', label: 'OpenCL GPU' },
       { value: 'opencl_cpu', label: 'OpenCL CPU' },
-      { value: 'numba', label: 'Numba CPU' },
     ],
     currentSimBasic.deviceMode,
     SIM_BASIC_DEFAULTS.deviceMode

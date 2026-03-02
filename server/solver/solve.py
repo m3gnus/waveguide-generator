@@ -290,49 +290,25 @@ def solve(
                 warning = {
                     "frequency_hz": float(freq),
                     "stage": "frequency_solve",
-                    "code": "opencl_runtime_fallback_to_numba",
-                    "detail": f"OpenCL buffer allocation failed; retrying this frequency with numba ({exc}).",
+                    "code": "opencl_runtime_unavailable",
+                    "detail": (
+                        f"OpenCL buffer allocation failed and no numba fallback is enabled ({exc}). "
+                        "Install/enable OpenCL drivers, then retry."
+                    ),
                     "original_interface": "opencl",
-                    "fallback_interface": "numba",
                 }
                 results["metadata"]["warnings"].append(warning)
                 results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
                 logger.warning(
-                    "[BEM] OpenCL runtime error at %.1f Hz; falling back to numba and retrying.", freq
+                    "[BEM] OpenCL runtime error at %.1f Hz; no numba fallback is enabled.", freq
                 )
-                boundary_interface = "numba"
-                potential_interface = "numba"
                 if isinstance(device_metadata, dict):
-                    device_metadata["runtime_selected"] = "numba"
+                    device_metadata["runtime_selected"] = "opencl_unavailable"
                     device_metadata["runtime_fallback_reason"] = str(exc)
-                    device_metadata["runtime_retry_outcome"] = "fell_back_to_numba"
-                    device_metadata["selected_mode"] = "numba"
-                    device_metadata["interface"] = "numba"
-                    device_metadata["selected"] = "numba"
-                    device_metadata["device_type"] = "cpu"
-                    device_metadata["device_name"] = "Numba CPU"
+                    device_metadata["runtime_retry_outcome"] = "opencl_retry_failed"
+                    device_metadata["interface"] = "unavailable"
+                    device_metadata["selected"] = "opencl_unavailable"
                     device_metadata["fallback_reason"] = str(exc)
-                try:
-                    spl, impedance, di = solve_frequency(
-                        grid,
-                        k,
-                        c,
-                        rho,
-                        sim_type,
-                        throat_elements=throat_elements,
-                        boundary_interface=boundary_interface,
-                        potential_interface=potential_interface,
-                        observation_distance_m=observation_distance_m,
-                        observation_frame=observation_frame,
-                    )
-                    success_count += 1
-                    results["spl_on_axis"]["spl"].append(float(spl))
-                    results["impedance"]["real"].append(float(impedance.real))
-                    results["impedance"]["imaginary"].append(float(impedance.imag))
-                    results["di"]["di"].append(float(di))
-                    continue
-                except Exception as retry_exc:
-                    exc = retry_exc
 
             logger.error("[BEM] Error at %.1f Hz: %s", freq, exc)
             results["metadata"]["failures"].append(

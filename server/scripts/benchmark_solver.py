@@ -8,7 +8,7 @@ Options:
     --freq-min FLOAT    Minimum frequency in Hz (default: 500)
     --freq-max FLOAT    Maximum frequency in Hz (default: 8000)
     --num-freq INT      Number of frequencies (default: 10)
-    --device MODE       Device mode: auto|opencl_gpu|opencl_cpu|numba (default: auto)
+    --device MODE       Device mode: auto|opencl_gpu|opencl_cpu (default: auto)
     --spacing MODE      Frequency spacing: log|linear (default: log)
     --no-warmup         Skip the warm-up pass (to measure first-solve penalty)
 
@@ -149,7 +149,7 @@ def main():
     parser.add_argument(
         "--device",
         default="auto",
-        choices=["auto", "opencl_gpu", "opencl_cpu", "numba"],
+        choices=["auto", "opencl_gpu", "opencl_cpu"],
         help="Device mode",
     )
     parser.add_argument(

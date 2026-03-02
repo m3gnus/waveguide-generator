@@ -23,7 +23,7 @@ try:
 
     SOLVER_AVAILABLE: bool = BEMPP_RUNTIME_READY
     if SOLVER_AVAILABLE:
-        logger.info("[BEM] Device auto policy: opencl_gpu -> opencl_cpu -> numba")
+        logger.info("[BEM] Device auto policy: opencl_gpu -> opencl_cpu")
 
 except ImportError:
     SOLVER_AVAILABLE = False
@@ -39,8 +39,8 @@ except ImportError:
 
     def normalize_device_mode(value: Any) -> str:  # type: ignore[misc]
         mode = str(value or "auto").strip().lower()
-        if mode not in {"auto", "opencl_cpu", "opencl_gpu", "numba"}:
-            raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu, numba.")
+        if mode not in {"auto", "opencl_cpu", "opencl_gpu"}:
+            raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu.")
         return mode
 
     def get_dependency_status() -> Dict[str, Any]:  # type: ignore[misc]
@@ -75,4 +75,3 @@ try:
 except ImportError:
     build_waveguide_mesh = None  # type: ignore[assignment]
     WAVEGUIDE_BUILDER_AVAILABLE = False
-
