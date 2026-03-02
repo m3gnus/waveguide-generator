@@ -28,6 +28,7 @@ venv/
 # Reference materials (large files, not part of program)
 _references/
 ATHequivalent/
+architecture/
 
 # Local GSD installations
 get-shit-done/
