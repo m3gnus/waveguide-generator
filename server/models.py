@@ -63,8 +63,8 @@ class PolarConfig(BaseModel):
 def _normalize_device_mode(value: Any) -> str:
     """Canonical device-mode normalization (mirrors solver.device_interface)."""
     mode = str(value or "auto").strip().lower()
-    if mode not in {"auto", "opencl_cpu", "opencl_gpu", "numba"}:
-        raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu, numba.")
+    if mode not in {"auto", "opencl_cpu", "opencl_gpu"}:
+        raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu.")
     return mode
 
 
@@ -80,14 +80,14 @@ class SimulationRequest(BaseModel):
     verbose: bool = True
     mesh_validation_mode: str = "warn"  # strict | warn | off
     frequency_spacing: str = "log"      # linear | log
-    device_mode: str = "auto"           # auto | opencl_cpu | opencl_gpu | numba
+    device_mode: str = "auto"           # auto | opencl_cpu | opencl_gpu
 
     @field_validator("device_mode")
     @classmethod
     def validate_device_mode(cls, value: str) -> str:
         raw = str(value or "auto").strip().lower()
-        if raw not in {"auto", "opencl_cpu", "opencl_gpu", "numba", "opencl", "cpu_opencl", "gpu_opencl"}:
-            raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu, numba.")
+        if raw not in {"auto", "opencl_cpu", "opencl_gpu", "opencl", "cpu_opencl", "gpu_opencl"}:
+            raise ValueError("device_mode must be one of: auto, opencl_cpu, opencl_gpu.")
         # Import real normalizer if available; fall back to local version.
         try:
             from solver.device_interface import normalize_device_mode

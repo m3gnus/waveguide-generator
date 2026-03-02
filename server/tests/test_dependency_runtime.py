@@ -81,7 +81,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             "device_type": "gpu",
             "device_name": "Fake GPU",
             "fallback_reason": None,
-            "available_modes": ["auto", "opencl_cpu", "opencl_gpu", "numba"],
+            "available_modes": ["auto", "opencl_cpu", "opencl_gpu"],
         }
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(

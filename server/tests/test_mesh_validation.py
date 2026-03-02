@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from solver.mesh import prepare_mesh
 
@@ -73,6 +74,18 @@ class MeshValidationTest(unittest.TestCase):
         msg = str(ctx.exception)
         # Message must mention the payload/list so the caller knows what to fix
         self.assertIn("vertices", msg.lower())
+
+    def test_use_gmsh_requires_gmsh_runtime(self):
+        with patch("solver.mesh.GMSH_AVAILABLE", False):
+            with self.assertRaises(ValueError) as ctx:
+                prepare_mesh(
+                    vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    indices=[0, 1, 2],
+                    surface_tags=[2],
+                    use_gmsh=True,
+                )
+        self.assertIn("gmsh", str(ctx.exception).lower())
+        self.assertIn("unavailable", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

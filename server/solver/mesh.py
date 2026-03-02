@@ -70,8 +70,13 @@ def refine_mesh_with_gmsh(
         Tuple of (refined_vertices, refined_indices, refined_tags)
     """
     if not GMSH_AVAILABLE:
-        logger.info("[Gmsh] Not available, using original mesh")
-        return vertices, indices, surface_tags
+        logger.warning(
+            "[Gmsh] Requested mesh refinement, but gmsh Python API is unavailable."
+        )
+        raise RuntimeError(
+            "Gmsh mesh refinement requested, but gmsh Python API is unavailable. "
+            "Install gmsh>=4.15,<5.0 and retry."
+        )
 
     try:
         with gmsh_lock:
@@ -156,8 +161,7 @@ def refine_mesh_with_gmsh(
                 elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
                 if len(elem_types) == 0:
-                    logger.warning("[Gmsh] No elements generated, using original mesh")
-                    return vertices, indices, surface_tags
+                    raise RuntimeError("Gmsh refinement generated no elements.")
 
                 # Find triangles (type 2)
                 refined_indices = None
@@ -169,8 +173,7 @@ def refine_mesh_with_gmsh(
                         break
 
                 if refined_indices is None:
-                    logger.warning("[Gmsh] No triangles found, using original mesh")
-                    return vertices, indices, surface_tags
+                    raise RuntimeError("Gmsh refinement generated no triangle elements.")
 
                 # Generate new surface tags based on physical groups
                 num_refined_tris = refined_indices.shape[1]
@@ -199,9 +202,8 @@ def refine_mesh_with_gmsh(
                 if initialized_here and gmsh.isInitialized():
                     gmsh.finalize()
     except Exception as e:
-        # Gmsh refinement is best-effort; fall back to original mesh on any error.
         logger.warning("[Gmsh] Error during mesh refinement: %s", e, exc_info=True)
-        return vertices, indices, surface_tags
+        raise RuntimeError(f"Gmsh mesh refinement failed: {e}") from e
 
 
 def prepare_mesh(
@@ -309,7 +311,15 @@ def prepare_mesh(
         original_surface_tags = domain_indices.copy()
 
     # Optionally refine mesh with Gmsh
-    if use_gmsh and GMSH_AVAILABLE:
+    if use_gmsh:
+        if not GMSH_AVAILABLE:
+            logger.warning(
+                "[Gmsh] Requested use_gmsh=True, but gmsh Python API is unavailable."
+            )
+            raise ValueError(
+                "Mesh refinement requested (use_gmsh=True), but gmsh Python API is unavailable. "
+                "Install gmsh>=4.15,<5.0 and retry."
+            )
         vertices_array, indices_array, domain_indices = refine_mesh_with_gmsh(
             vertices_array, indices_array, domain_indices, target_frequency
         )

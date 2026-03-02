@@ -41,7 +41,7 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @property {Record<string, unknown>|null} [polarConfig]
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
- * @property {'auto'|'opencl_cpu'|'opencl_gpu'|'numba'} [deviceMode]
+ * @property {'auto'|'opencl_cpu'|'opencl_gpu'} [deviceMode]
  */
 
 /**

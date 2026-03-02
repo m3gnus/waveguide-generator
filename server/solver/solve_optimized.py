@@ -407,7 +407,7 @@ def solve_optimized(
                 _lhs = 0.5 * _id - _dlp - _coupling * (-_hyp)
             else:
                 _lhs = _dlp - 0.5 * _id
-            _ = _lhs.strong_form()  # triggers assembly + OpenCL/numba compilation
+            _ = _lhs.strong_form()  # triggers assembly + OpenCL compilation
             warmup_time_seconds = time.time() - _warmup_start
             if verbose:
                 logger.info("[BEM] Warm-up complete (%.2fs)", warmup_time_seconds)
@@ -508,54 +508,25 @@ def solve_optimized(
                 warning = {
                     "frequency_hz": float(freq),
                     "stage": "frequency_solve",
-                    "code": "opencl_runtime_fallback_to_numba",
-                    "detail": f"OpenCL buffer allocation failed; retrying this frequency with numba ({exc}).",
+                    "code": "opencl_runtime_unavailable",
+                    "detail": (
+                        f"OpenCL buffer allocation failed and no numba fallback is enabled ({exc}). "
+                        "Install/enable OpenCL drivers, then retry."
+                    ),
                     "original_interface": "opencl",
-                    "fallback_interface": "numba",
                 }
                 results["metadata"]["warnings"].append(warning)
                 results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
                 logger.warning(
-                    "[BEM] OpenCL runtime error at %.1f Hz; falling back to numba and retrying.", freq
-                )
-                boundary_interface = "numba"
-                potential_interface = "numba"
-                cached_ops = CachedOperators(
-                    boundary_interface=boundary_interface,
-                    potential_interface=potential_interface,
+                    "[BEM] OpenCL runtime error at %.1f Hz; no numba fallback is enabled.", freq
                 )
                 if isinstance(device_metadata, dict):
-                    device_metadata["runtime_selected"] = "numba"
+                    device_metadata["runtime_selected"] = "opencl_unavailable"
                     device_metadata["runtime_fallback_reason"] = str(exc)
-                    device_metadata["runtime_retry_outcome"] = "fell_back_to_numba"
-                    device_metadata["selected_mode"] = "numba"
-                    device_metadata["interface"] = "numba"
-                    device_metadata["selected"] = "numba"
-                    device_metadata["device_type"] = "cpu"
-                    device_metadata["device_name"] = "Numba CPU"
+                    device_metadata["runtime_retry_outcome"] = "opencl_retry_failed"
+                    device_metadata["interface"] = "unavailable"
+                    device_metadata["selected"] = "opencl_unavailable"
                     device_metadata["fallback_reason"] = str(exc)
-                try:
-                    iter_start = time.time()
-                    spl, impedance, di, solution, iter_count = solve_frequency_cached(
-                        grid, k, c, rho, sim_type, cached_ops, throat_elements,
-                        observation_distance_m=observation_distance_m,
-                        observation_frame=observation_frame,
-                    )
-                    iter_time = time.time() - iter_start
-                    success_count += 1
-                    if verbose:
-                        logger.info(
-                            " -> %.1f dB, DI=%.1f dB, iters=%s (%.2fs)", spl, di, iter_count, iter_time
-                        )
-                    results["spl_on_axis"]["spl"].append(float(spl))
-                    results["impedance"]["real"].append(float(impedance.real))
-                    results["impedance"]["imaginary"].append(float(impedance.imag))
-                    results["di"]["di"].append(float(di))
-                    solutions.append(solution)
-                    gmres_iterations.append(iter_count)
-                    continue
-                except Exception as retry_exc:
-                    exc = retry_exc
 
             logger.error("[BEM] Frequency solve error at %.1f Hz: %s", freq, exc)
             results["metadata"]["failures"].append(

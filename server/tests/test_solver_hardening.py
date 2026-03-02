@@ -34,7 +34,45 @@ def _mesh_stub():
     }
 
 
-class SolverHardeningTest(unittest.TestCase):
+class _OpenCLRuntimePatchedTestCase(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self._boundary_patcher = patch(
+            "solver.solve_optimized.boundary_device_interface", return_value="opencl"
+        )
+        self._potential_patcher = patch(
+            "solver.solve_optimized.potential_device_interface", return_value="opencl"
+        )
+        self._metadata_patcher = patch(
+            "solver.solve_optimized.selected_device_metadata",
+            return_value={
+                "requested_mode": "auto",
+                "selected_mode": "opencl_cpu",
+                "interface": "opencl",
+                "device_type": "cpu",
+                "device_name": "Fake CPU",
+                "fallback_reason": None,
+                "available_modes": ["auto", "opencl_cpu", "opencl_gpu"],
+                "requested": "auto",
+                "selected": "opencl",
+                "runtime_selected": "opencl",
+                "runtime_retry_attempted": False,
+                "runtime_retry_outcome": "not_needed",
+                "runtime_profile": "default",
+            },
+        )
+        self._boundary_patcher.start()
+        self._potential_patcher.start()
+        self._metadata_patcher.start()
+
+    def tearDown(self):
+        self._metadata_patcher.stop()
+        self._potential_patcher.stop()
+        self._boundary_patcher.stop()
+        super().tearDown()
+
+
+class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
     def test_mesh_validation_strict_blocks_invalid_setup(self):
         mesh = _mesh_stub()
         with patch(
@@ -162,7 +200,7 @@ class SolverHardeningTest(unittest.TestCase):
         self.assertTrue(results["metadata"]["partial_success"])
         self.assertEqual(results["metadata"]["failures"][0]["code"], "frequency_solve_failed")
 
-    def test_opencl_invalid_buffer_size_retries_with_numba(self):
+    def test_opencl_invalid_buffer_size_no_numba_fallback_records_failure(self):
         mesh = _mesh_stub()
         attempted_interfaces = []
 
@@ -191,26 +229,26 @@ class SolverHardeningTest(unittest.TestCase):
         ):
             results = solve_optimized(
                 mesh=mesh,
-                frequency_range=[200.0, 200.0],
-                num_frequencies=1,
+                frequency_range=[200.0, 300.0],
+                num_frequencies=2,
                 sim_type="2",
                 enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
 
-        self.assertEqual(attempted_interfaces, ["opencl", "opencl", "numba"])
-        self.assertEqual(results["metadata"]["failure_count"], 0)
+        self.assertEqual(attempted_interfaces, ["opencl", "opencl", "opencl"])
+        self.assertEqual(results["metadata"]["failure_count"], 1)
         self.assertEqual(results["metadata"]["warning_count"], 1)
         self.assertEqual(
             results["metadata"]["warnings"][0]["code"],
-            "opencl_runtime_fallback_to_numba",
+            "opencl_runtime_unavailable",
         )
         device_meta = results["metadata"]["device_interface"]
         self.assertEqual(device_meta["runtime_retry_attempted"], True)
         self.assertEqual(device_meta["runtime_profile"], "safe_cpu")
-        self.assertEqual(device_meta["runtime_retry_outcome"], "fell_back_to_numba")
-        self.assertEqual(device_meta["runtime_selected"], "numba")
+        self.assertEqual(device_meta["runtime_retry_outcome"], "opencl_retry_failed")
+        self.assertEqual(device_meta["runtime_selected"], "opencl_unavailable")
 
     def test_opencl_invalid_buffer_size_recovers_with_safe_profile_retry(self):
         mesh = _mesh_stub()
@@ -259,7 +297,7 @@ class SolverHardeningTest(unittest.TestCase):
         self.assertEqual(device_meta["runtime_selected"], "opencl")
 
 
-class StrongFormGmresTest(unittest.TestCase):
+class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
     def test_gmres_iteration_count_in_metadata(self):
         mesh = _mesh_stub()
         with patch(
