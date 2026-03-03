@@ -75,7 +75,7 @@ def refine_mesh_with_gmsh(
         )
         raise RuntimeError(
             "Gmsh mesh refinement requested, but gmsh Python API is unavailable. "
-            "Install gmsh>=4.15,<5.0 and retry."
+            "Install gmsh>=4.11,<5.0 and retry."
         )
 
     try:
@@ -318,7 +318,7 @@ def prepare_mesh(
             )
             raise ValueError(
                 "Mesh refinement requested (use_gmsh=True), but gmsh Python API is unavailable. "
-                "Install gmsh>=4.15,<5.0 and retry."
+                "Install gmsh>=4.11,<5.0 and retry."
             )
         vertices_array, indices_array, domain_indices = refine_mesh_with_gmsh(
             vertices_array, indices_array, domain_indices, target_frequency
