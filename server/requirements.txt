@@ -10,6 +10,7 @@ python-multipart>=0.0.6
 numpy
 scipy
 meshio>=4.0.16
+pyopencl
 
 # Mesh Processing
 trimesh>=4.0.5
