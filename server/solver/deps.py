@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_PYTHON_MIN = (3, 10, 0)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 15, 0)
-SUPPORTED_GMSH_MIN = (4, 15, 0)
+SUPPORTED_GMSH_MIN = (4, 11, 0)
 SUPPORTED_GMSH_MAX_EXCLUSIVE = (5, 0, 0)
 SUPPORTED_BEMPP_CL_MIN = (0, 4, 0)
 SUPPORTED_BEMPP_CL_MAX_EXCLUSIVE = (0, 5, 0)
@@ -38,7 +38,7 @@ SUPPORTED_BEMPP_LEGACY_MAX_EXCLUSIVE = (0, 4, 0)
 
 SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     "python": {"range": ">=3.10,<3.15"},
-    "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
+    "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
     "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
     "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
 }
@@ -162,7 +162,7 @@ if not PYTHON_SUPPORTED:
     )
 if GMSH_AVAILABLE and not GMSH_SUPPORTED:
     logger.warning(
-        "Unsupported gmsh Python package version %s; supported range is >=4.15,<5.0.",
+        "Unsupported gmsh Python package version %s; supported range is >=4.11,<5.0.",
         GMSH_VERSION or "unknown",
     )
 if BEMPP_AVAILABLE and not BEMPP_SUPPORTED:

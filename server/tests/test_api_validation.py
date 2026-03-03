@@ -172,7 +172,7 @@ class ApiValidationTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.15"},
-                "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
+                "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
                 "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
             },
@@ -254,7 +254,7 @@ class ApiValidationTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.15"},
-                "gmsh_python": {"range": ">=4.15,<5.0", "required_for": "/api/mesh/build"},
+                "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
                 "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
             },

@@ -2503,7 +2503,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
     """
     if not GMSH_AVAILABLE:
         raise RuntimeError(
-            "Gmsh Python API is not available. Install gmsh: pip install gmsh>=4.15.0"
+            "Gmsh Python API is not available. Install gmsh: pip install 'gmsh>=4.11,<5.0'"
         )
 
     formula_type = params.get("formula_type", "R-OSSE")

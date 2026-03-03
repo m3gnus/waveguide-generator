@@ -67,7 +67,7 @@ If automatic `bempp-cl` install fails, setup continues and prints a manual retry
 
 Supported backend dependency matrix:
 - Python: `>=3.10,<3.15`
-- gmsh Python package: `>=4.15,<5.0`
+- gmsh Python package: `>=4.11,<5.0`
 - bempp-cl: `>=0.4,<0.5` (`/api/solve`)
 - legacy `bempp_api` fallback: `>=0.3,<0.4` (`/api/solve (legacy fallback)`)
 
@@ -83,7 +83,7 @@ To install it later:
 
 ## Gmsh install fallback
 
-Setup first tries default package indexes for `gmsh>=4.15,<5.0`. If that fails, it retries with the official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/), including the Linux headless (`-nox`) index. If all retries fail or `import gmsh` still fails, setup exits with an error.
+Setup first tries default package indexes for `gmsh>=4.11,<5.0`. If that fails, it retries with the official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/), including the Linux headless (`-nox`) index. If all retries fail or `import gmsh` still fails, setup exits with an error.
 
 Manual retry:
 
