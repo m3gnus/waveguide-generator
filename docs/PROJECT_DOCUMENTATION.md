@@ -135,7 +135,7 @@ Frontend call path:
 - `src/modules/export/useCases.js` -> `prepareExportArtifacts(...)`
 
 Backend implementation:
-- `server/app.py` route `POST /api/mesh/build`
+- `server/api/routes_mesh.py` route `POST /api/mesh/build`
 - `server/solver/waveguide_builder.py` function `build_waveguide_mesh(...)`
 
 Frontend request normalization:
