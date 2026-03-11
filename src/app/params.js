@@ -1,13 +1,10 @@
 import { GlobalState } from '../state.js';
 import { isNumericString } from '../geometry/index.js';
-import { GeometryModule } from '../modules/geometry/index.js';
+import { ParamModule } from '../modules/param/index.js';
 
 export { isNumericString };
 
 export function prepareParamsForMesh(options = {}) {
-  const state = GlobalState.get();
-  return GeometryModule.import(state.params, {
-    type: state.type,
-    ...options
-  }).params;
+  const paramTask = ParamModule.task(ParamModule.importState(GlobalState.get(), options));
+  return ParamModule.output.params(paramTask);
 }

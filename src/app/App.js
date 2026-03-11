@@ -3,7 +3,6 @@ import { ParamPanel } from '../ui/paramPanel.js';
 import { UiModule } from '../modules/ui/index.js';
 
 import { initializeLogging } from './logging.js';
-import { prepareParamsForMesh } from './params.js';
 import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } from './scene.js';
 import { setupEventListeners } from './events.js';
 import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
@@ -66,10 +65,6 @@ export class App {
 
   initializeLogging() {
     return initializeLogging();
-  }
-
-  prepareParamsForMesh(options) {
-    return prepareParamsForMesh(options);
   }
 
   setupScene() {

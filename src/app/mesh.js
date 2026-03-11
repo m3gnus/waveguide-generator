@@ -1,10 +1,15 @@
+import { GlobalState } from '../state.js';
+import { ParamModule } from '../modules/param/index.js';
 import { SimulationModule } from '../modules/simulation/index.js';
 
 export function provideMeshForSimulation(app) {
   try {
-    const preparedParams = app.prepareParamsForMesh({
-      applyVerticalOffset: true
-    });
+    const paramTask = ParamModule.task(
+      ParamModule.importState(GlobalState.get(), {
+        applyVerticalOffset: true
+      })
+    );
+    const preparedParams = ParamModule.output.params(paramTask);
     const simulationTask = SimulationModule.task(SimulationModule.importPrepared(preparedParams), {
       includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
       adaptivePhi: false
