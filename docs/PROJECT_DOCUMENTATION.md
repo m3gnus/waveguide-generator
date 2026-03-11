@@ -34,6 +34,7 @@ Primary entry points:
 - `src/modules/`
   - Staged facades for design prep, geometry, export, simulation, and UI coordination
   - `DesignModule` is the app-facing boundary for state/type -> prepared parameter normalization
+  - `DesignModule` also owns OCC request normalization helpers used by `ExportModule` and `SimulationModule`
   - `GeometryModule` prepares geometry-shape definitions only (no tessellation or payload assembly)
 - `src/export/`
   - `.geo` builder, ABEC file generators, bundle validator, STL/CSV helpers
