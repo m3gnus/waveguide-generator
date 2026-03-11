@@ -310,8 +310,12 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     frequencyStart: 100,
     frequencyEnd: 1000,
     numFrequencies: 6,
+    meshValidationMode: 'strict',
     frequencySpacing: 'log',
     deviceMode: 'auto',
+    useOptimized: true,
+    enableSymmetry: true,
+    verbose: false,
     polarConfig: {}
   };
   const meshData = {

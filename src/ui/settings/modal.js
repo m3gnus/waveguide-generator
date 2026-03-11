@@ -65,6 +65,61 @@ export function getDownloadSimMeshEnabled() {
   return _state.downloadSimMesh;
 }
 
+function _modeLabel(mode) {
+  switch (String(mode || '').trim().toLowerCase()) {
+    case 'opencl_gpu':
+      return 'OpenCL GPU';
+    case 'opencl_cpu':
+      return 'OpenCL CPU';
+    case 'numba':
+      return 'Numba CPU';
+    case 'auto':
+      return 'Auto';
+    default:
+      return String(mode || 'Unknown').trim();
+  }
+}
+
+export function describeSimBasicDeviceAvailability(health, requestedMode = 'auto') {
+  const deviceInfo = health?.deviceInterface;
+  const availability = deviceInfo?.mode_availability;
+  const normalizedRequestedMode = String(requestedMode || 'auto').trim().toLowerCase() || 'auto';
+
+  if (!availability || typeof availability !== 'object') {
+    return {
+      unavailableModes: ['opencl_gpu', 'opencl_cpu'],
+      statusText: 'Solver runtime unavailable. Auto mode only.'
+    };
+  }
+
+  const unavailableModes = ['opencl_gpu', 'opencl_cpu'].filter((mode) => {
+    const info = availability[mode];
+    return Boolean(info && info.available === false);
+  });
+
+  if (normalizedRequestedMode !== 'auto' && unavailableModes.includes(normalizedRequestedMode)) {
+    return {
+      unavailableModes,
+      statusText: `${_modeLabel(normalizedRequestedMode)} unavailable on this machine.`
+    };
+  }
+
+  const selectedMode = String(deviceInfo?.selected_mode || '').trim().toLowerCase();
+  if (normalizedRequestedMode === 'auto' && selectedMode && selectedMode !== 'auto') {
+    return {
+      unavailableModes,
+      statusText: `Auto resolves to: ${_modeLabel(selectedMode)}`
+    };
+  }
+
+  return {
+    unavailableModes,
+    statusText: unavailableModes.length > 0
+      ? `${unavailableModes.length} mode(s) unavailable on this machine`
+      : ''
+  };
+}
+
 /**
  * Open the settings modal. Creates it on-demand and appends to document.body.
  * Returns the backdrop element so callers can await removal if needed.
@@ -907,42 +962,20 @@ async function _pollSimBasicDeviceAvailability() {
     const res = await fetch('http://localhost:8000/health');
     if (!res.ok) throw new Error('health fetch failed');
     const health = await res.json();
-    const di = health?.deviceInterface;
-
-    if (!di || !di.mode_availability) {
-      // Solver unavailable — mark concrete modes disabled
-      for (const opt of select.options) {
+    const availability = describeSimBasicDeviceAvailability(health, select.value);
+    for (const opt of select.options) {
+      const isUnavailable = availability.unavailableModes.includes(opt.value);
+      if (isUnavailable) {
+        opt.disabled = true;
         if (opt.value !== 'auto') {
-          opt.disabled = true;
           opt.text = opt.text.replace(' (unavailable)', '') + ' (unavailable)';
         }
-      }
-      statusEl.textContent = 'Solver runtime unavailable. Auto mode only.';
-      return;
-    }
-
-    // Mark per-mode availability
-    let unavailableCount = 0;
-    for (const opt of select.options) {
-      const info = di.mode_availability[opt.value];
-      if (info && !info.available) {
-        opt.disabled = true;
-        opt.text = opt.value === 'auto' ? opt.text : opt.text.replace(' (unavailable)', '') + ' (unavailable)';
-        unavailableCount++;
       } else {
         opt.disabled = false;
-        // Strip any previously-added suffix on refresh
         opt.text = opt.text.replace(' (unavailable)', '');
       }
     }
-
-    // Populate inline status: show selected_mode for auto, or blank if all available
-    if (di.selected_mode && di.selected_mode !== 'auto') {
-      statusEl.textContent = `Auto resolves to: ${di.selected_mode}`;
-    } else {
-      statusEl.textContent = unavailableCount > 0 ? `${unavailableCount} mode(s) unavailable on this machine` : '';
-    }
-
+    statusEl.textContent = availability.statusText;
   } catch {
     // Health poll failed — fail silently, leave all options enabled
     statusEl.textContent = '';

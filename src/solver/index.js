@@ -39,6 +39,9 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
  * @property {'auto'|'opencl_cpu'|'opencl_gpu'} [deviceMode]
+ * @property {boolean} [useOptimized]
+ * @property {boolean} [enableSymmetry]
+ * @property {boolean} [verbose]
  */
 
 /**
@@ -142,6 +145,27 @@ async function fetchOrApiError(url, options, operation) {
   return response;
 }
 
+const VALID_MESH_VALIDATION_MODES = new Set(['strict', 'warn', 'off']);
+const VALID_FREQUENCY_SPACING = new Set(['linear', 'log']);
+const VALID_DEVICE_MODES = new Set(['auto', 'opencl_cpu', 'opencl_gpu']);
+
+function assignEnumSetting(payload, key, value, allowedValues) {
+  if (typeof value !== 'string') {
+    return;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || !allowedValues.has(normalized)) {
+    return;
+  }
+  payload[key] = normalized;
+}
+
+function assignBooleanSetting(payload, key, value) {
+  if (typeof value === 'boolean') {
+    payload[key] = value;
+  }
+}
+
 export class BemSolver {
   constructor() {
     /** @type {string} */
@@ -197,11 +221,25 @@ export class BemSolver {
       num_frequencies: config.numFrequencies,
       sim_type: String(config.simulationType ?? '2'),
       options: options,
-      polar_config: config.polarConfig || null,
-      mesh_validation_mode: config.meshValidationMode || 'warn',
-      frequency_spacing: config.frequencySpacing || 'log',
-      device_mode: config.deviceMode || 'auto'
+      polar_config: config.polarConfig || null
     };
+
+    assignEnumSetting(
+      payload,
+      'mesh_validation_mode',
+      config.meshValidationMode,
+      VALID_MESH_VALIDATION_MODES
+    );
+    assignEnumSetting(
+      payload,
+      'frequency_spacing',
+      config.frequencySpacing,
+      VALID_FREQUENCY_SPACING
+    );
+    assignEnumSetting(payload, 'device_mode', config.deviceMode, VALID_DEVICE_MODES);
+    assignBooleanSetting(payload, 'use_optimized', config.useOptimized);
+    assignBooleanSetting(payload, 'enable_symmetry', config.enableSymmetry);
+    assignBooleanSetting(payload, 'verbose', config.verbose);
 
     const response = await fetchOrApiError(`${this.backendUrl}/api/solve`, {
       method: 'POST',

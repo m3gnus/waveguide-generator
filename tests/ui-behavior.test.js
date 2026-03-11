@@ -12,6 +12,7 @@ import {
 } from '../src/ui/fileOps.js';
 import {
   SETTINGS_CONTROL_IDS,
+  describeSimBasicDeviceAvailability,
   getLiveUpdateEnabled,
   getDisplayMode,
   getDownloadSimMeshEnabled,
@@ -76,6 +77,43 @@ test('formatJobSummary appends complete duration in h:mm:ss', () => {
     completedAt: '2026-02-24T13:04:32.000Z'
   });
   assert.equal(summary, 'Complete (1:04:32)');
+});
+
+test('describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes', () => {
+  const summary = describeSimBasicDeviceAvailability(
+    {
+      deviceInterface: {
+        selected_mode: 'opencl_gpu',
+        mode_availability: {
+          auto: { available: true },
+          opencl_gpu: { available: true },
+          opencl_cpu: { available: false }
+        }
+      }
+    },
+    'auto'
+  );
+
+  assert.deepEqual(summary.unavailableModes, ['opencl_cpu']);
+  assert.equal(summary.statusText, 'Auto resolves to: OpenCL GPU');
+});
+
+test('describeSimBasicDeviceAvailability reports requested unavailable mode explicitly', () => {
+  const summary = describeSimBasicDeviceAvailability(
+    {
+      deviceInterface: {
+        mode_availability: {
+          auto: { available: true },
+          opencl_gpu: { available: false },
+          opencl_cpu: { available: true }
+        }
+      }
+    },
+    'opencl_gpu'
+  );
+
+  assert.deepEqual(summary.unavailableModes, ['opencl_gpu']);
+  assert.equal(summary.statusText, 'OpenCL GPU unavailable on this machine.');
 });
 
 test('formatJobSummary falls back to Complete when duration is unavailable', () => {
