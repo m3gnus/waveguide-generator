@@ -13,6 +13,10 @@
 - In progress:
   - Phase 5 untangle UI state and circular workflow logic
 
+## Session Shortcut
+
+Use `$architecture-cleanup-next` in a fresh Codex window to continue the next unfinished slice. The skill reads this plan, checks recent commits, picks the smallest coherent remaining slice in the current phase, and is expected to finish with tests, doc updates, and a commit.
+
 ## Goal
 
 Refactor the repo into explicit modules with one-way dependencies, one source of truth per contract, and no downstream "repair" logic that silently fixes invalid upstream data.
