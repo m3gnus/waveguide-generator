@@ -2,12 +2,8 @@
 
 import { createSimulationClient } from '../../modules/simulation/useCases.js';
 import {
-  buildTaskIndexEntriesFromJobs,
-  loadTaskIndex,
-  rebuildIndexFromManifests,
-  writeTaskIndex
-} from '../workspace/taskIndex.js';
-import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
+  readSimulationWorkspaceJobs
+} from '../../modules/simulation/useCases.js';
 import {
   createJobTracker,
   loadLocalIndex,
@@ -118,22 +114,13 @@ export async function restoreSimulationControllerJobs(
 
   const local = loadLocalIndex();
   let seedItems = local;
-  const folderHandle = getSelectedFolderHandle();
+  const workspace = await readSimulationWorkspaceJobs();
 
-  if (folderHandle) {
-    const indexResult = await loadTaskIndex(folderHandle);
-    if (indexResult.items.length > 0) {
-      seedItems = mergeJobs(local, indexResult.items);
-    } else {
-      const rebuilt = await rebuildIndexFromManifests(folderHandle);
-      if (rebuilt.items.length > 0) {
-        seedItems = mergeJobs(local, rebuilt.items);
-        await writeTaskIndex(folderHandle, rebuilt.items);
-      }
-      if (indexResult.warning || rebuilt.warnings.length > 0) {
-        onRecoverFromManifests();
-      }
-    }
+  if (workspace.items.length > 0) {
+    seedItems = mergeJobs(local, workspace.items);
+  }
+  if (workspace.repaired || workspace.warnings.length > 0) {
+    onRecoverFromManifests();
   }
 
   setJobsFromEntries(controller, seedItems);
@@ -146,10 +133,6 @@ export async function restoreSimulationControllerJobs(
     setJobsFromEntries(controller, merged);
     syncCurrentJobId(controller);
     persistPanelJobs(controller);
-
-    if (folderHandle) {
-      await writeTaskIndex(folderHandle, buildTaskIndexEntriesFromJobs(merged));
-    }
 
     onJobsUpdated();
     if (controller.activeJobId || hasActiveJobs(controller)) {

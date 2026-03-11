@@ -1,8 +1,6 @@
 import { showError, showMessage } from '../feedback.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
-import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
-import { updateTaskManifestForJob } from '../workspace/taskManifest.js';
 import {
   allJobs,
   hasActiveJobs,
@@ -26,24 +24,11 @@ import {
   applySimulationJobScriptState,
   buildQueuedSimulationJob,
   buildCancelledSimulationJob,
-  resolveClearedFailedJobIds
+  resolveClearedFailedJobIds,
+  syncSimulationWorkspaceJobManifest
 } from '../../modules/simulation/useCases.js';
 
 export { validateSimulationConfig };
-
-async function syncTaskManifestForJob(job, updates = null) {
-  const workspaceHandle = getSelectedFolderHandle();
-  if (!workspaceHandle || !job?.id) {
-    return null;
-  }
-
-  const nextUpdates = updates && typeof updates === 'object' ? updates : {};
-  const result = await updateTaskManifestForJob(workspaceHandle, job, nextUpdates);
-  if (result.warning) {
-    console.warn(result.warning);
-  }
-  return result.manifest;
-}
 
 export function formatJobSummary(job) {
   const status = String(job.status || '').toLowerCase();
@@ -262,7 +247,7 @@ export async function exportJobResults(panel, jobId) {
       });
       persistPanelJobs(panel);
       if (next) {
-        await syncTaskManifestForJob(next, { exportedFiles: next.exportedFiles });
+        await syncSimulationWorkspaceJobManifest(next, { exportedFiles: next.exportedFiles });
       }
     }
   }
@@ -499,7 +484,7 @@ export async function runSimulation(panel) {
     persistPanelJobs(panel);
     renderJobList(panel);
     if (createdJob) {
-      await syncTaskManifestForJob(createdJob);
+      await syncSimulationWorkspaceJobManifest(createdJob);
     }
 
     updateStageUi(panel, {

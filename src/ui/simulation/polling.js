@@ -2,8 +2,6 @@
 
 import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
 import { showError } from '../feedback.js';
-import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
-import { updateTaskManifestForJob } from '../workspace/taskManifest.js';
 import {
   allJobs,
   hasActiveJobs,
@@ -13,6 +11,7 @@ import {
 } from './jobTracker.js';
 import { renderJobList } from './jobActions.js';
 import { setPollTimer, setActiveJob } from './jobOrchestration.js';
+import { syncSimulationWorkspaceJobManifest } from '../../modules/simulation/useCases.js';
 export { setPollTimer, clearPollTimer, setActiveJob } from './jobOrchestration.js';
 
 const ACTIVE_POLL_MS = 1000;
@@ -20,14 +19,7 @@ const IDLE_POLL_MS = 15000;
 const MAX_POLL_BACKOFF_MS = 30000;
 
 async function syncManifestForRemoteUpdate(item) {
-  const workspaceHandle = getSelectedFolderHandle();
-  if (!workspaceHandle || !item?.id) {
-    return;
-  }
-  const result = await updateTaskManifestForJob(workspaceHandle, item);
-  if (result.warning) {
-    console.warn(result.warning);
-  }
+  await syncSimulationWorkspaceJobManifest(item);
 }
 
 /**

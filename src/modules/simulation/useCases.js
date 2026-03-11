@@ -1,9 +1,27 @@
 import { DesignModule } from '../design/index.js';
 import { SimulationModule } from './index.js';
 import { GlobalState } from '../../state.js';
+import { getSelectedFolderHandle } from '../../ui/workspace/folderWorkspace.js';
+import {
+  buildTaskIndexEntriesFromJobs,
+  loadTaskIndex,
+  rebuildIndexFromManifests,
+  writeTaskIndex
+} from '../../ui/workspace/taskIndex.js';
+import { updateTaskManifestForJob } from '../../ui/workspace/taskManifest.js';
+
+let pendingSimulationWorkspaceIndexSync = Promise.resolve({
+  synced: false,
+  available: false,
+  items: []
+});
 
 function isObject(value) {
   return value !== null && typeof value === 'object';
+}
+
+function normalizeWarningList(...values) {
+  return values.flat().map((value) => String(value || '').trim()).filter(Boolean);
 }
 
 export function readSimulationState() {
@@ -107,6 +125,87 @@ export function prepareOccAdaptiveSolveRequest(options = {}) {
 
 export function createSimulationClient() {
   return SimulationModule.output.client();
+}
+
+export async function readSimulationWorkspaceJobs() {
+  const folderHandle = getSelectedFolderHandle();
+  if (!folderHandle) {
+    return {
+      items: [],
+      available: false,
+      repaired: false,
+      warnings: []
+    };
+  }
+
+  const indexResult = await loadTaskIndex(folderHandle);
+  if (indexResult.items.length > 0) {
+    return {
+      items: indexResult.items,
+      available: true,
+      repaired: false,
+      warnings: normalizeWarningList(indexResult.warning)
+    };
+  }
+
+  const rebuilt = await rebuildIndexFromManifests(folderHandle);
+  if (rebuilt.items.length > 0) {
+    await writeTaskIndex(folderHandle, rebuilt.items);
+  }
+
+  return {
+    items: rebuilt.items,
+    available: true,
+    repaired: rebuilt.items.length > 0,
+    warnings: normalizeWarningList(indexResult.warning, rebuilt.warnings)
+  };
+}
+
+export function syncSimulationWorkspaceIndex(jobEntries = []) {
+  const folderHandle = getSelectedFolderHandle();
+  if (!folderHandle) {
+    return Promise.resolve({
+      synced: false,
+      available: false,
+      items: []
+    });
+  }
+
+  const items = buildTaskIndexEntriesFromJobs(jobEntries);
+  pendingSimulationWorkspaceIndexSync = pendingSimulationWorkspaceIndexSync.then(async () => {
+    try {
+      await writeTaskIndex(folderHandle, items);
+      return {
+        synced: true,
+        available: true,
+        items
+      };
+    } catch (error) {
+      console.warn('Simulation workspace index sync failed:', error);
+      return {
+        synced: false,
+        available: true,
+        items,
+        error
+      };
+    }
+  });
+
+  return pendingSimulationWorkspaceIndexSync;
+}
+
+export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
+  const folderHandle = getSelectedFolderHandle();
+  if (!folderHandle || !job?.id) {
+    return null;
+  }
+
+  const nextUpdates = isObject(updates) ? updates : {};
+  const result = await updateTaskManifestForJob(folderHandle, job, nextUpdates);
+  if (result.warning) {
+    console.warn(result.warning);
+  }
+  return result.manifest;
 }
 
 export function validateSimulationConfig(config = {}) {
