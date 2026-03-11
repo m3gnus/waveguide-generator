@@ -64,12 +64,12 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: `src/ui/settings/simBasicSettings.js` already persists `deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, and `verbose`, and the modal already polls `/health` for device availability. The runtime submit path still only forwards hardcoded `frequencySpacing` / `deviceMode` from `src/ui/simulation/jobActions.js`, while `src/solver/index.js` only serializes `mesh_validation_mode`, `frequency_spacing`, and `device_mode`.
   Completed: March 11, 2026. `runSimulation()` now reads all persisted Simulation Basic settings, the `/api/solve` serializer forwards only valid runtime overrides while leaving backend defaults authoritative for invalid/unset values, the inline device-mode status derives its message from `/health` mode availability, and the request-contract/UI tests now cover `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose`.
 
-- [ ] Add an explicit no-Gmsh regression lane for `/api/solve`.
+- [x] Add an explicit no-Gmsh regression lane for `/api/solve`.
   Source: archived future additions doc.
   Relevant: Yes. Current tests cover runtime gating and tag contracts, but not a dedicated “Gmsh unavailable while canonical `/api/solve` remains valid” lane.
   Will it improve the program: Yes. It protects a useful runtime mode from future regressions and makes the solve contract less fragile while OCC-specific work continues.
   Research findings: `server/tests/test_dependency_runtime.py` and `server/tests/test_api_validation.py` already assert OCC runtime failure paths, and `server/tests/test_mesh_validation.py` covers `use_gmsh=True` behavior. There is still no test that forces `occBuilderReady=False` while keeping solver readiness intact and proves canonical payload solves are still accepted.
-  Best approach: Add a server test configuration that forces Gmsh-unavailable readiness and asserts the expected `/api/solve` behavior in canonical-payload mode.
+  Completed: March 11, 2026. `server/tests/test_dependency_runtime.py` now locks the `solverReady=true` / `occBuilderReady=false` configuration, proves canonical `/api/solve` submission still enqueues successfully, and asserts that the OCC/Gmsh dependency branch is not consulted for canonical payloads.
 
 - [ ] Add pre-submit canonical tag diagnostics to the simulation UI.
   Source: archived future additions doc.
