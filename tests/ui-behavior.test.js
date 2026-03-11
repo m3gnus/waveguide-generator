@@ -19,6 +19,10 @@ import {
   openSettingsModal,
 } from '../src/ui/settings/modal.js';
 import {
+  describeSelectedDevice,
+  summarizeRuntimeCapabilities,
+} from '../src/ui/runtimeCapabilities.js';
+import {
   RECOMMENDED_DEFAULTS,
   resetAllViewerSettings,
   saveViewerSettings,
@@ -127,6 +131,47 @@ test('describeSimBasicDeviceAvailability reports requested unavailable mode expl
 
   assert.deepEqual(summary.unavailableModes, ['opencl_gpu']);
   assert.equal(summary.statusText, 'OpenCL GPU unavailable on this machine.');
+});
+
+test('summarizeRuntimeCapabilities reports advanced controls unavailable until backend advertises support', () => {
+  const summary = summarizeRuntimeCapabilities({
+    solverReady: true,
+    occBuilderReady: true,
+    capabilities: {
+      simulationAdvanced: {
+        available: false,
+        reason: 'This backend does not expose advanced solve-option overrides yet.',
+        plannedControls: ['enable_warmup', 'method']
+      }
+    }
+  });
+
+  assert.equal(summary.fullyReady, true);
+  assert.equal(summary.simulationAdvanced.available, false);
+  assert.equal(summary.simulationAdvanced.reason, 'This backend does not expose advanced solve-option overrides yet.');
+  assert.deepEqual(summary.simulationAdvanced.plannedControls, ['enable_warmup', 'method']);
+});
+
+test('describeSelectedDevice includes device name only when it adds signal', () => {
+  assert.equal(
+    describeSelectedDevice({
+      deviceInterface: {
+        selected_mode: 'opencl_gpu',
+        device_name: 'Fake GPU'
+      }
+    }),
+    'Selected solver backend: OpenCL GPU (Fake GPU)'
+  );
+
+  assert.equal(
+    describeSelectedDevice({
+      deviceInterface: {
+        selected_mode: 'opencl_cpu',
+        device_name: 'CPU'
+      }
+    }),
+    'Selected solver backend: OpenCL CPU'
+  );
 });
 
 test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', () => {

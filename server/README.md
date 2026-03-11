@@ -97,6 +97,11 @@ Health check and solver status.
 
 Includes:
 - dependency matrix/runtime payload under `dependencies`
+- settings capability metadata under `capabilities`, including:
+  - `simulationBasic.controls`
+  - `simulationAdvanced.available`
+  - `simulationAdvanced.reason`
+  - `simulationAdvanced.plannedControls`
 - selected BEM device metadata under `deviceInterface`, including:
   - `requested_mode`
   - `selected_mode`
@@ -247,6 +252,7 @@ MWG_LOG_LEVEL=DEBUG ./.venv/bin/python server/app.py
   - `solverReady`: `true` when BEM runtime is available
   - `occBuilderReady`: `true` when OCC gmsh runtime is available
   - `dependencies`: supported matrix + runtime status payload
+  - `capabilities`: frontend settings capability payload for Simulation Basic / Advanced gating
 - For production-like runs where simulation and OCC meshing must work, both `solverReady` and `occBuilderReady` should be `true`.
 
 ### 7.3 Common failure classes

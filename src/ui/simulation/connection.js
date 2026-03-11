@@ -1,32 +1,8 @@
-function _modeLabel(mode) {
-  switch (String(mode || '').trim().toLowerCase()) {
-    case 'opencl_gpu':
-      return 'OpenCL GPU';
-    case 'opencl_cpu':
-      return 'OpenCL CPU';
-    case 'auto':
-      return 'Auto';
-    default:
-      return String(mode || 'Unknown').trim();
-  }
-}
-
-function _selectedDeviceText(health) {
-  const deviceInfo = health?.deviceInterface;
-  if (!deviceInfo || typeof deviceInfo !== 'object') {
-    return '';
-  }
-
-  const selectedMode = _modeLabel(deviceInfo.selected_mode || deviceInfo.requested_mode || 'auto');
-  const deviceName = String(deviceInfo.device_name || '').trim();
-  const hasDeviceName = deviceName && deviceName.toLowerCase() !== 'none';
-  const modeAlreadyMentionsCpu = selectedMode.toLowerCase().includes('cpu');
-  const deviceNameIsCpuLabel = /^cpu$/i.test(deviceName);
-  const shouldShowDeviceSuffix = hasDeviceName && !(modeAlreadyMentionsCpu && deviceNameIsCpuLabel);
-  return shouldShowDeviceSuffix
-    ? `Selected solver backend: ${selectedMode} (${deviceName})`
-    : `Selected solver backend: ${selectedMode}`;
-}
+import {
+  cacheRuntimeHealth,
+  describeSelectedDevice,
+  summarizeRuntimeCapabilities,
+} from '../runtimeCapabilities.js';
 
 export async function checkSolverConnection(panel) {
   const statusDot = document.getElementById('solver-status');
@@ -49,9 +25,9 @@ export async function checkSolverConnection(panel) {
 
   try {
     const health = await panel.solver.getHealthStatus();
-    const solverReady = Boolean(health?.solverReady);
-    const occReady = Boolean(health?.occBuilderReady);
-    const isConnected = solverReady && occReady;
+    cacheRuntimeHealth(health);
+    const runtime = summarizeRuntimeCapabilities(health);
+    const isConnected = runtime.fullyReady;
 
     statusDot.className = isConnected ? 'status-dot connected' : 'status-dot disconnected';
 
@@ -60,7 +36,7 @@ export async function checkSolverConnection(panel) {
       if (isConnected) {
         statusText.textContent = panel.completedStatusMessage || 'Connected to adaptive BEM solver';
         runButton.disabled = false;
-        const deviceText = _selectedDeviceText(health);
+        const deviceText = describeSelectedDevice(health);
         if (statusHelp) {
           if (deviceText) {
             statusHelp.textContent = deviceText;

@@ -15,6 +15,7 @@ from services.solver_runtime import (
     WAVEGUIDE_BUILDER_AVAILABLE,
     GMSH_OCC_RUNTIME_READY,
     get_dependency_status,
+    get_settings_capabilities,
     render_all_charts,
     render_directivity_plot,
     selected_device_metadata,
@@ -50,6 +51,7 @@ async def health_check() -> Dict[str, Any]:
         "solverReady": BEMPP_RUNTIME_READY,
         "occBuilderReady": WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY,
         "dependencies": dependency_status,
+        "capabilities": get_settings_capabilities(),
         "deviceInterface": device_info,
         "timestamp": datetime.now().isoformat(),
     }

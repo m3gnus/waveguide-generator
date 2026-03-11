@@ -108,12 +108,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Best approach: Treat `PARAM_SCHEMA` fields with `type: 'expression'` as the starting set, then narrow to geometry-defining fields first: OSSE/R-OSSE core profile fields, morphing/profile-transform fields, throat-extension/slot/rotation fields, and guiding-curve parameters. Keep mesh-density, source-path, and admin-style fields on an allowlist basis only if real formula use cases exist. Add a small per-row `ƒ` affordance that opens the existing formula reference panel in context.
   Completed: March 11, 2026. The schema now carries an explicit formula-field allowlist for the audited geometry-defining inputs, `src/ui/paramPanel.js` renders per-row `ƒ` buttons beside only those fields and opens the existing formula reference panel with field context, and non-audited inputs such as enclosure resolution lists, source contours, and mesh-density controls now render with normal text/number inputs instead of blanket formula UI treatment.
 
-- [ ] Gate Simulation Advanced / expert controls by backend capability and finish the remaining hardening/docs pass around them.
+- [x] Gate Simulation Advanced / expert controls by backend capability and finish the remaining hardening/docs pass around them.
   Source: earlier simulation-management planning notes; `src/ui/settings/modal.js`; runtime capability checks.
   Relevant: Yes, but lower priority than the bugs and Phase 3 work above.
   Will it improve the program: Yes. It prevents dead or misleading controls while keeping the settings layout future-proof.
   Research findings: `src/ui/settings/modal.js` already contains a placeholder Simulation Advanced section, and the app already has two separate `/health` consumers: Sim Basic device-mode polling and the connection banner. There is not yet one shared capability model or any advanced-control availability flow, so this work should follow the Simulation Basic wiring rather than race it.
   Best approach: Check capability at startup and when opening Settings, keep unavailable controls in normal flow but disabled/explained instead of hidden if possible, and pair rollout with regression/docs updates rather than adding placeholder controls alone.
+  Completed: March 11, 2026. `/health` now advertises a small `capabilities` payload for simulation settings, the frontend caches the latest runtime health snapshot from startup polling and reuses it when Settings opens, Sim Basic device availability and the connection banner now derive from the same capability helper, and the Simulation Advanced pane renders explicit read-only Phase 2 controls with backend-driven explanations instead of a dead placeholder. Regression coverage now locks both the backend health payload and the frontend capability-summary behavior.
 
 ### P2 Folder-Backed Completion And Export Flow
 

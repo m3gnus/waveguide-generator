@@ -24,6 +24,37 @@ except ImportError:
     build_waveguide_mesh = None  # type: ignore[assignment]
 
 
+def get_settings_capabilities() -> Dict[str, Any]:
+    return {
+        "simulationBasic": {
+            "available": True,
+            "controls": [
+                "device_mode",
+                "mesh_validation_mode",
+                "frequency_spacing",
+                "use_optimized",
+                "enable_symmetry",
+                "verbose",
+            ],
+            "notes": "Current backend support is limited to the existing /api/solve runtime overrides.",
+        },
+        "simulationAdvanced": {
+            "available": False,
+            "plannedControls": [
+                "enable_warmup",
+                "method",
+                "tol",
+                "restart",
+                "maxiter",
+                "strong_form",
+                "use_burton_miller",
+                "symmetry_tolerance",
+            ],
+            "reason": "This backend does not expose advanced solve-option overrides yet.",
+        },
+    }
+
+
 def selected_device_metadata(mode: str = "auto") -> Optional[Dict[str, Any]]:
     if not SOLVER_AVAILABLE:
         return None
