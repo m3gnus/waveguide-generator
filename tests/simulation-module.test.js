@@ -288,8 +288,12 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       frequencyStart: 100,
       frequencyEnd: 1000,
       numFrequencies: 5,
+      meshValidationMode: 'strict',
       frequencySpacing: 'log',
       deviceMode: 'auto',
+      useOptimized: false,
+      enableSymmetry: false,
+      verbose: true,
       polarConfig: {
         angle_range: [0, 90, 15],
         norm_angle: 0,
@@ -309,6 +313,12 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.configSummary.formula_type, 'OSSE');
   assert.deepEqual(job.configSummary.frequency_range, [100, 1000]);
   assert.deepEqual(job.script.params, { L: 120, a: 45 });
+  assert.equal(job.script.meshValidationMode, 'strict');
+  assert.equal(job.script.frequencySpacing, 'log');
+  assert.equal(job.script.deviceMode, 'auto');
+  assert.equal(job.script.useOptimized, false);
+  assert.equal(job.script.enableSymmetry, false);
+  assert.equal(job.script.verbose, true);
 });
 
 test('simulation workspace service rebuilds folder index from task manifests', async () => {

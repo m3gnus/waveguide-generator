@@ -110,7 +110,7 @@ flowchart LR
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
-   - `device_mode = auto` (UI always delegates selection to backend policy)
+   - Simulation Basic settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
    - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu -> numba`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
