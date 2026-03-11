@@ -1,0 +1,3 @@
+display_name: Architecture Cleanup Next
+short_description: Continue the next cleanup slice from the active architecture plan.
+default_prompt: $architecture-cleanup-next
