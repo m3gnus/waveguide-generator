@@ -28,7 +28,6 @@ Primary entry points:
 - `src/modules/`
   - Staged facades for design prep, geometry, export, simulation, and UI coordination
   - `DesignModule` is the app-facing boundary for state/type -> prepared parameter normalization
-  - `ParamModule` remains a compatibility shim for legacy staged consumers
 - `src/export/`
   - `.geo` builder, ABEC file generators, bundle validator, STL/CSV helpers
 - `src/solver/`
