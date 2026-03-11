@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from models import SimulationRequest, WaveguideParamsRequest
+from contracts import SimulationRequest, WaveguideParamsRequest
 from solver_bootstrap import (
     BEMSolver,
     WAVEGUIDE_BUILDER_AVAILABLE,

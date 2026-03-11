@@ -49,6 +49,8 @@ Primary entry points:
 
 - `server/app.py`
   - FastAPI app assembly, router registration, lifecycle wiring
+- `server/contracts/`
+  - Shared Pydantic request/response contracts consumed by routes, services, and backend tests
 - `server/api/routes_simulation.py`
   - Simulation/job routes (`/api/solve`, `/api/status/{job_id}`, `/api/results/{job_id}`, `/api/jobs*`)
 - `server/api/routes_mesh.py`

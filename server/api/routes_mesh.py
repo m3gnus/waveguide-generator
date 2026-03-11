@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from models import WaveguideParamsRequest
+from contracts import WaveguideParamsRequest
 from solver_bootstrap import (
     WAVEGUIDE_BUILDER_AVAILABLE,
     GMSH_OCC_RUNTIME_READY,

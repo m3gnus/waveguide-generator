@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from db import SimulationDB
-from models import SimulationRequest
+from contracts import SimulationRequest
 
 logger = logging.getLogger(__name__)
 

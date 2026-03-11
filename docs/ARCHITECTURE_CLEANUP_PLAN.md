@@ -558,6 +558,9 @@ Completed in this step:
 1. Removed the remaining compatibility re-exports from `server/app.py`; it now exposes only FastAPI assembly (`create_app()`, `app`, CORS/lifespan wiring, runtime banner output).
 2. Added an import-boundary test that blocks `server/app.py` from reintroducing model/service/route-handler shortcut imports.
 3. Updated backend architecture docs so route ownership points at `server/api/routes_*` modules instead of `server/app.py`.
+4. Moved the shared request/response models into `server/contracts/` and rewired backend routes, services, and tests to import that package directly.
+5. Reduced `server/models.py` to a compatibility alias so internal code no longer depends on it.
+6. Removed solver-aware device-mode fallback imports from the contract definitions; contract validation now normalizes aliases locally inside `server/contracts/`.
 
 ## Phase 7: Eliminate Downstream Repair Logic
 
