@@ -8,7 +8,7 @@ import {
   buildGeometryArtifacts,
   buildCanonicalMeshPayload
 } from '../src/geometry/index.js';
-import { exportMSH } from '../src/export/msh.js';
+import { exportLegacyMSH } from './helpers/legacyMsh.js';
 
 function makePreparedParams(overrides = {}) {
   return prepareGeometryParams(
@@ -97,7 +97,7 @@ test('buildGeometryArtifacts simulation payload matches buildCanonicalMeshPayloa
   );
 });
 
-test('exportMSH omits interface/secondary physical groups', () => {
+test('legacy test-only MSH helper omits interface/secondary physical groups', () => {
   const params = makePreparedParams({
     encDepth: 240,
     subdomainSlices: '2',
@@ -111,7 +111,7 @@ test('exportMSH omits interface/secondary physical groups', () => {
   assert.equal(payload.surfaceTags.includes(SURFACE_TAGS.SECONDARY), false);
   assert.equal(payload.surfaceTags.includes(SURFACE_TAGS.INTERFACE), false);
 
-  const msh = exportMSH(payload.vertices, payload.indices, payload.surfaceTags, {
+  const msh = exportLegacyMSH(payload.vertices, payload.indices, payload.surfaceTags, {
     verticalOffset: payload.metadata?.verticalOffset || 0
   });
 
