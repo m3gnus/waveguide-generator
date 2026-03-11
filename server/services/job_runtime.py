@@ -8,10 +8,11 @@ queue one job at a time (max_concurrent_jobs=1).
 import asyncio
 import logging
 import threading
+import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from db import SimulationDB
 from contracts import SimulationRequest
@@ -28,6 +29,18 @@ max_concurrent_jobs: int = 1
 
 db = SimulationDB(Path(__file__).resolve().parents[1] / "data" / "simulations.db")
 db_initialized: bool = False
+
+
+class JobRuntimeNotFoundError(LookupError):
+    """Requested job does not exist in runtime cache or persistence."""
+
+
+class JobRuntimeConflictError(RuntimeError):
+    """Requested job action is invalid for the current job state."""
+
+
+class JobRuntimeResourceUnavailableError(RuntimeError):
+    """Requested persisted job resource is not available."""
 
 
 # ── DB readiness ───────────────────────────────────────────────────────────────
@@ -64,6 +77,187 @@ def _build_config_summary(request: SimulationRequest) -> Dict[str, Any]:
         "num_frequencies": request.num_frequencies,
         "sim_type": str(request.sim_type),
     }
+
+
+def create_simulation_job(request: SimulationRequest) -> str:
+    ensure_db_ready()
+    job_id = str(uuid.uuid4())
+    now = _now_iso()
+    request_dump = request.model_dump()
+    config_summary = _build_config_summary(request)
+
+    job_record: Dict[str, Any] = {
+        "id": job_id,
+        "status": "queued",
+        "progress": 0.0,
+        "stage": "queued",
+        "stage_message": "Job queued",
+        "created_at": now,
+        "updated_at": now,
+        "queued_at": now,
+        "started_at": None,
+        "completed_at": None,
+        "error": None,
+        "error_message": None,
+        "request": request_dump,
+        "request_obj": request,
+        "results": None,
+        "mesh_artifact": None,
+        "cancellation_requested": False,
+        "config_summary": config_summary,
+        "has_results": False,
+        "has_mesh_artifact": False,
+        "label": None,
+    }
+
+    db.create_job(
+        {
+            "id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "progress": 0.0,
+            "stage": "queued",
+            "stage_message": "Job queued",
+            "error_message": None,
+            "cancellation_requested": False,
+            "config_json": request_dump,
+            "config_summary_json": config_summary,
+            "has_results": False,
+            "has_mesh_artifact": False,
+            "label": None,
+        }
+    )
+
+    with jobs_lock:
+        jobs[job_id] = job_record
+        job_queue.append(job_id)
+
+    asyncio.create_task(_drain_scheduler_queue())
+    return job_id
+
+
+def get_job(job_id: str) -> Dict[str, Any]:
+    job = _merge_job_cache_from_db(job_id)
+    if not job:
+        raise JobRuntimeNotFoundError(job_id)
+    return job
+
+
+def request_stop_job(job_id: str) -> Dict[str, str]:
+    from services.simulation_runner import (  # noqa: PLC0415
+        CANCELLATION_REQUESTED_MESSAGE,
+        SIMULATION_CANCELLED_MESSAGE,
+    )
+
+    job = get_job(job_id)
+
+    if job["status"] not in ["queued", "running"]:
+        raise JobRuntimeConflictError(f"Cannot stop job with status: {job['status']}")
+
+    if job["status"] == "queued":
+        _remove_from_queue(job_id)
+        _set_job_fields(
+            job_id,
+            status="cancelled",
+            progress=0.0,
+            stage="cancelled",
+            stage_message="Simulation cancelled",
+            error_message=SIMULATION_CANCELLED_MESSAGE,
+            completed_at=_now_iso(),
+            cancellation_requested=False,
+        )
+        response = {
+            "message": f"Job {job_id} has been cancelled",
+            "status": "cancelled",
+        }
+    else:
+        _set_job_fields(
+            job_id,
+            stage="cancelling",
+            stage_message=CANCELLATION_REQUESTED_MESSAGE,
+            cancellation_requested=True,
+        )
+        response = {
+            "message": f"Cancellation requested for job {job_id}",
+            "status": "cancelling",
+        }
+
+    asyncio.create_task(_drain_scheduler_queue())
+    return response
+
+
+def get_job_results(job_id: str) -> Dict[str, Any]:
+    job = get_job(job_id)
+    if job["status"] != "complete":
+        raise JobRuntimeConflictError(f"Job not complete. Current status: {job['status']}")
+
+    cached_results = job.get("results")
+    if isinstance(cached_results, dict):
+        return cached_results
+
+    stored = db.get_results(job_id)
+    if stored is None:
+        raise JobRuntimeResourceUnavailableError("Results not available")
+    _set_job_fields(job_id, results=stored)
+    return stored
+
+
+def get_job_mesh_artifact(job_id: str) -> str:
+    job = get_job(job_id)
+    msh_text = job.get("mesh_artifact")
+    if not msh_text:
+        msh_text = db.get_mesh_artifact(job_id)
+        if msh_text:
+            _set_job_fields(job_id, mesh_artifact=msh_text, has_mesh_artifact=True)
+    if not msh_text:
+        raise JobRuntimeResourceUnavailableError("No mesh artifact available for this job")
+    return msh_text
+
+
+def list_job_items(
+    *,
+    status: Optional[str],
+    limit: int,
+    offset: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    ensure_db_ready()
+    statuses = _parse_status_filters(status)
+    rows, total = db.list_jobs(statuses=statuses, limit=limit, offset=offset)
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        merged = _merge_job_cache_from_db(row["id"]) or row
+        items.append(_serialize_job_item(merged))
+    return items, total
+
+
+def clear_failed_job_records() -> List[str]:
+    ensure_db_ready()
+    deleted_ids = db.delete_jobs_by_status(["error"])
+    with jobs_lock:
+        for job_id in deleted_ids:
+            jobs.pop(job_id, None)
+            running_jobs.discard(job_id)
+    for job_id in deleted_ids:
+        _remove_from_queue(job_id)
+    return deleted_ids
+
+
+def delete_job_record(job_id: str) -> None:
+    ensure_db_ready()
+    job = get_job(job_id)
+    if job.get("status") in {"queued", "running"}:
+        raise JobRuntimeConflictError("Cannot delete active job")
+
+    deleted = db.delete_job(job_id)
+    if not deleted:
+        raise JobRuntimeNotFoundError(job_id)
+
+    with jobs_lock:
+        jobs.pop(job_id, None)
+        running_jobs.discard(job_id)
+    _remove_from_queue(job_id)
 
 
 # ── Job cache + DB merge ───────────────────────────────────────────────────────
