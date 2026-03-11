@@ -12,6 +12,7 @@ import {
   queueSimulationControllerJob,
   reconcileSimulationControllerRemoteJobs,
   recordSimulationControllerExport,
+  recordSimulationControllerRating,
   removeSimulationControllerJob,
   restoreSimulationControllerJobs,
   restoreSimulationPanelRuntime,
@@ -393,6 +394,19 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
   assert.deepEqual(updated.exportedFiles, ['csv:simulation_results.csv', 'json:simulation_results.json']);
   assert.equal(updated.autoExportCompletedAt, '2026-03-11T10:01:00.000Z');
   assert.equal(updated.justCompleted, false);
+});
+
+test('recordSimulationControllerRating persists bounded rating values', async () => {
+  const controller = createSimulationControllerStore({ solver: {} });
+  controller.jobs.set('job-rate-1', {
+    id: 'job-rate-1',
+    status: 'complete',
+    rating: null,
+    exportedFiles: []
+  });
+
+  const updated = await recordSimulationControllerRating(controller, 'job-rate-1', 7);
+  assert.equal(updated.rating, 5);
 });
 
 test('submitSimulationControllerJob checks solver health and queues the submitted job through the controller boundary', async () => {

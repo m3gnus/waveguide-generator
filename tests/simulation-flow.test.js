@@ -9,6 +9,10 @@ import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { AppEvents } from '../src/events.js';
 import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
+import {
+  RECOMMENDED_DEFAULTS as SIM_MANAGEMENT_DEFAULTS,
+  saveSimulationManagementSettings
+} from '../src/ui/settings/simulationManagementSettings.js';
 
 const { BemSolver, validateCanonicalMeshPayload } = solverApi;
 
@@ -516,6 +520,76 @@ test('renderJobList exposes folder source mode in the header and rows', () => {
     assert.match(list.innerHTML, />Folder</);
   } finally {
     global.document = originalDocument;
+  }
+});
+
+test('renderJobList applies rating filter and renders rating controls', () => {
+  const originalDocument = global.document;
+  const originalLocalStorage = global.localStorage;
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+  const sortSelect = { value: 'completed_desc' };
+  const minRatingSelect = { value: '0' };
+
+  global.localStorage = {
+    values: new Map(),
+    getItem(key) {
+      return this.values.has(key) ? this.values.get(key) : null;
+    },
+    setItem(key, value) {
+      this.values.set(key, String(value));
+    }
+  };
+
+  saveSimulationManagementSettings({
+    autoExportOnComplete: true,
+    selectedFormats: ['csv'],
+    defaultSort: 'rating_desc',
+    minRatingFilter: 4
+  });
+
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      if (id === 'simulation-jobs-sort') return sortSelect;
+      if (id === 'simulation-jobs-min-rating') return minRatingSelect;
+      return null;
+    }
+  };
+
+  try {
+    renderJobList({
+      jobSourceMode: 'backend',
+      activeJobId: null,
+      jobs: new Map([
+        ['job-high', {
+          id: 'job-high',
+          label: 'rated-high',
+          status: 'complete',
+          rating: 5,
+          createdAt: '2026-03-11T09:00:00.000Z',
+          completedAt: '2026-03-11T09:10:00.000Z'
+        }],
+        ['job-low', {
+          id: 'job-low',
+          label: 'rated-low',
+          status: 'complete',
+          rating: 2,
+          createdAt: '2026-03-11T08:00:00.000Z',
+          completedAt: '2026-03-11T08:10:00.000Z'
+        }]
+      ])
+    });
+
+    assert.match(list.innerHTML, /rated-high/);
+    assert.doesNotMatch(list.innerHTML, /rated-low/);
+    assert.match(list.innerHTML, /simulation-job-rating-star/);
+    assert.match(list.innerHTML, /data-job-rating="5"/);
+  } finally {
+    saveSimulationManagementSettings(SIM_MANAGEMENT_DEFAULTS);
+    global.document = originalDocument;
+    global.localStorage = originalLocalStorage;
   }
 });
 

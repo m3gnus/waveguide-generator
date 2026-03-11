@@ -402,6 +402,24 @@ h1 {
     gap: 6px;
 }
 
+.simulation-jobs-toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.simulation-jobs-toolbar-field {
+    display: grid;
+    gap: 4px;
+    font-size: 0.72rem;
+    opacity: 0.82;
+}
+
+.simulation-jobs-toolbar-field select {
+    min-width: 120px;
+}
+
 .simulation-job-item {
     padding: 6px 8px;
     border: 1px solid var(--border-color);
@@ -427,6 +445,41 @@ h1 {
 .simulation-job-meta {
     font-size: 0.72rem;
     opacity: 0.75;
+}
+
+.simulation-job-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.simulation-job-footer-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    opacity: 0.65;
+}
+
+.simulation-job-rating {
+    display: inline-flex;
+    gap: 2px;
+}
+
+.simulation-job-rating-star {
+    border: none;
+    background: transparent;
+    color: var(--text-color);
+    opacity: 0.35;
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.simulation-job-rating-star.is-active,
+.simulation-job-rating-star:hover {
+    opacity: 1;
 }
 
 .simulation-job-header {

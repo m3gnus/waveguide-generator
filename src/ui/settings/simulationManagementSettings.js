@@ -134,6 +134,34 @@ export function getSelectedExportFormats() {
   return [...getCurrentSimulationManagementSettings().selectedFormats];
 }
 
+export function getTaskListSortPreference() {
+  const el = typeof document !== 'undefined' ? document.getElementById('simulation-jobs-sort') : null;
+  if (el && typeof el.value === 'string' && el.value.trim()) {
+    return el.value;
+  }
+  return getCurrentSimulationManagementSettings().defaultSort;
+}
+
+export function getTaskListMinRatingFilter() {
+  const el = typeof document !== 'undefined' ? document.getElementById('simulation-jobs-min-rating') : null;
+  if (el) {
+    const value = Number(el.value);
+    if (Number.isFinite(value)) {
+      return Math.max(0, Math.min(5, value));
+    }
+  }
+  return getCurrentSimulationManagementSettings().minRatingFilter;
+}
+
+export function updateTaskListPreferences(updates = {}) {
+  const current = getCurrentSimulationManagementSettings();
+  return saveSimulationManagementSettings({
+    ...current,
+    defaultSort: updates.defaultSort ?? current.defaultSort,
+    minRatingFilter: updates.minRatingFilter ?? current.minRatingFilter
+  });
+}
+
 export function resetSimulationManagementSettings() {
   return saveSimulationManagementSettings(RECOMMENDED_DEFAULTS);
 }
