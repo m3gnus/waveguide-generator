@@ -112,6 +112,7 @@ test('buildTaskIndexEntriesFromJobs preserves manifest metadata fields', () => {
       id: 'job-2',
       status: 'running',
       rating: 5,
+      autoExportCompletedAt: '2026-03-11T10:10:00.000Z',
       exportedFiles: ['export.csv'],
       scriptSchemaVersion: 2,
       scriptSnapshot: { outputName: 'horn' }
@@ -121,5 +122,6 @@ test('buildTaskIndexEntriesFromJobs preserves manifest metadata fields', () => {
   assert.equal(entries.length, 1);
   assert.equal(entries[0].id, 'job-2');
   assert.equal(entries[0].rating, 5);
+  assert.equal(entries[0].autoExportCompletedAt, '2026-03-11T10:10:00.000Z');
   assert.deepEqual(entries[0].exportedFiles, ['export.csv']);
 });

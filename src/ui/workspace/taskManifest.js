@@ -29,6 +29,10 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
   const queuedAt = raw.queuedAt ?? raw.queued_at ?? fallback.queuedAt ?? null;
   const startedAt = raw.startedAt ?? raw.started_at ?? fallback.startedAt ?? null;
   const completedAt = raw.completedAt ?? raw.completed_at ?? fallback.completedAt ?? null;
+  const autoExportCompletedAt = raw.autoExportCompletedAt
+    ?? raw.auto_export_completed_at
+    ?? fallback.autoExportCompletedAt
+    ?? null;
   const status = String(raw.status || fallback.status || 'queued');
 
   const scriptSnapshot = raw.scriptSnapshot
@@ -50,6 +54,7 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
     queuedAt,
     startedAt,
     completedAt,
+    autoExportCompletedAt,
     rating: raw.rating ?? fallback.rating ?? null,
     exportedFiles: normalizeExportedFiles(raw.exportedFiles ?? raw.exported_files ?? fallback.exportedFiles),
     scriptSchemaVersion: Number.isFinite(Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion))
@@ -70,6 +75,7 @@ export function createTaskManifestFromJob(job = {}) {
     queuedAt: job.queuedAt,
     startedAt: job.startedAt,
     completedAt: job.completedAt,
+    autoExportCompletedAt: job.autoExportCompletedAt,
     rating: job.rating,
     exportedFiles: job.exportedFiles,
     scriptSchemaVersion: job.scriptSchemaVersion,
@@ -126,6 +132,9 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
       ...(existing.manifest || {}),
       ...base,
       ...updates,
+      autoExportCompletedAt: updates.autoExportCompletedAt
+        ?? base.autoExportCompletedAt
+        ?? existing.manifest?.autoExportCompletedAt,
       exportedFiles: updates.exportedFiles ?? base.exportedFiles ?? existing.manifest?.exportedFiles,
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });
