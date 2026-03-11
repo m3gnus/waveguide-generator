@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createSimulationClient } from '../../modules/simulation/useCases.js';
+import { UiModule } from '../../modules/ui/index.js';
 import {
   readSimulationWorkspaceJobs
 } from '../../modules/simulation/useCases.js';
@@ -54,6 +55,12 @@ function cloneSimulationParamBindings() {
   return DEFAULT_SIMULATION_PARAM_BINDINGS.map((entry) => ({ ...entry }));
 }
 
+function createSimulationPanelUiCoordinator(panelAdapter) {
+  return UiModule.output.simulationPanel(
+    UiModule.task(UiModule.importSimulationPanel(panelAdapter))
+  );
+}
+
 export function createSimulationControllerStore({ solver = createSimulationClient() } = {}) {
   return {
     solver,
@@ -78,6 +85,24 @@ export function createSimulationControllerStore({ solver = createSimulationClien
   };
 }
 
+export function createSimulationPanelRuntime(
+  panelAdapter,
+  {
+    solver = createSimulationClient(),
+    createUiCoordinator = createSimulationPanelUiCoordinator
+  } = {}
+) {
+  const controller = createSimulationControllerStore({ solver });
+  bindSimulationControllerState(panelAdapter, controller);
+
+  return {
+    controller,
+    uiCoordinator: typeof createUiCoordinator === 'function'
+      ? createUiCoordinator(panelAdapter)
+      : null
+  };
+}
+
 export function bindSimulationControllerState(panelAdapter, controller) {
   for (const key of SIMULATION_CONTROLLER_FIELDS) {
     Object.defineProperty(panelAdapter, key, {
@@ -90,6 +115,32 @@ export function bindSimulationControllerState(panelAdapter, controller) {
         controller[key] = nextValue;
       }
     });
+  }
+}
+
+export async function restoreSimulationPanelRuntime(
+  runtime,
+  callbacks = {}
+) {
+  return restoreSimulationControllerJobs(runtime?.controller, callbacks);
+}
+
+export function disposeSimulationPanelRuntime(runtime) {
+  const controller = runtime?.controller;
+  if (controller?.pollTimer) {
+    clearTimeout(controller.pollTimer);
+    controller.pollTimer = null;
+    controller.pollInterval = null;
+    controller.isPolling = false;
+  }
+
+  if (controller?.connectionPollTimer) {
+    clearTimeout(controller.connectionPollTimer);
+    controller.connectionPollTimer = null;
+  }
+
+  if (runtime?.uiCoordinator) {
+    runtime.uiCoordinator.dispose();
   }
 }
 

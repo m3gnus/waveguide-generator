@@ -9,8 +9,6 @@
  * - Progress tracking
  * - Results display coordination
  */
-
-import { UiModule } from '../../modules/ui/index.js';
 import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
@@ -19,9 +17,9 @@ import { setupSimulationParamBindings, syncSimulationSettings } from './settings
 import { checkSolverConnection } from './connection.js';
 import { runSimulation, pollSimulationStatus, runMockSimulation, renderJobList } from './actions.js';
 import {
-  createSimulationControllerStore,
-  bindSimulationControllerState,
-  restoreSimulationControllerJobs
+  createSimulationPanelRuntime,
+  restoreSimulationPanelRuntime,
+  disposeSimulationPanelRuntime
 } from './controller.js';
 import { displayResults } from './results.js';
 import {
@@ -42,13 +40,9 @@ import { openViewResultsModal } from './viewResults.js';
 
 export class SimulationPanel {
   constructor() {
-    this.controller = createSimulationControllerStore();
-    // Keep existing panel field access for UI modules while moving state ownership
-    // into a dedicated simulation controller/store.
-    bindSimulationControllerState(this, this.controller);
-    this.uiCoordinator = UiModule.output.simulationPanel(
-      UiModule.task(UiModule.importSimulationPanel(this))
-    );
+    this.runtime = createSimulationPanelRuntime(this);
+    this.controller = this.runtime.controller;
+    this.uiCoordinator = this.runtime.uiCoordinator;
 
     this.setupEventListeners();
     this.setupMeshListener();
@@ -60,7 +54,7 @@ export class SimulationPanel {
   }
 
   async restoreJobs() {
-    return restoreSimulationControllerJobs(this.controller, {
+    return restoreSimulationPanelRuntime(this.runtime, {
       onJobsUpdated: () => {
         renderJobList(this);
       },
@@ -154,22 +148,6 @@ export class SimulationPanel {
    * Call when the panel is being unmounted or replaced.
    */
   dispose() {
-    // Stop simulation status polling.
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-      this.pollInterval = null;
-      this.isPolling = false;
-    }
-
-    // Stop connection-check polling.
-    if (this.connectionPollTimer) {
-      clearTimeout(this.connectionPollTimer);
-      this.connectionPollTimer = null;
-    }
-
-    if (this.uiCoordinator) {
-      this.uiCoordinator.dispose();
-    }
+    disposeSimulationPanelRuntime(this.runtime);
   }
 }
