@@ -10,6 +10,8 @@ import { assertBemMeshIntegrity } from './meshIntegrity.js';
 import { mapVertexToAth, transformVerticesToAth } from './transforms.js';
 import { prepareGeometryParams } from './params.js';
 
+const GEOMETRY_SHAPE_KIND = 'waveguide-shape';
+
 function resolveBuildOptions(buildParams, options = {}) {
   return {
     includeEnclosure: options.includeEnclosure ?? Number(buildParams.encDepth || 0) > 0,
@@ -18,11 +20,49 @@ function resolveBuildOptions(buildParams, options = {}) {
   };
 }
 
-function buildMeshData(params, options = {}) {
+function assertGeometryShape(shape) {
+  if (
+    !shape
+    || typeof shape !== 'object'
+    || shape.kind !== GEOMETRY_SHAPE_KIND
+    || !shape.buildParams
+    || typeof shape.buildParams !== 'object'
+  ) {
+    throw new Error('Invalid geometry shape: expected a value produced by buildGeometryShape().');
+  }
+}
+
+export function buildGeometryShape(params, options = {}) {
   const preparedParams = prepareGeometryParams(params, { type: params?.type });
   const buildParams = normalizeBuildParams(preparedParams, options);
-  const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
-  return { buildParams, meshData };
+  const buildOptions = resolveBuildOptions(buildParams, options);
+
+  return {
+    kind: GEOMETRY_SHAPE_KIND,
+    buildParams,
+    tessellation: {
+      includeEnclosure: Boolean(buildOptions.includeEnclosure),
+      adaptivePhi: Boolean(buildOptions.adaptivePhi)
+    }
+  };
+}
+
+function buildMeshDataFromShape(shape, options = {}) {
+  assertGeometryShape(shape);
+  const buildParams = shape.buildParams;
+  const shapeOptions = shape.tessellation || {};
+  const buildOptions = resolveBuildOptions(buildParams, {
+    includeEnclosure: options.includeEnclosure ?? shapeOptions.includeEnclosure,
+    adaptivePhi: options.adaptivePhi ?? shapeOptions.adaptivePhi
+  });
+
+  return buildWaveguideMesh(buildParams, buildOptions);
+}
+
+function buildMeshData(params, options = {}) {
+  const geometryShape = buildGeometryShape(params, options);
+  const meshData = buildMeshDataFromShape(geometryShape, options);
+  return { geometryShape, buildParams: geometryShape.buildParams, meshData };
 }
 
 function buildGeometryMeshOutput(meshData) {
@@ -33,6 +73,11 @@ function buildGeometryMeshOutput(meshData) {
     fullCircle: Boolean(meshData.fullCircle),
     groups: meshData.groups || {}
   };
+}
+
+export function buildGeometryMeshFromShape(shape, options = {}) {
+  const meshData = buildMeshDataFromShape(shape, options);
+  return buildGeometryMeshOutput(meshData);
 }
 
 function buildSimulationPayloadFromMesh(
@@ -82,6 +127,14 @@ function buildSimulationPayloadFromMesh(
   };
 }
 
+export function buildCanonicalMeshPayloadFromShape(shape, options = {}) {
+  assertGeometryShape(shape);
+  const meshData = buildMeshDataFromShape(shape, options);
+  return buildSimulationPayloadFromMesh(meshData, shape.buildParams, {
+    validateIntegrity: options.validateIntegrity ?? true
+  });
+}
+
 export function buildCanonicalMeshPayload(params, options = {}) {
   const { buildParams, meshData } = buildMeshData(params, options);
   return buildSimulationPayloadFromMesh(meshData, buildParams, {
@@ -95,12 +148,13 @@ export function buildGeometryMesh(params, options = {}) {
 }
 
 export function buildGeometryArtifacts(params, options = {}) {
-  const { buildParams, meshData } = buildMeshData(params, options);
+  const { geometryShape, buildParams, meshData } = buildMeshData(params, options);
   const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, {
     validateIntegrity: options.validateIntegrity === true
   });
 
   return {
+    geometry: geometryShape,
     mesh: buildGeometryMeshOutput(meshData),
     simulation,
     export: {

@@ -10,7 +10,14 @@ export {
 } from './params.js';
 export { SURFACE_TAGS } from './tags.js';
 export { mapVertexToAth, transformVerticesToAth } from './transforms.js';
-export { buildCanonicalMeshPayload, buildGeometryArtifacts, buildGeometryMesh } from './pipeline.js';
+export {
+  buildGeometryShape,
+  buildGeometryMeshFromShape,
+  buildCanonicalMeshPayloadFromShape,
+  buildCanonicalMeshPayload,
+  buildGeometryArtifacts,
+  buildGeometryMesh
+} from './pipeline.js';
 export {
   GeometryModule,
   importGeometryInput,
@@ -18,5 +25,5 @@ export {
   importPreparedGeometryInput,
   runGeometryTask,
   getGeometryOutput,
-  getGeometryMeshOutput,
+  getGeometryShapeOutput,
 } from '../modules/geometry/index.js';
