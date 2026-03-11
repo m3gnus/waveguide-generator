@@ -3,7 +3,7 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 2 (ready to start)
+- Current phase: Phase 2 (execution blueprint locked, implementation pending)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
@@ -250,6 +250,59 @@ Create one place where raw state becomes prepared domain input.
 - `node --test tests/waveguide-payload.test.js`
 - `node --test tests/export-module.test.js`
 - `node --test tests/app-mesh-integration.test.js`
+
+### Implementation Notes (Planned March 11, 2026)
+
+#### Scope lock for this phase
+
+In scope:
+
+1. Make `DesignModule` the only raw-input normalization boundary for frontend runtime flows.
+2. Ensure export and simulation use cases consume prepared input from `DesignModule` instead of re-normalizing values independently.
+3. Keep compatibility behavior only as thin adapters during transition and schedule deletion in the same phase.
+
+Out of scope (handled in later phases):
+
+1. App/UI orchestration movement (`src/app` and `src/ui` structural refactor) - Phase 4 and Phase 5.
+2. Geometry face identity expansion and classification mapping - Phase 3.
+3. Backend contract/package re-layout - Phase 6+.
+
+#### Prepared input contract decision for Phase 2
+
+The prepared frontend input object remains the shared handoff type, but normalization ownership changes:
+
+1. Raw app/state input -> normalized prepared input happens once in `DesignModule.task(...)`.
+2. `SimulationModule.import(...)` and export entrypoints should accept raw input only via `DesignModule`, or explicitly require already-prepared params (`importPrepared`-style APIs).
+3. `buildWaveguidePayload(...)` should map prepared values to request schema and enforce payload shape only; it should not be the source of independent defaulting rules that diverge from `DesignModule`.
+
+#### File-level execution sequence
+
+1. Normalize at one boundary:
+   - Consolidate normalization rules used by geometry/export/solver payload preparation under `src/modules/design/index.js` and `src/geometry/params.js` (single owner path).
+2. Remove export-side duplicate normalization:
+   - Refactor `src/modules/export/index.js` helpers (`normalizeAngularSegments`, resolution scaling/default fallbacks, segment coercion) so they consume prepared values rather than re-deriving defaults.
+3. Remove simulation-side duplicate normalization:
+   - Refactor `src/modules/simulation/index.js` + `src/solver/waveguidePayload.js` interface so OCC request building uses prepared values without a second normalization policy.
+4. Keep `src/app/*` behavior stable:
+   - Wire callers through `DesignModule.importState(...)` / `DesignModule.task(...)` where not already done, without broader app-layer movement (reserved for Phase 4).
+
+#### Test gates for this phase
+
+Run in this order while implementing:
+
+1. `node --test tests/design-module.test.js`
+2. `node --test tests/geometry-params.test.js`
+3. `node --test tests/waveguide-payload.test.js`
+4. `node --test tests/simulation-module.test.js`
+5. `node --test tests/export-module.test.js`
+6. `node --test tests/app-mesh-integration.test.js`
+7. `npm test`
+
+Definition for "Phase 2 complete":
+
+1. No normalization helpers remain duplicated across design/export/simulation paths.
+2. Existing behavior covered by `tests/waveguide-payload.test.js`, `tests/export-module.test.js`, and `tests/app-mesh-integration.test.js` is preserved or intentionally updated with matching doc changes.
+3. `docs/PROJECT_DOCUMENTATION.md` and `docs/CANONICAL_CONTRACT.md` are updated in the same change set if normalization behavior shifts.
 
 ## Phase 3: Make Geometry The Source Of Truth
 
