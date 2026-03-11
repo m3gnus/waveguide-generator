@@ -67,11 +67,16 @@ export function exportProfileCSV(app) {
   const vertices = app.hornMesh.geometry.attributes.position.array;
   const state = GlobalState.get();
   const baseName = getExportBaseName();
+  const designTask = DesignModule.task(
+    DesignModule.importState(state, {
+      applyVerticalOffset: false
+    })
+  );
+  const preparedParams = DesignModule.output.preparedParams(designTask);
+
   const exportTask = ExportModule.task(
-    ExportModule.importProfileCsv({
+    ExportModule.importProfileCsv(preparedParams, {
       vertices,
-      angularSegments: state.params.angularSegments,
-      lengthSegments: state.params.lengthSegments,
       baseName
     })
   );
