@@ -41,7 +41,7 @@ Primary entry points:
 - `src/solver/`
   - Backend client and payload validation
 - `src/ui/`
-  - Parameter and simulation UI behavior
+  - Parameter and simulation UI behavior, including schema-driven formula affordances in the parameter panel
 - `src/state.js`
   - Global app state, undo/redo, persistence
 
