@@ -74,7 +74,8 @@ Phase 0 runtime behavior by pipeline:
   - Emits tags `1`, `2`, and optional `3` when exterior surfaces exist.
   - Does not emit tag `4`.
 - OCC-adaptive `/api/solve` path (`server/services/simulation_runner.py`):
-  - Re-maps all non-source tags to `1` before solver mesh preparation.
+  - Requires full-domain queued OCC requests (`quadrants=1234`).
+  - Passes canonical OCC `surfaceTags` through to solver mesh preparation unchanged.
 
 Required invariants:
 - `surfaceTags.length === indices.length / 3`
@@ -119,7 +120,7 @@ Decision:
 - Frontend OCC request normalization (`src/modules/design/index.js`) accepts canonical values `1`, `12`, `14`, `1234`; otherwise attempts numeric coercion; fallback `1234`.
 - Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`) expects normalized integer `quadrants` and maps it directly.
 - `/api/solve` validates the OCC-adaptive request and builds the queued solve request with full-domain `quadrants=1234` at the submission boundary.
-- Simulation runner enforces full-domain `1234` again before OCC build.
+- Simulation runner rejects queued OCC requests that arrive with any non-`1234` quadrant value.
 
 ### 4.4 Enclosure resolution fields
 

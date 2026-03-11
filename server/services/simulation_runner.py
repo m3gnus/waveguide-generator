@@ -26,6 +26,47 @@ from services.job_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+CANONICAL_SURFACE_TAGS = {1, 2, 3, 4}
+
+
+def _require_occ_adaptive_full_domain_quadrants(validated_payload: dict[str, Any]) -> int:
+    quadrants = int(validated_payload.get("quadrants", 1234))
+    if quadrants != 1234:
+        raise ValueError(
+            "Queued occ_adaptive solve request must already use full-domain quadrants=1234."
+        )
+    return quadrants
+
+
+def _extract_occ_adaptive_canonical_mesh(
+    occ_result: dict[str, Any],
+) -> tuple[list[Any], list[Any], list[int]]:
+    canonical = occ_result.get("canonical_mesh") or {}
+    vertices = canonical.get("vertices")
+    indices = canonical.get("indices")
+    surface_tags = canonical.get("surfaceTags")
+    if (
+        not isinstance(vertices, list)
+        or not isinstance(indices, list)
+        or not isinstance(surface_tags, list)
+    ):
+        raise RuntimeError(
+            "Adaptive OCC mesh generation did not return canonical mesh arrays."
+        )
+    if len(indices) % 3 != 0:
+        raise RuntimeError("Adaptive OCC mesh returned invalid triangle index data.")
+    if len(surface_tags) != len(indices) // 3:
+        raise RuntimeError("Adaptive OCC mesh returned mismatched surface tag count.")
+
+    normalized_surface_tags = [int(tag) for tag in surface_tags]
+    invalid_tags = sorted({tag for tag in normalized_surface_tags if tag not in CANONICAL_SURFACE_TAGS})
+    if invalid_tags:
+        raise RuntimeError(
+            f"Adaptive OCC mesh returned unsupported surface tags: {invalid_tags}."
+        )
+    if 2 not in normalized_surface_tags:
+        raise RuntimeError("Adaptive OCC mesh returned no source-tagged elements (tag 2).")
+    return vertices, indices, normalized_surface_tags
 
 
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
@@ -87,29 +128,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             validated = WaveguideParamsRequest(**waveguide_params)
             validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
-            requested_quadrants = int(validated_payload.get("quadrants", 1234))
-            # Ensure OCC adaptive simulation mesh is always full domain.
-            validated_payload["quadrants"] = 1234
+            queued_quadrants = _require_occ_adaptive_full_domain_quadrants(validated_payload)
             occ_result = build_waveguide_mesh(validated_payload, include_canonical=True)
-            canonical = occ_result.get("canonical_mesh") or {}
-
-            vertices = canonical.get("vertices")
-            indices = canonical.get("indices")
-            surface_tags = canonical.get("surfaceTags")
-            if (
-                not isinstance(vertices, list)
-                or not isinstance(indices, list)
-                or not isinstance(surface_tags, list)
-            ):
-                raise RuntimeError(
-                    "Adaptive OCC mesh generation did not return canonical mesh arrays."
-                )
-            if len(indices) % 3 != 0:
-                raise RuntimeError("Adaptive OCC mesh returned invalid triangle index data.")
-            if len(surface_tags) != len(indices) // 3:
-                raise RuntimeError("Adaptive OCC mesh returned mismatched surface tag count.")
-            # BEM semantics: every non-source surface is rigid wall.
-            surface_tags = [2 if int(tag) == 2 else 1 for tag in surface_tags]
+            vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
 
             # Store mesh artifact for optional download.
             msh_artifact = occ_result.get("msh_text")
@@ -135,8 +156,8 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                     "unitScaleToMeter": 0.001,
                     "meshStrategy": "occ_adaptive",
                     "generatedBy": "gmsh-occ",
-                    "requestedQuadrants": requested_quadrants,
-                    "effectiveQuadrants": 1234,
+                    "requestedQuadrants": queued_quadrants,
+                    "effectiveQuadrants": queued_quadrants,
                     "occStats": occ_result.get("stats") or {},
                 }
             )
