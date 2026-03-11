@@ -144,3 +144,26 @@ test('frontend import boundaries only allow approved cross-layer dependencies', 
       .join('\n')
   );
 });
+
+test('ui simulation workflow files must not import GlobalState directly', () => {
+  const simulationUiRoot = path.join(SRC_ROOT, 'ui', 'simulation');
+  const files = listJsFiles(simulationUiRoot);
+  const violations = [];
+
+  for (const file of files) {
+    const content = fs.readFileSync(file, 'utf8');
+    const specs = extractImportSpecs(content);
+    for (const spec of specs) {
+      const targetFile = resolveImport(file, spec);
+      if (!targetFile) continue;
+      if (toSrcRelative(targetFile) !== 'state.js') continue;
+      violations.push(`${toSrcRelative(file)}->state.js`);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
