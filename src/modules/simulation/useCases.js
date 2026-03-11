@@ -57,3 +57,88 @@ export function prepareOccAdaptiveSolveRequest(options = {}) {
 export function createSimulationClient() {
   return SimulationModule.output.client();
 }
+
+export function validateSimulationConfig(config = {}) {
+  if (!Number.isFinite(config.frequencyStart) || !Number.isFinite(config.frequencyEnd)) {
+    return 'Frequency range must contain valid numbers.';
+  }
+  if (!Number.isFinite(config.numFrequencies) || config.numFrequencies < 1) {
+    return 'Number of frequencies must be at least 1.';
+  }
+  if (config.frequencyStart >= config.frequencyEnd) {
+    return 'Start frequency must be less than end frequency.';
+  }
+  return null;
+}
+
+export function buildQueuedSimulationJob({
+  jobId,
+  startedIso,
+  outputName,
+  counter,
+  config,
+  waveguidePayload,
+  preparedParams,
+  stateSnapshot
+}) {
+  return {
+    id: jobId,
+    status: 'queued',
+    progress: 0,
+    stage: 'queued',
+    stageMessage: 'Job queued',
+    createdAt: startedIso,
+    queuedAt: startedIso,
+    startedAt: startedIso,
+    configSummary: {
+      formula_type: waveguidePayload.formula_type,
+      frequency_range: [config.frequencyStart, config.frequencyEnd],
+      num_frequencies: config.numFrequencies,
+      sim_type: '2'
+    },
+    hasResults: false,
+    hasMeshArtifact: false,
+    label: `${outputName}_${counter}`,
+    errorMessage: null,
+    rating: null,
+    exportedFiles: [],
+    scriptSchemaVersion: 1,
+    script: {
+      outputName,
+      counter,
+      frequencyStart: config.frequencyStart,
+      frequencyEnd: config.frequencyEnd,
+      numFrequencies: config.numFrequencies,
+      frequencySpacing: config.frequencySpacing,
+      deviceMode: config.deviceMode,
+      polarConfig: config.polarConfig,
+      params: { ...preparedParams },
+      stateSnapshot
+    }
+  };
+}
+
+export function buildCancelledSimulationJob(job, { message = 'Simulation cancelled by user', completedAt } = {}) {
+  if (!job || typeof job !== 'object' || !job.id) {
+    return null;
+  }
+  return {
+    ...job,
+    id: job.id,
+    status: 'cancelled',
+    stage: 'cancelled',
+    stageMessage: message,
+    errorMessage: message,
+    completedAt: completedAt || new Date().toISOString()
+  };
+}
+
+export function resolveClearedFailedJobIds(localFailedIds = [], response = {}) {
+  if (Array.isArray(response?.deleted_ids) && response.deleted_ids.length > 0) {
+    return response.deleted_ids;
+  }
+  if (Number(response?.deleted_count) > 0) {
+    return [...localFailedIds];
+  }
+  return [];
+}

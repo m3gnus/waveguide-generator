@@ -3,7 +3,7 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 3 (in progress)
+- Current phase: Phase 4 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
@@ -422,6 +422,12 @@ Completed in this step:
 12. Tightened `tests/architecture-boundaries.test.js` by removing now-resolved legacy exceptions for app-level feedback/file-ops imports.
 13. Added `createSimulationClient()` to `src/modules/simulation/useCases.js` and refactored `src/ui/simulation/SimulationPanel.js` to consume a module API instead of importing `src/solver/index.js` directly.
 14. Removed remaining temporary import-boundary exceptions (`src/app/params.js -> src/geometry/index.js`, `src/ui/simulation/SimulationPanel.js -> src/solver/index.js`) and kept behavior stable with a local `isNumericString` helper in `src/app/params.js`.
+15. Moved additional simulation business logic from `src/ui/simulation/jobActions.js` into `src/modules/simulation/useCases.js`:
+   - simulation config validation
+   - queued-job metadata/script assembly
+   - cancelled-job state construction
+   - failed-job cleanup response reconciliation
+   `jobActions.js` now delegates those rules through module use cases while keeping DOM/event concerns in UI files.
 
 ## Phase 5: Untangle UI State And Circular Workflow Logic
 
