@@ -489,6 +489,12 @@ Completed in this step:
    - `src/ui/simulation/polling.js`
 11. Added regression coverage in `tests/simulation-module.test.js` for simulation workspace facade behavior (manifest sync, index rebuild, index write round-trip).
 12. Tightened `tests/architecture-boundaries.test.js` to block new direct `src/ui/simulation/* -> src/ui/workspace/*` imports.
+13. Moved `SimulationPanel` runtime assembly/disposal behind the controller layer:
+   - `createSimulationPanelRuntime(...)` now owns controller store creation, adapter state binding, and UI coordinator assembly
+   - `restoreSimulationPanelRuntime(...)` now mediates panel restore through the controller runtime
+   - `disposeSimulationPanelRuntime(...)` now owns timer/coordinator teardown
+14. Reduced `src/ui/simulation/SimulationPanel.js` to a thinner adapter that delegates lifecycle/state ownership to `src/ui/simulation/controller.js`.
+15. Added controller runtime regression coverage in `tests/simulation-controller.test.js` for runtime creation, restore delegation, and dispose teardown.
 
 ## Phase 6: Remove Backend Compatibility Glue
 
