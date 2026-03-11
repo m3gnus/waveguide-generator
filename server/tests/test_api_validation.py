@@ -362,8 +362,8 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
     """occ_adaptive BEM path must pass wall_thickness through to build_waveguide_mesh unchanged.
 
     The outer wall shell is part of the BEM mesh (tag 1 in the ABEC/ATH convention).
-    app.py normalizes all non-source tags to 1 after build_waveguide_mesh returns, so
-    the solver always sees exactly tag 1 (rigid wall) and tag 2 (source disc).
+    The queued request must already be full-domain, and the canonical OCC mesh tags
+    must pass through to solver mesh preparation unchanged.
     """
 
     def _make_occ_adaptive_request(self, extra_params=None):
@@ -408,9 +408,8 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
 
         The outer wall shell (wall_thickness > 0) is part of the BEM mesh: it forms the
         topologically connected rigid-wall boundary that encloses the horn cavity.
-        waveguide_builder assigns all wall surfaces to tag 1 (SD1G0); app.py normalises
-        any remaining non-source tags to 1 after the build, so the BEM solver always
-        sees exactly tag 1 (rigid wall) and tag 2 (source disc).
+        The runner must forward the queued full-domain request to `build_waveguide_mesh`
+        without repairing or zeroing wall shell geometry on the way through.
         """
         request = self._make_occ_adaptive_request({"wall_thickness": 6.0, "enc_depth": 0.0})
 
@@ -420,9 +419,20 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             captured_params.append(dict(params))
             return {
                 "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
-                "stats": {"nodeCount": 0, "elementCount": 0},
-                "canonical_mesh": {"vertices": [], "indices": [], "surfaceTags": []},
+                "stats": {"nodeCount": 3, "elementCount": 1},
+                "canonical_mesh": {
+                    "vertices": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    "indices": [0, 1, 2],
+                    "surfaceTags": [2],
+                },
             }
+
+        class MockSolver:
+            def prepare_mesh(self, *args, **kwargs):
+                return object()
+
+            def solve(self, *args, **kwargs):
+                return {"frequencies": [100.0], "directivity": {}}
 
         job_id = "test-preserve-wall"
         _jrt.jobs[job_id] = {
@@ -430,7 +440,9 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "stage_message": "", "results": None, "error": None,
         }
         try:
-            with patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+            ), patch(
                 "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
             ), patch("services.simulation_runner.build_waveguide_mesh", side_effect=fake_build):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
@@ -447,6 +459,85 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             6.0,
             "occ_adaptive BEM build must preserve wall_thickness (outer wall is part of BEM mesh).",
         )
+
+    def test_occ_adaptive_rejects_non_full_domain_queued_request(self):
+        request = self._make_occ_adaptive_request({"quadrants": 14})
+
+        class MockSolver:
+            def prepare_mesh(self, *args, **kwargs):
+                raise AssertionError("prepare_mesh must not run for invalid queued quadrants")
+
+        job_id = "test-occ-quadrants-rejected"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+            ), patch(
+                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+            ), patch("services.simulation_runner.build_waveguide_mesh") as build_mesh:
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            build_mesh.assert_not_called()
+            self.assertEqual(_jrt.jobs[job_id]["status"], "error")
+            self.assertIn("quadrants=1234", _jrt.jobs[job_id]["error_message"])
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_occ_adaptive_preserves_canonical_surface_tags_for_solver_mesh(self):
+        request = self._make_occ_adaptive_request()
+        captured_surface_tags = []
+
+        fake_occ_result = {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 5, "elementCount": 4},
+            "canonical_mesh": {
+                "vertices": [
+                    0.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0,
+                    1.0, 1.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.5, 0.5, 0.5,
+                ],
+                "indices": [
+                    0, 1, 4,
+                    1, 2, 4,
+                    2, 3, 4,
+                    3, 0, 4,
+                ],
+                "surfaceTags": [1, 2, 3, 4],
+            },
+        }
+
+        class MockSolver:
+            def prepare_mesh(self, vertices, indices, surface_tags=None, **kwargs):
+                captured_surface_tags.append(list(surface_tags or []))
+                return object()
+
+            def solve(self, *args, **kwargs):
+                return {"frequencies": [100.0], "directivity": {}}
+
+        job_id = "test-occ-canonical-tags"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+            ), patch(
+                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+            ), patch(
+                "services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result
+            ):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            self.assertEqual(captured_surface_tags, [[1, 2, 3, 4]])
+            self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
+        finally:
+            _jrt.jobs.pop(job_id, None)
 
 
 class MeshArtifactEndpointTest(unittest.TestCase):
