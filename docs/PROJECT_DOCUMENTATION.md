@@ -16,7 +16,7 @@ Waveguide Generator is a browser-based horn design tool with:
 - Real-time Three.js rendering
 - Canonical mesh payload generation for BEM simulation
 - Backend meshing and solve APIs (FastAPI + gmsh + bempp)
-- ABEC bundle export workflow
+- STL / profile CSV / MWG config export workflows
 
 Primary entry points:
 - Frontend boot: `src/main.js`
@@ -37,7 +37,7 @@ Primary entry points:
   - `DesignModule` also owns OCC request normalization helpers used by `ExportModule` and `SimulationModule`
   - `GeometryModule` prepares geometry-shape definitions only (no tessellation or payload assembly)
 - `src/export/`
-  - `.geo` builder, ABEC file generators, bundle validator, STL/CSV helpers
+  - Active STL/profile/config export helpers plus OCC mesh-build orchestration support
 - `src/solver/`
   - Backend client and payload validation
 - `src/ui/`
@@ -76,6 +76,23 @@ Primary entry points:
 - `server/solver/deps.py`
   - Runtime dependency/version gating
 
+### 2.3 Overview Diagram
+
+```mermaid
+flowchart LR
+  App["src/app<br/>assembly + event wiring"] --> Modules["src/modules/*<br/>public frontend boundaries"]
+  Modules --> Design["DesignModule<br/>state/import normalization"]
+  Modules --> Geometry["Geometry internals<br/>shape + canonical payload"]
+  Modules --> SolverClient["src/solver<br/>backend client + preflight validation"]
+  Modules --> UiRuntime["src/ui<br/>panels + coordinators"]
+  Geometry --> Viewer["src/viewer + Three.js"]
+  SolverClient --> Api["server/api<br/>HTTP boundary"]
+  Api --> Services["server/services<br/>validation + job orchestration"]
+  Services --> SolverDomain["server/solver<br/>OCC meshing + BEM solve"]
+  SolverDomain --> MeshBuild["/api/mesh/build"]
+  SolverDomain --> Solve["/api/solve"]
+```
+
 ## 3. Core Flows
 
 ### 3.1 Render flow
@@ -99,12 +116,12 @@ Primary entry points:
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
-### 3.3 ABEC export flow
+### 3.3 Export flow
 
-1. `exportABECProject(...)` prepares params and auto-detects symmetry (`detectGeometrySymmetry`).
-2. Export requests `POST /api/mesh/build` (OCC path).
-3. If OCC endpoint returns `503`, export fails and surfaces the backend error.
-4. Bundle is assembled in-browser with returned `.msh` plus generated ABEC text files and `bem_mesh.geo`.
+1. Local file exports (`exportSTL`, `exportMWGConfig`, `exportProfileCSV`) run through `src/modules/export/useCases.js`.
+2. OCC-backed mesh export uses `prepareExportArtifacts(...)`, which normalizes export params through `DesignModule` and requests `POST /api/mesh/build`.
+3. If `/api/mesh/build` returns `503`, the export path fails explicitly and does not fall back to a legacy frontend mesher.
+4. ABEC bundle generation is not part of the active runtime; remaining ABEC compatibility is limited to config/result text conventions used by import/export helpers.
 
 ## 4. Mesh Pipelines
 
@@ -192,13 +209,12 @@ Physical groups written by OCC builder:
 
 ### 5.1 UI-exposed exports
 
-Buttons wired in `src/app/events.js` currently export:
-- STL (`exportSTL`)
-- MWG config text (`exportMWGConfig`)
-- Profile CSV (`exportProfileCSV`) — writes `_profiles.csv` and `_slices.csv`
-- MSH (`exportMSH`)
+Active runtime export surfaces:
+- App-level exports: STL (`exportSTL`), MWG config text (`exportMWGConfig`), and profile/slice CSV (`exportProfileCSV`)
+- Simulation-result exports: VACS spectrum text plus waveguide STL helpers in `src/ui/simulation/exports.js`
+- Completed-job mesh download: `.msh` artifact fetch via `src/ui/simulation/meshDownload.js` when backend jobs persist mesh artifacts
 
-ABEC export was removed in Feb 2026. The BEM solver is now fully backend-driven via `/api/solve`.
+ABEC bundle export is removed from the active runtime. The live solver path is fully backend-driven via `/api/solve`.
 
 ### 5.2 CSV profile/slice export
 
@@ -290,6 +306,7 @@ Notes:
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`, then `numba`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
+- The runtime prefers `bempp-cl`; the legacy `bempp_api` entry only documents the compatibility lane still encoded in `server/solver/deps.py`.
 
 ### 7.1 Solver performance metadata
 
@@ -371,7 +388,7 @@ Primary commands:
 
 High-signal test suites:
 - Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
-- Export/ABEC: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
+- Export/OCC pipeline: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
 - Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_directivity_plot.py`
 
 ## 10. Operational Notes and Constraints
@@ -413,22 +430,19 @@ If OpenCL is unavailable the backend falls back to `numba`; fallback reason is s
 - Directivity render: `server/solver/directivity_plot.py`
 - Solver dependency matrix: `server/solver/deps.py`
 
-## 12. Recent Major Refactors (Feb 2026)
+## 12. Recent Major Refactors (Feb-Mar 2026)
 
-The project underwent a significant architectural cleanup to streamline mesh generation.
+### 12.1 OCC Meshing Consolidation
+- Removed legacy frontend `.geo` mesh-build fallbacks from active runtime flows.
+- `POST /api/mesh/build` is the only supported runtime path for OCC-authored `.msh` export artifacts.
 
-### 12.1 Unified Mesh Generation
-- Removed legacy frontend `.geo` builders (`gmshGeoBuilder.js`).
-- **Primary Path**: Export and ABEC flows use the Python OCC builder (`/api/mesh/build`).
+### 12.2 Frontend Boundary Cleanup
+- App assembly now routes render, export, simulation, and panel setup through module entry points.
+- Deprecated solver/export/geometry alias entry points were removed during Phase 8 cleanup.
 
-### 12.2 ABEC Export Modernization
-- ABEC export now exclusively uses the BEM `.msh` file generated by the OCC builder.
-- Removed legacy `coords.txt` and `static.txt` generation from the ABEC path.
-- Updated `Project.abec` to point directly to the Gmsh `.msh` file.
-
-### 12.3 Dead Code Elimination
-- Deleted unused Node.js-only STL export scripts.
-- Pruned unused imports and diagnostic functions across the core application.
+### 12.3 Export Surface Simplification
+- Active runtime exports are STL, MWG config text, profile/slice CSV, simulation-result text exports, and persisted simulation mesh downloads.
+- ABEC bundle export is no longer part of the shipped runtime.
 
 ### 12.4 Backend Router/Service Decomposition
 - `server/app.py` was reduced to app assembly, CORS setup, router registration, and lifecycle startup.
