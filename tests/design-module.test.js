@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams } from '../src/geometry/index.js';
-import { DesignModule } from '../src/modules/design/index.js';
+import {
+  DesignModule,
+  prepareOccExportParams,
+  prepareOccSimulationParams
+} from '../src/modules/design/index.js';
 
 function makeRawParams(overrides = {}) {
   return {
@@ -75,4 +79,47 @@ test('DesignModule output helpers preserve pre-prepared params', () => {
   assert.equal(DesignModule.output.preparedParams(designTask), preparedParams);
   assert.equal(DesignModule.output.exportParams(designTask), preparedParams);
   assert.equal(DesignModule.output.simulationParams(designTask), preparedParams);
+});
+
+test('DesignModule OCC normalization outputs centralize simulation/export request prep', () => {
+  const prepared = prepareGeometryParams(
+    makeRawParams({
+      angularSegments: 21.2,
+      lengthSegments: 9.1,
+      quadrants: 'not-a-quadrant',
+      scale: 2,
+      throatResolution: 3,
+      mouthResolution: 5,
+      rearResolution: 7,
+      encFrontResolution: [4, 5, 6, 7],
+      encBackResolution: [8, 9, 10, 11],
+      encDepth: 0,
+      wallThickness: 0
+    }),
+    { type: 'OSSE', applyVerticalOffset: true }
+  );
+
+  const designTask = DesignModule.task(DesignModule.importPrepared(prepared));
+  const occSimulation = DesignModule.output.occSimulationParams(designTask);
+  const occExport = DesignModule.output.occExportParams(designTask);
+
+  assert.equal(occSimulation.angularSegments, 21);
+  assert.equal(occSimulation.lengthSegments, 10);
+  assert.equal(occSimulation.quadrants, 1234);
+  assert.equal(occSimulation.encFrontResolution, '4,5,6,7');
+  assert.equal(occSimulation.encBackResolution, '8,9,10,11');
+
+  assert.equal(occExport.angularSegments, 20);
+  assert.equal(occExport.lengthSegments, 10);
+  assert.equal(occExport.throatResolution, 12);
+  assert.equal(occExport.mouthResolution, 20);
+  assert.equal(occExport.rearResolution, 28);
+  assert.equal(occExport.encFrontResolution, '8,10,12,14');
+  assert.equal(occExport.encBackResolution, '16,18,20,22');
+  assert.equal(occExport.wallThickness, 5);
+
+  const directOccSimulation = prepareOccSimulationParams(prepared);
+  const directOccExport = prepareOccExportParams(prepared);
+  assert.equal(JSON.stringify(directOccSimulation), JSON.stringify(occSimulation));
+  assert.equal(JSON.stringify(directOccExport), JSON.stringify(occExport));
 });
