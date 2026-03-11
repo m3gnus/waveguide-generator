@@ -10,7 +10,7 @@ export function provideMeshForSimulation(app) {
       })
     );
     const preparedParams = DesignModule.output.simulationParams(designTask);
-    const simulationTask = SimulationModule.task(SimulationModule.importPrepared(preparedParams), {
+    const simulationTask = SimulationModule.task(SimulationModule.importDesign(designTask), {
       includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
       adaptivePhi: false
     });

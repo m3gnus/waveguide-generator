@@ -488,7 +488,7 @@ export async function runSimulation(panel) {
       })
     );
     const preparedParams = DesignModule.output.simulationParams(designTask);
-    const simulationInput = SimulationModule.importPrepared(preparedParams);
+    const simulationInput = SimulationModule.importDesign(designTask);
     const { waveguidePayload, submitOptions } = SimulationModule.output.occAdaptive(simulationInput, {
       mshVersion: '2.2',
       simType: 2
