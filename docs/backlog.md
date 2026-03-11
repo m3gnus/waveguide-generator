@@ -144,12 +144,13 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P3 Docs, Hardening, And Cleanup
 
-- [ ] Create a smaller durable architecture doc and split stable per-module contracts out of large narrative docs.
+- [x] Create a smaller durable architecture doc and split stable per-module contracts out of large narrative docs.
   Source: user rules for this backlog; pending doc-maintenance work around trimming `docs/PROJECT_DOCUMENTATION.md`.
   Relevant: Yes. The project now has one large runtime document but no focused `docs/architecture.md` or `docs/modules/` contract set.
   Will it improve the program: Yes. It reduces doc drift and makes future maintenance cheaper.
   Research findings: the working rules in this very backlog already refer to `docs/architecture.md` and `docs/modules/`, but those paths do not exist yet. The architecture cleanup work is complete enough that this is now straightforward documentation debt rather than a blocker for product work.
   Best approach: Extract durable architecture decisions into `docs/architecture.md`, move contract details into `docs/modules/`, and keep `docs/PROJECT_DOCUMENTATION.md` as a concise runtime map until the split is complete.
+  Completed: March 11, 2026. The repo now has a dedicated `docs/architecture.md` durable architecture guide plus `docs/modules/` contract docs for geometry, simulation, export, and backend boundaries, and the README/runtime documentation now point readers to those extracted references instead of relying on `docs/PROJECT_DOCUMENTATION.md` alone.
 
 - [ ] Add a maintained-doc parity audit so runtime/device-mode changes cannot leave `docs/PROJECT_DOCUMENTATION.md` and `server/README.md` describing removed fallback behavior.
   Source: architecture audit on March 11, 2026; `docs/PROJECT_DOCUMENTATION.md`; `server/README.md`; `server/contracts/__init__.py`; `server/solver/device_interface.py`.

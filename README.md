@@ -6,6 +6,8 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 
 ## Documentation
 
+- [Architecture](docs/architecture.md) - durable layer and contract overview
+- [Module Contracts](docs/modules/README.md) - stable module boundaries and invariants
 - [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - maintained architecture and runtime reference
 - [Backlog](docs/backlog.md) - active unfinished work and prioritized follow-ups
 - [Testing Guide](tests/TESTING.md) - canonical test map, commands, and diagnostics

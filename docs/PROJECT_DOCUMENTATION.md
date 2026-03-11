@@ -3,6 +3,11 @@
 This document describes the current implementation in this repository.
 If code and docs disagree, update this file to match runtime behavior.
 
+Companion docs:
+- `docs/architecture.md` for durable system-level architecture
+- `docs/modules/README.md` for stable per-module contracts
+- `docs/backlog.md` for active unfinished work
+
 Active backlog:
 - `docs/backlog.md`
 
