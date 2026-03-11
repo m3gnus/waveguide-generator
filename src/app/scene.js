@@ -16,6 +16,7 @@ import {
 } from '../ui/settings/viewerSettings.js';
 import { GlobalState } from '../state.js';
 import { DesignModule } from '../modules/design/index.js';
+import { buildGeometryMeshFromShape } from '../geometry/pipeline.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -90,13 +91,15 @@ export function renderModel(app) {
   );
   const preparedParams = DesignModule.output.preparedParams(designTask);
 
-  // Viewport always uses the formula-based mesh — evaluates profile math
-  // directly at every grid point. Export and simulation flows use a
-  // canonical tagged payload derived from the same geometry equations.
+  // Viewport tessellates from the prepared geometry shape. Export and
+  // simulation flows reuse the same shape-first geometry contract.
   const geometryTask = GeometryModule.task(GeometryModule.importDesign(designTask), {
     adaptivePhi: false
   });
-  const { vertices, indices } = GeometryModule.output.mesh(geometryTask);
+  const geometryShape = GeometryModule.output.shape(geometryTask);
+  const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
+    adaptivePhi: false
+  });
   applyMeshToScene(app, vertices, indices, preparedParams);
 }
 

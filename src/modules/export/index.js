@@ -5,7 +5,10 @@ import {
   exportSTLBinary
 } from '../../export/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
-import { buildCanonicalMeshPayload } from '../../geometry/pipeline.js';
+import {
+  buildCanonicalMeshPayloadFromShape,
+  buildGeometryMeshFromShape
+} from '../../geometry/pipeline.js';
 import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
 import { GeometryModule } from '../geometry/index.js';
 
@@ -224,11 +227,14 @@ async function runOccMeshExportTask(input, options = {}) {
   const geometryTask = GeometryModule.task(GeometryModule.importPrepared(gmshParams), {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0
   });
-  const payload = buildCanonicalMeshPayload(gmshParams, {
+  const geometryShape = GeometryModule.output.shape(geometryTask);
+  const payload = buildCanonicalMeshPayloadFromShape(geometryShape, {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0,
     validateIntegrity: false
   });
-  const mesh = GeometryModule.output.mesh(geometryTask);
+  const mesh = buildGeometryMeshFromShape(geometryShape, {
+    includeEnclosure: Number(gmshParams.encDepth || 0) > 0
+  });
 
   return Object.freeze({
     module: EXPORT_MODULE_ID,
@@ -251,7 +257,11 @@ function runStlExportTask(input) {
     includeEnclosure: false,
     adaptivePhi: true
   });
-  const { vertices, indices } = GeometryModule.output.mesh(geometryTask);
+  const geometryShape = GeometryModule.output.shape(geometryTask);
+  const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
+    includeEnclosure: false,
+    adaptivePhi: true
+  });
   const stlBinary = exportSTLBinary(
     rotateVerticesForStl(Float32Array.from(vertices)),
     Uint32Array.from(indices),

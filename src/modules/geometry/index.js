@@ -1,4 +1,4 @@
-import { buildGeometryMesh } from '../../geometry/pipeline.js';
+import { buildGeometryShape } from '../../geometry/pipeline.js';
 import { DesignModule } from '../design/index.js';
 
 const GEOMETRY_MODULE_ID = 'geometry';
@@ -43,7 +43,7 @@ function assertGeometryTaskEnvelope(result) {
     !isObject(result) ||
     result.module !== GEOMETRY_MODULE_ID ||
     result.stage !== GEOMETRY_TASK_STAGE ||
-    !isObject(result.geometry)
+    !isObject(result.geometryShape)
   ) {
     throw new Error('Geometry module output requires a result from GeometryModule.task().');
   }
@@ -70,16 +70,16 @@ export function runGeometryTask(input, options = {}) {
     module: GEOMETRY_MODULE_ID,
     stage: GEOMETRY_TASK_STAGE,
     input,
-    geometry: buildGeometryMesh(input.params, options)
+    geometryShape: buildGeometryShape(input.params, options)
   });
 }
 
 export function getGeometryOutput(result) {
   assertGeometryTaskEnvelope(result);
-  return result.geometry;
+  return result.geometryShape;
 }
 
-export function getGeometryMeshOutput(result) {
+export function getGeometryShapeOutput(result) {
   return getGeometryOutput(result);
 }
 
@@ -91,6 +91,6 @@ export const GeometryModule = Object.freeze({
   task: runGeometryTask,
   output: Object.freeze({
     geometry: getGeometryOutput,
-    mesh: getGeometryMeshOutput
+    shape: getGeometryShapeOutput
   })
 });

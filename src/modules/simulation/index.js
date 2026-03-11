@@ -1,6 +1,9 @@
 import { DesignModule } from '../design/index.js';
-import { buildCanonicalMeshPayload } from '../../geometry/pipeline.js';
+import {
+  buildCanonicalMeshPayloadFromShape
+} from '../../geometry/pipeline.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
+import { GeometryModule } from '../geometry/index.js';
 
 const SIMULATION_MODULE_ID = 'simulation';
 const SIMULATION_IMPORT_STAGE = 'import';
@@ -67,7 +70,13 @@ export function importDesignSimulationInput(designTask) {
 
 export function runSimulationTask(input, options = {}) {
   assertSimulationImportEnvelope(input);
-  const mesh = buildCanonicalMeshPayload(input.params, {
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(input.params), {
+    includeEnclosure: options.includeEnclosure ?? Number(input.params.encDepth || 0) > 0,
+    adaptivePhi: options.adaptivePhi ?? false
+  });
+  const geometryShape = GeometryModule.output.shape(geometryTask);
+
+  const mesh = buildCanonicalMeshPayloadFromShape(geometryShape, {
     includeEnclosure: options.includeEnclosure ?? Number(input.params.encDepth || 0) > 0,
     adaptivePhi: options.adaptivePhi ?? false,
     validateIntegrity: options.validateIntegrity === true
