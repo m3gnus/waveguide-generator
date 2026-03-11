@@ -25,8 +25,7 @@ export async function prepareExportArtifacts(
   return ExportModule.output.occMesh(exportTask);
 }
 
-export function exportSTL() {
-  const baseName = getExportBaseName();
+export function buildStlExportFiles({ baseName = getExportBaseName() } = {}) {
   const designTask = DesignModule.task(
     DesignModule.importState(GlobalState.get(), {
       applyVerticalOffset: false
@@ -34,8 +33,12 @@ export function exportSTL() {
   );
   const preparedParams = DesignModule.output.exportParams(designTask);
   const exportTask = ExportModule.task(ExportModule.importStl(preparedParams, { baseName }));
-  for (const file of ExportModule.output.files(exportTask)) {
-    saveFile(file.content, file.fileName, file.saveOptions);
+  return ExportModule.output.files(exportTask);
+}
+
+export async function exportSTL(options = {}) {
+  for (const file of buildStlExportFiles(options)) {
+    await saveFile(file.content, file.fileName, file.saveOptions);
   }
 }
 
@@ -53,14 +56,12 @@ export function exportMWGConfig() {
   }
 }
 
-export function exportProfileCSV(vertices) {
+export function buildProfileCsvExportFiles(vertices, { baseName = getExportBaseName() } = {}) {
   if (!vertices || vertices.length === 0) {
-    showError('Please generate a horn model first.');
-    return;
+    return null;
   }
 
   const state = GlobalState.get();
-  const baseName = getExportBaseName();
   const designTask = DesignModule.task(
     DesignModule.importState(state, {
       applyVerticalOffset: false
@@ -74,8 +75,17 @@ export function exportProfileCSV(vertices) {
       baseName
     })
   );
-  for (const file of ExportModule.output.files(exportTask)) {
-    saveFile(file.content, file.fileName, file.saveOptions);
+  return ExportModule.output.files(exportTask);
+}
+
+export async function exportProfileCSV(vertices, options = {}) {
+  const files = buildProfileCsvExportFiles(vertices, options);
+  if (!files) {
+    showError('Please generate a horn model first.');
+    return;
+  }
+  for (const file of files) {
+    await saveFile(file.content, file.fileName, file.saveOptions);
   }
 }
 

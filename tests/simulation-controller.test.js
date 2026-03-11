@@ -385,8 +385,14 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
   assert.equal(controller.activeJobId, 'job-queued-1');
   assert.equal(controller.currentJobId, 'job-queued-1');
 
-  const updated = await recordSimulationControllerExport(controller, 'job-queued-1', 'export-csv:2026-03-11T10:01:00.000Z');
-  assert.deepEqual(updated.exportedFiles, ['export-csv:2026-03-11T10:01:00.000Z']);
+  const updated = await recordSimulationControllerExport(controller, 'job-queued-1', {
+    exportedFiles: ['csv:simulation_results.csv', 'json:simulation_results.json'],
+    autoExportCompletedAt: '2026-03-11T10:01:00.000Z',
+    justCompleted: false
+  });
+  assert.deepEqual(updated.exportedFiles, ['csv:simulation_results.csv', 'json:simulation_results.json']);
+  assert.equal(updated.autoExportCompletedAt, '2026-03-11T10:01:00.000Z');
+  assert.equal(updated.justCompleted, false);
 });
 
 test('submitSimulationControllerJob checks solver health and queues the submitted job through the controller boundary', async () => {

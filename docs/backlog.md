@@ -118,12 +118,13 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P2 Folder-Backed Completion And Export Flow
 
-- [ ] Build selected-format bundle export and idempotent auto-export on simulation completion.
+- [x] Build selected-format bundle export and idempotent auto-export on simulation completion.
   Source: `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`; current export/task code.
   Relevant: Yes. The data model for task manifests/index exists, but export orchestration across formats is still fragmented.
   Will it improve the program: Yes. It turns completed simulations into reusable artifacts without manual repetition and matches the folder-workspace design.
   Research findings: current export use cases in `src/modules/export/useCases.js` are per-format only, and completed-job export in `src/ui/simulation/jobActions.js` only records a synthetic token into `exportedFiles` after a manual export. The manifest/index model is ready for bundle bookkeeping, but there is no bundle coordinator, selected-format settings model, or once-per-completion idempotency flow.
   Best approach: Add one bundle coordinator over existing exporters, drive it from settings-selected formats, record per-task exported files, and store an idempotency marker so auto-export only runs once per completion event while preserving partial-failure reporting.
+  Completed: March 11, 2026. Simulation Basic settings now persist `autoExportOnComplete` plus stable string-based export format selections, completed-task `Export` runs the full configured bundle instead of a one-off picker, bundle writes route into the task folder when a workspace is active, task manifests/index entries record real exported file tokens plus `autoExportCompletedAt`, and polling auto-exports a completed job exactly once per completion transition while still surfacing partial-format failures.
 
 - [x] Finish completed-task source modes so folder-backed tasks and backend jobs have clear, non-mixed browsing behavior.
   Source: earlier simulation-management planning notes; current folder workspace and job-feed code.

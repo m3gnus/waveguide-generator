@@ -2,6 +2,7 @@
 
 import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
 import { showError } from '../feedback.js';
+import { getAutoExportOnComplete } from '../settings/simulationManagementSettings.js';
 import {
   hasActiveJobs
 } from './jobTracker.js';
@@ -9,6 +10,7 @@ import { renderJobList } from './jobActions.js';
 import { setPollTimer } from './jobOrchestration.js';
 import {
   ensureSimulationControllerJobResults,
+  recordSimulationControllerExport,
   reconcileSimulationControllerRemoteJobs
 } from './controller.js';
 export { setPollTimer, clearPollTimer, setActiveJob } from './jobOrchestration.js';
@@ -104,6 +106,19 @@ export function pollSimulationStatus(panel) {
               stage: 'complete',
               message: 'Results ready'
             });
+
+            if (activeJob.justCompleted && getAutoExportOnComplete()) {
+              const bundle = await panel.exportResults({
+                job: activeJob,
+                auto: true
+              });
+
+              await recordSimulationControllerExport(panel, activeJob.id, {
+                exportedFiles: bundle?.exportedFiles ?? [],
+                autoExportCompletedAt: activeJob.completedAt ?? new Date().toISOString(),
+                justCompleted: false
+              });
+            }
           }
         } else if (activeJob.status === 'error' || activeJob.status === 'cancelled') {
           panel.completedStatusMessage = null;

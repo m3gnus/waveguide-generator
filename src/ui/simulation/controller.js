@@ -86,6 +86,56 @@ function cloneSimulationParamBindings() {
   return DEFAULT_SIMULATION_PARAM_BINDINGS.map((entry) => ({ ...entry }));
 }
 
+function normalizeExportPatch(exportPatch) {
+  if (typeof exportPatch === 'string') {
+    return {
+      exportedFiles: [exportPatch],
+      autoExportCompletedAt: null,
+      justCompleted: false
+    };
+  }
+
+  if (Array.isArray(exportPatch)) {
+    return {
+      exportedFiles: exportPatch.map((item) => String(item || '').trim()).filter(Boolean),
+      autoExportCompletedAt: null,
+      justCompleted: false
+    };
+  }
+
+  if (!exportPatch || typeof exportPatch !== 'object') {
+    return {
+      exportedFiles: [],
+      autoExportCompletedAt: null,
+      justCompleted: false
+    };
+  }
+
+  return {
+    exportedFiles: Array.isArray(exportPatch.exportedFiles)
+      ? exportPatch.exportedFiles.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    autoExportCompletedAt: exportPatch.autoExportCompletedAt ?? null,
+    justCompleted: exportPatch.justCompleted ?? false
+  };
+}
+
+function mergeUniqueStrings(...lists) {
+  const seen = new Set();
+  const merged = [];
+  for (const list of lists) {
+    for (const item of list || []) {
+      const value = String(item || '').trim();
+      if (!value || seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      merged.push(value);
+    }
+  }
+  return merged;
+}
+
 function createSimulationPanelUiCoordinator(panelAdapter) {
   return UiModule.output.simulationPanel(
     UiModule.task(UiModule.importSimulationPanel(panelAdapter))
@@ -214,23 +264,27 @@ export async function ensureSimulationControllerJobResults(
 export async function recordSimulationControllerExport(
   controller,
   jobId,
-  exportToken
+  exportPatch
 ) {
   const current = controller?.jobs?.get(jobId);
   if (!current) {
     return null;
   }
 
-  const exportedFiles = Array.isArray(current.exportedFiles) ? [...current.exportedFiles] : [];
-  exportedFiles.push(String(exportToken));
+  const normalizedPatch = normalizeExportPatch(exportPatch);
   const next = upsertJob(controller, {
     ...current,
     id: current.id,
-    exportedFiles
+    exportedFiles: mergeUniqueStrings(current.exportedFiles, normalizedPatch.exportedFiles),
+    autoExportCompletedAt: normalizedPatch.autoExportCompletedAt ?? current.autoExportCompletedAt ?? null,
+    justCompleted: normalizedPatch.justCompleted
   });
   persistControllerJobs(controller);
   if (next) {
-    await syncSimulationWorkspaceJobManifest(next, { exportedFiles: next.exportedFiles });
+    await syncSimulationWorkspaceJobManifest(next, {
+      exportedFiles: next.exportedFiles,
+      autoExportCompletedAt: next.autoExportCompletedAt
+    });
   }
   return next;
 }

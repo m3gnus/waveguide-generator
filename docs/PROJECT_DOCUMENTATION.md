@@ -16,7 +16,7 @@ Waveguide Generator is a browser-based horn design tool with:
 - Real-time Three.js rendering
 - Canonical mesh payload generation for BEM simulation
 - Backend meshing and solve APIs (FastAPI + gmsh + bempp)
-- STL / profile CSV / MWG config export workflows
+- STL / profile CSV / MWG config export workflows plus task-bundle result export automation
 
 Primary entry points:
 - Frontend boot: `src/main.js`
@@ -116,6 +116,7 @@ flowchart LR
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
+   - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Simulation Basic task-export settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow
@@ -123,7 +124,9 @@ flowchart LR
 1. Local file exports (`exportSTL`, `exportMWGConfig`, `exportProfileCSV`) run through `src/modules/export/useCases.js`.
 2. OCC-backed mesh export uses `prepareExportArtifacts(...)`, which normalizes export params through `DesignModule` and requests `POST /api/mesh/build`.
 3. If `/api/mesh/build` returns `503`, the export path fails explicitly and does not fall back to a legacy frontend mesher.
-4. ABEC bundle generation is not part of the active runtime; remaining ABEC compatibility is limited to config/result text conventions used by import/export helpers.
+4. Completed-task exports now run through a bundle coordinator in `src/ui/simulation/exports.js`, driven by persisted Simulation Basic task-export settings (`autoExportOnComplete`, `selectedFormats`).
+5. When a folder workspace is active, bundle files write into the task subfolder (`<workspace>/<jobId>/...`) and manifests/index rows record `exportedFiles` plus `autoExportCompletedAt`; without folder access the same bundle falls back to standard file-save/download behavior.
+6. ABEC bundle generation is not part of the active runtime; remaining ABEC compatibility is limited to config/result text conventions used by import/export helpers.
 
 ## 4. Mesh Pipelines
 
@@ -218,7 +221,7 @@ Physical groups written by OCC builder:
 
 Active runtime export surfaces:
 - App-level exports: STL (`exportSTL`), MWG config text (`exportMWGConfig`), and profile/slice CSV (`exportProfileCSV`)
-- Simulation-result exports: VACS spectrum text plus waveguide STL helpers in `src/ui/simulation/exports.js`
+- Simulation-result exports: bundle-coordinated PNG / CSV / JSON / text / polar CSV / impedance CSV / VACS / STL / Fusion CSV task exports in `src/ui/simulation/exports.js`
 - Completed-job mesh download: `.msh` artifact fetch via `src/ui/simulation/meshDownload.js` when backend jobs persist mesh artifacts
 
 ABEC bundle export is removed from the active runtime. The live solver path is fully backend-driven via `/api/solve`.

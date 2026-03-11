@@ -38,7 +38,9 @@ Command behavior:
 - `tests/polar-settings.test.js`
 - `tests/references-guard.test.js`
 - `tests/simulation-flow.test.js`
+- `tests/simulation-export-bundle.test.js`
 - `tests/simulation-job-tracker.test.js`
+- `tests/simulation-management-settings.test.js`
 - `tests/simulation-module.test.js`
 - `tests/simulation-reconciliation.test.js`
 - `tests/task-index-rebuild.test.js`

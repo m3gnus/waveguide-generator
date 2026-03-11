@@ -1,29 +1,28 @@
 import { applySmoothing } from '../../results/smoothing.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import { chooseExportFormat, showError, showMessage } from '../feedback.js';
+import {
+  buildProfileCsvExportFiles,
+  buildStlExportFiles
+} from '../../modules/export/useCases.js';
+import { writeSimulationTaskBundleFile } from '../../modules/simulation/useCases.js';
+import {
+  SIMULATION_EXPORT_FORMAT_IDS,
+  getSelectedExportFormats
+} from '../settings/simulationManagementSettings.js';
+import { showError, showMessage } from '../feedback.js';
+import { getExportBaseName, saveFile } from '../fileOps.js';
 
-export function applyExportSelection(panel, exportType, handlers = null) {
-  const actionMap = handlers || {
-    '1': () => exportAsMatplotlibPNG(panel),
-    '2': () => exportAsCSV(panel),
-    '3': () => exportAsJSON(panel),
-    '4': () => exportAsText(panel),
-    '5': () => exportAsPolarCSV(panel),
-    '6': () => exportAsImpedanceCSV(panel),
-    '7': () => exportAsVACSSpectrum(panel),
-    '8': () => exportAsWaveguideSTL(panel),
-    '9': () => exportAsFusionCurvesCSV(panel)
-  };
-
-  const action = actionMap[exportType];
-  if (!action) {
-    showError('Invalid export selection.');
-    return false;
-  }
-
-  action();
-  return true;
-}
+const EXPORT_FORMAT_LABELS = Object.freeze({
+  png: 'Chart Images (PNG)',
+  csv: 'Frequency Data CSV',
+  json: 'Full Results JSON',
+  txt: 'Summary Text Report',
+  polar_csv: 'Polar Directivity CSV',
+  impedance_csv: 'Impedance CSV',
+  vacs: 'ABEC Spectrum (VACS)',
+  stl: 'Waveguide STL',
+  fusion_csv: 'Fusion 360 CSV Curves'
+});
 
 function resolveApp(panel) {
   if (panel?.app) {
@@ -35,49 +34,68 @@ function resolveApp(panel) {
   return null;
 }
 
-export function exportAsWaveguideSTL(panel) {
-  const app = resolveApp(panel);
-  if (!app || typeof app.exportSTL !== 'function') {
-    showError('STL export is unavailable right now.');
-    return;
+function normalizeSelectedFormats(formatIds) {
+  const seen = new Set();
+  const normalized = [];
+
+  for (const raw of formatIds || []) {
+    const id = String(raw || '').trim();
+    if (!SIMULATION_EXPORT_FORMAT_IDS.includes(id) || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    normalized.push(id);
   }
-  app.exportSTL();
+
+  return normalized;
 }
 
-export function exportAsFusionCurvesCSV(panel) {
-  const app = resolveApp(panel);
-  if (!app || typeof app.exportProfileCSV !== 'function') {
-    showError('CSV profile export is unavailable right now.');
-    return;
-  }
-  app.exportProfileCSV();
+function resolveExportBaseName(job = null) {
+  const label = String(job?.label || '').trim();
+  return label || getExportBaseName() || 'simulation';
 }
 
-export async function exportResults(panel) {
-  if (!panel.lastResults) {
-    showError('No simulation results available to export.');
-    return;
+async function writeExportFile(file, { writer = null } = {}) {
+  if (typeof writer === 'function') {
+    return writer(file);
   }
 
-  const exportType = await chooseExportFormat();
-  if (!exportType) {
-    return;
-  }
-
-  if (!applyExportSelection(panel, exportType)) {
-    return null;
-  }
-  return exportType;
+  await saveFile(file.content, file.fileName, {
+    ...file.saveOptions,
+    incrementCounter: false
+  });
+  return file.fileName;
 }
 
-/**
- * Export all result charts as PNG images via Matplotlib backend rendering.
- */
-export async function exportAsMatplotlibPNG(panel) {
+async function writeExportFiles(files, options = {}) {
+  const savedFiles = [];
+  for (const file of files || []) {
+    savedFiles.push(await writeExportFile(file, options));
+  }
+  return savedFiles;
+}
+
+function createDownloadFile(fileName, content, saveOptions = {}) {
+  return {
+    fileName,
+    content,
+    saveOptions
+  };
+}
+
+function localTimestampParts() {
+  const now = new Date();
+  return {
+    now,
+    dateStamp: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+    timeStamp: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+  };
+}
+
+async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
   const results = panel.lastResults;
   if (!results) {
-    showError('No simulation results available.');
-    return;
+    throw new Error('No simulation results available.');
   }
 
   const splData = results.spl_on_axis || {};
@@ -93,7 +111,6 @@ export async function exportAsMatplotlibPNG(panel) {
   const directivity = results.directivity || {};
 
   if (panel.currentSmoothing !== 'none') {
-    const { applySmoothing } = await import('../../results/smoothing.js');
     spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
     di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
     impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
@@ -108,73 +125,63 @@ export async function exportAsMatplotlibPNG(panel) {
     impedance_frequencies: impedanceFrequencies,
     impedance_real: impedanceReal,
     impedance_imaginary: impedanceImag,
-    directivity,
+    directivity
   };
 
   const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
-  try {
-    const response = await fetch(`${backendUrl}/api/render-charts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+  const response = await fetch(`${backendUrl}/api/render-charts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
 
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      if (response.status === 503) {
-        showError('Matplotlib is not installed on the backend. Install it with: pip install matplotlib');
-      } else {
-        showError(`Chart rendering failed: ${detail || response.status}`);
-      }
-      return;
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    if (response.status === 503) {
+      throw new Error('Matplotlib is not installed on the backend. Install it with: pip install matplotlib');
     }
-
-    const data = await response.json();
-    const charts = data.charts || {};
-    const chartKeys = Object.keys(charts);
-
-    if (chartKeys.length === 0) {
-      showError('No charts were rendered by the backend.');
-      return;
-    }
-
-    // Download each chart as a separate PNG
-    for (const key of chartKeys) {
-      const b64 = charts[key];
-      if (!b64) continue;
-      const byteString = atob(b64.split(',')[1]);
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-      const blob = new Blob([ab], { type: 'image/png' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `bem_${key}_${Date.now()}.png`;
-      link.click();
-      URL.revokeObjectURL(url);
-    }
-
-    showMessage(`Exported ${chartKeys.length} chart(s) as PNG.`, { type: 'info', duration: 3000 });
-  } catch (err) {
-    showError('Chart export failed. Ensure the backend server is running with Matplotlib installed.');
+    throw new Error(`Chart rendering failed: ${detail || response.status}`);
   }
+
+  const data = await response.json();
+  const charts = data.charts || {};
+  const chartKeys = Object.keys(charts);
+  if (chartKeys.length === 0) {
+    throw new Error('No charts were rendered by the backend.');
+  }
+
+  return chartKeys.map((key) => {
+    const b64 = charts[key];
+    const byteString = atob(b64.split(',')[1]);
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i += 1) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+
+    return createDownloadFile(
+      `${baseName}_${key}.png`,
+      new Blob([ab], { type: 'image/png' }),
+      {
+        contentType: 'image/png',
+        typeInfo: { description: 'PNG Image', accept: { 'image/png': ['.png'] } }
+      }
+    );
+  });
 }
 
-/**
- * Export results as CSV
- */
-export function exportAsCSV(panel) {
+function buildCsvFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
+  if (!results) {
+    throw new Error('No simulation results available.');
+  }
+
   const splData = results.spl_on_axis || {};
   const frequencies = splData.frequencies || [];
   const splValues = splData.spl || [];
   const diData = results.di || {};
   const impedanceData = results.impedance || {};
 
-  // Apply current smoothing
   let smoothedSPL = splValues;
   let smoothedDI = diData.di || [];
   let smoothedImpReal = impedanceData.real || [];
@@ -187,87 +194,58 @@ export function exportAsCSV(panel) {
     smoothedImpImag = applySmoothing(frequencies, smoothedImpImag, panel.currentSmoothing);
   }
 
-  // Build CSV content
   let csv = 'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Ω),Impedance Imag (Ω)\n';
-
-  for (let i = 0; i < frequencies.length; i++) {
+  for (let i = 0; i < frequencies.length; i += 1) {
     csv += `${frequencies[i]},${smoothedSPL[i] || ''},${smoothedDI[i] || ''},${smoothedImpReal[i] || ''},${smoothedImpImag[i] || ''}\n`;
   }
 
-  // Add smoothing info as comment
   if (panel.currentSmoothing !== 'none') {
-    csv = `# Smoothing: ${panel.currentSmoothing}\n` + csv;
+    csv = `# Smoothing: ${panel.currentSmoothing}\n${csv}`;
   }
 
-  // Download
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `bem_results_${Date.now()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  return createDownloadFile(`${baseName}_results.csv`, csv, {
+    contentType: 'text/csv',
+    typeInfo: { description: 'CSV File', accept: { 'text/csv': ['.csv'] } }
+  });
 }
 
-/**
- * Export results as JSON
- */
-export function exportAsJSON(panel) {
-  // Use local time format to match system clock
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const hour = String(now.getHours()).padStart(2, '0');
-  const minute = String(now.getMinutes()).padStart(2, '0');
-  const second = String(now.getSeconds()).padStart(2, '0');
-  
+function buildJsonFile(panel, { baseName } = {}) {
+  if (!panel.lastResults) {
+    throw new Error('No simulation results available.');
+  }
+
+  const { dateStamp, timeStamp } = localTimestampParts();
   const exportData = {
-    timestamp: `${year}-${month}-${day} ${hour}:${minute}:${second}`,
+    timestamp: `${dateStamp} ${timeStamp}`,
     smoothing: panel.currentSmoothing,
     results: panel.lastResults
   };
 
-  const json = JSON.stringify(exportData, null, 2);
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `bem_results_${Date.now()}.json`;
-  link.click();
-
-  URL.revokeObjectURL(url);
+  return createDownloadFile(`${baseName}_results.json`, JSON.stringify(exportData, null, 2), {
+    contentType: 'application/json',
+    typeInfo: { description: 'JSON File', accept: { 'application/json': ['.json'] } }
+  });
 }
 
-/**
- * Export results as text report
- */
-export function exportAsText(panel) {
-  // Use local time format to match system clock
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const hour = String(now.getHours()).padStart(2, '0');
-  const minute = String(now.getMinutes()).padStart(2, '0');
-  const second = String(now.getSeconds()).padStart(2, '0');
-
+function buildTextFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
-  const splData = results.spl_on_axis || {};
-  const frequencies = splData.frequencies || [];
-  const splValues = splData.spl || [];
+  if (!results) {
+    throw new Error('No simulation results available.');
+  }
+
+  const { dateStamp, timeStamp } = localTimestampParts();
+  const frequencies = results.spl_on_axis?.frequencies || [];
+  const splValues = results.spl_on_axis?.spl || [];
   const diData = results.di || {};
   const impedanceData = results.impedance || {};
 
   let report = 'BEM SIMULATION RESULTS\n';
   report += '=====================\n\n';
-  report += `Generated: ${year}-${month}-${day} ${hour}:${minute}:${second}\n`;
+  report += `Generated: ${dateStamp} ${timeStamp}\n`;
   report += `Smoothing: ${panel.currentSmoothing}\n`;
   report += `Frequency range: ${Math.min(...frequencies).toFixed(0)} - ${Math.max(...frequencies).toFixed(0)} Hz\n`;
   report += `Number of points: ${frequencies.length}\n\n`;
 
-  // Summary statistics
   if (splValues.length > 0) {
     const avgSPL = splValues.reduce((a, b) => a + b, 0) / splValues.length;
     const minSPL = Math.min(...splValues);
@@ -293,7 +271,6 @@ export function exportAsText(panel) {
 
   if (impedanceData.real && impedanceData.real.length > 0) {
     const avgZ = impedanceData.real.reduce((a, b) => a + b, 0) / impedanceData.real.length;
-
     report += 'IMPEDANCE SUMMARY\n';
     report += '-----------------\n';
     report += `Average Real Part: ${avgZ.toFixed(2)} Ω\n\n`;
@@ -304,7 +281,7 @@ export function exportAsText(panel) {
   report += 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Real(Ω)  Z_Imag(Ω)\n';
   report += '--------  -------  ------  ---------  ---------\n';
 
-  for (let i = 0; i < frequencies.length; i++) {
+  for (let i = 0; i < frequencies.length; i += 1) {
     report += `${frequencies[i].toString().padEnd(8)}  `;
     report += `${(splValues[i] || 0).toFixed(2).padEnd(7)}  `;
     report += `${((diData.di && diData.di[i]) || 0).toFixed(2).padEnd(6)}  `;
@@ -312,35 +289,25 @@ export function exportAsText(panel) {
     report += `${((impedanceData.imaginary && impedanceData.imaginary[i]) || 0).toFixed(2)}\n`;
   }
 
-  // Download
-  const blob = new Blob([report], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `bem_report_${Date.now()}.txt`;
-  link.click();
-  URL.revokeObjectURL(url);
+  return createDownloadFile(`${baseName}_report.txt`, report, {
+    contentType: 'text/plain',
+    typeInfo: { description: 'Text Report', accept: { 'text/plain': ['.txt'] } }
+  });
 }
 
-/**
- * Export polar directivity data as CSV
- * Format: Frequency_Hz, Plane, Theta_deg, SPL_norm_dB
- */
-export function exportAsPolarCSV(panel) {
+function buildPolarCsvFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
   if (!results) {
-    showError('No simulation results available.');
-    return;
+    throw new Error('No simulation results available.');
   }
 
   const frequencies = results.spl_on_axis?.frequencies || [];
   const directivity = results.directivity || {};
-
   let csv = 'Frequency_Hz,Plane,Theta_deg,SPL_norm_dB\n';
 
   for (const plane of ['horizontal', 'vertical', 'diagonal']) {
     const patterns = directivity[plane] || [];
-    for (let fi = 0; fi < patterns.length; fi++) {
+    for (let fi = 0; fi < patterns.length; fi += 1) {
       const freq = frequencies[Math.min(fi, frequencies.length - 1)];
       for (const [angle, db] of patterns[fi]) {
         csv += `${freq},${plane},${angle},${db.toFixed(2)}\n`;
@@ -348,46 +315,27 @@ export function exportAsPolarCSV(panel) {
     }
   }
 
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `polar_directivity_${Date.now()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  return createDownloadFile(`${baseName}_polar.csv`, csv, {
+    contentType: 'text/csv',
+    typeInfo: { description: 'CSV File', accept: { 'text/csv': ['.csv'] } }
+  });
 }
 
-/**
- * Export impedance data as CSV
- * Format: Freq_Hz, Z_Real, Z_Imag (matches reference impedance_curve.csv)
- */
-/**
- * Export results in VACS Data Text format (ABEC Spectrum).
- * Compatible with VituixCAD and other ABEC-aware tools.
- * Produces two data blocks:
- *   1. Radiation impedance (complex)
- *   2. Horizontal polar directivity (complex pressure, magnitude-only from normalized dB)
- */
-export function exportAsVACSSpectrum(panel) {
+function buildVacSpectrumFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
   if (!results) {
-    showError('No simulation results available.');
-    return;
+    throw new Error('No simulation results available.');
   }
 
   const now = new Date();
-  const dateStr = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()} `
-    + now.toLocaleTimeString('en-US');
-
+  const dateStr = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()} ${now.toLocaleTimeString('en-US')}`;
   const frequencies = results.spl_on_axis?.frequencies || [];
   const impedanceData = results.impedance || {};
   const impFreqs = impedanceData.frequencies || frequencies;
   const impReal = impedanceData.real || [];
   const impImag = impedanceData.imaginary || [];
-  const directivity = results.directivity || {};
-  const hPatterns = directivity.horizontal || [];
+  const hPatterns = results.directivity?.horizontal || [];
 
-  // --- File header ---
   let out = '';
   out += '// ************************************************************\n';
   out += '//\n';
@@ -407,7 +355,6 @@ export function exportAsVACSSpectrum(panel) {
   out += 'EndString_Data=Data_End\n';
   out += ' \n';
 
-  // --- Block 1: Radiation impedance ---
   if (impReal.length > 0) {
     out += '// ------------------------------------------------------------\n';
     out += ' \n';
@@ -431,31 +378,30 @@ export function exportAsVACSSpectrum(panel) {
     out += 'Graph_Group="Waveguide Generator"\n';
     out += 'Data\n';
 
-    for (let i = 0; i < impFreqs.length; i++) {
+    for (let i = 0; i < impFreqs.length; i += 1) {
       const f = impFreqs[i];
       const re = impReal[i] ?? 0;
       const im = impImag[i] ?? 0;
-      if (f == null || !Number.isFinite(f)) continue;
+      if (f == null || !Number.isFinite(f)) {
+        continue;
+      }
       out += `${f}   ${re} ${im}\n`;
     }
     out += 'Data_End\n';
     out += ' \n';
   }
 
-  // --- Block 2: Horizontal polar directivity ---
   if (hPatterns.length > 0) {
-    // Extract angle list from first valid pattern
     let angles = null;
     for (const pat of hPatterns) {
       if (pat && Array.isArray(pat) && pat.length > 0 && pat[0][1] != null) {
-        angles = pat.map(p => p[0]);
+        angles = pat.map((entry) => entry[0]);
         break;
       }
     }
 
     if (angles) {
       const paramIndices = angles.map((_, i) => i + 1).join(',');
-
       out += '// ------------------------------------------------------------\n';
       out += ' \n';
       out += 'Data_Format=Complex\n';
@@ -481,16 +427,19 @@ export function exportAsVACSSpectrum(panel) {
       out += 'Graph_Group="Waveguide Generator"\n';
       out += 'Data\n';
 
-      for (let fi = 0; fi < hPatterns.length; fi++) {
+      for (let fi = 0; fi < hPatterns.length; fi += 1) {
         const freq = frequencies[Math.min(fi, frequencies.length - 1)];
-        if (freq == null || !Number.isFinite(freq)) continue;
+        if (freq == null || !Number.isFinite(freq)) {
+          continue;
+        }
 
         const pattern = hPatterns[fi];
-        if (!pattern || !Array.isArray(pattern)) continue;
+        if (!pattern || !Array.isArray(pattern)) {
+          continue;
+        }
 
         let row = `${freq}`;
         for (const [, db] of pattern) {
-          // Convert normalized dB to complex magnitude (phase=0 since we lack phase data)
           if (db == null || !Number.isFinite(db)) {
             row += '   0 0';
           } else {
@@ -498,44 +447,254 @@ export function exportAsVACSSpectrum(panel) {
             row += `   ${mag} 0`;
           }
         }
-        out += row + '\n';
+        out += `${row}\n`;
       }
       out += 'Data_End\n';
       out += ' \n';
     }
   }
 
-  // Download
-  const blob = new Blob([out], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Spectrum_WG_${Date.now()}.txt`;
-  link.click();
-  URL.revokeObjectURL(url);
+  return createDownloadFile(`${baseName}_spectrum.txt`, out, {
+    contentType: 'text/plain',
+    typeInfo: { description: 'Spectrum Text', accept: { 'text/plain': ['.txt'] } }
+  });
 }
 
-export function exportAsImpedanceCSV(panel) {
+function buildImpedanceCsvFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
   if (!results) {
-    showError('No simulation results available.');
-    return;
+    throw new Error('No simulation results available.');
   }
 
   const freqs = results.impedance?.frequencies || [];
   const real = results.impedance?.real || [];
   const imag = results.impedance?.imaginary || [];
-
   let csv = 'Freq_Hz,Z_Real,Z_Imag\n';
-  for (let i = 0; i < freqs.length; i++) {
+
+  for (let i = 0; i < freqs.length; i += 1) {
     csv += `${freqs[i]},${real[i] ?? ''},${imag[i] ?? ''}\n`;
   }
 
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `impedance_curve_${Date.now()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  return createDownloadFile(`${baseName}_impedance.csv`, csv, {
+    contentType: 'text/csv',
+    typeInfo: { description: 'CSV File', accept: { 'text/csv': ['.csv'] } }
+  });
+}
+
+async function runExportFormat(panel, formatId, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
+
+  switch (formatId) {
+    case 'png':
+      return writeExportFiles(await buildMatplotlibPngFiles(panel, { baseName }), options);
+    case 'csv':
+      return writeExportFiles([buildCsvFile(panel, { baseName })], options);
+    case 'json':
+      return writeExportFiles([buildJsonFile(panel, { baseName })], options);
+    case 'txt':
+      return writeExportFiles([buildTextFile(panel, { baseName })], options);
+    case 'polar_csv':
+      return writeExportFiles([buildPolarCsvFile(panel, { baseName })], options);
+    case 'impedance_csv':
+      return writeExportFiles([buildImpedanceCsvFile(panel, { baseName })], options);
+    case 'vacs':
+      return writeExportFiles([buildVacSpectrumFile(panel, { baseName })], options);
+    case 'stl':
+      return writeExportFiles(buildStlExportFiles({ baseName }), options);
+    case 'fusion_csv': {
+      const app = resolveApp(panel);
+      const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
+      const files = buildProfileCsvExportFiles(vertices, { baseName });
+      if (!files) {
+        throw new Error('Fusion CSV export requires an active viewport mesh.');
+      }
+      return writeExportFiles(files, options);
+    }
+    default:
+      throw new Error(`Unsupported export format: ${formatId}`);
+  }
+}
+
+function formatBundleMessage({ exportedFiles, failures, selectedFormats, auto = false }) {
+  const exportedCount = exportedFiles.length;
+  const formatCount = selectedFormats.length;
+  const exportedSummary = exportedCount > 0
+    ? `Exported ${exportedCount} file${exportedCount === 1 ? '' : 's'} across ${formatCount} format${formatCount === 1 ? '' : 's'}.`
+    : 'No files were exported.';
+
+  if (failures.length === 0) {
+    return exportedSummary;
+  }
+
+  const failureSummary = failures
+    .map(({ formatId, message }) => `${EXPORT_FORMAT_LABELS[formatId] || formatId}: ${message}`)
+    .join(' | ');
+
+  return auto
+    ? `${exportedSummary} Some formats failed: ${failureSummary}`
+    : `${exportedSummary} Failed formats: ${failureSummary}`;
+}
+
+function createTaskExportWriter(job) {
+  return async (file) => {
+    const result = await writeSimulationTaskBundleFile(job, file, {
+      fallbackWrite: async (nextFile) => {
+        await saveFile(nextFile.content, nextFile.fileName, {
+          ...nextFile.saveOptions,
+          incrementCounter: false
+        });
+      }
+    });
+    return result.fileName;
+  };
+}
+
+export async function exportResults(panel, { job = null, auto = false, selectedFormats = null } = {}) {
+  if (!panel.lastResults) {
+    showError('No simulation results available to export.');
+    return null;
+  }
+
+  const normalizedFormats = normalizeSelectedFormats(selectedFormats ?? getSelectedExportFormats());
+  if (normalizedFormats.length === 0) {
+    showError('Select at least one task export format in Settings.');
+    return {
+      exportedFiles: [],
+      failures: [],
+      selectedFormats: []
+    };
+  }
+
+  const writer = createTaskExportWriter(job);
+  const exportedFiles = [];
+  const failures = [];
+  const baseName = resolveExportBaseName(job);
+
+  for (const formatId of normalizedFormats) {
+    try {
+      const savedFiles = await runExportFormat(panel, formatId, {
+        job,
+        writer,
+        baseName
+      });
+      exportedFiles.push(...savedFiles.map((fileName) => `${formatId}:${fileName}`));
+    } catch (error) {
+      failures.push({
+        formatId,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  const message = formatBundleMessage({
+    exportedFiles,
+    failures,
+    selectedFormats: normalizedFormats,
+    auto
+  });
+
+  if (failures.length > 0 && exportedFiles.length > 0) {
+    showMessage(message, { type: 'warning', duration: auto ? 4200 : 5200 });
+  } else if (failures.length > 0) {
+    showError(message);
+  } else {
+    showMessage(message, { type: 'success', duration: auto ? 2600 : 3200 });
+  }
+
+  return {
+    exportedFiles,
+    failures,
+    selectedFormats: normalizedFormats
+  };
+}
+
+export function applyExportSelection(panel, exportType, handlers = null) {
+  const actionMap = handlers || {
+    '1': () => exportAsMatplotlibPNG(panel),
+    '2': () => exportAsCSV(panel),
+    '3': () => exportAsJSON(panel),
+    '4': () => exportAsText(panel),
+    '5': () => exportAsPolarCSV(panel),
+    '6': () => exportAsImpedanceCSV(panel),
+    '7': () => exportAsVACSSpectrum(panel),
+    '8': () => exportAsWaveguideSTL(panel),
+    '9': () => exportAsFusionCurvesCSV(panel)
+  };
+
+  const action = actionMap[exportType];
+  if (!action) {
+    showError('Invalid export selection.');
+    return false;
+  }
+
+  void action();
+  return true;
+}
+
+export async function exportAsMatplotlibPNG(panel, options = {}) {
+  return writeExportFiles(
+    await buildMatplotlibPngFiles(panel, { baseName: options.baseName || resolveExportBaseName(options.job) }),
+    options
+  );
+}
+
+export async function exportAsCSV(panel, options = {}) {
+  return writeExportFiles(
+    [buildCsvFile(panel, { baseName: options.baseName || resolveExportBaseName(options.job) })],
+    options
+  );
+}
+
+export async function exportAsJSON(panel, options = {}) {
+  return writeExportFiles(
+    [buildJsonFile(panel, { baseName: options.baseName || resolveExportBaseName(options.job) })],
+    options
+  );
+}
+
+export async function exportAsText(panel, options = {}) {
+  return writeExportFiles(
+    [buildTextFile(panel, { baseName: options.baseName || resolveExportBaseName(options.job) })],
+    options
+  );
+}
+
+export async function exportAsPolarCSV(panel, options = {}) {
+  return writeExportFiles(
+    [buildPolarCsvFile(panel, { baseName: options.baseName || resolveExportBaseName(options.job) })],
+    options
+  );
+}
+
+export async function exportAsVACSSpectrum(panel, options = {}) {
+  return writeExportFiles(
+    [buildVacSpectrumFile(panel, { baseName: options.baseName || resolveExportBaseName(options.job) })],
+    options
+  );
+}
+
+export async function exportAsImpedanceCSV(panel, options = {}) {
+  return writeExportFiles(
+    [buildImpedanceCsvFile(panel, { baseName: options.baseName || resolveExportBaseName(options.job) })],
+    options
+  );
+}
+
+export async function exportAsWaveguideSTL(panel, options = {}) {
+  return writeExportFiles(
+    buildStlExportFiles({ baseName: options.baseName || resolveExportBaseName(options.job) }),
+    options
+  );
+}
+
+export async function exportAsFusionCurvesCSV(panel, options = {}) {
+  const app = resolveApp(panel);
+  const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
+  const files = buildProfileCsvExportFiles(vertices, {
+    baseName: options.baseName || resolveExportBaseName(options.job)
+  });
+  if (!files) {
+    throw new Error('Fusion CSV export requires an active viewport mesh.');
+  }
+  return writeExportFiles(files, options);
 }

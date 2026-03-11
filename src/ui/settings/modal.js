@@ -22,6 +22,13 @@ import {
   resetSimBasicSettings,
 } from './simBasicSettings.js';
 import {
+  RECOMMENDED_DEFAULTS as SIM_MANAGEMENT_DEFAULTS,
+  SIMULATION_EXPORT_FORMAT_IDS,
+  getCurrentSimulationManagementSettings,
+  resetSimulationManagementSettings,
+  saveSimulationManagementSettings,
+} from './simulationManagementSettings.js';
+import {
   describeSimBasicDeviceAvailability,
   fetchRuntimeHealth,
   getCachedRuntimeHealth,
@@ -164,6 +171,23 @@ function _buildModal() {
       settings.enableSymmetry = document.getElementById('simbasic-enableSymmetry')?.checked ?? settings.enableSymmetry;
       settings.verbose = document.getElementById('simbasic-verbose')?.checked ?? settings.verbose;
       saveSimBasicSettings(settings);
+    }
+
+    if (t.id === 'simmanage-auto-export' || t.getAttribute?.('data-sim-management-format')) {
+      const selectedFormats = Array.from(
+        backdrop.querySelectorAll('input[data-sim-management-format]')
+      )
+        .filter((input) => input.checked)
+        .map((input) => input.getAttribute('data-sim-management-format'))
+        .filter(Boolean);
+
+      const currentSettings = getCurrentSimulationManagementSettings();
+      saveSimulationManagementSettings({
+        ...currentSettings,
+        autoExportOnComplete: document.getElementById('simmanage-auto-export')?.checked
+          ?? currentSettings.autoExportOnComplete,
+        selectedFormats
+      });
     }
   });
 
@@ -617,6 +641,79 @@ function _buildSimBasicSection() {
     labelFor: 'download-sim-mesh',
     controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
   });
+
+  const managementSettings = getCurrentSimulationManagementSettings();
+  const exportHeader = document.createElement('div');
+  exportHeader.className = 'settings-subsection-header';
+
+  const exportTitle = document.createElement('h4');
+  exportTitle.className = 'settings-subsection-title';
+  exportTitle.textContent = 'Task Exports';
+  exportHeader.appendChild(exportTitle);
+
+  const exportResetBtn = document.createElement('button');
+  exportResetBtn.type = 'button';
+  exportResetBtn.className = 'settings-reset-btn';
+  exportResetBtn.textContent = 'Reset';
+  exportResetBtn.addEventListener('click', () => {
+    resetSimulationManagementSettings();
+    const autoExport = document.getElementById('simmanage-auto-export');
+    if (autoExport) {
+      autoExport.checked = SIM_MANAGEMENT_DEFAULTS.autoExportOnComplete;
+    }
+    Array.from(sec.querySelectorAll('input[data-sim-management-format]')).forEach((input) => {
+      const formatId = input.getAttribute('data-sim-management-format');
+      input.checked = SIM_MANAGEMENT_DEFAULTS.selectedFormats.includes(formatId);
+    });
+  });
+  exportHeader.appendChild(exportResetBtn);
+  sec.appendChild(exportHeader);
+
+  _appendInlineRow(sec, {
+    labelText: 'Auto-export completed task bundle',
+    labelFor: 'simmanage-auto-export',
+    controlHtml: `<input type="checkbox" id="simmanage-auto-export"${managementSettings.autoExportOnComplete ? ' checked' : ''}>`,
+  });
+
+  const exportFormatsRow = document.createElement('div');
+  exportFormatsRow.className = 'settings-control-row';
+  const exportFormatsLabel = document.createElement('label');
+  exportFormatsLabel.textContent = 'Bundle Formats';
+  exportFormatsRow.appendChild(exportFormatsLabel);
+
+  const exportFormatsValue = document.createElement('div');
+  exportFormatsValue.className = 'settings-control-value';
+  exportFormatsValue.setAttribute('style', 'display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px 12px;align-items:start;');
+
+  const exportFormatLabels = new Map([
+    ['png', 'Chart Images (PNG)'],
+    ['csv', 'Frequency Data CSV'],
+    ['json', 'Full Results JSON'],
+    ['txt', 'Summary Text Report'],
+    ['polar_csv', 'Polar Directivity CSV'],
+    ['impedance_csv', 'Impedance CSV'],
+    ['vacs', 'ABEC Spectrum (VACS)'],
+    ['stl', 'Waveguide STL'],
+    ['fusion_csv', 'Fusion 360 CSV Curves']
+  ]);
+
+  SIMULATION_EXPORT_FORMAT_IDS.forEach((formatId) => {
+    const option = document.createElement('label');
+    option.setAttribute('style', 'display:flex;align-items:center;gap:8px;');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = `simmanage-format-${formatId}`;
+    checkbox.setAttribute('data-sim-management-format', formatId);
+    checkbox.checked = managementSettings.selectedFormats.includes(formatId);
+    option.appendChild(checkbox);
+    const text = document.createElement('span');
+    text.textContent = exportFormatLabels.get(formatId) || formatId;
+    option.appendChild(text);
+    exportFormatsValue.appendChild(option);
+  });
+
+  exportFormatsRow.appendChild(exportFormatsValue);
+  sec.appendChild(exportFormatsRow);
 
   // --- Solver Settings sub-section ---
   const currentSimBasic = getCurrentSimBasicSettings();
