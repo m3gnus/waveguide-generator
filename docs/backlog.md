@@ -80,12 +80,12 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P1 Simulation UX That Depends On Runtime Truth
 
-- [ ] Show simulation mesh vertex/triangle counts in the stats widget once the `.msh`/simulation mesh is built.
+- [x] Show simulation mesh vertex/triangle counts in the stats widget once the `.msh`/simulation mesh is built.
   Source: user request; `src/app/scene.js`; `src/modules/simulation/useCases.js`; `server/services/simulation_runner.py`.
   Relevant: Yes. The current stats widget always shows viewport tessellation counts from `renderModel()`, which diverges from the actual simulation mesh.
   Will it improve the program: Yes. It gives users the complexity they actually submitted to BEM instead of a potentially misleading viewport proxy.
   Research findings: `src/app/scene.js` always writes viewport counts into `app.stats`, while `server/services/simulation_runner.py` stores `mesh_artifact` and OCC stats but does not publish canonical vertex/triangle counts into job state. There is no shared app/panel state that can swap the stats widget from viewport counts to solve-mesh counts after OCC mesh generation succeeds.
-  Best approach: Keep viewport counts until a simulation mesh exists, then publish simulation mesh stats from the point where OCC mesh/canonical mesh construction succeeds. Persist the latest simulation mesh counts in panel/app state and update the same stats widget when `mesh_artifact` or canonical mesh preparation completes.
+  Completed: March 11, 2026. The backend job payload now publishes `mesh_stats` as soon as canonical/occ-adaptive solve mesh arrays exist, the simulation job cache persists those counts through polling/local job state, and the stats widget now flips from `Viewport` counts to `Simulation` counts once a live job reports solve-mesh geometry. Regression coverage now locks the backend `mesh_stats` publication, job-cache normalization, and polling-to-widget handoff.
 
 - [ ] Clarify solve-mesh versus export-mesh controls in the UI and docs.
   Source: archived future additions doc.

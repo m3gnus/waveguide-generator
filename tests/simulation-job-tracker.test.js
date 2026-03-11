@@ -107,6 +107,23 @@ test('mergeJobs preserves local label and script metadata when backend omits the
   assert.deepEqual(merged[0].script, { outputName: 'horn_design', counter: 1 });
 });
 
+test('mergeJobs preserves backend simulation mesh stats for the stats widget handoff', () => {
+  const merged = mergeJobs(
+    [{ id: 'job-1', status: 'queued', meshStats: null }],
+    [{
+      id: 'job-1',
+      status: 'running',
+      mesh_stats: { vertex_count: 88, triangle_count: 44, source: 'occ_adaptive_canonical' }
+    }]
+  );
+
+  assert.deepEqual(merged[0].meshStats, {
+    vertex_count: 88,
+    triangle_count: 44,
+    source: 'occ_adaptive_canonical'
+  });
+});
+
 test('removeJob removes job and result cache entry', () => {
   const panel = {
     jobs: new Map([['job-1', { id: 'job-1', status: 'complete' }]]),

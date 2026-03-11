@@ -26,6 +26,9 @@ export class App {
   constructor() {
     this.container = document.getElementById('canvas-container');
     this.stats = document.getElementById('stats');
+    this.viewportMeshStats = null;
+    this.simulationMeshStats = null;
+    this.activeMeshStatsSource = 'viewport';
     this.renderRequested = false;
     this.simulationPanel = null;
     this.uiCoordinator = UiModule.output.app(
@@ -152,7 +155,53 @@ export class App {
     return this.uiCoordinator.publishSimulationMeshError(message);
   }
 
+  setViewportMeshStats(meshStats) {
+    this.viewportMeshStats = normalizeMeshStats(meshStats);
+    this.activeMeshStatsSource = 'viewport';
+    this.renderMeshStats();
+    return this.viewportMeshStats;
+  }
+
+  setSimulationMeshStats(meshStats) {
+    const normalized = normalizeMeshStats(meshStats);
+    if (!normalized) {
+      return null;
+    }
+    this.simulationMeshStats = normalized;
+    this.activeMeshStatsSource = 'simulation';
+    this.renderMeshStats();
+    return this.simulationMeshStats;
+  }
+
+  renderMeshStats() {
+    if (!this.stats) {
+      return;
+    }
+    const activeStats = this.activeMeshStatsSource === 'simulation'
+      ? this.simulationMeshStats
+      : this.viewportMeshStats;
+    if (!activeStats) {
+      return;
+    }
+    const label = this.activeMeshStatsSource === 'simulation'
+      ? 'Simulation'
+      : 'Viewport';
+    this.stats.innerText = `${label}: ${activeStats.vertexCount} vertices | ${activeStats.triangleCount} triangles`;
+  }
+
   async checkForUpdates(buttonEl) {
     return checkForUpdates(buttonEl);
   }
+}
+
+function normalizeMeshStats(meshStats = null) {
+  const vertexCount = Number(meshStats?.vertexCount ?? meshStats?.vertex_count);
+  const triangleCount = Number(meshStats?.triangleCount ?? meshStats?.triangle_count);
+  if (!Number.isFinite(vertexCount) || !Number.isFinite(triangleCount)) {
+    return null;
+  }
+  return {
+    vertexCount: Math.max(0, Math.floor(vertexCount)),
+    triangleCount: Math.max(0, Math.floor(triangleCount))
+  };
 }
