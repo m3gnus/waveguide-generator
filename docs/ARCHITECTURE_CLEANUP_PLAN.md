@@ -3,7 +3,7 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 6 (in progress)
+- Current phase: Phase 7 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
@@ -11,6 +11,7 @@
   - Phase 3 make geometry the source of truth (put geometry topology, face identity, and solver-tag mapping in one place)
   - Phase 4 rebuild export and simulation as real use-case modules
   - Phase 5 untangle UI state and circular workflow logic
+  - Phase 6 remove backend compatibility glue (routes now depend on contracts/services only, solver bootstrap reduced to dependency status, `/api/solve` validation moved into services)
 - In progress:
   - None
 
@@ -412,7 +413,7 @@ Turn `src/modules/*` into real application modules instead of pass-through wrapp
 - `node --test tests/export-module.test.js`
 - `npm test`
 
-### Implementation Notes (In Progress, March 11, 2026)
+### Implementation Notes (Completed, March 11, 2026)
 
 Completed in this step:
 
@@ -561,6 +562,8 @@ Completed in this step:
 4. Moved the shared request/response models into `server/contracts/` and rewired backend routes, services, and tests to import that package directly.
 5. Reduced `server/models.py` to a compatibility alias so internal code no longer depends on it.
 6. Removed solver-aware device-mode fallback imports from the contract definitions; contract validation now normalizes aliases locally inside `server/contracts/`.
+7. Moved route-facing solver/OCC adapters into `server/services/solver_runtime.py`, so `server/api/routes_*` now import service-layer runtime APIs instead of `server/solver_bootstrap.py` or `server/solver/*`.
+8. Moved `/api/solve` domain validation into `server/services/simulation_validation.py`, including OCC shell checks and full-domain quadrant normalization for adaptive solves.
 
 ## Phase 7: Eliminate Downstream Repair Logic
 
