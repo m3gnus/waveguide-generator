@@ -3,10 +3,7 @@ import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSetting
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import {
   allJobs,
-  hasActiveJobs,
-  persistPanelJobs,
-  removeJob,
-  upsertJob
+  hasActiveJobs
 } from './jobTracker.js';
 import {
   updateStageUi,
@@ -22,11 +19,16 @@ import {
   prepareOccAdaptiveSolveRequest,
   validateSimulationConfig,
   applySimulationJobScriptState,
-  buildQueuedSimulationJob,
-  buildCancelledSimulationJob,
-  resolveClearedFailedJobIds,
-  syncSimulationWorkspaceJobManifest
+  resolveClearedFailedJobIds
 } from '../../modules/simulation/useCases.js';
+import {
+  cancelSimulationControllerJob,
+  clearSimulationControllerJobs,
+  ensureSimulationControllerJobResults,
+  queueSimulationControllerJob,
+  recordSimulationControllerExport,
+  removeSimulationControllerJob
+} from './controller.js';
 
 export { validateSimulationConfig };
 
@@ -160,36 +162,22 @@ function setSimulationInputsFromScript(script = {}) {
 }
 
 async function ensureJobResults(panel, jobId, { display = true } = {}) {
-  const job = panel.jobs?.get(jobId);
-  if (!job) {
+  const result = await ensureSimulationControllerJobResults(panel, jobId, {
+    display,
+    displayResults: (results) => {
+      panel.displayResults(results);
+    }
+  });
+
+  if (result.reason === 'missing_job') {
     showError('Simulation task not found.');
     return null;
   }
-
-  panel.activeJobId = jobId;
-  panel.currentJobId = jobId;
-
-  if (panel.resultCache?.has(jobId)) {
-    const cached = panel.resultCache.get(jobId);
-    panel.lastResults = cached;
-    if (display) {
-      panel.displayResults(cached);
-    }
-    return cached;
-  }
-
-  if (job.status !== 'complete') {
+  if (result.reason === 'not_complete') {
     showError('Results are only available for completed simulations.');
     return null;
   }
-
-  const results = await panel.solver.getResults(jobId);
-  panel.resultCache.set(jobId, results);
-  panel.lastResults = results;
-  if (display) {
-    panel.displayResults(results);
-  }
-  return results;
+  return result.results;
 }
 
 export function renderJobList(panel) {
@@ -236,20 +224,11 @@ export async function exportJobResults(panel, jobId) {
   if (!results) return;
   const selectedExport = await panel.exportResults();
   if (selectedExport) {
-    const current = panel.jobs?.get(jobId);
-    if (current) {
-      const exportedFiles = Array.isArray(current.exportedFiles) ? [...current.exportedFiles] : [];
-      exportedFiles.push(`export-${selectedExport}:${new Date().toISOString()}`);
-      const next = upsertJob(panel, {
-        ...current,
-        id: current.id,
-        exportedFiles
-      });
-      persistPanelJobs(panel);
-      if (next) {
-        await syncSimulationWorkspaceJobManifest(next, { exportedFiles: next.exportedFiles });
-      }
-    }
+    await recordSimulationControllerExport(
+      panel,
+      jobId,
+      `export-${selectedExport}:${new Date().toISOString()}`
+    );
   }
   panel.pollSimulationStatus();
 }
@@ -283,8 +262,7 @@ export async function redoJob(panel, jobId) {
 
   // Remove the failed/cancelled job before re-running
   try { await panel.solver.deleteJob(jobId); } catch (_) { /* best-effort */ }
-  removeJob(panel, jobId);
-  persistPanelJobs(panel);
+  removeSimulationControllerJob(panel, jobId);
   renderJobList(panel);
 
   panel.runSimulation();
@@ -308,10 +286,9 @@ export async function removeJobFromFeed(panel, jobId) {
     return;
   }
 
-  if (!removeJob(panel, jobId)) {
+  if (!removeSimulationControllerJob(panel, jobId)) {
     return;
   }
-  persistPanelJobs(panel);
   renderJobList(panel);
 }
 
@@ -334,13 +311,7 @@ export async function clearFailedSimulations(panel) {
     return;
   }
 
-  let removed = 0;
-  for (const jobId of deletedIds) {
-    if (removeJob(panel, jobId)) {
-      removed += 1;
-    }
-  }
-  persistPanelJobs(panel);
+  const removed = clearSimulationControllerJobs(panel, deletedIds);
   renderJobList(panel);
   showMessage(
     removed > 0 ? `Deleted ${removed} failed simulation${removed === 1 ? '' : 's'} from database.` : 'No failed simulations found in database.',
@@ -361,13 +332,7 @@ export async function stopSimulation(panel) {
     }
   }
 
-  if (targetJobId && panel.jobs.has(targetJobId)) {
-    const cancelledJob = buildCancelledSimulationJob(panel.jobs.get(targetJobId));
-    if (cancelledJob) {
-      upsertJob(panel, cancelledJob);
-    }
-  }
-  persistPanelJobs(panel);
+  cancelSimulationControllerJob(panel, targetJobId);
   renderJobList(panel);
 
   // Update UI to show cancellation
@@ -469,8 +434,7 @@ export async function runSimulation(panel) {
     const startedIso = new Date().toISOString();
     const { name: outputName, counter } = readOutputNameAndCounter();
     const jobId = await panel.solver.submitSimulation(config, meshData, submitOptions);
-    setActiveJob(panel, jobId);
-    const createdJob = upsertJob(panel, buildQueuedSimulationJob({
+    const createdJob = await queueSimulationControllerJob(panel, {
       jobId,
       startedIso,
       outputName,
@@ -479,13 +443,9 @@ export async function runSimulation(panel) {
       waveguidePayload,
       preparedParams,
       stateSnapshot
-    }));
+    });
     incrementOutputCounter();
-    persistPanelJobs(panel);
     renderJobList(panel);
-    if (createdJob) {
-      await syncSimulationWorkspaceJobManifest(createdJob);
-    }
 
     updateStageUi(panel, {
       progress: 0.3,

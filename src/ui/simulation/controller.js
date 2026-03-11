@@ -3,15 +3,21 @@
 import { createSimulationClient } from '../../modules/simulation/useCases.js';
 import { UiModule } from '../../modules/ui/index.js';
 import {
-  readSimulationWorkspaceJobs
+  buildCancelledSimulationJob,
+  buildQueuedSimulationJob,
+  readSimulationWorkspaceJobs,
+  syncSimulationWorkspaceJobManifest
 } from '../../modules/simulation/useCases.js';
 import {
   createJobTracker,
   loadLocalIndex,
   mergeJobs,
+  removeJob,
   setJobsFromEntries,
-  persistPanelJobs
+  persistPanelJobs,
+  upsertJob
 } from './jobTracker.js';
+import { setActiveJob } from './jobOrchestration.js';
 
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
 
@@ -142,6 +148,107 @@ export function disposeSimulationPanelRuntime(runtime) {
   if (runtime?.uiCoordinator) {
     runtime.uiCoordinator.dispose();
   }
+}
+
+export async function ensureSimulationControllerJobResults(
+  controller,
+  jobId,
+  { display = true, displayResults = null } = {}
+) {
+  const job = controller?.jobs?.get(jobId);
+  if (!job) {
+    return { ok: false, reason: 'missing_job', results: null, job: null };
+  }
+
+  setActiveJob(controller, jobId);
+
+  if (controller.resultCache?.has(jobId)) {
+    const cached = controller.resultCache.get(jobId);
+    controller.lastResults = cached;
+    if (display && typeof displayResults === 'function') {
+      displayResults(cached);
+    }
+    return { ok: true, reason: 'cached', results: cached, job };
+  }
+
+  if (job.status !== 'complete') {
+    return { ok: false, reason: 'not_complete', results: null, job };
+  }
+
+  const results = await controller.solver.getResults(jobId);
+  controller.resultCache.set(jobId, results);
+  controller.lastResults = results;
+  if (display && typeof displayResults === 'function') {
+    displayResults(results);
+  }
+  return { ok: true, reason: 'fetched', results, job: controller.jobs.get(jobId) || job };
+}
+
+export async function recordSimulationControllerExport(
+  controller,
+  jobId,
+  exportToken
+) {
+  const current = controller?.jobs?.get(jobId);
+  if (!current) {
+    return null;
+  }
+
+  const exportedFiles = Array.isArray(current.exportedFiles) ? [...current.exportedFiles] : [];
+  exportedFiles.push(String(exportToken));
+  const next = upsertJob(controller, {
+    ...current,
+    id: current.id,
+    exportedFiles
+  });
+  persistPanelJobs(controller);
+  if (next) {
+    await syncSimulationWorkspaceJobManifest(next, { exportedFiles: next.exportedFiles });
+  }
+  return next;
+}
+
+export async function queueSimulationControllerJob(controller, jobInput) {
+  const createdJob = upsertJob(controller, buildQueuedSimulationJob(jobInput));
+  setActiveJob(controller, jobInput?.jobId);
+  persistPanelJobs(controller);
+  if (createdJob) {
+    await syncSimulationWorkspaceJobManifest(createdJob);
+  }
+  return createdJob;
+}
+
+export function removeSimulationControllerJob(controller, jobId) {
+  const removed = removeJob(controller, jobId);
+  if (removed) {
+    persistPanelJobs(controller);
+  }
+  return removed;
+}
+
+export function clearSimulationControllerJobs(controller, jobIds = []) {
+  let removed = 0;
+  for (const jobId of jobIds) {
+    if (removeJob(controller, jobId)) {
+      removed += 1;
+    }
+  }
+  persistPanelJobs(controller);
+  return removed;
+}
+
+export function cancelSimulationControllerJob(controller, jobId) {
+  if (!jobId || !controller?.jobs?.has(jobId)) {
+    persistPanelJobs(controller);
+    return null;
+  }
+
+  const cancelledJob = buildCancelledSimulationJob(controller.jobs.get(jobId));
+  if (cancelledJob) {
+    upsertJob(controller, cancelledJob);
+  }
+  persistPanelJobs(controller);
+  return cancelledJob;
 }
 
 export async function restoreSimulationControllerJobs(
