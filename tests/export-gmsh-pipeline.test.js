@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams } from '../src/geometry/index.js';
-import { buildExportMeshFromParams } from '../src/modules/export/useCases.js';
+import { buildExportMeshFromParams, prepareExportArtifacts } from '../src/modules/export/useCases.js';
 
 function makePreparedParams(overrides = {}) {
   return prepareGeometryParams(
@@ -22,7 +22,7 @@ function makePreparedParams(overrides = {}) {
   );
 }
 
-test('buildExportMeshFromParams requests backend OCC meshing endpoint', async () => {
+test('prepareExportArtifacts requests backend OCC meshing endpoint', async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
 
@@ -62,7 +62,7 @@ test('buildExportMeshFromParams requests backend OCC meshing endpoint', async ()
     const backendUrl = 'http://localhost:8000';
 
     const prepared = makePreparedParams({ encDepth: 180 });
-    const result = await buildExportMeshFromParams(prepared, { backendUrl });
+    const result = await prepareExportArtifacts(prepared, { backendUrl });
 
     assert.equal(result.msh.includes('$MeshFormat'), true);
     assert.equal(requests.length, 2);
@@ -90,7 +90,7 @@ test('buildExportMeshFromParams requests backend OCC meshing endpoint', async ()
   }
 });
 
-test('buildExportMeshFromParams does not fall back to /api/mesh/generate-msh on 503', async () => {
+test('prepareExportArtifacts does not fall back to /api/mesh/generate-msh on 503', async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
 
@@ -128,7 +128,7 @@ test('buildExportMeshFromParams does not fall back to /api/mesh/generate-msh on 
     const prepared = makePreparedParams({ encDepth: 0, wallThickness: 0 });
 
     await assert.rejects(
-      () => buildExportMeshFromParams(prepared, { backendUrl }),
+      () => prepareExportArtifacts(prepared, { backendUrl }),
       /\/api\/mesh\/build failed: Python OCC mesh builder unavailable/
     );
 
@@ -136,6 +136,52 @@ test('buildExportMeshFromParams does not fall back to /api/mesh/generate-msh on 
     assert.equal(requests[0], 'http://localhost:8000/health');
     assert.equal(requests[1], 'http://localhost:8000/api/mesh/build');
     assert.equal(requests.some((url) => url.endsWith('/api/mesh/generate-msh')), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('buildExportMeshFromParams forwards to prepareExportArtifacts for compatibility', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+
+    if (url.endsWith('/health')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        async json() {
+          return { status: 'ok' };
+        }
+      };
+    }
+
+    if (url.endsWith('/api/mesh/build')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        async json() {
+          return {
+            msh: '$MeshFormat\n2.2 0 8\n$EndMeshFormat\n',
+            generatedBy: 'gmsh-occ',
+            stats: { nodeCount: 3, elementCount: 1 }
+          };
+        }
+      };
+    }
+
+    throw new Error(`Unexpected request URL: ${url}`);
+  };
+
+  try {
+    const prepared = makePreparedParams();
+    const result = await buildExportMeshFromParams(prepared, { backendUrl: 'http://localhost:8000' });
+    assert.equal(typeof result.msh, 'string');
+    assert.equal(requests.includes('http://localhost:8000/api/mesh/build'), true);
   } finally {
     globalThis.fetch = originalFetch;
   }
