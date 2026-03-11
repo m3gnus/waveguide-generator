@@ -11,10 +11,9 @@ import {
   upsertJob,
   toUiJob
 } from './jobTracker.js';
-// renderJobList is imported from jobActions.js; this creates a circular reference between
-// polling.js and jobActions.js. Both modules only use each other's exports inside function
-// bodies (never at module init time), so ESM live bindings resolve correctly at runtime.
 import { renderJobList } from './jobActions.js';
+import { setPollTimer, setActiveJob } from './jobOrchestration.js';
+export { setPollTimer, clearPollTimer, setActiveJob } from './jobOrchestration.js';
 
 const ACTIVE_POLL_MS = 1000;
 const IDLE_POLL_MS = 15000;
@@ -67,38 +66,6 @@ function nextBackoffMs(currentBackoffMs) {
     return ACTIVE_POLL_MS * 2;
   }
   return Math.min(MAX_POLL_BACKOFF_MS, current * 2);
-}
-
-/**
- * @param {PollingPanel} panel
- * @param {ReturnType<typeof setTimeout>} timer
- */
-export function setPollTimer(panel, timer) {
-  panel.pollTimer = timer;
-  panel.pollInterval = timer;
-}
-
-/**
- * @param {PollingPanel} panel
- */
-export function clearPollTimer(panel) {
-  if (panel.pollTimer) {
-    clearTimeout(panel.pollTimer);
-  }
-  panel.pollTimer = null;
-  panel.pollInterval = null;
-  // Reset isPolling so pollSimulationStatus() can restart the loop if needed.
-  panel.isPolling = false;
-  panel.consecutivePollFailures = 0;
-}
-
-/**
- * @param {PollingPanel} panel
- * @param {string|null|undefined} jobId
- */
-export function setActiveJob(panel, jobId) {
-  panel.activeJobId = jobId || null;
-  panel.currentJobId = panel.activeJobId;
 }
 
 /**
@@ -220,8 +187,7 @@ export function pollSimulationStatus(panel) {
       // so the loop guard remains active while the next tick is pending).
       if (panel.pollTimer) clearTimeout(panel.pollTimer);
       const nextTimer = setTimeout(() => { pollOnce().catch(() => {}); }, panel.pollDelayMs);
-      panel.pollTimer = nextTimer;
-      panel.pollInterval = nextTimer;
+      setPollTimer(panel, nextTimer);
     }
   };
 
