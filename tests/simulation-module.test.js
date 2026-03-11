@@ -12,10 +12,17 @@ import {
   updateSimulationStateParams,
   loadSimulationStateSnapshot,
   applySimulationJobScriptState,
+  readSimulationWorkspaceJobs,
+  syncSimulationWorkspaceIndex,
+  syncSimulationWorkspaceJobManifest,
   buildQueuedSimulationJob,
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds
 } from '../src/modules/simulation/useCases.js';
+import {
+  resetSelectedFolder,
+  setSelectedFolderHandle
+} from '../src/ui/workspace/folderWorkspace.js';
 
 function makeRawParams(overrides = {}) {
   return {
@@ -28,6 +35,61 @@ function makeRawParams(overrides = {}) {
     angularSegments: 24,
     lengthSegments: 10,
     ...overrides
+  };
+}
+
+function createMemoryDirectory(name = 'root') {
+  const files = new Map();
+  const directories = new Map();
+
+  return {
+    kind: 'directory',
+    name,
+    async getDirectoryHandle(dirName, options = {}) {
+      if (!directories.has(dirName)) {
+        if (!options.create) {
+          const error = new Error('not found');
+          error.name = 'NotFoundError';
+          throw error;
+        }
+        directories.set(dirName, createMemoryDirectory(dirName));
+      }
+      return directories.get(dirName);
+    },
+    async getFileHandle(fileName, options = {}) {
+      if (!files.has(fileName)) {
+        if (!options.create) {
+          const error = new Error('not found');
+          error.name = 'NotFoundError';
+          throw error;
+        }
+        files.set(fileName, '');
+      }
+      return {
+        async getFile() {
+          const textValue = files.get(fileName) ?? '';
+          return { async text() { return textValue; } };
+        },
+        async createWritable() {
+          return {
+            async write(content) {
+              files.set(fileName, String(content));
+            },
+            async close() {}
+          };
+        }
+      };
+    },
+    files,
+    directories,
+    async *entries() {
+      for (const [dirName, dirHandle] of directories.entries()) {
+        yield [dirName, dirHandle];
+      }
+      for (const [fileName] of files.entries()) {
+        yield [fileName, { kind: 'file', name: fileName }];
+      }
+    }
   };
 }
 
@@ -247,6 +309,59 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.configSummary.formula_type, 'OSSE');
   assert.deepEqual(job.configSummary.frequency_range, [100, 1000]);
   assert.deepEqual(job.script.params, { L: 120, a: 45 });
+});
+
+test('simulation workspace service rebuilds folder index from task manifests', async () => {
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
+
+  try {
+    const manifest = await syncSimulationWorkspaceJobManifest({
+      id: 'job-folder-1',
+      label: 'horn_1',
+      status: 'queued',
+      createdAt: '2026-03-11T12:00:00.000Z'
+    });
+
+    assert.equal(manifest.id, 'job-folder-1');
+
+    const restored = await readSimulationWorkspaceJobs();
+    assert.equal(restored.available, true);
+    assert.equal(restored.repaired, true);
+    assert.equal(restored.items.length, 1);
+    assert.equal(restored.items[0].id, 'job-folder-1');
+    assert.equal(root.files.has('.waveguide-tasks.index.v1.json'), true);
+  } finally {
+    resetSelectedFolder();
+  }
+});
+
+test('simulation workspace service writes normalized folder index entries', async () => {
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
+
+  try {
+    const result = await syncSimulationWorkspaceIndex([
+      {
+        id: 'job-folder-2',
+        status: 'complete',
+        exportedFiles: ['result.csv'],
+        scriptSnapshot: { outputName: 'horn' }
+      }
+    ]);
+
+    assert.equal(result.synced, true);
+    assert.equal(result.items.length, 1);
+
+    const restored = await readSimulationWorkspaceJobs();
+    assert.equal(restored.repaired, false);
+    assert.equal(restored.items.length, 1);
+    assert.equal(restored.items[0].id, 'job-folder-2');
+    assert.deepEqual(restored.items[0].exportedFiles, ['result.csv']);
+    assert.deepEqual(restored.items[0].scriptSnapshot, { outputName: 'horn' });
+  } finally {
+    resetSelectedFolder();
+  }
 });
 
 test('simulation use case builds cancelled job state and resolves failed cleanup IDs', () => {
