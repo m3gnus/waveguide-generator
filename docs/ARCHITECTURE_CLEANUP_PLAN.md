@@ -3,15 +3,16 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 5 (in progress)
+- Current phase: Phase 6 (not started)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
   - Phase 2 input normalization consolidation (DesignModule now owns OCC simulation/export normalization helpers consumed by module use cases)
   - Phase 3 make geometry the source of truth (put geometry topology, face identity, and solver-tag mapping in one place)
   - Phase 4 rebuild export and simulation as real use-case modules
-- In progress:
   - Phase 5 untangle UI state and circular workflow logic
+- In progress:
+  - None
 
 ## Session Shortcut
 
@@ -93,7 +94,9 @@ These are physics classes, not geometry names.
 
 `throat_disc` should remain a geometry identity. It should map to `ACOUSTIC_SOURCE` only when the active simulation setup says it is the driven boundary.
 
-## What Is Still Architecturally Wrong
+## Baseline Architectural Problems
+
+This section captures the pre-cleanup snapshot that motivated the phase plan. Use the execution status and per-phase implementation notes above/below as the source of truth for what has already been resolved.
 
 ### Frontend
 
@@ -519,6 +522,7 @@ Completed in this step:
    - `stopSimulationControllerJob(...)` now owns stop-request handling while preserving local cancellation fallback
 23. Reduced `jobActions.js` further to a DOM/progress adapter that reads inputs, renders UI state, and delegates submission/stop workflow through controller helpers.
 24. Expanded `tests/simulation-controller.test.js` with submission/cancellation boundary coverage so the controller owns solver workflow contracts explicitly.
+25. Removed the temporary `src/ui/simulation/actions.js` compatibility barrel and rewired the remaining runtime/tests to import focused submodules directly (`jobActions.js`, `polling.js`, `meshDownload.js`), leaving no documented compatibility shim in the Phase 5 simulation UI path.
 
 ## Phase 6: Remove Backend Compatibility Glue
 

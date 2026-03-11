@@ -6,7 +6,7 @@ import {
   removeJobFromFeed,
   stopSimulation,
   viewJobResults
-} from './actions.js';
+} from './jobActions.js';
 
 export function setupEventListeners(panel) {
   // Stop simulation button
