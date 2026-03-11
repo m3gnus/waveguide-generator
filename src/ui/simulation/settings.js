@@ -1,4 +1,7 @@
-import { GlobalState } from '../../state.js';
+import {
+  readSimulationState,
+  updateSimulationStateParams
+} from '../../modules/simulation/useCases.js';
 import {
   bindPolarUiToggleHandlers,
   getPolarBlocksSignature,
@@ -16,14 +19,15 @@ export function setupSimulationParamBindings(panel) {
       const nextValue = parse(e.target.value);
       if (Number.isNaN(nextValue)) return;
 
-      const currentValue = GlobalState.get().params[key];
+      const currentState = readSimulationState();
+      const currentValue = currentState?.params?.[key];
       if (currentValue === nextValue) return;
 
-      GlobalState.update({ [key]: nextValue });
+      updateSimulationStateParams({ [key]: nextValue });
     });
   });
 
-  syncSimulationSettings(panel, GlobalState.get());
+  syncSimulationSettings(panel, readSimulationState());
 }
 
 export function syncSimulationSettings(panel, state) {

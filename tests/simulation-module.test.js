@@ -5,8 +5,13 @@ import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams, buildCanonicalMeshPayload } from '../src/geometry/index.js';
 import { SimulationModule } from '../src/modules/simulation/index.js';
 import { DesignModule } from '../src/modules/design/index.js';
+import { GlobalState } from '../src/state.js';
 import {
   validateSimulationConfig,
+  readSimulationState,
+  updateSimulationStateParams,
+  loadSimulationStateSnapshot,
+  applySimulationJobScriptState,
   buildQueuedSimulationJob,
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds
@@ -113,6 +118,102 @@ test('simulation use case validates frequency configuration', () => {
     }),
     null
   );
+});
+
+test('simulation state facade reads and updates GlobalState through module boundary', () => {
+  const originalGet = GlobalState.get;
+  const originalUpdate = GlobalState.update;
+  const originalLoadState = GlobalState.loadState;
+
+  let currentState = {
+    type: 'OSSE',
+    params: { freqStart: 120, a: 30, _blocks: { horizontal: {} } }
+  };
+  const loadCalls = [];
+
+  GlobalState.get = () => currentState;
+  GlobalState.update = (nextParams) => {
+    currentState = {
+      ...currentState,
+      params: {
+        ...currentState.params,
+        ...nextParams
+      }
+    };
+  };
+  GlobalState.loadState = (nextState, source) => {
+    loadCalls.push({ nextState, source });
+    currentState = nextState;
+  };
+
+  try {
+    assert.equal(readSimulationState().params.freqStart, 120);
+
+    updateSimulationStateParams({ freqStart: 240 });
+    assert.equal(readSimulationState().params.freqStart, 240);
+
+    const loaded = loadSimulationStateSnapshot(
+      { type: 'OSSE', params: { freqStart: 360, _blocks: { diagonal: {} } } },
+      'test-snapshot-load'
+    );
+    assert.equal(loaded.params.freqStart, 360);
+    assert.equal(loadCalls.length, 1);
+    assert.equal(loadCalls[0].source, 'test-snapshot-load');
+  } finally {
+    GlobalState.get = originalGet;
+    GlobalState.update = originalUpdate;
+    GlobalState.loadState = originalLoadState;
+  }
+});
+
+test('simulation job script state application prefers snapshots and falls back to params', () => {
+  const originalGet = GlobalState.get;
+  const originalUpdate = GlobalState.update;
+  const originalLoadState = GlobalState.loadState;
+
+  let currentState = { type: 'OSSE', params: { L: 120 } };
+  let updateCalls = 0;
+  let loadCalls = 0;
+
+  GlobalState.get = () => currentState;
+  GlobalState.update = (nextParams) => {
+    updateCalls += 1;
+    currentState = {
+      ...currentState,
+      params: {
+        ...currentState.params,
+        ...nextParams
+      }
+    };
+  };
+  GlobalState.loadState = (nextState) => {
+    loadCalls += 1;
+    currentState = nextState;
+  };
+
+  try {
+    const snapshotResult = applySimulationJobScriptState({
+      stateSnapshot: { type: 'OSSE', params: { L: 200, _blocks: { horizontal: {} } } },
+      params: { L: 300 }
+    });
+    assert.equal(snapshotResult.mode, 'snapshot');
+    assert.equal(snapshotResult.params.L, 200);
+    assert.equal(loadCalls, 1);
+    assert.equal(updateCalls, 0);
+
+    const paramsResult = applySimulationJobScriptState({ params: { a: 42 } });
+    assert.equal(paramsResult.mode, 'params');
+    assert.equal(paramsResult.params.a, 42);
+    assert.equal(updateCalls, 1);
+
+    const noneResult = applySimulationJobScriptState({});
+    assert.equal(noneResult.mode, 'none');
+    assert.equal(noneResult.params, null);
+  } finally {
+    GlobalState.get = originalGet;
+    GlobalState.update = originalUpdate;
+    GlobalState.loadState = originalLoadState;
+  }
 });
 
 test('simulation use case builds queued job metadata and script snapshot', () => {
