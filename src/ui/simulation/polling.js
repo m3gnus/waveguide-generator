@@ -75,6 +75,9 @@ export function pollSimulationStatus(panel) {
       });
 
       if (activeJob) {
+        if (activeJob.meshStats && typeof panel.app?.setSimulationMeshStats === 'function') {
+          panel.app.setSimulationMeshStats(activeJob.meshStats);
+        }
         updateStageUi(panel, {
           progress: activeJob.progress ?? 0,
           stage: activeJob.stage || activeJob.status || 'queued',

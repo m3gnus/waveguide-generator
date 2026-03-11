@@ -540,6 +540,63 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         finally:
             _jrt.jobs.pop(job_id, None)
 
+    def test_occ_adaptive_publishes_mesh_stats_after_canonical_mesh_build(self):
+        request = self._make_occ_adaptive_request()
+
+        fake_occ_result = {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 5, "elementCount": 4},
+            "canonical_mesh": {
+                "vertices": [
+                    0.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0,
+                    1.0, 1.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.5, 0.5, 0.5,
+                ],
+                "indices": [
+                    0, 1, 4,
+                    1, 2, 4,
+                    2, 3, 4,
+                    3, 0, 4,
+                ],
+                "surfaceTags": [1, 2, 3, 4],
+            },
+        }
+
+        class MockSolver:
+            def prepare_mesh(self, *_args, **_kwargs):
+                return object()
+
+            def solve(self, *_args, **_kwargs):
+                return {"frequencies": [100.0], "directivity": {}}
+
+        job_id = "test-occ-mesh-stats"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+            ), patch(
+                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+            ), patch(
+                "services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result
+            ):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            self.assertEqual(
+                _jrt.jobs[job_id].get("mesh_stats"),
+                {
+                    "vertex_count": 5,
+                    "triangle_count": 4,
+                    "source": "occ_adaptive_canonical",
+                },
+            )
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
 
 class MeshArtifactEndpointTest(unittest.TestCase):
     def test_mesh_artifact_returns_404_for_unknown_job(self):

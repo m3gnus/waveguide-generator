@@ -506,6 +506,66 @@ test('clearPollTimer from polling.js resets isPolling and clears timer refs', ()
   }
 });
 
+test('pollSimulationStatus publishes backend simulation mesh stats to the app widget', async () => {
+  const originalDocument = global.document;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+
+  global.document = { getElementById() { return null; } };
+  global.setTimeout = () => 1;
+  global.clearTimeout = () => {};
+
+  const publishedMeshStats = [];
+
+  try {
+    const panel = {
+      isPolling: false,
+      pollTimer: null,
+      pollInterval: null,
+      pollDelayMs: 1000,
+      pollBackoffMs: 1000,
+      consecutivePollFailures: 0,
+      activeJobId: null,
+      currentJobId: null,
+      jobs: new Map(),
+      resultCache: new Map(),
+      solver: {
+        async listJobs() {
+          return {
+            items: [{
+              id: 'job-mesh-stats',
+              status: 'running',
+              progress: 0.35,
+              stage: 'mesh_prepare',
+              stage_message: 'Building adaptive OCC mesh',
+              mesh_stats: { vertex_count: 144, triangle_count: 72, source: 'occ_adaptive_canonical' }
+            }]
+          };
+        }
+      },
+      displayResults() {},
+      checkSolverConnection() {},
+      app: {
+        setSimulationMeshStats(meshStats) {
+          publishedMeshStats.push(meshStats);
+        }
+      }
+    };
+
+    pollSimulationStatus(panel);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.deepEqual(publishedMeshStats, [
+      { vertex_count: 144, triangle_count: 72, source: 'occ_adaptive_canonical' }
+    ]);
+  } finally {
+    global.document = originalDocument;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
 test('pollSimulationStatus enforces idle polling budget after status-fetch error', async () => {
   const originalDocument = global.document;
   const originalSetTimeout = global.setTimeout;

@@ -43,6 +43,7 @@ function normalizeItem(raw = {}) {
     label: raw.label ?? null,
     errorMessage: raw.errorMessage ?? raw.error_message ?? null,
     cancellationRequested: Boolean(raw.cancellationRequested ?? raw.cancellation_requested),
+    meshStats: raw.meshStats ?? raw.mesh_stats ?? null,
     script: raw.script ?? scriptSnapshot,
     rating: raw.rating ?? null,
     exportedFiles,
@@ -70,6 +71,7 @@ function toStorageItem(item) {
     label: item.label,
     error_message: item.errorMessage,
     cancellation_requested: Boolean(item.cancellationRequested),
+    mesh_stats: item.meshStats ?? null,
     script: item.script,
     rating: item.rating ?? null,
     exported_files: Array.isArray(item.exportedFiles) ? item.exportedFiles : [],
@@ -156,6 +158,7 @@ export function mergeJobs(localItems, remoteItems) {
         ...normalized,
         label: normalized.label ?? existing.label ?? null,
         script: normalized.script ?? existing.script ?? null,
+        meshStats: normalized.meshStats ?? existing.meshStats ?? null,
         rating: normalized.rating ?? existing.rating ?? null,
         exportedFiles: normalized.exportedFiles?.length
           ? normalized.exportedFiles
@@ -218,6 +221,7 @@ export function upsertJob(panel, rawEntry) {
     ...next,
     label: next.label ?? existing?.label ?? null,
     script: next.script ?? existing?.script ?? null,
+    meshStats: next.meshStats ?? existing?.meshStats ?? null,
     rating: next.rating ?? existing?.rating ?? null,
     exportedFiles: next.exportedFiles?.length
       ? next.exportedFiles
