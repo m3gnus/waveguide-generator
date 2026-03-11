@@ -1,5 +1,5 @@
-import { GeometryModule } from '../geometry/index.js';
 import { DesignModule } from '../design/index.js';
+import { buildCanonicalMeshPayload } from '../../geometry/pipeline.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 
 const SIMULATION_MODULE_ID = 'simulation';
@@ -18,6 +18,16 @@ function createSimulationImportEnvelope(params) {
   });
 }
 
+function assertDesignTaskEnvelope(input) {
+  if (
+    !isObject(input) ||
+    input.module !== DesignModule.id ||
+    input.stage !== 'task'
+  ) {
+    throw new Error('Simulation module design import requires a result from DesignModule.task().');
+  }
+}
+
 function assertSimulationImportEnvelope(input) {
   if (
     !isObject(input) ||
@@ -25,7 +35,7 @@ function assertSimulationImportEnvelope(input) {
     input.stage !== SIMULATION_IMPORT_STAGE ||
     !isObject(input.params)
   ) {
-    throw new Error('Simulation module task requires input from SimulationModule.import() or SimulationModule.importPrepared().');
+    throw new Error('Simulation module task requires input from SimulationModule.import(), SimulationModule.importPrepared(), or SimulationModule.importDesign().');
   }
 }
 
@@ -41,27 +51,33 @@ function assertSimulationTaskEnvelope(result) {
 }
 
 export function importSimulationInput(rawParams = {}, options = {}) {
-  const designTask = DesignModule.task(DesignModule.import(rawParams, options));
-  return createSimulationImportEnvelope(DesignModule.output.simulationParams(designTask));
+  return importDesignSimulationInput(
+    DesignModule.task(DesignModule.import(rawParams, options))
+  );
 }
 
 export function importPreparedSimulationInput(preparedParams = {}) {
   return createSimulationImportEnvelope(preparedParams);
 }
 
+export function importDesignSimulationInput(designTask) {
+  assertDesignTaskEnvelope(designTask);
+  return createSimulationImportEnvelope(DesignModule.output.simulationParams(designTask));
+}
+
 export function runSimulationTask(input, options = {}) {
   assertSimulationImportEnvelope(input);
-
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(input.params), {
+  const mesh = buildCanonicalMeshPayload(input.params, {
     includeEnclosure: options.includeEnclosure ?? Number(input.params.encDepth || 0) > 0,
-    adaptivePhi: options.adaptivePhi ?? false
+    adaptivePhi: options.adaptivePhi ?? false,
+    validateIntegrity: options.validateIntegrity === true
   });
 
   return Object.freeze({
     module: SIMULATION_MODULE_ID,
     stage: SIMULATION_TASK_STAGE,
     input,
-    mesh: GeometryModule.output.simulation(geometryTask)
+    mesh
   });
 }
 
@@ -93,6 +109,7 @@ export const SimulationModule = Object.freeze({
   id: SIMULATION_MODULE_ID,
   import: importSimulationInput,
   importPrepared: importPreparedSimulationInput,
+  importDesign: importDesignSimulationInput,
   task: runSimulationTask,
   output: Object.freeze({
     mesh: getSimulationMeshOutput,

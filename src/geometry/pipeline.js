@@ -18,6 +18,23 @@ function resolveBuildOptions(buildParams, options = {}) {
   };
 }
 
+function buildMeshData(params, options = {}) {
+  const preparedParams = prepareGeometryParams(params, { type: params?.type });
+  const buildParams = normalizeBuildParams(preparedParams, options);
+  const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
+  return { buildParams, meshData };
+}
+
+function buildGeometryMeshOutput(meshData) {
+  return {
+    vertices: Array.from(meshData.vertices),
+    indices: Array.from(meshData.indices),
+    ringCount: meshData.ringCount,
+    fullCircle: Boolean(meshData.fullCircle),
+    groups: meshData.groups || {}
+  };
+}
+
 function buildSimulationPayloadFromMesh(
   meshData,
   buildParams,
@@ -66,30 +83,25 @@ function buildSimulationPayloadFromMesh(
 }
 
 export function buildCanonicalMeshPayload(params, options = {}) {
-  const preparedParams = prepareGeometryParams(params, { type: params?.type });
-  const buildParams = normalizeBuildParams(preparedParams, options);
-  const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
+  const { buildParams, meshData } = buildMeshData(params, options);
   return buildSimulationPayloadFromMesh(meshData, buildParams, {
-    validateIntegrity: true
+    validateIntegrity: options.validateIntegrity ?? true
   });
 }
 
+export function buildGeometryMesh(params, options = {}) {
+  const { meshData } = buildMeshData(params, options);
+  return buildGeometryMeshOutput(meshData);
+}
+
 export function buildGeometryArtifacts(params, options = {}) {
-  const preparedParams = prepareGeometryParams(params, { type: params?.type });
-  const buildParams = normalizeBuildParams(preparedParams, options);
-  const meshData = buildWaveguideMesh(buildParams, resolveBuildOptions(buildParams, options));
+  const { buildParams, meshData } = buildMeshData(params, options);
   const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, {
     validateIntegrity: options.validateIntegrity === true
   });
 
   return {
-    mesh: {
-      vertices: Array.from(meshData.vertices),
-      indices: Array.from(meshData.indices),
-      ringCount: meshData.ringCount,
-      fullCircle: Boolean(meshData.fullCircle),
-      groups: meshData.groups || {}
-    },
+    mesh: buildGeometryMeshOutput(meshData),
     simulation,
     export: {
       verticalOffset: simulation.metadata.verticalOffset,

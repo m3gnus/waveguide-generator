@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams, buildCanonicalMeshPayload } from '../src/geometry/index.js';
 import { SimulationModule } from '../src/modules/simulation/index.js';
+import { DesignModule } from '../src/modules/design/index.js';
 
 function makeRawParams(overrides = {}) {
   return {
@@ -65,5 +66,25 @@ test('SimulationModule occ adaptive output builds solver submit options', () => 
   assert.equal(
     adaptive.submitOptions.mesh.waveguide_params,
     adaptive.waveguidePayload
+  );
+});
+
+test('SimulationModule.importDesign consumes DesignModule task output directly', () => {
+  const rawParams = makeRawParams({ encDepth: 120, wallThickness: 4 });
+  const designTask = DesignModule.task(
+    DesignModule.import(rawParams, {
+      type: 'OSSE',
+      applyVerticalOffset: true
+    })
+  );
+  const simulationInput = SimulationModule.importDesign(designTask);
+  const expectedPrepared = prepareGeometryParams(rawParams, {
+    type: 'OSSE',
+    applyVerticalOffset: true
+  });
+
+  assert.equal(
+    JSON.stringify(simulationInput.params),
+    JSON.stringify(expectedPrepared)
   );
 });

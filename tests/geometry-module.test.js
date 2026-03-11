@@ -5,9 +5,9 @@ import { getDefaults } from '../src/config/defaults.js';
 import {
   GeometryModule,
   prepareGeometryParams,
-  buildGeometryArtifacts,
-  buildCanonicalMeshPayload
+  buildGeometryMesh
 } from '../src/geometry/index.js';
+import { DesignModule } from '../src/modules/design/index.js';
 
 function makeRawParams(overrides = {}) {
   return {
@@ -23,7 +23,7 @@ function makeRawParams(overrides = {}) {
   };
 }
 
-test('GeometryModule exposes import, task, and output stages with legacy parity', () => {
+test('GeometryModule exposes import, task, and mesh-only output stages', () => {
   const rawParams = makeRawParams({ encDepth: 200, quadrants: '1' });
   const geometryInput = GeometryModule.import(rawParams, {
     type: 'OSSE',
@@ -37,23 +37,17 @@ test('GeometryModule exposes import, task, and output stages with legacy parity'
     type: 'OSSE',
     applyVerticalOffset: true
   });
-  const expectedArtifacts = buildGeometryArtifacts(expectedPrepared, {
+  const expectedMesh = buildGeometryMesh(expectedPrepared, {
     includeEnclosure: true
   });
 
   assert.equal(geometryInput.module, 'geometry');
   assert.equal(geometryInput.stage, 'import');
   assert.equal(geometryTask.stage, 'task');
-  assert.deepEqual(GeometryModule.output.mesh(geometryTask), expectedArtifacts.mesh);
-  assert.deepEqual(GeometryModule.output.simulation(geometryTask), expectedArtifacts.simulation);
-  assert.equal(
-    GeometryModule.output.export(geometryTask).verticalOffset,
-    expectedArtifacts.export.verticalOffset
-  );
-  assert.deepEqual(
-    GeometryModule.output.export(geometryTask).toAthVertices(),
-    expectedArtifacts.export.toAthVertices()
-  );
+  assert.deepEqual(GeometryModule.output.mesh(geometryTask), expectedMesh);
+  assert.equal(typeof GeometryModule.output.simulation, 'undefined');
+  assert.equal(typeof GeometryModule.output.export, 'undefined');
+  assert.equal(typeof GeometryModule.output.canonical, 'undefined');
 });
 
 test('GeometryModule.importPrepared preserves already prepared geometry params', () => {
@@ -73,28 +67,32 @@ test('GeometryModule.importPrepared preserves already prepared geometry params',
   const geometryTask = GeometryModule.task(geometryInput, {
     includeEnclosure: false
   });
-  const expectedArtifacts = buildGeometryArtifacts(preparedParams, {
+  const expectedMesh = buildGeometryMesh(preparedParams, {
     includeEnclosure: false
   });
 
   assert.equal(geometryInput.params.L, preparedParams.L);
   assert.equal(geometryInput.params.r0, preparedParams.r0);
-  assert.deepEqual(GeometryModule.output.mesh(geometryTask), expectedArtifacts.mesh);
+  assert.deepEqual(GeometryModule.output.mesh(geometryTask), expectedMesh);
 });
 
-test('GeometryModule canonical output matches legacy canonical payload builder', () => {
-  const rawParams = makeRawParams({ encDepth: 180, quadrants: '14' });
-  const geometryInput = GeometryModule.import(rawParams, {
+test('GeometryModule.importDesign consumes DesignModule task output directly', () => {
+  const rawParams = makeRawParams({ encDepth: 180, quadrants: '12' });
+  const designTask = DesignModule.task(
+    DesignModule.import(rawParams, {
+      type: 'OSSE',
+      applyVerticalOffset: true
+    })
+  );
+  const geometryInput = GeometryModule.importDesign(designTask);
+
+  const expectedPrepared = prepareGeometryParams(rawParams, {
     type: 'OSSE',
     applyVerticalOffset: true
   });
 
-  const expected = buildCanonicalMeshPayload(geometryInput.params, {
-    includeEnclosure: true
-  });
-
-  assert.deepEqual(
-    GeometryModule.output.canonical(geometryInput, { includeEnclosure: true }),
-    expected
+  assert.equal(
+    JSON.stringify(geometryInput.params),
+    JSON.stringify(expectedPrepared)
   );
 });
