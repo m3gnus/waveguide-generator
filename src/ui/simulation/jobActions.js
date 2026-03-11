@@ -16,18 +16,17 @@ import {
 import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
 import { downloadMeshArtifact } from './meshDownload.js';
 import {
-  prepareOccAdaptiveSolveRequest,
   validateSimulationConfig,
   applySimulationJobScriptState,
   resolveClearedFailedJobIds
 } from '../../modules/simulation/useCases.js';
 import {
-  cancelSimulationControllerJob,
   clearSimulationControllerJobs,
   ensureSimulationControllerJobResults,
-  queueSimulationControllerJob,
+  submitSimulationControllerJob,
   recordSimulationControllerExport,
-  removeSimulationControllerJob
+  removeSimulationControllerJob,
+  stopSimulationControllerJob
 } from './controller.js';
 
 export { validateSimulationConfig };
@@ -322,17 +321,10 @@ export async function clearFailedSimulations(panel) {
 export async function stopSimulation(panel) {
   const dom = getSimulationDom();
   const targetJobId = panel.activeJobId || panel.currentJobId;
-
-  if (targetJobId) {
-    try {
-      await panel.solver.stopJob(targetJobId);
-    } catch (error) {
-      console.warn('Failed to call stop API:', error);
-      // Continue with local cleanup even if API call fails
-    }
+  const { stopError } = await stopSimulationControllerJob(panel, targetJobId);
+  if (stopError) {
+    console.warn('Failed to call stop API:', stopError);
   }
-
-  cancelSimulationControllerJob(panel, targetJobId);
   renderJobList(panel);
 
   // Update UI to show cancellation
@@ -410,10 +402,6 @@ export async function runSimulation(panel) {
   try {
     // Get current mesh data
     const meshData = await panel.prepareMeshForSimulation();
-    const { waveguidePayload, submitOptions, preparedParams, stateSnapshot } = prepareOccAdaptiveSolveRequest({
-      mshVersion: '2.2',
-      simType: 2
-    });
 
     updateStageUi(panel, {
       progress: 0.2,
@@ -426,23 +414,12 @@ export async function runSimulation(panel) {
       dom.stopBtn.disabled = true;
     }
 
-    const health = await panel.solver.getHealthStatus();
-    if (!health?.solverReady || !health?.occBuilderReady) {
-      throw new Error('Backend solver and OCC mesher must be ready to run adaptive BEM simulation.');
-    }
-
-    const startedIso = new Date().toISOString();
     const { name: outputName, counter } = readOutputNameAndCounter();
-    const jobId = await panel.solver.submitSimulation(config, meshData, submitOptions);
-    const createdJob = await queueSimulationControllerJob(panel, {
-      jobId,
-      startedIso,
-      outputName,
-      counter,
+    await submitSimulationControllerJob(panel, {
       config,
-      waveguidePayload,
-      preparedParams,
-      stateSnapshot
+      meshData,
+      outputName,
+      counter
     });
     incrementOutputCounter();
     renderJobList(panel);
