@@ -289,6 +289,33 @@ export async function recordSimulationControllerExport(
   return next;
 }
 
+export async function recordSimulationControllerRating(
+  controller,
+  jobId,
+  rating
+) {
+  const current = controller?.jobs?.get(jobId);
+  if (!current) {
+    return null;
+  }
+
+  const numericRating = Number(rating);
+  const normalizedRating = Number.isFinite(numericRating)
+    ? Math.max(0, Math.min(5, Math.round(numericRating)))
+    : null;
+
+  const next = upsertJob(controller, {
+    ...current,
+    id: current.id,
+    rating: normalizedRating
+  });
+  persistControllerJobs(controller);
+  if (next) {
+    await syncSimulationWorkspaceJobManifest(next, { rating: next.rating });
+  }
+  return next;
+}
+
 export function prepareSimulationControllerSubmission(
   options = {}
 ) {
