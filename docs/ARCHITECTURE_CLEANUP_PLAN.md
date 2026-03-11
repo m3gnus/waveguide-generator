@@ -644,6 +644,8 @@ Finish the cleanup by removing dead branches and stale language.
 4. Rewired the UI module's lazy simulation-panel loader to the real `src/ui/simulation/index.js` entry point and deleted the old `src/ui/simulationPanel.js` alias file.
 5. Rewired canonical mesh payload coverage to import directly from `src/geometry/pipeline.js` and `src/geometry/tags.js`, then deleted the deprecated `src/simulation/payload.js` alias.
 6. After this slice, no runtime or test code depends on those legacy frontend alias entry points.
+7. Removed `buildExportMeshFromParams(...)` from `src/modules/export/useCases.js`; callers now use `prepareExportArtifacts(...)` as the only OCC mesh-build entry point.
+8. Deleted the compatibility-only regression coverage for that alias and kept the export pipeline tests on the real API surface.
 
 ## Suggested Implementation Order
 
