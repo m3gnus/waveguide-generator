@@ -1,4 +1,4 @@
-import { MWGConfigParser } from '../config/index.js';
+import { importMWGConfig } from '../modules/design/useCases.js';
 import { GlobalState } from '../state.js';
 import { showError } from '../ui/feedback.js';
 import {
@@ -6,11 +6,6 @@ import {
   setExportFields,
   resetParameterChangeTracking
 } from '../ui/fileOps.js';
-import {
-  coerceConfigParams,
-  applyAthImportDefaults,
-  isMWGConfig
-} from '../geometry/index.js';
 
 export function handleFileUpload(event) {
   const target = event?.target;
@@ -26,25 +21,14 @@ export function handleFileUpload(event) {
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
-      const content = e.target.result;
-      const parsed = MWGConfigParser.parse(content);
-      if (parsed.type) {
-        const typedParams = coerceConfigParams(parsed.params);
-
-        if (parsed.blocks && Object.keys(parsed.blocks).length > 0) {
-          typedParams._blocks = parsed.blocks;
-        }
-
-        if (!isMWGConfig(content)) {
-          applyAthImportDefaults(parsed, typedParams);
-        }
-
+      const result = importMWGConfig(e.target.result, file.name);
+      if (result.success) {
         // Loading a config establishes a new baseline; skip this update as a "user change".
         resetParameterChangeTracking({ skipNext: true });
-        GlobalState.update(typedParams, parsed.type);
+        GlobalState.update(result.params, result.type);
         setExportFields(deriveExportFieldsFromFileName(file.name));
       } else {
-        showError('Could not find OSSE or R-OSSE block in config file.');
+        showError(result.error || 'Failed to parse config file.');
       }
     } finally {
       resetInputValue();

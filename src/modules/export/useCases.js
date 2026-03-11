@@ -1,28 +1,20 @@
-import { saveFile, getExportBaseName } from '../ui/fileOps.js';
-import { showError } from '../ui/feedback.js';
-import { GlobalState } from '../state.js';
-import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
-import { isDevRuntime } from '../config/runtimeMode.js';
-import { ExportModule } from '../modules/export/index.js';
-import { DesignModule } from '../modules/design/index.js';
-
-function getBackendUrl(app) {
-  return app?.simulationPanel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
-}
+import { saveFile, getExportBaseName } from '../../ui/fileOps.js';
+import { showError } from '../../ui/feedback.js';
+import { GlobalState } from '../../state.js';
+import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
+import { isDevRuntime } from '../../config/runtimeMode.js';
+import { ExportModule } from './index.js';
+import { DesignModule } from '../design/index.js';
 
 /**
  * Build an OCC-based .msh using the Python builder (POST /api/mesh/build).
  * Supports R-OSSE and OSSE configs when the backend Gmsh Python API is installed.
  */
-export async function buildExportMeshFromParams(app, preparedParams, options = {}) {
+export async function buildExportMeshFromParams(preparedParams, { backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}) {
   const exportTask = await ExportModule.task(
     ExportModule.importOccMeshBuild(preparedParams, {
-      backendUrl: getBackendUrl(app),
-      onStatus(message) {
-        if (app?.stats) {
-          app.stats.innerText = message.replace('...', '\u2026');
-        }
-      }
+      backendUrl,
+      onStatus
     }),
     options
   );
@@ -30,7 +22,7 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
   return ExportModule.output.occMesh(exportTask);
 }
 
-export function exportSTL(app) {
+export function exportSTL() {
   const baseName = getExportBaseName();
   const designTask = DesignModule.task(
     DesignModule.importState(GlobalState.get(), {
@@ -58,13 +50,12 @@ export function exportMWGConfig() {
   }
 }
 
-export function exportProfileCSV(app) {
-  if (!app.hornMesh) {
+export function exportProfileCSV(vertices) {
+  if (!vertices || vertices.length === 0) {
     showError('Please generate a horn model first.');
     return;
   }
 
-  const vertices = app.hornMesh.geometry.attributes.position.array;
   const state = GlobalState.get();
   const baseName = getExportBaseName();
   const designTask = DesignModule.task(

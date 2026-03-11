@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams } from '../src/geometry/index.js';
-import { buildExportMeshFromParams } from '../src/app/exports.js';
+import { buildExportMeshFromParams } from '../src/modules/export/useCases.js';
 
 function makePreparedParams(overrides = {}) {
   return prepareGeometryParams(
@@ -59,16 +59,10 @@ test('buildExportMeshFromParams requests backend OCC meshing endpoint', async ()
   };
 
   try {
-    const app = {
-      simulationPanel: {
-        solver: {
-          backendUrl: 'http://localhost:8000'
-        }
-      }
-    };
+    const backendUrl = 'http://localhost:8000';
 
     const prepared = makePreparedParams({ encDepth: 180 });
-    const result = await buildExportMeshFromParams(app, prepared);
+    const result = await buildExportMeshFromParams(prepared, { backendUrl });
 
     assert.equal(result.msh.includes('$MeshFormat'), true);
     assert.equal(requests.length, 2);
@@ -129,18 +123,12 @@ test('buildExportMeshFromParams does not fall back to /api/mesh/generate-msh on 
   };
 
   try {
-    const app = {
-      simulationPanel: {
-        solver: {
-          backendUrl: 'http://localhost:8000'
-        }
-      }
-    };
+    const backendUrl = 'http://localhost:8000';
 
     const prepared = makePreparedParams({ encDepth: 0, wallThickness: 0 });
 
     await assert.rejects(
-      () => buildExportMeshFromParams(app, prepared),
+      () => buildExportMeshFromParams(prepared, { backendUrl }),
       /\/api\/mesh\/build failed: Python OCC mesh builder unavailable/
     );
 
