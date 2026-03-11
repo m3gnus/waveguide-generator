@@ -15,7 +15,9 @@ import {
   removeSimulationControllerJob,
   restoreSimulationControllerJobs,
   restoreSimulationPanelRuntime,
-  disposeSimulationPanelRuntime
+  disposeSimulationPanelRuntime,
+  stopSimulationControllerJob,
+  submitSimulationControllerJob
 } from '../src/ui/simulation/controller.js';
 
 test('createSimulationControllerStore initializes expected controller state', () => {
@@ -287,6 +289,108 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
 
   const updated = await recordSimulationControllerExport(controller, 'job-queued-1', 'export-csv:2026-03-11T10:01:00.000Z');
   assert.deepEqual(updated.exportedFiles, ['export-csv:2026-03-11T10:01:00.000Z']);
+});
+
+test('submitSimulationControllerJob checks solver health and queues the submitted job through the controller boundary', async () => {
+  const calls = [];
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getHealthStatus() {
+        calls.push(['health']);
+        return { solverReady: true, occBuilderReady: true };
+      },
+      async submitSimulation(config, meshData, submitOptions) {
+        calls.push(['submit', config, meshData, submitOptions]);
+        return 'job-submit-1';
+      }
+    }
+  });
+
+  const config = {
+    frequencyStart: 100,
+    frequencyEnd: 1000,
+    numFrequencies: 6,
+    frequencySpacing: 'log',
+    deviceMode: 'auto',
+    polarConfig: {}
+  };
+  const meshData = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2],
+    surfaceTags: [2]
+  };
+  const submission = {
+    waveguidePayload: { formula_type: 'OSSE' },
+    submitOptions: { mesh: { strategy: 'occ_adaptive' } },
+    preparedParams: { L: 120 },
+    stateSnapshot: { type: 'OSSE', params: { L: 120 } }
+  };
+
+  const result = await submitSimulationControllerJob(controller, {
+    config,
+    meshData,
+    outputName: 'simulation',
+    counter: 3,
+    submission
+  });
+
+  assert.equal(result.jobId, 'job-submit-1');
+  assert.equal(result.createdJob.id, 'job-submit-1');
+  assert.equal(controller.activeJobId, 'job-submit-1');
+  assert.equal(controller.currentJobId, 'job-submit-1');
+  assert.deepEqual(calls, [
+    ['health'],
+    ['submit', config, meshData, submission.submitOptions]
+  ]);
+});
+
+test('submitSimulationControllerJob rejects when backend solver dependencies are unavailable', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getHealthStatus() {
+        return { solverReady: false, occBuilderReady: true };
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => submitSimulationControllerJob(controller, {
+      config: {
+        frequencyStart: 100,
+        frequencyEnd: 1000,
+        numFrequencies: 3
+      },
+      meshData: { vertices: [], indices: [], surfaceTags: [] },
+      outputName: 'simulation',
+      counter: 1,
+      submission: {
+        waveguidePayload: { formula_type: 'OSSE' },
+        submitOptions: {},
+        preparedParams: {},
+        stateSnapshot: { params: {} }
+      }
+    }),
+    /backend solver and OCC mesher must be ready/i
+  );
+});
+
+test('stopSimulationControllerJob keeps local cancellation behavior even when stop API fails', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async stopJob() {
+        throw new Error('network down');
+      }
+    }
+  });
+  controller.jobs.set('job-running', { id: 'job-running', status: 'running' });
+  controller.activeJobId = 'job-running';
+  controller.currentJobId = 'job-running';
+
+  const result = await stopSimulationControllerJob(controller, 'job-running');
+
+  assert.match(result.stopError?.message || '', /network down/i);
+  assert.equal(result.cancelledJob?.status, 'cancelled');
+  assert.equal(controller.jobs.get('job-running')?.status, 'cancelled');
 });
 
 test('controller job mutation helpers remove, clear, and cancel jobs via controller boundary', () => {

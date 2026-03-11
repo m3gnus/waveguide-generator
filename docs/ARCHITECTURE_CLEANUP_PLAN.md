@@ -513,6 +513,12 @@ Completed in this step:
    - manifest sync delegation with error callback hook
 20. Reduced `polling.js` to a thinner UI timer/stage wrapper that delegates reconciliation and result-cache mutation to controller helpers.
 21. Expanded `tests/simulation-controller.test.js` with remote reconciliation coverage to keep the polling/controller boundary contract stable.
+22. Moved solver-backed submission/cancellation orchestration out of `src/ui/simulation/jobActions.js` into `src/ui/simulation/controller.js`:
+   - `prepareSimulationControllerSubmission(...)` now owns OCC adaptive submission request preparation
+   - `submitSimulationControllerJob(...)` now owns backend health checks, solver submission, and queued-job persistence
+   - `stopSimulationControllerJob(...)` now owns stop-request handling while preserving local cancellation fallback
+23. Reduced `jobActions.js` further to a DOM/progress adapter that reads inputs, renders UI state, and delegates submission/stop workflow through controller helpers.
+24. Expanded `tests/simulation-controller.test.js` with submission/cancellation boundary coverage so the controller owns solver workflow contracts explicitly.
 
 ## Phase 6: Remove Backend Compatibility Glue
 
