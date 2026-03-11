@@ -3,10 +3,12 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 2 (execution blueprint locked, implementation pending)
+- Current phase: Phase 2 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
+- In progress:
+  - Phase 2 input normalization consolidation (DesignModule now owns OCC simulation/export normalization helpers consumed by module use cases)
 
 ## Goal
 
@@ -303,6 +305,21 @@ Definition for "Phase 2 complete":
 1. No normalization helpers remain duplicated across design/export/simulation paths.
 2. Existing behavior covered by `tests/waveguide-payload.test.js`, `tests/export-module.test.js`, and `tests/app-mesh-integration.test.js` is preserved or intentionally updated with matching doc changes.
 3. `docs/PROJECT_DOCUMENTATION.md` and `docs/CANONICAL_CONTRACT.md` are updated in the same change set if normalization behavior shifts.
+
+### Implementation Notes (Started March 11, 2026)
+
+Completed in this step:
+
+1. Added shared OCC normalization helpers to `DesignModule`:
+   - `prepareOccSimulationParams(...)`
+   - `prepareOccExportParams(...)`
+   - `DesignModule.output.occSimulationParams(...)`
+   - `DesignModule.output.occExportParams(...)`
+2. Refactored `ExportModule` OCC mesh flow to consume design-layer OCC export normalization before request/payload assembly.
+3. Refactored `SimulationModule` OCC-adaptive request builder to consume design-layer OCC simulation normalization.
+4. Added/updated contract tests:
+   - `tests/design-module.test.js` (new OCC normalization coverage)
+   - `tests/export-module.test.js` (new assertion that OCC request payload uses design-layer export normalization)
 
 ## Phase 3: Make Geometry The Source Of Truth
 

@@ -130,3 +130,71 @@ test('ExportModule file tasks return save descriptors for STL, CSV, and config',
   assert.equal(configFiles[0].fileName, 'demo.txt');
   assert.equal(typeof configFiles[0].content, 'string');
 });
+
+test('ExportModule OCC mesh build uses design-layer OCC export normalization for request payload', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+
+    if (url.endsWith('/health')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        async json() {
+          return { status: 'ok' };
+        }
+      };
+    }
+
+    if (url.endsWith('/api/mesh/build')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        async json() {
+          return {
+            msh: '$MeshFormat\n2.2 0 8\n$EndMeshFormat\n',
+            generatedBy: 'gmsh-occ',
+            stats: { nodeCount: 3, elementCount: 1 }
+          };
+        }
+      };
+    }
+
+    throw new Error(`Unexpected request URL: ${url}`);
+  };
+
+  try {
+    const prepared = makePreparedParams({
+      encDepth: 0,
+      wallThickness: 0,
+      angularSegments: 21.2,
+      lengthSegments: 9.1,
+      scale: 2,
+      throatResolution: 3,
+      mouthResolution: 5,
+      rearResolution: 7,
+      quadrants: 'not-a-quadrant'
+    });
+
+    await ExportModule.task(
+      ExportModule.importOccMeshBuild(prepared, {
+        backendUrl: 'http://localhost:8000'
+      })
+    );
+
+    const payload = JSON.parse(requests[1].init.body);
+    assert.equal(payload.n_angular, 20);
+    assert.equal(payload.n_length, 10);
+    assert.equal(payload.throat_res, 12);
+    assert.equal(payload.mouth_res, 20);
+    assert.equal(payload.rear_res, 28);
+    assert.equal(payload.wall_thickness, 5);
+    assert.equal(payload.quadrants, 1234);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -1,4 +1,4 @@
-import { DesignModule } from '../design/index.js';
+import { DesignModule, prepareOccSimulationParams } from '../design/index.js';
 import {
   buildCanonicalMeshPayloadFromShape
 } from '../../geometry/pipeline.js';
@@ -100,7 +100,8 @@ export function buildOccAdaptiveSimulationOutput(input, options = {}) {
 
   const mshVersion = options.mshVersion || '2.2';
   const simType = options.simType ?? 2;
-  const waveguidePayload = buildWaveguidePayload(input.params, mshVersion);
+  const occParams = prepareOccSimulationParams(input.params);
+  const waveguidePayload = buildWaveguidePayload(occParams, mshVersion);
   waveguidePayload.sim_type = simType;
 
   return Object.freeze({

@@ -11,6 +11,7 @@ import {
 } from '../../geometry/pipeline.js';
 import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
 import { GeometryModule } from '../geometry/index.js';
+import { prepareOccExportParams } from '../design/index.js';
 
 const EXPORT_MODULE_ID = 'export';
 const EXPORT_IMPORT_STAGE = 'import';
@@ -21,13 +22,6 @@ const EXPORT_KINDS = Object.freeze({
   STL: 'stl',
   PROFILE_CSV: 'profile-csv',
   CONFIG: 'config'
-});
-
-const GMSH_EXPORT_DEFAULTS = Object.freeze({
-  segmentDivisor: 1,
-  resolutionScale: 1,
-  minAngularSegments: 20,
-  minLengthSegments: 10
 });
 
 function isObject(value) {
@@ -69,68 +63,10 @@ function assertExportTaskEnvelope(result, expectedKind = null) {
   }
 }
 
-function toPositiveNumber(value, fallback) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function scaleResolutionValue(value, scale) {
-  if (value === undefined || value === null || value === '') return value;
-
-  if (typeof value === 'number') {
-    return value > 0 ? value * scale : value;
-  }
-
-  const text = String(value).trim();
-  if (!text) return value;
-  const parts = text.split(',').map((part) => part.trim()).filter((part) => part.length > 0);
-  if (parts.length === 0) return value;
-
-  const nums = parts.map((part) => Number(part));
-  if (nums.some((n) => !Number.isFinite(n))) return value;
-
-  return nums.map((n) => (n > 0 ? n * scale : n)).join(',');
-}
-
-function normalizeAngularSegments(value, minSegments) {
-  const rounded = Math.max(minSegments, Math.round(value));
-  const snapped = Math.round(rounded / 4) * 4;
-  return Math.max(4, snapped);
-}
-
 function getMeshRingCount(rawAngularSegments) {
   const count = Math.max(4, Math.round(Number(rawAngularSegments) || 0));
   if (count % 4 === 0) return count;
   return Math.max(8, Math.ceil(count / 8) * 8);
-}
-
-function buildGmshExportParams(preparedParams) {
-  const hasEnclosure = Number(preparedParams.encDepth || 0) > 0;
-  const baseAngular = toPositiveNumber(preparedParams.angularSegments, 120);
-  const baseLength = toPositiveNumber(preparedParams.lengthSegments, 40);
-  const coarseAngular = normalizeAngularSegments(
-    baseAngular / GMSH_EXPORT_DEFAULTS.segmentDivisor,
-    GMSH_EXPORT_DEFAULTS.minAngularSegments
-  );
-  const coarseLength = Math.max(
-    GMSH_EXPORT_DEFAULTS.minLengthSegments,
-    Math.round(baseLength / GMSH_EXPORT_DEFAULTS.segmentDivisor)
-  );
-  const scale = preparedParams.scale ?? GMSH_EXPORT_DEFAULTS.resolutionScale;
-
-  return {
-    ...preparedParams,
-    angularSegments: coarseAngular,
-    lengthSegments: coarseLength,
-    throatResolution: toPositiveNumber(preparedParams.throatResolution, 6) * scale,
-    mouthResolution: toPositiveNumber(preparedParams.mouthResolution, 15) * scale,
-    rearResolution: toPositiveNumber(preparedParams.rearResolution, 40) * scale,
-    encFrontResolution: scaleResolutionValue(preparedParams.encFrontResolution ?? '25,25,25,25', scale),
-    encBackResolution: scaleResolutionValue(preparedParams.encBackResolution ?? '40,40,40,40', scale),
-    wallThickness: hasEnclosure
-      ? preparedParams.wallThickness
-      : toPositiveNumber(preparedParams.wallThickness, 5)
-  };
 }
 
 async function checkBackendReachable(backendUrl) {
@@ -198,7 +134,8 @@ async function runOccMeshExportTask(input, options = {}) {
   input.onStatus?.('Building mesh (Python OCC)...');
 
   const mshVersion = options.mshVersion || '2.2';
-  const requestPayload = buildWaveguidePayload(input.params, mshVersion);
+  const occParams = prepareOccExportParams(input.params);
+  const requestPayload = buildWaveguidePayload(occParams, mshVersion);
 
   let response;
   try {
@@ -223,17 +160,16 @@ async function runOccMeshExportTask(input, options = {}) {
     throw new Error('Invalid response from /api/mesh/build: expected gmsh-occ mesh data.');
   }
 
-  const gmshParams = buildGmshExportParams(input.params);
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(gmshParams), {
-    includeEnclosure: Number(gmshParams.encDepth || 0) > 0
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(occParams), {
+    includeEnclosure: Number(occParams.encDepth || 0) > 0
   });
   const geometryShape = GeometryModule.output.shape(geometryTask);
   const payload = buildCanonicalMeshPayloadFromShape(geometryShape, {
-    includeEnclosure: Number(gmshParams.encDepth || 0) > 0,
+    includeEnclosure: Number(occParams.encDepth || 0) > 0,
     validateIntegrity: false
   });
   const mesh = buildGeometryMeshFromShape(geometryShape, {
-    includeEnclosure: Number(gmshParams.encDepth || 0) > 0
+    includeEnclosure: Number(occParams.encDepth || 0) > 0
   });
 
   return Object.freeze({
