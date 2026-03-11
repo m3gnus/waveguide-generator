@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { BemSolver, validateCanonicalMeshPayload } from '../src/solver/index.js';
 import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
 import { filterValidPairs } from '../src/ui/simulation/charts.js';
-import { downloadMeshArtifact, pollSimulationStatus } from '../src/ui/simulation/actions.js';
+import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
-import { pollSimulationStatus as pollFromSubModule, clearPollTimer } from '../src/ui/simulation/polling.js';
+import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { AppEvents } from '../src/events.js';
 import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
 
@@ -413,11 +413,6 @@ test('formatJobSummary is accessible from jobActions.js sub-module', () => {
 
 test('renderJobList is accessible from jobActions.js sub-module', () => {
   assert.strictEqual(typeof renderJobList, 'function');
-});
-
-test('pollSimulationStatus from polling.js sub-module is the same export as from actions.js barrel', () => {
-  // Both imports should resolve to the same function reference via the barrel re-export.
-  assert.strictEqual(pollSimulationStatus, pollFromSubModule);
 });
 
 test('clearPollTimer from polling.js resets isPolling and clears timer refs', () => {
