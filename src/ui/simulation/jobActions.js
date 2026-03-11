@@ -1,7 +1,5 @@
 import { showError, showMessage } from '../feedback.js';
 import { GlobalState } from '../../state.js';
-import { SimulationModule } from '../../modules/simulation/index.js';
-import { DesignModule } from '../../modules/design/index.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
@@ -26,6 +24,7 @@ import {
 // function bodies (never at module init time), so ESM live bindings resolve correctly at runtime.
 import { clearPollTimer, setActiveJob } from './polling.js';
 import { downloadMeshArtifact } from './meshDownload.js';
+import { prepareOccAdaptiveSolveRequest } from '../../modules/simulation/useCases.js';
 
 async function syncTaskManifestForJob(job, updates = null) {
   const workspaceHandle = getSelectedFolderHandle();
@@ -478,18 +477,7 @@ export async function runSimulation(panel) {
   try {
     // Get current mesh data
     const meshData = await panel.prepareMeshForSimulation();
-    if (!meshData.surfaceTags || meshData.surfaceTags.length !== meshData.indices.length / 3) {
-      throw new Error('Mesh payload is invalid: missing canonical surface tags.');
-    }
-    const state = GlobalState.get();
-    const designTask = DesignModule.task(
-      DesignModule.importState(state, {
-        applyVerticalOffset: true
-      })
-    );
-    const preparedParams = DesignModule.output.simulationParams(designTask);
-    const simulationInput = SimulationModule.importDesign(designTask);
-    const { waveguidePayload, submitOptions } = SimulationModule.output.occAdaptive(simulationInput, {
+    const { waveguidePayload, submitOptions, preparedParams, stateSnapshot } = prepareOccAdaptiveSolveRequest({
       mshVersion: '2.2',
       simType: 2
     });
@@ -546,7 +534,7 @@ export async function runSimulation(panel) {
         deviceMode: config.deviceMode,
         polarConfig: config.polarConfig,
         params: { ...preparedParams },
-        stateSnapshot: JSON.parse(JSON.stringify(state))
+        stateSnapshot
       }
     });
     incrementOutputCounter();
