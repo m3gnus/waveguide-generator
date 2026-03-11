@@ -7,10 +7,13 @@ import { ExportModule } from './index.js';
 import { DesignModule } from '../design/index.js';
 
 /**
- * Build an OCC-based .msh using the Python builder (POST /api/mesh/build).
- * Supports R-OSSE and OSSE configs when the backend Gmsh Python API is installed.
+ * Prepare OCC export artifacts using the Python mesher (`POST /api/mesh/build`).
+ * Returns `{ artifacts, payload, msh, meshStats }`.
  */
-export async function buildExportMeshFromParams(preparedParams, { backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}) {
+export async function prepareExportArtifacts(
+  preparedParams,
+  { backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}
+) {
   const exportTask = await ExportModule.task(
     ExportModule.importOccMeshBuild(preparedParams, {
       backendUrl,
@@ -20,6 +23,16 @@ export async function buildExportMeshFromParams(preparedParams, { backendUrl = D
   );
 
   return ExportModule.output.occMesh(exportTask);
+}
+
+/**
+ * @deprecated Use prepareExportArtifacts(...) instead.
+ */
+export async function buildExportMeshFromParams(
+  preparedParams,
+  { backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}
+) {
+  return prepareExportArtifacts(preparedParams, { backendUrl, onStatus, ...options });
 }
 
 export function exportSTL() {

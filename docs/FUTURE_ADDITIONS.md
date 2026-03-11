@@ -93,7 +93,7 @@ Next additions:
 
 ### Architecture audit
 - **Implemented (Audited Feb 22, 2026)**: JavaScript mesh engine audit completed for `buildWaveguideMesh.js`.
-- Current runtime callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/app/exports.js`, `src/app/mesh.js`).
+- Current runtime callers are viewport render, STL export, and simulation payload generation (`src/app/scene.js`, `src/modules/export/useCases.js`, `src/app/mesh.js`).
 - `adaptivePhi` is effectively STL-only in current UI behavior; viewport and simulation disable it.
 - Follow-up simplification candidates (not yet implemented):
 - Replace spread-based max-index checks (`Math.max(...indices)`) with a linear scan helper to avoid large-array argument limits.
