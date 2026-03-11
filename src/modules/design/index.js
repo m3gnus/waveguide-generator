@@ -64,6 +64,12 @@ function scaleResolutionValue(value, scale) {
   return nums.map((n) => (n > 0 ? n * scale : n)).join(',');
 }
 
+function normalizeProfileCsvAngularSegments(value) {
+  const count = Math.max(4, Math.round(Number(value) || 0));
+  if (count % 4 === 0) return count;
+  return Math.max(8, Math.ceil(count / 8) * 8);
+}
+
 function normalizeExportAngularSegments(value) {
   const rounded = Math.max(OCC_MIN_ANGULAR_SEGMENTS, Math.round(value));
   const snapped = Math.round(rounded / 4) * 4;
@@ -210,6 +216,19 @@ export function getOccExportDesignOutput(result) {
   return prepareOccExportParams(getPreparedDesignOutput(result));
 }
 
+export function prepareProfileCsvParams(preparedParams = {}) {
+  const base = isObject(preparedParams) ? preparedParams : {};
+  return Object.freeze({
+    ...base,
+    angularSegments: normalizeProfileCsvAngularSegments(base.angularSegments),
+    lengthSegments: Math.max(1, Math.round(Number(base.lengthSegments) || 40))
+  });
+}
+
+export function getProfileCsvDesignOutput(result) {
+  return prepareProfileCsvParams(getPreparedDesignOutput(result));
+}
+
 export const DesignModule = Object.freeze({
   id: DESIGN_MODULE_ID,
   import: importDesignInput,
@@ -221,6 +240,7 @@ export const DesignModule = Object.freeze({
     exportParams: getExportDesignOutput,
     simulationParams: getSimulationDesignOutput,
     occSimulationParams: getOccSimulationDesignOutput,
-    occExportParams: getOccExportDesignOutput
+    occExportParams: getOccExportDesignOutput,
+    profileCsvParams: getProfileCsvDesignOutput
   })
 });
