@@ -136,7 +136,15 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
   app.hornMesh = new THREE.Mesh(geometry, material);
   app.scene.add(app.hornMesh);
 
-  app.stats.innerText = `Vertices: ${vertices.length / 3} | Triangles: ${indices.length / 3}`;
+  const viewportStats = {
+    vertexCount: vertices.length / 3,
+    triangleCount: indices.length / 3
+  };
+  if (typeof app.setViewportMeshStats === 'function') {
+    app.setViewportMeshStats(viewportStats);
+  } else if (app.stats) {
+    app.stats.innerText = `Viewport: ${viewportStats.vertexCount} vertices | ${viewportStats.triangleCount} triangles`;
+  }
 }
 
 export function calculateCurvatureColors(geometry, radialSteps, lengthSteps) {

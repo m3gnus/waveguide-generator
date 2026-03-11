@@ -107,6 +107,19 @@ def _extract_occ_adaptive_canonical_mesh(
     return vertices, indices, normalized_surface_tags
 
 
+def _build_mesh_stats(
+    vertices: list[Any],
+    indices: list[Any],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "vertex_count": len(vertices) // 3,
+        "triangle_count": len(indices) // 3,
+        "source": source,
+    }
+
+
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
     """Run BEM simulation in background."""
     try:
@@ -181,6 +194,14 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             )
             _cancellation_callback("Cancellation requested after adaptive mesh build completed")
             vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
+            _set_job_fields(
+                job_id,
+                mesh_stats=_build_mesh_stats(
+                    vertices,
+                    indices,
+                    source="occ_adaptive_canonical",
+                ),
+            )
 
             # Store mesh artifact for optional download.
             msh_artifact = occ_result.get("msh_text")
@@ -227,6 +248,14 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 job_id, "mesh_prepare", progress=0.15, stage_message="Preparing canonical mesh"
             )
             _cancellation_callback("Cancellation requested before canonical mesh preparation")
+            _set_job_fields(
+                job_id,
+                mesh_stats=_build_mesh_stats(
+                    request.mesh.vertices,
+                    request.mesh.indices,
+                    source="canonical_payload",
+                ),
+            )
             mesh = solver.prepare_mesh(
                 request.mesh.vertices,
                 request.mesh.indices,
