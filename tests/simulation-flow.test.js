@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BemSolver, validateCanonicalMeshPayload } from '../src/solver/index.js';
+import * as solverApi from '../src/solver/index.js';
 import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
 import { filterValidPairs } from '../src/ui/simulation/charts.js';
 import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
@@ -9,6 +9,12 @@ import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { AppEvents } from '../src/events.js';
 import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
+
+const { BemSolver, validateCanonicalMeshPayload } = solverApi;
+
+test('solver public API no longer exposes mock fallback helpers', () => {
+  assert.equal('mockBEMSolver' in solverApi, false);
+});
 
 test('submitSimulation sends canonical mesh payload shape and adaptive mesh options', async () => {
   const originalFetch = global.fetch;

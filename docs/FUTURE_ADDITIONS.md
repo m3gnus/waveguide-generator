@@ -66,10 +66,9 @@ Decision framework:
 
 ### Code sanitization and dead-code removal
 Current state:
-- Codebase still contains fallback paths (for example `mockBEMSolver`) and utility paths not fully wired to UI.
+- Legacy runtime fallback paths have been removed from the active solver client, but utility paths not fully wired to UI may still remain.
 
 Next additions:
-- Remove mock/pending fallback code once backend BEM integration hardening is complete.
 - Run structured dead-code audit in `src/` for functions with no runtime UI path.
 
 ## Completed (Implemented)
@@ -86,9 +85,8 @@ Next additions:
 
 ### Frontend solver UX messaging
 - **Implemented (Feb 2026)**:
-- `src/solver/index.js` warning text now makes clear that mock output is backend-unavailable fallback only.
 - `src/ui/simulation/results.js` is now a thin data-caching stub (left-panel inline charts removed).
-- Simulation UI/log wording now presents backend BEM as default behavior and mock output as fallback only.
+- Simulation UI/log wording now presents backend BEM as the only supported runtime path.
 - Backend solve integration remains the primary path in `BemSolver.submitSimulation(...)`.
 
 ### Architecture audit
