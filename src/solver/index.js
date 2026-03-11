@@ -4,14 +4,11 @@
  * BEM Solver Interface
  *
  * ╔════════════════════════════════════════════════════════════════════════════╗
- * ║  Backend-first solver client                                                ║
+ * ║  Backend-only solver client                                                 ║
  * ╠════════════════════════════════════════════════════════════════════════════╣
  * ║  submitSimulation/getJobStatus/getResults call the Python backend API.     ║
- * ║  mockBEMSolver is a local fallback helper only and is not physics-based.   ║
  * ║                                                                            ║
  * ║  Runtime requirement: backend running at localhost:8000 (default)          ║
- * ║                                                                            ║
- * ║  Use mock results only for UI/debug validation workflows.                  ║
  * ╚════════════════════════════════════════════════════════════════════════════╝
  *
  * This module provides the public API for BEM acoustic simulations.
@@ -52,33 +49,6 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @property {string} simulationType - Type of simulation (1: infinite baffle, 2: free-standing)
  * @property {Object} boundaryConditions - Boundary condition settings
  */
-
-/**
- * Mock BEM Backend for Validation Only (Phase 4.0)
- *
- * Returns deterministic fake data - NO numerical correctness validation yet
- */
-export function mockBEMSolver(meshData) {
-  console.warn('[BEM Solver] Backend unavailable: using mock fallback (non-physics) results for UI/debug only.');
-
-  // Generate deterministic fake frequency response (flat for validation)
-  const numFrequencies = 50;
-  
-  return {
-    frequencies: Array.from({ length: numFrequencies }, (_, i) => ({
-      freqHz: 100 + (i * 50),
-    })),
-    
-    // Flat response for validation - not numerically accurate
-    frequencyResponse: Array.from({ length: numFrequencies }, (_, i) => ({
-      freqHz: 100 + (i * 50),
-      magnitudeDb: -20, // flat response
-    })),
-    
-    directivityPattern: [[0, 30], [90, -15]],
-  
-};
-}
 
 /**
  * @typedef {Object} BemSimulationResult

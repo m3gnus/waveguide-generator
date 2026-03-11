@@ -636,6 +636,12 @@ Finish the cleanup by removing dead branches and stale language.
 - `npm run test:server`
 - manual import-boundary audit
 
+### Implementation Notes (In Progress, March 11, 2026)
+
+1. Removed the dead `mockBEMSolver` export from `src/solver/index.js`; the solver client now documents backend-only runtime behavior with no supported local-result fallback path.
+2. Added a solver API regression test proving the public solver surface no longer exposes the removed fallback helper.
+3. Updated roadmap/backlog docs so Phase 8 and future cleanup notes no longer describe `mockBEMSolver` as a remaining supported runtime branch.
+
 ## Suggested Implementation Order
 
 1. Phase 0
