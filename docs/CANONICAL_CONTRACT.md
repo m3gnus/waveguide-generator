@@ -97,25 +97,29 @@ Deferred to later phases:
   - Round to integer.
   - Minimum 4.
   - If not divisible by 4, snap up to the nearest multiple of 8 for ring construction.
-- Waveguide OCC payload (`src/solver/waveguidePayload.js`):
-  - `n_angular = max(20, round(angularSegments))`.
-  - No additional divisibility snapping in this function.
-- OCC export module pre-normalization (`src/modules/export/index.js`):
-  - Angular segments are pre-snapped to multiples of 4 with minimum 20 before calling `buildWaveguidePayload(...)`.
+- OCC simulation request normalization (`src/modules/design/index.js`):
+  - `prepareOccSimulationParams(...)` sets `angularSegments = max(20, round(value))`.
+- OCC export request normalization (`src/modules/design/index.js`):
+  - `prepareOccExportParams(...)` snaps angular segments to multiples of 4 (minimum 20).
+- Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`):
+  - Expects already-normalized integer `angularSegments` and maps it to `n_angular`.
+  - Throws on missing/invalid OCC-required fields instead of normalizing them locally.
 
 ### 4.2 Length segments
 
 - Geometry mesh generation:
   - Round to integer.
   - Minimum 1 for internal tessellation (`lengthSegments`).
-- Waveguide OCC payload:
-  - `n_length = max(10, round(lengthSegments))`.
-- OCC export module pre-normalization:
-  - Minimum 10 before payload build.
+- OCC simulation/export request normalization (`src/modules/design/index.js`):
+  - `prepareOccSimulationParams(...)` and `prepareOccExportParams(...)` set `lengthSegments = max(10, round(value))`.
+- Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`):
+  - Expects already-normalized integer `lengthSegments` and maps it to `n_length`.
+  - Throws on missing/invalid OCC-required fields instead of normalizing them locally.
 
 ### 4.3 Quadrants
 
-- Frontend OCC payload builder accepts canonical values `1`, `12`, `14`, `1234`; otherwise attempts numeric coercion; fallback `1234`.
+- Frontend OCC request normalization (`src/modules/design/index.js`) accepts canonical values `1`, `12`, `14`, `1234`; otherwise attempts numeric coercion; fallback `1234`.
+- Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`) expects normalized integer `quadrants` and maps it directly.
 - `/api/solve` OCC-adaptive route validates request and coerces OCC build quadrants to full-domain `1234`.
 - Simulation runner enforces full-domain `1234` again before OCC build.
 
@@ -124,8 +128,8 @@ Deferred to later phases:
 - Frontend OCC payload fields:
   - `enc_front_resolution`, `enc_back_resolution` are string fields.
   - Defaults: `"25,25,25,25"` and `"40,40,40,40"`.
-  - Values are forwarded as strings by `buildWaveguidePayload(...)`.
-- OCC export module applies scale-aware numeric-string transformation for these fields before payload build.
+  - Defaults and export scaling are applied by `prepareOccSimulationParams(...)` / `prepareOccExportParams(...)`.
+  - Values are forwarded as strings by `buildWaveguidePayload(...)`, which requires the fields to be present.
 
 ### 4.5 Unit metadata
 
@@ -141,4 +145,3 @@ Primary tests that lock this contract:
 - `tests/geometry-artifacts.test.js`
 - `tests/waveguide-payload.test.js`
 - `server/tests/test_api_validation.py`
-

@@ -320,6 +320,13 @@ Completed in this step:
 4. Added/updated contract tests:
    - `tests/design-module.test.js` (new OCC normalization coverage)
    - `tests/export-module.test.js` (new assertion that OCC request payload uses design-layer export normalization)
+5. Refactored `src/solver/waveguidePayload.js` OCC field handling to map/validate DesignModule-normalized inputs instead of running an independent OCC normalization policy.
+6. Updated `tests/waveguide-payload.test.js` to assert the new boundary contract:
+   - defaults/normalization are owned by `DesignModule` OCC helpers
+   - `buildWaveguidePayload(...)` rejects unprepared OCC-required fields
+7. Updated contract docs to reflect new ownership:
+   - `docs/PROJECT_DOCUMENTATION.md`
+   - `docs/CANONICAL_CONTRACT.md`
 
 ## Phase 3: Make Geometry The Source Of Truth
 
