@@ -18,8 +18,7 @@
     "diag:payload": "node scripts/diagnostics/build-canonical-payload-from-reference.js",
     "diag:geometry": "node scripts/diagnostics/check-tritonia-geometry-artifacts.js",
     "diag:occ:tritonia": "python3 scripts/diagnostics/build-occ-mesh-tritonia.py",
-    "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py",
-    "backlog:next": "node ./.codex/skills/backlog-next/scripts/next-backlog-status.mjs"
+    "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py"
   },
   "keywords": [
     "3d",
