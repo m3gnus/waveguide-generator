@@ -5,6 +5,8 @@ import {
   RECOMMENDED_DEFAULTS,
   getAutoExportOnComplete,
   getSelectedExportFormats,
+  getTaskListMinRatingFilter,
+  getTaskListSortPreference,
   loadSimulationManagementSettings,
   saveSimulationManagementSettings
 } from '../src/ui/settings/simulationManagementSettings.js';
@@ -61,6 +63,12 @@ test('simulation management DOM getters prefer live modal controls', () => {
       if (id === 'simmanage-auto-export') {
         return { checked: false };
       }
+      if (id === 'simulation-jobs-sort') {
+        return { value: 'rating_desc' };
+      }
+      if (id === 'simulation-jobs-min-rating') {
+        return { value: '3' };
+      }
       return null;
     },
     querySelectorAll(selector) {
@@ -87,6 +95,8 @@ test('simulation management DOM getters prefer live modal controls', () => {
   try {
     assert.equal(getAutoExportOnComplete(), false);
     assert.deepEqual(getSelectedExportFormats(), ['csv']);
+    assert.equal(getTaskListSortPreference(), 'rating_desc');
+    assert.equal(getTaskListMinRatingFilter(), 3);
   } finally {
     global.document = originalDocument;
   }

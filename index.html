@@ -169,6 +169,27 @@
                             <button id="refresh-jobs-btn" class="secondary button-compact" type="button">Refresh</button>
                         </div>
                     </div>
+                    <div class="simulation-jobs-toolbar">
+                        <label class="simulation-jobs-toolbar-field" for="simulation-jobs-sort">
+                            <span>Sort</span>
+                            <select id="simulation-jobs-sort">
+                                <option value="completed_desc">Newest First</option>
+                                <option value="rating_desc">Highest Rated</option>
+                                <option value="label_asc">Label A-Z</option>
+                            </select>
+                        </label>
+                        <label class="simulation-jobs-toolbar-field" for="simulation-jobs-min-rating">
+                            <span>Min Rating</span>
+                            <select id="simulation-jobs-min-rating">
+                                <option value="0">All</option>
+                                <option value="1">1 star</option>
+                                <option value="2">2 stars</option>
+                                <option value="3">3 stars</option>
+                                <option value="4">4 stars</option>
+                                <option value="5">5 stars</option>
+                            </select>
+                        </label>
+                    </div>
                     <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
                 </div>
             </div>

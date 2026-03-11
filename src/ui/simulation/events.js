@@ -2,11 +2,14 @@ import {
   clearFailedSimulations,
   exportJobResults,
   loadJobScript,
+  rateJob,
   redoJob,
   removeJobFromFeed,
   stopSimulation,
   viewJobResults
 } from './jobActions.js';
+import { renderJobList } from './jobActions.js';
+import { updateTaskListPreferences } from '../settings/simulationManagementSettings.js';
 
 export function setupEventListeners(panel) {
   // Stop simulation button
@@ -43,11 +46,33 @@ export function setupEventListeners(panel) {
     clearFailedBtn.addEventListener('click', async () => clearFailedSimulations(panel));
   }
 
+  const sortSelect = document.getElementById('simulation-jobs-sort');
+  if (sortSelect) {
+    sortSelect.addEventListener('change', () => {
+      updateTaskListPreferences({ defaultSort: sortSelect.value });
+      renderJobList(panel);
+    });
+  }
+
+  const minRatingSelect = document.getElementById('simulation-jobs-min-rating');
+  if (minRatingSelect) {
+    minRatingSelect.addEventListener('change', () => {
+      updateTaskListPreferences({ minRatingFilter: Number(minRatingSelect.value) || 0 });
+      renderJobList(panel);
+    });
+  }
+
   const jobList = document.getElementById('simulation-jobs-list');
   if (jobList) {
     jobList.addEventListener('click', async (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
+      const ratingValue = target.dataset.jobRating;
+      const ratingJobId = target.dataset.jobId;
+      if (ratingValue && ratingJobId) {
+        await rateJob(panel, ratingJobId, Number(ratingValue));
+        return;
+      }
       const action = target.dataset.jobAction;
       const jobId = target.dataset.jobId;
       if (!action || !jobId) return;

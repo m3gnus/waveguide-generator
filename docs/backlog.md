@@ -134,12 +134,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Best approach: Introduce an explicit source abstraction, show folder tasks when folder context is active, fall back to backend jobs otherwise, and expose the current source with a header label plus compact badge rather than mixing both sources in one list.
   Completed: March 11, 2026. The simulation feed now has explicit source modes: selecting a folder workspace loads folder task manifests/index only and skips backend job listing, backend mode still restores/polls remote jobs plus the local cache when no folder is active, the Refresh action reloads the active source instead of assuming backend polling, and the UI now labels the active source in the header plus a compact per-row badge instead of mixing sources silently.
 
-- [ ] Add task ratings plus stable sorting and filtering controls.
+- [x] Add task ratings plus stable sorting and filtering controls.
   Source: earlier simulation-management planning notes; existing manifest/index `rating` fields.
   Relevant: Yes. The schema already carries `rating`, but there is no complete user flow that makes it useful.
   Will it improve the program: Yes. It helps users manage larger simulation histories instead of treating every result as flat output.
   Research findings: the rating field already persists through `task.manifest.json`, task index rebuild, local job tracking, and merge logic, but there is no rating editor in `renderJobList()`. Sorting is currently hardcoded to newest-first in `src/ui/simulation/jobTracker.js`, and there are no filter controls or persisted task-list preferences.
   Best approach: Implement star editing against manifest/index persistence, default to newest-first, persist last-used sort/filter preferences, and use fast preset filters rather than freeform controls.
+  Completed: March 11, 2026. The simulation jobs header now includes persisted sort and minimum-rating controls, job rows expose inline 1-5 star rating buttons, rating changes sync through controller persistence into local cache plus folder task manifests/index, and task-list rendering uses stable preference-driven sorting (`Newest`, `Highest Rated`, `Label A-Z`) with rating filtering instead of hardcoded newest-first ordering.
 
 ### P3 Docs, Hardening, And Cleanup
 

@@ -117,6 +117,7 @@ flowchart LR
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
    - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Simulation Basic task-export settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
+   - Task-list UI preferences now persist through simulation-management settings: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and folder manifests/index when available.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow
@@ -223,6 +224,11 @@ Active runtime export surfaces:
 - App-level exports: STL (`exportSTL`), MWG config text (`exportMWGConfig`), and profile/slice CSV (`exportProfileCSV`)
 - Simulation-result exports: bundle-coordinated PNG / CSV / JSON / text / polar CSV / impedance CSV / VACS / STL / Fusion CSV task exports in `src/ui/simulation/exports.js`
 - Completed-job mesh download: `.msh` artifact fetch via `src/ui/simulation/meshDownload.js` when backend jobs persist mesh artifacts
+
+Task-history controls:
+- `src/ui/simulation/jobActions.js` renders inline 1-5 star rating controls and applies persisted sort/filter preferences.
+- `src/ui/settings/simulationManagementSettings.js` stores task export settings plus task-list preferences (`defaultSort`, `minRatingFilter`).
+- `src/ui/simulation/controller.js` persists rating updates through the same job/task-manifest contract used for export bookkeeping.
 
 ABEC bundle export is removed from the active runtime. The live solver path is fully backend-driven via `/api/solve`.
 

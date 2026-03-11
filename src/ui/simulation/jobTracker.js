@@ -87,16 +87,46 @@ function toStorageItem(item) {
   };
 }
 
-function sortByCreatedDesc(items) {
-  return [...items].sort((a, b) => {
-    const left = Date.parse(a.createdAt || a.queuedAt || '') || 0;
-    const right = Date.parse(b.createdAt || b.queuedAt || '') || 0;
-    return right - left;
-  });
+function resolveSortTimestamp(item) {
+  return Date.parse(item.completedAt || item.createdAt || item.queuedAt || item.startedAt || '') || 0;
+}
+
+export function sortJobs(items, { sortBy = 'completed_desc' } = {}) {
+  return [...items]
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      if (sortBy === 'rating_desc') {
+        const ratingDelta = (right.item.rating ?? 0) - (left.item.rating ?? 0);
+        if (ratingDelta !== 0) {
+          return ratingDelta;
+        }
+        const timeDelta = resolveSortTimestamp(right.item) - resolveSortTimestamp(left.item);
+        if (timeDelta !== 0) {
+          return timeDelta;
+        }
+      } else if (sortBy === 'label_asc') {
+        const labelDelta = String(left.item.label || left.item.id || '').localeCompare(
+          String(right.item.label || right.item.id || ''),
+          undefined,
+          { sensitivity: 'base' }
+        );
+        if (labelDelta !== 0) {
+          return labelDelta;
+        }
+      } else {
+        const timeDelta = resolveSortTimestamp(right.item) - resolveSortTimestamp(left.item);
+        if (timeDelta !== 0) {
+          return timeDelta;
+        }
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
 }
 
 function prune(items) {
-  return sortByCreatedDesc(items).slice(0, MAX_LOCAL_ITEMS);
+  return sortJobs(items, { sortBy: 'completed_desc' }).slice(0, MAX_LOCAL_ITEMS);
 }
 
 export function createJobTracker() {
@@ -246,8 +276,12 @@ export function upsertJob(panel, rawEntry) {
   return panel.jobs.get(next.id);
 }
 
-export function allJobs(panel) {
-  return sortByCreatedDesc(Array.from(panel.jobs.values()));
+export function allJobs(panel, options = {}) {
+  const minRating = Number.isFinite(Number(options.minRating))
+    ? Math.max(0, Math.min(5, Number(options.minRating)))
+    : 0;
+  const filtered = Array.from(panel.jobs.values()).filter((job) => (job.rating ?? 0) >= minRating);
+  return sortJobs(filtered, { sortBy: options.sortBy || 'completed_desc' });
 }
 
 export function persistPanelJobs(panel) {

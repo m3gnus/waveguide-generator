@@ -7,6 +7,11 @@ import {
   getUseOptimized,
   getVerbose
 } from '../settings/simBasicSettings.js';
+import {
+  getCurrentSimulationManagementSettings,
+  getTaskListMinRatingFilter,
+  getTaskListSortPreference
+} from '../settings/simulationManagementSettings.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import {
@@ -34,6 +39,7 @@ import {
   ensureSimulationControllerJobResults,
   submitSimulationControllerJob,
   recordSimulationControllerExport,
+  recordSimulationControllerRating,
   removeSimulationControllerJob,
   stopSimulationControllerJob
 } from './controller.js';
@@ -143,6 +149,42 @@ function describeJobFeedSource(panel) {
   };
 }
 
+function renderRatingStars(job) {
+  const currentRating = Number.isFinite(Number(job?.rating)) ? Math.max(0, Math.min(5, Number(job.rating))) : 0;
+  return `
+    <div class="simulation-job-rating" aria-label="Task rating">
+      ${Array.from({ length: 5 }, (_, index) => {
+        const ratingValue = index + 1;
+        const isActive = ratingValue <= currentRating;
+        return `
+          <button
+            type="button"
+            class="simulation-job-rating-star${isActive ? ' is-active' : ''}"
+            data-job-rating="${ratingValue}"
+            data-job-id="${escapeHtml(job.id)}"
+            aria-label="Rate ${escapeHtml(job.label || job.id)} ${ratingValue} out of 5"
+            title="Rate ${ratingValue} out of 5"
+          >${isActive ? '&#9733;' : '&#9734;'}</button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function syncJobListPreferenceControls() {
+  const settings = getCurrentSimulationManagementSettings();
+  const sortEl = document.getElementById('simulation-jobs-sort');
+  if (sortEl && sortEl.value !== settings.defaultSort) {
+    sortEl.value = settings.defaultSort;
+  }
+
+  const ratingEl = document.getElementById('simulation-jobs-min-rating');
+  const ratingValue = String(settings.minRatingFilter);
+  if (ratingEl && ratingEl.value !== ratingValue) {
+    ratingEl.value = ratingValue;
+  }
+}
+
 function readOutputNameAndCounter() {
   const name = (document.getElementById('export-prefix')?.value || 'simulation').trim() || 'simulation';
   const counterEl = document.getElementById('export-counter');
@@ -249,7 +291,11 @@ export function renderJobList(panel) {
     sourceEl.textContent = source.label;
   }
 
-  const jobs = allJobs(panel);
+  syncJobListPreferenceControls();
+  const jobs = allJobs(panel, {
+    sortBy: getTaskListSortPreference(),
+    minRating: getTaskListMinRatingFilter()
+  });
   if (jobs.length === 0) {
     list.innerHTML = `<div class="simulation-job-meta">No ${source.mode === 'folder' ? 'folder tasks' : 'backend jobs'} yet.</div>`;
     return;
@@ -275,6 +321,10 @@ export function renderJobList(panel) {
             : ''}
           <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove simulation from feed" title="Remove this simulation from the feed">&#x2715;</button>
         </div>
+      </div>
+      <div class="simulation-job-footer">
+        <span class="simulation-job-footer-label">Rating</span>
+        ${renderRatingStars(job)}
       </div>
     </div>
   `).join('');
@@ -322,6 +372,15 @@ export function loadJobScript(panel, jobId) {
 
   setSimulationInputsFromScript(script);
   showMessage(`Loaded parameters from ${job.label || jobId}.`, { type: 'info', duration: 2500 });
+}
+
+export async function rateJob(panel, jobId, rating) {
+  const next = await recordSimulationControllerRating(panel, jobId, rating);
+  if (!next) {
+    showError('Simulation task not found.');
+    return;
+  }
+  renderJobList(panel);
 }
 
 export async function redoJob(panel, jobId) {
