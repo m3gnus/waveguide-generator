@@ -474,6 +474,10 @@ Completed in this step:
    - controller store defaults
    - adapter/controller state binding
    - restore flow behavior and polling trigger semantics
+7. Removed direct `GlobalState` access from deep simulation UI workflow files:
+   - `src/ui/simulation/settings.js` now reads/updates state through `src/modules/simulation/useCases.js` facade helpers.
+   - `src/ui/simulation/jobActions.js` now restores scripted state through `applySimulationJobScriptState(...)` instead of mutating `GlobalState` directly.
+8. Added import-boundary regression coverage to block new `src/ui/simulation/* -> src/state.js` direct imports (`tests/architecture-boundaries.test.js`).
 
 ## Phase 6: Remove Backend Compatibility Glue
 

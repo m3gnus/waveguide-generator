@@ -1,5 +1,4 @@
 import { showError, showMessage } from '../feedback.js';
-import { GlobalState } from '../../state.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
@@ -24,6 +23,7 @@ import { downloadMeshArtifact } from './meshDownload.js';
 import {
   prepareOccAdaptiveSolveRequest,
   validateSimulationConfig,
+  applySimulationJobScriptState,
   buildQueuedSimulationJob,
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds
@@ -277,11 +277,11 @@ export function loadJobScript(panel, jobId) {
   }
 
   const script = job.script;
-  if (script.stateSnapshot && script.stateSnapshot.params) {
-    GlobalState.loadState(script.stateSnapshot, 'simulation-job-load-script');
-    syncPolarControlsFromBlocks(script.stateSnapshot.params._blocks);
-  } else if (script.params) {
-    GlobalState.update(script.params);
+  const appliedState = applySimulationJobScriptState(script, {
+    source: 'simulation-job-load-script'
+  });
+  if (appliedState.mode === 'snapshot') {
+    syncPolarControlsFromBlocks(appliedState.params?._blocks);
   }
 
   setSimulationInputsFromScript(script);
