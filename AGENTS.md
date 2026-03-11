@@ -72,6 +72,8 @@
 - No docs claim `/api/mesh/build` returns `.geo` unless code does so.
 - ABEC bundle output validates against the parity contract/checklist.
 - Solver support matrix in docs matches `server/solver/deps.py`.
+- End each work session with a commit for the completed changes.
+- Before ending a session, review and update documentation affected by the change so docs stay current.
 
 ## Multi-Agent Handoff Rules
 - Start from this root `AGENTS.md`.
