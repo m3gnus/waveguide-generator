@@ -116,10 +116,10 @@ function inferReasoning(title, tasks, notes) {
 
 const defaultReasoning = inferReasoning(phaseTitle, phaseTasks, implementationNotes);
 const prompt = [
-  `Do the next unfinished slice in docs/ARCHITECTURE_CLEANUP_PLAN.md.`,
-  `Ground on the current phase summary and the recent commits below.`,
-  `Use Codex 5.3 subagents and choose reasoning effort from slice complexity (${defaultReasoning} by default, adjust if the chosen slice is smaller or larger).`,
-  `Pick the smallest coherent unfinished slice, run targeted tests first, update affected docs including the plan notes, and commit the completed slice.`
+  `Continue the current phase in docs/ARCHITECTURE_CLEANUP_PLAN.md by executing one unfinished slice after another.`,
+  `Ground on the current phase summary and the recent commits below, and rerun this status check after each committed slice.`,
+  `Use a fresh Codex 5.3 subagent for each slice and choose reasoning effort from slice complexity (${defaultReasoning} by default, adjust per slice).`,
+  `Pick the smallest coherent unfinished slice, run targeted tests first, update affected docs including the plan notes, commit the completed slice, then continue until the phase is complete or blocked.`
 ].join(' ');
 
 const payload = {

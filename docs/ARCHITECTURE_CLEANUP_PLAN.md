@@ -15,7 +15,7 @@
 
 ## Session Shortcut
 
-Use `$architecture-cleanup-next` in a fresh Codex window to continue the next unfinished slice. The skill reads this plan, checks recent commits, picks the smallest coherent remaining slice in the current phase, and is expected to finish with tests, doc updates, and a commit.
+Use `$architecture-cleanup-next` in a fresh Codex window to continue the current phase as a sequence of small slices. The skill reads this plan, checks recent commits, picks the smallest coherent remaining slice, hands each slice to a fresh Codex 5.3 subagent, and is expected to continue until the phase is complete or blocked, with tests, doc updates, and a commit per slice.
 
 ## Goal
 
