@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 
 import {
   SIMULATION_CONTROLLER_FIELDS,
+  cancelSimulationControllerJob,
+  clearSimulationControllerJobs,
   createSimulationControllerStore,
   createSimulationPanelRuntime,
   bindSimulationControllerState,
+  ensureSimulationControllerJobResults,
+  queueSimulationControllerJob,
+  recordSimulationControllerExport,
+  removeSimulationControllerJob,
   restoreSimulationControllerJobs,
   restoreSimulationPanelRuntime,
   disposeSimulationPanelRuntime
@@ -171,4 +177,97 @@ test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', 
   } finally {
     global.clearTimeout = originalClearTimeout;
   }
+});
+
+test('ensureSimulationControllerJobResults handles missing, incomplete, cached, and fetched jobs', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getResults(jobId) {
+        return { jobId, spl_on_axis: { frequencies: [100], spl: [90] } };
+      }
+    }
+  });
+  controller.jobs.set('job-complete', { id: 'job-complete', status: 'complete' });
+  controller.jobs.set('job-running', { id: 'job-running', status: 'running' });
+  controller.resultCache.set('job-cached', { cached: true });
+  controller.jobs.set('job-cached', { id: 'job-cached', status: 'complete' });
+
+  const displayed = [];
+
+  const missing = await ensureSimulationControllerJobResults(controller, 'job-missing');
+  assert.equal(missing.reason, 'missing_job');
+
+  const incomplete = await ensureSimulationControllerJobResults(controller, 'job-running');
+  assert.equal(incomplete.reason, 'not_complete');
+
+  const cached = await ensureSimulationControllerJobResults(controller, 'job-cached', {
+    displayResults(results) {
+      displayed.push(results);
+    }
+  });
+  assert.equal(cached.reason, 'cached');
+  assert.deepEqual(displayed[0], { cached: true });
+
+  const fetched = await ensureSimulationControllerJobResults(controller, 'job-complete', {
+    displayResults(results) {
+      displayed.push(results);
+    }
+  });
+  assert.equal(fetched.reason, 'fetched');
+  assert.equal(controller.activeJobId, 'job-complete');
+  assert.equal(controller.currentJobId, 'job-complete');
+  assert.equal(controller.resultCache.has('job-complete'), true);
+});
+
+test('queueSimulationControllerJob and recordSimulationControllerExport update controller job metadata', async () => {
+  const controller = createSimulationControllerStore({ solver: {} });
+
+  const created = await queueSimulationControllerJob(controller, {
+    jobId: 'job-queued-1',
+    startedIso: '2026-03-11T10:00:00.000Z',
+    outputName: 'simulation',
+    counter: 2,
+    config: {
+      frequencyStart: 100,
+      frequencyEnd: 1000,
+      numFrequencies: 5,
+      frequencySpacing: 'log',
+      deviceMode: 'auto',
+      polarConfig: {}
+    },
+    waveguidePayload: { formula_type: 'OSSE' },
+    preparedParams: { L: 120 },
+    stateSnapshot: { type: 'OSSE', params: { L: 120 } }
+  });
+
+  assert.equal(created.id, 'job-queued-1');
+  assert.equal(controller.activeJobId, 'job-queued-1');
+  assert.equal(controller.currentJobId, 'job-queued-1');
+
+  const updated = await recordSimulationControllerExport(controller, 'job-queued-1', 'export-csv:2026-03-11T10:01:00.000Z');
+  assert.deepEqual(updated.exportedFiles, ['export-csv:2026-03-11T10:01:00.000Z']);
+});
+
+test('controller job mutation helpers remove, clear, and cancel jobs via controller boundary', () => {
+  const controller = createSimulationControllerStore({ solver: {} });
+  controller.jobs.set('job-error-1', { id: 'job-error-1', status: 'error' });
+  controller.jobs.set('job-error-2', { id: 'job-error-2', status: 'error' });
+  controller.jobs.set('job-running', { id: 'job-running', status: 'running' });
+  controller.activeJobId = 'job-running';
+  controller.currentJobId = 'job-running';
+
+  const cancelled = cancelSimulationControllerJob(controller, 'job-running');
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(controller.jobs.get('job-running').status, 'cancelled');
+
+  const cleared = clearSimulationControllerJobs(controller, ['job-error-1', 'job-error-2']);
+  assert.equal(cleared, 2);
+  assert.equal(controller.jobs.has('job-error-1'), false);
+  assert.equal(controller.jobs.has('job-error-2'), false);
+
+  const removed = removeSimulationControllerJob(controller, 'job-running');
+  assert.equal(removed, true);
+  assert.equal(controller.jobs.has('job-running'), false);
+  assert.equal(controller.activeJobId, null);
+  assert.equal(controller.currentJobId, null);
 });

@@ -495,6 +495,13 @@ Completed in this step:
    - `disposeSimulationPanelRuntime(...)` now owns timer/coordinator teardown
 14. Reduced `src/ui/simulation/SimulationPanel.js` to a thinner adapter that delegates lifecycle/state ownership to `src/ui/simulation/controller.js`.
 15. Added controller runtime regression coverage in `tests/simulation-controller.test.js` for runtime creation, restore delegation, and dispose teardown.
+16. Moved remaining controller-state mutations out of `src/ui/simulation/jobActions.js` into `src/ui/simulation/controller.js`:
+   - result-cache loading (`ensureSimulationControllerJobResults(...)`)
+   - queued job creation/persistence (`queueSimulationControllerJob(...)`)
+   - export metadata persistence (`recordSimulationControllerExport(...)`)
+   - feed removal / failed-job clearing / cancellation state (`removeSimulationControllerJob(...)`, `clearSimulationControllerJobs(...)`, `cancelSimulationControllerJob(...)`)
+17. Reduced `jobActions.js` further toward a DOM/message adapter that delegates controller mutations instead of mutating job store state directly.
+18. Expanded `tests/simulation-controller.test.js` to lock down those controller-level job mutation/result-loading behaviors.
 
 ## Phase 6: Remove Backend Compatibility Glue
 
