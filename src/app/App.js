@@ -9,7 +9,7 @@ import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
-import { getLiveUpdateEnabled } from '../ui/settings/modal.js';
+import { readLiveUpdateSetting } from '../modules/ui/useCases.js';
 
 let simulationPanelModulePromise = null;
 function loadSimulationPanelModule() {
@@ -93,7 +93,7 @@ export class App {
     this.schedulePanelAutoSize();
 
     // 2. Render
-    if (getLiveUpdateEnabled()) {
+    if (readLiveUpdateSetting()) {
       this.requestRender();
     }
   }
