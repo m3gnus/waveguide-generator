@@ -28,7 +28,7 @@ Primary entry points:
 - `src/modules/`
   - Staged facades for design prep, geometry, export, simulation, and UI coordination
   - `DesignModule` is the app-facing boundary for state/type -> prepared parameter normalization
-  - `GeometryModule` is geometry-only (mesh construction) and does not emit export/simulation payload views
+  - `GeometryModule` prepares geometry-shape definitions only (no tessellation or payload assembly)
 - `src/export/`
   - `.geo` builder, ABEC file generators, bundle validator, STL/CSV helpers
 - `src/solver/`
@@ -69,7 +69,7 @@ Primary entry points:
 
 1. UI parameter updates mutate `GlobalState`.
 2. `App` schedules render.
-3. `src/app/scene.js` resolves prepared design inputs via `DesignModule`, then builds viewport mesh geometry via `GeometryModule`.
+3. `src/app/scene.js` resolves prepared design inputs via `DesignModule`, gets a geometry shape from `GeometryModule`, then tessellates it for viewport rendering.
 4. Returned mesh is rendered in Three.js.
 
 ### 3.2 Simulation flow
@@ -103,6 +103,7 @@ Primary files:
 - `src/geometry/tags.js`
 
 `buildGeometryArtifacts(...)` returns:
+- `geometry` shape definition used as tessellation input
 - `mesh` for render/export helpers
 - `simulation` canonical payload with tags/BC metadata
 - `export` helpers (ATH coordinate transform)

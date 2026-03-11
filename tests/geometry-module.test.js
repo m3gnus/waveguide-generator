@@ -5,7 +5,8 @@ import { getDefaults } from '../src/config/defaults.js';
 import {
   GeometryModule,
   prepareGeometryParams,
-  buildGeometryMesh
+  buildGeometryShape,
+  buildGeometryMeshFromShape
 } from '../src/geometry/index.js';
 import { DesignModule } from '../src/modules/design/index.js';
 
@@ -23,7 +24,7 @@ function makeRawParams(overrides = {}) {
   };
 }
 
-test('GeometryModule exposes import, task, and mesh-only output stages', () => {
+test('GeometryModule exposes import, task, and shape-only output stages', () => {
   const rawParams = makeRawParams({ encDepth: 200, quadrants: '1' });
   const geometryInput = GeometryModule.import(rawParams, {
     type: 'OSSE',
@@ -37,17 +38,32 @@ test('GeometryModule exposes import, task, and mesh-only output stages', () => {
     type: 'OSSE',
     applyVerticalOffset: true
   });
-  const expectedMesh = buildGeometryMesh(expectedPrepared, {
+  const expectedShape = buildGeometryShape(expectedPrepared, {
     includeEnclosure: true
   });
 
   assert.equal(geometryInput.module, 'geometry');
   assert.equal(geometryInput.stage, 'import');
   assert.equal(geometryTask.stage, 'task');
-  assert.deepEqual(GeometryModule.output.mesh(geometryTask), expectedMesh);
+  const geometryShape = GeometryModule.output.shape(geometryTask);
+  assert.equal(GeometryModule.output.geometry(geometryTask), geometryShape);
+  assert.equal(geometryShape.kind, expectedShape.kind);
+  assert.deepEqual(geometryShape.tessellation, expectedShape.tessellation);
+  assert.equal(geometryShape.buildParams.type, expectedShape.buildParams.type);
+  assert.equal(geometryShape.buildParams.quadrants, expectedShape.buildParams.quadrants);
+  assert.equal(geometryShape.buildParams.angularSegments, expectedShape.buildParams.angularSegments);
+  assert.equal(geometryShape.buildParams.lengthSegments, expectedShape.buildParams.lengthSegments);
+  const expectedMesh = buildGeometryMeshFromShape(expectedShape, {
+    includeEnclosure: true
+  });
+  const actualMesh = buildGeometryMeshFromShape(geometryShape, {
+    includeEnclosure: true
+  });
+  assert.deepEqual(actualMesh, expectedMesh);
   assert.equal(typeof GeometryModule.output.simulation, 'undefined');
   assert.equal(typeof GeometryModule.output.export, 'undefined');
   assert.equal(typeof GeometryModule.output.canonical, 'undefined');
+  assert.equal(typeof GeometryModule.output.mesh, 'undefined');
 });
 
 test('GeometryModule.importPrepared preserves already prepared geometry params', () => {
@@ -67,13 +83,15 @@ test('GeometryModule.importPrepared preserves already prepared geometry params',
   const geometryTask = GeometryModule.task(geometryInput, {
     includeEnclosure: false
   });
-  const expectedMesh = buildGeometryMesh(preparedParams, {
+  const expectedShape = buildGeometryShape(preparedParams, {
     includeEnclosure: false
   });
 
   assert.equal(geometryInput.params.L, preparedParams.L);
   assert.equal(geometryInput.params.r0, preparedParams.r0);
-  assert.deepEqual(GeometryModule.output.mesh(geometryTask), expectedMesh);
+  const shape = GeometryModule.output.shape(geometryTask);
+  assert.equal(shape.kind, expectedShape.kind);
+  assert.deepEqual(shape.tessellation, expectedShape.tessellation);
 });
 
 test('GeometryModule.importDesign consumes DesignModule task output directly', () => {
