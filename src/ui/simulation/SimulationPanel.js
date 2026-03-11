@@ -148,8 +148,8 @@ export class SimulationPanel {
     return openViewResultsModal(this);
   }
 
-  exportResults() {
-    return exportResults(this);
+  exportResults(options = {}) {
+    return exportResults(this, options);
   }
 
   exportAsMatplotlibPNG() {

@@ -290,12 +290,16 @@ export async function viewJobResults(panel, jobId) {
 export async function exportJobResults(panel, jobId) {
   const results = await ensureJobResults(panel, jobId, { display: true });
   if (!results) return;
-  const selectedExport = await panel.exportResults();
-  if (selectedExport) {
+  const job = panel.jobs?.get(jobId) || null;
+  const bundle = await panel.exportResults({ job });
+  if (bundle && (bundle.exportedFiles.length > 0 || bundle.failures.length > 0)) {
     await recordSimulationControllerExport(
       panel,
       jobId,
-      `export-${selectedExport}:${new Date().toISOString()}`
+      {
+        exportedFiles: bundle.exportedFiles,
+        justCompleted: false
+      }
     );
   }
   panel.pollSimulationStatus();

@@ -35,6 +35,7 @@ export function normalizeTaskIndexEntry(raw = {}) {
     queuedAt: fromManifest.queuedAt ?? null,
     startedAt: fromManifest.startedAt ?? null,
     completedAt: fromManifest.completedAt ?? null,
+    autoExportCompletedAt: fromManifest.autoExportCompletedAt ?? null,
     rating: fromManifest.rating ?? null,
     exportedFiles: normalizeExportedFiles(fromManifest.exportedFiles),
     scriptSchemaVersion: Number.isFinite(Number(fromManifest.scriptSchemaVersion))

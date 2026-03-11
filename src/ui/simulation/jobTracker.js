@@ -37,6 +37,7 @@ function normalizeItem(raw = {}) {
     queuedAt: raw.queuedAt ?? raw.queued_at ?? null,
     startedAt: raw.startedAt ?? raw.started_at ?? null,
     completedAt: raw.completedAt ?? raw.completed_at ?? null,
+    autoExportCompletedAt: raw.autoExportCompletedAt ?? raw.auto_export_completed_at ?? null,
     configSummary: raw.configSummary ?? raw.config_summary ?? {},
     hasResults: Boolean(raw.hasResults ?? raw.has_results),
     hasMeshArtifact: Boolean(raw.hasMeshArtifact ?? raw.has_mesh_artifact),
@@ -47,6 +48,7 @@ function normalizeItem(raw = {}) {
     script: raw.script ?? scriptSnapshot,
     rating: raw.rating ?? null,
     exportedFiles,
+    justCompleted: Boolean(raw.justCompleted),
     scriptSchemaVersion: Number.isFinite(Number(scriptSchemaInput))
       ? Number(scriptSchemaInput)
       : null,
@@ -65,6 +67,7 @@ function toStorageItem(item) {
     queued_at: item.queuedAt,
     started_at: item.startedAt,
     completed_at: item.completedAt,
+    auto_export_completed_at: item.autoExportCompletedAt ?? null,
     config_summary: item.configSummary,
     has_results: item.hasResults,
     has_mesh_artifact: item.hasMeshArtifact,
@@ -160,9 +163,11 @@ export function mergeJobs(localItems, remoteItems) {
         script: normalized.script ?? existing.script ?? null,
         meshStats: normalized.meshStats ?? existing.meshStats ?? null,
         rating: normalized.rating ?? existing.rating ?? null,
+        autoExportCompletedAt: normalized.autoExportCompletedAt ?? existing.autoExportCompletedAt ?? null,
         exportedFiles: normalized.exportedFiles?.length
           ? normalized.exportedFiles
           : (existing.exportedFiles ?? []),
+        justCompleted: normalized.status === 'complete' && existing.status !== 'complete',
         scriptSchemaVersion: normalized.scriptSchemaVersion !== null
           && normalized.scriptSchemaVersion !== undefined
           && Number.isFinite(Number(normalized.scriptSchemaVersion))
@@ -223,9 +228,11 @@ export function upsertJob(panel, rawEntry) {
     script: next.script ?? existing?.script ?? null,
     meshStats: next.meshStats ?? existing?.meshStats ?? null,
     rating: next.rating ?? existing?.rating ?? null,
+    autoExportCompletedAt: next.autoExportCompletedAt ?? existing?.autoExportCompletedAt ?? null,
     exportedFiles: next.exportedFiles?.length
       ? next.exportedFiles
       : (existing?.exportedFiles ?? []),
+    justCompleted: next.justCompleted ?? existing?.justCompleted ?? false,
     scriptSchemaVersion: next.scriptSchemaVersion !== null
       && next.scriptSchemaVersion !== undefined
       && Number.isFinite(Number(next.scriptSchemaVersion))

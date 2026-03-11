@@ -3,6 +3,10 @@ import { SimulationModule } from './index.js';
 import { GlobalState } from '../../state.js';
 import { getSelectedFolderHandle } from '../../ui/workspace/folderWorkspace.js';
 import {
+  ensureFolderWritePermission,
+  resetSelectedFolder
+} from '../../ui/workspace/folderWorkspace.js';
+import {
   buildTaskIndexEntriesFromJobs,
   loadTaskIndex,
   rebuildIndexFromManifests,
@@ -258,6 +262,43 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   return result.manifest;
 }
 
+export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null } = {}) {
+  const folderHandle = getSelectedFolderHandle();
+  if (folderHandle && job?.id) {
+    try {
+      const permissionGranted = await ensureFolderWritePermission(folderHandle);
+      if (!permissionGranted) {
+        throw new Error('Write permission for selected folder was denied.');
+      }
+
+      const taskDir = await folderHandle.getDirectoryHandle(String(job.id), { create: true });
+      const fileHandle = await taskDir.getFileHandle(file.fileName, { create: true });
+      const writable = await fileHandle.createWritable();
+      const blob = file.content instanceof Blob
+        ? file.content
+        : new Blob([file.content], { type: file.saveOptions?.contentType || 'application/octet-stream' });
+      await writable.write(blob);
+      await writable.close();
+      return {
+        fileName: file.fileName,
+        wroteToTaskFolder: true
+      };
+    } catch (error) {
+      console.warn('Task folder export failed, falling back to standard save flow:', error);
+      resetSelectedFolder();
+    }
+  }
+
+  if (typeof fallbackWrite === 'function') {
+    await fallbackWrite(file);
+  }
+
+  return {
+    fileName: file.fileName,
+    wroteToTaskFolder: false
+  };
+}
+
 export function validateSimulationConfig(config = {}) {
   if (!Number.isFinite(config.frequencyStart) || !Number.isFinite(config.frequencyEnd)) {
     return 'Frequency range must contain valid numbers.';
@@ -301,6 +342,7 @@ export function buildQueuedSimulationJob({
     label: `${outputName}_${counter}`,
     errorMessage: null,
     rating: null,
+    autoExportCompletedAt: null,
     exportedFiles: [],
     scriptSchemaVersion: 1,
     script: {

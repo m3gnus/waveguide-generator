@@ -80,6 +80,7 @@ test('createTaskManifestFromJob maps script and metadata fields', () => {
     label: 'horn_42',
     status: 'running',
     rating: 4,
+    autoExportCompletedAt: '2026-03-11T10:00:00.000Z',
     exportedFiles: ['file-a.csv'],
     script: { outputName: 'horn' }
   });
@@ -87,6 +88,7 @@ test('createTaskManifestFromJob maps script and metadata fields', () => {
   assert.equal(manifest.id, 'job-42');
   assert.equal(manifest.label, 'horn_42');
   assert.equal(manifest.rating, 4);
+  assert.equal(manifest.autoExportCompletedAt, '2026-03-11T10:00:00.000Z');
   assert.deepEqual(manifest.exportedFiles, ['file-a.csv']);
   assert.deepEqual(manifest.scriptSnapshot, { outputName: 'horn' });
 });
