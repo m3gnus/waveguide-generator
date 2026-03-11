@@ -59,8 +59,12 @@ Primary entry points:
   - Misc routes (`/`, `/health`, `/api/updates/check`, chart/directivity rendering)
 - `server/services/job_runtime.py`
   - In-memory job cache, queue, scheduler loop, DB merge helpers
+- `server/services/solver_runtime.py`
+  - Service-layer adapter for solver availability flags, dependency status, OCC builder access, and device metadata
 - `server/services/simulation_runner.py`
   - Async single-job execution and persistence flow
+- `server/services/simulation_validation.py`
+  - Domain validation helpers for `/api/solve` request semantics and OCC shell requirements
 - `server/services/update_service.py`
   - Git-backed update status checks
 - `server/solver/waveguide_builder.py`
@@ -427,7 +431,7 @@ The project underwent a significant architectural cleanup to streamline mesh gen
 ### 12.4 Backend Router/Service Decomposition
 - `server/app.py` was reduced to app assembly, CORS setup, router registration, and lifecycle startup.
 - Route handlers now live in `server/api/routes_*.py`.
-- Runtime orchestration/state and job execution moved into `server/services/*`.
+- Runtime orchestration/state, solver-runtime adapters, and request validation now live in `server/services/*`.
 
 ---
 

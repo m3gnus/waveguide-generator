@@ -9,12 +9,15 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from contracts import ChartsRenderRequest, DirectivityRenderRequest
-from solver_bootstrap import (
+from services.solver_runtime import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,
     WAVEGUIDE_BUILDER_AVAILABLE,
     GMSH_OCC_RUNTIME_READY,
     get_dependency_status,
+    render_all_charts,
+    render_directivity_plot,
+    selected_device_metadata,
 )
 from services.update_service import get_update_status
 
@@ -39,14 +42,7 @@ async def health_check() -> Dict[str, Any]:
     """Health check endpoint."""
     logger.info("Health check requested")
     dependency_status = get_dependency_status()
-
-    device_info = None
-    if SOLVER_AVAILABLE:
-        try:
-            from solver.device_interface import selected_device_metadata  # noqa: PLC0415
-            device_info = selected_device_metadata("auto")
-        except Exception:
-            pass
+    device_info = selected_device_metadata("auto")
 
     return {
         "status": "ok",
@@ -74,19 +70,14 @@ async def render_charts(request: ChartsRenderRequest) -> Dict[str, Any]:
     Returns base64-encoded PNGs for each chart type.
     """
     try:
-        from solver.charts import render_all_charts  # noqa: PLC0415
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=503, detail=f"Chart renderer not available: {exc}"
-        ) from exc
-
-    try:
         charts = render_all_charts(request.model_dump())
         result = {}
         for key, b64 in charts.items():
             if b64 is not None:
                 result[key] = f"data:image/png;base64,{b64}"
         return {"charts": result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Chart rendering failed: {exc}") from exc
 
@@ -101,11 +92,6 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
         raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
 
     try:
-        from solver.directivity_plot import render_directivity_plot  # noqa: PLC0415
-    except ImportError as exc:
-        raise HTTPException(status_code=503, detail=f"Matplotlib not available: {exc}") from exc
-
-    try:
         image_b64 = render_directivity_plot(
             request.frequencies,
             request.directivity,
@@ -114,5 +100,7 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
         if image_b64 is None:
             raise HTTPException(status_code=400, detail="No directivity patterns to render")
         return {"image": f"data:image/png;base64,{image_b64}"}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Rendering failed: {exc}") from exc

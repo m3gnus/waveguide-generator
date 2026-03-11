@@ -9,21 +9,19 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from pydantic import ValidationError
 
 from contracts import (
     JobStatus,
     MeshData,
     SimulationRequest,
-    WaveguideParamsRequest,
 )
-from solver_bootstrap import (
+from services.simulation_validation import validate_submit_simulation_request
+from services.solver_runtime import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,
     WAVEGUIDE_BUILDER_AVAILABLE,
     GMSH_OCC_RUNTIME_READY,
     build_waveguide_mesh,
-    normalize_mesh_validation_mode,
     get_dependency_status,
 )
 import services.job_runtime as _jrt
@@ -42,7 +40,6 @@ from services.job_runtime import (
     jobs_lock,
     running_jobs,
 )
-from services.simulation_runner import _validate_occ_adaptive_bem_shell
 
 logger = logging.getLogger(__name__)
 
@@ -52,33 +49,8 @@ router = APIRouter()
 @router.post("/api/solve")
 async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     """Submit a new BEM simulation job. Returns a job ID for tracking progress."""
-    triangle_count = len(request.mesh.indices) // 3
-    if len(request.mesh.vertices) % 3 != 0:
-        raise HTTPException(
-            status_code=422, detail="Mesh vertices length must be divisible by 3."
-        )
-    if len(request.mesh.indices) % 3 != 0:
-        raise HTTPException(
-            status_code=422, detail="Mesh indices length must be divisible by 3."
-        )
-    if len(request.mesh.surfaceTags) != triangle_count:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) "
-                f"must match triangle count ({triangle_count})."
-            ),
-        )
-    if str(request.sim_type).strip() != "2":
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Only sim_type='2' (free-standing) is supported; "
-                "infinite-baffle sim_type='1' was removed."
-            ),
-        )
     try:
-        normalize_mesh_validation_mode(request.mesh_validation_mode)
+        validation = validate_submit_simulation_request(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -88,34 +60,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     )
     mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
 
-    if mesh_strategy == "occ_adaptive":
-        waveguide_params = mesh_opts.get("waveguide_params")
-        if not isinstance(waveguide_params, dict):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "options.mesh.waveguide_params must be an object when "
-                    "options.mesh.strategy='occ_adaptive'."
-                ),
-            )
-        try:
-            validated_waveguide = WaveguideParamsRequest(**waveguide_params)
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid options.mesh.waveguide_params: {exc.errors()}",
-            ) from exc
-        try:
-            _validate_occ_adaptive_bem_shell(
-                validated_waveguide.enc_depth,
-                validated_waveguide.wall_thickness,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        # BEM solve path always builds full-domain geometry.
-        if int(validated_waveguide.quadrants) != 1234:
-            waveguide_params["quadrants"] = 1234
-
+    if validation.mesh_strategy == "occ_adaptive":
         if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None:
             raise HTTPException(
                 status_code=503,
