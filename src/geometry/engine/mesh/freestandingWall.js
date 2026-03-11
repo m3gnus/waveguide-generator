@@ -414,12 +414,21 @@ export function addFreestandingWallGeometry(
     offsetSign
   );
 
+  const outerWallStartTri = indices.length / 3;
   stitchOuterShell(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart);
+  const outerWallEndTri = indices.length / 3;
+
   stitchMouthBand(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart);
+  const mouthRimEndTri = indices.length / 3;
+
   addRearPlate(vertices, indices, ringCount, fullCircle, outerStart, throatPlateY, rearDiscY, thickness);
+  const rearCapEndTri = indices.length / 3;
 
   const wallEndTri = indices.length / 3;
   if (groupInfo && wallEndTri > wallStartTri) {
     groupInfo.freestandingWall = { start: wallStartTri, end: wallEndTri };
+    groupInfo.outer_wall = { start: outerWallStartTri, end: outerWallEndTri };
+    groupInfo.mouth_rim = { start: outerWallEndTri, end: mouthRimEndTri };
+    groupInfo.rear_cap = { start: mouthRimEndTri, end: rearCapEndTri };
   }
 }
