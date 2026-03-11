@@ -1,6 +1,5 @@
 export { generateMWGConfigContent } from './mwgConfig.js';
 export { exportProfilesCSV, exportSlicesCSV } from './profiles.js';
-export { exportMSH } from './msh.js';
 export { exportVerticesToCSV, exportVerticesToCSVWithMetadata, exportCrossSectionProfilesCSV } from './csv.js';
 
 // Browser-compatible STL exports (binary/ASCII generation)
