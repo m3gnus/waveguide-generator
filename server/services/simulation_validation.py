@@ -39,6 +39,10 @@ def validate_submit_simulation_request(
             f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) "
             f"must match triangle count ({triangle_count})."
         )
+    if not any(int(tag) == 2 for tag in request.mesh.surfaceTags):
+        raise ValueError(
+            "Mesh surfaceTags must include source tag 2 before solve submission."
+        )
     if str(request.sim_type).strip() != "2":
         raise ValueError(
             "Only sim_type='2' (free-standing) is supported; "
