@@ -1,4 +1,4 @@
-import { prepareGeometryParams } from '../../geometry/params.js';
+import { DesignModule } from '../design/index.js';
 
 const PARAM_MODULE_ID = 'param';
 const PARAM_IMPORT_STAGE = 'import';
@@ -70,9 +70,10 @@ export function importPreparedParamInput(preparedParams = {}) {
 export function runParamTask(input) {
   assertParamImportEnvelope(input);
 
-  const preparedParams = input.kind === PARAM_INPUT_KINDS.PREPARED
-    ? input.params
-    : prepareGeometryParams(input.params, input.options);
+  const designTask = input.kind === PARAM_INPUT_KINDS.PREPARED
+    ? DesignModule.task(DesignModule.importPrepared(input.params))
+    : DesignModule.task(DesignModule.import(input.params, input.options));
+  const preparedParams = DesignModule.output.preparedParams(designTask);
 
   return Object.freeze({
     module: PARAM_MODULE_ID,
