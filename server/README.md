@@ -69,7 +69,6 @@ The backend now enforces a version matrix at runtime:
 | Python | `>=3.10,<3.15` | backend runtime |
 | gmsh Python package | `>=4.11,<5.0` | `/api/mesh/build` |
 | bempp-cl | `>=0.4,<0.5` | `/api/solve` |
-| legacy `bempp_api` fallback | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |
 
 Notes:
 - `GET /health` returns the live dependency status and matrix under `dependencies`.

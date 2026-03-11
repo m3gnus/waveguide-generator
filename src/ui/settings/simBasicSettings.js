@@ -170,7 +170,7 @@ export function resetSimBasicSettings() {
 
 /**
  * Update the device mode in the persisted state.
- * Used by fallback logic in Plan 02 to reflect runtime mode resolution.
+ * Used to persist runtime-resolved device mode selections.
  */
 export function updateDeviceModeSelection(mode) {
   const current = getCurrentSimBasicSettings();

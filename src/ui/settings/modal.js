@@ -71,8 +71,6 @@ function _modeLabel(mode) {
       return 'OpenCL GPU';
     case 'opencl_cpu':
       return 'OpenCL CPU';
-    case 'numba':
-      return 'Numba CPU';
     case 'auto':
       return 'Auto';
     default:

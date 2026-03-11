@@ -96,9 +96,6 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
         bempp_info = dep["runtime"]["bempp"]
         py_info = dep["runtime"]["python"]
         bempp_cl_range = dep["supportedMatrix"].get("bempp_cl", {}).get("range", ">=0.4,<0.5")
-        bempp_legacy_range = dep["supportedMatrix"].get("bempp_api_legacy", {}).get(
-            "range", ">=0.3,<0.4"
-        )
         raise HTTPException(
             status_code=503,
             detail=(
@@ -106,7 +103,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
                 f"python={py_info.get('version')} supported={py_info.get('supported')}; "
                 f"bempp variant={bempp_info.get('variant')} version={bempp_info.get('version')} "
                 f"supported={bempp_info.get('supported')}. "
-                f"Supported matrix: bempp-cl {bempp_cl_range}, legacy bempp_api {bempp_legacy_range}."
+                f"Supported matrix: bempp-cl {bempp_cl_range}."
             ),
         )
 
