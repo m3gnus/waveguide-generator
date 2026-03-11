@@ -12,6 +12,7 @@ export const STAGE_LABELS = {
   frequency_solve: 'BEM solve',
   directivity: 'Spectra and directivity',
   finalizing: 'Finalizing results',
+  cancelling: 'Stopping',
   complete: 'Complete',
   cancelled: 'Cancelled',
   error: 'Error'
@@ -34,6 +35,7 @@ function stageStep(stage) {
   }
   if (key === 'queued') return 1;
   if (key === 'directivity') return 3;
+  if (key === 'cancelling') return 4;
   if (key === 'finalizing' || key === 'complete' || key === 'cancelled' || key === 'error') return 4;
   return 2;
 }
@@ -104,6 +106,10 @@ export function resolveStageDetail(stage, message, pct) {
 
   if (key === 'finalizing') {
     return raw || 'Packaging solver output and preparing charts.';
+  }
+
+  if (key === 'cancelling') {
+    return raw || 'Stop requested. Waiting for backend worker to stop.';
   }
 
   return raw;

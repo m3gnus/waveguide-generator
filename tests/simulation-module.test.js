@@ -16,6 +16,7 @@ import {
   syncSimulationWorkspaceIndex,
   syncSimulationWorkspaceJobManifest,
   buildQueuedSimulationJob,
+  buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds,
   summarizeCanonicalSimulationMesh
@@ -401,6 +402,15 @@ test('simulation workspace service writes normalized folder index entries', asyn
 });
 
 test('simulation use case builds cancelled job state and resolves failed cleanup IDs', () => {
+  const pending = buildCancellationRequestedSimulationJob(
+    { id: 'job-1', status: 'running', stage: 'solver_setup' },
+    { message: 'Cancellation requested by user' }
+  );
+  assert.equal(pending.status, 'running');
+  assert.equal(pending.stage, 'cancelling');
+  assert.equal(pending.stageMessage, 'Cancellation requested by user');
+  assert.equal(pending.cancellationRequested, true);
+
   const cancelled = buildCancelledSimulationJob(
     { id: 'job-1', status: 'running', stage: 'solver_setup' },
     { completedAt: '2026-03-11T10:01:00.000Z' }
@@ -408,6 +418,8 @@ test('simulation use case builds cancelled job state and resolves failed cleanup
   assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.stageMessage, 'Simulation cancelled by user');
   assert.equal(cancelled.completedAt, '2026-03-11T10:01:00.000Z');
+  assert.equal(cancelled.cancellationRequested, false);
+  assert.equal(buildCancellationRequestedSimulationJob(null), null);
   assert.equal(buildCancelledSimulationJob(null), null);
 
   assert.deepEqual(

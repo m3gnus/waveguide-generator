@@ -292,6 +292,7 @@ def _serialize_job_item(job: Dict[str, Any]) -> Dict[str, Any]:
         "has_mesh_artifact": bool(job.get("has_mesh_artifact")),
         "label": job.get("label"),
         "error_message": job.get("error_message"),
+        "cancellation_requested": bool(job.get("cancellation_requested")),
     }
 
 

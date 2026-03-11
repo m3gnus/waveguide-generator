@@ -50,12 +50,12 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P0 Upstream Runtime And Contract Seams
 
-- [ ] Make the Stop action cancel backend work cooperatively instead of only updating UI state.
+- [x] Make the Stop action cancel backend work cooperatively instead of only updating UI state.
   Source: user report; `server/api/routes_simulation.py`; `server/services/simulation_runner.py`; `src/ui/simulation/controller.js`.
   Relevant: Yes. The current route marks running jobs as cancelled, but the worker thread continues through meshing/solve and only notices cancellation after the solve returns.
   Will it improve the program: Yes. It prevents wasted compute, misleading UI, and inconsistent job state.
   Research findings: `stop_simulation()` marks running jobs `cancelled` immediately, `run_simulation()` only checks cancellation after `solver.solve(...)` returns, and `stopSimulationControllerJob()` / `stopSimulation()` also flip the frontend feed to `cancelled` immediately. This is the highest-leverage runtime seam because several downstream UX states currently trust a cancellation that did not happen yet.
-  Best approach: Introduce a cooperative cancellation token/check that is visible to OCC meshing and BEM solve loops, check `cancellation_requested` before expensive stages and between frequency steps, and only finalize `cancelled` after the worker acknowledges the stop. Add backend tests for queued and running cancellation plus a frontend regression proving the UI waits for real cancellation semantics.
+  Completed: March 11, 2026. Running-job stops now remain `running` with stage `cancelling` until the worker acknowledges the stop request, queued jobs still cancel immediately, the runner checks `cancellation_requested` before expensive stages and threads a cooperative cancellation callback through OCC preparation and both solver frequency loops, and the frontend now renders a truthful “stopping” state instead of faking local `cancelled` status. Backend/API, solver-hardening, and frontend controller/module regressions now cover queued cancellation, running cancellation requests, worker acknowledgement, and UI stop semantics.
 
 - [x] Wire Simulation Basic settings all the way into `/api/solve` payloads and runtime availability messaging.
   Source: `.planning/ROADMAP.md` Phase 3; `.planning/phases/03-simulation-basic-payload-wiring/03-CONTEXT.md`; `src/ui/settings/simBasicSettings.js`; `src/ui/simulation/jobActions.js`.

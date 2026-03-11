@@ -378,7 +378,31 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
   );
 });
 
-test('stopSimulationControllerJob keeps local cancellation behavior even when stop API fails', async () => {
+test('stopSimulationControllerJob keeps running job in cancelling state until backend confirms stop', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async stopJob() {
+        return {
+          status: 'cancelling',
+          message: 'Cancellation requested for job job-running'
+        };
+      }
+    }
+  });
+  controller.jobs.set('job-running', { id: 'job-running', status: 'running', progress: 0.4 });
+  controller.activeJobId = 'job-running';
+  controller.currentJobId = 'job-running';
+
+  const result = await stopSimulationControllerJob(controller, 'job-running');
+
+  assert.equal(result.stopError, null);
+  assert.equal(result.cancelledJob?.status, 'running');
+  assert.equal(result.cancelledJob?.stage, 'cancelling');
+  assert.equal(controller.jobs.get('job-running')?.status, 'running');
+  assert.equal(controller.jobs.get('job-running')?.stage, 'cancelling');
+});
+
+test('stopSimulationControllerJob does not fake a local cancel when stop API fails', async () => {
   const controller = createSimulationControllerStore({
     solver: {
       async stopJob() {
@@ -393,8 +417,8 @@ test('stopSimulationControllerJob keeps local cancellation behavior even when st
   const result = await stopSimulationControllerJob(controller, 'job-running');
 
   assert.match(result.stopError?.message || '', /network down/i);
-  assert.equal(result.cancelledJob?.status, 'cancelled');
-  assert.equal(controller.jobs.get('job-running')?.status, 'cancelled');
+  assert.equal(result.cancelledJob, null);
+  assert.equal(controller.jobs.get('job-running')?.status, 'running');
 });
 
 test('controller job mutation helpers remove, clear, and cancel jobs via controller boundary', () => {

@@ -6,6 +6,7 @@ import {
 } from '../../modules/simulation/useCases.js';
 import { UiModule } from '../../modules/ui/index.js';
 import {
+  buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
   buildQueuedSimulationJob,
   readSimulationWorkspaceJobs,
@@ -283,19 +284,23 @@ export function removeSimulationControllerJob(controller, jobId) {
 
 export async function stopSimulationControllerJob(controller, jobId) {
   let stopError = null;
+  let stopResult = null;
 
   if (jobId) {
     try {
-      await controller.solver.stopJob(jobId);
+      stopResult = await controller.solver.stopJob(jobId);
     } catch (error) {
       stopError = error;
     }
   }
 
-  const cancelledJob = cancelSimulationControllerJob(controller, jobId);
+  const cancelledJob = stopError
+    ? null
+    : applyStoppedSimulationControllerJob(controller, jobId, stopResult);
   return {
     cancelledJob,
-    stopError
+    stopError,
+    stopResult
   };
 }
 
@@ -322,6 +327,37 @@ export function cancelSimulationControllerJob(controller, jobId) {
   }
   persistPanelJobs(controller);
   return cancelledJob;
+}
+
+export function requestSimulationControllerJobCancellation(
+  controller,
+  jobId,
+  { message = 'Cancellation requested. Waiting for backend worker to stop.' } = {}
+) {
+  if (!jobId || !controller?.jobs?.has(jobId)) {
+    persistPanelJobs(controller);
+    return null;
+  }
+
+  const pendingJob = buildCancellationRequestedSimulationJob(controller.jobs.get(jobId), {
+    message
+  });
+  if (pendingJob) {
+    upsertJob(controller, pendingJob);
+  }
+  persistPanelJobs(controller);
+  return pendingJob;
+}
+
+export function applyStoppedSimulationControllerJob(controller, jobId, stopResult = {}) {
+  const responseStatus = String(stopResult?.status || '').trim().toLowerCase();
+  if (responseStatus === 'cancelled') {
+    return cancelSimulationControllerJob(controller, jobId);
+  }
+  return requestSimulationControllerJobCancellation(controller, jobId, {
+    message: String(stopResult?.message || '').trim()
+      || 'Cancellation requested. Waiting for backend worker to stop.'
+  });
 }
 
 export async function reconcileSimulationControllerRemoteJobs(

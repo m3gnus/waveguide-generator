@@ -43,6 +43,7 @@ from services.job_runtime import (
     jobs_lock,
     running_jobs,
 )
+from services.simulation_runner import CANCELLATION_REQUESTED_MESSAGE, SIMULATION_CANCELLED_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -189,23 +190,24 @@ async def stop_simulation(job_id: str) -> Dict[str, str]:
             progress=0.0,
             stage="cancelled",
             stage_message="Simulation cancelled",
-            error_message="Simulation cancelled by user",
+            error_message=SIMULATION_CANCELLED_MESSAGE,
             completed_at=_now_iso(),
-            cancellation_requested=True,
+            cancellation_requested=False,
         )
+        response_status = "cancelled"
+        response_message = f"Job {job_id} has been cancelled"
     else:
         _set_job_fields(
             job_id,
-            status="cancelled",
-            stage="cancelled",
-            stage_message="Simulation cancelled",
-            error_message="Simulation cancelled by user",
-            completed_at=_now_iso(),
+            stage="cancelling",
+            stage_message=CANCELLATION_REQUESTED_MESSAGE,
             cancellation_requested=True,
         )
+        response_status = "cancelling"
+        response_message = f"Cancellation requested for job {job_id}"
 
     asyncio.create_task(_drain_scheduler_queue())
-    return {"message": f"Job {job_id} has been cancelled", "status": "cancelled"}
+    return {"message": response_message, "status": response_status}
 
 
 @router.get("/api/status/{job_id}")

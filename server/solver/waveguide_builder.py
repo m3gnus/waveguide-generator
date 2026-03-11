@@ -38,7 +38,7 @@ import math
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,11 @@ def _make_callable(value, default: float = 0.0):
         return lambda p, _v=v: _v
     except ValueError:
         return _expression_to_callable(text)
+
+
+def _run_cancellation_callback(cancellation_callback: Optional[Callable[[], None]]) -> None:
+    if callable(cancellation_callback):
+        cancellation_callback()
 
 
 # ---------------------------------------------------------------------------
@@ -2483,7 +2488,12 @@ def _orient_and_validate_canonical_mesh(
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> dict:
+def build_waveguide_mesh(
+    params: dict,
+    *,
+    include_canonical: bool = False,
+    cancellation_callback: Optional[Callable[[], None]] = None,
+) -> dict:
     """Build a .msh from ATH parameters using Gmsh OCC Python API.
 
     Accepts both R-OSSE and OSSE formula types. See WaveguideParamsRequest
@@ -2517,6 +2527,8 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
     # sim_type is passed through to ABEC project files but does not affect geometry
     quadrants = int(params.get("quadrants", 1234))
     closed = (quadrants == 1234)
+
+    _run_cancellation_callback(cancellation_callback)
 
     # Compute 3D point grids (includes morph).
     # outer_points is non-None only for the wall-shell case (enc_depth==0 + wall_thickness>0).
@@ -2645,6 +2657,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
                     )
 
             # --- Mesh size fields ---
+            _run_cancellation_callback(cancellation_callback)
             _configure_mesh_size(
                 inner_points,
                 surface_groups,
@@ -2665,6 +2678,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
             gmsh.option.setNumber("Mesh.MshFileVersion", float(msh_version))
 
             # --- Generate mesh ---
+            _run_cancellation_callback(cancellation_callback)
             gmsh.model.mesh.generate(2)
             gmsh.model.mesh.removeDuplicateNodes()
             canonical_mesh = _extract_canonical_mesh_from_model() if include_canonical else None
@@ -2690,6 +2704,7 @@ def build_waveguide_mesh(params: dict, *, include_canonical: bool = False) -> di
                     raise GmshMeshingError("Canonical extraction produced no source-tagged triangles.")
 
             # --- Write outputs ---
+            _run_cancellation_callback(cancellation_callback)
             with tempfile.TemporaryDirectory(prefix="mwg-occ-") as tmp_dir:
                 tmp = Path(tmp_dir)
                 msh_path = tmp / "output.msh"
