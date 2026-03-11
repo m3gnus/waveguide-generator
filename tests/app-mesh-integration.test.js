@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { provideMeshForSimulation } from '../src/app/mesh.js';
+import { GlobalState } from '../src/state.js';
 import { validateCanonicalMeshPayload } from '../src/solver/index.js';
 import { getDefaults } from '../src/config/defaults.js';
 import { prepareGeometryParams, buildGeometryArtifacts } from '../src/geometry/index.js';
@@ -22,10 +23,10 @@ function makePreparedParams(overrides = {}) {
 
 test('app mesh provider emits canonical payload from shared geometry artifacts pipeline', () => {
   let publishedPayload = null;
+  const originalGet = GlobalState.get;
 
   const preparedInput = makePreparedParams({ encDepth: 200, quadrants: '1' });
   const app = {
-    prepareParamsForMesh: (options = {}) => prepareGeometryParams(preparedInput, { type: 'OSSE', ...options }),
     publishSimulationMesh(payload) {
       publishedPayload = payload;
       return payload;
@@ -35,7 +36,16 @@ test('app mesh provider emits canonical payload from shared geometry artifacts p
     }
   };
 
-  provideMeshForSimulation(app);
+  GlobalState.get = () => ({
+    type: 'OSSE',
+    params: preparedInput
+  });
+
+  try {
+    provideMeshForSimulation(app);
+  } finally {
+    GlobalState.get = originalGet;
+  }
 
   assert.ok(publishedPayload);
   validateCanonicalMeshPayload(publishedPayload);
@@ -56,11 +66,9 @@ test('app mesh provider emits canonical payload from shared geometry artifacts p
 
 test('app mesh provider emits explicit simulation:mesh-error on generation failure', () => {
   let errorMessage = null;
+  const originalGet = GlobalState.get;
 
   const app = {
-    prepareParamsForMesh: () => {
-      throw new Error('intentional mesh setup failure');
-    },
     publishSimulationMesh() {
       throw new Error('unexpected mesh success');
     },
@@ -70,7 +78,15 @@ test('app mesh provider emits explicit simulation:mesh-error on generation failu
     }
   };
 
-  provideMeshForSimulation(app);
+  GlobalState.get = () => {
+    throw new Error('intentional mesh setup failure');
+  };
+
+  try {
+    provideMeshForSimulation(app);
+  } finally {
+    GlobalState.get = originalGet;
+  }
 
   assert.match(errorMessage, /intentional mesh setup failure/);
 });

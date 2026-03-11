@@ -1,5 +1,5 @@
-import { prepareGeometryParams } from '../../geometry/params.js';
 import { buildCanonicalMeshPayload, buildGeometryArtifacts } from '../../geometry/pipeline.js';
+import { ParamModule } from '../param/index.js';
 
 const GEOMETRY_MODULE_ID = 'geometry';
 const GEOMETRY_IMPORT_STAGE = 'import';
@@ -40,7 +40,8 @@ function assertGeometryTaskEnvelope(result) {
 }
 
 export function importGeometryInput(rawParams = {}, options = {}) {
-  return createGeometryImportEnvelope(prepareGeometryParams(rawParams, options));
+  const paramTask = ParamModule.task(ParamModule.import(rawParams, options));
+  return createGeometryImportEnvelope(ParamModule.output.params(paramTask));
 }
 
 export function importPreparedGeometryInput(preparedParams = {}) {
