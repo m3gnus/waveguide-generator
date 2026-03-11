@@ -15,7 +15,10 @@ from contracts import (
     MeshData,
     SimulationRequest,
 )
-from services.simulation_validation import validate_submit_simulation_request
+from services.simulation_validation import (
+    build_submit_simulation_request,
+    validate_submit_simulation_request,
+)
 from services.solver_runtime import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,
@@ -53,8 +56,9 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
         validation = validate_submit_simulation_request(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    request_to_submit = build_submit_simulation_request(request, validation)
 
-    options = request.options if isinstance(request.options, dict) else {}
+    options = request_to_submit.options if isinstance(request_to_submit.options, dict) else {}
     mesh_opts = (
         options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
     )
@@ -108,8 +112,8 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     ensure_db_ready()
     job_id = str(uuid.uuid4())
     now = _now_iso()
-    request_dump = request.model_dump()
-    config_summary = _build_config_summary(request)
+    request_dump = request_to_submit.model_dump()
+    config_summary = _build_config_summary(request_to_submit)
 
     job_record: Dict[str, Any] = {
         "id": job_id,
@@ -125,7 +129,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
         "error": None,
         "error_message": None,
         "request": request_dump,
-        "request_obj": request,
+        "request_obj": request_to_submit,
         "results": None,
         "mesh_artifact": None,
         "cancellation_requested": False,

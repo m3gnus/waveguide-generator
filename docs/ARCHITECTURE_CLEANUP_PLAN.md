@@ -596,6 +596,14 @@ Reject invalid requests upstream instead of mutating them later.
 - `cd server && python3 -m unittest tests.test_solver_tag_contract`
 - `cd server && python3 -m unittest tests.test_mesh_validation`
 
+### Implementation Notes (In Progress, March 11, 2026)
+
+Completed in this step:
+
+1. Kept `validate_submit_simulation_request()` pure: it now validates and returns normalized OCC waveguide params without mutating the caller-owned `SimulationRequest`.
+2. Added an explicit submission-boundary builder in `server/services/simulation_validation.py`, so `/api/solve` queues a corrected full-domain OCC request while preserving the original request object.
+3. Updated contract coverage to assert the full-domain quadrant correction happens only in the queued submission payload, not by rewriting the input request in place.
+
 ## Phase 8: Delete Legacy Paths And Rename Docs To Match Reality
 
 ### Objective

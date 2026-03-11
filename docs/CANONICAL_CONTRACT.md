@@ -118,7 +118,7 @@ Decision:
 
 - Frontend OCC request normalization (`src/modules/design/index.js`) accepts canonical values `1`, `12`, `14`, `1234`; otherwise attempts numeric coercion; fallback `1234`.
 - Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`) expects normalized integer `quadrants` and maps it directly.
-- `/api/solve` OCC-adaptive route validates request and coerces OCC build quadrants to full-domain `1234`.
+- `/api/solve` validates the OCC-adaptive request and builds the queued solve request with full-domain `quadrants=1234` at the submission boundary.
 - Simulation runner enforces full-domain `1234` again before OCC build.
 
 ### 4.4 Enclosure resolution fields
