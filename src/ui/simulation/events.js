@@ -1,4 +1,3 @@
-import { AppEvents } from '../../events.js';
 import {
   clearFailedSimulations,
   exportJobResults,
@@ -81,10 +80,6 @@ export function setupEventListeners(panel) {
     });
   }
 
-  // Store reference so dispose() can remove the listener.
-  panel._onStateUpdated = (state) => { panel.syncSimulationSettings(state); };
-  AppEvents.on('state:updated', panel._onStateUpdated);
-
   function switchTab(tabName) {
     // Update tab buttons
     document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -101,7 +96,7 @@ export function setupEventListeners(panel) {
       content.hidden = !isActive;
     });
 
-    AppEvents.emit('ui:tab-changed', { tab: tabName });
+    panel.emitTabChanged(tabName);
   }
 }
 

@@ -11,7 +11,7 @@
  */
 
 import { BemSolver } from '../../solver/index.js';
-import { AppEvents } from '../../events.js';
+import { UiModule } from '../../modules/ui/index.js';
 import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
@@ -56,7 +56,6 @@ export class SimulationPanel {
     this.currentJobId = null; // Backward-compatible alias for activeJobId
     this.pollInterval = null; // Backward-compatible alias for pollTimer
     this.connectionPollTimer = null;
-    this.pendingMeshResolve = null;
     this.lastResults = null;
     /** @type {Map<string, any>} */
     this.jobs = new Map();
@@ -79,6 +78,9 @@ export class SimulationPanel {
       { id: 'freq-end', key: 'freqEnd', parse: (value) => parseFloat(value) },
       { id: 'freq-steps', key: 'numFreqs', parse: (value) => parseInt(value, 10) }
     ];
+    this.uiCoordinator = UiModule.output.simulationPanel(
+      UiModule.task(UiModule.importSimulationPanel(this))
+    );
 
     this.setupEventListeners();
     this.setupMeshListener();
@@ -185,6 +187,10 @@ export class SimulationPanel {
     return prepareMeshForSimulation(this);
   }
 
+  emitTabChanged(tabName) {
+    return this.uiCoordinator.emitTabChanged(tabName);
+  }
+
   displayResults(results = null) {
     return displayResults(this, results);
   }
@@ -232,20 +238,8 @@ export class SimulationPanel {
       this.connectionPollTimer = null;
     }
 
-    // Remove EventBus listeners stored by setupEventListeners.
-    if (this._onStateUpdated) {
-      AppEvents.off('state:updated', this._onStateUpdated);
-      this._onStateUpdated = null;
-    }
-
-    // Remove EventBus listeners stored by setupMeshListener.
-    if (this._onMeshReady) {
-      AppEvents.off('simulation:mesh-ready', this._onMeshReady);
-      this._onMeshReady = null;
-    }
-    if (this._onMeshError) {
-      AppEvents.off('simulation:mesh-error', this._onMeshError);
-      this._onMeshError = null;
+    if (this.uiCoordinator) {
+      this.uiCoordinator.dispose();
     }
   }
 }

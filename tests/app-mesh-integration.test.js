@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AppEvents } from '../src/events.js';
 import { provideMeshForSimulation } from '../src/app/mesh.js';
 import { validateCanonicalMeshPayload } from '../src/solver/index.js';
 import { getDefaults } from '../src/config/defaults.js';
@@ -22,61 +21,56 @@ function makePreparedParams(overrides = {}) {
 }
 
 test('app mesh provider emits canonical payload from shared geometry artifacts pipeline', () => {
-  const emitted = [];
-  const originalEmit = AppEvents.emit;
-  AppEvents.emit = (event, data) => {
-    emitted.push({ event, data });
+  let publishedPayload = null;
+
+  const preparedInput = makePreparedParams({ encDepth: 200, quadrants: '1' });
+  const app = {
+    prepareParamsForMesh: (options = {}) => prepareGeometryParams(preparedInput, { type: 'OSSE', ...options }),
+    publishSimulationMesh(payload) {
+      publishedPayload = payload;
+      return payload;
+    },
+    publishSimulationMeshError() {
+      throw new Error('unexpected mesh error');
+    }
   };
 
-  try {
-    const preparedInput = makePreparedParams({ encDepth: 200, quadrants: '1' });
-    const app = {
-      prepareParamsForMesh: (options = {}) => prepareGeometryParams(preparedInput, { type: 'OSSE', ...options })
-    };
+  provideMeshForSimulation(app);
 
-    provideMeshForSimulation(app);
+  assert.ok(publishedPayload);
+  validateCanonicalMeshPayload(publishedPayload);
 
-    assert.equal(emitted.length, 1);
-    assert.equal(emitted[0].event, 'simulation:mesh-ready');
-    validateCanonicalMeshPayload(emitted[0].data);
+  const expectedPrepared = prepareGeometryParams(preparedInput, {
+    type: 'OSSE',
+    applyVerticalOffset: true
+  });
+  const expected = buildGeometryArtifacts(expectedPrepared, {
+    includeEnclosure: Number(expectedPrepared.encDepth || 0) > 0
+  }).simulation;
 
-    const expectedPrepared = prepareGeometryParams(preparedInput, {
-      type: 'OSSE',
-      applyVerticalOffset: true
-    });
-    const expected = buildGeometryArtifacts(expectedPrepared, {
-      includeEnclosure: Number(expectedPrepared.encDepth || 0) > 0
-    }).simulation;
-
-    assert.equal(emitted[0].data.metadata.fullCircle, true);
-    assert.deepEqual(emitted[0].data.surfaceTags, expected.surfaceTags);
-    assert.equal(emitted[0].data.indices.length, expected.indices.length);
-    assert.equal(emitted[0].data.vertices.length, expected.vertices.length);
-  } finally {
-    AppEvents.emit = originalEmit;
-  }
+  assert.equal(publishedPayload.metadata.fullCircle, true);
+  assert.deepEqual(publishedPayload.surfaceTags, expected.surfaceTags);
+  assert.equal(publishedPayload.indices.length, expected.indices.length);
+  assert.equal(publishedPayload.vertices.length, expected.vertices.length);
 });
 
 test('app mesh provider emits explicit simulation:mesh-error on generation failure', () => {
-  const emitted = [];
-  const originalEmit = AppEvents.emit;
-  AppEvents.emit = (event, data) => {
-    emitted.push({ event, data });
+  let errorMessage = null;
+
+  const app = {
+    prepareParamsForMesh: () => {
+      throw new Error('intentional mesh setup failure');
+    },
+    publishSimulationMesh() {
+      throw new Error('unexpected mesh success');
+    },
+    publishSimulationMeshError(message) {
+      errorMessage = message;
+      return null;
+    }
   };
 
-  try {
-    const app = {
-      prepareParamsForMesh: () => {
-        throw new Error('intentional mesh setup failure');
-      }
-    };
+  provideMeshForSimulation(app);
 
-    provideMeshForSimulation(app);
-
-    assert.equal(emitted.length, 1);
-    assert.equal(emitted[0].event, 'simulation:mesh-error');
-    assert.match(emitted[0].data.message, /intentional mesh setup failure/);
-  } finally {
-    AppEvents.emit = originalEmit;
-  }
+  assert.match(errorMessage, /intentional mesh setup failure/);
 });
