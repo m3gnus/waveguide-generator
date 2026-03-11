@@ -19,10 +19,7 @@ import {
   formatElapsedDuration,
   resolveJobDurationMs
 } from './progressUi.js';
-// clearPollTimer/setActiveJob are imported from polling.js; this creates a circular reference
-// between jobActions.js and polling.js. Both modules only use each other's exports inside
-// function bodies (never at module init time), so ESM live bindings resolve correctly at runtime.
-import { clearPollTimer, setActiveJob } from './polling.js';
+import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
 import { downloadMeshArtifact } from './meshDownload.js';
 import {
   prepareOccAdaptiveSolveRequest,

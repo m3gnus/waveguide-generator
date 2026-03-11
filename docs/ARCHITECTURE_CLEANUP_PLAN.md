@@ -3,14 +3,15 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 4 (in progress)
+- Current phase: Phase 5 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
   - Phase 2 input normalization consolidation (DesignModule now owns OCC simulation/export normalization helpers consumed by module use cases)
   - Phase 3 make geometry the source of truth (put geometry topology, face identity, and solver-tag mapping in one place)
-- In progress:
   - Phase 4 rebuild export and simulation as real use-case modules
+- In progress:
+  - Phase 5 untangle UI state and circular workflow logic
 
 ## Goal
 
@@ -455,6 +456,16 @@ Keep DOM code as an adapter layer, not a second application layer.
 - `node --test tests/simulation-flow.test.js`
 - `node --test tests/ui-module.test.js`
 - any simulation UI regression tests added in this phase
+
+### Implementation Notes (In Progress, March 11, 2026)
+
+Completed in this step:
+
+1. Added `src/ui/simulation/jobOrchestration.js` as a shared UI orchestration boundary for polling/job state helpers (`setPollTimer`, `clearPollTimer`, `setActiveJob`).
+2. Removed the runtime `jobActions.js` <-> `polling.js` circular dependency:
+   - `jobActions.js` now imports orchestration helpers from `jobOrchestration.js`.
+   - `polling.js` now reuses/re-exports orchestration helpers from `jobOrchestration.js`.
+3. Kept existing external APIs stable by preserving `polling.js` helper exports for existing callers/tests.
 
 ## Phase 6: Remove Backend Compatibility Glue
 
