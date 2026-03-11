@@ -24,7 +24,15 @@ import {
 // function bodies (never at module init time), so ESM live bindings resolve correctly at runtime.
 import { clearPollTimer, setActiveJob } from './polling.js';
 import { downloadMeshArtifact } from './meshDownload.js';
-import { prepareOccAdaptiveSolveRequest } from '../../modules/simulation/useCases.js';
+import {
+  prepareOccAdaptiveSolveRequest,
+  validateSimulationConfig,
+  buildQueuedSimulationJob,
+  buildCancelledSimulationJob,
+  resolveClearedFailedJobIds
+} from '../../modules/simulation/useCases.js';
+
+export { validateSimulationConfig };
 
 async function syncTaskManifestForJob(job, updates = null) {
   const workspaceHandle = getSelectedFolderHandle();
@@ -338,11 +346,7 @@ export async function clearFailedSimulations(panel) {
   let deletedIds = [];
   try {
     const response = await panel.solver.clearFailedJobs();
-    if (Array.isArray(response?.deleted_ids) && response.deleted_ids.length > 0) {
-      deletedIds = response.deleted_ids;
-    } else if (Number(response?.deleted_count) > 0) {
-      deletedIds = [...localFailedIds];
-    }
+    deletedIds = resolveClearedFailedJobIds(localFailedIds, response);
   } catch (error) {
     showError(`Failed to clear failed simulations from backend: ${error.message}`);
     return;
@@ -362,19 +366,6 @@ export async function clearFailedSimulations(panel) {
   );
 }
 
-export function validateSimulationConfig(config) {
-  if (!Number.isFinite(config.frequencyStart) || !Number.isFinite(config.frequencyEnd)) {
-    return 'Frequency range must contain valid numbers.';
-  }
-  if (!Number.isFinite(config.numFrequencies) || config.numFrequencies < 1) {
-    return 'Number of frequencies must be at least 1.';
-  }
-  if (config.frequencyStart >= config.frequencyEnd) {
-    return 'Start frequency must be less than end frequency.';
-  }
-  return null;
-}
-
 export async function stopSimulation(panel) {
   const dom = getSimulationDom();
   const targetJobId = panel.activeJobId || panel.currentJobId;
@@ -389,15 +380,10 @@ export async function stopSimulation(panel) {
   }
 
   if (targetJobId && panel.jobs.has(targetJobId)) {
-    upsertJob(panel, {
-      ...panel.jobs.get(targetJobId),
-      id: targetJobId,
-      status: 'cancelled',
-      stage: 'cancelled',
-      stageMessage: 'Simulation cancelled by user',
-      errorMessage: 'Simulation cancelled by user',
-      completedAt: new Date().toISOString()
-    });
+    const cancelledJob = buildCancelledSimulationJob(panel.jobs.get(targetJobId));
+    if (cancelledJob) {
+      upsertJob(panel, cancelledJob);
+    }
   }
   persistPanelJobs(panel);
   renderJobList(panel);
@@ -502,41 +488,16 @@ export async function runSimulation(panel) {
     const { name: outputName, counter } = readOutputNameAndCounter();
     const jobId = await panel.solver.submitSimulation(config, meshData, submitOptions);
     setActiveJob(panel, jobId);
-    const createdJob = upsertJob(panel, {
-      id: jobId,
-      status: 'queued',
-      progress: 0,
-      stage: 'queued',
-      stageMessage: 'Job queued',
-      createdAt: startedIso,
-      queuedAt: startedIso,
-      startedAt: startedIso,
-      configSummary: {
-        formula_type: waveguidePayload.formula_type,
-        frequency_range: [config.frequencyStart, config.frequencyEnd],
-        num_frequencies: config.numFrequencies,
-        sim_type: '2'
-      },
-      hasResults: false,
-      hasMeshArtifact: false,
-      label: `${outputName}_${counter}`,
-      errorMessage: null,
-      rating: null,
-      exportedFiles: [],
-      scriptSchemaVersion: 1,
-      script: {
-        outputName,
-        counter,
-        frequencyStart: config.frequencyStart,
-        frequencyEnd: config.frequencyEnd,
-        numFrequencies: config.numFrequencies,
-        frequencySpacing: config.frequencySpacing,
-        deviceMode: config.deviceMode,
-        polarConfig: config.polarConfig,
-        params: { ...preparedParams },
-        stateSnapshot
-      }
-    });
+    const createdJob = upsertJob(panel, buildQueuedSimulationJob({
+      jobId,
+      startedIso,
+      outputName,
+      counter,
+      config,
+      waveguidePayload,
+      preparedParams,
+      stateSnapshot
+    }));
     incrementOutputCounter();
     persistPanelJobs(panel);
     renderJobList(panel);
