@@ -77,10 +77,23 @@ def validate_submit_simulation_request(
 
     normalized_waveguide_params = validated_waveguide.model_dump()
     normalized_waveguide_params["quadrants"] = 1234
-    waveguide_params.clear()
-    waveguide_params.update(normalized_waveguide_params)
 
     return SimulationRequestValidation(
         mesh_strategy=mesh_strategy,
         waveguide_params=normalized_waveguide_params,
     )
+
+
+def build_submit_simulation_request(
+    request: SimulationRequest,
+    validation: SimulationRequestValidation,
+) -> SimulationRequest:
+    """Build the request object that will actually be queued for submission."""
+    if validation.mesh_strategy != "occ_adaptive" or not validation.waveguide_params:
+        return request
+
+    options = dict(request.options or {})
+    mesh_opts = dict(options.get("mesh", {}))
+    mesh_opts["waveguide_params"] = dict(validation.waveguide_params)
+    options["mesh"] = mesh_opts
+    return request.model_copy(update={"options": options}, deep=True)
