@@ -641,6 +641,9 @@ Finish the cleanup by removing dead branches and stale language.
 1. Removed the dead `mockBEMSolver` export from `src/solver/index.js`; the solver client now documents backend-only runtime behavior with no supported local-result fallback path.
 2. Added a solver API regression test proving the public solver surface no longer exposes the removed fallback helper.
 3. Updated roadmap/backlog docs so Phase 8 and future cleanup notes no longer describe `mockBEMSolver` as a remaining supported runtime branch.
+4. Rewired the UI module's lazy simulation-panel loader to the real `src/ui/simulation/index.js` entry point and deleted the old `src/ui/simulationPanel.js` alias file.
+5. Rewired canonical mesh payload coverage to import directly from `src/geometry/pipeline.js` and `src/geometry/tags.js`, then deleted the deprecated `src/simulation/payload.js` alias.
+6. After this slice, no runtime or test code depends on those legacy frontend alias entry points.
 
 ## Suggested Implementation Order
 
