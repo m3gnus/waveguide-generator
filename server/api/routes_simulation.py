@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import ValidationError
 
-from models import (
+from contracts import (
     JobStatus,
     MeshData,
     SimulationRequest,

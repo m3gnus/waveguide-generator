@@ -12,7 +12,7 @@ from api.routes_simulation import (
     get_results,
     submit_simulation,
 )
-from models import DirectivityRenderRequest, MeshData, SimulationRequest
+from contracts import DirectivityRenderRequest, MeshData, SimulationRequest
 import services.job_runtime as _jrt
 import services.simulation_runner as _sim_runner
 

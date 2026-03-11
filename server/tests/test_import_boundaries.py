@@ -121,6 +121,22 @@ class ImportBoundaryTest(unittest.TestCase):
             'server/services must not import server/api modules: ' + ', '.join(violations),
         )
 
+    def test_backend_packages_use_contracts_package_not_models_module(self):
+        violations = []
+        for subdir in ('api', 'services', 'tests'):
+            for file_path in self._iter_py_files(subdir):
+                roots = self._import_roots(file_path)
+                if 'models' in roots:
+                    rel = file_path.relative_to(SERVER_ROOT)
+                    violations.append(str(rel))
+
+        self.assertEqual(
+            violations,
+            [],
+            'Backend internals must import shared contracts from server/contracts, not models.py: '
+            + ', '.join(violations),
+        )
+
     def test_solver_package_does_not_import_api_or_services_packages(self):
         violations = []
         for solver_file in self._iter_py_files('solver'):

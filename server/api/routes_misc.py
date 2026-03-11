@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from models import ChartsRenderRequest, DirectivityRenderRequest
+from contracts import ChartsRenderRequest, DirectivityRenderRequest
 from solver_bootstrap import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,

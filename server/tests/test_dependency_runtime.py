@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from api.routes_mesh import build_mesh_from_params
 from api.routes_misc import health_check
 from api.routes_simulation import submit_simulation
-from models import MeshData, SimulationRequest, WaveguideParamsRequest
+from contracts import MeshData, SimulationRequest, WaveguideParamsRequest
 
 
 class DependencyRuntimeTest(unittest.TestCase):
