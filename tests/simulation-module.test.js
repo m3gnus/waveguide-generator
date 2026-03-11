@@ -17,7 +17,8 @@ import {
   syncSimulationWorkspaceJobManifest,
   buildQueuedSimulationJob,
   buildCancelledSimulationJob,
-  resolveClearedFailedJobIds
+  resolveClearedFailedJobIds,
+  summarizeCanonicalSimulationMesh
 } from '../src/modules/simulation/useCases.js';
 import {
   resetSelectedFolder,
@@ -319,6 +320,31 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.script.useOptimized, false);
   assert.equal(job.script.enableSymmetry, false);
   assert.equal(job.script.verbose, true);
+});
+
+test('simulation use case summarizes canonical tag counts and warnings', () => {
+  const summary = summarizeCanonicalSimulationMesh({
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2, 0, 2, 1],
+    surfaceTags: [1, 4]
+  });
+
+  assert.equal(summary.vertexCount, 3);
+  assert.equal(summary.triangleCount, 2);
+  assert.deepEqual(summary.tagCounts, { 1: 1, 2: 0, 3: 0, 4: 1 });
+  assert.equal(summary.ok, false);
+  assert.match(summary.warnings[0], /source surface tag/i);
+});
+
+test('simulation use case flags tag-count mismatches in canonical summaries', () => {
+  const summary = summarizeCanonicalSimulationMesh({
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2, 0, 2, 1],
+    surfaceTags: [2]
+  });
+
+  assert.equal(summary.ok, false);
+  assert.match(summary.warnings[0], /surface tag count/i);
 });
 
 test('simulation workspace service rebuilds folder index from task manifests', async () => {

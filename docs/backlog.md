@@ -71,12 +71,12 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: `server/tests/test_dependency_runtime.py` and `server/tests/test_api_validation.py` already assert OCC runtime failure paths, and `server/tests/test_mesh_validation.py` covers `use_gmsh=True` behavior. There is still no test that forces `occBuilderReady=False` while keeping solver readiness intact and proves canonical payload solves are still accepted.
   Completed: March 11, 2026. `server/tests/test_dependency_runtime.py` now locks the `solverReady=true` / `occBuilderReady=false` configuration, proves canonical `/api/solve` submission still enqueues successfully, and asserts that the OCC/Gmsh dependency branch is not consulted for canonical payloads.
 
-- [ ] Add pre-submit canonical tag diagnostics to the simulation UI.
+- [x] Add pre-submit canonical tag diagnostics to the simulation UI.
   Source: archived future additions doc.
   Relevant: Yes. Contract validation exists, but users still do not get a concise pre-submit view of tag counts or missing-source problems.
   Will it improve the program: Yes. It shortens debug loops before a solve request is sent.
   Research findings: frontend preflight already rejects malformed canonical payloads in `src/solver/index.js`, backend validation rejects tag/triangle mismatches and missing tag `2`, and `prepareCanonicalSimulationMesh()` already has the data needed to count triangles per tag. The gap is purely the absence of a small read-only UI summary before submit.
-  Best approach: Surface counts for tags `1/2/3/4`, warn on missing source coverage or triangle/tag mismatches, and keep the checks lightweight and strictly read-only.
+  Completed: March 11, 2026. The simulation panel now renders a read-only canonical diagnostics card before submit with vertex/triangle totals, counts for tags `1/2/3/4`, and warnings for missing source coverage or tag/triangle mismatches, driven by a lightweight frontend summary helper over the canonical payload.
 
 ### P1 Simulation UX That Depends On Runtime Truth
 
