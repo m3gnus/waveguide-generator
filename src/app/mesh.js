@@ -1,16 +1,16 @@
 import { AppEvents } from '../events.js';
-import { GeometryModule } from '../modules/geometry/index.js';
+import { SimulationModule } from '../modules/simulation/index.js';
 
 export function provideMeshForSimulation(app) {
   try {
     const preparedParams = app.prepareParamsForMesh({
       applyVerticalOffset: true
     });
-    const geometryTask = GeometryModule.task(GeometryModule.importPrepared(preparedParams), {
+    const simulationTask = SimulationModule.task(SimulationModule.importPrepared(preparedParams), {
       includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
       adaptivePhi: false
     });
-    const payload = GeometryModule.output.simulation(geometryTask);
+    const payload = SimulationModule.output.mesh(simulationTask);
 
     const vertexCount = payload.vertices.length / 3;
     const triangleCount = payload.indices.length / 3;

@@ -1,7 +1,6 @@
 import { showError, showMessage } from '../feedback.js';
 import { GlobalState } from '../../state.js';
-import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
-import { GeometryModule } from '../../modules/geometry/index.js';
+import { SimulationModule } from '../../modules/simulation/index.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
@@ -482,18 +481,14 @@ export async function runSimulation(panel) {
       throw new Error('Mesh payload is invalid: missing canonical surface tags.');
     }
     const state = GlobalState.get();
-    const preparedParams = GeometryModule.import(state.params, {
+    const simulationInput = SimulationModule.import(state.params, {
       type: state.type,
       applyVerticalOffset: true
-    }).params;
-    const waveguidePayload = buildWaveguidePayload(preparedParams, '2.2');
-    waveguidePayload.sim_type = 2;
-    const submitOptions = {
-      mesh: {
-        strategy: 'occ_adaptive',
-        waveguide_params: waveguidePayload
-      }
-    };
+    });
+    const { waveguidePayload, submitOptions } = SimulationModule.output.occAdaptive(simulationInput, {
+      mshVersion: '2.2',
+      simType: 2
+    });
 
     updateStageUi(panel, {
       progress: 0.2,
