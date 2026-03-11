@@ -71,7 +71,8 @@ Supported backend dependency matrix:
 - Python: `>=3.10,<3.15`
 - gmsh Python package: `>=4.11,<5.0`
 - bempp-cl: `>=0.4,<0.5` (`/api/solve`)
-- legacy `bempp_api` fallback: `>=0.3,<0.4` (`/api/solve (legacy fallback)`)
+
+The maintained runtime only supports `bempp-cl` for `/api/solve`; there is no legacy `bempp_api` fallback path.
 
 To install it later:
 
