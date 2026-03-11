@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from unittest.mock import patch
+import uuid
 
 from fastapi import HTTPException
 
@@ -137,6 +138,67 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("bempp variant=bempp_cl version=0.5.1 supported=False", detail)
         self.assertIn("bempp-cl >=0.4,<0.5", detail)
         self.assertIn("legacy bempp_api >=0.3,<0.4", detail)
+
+    def test_canonical_solve_remains_available_when_occ_runtime_is_unavailable(self):
+        dependency_status = {
+            "supportedMatrix": {
+                "python": {"range": ">=3.10,<3.15"},
+                "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
+                "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
+                "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
+            },
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": False, "version": None, "supported": False, "ready": False},
+                "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
+            },
+        }
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format="msh",
+                boundaryConditions={},
+                metadata={},
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=8,
+            sim_type="2",
+            options={},
+        )
+        job_uuid = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
+        with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.SOLVER_AVAILABLE", True
+        ), patch("api.routes_misc.BEMPP_RUNTIME_READY", True), patch(
+            "api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True
+        ), patch("api.routes_misc.GMSH_OCC_RUNTIME_READY", False):
+            health = asyncio.run(health_check())
+
+        self.assertTrue(health["solverReady"])
+        self.assertFalse(health["occBuilderReady"])
+
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch(
+            "api.routes_simulation.BEMPP_RUNTIME_READY", True
+        ), patch("api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "api.routes_simulation.GMSH_OCC_RUNTIME_READY", False
+        ), patch("api.routes_simulation.get_dependency_status", return_value=dependency_status) as dependency_mock, patch(
+            "api.routes_simulation.ensure_db_ready"
+        ), patch(
+            "api.routes_simulation.uuid.uuid4", return_value=job_uuid
+        ), patch(
+            "api.routes_simulation._jrt.db.create_job"
+        ) as create_job, patch(
+            "api.routes_simulation.asyncio.create_task",
+            side_effect=lambda coro: coro.close(),
+        ) as create_task:
+            response = asyncio.run(submit_simulation(request))
+
+        self.assertEqual(response, {"job_id": str(job_uuid)})
+        create_job.assert_called_once()
+        create_task.assert_called_once()
+        dependency_mock.assert_not_called()
 
 
 if __name__ == "__main__":
