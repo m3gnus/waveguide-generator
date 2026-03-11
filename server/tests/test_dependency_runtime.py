@@ -18,7 +18,6 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "python": {"range": ">=3.10,<3.15"},
                 "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
-                "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
@@ -103,7 +102,6 @@ class DependencyRuntimeTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
-                "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
@@ -137,7 +135,6 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("python=3.13.1 supported=True", detail)
         self.assertIn("bempp variant=bempp_cl version=0.5.1 supported=False", detail)
         self.assertIn("bempp-cl >=0.4,<0.5", detail)
-        self.assertIn("legacy bempp_api >=0.3,<0.4", detail)
 
     def test_canonical_solve_remains_available_when_occ_runtime_is_unavailable(self):
         dependency_status = {
@@ -145,7 +142,6 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "python": {"range": ">=3.10,<3.15"},
                 "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
                 "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
-                "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
