@@ -3,7 +3,7 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 6 (not started)
+- Current phase: Phase 6 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
@@ -550,6 +550,14 @@ Make backend packages talk through explicit APIs instead of re-export hubs.
 - `cd server && python3 -m unittest tests.test_api_validation`
 - `cd server && python3 -m unittest tests.test_dependency_runtime`
 - `npm run test:server`
+
+### Implementation Notes (In Progress, March 11, 2026)
+
+Completed in this step:
+
+1. Removed the remaining compatibility re-exports from `server/app.py`; it now exposes only FastAPI assembly (`create_app()`, `app`, CORS/lifespan wiring, runtime banner output).
+2. Added an import-boundary test that blocks `server/app.py` from reintroducing model/service/route-handler shortcut imports.
+3. Updated backend architecture docs so route ownership points at `server/api/routes_*` modules instead of `server/app.py`.
 
 ## Phase 7: Eliminate Downstream Repair Logic
 

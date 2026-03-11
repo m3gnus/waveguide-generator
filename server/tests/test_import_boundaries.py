@@ -27,6 +27,10 @@ class ImportBoundaryTest(unittest.TestCase):
 
         return roots
 
+    def _import_from_nodes(self, file_path: Path):
+        tree = ast.parse(file_path.read_text(encoding='utf-8'), filename=str(file_path))
+        return [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+
     def test_server_tests_do_not_import_app_module_shortcuts(self):
         violations = []
         for test_file in self._iter_py_files('tests'):
@@ -54,6 +58,53 @@ class ImportBoundaryTest(unittest.TestCase):
             violations,
             [],
             'server/api must not import app.py: ' + ', '.join(violations),
+        )
+
+    def test_app_module_only_imports_assembly_dependencies(self):
+        app_file = SERVER_ROOT / 'app.py'
+        violations = []
+
+        allowed_route_import = {'router'}
+        allowed_job_runtime_import = {'startup_jobs_runtime'}
+        allowed_solver_bootstrap_import = {
+            'GMSH_OCC_RUNTIME_READY',
+            'SOLVER_AVAILABLE',
+            'WAVEGUIDE_BUILDER_AVAILABLE',
+        }
+
+        for node in self._import_from_nodes(app_file):
+            module = node.module
+            names = {alias.name for alias in node.names}
+
+            if module == 'models':
+                violations.append('app.py must not re-export request/response models')
+            elif module and module.startswith('api.routes_'):
+                bad_names = sorted(names - allowed_route_import)
+                if bad_names:
+                    violations.append(
+                        f"{module} imports non-router names: {', '.join(bad_names)}"
+                    )
+            elif module == 'services.job_runtime':
+                bad_names = sorted(names - allowed_job_runtime_import)
+                if bad_names:
+                    violations.append(
+                        'services.job_runtime imports non-lifecycle names: '
+                        + ', '.join(bad_names)
+                    )
+            elif module and module.startswith('services.'):
+                violations.append(f'app.py must not import {module}')
+            elif module == 'solver_bootstrap':
+                bad_names = sorted(names - allowed_solver_bootstrap_import)
+                if bad_names:
+                    violations.append(
+                        'solver_bootstrap imports non-runtime-status names: '
+                        + ', '.join(bad_names)
+                    )
+
+        self.assertEqual(
+            violations,
+            [],
+            'server/app.py must stay as assembly only: ' + '; '.join(violations),
         )
 
     def test_services_package_does_not_import_api_package(self):
