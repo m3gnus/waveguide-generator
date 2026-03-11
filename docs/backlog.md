@@ -152,12 +152,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Best approach: Extract durable architecture decisions into `docs/architecture.md`, move contract details into `docs/modules/`, and keep `docs/PROJECT_DOCUMENTATION.md` as a concise runtime map until the split is complete.
   Completed: March 11, 2026. The repo now has a dedicated `docs/architecture.md` durable architecture guide plus `docs/modules/` contract docs for geometry, simulation, export, and backend boundaries, and the README/runtime documentation now point readers to those extracted references instead of relying on `docs/PROJECT_DOCUMENTATION.md` alone.
 
-- [ ] Add a maintained-doc parity audit so runtime/device-mode changes cannot leave `docs/PROJECT_DOCUMENTATION.md` and `server/README.md` describing removed fallback behavior.
+- [x] Add a maintained-doc parity audit so runtime/device-mode changes cannot leave `docs/PROJECT_DOCUMENTATION.md` and `server/README.md` describing removed fallback behavior.
   Source: architecture audit on March 11, 2026; `docs/PROJECT_DOCUMENTATION.md`; `server/README.md`; `server/contracts/__init__.py`; `server/solver/device_interface.py`.
   Relevant: Yes. The maintained docs drifted into describing `numba` and legacy fallback paths after the runtime had already narrowed to OpenCL-only device modes and explicit hard failures.
   Will it improve the program: Yes. It protects the repo’s stated “docs plus tests plus code” source-of-truth model and reduces future audit noise.
   Research findings: the March 11 audit found stale claims about `numba` mode/fallback and legacy `bempp_api` support in maintained docs even though the runtime contract and validation layer no longer exposed those paths. The repo needs a repeatable way to catch that class of drift.
   Best approach: Keep the maintained architecture docs short, derive contract tables from code where practical, and add a small regression/doc-review checklist whenever runtime enums, dependency matrices, or fallback rules change.
+  Completed: March 11, 2026. README’s backend dependency matrix now states the live `bempp-cl`-only solve contract, and `tests/docs-parity.test.js` keeps the maintained docs aligned on supported device modes plus the explicit no-legacy-fallback wording across `README.md`, `docs/PROJECT_DOCUMENTATION.md`, and `server/README.md`.
 
 - [ ] Run a structured dead-code audit on `src/` and remove utility paths with no runtime entry.
   Source: archived future additions doc.

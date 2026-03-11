@@ -24,6 +24,7 @@ Command behavior:
 - `tests/config-roundtrip.test.js`
 - `tests/csv-export.test.js`
 - `tests/design-module.test.js`
+- `tests/docs-parity.test.js`
 - `tests/enclosure-regression.test.js`
 - `tests/error-hardening.test.js`
 - `tests/export-gmsh-pipeline.test.js`
