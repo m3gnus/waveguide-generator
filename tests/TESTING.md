@@ -22,6 +22,7 @@ Command behavior:
 - `tests/config-import.test.js`
 - `tests/config-roundtrip.test.js`
 - `tests/csv-export.test.js`
+- `tests/design-module.test.js`
 - `tests/enclosure-regression.test.js`
 - `tests/export-gmsh-pipeline.test.js`
 - `tests/geometry-artifacts.test.js`

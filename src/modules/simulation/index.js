@@ -1,5 +1,5 @@
 import { GeometryModule } from '../geometry/index.js';
-import { ParamModule } from '../param/index.js';
+import { DesignModule } from '../design/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 
 const SIMULATION_MODULE_ID = 'simulation';
@@ -41,8 +41,8 @@ function assertSimulationTaskEnvelope(result) {
 }
 
 export function importSimulationInput(rawParams = {}, options = {}) {
-  const paramTask = ParamModule.task(ParamModule.import(rawParams, options));
-  return createSimulationImportEnvelope(ParamModule.output.params(paramTask));
+  const designTask = DesignModule.task(DesignModule.import(rawParams, options));
+  return createSimulationImportEnvelope(DesignModule.output.simulationParams(designTask));
 }
 
 export function importPreparedSimulationInput(preparedParams = {}) {
