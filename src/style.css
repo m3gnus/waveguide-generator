@@ -368,6 +368,26 @@ h1 {
     font-weight: 600;
 }
 
+.simulation-jobs-header-copy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.simulation-jobs-source-label,
+.simulation-job-source-badge {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    opacity: 0.8;
+}
+
 .simulation-jobs-header-actions {
     display: flex;
     gap: 6px;
@@ -398,6 +418,10 @@ h1 {
 .simulation-job-title {
     font-size: 0.78rem;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
 }
 
 .simulation-job-meta {

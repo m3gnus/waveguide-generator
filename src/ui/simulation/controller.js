@@ -26,6 +26,10 @@ import {
 import { setActiveJob } from './jobOrchestration.js';
 
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
+const JOB_SOURCE_MODES = Object.freeze({
+  BACKEND: 'backend',
+  FOLDER: 'folder'
+});
 
 const DEFAULT_SIMULATION_PARAM_BINDINGS = Object.freeze([
   { id: 'freq-start', key: 'freqStart', parse: (value) => parseFloat(value) },
@@ -52,7 +56,9 @@ export const SIMULATION_CONTROLLER_FIELDS = Object.freeze([
   'simulationStartedAtMs',
   'lastSimulationDurationMs',
   'currentSmoothing',
-  'simulationParamBindings'
+  'simulationParamBindings',
+  'jobSourceMode',
+  'jobSourceLabel'
 ]);
 
 function hasActiveJobs(controller) {
@@ -61,6 +67,19 @@ function hasActiveJobs(controller) {
 
 function syncCurrentJobId(controller) {
   controller.currentJobId = controller.activeJobId || null;
+}
+
+function setJobSourceMode(controller, mode) {
+  const nextMode = mode === JOB_SOURCE_MODES.FOLDER ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND;
+  controller.jobSourceMode = nextMode;
+  controller.jobSourceLabel = nextMode === JOB_SOURCE_MODES.FOLDER ? 'Folder Tasks' : 'Backend Jobs';
+}
+
+function persistControllerJobs(controller) {
+  if (controller?.jobSourceMode === JOB_SOURCE_MODES.FOLDER) {
+    return;
+  }
+  persistPanelJobs(controller);
 }
 
 function cloneSimulationParamBindings() {
@@ -93,7 +112,9 @@ export function createSimulationControllerStore({ solver = createSimulationClien
     simulationStartedAtMs: null,
     lastSimulationDurationMs: null,
     currentSmoothing: 'none',
-    simulationParamBindings: cloneSimulationParamBindings()
+    simulationParamBindings: cloneSimulationParamBindings(),
+    jobSourceMode: JOB_SOURCE_MODES.BACKEND,
+    jobSourceLabel: 'Backend Jobs'
   };
 }
 
@@ -207,7 +228,7 @@ export async function recordSimulationControllerExport(
     id: current.id,
     exportedFiles
   });
-  persistPanelJobs(controller);
+  persistControllerJobs(controller);
   if (next) {
     await syncSimulationWorkspaceJobManifest(next, { exportedFiles: next.exportedFiles });
   }
@@ -267,7 +288,7 @@ export async function submitSimulationControllerJob(
 export async function queueSimulationControllerJob(controller, jobInput) {
   const createdJob = upsertJob(controller, buildQueuedSimulationJob(jobInput));
   setActiveJob(controller, jobInput?.jobId);
-  persistPanelJobs(controller);
+  persistControllerJobs(controller);
   if (createdJob) {
     await syncSimulationWorkspaceJobManifest(createdJob);
   }
@@ -277,7 +298,7 @@ export async function queueSimulationControllerJob(controller, jobInput) {
 export function removeSimulationControllerJob(controller, jobId) {
   const removed = removeJob(controller, jobId);
   if (removed) {
-    persistPanelJobs(controller);
+    persistControllerJobs(controller);
   }
   return removed;
 }
@@ -311,13 +332,13 @@ export function clearSimulationControllerJobs(controller, jobIds = []) {
       removed += 1;
     }
   }
-  persistPanelJobs(controller);
+  persistControllerJobs(controller);
   return removed;
 }
 
 export function cancelSimulationControllerJob(controller, jobId) {
   if (!jobId || !controller?.jobs?.has(jobId)) {
-    persistPanelJobs(controller);
+    persistControllerJobs(controller);
     return null;
   }
 
@@ -325,7 +346,7 @@ export function cancelSimulationControllerJob(controller, jobId) {
   if (cancelledJob) {
     upsertJob(controller, cancelledJob);
   }
-  persistPanelJobs(controller);
+  persistControllerJobs(controller);
   return cancelledJob;
 }
 
@@ -335,7 +356,7 @@ export function requestSimulationControllerJobCancellation(
   { message = 'Cancellation requested. Waiting for backend worker to stop.' } = {}
 ) {
   if (!jobId || !controller?.jobs?.has(jobId)) {
-    persistPanelJobs(controller);
+    persistControllerJobs(controller);
     return null;
   }
 
@@ -345,7 +366,7 @@ export function requestSimulationControllerJobCancellation(
   if (pendingJob) {
     upsertJob(controller, pendingJob);
   }
-  persistPanelJobs(controller);
+  persistControllerJobs(controller);
   return pendingJob;
 }
 
@@ -374,7 +395,7 @@ export async function reconcileSimulationControllerRemoteJobs(
   const merged = mergeJobs(allJobs(controller), remoteItems);
   setJobsFromEntries(controller, merged);
   setActiveJob(controller, controller.activeJobId || null);
-  persistPanelJobs(controller);
+  persistControllerJobs(controller);
 
   for (const item of remoteItems) {
     syncSimulationWorkspaceJobManifest(item).catch((error) => {
@@ -400,6 +421,10 @@ export async function restoreSimulationControllerJobs(
     onRecoverFromManifests = () => {}
   } = {}
 ) {
+  if (controller.pollTimer) {
+    clearTimeout(controller.pollTimer);
+  }
+
   const tracker = createJobTracker();
   controller.jobs = tracker.jobs;
   controller.resultCache = tracker.resultCache;
@@ -414,9 +439,11 @@ export async function restoreSimulationControllerJobs(
   const local = loadLocalIndex();
   let seedItems = local;
   const workspace = await readSimulationWorkspaceJobs();
+  const useFolderSource = workspace.available;
 
-  if (workspace.items.length > 0) {
-    seedItems = mergeJobs(local, workspace.items);
+  setJobSourceMode(controller, useFolderSource ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND);
+  if (useFolderSource) {
+    seedItems = workspace.items;
   }
   if (workspace.repaired || workspace.warnings.length > 0) {
     onRecoverFromManifests();
@@ -426,19 +453,23 @@ export async function restoreSimulationControllerJobs(
   syncCurrentJobId(controller);
   onJobsUpdated();
 
+  if (useFolderSource) {
+    return;
+  }
+
   try {
     const remote = await controller.solver.listJobs({ limit: 200, offset: 0 });
     const merged = mergeJobs(seedItems, remote.items || []);
     setJobsFromEntries(controller, merged);
     syncCurrentJobId(controller);
-    persistPanelJobs(controller);
+    persistControllerJobs(controller);
 
     onJobsUpdated();
     if (controller.activeJobId || hasActiveJobs(controller)) {
       onStartPolling();
     }
   } catch (_error) {
-    persistPanelJobs(controller);
+    persistControllerJobs(controller);
     onJobsUpdated();
   }
 }
