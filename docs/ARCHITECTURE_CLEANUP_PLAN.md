@@ -3,7 +3,7 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 7 (in progress)
+- Current phase: Phase 8 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
@@ -12,8 +12,9 @@
   - Phase 4 rebuild export and simulation as real use-case modules
   - Phase 5 untangle UI state and circular workflow logic
   - Phase 6 remove backend compatibility glue (routes now depend on contracts/services only, solver bootstrap reduced to dependency status, `/api/solve` validation moved into services)
+  - Phase 7 eliminate downstream repair logic (queued OCC request construction moved to the submission boundary, source-tag invariants enforced before solve submission, runner rewrites replaced with validation)
 - In progress:
-  - None
+  - Phase 8 delete legacy paths and rename docs to match reality
 
 ## Session Shortcut
 
@@ -563,7 +564,7 @@ Completed in this step:
 5. Reduced `server/models.py` to a compatibility alias so internal code no longer depends on it.
 6. Removed solver-aware device-mode fallback imports from the contract definitions; contract validation now normalizes aliases locally inside `server/contracts/`.
 7. Moved route-facing solver/OCC adapters into `server/services/solver_runtime.py`, so `server/api/routes_*` now import service-layer runtime APIs instead of `server/solver_bootstrap.py` or `server/solver/*`.
-8. Moved `/api/solve` domain validation into `server/services/simulation_validation.py`, including OCC shell checks and full-domain quadrant normalization for adaptive solves.
+8. Moved `/api/solve` domain validation into `server/services/simulation_validation.py`, including OCC shell checks and adaptive solve request validation.
 
 ## Phase 7: Eliminate Downstream Repair Logic
 
@@ -596,7 +597,7 @@ Reject invalid requests upstream instead of mutating them later.
 - `cd server && python3 -m unittest tests.test_solver_tag_contract`
 - `cd server && python3 -m unittest tests.test_mesh_validation`
 
-### Implementation Notes (In Progress, March 11, 2026)
+### Implementation Notes (Completed, March 11, 2026)
 
 Completed in this step:
 
@@ -604,6 +605,8 @@ Completed in this step:
 2. Added an explicit submission-boundary builder in `server/services/simulation_validation.py`, so `/api/solve` queues a corrected full-domain OCC request while preserving the original request object.
 3. Updated contract coverage to assert the full-domain quadrant correction happens only in the queued submission payload, not by rewriting the input request in place.
 4. Added submission-time validation that rejects any solve request whose mesh payload lacks source tag `2`, so the invariant is enforced before the solver runtime starts.
+5. Removed the remaining OCC runner repair logic: queued requests with non-full-domain quadrants now fail explicitly, and canonical OCC `surfaceTags` pass through to solver mesh preparation unchanged.
+6. Audited the remaining backend `normalize/coerce/fallback/retry` sites: request/contract parsing stays at the boundary, while the remaining fallback and retry logic is runtime-only (OpenCL/device/runtime resilience and OCC builder internals), not semantic input repair.
 
 ## Phase 8: Delete Legacy Paths And Rename Docs To Match Reality
 

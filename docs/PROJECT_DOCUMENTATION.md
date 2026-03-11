@@ -133,6 +133,7 @@ Important behavior:
 - Simulation payload topology is full-domain and does not trim by `quadrants`.
 - OCC-adaptive `/api/solve` builds a full-domain queued OCC request with `quadrants=1234` at the submission boundary instead of mutating the caller-owned request in place.
 - `/api/solve` rejects mesh payloads that do not already contain source tag `2`, instead of waiting for solver-side mesh preparation to fail.
+- The OCC runner passes canonical mesh `surfaceTags` through unchanged; later stages validate contracts rather than collapsing non-source tags into `1`.
 - Adaptive phi tessellation is restricted to full-circle horn-only render usage.
 - The canonical frontend payload remains a validation/contract artifact; active simulation meshing is OCC-adaptive in backend.
 
