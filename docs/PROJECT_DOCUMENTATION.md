@@ -282,9 +282,12 @@ Base URL: `http://localhost:8000`
 
 - `POST /api/stop/{job_id}`
   - Cancels queued/running job
+  - Queued jobs become `cancelled` immediately
+  - Running jobs stay `running` with stage `cancelling` until the worker acknowledges the stop request
 
 - `GET /api/status/{job_id}`
   - Returns status/progress
+  - Stage metadata carries cancellation progress (`cancelling`) while a running stop request is still being acknowledged
 
 - `GET /api/results/{job_id}`
   - Returns results for completed jobs

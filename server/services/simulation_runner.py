@@ -4,7 +4,7 @@ BEM simulation runner — executes a single simulation job asynchronously.
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
 from services.simulation_validation import validate_occ_adaptive_bem_shell
@@ -27,6 +27,44 @@ from services.job_runtime import (
 
 logger = logging.getLogger(__name__)
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4}
+CANCELLATION_REQUESTED_MESSAGE = "Cancellation requested; waiting for backend worker to stop"
+SIMULATION_CANCELLED_MESSAGE = "Simulation cancelled by user"
+
+
+class SimulationCancelled(RuntimeError):
+    """Raised when a queued/running job acknowledges a stop request."""
+
+
+def _is_cancellation_requested(job_id: str) -> bool:
+    latest = _merge_job_cache_from_db(job_id)
+    return bool(latest and latest.get("cancellation_requested"))
+
+
+def _raise_if_cancellation_requested(
+    job_id: str,
+    *,
+    stage_message: str = CANCELLATION_REQUESTED_MESSAGE,
+) -> None:
+    if not _is_cancellation_requested(job_id):
+        return
+    update_job_stage(job_id, "cancelling", stage_message=stage_message)
+    raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
+
+
+def _finalize_cancelled_job(
+    job_id: str,
+    *,
+    stage_message: str = SIMULATION_CANCELLED_MESSAGE,
+) -> None:
+    _set_job_fields(
+        job_id,
+        status="cancelled",
+        stage="cancelled",
+        stage_message=stage_message,
+        error_message=SIMULATION_CANCELLED_MESSAGE,
+        completed_at=_now_iso(),
+        cancellation_requested=False,
+    )
 
 
 def _require_occ_adaptive_full_domain_quadrants(validated_payload: dict[str, Any]) -> int:
@@ -87,9 +125,13 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         update_job_stage(
             job_id, "initializing", progress=0.05, stage_message="Initializing BEM solver"
         )
+        _raise_if_cancellation_requested(job_id)
 
         # Initialize solver
         solver = BEMSolver()
+
+        def _cancellation_callback(stage_message: str = CANCELLATION_REQUESTED_MESSAGE) -> None:
+            _raise_if_cancellation_requested(job_id, stage_message=stage_message)
 
         # Extract mesh generation options
         options = request.options if isinstance(request.options, dict) else {}
@@ -125,11 +167,19 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             update_job_stage(
                 job_id, "mesh_prepare", progress=0.15, stage_message="Building adaptive OCC mesh"
             )
+            _cancellation_callback("Cancellation requested before adaptive mesh build started")
             validated = WaveguideParamsRequest(**waveguide_params)
             validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
             queued_quadrants = _require_occ_adaptive_full_domain_quadrants(validated_payload)
-            occ_result = build_waveguide_mesh(validated_payload, include_canonical=True)
+            occ_result = build_waveguide_mesh(
+                validated_payload,
+                include_canonical=True,
+                cancellation_callback=lambda: _cancellation_callback(
+                    "Cancellation requested while preparing adaptive mesh"
+                ),
+            )
+            _cancellation_callback("Cancellation requested after adaptive mesh build completed")
             vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
 
             # Store mesh artifact for optional download.
@@ -176,6 +226,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             update_job_stage(
                 job_id, "mesh_prepare", progress=0.15, stage_message="Preparing canonical mesh"
             )
+            _cancellation_callback("Cancellation requested before canonical mesh preparation")
             mesh = solver.prepare_mesh(
                 request.mesh.vertices,
                 request.mesh.indices,
@@ -190,6 +241,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         update_job_stage(
             job_id, "solver_setup", progress=0.30, stage_message="Configuring BEM solve"
         )
+        _cancellation_callback("Cancellation requested before BEM solve setup")
 
         def _solver_stage_callback(
             stage: str, progress: Optional[float] = None, message: Optional[str] = None
@@ -256,7 +308,11 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             mesh_validation_mode=request.mesh_validation_mode,
             frequency_spacing=request.frequency_spacing,
             device_mode=request.device_mode,
+            cancellation_callback=lambda: _cancellation_callback(
+                "Cancellation requested during BEM solve"
+            ),
         )
+        _cancellation_callback("Cancellation requested before result persistence")
 
         # Check for cancellation before storing results.
         latest = _merge_job_cache_from_db(job_id)
@@ -293,6 +349,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             error_message=None,
         )
 
+    except SimulationCancelled as exc:
+        _finalize_cancelled_job(job_id, stage_message=str(exc) or SIMULATION_CANCELLED_MESSAGE)
+        logger.info("Simulation cancellation acknowledged for job %s", job_id)
     except Exception as e:
         # Top-level catch-all: any unhandled exception must transition the job to
         # error state rather than leaving it stuck in 'running'.

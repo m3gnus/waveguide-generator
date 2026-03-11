@@ -77,6 +77,7 @@ class BEMSolver:
         mesh_validation_mode: str = "warn",
         frequency_spacing: str = "linear",
         device_mode: str = "auto",
+        cancellation_callback: Optional[callable] = None,
     ) -> Dict:
         """
         Run BEM simulation with optional optimizations.
@@ -117,6 +118,7 @@ class BEMSolver:
                 mesh_validation_mode=mesh_validation_mode,
                 frequency_spacing=frequency_spacing,
                 device_mode=device_mode,
+                cancellation_callback=cancellation_callback,
             )
         else:
             # Legacy solver (no symmetry, analytical piston directivity)
@@ -126,6 +128,7 @@ class BEMSolver:
                 mesh_validation_mode=mesh_validation_mode,
                 frequency_spacing=frequency_spacing,
                 device_mode=device_mode,
+                cancellation_callback=cancellation_callback,
             )
 
     def _solve_frequency(

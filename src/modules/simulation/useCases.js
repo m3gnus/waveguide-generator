@@ -333,7 +333,27 @@ export function buildCancelledSimulationJob(job, { message = 'Simulation cancell
     stage: 'cancelled',
     stageMessage: message,
     errorMessage: message,
-    completedAt: completedAt || new Date().toISOString()
+    completedAt: completedAt || new Date().toISOString(),
+    cancellationRequested: false
+  };
+}
+
+export function buildCancellationRequestedSimulationJob(
+  job,
+  { message = 'Cancellation requested. Waiting for backend worker to stop.' } = {}
+) {
+  if (!job || typeof job !== 'object' || !job.id) {
+    return null;
+  }
+  return {
+    ...job,
+    id: job.id,
+    status: job.status === 'queued' ? 'queued' : 'running',
+    stage: 'cancelling',
+    stageMessage: message,
+    errorMessage: null,
+    completedAt: null,
+    cancellationRequested: true
   };
 }
 

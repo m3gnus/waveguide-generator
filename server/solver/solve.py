@@ -153,6 +153,7 @@ def solve(
     mesh_validation_mode: str = "warn",
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
+    cancellation_callback: Optional[Callable[[], None]] = None,
 ) -> Dict:
     """Run legacy BEM simulation path with explicit failure reporting."""
     if isinstance(mesh, dict):
@@ -210,7 +211,12 @@ def solve(
     if stage_callback:
         stage_callback("setup", 1.0, "Legacy solver initialized")
 
+    if cancellation_callback:
+        cancellation_callback()
+
     for i, freq in enumerate(frequencies):
+        if cancellation_callback:
+            cancellation_callback()
         if progress_callback:
             progress_callback(i / len(frequencies))
         if stage_callback:
@@ -319,6 +325,9 @@ def solve(
             results["impedance"]["imaginary"].append(None)
             results["di"]["di"].append(None)
 
+    if cancellation_callback:
+        cancellation_callback()
+
     if stage_callback:
         stage_callback(
             "directivity",
@@ -338,6 +347,9 @@ def solve(
 
     results["metadata"]["failure_count"] = len(results["metadata"]["failures"])
     results["metadata"]["partial_success"] = success_count > 0 and results["metadata"]["failure_count"] > 0
+
+    if cancellation_callback:
+        cancellation_callback()
 
     if progress_callback:
         progress_callback(1.0)

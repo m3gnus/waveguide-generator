@@ -11,6 +11,7 @@ from api.routes_simulation import (
     get_job_status,
     get_mesh_artifact,
     get_results,
+    stop_simulation,
     submit_simulation,
 )
 from contracts import DirectivityRenderRequest, MeshData, SimulationRequest
@@ -569,6 +570,135 @@ class MeshArtifactEndpointTest(unittest.TestCase):
             self.assertIn("text/plain", resp.media_type)
         finally:
             _jrt.jobs.pop("test-with-artifact", None)
+
+
+class StopSimulationLifecycleTest(unittest.TestCase):
+    def test_stop_simulation_cancels_queued_job_immediately(self):
+        job_id = "test-stop-queued"
+        _jrt.jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "progress": 0.0,
+            "stage": "queued",
+            "stage_message": "Job queued",
+            "error_message": None,
+            "cancellation_requested": False,
+        }
+        _jrt.job_queue.append(job_id)
+        try:
+            response = asyncio.run(stop_simulation(job_id))
+
+            self.assertEqual(response["status"], "cancelled")
+            self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
+            self.assertEqual(_jrt.jobs[job_id]["stage"], "cancelled")
+            self.assertFalse(_jrt.jobs[job_id]["cancellation_requested"])
+        finally:
+            _jrt.jobs.pop(job_id, None)
+            while job_id in _jrt.job_queue:
+                _jrt.job_queue.remove(job_id)
+
+    def test_stop_simulation_marks_running_job_as_cancelling_until_worker_acknowledges(self):
+        job_id = "test-stop-running"
+        _jrt.jobs[job_id] = {
+            "id": job_id,
+            "status": "running",
+            "progress": 0.45,
+            "stage": "bem_solve",
+            "stage_message": "Solving frequency 2/5",
+            "error_message": None,
+            "completed_at": None,
+            "cancellation_requested": False,
+        }
+        try:
+            response = asyncio.run(stop_simulation(job_id))
+
+            self.assertEqual(response["status"], "cancelling")
+            self.assertEqual(_jrt.jobs[job_id]["status"], "running")
+            self.assertEqual(_jrt.jobs[job_id]["stage"], "cancelling")
+            self.assertTrue(_jrt.jobs[job_id]["cancellation_requested"])
+            self.assertIsNone(_jrt.jobs[job_id].get("completed_at"))
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+
+class CooperativeCancellationRunnerTest(unittest.TestCase):
+    def _make_minimal_request(self):
+        return SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format="msh",
+                boundaryConditions={},
+                metadata={},
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=2,
+            sim_type="2",
+            options={},
+        )
+
+    def _make_job_entry(self, job_id, *, cancellation_requested=False):
+        return {
+            "id": job_id,
+            "status": "running",
+            "progress": 0.5,
+            "stage": "bem_solve",
+            "stage_message": "Solving",
+            "results": None,
+            "error": None,
+            "error_message": None,
+            "has_results": False,
+            "has_mesh_artifact": False,
+            "cancellation_requested": cancellation_requested,
+        }
+
+    def test_run_simulation_exits_cancelled_when_stop_was_requested_before_solver_work(self):
+        job_id = "test-runner-cancelled-before-start"
+        _jrt.jobs[job_id] = self._make_job_entry(job_id, cancellation_requested=True)
+
+        class MockSolver:
+            def __init__(self):
+                self.created = True
+
+            def prepare_mesh(self, *_args, **_kwargs):
+                raise AssertionError("prepare_mesh must not run once cancellation is requested")
+
+        try:
+            with patch("services.simulation_runner.BEMSolver", MockSolver):
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
+            self.assertEqual(_jrt.jobs[job_id]["stage"], "cancelled")
+            self.assertFalse(_jrt.jobs[job_id]["cancellation_requested"])
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_run_simulation_transitions_to_cancelled_when_solver_callback_acknowledges_stop(self):
+        job_id = "test-runner-cancelled-during-solve"
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
+
+        class MockSolver:
+            def prepare_mesh(self, *_args, **_kwargs):
+                return object()
+
+            def solve(self, *_args, **kwargs):
+                _jrt.jobs[job_id]["cancellation_requested"] = True
+                kwargs["cancellation_callback"]()
+                raise AssertionError("cancellation_callback should have interrupted solve")
+
+        try:
+            with patch("services.simulation_runner.BEMSolver", MockSolver):
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
+            self.assertEqual(_jrt.jobs[job_id]["stage"], "cancelled")
+            self.assertEqual(
+                _jrt.jobs[job_id]["error_message"],
+                "Simulation cancelled by user",
+            )
+        finally:
+            _jrt.jobs.pop(job_id, None)
 
 
 class JobPersistenceFailureSafetyTest(unittest.TestCase):

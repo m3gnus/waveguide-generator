@@ -82,12 +82,16 @@ export function formatJobSummary(job) {
   const status = String(job.status || '').toLowerCase();
   const progress = Math.round((Number(job.progress) || 0) * 100);
   const detail = String(job.stageMessage || job.errorMessage || '').trim();
+  const stage = String(job.stage || '').toLowerCase();
 
   if (status === 'complete') {
     const duration = formatElapsedDuration(resolveJobDurationMs(job));
     return duration ? `Complete (${duration})` : 'Complete';
   }
   if (status === 'cancelled') return 'Cancelled';
+  if (stage === 'cancelling' || job.cancellationRequested) {
+    return detail || 'Stopping...';
+  }
   if (status === 'queued') return 'Queued';
   if (status === 'running') {
     if (detail && !/simulation\s+running|running/i.test(detail)) {
@@ -248,7 +252,7 @@ export function renderJobList(panel) {
           ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export simulation results to file">Export</button>` : ''}
           ${job.script ? `<button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Restore geometry and solver parameters from this simulation">Script</button>` : ''}
           ${(job.status === 'error' || job.status === 'cancelled') && job.script ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Restore parameters and re-run this simulation">Redo</button>` : ''}
-          ${job.status === 'queued' || job.status === 'running'
+          ${(job.status === 'queued' || job.status === 'running') && job.stage !== 'cancelling'
             ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop this running simulation">Stop</button>`
             : ''}
           <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove simulation from feed" title="Remove this simulation from the feed">&#x2715;</button>
@@ -368,39 +372,48 @@ export async function clearFailedSimulations(panel) {
 export async function stopSimulation(panel) {
   const dom = getSimulationDom();
   const targetJobId = panel.activeJobId || panel.currentJobId;
-  const { stopError } = await stopSimulationControllerJob(panel, targetJobId);
+  const { stopError, cancelledJob } = await stopSimulationControllerJob(panel, targetJobId);
   if (stopError) {
     console.warn('Failed to call stop API:', stopError);
+    showError(`Failed to stop simulation: ${stopError.message}`);
+    return;
   }
   renderJobList(panel);
 
-  // Update UI to show cancellation
-  panel.completedStatusMessage = null;
-  panel.simulationStartedAtMs = null;
-  panel.lastSimulationDurationMs = null;
-  updateStageUi(panel, {
-    progress: 0,
-    stage: 'cancelled',
-    message: 'Simulation cancelled by user'
-  });
-  showMessage('Simulation cancelled.', { type: 'info', duration: 2000 });
-  if (dom.runBtn) {
-    dom.runBtn.disabled = false;
+  if (cancelledJob?.status === 'cancelled') {
+    panel.completedStatusMessage = null;
+    panel.simulationStartedAtMs = null;
+    panel.lastSimulationDurationMs = null;
+    updateStageUi(panel, {
+      progress: 0,
+      stage: 'cancelled',
+      message: cancelledJob.stageMessage || 'Simulation cancelled by user'
+    });
+    showMessage('Simulation cancelled.', { type: 'info', duration: 2000 });
+    if (dom.runBtn) {
+      dom.runBtn.disabled = false;
+    }
+  } else if (cancelledJob) {
+    setProgressVisible(true);
+    updateStageUi(panel, {
+      progress: Number(cancelledJob.progress) || 0,
+      stage: cancelledJob.stage || 'cancelling',
+      message: cancelledJob.stageMessage || 'Cancellation requested. Waiting for backend worker to stop.'
+    });
+    showMessage('Cancellation requested. Waiting for backend worker to stop.', { type: 'info', duration: 2400 });
   }
   if (dom.stopBtn) {
     dom.stopBtn.disabled = true;
   }
 
-  // Hide progress bar after a short delay
-  setTimeout(() => {
-    setProgressVisible(false);
-  }, 1000);
-
   if (!hasActiveJobs(panel)) {
+    setTimeout(() => {
+      setProgressVisible(false);
+    }, 1000);
     clearPollTimer(panel);
     setActiveJob(panel, null);
+    restoreConnectionStatus(panel);
   }
-  restoreConnectionStatus(panel);
 }
 
 export async function runSimulation(panel) {
