@@ -3,7 +3,7 @@
 Last updated: March 11, 2026
 
 Purpose:
-- Freeze current runtime contract before structural refactors in `docs/ARCHITECTURE_CLEANUP_PLAN.md`.
+- Preserve the runtime contract that was frozen for the completed architecture cleanup.
 - Eliminate drift between docs, runtime code, and tests.
 
 This document is normative for Phase 0.

@@ -21,14 +21,14 @@
 
 3. BEM solve pipeline (`/api/solve`)
 - Backend validates mesh shape and source tags before solving.
-- Frontend simulation falls back to mock results only when backend is unreachable.
+- Frontend simulation requires the backend solve path; there is no supported mock fallback.
 
 ## Source-of-Truth and Governance
 - Runtime behavior truth: code + tests in `src/`, `server/`, `tests/`, and `server/tests/`.
 - Architecture reference (maintained, concise): [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
 - Test inventory and commands: [tests/TESTING.md](tests/TESTING.md)
 - Backend operational details: [server/README.md](server/README.md)
-- Backlog/ideas (reviewed regularly, not immutable truth): [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md)
+- Backlog/ideas (reviewed regularly, not immutable truth): [docs/backlog.md](docs/backlog.md)
 - Historical plans/reports/spec snapshots: [docs/archive/README.md](docs/archive/README.md)
 
 ## Coding and Testing Guardrails
@@ -52,9 +52,9 @@
 - **Pitfalls**: `interfaceOffset` might be a list. Avoid scalar-only assumptions.
 
 ### Export (`src/export/`)
-- **Responsibilities**: Build export artifacts, orchestrate backend meshing, enforce ABEC parity.
-- **Invariants**: ABEC export uses `/api/mesh/build` only (no JS `.geo` fallback).
-- **Pitfalls**: Keep `Project.abec` mesh references in sync with zip entries.
+- **Responsibilities**: Build export artifacts, orchestrate backend meshing, and keep active STL/CSV/config exports aligned with runtime contracts.
+- **Invariants**: OCC mesh export uses `/api/mesh/build` only (no JS `.geo` fallback).
+- **Pitfalls**: Distinguish viewport/export helpers from actual simulation mesh behavior.
 
 ## Do Not Change Without Parity Tests
 - `src/geometry/tags.js`, `src/geometry/pipeline.js`, `src/geometry/engine/mesh/enclosure.js`
@@ -70,7 +70,6 @@
 - JS tests pass: `npm test`.
 - Server tests pass: `npm run test:server`.
 - No docs claim `/api/mesh/build` returns `.geo` unless code does so.
-- ABEC bundle output validates against the parity contract/checklist.
 - Solver support matrix in docs matches `server/solver/deps.py`.
 - End each work session with a commit for the completed changes.
 - Before ending a session, review and update documentation affected by the change so docs stay current.
