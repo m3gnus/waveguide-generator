@@ -23,6 +23,7 @@ import {
   resetAllViewerSettings,
   saveViewerSettings,
 } from '../src/ui/settings/viewerSettings.js';
+import { PARAM_SCHEMA } from '../src/config/schema.js';
 
 test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('1.0'), 1);
@@ -30,6 +31,18 @@ test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('-0.25'), -0.25);
   assert.equal(normalizeParamInput('45 + 10*cos(p)'), '45 + 10*cos(p)');
   assert.equal(normalizeParamInput('2+3'), '2+3');
+});
+
+test('mesh control labels separate viewport tessellation from solve mesh sizing', () => {
+  assert.equal(PARAM_SCHEMA.MESH.angularSegments.label, 'Viewport Angular Segs');
+  assert.equal(PARAM_SCHEMA.MESH.lengthSegments.label, 'Viewport Length Segs');
+  assert.equal(PARAM_SCHEMA.MESH.throatResolution.label, 'Solve Throat Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.mouthResolution.label, 'Solve Mouth Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, 'Solve Rear Resolution');
+  assert.equal(PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label, 'Solve Front Baffle Resolution');
+  assert.equal(PARAM_SCHEMA.ENCLOSURE.encBackResolution.label, 'Solve Back Baffle Resolution');
+  assert.match(PARAM_SCHEMA.MESH.angularSegments.tooltip, /Three\.js viewport/i);
+  assert.match(PARAM_SCHEMA.MESH.throatResolution.tooltip, /backend OCC solve\/export mesh/i);
 });
 
 test('validateSimulationConfig catches invalid ranges and counts', () => {

@@ -212,8 +212,12 @@ export class ParamPanel {
             }
             this.simulationContainer.appendChild(sourceSection);
 
-            // Mesh density section (simulation-only parameters)
-            const combinedMeshSection = this.createDetailsSection('Mesh Density', 'mesh-details');
+            // Mesh controls section (viewport tessellation + backend solve/export mesh sizing)
+            const combinedMeshSection = this.createDetailsSection('Mesh Controls', 'mesh-details');
+            const meshNote = document.createElement('div');
+            meshNote.className = 'section-note';
+            meshNote.textContent = 'Viewport controls affect only the 3D preview. Solve controls affect the backend OCC mesh and downloaded simulation mesh artifacts.';
+            combinedMeshSection.appendChild(meshNote);
 
             // Params moved to Geometry tab — skip here
             const geomTabKeys = new Set(['wallThickness']);

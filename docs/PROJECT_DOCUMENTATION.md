@@ -200,6 +200,11 @@ OCC mesh-resolution semantics:
   comma list (`q1,q2,q3,q4`) or scalar broadcast for enclosure front/back baffle corners.
   Quadrant mapping: `Q1(+x,+y)`, `Q2(-x,+y)`, `Q3(-x,-y)`, `Q4(+x,-y)`.
 
+UI control mapping:
+- `Viewport Angular/Length/Corner/Throat Segs` and `Throat Slice Density` affect only Three.js preview tessellation.
+- `Solve Throat/Mouth/Rear Resolution` and `Solve Front/Back Baffle Resolution` affect backend OCC solve/export mesh density.
+- `Auto-download solve mesh artifact (.msh)` affects only whether the persisted backend `.msh` artifact is downloaded.
+
 Physical groups written by OCC builder:
 - tag 1: `SD1G0`
 - tag 2: `SD1D1001`

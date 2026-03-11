@@ -124,6 +124,14 @@ Windows/Linux note:
 - Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
 - Export: STL, CSV profiles, MWG config text, simulation mesh download, and VACS-style result text
 
+## Mesh Control Guide
+
+| Control family | What it affects | What it does not affect |
+| --- | --- | --- |
+| `Viewport * Segs` + `Throat Slice Density` | Three.js preview tessellation and slice distribution | Backend OCC solve mesh, `/api/mesh/build`, `.msh` artifact quality |
+| `Solve * Resolution` + enclosure front/back resolutions | Backend OCC solve mesh and OCC-authored `.msh` artifacts | Three.js triangle count except for minor slice-spacing hints |
+| `Auto-download solve mesh artifact (.msh)` | Whether the persisted backend `.msh` file is downloaded for a simulation job | Mesh generation itself |
+
 ## Project layout
 
 ```
