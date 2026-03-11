@@ -167,12 +167,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: recent Phase 8 cleanup already removed several deprecated frontend/export aliases, so the obvious low-hanging cleanup has mostly been harvested. What remains should be handled as a deliberate import/callsite audit with small removals, not as opportunistic drive-by deletion during product work.
   Best approach: Start with an import/callsite inventory, remove only code with no active UI/runtime/test path, and keep each cleanup slice small enough for targeted verification.
 
-- [ ] Retire the legacy frontend `.msh` export surface once tests/tooling no longer need it.
+- [x] Retire the legacy frontend `.msh` export surface once tests/tooling no longer need it.
   Source: architecture audit on March 11, 2026; `src/export/index.js`; `src/export/msh.js`; `tests/geometry-artifacts.test.js`.
   Relevant: Yes, but below active runtime correctness work.
   Will it improve the program: Yes. It removes a public export path that bypasses the backend-only OCC mesh flow described by the active architecture.
   Research findings: the active runtime uses `/api/mesh/build` for authored `.msh` output, but `src/export/index.js` still publicly re-exports `exportMSH()` and `src/export/msh.js` still contains dead helper code that is only exercised by tests. That leaves legacy API surface area in place after the runtime moved on.
   Best approach: First move any remaining regression coverage to the active backend/export contract, then delete or explicitly quarantine the legacy helper so app-facing exports cannot accidentally depend on it again.
+  Completed: March 11, 2026. The app-facing `src/export/index.js` surface no longer re-exports `exportMSH()`, the old frontend helper has been removed from `src/export/`, and the one remaining regression that still checks historical physical-name behavior now uses a quarantined test-only helper under `tests/helpers/legacyMsh.js`.
 
 ### P4 Research And Optional Engineering Tracks
 

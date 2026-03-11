@@ -252,7 +252,7 @@ Regression coverage: `tests/csv-export.test.js`
 
 ### 5.3 Internal/library export utilities
 
-Additional export utilities exist in `src/export/*` (tests/tooling/legacy helpers), including `.geo` and direct `.msh` builders. The OCC runtime export flow remains backend-meshed and Gmsh-authored.
+Additional export utilities in `src/export/*` are limited to active STL / CSV / config helpers plus legacy `.geo` tooling; the old direct frontend `.msh` helper is now quarantined under `tests/helpers/legacyMsh.js` for regression-only use. The OCC runtime export flow remains backend-meshed and Gmsh-authored.
 
 ## 6. Backend API Contract
 
