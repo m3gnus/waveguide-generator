@@ -69,12 +69,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: `server/tests/test_dependency_runtime.py` and `server/tests/test_api_validation.py` already assert OCC runtime failure paths, and `server/tests/test_mesh_validation.py` covers `use_gmsh=True` behavior. There is still no test that forces `occBuilderReady=False` while keeping solver readiness intact and proves canonical payload solves are still accepted.
   Completed: March 11, 2026. `server/tests/test_dependency_runtime.py` now locks the `solverReady=true` / `occBuilderReady=false` configuration, proves canonical `/api/solve` submission still enqueues successfully, and asserts that the OCC/Gmsh dependency branch is not consulted for canonical payloads.
 
-- [ ] Introduce a public job-runtime service surface and stop letting `server/api/routes_simulation.py` mutate job state internals directly.
+- [x] Introduce a public job-runtime service surface and stop letting `server/api/routes_simulation.py` mutate job state internals directly.
   Source: architecture audit on March 11, 2026; `server/api/routes_simulation.py`; `server/services/job_runtime.py`.
   Relevant: Yes. The route layer currently imports private helpers plus mutable runtime state from `job_runtime` and writes to the DB/cache/queue directly instead of going through a service boundary.
   Will it improve the program: Yes. It restores the intended API -> services -> solver layering and makes job lifecycle behavior easier to test and evolve safely.
   Research findings: `job_runtime.py` declares ownership of the in-memory cache, queue, and scheduler, but `routes_simulation.py` still imports `_build_config_summary`, `_set_job_fields`, `_drain_scheduler_queue`, `jobs`, `job_queue`, `running_jobs`, `jobs_lock`, and `_jrt.db`. The import-boundary tests pass because they only check package-level edges, not direct access to private service internals.
   Best approach: Add explicit public service functions for create/stop/list/delete/result retrieval, migrate the route handlers to those functions, and tighten the backend boundary tests to reject direct API access to underscore-prefixed service internals.
+  Completed: March 11, 2026. `server/services/job_runtime.py` now owns the public create/stop/status/result/artifact/list/delete operations, `server/api/routes_simulation.py` maps HTTP semantics onto that service surface instead of mutating DB/cache/queue internals directly, and backend regressions now cover the public submit path plus an import-boundary rule that blocks `routes_simulation.py` from importing private `job_runtime` names again.
 
 - [x] Add pre-submit canonical tag diagnostics to the simulation UI.
   Source: archived future additions doc.

@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from api.routes_simulation import (
     list_jobs,
 )
 import services.job_runtime as _jrt
+from contracts import SimulationRequest
 from db import SimulationDB
 from fastapi import HTTPException
 
@@ -108,6 +110,26 @@ class JobPersistenceTest(unittest.TestCase):
         recovered_queued = _jrt.db.get_job_row("job-queued")
         self.assertEqual(recovered_queued["status"], "queued")
         self.assertIn("job-queued", list(_jrt.job_queue))
+
+    def test_create_simulation_job_persists_cache_and_scheduler_trigger(self):
+        request = SimulationRequest(**self._request_dump())
+        job_id = "11111111-1111-1111-1111-111111111111"
+
+        with patch("services.job_runtime.uuid.uuid4", return_value=uuid.UUID(job_id)), patch(
+            "services.job_runtime.asyncio.create_task"
+        ) as create_task:
+            create_task.side_effect = lambda coro: (coro.close(), None)[1]
+            created_job_id = _jrt.create_simulation_job(request)
+
+        self.assertEqual(created_job_id, job_id)
+        self.assertIn(job_id, _jrt.jobs)
+        self.assertIn(job_id, list(_jrt.job_queue))
+
+        row = _jrt.db.get_job_row(job_id)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "queued")
+        self.assertEqual(row["config_json"]["mesh"]["surfaceTags"], [2])
+        create_task.assert_called_once()
 
     def test_delete_job_rejects_active_and_allows_terminal(self):
         self._create_db_job("job-active", "queued")

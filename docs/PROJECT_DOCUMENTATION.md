@@ -52,13 +52,13 @@ Primary entry points:
 - `server/contracts/`
   - Shared Pydantic request/response contracts consumed by routes, services, and backend tests
 - `server/api/routes_simulation.py`
-  - Simulation/job routes (`/api/solve`, `/api/status/{job_id}`, `/api/results/{job_id}`, `/api/jobs*`)
+  - Simulation/job routes (`/api/solve`, `/api/status/{job_id}`, `/api/results/{job_id}`, `/api/jobs*`) that map HTTP semantics onto the public job-runtime service boundary
 - `server/api/routes_mesh.py`
   - Mesh routes (`/api/mesh/build`)
 - `server/api/routes_misc.py`
   - Misc routes (`/`, `/health`, `/api/updates/check`, chart/directivity rendering)
 - `server/services/job_runtime.py`
-  - In-memory job cache, queue, scheduler loop, DB merge helpers
+  - Public job lifecycle service surface plus the in-memory job cache, queue, scheduler loop, and DB merge helpers it owns
 - `server/services/solver_runtime.py`
   - Service-layer adapter for solver availability flags, dependency status, OCC builder access, and device metadata
 - `server/services/simulation_runner.py`

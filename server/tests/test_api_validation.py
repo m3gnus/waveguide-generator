@@ -1,5 +1,4 @@
 import asyncio
-import uuid
 import unittest
 from unittest.mock import patch
 
@@ -252,25 +251,14 @@ class ApiValidationTest(unittest.TestCase):
         with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch(
             "api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True
         ), patch("api.routes_simulation.GMSH_OCC_RUNTIME_READY", True), patch(
-            "api.routes_simulation.ensure_db_ready"
-        ), patch(
-            "api.routes_simulation.uuid.uuid4", return_value=uuid.UUID("11111111-1111-1111-1111-111111111111")
-        ), patch(
-            "api.routes_simulation._jrt.db.create_job"
-        ) as create_job, patch("api.routes_simulation.asyncio.create_task") as create_task:
-            create_task.side_effect = lambda coro: (coro.close(), None)[1]
-            try:
-                result = asyncio.run(submit_simulation(request))
-            finally:
-                _jrt.jobs.pop(job_id, None)
-                if job_id in _jrt.job_queue:
-                    _jrt.job_queue.remove(job_id)
+            "api.routes_simulation.create_simulation_job", return_value=job_id
+        ) as create_simulation_job:
+            result = asyncio.run(submit_simulation(request))
 
         self.assertEqual(result["job_id"], job_id)
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
-        stored_request = create_job.call_args.args[0]["config_json"]
-        self.assertEqual(stored_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
-        create_task.assert_called_once()
+        submitted_request = create_simulation_job.call_args.args[0].model_dump()
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
 
     def test_occ_adaptive_accepts_rosse_b_expression(self):
         request = SimulationRequest(

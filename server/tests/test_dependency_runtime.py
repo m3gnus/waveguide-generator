@@ -180,20 +180,12 @@ class DependencyRuntimeTest(unittest.TestCase):
         ), patch("api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
             "api.routes_simulation.GMSH_OCC_RUNTIME_READY", False
         ), patch("api.routes_simulation.get_dependency_status", return_value=dependency_status) as dependency_mock, patch(
-            "api.routes_simulation.ensure_db_ready"
-        ), patch(
-            "api.routes_simulation.uuid.uuid4", return_value=job_uuid
-        ), patch(
-            "api.routes_simulation._jrt.db.create_job"
-        ) as create_job, patch(
-            "api.routes_simulation.asyncio.create_task",
-            side_effect=lambda coro: coro.close(),
-        ) as create_task:
+            "api.routes_simulation.create_simulation_job", return_value=str(job_uuid)
+        ) as create_simulation_job:
             response = asyncio.run(submit_simulation(request))
 
         self.assertEqual(response, {"job_id": str(job_uuid)})
-        create_job.assert_called_once()
-        create_task.assert_called_once()
+        create_simulation_job.assert_called_once()
         dependency_mock.assert_not_called()
 
 
