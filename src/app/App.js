@@ -1,6 +1,6 @@
 import { GlobalState } from '../state.js';
 import { ParamPanel } from '../ui/paramPanel.js';
-import { AppEvents } from '../events.js';
+import { UiModule } from '../modules/ui/index.js';
 
 import { initializeLogging } from './logging.js';
 import { prepareParamsForMesh } from './params.js';
@@ -10,8 +10,6 @@ import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
-import { markParametersChanged } from '../ui/fileOps.js';
-import { isDevRuntime } from '../config/runtimeMode.js';
 import { getLiveUpdateEnabled } from '../ui/settings/modal.js';
 
 let simulationPanelModulePromise = null;
@@ -36,13 +34,20 @@ export class App {
     this.stats = document.getElementById('stats');
     this.renderRequested = false;
     this.simulationPanel = null;
-    this._simulationPanelInitPromise = null;
+    this.uiCoordinator = UiModule.output.app(
+      UiModule.task(
+        UiModule.importApp(this, {
+          loadSimulationPanel: loadSimulationPanelModule
+        })
+      )
+    );
 
     // Initialize change logging
     this.initializeLogging();
 
     // Init UI
     this.paramPanel = new ParamPanel('param-container');
+    this.uiCoordinator.bind();
     this.ensureSimulationPanel().catch((error) => {
       console.error('Failed to initialize simulation panel:', error);
     });
@@ -53,43 +58,10 @@ export class App {
 
     // Initial render — viewport always uses formula-based mesh
     this.onStateUpdate(GlobalState.get());
-
-    // Subscribe to state updates
-    AppEvents.on('state:updated', (state) => {
-      this.onStateUpdate(state);
-      markParametersChanged();
-    });
-
-    // Subscribe to simulation events - canonical mesh payload generation for simulation
-    AppEvents.on('simulation:mesh-requested', () => {
-      this.provideMeshForSimulation();
-    });
-
-    AppEvents.on('ui:tab-changed', () => {
-      this.schedulePanelAutoSize();
-    });
   }
 
   async ensureSimulationPanel() {
-    if (this.simulationPanel) {
-      return this.simulationPanel;
-    }
-    if (this._simulationPanelInitPromise) {
-      return this._simulationPanelInitPromise;
-    }
-
-    this._simulationPanelInitPromise = loadSimulationPanelModule().then(({ SimulationPanel }) => {
-      if (!this.simulationPanel) {
-        this.simulationPanel = new SimulationPanel();
-        this.simulationPanel.app = this;
-      }
-      if (typeof window !== 'undefined' && isDevRuntime()) {
-        window.__waveguideApp = this;
-      }
-      return this.simulationPanel;
-    });
-
-    return this._simulationPanelInitPromise;
+    return this.uiCoordinator.ensureSimulationPanel();
   }
 
   initializeLogging() {
@@ -179,6 +151,14 @@ export class App {
 
   async provideMeshForSimulation() {
     return provideMeshForSimulation(this);
+  }
+
+  publishSimulationMesh(payload) {
+    return this.uiCoordinator.publishSimulationMesh(payload);
+  }
+
+  publishSimulationMeshError(message) {
+    return this.uiCoordinator.publishSimulationMeshError(message);
   }
 
   async checkForUpdates(buttonEl) {
