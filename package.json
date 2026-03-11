@@ -19,7 +19,7 @@
     "diag:geometry": "node scripts/diagnostics/check-tritonia-geometry-artifacts.js",
     "diag:occ:tritonia": "python3 scripts/diagnostics/build-occ-mesh-tritonia.py",
     "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py",
-    "arch:next": "node ./.codex/skills/architecture-cleanup-next/scripts/next-architecture-cleanup-status.mjs"
+    "backlog:next": "node ./.codex/skills/backlog-next/scripts/next-backlog-status.mjs"
   },
   "keywords": [
     "3d",
