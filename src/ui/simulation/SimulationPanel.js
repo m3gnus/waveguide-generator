@@ -10,8 +10,8 @@
  * - Results display coordination
  */
 
-import { BemSolver } from '../../solver/index.js';
 import { UiModule } from '../../modules/ui/index.js';
+import { createSimulationClient } from '../../modules/simulation/useCases.js';
 import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
@@ -52,7 +52,7 @@ import { openViewResultsModal } from './viewResults.js';
 
 export class SimulationPanel {
   constructor() {
-    this.solver = new BemSolver();
+    this.solver = createSimulationClient();
     this.currentJobId = null; // Backward-compatible alias for activeJobId
     this.pollInterval = null; // Backward-compatible alias for pollTimer
     this.connectionPollTimer = null;

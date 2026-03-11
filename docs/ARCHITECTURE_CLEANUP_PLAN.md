@@ -420,6 +420,8 @@ Completed in this step:
 10. Added app-facing wrappers in `src/modules/ui/useCases.js` for feedback and file-ops interactions used by app assembly flows.
 11. Refactored `src/app/configImport.js`, `src/app/events.js`, and `src/app/updates.js` to consume those wrappers instead of importing `src/ui/feedback.js` and `src/ui/fileOps.js` directly.
 12. Tightened `tests/architecture-boundaries.test.js` by removing now-resolved legacy exceptions for app-level feedback/file-ops imports.
+13. Added `createSimulationClient()` to `src/modules/simulation/useCases.js` and refactored `src/ui/simulation/SimulationPanel.js` to consume a module API instead of importing `src/solver/index.js` directly.
+14. Removed remaining temporary import-boundary exceptions (`src/app/params.js -> src/geometry/index.js`, `src/ui/simulation/SimulationPanel.js -> src/solver/index.js`) and kept behavior stable with a local `isNumericString` helper in `src/app/params.js`.
 
 ## Phase 5: Untangle UI State And Circular Workflow Logic
 
