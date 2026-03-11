@@ -7,8 +7,6 @@ const ROOT = process.cwd();
 const SRC_ROOT = path.join(ROOT, 'src');
 
 const LEGACY_EXCEPTIONS = new Set([
-  'app/App.js->ui/paramPanel.js',
-  'app/App.js->ui/simulationPanel.js',
   'app/configImport.js->ui/feedback.js',
   'app/configImport.js->ui/fileOps.js',
   'app/events.js->ui/fileOps.js',
