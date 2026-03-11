@@ -1,5 +1,12 @@
 # Architecture Cleanup Plan
 
+## Execution Status
+
+- Started: March 11, 2026
+- Current phase: Phase 1 (ready to start)
+- Completed:
+  - Phase 0 contract freeze (docs + contract tests aligned to runtime)
+
 ## Goal
 
 Refactor the repo into explicit modules with one-way dependencies, one source of truth per contract, and no downstream "repair" logic that silently fixes invalid upstream data.

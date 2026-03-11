@@ -6,6 +6,9 @@ If code and docs disagree, update this file to match runtime behavior.
 Active cleanup roadmap:
 - `docs/ARCHITECTURE_CLEANUP_PLAN.md`
 
+Canonical contract freeze:
+- `docs/CANONICAL_CONTRACT.md`
+
 ## 1. Scope and Entry Points
 
 Waveguide Generator is a browser-based horn design tool with:
@@ -79,7 +82,7 @@ Primary entry points:
 
 1. Simulation UI emits `simulation:mesh-requested`.
 2. `src/app/mesh.js` resolves prepared design inputs via `DesignModule`, and `SimulationModule` builds canonical payload from those inputs before emitting `simulation:mesh-ready`.
-   - For `/api/solve`, frontend forces `quadrants='1234'` so backend symmetry detection/reduction is the source of truth.
+   - For OCC-adaptive `/api/solve`, frontend sends `waveguide_params.quadrants`; backend currently coerces OCC build geometry to full-domain `1234`.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
@@ -114,14 +117,14 @@ Primary files:
 Canonical surface tags:
 - `1` = wall
 - `2` = source
-- `3` = secondary domain
-- `4` = interface
+- `3` = secondary domain (reserved in JS canonical runtime)
+- `4` = interface (reserved in JS canonical runtime)
 
 Important behavior:
 - Source triangles are explicit geometry and required; payload build throws if none are tagged.
-- Interface tags are only emitted when enclosure exists and `interfaceOffset` is positive.
-- Symmetry-domain payloads remove triangles that lie on split planes.
-- Live `/api/solve` submission forces full quadrants and delegates symmetry reduction to backend solver logic.
+- JS canonical payload currently emits only tags `1` and `2`; tag counters for `3`/`4` remain zero in runtime tests.
+- Simulation payload topology is full-domain and does not trim by `quadrants`.
+- OCC-adaptive `/api/solve` currently coerces OCC build requests to full-domain `quadrants=1234` in backend route/service code.
 - Adaptive phi tessellation is restricted to full-circle horn-only render usage.
 - The canonical frontend payload remains a validation/contract artifact; active simulation meshing is OCC-adaptive in backend.
 
@@ -135,9 +138,9 @@ Backend implementation:
 - `server/solver/waveguide_builder.py` function `build_waveguide_mesh(...)`
 
 Frontend request normalization:
-- Angular/length counts are normalized before submit:
-  - `n_angular`: rounded, snapped to multiple of 4, minimum 20
-  - `n_length`: rounded, minimum 10
+- Angular/length normalization is boundary-specific:
+  - `buildWaveguidePayload(...)`: `n_angular=max(20, round(angularSegments))`, `n_length=max(10, round(lengthSegments))`
+  - `ExportModule` OCC path pre-normalizes angular segments to multiples of 4 (min 20) before payload build
 
 Response shape:
 ```json
@@ -295,6 +298,9 @@ Every `/api/solve` result includes `metadata.performance`:
 | `reduction_speedup` | float | Symmetry reduction factor applied (1.0 = no reduction) |
 
 ## 8. Canonical Mesh Payload Contract
+
+Normative reference:
+- `docs/CANONICAL_CONTRACT.md`
 
 Frontend payload shape sent to `/api/solve`:
 

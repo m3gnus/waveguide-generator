@@ -52,6 +52,8 @@ test('canonical mesh payload includes surface tags and source coverage', () => {
   assert.equal(payload.surfaceTags.length, payload.indices.length / 3);
   assert.ok(payload.surfaceTags.includes(SURFACE_TAGS.SOURCE));
   assert.ok(payload.metadata.tagCounts[SURFACE_TAGS.SOURCE] > 0);
+  assert.equal(payload.metadata.units, 'mm');
+  assert.equal(payload.metadata.unitScaleToMeter, 0.001);
   assert.equal(payload.format, 'msh');
   assert.equal(
     Object.prototype.hasOwnProperty.call(payload.metadata, 'rearClosureForced'),
