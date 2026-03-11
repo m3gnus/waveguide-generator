@@ -483,6 +483,42 @@ test('renderJobList is accessible from jobActions.js sub-module', () => {
   assert.strictEqual(typeof renderJobList, 'function');
 });
 
+test('renderJobList exposes folder source mode in the header and rows', () => {
+  const originalDocument = global.document;
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    }
+  };
+
+  try {
+    renderJobList({
+      jobSourceMode: 'folder',
+      activeJobId: null,
+      jobs: new Map([
+        ['job-folder-1', {
+          id: 'job-folder-1',
+          label: 'folder-task',
+          status: 'complete',
+          createdAt: '2026-03-11T09:00:00.000Z',
+          completedAt: '2026-03-11T09:10:00.000Z'
+        }]
+      ])
+    });
+
+    assert.equal(sourceLabel.textContent, 'Folder Tasks');
+    assert.match(list.innerHTML, /simulation-job-source-badge/);
+    assert.match(list.innerHTML, />Folder</);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
 test('clearPollTimer from polling.js resets isPolling and clears timer refs', () => {
   const clearedIds = [];
   const origClearTimeout = global.clearTimeout;

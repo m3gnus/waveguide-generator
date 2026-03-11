@@ -9,7 +9,10 @@ import {
   setInvertWheelZoom,
   getCurrentViewerSettings
 } from '../../ui/settings/viewerSettings.js';
-import { supportsFolderSelection } from '../../ui/workspace/folderWorkspace.js';
+import {
+  supportsFolderSelection,
+  subscribeFolderWorkspace
+} from '../../ui/workspace/folderWorkspace.js';
 import { ParamPanel } from '../../ui/paramPanel.js';
 import {
   showCommandSuggestion,
@@ -40,6 +43,10 @@ export function openAppSettings() {
 
 export function isFolderSelectionSupported(targetWindow = window) {
   return supportsFolderSelection(targetWindow);
+}
+
+export function subscribeAppFolderWorkspace(listener) {
+  return subscribeFolderWorkspace(listener);
 }
 
 export function loadAppViewerSettings() {

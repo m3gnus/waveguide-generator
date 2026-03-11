@@ -35,7 +35,7 @@ export function setupEventListeners(panel) {
 
   const refreshBtn = document.getElementById('refresh-jobs-btn');
   if (refreshBtn) {
-    refreshBtn.addEventListener('click', () => panel.pollSimulationStatus());
+    refreshBtn.addEventListener('click', () => panel.refreshJobFeed());
   }
 
   const clearFailedBtn = document.getElementById('clear-failed-jobs-btn');

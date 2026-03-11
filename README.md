@@ -121,6 +121,7 @@ Windows/Linux note:
 - R-OSSE and OSSE horn profile generation with live parameter controls
 - Real-time 3D rendering (standard, zebra, wireframe, curvature)
 - BEM simulation workflow with backend job submission and result plotting
+- Explicit task-history source modes: folder-backed tasks when a workspace is selected, backend jobs otherwise
 - Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
 - Export: STL, CSV profiles, MWG config text, simulation mesh download, and VACS-style result text
 
