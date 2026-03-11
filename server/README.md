@@ -170,7 +170,7 @@ Returns live job status payload:
 
 - `status`: `queued` | `running` | `complete` | `error` | `cancelled`
 - `progress`: normalized `0.0..1.0`
-- `stage`: current pipeline stage (for example `mesh_prepare`, `bem_solve`, `directivity`, `finalizing`)
+- `stage`: current pipeline stage (for example `mesh_prepare`, `bem_solve`, `cancelling`, `directivity`, `finalizing`)
 - `stage_message`: human-readable stage detail
 - `message`: terminal error/cancellation message (when applicable)
 
@@ -181,6 +181,10 @@ Returns simulation results for completed job.
 ### `POST /api/stop/{job_id}`
 
 Cancels queued/running job.
+
+- Queued jobs transition directly to `cancelled`.
+- Running jobs transition to stage `cancelling` while the worker checks `cancellation_requested`.
+- Final `cancelled` status is only written after the worker exits a safe checkpoint.
 
 ## 4. Canonical Surface Tags
 

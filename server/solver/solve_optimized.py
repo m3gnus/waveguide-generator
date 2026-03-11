@@ -232,6 +232,7 @@ def solve_optimized(
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
     enable_warmup: bool = True,
+    cancellation_callback: Optional[Callable[[], None]] = None,
 ) -> Dict:
     """Run optimized BEM simulation with explicit metadata and failure reporting."""
     start_time = time.time()
@@ -272,6 +273,9 @@ def solve_optimized(
     reduction_factor = 1.0
     if stage_callback:
         stage_callback("setup", 0.0, "Preparing optimized solver")
+
+    if cancellation_callback:
+        cancellation_callback()
 
     if enable_symmetry and original_vertices is not None:
         if verbose:
@@ -394,6 +398,8 @@ def solve_optimized(
     # the timed frequency loop by assembling operators at a representative wavenumber.
     warmup_time_seconds = 0.0
     if enable_warmup and len(frequencies) > 0:
+        if cancellation_callback:
+            cancellation_callback()
         _warmup_start = time.time()
         try:
             _k_warmup = 2 * np.pi * frequencies[len(frequencies) // 2] / c
@@ -421,6 +427,8 @@ def solve_optimized(
     device_metadata = results.get("metadata", {}).get("device_interface")
 
     for i, freq in enumerate(frequencies):
+        if cancellation_callback:
+            cancellation_callback()
         if progress_callback:
             progress_callback(i / len(frequencies))
         if stage_callback:
@@ -543,6 +551,8 @@ def solve_optimized(
 
     if verbose:
         logger.info("[BEM] Computing directivity patterns...")
+    if cancellation_callback:
+        cancellation_callback()
     if stage_callback:
         stage_callback(
             "directivity",
@@ -683,6 +693,9 @@ def solve_optimized(
         if reduction_factor > 1.0:
             logger.info("Symmetry speedup: %.1fx", reduction_factor)
         logger.info("=" * 70)
+
+    if cancellation_callback:
+        cancellation_callback()
 
     if progress_callback:
         progress_callback(1.0)
