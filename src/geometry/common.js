@@ -25,9 +25,6 @@ export const parseNumberList = (value) => {
     return null;
 };
 
-// Alias for compatibility
-export const parseList = parseNumberList;
-
 export const isFullCircle = (quadrants) => {
     const q = String(quadrants ?? '1234').trim();
     return q === '' || q === '1234';
