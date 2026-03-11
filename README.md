@@ -7,8 +7,8 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 ## Documentation
 
 - [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - maintained architecture and runtime reference
+- [Backlog](docs/backlog.md) - active unfinished work and prioritized follow-ups
 - [Testing Guide](tests/TESTING.md) - canonical test map, commands, and diagnostics
-- [Future Additions](docs/FUTURE_ADDITIONS.md) - working backlog (periodically reviewed/pruned)
 - [Archive Index](docs/archive/README.md) - superseded plans and historical reports
 
 ## Get the project files

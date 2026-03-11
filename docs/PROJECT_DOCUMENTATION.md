@@ -3,8 +3,11 @@
 This document describes the current implementation in this repository.
 If code and docs disagree, update this file to match runtime behavior.
 
-Active cleanup roadmap:
-- `docs/ARCHITECTURE_CLEANUP_PLAN.md`
+Active backlog:
+- `docs/backlog.md`
+
+Historical cleanup record:
+- `docs/archive/ARCHITECTURE_CLEANUP_PLAN_2026-03-11.md`
 
 Canonical contract freeze:
 - `docs/CANONICAL_CONTRACT.md`
@@ -453,4 +456,4 @@ If OpenCL is unavailable the backend falls back to `numba`; fallback reason is s
 
 ## 13. Future Work Tracking
 
-Planned or partial features are tracked in [docs/FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md).
+Planned or partial features are tracked in [docs/backlog.md](docs/backlog.md).
