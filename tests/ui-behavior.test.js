@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { normalizeParamInput } from '../src/ui/paramInput.js';
-import { formatJobSummary, validateSimulationConfig } from '../src/ui/simulation/actions.js';
+import { formatJobSummary } from '../src/ui/simulation/jobActions.js';
+import { validateSimulationConfig } from '../src/modules/simulation/useCases.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
   deriveExportFieldsFromFileName,

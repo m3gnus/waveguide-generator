@@ -15,7 +15,8 @@ import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
 import { setupSmoothingListener, setupKeyboardShortcuts } from './smoothing.js';
 import { setupSimulationParamBindings, syncSimulationSettings } from './settings.js';
 import { checkSolverConnection } from './connection.js';
-import { runSimulation, pollSimulationStatus, runMockSimulation, renderJobList } from './actions.js';
+import { pollSimulationStatus } from './polling.js';
+import { runSimulation, runMockSimulation, renderJobList } from './jobActions.js';
 import {
   createSimulationPanelRuntime,
   restoreSimulationPanelRuntime,
