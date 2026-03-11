@@ -87,3 +87,46 @@ test('buildWaveguidePayload coerces non-finite numeric fields to finite defaults
   assert.equal(payload.enc_depth, 0);
   assert.equal(payload.enc_edge_type, 1);
 });
+
+test('buildWaveguidePayload rounds angular segments without divisibility snapping', () => {
+  const payload = buildWaveguidePayload(
+    {
+      type: 'OSSE',
+      angularSegments: 21.2,
+      lengthSegments: 9.7
+    },
+    '2.2'
+  );
+
+  assert.equal(payload.n_angular, 21);
+  assert.equal(payload.n_length, 10);
+});
+
+test('buildWaveguidePayload keeps canonical quadrants and falls back on invalid values', () => {
+  assert.equal(
+    buildWaveguidePayload({ type: 'OSSE', quadrants: '14' }, '2.2').quadrants,
+    14
+  );
+  assert.equal(
+    buildWaveguidePayload({ type: 'OSSE', quadrants: '12' }, '2.2').quadrants,
+    12
+  );
+  assert.equal(
+    buildWaveguidePayload({ type: 'OSSE', quadrants: 'not-a-quadrant' }, '2.2').quadrants,
+    1234
+  );
+});
+
+test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
+  const payload = buildWaveguidePayload(
+    {
+      type: 'OSSE',
+      encFrontResolution: [7, 8, 9, 10],
+      encBackResolution: [11, 12, 13, 14]
+    },
+    '2.2'
+  );
+
+  assert.equal(payload.enc_front_resolution, '7,8,9,10');
+  assert.equal(payload.enc_back_resolution, '11,12,13,14');
+});
