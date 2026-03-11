@@ -5,13 +5,13 @@ import {
   exportSlicesCSV,
   generateMWGConfigContent
 } from '../export/index.js';
-import { buildGeometryArtifacts } from '../geometry/index.js';
 import { buildWaveguidePayload } from '../solver/waveguidePayload.js';
 import { saveFile, getExportBaseName } from '../ui/fileOps.js';
 import { showError } from '../ui/feedback.js';
 import { GlobalState } from '../state.js';
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 import { isDevRuntime } from '../config/runtimeMode.js';
+import { GeometryModule } from '../modules/geometry/index.js';
 
 // Mirrors normalizeAngularSegments() in geometry/engine/mesh/angles.js —
 // the mesh builder snaps angularSegments to a multiple of 8 when it isn't
@@ -142,10 +142,11 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
 
   // Build geometry artifacts (coords, static, solving params)
   const gmshParams = buildGmshExportParams(preparedParams);
-  const artifacts = buildGeometryArtifacts(gmshParams, {
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(gmshParams), {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0
   });
-  const payload = artifacts.simulation;
+  const artifacts = GeometryModule.output.artifacts(geometryTask);
+  const payload = GeometryModule.output.simulation(geometryTask);
   return {
     artifacts,
     payload,
@@ -211,11 +212,11 @@ export function exportSTL(app) {
   const preparedParams = app.prepareParamsForMesh({
     applyVerticalOffset: false
   });
-  const artifacts = buildGeometryArtifacts(preparedParams, {
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(preparedParams), {
     includeEnclosure: false,
     adaptivePhi: true
   });
-  const { vertices, indices } = artifacts.mesh;
+  const { vertices, indices } = GeometryModule.output.mesh(geometryTask);
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));

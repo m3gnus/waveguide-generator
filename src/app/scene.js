@@ -6,7 +6,7 @@ import {
   createOrthoCamera,
   ZebraShader
 } from '../viewer/index.js';
-import { buildGeometryArtifacts } from '../geometry/index.js';
+import { GeometryModule } from '../modules/geometry/index.js';
 import { getDisplayMode } from '../ui/settings/modal.js';
 import {
   loadViewerSettings,
@@ -88,10 +88,10 @@ export function renderModel(app) {
   // Viewport always uses the formula-based mesh — evaluates profile math
   // directly at every grid point. Export and simulation flows use a
   // canonical tagged payload derived from the same geometry equations.
-  const artifacts = buildGeometryArtifacts(preparedParams, {
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(preparedParams), {
     adaptivePhi: false
   });
-  const { vertices, indices } = artifacts.mesh;
+  const { vertices, indices } = GeometryModule.output.mesh(geometryTask);
   applyMeshToScene(app, vertices, indices, preparedParams);
 }
 
