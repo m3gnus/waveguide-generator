@@ -10,6 +10,7 @@ import {
   bindSimulationControllerState,
   ensureSimulationControllerJobResults,
   queueSimulationControllerJob,
+  reconcileSimulationControllerRemoteJobs,
   recordSimulationControllerExport,
   removeSimulationControllerJob,
   restoreSimulationControllerJobs,
@@ -217,6 +218,46 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   assert.equal(controller.activeJobId, 'job-complete');
   assert.equal(controller.currentJobId, 'job-complete');
   assert.equal(controller.resultCache.has('job-complete'), true);
+});
+
+test('reconcileSimulationControllerRemoteJobs merges remote data and marks missing active jobs as lost', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async listJobs() {
+        return {
+          items: [
+            {
+              id: 'job-remote-running',
+              status: 'running',
+              progress: 0.4,
+              stage: 'solving',
+              stage_message: 'Solving on backend',
+              created_at: '2026-03-11T10:00:00.000Z'
+            }
+          ]
+        };
+      }
+    }
+  });
+
+  controller.jobs.set('job-lost-running', {
+    id: 'job-lost-running',
+    status: 'running',
+    progress: 0.2,
+    createdAt: '2026-03-11T09:59:00.000Z'
+  });
+  controller.activeJobId = 'job-lost-running';
+  controller.currentJobId = 'job-lost-running';
+
+  const result = await reconcileSimulationControllerRemoteJobs(controller);
+
+  assert.equal(result.anyActive, true);
+  assert.equal(result.activeJob?.id, 'job-lost-running');
+  assert.equal(controller.activeJobId, 'job-lost-running');
+  assert.equal(controller.currentJobId, 'job-lost-running');
+  assert.equal(controller.jobs.get('job-remote-running')?.status, 'running');
+  assert.equal(controller.jobs.get('job-lost-running')?.status, 'error');
+  assert.match(controller.jobs.get('job-lost-running')?.errorMessage || '', /lost/i);
 });
 
 test('queueSimulationControllerJob and recordSimulationControllerExport update controller job metadata', async () => {

@@ -502,6 +502,13 @@ Completed in this step:
    - feed removal / failed-job clearing / cancellation state (`removeSimulationControllerJob(...)`, `clearSimulationControllerJobs(...)`, `cancelSimulationControllerJob(...)`)
 17. Reduced `jobActions.js` further toward a DOM/message adapter that delegates controller mutations instead of mutating job store state directly.
 18. Expanded `tests/simulation-controller.test.js` to lock down those controller-level job mutation/result-loading behaviors.
+19. Moved polling-time remote job reconciliation out of `src/ui/simulation/polling.js` into `src/ui/simulation/controller.js` via `reconcileSimulationControllerRemoteJobs(...)`:
+   - remote backend list fetch + UI-job normalization
+   - local/remote merge reconciliation (including lost-active-job error conversion)
+   - active-job/current-job synchronization and persistence
+   - manifest sync delegation with error callback hook
+20. Reduced `polling.js` to a thinner UI timer/stage wrapper that delegates reconciliation and result-cache mutation to controller helpers.
+21. Expanded `tests/simulation-controller.test.js` with remote reconciliation coverage to keep the polling/controller boundary contract stable.
 
 ## Phase 6: Remove Backend Compatibility Glue
 
