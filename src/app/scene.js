@@ -6,18 +6,18 @@ import {
   createOrthoCamera,
   ZebraShader
 } from '../viewer/index.js';
-import { getDisplayMode } from '../ui/settings/modal.js';
 import {
-  loadViewerSettings,
-  applyViewerSettingsToControls,
-  setInvertWheelZoom,
-  getCurrentViewerSettings,
-} from '../ui/settings/viewerSettings.js';
+  readDisplayModeSetting,
+  loadAppViewerSettings,
+  applyAppViewerSettingsToControls,
+  configureWheelZoomInversion,
+  getAppViewerSettings
+} from '../modules/ui/useCases.js';
 import { prepareViewportMesh } from '../modules/geometry/useCases.js';
 
 export function setupScene(app) {
   app.scene = createScene();
-  const viewerSettings = loadViewerSettings();
+  const viewerSettings = loadAppViewerSettings();
   app.cameraMode = viewerSettings.startupCameraMode || 'perspective';
 
   const width = Math.max(1, app.container.clientWidth);
@@ -45,8 +45,8 @@ export function setupScene(app) {
   }
 
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
-  applyViewerSettingsToControls(app.controls, viewerSettings);
-  setInvertWheelZoom(app.renderer.domElement, viewerSettings.invertWheelZoom);
+  applyAppViewerSettingsToControls(app.controls, viewerSettings);
+  configureWheelZoomInversion(app.renderer.domElement, viewerSettings.invertWheelZoom);
   window.addEventListener('resize', () => onResize(app));
   animate(app);
   return true;
@@ -106,7 +106,7 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
     geometry.computeVertexNormals();
   }
 
-  const displayMode = getDisplayMode();
+  const displayMode = readDisplayModeSetting();
   let material;
 
   if (displayMode === 'zebra') {
@@ -221,9 +221,9 @@ export function toggleCamera(app) {
   const oldControls = app.controls;
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
   app.controls.target.copy(target);
-  const vs = getCurrentViewerSettings();
-  applyViewerSettingsToControls(app.controls, vs);
-  setInvertWheelZoom(app.renderer.domElement, vs.invertWheelZoom);
+  const vs = getAppViewerSettings();
+  applyAppViewerSettingsToControls(app.controls, vs);
+  configureWheelZoomInversion(app.renderer.domElement, vs.invertWheelZoom);
   app.controls.update();
   oldControls.dispose();
 }
