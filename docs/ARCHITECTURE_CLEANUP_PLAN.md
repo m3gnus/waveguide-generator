@@ -3,7 +3,7 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 8 (in progress)
+- Current phase: Phase 8 (completed)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
@@ -13,7 +13,6 @@
   - Phase 5 untangle UI state and circular workflow logic
   - Phase 6 remove backend compatibility glue (routes now depend on contracts/services only, solver bootstrap reduced to dependency status, `/api/solve` validation moved into services)
   - Phase 7 eliminate downstream repair logic (queued OCC request construction moved to the submission boundary, source-tag invariants enforced before solve submission, runner rewrites replaced with validation)
-- In progress:
   - Phase 8 delete legacy paths and rename docs to match reality
 
 ## Session Shortcut
@@ -466,7 +465,7 @@ Keep DOM code as an adapter layer, not a second application layer.
 - `node --test tests/ui-module.test.js`
 - any simulation UI regression tests added in this phase
 
-### Implementation Notes (In Progress, March 11, 2026)
+### Implementation Notes (Completed, March 11, 2026)
 
 Completed in this step:
 
@@ -647,6 +646,9 @@ Finish the cleanup by removing dead branches and stale language.
 7. Removed `buildExportMeshFromParams(...)` from `src/modules/export/useCases.js`; callers now use `prepareExportArtifacts(...)` as the only OCC mesh-build entry point.
 8. Deleted the compatibility-only regression coverage for that alias and kept the export pipeline tests on the real API surface.
 9. Removed the unused `parseList` compatibility alias from the geometry package export surface; `parseNumberList(...)` remains the single list parser in `src/geometry/common.js`.
+10. Updated `docs/PROJECT_DOCUMENTATION.md` and `README.md` so the maintained docs now describe the shipped export surfaces, current module boundaries, and actual `/api/mesh/build` and `/api/solve` behavior.
+11. Added a simple architecture overview diagram to `docs/PROJECT_DOCUMENTATION.md` showing the final frontend module boundaries and backend `api -> services -> solver` flow.
+12. Phase 8 exit criteria are satisfied: legacy runtime fallbacks/aliases were removed, documented circular/compat shims are gone from active runtime code, and the maintained docs now describe shipped behavior rather than pre-cleanup plans.
 
 ## Suggested Implementation Order
 

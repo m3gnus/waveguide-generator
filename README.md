@@ -60,7 +60,7 @@ The app opens automatically in your browser at `http://localhost:3000`. Close th
 
 ## Optional: BEM Solver
 
-The setup script now automatically attempts to install `bempp-cl` (a BEM acoustic solver) without a Y/N prompt. This enables the **Start BEM Simulation** feature. It remains optional — all other features (3D preview, mesh export, ABEC export, etc.) work without it.
+The setup script now automatically attempts to install `bempp-cl` (a BEM acoustic solver) without a Y/N prompt. This enables the **Start BEM Simulation** feature. It remains optional — 3D preview plus the local STL/config/profile exports still work without it.
 
 If automatic `gmsh` install fails, setup stops and prints manual retry commands because `/api/mesh/build` requires Python `gmsh`.
 If automatic `bempp-cl` install fails, setup continues and prints a manual retry command.
@@ -122,7 +122,7 @@ Windows/Linux note:
 - Real-time 3D rendering (standard, zebra, wireframe, curvature)
 - BEM simulation workflow with backend job submission and result plotting
 - Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
-- Export: STL, GEO, MSH, ABEC project ZIP, CSV profiles, MWG config text
+- Export: STL, CSV profiles, MWG config text, simulation mesh download, and VACS-style result text
 
 ## Project layout
 
