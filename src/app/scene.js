@@ -15,7 +15,7 @@ import {
   getCurrentViewerSettings,
 } from '../ui/settings/viewerSettings.js';
 import { GlobalState } from '../state.js';
-import { ParamModule } from '../modules/param/index.js';
+import { DesignModule } from '../modules/design/index.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -83,12 +83,12 @@ export function renderModel(app) {
     app.hornMesh.material.dispose();
   }
 
-  const paramTask = ParamModule.task(
-    ParamModule.importState(GlobalState.get(), {
+  const designTask = DesignModule.task(
+    DesignModule.importState(GlobalState.get(), {
       applyVerticalOffset: true
     })
   );
-  const preparedParams = ParamModule.output.params(paramTask);
+  const preparedParams = DesignModule.output.preparedParams(designTask);
 
   // Viewport always uses the formula-based mesh — evaluates profile math
   // directly at every grid point. Export and simulation flows use a

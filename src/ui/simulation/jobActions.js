@@ -1,7 +1,7 @@
 import { showError, showMessage } from '../feedback.js';
 import { GlobalState } from '../../state.js';
 import { SimulationModule } from '../../modules/simulation/index.js';
-import { ParamModule } from '../../modules/param/index.js';
+import { DesignModule } from '../../modules/design/index.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
@@ -482,12 +482,12 @@ export async function runSimulation(panel) {
       throw new Error('Mesh payload is invalid: missing canonical surface tags.');
     }
     const state = GlobalState.get();
-    const paramTask = ParamModule.task(
-      ParamModule.importState(state, {
+    const designTask = DesignModule.task(
+      DesignModule.importState(state, {
         applyVerticalOffset: true
       })
     );
-    const preparedParams = ParamModule.output.params(paramTask);
+    const preparedParams = DesignModule.output.simulationParams(designTask);
     const simulationInput = SimulationModule.importPrepared(preparedParams);
     const { waveguidePayload, submitOptions } = SimulationModule.output.occAdaptive(simulationInput, {
       mshVersion: '2.2',

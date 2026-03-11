@@ -25,6 +25,8 @@ Primary entry points:
   - App orchestration, event wiring, scene lifecycle, export orchestration
 - `src/geometry/`
   - Formula evaluation, mesh topology generation, tag assignment, canonical payload assembly
+- `src/modules/`
+  - Staged facades for design prep, geometry, export, simulation, and UI coordination
 - `src/export/`
   - `.geo` builder, ABEC file generators, bundle validator, STL/CSV helpers
 - `src/solver/`
@@ -65,13 +67,13 @@ Primary entry points:
 
 1. UI parameter updates mutate `GlobalState`.
 2. `App` schedules render.
-3. `src/app/scene.js` calls `buildGeometryArtifacts(...)`.
+3. `src/app/scene.js` resolves prepared design inputs via `DesignModule`, then builds mesh artifacts via `GeometryModule`.
 4. Returned mesh is rendered in Three.js.
 
 ### 3.2 Simulation flow
 
 1. Simulation UI emits `simulation:mesh-requested`.
-2. `src/app/mesh.js` builds canonical payload through `buildGeometryArtifacts(...)` and emits `simulation:mesh-ready`.
+2. `src/app/mesh.js` resolves prepared design inputs via `DesignModule`, builds canonical payload via `SimulationModule`, and emits `simulation:mesh-ready`.
    - For `/api/solve`, frontend forces `quadrants='1234'` so backend symmetry detection/reduction is the source of truth.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
