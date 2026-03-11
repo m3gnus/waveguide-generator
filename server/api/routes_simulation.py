@@ -2,10 +2,8 @@
 Simulation lifecycle routes: submit, status, results, jobs list, cancel, delete.
 """
 
-import asyncio
 import logging
-import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -27,23 +25,19 @@ from services.solver_runtime import (
     build_waveguide_mesh,
     get_dependency_status,
 )
-import services.job_runtime as _jrt
 from services.job_runtime import (
-    _build_config_summary,
-    _drain_scheduler_queue,
-    _merge_job_cache_from_db,
-    _now_iso,
-    _parse_status_filters,
-    _remove_from_queue,
-    _serialize_job_item,
-    _set_job_fields,
-    ensure_db_ready,
-    job_queue,
-    jobs,
-    jobs_lock,
-    running_jobs,
+    JobRuntimeConflictError,
+    JobRuntimeNotFoundError,
+    JobRuntimeResourceUnavailableError,
+    clear_failed_job_records,
+    create_simulation_job,
+    delete_job_record,
+    get_job,
+    get_job_mesh_artifact,
+    get_job_results,
+    list_job_items,
+    request_stop_job,
 )
-from services.simulation_runner import CANCELLATION_REQUESTED_MESSAGE, SIMULATION_CANCELLED_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +52,6 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     request_to_submit = build_submit_simulation_request(request, validation)
-
-    options = request_to_submit.options if isinstance(request_to_submit.options, dict) else {}
-    mesh_opts = (
-        options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
-    )
-    mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
 
     if validation.mesh_strategy == "occ_adaptive":
         if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None:
@@ -107,61 +95,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
             ),
         )
 
-    ensure_db_ready()
-    job_id = str(uuid.uuid4())
-    now = _now_iso()
-    request_dump = request_to_submit.model_dump()
-    config_summary = _build_config_summary(request_to_submit)
-
-    job_record: Dict[str, Any] = {
-        "id": job_id,
-        "status": "queued",
-        "progress": 0.0,
-        "stage": "queued",
-        "stage_message": "Job queued",
-        "created_at": now,
-        "updated_at": now,
-        "queued_at": now,
-        "started_at": None,
-        "completed_at": None,
-        "error": None,
-        "error_message": None,
-        "request": request_dump,
-        "request_obj": request_to_submit,
-        "results": None,
-        "mesh_artifact": None,
-        "cancellation_requested": False,
-        "config_summary": config_summary,
-        "has_results": False,
-        "has_mesh_artifact": False,
-        "label": None,
-    }
-
-    _jrt.db.create_job(
-        {
-            "id": job_id,
-            "status": "queued",
-            "created_at": now,
-            "updated_at": now,
-            "queued_at": now,
-            "progress": 0.0,
-            "stage": "queued",
-            "stage_message": "Job queued",
-            "error_message": None,
-            "cancellation_requested": False,
-            "config_json": request_dump,
-            "config_summary_json": config_summary,
-            "has_results": False,
-            "has_mesh_artifact": False,
-            "label": None,
-        }
-    )
-
-    with jobs_lock:
-        jobs[job_id] = job_record
-        job_queue.append(job_id)
-
-    asyncio.create_task(_drain_scheduler_queue())
+    job_id = create_simulation_job(request_to_submit)
 
     return {"job_id": job_id}
 
@@ -169,50 +103,24 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
 @router.post("/api/stop/{job_id}")
 async def stop_simulation(job_id: str) -> Dict[str, str]:
     """Stop a running simulation job."""
-    job = _merge_job_cache_from_db(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if job["status"] not in ["queued", "running"]:
+    try:
+        return request_stop_job(job_id)
+    except JobRuntimeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JobRuntimeConflictError as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot stop job with status: {job['status']}",
-        )
-
-    if job["status"] == "queued":
-        _remove_from_queue(job_id)
-        _set_job_fields(
-            job_id,
-            status="cancelled",
-            progress=0.0,
-            stage="cancelled",
-            stage_message="Simulation cancelled",
-            error_message=SIMULATION_CANCELLED_MESSAGE,
-            completed_at=_now_iso(),
-            cancellation_requested=False,
-        )
-        response_status = "cancelled"
-        response_message = f"Job {job_id} has been cancelled"
-    else:
-        _set_job_fields(
-            job_id,
-            stage="cancelling",
-            stage_message=CANCELLATION_REQUESTED_MESSAGE,
-            cancellation_requested=True,
-        )
-        response_status = "cancelling"
-        response_message = f"Cancellation requested for job {job_id}"
-
-    asyncio.create_task(_drain_scheduler_queue())
-    return {"message": response_message, "status": response_status}
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/api/status/{job_id}")
 async def get_job_status(job_id: str) -> JobStatus:
     """Get the status of a simulation job."""
-    job = _merge_job_cache_from_db(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        job = get_job(job_id)
+    except JobRuntimeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
 
     return JobStatus(
         status=job["status"],
@@ -226,41 +134,25 @@ async def get_job_status(job_id: str) -> JobStatus:
 @router.get("/api/results/{job_id}")
 async def get_results(job_id: str) -> Dict[str, Any]:
     """Retrieve simulation results."""
-    job = _merge_job_cache_from_db(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if job["status"] != "complete":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job not complete. Current status: {job['status']}",
-        )
-
-    cached_results = job.get("results")
-    if isinstance(cached_results, dict):
-        return cached_results
-
-    stored = _jrt.db.get_results(job_id)
-    if stored is None:
-        raise HTTPException(status_code=404, detail="Results not available")
-    _set_job_fields(job_id, results=stored)
-    return stored
+    try:
+        return get_job_results(job_id)
+    except JobRuntimeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JobRuntimeConflictError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except JobRuntimeResourceUnavailableError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/api/mesh-artifact/{job_id}")
 async def get_mesh_artifact(job_id: str) -> PlainTextResponse:
     """Download the simulation mesh artifact (.msh text) for a given job."""
-    job = _merge_job_cache_from_db(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    msh_text = job.get("mesh_artifact")
-    if not msh_text:
-        msh_text = _jrt.db.get_mesh_artifact(job_id)
-        if msh_text:
-            _set_job_fields(job_id, mesh_artifact=msh_text, has_mesh_artifact=True)
-    if not msh_text:
-        raise HTTPException(status_code=404, detail="No mesh artifact available for this job")
+    try:
+        msh_text = get_job_mesh_artifact(job_id)
+    except JobRuntimeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JobRuntimeResourceUnavailableError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return PlainTextResponse(content=msh_text, media_type="text/plain")
 
@@ -271,27 +163,13 @@ async def list_jobs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> Dict[str, Any]:
-    ensure_db_ready()
-    statuses = _parse_status_filters(status)
-    rows, total = _jrt.db.list_jobs(statuses=statuses, limit=limit, offset=offset)
-    items: List[Dict[str, Any]] = []
-    for row in rows:
-        merged = _merge_job_cache_from_db(row["id"]) or row
-        items.append(_serialize_job_item(merged))
-
+    items, total = list_job_items(status=status, limit=limit, offset=offset)
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.delete("/api/jobs/clear-failed")
 async def clear_failed_jobs() -> Dict[str, Any]:
-    ensure_db_ready()
-    deleted_ids = _jrt.db.delete_jobs_by_status(["error"])
-    with jobs_lock:
-        for job_id in deleted_ids:
-            jobs.pop(job_id, None)
-            running_jobs.discard(job_id)
-    for job_id in deleted_ids:
-        _remove_from_queue(job_id)
+    deleted_ids = clear_failed_job_records()
     return {
         "deleted": len(deleted_ids) > 0,
         "deleted_count": len(deleted_ids),
@@ -301,19 +179,10 @@ async def clear_failed_jobs() -> Dict[str, Any]:
 
 @router.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str) -> Dict[str, Any]:
-    ensure_db_ready()
-    job = _merge_job_cache_from_db(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("status") in {"queued", "running"}:
-        raise HTTPException(status_code=409, detail="Cannot delete active job")
-
-    deleted = _jrt.db.delete_job(job_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    with jobs_lock:
-        jobs.pop(job_id, None)
-        running_jobs.discard(job_id)
-    _remove_from_queue(job_id)
+    try:
+        delete_job_record(job_id)
+    except JobRuntimeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JobRuntimeConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"deleted": True, "job_id": job_id}

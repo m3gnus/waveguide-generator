@@ -78,6 +78,51 @@ class ImportBoundaryTest(unittest.TestCase):
             + '; '.join(violations),
         )
 
+    def test_simulation_routes_only_import_public_job_runtime_names(self):
+        route_file = SERVER_ROOT / 'api' / 'routes_simulation.py'
+        violations = []
+        allowed_names = {
+            'JobRuntimeConflictError',
+            'JobRuntimeNotFoundError',
+            'JobRuntimeResourceUnavailableError',
+            'clear_failed_job_records',
+            'create_simulation_job',
+            'delete_job_record',
+            'get_job',
+            'get_job_mesh_artifact',
+            'get_job_results',
+            'list_job_items',
+            'request_stop_job',
+        }
+
+        tree = ast.parse(route_file.read_text(encoding='utf-8'), filename=str(route_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == 'services.job_runtime':
+                        violations.append('routes_simulation.py must not import services.job_runtime as a module')
+            elif isinstance(node, ast.ImportFrom) and node.module == 'services.job_runtime':
+                names = {alias.name for alias in node.names}
+                private = sorted(name for name in names if name.startswith('_'))
+                if private:
+                    violations.append(
+                        'routes_simulation.py imports private job_runtime names: '
+                        + ', '.join(private)
+                    )
+                extra = sorted(names - allowed_names)
+                if extra:
+                    violations.append(
+                        'routes_simulation.py imports unsupported job_runtime names: '
+                        + ', '.join(extra)
+                    )
+
+        self.assertEqual(
+            violations,
+            [],
+            'Simulation routes must use the public job_runtime service surface only: '
+            + '; '.join(violations),
+        )
+
     def test_app_module_only_imports_assembly_dependencies(self):
         app_file = SERVER_ROOT / 'app.py'
         violations = []
