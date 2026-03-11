@@ -11,7 +11,6 @@
  */
 
 import { UiModule } from '../../modules/ui/index.js';
-import { createSimulationClient } from '../../modules/simulation/useCases.js';
 import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
@@ -20,19 +19,10 @@ import { setupSimulationParamBindings, syncSimulationSettings } from './settings
 import { checkSolverConnection } from './connection.js';
 import { runSimulation, pollSimulationStatus, runMockSimulation, renderJobList } from './actions.js';
 import {
-  buildTaskIndexEntriesFromJobs,
-  loadTaskIndex,
-  rebuildIndexFromManifests,
-  writeTaskIndex
-} from '../workspace/taskIndex.js';
-import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
-import {
-  createJobTracker,
-  loadLocalIndex,
-  mergeJobs,
-  setJobsFromEntries,
-  persistPanelJobs
-} from './jobTracker.js';
+  createSimulationControllerStore,
+  bindSimulationControllerState,
+  restoreSimulationControllerJobs
+} from './controller.js';
 import { displayResults } from './results.js';
 import {
   exportResults,
@@ -52,32 +42,10 @@ import { openViewResultsModal } from './viewResults.js';
 
 export class SimulationPanel {
   constructor() {
-    this.solver = createSimulationClient();
-    this.currentJobId = null; // Backward-compatible alias for activeJobId
-    this.pollInterval = null; // Backward-compatible alias for pollTimer
-    this.connectionPollTimer = null;
-    this.lastResults = null;
-    /** @type {Map<string, any>} */
-    this.jobs = new Map();
-    /** @type {Map<string, any>} */
-    this.resultCache = new Map();
-    this.activeJobId = null;
-    this.pollTimer = null;
-    this.pollDelayMs = 1000;
-    this.pollBackoffMs = 1000;
-    this.consecutivePollFailures = 0;
-    this.isPolling = false;
-    this.stageStatusActive = false;
-    this.completedStatusMessage = null;
-    this.simulationStartedAtMs = null;
-    this.lastSimulationDurationMs = null;
-    this.currentSmoothing = 'none';
-    /** @type {SimulationBinding[]} */
-    this.simulationParamBindings = [
-      { id: 'freq-start', key: 'freqStart', parse: (value) => parseFloat(value) },
-      { id: 'freq-end', key: 'freqEnd', parse: (value) => parseFloat(value) },
-      { id: 'freq-steps', key: 'numFreqs', parse: (value) => parseInt(value, 10) }
-    ];
+    this.controller = createSimulationControllerStore();
+    // Keep existing panel field access for UI modules while moving state ownership
+    // into a dedicated simulation controller/store.
+    bindSimulationControllerState(this, this.controller);
     this.uiCoordinator = UiModule.output.simulationPanel(
       UiModule.task(UiModule.importSimulationPanel(this))
     );
@@ -92,55 +60,17 @@ export class SimulationPanel {
   }
 
   async restoreJobs() {
-    const tracker = createJobTracker();
-    this.jobs = tracker.jobs;
-    this.resultCache = tracker.resultCache;
-    this.activeJobId = tracker.activeJobId;
-    this.pollTimer = tracker.pollTimer;
-    this.pollDelayMs = tracker.pollDelayMs;
-    this.pollBackoffMs = tracker.pollBackoffMs;
-    this.consecutivePollFailures = Number(tracker.consecutivePollFailures) || 0;
-    this.isPolling = tracker.isPolling;
-
-    const local = loadLocalIndex();
-    let seedItems = local;
-
-    const folderHandle = getSelectedFolderHandle();
-    if (folderHandle) {
-      const indexResult = await loadTaskIndex(folderHandle);
-      if (indexResult.items.length > 0) {
-        seedItems = mergeJobs(local, indexResult.items);
-      } else {
-        const rebuilt = await rebuildIndexFromManifests(folderHandle);
-        if (rebuilt.items.length > 0) {
-          seedItems = mergeJobs(local, rebuilt.items);
-          await writeTaskIndex(folderHandle, rebuilt.items);
-        }
-        if (indexResult.warning || rebuilt.warnings.length > 0) {
-          showMessage('Recovered folder task history from manifests.', { type: 'warning', duration: 2800 });
-        }
-      }
-    }
-
-    setJobsFromEntries(this, seedItems);
-    renderJobList(this);
-
-    try {
-      const remote = await this.solver.listJobs({ limit: 200, offset: 0 });
-      const merged = mergeJobs(seedItems, remote.items || []);
-      setJobsFromEntries(this, merged);
-      persistPanelJobs(this);
-      if (folderHandle) {
-        await writeTaskIndex(folderHandle, buildTaskIndexEntriesFromJobs(merged));
-      }
-      renderJobList(this);
-      if (this.activeJobId || merged.some((job) => job.status === 'queued' || job.status === 'running')) {
+    return restoreSimulationControllerJobs(this.controller, {
+      onJobsUpdated: () => {
+        renderJobList(this);
+      },
+      onStartPolling: () => {
         this.pollSimulationStatus();
+      },
+      onRecoverFromManifests: () => {
+        showMessage('Recovered folder task history from manifests.', { type: 'warning', duration: 2800 });
       }
-    } catch (_error) {
-      persistPanelJobs(this);
-      renderJobList(this);
-    }
+    });
   }
 
   setupEventListeners() {

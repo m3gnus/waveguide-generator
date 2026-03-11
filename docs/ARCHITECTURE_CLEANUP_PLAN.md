@@ -466,6 +466,14 @@ Completed in this step:
    - `jobActions.js` now imports orchestration helpers from `jobOrchestration.js`.
    - `polling.js` now reuses/re-exports orchestration helpers from `jobOrchestration.js`.
 3. Kept existing external APIs stable by preserving `polling.js` helper exports for existing callers/tests.
+4. Split `SimulationPanel` into a UI adapter backed by a dedicated controller/store module (`src/ui/simulation/controller.js`):
+   - state initialization is now owned by `createSimulationControllerStore(...)`
+   - `SimulationPanel` binds existing panel fields to controller state through explicit property delegation
+5. Moved simulation job-restore orchestration out of `SimulationPanel` into `restoreSimulationControllerJobs(...)` so the panel remains focused on UI adapter concerns.
+6. Added controller-level regression coverage in `tests/simulation-controller.test.js` for:
+   - controller store defaults
+   - adapter/controller state binding
+   - restore flow behavior and polling trigger semantics
 
 ## Phase 6: Remove Backend Compatibility Glue
 
