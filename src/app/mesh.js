@@ -1,4 +1,3 @@
-import { AppEvents } from '../events.js';
 import { SimulationModule } from '../modules/simulation/index.js';
 
 export function provideMeshForSimulation(app) {
@@ -26,12 +25,10 @@ export function provideMeshForSimulation(app) {
       `[Simulation] Mesh validated: ${vertexCount} vertices, ${triangleCount} triangles`
     );
 
-    AppEvents.emit('simulation:mesh-ready', payload);
-    return payload;
+    return app.publishSimulationMesh(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[Simulation] Mesh generation failed:', message);
-    AppEvents.emit('simulation:mesh-error', { message });
-    return null;
+    return app.publishSimulationMeshError(message);
   }
 }
