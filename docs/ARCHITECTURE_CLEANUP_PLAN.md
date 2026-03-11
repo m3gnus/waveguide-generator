@@ -415,6 +415,8 @@ Completed in this step:
 5. Added `src/modules/ui/useCases.js` as the app-facing settings/workspace boundary for UI settings operations.
 6. Refactored `src/app/App.js`, `src/app/events.js`, and `src/app/scene.js` to consume settings/workspace operations through `src/modules/ui/useCases.js` instead of importing `src/ui/settings/*` and `src/ui/workspace/*` directly.
 7. Tightened `tests/architecture-boundaries.test.js` by removing now-resolved `src/app -> src/ui/settings|workspace` legacy exception edges.
+8. Added `createAppParamPanel(...)` and `loadSimulationPanelModule(...)` use cases to `src/modules/ui/useCases.js` so app assembly no longer imports `src/ui/paramPanel.js` or `src/ui/simulationPanel.js` directly.
+9. Refactored `src/app/App.js` to consume those new UI module use cases and removed the corresponding legacy app-to-ui exceptions from `tests/architecture-boundaries.test.js`.
 
 ## Phase 5: Untangle UI State And Circular Workflow Logic
 
