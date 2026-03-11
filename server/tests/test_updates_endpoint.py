@@ -4,7 +4,8 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app import check_updates, get_update_status
+from api.routes_misc import check_updates
+from services.update_service import get_update_status
 
 
 class UpdatesEndpointTest(unittest.TestCase):
