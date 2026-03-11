@@ -1,8 +1,9 @@
 import { GlobalState } from '../state.js';
-import { isNumericString } from '../geometry/index.js';
 import { DesignModule } from '../modules/design/index.js';
 
-export { isNumericString };
+export function isNumericString(value) {
+  return /^-?\d*\.?\d+(e[+-]?\d+)?$/i.test(String(value).trim());
+}
 
 export function prepareParamsForMesh(options = {}) {
   const designTask = DesignModule.task(DesignModule.importState(GlobalState.get(), options));

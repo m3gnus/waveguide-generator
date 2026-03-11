@@ -53,3 +53,7 @@ export function prepareOccAdaptiveSolveRequest(options = {}) {
 
   return { waveguidePayload, submitOptions, preparedParams, stateSnapshot: JSON.parse(JSON.stringify(state)) };
 }
+
+export function createSimulationClient() {
+  return SimulationModule.output.client();
+}

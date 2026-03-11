@@ -2,6 +2,7 @@ import { DesignModule, prepareOccSimulationParams } from '../design/index.js';
 import {
   buildCanonicalMeshPayloadFromShape
 } from '../../geometry/pipeline.js';
+import { BemSolver } from '../../solver/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { GeometryModule } from '../geometry/index.js';
 
@@ -115,6 +116,10 @@ export function buildOccAdaptiveSimulationOutput(input, options = {}) {
   });
 }
 
+export function createSimulationClient() {
+  return new BemSolver();
+}
+
 export const SimulationModule = Object.freeze({
   id: SIMULATION_MODULE_ID,
   import: importSimulationInput,
@@ -122,6 +127,7 @@ export const SimulationModule = Object.freeze({
   importDesign: importDesignSimulationInput,
   task: runSimulationTask,
   output: Object.freeze({
+    client: createSimulationClient,
     mesh: getSimulationMeshOutput,
     occAdaptive: buildOccAdaptiveSimulationOutput
   })
