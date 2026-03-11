@@ -1,5 +1,5 @@
 ---
-name: "architecture-cleanup-next"
+name: "backlog-next"
 description: "Continue docs/backlog.md by running one unfinished backlog slice after another, grounding on the latest git commits, and orchestrating fresh Codex 5.3 subagents with reasoning scaled to each slice"
 metadata:
   short-description: "Run backlog slices in sequence"
@@ -7,11 +7,11 @@ metadata:
 
 <codex_skill_adapter>
 Codex skills-first mode:
-- This skill is invoked by mentioning `$architecture-cleanup-next`.
-- Treat all user text after `$architecture-cleanup-next` as optional constraints.
+- This skill is invoked by mentioning `$backlog-next`.
+- Treat all user text after `$backlog-next` as optional constraints.
 
 Execution helper:
-- Run `node ./.codex/skills/architecture-cleanup-next/scripts/next-architecture-cleanup-status.mjs --json` from repo root first.
+- Run `node ./.codex/skills/backlog-next/scripts/next-backlog-status.mjs --json` from repo root first.
 - Use that output as the source of truth for the current backlog priority, recent commits, and the active backlog task list.
 </codex_skill_adapter>
 
