@@ -60,6 +60,24 @@ class ImportBoundaryTest(unittest.TestCase):
             'server/api must not import app.py: ' + ', '.join(violations),
         )
 
+    def test_api_package_depends_on_contracts_and_services_only_for_backend_logic(self):
+        violations = []
+        blocked_roots = {'solver', 'solver_bootstrap'}
+
+        for api_file in self._iter_py_files('api'):
+            roots = self._import_roots(api_file)
+            bad = sorted(root for root in blocked_roots if root in roots)
+            if bad:
+                rel = api_file.relative_to(SERVER_ROOT)
+                violations.append(f"{rel} imports {', '.join(bad)}")
+
+        self.assertEqual(
+            violations,
+            [],
+            'server/api must depend on contracts/services instead of solver glue: '
+            + '; '.join(violations),
+        )
+
     def test_app_module_only_imports_assembly_dependencies(self):
         app_file = SERVER_ROOT / 'app.py'
         violations = []

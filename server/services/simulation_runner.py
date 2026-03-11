@@ -7,7 +7,8 @@ import logging
 from typing import Any, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
-from solver_bootstrap import (
+from services.simulation_validation import validate_occ_adaptive_bem_shell
+from services.solver_runtime import (
     BEMSolver,
     WAVEGUIDE_BUILDER_AVAILABLE,
     GMSH_OCC_RUNTIME_READY,
@@ -25,15 +26,6 @@ from services.job_runtime import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _validate_occ_adaptive_bem_shell(enc_depth: float, wall_thickness: float) -> None:
-    """Adaptive BEM requires either enclosure volume or wall shell thickness."""
-    if float(enc_depth) <= 0.0 and float(wall_thickness) <= 0.0:
-        raise ValueError(
-            "Adaptive BEM simulation requires a closed shell. "
-            "Increase enclosure depth or wall thickness."
-        )
 
 
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
@@ -93,7 +85,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 job_id, "mesh_prepare", progress=0.15, stage_message="Building adaptive OCC mesh"
             )
             validated = WaveguideParamsRequest(**waveguide_params)
-            _validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
+            validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
             requested_quadrants = int(validated_payload.get("quadrants", 1234))
             # Ensure OCC adaptive simulation mesh is always full domain.
