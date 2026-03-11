@@ -417,6 +417,9 @@ Completed in this step:
 7. Tightened `tests/architecture-boundaries.test.js` by removing now-resolved `src/app -> src/ui/settings|workspace` legacy exception edges.
 8. Added `createAppParamPanel(...)` and `loadSimulationPanelModule(...)` use cases to `src/modules/ui/useCases.js` so app assembly no longer imports `src/ui/paramPanel.js` or `src/ui/simulationPanel.js` directly.
 9. Refactored `src/app/App.js` to consume those new UI module use cases and removed the corresponding legacy app-to-ui exceptions from `tests/architecture-boundaries.test.js`.
+10. Added app-facing wrappers in `src/modules/ui/useCases.js` for feedback and file-ops interactions used by app assembly flows.
+11. Refactored `src/app/configImport.js`, `src/app/events.js`, and `src/app/updates.js` to consume those wrappers instead of importing `src/ui/feedback.js` and `src/ui/fileOps.js` directly.
+12. Tightened `tests/architecture-boundaries.test.js` by removing now-resolved legacy exceptions for app-level feedback/file-ops imports.
 
 ## Phase 5: Untangle UI State And Circular Workflow Logic
 
