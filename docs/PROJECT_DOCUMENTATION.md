@@ -28,7 +28,7 @@ Primary entry points:
 ### 2.1 Frontend
 
 - `src/app/`
-  - App orchestration, event wiring, scene lifecycle, export orchestration
+  - App orchestration, event wiring, scene lifecycle
 - `src/geometry/`
   - Formula evaluation, mesh topology generation, tag assignment, canonical payload assembly
 - `src/modules/`
@@ -132,7 +132,7 @@ Important behavior:
 ### 4.2 OCC parameter-to-`.msh` pipeline (`/api/mesh/build`)
 
 Frontend call path:
-- `src/app/exports.js` -> `buildExportMeshFromParams(...)`
+- `src/modules/export/useCases.js` -> `prepareExportArtifacts(...)`
 
 Backend implementation:
 - `server/app.py` route `POST /api/mesh/build`
@@ -194,7 +194,7 @@ ABEC export was removed in Feb 2026. The BEM solver is now fully backend-driven 
 
 ### 5.2 CSV profile/slice export
 
-`exportProfileCSV` in `src/app/exports.js` reads the viewport horn mesh and writes two CSV files via `src/export/profiles.js`:
+`exportProfileCSV` in `src/modules/export/useCases.js` reads the viewport horn mesh and writes two CSV files via `src/export/profiles.js`:
 
 - **`_profiles.csv`**: For each angular position (fixed phi), lists all points from throat to mouth along the horn axis. Sections separated by blank lines.
 - **`_slices.csv`**: For each axial position (fixed z), lists all points around the circumference (closing back to phi=0). Sections separated by blank lines.
@@ -391,7 +391,7 @@ If OpenCL is unavailable the backend falls back to `numba`; fallback reason is s
 - Simulation mesh provider: `src/app/mesh.js`
 - Geometry artifacts/payload: `src/geometry/pipeline.js`
 - Surface tag rules: `src/geometry/tags.js`
-- Export orchestration: `src/app/exports.js`
+- Export use cases: `src/modules/export/useCases.js`
 - Polar UI/helpers: `src/ui/simulation/polarSettings.js`
 - FastAPI app wiring: `server/app.py`
 - Simulation routes: `server/api/routes_simulation.py`

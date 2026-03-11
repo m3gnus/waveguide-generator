@@ -404,6 +404,15 @@ Turn `src/modules/*` into real application modules instead of pass-through wrapp
 - `node --test tests/export-module.test.js`
 - `npm test`
 
+### Implementation Notes (In Progress, March 11, 2026)
+
+Completed in this step:
+
+1. Added explicit export use case `prepareExportArtifacts(...)` in `src/modules/export/useCases.js` as the Phase 4 export-artifact workflow boundary.
+2. Kept `buildExportMeshFromParams(...)` as a thin compatibility alias to avoid breaking existing callers/tests during Phase 4 migration.
+3. Updated export pipeline tests to validate `prepareExportArtifacts(...)` as the primary OCC export use case.
+4. Updated project documentation references from removed `src/app/exports.js` paths to current module use-case paths.
+
 ## Phase 5: Untangle UI State And Circular Workflow Logic
 
 ### Objective
