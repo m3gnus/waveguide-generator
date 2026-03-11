@@ -11,7 +11,7 @@ import {
 } from '../../geometry/pipeline.js';
 import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
 import { GeometryModule } from '../geometry/index.js';
-import { prepareOccExportParams } from '../design/index.js';
+import { prepareOccExportParams, prepareProfileCsvParams } from '../design/index.js';
 
 const EXPORT_MODULE_ID = 'export';
 const EXPORT_IMPORT_STAGE = 'import';
@@ -61,12 +61,6 @@ function assertExportTaskEnvelope(result, expectedKind = null) {
   if (expectedKind && result.kind !== expectedKind) {
     throw new Error(`Export module output expected "${expectedKind}" result but received "${result.kind}".`);
   }
-}
-
-function getMeshRingCount(rawAngularSegments) {
-  const count = Math.max(4, Math.round(Number(rawAngularSegments) || 0));
-  if (count % 4 === 0) return count;
-  return Math.max(8, Math.ceil(count / 8) * 8);
 }
 
 async function checkBackendReachable(backendUrl) {
@@ -225,9 +219,11 @@ function runStlExportTask(input) {
 function runProfileCsvExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.PROFILE_CSV);
 
-  const ringCount = getMeshRingCount(input.angularSegments);
-  const lengthSteps = Math.max(1, Math.round(Number(input.lengthSegments) || 40));
-  const meshParams = { angularSegments: ringCount, lengthSegments: lengthSteps };
+  const csvParams = prepareProfileCsvParams(input.params);
+  const meshParams = {
+    angularSegments: csvParams.angularSegments,
+    lengthSegments: csvParams.lengthSegments
+  };
 
   return Object.freeze({
     module: EXPORT_MODULE_ID,
@@ -292,16 +288,10 @@ export function importStlExport(preparedParams, { baseName = 'waveguide', modelN
   });
 }
 
-export function importProfileCsvExport({
-  vertices,
-  angularSegments,
-  lengthSegments,
-  baseName = 'waveguide'
-}) {
+export function importProfileCsvExport(preparedParams, { vertices, baseName = 'waveguide' } = {}) {
   return createExportImportEnvelope(EXPORT_KINDS.PROFILE_CSV, {
+    params: preparedParams,
     vertices,
-    angularSegments,
-    lengthSegments,
     baseName
   });
 }

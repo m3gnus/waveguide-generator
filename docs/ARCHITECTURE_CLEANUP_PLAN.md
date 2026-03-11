@@ -3,12 +3,13 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 2 (in progress)
+- Current phase: Phase 3 (in progress)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
-- In progress:
   - Phase 2 input normalization consolidation (DesignModule now owns OCC simulation/export normalization helpers consumed by module use cases)
+- In progress:
+  - Phase 3 make geometry the source of truth (put geometry topology, face identity, and solver-tag mapping in one place)
 
 ## Goal
 
@@ -306,7 +307,7 @@ Definition for "Phase 2 complete":
 2. Existing behavior covered by `tests/waveguide-payload.test.js`, `tests/export-module.test.js`, and `tests/app-mesh-integration.test.js` is preserved or intentionally updated with matching doc changes.
 3. `docs/PROJECT_DOCUMENTATION.md` and `docs/CANONICAL_CONTRACT.md` are updated in the same change set if normalization behavior shifts.
 
-### Implementation Notes (Started March 11, 2026)
+### Implementation Notes (Completed March 11, 2026)
 
 Completed in this step:
 

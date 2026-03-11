@@ -101,17 +101,13 @@ test('ExportModule file tasks return save descriptors for STL, CSV, and config',
   assert.equal(new DataView(stlFiles[0].content).getUint32(80, true) > 0, true);
 
   const csvTask = ExportModule.task(
-    ExportModule.importProfileCsv({
-      vertices: new Float32Array([
-        0, 0, 0,
-        1, 0, 0,
-        0, 1, 0,
-        1, 1, 0
-      ]),
-      angularSegments: 4,
-      lengthSegments: 1,
-      baseName: 'demo'
-    })
+    ExportModule.importProfileCsv(
+      { angularSegments: 4, lengthSegments: 1 },
+      {
+        vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]),
+        baseName: 'demo'
+      }
+    )
   );
   const csvFiles = ExportModule.output.files(csvTask);
   assert.deepEqual(
