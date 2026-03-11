@@ -28,9 +28,9 @@ Canonical identity vocabulary to preserve during cleanup:
   - `enc_rear`
   - `enc_edge`
 
-Phase 0 runtime status:
-- Only `throat_disc` is explicitly separated in JS runtime (`meshData.groups.source` -> source-tagged triangles).
-- All other triangles are aggregated into a single wall class and are not split into explicit face identities yet.
+Phase 3 runtime status:
+- All triangles are emitted from the JS geometry engine into explicit subsets (`inner_wall`, `outer_wall`, `mouth_rim`, `rear_cap`, `horn_wall`, `throat_disc`, `enc_front`, `enc_side`, `enc_rear`, `enc_edge`).
+- `src/geometry/tags.js` provides deterministic mapping from these identities to mesh sizing classes and solver boundary classes.
 
 ### 1.2 Mesh sizing classes
 
@@ -42,9 +42,9 @@ Mesh sizing classes are meshing semantics only (not solver BC semantics):
 - `enclosure_rear`
 - `enclosure_edge`
 
-Phase 0 runtime status:
+Phase 3 runtime status:
+- JS runtime maps geometry identities to logical `MESH_SIZING_CLASS` constants internally via `tags.js`.
 - OCC meshing uses numeric resolution fields directly (`throat_res`, `mouth_res`, `rear_res`, `enc_front_resolution`, `enc_back_resolution`).
-- JS runtime does not yet emit explicit mesh sizing class metadata.
 
 ### 1.3 Solver boundary classes
 
@@ -80,14 +80,12 @@ Required invariants:
 - `surfaceTags.length === indices.length / 3`
 - At least one source-tagged triangle (`2`) must exist before solve submission.
 
-## 3. Frontend Payload Decision (Phase 0)
+## 3. Frontend Payload Decision (Phase 3)
 
 Decision:
-- Frontend canonical payload remains numeric-tag-first (`vertices`, `indices`, `surfaceTags`) and does not yet include explicit face identity metadata.
-
-Deferred to later phases:
-- Emitting explicit geometry face identities alongside numeric tags.
-- Explicit identity -> sizing class -> solver class mapping tables in runtime payloads.
+- Frontend canonical payload remains numeric-tag-first (`vertices`, `indices`, `surfaceTags`) for downstream generic simulation pipelines.
+- Face identities are exposed through `meshData.groups` and mapped via `src/geometry/tags.js`.
+- OCC meshing consumes raw prepared parameters only; it does not consume a frontend-generated mesh contract.
 
 ## 4. Authoritative Normalization Spec (Current Runtime)
 

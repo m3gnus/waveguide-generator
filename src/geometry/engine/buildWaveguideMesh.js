@@ -101,6 +101,7 @@ export function buildWaveguideMesh(params, options = {}) {
   const hornEndTri = indices.length / 3;
   if (groupInfo) {
     groupInfo.horn = { start: 0, end: hornEndTri };
+    groupInfo[hasEnclosure ? 'horn_wall' : 'inner_wall'] = { start: 0, end: hornEndTri };
   }
 
   if (hasEnclosure) {
@@ -136,6 +137,7 @@ export function buildWaveguideMesh(params, options = {}) {
 
   if (groupInfo && sourceEndTri > sourceStartTri) {
     groupInfo.source = { start: sourceStartTri, end: sourceEndTri };
+    groupInfo.throat_disc = { start: sourceStartTri, end: sourceEndTri };
   }
 
   const vertexCount = vertices.length / 3;
