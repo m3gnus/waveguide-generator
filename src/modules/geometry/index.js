@@ -1,4 +1,4 @@
-import { buildCanonicalMeshPayload, buildGeometryArtifacts } from '../../geometry/pipeline.js';
+import { buildGeometryMesh } from '../../geometry/pipeline.js';
 import { DesignModule } from '../design/index.js';
 
 const GEOMETRY_MODULE_ID = 'geometry';
@@ -17,6 +17,16 @@ function createGeometryImportEnvelope(params) {
   });
 }
 
+function assertDesignTaskEnvelope(input) {
+  if (
+    !isObject(input) ||
+    input.module !== DesignModule.id ||
+    input.stage !== 'task'
+  ) {
+    throw new Error('Geometry module design import requires a result from DesignModule.task().');
+  }
+}
+
 function assertGeometryImportEnvelope(input) {
   if (
     !isObject(input) ||
@@ -24,7 +34,7 @@ function assertGeometryImportEnvelope(input) {
     input.stage !== GEOMETRY_IMPORT_STAGE ||
     !isObject(input.params)
   ) {
-    throw new Error('Geometry module task requires input from GeometryModule.import() or GeometryModule.importPrepared().');
+    throw new Error('Geometry module task requires input from GeometryModule.import(), GeometryModule.importPrepared(), or GeometryModule.importDesign().');
   }
 }
 
@@ -33,19 +43,25 @@ function assertGeometryTaskEnvelope(result) {
     !isObject(result) ||
     result.module !== GEOMETRY_MODULE_ID ||
     result.stage !== GEOMETRY_TASK_STAGE ||
-    !isObject(result.artifacts)
+    !isObject(result.geometry)
   ) {
     throw new Error('Geometry module output requires a result from GeometryModule.task().');
   }
 }
 
 export function importGeometryInput(rawParams = {}, options = {}) {
-  const designTask = DesignModule.task(DesignModule.import(rawParams, options));
-  return createGeometryImportEnvelope(DesignModule.output.preparedParams(designTask));
+  return importDesignGeometryInput(
+    DesignModule.task(DesignModule.import(rawParams, options))
+  );
 }
 
 export function importPreparedGeometryInput(preparedParams = {}) {
   return createGeometryImportEnvelope(preparedParams);
+}
+
+export function importDesignGeometryInput(designTask) {
+  assertDesignTaskEnvelope(designTask);
+  return createGeometryImportEnvelope(DesignModule.output.preparedParams(designTask));
 }
 
 export function runGeometryTask(input, options = {}) {
@@ -54,42 +70,27 @@ export function runGeometryTask(input, options = {}) {
     module: GEOMETRY_MODULE_ID,
     stage: GEOMETRY_TASK_STAGE,
     input,
-    artifacts: buildGeometryArtifacts(input.params, options)
+    geometry: buildGeometryMesh(input.params, options)
   });
 }
 
-export function getGeometryArtifacts(result) {
+export function getGeometryOutput(result) {
   assertGeometryTaskEnvelope(result);
-  return result.artifacts;
+  return result.geometry;
 }
 
 export function getGeometryMeshOutput(result) {
-  return getGeometryArtifacts(result).mesh;
-}
-
-export function getGeometrySimulationOutput(result) {
-  return getGeometryArtifacts(result).simulation;
-}
-
-export function getGeometryExportOutput(result) {
-  return getGeometryArtifacts(result).export;
-}
-
-export function buildGeometryCanonicalOutput(input, options = {}) {
-  assertGeometryImportEnvelope(input);
-  return buildCanonicalMeshPayload(input.params, options);
+  return getGeometryOutput(result);
 }
 
 export const GeometryModule = Object.freeze({
   id: GEOMETRY_MODULE_ID,
   import: importGeometryInput,
   importPrepared: importPreparedGeometryInput,
+  importDesign: importDesignGeometryInput,
   task: runGeometryTask,
   output: Object.freeze({
-    artifacts: getGeometryArtifacts,
-    mesh: getGeometryMeshOutput,
-    simulation: getGeometrySimulationOutput,
-    export: getGeometryExportOutput,
-    canonical: buildGeometryCanonicalOutput
+    geometry: getGeometryOutput,
+    mesh: getGeometryMeshOutput
   })
 });

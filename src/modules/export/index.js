@@ -5,6 +5,8 @@ import {
   exportSTLBinary
 } from '../../export/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
+import { buildCanonicalMeshPayload } from '../../geometry/pipeline.js';
+import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
 import { GeometryModule } from '../geometry/index.js';
 
 const EXPORT_MODULE_ID = 'export';
@@ -155,6 +157,25 @@ function rotateVerticesForStl(vertices) {
   return rotated;
 }
 
+function buildExportArtifacts(mesh, payload) {
+  const verticalOffset = Number(payload?.metadata?.verticalOffset || 0);
+  return {
+    mesh,
+    export: {
+      verticalOffset,
+      mapVertexToAth,
+      transformVerticesToAth,
+      toAthVertices(vertices = payload.vertices, transformOptions = {}) {
+        return transformVerticesToAth(vertices, {
+          verticalOffset,
+          offsetSign: 1,
+          ...transformOptions
+        });
+      }
+    }
+  };
+}
+
 async function runOccMeshExportTask(input, options = {}) {
   assertExportImportEnvelope(input, EXPORT_KINDS.OCC_MESH);
 
@@ -203,6 +224,11 @@ async function runOccMeshExportTask(input, options = {}) {
   const geometryTask = GeometryModule.task(GeometryModule.importPrepared(gmshParams), {
     includeEnclosure: Number(gmshParams.encDepth || 0) > 0
   });
+  const payload = buildCanonicalMeshPayload(gmshParams, {
+    includeEnclosure: Number(gmshParams.encDepth || 0) > 0,
+    validateIntegrity: false
+  });
+  const mesh = GeometryModule.output.mesh(geometryTask);
 
   return Object.freeze({
     module: EXPORT_MODULE_ID,
@@ -210,8 +236,8 @@ async function runOccMeshExportTask(input, options = {}) {
     kind: EXPORT_KINDS.OCC_MESH,
     input,
     result: {
-      artifacts: GeometryModule.output.artifacts(geometryTask),
-      payload: GeometryModule.output.simulation(geometryTask),
+      artifacts: buildExportArtifacts(mesh, payload),
+      payload,
       msh: response.msh,
       meshStats: response.stats || null
     }
