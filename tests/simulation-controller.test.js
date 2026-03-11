@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import {
   SIMULATION_CONTROLLER_FIELDS,
   createSimulationControllerStore,
+  createSimulationPanelRuntime,
   bindSimulationControllerState,
-  restoreSimulationControllerJobs
+  restoreSimulationControllerJobs,
+  restoreSimulationPanelRuntime,
+  disposeSimulationPanelRuntime
 } from '../src/ui/simulation/controller.js';
 
 test('createSimulationControllerStore initializes expected controller state', () => {
@@ -79,4 +82,93 @@ test('restoreSimulationControllerJobs hydrates job state and signals polling for
   assert.equal(controller.currentJobId, 'job-live-1');
   assert.equal(startPollingCalls, 1);
   assert.equal(jobsUpdatedCalls >= 2, true);
+});
+
+test('createSimulationPanelRuntime binds a controller store and injected ui coordinator', () => {
+  const panelAdapter = {};
+  const solver = { id: 'solver-test' };
+  const fakeUiCoordinator = { bind() {}, dispose() {} };
+
+  const runtime = createSimulationPanelRuntime(panelAdapter, {
+    solver,
+    createUiCoordinator() {
+      return fakeUiCoordinator;
+    }
+  });
+
+  assert.equal(runtime.controller.solver, solver);
+  assert.equal(runtime.uiCoordinator, fakeUiCoordinator);
+  assert.equal(panelAdapter.solver, solver);
+
+  panelAdapter.activeJobId = 'job-runtime-1';
+  assert.equal(runtime.controller.activeJobId, 'job-runtime-1');
+});
+
+test('restoreSimulationPanelRuntime delegates to controller restore using runtime controller', async () => {
+  const panelAdapter = {};
+  const runtime = createSimulationPanelRuntime(panelAdapter, {
+    solver: {
+      async listJobs() {
+        return {
+          items: [
+            {
+              id: 'job-runtime-live',
+              status: 'running',
+              progress: 0.2,
+              created_at: '2026-03-11T09:00:00.000Z'
+            }
+          ]
+        };
+      }
+    },
+    createUiCoordinator() {
+      return { bind() {}, dispose() {} };
+    }
+  });
+
+  let startPollingCalls = 0;
+  await restoreSimulationPanelRuntime(runtime, {
+    onStartPolling: () => {
+      startPollingCalls += 1;
+    }
+  });
+
+  assert.equal(runtime.controller.activeJobId, 'job-runtime-live');
+  assert.equal(startPollingCalls, 1);
+});
+
+test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', () => {
+  const originalClearTimeout = global.clearTimeout;
+  const cleared = [];
+  global.clearTimeout = (timerId) => {
+    cleared.push(timerId);
+  };
+
+  try {
+    const runtime = {
+      controller: {
+        pollTimer: { id: 'poll' },
+        pollInterval: { id: 'interval' },
+        isPolling: true,
+        connectionPollTimer: { id: 'connection' }
+      },
+      uiCoordinator: {
+        disposed: false,
+        dispose() {
+          this.disposed = true;
+        }
+      }
+    };
+
+    disposeSimulationPanelRuntime(runtime);
+
+    assert.deepEqual(cleared, [{ id: 'poll' }, { id: 'connection' }]);
+    assert.equal(runtime.controller.pollTimer, null);
+    assert.equal(runtime.controller.pollInterval, null);
+    assert.equal(runtime.controller.isPolling, false);
+    assert.equal(runtime.controller.connectionPollTimer, null);
+    assert.equal(runtime.uiCoordinator.disposed, true);
+  } finally {
+    global.clearTimeout = originalClearTimeout;
+  }
 });
