@@ -1,5 +1,10 @@
-import { showCommandSuggestion, showError, showMessage, showSuccess } from '../ui/feedback.js';
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
+import {
+  showUiCommandSuggestion,
+  showUiError,
+  showUiMessage,
+  showUiSuccess
+} from '../modules/ui/useCases.js';
 
 function shortCommit(sha) {
   const text = String(sha || '').trim();
@@ -52,29 +57,29 @@ export async function checkForUpdates(buttonEl) {
 
     if (behind > 0) {
       const pullCommand = `git pull --ff-only origin ${branch}`;
-      const copied = await showCommandSuggestion({
+      const copied = await showUiCommandSuggestion({
         title: 'Update Available',
         subtitle: `${behind} commit(s) behind origin/${branch} (${localSha} -> ${remoteSha}).`,
         command: pullCommand
       });
 
       if (!copied) {
-        showMessage(`Run in terminal: ${pullCommand}`, { type: 'info', duration: 7000 });
+        showUiMessage(`Run in terminal: ${pullCommand}`, { type: 'info', duration: 7000 });
       }
       return;
     }
 
     if (ahead > 0) {
-      showMessage(
+      showUiMessage(
         `Local branch is ${ahead} commit(s) ahead of origin/${branch} (${localSha}).`,
         { type: 'info', duration: 4200 }
       );
       return;
     }
 
-    showSuccess(`Up to date with origin/${branch} (${localSha}).`);
+    showUiSuccess(`Up to date with origin/${branch} (${localSha}).`);
   } catch (error) {
-    showError(`Update check failed: ${error?.message || 'Unknown error'}`);
+    showUiError(`Update check failed: ${error?.message || 'Unknown error'}`);
   } finally {
     if (button) {
       button.disabled = false;

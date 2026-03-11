@@ -11,6 +11,18 @@ import {
 } from '../../ui/settings/viewerSettings.js';
 import { supportsFolderSelection } from '../../ui/workspace/folderWorkspace.js';
 import { ParamPanel } from '../../ui/paramPanel.js';
+import {
+  showCommandSuggestion,
+  showError,
+  showMessage,
+  showSuccess
+} from '../../ui/feedback.js';
+import {
+  deriveExportFieldsFromFileName,
+  setExportFields,
+  resetParameterChangeTracking,
+  selectOutputFolder
+} from '../../ui/fileOps.js';
 
 let simulationPanelModulePromise = null;
 
@@ -55,4 +67,36 @@ export function loadSimulationPanelModule() {
     simulationPanelModulePromise = import('../../ui/simulationPanel.js');
   }
   return simulationPanelModulePromise;
+}
+
+export function showUiError(message, duration) {
+  return showError(message, duration);
+}
+
+export function showUiMessage(message, options) {
+  return showMessage(message, options);
+}
+
+export function showUiSuccess(message, duration) {
+  return showSuccess(message, duration);
+}
+
+export function showUiCommandSuggestion(options = {}) {
+  return showCommandSuggestion(options);
+}
+
+export function deriveExportFieldsFromImportedFileName(fileName, options = {}) {
+  return deriveExportFieldsFromFileName(fileName, options);
+}
+
+export function setAppExportFields(fields = {}, doc = document) {
+  return setExportFields(fields, doc);
+}
+
+export function resetAppParameterChangeTracking(options = {}) {
+  return resetParameterChangeTracking(options);
+}
+
+export async function chooseOutputFolder() {
+  return selectOutputFolder();
 }
