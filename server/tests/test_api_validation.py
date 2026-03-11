@@ -5,7 +5,16 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app import MeshData, SimulationRequest, submit_simulation
+from api.routes_misc import render_directivity
+from api.routes_simulation import (
+    get_job_status,
+    get_mesh_artifact,
+    get_results,
+    submit_simulation,
+)
+from models import DirectivityRenderRequest, MeshData, SimulationRequest
+import services.job_runtime as _jrt
+import services.simulation_runner as _sim_runner
 
 
 class ApiValidationTest(unittest.TestCase):
@@ -365,8 +374,6 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         any remaining non-source tags to 1 after the build, so the BEM solver always
         sees exactly tag 1 (rigid wall) and tag 2 (source disc).
         """
-        from app import run_simulation, jobs
-
         request = self._make_occ_adaptive_request({"wall_thickness": 6.0, "enc_depth": 0.0})
 
         captured_params = []
@@ -380,7 +387,7 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             }
 
         job_id = "test-preserve-wall"
-        jobs[job_id] = {
+        _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
         }
@@ -388,9 +395,9 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             with patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
                 "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
             ), patch("services.simulation_runner.build_waveguide_mesh", side_effect=fake_build):
-                asyncio.run(run_simulation(job_id, request))
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
         finally:
-            jobs.pop(job_id, None)
+            _jrt.jobs.pop(job_id, None)
 
         self.assertTrue(
             len(captured_params) > 0,
@@ -406,29 +413,23 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
 
 class MeshArtifactEndpointTest(unittest.TestCase):
     def test_mesh_artifact_returns_404_for_unknown_job(self):
-        from app import get_mesh_artifact
-
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(get_mesh_artifact("nonexistent-job"))
         self.assertEqual(ctx.exception.status_code, 404)
 
     def test_mesh_artifact_returns_404_when_no_artifact(self):
-        from app import get_mesh_artifact, jobs
-
-        jobs["test-no-artifact"] = {"status": "complete", "results": None}
+        _jrt.jobs["test-no-artifact"] = {"status": "complete", "results": None}
         try:
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(get_mesh_artifact("test-no-artifact"))
             self.assertEqual(ctx.exception.status_code, 404)
             self.assertIn("No mesh artifact", str(ctx.exception.detail))
         finally:
-            del jobs["test-no-artifact"]
+            _jrt.jobs.pop("test-no-artifact", None)
 
     def test_mesh_artifact_returns_msh_text(self):
-        from app import get_mesh_artifact, jobs
-
         msh_content = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
-        jobs["test-with-artifact"] = {
+        _jrt.jobs["test-with-artifact"] = {
             "status": "complete",
             "results": None,
             "mesh_artifact": msh_content,
@@ -438,7 +439,7 @@ class MeshArtifactEndpointTest(unittest.TestCase):
             self.assertEqual(resp.body.decode(), msh_content)
             self.assertIn("text/plain", resp.media_type)
         finally:
-            del jobs["test-with-artifact"]
+            _jrt.jobs.pop("test-with-artifact", None)
 
 
 class JobPersistenceFailureSafetyTest(unittest.TestCase):
@@ -477,11 +478,8 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
     def test_results_persistence_failure_leaves_error_not_complete(self):
         """Job must end in 'error' state (not 'complete') when db.store_results raises."""
-        import app as app_module
-        from app import run_simulation, jobs
-
         job_id = "test-persist-fail-status"
-        jobs[job_id] = self._make_job_entry(job_id)
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
 
         class MockSolver:
             def prepare_mesh(self, *args, **kwargs):
@@ -491,10 +489,10 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
-                 patch.object(app_module.db, "store_results", side_effect=OSError("disk full")):
-                asyncio.run(run_simulation(job_id, self._make_minimal_request()))
+                 patch.object(_sim_runner.db, "store_results", side_effect=OSError("disk full")):
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
-            final_status = jobs.get(job_id, {}).get("status")
+            final_status = _jrt.jobs.get(job_id, {}).get("status")
             self.assertNotEqual(
                 final_status, "complete",
                 "Job must not be left in 'complete' state when results persistence fails.",
@@ -504,15 +502,12 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
                 "Job must be in 'error' state when results persistence fails.",
             )
         finally:
-            jobs.pop(job_id, None)
+            _jrt.jobs.pop(job_id, None)
 
     def test_results_persistence_failure_error_message_is_safe(self):
         """Error message on persistence failure must not expose internal exception details."""
-        import app as app_module
-        from app import run_simulation, jobs
-
         job_id = "test-persist-fail-msg"
-        jobs[job_id] = self._make_job_entry(job_id)
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
 
         class MockSolver:
             def prepare_mesh(self, *args, **kwargs):
@@ -522,23 +517,20 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
-                 patch.object(app_module.db, "store_results", side_effect=OSError("disk full")):
-                asyncio.run(run_simulation(job_id, self._make_minimal_request()))
+                 patch.object(_sim_runner.db, "store_results", side_effect=OSError("disk full")):
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
-            error_msg = jobs.get(job_id, {}).get("error_message", "")
+            error_msg = _jrt.jobs.get(job_id, {}).get("error_message", "")
             self.assertIsNotNone(error_msg, "Error message must be set on persistence failure.")
             self.assertNotIn("Traceback", error_msg, "Error message must not contain Python traceback.")
             self.assertNotIn("OSError", error_msg, "Error message must not expose internal exception class.")
         finally:
-            jobs.pop(job_id, None)
+            _jrt.jobs.pop(job_id, None)
 
     def test_mesh_artifact_persistence_failure_does_not_abort_simulation(self):
         """Simulation must complete even if db.store_mesh_artifact raises."""
-        import app as app_module
-        from app import run_simulation, jobs
-
         job_id = "test-artifact-persist-fail"
-        jobs[job_id] = self._make_job_entry(job_id)
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
 
         fake_msh = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
         fake_occ_result = {
@@ -581,20 +573,20 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
                  patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), \
                  patch("services.simulation_runner.GMSH_OCC_RUNTIME_READY", True), \
                  patch("services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result), \
-                 patch.object(app_module.db, "store_mesh_artifact", side_effect=OSError("disk full")):
-                asyncio.run(run_simulation(job_id, request))
+                 patch.object(_sim_runner.db, "store_mesh_artifact", side_effect=OSError("disk full")):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
 
-            final_status = jobs.get(job_id, {}).get("status")
+            final_status = _jrt.jobs.get(job_id, {}).get("status")
             self.assertEqual(
                 final_status, "complete",
                 "Simulation must complete even when mesh artifact persistence fails.",
             )
             self.assertFalse(
-                jobs.get(job_id, {}).get("has_mesh_artifact", True),
+                _jrt.jobs.get(job_id, {}).get("has_mesh_artifact", True),
                 "has_mesh_artifact must be False when artifact persistence fails.",
             )
         finally:
-            jobs.pop(job_id, None)
+            _jrt.jobs.pop(job_id, None)
 
 
 class HttpSemanticsTest(unittest.TestCase):
@@ -608,24 +600,19 @@ class HttpSemanticsTest(unittest.TestCase):
 
     def test_get_results_missing_stored_results_returns_404(self):
         """get_results must return 404 when the DB has no stored results for a complete job."""
-        import app as app_module
-        from app import get_results, jobs
-
         job_id = "test-missing-stored-results"
-        jobs[job_id] = {"status": "complete", "results": None}
+        _jrt.jobs[job_id] = {"status": "complete", "results": None}
         try:
-            with patch.object(app_module.db, "get_results", return_value=None):
+            with patch.object(_jrt.db, "get_results", return_value=None):
                 with self.assertRaises(HTTPException) as ctx:
                     asyncio.run(get_results(job_id))
             self.assertEqual(ctx.exception.status_code, 404)
             self.assertIn("not available", str(ctx.exception.detail).lower())
         finally:
-            jobs.pop(job_id, None)
+            _jrt.jobs.pop(job_id, None)
 
     def test_render_directivity_empty_input_returns_422(self):
         """render_directivity must return 422 (not 400) for missing request data."""
-        from app import render_directivity, DirectivityRenderRequest
-
         request = DirectivityRenderRequest(frequencies=[], directivity={})
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(render_directivity(request))
@@ -633,16 +620,12 @@ class HttpSemanticsTest(unittest.TestCase):
 
     def test_get_results_unknown_job_returns_404(self):
         """get_results must return 404 for a job ID that does not exist."""
-        from app import get_results
-
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(get_results("nonexistent-job-id-xyz"))
         self.assertEqual(ctx.exception.status_code, 404)
 
     def test_get_job_status_unknown_job_returns_404(self):
         """get_job_status must return 404 for an unknown job."""
-        from app import get_job_status
-
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(get_job_status("nonexistent-job-id-xyz"))
         self.assertEqual(ctx.exception.status_code, 404)
@@ -653,35 +636,29 @@ class SchedulerStateTest(unittest.TestCase):
 
     def test_scheduler_skips_when_already_running(self):
         """_drain_scheduler_queue must exit immediately if scheduler_loop_running is True."""
-        import services.job_runtime as _jrt
-        from app import _drain_scheduler_queue, job_queue, jobs_lock
-
         original = _jrt.scheduler_loop_running
         sentinel = "test-sentinel-job-id"
         try:
-            with jobs_lock:
+            with _jrt.jobs_lock:
                 _jrt.scheduler_loop_running = True
-            job_queue.append(sentinel)
-            asyncio.run(_drain_scheduler_queue())
+            _jrt.job_queue.append(sentinel)
+            asyncio.run(_jrt._drain_scheduler_queue())
             # Sentinel job must still be in the queue — scheduler did not consume it
-            self.assertIn(sentinel, job_queue, "Scheduler must not process jobs when already running.")
+            self.assertIn(sentinel, _jrt.job_queue, "Scheduler must not process jobs when already running.")
         finally:
-            with jobs_lock:
+            with _jrt.jobs_lock:
                 _jrt.scheduler_loop_running = original
-            if sentinel in job_queue:
-                job_queue.remove(sentinel)
+            if sentinel in _jrt.job_queue:
+                _jrt.job_queue.remove(sentinel)
 
     def test_scheduler_loop_running_resets_after_empty_queue(self):
         """scheduler_loop_running must be False after drain completes with empty queue."""
-        import services.job_runtime as _jrt
-        from app import _drain_scheduler_queue, jobs_lock
-
-        with jobs_lock:
+        with _jrt.jobs_lock:
             _jrt.scheduler_loop_running = False
 
-        asyncio.run(_drain_scheduler_queue())
+        asyncio.run(_jrt._drain_scheduler_queue())
 
-        with jobs_lock:
+        with _jrt.jobs_lock:
             running = _jrt.scheduler_loop_running
         self.assertFalse(running, "scheduler_loop_running must be reset to False after drain finishes.")
 

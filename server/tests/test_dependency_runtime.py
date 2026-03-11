@@ -4,8 +4,10 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-import app
-from app import MeshData, SimulationRequest, WaveguideParamsRequest
+from api.routes_mesh import build_mesh_from_params
+from api.routes_misc import health_check
+from api.routes_simulation import submit_simulation
+from models import MeshData, SimulationRequest, WaveguideParamsRequest
 
 
 class DependencyRuntimeTest(unittest.TestCase):
@@ -29,7 +31,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         ), patch("api.routes_misc.BEMPP_RUNTIME_READY", False), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
             "api.routes_misc.GMSH_OCC_RUNTIME_READY", True
         ):
-            response = asyncio.run(app.health_check())
+            response = asyncio.run(health_check())
 
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["dependencies"], dependency_status)
@@ -56,7 +58,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             "api.routes_mesh.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
-                asyncio.run(app.build_mesh_from_params(request))
+                asyncio.run(build_mesh_from_params(request))
 
         self.assertEqual(ctx.exception.status_code, 503)
         detail = str(ctx.exception.detail)
@@ -91,7 +93,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         ), patch(
             "solver.device_interface.selected_device_metadata", return_value=device_info
         ):
-            response = asyncio.run(app.health_check())
+            response = asyncio.run(health_check())
 
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["deviceInterface"], device_info)
@@ -127,7 +129,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             "api.routes_simulation.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
-                asyncio.run(app.submit_simulation(request))
+                asyncio.run(submit_simulation(request))
 
         self.assertEqual(ctx.exception.status_code, 503)
         detail = str(ctx.exception.detail)

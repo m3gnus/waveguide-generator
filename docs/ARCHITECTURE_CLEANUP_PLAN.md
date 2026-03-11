@@ -3,9 +3,10 @@
 ## Execution Status
 
 - Started: March 11, 2026
-- Current phase: Phase 1 (ready to start)
+- Current phase: Phase 2 (ready to start)
 - Completed:
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
+  - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
 
 ## Goal
 
@@ -207,6 +208,23 @@ Make invalid imports impossible before moving logic.
 - New import-boundary test suite passes
 - `npm test`
 - `npm run test:server`
+
+### Implementation Notes (Completed March 11, 2026)
+
+- Added frontend boundary suite: `tests/architecture-boundaries.test.js`
+  - Encodes dependency direction rules and blocks new cross-layer imports.
+  - Tracks currently-known legacy cross-layer edges via explicit temporary exceptions.
+- Added backend boundary suite: `server/tests/test_import_boundaries.py`
+  - Enforces:
+    - `server/tests` do not import `app.py` as a shortcut.
+    - `server/api` does not import `app.py`.
+    - `server/services` does not import `server/api`.
+    - `server/solver` does not import `server/api` or `server/services`.
+- Migrated existing server tests to true module imports:
+  - `server/tests/test_api_validation.py`
+  - `server/tests/test_dependency_runtime.py`
+  - `server/tests/test_updates_endpoint.py`
+  - `server/tests/test_job_persistence.py`
 
 ## Phase 2: Consolidate Frontend Input Normalization
 
