@@ -134,6 +134,15 @@ function formatTimestampTooltip(job) {
   return `Started: ${formatted}`;
 }
 
+function describeJobFeedSource(panel) {
+  const mode = panel?.jobSourceMode === 'folder' ? 'folder' : 'backend';
+  return {
+    mode,
+    label: mode === 'folder' ? 'Folder Tasks' : 'Backend Jobs',
+    badge: mode === 'folder' ? 'Folder' : 'Backend'
+  };
+}
+
 function readOutputNameAndCounter() {
   const name = (document.getElementById('export-prefix')?.value || 'simulation').trim() || 'simulation';
   const counterEl = document.getElementById('export-counter');
@@ -234,9 +243,15 @@ export function renderJobList(panel) {
   const list = document.getElementById('simulation-jobs-list');
   if (!list) return;
 
+  const sourceEl = document.getElementById('simulation-jobs-source-label');
+  const source = describeJobFeedSource(panel);
+  if (sourceEl) {
+    sourceEl.textContent = source.label;
+  }
+
   const jobs = allJobs(panel);
   if (jobs.length === 0) {
-    list.innerHTML = '<div class="simulation-job-meta">No jobs yet.</div>';
+    list.innerHTML = `<div class="simulation-job-meta">No ${source.mode === 'folder' ? 'folder tasks' : 'backend jobs'} yet.</div>`;
     return;
   }
 
@@ -244,7 +259,10 @@ export function renderJobList(panel) {
     <div class="simulation-job-item ${panel.activeJobId === job.id ? 'is-active' : ''}" data-job-id="${job.id}">
       <div class="simulation-job-header">
         <div class="simulation-job-info">
-          <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">${escapeHtml(job.label || job.id.slice(0, 8))}</div>
+          <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
+            <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
+            <span class="simulation-job-source-badge">${source.badge}</span>
+          </div>
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
         </div>
         <div class="simulation-job-actions">

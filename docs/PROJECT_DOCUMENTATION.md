@@ -115,6 +115,7 @@ flowchart LR
    - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
+   - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow

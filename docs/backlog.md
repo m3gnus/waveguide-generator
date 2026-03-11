@@ -125,12 +125,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: current export use cases in `src/modules/export/useCases.js` are per-format only, and completed-job export in `src/ui/simulation/jobActions.js` only records a synthetic token into `exportedFiles` after a manual export. The manifest/index model is ready for bundle bookkeeping, but there is no bundle coordinator, selected-format settings model, or once-per-completion idempotency flow.
   Best approach: Add one bundle coordinator over existing exporters, drive it from settings-selected formats, record per-task exported files, and store an idempotency marker so auto-export only runs once per completion event while preserving partial-failure reporting.
 
-- [ ] Finish completed-task source modes so folder-backed tasks and backend jobs have clear, non-mixed browsing behavior.
+- [x] Finish completed-task source modes so folder-backed tasks and backend jobs have clear, non-mixed browsing behavior.
   Source: earlier simulation-management planning notes; current folder workspace and job-feed code.
   Relevant: Yes. Folder workspace storage exists, but the user-facing source model is still incomplete.
   Will it improve the program: Yes. It makes task history understandable at scale and aligns export folders with browsing behavior.
   Research findings: `restoreSimulationControllerJobs()` currently merges local storage, workspace index items, and remote backend jobs into one combined feed, and `renderJobList()` shows no source label or badge. That mixed-source behavior is exactly the ambiguity the original phase was trying to eliminate, so this remains the upstream seam for task-history UX.
   Best approach: Introduce an explicit source abstraction, show folder tasks when folder context is active, fall back to backend jobs otherwise, and expose the current source with a header label plus compact badge rather than mixing both sources in one list.
+  Completed: March 11, 2026. The simulation feed now has explicit source modes: selecting a folder workspace loads folder task manifests/index only and skips backend job listing, backend mode still restores/polls remote jobs plus the local cache when no folder is active, the Refresh action reloads the active source instead of assuming backend polling, and the UI now labels the active source in the header plus a compact per-row badge instead of mixing sources silently.
 
 - [ ] Add task ratings plus stable sorting and filtering controls.
   Source: earlier simulation-management planning notes; existing manifest/index `rating` fields.
