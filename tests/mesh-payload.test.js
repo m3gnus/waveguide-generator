@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
-import { buildCanonicalMeshPayload, SURFACE_TAGS } from '../src/simulation/payload.js';
+import { buildCanonicalMeshPayload } from '../src/geometry/pipeline.js';
+import { SURFACE_TAGS } from '../src/geometry/tags.js';
 import { assertBemMeshIntegrity } from '../src/geometry/meshIntegrity.js';
 
 function quietBuild(params, options = {}) {
