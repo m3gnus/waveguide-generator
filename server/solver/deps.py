@@ -33,14 +33,11 @@ SUPPORTED_GMSH_MIN = (4, 11, 0)
 SUPPORTED_GMSH_MAX_EXCLUSIVE = (5, 0, 0)
 SUPPORTED_BEMPP_CL_MIN = (0, 4, 0)
 SUPPORTED_BEMPP_CL_MAX_EXCLUSIVE = (0, 5, 0)
-SUPPORTED_BEMPP_LEGACY_MIN = (0, 3, 0)
-SUPPORTED_BEMPP_LEGACY_MAX_EXCLUSIVE = (0, 4, 0)
 
 SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     "python": {"range": ">=3.10,<3.15"},
     "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
     "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
-    "bempp_api_legacy": {"range": ">=0.3,<0.4", "required_for": "/api/solve (legacy fallback)"},
 }
 
 
@@ -124,34 +121,17 @@ try:
         or getattr(bempp_api, "__version__", None)
     )
 except ImportError:
-    try:
-        # Legacy package import path.
-        import bempp_api as bempp_api  # type: ignore
-        BEMPP_AVAILABLE = True
-        BEMPP_VARIANT = "bempp_api"
-        BEMPP_VERSION = (
-            _distribution_version("bempp_api", "bempp-api")
-            or getattr(bempp_api, "__version__", None)
-        )
-    except ImportError:
-        BEMPP_AVAILABLE = False
-        bempp_api = None
+    BEMPP_AVAILABLE = False
+    bempp_api = None
 
 if BEMPP_AVAILABLE:
     BEMPP_VERSION_TUPLE = _parse_version_tuple(BEMPP_VERSION)
 
-if BEMPP_VARIANT == "bempp_api":
-    BEMPP_SUPPORTED = PYTHON_SUPPORTED and _in_supported_range(
-        BEMPP_VERSION_TUPLE,
-        SUPPORTED_BEMPP_LEGACY_MIN,
-        SUPPORTED_BEMPP_LEGACY_MAX_EXCLUSIVE,
-    )
-else:
-    BEMPP_SUPPORTED = BEMPP_AVAILABLE and PYTHON_SUPPORTED and _in_supported_range(
-        BEMPP_VERSION_TUPLE,
-        SUPPORTED_BEMPP_CL_MIN,
-        SUPPORTED_BEMPP_CL_MAX_EXCLUSIVE,
-    )
+BEMPP_SUPPORTED = BEMPP_AVAILABLE and PYTHON_SUPPORTED and _in_supported_range(
+    BEMPP_VERSION_TUPLE,
+    SUPPORTED_BEMPP_CL_MIN,
+    SUPPORTED_BEMPP_CL_MAX_EXCLUSIVE,
+)
 
 BEMPP_RUNTIME_READY = BEMPP_AVAILABLE and BEMPP_SUPPORTED
 GMSH_OCC_RUNTIME_READY = GMSH_AVAILABLE and GMSH_SUPPORTED
@@ -166,15 +146,11 @@ if GMSH_AVAILABLE and not GMSH_SUPPORTED:
         GMSH_VERSION or "unknown",
     )
 if BEMPP_AVAILABLE and not BEMPP_SUPPORTED:
-    if BEMPP_VARIANT == "bempp_api":
-        range_text = ">=0.3,<0.4"
-    else:
-        range_text = ">=0.4,<0.5"
     logger.warning(
         "Unsupported bempp runtime %s %s; supported range is %s.",
         BEMPP_VARIANT or "unknown",
         BEMPP_VERSION or "unknown",
-        range_text,
+        ">=0.4,<0.5",
     )
 if not BEMPP_AVAILABLE:
     logger.warning("bempp runtime not available (install bempp-cl >=0.4,<0.5).")

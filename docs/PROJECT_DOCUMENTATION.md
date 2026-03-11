@@ -111,7 +111,7 @@ flowchart LR
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
    - Simulation Basic settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
-   - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu -> numba`
+   - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
@@ -244,7 +244,7 @@ Base URL: `http://localhost:8000`
   - Health status + dependency matrix/runtime payload from `deps.py`
   - Includes `deviceInterface` metadata for current device policy resolution:
     - `requested_mode`, `selected_mode`
-    - `interface` (`opencl` or `numba`)
+    - `interface` (`opencl` when a device is selected)
     - `device_type` (`cpu` or `gpu`)
     - `device_name`
     - `fallback_reason`
@@ -268,7 +268,7 @@ Base URL: `http://localhost:8000`
   - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
     and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
-  - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`, `numba`)
+  - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`)
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
 
@@ -301,15 +301,14 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Python | `>=3.10,<3.15` | backend runtime |
 | gmsh Python package | `>=4.11,<5.0` | `/api/mesh/build` |
 | bempp-cl | `>=0.4,<0.5` | `/api/solve` |
-| legacy `bempp_api` | `>=0.3,<0.4` | `/api/solve (legacy fallback)` |
 
 Notes:
 - Backend solve path defaults to optimized solve mode (`use_optimized=True` in request model).
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
-- Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`, then `numba`.
+- Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
-- The runtime prefers `bempp-cl`; the legacy `bempp_api` entry only documents the compatibility lane still encoded in `server/solver/deps.py`.
+- The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata
 
@@ -535,7 +534,7 @@ High-signal test suites:
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
-If OpenCL is unavailable the backend falls back to `numba`; fallback reason is surfaced in `/health` under `deviceInterface.fallback_reason`.
+If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`.
 
 ## 11. Key File Map
 

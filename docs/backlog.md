@@ -6,8 +6,6 @@ This file is the active source of truth for unfinished product and engineering w
 Superseded planning inputs were folded in from:
 - `docs/archive/FUTURE_ADDITIONS_2026-03-11.md`
 - `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`
-- `.planning/ROADMAP.md`
-- `.planning/STATE.md`
 - selected deferred notes in archived readiness documents
 
 ## Working Rules
@@ -27,12 +25,12 @@ status as of date:
 - The architecture cleanup plan is complete.
 - The settings modal exists, viewer settings persist, and the folder workspace manifest/index model exists.
 - Active runtime docs are `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `tests/TESTING.md`, `server/README.md`, and `AGENTS.md`.
-- Remaining work is now a mix of user-reported bugs, unfinished simulation-management product work imported from old GSD plans, and a smaller set of hardening/research follow-ups.
+- Remaining work is now a mix of user-reported bugs, unfinished simulation-management product work carried over from earlier planning, and a smaller set of hardening/research follow-ups.
 
 Remaining work:
 - Fix real cancellation behavior for running backend solves.
 - Improve simulation UX around mesh visibility, formula entry, and settings-to-runtime parity.
-- Finish the unfinished simulation-management roadmap slices that were left in `.planning/`.
+- Finish the remaining simulation-management roadmap slices that were carried into this backlog.
 - Consolidate durable architecture/contracts into smaller maintained docs over time.
 - Keep diagnostics, regression coverage, and optional engineering cleanup focused on shipped value.
 
@@ -58,7 +56,7 @@ Work the backlog from upstream runtime truth to downstream UX:
   Completed: March 11, 2026. Running-job stops now remain `running` with stage `cancelling` until the worker acknowledges the stop request, queued jobs still cancel immediately, the runner checks `cancellation_requested` before expensive stages and threads a cooperative cancellation callback through OCC preparation and both solver frequency loops, and the frontend now renders a truthful “stopping” state instead of faking local `cancelled` status. Backend/API, solver-hardening, and frontend controller/module regressions now cover queued cancellation, running cancellation requests, worker acknowledgement, and UI stop semantics.
 
 - [x] Wire Simulation Basic settings all the way into `/api/solve` payloads and runtime availability messaging.
-  Source: `.planning/ROADMAP.md` Phase 3; `.planning/phases/03-simulation-basic-payload-wiring/03-CONTEXT.md`; `src/ui/settings/simBasicSettings.js`; `src/ui/simulation/jobActions.js`.
+  Source: earlier simulation-management planning notes; `src/ui/settings/simBasicSettings.js`; `src/ui/simulation/jobActions.js`.
   Relevant: Yes. The settings UI exists, but `runSimulation()` still hardcodes `frequencySpacing: 'log'` and `deviceMode: 'auto'` instead of consuming the saved Simulation Basic settings consistently.
   Will it improve the program: Yes. It makes settings trustworthy and closes the gap between visible controls and actual solve behavior.
   Research findings: `src/ui/settings/simBasicSettings.js` already persists `deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, and `verbose`, and the modal already polls `/health` for device availability. The runtime submit path still only forwards hardcoded `frequencySpacing` / `deviceMode` from `src/ui/simulation/jobActions.js`, while `src/solver/index.js` only serializes `mesh_validation_mode`, `frequency_spacing`, and `device_mode`.
@@ -70,6 +68,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Will it improve the program: Yes. It protects a useful runtime mode from future regressions and makes the solve contract less fragile while OCC-specific work continues.
   Research findings: `server/tests/test_dependency_runtime.py` and `server/tests/test_api_validation.py` already assert OCC runtime failure paths, and `server/tests/test_mesh_validation.py` covers `use_gmsh=True` behavior. There is still no test that forces `occBuilderReady=False` while keeping solver readiness intact and proves canonical payload solves are still accepted.
   Completed: March 11, 2026. `server/tests/test_dependency_runtime.py` now locks the `solverReady=true` / `occBuilderReady=false` configuration, proves canonical `/api/solve` submission still enqueues successfully, and asserts that the OCC/Gmsh dependency branch is not consulted for canonical payloads.
+
+- [ ] Introduce a public job-runtime service surface and stop letting `server/api/routes_simulation.py` mutate job state internals directly.
+  Source: architecture audit on March 11, 2026; `server/api/routes_simulation.py`; `server/services/job_runtime.py`.
+  Relevant: Yes. The route layer currently imports private helpers plus mutable runtime state from `job_runtime` and writes to the DB/cache/queue directly instead of going through a service boundary.
+  Will it improve the program: Yes. It restores the intended API -> services -> solver layering and makes job lifecycle behavior easier to test and evolve safely.
+  Research findings: `job_runtime.py` declares ownership of the in-memory cache, queue, and scheduler, but `routes_simulation.py` still imports `_build_config_summary`, `_set_job_fields`, `_drain_scheduler_queue`, `jobs`, `job_queue`, `running_jobs`, `jobs_lock`, and `_jrt.db`. The import-boundary tests pass because they only check package-level edges, not direct access to private service internals.
+  Best approach: Add explicit public service functions for create/stop/list/delete/result retrieval, migrate the route handlers to those functions, and tighten the backend boundary tests to reject direct API access to underscore-prefixed service internals.
 
 - [x] Add pre-submit canonical tag diagnostics to the simulation UI.
   Source: archived future additions doc.
@@ -102,7 +107,7 @@ Work the backlog from upstream runtime truth to downstream UX:
   Best approach: Treat `PARAM_SCHEMA` fields with `type: 'expression'` as the starting set, then narrow to geometry-defining fields first: OSSE/R-OSSE core profile fields, morphing/profile-transform fields, throat-extension/slot/rotation fields, and guiding-curve parameters. Keep mesh-density, source-path, and admin-style fields on an allowlist basis only if real formula use cases exist. Add a small per-row `ƒ` affordance that opens the existing formula reference panel in context.
 
 - [ ] Gate Simulation Advanced / expert controls by backend capability and finish the remaining hardening/docs pass around them.
-  Source: `.planning/ROADMAP.md` Phase 8; `.planning/phases/08-advanced-controls-gating-and-hardening/08-CONTEXT.md`.
+  Source: earlier simulation-management planning notes; `src/ui/settings/modal.js`; runtime capability checks.
   Relevant: Yes, but lower priority than the bugs and Phase 3 work above.
   Will it improve the program: Yes. It prevents dead or misleading controls while keeping the settings layout future-proof.
   Research findings: `src/ui/settings/modal.js` already contains a placeholder Simulation Advanced section, and the app already has two separate `/health` consumers: Sim Basic device-mode polling and the connection banner. There is not yet one shared capability model or any advanced-control availability flow, so this work should follow the Simulation Basic wiring rather than race it.
@@ -111,21 +116,21 @@ Work the backlog from upstream runtime truth to downstream UX:
 ### P2 Folder-Backed Completion And Export Flow
 
 - [ ] Build selected-format bundle export and idempotent auto-export on simulation completion.
-  Source: `.planning/ROADMAP.md` Phase 5; `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`.
+  Source: `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`; current export/task code.
   Relevant: Yes. The data model for task manifests/index exists, but export orchestration across formats is still fragmented.
   Will it improve the program: Yes. It turns completed simulations into reusable artifacts without manual repetition and matches the folder-workspace design.
   Research findings: current export use cases in `src/modules/export/useCases.js` are per-format only, and completed-job export in `src/ui/simulation/jobActions.js` only records a synthetic token into `exportedFiles` after a manual export. The manifest/index model is ready for bundle bookkeeping, but there is no bundle coordinator, selected-format settings model, or once-per-completion idempotency flow.
   Best approach: Add one bundle coordinator over existing exporters, drive it from settings-selected formats, record per-task exported files, and store an idempotency marker so auto-export only runs once per completion event while preserving partial-failure reporting.
 
 - [ ] Finish completed-task source modes so folder-backed tasks and backend jobs have clear, non-mixed browsing behavior.
-  Source: `.planning/ROADMAP.md` Phase 6; `.planning/phases/06-completed-task-source-modes/06-CONTEXT.md`.
+  Source: earlier simulation-management planning notes; current folder workspace and job-feed code.
   Relevant: Yes. Folder workspace storage exists, but the user-facing source model is still incomplete.
   Will it improve the program: Yes. It makes task history understandable at scale and aligns export folders with browsing behavior.
   Research findings: `restoreSimulationControllerJobs()` currently merges local storage, workspace index items, and remote backend jobs into one combined feed, and `renderJobList()` shows no source label or badge. That mixed-source behavior is exactly the ambiguity the original phase was trying to eliminate, so this remains the upstream seam for task-history UX.
   Best approach: Introduce an explicit source abstraction, show folder tasks when folder context is active, fall back to backend jobs otherwise, and expose the current source with a header label plus compact badge rather than mixing both sources in one list.
 
 - [ ] Add task ratings plus stable sorting and filtering controls.
-  Source: `.planning/ROADMAP.md` Phase 7; `.planning/phases/07-ratings-sorting-filtering/07-CONTEXT.md`; existing manifest/index `rating` fields.
+  Source: earlier simulation-management planning notes; existing manifest/index `rating` fields.
   Relevant: Yes. The schema already carries `rating`, but there is no complete user flow that makes it useful.
   Will it improve the program: Yes. It helps users manage larger simulation histories instead of treating every result as flat output.
   Research findings: the rating field already persists through `task.manifest.json`, task index rebuild, local job tracking, and merge logic, but there is no rating editor in `renderJobList()`. Sorting is currently hardcoded to newest-first in `src/ui/simulation/jobTracker.js`, and there are no filter controls or persisted task-list preferences.
@@ -134,11 +139,18 @@ Work the backlog from upstream runtime truth to downstream UX:
 ### P3 Docs, Hardening, And Cleanup
 
 - [ ] Create a smaller durable architecture doc and split stable per-module contracts out of large narrative docs.
-  Source: user rules for this backlog; `.planning/STATE.md` pending todo about trimming `docs/PROJECT_DOCUMENTATION.md`.
+  Source: user rules for this backlog; pending doc-maintenance work around trimming `docs/PROJECT_DOCUMENTATION.md`.
   Relevant: Yes. The project now has one large runtime document but no focused `docs/architecture.md` or `docs/modules/` contract set.
   Will it improve the program: Yes. It reduces doc drift and makes future maintenance cheaper.
   Research findings: the working rules in this very backlog already refer to `docs/architecture.md` and `docs/modules/`, but those paths do not exist yet. The architecture cleanup work is complete enough that this is now straightforward documentation debt rather than a blocker for product work.
   Best approach: Extract durable architecture decisions into `docs/architecture.md`, move contract details into `docs/modules/`, and keep `docs/PROJECT_DOCUMENTATION.md` as a concise runtime map until the split is complete.
+
+- [ ] Add a maintained-doc parity audit so runtime/device-mode changes cannot leave `docs/PROJECT_DOCUMENTATION.md` and `server/README.md` describing removed fallback behavior.
+  Source: architecture audit on March 11, 2026; `docs/PROJECT_DOCUMENTATION.md`; `server/README.md`; `server/contracts/__init__.py`; `server/solver/device_interface.py`.
+  Relevant: Yes. The maintained docs drifted into describing `numba` and legacy fallback paths after the runtime had already narrowed to OpenCL-only device modes and explicit hard failures.
+  Will it improve the program: Yes. It protects the repo’s stated “docs plus tests plus code” source-of-truth model and reduces future audit noise.
+  Research findings: the March 11 audit found stale claims about `numba` mode/fallback and legacy `bempp_api` support in maintained docs even though the runtime contract and validation layer no longer exposed those paths. The repo needs a repeatable way to catch that class of drift.
+  Best approach: Keep the maintained architecture docs short, derive contract tables from code where practical, and add a small regression/doc-review checklist whenever runtime enums, dependency matrices, or fallback rules change.
 
 - [ ] Run a structured dead-code audit on `src/` and remove utility paths with no runtime entry.
   Source: archived future additions doc.
@@ -146,6 +158,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Will it improve the program: Yes. It reduces maintenance noise and future confusion.
   Research findings: recent Phase 8 cleanup already removed several deprecated frontend/export aliases, so the obvious low-hanging cleanup has mostly been harvested. What remains should be handled as a deliberate import/callsite audit with small removals, not as opportunistic drive-by deletion during product work.
   Best approach: Start with an import/callsite inventory, remove only code with no active UI/runtime/test path, and keep each cleanup slice small enough for targeted verification.
+
+- [ ] Retire the legacy frontend `.msh` export surface once tests/tooling no longer need it.
+  Source: architecture audit on March 11, 2026; `src/export/index.js`; `src/export/msh.js`; `tests/geometry-artifacts.test.js`.
+  Relevant: Yes, but below active runtime correctness work.
+  Will it improve the program: Yes. It removes a public export path that bypasses the backend-only OCC mesh flow described by the active architecture.
+  Research findings: the active runtime uses `/api/mesh/build` for authored `.msh` output, but `src/export/index.js` still publicly re-exports `exportMSH()` and `src/export/msh.js` still contains dead helper code that is only exercised by tests. That leaves legacy API surface area in place after the runtime moved on.
+  Best approach: First move any remaining regression coverage to the active backend/export contract, then delete or explicitly quarantine the legacy helper so app-facing exports cannot accidentally depend on it again.
 
 ### P4 Research And Optional Engineering Tracks
 
@@ -170,9 +189,9 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: `server/solver/solve_optimized.py` is currently 693 lines and `server/solver/waveguide_builder.py` is 2723 lines, so the maintenance concern is real. The existing backlog does not require those refactors yet, and recent work has not shown them to be the current delivery bottleneck.
   Best approach: Treat it as opportunistic refactor work only when a feature or bug fix needs deeper changes in those files; do not schedule it as standalone cleanup unless those modules become a bottleneck.
 
-## Imported GSD Work
+## Imported Historical Planning Work
 
-The unfinished GSD planning work folded into this backlog came from:
-- `.planning/ROADMAP.md` unfinished phases 3, 5, 6, 7, and 8
-- `.planning/STATE.md` pending todos that were still relevant
-- `.planning/phases/*/CONTEXT.md` decisions used to preserve product intent without keeping GSD as the active workflow
+The unfinished planning work folded into this backlog came from:
+- `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`
+- `docs/archive/FUTURE_ADDITIONS_2026-03-11.md`
+- selected decisions preserved from earlier local planning notes before those files were removed from the repository
