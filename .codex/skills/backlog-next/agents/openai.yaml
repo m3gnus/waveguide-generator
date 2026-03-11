@@ -1,0 +1,3 @@
+display_name: Backlog Runner
+short_description: Continue the active backlog one researched slice at a time until blocked or complete.
+default_prompt: $backlog-next
