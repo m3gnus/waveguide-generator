@@ -1,6 +1,9 @@
 // @ts-check
 
-import { createSimulationClient } from '../../modules/simulation/useCases.js';
+import {
+  createSimulationClient,
+  prepareOccAdaptiveSolveRequest
+} from '../../modules/simulation/useCases.js';
 import { UiModule } from '../../modules/ui/index.js';
 import {
   buildCancelledSimulationJob,
@@ -210,6 +213,56 @@ export async function recordSimulationControllerExport(
   return next;
 }
 
+export function prepareSimulationControllerSubmission(
+  options = {}
+) {
+  return prepareOccAdaptiveSolveRequest({
+    mshVersion: options.mshVersion || '2.2',
+    simType: options.simType ?? 2
+  });
+}
+
+export async function submitSimulationControllerJob(
+  controller,
+  {
+    config,
+    meshData,
+    outputName,
+    counter,
+    submission = prepareSimulationControllerSubmission()
+  } = {}
+) {
+  const health = await controller.solver.getHealthStatus();
+  if (!health?.solverReady || !health?.occBuilderReady) {
+    throw new Error('Backend solver and OCC mesher must be ready to run adaptive BEM simulation.');
+  }
+
+  const {
+    waveguidePayload,
+    submitOptions,
+    preparedParams,
+    stateSnapshot
+  } = submission;
+  const startedIso = new Date().toISOString();
+  const jobId = await controller.solver.submitSimulation(config, meshData, submitOptions);
+  const createdJob = await queueSimulationControllerJob(controller, {
+    jobId,
+    startedIso,
+    outputName,
+    counter,
+    config,
+    waveguidePayload,
+    preparedParams,
+    stateSnapshot
+  });
+
+  return {
+    health,
+    jobId,
+    createdJob
+  };
+}
+
 export async function queueSimulationControllerJob(controller, jobInput) {
   const createdJob = upsertJob(controller, buildQueuedSimulationJob(jobInput));
   setActiveJob(controller, jobInput?.jobId);
@@ -226,6 +279,24 @@ export function removeSimulationControllerJob(controller, jobId) {
     persistPanelJobs(controller);
   }
   return removed;
+}
+
+export async function stopSimulationControllerJob(controller, jobId) {
+  let stopError = null;
+
+  if (jobId) {
+    try {
+      await controller.solver.stopJob(jobId);
+    } catch (error) {
+      stopError = error;
+    }
+  }
+
+  const cancelledJob = cancelSimulationControllerJob(controller, jobId);
+  return {
+    cancelledJob,
+    stopError
+  };
 }
 
 export function clearSimulationControllerJobs(controller, jobIds = []) {
