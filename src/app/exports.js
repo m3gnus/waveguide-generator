@@ -4,7 +4,7 @@ import { GlobalState } from '../state.js';
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 import { isDevRuntime } from '../config/runtimeMode.js';
 import { ExportModule } from '../modules/export/index.js';
-import { ParamModule } from '../modules/param/index.js';
+import { DesignModule } from '../modules/design/index.js';
 
 function getBackendUrl(app) {
   return app?.simulationPanel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
@@ -32,12 +32,12 @@ export async function buildExportMeshFromParams(app, preparedParams, options = {
 
 export function exportSTL(app) {
   const baseName = getExportBaseName();
-  const paramTask = ParamModule.task(
-    ParamModule.importState(GlobalState.get(), {
+  const designTask = DesignModule.task(
+    DesignModule.importState(GlobalState.get(), {
       applyVerticalOffset: false
     })
   );
-  const preparedParams = ParamModule.output.params(paramTask);
+  const preparedParams = DesignModule.output.exportParams(designTask);
   const exportTask = ExportModule.task(ExportModule.importStl(preparedParams, { baseName }));
   for (const file of ExportModule.output.files(exportTask)) {
     saveFile(file.content, file.fileName, file.saveOptions);
