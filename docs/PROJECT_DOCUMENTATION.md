@@ -139,9 +139,10 @@ Backend implementation:
 - `server/solver/waveguide_builder.py` function `build_waveguide_mesh(...)`
 
 Frontend request normalization:
-- Angular/length normalization is boundary-specific:
-  - `buildWaveguidePayload(...)`: `n_angular=max(20, round(angularSegments))`, `n_length=max(10, round(lengthSegments))`
-  - `ExportModule` OCC path pre-normalizes angular segments to multiples of 4 (min 20) before payload build
+- OCC request normalization is owned by `DesignModule`:
+  - `DesignModule.output.occSimulationParams(...)` normalizes simulation OCC inputs (min/rounded segment counts, canonical quadrants, mesh-resolution defaults).
+  - `DesignModule.output.occExportParams(...)` adds export-specific OCC normalization (angular snapping to multiples of 4 and scaled/coarse export resolutions).
+  - `buildWaveguidePayload(...)` maps already-normalized OCC fields to request schema and enforces payload shape for required OCC fields.
 
 Response shape:
 ```json

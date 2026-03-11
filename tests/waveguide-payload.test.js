@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildWaveguidePayload } from '../src/solver/waveguidePayload.js';
+import { prepareOccSimulationParams } from '../src/modules/design/index.js';
 
 test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   const payload = buildWaveguidePayload(
-    {
+    prepareOccSimulationParams({
       type: 'OSSE',
       throatResolution: 4,
       mouthResolution: 9,
@@ -13,7 +14,7 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
       encFrontResolution: '6,7,8,9',
       encBackResolution: '11,12,13,14',
       quadrants: '1234'
-    },
+    }),
     '2.2'
   );
 
@@ -31,15 +32,17 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   assert.equal(payload.msh_version, '2.2');
 });
 
-test('buildWaveguidePayload applies requested mesh defaults when fields are omitted', () => {
+test('buildWaveguidePayload uses DesignModule OCC simulation defaults when fields are omitted', () => {
   const payload = buildWaveguidePayload(
-    {
-      type: 'OSSE',
-      quadrants: '1234'
-    },
+    prepareOccSimulationParams({
+      type: 'OSSE'
+    }),
     '2.2'
   );
 
+  assert.equal(payload.n_angular, 100);
+  assert.equal(payload.n_length, 20);
+  assert.equal(payload.quadrants, 1234);
   assert.equal(payload.throat_res, 6);
   assert.equal(payload.mouth_res, 15);
   assert.equal(payload.rear_res, 40);
@@ -52,49 +55,38 @@ test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
   bExpr._rawExpr = '0.2+0.1*sin(p)';
 
   const payload = buildWaveguidePayload(
-    {
+    prepareOccSimulationParams({
       type: 'R-OSSE',
       R: '140',
       a: '45',
       b: bExpr
-    },
+    }),
     '2.2'
   );
 
   assert.equal(payload.b, '0.2+0.1*sin(p)');
 });
 
-test('buildWaveguidePayload coerces non-finite numeric fields to finite defaults', () => {
-  const payload = buildWaveguidePayload(
-    {
-      type: 'OSSE',
-      throatExtAngle: 'sin(p)',
-      gcurveDist: 'bad-value',
-      morphRate: 'nan-value',
-      angularSegments: 'oops',
-      wallThickness: 'invalid',
-      encDepth: 'none',
-      encEdgeType: 'bad'
-    },
-    '2.2'
+test('buildWaveguidePayload rejects unprepared OCC payload fields', () => {
+  assert.throws(
+    () => buildWaveguidePayload(
+      {
+        type: 'OSSE',
+        angularSegments: 20
+      },
+      '2.2'
+    ),
+    /requires finite "lengthSegments"/
   );
-
-  assert.equal(payload.throat_ext_angle, 0);
-  assert.equal(payload.gcurve_dist, 0.5);
-  assert.equal(payload.morph_rate, 3.0);
-  assert.equal(payload.n_angular, 100);
-  assert.equal(payload.wall_thickness, 6.0);
-  assert.equal(payload.enc_depth, 0);
-  assert.equal(payload.enc_edge_type, 1);
 });
 
-test('buildWaveguidePayload rounds angular segments without divisibility snapping', () => {
+test('buildWaveguidePayload receives rounded OCC segments from DesignModule normalization', () => {
   const payload = buildWaveguidePayload(
-    {
+    prepareOccSimulationParams({
       type: 'OSSE',
       angularSegments: 21.2,
       lengthSegments: 9.7
-    },
+    }),
     '2.2'
   );
 
@@ -102,28 +94,37 @@ test('buildWaveguidePayload rounds angular segments without divisibility snappin
   assert.equal(payload.n_length, 10);
 });
 
-test('buildWaveguidePayload keeps canonical quadrants and falls back on invalid values', () => {
+test('buildWaveguidePayload uses canonical quadrants from DesignModule normalization', () => {
   assert.equal(
-    buildWaveguidePayload({ type: 'OSSE', quadrants: '14' }, '2.2').quadrants,
+    buildWaveguidePayload(
+      prepareOccSimulationParams({ type: 'OSSE', quadrants: '14' }),
+      '2.2'
+    ).quadrants,
     14
   );
   assert.equal(
-    buildWaveguidePayload({ type: 'OSSE', quadrants: '12' }, '2.2').quadrants,
+    buildWaveguidePayload(
+      prepareOccSimulationParams({ type: 'OSSE', quadrants: '12' }),
+      '2.2'
+    ).quadrants,
     12
   );
   assert.equal(
-    buildWaveguidePayload({ type: 'OSSE', quadrants: 'not-a-quadrant' }, '2.2').quadrants,
+    buildWaveguidePayload(
+      prepareOccSimulationParams({ type: 'OSSE', quadrants: 'not-a-quadrant' }),
+      '2.2'
+    ).quadrants,
     1234
   );
 });
 
 test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
   const payload = buildWaveguidePayload(
-    {
+    prepareOccSimulationParams({
       type: 'OSSE',
       encFrontResolution: [7, 8, 9, 10],
       encBackResolution: [11, 12, 13, 14]
-    },
+    }),
     '2.2'
   );
 
