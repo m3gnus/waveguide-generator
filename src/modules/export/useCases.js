@@ -25,16 +25,6 @@ export async function prepareExportArtifacts(
   return ExportModule.output.occMesh(exportTask);
 }
 
-/**
- * @deprecated Use prepareExportArtifacts(...) instead.
- */
-export async function buildExportMeshFromParams(
-  preparedParams,
-  { backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}
-) {
-  return prepareExportArtifacts(preparedParams, { backendUrl, onStatus, ...options });
-}
-
 export function exportSTL() {
   const baseName = getExportBaseName();
   const designTask = DesignModule.task(
