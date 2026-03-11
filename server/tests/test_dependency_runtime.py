@@ -37,6 +37,18 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertEqual(response["dependencies"], dependency_status)
         self.assertFalse(response["solverReady"])
         self.assertTrue(response["occBuilderReady"])
+        self.assertEqual(
+            response["capabilities"]["simulationBasic"]["controls"],
+            [
+                "device_mode",
+                "mesh_validation_mode",
+                "frequency_spacing",
+                "use_optimized",
+                "enable_symmetry",
+                "verbose",
+            ],
+        )
+        self.assertFalse(response["capabilities"]["simulationAdvanced"]["available"])
 
     def test_mesh_build_dependency_gate_returns_matrix_details(self):
         dependency_status = {
@@ -97,6 +109,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["deviceInterface"], device_info)
+        self.assertIn("capabilities", response)
 
     def test_solve_dependency_gate_returns_matrix_details(self):
         dependency_status = {

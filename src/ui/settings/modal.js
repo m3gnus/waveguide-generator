@@ -21,6 +21,14 @@ import {
   saveSimBasicSettings,
   resetSimBasicSettings,
 } from './simBasicSettings.js';
+import {
+  describeSimBasicDeviceAvailability,
+  fetchRuntimeHealth,
+  getCachedRuntimeHealth,
+  summarizeRuntimeCapabilities,
+} from '../runtimeCapabilities.js';
+
+export { describeSimBasicDeviceAvailability } from '../runtimeCapabilities.js';
 
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
@@ -65,57 +73,8 @@ export function getDownloadSimMeshEnabled() {
   return _state.downloadSimMesh;
 }
 
-function _modeLabel(mode) {
-  switch (String(mode || '').trim().toLowerCase()) {
-    case 'opencl_gpu':
-      return 'OpenCL GPU';
-    case 'opencl_cpu':
-      return 'OpenCL CPU';
-    case 'auto':
-      return 'Auto';
-    default:
-      return String(mode || 'Unknown').trim();
-  }
-}
-
-export function describeSimBasicDeviceAvailability(health, requestedMode = 'auto') {
-  const deviceInfo = health?.deviceInterface;
-  const availability = deviceInfo?.mode_availability;
-  const normalizedRequestedMode = String(requestedMode || 'auto').trim().toLowerCase() || 'auto';
-
-  if (!availability || typeof availability !== 'object') {
-    return {
-      unavailableModes: ['opencl_gpu', 'opencl_cpu'],
-      statusText: 'Solver runtime unavailable. Auto mode only.'
-    };
-  }
-
-  const unavailableModes = ['opencl_gpu', 'opencl_cpu'].filter((mode) => {
-    const info = availability[mode];
-    return Boolean(info && info.available === false);
-  });
-
-  if (normalizedRequestedMode !== 'auto' && unavailableModes.includes(normalizedRequestedMode)) {
-    return {
-      unavailableModes,
-      statusText: `${_modeLabel(normalizedRequestedMode)} unavailable on this machine.`
-    };
-  }
-
-  const selectedMode = String(deviceInfo?.selected_mode || '').trim().toLowerCase();
-  if (normalizedRequestedMode === 'auto' && selectedMode && selectedMode !== 'auto') {
-    return {
-      unavailableModes,
-      statusText: `Auto resolves to: ${_modeLabel(selectedMode)}`
-    };
-  }
-
-  return {
-    unavailableModes,
-    statusText: unavailableModes.length > 0
-      ? `${unavailableModes.length} mode(s) unavailable on this machine`
-      : ''
-  };
+function _getDocument() {
+  return typeof document !== 'undefined' ? document : null;
 }
 
 /**
@@ -284,6 +243,8 @@ function _buildContent() {
   content.appendChild(_buildSimBasicSection());
   content.appendChild(_buildSimAdvancedSection());
   content.appendChild(_buildSystemSection());
+
+  void _refreshSimulationCapabilityState();
 
   return content;
 }
@@ -856,8 +817,10 @@ function _buildSimBasicSection() {
   sec.appendChild(vbResult.row);
   let vbBadge = vbResult.badge;
 
-  // Fire non-blocking device availability poll after section renders
-  void _pollSimBasicDeviceAvailability();
+  const cachedHealth = getCachedRuntimeHealth();
+  if (cachedHealth) {
+    _applySimBasicDeviceAvailability(cachedHealth);
+  }
 
   return sec;
 }
@@ -872,13 +835,48 @@ function _buildSimAdvancedSection() {
   _appendSectionHeading(
     sec,
     'Simulation Advanced',
-    'Expert BEM solver tuning and mesh quality controls. Additional options available in future releases.'
+    'Phase-2 solver controls stay visible here, but remain read-only until the backend explicitly exposes them.'
   );
 
-  const placeholder = document.createElement('p');
-  placeholder.className = 'settings-placeholder-text';
-  placeholder.textContent = 'Advanced solver controls will appear here in a future update.';
-  sec.appendChild(placeholder);
+  const status = document.createElement('p');
+  status.id = 'simadvanced-capability-status';
+  status.className = 'settings-placeholder-text';
+  status.textContent = 'Checking backend capability...';
+  sec.appendChild(status);
+
+  const controlSpecs = [
+    ['Warm-up Pass', 'Controls one-time backend warm-up before solve loops.'],
+    ['Linear Solver Method', 'Planned solver-method override (for example GMRES vs CG).'],
+    ['Linear Solver Tolerance', 'Planned convergence tolerance override.'],
+    ['GMRES Restart', 'Planned restart/window size override for iterative solves.'],
+    ['Max Iterations', 'Planned cap for the linear solver iteration budget.'],
+    ['Strong-form Preconditioner', 'Planned strong-form preconditioner policy override.'],
+    ['Burton-Miller Coupling', 'Planned coupling toggle for high-frequency stability.'],
+    ['Symmetry Tolerance', 'Planned tolerance override for symmetry detection/reduction.'],
+  ];
+
+  for (const [labelText, helpText] of controlSpecs) {
+    const row = document.createElement('div');
+    row.className = 'settings-action-row';
+
+    const control = document.createElement('input');
+    control.type = 'text';
+    control.disabled = true;
+    control.value = 'Backend capability required';
+    row.appendChild(control);
+
+    const label = document.createElement('p');
+    label.className = 'settings-action-help';
+    label.textContent = `${labelText}: ${helpText}`;
+    row.appendChild(label);
+
+    sec.appendChild(row);
+  }
+
+  const cachedHealth = getCachedRuntimeHealth();
+  if (cachedHealth) {
+    _applySimAdvancedCapabilityState(cachedHealth);
+  }
 
   return sec;
 }
@@ -940,43 +938,69 @@ function _buildSystemSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Sim Basic device availability poll
+// Runtime capability refresh
 // ---------------------------------------------------------------------------
 
-/**
- * Non-blocking async health poll that marks unavailable device mode options
- * and populates the inline status element.
- *
- * Called fire-and-forget after _buildSimBasicSection renders.
- * Fails silently on any error — the UI remains fully functional with all
- * options enabled if the health check cannot be completed.
- */
-async function _pollSimBasicDeviceAvailability() {
-  const statusEl = document.getElementById('simbasic-deviceMode-status');
-  const select = document.getElementById('simbasic-deviceMode');
-  if (!statusEl || !select) return; // section not visible
+function _getSelectOptions(select) {
+  if (!select) return [];
+  if (select.options && typeof select.options[Symbol.iterator] === 'function') {
+    return Array.from(select.options);
+  }
+  return Array.isArray(select._children) ? select._children : [];
+}
 
+function _setOptionLabel(option, label) {
+  if (!option) return;
+  if ('textContent' in option) {
+    option.textContent = label;
+    return;
+  }
+  option.text = label;
+}
+
+function _applySimBasicDeviceAvailability(health) {
+  const doc = _getDocument();
+  if (!doc) return;
+
+  const statusEl = doc.getElementById('simbasic-deviceMode-status');
+  const select = doc.getElementById('simbasic-deviceMode');
+  if (!statusEl || !select) return;
+
+  const availability = describeSimBasicDeviceAvailability(health, select.value);
+  for (const opt of _getSelectOptions(select)) {
+    const isUnavailable = availability.unavailableModes.includes(opt.value);
+    opt.disabled = isUnavailable;
+    const baseLabel = String(opt.textContent || opt.text || '').replace(' (unavailable)', '');
+    _setOptionLabel(opt, isUnavailable && opt.value !== 'auto' ? `${baseLabel} (unavailable)` : baseLabel);
+  }
+  statusEl.textContent = availability.statusText;
+}
+
+function _applySimAdvancedCapabilityState(health) {
+  const doc = _getDocument();
+  if (!doc) return;
+
+  const statusEl = doc.getElementById('simadvanced-capability-status');
+  if (!statusEl) return;
+
+  const runtime = summarizeRuntimeCapabilities(health);
+  statusEl.textContent = runtime.simulationAdvanced.available
+    ? 'Advanced solve overrides are available for this backend.'
+    : runtime.simulationAdvanced.reason;
+}
+
+async function _refreshSimulationCapabilityState() {
   try {
-    const res = await fetch('http://localhost:8000/health');
-    if (!res.ok) throw new Error('health fetch failed');
-    const health = await res.json();
-    const availability = describeSimBasicDeviceAvailability(health, select.value);
-    for (const opt of select.options) {
-      const isUnavailable = availability.unavailableModes.includes(opt.value);
-      if (isUnavailable) {
-        opt.disabled = true;
-        if (opt.value !== 'auto') {
-          opt.text = opt.text.replace(' (unavailable)', '') + ' (unavailable)';
-        }
-      } else {
-        opt.disabled = false;
-        opt.text = opt.text.replace(' (unavailable)', '');
-      }
-    }
-    statusEl.textContent = availability.statusText;
+    const health = await fetchRuntimeHealth();
+    _applySimBasicDeviceAvailability(health);
+    _applySimAdvancedCapabilityState(health);
   } catch {
-    // Health poll failed — fail silently, leave all options enabled
-    statusEl.textContent = '';
+    const doc = _getDocument();
+    const statusEl = doc?.getElementById('simbasic-deviceMode-status');
+    if (statusEl) {
+      statusEl.textContent = '';
+    }
+    _applySimAdvancedCapabilityState(null);
   }
 }
 

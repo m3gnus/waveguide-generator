@@ -111,6 +111,7 @@ flowchart LR
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
    - Simulation Basic settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
+   - Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
    - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
@@ -247,6 +248,11 @@ Base URL: `http://localhost:8000`
 
 - `GET /health`
   - Health status + dependency matrix/runtime payload from `deps.py`
+  - Includes `capabilities` metadata for frontend settings gating:
+    - `simulationBasic.controls`
+    - `simulationAdvanced.available`
+    - `simulationAdvanced.reason`
+    - `simulationAdvanced.plannedControls`
   - Includes `deviceInterface` metadata for current device policy resolution:
     - `requested_mode`, `selected_mode`
     - `interface` (`opencl` when a device is selected)
