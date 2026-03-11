@@ -392,6 +392,8 @@ If OpenCL is unavailable the backend falls back to `numba`; fallback reason is s
 - Geometry artifacts/payload: `src/geometry/pipeline.js`
 - Surface tag rules: `src/geometry/tags.js`
 - Export use cases: `src/modules/export/useCases.js`
+- Simulation panel controller/store: `src/ui/simulation/controller.js`
+- Simulation job orchestration helpers: `src/ui/simulation/jobOrchestration.js`
 - Polar UI/helpers: `src/ui/simulation/polarSettings.js`
 - FastAPI app wiring: `server/app.py`
 - Simulation routes: `server/api/routes_simulation.py`
