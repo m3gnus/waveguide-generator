@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { normalizeParamInput } from '../src/ui/paramInput.js';
-import { formatJobSummary } from '../src/ui/simulation/jobActions.js';
+import { formatJobSummary, renderSimulationMeshDiagnostics } from '../src/ui/simulation/jobActions.js';
 import { validateSimulationConfig } from '../src/modules/simulation/useCases.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
@@ -114,6 +114,32 @@ test('describeSimBasicDeviceAvailability reports requested unavailable mode expl
 
   assert.deepEqual(summary.unavailableModes, ['opencl_gpu']);
   assert.equal(summary.statusText, 'OpenCL GPU unavailable on this machine.');
+});
+
+test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', () => {
+  const originalDocument = global.document;
+  const diagnosticsEl = { innerHTML: '' };
+  global.document = {
+    getElementById(id) {
+      return id === 'simulation-mesh-diagnostics' ? diagnosticsEl : null;
+    }
+  };
+
+  try {
+    renderSimulationMeshDiagnostics({
+      vertexCount: 12,
+      triangleCount: 4,
+      tagCounts: { 1: 2, 2: 0, 3: 1, 4: 1 },
+      warnings: ['Source surface tag (2) missing from the canonical simulation mesh.']
+    });
+
+    assert.match(diagnosticsEl.innerHTML, /12 vertices/);
+    assert.match(diagnosticsEl.innerHTML, /Tag 2/);
+    assert.match(diagnosticsEl.innerHTML, /Source/);
+    assert.match(diagnosticsEl.innerHTML, /missing from the canonical simulation mesh/i);
+  } finally {
+    global.document = originalDocument;
+  }
 });
 
 test('formatJobSummary falls back to Complete when duration is unavailable', () => {

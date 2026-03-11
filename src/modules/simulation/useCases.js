@@ -24,6 +24,8 @@ function normalizeWarningList(...values) {
   return values.flat().map((value) => String(value || '').trim()).filter(Boolean);
 }
 
+const CANONICAL_TAG_ORDER = Object.freeze([1, 2, 3, 4]);
+
 export function readSimulationState() {
   return GlobalState.get();
 }
@@ -99,6 +101,54 @@ export function prepareCanonicalSimulationMesh() {
   }
 
   return payload;
+}
+
+export function summarizeCanonicalSimulationMesh(meshData = {}) {
+  const vertices = Array.isArray(meshData?.vertices) ? meshData.vertices : [];
+  const indices = Array.isArray(meshData?.indices) ? meshData.indices : [];
+  const surfaceTags = Array.isArray(meshData?.surfaceTags) ? meshData.surfaceTags : [];
+  const warnings = [];
+
+  if (vertices.length % 3 !== 0) {
+    warnings.push('Vertex array length is not divisible by 3.');
+  }
+  if (indices.length % 3 !== 0) {
+    warnings.push('Triangle index array length is not divisible by 3.');
+  }
+
+  const vertexCount = Math.floor(vertices.length / 3);
+  const triangleCount = Math.floor(indices.length / 3);
+  const tagCounts = Object.fromEntries(CANONICAL_TAG_ORDER.map((tag) => [tag, 0]));
+  const unsupportedTags = new Set();
+
+  for (const rawTag of surfaceTags) {
+    const tag = Number(rawTag);
+    if (Object.hasOwn(tagCounts, tag)) {
+      tagCounts[tag] += 1;
+    } else {
+      unsupportedTags.add(tag);
+    }
+  }
+
+  if (surfaceTags.length !== triangleCount) {
+    warnings.push(
+      `Surface tag count ${surfaceTags.length} does not match triangle count ${triangleCount}.`
+    );
+  }
+  if (tagCounts[2] === 0) {
+    warnings.push('Source surface tag (2) missing from the canonical simulation mesh.');
+  }
+  if (unsupportedTags.size > 0) {
+    warnings.push(`Unsupported surface tags present: ${Array.from(unsupportedTags).sort((a, b) => a - b).join(', ')}.`);
+  }
+
+  return {
+    vertexCount,
+    triangleCount,
+    tagCounts,
+    warnings,
+    ok: warnings.length === 0
+  };
 }
 
 /**

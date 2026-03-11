@@ -24,6 +24,7 @@ import {
 import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
 import { downloadMeshArtifact } from './meshDownload.js';
 import {
+  summarizeCanonicalSimulationMesh,
   validateSimulationConfig,
   applySimulationJobScriptState,
   resolveClearedFailedJobIds
@@ -38,6 +39,44 @@ import {
 } from './controller.js';
 
 export { validateSimulationConfig };
+
+export function renderSimulationMeshDiagnostics(summary = null) {
+  const container = document.getElementById('simulation-mesh-diagnostics');
+  if (!container) {
+    return;
+  }
+
+  if (!summary) {
+    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Canonical tag diagnostics appear here before submit.</div>';
+    return;
+  }
+
+  const tagRows = [
+    ['1', 'Wall', summary.tagCounts?.[1] ?? 0],
+    ['2', 'Source', summary.tagCounts?.[2] ?? 0],
+    ['3', 'Secondary', summary.tagCounts?.[3] ?? 0],
+    ['4', 'Interface', summary.tagCounts?.[4] ?? 0]
+  ].map(([tag, label, count]) => `
+    <div class="simulation-mesh-diagnostics-tag">
+      <span class="simulation-mesh-diagnostics-tag-id">Tag ${tag}</span>
+      <span class="simulation-mesh-diagnostics-tag-label">${label}</span>
+      <span class="simulation-mesh-diagnostics-tag-count">${count}</span>
+    </div>
+  `).join('');
+
+  const warningMarkup = Array.isArray(summary.warnings) && summary.warnings.length > 0
+    ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join('<br>')}</div>`
+    : '<div class="simulation-mesh-diagnostics-ok">Canonical mesh tags look ready for submit.</div>';
+
+  container.innerHTML = `
+    <div class="simulation-mesh-diagnostics-header">
+      <span>Canonical Mesh Diagnostics</span>
+      <span>${summary.vertexCount} vertices • ${summary.triangleCount} triangles</span>
+    </div>
+    <div class="simulation-mesh-diagnostics-tags">${tagRows}</div>
+    ${warningMarkup}
+  `;
+}
 
 export function formatJobSummary(job) {
   const status = String(job.status || '').toLowerCase();
@@ -414,6 +453,7 @@ export async function runSimulation(panel) {
   try {
     // Get current mesh data
     const meshData = await panel.prepareMeshForSimulation();
+    renderSimulationMeshDiagnostics(summarizeCanonicalSimulationMesh(meshData));
 
     updateStageUi(panel, {
       progress: 0.2,
