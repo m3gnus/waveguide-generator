@@ -1,3 +1,30 @@
+export const FORMULA_FIELD_ALLOWLIST = Object.freeze({
+    'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
+    'OSSE': ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
+    'MORPH': ['morphWidth', 'morphHeight', 'morphCorner', 'morphRate', 'morphFixed'],
+    'GEOMETRY': [
+        'throatExtAngle',
+        'throatExtLength',
+        'slotLength',
+        'rot',
+        'gcurveDist',
+        'gcurveWidth',
+        'gcurveAspectRatio',
+        'gcurveSeN',
+        'gcurveSf',
+        'gcurveSfA',
+        'gcurveSfB',
+        'gcurveSfM1',
+        'gcurveSfM2',
+        'gcurveSfN1',
+        'gcurveSfN2',
+        'gcurveSfN3',
+        'gcurveRot',
+        'circArcTermAngle',
+        'circArcRadius'
+    ]
+});
+
 export const PARAM_SCHEMA = {
     'R-OSSE': {
         scale: {
@@ -178,3 +205,13 @@ export const PARAM_SCHEMA = {
     },
     // Output actions are handled via export buttons in the UI.
 };
+
+for (const [group, keys] of Object.entries(FORMULA_FIELD_ALLOWLIST)) {
+    const schemaGroup = PARAM_SCHEMA[group];
+    if (!schemaGroup) continue;
+    for (const key of keys) {
+        if (schemaGroup[key]) {
+            schemaGroup[key].supportsFormula = true;
+        }
+    }
+}
