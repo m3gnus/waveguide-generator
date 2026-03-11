@@ -6,10 +6,7 @@ import path from 'node:path';
 const ROOT = process.cwd();
 const SRC_ROOT = path.join(ROOT, 'src');
 
-const LEGACY_EXCEPTIONS = new Set([
-  'app/params.js->geometry/index.js',
-  'ui/simulation/SimulationPanel.js->solver/index.js'
-]);
+const LEGACY_EXCEPTIONS = new Set([]);
 
 const BOUNDARY_RULES = [
   {
