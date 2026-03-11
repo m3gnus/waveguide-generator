@@ -3,24 +3,19 @@
 import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
 import { showError } from '../feedback.js';
 import {
-  allJobs,
-  hasActiveJobs,
-  persistPanelJobs,
-  upsertJob,
-  toUiJob
+  hasActiveJobs
 } from './jobTracker.js';
 import { renderJobList } from './jobActions.js';
-import { setPollTimer, setActiveJob } from './jobOrchestration.js';
-import { syncSimulationWorkspaceJobManifest } from '../../modules/simulation/useCases.js';
+import { setPollTimer } from './jobOrchestration.js';
+import {
+  ensureSimulationControllerJobResults,
+  reconcileSimulationControllerRemoteJobs
+} from './controller.js';
 export { setPollTimer, clearPollTimer, setActiveJob } from './jobOrchestration.js';
 
 const ACTIVE_POLL_MS = 1000;
 const IDLE_POLL_MS = 15000;
 const MAX_POLL_BACKOFF_MS = 30000;
-
-async function syncManifestForRemoteUpdate(item) {
-  await syncSimulationWorkspaceJobManifest(item);
-}
 
 /**
  * @typedef {Object} SolverPollingApi
@@ -73,76 +68,52 @@ export function pollSimulationStatus(panel) {
   const pollOnce = async () => {
     try {
       const { runBtn } = getSimulationDom();
-      const payload = await panel.solver.listJobs({ limit: 200, offset: 0 });
-      const remoteItems = Array.isArray(payload?.items) ? payload.items.map((item) => toUiJob(item)) : [];
-      const knownIds = new Set();
-      for (const item of remoteItems) {
-        upsertJob(panel, item);
-        syncManifestForRemoteUpdate(item).catch((error) => {
+      const { activeJob, anyActive } = await reconcileSimulationControllerRemoteJobs(panel, {
+        onManifestSyncError: (error) => {
           console.warn('Task manifest sync failed during polling:', error);
-        });
-        knownIds.add(item.id);
-      }
-
-      for (const local of allJobs(panel)) {
-        if (knownIds.has(local.id)) {
-          continue;
         }
-        if (local.status === 'queued' || local.status === 'running') {
-          upsertJob(panel, {
-            ...local,
-            status: 'error',
-            stage: 'error',
-            stageMessage: 'Job missing from backend after reconnect',
-            errorMessage: 'Job state was lost after backend restart or reset.',
-            completedAt: local.completedAt || new Date().toISOString()
-          });
-        }
-      }
+      });
 
-      if (!panel.activeJobId || !panel.jobs.has(panel.activeJobId)) {
-        const active = allJobs(panel).find((job) => job.status === 'queued' || job.status === 'running');
-        setActiveJob(panel, active ? active.id : null);
-      }
-
-      if (panel.activeJobId && panel.jobs.has(panel.activeJobId)) {
-        const active = panel.jobs.get(panel.activeJobId);
+      if (activeJob) {
         updateStageUi(panel, {
-          progress: active.progress ?? 0,
-          stage: active.stage || active.status || 'queued',
-          message: active.stageMessage || active.errorMessage || ''
+          progress: activeJob.progress ?? 0,
+          stage: activeJob.stage || activeJob.status || 'queued',
+          message: activeJob.stageMessage || activeJob.errorMessage || ''
         });
 
-        if (active.status === 'complete' && !panel.resultCache.has(active.id)) {
-          updateStageUi(panel, {
-            progress: 1,
-            stage: 'finalizing',
-            message: 'Fetching and rendering results'
+        if (activeJob.status === 'complete') {
+          if (!panel.resultCache.has(activeJob.id)) {
+            updateStageUi(panel, {
+              progress: 1,
+              stage: 'finalizing',
+              message: 'Fetching and rendering results'
+            });
+          }
+          const result = await ensureSimulationControllerJobResults(panel, activeJob.id, {
+            display: true,
+            displayResults: (results) => {
+              panel.displayResults(results);
+            }
           });
-          const results = await panel.solver.getResults(active.id);
-          panel.resultCache.set(active.id, results);
-          panel.lastResults = results;
-          panel.displayResults(results);
-          updateStageUi(panel, {
-            progress: 1,
-            stage: 'complete',
-            message: 'Results ready'
-          });
-        } else if (active.status === 'complete' && panel.resultCache.has(active.id)) {
-          panel.lastResults = panel.resultCache.get(active.id);
-        } else if (active.status === 'error' || active.status === 'cancelled') {
+          if (result.ok) {
+            updateStageUi(panel, {
+              progress: 1,
+              stage: 'complete',
+              message: 'Results ready'
+            });
+          }
+        } else if (activeJob.status === 'error' || activeJob.status === 'cancelled') {
           panel.completedStatusMessage = null;
           panel.simulationStartedAtMs = null;
           panel.lastSimulationDurationMs = null;
           updateStageUi(panel, {
-            progress: active.status === 'cancelled' ? 0 : 1,
-            stage: active.status,
-            message: active.errorMessage || active.stageMessage || `Simulation ${active.status}`
+            progress: activeJob.status === 'cancelled' ? 0 : 1,
+            stage: activeJob.status,
+            message: activeJob.errorMessage || activeJob.stageMessage || `Simulation ${activeJob.status}`
           });
         }
       }
 
-      const anyActive = hasActiveJobs(panel);
       panel.pollBackoffMs = ACTIVE_POLL_MS;
       panel.consecutivePollFailures = 0;
       panel.pollDelayMs = anyActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
@@ -155,7 +126,6 @@ export function pollSimulationStatus(panel) {
         }, 1000);
       }
 
-      persistPanelJobs(panel);
       renderJobList(panel);
     } catch (error) {
       panel.consecutivePollFailures = (Number(panel.consecutivePollFailures) || 0) + 1;

@@ -9,12 +9,14 @@ import {
   syncSimulationWorkspaceJobManifest
 } from '../../modules/simulation/useCases.js';
 import {
+  allJobs,
   createJobTracker,
   loadLocalIndex,
   mergeJobs,
   removeJob,
   setJobsFromEntries,
   persistPanelJobs,
+  toUiJob,
   upsertJob
 } from './jobTracker.js';
 import { setActiveJob } from './jobOrchestration.js';
@@ -249,6 +251,38 @@ export function cancelSimulationControllerJob(controller, jobId) {
   }
   persistPanelJobs(controller);
   return cancelledJob;
+}
+
+export async function reconcileSimulationControllerRemoteJobs(
+  controller,
+  {
+    listQuery = { limit: 200, offset: 0 },
+    onManifestSyncError = null
+  } = {}
+) {
+  const payload = await controller.solver.listJobs(listQuery);
+  const remoteItems = Array.isArray(payload?.items)
+    ? payload.items.map((item) => toUiJob(item)).filter((item) => item?.id)
+    : [];
+  const merged = mergeJobs(allJobs(controller), remoteItems);
+  setJobsFromEntries(controller, merged);
+  setActiveJob(controller, controller.activeJobId || null);
+  persistPanelJobs(controller);
+
+  for (const item of remoteItems) {
+    syncSimulationWorkspaceJobManifest(item).catch((error) => {
+      if (typeof onManifestSyncError === 'function') {
+        onManifestSyncError(error, item);
+      }
+    });
+  }
+
+  const activeJob = controller.activeJobId ? (controller.jobs.get(controller.activeJobId) || null) : null;
+  return {
+    remoteItems,
+    activeJob,
+    anyActive: hasActiveJobs(controller)
+  };
 }
 
 export async function restoreSimulationControllerJobs(
