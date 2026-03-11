@@ -1,4 +1,12 @@
 import { showError, showMessage } from '../feedback.js';
+import {
+  getDeviceMode,
+  getEnableSymmetry,
+  getFrequencySpacing,
+  getMeshValidationMode,
+  getUseOptimized,
+  getVerbose
+} from '../settings/simBasicSettings.js';
 import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import {
@@ -365,8 +373,12 @@ export async function runSimulation(panel) {
     frequencyStart: Number(document.getElementById('freq-start').value),
     frequencyEnd: Number(document.getElementById('freq-end').value),
     numFrequencies: Number(document.getElementById('freq-steps').value),
-    frequencySpacing: 'log',
-    deviceMode: 'auto'
+    meshValidationMode: getMeshValidationMode(),
+    frequencySpacing: getFrequencySpacing(),
+    deviceMode: getDeviceMode(),
+    useOptimized: getUseOptimized(),
+    enableSymmetry: getEnableSymmetry(),
+    verbose: getVerbose()
   };
 
   const polarSettings = readPolarUiSettings();

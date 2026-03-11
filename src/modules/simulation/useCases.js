@@ -259,8 +259,12 @@ export function buildQueuedSimulationJob({
       frequencyStart: config.frequencyStart,
       frequencyEnd: config.frequencyEnd,
       numFrequencies: config.numFrequencies,
+      meshValidationMode: config.meshValidationMode,
       frequencySpacing: config.frequencySpacing,
       deviceMode: config.deviceMode,
+      useOptimized: config.useOptimized,
+      enableSymmetry: config.enableSymmetry,
+      verbose: config.verbose,
       polarConfig: config.polarConfig,
       params: { ...preparedParams },
       stateSnapshot

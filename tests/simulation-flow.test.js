@@ -65,6 +65,12 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         frequencyEnd: 1000,
         numFrequencies: 4,
         simulationType: '2',
+        meshValidationMode: 'strict',
+        frequencySpacing: 'linear',
+        deviceMode: 'opencl_cpu',
+        useOptimized: false,
+        enableSymmetry: false,
+        verbose: false,
         polarConfig: {
           angle_range: [0, 180, 37],
           norm_angle: 5,
@@ -95,6 +101,62 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.options.mesh.waveguide_params.formula_type, 'OSSE');
     assert.deepEqual(payload.polar_config.enabled_axes, ['horizontal', 'diagonal']);
     assert.equal(payload.sim_type, '2');
+    assert.equal(payload.mesh_validation_mode, 'strict');
+    assert.equal(payload.frequency_spacing, 'linear');
+    assert.equal(payload.device_mode, 'opencl_cpu');
+    assert.equal(payload.use_optimized, false);
+    assert.equal(payload.enable_symmetry, false);
+    assert.equal(payload.verbose, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { job_id: 'job-test-omit-1' };
+      }
+    };
+  };
+
+  try {
+    const solver = new BemSolver();
+    await solver.submitSimulation(
+      {
+        frequencyStart: 100,
+        frequencyEnd: 1000,
+        numFrequencies: 4,
+        meshValidationMode: 'invalid',
+        frequencySpacing: 'bogus',
+        deviceMode: '',
+        useOptimized: 'yes please',
+        enableSymmetry: null,
+        verbose: undefined
+      },
+      {
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2],
+        surfaceTags: [2],
+        format: 'msh',
+        boundaryConditions: {},
+        metadata: {}
+      }
+    );
+
+    const payload = JSON.parse(calls[0].options.body);
+    assert.equal('mesh_validation_mode' in payload, false);
+    assert.equal('frequency_spacing' in payload, false);
+    assert.equal('device_mode' in payload, false);
+    assert.equal('use_optimized' in payload, false);
+    assert.equal('enable_symmetry' in payload, false);
+    assert.equal('verbose' in payload, false);
   } finally {
     global.fetch = originalFetch;
   }
