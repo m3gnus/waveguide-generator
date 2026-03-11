@@ -8,16 +8,11 @@ const SRC_ROOT = path.join(ROOT, 'src');
 
 const LEGACY_EXCEPTIONS = new Set([
   'app/App.js->ui/paramPanel.js',
-  'app/App.js->ui/settings/modal.js',
   'app/App.js->ui/simulationPanel.js',
   'app/configImport.js->ui/feedback.js',
   'app/configImport.js->ui/fileOps.js',
   'app/events.js->ui/fileOps.js',
-  'app/events.js->ui/settings/modal.js',
-  'app/events.js->ui/workspace/folderWorkspace.js',
   'app/params.js->geometry/index.js',
-  'app/scene.js->ui/settings/modal.js',
-  'app/scene.js->ui/settings/viewerSettings.js',
   'app/updates.js->ui/feedback.js',
   'ui/simulation/SimulationPanel.js->solver/index.js'
 ]);

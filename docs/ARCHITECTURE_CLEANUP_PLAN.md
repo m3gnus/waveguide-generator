@@ -412,6 +412,9 @@ Completed in this step:
 2. Kept `buildExportMeshFromParams(...)` as a thin compatibility alias to avoid breaking existing callers/tests during Phase 4 migration.
 3. Updated export pipeline tests to validate `prepareExportArtifacts(...)` as the primary OCC export use case.
 4. Updated project documentation references from removed `src/app/exports.js` paths to current module use-case paths.
+5. Added `src/modules/ui/useCases.js` as the app-facing settings/workspace boundary for UI settings operations.
+6. Refactored `src/app/App.js`, `src/app/events.js`, and `src/app/scene.js` to consume settings/workspace operations through `src/modules/ui/useCases.js` instead of importing `src/ui/settings/*` and `src/ui/workspace/*` directly.
+7. Tightened `tests/architecture-boundaries.test.js` by removing now-resolved `src/app -> src/ui/settings|workspace` legacy exception edges.
 
 ## Phase 5: Untangle UI State And Circular Workflow Logic
 

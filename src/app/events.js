@@ -1,7 +1,6 @@
 import { GlobalState } from '../state.js';
 import { selectOutputFolder } from '../ui/fileOps.js';
-import { openSettingsModal } from '../ui/settings/modal.js';
-import { supportsFolderSelection } from '../ui/workspace/folderWorkspace.js';
+import { openAppSettings, isFolderSelectionSupported } from '../modules/ui/useCases.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
@@ -22,7 +21,7 @@ export function setupEventListeners(app) {
   });
 
   // Hide folder selection button if not supported by the browser
-  if (!supportsFolderSelection(window)) {
+  if (!isFolderSelectionSupported(window)) {
     const folderRow = document.getElementById('output-folder-row');
     if (folderRow) folderRow.style.display = 'none';
   }
@@ -56,7 +55,7 @@ export function bindButtonEvents(app) {
       type: 'click'
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
-    { id: 'settings-btn', handler: () => openSettingsModal(), type: 'click' }
+    { id: 'settings-btn', handler: () => openAppSettings(), type: 'click' }
   ];
 
   buttonBindings.forEach(({ id, handler, type }) => {
