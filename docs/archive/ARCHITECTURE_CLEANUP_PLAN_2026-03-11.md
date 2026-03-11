@@ -315,7 +315,7 @@ Definition for "Phase 2 complete":
 
 1. No normalization helpers remain duplicated across design/export/simulation paths.
 2. Existing behavior covered by `tests/waveguide-payload.test.js`, `tests/export-module.test.js`, and `tests/app-mesh-integration.test.js` is preserved or intentionally updated with matching doc changes.
-3. `docs/PROJECT_DOCUMENTATION.md` and `docs/CANONICAL_CONTRACT.md` are updated in the same change set if normalization behavior shifts.
+3. `docs/PROJECT_DOCUMENTATION.md` is updated in the same change set if normalization behavior shifts. At the time of this archive entry, the Phase 0 freeze also lived in `docs/CANONICAL_CONTRACT.md`; that content was later merged into the maintained project documentation.
 
 ### Implementation Notes (Completed March 11, 2026)
 
@@ -337,7 +337,7 @@ Completed in this step:
    - `buildWaveguidePayload(...)` rejects unprepared OCC-required fields
 7. Updated contract docs to reflect new ownership:
    - `docs/PROJECT_DOCUMENTATION.md`
-   - `docs/CANONICAL_CONTRACT.md`
+   - Section 8 of `docs/PROJECT_DOCUMENTATION.md` (originally tracked in `docs/CANONICAL_CONTRACT.md`)
 
 ## Phase 3: Make Geometry The Source Of Truth
 
