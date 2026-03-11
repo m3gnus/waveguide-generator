@@ -6,7 +6,6 @@ import {
   createOrthoCamera,
   ZebraShader
 } from '../viewer/index.js';
-import { GeometryModule } from '../modules/geometry/index.js';
 import { getDisplayMode } from '../ui/settings/modal.js';
 import {
   loadViewerSettings,
@@ -14,9 +13,7 @@ import {
   setInvertWheelZoom,
   getCurrentViewerSettings,
 } from '../ui/settings/viewerSettings.js';
-import { GlobalState } from '../state.js';
-import { DesignModule } from '../modules/design/index.js';
-import { buildGeometryMeshFromShape } from '../geometry/pipeline.js';
+import { prepareViewportMesh } from '../modules/geometry/useCases.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -76,6 +73,7 @@ export function onResize(app) {
   app.renderer.setSize(width, height);
 }
 
+
 export function renderModel(app) {
   if (!app.scene || !app.renderer) return;
   if (app.hornMesh) {
@@ -84,22 +82,7 @@ export function renderModel(app) {
     app.hornMesh.material.dispose();
   }
 
-  const designTask = DesignModule.task(
-    DesignModule.importState(GlobalState.get(), {
-      applyVerticalOffset: true
-    })
-  );
-  const preparedParams = DesignModule.output.preparedParams(designTask);
-
-  // Viewport tessellates from the prepared geometry shape. Export and
-  // simulation flows reuse the same shape-first geometry contract.
-  const geometryTask = GeometryModule.task(GeometryModule.importDesign(designTask), {
-    adaptivePhi: false
-  });
-  const geometryShape = GeometryModule.output.shape(geometryTask);
-  const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
-    adaptivePhi: false
-  });
+  const { vertices, indices, preparedParams } = prepareViewportMesh();
   applyMeshToScene(app, vertices, indices, preparedParams);
 }
 

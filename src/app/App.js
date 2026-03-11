@@ -19,12 +19,12 @@ function loadSimulationPanelModule() {
   return simulationPanelModulePromise;
 }
 
-let appExportsModulePromise = null;
-function loadAppExportsModule() {
-  if (!appExportsModulePromise) {
-    appExportsModulePromise = import('./exports.js');
+let exportUseCasesPromise = null;
+function loadExportUseCases() {
+  if (!exportUseCasesPromise) {
+    exportUseCasesPromise = import('../modules/export/useCases.js');
   }
-  return appExportsModulePromise;
+  return exportUseCasesPromise;
 }
 
 export class App {
@@ -130,18 +130,19 @@ export class App {
   }
 
   async exportSTL() {
-    const { exportSTL } = await loadAppExportsModule();
-    return exportSTL(this);
+    const { exportSTL } = await loadExportUseCases();
+    return exportSTL();
   }
 
   async exportMWGConfig() {
-    const { exportMWGConfig } = await loadAppExportsModule();
+    const { exportMWGConfig } = await loadExportUseCases();
     return exportMWGConfig();
   }
 
   async exportProfileCSV() {
-    const { exportProfileCSV } = await loadAppExportsModule();
-    return exportProfileCSV(this);
+    const { exportProfileCSV } = await loadExportUseCases();
+    const vertices = this.hornMesh?.geometry?.attributes?.position?.array;
+    return exportProfileCSV(vertices);
   }
 
   async provideMeshForSimulation() {
