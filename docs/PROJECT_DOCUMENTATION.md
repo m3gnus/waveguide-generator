@@ -132,6 +132,7 @@ Important behavior:
 - JS canonical payload currently emits only tags `1` and `2`; tag counters for `3`/`4` remain zero in runtime tests.
 - Simulation payload topology is full-domain and does not trim by `quadrants`.
 - OCC-adaptive `/api/solve` builds a full-domain queued OCC request with `quadrants=1234` at the submission boundary instead of mutating the caller-owned request in place.
+- `/api/solve` rejects mesh payloads that do not already contain source tag `2`, instead of waiting for solver-side mesh preparation to fail.
 - Adaptive phi tessellation is restricted to full-circle horn-only render usage.
 - The canonical frontend payload remains a validation/contract artifact; active simulation meshing is OCC-adaptive in backend.
 

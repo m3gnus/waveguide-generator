@@ -41,6 +41,28 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn('surfaceTags length', str(ctx.exception.detail))
 
+    def test_missing_source_tag_is_rejected_before_solver_check(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[1],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            options={}
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(submit_simulation(request))
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn('source tag 2', str(ctx.exception.detail))
+
     def test_sim_type_one_is_rejected_as_unsupported(self):
         request = SimulationRequest(
             mesh=MeshData(

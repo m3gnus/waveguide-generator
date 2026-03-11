@@ -603,6 +603,7 @@ Completed in this step:
 1. Kept `validate_submit_simulation_request()` pure: it now validates and returns normalized OCC waveguide params without mutating the caller-owned `SimulationRequest`.
 2. Added an explicit submission-boundary builder in `server/services/simulation_validation.py`, so `/api/solve` queues a corrected full-domain OCC request while preserving the original request object.
 3. Updated contract coverage to assert the full-domain quadrant correction happens only in the queued submission payload, not by rewriting the input request in place.
+4. Added submission-time validation that rejects any solve request whose mesh payload lacks source tag `2`, so the invariant is enforced before the solver runtime starts.
 
 ## Phase 8: Delete Legacy Paths And Rename Docs To Match Reality
 
