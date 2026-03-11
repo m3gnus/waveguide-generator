@@ -1,5 +1,4 @@
 import { GlobalState } from '../state.js';
-import { ParamPanel } from '../ui/paramPanel.js';
 import { UiModule } from '../modules/ui/index.js';
 
 import { initializeLogging } from './logging.js';
@@ -9,15 +8,11 @@ import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
-import { readLiveUpdateSetting } from '../modules/ui/useCases.js';
-
-let simulationPanelModulePromise = null;
-function loadSimulationPanelModule() {
-  if (!simulationPanelModulePromise) {
-    simulationPanelModulePromise = import('../ui/simulationPanel.js');
-  }
-  return simulationPanelModulePromise;
-}
+import {
+  readLiveUpdateSetting,
+  createAppParamPanel,
+  loadSimulationPanelModule
+} from '../modules/ui/useCases.js';
 
 let exportUseCasesPromise = null;
 function loadExportUseCases() {
@@ -45,7 +40,7 @@ export class App {
     this.initializeLogging();
 
     // Init UI
-    this.paramPanel = new ParamPanel('param-container');
+    this.paramPanel = createAppParamPanel('param-container');
     this.uiCoordinator.bind();
     this.ensureSimulationPanel().catch((error) => {
       console.error('Failed to initialize simulation panel:', error);

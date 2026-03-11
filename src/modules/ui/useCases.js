@@ -10,6 +10,9 @@ import {
   getCurrentViewerSettings
 } from '../../ui/settings/viewerSettings.js';
 import { supportsFolderSelection } from '../../ui/workspace/folderWorkspace.js';
+import { ParamPanel } from '../../ui/paramPanel.js';
+
+let simulationPanelModulePromise = null;
 
 export function readLiveUpdateSetting() {
   return getLiveUpdateEnabled();
@@ -41,4 +44,15 @@ export function configureWheelZoomInversion(domElement, invertEnabled) {
 
 export function getAppViewerSettings() {
   return getCurrentViewerSettings();
+}
+
+export function createAppParamPanel(containerId = 'param-container') {
+  return new ParamPanel(containerId);
+}
+
+export function loadSimulationPanelModule() {
+  if (!simulationPanelModulePromise) {
+    simulationPanelModulePromise = import('../../ui/simulationPanel.js');
+  }
+  return simulationPanelModulePromise;
 }
