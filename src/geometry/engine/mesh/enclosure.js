@@ -417,6 +417,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
             pushTri(lastRowStart + i2, ring0Start + i2, ring0Start + i);
         }
     }
+    const flatFrontEndTri = indices.length / 3;
 
     // --- Step 5: Front roundover rings (mouth-angle spacing, ringSize pts) ---
     // Use mouth-angle points so front roundover is identical to "mouth angles
@@ -444,6 +445,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         stitchRing(prevRing, ringIdx, ringSize);
         prevRing = ringIdx;
     }
+    const frontRoundoverEndTri = indices.length / 3;
     const frontRoundoverEnd = prevRing;
 
     // --- Step 6: Sidewall with fan stitch for ring-size transition ---
@@ -462,6 +464,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     } else {
         stitchRing(frontRoundoverEnd, backRingStart, ringSize);
     }
+    const sideWallEndTri = indices.length / 3;
 
     // --- Step 7: Back roundover rings (refined ring size) ---
     let currentRingStart = backRingStart;
@@ -491,6 +494,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         stitchRing(currentRingStart, ringStart, bodySize);
         currentRingStart = ringStart;
     }
+    const backRoundoverEndTri = indices.length / 3;
 
     // --- Step 8: Back Cap ---
     let avgX = 0, avgZ = 0;
@@ -531,9 +535,17 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         const i2 = (i + 1) % bodySize;
         pushTri(capRingStart + i, capRingStart + i2, capStart);
     }
+    const backCapEndTri = indices.length / 3;
 
     const enclosureEndTri = indices.length / 3;
     if (groupInfo) {
         groupInfo.enclosure = { start: enclosureStartTri, end: enclosureEndTri };
+        groupInfo.enc_front = { start: enclosureStartTri, end: flatFrontEndTri };
+        groupInfo.enc_edge = [
+            { start: flatFrontEndTri, end: frontRoundoverEndTri },
+            { start: sideWallEndTri, end: backRoundoverEndTri }
+        ];
+        groupInfo.enc_side = { start: frontRoundoverEndTri, end: sideWallEndTri };
+        groupInfo.enc_rear = { start: backRoundoverEndTri, end: backCapEndTri };
     }
 }

@@ -8,8 +8,9 @@
   - Phase 0 contract freeze (docs + contract tests aligned to runtime)
   - Phase 1 dependency boundary enforcement (frontend/backend import-boundary suites + server tests decoupled from `app.py` import shortcuts)
   - Phase 2 input normalization consolidation (DesignModule now owns OCC simulation/export normalization helpers consumed by module use cases)
-- In progress:
   - Phase 3 make geometry the source of truth (put geometry topology, face identity, and solver-tag mapping in one place)
+- In progress:
+  - Phase 4 rebuild export and simulation as real use-case modules
 
 ## Goal
 
@@ -360,6 +361,18 @@ Put geometry topology, face identity, and solver-tag mapping in one place.
 - `node --test tests/geometry-artifacts.test.js`
 - `node --test tests/enclosure-regression.test.js`
 - `node --test tests/export-gmsh-pipeline.test.js`
+
+### Implementation Notes (Completed March 11, 2026)
+
+Completed in this step:
+
+1. Expanded geometry pipeline to produce explicit geometry face identities (`inner_wall`, `enc_front`, etc.) natively in `src/geometry/engine/mesh/`.
+2. Created deterministic mapping layer in `src/geometry/tags.js`:
+   - `FACE_IDENTITY` -> `MESH_SIZING_CLASS`
+   - `FACE_IDENTITY` -> `SOLVER_BOUNDARY_CLASS`
+   - `SOLVER_BOUNDARY_CLASS` -> tag values
+3. Stopped using raw numeric tags as the initial intermediate meaning. The pipeline emits `groups` containing explicit semantic faces, which `buildSurfaceTags` maps deterministically.
+4. Decision on OCC boundary: OCC meshing consumes raw prepared parameters only (`occExportParams`, `occSimulationParams`). The frontend geometry mesh contract is strictly for JavaScript visualization and BEM payloads. The backend boundary remains parameter-based, not an explicit geometry payload upload. Documentation has been updated to reflect this boundary.
 
 ## Phase 4: Rebuild Export And Simulation As Real Use-Case Modules
 
