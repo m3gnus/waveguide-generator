@@ -3,6 +3,9 @@
 This document describes the current implementation in this repository.
 If code and docs disagree, update this file to match runtime behavior.
 
+Active cleanup roadmap:
+- `docs/ARCHITECTURE_CLEANUP_PLAN.md`
+
 ## 1. Scope and Entry Points
 
 Waveguide Generator is a browser-based horn design tool with:
