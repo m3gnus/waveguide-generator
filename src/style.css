@@ -536,6 +536,20 @@ h3 {
     color: var(--text-color);
 }
 
+.input-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.param-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+
 .input-row input[type="number"],
 .input-row input[type="text"] {
     width: 100%;
@@ -738,6 +752,13 @@ h3 {
     font-size: 1rem;
     font-weight: 600;
     color: var(--text-color);
+}
+
+.formula-info-context {
+    margin: 4px 0 0;
+    font-size: 0.8rem;
+    color: var(--text-color);
+    opacity: 0.75;
 }
 
 .formula-info-close {

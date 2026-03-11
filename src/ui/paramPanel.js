@@ -131,17 +131,7 @@ export class ParamPanel {
             header.className = 'section-header';
             const title = document.createElement('h3');
             title.textContent = `${type} PARAMETERS`;
-            const infoBtn = document.createElement('button');
-            infoBtn.className = 'formula-info-btn';
-            infoBtn.textContent = 'ƒ';
-            infoBtn.title = 'View available formulas and functions';
-            infoBtn.setAttribute('aria-label', 'View available formulas and functions');
-            infoBtn.onclick = (e) => {
-                e.preventDefault();
-                this.showFormulaInfo();
-            };
             header.appendChild(title);
-            header.appendChild(infoBtn);
             section.appendChild(header);
             for (const [key, def] of Object.entries(coreSchema)) {
                 section.appendChild(this.createControlRow(key, def, state.params[key]));
@@ -269,6 +259,10 @@ export class ParamPanel {
     createControlRow(key, def, currentValue) {
         const row = document.createElement('div');
         row.className = 'input-row';
+        row.setAttribute('data-param-key', key);
+
+        const labelRow = document.createElement('div');
+        labelRow.className = 'input-label-row';
 
         const label = document.createElement('label');
         const controlId = `param-${key}-${this.controlIdCounter++}`;
@@ -282,38 +276,61 @@ export class ParamPanel {
             label.classList.add('has-tooltip');
         }
 
-        row.appendChild(label);
+        labelRow.appendChild(label);
+        row.appendChild(labelRow);
 
-        if (def.type === 'range' || def.type === 'number' || def.type === 'expression') {
-            // All numeric/expression fields use fixed-width multi-line text inputs that accept formulas
+        const inputMode = getControlInputMode(def);
+        const isFormulaField = inputMode === 'formula';
+
+        if (inputMode === 'formula' || inputMode === 'number' || inputMode === 'text') {
             const wrapper = document.createElement('div');
-            wrapper.className = 'formula-input-wrapper';
+            wrapper.className = isFormulaField ? 'formula-input-wrapper' : 'param-input-wrapper';
 
             const input = document.createElement('input');
-            input.type = 'text';
+            input.type = inputMode === 'number' ? 'number' : 'text';
             input.id = controlId;
-            input.value = currentValue;
-            input.className = 'formula-input';
-            input.placeholder = def.type === 'expression' ? 'e.g., 45 + 10*cos(p)' : 'number or formula';
-
-            // Add min/max hint for range types
-            if (def.type === 'range' && def.min !== undefined && def.max !== undefined) {
-                input.title = `Range: ${def.min} to ${def.max}`;
+            input.value = currentValue ?? '';
+            input.setAttribute('data-param-key', key);
+            if (isFormulaField) {
+                input.className = 'formula-input';
+                input.placeholder = 'e.g., 45 + 10*cos(p)';
+                input.style.width = '100%';
+                input.style.whiteSpace = 'pre-wrap';
+                input.style.overflowY = 'auto';
+            } else if (inputMode === 'text') {
+                input.placeholder = def.placeholder || '';
             }
 
-            // Set fixed width matching dropdown menus, enable multi-line expansion
-            input.style.width = '100%';
-            input.style.whiteSpace = 'pre-wrap';
-            input.style.overflowY = 'auto';
+            if (inputMode === 'number') {
+                if (def.min !== undefined) input.min = String(def.min);
+                if (def.max !== undefined) input.max = String(def.max);
+                if (def.step !== undefined) input.step = String(def.step);
+            } else if (def.type === 'range' && def.min !== undefined && def.max !== undefined) {
+                input.title = `Range: ${def.min} to ${def.max}`;
+            }
 
             input.onchange = (e) => {
                 this.updateParam(key, normalizeParamInput(e.target.value));
             };
 
             wrapper.appendChild(input);
+            if (isFormulaField) {
+                const infoBtn = document.createElement('button');
+                infoBtn.type = 'button';
+                infoBtn.className = 'formula-info-btn';
+                infoBtn.textContent = 'ƒ';
+                infoBtn.title = `View formula reference for ${def.label}`;
+                infoBtn.setAttribute('aria-label', `View formula reference for ${def.label}`);
+                infoBtn.setAttribute('data-param-key', key);
+                infoBtn.onclick = (e) => {
+                    e.preventDefault();
+                    this.showFormulaInfo(def.label);
+                };
+                wrapper.appendChild(infoBtn);
+            }
 
             row.appendChild(wrapper);
-        } else if (def.type === 'select') {
+        } else if (inputMode === 'select') {
             const select = document.createElement('select');
             select.id = controlId;
             def.options.forEach(opt => {
@@ -333,11 +350,12 @@ export class ParamPanel {
         return row;
     }
 
-    showFormulaInfo() {
+    showFormulaInfo(fieldLabel = null) {
         // Check if info panel already exists
         let infoPanel = document.getElementById('formula-info-panel');
         if (infoPanel) {
-            infoPanel.classList.toggle('visible');
+            this.updateFormulaInfoContext(infoPanel, fieldLabel);
+            infoPanel.classList.add('visible');
             return;
         }
 
@@ -349,7 +367,10 @@ export class ParamPanel {
         const header = document.createElement('div');
         header.className = 'formula-info-header';
         header.innerHTML = `
-            <h4>Formula Reference</h4>
+            <div>
+                <h4 class="formula-info-title">Formula Reference</h4>
+                <p class="formula-info-context"></p>
+            </div>
             <button class="formula-info-close" title="Close">&times;</button>
         `;
         infoPanel.appendChild(header);
@@ -404,10 +425,31 @@ export class ParamPanel {
             infoPanel.classList.remove('visible');
         };
 
+        this.updateFormulaInfoContext(infoPanel, fieldLabel);
         document.body.appendChild(infoPanel);
+    }
+
+    updateFormulaInfoContext(infoPanel, fieldLabel) {
+        const context = infoPanel.querySelector('.formula-info-context');
+        if (!context) return;
+        if (fieldLabel) {
+            context.textContent = `For ${fieldLabel}`;
+            context.hidden = false;
+            return;
+        }
+        context.textContent = '';
+        context.hidden = true;
     }
 
     updateParam(key, value) {
         GlobalState.update({ [key]: value });
     }
+}
+
+export function getControlInputMode(def) {
+    if (!def) return 'text';
+    if (def.type === 'select') return 'select';
+    if (def.supportsFormula) return 'formula';
+    if (def.type === 'number' || def.type === 'range') return 'number';
+    return 'text';
 }
