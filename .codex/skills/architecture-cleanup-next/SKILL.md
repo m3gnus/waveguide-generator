@@ -1,8 +1,8 @@
 ---
 name: "architecture-cleanup-next"
-description: "Continue docs/ARCHITECTURE_CLEANUP_PLAN.md by running one unfinished slice after another from the current phase, grounding on the latest git commits, and orchestrating fresh Codex 5.3 subagents with reasoning scaled to each slice"
+description: "Continue docs/backlog.md by running one unfinished backlog slice after another, grounding on the latest git commits, and orchestrating fresh Codex 5.3 subagents with reasoning scaled to each slice"
 metadata:
-  short-description: "Run architecture cleanup slices in sequence"
+  short-description: "Run backlog slices in sequence"
 ---
 
 <codex_skill_adapter>
@@ -12,33 +12,33 @@ Codex skills-first mode:
 
 Execution helper:
 - Run `node ./.codex/skills/architecture-cleanup-next/scripts/next-architecture-cleanup-status.mjs --json` from repo root first.
-- Use that output as the source of truth for current phase, recent commits, and the current phase task list.
+- Use that output as the source of truth for the current backlog priority, recent commits, and the active backlog task list.
 </codex_skill_adapter>
 
 <objective>
-Replace the repeated prompt "do the next task in ARCHITECTURE_CLEANUP_PLAN.md; see last git commit for what has been done" with a deterministic multi-slice workflow.
+Replace the repeated prompt "do the next backlog item; see last git commit for what has been done" with a deterministic multi-slice workflow.
 
 The skill should:
-1. Read the cleanup-plan status helper output.
+1. Read the backlog status helper output.
 2. Inspect the latest commit(s) only as additional grounding, not as the sole source of truth.
-3. Choose the smallest coherent unfinished slice in the current phase.
+3. Choose the smallest coherent unfinished slice from the highest active backlog priority.
 4. Orchestrate a fresh Codex 5.3 subagent to execute that slice.
 5. After the slice lands and is committed, rerun the helper, choose the next slice, and hand it to a new Codex 5.3 subagent.
 6. Pick reasoning effort per slice complexity, not once for the whole phase.
 7. Run the narrowest relevant tests first, then broader tests if the slice completes.
-8. Update docs affected by the change, including `docs/ARCHITECTURE_CLEANUP_PLAN.md` implementation notes when appropriate.
-9. Stop only when the current phase is complete, a blocker requires user input, or a test failure means the slice is not safely shippable.
+8. Update docs affected by the change, including `docs/backlog.md` when priorities, relevance, or approach notes need to change.
+9. Stop only when the backlog is empty, a blocker requires user input, or a test failure means the slice is not safely shippable.
 </objective>
 
 <process>
-## 1. Phase loop
-Work in a loop for the active phase:
+## 1. Backlog loop
+Work in a loop for the active backlog:
 1. Run the helper script and capture:
-   - `currentPhase`
-   - `phaseTitle`
+   - `currentPriority`
+   - `currentPriorityTitle`
    - `recentCommits`
-   - `phaseTasks`
-   - `implementationNotes`
+   - `openItems`
+   - `baselineNotes`
    - `defaultReasoning`
 2. Merge any user-supplied constraints after the generated briefing.
 3. Pick the next slice using the selection rules below.
@@ -48,12 +48,12 @@ Work in a loop for the active phase:
 Do not keep implementing multiple slices in one long-lived worker. The whole point is to keep slice context isolated.
 
 ## 2. Pick the next slice
-Use the current phase section as the planning boundary. Select the next slice with these rules:
+Use the active backlog priority as the planning boundary. Select the next slice with these rules:
 - Prefer the smallest slice that removes one real architectural seam.
 - Prefer slices that eliminate remaining direct imports, duplicate orchestration, or UI-owned business logic.
 - Avoid broad file moves unless the current phase explicitly requires them.
 - If the last commit already completed a likely slice, move to the next non-overlapping seam.
-- If the phase has a checklist or numbered implementation notes, treat unchecked or unmentioned seams as remaining work.
+- If the backlog has researched item notes, treat unchecked items in the highest priority section as remaining work.
 - If a slice would exceed one focused subagent session, split it again before execution.
 
 State the chosen slice explicitly before execution in one sentence.
@@ -83,7 +83,7 @@ Subagents must:
 
 ## 5. Loop stop conditions
 Continue phase execution until one of these conditions is true:
-- the phase exit criteria are satisfied and the plan status can be advanced
+- there are no unchecked backlog items left
 - there is no clear next slice without a product decision or missing information
 - a targeted or broad regression test fails and the slice cannot be safely completed in the same run
 - the user provided a stopping constraint such as a commit-count or time limit
@@ -97,6 +97,6 @@ Report:
 - files changed
 - tests run
 - commit hashes
-- whether the current phase is complete
-- what the next likely slice is if the phase is still open
+- whether the backlog is empty
+- what the next likely slice is if backlog items remain
 </process>
