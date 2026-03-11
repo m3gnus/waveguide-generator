@@ -647,12 +647,12 @@ function _buildSimBasicSection() {
   _appendSectionHeading(
     sec,
     'Simulation Basic',
-    'BEM solver and meshing settings.'
+    'BEM solver defaults and solve-mesh behavior.'
   );
 
   // Keep existing "Download simulation mesh on start" checkbox
   _appendInlineRow(sec, {
-    labelText: 'Download simulation mesh on start',
+    labelText: 'Auto-download solve mesh artifact (.msh)',
     labelFor: 'download-sim-mesh',
     controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
   });

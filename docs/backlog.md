@@ -92,12 +92,12 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: `src/app/scene.js` always writes viewport counts into `app.stats`, while `server/services/simulation_runner.py` stores `mesh_artifact` and OCC stats but does not publish canonical vertex/triangle counts into job state. There is no shared app/panel state that can swap the stats widget from viewport counts to solve-mesh counts after OCC mesh generation succeeds.
   Completed: March 11, 2026. The backend job payload now publishes `mesh_stats` as soon as canonical/occ-adaptive solve mesh arrays exist, the simulation job cache persists those counts through polling/local job state, and the stats widget now flips from `Viewport` counts to `Simulation` counts once a live job reports solve-mesh geometry. Regression coverage now locks the backend `mesh_stats` publication, job-cache normalization, and polling-to-widget handoff.
 
-- [ ] Clarify solve-mesh versus export-mesh controls in the UI and docs.
+- [x] Clarify solve-mesh versus export-mesh controls in the UI and docs.
   Source: archived future additions doc.
   Relevant: Yes. Current controls mix viewport/export/solve semantics in ways that are not obvious.
   Will it improve the program: Yes. It should reduce incorrect expectations about what affects the backend OCC mesh.
   Research findings: the runtime docs already state that the viewport mesh is not the active simulation mesh, and `throatSliceDensity` already documents that it is viewport-only. The UI still groups mixed controls under `Mesh Density`, including viewport-only tessellation, OCC enclosure resolution fields, and simulation-only mesh download behavior, so the contract is still not obvious at the point of use.
-  Best approach: Update labels/tooltips first, then add a short mesh-controls matrix to `README.md` and `docs/PROJECT_DOCUMENTATION.md` once the UI wording is final.
+  Completed: March 11, 2026. The simulation panel now labels the mixed section as `Mesh Controls`, adds an inline note separating preview tessellation from backend solve/export meshing, renames the relevant schema labels/tooltips to `Viewport ...` versus `Solve ...`, and relabels the settings checkbox to `Auto-download solve mesh artifact (.msh)`. `README.md` and `docs/PROJECT_DOCUMENTATION.md` now include a short control matrix so viewport tessellation, solve/export mesh density, and download behavior are documented in one place.
 
 - [ ] Move the formula affordance from the section header to the relevant input fields and audit which fields should support formulas.
   Source: user request; `src/ui/paramPanel.js`; `src/config/schema.js`.
