@@ -1,6 +1,6 @@
 export { calculateROSSE, calculateOSSE, validateParameters, buildHornMesh, buildWaveguideMesh } from './waveguide.js';
 export { parseExpression } from './expression.js';
-export { evalParam, parseList, parseQuadrants } from './common.js';
+export { evalParam, parseQuadrants } from './common.js';
 export {
   isNumericString,
   isMWGConfig,

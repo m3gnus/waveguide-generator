@@ -646,6 +646,7 @@ Finish the cleanup by removing dead branches and stale language.
 6. After this slice, no runtime or test code depends on those legacy frontend alias entry points.
 7. Removed `buildExportMeshFromParams(...)` from `src/modules/export/useCases.js`; callers now use `prepareExportArtifacts(...)` as the only OCC mesh-build entry point.
 8. Deleted the compatibility-only regression coverage for that alias and kept the export pipeline tests on the real API surface.
+9. Removed the unused `parseList` compatibility alias from the geometry package export surface; `parseNumberList(...)` remains the single list parser in `src/geometry/common.js`.
 
 ## Suggested Implementation Order
 
