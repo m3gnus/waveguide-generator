@@ -9,9 +9,6 @@ Active backlog:
 Historical cleanup record:
 - `docs/archive/ARCHITECTURE_CLEANUP_PLAN_2026-03-11.md`
 
-Canonical contract freeze:
-- `docs/CANONICAL_CONTRACT.md`
-
 ## 1. Scope and Entry Points
 
 Waveguide Generator is a browser-based horn design tool with:
@@ -327,10 +324,127 @@ Every `/api/solve` result includes `metadata.performance`:
 | `gmres_strong_form_supported` | bool | Whether strong-form preconditioner was active for this run |
 | `reduction_speedup` | float | Symmetry reduction factor applied (1.0 = no reduction) |
 
-## 8. Canonical Mesh Payload Contract
+## 8. Canonical Contract
 
-Normative reference:
-- `docs/CANONICAL_CONTRACT.md`
+This section is normative for the current runtime contract. It absorbs the Phase 0 contract freeze that was previously kept in `docs/CANONICAL_CONTRACT.md`.
+
+### 8.1 Classification layers
+
+#### Geometry face identity
+
+Canonical identity vocabulary preserved by the cleanup:
+
+- Freestanding thickened horn:
+  - `inner_wall`
+  - `outer_wall`
+  - `mouth_rim`
+  - `rear_cap`
+  - `throat_disc`
+- Horn with enclosure:
+  - `horn_wall`
+  - `throat_disc`
+  - `enc_front`
+  - `enc_side`
+  - `enc_rear`
+  - `enc_edge`
+
+Runtime status:
+- The JS geometry engine emits explicit subsets for `inner_wall`, `outer_wall`, `mouth_rim`, `rear_cap`, `horn_wall`, `throat_disc`, `enc_front`, `enc_side`, `enc_rear`, and `enc_edge`.
+- `src/geometry/tags.js` maps those identities deterministically to mesh sizing classes and solver boundary classes.
+
+#### Mesh sizing classes
+
+Mesh sizing classes are meshing semantics only, not solver boundary-condition semantics:
+
+- `horn_inner_axial`
+- `horn_rear_domain`
+- `throat_source_region`
+- `enclosure_front`
+- `enclosure_rear`
+- `enclosure_edge`
+
+Runtime status:
+- JS runtime maps geometry identities to logical `MESH_SIZING_CLASS` constants via `src/geometry/tags.js`.
+- OCC meshing uses numeric resolution fields directly (`throat_res`, `mouth_res`, `rear_res`, `enc_front_resolution`, `enc_back_resolution`).
+
+#### Solver boundary classes
+
+- `RIGID_WALL`
+- `ACOUSTIC_SOURCE`
+- `IMPEDANCE_APERTURE` (reserved)
+- `SYMMETRY` (reserved)
+
+Runtime status:
+- Active frontend/runtime submission classes are `RIGID_WALL` and `ACOUSTIC_SOURCE`.
+- `throat_disc` maps to `ACOUSTIC_SOURCE`.
+- All non-source triangles map to `RIGID_WALL`.
+
+### 8.2 Numeric tag contract
+
+Shared numeric tag vocabulary:
+
+- `1` = wall (`SD1G0`)
+- `2` = source (`SD1D1001`)
+- `3` = secondary domain (`SD2G0`)
+- `4` = interface (`I1-2`)
+
+Runtime behavior by pipeline:
+- JS canonical simulation payload (`src/geometry/pipeline.js`, `src/geometry/tags.js`) emits only tags `1` and `2`.
+- OCC mesh build output (`/api/mesh/build`) emits tags `1`, `2`, and optional `3` when exterior surfaces exist.
+- Neither active JS runtime nor active OCC mesh build emits tag `4`.
+- OCC-adaptive `/api/solve` requires full-domain queued OCC requests (`quadrants=1234`) and passes canonical OCC `surfaceTags` through to solver mesh preparation unchanged.
+
+Required invariants:
+- `surfaceTags.length === indices.length / 3`
+- At least one source-tagged triangle (`2`) must exist before solve submission.
+
+### 8.3 Frontend payload decision
+
+- The frontend canonical payload remains numeric-tag-first: `vertices`, `indices`, and `surfaceTags` are the downstream simulation contract.
+- Face identities remain available through `meshData.groups` and are mapped via `src/geometry/tags.js`.
+- OCC meshing consumes raw prepared parameters only; it does not consume a frontend-generated mesh contract.
+
+### 8.4 Authoritative normalization spec
+
+#### Angular segments
+
+- Geometry mesh generation (`src/geometry/engine/buildWaveguideMesh.js`, `src/geometry/engine/mesh/angles.js`):
+  - Round to integer.
+  - Minimum `4`.
+  - If not divisible by `4`, snap up to the nearest multiple of `8` for ring construction.
+- OCC simulation request normalization (`src/modules/design/index.js`):
+  - `prepareOccSimulationParams(...)` sets `angularSegments = max(20, round(value))`.
+- OCC export request normalization (`src/modules/design/index.js`):
+  - `prepareOccExportParams(...)` snaps angular segments to multiples of `4` with minimum `20`.
+- Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`):
+  - Expects already-normalized integer `angularSegments`, maps it to `n_angular`, and throws on missing/invalid OCC-required fields instead of normalizing locally.
+
+#### Length segments
+
+- Geometry mesh generation rounds to integer and uses minimum `1` for internal tessellation.
+- OCC simulation/export normalization (`src/modules/design/index.js`) sets `lengthSegments = max(10, round(value))`.
+- Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`) expects already-normalized integer `lengthSegments`, maps it to `n_length`, and throws on missing/invalid OCC-required fields instead of normalizing locally.
+
+#### Quadrants
+
+- Frontend OCC request normalization (`src/modules/design/index.js`) accepts canonical values `1`, `12`, `14`, `1234`; otherwise it attempts numeric coercion and falls back to `1234`.
+- Waveguide OCC payload mapping (`src/solver/waveguidePayload.js`) expects normalized integer `quadrants` and maps it directly.
+- `/api/solve` validates the OCC-adaptive request and builds the queued solve request with full-domain `quadrants=1234` at the submission boundary.
+- Simulation runner rejects queued OCC requests that arrive with any non-`1234` quadrant value.
+
+#### Enclosure resolution fields
+
+- Frontend OCC payload fields `enc_front_resolution` and `enc_back_resolution` are strings.
+- Defaults are `"25,25,25,25"` and `"40,40,40,40"`.
+- Defaults and export scaling are applied by `prepareOccSimulationParams(...)` and `prepareOccExportParams(...)`.
+- `buildWaveguidePayload(...)` forwards the values as strings and requires the fields to be present.
+
+#### Unit metadata
+
+- Canonical frontend simulation payload metadata is `units: "mm"` and `unitScaleToMeter: 0.001`.
+- OCC-adaptive solve enriches mesh metadata with the same unit contract.
+
+### 8.5 Frontend canonical payload shape
 
 Frontend payload shape sent to `/api/solve`:
 
@@ -379,6 +493,14 @@ Validation points:
 - Backend request validation: `server/api/routes_simulation.py`
 - Backend mesh integrity checks: `server/solver/mesh.py`
 - Backend results surface failures in `metadata.failures`, `metadata.failure_count`, and `metadata.partial_success`
+
+### 8.6 Contract lock tests
+
+Primary tests that lock this contract:
+- `tests/mesh-payload.test.js`
+- `tests/geometry-artifacts.test.js`
+- `tests/waveguide-payload.test.js`
+- `server/tests/test_api_validation.py`
 
 ## 9. Testing and Verification
 
