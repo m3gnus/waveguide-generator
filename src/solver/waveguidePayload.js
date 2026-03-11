@@ -6,15 +6,6 @@ function toExprString(value) {
   return String(value);
 }
 
-function normalizeQuadrants(value) {
-  const text = String(value ?? '1234').trim();
-  if (text === '1' || text === '12' || text === '14' || text === '1234') {
-    return Number(text);
-  }
-  const numeric = Number(text);
-  return Number.isFinite(numeric) ? numeric : 1234;
-}
-
 function toNumberOrExpr(value, fallback) {
   if (value == null || value === '') return fallback;
   if (typeof value === 'function') {
@@ -28,6 +19,35 @@ function toNumberOrExpr(value, fallback) {
 function toFiniteNumber(value, fallback) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function requireFiniteNumber(name, value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    throw new Error(
+      `buildWaveguidePayload requires finite "${name}" from DesignModule OCC-normalized params.`
+    );
+  }
+  return numeric;
+}
+
+function requireIntegerNumber(name, value) {
+  const numeric = requireFiniteNumber(name, value);
+  if (!Number.isInteger(numeric)) {
+    throw new Error(
+      `buildWaveguidePayload requires integer "${name}" from DesignModule OCC-normalized params.`
+    );
+  }
+  return numeric;
+}
+
+function requireStringValue(name, value) {
+  if (value === undefined || value === null) {
+    throw new Error(
+      `buildWaveguidePayload requires "${name}" from DesignModule OCC-normalized params.`
+    );
+  }
+  return String(value);
 }
 
 export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
@@ -92,15 +112,15 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     morph_allow_shrinkage: toFiniteNumber(preparedParams.morphAllowShrinkage, 0),
 
     // Geometry grid
-    n_angular: Math.max(20, Math.round(toFiniteNumber(preparedParams.angularSegments, 100)) / 4 * 4),
-    n_length: Math.max(10, Math.round(toFiniteNumber(preparedParams.lengthSegments, 20))),
-    quadrants: normalizeQuadrants(preparedParams.quadrants),
+    n_angular: requireIntegerNumber('angularSegments', preparedParams.angularSegments),
+    n_length: requireIntegerNumber('lengthSegments', preparedParams.lengthSegments),
+    quadrants: requireIntegerNumber('quadrants', preparedParams.quadrants),
 
     // BEM mesh element sizes
-    throat_res: toFiniteNumber(preparedParams.throatResolution, 6.0),
-    mouth_res: toFiniteNumber(preparedParams.mouthResolution, 15.0),
-    rear_res: toFiniteNumber(preparedParams.rearResolution, 40.0),
-    wall_thickness: toFiniteNumber(preparedParams.wallThickness, 6.0),
+    throat_res: requireFiniteNumber('throatResolution', preparedParams.throatResolution),
+    mouth_res: requireFiniteNumber('mouthResolution', preparedParams.mouthResolution),
+    rear_res: requireFiniteNumber('rearResolution', preparedParams.rearResolution),
+    wall_thickness: requireFiniteNumber('wallThickness', preparedParams.wallThickness),
 
     // Enclosure
     enc_depth: toFiniteNumber(preparedParams.encDepth, 0),
@@ -111,12 +131,8 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     enc_edge: toFiniteNumber(preparedParams.encEdge, 18),
     enc_edge_type: toFiniteNumber(preparedParams.encEdgeType, 1),
     corner_segments: toFiniteNumber(preparedParams.cornerSegments, 4),
-    enc_front_resolution: preparedParams.encFrontResolution != null
-      ? String(preparedParams.encFrontResolution)
-      : '25,25,25,25',
-    enc_back_resolution: preparedParams.encBackResolution != null
-      ? String(preparedParams.encBackResolution)
-      : '40,40,40,40',
+    enc_front_resolution: requireStringValue('encFrontResolution', preparedParams.encFrontResolution),
+    enc_back_resolution: requireStringValue('encBackResolution', preparedParams.encBackResolution),
 
     // Simulation / output
     sim_type: 2,
