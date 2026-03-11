@@ -478,6 +478,17 @@ Completed in this step:
    - `src/ui/simulation/settings.js` now reads/updates state through `src/modules/simulation/useCases.js` facade helpers.
    - `src/ui/simulation/jobActions.js` now restores scripted state through `applySimulationJobScriptState(...)` instead of mutating `GlobalState` directly.
 8. Added import-boundary regression coverage to block new `src/ui/simulation/* -> src/state.js` direct imports (`tests/architecture-boundaries.test.js`).
+9. Centralized simulation workspace side effects behind `src/modules/simulation/useCases.js`:
+   - workspace index restore/rebuild is now owned by `readSimulationWorkspaceJobs(...)`
+   - index writes are serialized through `syncSimulationWorkspaceIndex(...)`
+   - task manifest writes are routed through `syncSimulationWorkspaceJobManifest(...)`
+10. Removed direct `src/ui/simulation/* -> src/ui/workspace/*` imports from:
+   - `src/ui/simulation/controller.js`
+   - `src/ui/simulation/jobTracker.js`
+   - `src/ui/simulation/jobActions.js`
+   - `src/ui/simulation/polling.js`
+11. Added regression coverage in `tests/simulation-module.test.js` for simulation workspace facade behavior (manifest sync, index rebuild, index write round-trip).
+12. Tightened `tests/architecture-boundaries.test.js` to block new direct `src/ui/simulation/* -> src/ui/workspace/*` imports.
 
 ## Phase 6: Remove Backend Compatibility Glue
 

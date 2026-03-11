@@ -1,5 +1,4 @@
-import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
-import { buildTaskIndexEntriesFromJobs, writeTaskIndex } from '../workspace/taskIndex.js';
+import { syncSimulationWorkspaceIndex } from '../../modules/simulation/useCases.js';
 
 const STORAGE_KEY = 'ath_simulation_jobs:v1';
 const STORAGE_VERSION = 1;
@@ -7,7 +6,6 @@ const MAX_LOCAL_ITEMS = 50;
 
 const TERMINAL = new Set(['complete', 'error', 'cancelled']);
 const ACTIVE = new Set(['queued', 'running']);
-let pendingFolderIndexWrite = Promise.resolve();
 
 function nowIso() {
   return new Date().toISOString();
@@ -242,20 +240,7 @@ export function allJobs(panel) {
 export function persistPanelJobs(panel) {
   const jobs = allJobs(panel);
   saveLocalIndex(jobs);
-
-  const folderHandle = getSelectedFolderHandle();
-  if (!folderHandle) {
-    return;
-  }
-
-  const entries = buildTaskIndexEntriesFromJobs(jobs);
-  pendingFolderIndexWrite = pendingFolderIndexWrite
-    .then(async () => {
-      await writeTaskIndex(folderHandle, entries);
-    })
-    .catch((error) => {
-      console.warn('Folder index write failed:', error);
-    });
+  void syncSimulationWorkspaceIndex(jobs);
 }
 
 export function removeJob(panel, jobId) {
