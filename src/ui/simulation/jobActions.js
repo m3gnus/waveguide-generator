@@ -12,7 +12,10 @@ import {
   getTaskListMinRatingFilter,
   getTaskListSortPreference
 } from '../settings/simulationManagementSettings.js';
-import { syncPolarControlsFromBlocks, readPolarUiSettings } from './polarSettings.js';
+import {
+  buildPolarStatePatchFromConfig,
+  readPolarStateSettings
+} from './polarSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import {
   allJobs,
@@ -33,7 +36,9 @@ import {
   validateSimulationConfig
 } from '../../modules/simulation/domain.js';
 import {
-  applySimulationJobScriptState
+  applySimulationJobScriptState,
+  readSimulationState,
+  updateSimulationStateParams
 } from '../../modules/simulation/state.js';
 import {
   resolveClearedFailedJobIds
@@ -234,35 +239,10 @@ function setSimulationInputsFromScript(script = {}) {
   }
 
   if (script.polarConfig) {
-    const polar = script.polarConfig;
-    const [angleStart, angleEnd, angleStep] = Array.isArray(polar.angle_range) ? polar.angle_range : [];
-    const polarMap = [
-      ['polar-angle-start', angleStart],
-      ['polar-angle-end', angleEnd],
-      ['polar-angle-step', angleStep],
-      ['polar-norm-angle', polar.norm_angle],
-      ['polar-distance', polar.distance],
-      ['polar-inclination', polar.inclination]
-    ];
-    for (const [id, value] of polarMap) {
-      if (value === undefined || value === null) continue;
-      const el = document.getElementById(id);
-      if (el) {
-        el.value = String(value);
-      }
-    }
-    const enabledAxes = new Set(Array.isArray(polar.enabled_axes) ? polar.enabled_axes : []);
-    const axisMappings = [
-      ['polar-axis-horizontal', 'horizontal'],
-      ['polar-axis-vertical', 'vertical'],
-      ['polar-axis-diagonal', 'diagonal']
-    ];
-    for (const [id, axis] of axisMappings) {
-      const el = document.getElementById(id);
-      if (el) {
-        el.checked = enabledAxes.size === 0 ? true : enabledAxes.has(axis);
-      }
-    }
+    const currentState = readSimulationState();
+    updateSimulationStateParams(
+      buildPolarStatePatchFromConfig(currentState?.params, script.polarConfig)
+    );
   }
 }
 
@@ -367,12 +347,9 @@ export function loadJobScript(panel, jobId) {
   }
 
   const script = job.script;
-  const appliedState = applySimulationJobScriptState(script, {
+  applySimulationJobScriptState(script, {
     source: 'simulation-job-load-script'
   });
-  if (appliedState.mode === 'snapshot') {
-    syncPolarControlsFromBlocks(appliedState.params?._blocks);
-  }
 
   setSimulationInputsFromScript(script);
   showMessage(`Loaded parameters from ${job.label || jobId}.`, { type: 'info', duration: 2500 });
@@ -518,7 +495,7 @@ export async function runSimulation(panel) {
     verbose: getVerbose()
   };
 
-  const polarSettings = readPolarUiSettings();
+  const polarSettings = readPolarStateSettings(readSimulationState()?.params);
   if (!polarSettings.ok) {
     showError(polarSettings.validationError);
     return;
