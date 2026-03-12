@@ -28,6 +28,7 @@ Primary files:
 
 - Real simulation requires the backend `/api/solve` path.
 - Completed-result UI reads backend result metadata directly; the View Results modal surfaces `metadata.symmetry_policy` / `metadata.symmetry` as a read-only symmetry decision summary when present.
+- Pre-submit diagnostics report geometry face identities as triangle counts and keep canonical numeric tag counts only as a secondary debug summary.
 - Frontend restore logic chooses one source mode at a time:
   - folder workspace selected -> folder manifests/index only
   - no folder workspace -> backend jobs plus local cache

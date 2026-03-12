@@ -3,6 +3,7 @@ import {
   SURFACE_TAGS,
   normalizeBuildParams,
   buildSurfaceTags,
+  countFaceIdentityTriangles,
   countTags,
   buildBoundaryConditions
 } from './tags.js';
@@ -104,6 +105,7 @@ function buildSimulationPayloadFromMesh(
   }
 
   const tagCounts = countTags(surfaceTags);
+  const identityTriangleCounts = countFaceIdentityTriangles(meshData.groups, indices.length / 3);
   if (tagCounts[SURFACE_TAGS.SOURCE] === 0) {
     throw new Error('Mesh payload generation failed: no source-tagged triangles were produced.');
   }
@@ -120,6 +122,7 @@ function buildSimulationPayloadFromMesh(
       fullCircle: Boolean(meshData.fullCircle),
       hasEnclosure,
       tagCounts,
+      identityTriangleCounts,
       units: 'mm',
       unitScaleToMeter: 0.001,
       verticalOffset: Number(buildParams.verticalOffset || 0)

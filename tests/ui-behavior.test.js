@@ -193,13 +193,29 @@ test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', 
     renderSimulationMeshDiagnostics({
       vertexCount: 12,
       triangleCount: 4,
+      identityTriangleCounts: {
+        throat_disc: 1,
+        horn_wall: 0,
+        inner_wall: 2,
+        outer_wall: 1,
+        mouth_rim: 0,
+        throat_return: 0,
+        rear_cap: 0,
+        enc_front: 0,
+        enc_side: 0,
+        enc_rear: 0,
+        enc_edge: 0
+      },
       tagCounts: { 1: 2, 2: 0, 3: 1, 4: 1 },
       warnings: ['Source surface tag (2) missing from the canonical simulation mesh.']
     });
 
     assert.match(diagnosticsEl.innerHTML, /12 vertices/);
-    assert.match(diagnosticsEl.innerHTML, /Tag 2/);
+    assert.match(diagnosticsEl.innerHTML, /Geometry Diagnostics/);
+    assert.match(diagnosticsEl.innerHTML, /throat_disc/);
+    assert.match(diagnosticsEl.innerHTML, /Inner Wall/);
     assert.match(diagnosticsEl.innerHTML, /Source/);
+    assert.match(diagnosticsEl.innerHTML, /triangle counts/i);
     assert.match(diagnosticsEl.innerHTML, /missing from the canonical simulation mesh/i);
   } finally {
     global.document = originalDocument;

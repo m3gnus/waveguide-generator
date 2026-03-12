@@ -19,6 +19,20 @@ export const FACE_IDENTITY = Object.freeze({
   ENC_EDGE: 'enc_edge'
 });
 
+export const FACE_IDENTITY_ORDER = Object.freeze([
+  FACE_IDENTITY.INNER_WALL,
+  FACE_IDENTITY.OUTER_WALL,
+  FACE_IDENTITY.MOUTH_RIM,
+  FACE_IDENTITY.THROAT_RETURN,
+  FACE_IDENTITY.REAR_CAP,
+  FACE_IDENTITY.HORN_WALL,
+  FACE_IDENTITY.THROAT_DISC,
+  FACE_IDENTITY.ENC_FRONT,
+  FACE_IDENTITY.ENC_SIDE,
+  FACE_IDENTITY.ENC_REAR,
+  FACE_IDENTITY.ENC_EDGE
+]);
+
 export const MESH_SIZING_CLASS = Object.freeze({
   HORN_INNER_AXIAL: 'horn_inner_axial',
   HORN_REAR_DOMAIN: 'horn_rear_domain',
@@ -133,6 +147,27 @@ export function countTags(surfaceTags) {
     if (counts[tag] !== undefined) {
       counts[tag] += 1;
     }
+  }
+  return counts;
+}
+
+function countTrianglesInRange(range, triangleCount) {
+  if (!range) {
+    return 0;
+  }
+  if (Array.isArray(range)) {
+    return range.reduce((sum, nextRange) => sum + countTrianglesInRange(nextRange, triangleCount), 0);
+  }
+
+  const start = Math.max(0, Math.floor(Number(range.start || 0)));
+  const end = Math.min(triangleCount, Math.floor(Number(range.end || 0)));
+  return end > start ? end - start : 0;
+}
+
+export function countFaceIdentityTriangles(groups = {}, triangleCount = 0) {
+  const counts = Object.fromEntries(FACE_IDENTITY_ORDER.map((identity) => [identity, 0]));
+  for (const identity of FACE_IDENTITY_ORDER) {
+    counts[identity] = countTrianglesInRange(groups?.[identity], triangleCount);
   }
   return counts;
 }
