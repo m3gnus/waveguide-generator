@@ -29,6 +29,7 @@ Command behavior:
 - `tests/error-hardening.test.js`
 - `tests/export-gmsh-pipeline.test.js`
 - `tests/export-module.test.js`
+- `tests/file-ops.test.js`
 - `tests/folder-workspace.test.js`
 - `tests/geometry-artifacts.test.js`
 - `tests/geometry-module.test.js`

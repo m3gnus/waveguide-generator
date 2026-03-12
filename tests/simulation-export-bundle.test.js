@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { exportResults } from '../src/ui/simulation/exports.js';
+import { writeSimulationTaskBundleFile } from '../src/ui/simulation/workspaceTasks.js';
 import {
+  getSelectedFolderHandle,
   resetSelectedFolder,
   setSelectedFolderHandle
 } from '../src/ui/workspace/folderWorkspace.js';
@@ -100,6 +102,42 @@ test('exportResults writes selected bundle files into the task folder workspace'
     assert.equal(taskDir.files.has('horn_12_results.json'), true);
     assert.match(taskDir.files.get('horn_12_results.csv'), /Frequency \(Hz\),SPL \(dB\)/);
     assert.match(taskDir.files.get('horn_12_results.json'), /"smoothing": "none"/);
+  } finally {
+    resetSelectedFolder();
+  }
+});
+
+test('writeSimulationTaskBundleFile clears the selected workspace and falls back when task-folder writes fail', async () => {
+  setSelectedFolderHandle({
+    name: 'workspace',
+    async queryPermission() {
+      return 'granted';
+    },
+    async getDirectoryHandle() {
+      throw new Error('write failed');
+    }
+  }, { label: 'workspace' });
+
+  const fallbackCalls = [];
+
+  try {
+    const result = await writeSimulationTaskBundleFile(
+      { id: 'job-2' },
+      {
+        fileName: 'job-2_results.json',
+        content: '{"ok":true}',
+        saveOptions: { contentType: 'application/json' }
+      },
+      {
+        fallbackWrite: async (file) => {
+          fallbackCalls.push(file.fileName);
+        }
+      }
+    );
+
+    assert.equal(result.wroteToTaskFolder, false);
+    assert.deepEqual(fallbackCalls, ['job-2_results.json']);
+    assert.equal(getSelectedFolderHandle(), null);
   } finally {
     resetSelectedFolder();
   }
