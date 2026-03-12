@@ -118,12 +118,13 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P1.5 Viewport Geometry UX
 
-- [ ] Align the viewport throat-disc appearance between OSSE and R-OSSE so R-OSSE no longer looks visually smoothed over at the source cap.
+- [x] Align the viewport throat-disc appearance between OSSE and R-OSSE so R-OSSE no longer looks visually smoothed over at the source cap.
   Source: user report on March 12, 2026; `src/geometry/engine/buildWaveguideMesh.js`; `src/geometry/engine/mesh/source.js`; `src/app/scene.js`; `src/geometry/engine/profiles/rosse.js`; `src/geometry/engine/profiles/osse.js`.
   Relevant: Yes. The inconsistency is visible in the main viewport, so it affects day-to-day geometry inspection even though the canonical source tag contract remains correct.
   Will it improve the program: Yes. It will make OSSE and R-OSSE throat presentation feel consistent and avoid implying a geometry difference where the runtime contract expects the same source-cap identity.
   Research findings: `buildWaveguideMesh()` builds the throat disc the same way for both model types by calling `generateThroatSource(vertices, throatRingCount, fullCircle)` on the first ring and then fanning triangles from an averaged center point; there is no OSSE-versus-R-OSSE branch in that source-cap path. The viewport renderer in `src/app/scene.js` then uses `geometry.computeVertexNormals()`, so the visible seam is driven by shared rim vertices plus the local horn-wall slope. `R-OSSE` also exposes `k - Rounding` explicitly as a throat smoothness control in `src/config/schema.js` and `src/geometry/engine/profiles/rosse.js`, which likely makes the shared normals blend the disc into the wall more softly than OSSE.
   Best approach: Treat this as a viewport shading/tessellation follow-up rather than a source-tag contract change. Investigate whether the throat disc should use duplicated rim vertices, flat/source-cap normals, or a small render-only disc material split so the cap keeps a crisp OSSE-like presentation without changing canonical mesh tags or solver payloads.
+  Completed: March 12, 2026. The viewport render path now duplicates the `throat_disc` triangle group's vertices before Three.js computes normals, so the source cap shades independently from the horn wall while the canonical geometry/simulation payload remains unchanged. `tests/viewport-throat-disc.test.js` locks the seam by proving the detached viewport mesh no longer shares source-cap vertices with the horn wall.
 
 ### P2 Folder-Backed Completion And Export Flow
 
