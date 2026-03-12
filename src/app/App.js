@@ -9,18 +9,16 @@ import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
 import {
+  exportMwgConfigFromApp,
+  exportProfileCsvFromApp,
+  exportStlFromApp,
+  registerBackendDiagnosticTool
+} from './exports.js';
+import {
   readLiveUpdateSetting,
   createAppParamPanel,
   loadSimulationPanelModule
 } from '../modules/ui/useCases.js';
-
-let exportUseCasesPromise = null;
-function loadExportUseCases() {
-  if (!exportUseCasesPromise) {
-    exportUseCasesPromise = import('../modules/export/useCases.js');
-  }
-  return exportUseCasesPromise;
-}
 
 export class App {
   constructor() {
@@ -48,6 +46,7 @@ export class App {
     this.ensureSimulationPanel().catch((error) => {
       console.error('Failed to initialize simulation panel:', error);
     });
+    registerBackendDiagnosticTool();
 
     this.setupScene();
     this.setupEventListeners();
@@ -128,19 +127,16 @@ export class App {
   }
 
   async exportSTL() {
-    const { exportSTL } = await loadExportUseCases();
-    return exportSTL();
+    return exportStlFromApp();
   }
 
   async exportMWGConfig() {
-    const { exportMWGConfig } = await loadExportUseCases();
-    return exportMWGConfig();
+    return exportMwgConfigFromApp();
   }
 
   async exportProfileCSV() {
-    const { exportProfileCSV } = await loadExportUseCases();
     const vertices = this.hornMesh?.geometry?.attributes?.position?.array;
-    return exportProfileCSV(vertices);
+    return exportProfileCsvFromApp(vertices);
   }
 
   async provideMeshForSimulation() {

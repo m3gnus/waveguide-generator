@@ -1,10 +1,36 @@
-import { saveFile, getExportBaseName } from '../../ui/fileOps.js';
-import { showError } from '../../ui/feedback.js';
-import { GlobalState } from '../../state.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import { isDevRuntime } from '../../config/runtimeMode.js';
 import { ExportModule } from './index.js';
 import { DesignModule } from '../design/index.js';
+
+const DEFAULT_EXPORT_BASE_NAME = 'horn';
+
+function isObject(value) {
+  return value !== null && typeof value === 'object';
+}
+
+function normalizeBaseName(baseName) {
+  const normalized = String(baseName || '').trim();
+  return normalized || DEFAULT_EXPORT_BASE_NAME;
+}
+
+function requireExportState(state) {
+  if (!isObject(state) || !isObject(state.params) || typeof state.type !== 'string') {
+    throw new Error('Export use cases require an explicit application state snapshot.');
+  }
+  return state;
+}
+
+async function writeExportFiles(files, writeFile) {
+  if (typeof writeFile !== 'function') {
+    throw new Error('Export use cases require a writeFile callback at the app/UI edge.');
+  }
+
+  const writtenFiles = [];
+  for (const file of files) {
+    writtenFiles.push(await writeFile(file));
+  }
+  return writtenFiles;
+}
 
 /**
  * Prepare OCC export artifacts using the Python mesher (`POST /api/mesh/build`).
@@ -25,45 +51,55 @@ export async function prepareExportArtifacts(
   return ExportModule.output.occMesh(exportTask);
 }
 
-export function buildStlExportFiles({ baseName = getExportBaseName() } = {}) {
+export function buildStlExportFiles(state, { baseName } = {}) {
+  const exportState = requireExportState(state);
   const designTask = DesignModule.task(
-    DesignModule.importState(GlobalState.get(), {
+    DesignModule.importState(exportState, {
       applyVerticalOffset: false
     })
   );
   const preparedParams = DesignModule.output.exportParams(designTask);
-  const exportTask = ExportModule.task(ExportModule.importStl(preparedParams, { baseName }));
+  const exportTask = ExportModule.task(
+    ExportModule.importStl(preparedParams, {
+      baseName: normalizeBaseName(baseName)
+    })
+  );
   return ExportModule.output.files(exportTask);
 }
 
-export async function exportSTL(options = {}) {
-  for (const file of buildStlExportFiles(options)) {
-    await saveFile(file.content, file.fileName, file.saveOptions);
-  }
+export async function exportSTL({ state, baseName, writeFile } = {}) {
+  return writeExportFiles(
+    buildStlExportFiles(state, { baseName }),
+    writeFile
+  );
 }
 
-export function exportMWGConfig() {
-  const state = GlobalState.get();
-  const baseName = getExportBaseName();
+export function buildMwgConfigExportFiles(state, { baseName } = {}) {
+  const exportState = requireExportState(state);
   const exportTask = ExportModule.task(
     ExportModule.importConfig({
-      params: { type: state.type, ...state.params },
-      baseName
+      params: { type: exportState.type, ...exportState.params },
+      baseName: normalizeBaseName(baseName)
     })
   );
-  for (const file of ExportModule.output.files(exportTask)) {
-    saveFile(file.content, file.fileName, file.saveOptions);
-  }
+  return ExportModule.output.files(exportTask);
 }
 
-export function buildProfileCsvExportFiles(vertices, { baseName = getExportBaseName() } = {}) {
+export async function exportMWGConfig({ state, baseName, writeFile } = {}) {
+  return writeExportFiles(
+    buildMwgConfigExportFiles(state, { baseName }),
+    writeFile
+  );
+}
+
+export function buildProfileCsvExportFiles(vertices, { state, baseName } = {}) {
   if (!vertices || vertices.length === 0) {
     return null;
   }
 
-  const state = GlobalState.get();
+  const exportState = requireExportState(state);
   const designTask = DesignModule.task(
-    DesignModule.importState(state, {
+    DesignModule.importState(exportState, {
       applyVerticalOffset: false
     })
   );
@@ -72,102 +108,19 @@ export function buildProfileCsvExportFiles(vertices, { baseName = getExportBaseN
   const exportTask = ExportModule.task(
     ExportModule.importProfileCsv(preparedParams, {
       vertices,
-      baseName
+      baseName: normalizeBaseName(baseName)
     })
   );
   return ExportModule.output.files(exportTask);
 }
 
-export async function exportProfileCSV(vertices, options = {}) {
-  const files = buildProfileCsvExportFiles(vertices, options);
+export async function exportProfileCSV(vertices, { state, baseName, writeFile, onMissingMesh } = {}) {
+  const files = buildProfileCsvExportFiles(vertices, { state, baseName });
   if (!files) {
-    showError('Please generate a horn model first.');
-    return;
+    if (typeof onMissingMesh === 'function') {
+      onMissingMesh('Please generate a horn model first.');
+    }
+    return null;
   }
-  for (const file of files) {
-    await saveFile(file.content, file.fileName, file.saveOptions);
-  }
-}
-
-// Manual backend diagnostics tool (available in browser console in local/dev runtime only)
-if (typeof window !== 'undefined' && isDevRuntime()) {
-  window.testBackendConnection = async function () {
-    console.log('╔════════════════════════════════════════════════════════╗');
-    console.log('║     Backend Connection Diagnostic Test                ║');
-    console.log('╚════════════════════════════════════════════════════════╝\n');
-
-    const backendUrl = DEFAULT_BACKEND_URL;
-
-    // Test 1: Health endpoint
-    console.log('📡 Test 1: Health endpoint check');
-    console.log('   URL:', `${backendUrl}/health`);
-    try {
-      const start = performance.now();
-      const res = await fetch(`${backendUrl}/health`);
-      const elapsed = (performance.now() - start).toFixed(0);
-      console.log(`   ✅ Response: HTTP ${res.status} (${elapsed}ms)`);
-      const data = await res.json();
-      console.log('   Data:', data);
-    } catch (e) {
-      console.error('   ❌ Failed:', e.name, '-', e.message);
-    }
-
-    console.log('\n📡 Test 2: Root endpoint check');
-    console.log('   URL:', `${backendUrl}/`);
-    try {
-      const start = performance.now();
-      const res = await fetch(`${backendUrl}/`);
-      const elapsed = (performance.now() - start).toFixed(0);
-      console.log(`   ✅ Response: HTTP ${res.status} (${elapsed}ms)`);
-      const data = await res.json();
-      console.log('   Data:', data);
-    } catch (e) {
-      console.error('   ❌ Failed:', e.name, '-', e.message);
-    }
-
-    // Test 3: Gmsh meshing endpoint (OCC builder)
-    console.log('\n📡 Test 3: Gmsh meshing endpoint (OCC builder)');
-    console.log('   URL:', `${backendUrl}/api/mesh/build`);
-    try {
-      const testPayload = {
-        params: {
-          type: 'R-OSSE',
-          L: 50,
-          throat: 25.4,
-          mouth: 150,
-          depth: 100,
-          quadrants: '12',
-          angularSegments: 40,
-          lengthSegments: 20
-        },
-        mshVersion: '2.2'
-      };
-      const start = performance.now();
-      const res = await fetch(`${backendUrl}/api/mesh/build`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(testPayload)
-      });
-      const elapsed = (performance.now() - start).toFixed(0);
-      console.log(`   Response: HTTP ${res.status} (${elapsed}ms)`);
-
-      if (!res.ok) {
-        const err = await res.json();
-        console.error('   ❌ Error:', err.detail || err);
-      } else {
-        const data = await res.json();
-        console.log('   ✅ Success! Python OCC builder works.');
-        console.log('   Stats:', data.stats);
-      }
-    } catch (e) {
-      console.error('   ❌ Failed:', e.name, '-', e.message);
-    }
-
-    console.log('\n╔════════════════════════════════════════════════════════╗');
-    console.log('║     Diagnostic Test Complete                           ║');
-    console.log('╚════════════════════════════════════════════════════════╝');
-  };
-
-  console.log('💡 Backend diagnostic tool loaded.');
-  console.log('   Run: window.testBackendConnection()');
+  return writeExportFiles(files, writeFile);
 }
