@@ -31,6 +31,9 @@ export async function openViewResultsModal(panel) {
   title.textContent = 'Simulation Results';
   header.appendChild(title);
 
+  const headerActions = document.createElement('div');
+  headerActions.className = 'view-results-header-actions';
+
   // Smoothing dropdown in header
   const smoothingContainer = document.createElement('div');
   smoothingContainer.className = 'view-results-smoothing';
@@ -62,14 +65,16 @@ export async function openViewResultsModal(panel) {
     smoothingSelect.appendChild(opt);
   }
   smoothingContainer.appendChild(smoothingSelect);
-  header.appendChild(smoothingContainer);
+  headerActions.appendChild(smoothingContainer);
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'view-results-close';
   closeBtn.textContent = '\u00d7';
   closeBtn.title = 'Close (Escape)';
-  header.appendChild(closeBtn);
+  headerActions.appendChild(closeBtn);
+
+  header.appendChild(headerActions);
 
   dialog.appendChild(header);
 
