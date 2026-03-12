@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from solver.observation import infer_observation_frame, point_from_polar
+from solver.observation import (
+    infer_observation_frame,
+    point_from_polar,
+    resolve_safe_observation_distance,
+)
 
 
 class _GridStub:
@@ -79,6 +83,30 @@ class ObservationFrameTest(unittest.TestCase):
         )
 
         self.assertGreater(float(np.dot(obs - frame["origin_center"], frame["axis"])), 0.99)
+
+    def test_safe_observation_distance_is_pushed_ahead_of_large_geometry(self):
+        vertices = np.array([
+            [0.0, 0.1, -0.1, 0.0, 0.2, -0.2],
+            [0.1, -0.1, 0.0, 0.1, -0.1, 0.0],
+            [0.0, 0.0, 0.0, 1.12, 1.12, 1.12],
+        ], dtype=np.float64)
+        elements = np.array([
+            [0, 1, 2, 3],
+            [1, 2, 0, 4],
+            [2, 0, 1, 5],
+        ], dtype=np.int64)
+        domain_indices = np.array([2, 2, 2, 1], dtype=np.int64)
+        grid = _GridStub(vertices, elements, domain_indices)
+
+        frame = infer_observation_frame(grid)
+        resolved = resolve_safe_observation_distance(grid, 1.0, frame)
+
+        self.assertTrue(resolved["adjusted"])
+        self.assertGreater(resolved["effective_distance_m"], 1.12)
+        self.assertGreaterEqual(
+            resolved["effective_distance_m"],
+            resolved["min_safe_distance_m"],
+        )
 
 
 if __name__ == "__main__":

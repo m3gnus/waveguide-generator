@@ -113,12 +113,10 @@ def _mode_unavailable_reason(mode: str) -> Optional[str]:
     if base_reason:
         return str(base_reason)
 
-    # bempp-cl 0.4.x singular assembler currently relies on CPU OpenCL kernels.
-    if not bool(info.get("cpu_available")):
-        return str(info.get("cpu_reason") or "no suitable OpenCL CPU driver.")
-
     if normalized == "opencl_cpu":
-        return None
+        if bool(info.get("cpu_available")):
+            return None
+        return str(info.get("cpu_reason") or "no suitable OpenCL CPU driver.")
 
     if normalized == "opencl_gpu":
         if bool(info.get("gpu_available")):
@@ -192,30 +190,40 @@ def _apply_opencl_mode(mode: str) -> Tuple[bool, Optional[str], Optional[str], O
         return False, "opencl", None, None
 
     try:
-        from bempp_cl.core.opencl_kernels import (  # type: ignore
-            default_cpu_context,
-            default_cpu_device,
-            default_gpu_context,
-            default_gpu_device,
-        )
+        import bempp_cl.core.opencl_kernels as opencl_kernels  # type: ignore
     except Exception:
         return False, "opencl", None, None
 
     if normalized == "opencl_cpu":
         setattr(bempp_api, "BOUNDARY_OPERATOR_DEVICE_TYPE", "cpu")
         setattr(bempp_api, "POTENTIAL_OPERATOR_DEVICE_TYPE", "cpu")
-        device = default_cpu_device()
-        default_cpu_context()
+        device = opencl_kernels.default_cpu_device()
+        opencl_kernels.default_cpu_context()
         return True, "opencl", "cpu", str(getattr(device, "name", None) or "OpenCL CPU")
 
     # For GPU mode, keep boundary/potential on GPU while ensuring CPU context can
-    # still be initialized for singular kernels in bempp-cl 0.4.x.
+    # still be initialized for singular kernels in bempp-cl 0.4.x. On some
+    # Apple/OpenCL setups only a GPU context is exposed, so alias the singular
+    # assembler's CPU context calls to the active GPU context.
     setattr(bempp_api, "BOUNDARY_OPERATOR_DEVICE_TYPE", "gpu")
     setattr(bempp_api, "POTENTIAL_OPERATOR_DEVICE_TYPE", "gpu")
-    device = default_gpu_device()
+    device = opencl_kernels.default_gpu_device()
+    default_gpu_context = opencl_kernels.default_gpu_context
     default_gpu_context()
-    default_cpu_device()
-    default_cpu_context()
+
+    info = _opencl_inventory()
+    if not bool(info.get("cpu_available")):
+        gpu_context = default_gpu_context()
+        gpu_device = device
+        setattr(opencl_kernels, "_wg_original_default_cpu_device", getattr(opencl_kernels, "default_cpu_device", None))
+        setattr(opencl_kernels, "_wg_original_default_cpu_context", getattr(opencl_kernels, "default_cpu_context", None))
+        setattr(opencl_kernels, "_wg_original_default_context", getattr(opencl_kernels, "default_context", None))
+        opencl_kernels.default_cpu_device = lambda *args, **kwargs: gpu_device
+        opencl_kernels.default_cpu_context = lambda *args, **kwargs: gpu_context
+        opencl_kernels.default_context = lambda *args, **kwargs: gpu_context
+    else:
+        opencl_kernels.default_cpu_device()
+        opencl_kernels.default_cpu_context()
     return True, "opencl", "gpu", str(getattr(device, "name", None) or "OpenCL GPU")
 
 
