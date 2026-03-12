@@ -4,6 +4,11 @@ import { applyMorphing } from '../morphing.js';
 import { calculateOSSE } from '../profiles/osse.js';
 import { calculateROSSE } from '../profiles/rosse.js';
 
+function computeRosseProfileAt(t, p, params) {
+  const tmax = params.tmax === undefined ? DEFAULTS.TMAX : evalParam(params.tmax, p);
+  return calculateROSSE(t * tmax, p, params);
+}
+
 export function computeOsseProfileAt(t, p, params, context) {
   const L = evalParam(params.L, p);
   const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
@@ -22,6 +27,13 @@ export function computeOsseProfileAt(t, p, params, context) {
   return profile;
 }
 
+export function evaluateInnerProfileAt(t, p, params, context) {
+  if (params.type === 'R-OSSE') {
+    return computeRosseProfileAt(t, p, params);
+  }
+  return computeOsseProfileAt(t, p, params, context);
+}
+
 export function computeMouthExtents(params, context) {
   const sampleCount = Math.max(360, Math.round((params.angularSegments || DEFAULTS.ANGULAR_SEGMENTS) * 4));
   const needsTarget = params.morphTarget !== undefined && Number(params.morphTarget) !== MORPH_TARGETS.NONE;
@@ -30,9 +42,7 @@ export function computeMouthExtents(params, context) {
   let rawMaxX = 0;
   let rawMaxZ = 0;
 
-  const evaluateAt = (p) => (params.type === 'R-OSSE'
-    ? calculateROSSE(evalParam(params.tmax || DEFAULTS.TMAX, p), p, params)
-    : computeOsseProfileAt(1, p, params, context));
+  const evaluateAt = (p) => evaluateInnerProfileAt(1, p, params, context);
 
   for (let i = 0; i < sampleCount; i += 1) {
     const p = (i / sampleCount) * Math.PI * 2;
@@ -70,7 +80,7 @@ export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, cont
     let maxZ = 0;
 
     for (const p of safeAngles) {
-      const profile = computeOsseProfileAt(t, p, params, context);
+      const profile = evaluateInnerProfileAt(t, p, params, context);
       const r = profile.y;
       maxX = Math.max(maxX, Math.abs(r * Math.cos(p)));
       maxZ = Math.max(maxZ, Math.abs(r * Math.sin(p)));
@@ -88,14 +98,7 @@ export function createRingVertices(params, sliceMap, angleList, morphTargets, ri
 
     for (let i = 0; i < ringCount; i += 1) {
       const p = angleList[i];
-      const tmax = params.type === 'R-OSSE'
-        ? (params.tmax === undefined ? DEFAULTS.TMAX : evalParam(params.tmax, p))
-        : DEFAULTS.TMAX;
-      const tActual = params.type === 'R-OSSE' ? t * tmax : t;
-
-      const profile = params.type === 'R-OSSE'
-        ? calculateROSSE(tActual, p, params)
-        : computeOsseProfileAt(tActual, p, params, context);
+      const profile = evaluateInnerProfileAt(t, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
       const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);
@@ -146,14 +149,7 @@ function _sampleEffectiveRadius(params, t, context) {
 
   for (let i = 0; i <= NSAMPLE; i += 1) {
     const p = (i / NSAMPLE) * Math.PI * 2;
-    const tmax = params.type === 'R-OSSE'
-      ? (params.tmax === undefined ? DEFAULTS.TMAX : evalParam(params.tmax, p))
-      : DEFAULTS.TMAX;
-    const tActual = params.type === 'R-OSSE' ? t * tmax : t;
-
-    const profile = params.type === 'R-OSSE'
-      ? calculateROSSE(tActual, p, params)
-      : computeOsseProfileAt(tActual, p, params, context);
+    const profile = evaluateInnerProfileAt(t, p, params, context);
 
     const r = profile.y; // pre-morph radius (morph is minor near throat)
     const x = r * Math.cos(p);
@@ -230,14 +226,7 @@ export function createAdaptiveRingVertices(params, sliceMap, morphTargets, phiCo
 
     for (let i = 0; i < N; i += 1) {
       const p = (i / N) * Math.PI * 2;
-      const tmax = params.type === 'R-OSSE'
-        ? (params.tmax === undefined ? DEFAULTS.TMAX : evalParam(params.tmax, p))
-        : DEFAULTS.TMAX;
-      const tActual = params.type === 'R-OSSE' ? t * tmax : t;
-
-      const profile = params.type === 'R-OSSE'
-        ? calculateROSSE(tActual, p, params)
-        : computeOsseProfileAt(tActual, p, params, context);
+      const profile = evaluateInnerProfileAt(t, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
       const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);

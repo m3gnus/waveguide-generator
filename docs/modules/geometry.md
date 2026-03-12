@@ -39,10 +39,16 @@ Invariants:
 - Frontend simulation payload topology is full-domain and is not trimmed by `quadrants`.
 - JS canonical payload is a contract/validation artifact; active simulation meshing is OCC-adaptive in the backend.
 - Adaptive phi tessellation is only for full-circle horn-only render usage.
+- Outer build mode is exclusive: enclosure (`encDepth > 0`) or freestanding wall shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
+- Enclosure generation is OSSE-only. `R-OSSE` with `encDepth > 0` is rejected.
+- Freestanding wall thickness is generated from local axial/radial profile-section normals, not a global radial expansion.
+- When `morphTarget` is enabled and `morphWidth` / `morphHeight` are unset, target extents are derived from the current slice.
 
 ## Regression Coverage
 
 - `tests/mesh-payload.test.js`
 - `tests/geometry-artifacts.test.js`
 - `tests/enclosure-regression.test.js`
+- `tests/geometry-quality.test.js`
+- `tests/morph-implicit-target.test.js`
 - `tests/geometry-module.test.js`

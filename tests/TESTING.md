@@ -36,6 +36,7 @@ Command behavior:
 - `tests/geometry-parity.test.js`
 - `tests/geometry-quality.test.js`
 - `tests/mesh-payload.test.js`
+- `tests/morph-implicit-target.test.js`
 - `tests/polar-settings.test.js`
 - `tests/references-guard.test.js`
 - `tests/simulation-flow.test.js`
