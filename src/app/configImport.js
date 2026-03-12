@@ -1,16 +1,18 @@
 import { importMWGConfig } from '../modules/design/useCases.js';
 import { GlobalState } from '../state.js';
 import {
-  showUiError,
   deriveExportFieldsFromImportedFileName,
   setAppExportFields,
   resetAppParameterChangeTracking
 } from '../modules/ui/useCases.js';
 
-export function handleFileUpload(event) {
+export function handleFileUpload(event, ui = {}) {
   const target = event?.target;
   const file = target?.files?.[0];
   if (!file) return;
+  const showError = typeof ui.showError === 'function'
+    ? ui.showError.bind(ui)
+    : (message) => console.error(message);
 
   const resetInputValue = () => {
     if (target && 'value' in target) {
@@ -28,14 +30,14 @@ export function handleFileUpload(event) {
         GlobalState.update(result.params, result.type);
         setAppExportFields(deriveExportFieldsFromImportedFileName(file.name), document);
       } else {
-        showUiError(result.error || 'Failed to parse config file.');
+        showError(result.error || 'Failed to parse config file.');
       }
     } finally {
       resetInputValue();
     }
   };
   reader.onerror = () => {
-    showUiError('Failed to read config file.');
+    showError('Failed to read config file.');
     resetInputValue();
   };
   reader.readAsText(file);

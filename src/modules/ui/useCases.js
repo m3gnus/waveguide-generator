@@ -11,12 +11,6 @@ import {
 } from '../../ui/settings/viewerSettings.js';
 import { ParamPanel } from '../../ui/paramPanel.js';
 import {
-  showCommandSuggestion,
-  showError,
-  showMessage,
-  showSuccess
-} from '../../ui/feedback.js';
-import {
   deriveExportFieldsFromFileName,
   setExportFields,
   resetParameterChangeTracking,
@@ -66,22 +60,6 @@ export function loadSimulationPanelModule() {
     simulationPanelModulePromise = import('../../ui/simulation/SimulationPanel.js');
   }
   return simulationPanelModulePromise;
-}
-
-export function showUiError(message, duration) {
-  return showError(message, duration);
-}
-
-export function showUiMessage(message, options) {
-  return showMessage(message, options);
-}
-
-export function showUiSuccess(message, duration) {
-  return showSuccess(message, duration);
-}
-
-export function showUiCommandSuggestion(options = {}) {
-  return showCommandSuggestion(options);
 }
 
 export function deriveExportFieldsFromImportedFileName(fileName, options = {}) {
