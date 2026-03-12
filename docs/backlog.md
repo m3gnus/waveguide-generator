@@ -47,6 +47,9 @@ When new work lands, continue to work the backlog from upstream runtime truth to
 
 There are no scheduled implementation items right now.
 
+When the backlog re-opens, queue this UX/runtime follow-up near the simulation UI slice:
+- Expose the `enable_symmetry` on/off control in the settings menu so users can explicitly disable automatic symmetry reduction for troubleshooting and A/B comparisons between full-model and reduced-model solves.
+
 Re-open the backlog when:
 - a new product or runtime requirement lands
 - a deferred watchpoint becomes an active delivery bottleneck
