@@ -22,6 +22,7 @@ export class App {
     this.viewportMeshStats = null;
     this.simulationMeshStats = null;
     this.activeMeshStatsSource = 'viewport';
+    this.currentState = null;
     this.renderRequested = false;
     this.simulationPanel = null;
     this.uiCoordinator = UiModule.output.app(
@@ -78,6 +79,7 @@ export class App {
   }
 
   onStateUpdate(state) {
+    this.currentState = state;
     // 1. Rebuild Param UI
     this.paramPanel.createFullPanel();
     this.schedulePanelAutoSize();

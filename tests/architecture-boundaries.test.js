@@ -11,7 +11,6 @@ const LEGACY_EXCEPTIONS = new Set([
   'app/exports.js->ui/fileOps.js'
 ]);
 const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
-  'modules/geometry/useCases.js->state.js',
   'modules/simulation/state.js->state.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/folderWorkspace.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskIndex.js',

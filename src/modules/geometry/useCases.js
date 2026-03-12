@@ -1,15 +1,22 @@
 import { buildGeometryMeshFromShape } from '../../geometry/pipeline.js';
 import { GeometryModule } from './index.js';
 import { DesignModule } from '../design/index.js';
-import { GlobalState } from '../../state.js';
+
+function requireViewportState(state) {
+  if (!state || typeof state !== 'object') {
+    throw new Error('Geometry viewport use cases require an explicit application state snapshot.');
+  }
+  return state;
+}
 
 /**
  * Prepare mesh data for viewport rendering.
- * Consumes GlobalState and returns { vertices, indices, preparedParams }.
+ * Consumes an explicit app-state snapshot and returns { vertices, indices, groups, preparedParams }.
  */
-export function prepareViewportMesh() {
+export function prepareViewportMesh(state) {
+  const viewportState = requireViewportState(state);
   const designTask = DesignModule.task(
-    DesignModule.importState(GlobalState.get(), {
+    DesignModule.importState(viewportState, {
       applyVerticalOffset: true
     })
   );

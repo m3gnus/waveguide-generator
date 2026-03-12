@@ -70,13 +70,14 @@ export function onResize(app) {
 
 export function renderModel(app) {
   if (!app.scene || !app.renderer) return;
+  if (!app.currentState) return;
   if (app.hornMesh) {
     app.scene.remove(app.hornMesh);
     app.hornMesh.geometry.dispose();
     app.hornMesh.material.dispose();
   }
 
-  const viewportMesh = prepareViewportMesh();
+  const viewportMesh = prepareViewportMesh(app.currentState);
   const renderMesh = detachThroatDiscVertices(viewportMesh);
   applyMeshToScene(app, renderMesh.vertices, renderMesh.indices, viewportMesh.preparedParams);
 }

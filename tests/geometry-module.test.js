@@ -9,6 +9,7 @@ import {
   buildGeometryMeshFromShape
 } from '../src/geometry/index.js';
 import { DesignModule } from '../src/modules/design/index.js';
+import { prepareViewportMesh } from '../src/modules/geometry/useCases.js';
 
 function makeRawParams(overrides = {}) {
   return {
@@ -113,4 +114,31 @@ test('GeometryModule.importDesign consumes DesignModule task output directly', (
     JSON.stringify(geometryInput.params),
     JSON.stringify(expectedPrepared)
   );
+});
+
+test('prepareViewportMesh consumes an explicit state snapshot instead of ambient state', () => {
+  const state = {
+    type: 'OSSE',
+    params: makeRawParams({
+      encDepth: 180,
+      quadrants: '12'
+    })
+  };
+
+  const viewportMesh = prepareViewportMesh(state);
+  const expectedPrepared = prepareGeometryParams(state.params, {
+    type: state.type,
+    applyVerticalOffset: true
+  });
+  const expectedShape = buildGeometryShape(expectedPrepared, {
+    adaptivePhi: false
+  });
+  const expectedMesh = buildGeometryMeshFromShape(expectedShape, {
+    adaptivePhi: false
+  });
+
+  assert.equal(viewportMesh.preparedParams.type, expectedPrepared.type);
+  assert.deepEqual(viewportMesh.vertices, expectedMesh.vertices);
+  assert.deepEqual(viewportMesh.indices, expectedMesh.indices);
+  assert.deepEqual(viewportMesh.groups, expectedMesh.groups);
 });
