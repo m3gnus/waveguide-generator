@@ -34,6 +34,7 @@ import {
   getCachedRuntimeHealth,
   summarizeRuntimeCapabilities,
 } from '../runtimeCapabilities.js';
+import { createHelpTrigger } from '../helpAffordance.js';
 
 export { describeSimBasicDeviceAvailability } from '../runtimeCapabilities.js';
 
@@ -51,6 +52,21 @@ const _state = {
   displayMode: 'standard',
   downloadSimMesh: false,
 };
+const SIMULATION_MANAGEMENT_HELP = Object.freeze({
+  downloadMesh: 'Automatically downloads the backend-generated .msh artifact when a solve starts.',
+  defaultSort: 'Sets the default order used in the Simulation Jobs list.',
+  minRatingFilter: 'Hides completed jobs rated below this threshold in the Simulation Jobs list.',
+  autoExportOnComplete: 'Automatically exports the selected bundle formats whenever a simulation finishes successfully.',
+  selectedFormats: 'Chooses which files are included in a completed-task export bundle.'
+});
+const SIMULATION_BASIC_HELP = Object.freeze({
+  deviceMode: 'Chooses the preferred OpenCL device lane. Auto follows the backend capability policy.',
+  meshValidationMode: 'Controls whether canonical mesh validation warns, fails, or is skipped before solve submission.',
+  frequencySpacing: 'Controls how solved frequencies are distributed between the sweep start and end values.',
+  useOptimized: 'Uses the optimized backend solve path when the runtime supports it.',
+  enableSymmetry: 'Allows the backend symmetry policy to reduce eligible models before solving.',
+  verbose: 'Includes detailed backend logging in job progress output and server logs.'
+});
 
 /**
  * Get the current live-update preference.
@@ -181,20 +197,11 @@ function _buildModal(viewerRuntime) {
       saveSimBasicSettings(settings);
     }
 
-    if (t.id === 'simmanage-auto-export' || t.getAttribute?.('data-sim-management-format')) {
-      const selectedFormats = Array.from(
-        backdrop.querySelectorAll('input[data-sim-management-format]')
-      )
-        .filter((input) => input.checked)
-        .map((input) => input.getAttribute('data-sim-management-format'))
-        .filter(Boolean);
-
-      const currentSettings = getCurrentSimulationManagementSettings();
-      saveSimulationManagementSettings({
-        ...currentSettings,
-        autoExportOnComplete: document.getElementById('simmanage-auto-export')?.checked
-          ?? currentSettings.autoExportOnComplete,
-        selectedFormats
+    if (_isSimulationManagementControl(t)) {
+      const settings = _readSimulationManagementSettings(backdrop);
+      saveSimulationManagementSettings(settings);
+      _syncTaskListPreferenceControls(settings, {
+        dispatchToolbarChange: t.id === 'simmanage-default-sort' || t.id === 'simmanage-min-rating'
       });
     }
   });
@@ -647,10 +654,45 @@ function _buildSimBasicSection() {
   _appendInlineRow(sec, {
     labelText: 'Auto-download solve mesh artifact (.msh)',
     labelFor: 'download-sim-mesh',
+    helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
     controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
   });
 
   const managementSettings = getCurrentSimulationManagementSettings();
+  const taskListHeader = document.createElement('div');
+  taskListHeader.className = 'settings-subsection-header';
+
+  const taskListTitle = document.createElement('h4');
+  taskListTitle.className = 'settings-subsection-title';
+  taskListTitle.textContent = 'Task List';
+  taskListHeader.appendChild(taskListTitle);
+  sec.appendChild(taskListHeader);
+
+  _appendInlineRow(sec, {
+    labelText: 'Default Task Sort',
+    labelFor: 'simmanage-default-sort',
+    helpText: SIMULATION_MANAGEMENT_HELP.defaultSort,
+    controlNode: _buildSelectElement('simmanage-default-sort', managementSettings.defaultSort, [
+      { value: 'completed_desc', label: 'Newest First' },
+      { value: 'rating_desc', label: 'Highest Rated' },
+      { value: 'label_asc', label: 'Label A-Z' }
+    ])
+  });
+
+  _appendInlineRow(sec, {
+    labelText: 'Minimum Rating Filter',
+    labelFor: 'simmanage-min-rating',
+    helpText: SIMULATION_MANAGEMENT_HELP.minRatingFilter,
+    controlNode: _buildSelectElement('simmanage-min-rating', String(managementSettings.minRatingFilter), [
+      { value: '0', label: 'All Ratings' },
+      { value: '1', label: '1 star or higher' },
+      { value: '2', label: '2 stars or higher' },
+      { value: '3', label: '3 stars or higher' },
+      { value: '4', label: '4 stars or higher' },
+      { value: '5', label: '5 stars only' }
+    ])
+  });
+
   const exportHeader = document.createElement('div');
   exportHeader.className = 'settings-subsection-header';
 
@@ -664,15 +706,24 @@ function _buildSimBasicSection() {
   exportResetBtn.className = 'settings-reset-btn';
   exportResetBtn.textContent = 'Reset';
   exportResetBtn.addEventListener('click', () => {
-    resetSimulationManagementSettings();
+    const resetSettings = resetSimulationManagementSettings();
     const autoExport = document.getElementById('simmanage-auto-export');
     if (autoExport) {
-      autoExport.checked = SIM_MANAGEMENT_DEFAULTS.autoExportOnComplete;
+      autoExport.checked = resetSettings.autoExportOnComplete;
     }
     Array.from(sec.querySelectorAll('input[data-sim-management-format]')).forEach((input) => {
       const formatId = input.getAttribute('data-sim-management-format');
-      input.checked = SIM_MANAGEMENT_DEFAULTS.selectedFormats.includes(formatId);
+      input.checked = resetSettings.selectedFormats.includes(formatId);
     });
+    const defaultSort = document.getElementById('simmanage-default-sort');
+    if (defaultSort) {
+      defaultSort.value = resetSettings.defaultSort;
+    }
+    const minRating = document.getElementById('simmanage-min-rating');
+    if (minRating) {
+      minRating.value = String(resetSettings.minRatingFilter);
+    }
+    _syncTaskListPreferenceControls(resetSettings);
   });
   exportHeader.appendChild(exportResetBtn);
   sec.appendChild(exportHeader);
@@ -680,14 +731,13 @@ function _buildSimBasicSection() {
   _appendInlineRow(sec, {
     labelText: 'Auto-export completed task bundle',
     labelFor: 'simmanage-auto-export',
+    helpText: SIMULATION_MANAGEMENT_HELP.autoExportOnComplete,
     controlHtml: `<input type="checkbox" id="simmanage-auto-export"${managementSettings.autoExportOnComplete ? ' checked' : ''}>`,
   });
 
   const exportFormatsRow = document.createElement('div');
   exportFormatsRow.className = 'settings-control-row';
-  const exportFormatsLabel = document.createElement('label');
-  exportFormatsLabel.textContent = 'Bundle Formats';
-  exportFormatsRow.appendChild(exportFormatsLabel);
+  exportFormatsRow.appendChild(_buildSettingsLabelCopy('Bundle Formats', '', SIMULATION_MANAGEMENT_HELP.selectedFormats));
 
   const exportFormatsValue = document.createElement('div');
   exportFormatsValue.className = 'settings-control-value';
@@ -775,14 +825,10 @@ function _buildSimBasicSection() {
   }
 
   // Helper: build a select control row for Sim Basic
-  function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, defaultValue) {
+  function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, defaultValue, helpText = '') {
     const row = document.createElement('div');
     row.className = 'settings-control-row';
-
-    const label = document.createElement('label');
-    label.setAttribute('for', selectId);
-    label.textContent = labelText;
-    row.appendChild(label);
+    row.appendChild(_buildSettingsLabelCopy(labelText, selectId, helpText));
 
     const valueWrapper = document.createElement('div');
     valueWrapper.className = 'settings-control-value';
@@ -812,14 +858,10 @@ function _buildSimBasicSection() {
   }
 
   // Helper: build a checkbox control row for Sim Basic
-  function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultValue) {
+  function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultValue, helpText = '') {
     const row = document.createElement('div');
     row.className = 'settings-control-row';
-
-    const label = document.createElement('label');
-    label.setAttribute('for', checkboxId);
-    label.textContent = labelText;
-    row.appendChild(label);
+    row.appendChild(_buildSettingsLabelCopy(labelText, checkboxId, helpText));
 
     const valueWrapper = document.createElement('div');
     valueWrapper.className = 'settings-control-value';
@@ -852,7 +894,8 @@ function _buildSimBasicSection() {
       { value: 'opencl_cpu', label: 'OpenCL CPU' },
     ],
     currentSimBasic.deviceMode,
-    SIM_BASIC_DEFAULTS.deviceMode
+    SIM_BASIC_DEFAULTS.deviceMode,
+    SIMULATION_BASIC_HELP.deviceMode
   );
   sec.appendChild(dmResult.row);
   let dmBadge = dmResult.badge;
@@ -873,7 +916,8 @@ function _buildSimBasicSection() {
       { value: 'off', label: 'Off' },
     ],
     currentSimBasic.meshValidationMode,
-    SIM_BASIC_DEFAULTS.meshValidationMode
+    SIM_BASIC_DEFAULTS.meshValidationMode,
+    SIMULATION_BASIC_HELP.meshValidationMode
   );
   sec.appendChild(mvmResult.row);
   let mvmBadge = mvmResult.badge;
@@ -887,17 +931,19 @@ function _buildSimBasicSection() {
       { value: 'linear', label: 'Linear' },
     ],
     currentSimBasic.frequencySpacing,
-    SIM_BASIC_DEFAULTS.frequencySpacing
+    SIM_BASIC_DEFAULTS.frequencySpacing,
+    SIMULATION_BASIC_HELP.frequencySpacing
   );
   sec.appendChild(fsResult.row);
   let fsBadge = fsResult.badge;
 
   // 4. Use Optimized checkbox
   const uoResult = _buildSimBasicCheckboxRow(
-    'Use Optimized',
+    'Use Optimized Solver',
     'simbasic-useOptimized',
     currentSimBasic.useOptimized,
-    SIM_BASIC_DEFAULTS.useOptimized
+    SIM_BASIC_DEFAULTS.useOptimized,
+    SIMULATION_BASIC_HELP.useOptimized
   );
   sec.appendChild(uoResult.row);
   let uoBadge = uoResult.badge;
@@ -907,17 +953,19 @@ function _buildSimBasicSection() {
     'Enable Symmetry',
     'simbasic-enableSymmetry',
     currentSimBasic.enableSymmetry,
-    SIM_BASIC_DEFAULTS.enableSymmetry
+    SIM_BASIC_DEFAULTS.enableSymmetry,
+    SIMULATION_BASIC_HELP.enableSymmetry
   );
   sec.appendChild(esResult.row);
   let esBadge = esResult.badge;
 
   // 6. Verbose Logging checkbox
   const vbResult = _buildSimBasicCheckboxRow(
-    'Verbose Logging',
+    'Verbose Backend Logging',
     'simbasic-verbose',
     currentSimBasic.verbose,
-    SIM_BASIC_DEFAULTS.verbose
+    SIM_BASIC_DEFAULTS.verbose,
+    SIMULATION_BASIC_HELP.verbose
   );
   sec.appendChild(vbResult.row);
   let vbBadge = vbResult.badge;
@@ -1127,19 +1175,106 @@ function _appendSectionHeading(parent, title, helpText) {
   }
 }
 
-function _appendInlineRow(parent, { labelText, labelFor, controlHtml }) {
+function _appendInlineRow(parent, { labelText, labelFor, controlHtml = '', controlNode = null, helpText = '' }) {
   const row = document.createElement('div');
   row.className = 'settings-control-row';
-
-  const label = document.createElement('label');
-  label.setAttribute('for', labelFor);
-  label.textContent = labelText;
-  row.appendChild(label);
+  row.appendChild(_buildSettingsLabelCopy(labelText, labelFor, helpText));
 
   const wrapper = document.createElement('div');
   wrapper.className = 'settings-control-value';
-  wrapper.innerHTML = controlHtml;
+  if (controlNode) {
+    wrapper.appendChild(controlNode);
+  } else {
+    wrapper.innerHTML = controlHtml;
+  }
   row.appendChild(wrapper);
 
   parent.appendChild(row);
+}
+
+function _buildSettingsLabelCopy(labelText, labelFor, helpText = '') {
+  const copy = document.createElement('div');
+  copy.className = 'settings-control-copy';
+
+  const label = document.createElement('label');
+  if (labelFor) {
+    label.setAttribute('for', labelFor);
+  }
+  label.textContent = labelText;
+  copy.appendChild(label);
+
+  const helpTrigger = createHelpTrigger(document, { labelText, helpText });
+  if (helpTrigger) {
+    copy.appendChild(helpTrigger);
+  }
+
+  return copy;
+}
+
+function _buildSelectElement(id, currentValue, options) {
+  const select = document.createElement('select');
+  select.id = id;
+
+  options.forEach(({ value, label }) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    if (String(value) === String(currentValue)) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  });
+
+  return select;
+}
+
+function _isSimulationManagementControl(target) {
+  return Boolean(
+    target?.id === 'simmanage-auto-export'
+    || target?.id === 'simmanage-default-sort'
+    || target?.id === 'simmanage-min-rating'
+    || target?.getAttribute?.('data-sim-management-format')
+  );
+}
+
+function _readSimulationManagementSettings(root) {
+  const current = getCurrentSimulationManagementSettings();
+  const selectedFormats = Array.from(root.querySelectorAll('input[data-sim-management-format]'))
+    .filter((input) => input.checked)
+    .map((input) => input.getAttribute('data-sim-management-format'))
+    .filter(Boolean);
+  const minRating = Number(document.getElementById('simmanage-min-rating')?.value);
+
+  return {
+    ...current,
+    autoExportOnComplete: document.getElementById('simmanage-auto-export')?.checked
+      ?? current.autoExportOnComplete,
+    selectedFormats,
+    defaultSort: document.getElementById('simmanage-default-sort')?.value || current.defaultSort,
+    minRatingFilter: Number.isFinite(minRating)
+      ? Math.max(0, Math.min(5, minRating))
+      : current.minRatingFilter
+  };
+}
+
+function _syncTaskListPreferenceControls(settings, { dispatchToolbarChange = false } = {}) {
+  const desiredSort = settings?.defaultSort;
+  const desiredMinRating = String(settings?.minRatingFilter ?? 0);
+  const syncValue = (id, nextValue, shouldDispatch) => {
+    const element = document.getElementById(id);
+    if (!element || element.value === nextValue) {
+      return;
+    }
+    element.value = nextValue;
+    if (shouldDispatch && typeof Event === 'function' && typeof element.dispatchEvent === 'function') {
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+
+  if (desiredSort) {
+    syncValue('simmanage-default-sort', desiredSort, false);
+    syncValue('simulation-jobs-sort', desiredSort, dispatchToolbarChange);
+  }
+  syncValue('simmanage-min-rating', desiredMinRating, false);
+  syncValue('simulation-jobs-min-rating', desiredMinRating, dispatchToolbarChange);
 }
