@@ -58,7 +58,7 @@ The solver now supports explicit device mode selection:
 Notes:
 - `auto` is deterministic and fast: `opencl_gpu` if available, else `opencl_cpu`.
 - OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
-- With current bempp-cl `0.4.x`, OpenCL runtime availability still depends on a CPU OpenCL driver for safe operator assembly.
+- With current bempp-cl `0.4.x`, the singular assembler still asks for a CPU OpenCL context. On GPU-only runtimes that expose no CPU OpenCL device, Waveguide Generator now aliases those CPU-context lookups to the active GPU context for `opencl_gpu` mode so Apple/other GPU-only systems can still solve.
 
 ## 1.2 Supported dependency matrix (P3-1)
 
@@ -246,6 +246,10 @@ Returns simulation results for completed job.
 Returns paginated persisted job rows.
 
 - `config_summary` includes the submitted `enable_symmetry` flag alongside formula/frequency metadata so frontend job feeds can show the requested symmetry policy even after a reload.
+- `mesh_stats` persists the authoritative solve-mesh diagnostics for each job:
+  - `vertex_count` / `triangle_count`
+  - canonical `tag_counts`
+  - OCC-derived `identity_triangle_counts` sourced from the same canonical extraction the solver consumes
 - Completed jobs still require `GET /api/results/{job_id}` to fetch full `metadata.symmetry` / `metadata.symmetry_policy`.
 
 ### `POST /api/stop/{job_id}`
