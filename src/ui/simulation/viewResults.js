@@ -1,5 +1,6 @@
 import { applySmoothing } from '../../results/smoothing.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
+import { renderSymmetryPolicySummary } from './results.js';
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -74,6 +75,16 @@ export async function openViewResultsModal(panel) {
 
   const body = document.createElement('div');
   body.className = 'view-results-body';
+
+  const symmetryPolicyMarkup = renderSymmetryPolicySummary(results);
+  if (symmetryPolicyMarkup) {
+    const summaryWrapper = document.createElement('div');
+    summaryWrapper.innerHTML = symmetryPolicyMarkup.trim();
+    const summarySection = summaryWrapper.firstElementChild;
+    if (summarySection) {
+      body.appendChild(summarySection);
+    }
+  }
 
   // Chart containers with loading placeholders
   const chartNames = [

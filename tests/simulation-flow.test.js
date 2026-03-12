@@ -6,6 +6,10 @@ import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
 import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
+import {
+  getSymmetryPolicySummary,
+  renderSymmetryPolicySummary
+} from '../src/ui/simulation/results.js';
 import { AppEvents } from '../src/events.js';
 import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
 import {
@@ -182,6 +186,84 @@ test('smoothing update sets panel state without submitting a new job', () => {
 
   assert.equal(panel.currentSmoothing, '1/6');
   assert.equal(submitCalls, 0);
+});
+
+test('getSymmetryPolicySummary formats applied symmetry reductions for the results UI', () => {
+  const summary = getSymmetryPolicySummary({
+    metadata: {
+      symmetry: {
+        symmetry_type: 'quarter_xz',
+        reduction_factor: 4
+      },
+      symmetry_policy: {
+        requested: true,
+        applied: true,
+        reason: 'applied',
+        detected_symmetry_type: 'quarter_xz',
+        detected_symmetry_planes: ['YZ', 'XY'],
+        detected_reduction_factor: 4,
+        reduction_factor: 4,
+        excitation_centered: true
+      }
+    }
+  });
+
+  assert.equal(summary.badge, 'Reduced');
+  assert.match(summary.headline, /quarter-domain/i);
+  assert.match(summary.details, /YZ plane and XY plane/i);
+  assert.equal(summary.items.find((item) => item.label === 'Decision')?.value, 'Quarter-domain (X/Z symmetry)');
+  assert.equal(summary.items.find((item) => item.label === 'Source alignment')?.value, 'Centered');
+  assert.equal(summary.items.find((item) => item.label === 'Reduction')?.value, '4x applied');
+});
+
+test('getSymmetryPolicySummary explains when detected symmetry is rejected by source alignment', () => {
+  const summary = getSymmetryPolicySummary({
+    metadata: {
+      symmetry: {
+        symmetry_type: 'full',
+        reduction_factor: 1
+      },
+      symmetry_policy: {
+        requested: true,
+        applied: false,
+        reason: 'excitation_off_center',
+        detected_symmetry_type: 'quarter_xz',
+        detected_symmetry_planes: ['YZ', 'XY'],
+        detected_reduction_factor: 4,
+        reduction_factor: 1,
+        excitation_centered: false
+      }
+    }
+  });
+
+  assert.equal(summary.badge, 'Full model');
+  assert.match(summary.headline, /alignment check/i);
+  assert.match(summary.details, /off-center/i);
+  assert.equal(summary.items.find((item) => item.label === 'Decision')?.value, 'Full model');
+  assert.equal(summary.items.find((item) => item.label === 'Detected geometry')?.value, 'Quarter-domain (X/Z symmetry)');
+  assert.equal(summary.items.find((item) => item.label === 'Reduction')?.value, '4x available');
+});
+
+test('renderSymmetryPolicySummary returns result-modal markup only when policy metadata exists', () => {
+  const markup = renderSymmetryPolicySummary({
+    metadata: {
+      symmetry_policy: {
+        requested: false,
+        applied: false,
+        reason: 'disabled',
+        detected_symmetry_type: 'full',
+        detected_symmetry_planes: [],
+        detected_reduction_factor: 1,
+        reduction_factor: 1,
+        excitation_centered: null
+      }
+    }
+  });
+
+  assert.match(markup, /Symmetry Policy/);
+  assert.match(markup, /Kept full model with symmetry disabled/);
+  assert.match(markup, /view-results-summary/);
+  assert.equal(renderSymmetryPolicySummary({ metadata: {} }), '');
 });
 
 test('validateCanonicalMeshPayload rejects malformed canonical mesh', () => {
