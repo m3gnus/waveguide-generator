@@ -11,23 +11,40 @@ import {
 export function setupSimulationParamBindings(panel) {
   bindPolarUiToggleHandlers();
 
-  panel.simulationParamBindings.forEach(({ id, key, parse }) => {
-    const element = document.getElementById(id);
-    if (!element) return;
+  if (!panel._simulationParamBindingsAttached) {
+    const bindingsById = new Map(
+      panel.simulationParamBindings.map((binding) => [binding.id, binding])
+    );
+    const changeHandler = (e) => {
+      const binding = bindingsById.get(e?.target?.id);
+      if (!binding) return;
 
-    element.addEventListener('change', (e) => {
-      const nextValue = parse(e.target.value);
+      const nextValue = binding.parse(e.target.value);
       if (Number.isNaN(nextValue)) return;
 
       const currentState = readSimulationState();
-      const currentValue = currentState?.params?.[key];
+      const currentValue = currentState?.params?.[binding.key];
       if (currentValue === nextValue) return;
 
-      updateSimulationStateParams({ [key]: nextValue });
-    });
-  });
+      updateSimulationStateParams({ [binding.key]: nextValue });
+    };
+
+    document.addEventListener('change', changeHandler);
+    panel._simulationParamBindingsAttached = true;
+    panel._simulationParamChangeHandler = changeHandler;
+  }
 
   syncSimulationSettings(panel, readSimulationState());
+}
+
+export function teardownSimulationParamBindings(panel) {
+  if (!panel?._simulationParamBindingsAttached || typeof panel._simulationParamChangeHandler !== 'function') {
+    return;
+  }
+
+  document.removeEventListener('change', panel._simulationParamChangeHandler);
+  panel._simulationParamBindingsAttached = false;
+  panel._simulationParamChangeHandler = null;
 }
 
 export function syncSimulationSettings(panel, state) {
