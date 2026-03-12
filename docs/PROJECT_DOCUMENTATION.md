@@ -366,6 +366,7 @@ Canonical identity vocabulary preserved by the cleanup:
   - `inner_wall`
   - `outer_wall`
   - `mouth_rim`
+  - `throat_return`
   - `rear_cap`
   - `throat_disc`
 - Horn with enclosure:
@@ -377,8 +378,12 @@ Canonical identity vocabulary preserved by the cleanup:
   - `enc_edge`
 
 Runtime status:
-- The JS geometry engine emits explicit subsets for `inner_wall`, `outer_wall`, `mouth_rim`, `rear_cap`, `horn_wall`, `throat_disc`, `enc_front`, `enc_side`, `enc_rear`, and `enc_edge`.
+- The JS geometry engine emits explicit subsets for `inner_wall`, `outer_wall`, `mouth_rim`, `throat_return`, `rear_cap`, `horn_wall`, `throat_disc`, `enc_front`, `enc_side`, `enc_rear`, and `enc_edge`.
 - `src/geometry/tags.js` maps those identities deterministically to mesh sizing classes and solver boundary classes.
+- JS geometry outer-build selection is exclusive: enclosure (`encDepth > 0`) or freestanding shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
+- JS enclosure generation is OSSE-only; `R-OSSE` with `encDepth > 0` is rejected.
+- JS freestanding wall thickness is generated in local `(axial, radial)` profile sections and keeps the outer throat ring at the same axial station as the inner throat ring.
+- JS morphing derives implicit target extents from each current slice when `morphTarget` is active but `morphWidth` / `morphHeight` are unset.
 
 #### Mesh sizing classes
 
@@ -540,7 +545,7 @@ Primary commands:
 - `npm run build`
 
 High-signal test suites:
-- Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`
+- Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`, `tests/geometry-quality.test.js`, `tests/morph-implicit-target.test.js`
 - Export/OCC pipeline: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
 - Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_directivity_plot.py`
 

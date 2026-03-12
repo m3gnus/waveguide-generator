@@ -31,6 +31,23 @@ function logQualityIssues(quality) {
   }
 }
 
+function resolveOuterBuildMode(params, options = {}) {
+  const encDepth = Number(params.encDepth || 0);
+  const wallThickness = Number(params.wallThickness || 0);
+  const enclosureRequested = encDepth > 0;
+  const enclosureEnabled = options.includeEnclosure !== false;
+
+  if (params.type === 'R-OSSE' && enclosureRequested) {
+    throw new Error(
+      'R-OSSE enclosure is not supported by the default geometry contract. Use OSSE for enclosures or set encDepth=0.'
+    );
+  }
+
+  if (enclosureRequested && enclosureEnabled) return 'enclosure';
+  if (encDepth <= 0 && wallThickness > 0) return 'freestandingWall';
+  return 'bare';
+}
+
 export function buildWaveguideMesh(params, options = {}) {
   const angularSegments = clampSegmentCount(params.angularSegments, DEFAULTS.ANGULAR_SEGMENTS, 4);
   const lengthSteps = clampSegmentCount(params.lengthSegments, DEFAULTS.LENGTH_SEGMENTS, 1);
@@ -57,8 +74,7 @@ export function buildWaveguideMesh(params, options = {}) {
   const fullCircle = true;
 
   const morphTarget = Number(meshParams.morphTarget || MORPH_TARGETS.NONE);
-  const needsMorphTargets = meshParams.type === 'OSSE'
-    && morphTarget !== MORPH_TARGETS.NONE
+  const needsMorphTargets = morphTarget !== MORPH_TARGETS.NONE
     && (!meshParams.morphWidth || !meshParams.morphHeight);
   const morphTargets = needsMorphTargets
     ? buildMorphTargets(meshParams, lengthSteps, angleList, sliceMap, profileContext)
@@ -67,8 +83,9 @@ export function buildWaveguideMesh(params, options = {}) {
   // Adaptive phi: only when the caller explicitly opts in AND the geometry is a plain
   // full-circle horn (no enclosure/wall). Enclosure/wall functions assume uniform ring
   // topology. ABEC/simulation exports rely on a consistent ringCount and must NOT opt in.
-  const hasEnclosure = includeEnclosure && Number(meshParams.encDepth || 0) > 0;
-  const hasWall = Number(meshParams.encDepth || 0) <= 0 && Number(meshParams.wallThickness || 0) > 0;
+  const outerBuildMode = resolveOuterBuildMode(meshParams, { includeEnclosure });
+  const hasEnclosure = outerBuildMode === 'enclosure';
+  const hasWall = outerBuildMode === 'freestandingWall';
   const useAdaptivePhi = (options.adaptivePhi === true)
     && fullCircle
     && !hasEnclosure
@@ -146,9 +163,11 @@ export function buildWaveguideMesh(params, options = {}) {
     console.error(`[Geometry] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`);
   }
 
-  orientMeshConsistently(vertices, indices, {
-    preferOutward: fullCircle
-  });
+  if (options.useLegacyOrientationRepair === true || meshParams.useLegacyOrientationRepair === true) {
+    orientMeshConsistently(vertices, indices, {
+      preferOutward: fullCircle
+    });
+  }
 
   const quality = validateMeshQuality(vertices, indices, groupInfo);
   logQualityIssues(quality);

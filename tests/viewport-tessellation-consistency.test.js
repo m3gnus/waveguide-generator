@@ -62,7 +62,7 @@ test('OSSE viewport-equivalent tessellation keeps horn topology consistent with 
   assert.equal(hornTriangles(noEnclosure), hornTriangles(withEnclosure));
 });
 
-test('R-OSSE viewport-equivalent tessellation keeps horn topology consistent with and without enclosure', () => {
+test('R-OSSE enclosure requests fail even in viewport-equivalent build path', () => {
   const base = makeParams('R-OSSE', {
     R: '140 * (abs(cos(p)/1.6)^3 + abs(sin(p)/1)^4)^(-1/4.5)',
     a: '25 * (abs(cos(p)/1.2)^4 + abs(sin(p)/1)^3)^(-1/2.5)',
@@ -78,10 +78,10 @@ test('R-OSSE viewport-equivalent tessellation keeps horn topology consistent wit
     wallThickness: 0
   });
 
-  const noEnclosure = buildViewportArtifacts(base).mesh;
-  const withEnclosure = buildViewportArtifacts({ ...base, encDepth: 240 }).mesh;
-
-  assert.equal(hornTriangles(noEnclosure), hornTriangles(withEnclosure));
+  assert.throws(
+    () => buildViewportArtifacts({ ...base, encDepth: 240 }),
+    /R-OSSE enclosure is not supported by the default geometry contract/
+  );
 });
 
 test('enclosure-present mesh ignores adaptivePhi flag for horn tessellation', () => {
