@@ -224,13 +224,13 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P4 Research And Optional Engineering Tracks
 
-- [ ] Add a symmetry benchmark harness and expose symmetry-policy decisions more clearly.
+- [x] Add a symmetry benchmark harness and expose symmetry-policy decisions more clearly.
   Source: archived future additions doc.
   Relevant: Probably, but not urgent.
   Will it improve the program: Potentially. It would make symmetry reduction more explainable and measurable.
   Research findings: the backend already has automatic symmetry detection/reduction plus a repeatable benchmark script in `server/scripts/benchmark_solver.py`, but there is no fixture-backed harness that compares full versus half versus quarter-domain runs or captures UI-facing policy decisions. This is real research work, not a thin UI tweak.
   Best approach: Build repeatable full/half/quarter benchmark cases first, then decide whether UI controls such as `auto` versus `force_full` are justified by the data.
-  Progress: March 12, 2026. The first slice is now in place: `server/solver/symmetry_benchmark.py` and `server/scripts/benchmark_symmetry.py` provide deterministic full/half/quarter/off-center fixtures for repeatable policy benchmarking, and `/api/results` now exposes `metadata.symmetry_policy` alongside `metadata.symmetry`. A second slice now threads that metadata into the simulation View Results modal as a read-only symmetry-policy summary so users can see whether symmetry was applied, rejected because the source was off-center, or disabled. Remaining work is the product decision only: decide whether the benchmark evidence justifies explicit symmetry controls (for example `auto` versus `force_full`).
+  Completed: March 12, 2026. `server/solver/symmetry_benchmark.py` and `server/scripts/benchmark_symmetry.py` now provide deterministic full/half/quarter/off-center fixtures for repeatable policy benchmarking, `/api/results` exposes `metadata.symmetry_policy` alongside `metadata.symmetry`, and the simulation View Results modal renders that metadata as a read-only symmetry-policy summary. A benchmark decision run (`cd server && python3 scripts/benchmark_symmetry.py --iterations 10 --json`) passed all reference cases, so explicit `auto` / `force_full` controls are not justified today; the decision and revisit triggers are recorded in `research/symmetry-policy-controls-2026-03-12.md`.
 
 - [x] Decide whether the Gmsh export stack should remain a long-term dependency.
   Source: archived future additions doc.
