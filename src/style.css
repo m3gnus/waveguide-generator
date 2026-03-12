@@ -1699,11 +1699,19 @@ button.secondary:hover:not(:disabled) {
     border: 1px solid var(--border-color);
 }
 
-.settings-control-row label {
+.settings-control-copy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+}
+
+.settings-control-copy label {
     font-size: 0.85rem;
     color: var(--text-color);
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     cursor: pointer;
+    margin: 0;
 }
 
 .settings-control-value {

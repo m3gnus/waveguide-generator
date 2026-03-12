@@ -63,6 +63,12 @@ test('simulation management DOM getters prefer live modal controls', () => {
       if (id === 'simmanage-auto-export') {
         return { checked: false };
       }
+      if (id === 'simmanage-default-sort') {
+        return { value: 'label_asc' };
+      }
+      if (id === 'simmanage-min-rating') {
+        return { value: '4' };
+      }
       if (id === 'simulation-jobs-sort') {
         return { value: 'rating_desc' };
       }
@@ -95,8 +101,8 @@ test('simulation management DOM getters prefer live modal controls', () => {
   try {
     assert.equal(getAutoExportOnComplete(), false);
     assert.deepEqual(getSelectedExportFormats(), ['csv']);
-    assert.equal(getTaskListSortPreference(), 'rating_desc');
-    assert.equal(getTaskListMinRatingFilter(), 3);
+    assert.equal(getTaskListSortPreference(), 'label_asc');
+    assert.equal(getTaskListMinRatingFilter(), 4);
   } finally {
     global.document = originalDocument;
   }
