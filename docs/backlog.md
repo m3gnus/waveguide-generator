@@ -37,9 +37,10 @@ Researched UI/runtime findings:
 - The Simulation section exposes the active runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`) plus optimized-solver advanced overrides for `enableWarmup`, `bemPrecision`, `useBurtonMiller`, and `symmetryTolerance`.
 - Backend capability metadata now reports `simulationAdvanced.controls` for the shipped advanced overrides while keeping GMRES method/restart/tolerance/max-iteration and explicit strong-form policy items in `plannedControls`.
 - Folder workspace support is now visible inside the settings modal even when `window.showDirectoryPicker` is unavailable, so unsupported browsers show an explicit fallback explanation instead of no discoverable workspace entry point.
+- The primary folder-selection action should live in the simulation jobs header beside `Clear Failed` and `Refresh`, with the settings modal kept as the explanatory/status surface rather than the only picker entry point.
 - Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder root when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`. If either direct-write path fails, the app clears the selected folder and falls back to the browser picker/download flow.
 - The simulation diagnostics panel now reports geometry face identities such as `throat_disc`, `inner_wall`/`horn_wall`, `outer_wall`, `rear_cap`, and enclosure faces as triangle counts before submit. Canonical numeric tags (`1/2/3/4`) remain available only as a secondary debug summary.
-- The simulation job list now keeps backend-only source labeling at the header level and reserves per-row source badges for folder-backed history where the label adds information.
+- The simulation job list no longer spends header space on a redundant `Backend Jobs` pill; folder-backed history can still surface source context through folder mode and row-level badges when that label adds information.
 
 Remaining work:
 - Keep diagnostics, regression coverage, and documentation current as new changes land.
@@ -181,12 +182,19 @@ Implementation notes:
 ### P2. Folder Workspace Discoverability and Export Routing
 
 - [x] Make folder selection discoverable near Settings and/or inside the settings modal without relying on users finding the current output-row placement.
+  - [x] Move the primary folder-selection action into the simulation jobs header where the redundant `Backend Jobs` pill used to sit, next to `Clear Failed` and `Refresh`.
   - [x] Treat “folder button not visible” as a real product gap: when folder picker support is unavailable, provide a visible fallback/explanation instead of silently hiding the control.
   - [x] Document and verify expected routing behavior when a folder workspace is active:
     - manual exports write into the selected folder root
     - completed simulation bundles write into `<workspace>/<jobId>/`
     - folder write failures currently clear the selected folder and fall back to picker/download behavior
   - [x] Decide that the workspace routing promise covers manual exports plus completed simulation bundles. Folder manifests/index still persist there for history, but there is no broader catch-all redirect for unrelated generated artifacts.
+
+Research notes:
+- The runtime gate is `window.showDirectoryPicker` in `src/ui/workspace/folderWorkspace.js`, so folder workspaces currently depend on the browser File System Access API instead of a repo-owned abstraction.
+- MDN currently marks `showDirectoryPicker()` as limited-availability and secure-context only, which means the feature is not baseline web platform behavior across major browsers.
+- Chrome’s File System Access documentation says directory picking requires a secure context (`https://` or `http://localhost`) and is implemented in Chromium-family browsers. Inference: unsupported browsers and non-secure contexts must stay on the save-picker/download fallback path until the product adopts a different workspace mechanism.
+- Product wording should stay precise: without folder workspace support, manual exports and completed simulation bundles use the browser save/download path instead of workspace writes.
 
 Implementation notes:
 - `index.html`
@@ -250,7 +258,7 @@ Implementation notes:
   - Add regression coverage for those reference cases so future geometry or solver changes cannot silently change reduction eligibility.
   - [x] Audit the existing `Enable Symmetry` control in the Settings modal and verify that it is visible in the live modal, persists correctly, and changes submitted `/api/solve` payloads as expected.
   - [x] Surface the requested symmetry setting and the resulting `symmetry_policy` together in user-visible job/result surfaces so users can tell whether a run kept the full model because symmetry was disabled, rejected, or successfully applied.
-  - Update runtime docs to clarify that imported ATH `Mesh.Quadrants` values do not directly trim the canonical simulation payload; full-model vs reduced-model behavior is determined by the solver symmetry policy.
+  - [x] Update runtime docs to clarify that imported ATH `Mesh.Quadrants` values do not directly trim the canonical simulation payload; full-model vs reduced-model behavior is determined by the solver symmetry policy.
 
 ### P4. Maintained Markdown Document Overhaul
 

@@ -141,6 +141,8 @@ Windows/Linux note:
 | `Auto-download solve mesh artifact (.msh)` | Whether the persisted backend `.msh` file is downloaded for a simulation job | Mesh generation itself |
 | `Task Exports` settings | Which completed-simulation bundle formats run for manual task export and auto-export-on-complete | Solver execution or canonical mesh generation |
 
+Imported ATH `Mesh.Quadrants` values do not trim the canonical simulation payload. The frontend keeps the canonical payload full-domain, the queued OCC-adaptive solve request is normalized to `quadrants=1234`, and any half/quarter reduction happens later only if the backend symmetry policy approves it.
+
 ## Project layout
 
 ```
