@@ -27,6 +27,7 @@ Primary files:
 ## Runtime Contract
 
 - Real simulation requires the backend `/api/solve` path.
+- Completed-result UI reads backend result metadata directly; the View Results modal surfaces `metadata.symmetry_policy` / `metadata.symmetry` as a read-only symmetry decision summary when present.
 - Frontend restore logic chooses one source mode at a time:
   - folder workspace selected -> folder manifests/index only
   - no folder workspace -> backend jobs plus local cache
