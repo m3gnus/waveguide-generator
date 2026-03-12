@@ -1,5 +1,7 @@
 const SETTINGS_KEY = 'waveguide-simulation-management-settings';
 const SCHEMA_VERSION = 1;
+const TASK_LIST_SORT_CONTROL_IDS = Object.freeze(['simmanage-default-sort', 'simulation-jobs-sort']);
+const TASK_LIST_MIN_RATING_CONTROL_IDS = Object.freeze(['simmanage-min-rating', 'simulation-jobs-min-rating']);
 
 export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
   'png',
@@ -135,7 +137,7 @@ export function getSelectedExportFormats() {
 }
 
 export function getTaskListSortPreference() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simulation-jobs-sort') : null;
+  const el = getFirstPresentElement(TASK_LIST_SORT_CONTROL_IDS);
   if (el && typeof el.value === 'string' && el.value.trim()) {
     return el.value;
   }
@@ -143,7 +145,7 @@ export function getTaskListSortPreference() {
 }
 
 export function getTaskListMinRatingFilter() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simulation-jobs-min-rating') : null;
+  const el = getFirstPresentElement(TASK_LIST_MIN_RATING_CONTROL_IDS);
   if (el) {
     const value = Number(el.value);
     if (Number.isFinite(value)) {
@@ -164,4 +166,19 @@ export function updateTaskListPreferences(updates = {}) {
 
 export function resetSimulationManagementSettings() {
   return saveSimulationManagementSettings(RECOMMENDED_DEFAULTS);
+}
+
+function getFirstPresentElement(ids) {
+  if (typeof document === 'undefined' || typeof document.getElementById !== 'function') {
+    return null;
+  }
+
+  for (const id of ids) {
+    const element = document.getElementById(id);
+    if (element) {
+      return element;
+    }
+  }
+
+  return null;
 }

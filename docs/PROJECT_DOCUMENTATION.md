@@ -49,6 +49,7 @@ Primary entry points:
   - Parameter and simulation UI behavior, including schema-driven formula affordances in the parameter panel
   - `src/ui/parameterInventory.js` is the source of truth for parameter-section grouping/order across geometry, sweep, directivity placement, source, and mesh sections
   - `src/ui/helpAffordance.js` renders the shared hover-help trigger used by schema-driven controls and the directivity panel
+  - Settings-modal Simulation Basic rows reuse the same help-trigger pattern for task-management preferences and live solver defaults
 - `src/state.js`
   - Global app state, undo/redo, persistence
 

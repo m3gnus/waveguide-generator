@@ -486,6 +486,14 @@ test('openSettingsModal creates modal with all four required section names', () 
     assert.ok(allText.some(t => t === 'Simulation Basic'), 'Simulation Basic section must be present');
     assert.ok(allText.some(t => t === 'Simulation Advanced'), 'Simulation Advanced section must be present');
     assert.ok(allText.some(t => t === 'System'), 'System section must be present');
+    assert.ok(
+      createdElements.some((el) => el.id === 'simmanage-default-sort'),
+      'Simulation Basic should expose a default task sort control'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'simmanage-min-rating'),
+      'Simulation Basic should expose a minimum rating filter control'
+    );
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;

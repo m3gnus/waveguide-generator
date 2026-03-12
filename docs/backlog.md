@@ -33,8 +33,8 @@ Researched UI/runtime findings:
 - `src/ui/paramPanel.js` now renders geometry/source/mesh controls from an explicit parameter-section inventory, and both schema-driven controls and directivity controls use the shared hover-help trigger pattern. Settings modal controls still need parity with that affordance.
 - Not every schema parameter is visible. `PARAM_SCHEMA.MESH` includes `throatSliceDensity` and `verticalOffset`, but the current parameter UI does not render either control.
 - Simulation frequency and polar controls remain outside the settings modal, but they now share the same naming/order pass and hover-help affordance as the schema-driven parameter controls.
-- The settings modal fully exposes viewer settings and the active Simulation Basic runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`).
-- Persisted simulation-management settings are only partially exposed in the settings modal. `autoExportOnComplete` and `selectedFormats` are visible there, while `defaultSort` and `minRatingFilter` still live only in the simulation-jobs toolbar.
+- The settings modal fully exposes viewer settings, the active Simulation Basic runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`), and the persisted task-list preferences (`defaultSort`, `minRatingFilter`).
+- Persisted simulation-management settings now have a home in the settings modal, but the broader section ordering/copy pass is still unfinished.
 - The Simulation Advanced section is placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
 - Folder workspace support exists in code, but visibility is conditional. The `Choose Folder` row in `index.html` is hidden by `src/app/events.js` when `window.showDirectoryPicker` is unavailable, so some user environments will show no folder button at all.
 - Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`.
@@ -166,8 +166,9 @@ Implementation notes:
 ### P1. Settings Panel Completeness and Information Architecture
 
 - [ ] Audit all active settings sources and make the settings modal the primary discoverable home for persistent user preferences.
+  - [x] Mirror task-list preferences `defaultSort` and `minRatingFilter` into the Simulation Basic settings modal with the same hover-help affordance used by the parameter UI.
   - Add understandable titles and hover clarifications for each visible setting.
-  - Move or mirror task-list preferences `defaultSort` and `minRatingFilter` into the settings modal, or intentionally keep them in the jobs toolbar with matching copy and documentation.
+  - Keep the simulation-jobs toolbar in sync with the settings-modal task-list preferences while it remains visible as a quick-access surface.
   - Reorder modal sections so viewer behavior, simulation defaults, task export behavior, folder/workspace behavior, and system actions are grouped predictably.
   - Keep the modal aligned with backend capability metadata so unsupported advanced controls are clearly separated from active controls.
 
