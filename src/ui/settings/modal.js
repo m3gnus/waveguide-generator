@@ -88,7 +88,8 @@ function _getDocument() {
  * Open the settings modal. Creates it on-demand and appends to document.body.
  * Returns the backdrop element so callers can await removal if needed.
  */
-export function openSettingsModal() {
+export function openSettingsModal(options = {}) {
+  const viewerRuntime = _resolveViewerRuntime(options.viewerRuntime);
   // Prevent duplicate modals
   const existing = document.getElementById('settings-modal-backdrop');
   if (existing) {
@@ -96,7 +97,7 @@ export function openSettingsModal() {
     return existing;
   }
 
-  const backdrop = _buildModal();
+  const backdrop = _buildModal(viewerRuntime);
   document.body.appendChild(backdrop);
 
   // Focus the dialog for keyboard access
@@ -110,7 +111,14 @@ export function openSettingsModal() {
 // Internal builders
 // ---------------------------------------------------------------------------
 
-function _buildModal() {
+function _resolveViewerRuntime(runtime = {}) {
+  return {
+    getControls: typeof runtime?.getControls === 'function' ? runtime.getControls : () => null,
+    getDomElement: typeof runtime?.getDomElement === 'function' ? runtime.getDomElement : () => null
+  };
+}
+
+function _buildModal(viewerRuntime) {
   const backdrop = document.createElement('div');
   backdrop.id = 'settings-modal-backdrop';
   backdrop.className = 'settings-modal-backdrop';
@@ -146,7 +154,7 @@ function _buildModal() {
   body.className = 'settings-modal-body';
 
   const nav = _buildNav();
-  const content = _buildContent();
+  const content = _buildContent(viewerRuntime);
 
   body.appendChild(nav);
   body.appendChild(content);
@@ -259,14 +267,14 @@ function _buildNav() {
   return nav;
 }
 
-function _buildContent() {
+function _buildContent(viewerRuntime) {
   const content = document.createElement('div');
   content.className = 'settings-modal-content';
 
-  content.appendChild(_buildViewerSection());
+  content.appendChild(_buildViewerSection(viewerRuntime));
   content.appendChild(_buildSimBasicSection());
   content.appendChild(_buildSimAdvancedSection());
-  content.appendChild(_buildSystemSection());
+  content.appendChild(_buildSystemSection(viewerRuntime));
 
   void _refreshSimulationCapabilityState();
 
@@ -277,7 +285,7 @@ function _buildContent() {
 // Section builders — controls are the actual interactive elements
 // ---------------------------------------------------------------------------
 
-function _buildViewerSection() {
+function _buildViewerSection(viewerRuntime) {
   const sec = document.createElement('div');
   sec.id = 'settings-section-viewer';
   sec.className = 'settings-section';
@@ -316,9 +324,9 @@ function _buildViewerSection() {
 
   // Live-apply helper: push _viewerState into OrbitControls and wheel zoom
   function _applyLive() {
-    const controls = window.app && window.app.controls;
+    const controls = viewerRuntime.getControls();
     applyViewerSettingsToControls(controls, _viewerState);
-    const domEl = window.app && window.app.renderer && window.app.renderer.domElement;
+    const domEl = viewerRuntime.getDomElement();
     if (domEl) setInvertWheelZoom(domEl, _viewerState.invertWheelZoom);
   }
 
@@ -978,7 +986,7 @@ function _buildSimAdvancedSection() {
   return sec;
 }
 
-function _buildSystemSection() {
+function _buildSystemSection(viewerRuntime) {
   const sec = document.createElement('div');
   sec.id = 'settings-section-system';
   sec.className = 'settings-section';
@@ -1024,8 +1032,8 @@ function _buildSystemSection() {
 
   resetAllBtn.addEventListener('click', () => {
     resetAllViewerSettings();
-    applyViewerSettingsToControls(window.app?.controls, RECOMMENDED_DEFAULTS);
-    const domEl = window.app?.renderer?.domElement;
+    applyViewerSettingsToControls(viewerRuntime.getControls(), RECOMMENDED_DEFAULTS);
+    const domEl = viewerRuntime.getDomElement();
     if (domEl) setInvertWheelZoom(domEl, RECOMMENDED_DEFAULTS.invertWheelZoom);
   });
 
