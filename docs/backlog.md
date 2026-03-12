@@ -116,6 +116,15 @@ Work the backlog from upstream runtime truth to downstream UX:
   Best approach: Check capability at startup and when opening Settings, keep unavailable controls in normal flow but disabled/explained instead of hidden if possible, and pair rollout with regression/docs updates rather than adding placeholder controls alone.
   Completed: March 11, 2026. `/health` now advertises a small `capabilities` payload for simulation settings, the frontend caches the latest runtime health snapshot from startup polling and reuses it when Settings opens, Sim Basic device availability and the connection banner now derive from the same capability helper, and the Simulation Advanced pane renders explicit read-only Phase 2 controls with backend-driven explanations instead of a dead placeholder. Regression coverage now locks both the backend health payload and the frontend capability-summary behavior.
 
+### P1.5 Viewport Geometry UX
+
+- [ ] Align the viewport throat-disc appearance between OSSE and R-OSSE so R-OSSE no longer looks visually smoothed over at the source cap.
+  Source: user report on March 12, 2026; `src/geometry/engine/buildWaveguideMesh.js`; `src/geometry/engine/mesh/source.js`; `src/app/scene.js`; `src/geometry/engine/profiles/rosse.js`; `src/geometry/engine/profiles/osse.js`.
+  Relevant: Yes. The inconsistency is visible in the main viewport, so it affects day-to-day geometry inspection even though the canonical source tag contract remains correct.
+  Will it improve the program: Yes. It will make OSSE and R-OSSE throat presentation feel consistent and avoid implying a geometry difference where the runtime contract expects the same source-cap identity.
+  Research findings: `buildWaveguideMesh()` builds the throat disc the same way for both model types by calling `generateThroatSource(vertices, throatRingCount, fullCircle)` on the first ring and then fanning triangles from an averaged center point; there is no OSSE-versus-R-OSSE branch in that source-cap path. The viewport renderer in `src/app/scene.js` then uses `geometry.computeVertexNormals()`, so the visible seam is driven by shared rim vertices plus the local horn-wall slope. `R-OSSE` also exposes `k - Rounding` explicitly as a throat smoothness control in `src/config/schema.js` and `src/geometry/engine/profiles/rosse.js`, which likely makes the shared normals blend the disc into the wall more softly than OSSE.
+  Best approach: Treat this as a viewport shading/tessellation follow-up rather than a source-tag contract change. Investigate whether the throat disc should use duplicated rim vertices, flat/source-cap normals, or a small render-only disc material split so the cap keeps a crisp OSSE-like presentation without changing canonical mesh tags or solver payloads.
+
 ### P2 Folder-Backed Completion And Export Flow
 
 - [x] Build selected-format bundle export and idempotent auto-export on simulation completion.
