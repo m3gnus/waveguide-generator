@@ -167,13 +167,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   2. Move folder-workspace index/manifest syncing into a dedicated workspace-task service.
   3. Move task-bundle file writes into an export/workspace adapter that the UI controller calls explicitly.
 
-- [ ] Remove ambient frontend globals such as `window.app` and `window.__waveguideApp` in favor of explicit composition.
+- [x] Remove ambient frontend globals such as `window.app` and `window.__waveguideApp` in favor of explicit composition.
   Source: architecture review on March 12, 2026; `src/modules/ui/index.js`; `src/ui/settings/modal.js`; `src/ui/simulation/exports.js`.
   Relevant: Yes. The current runtime mostly composes through modules and coordinators, but a few important UI flows still rely on global app handles.
   Will it improve the program: Yes. It will reduce hidden dependencies, make lazy-loaded UI flows easier to test, and keep module boundaries honest.
   Research findings: `src/modules/ui/index.js` still assigns `window.__waveguideApp` during simulation-panel bootstrapping, `src/ui/simulation/exports.js` falls back to that global when resolving the app instance, and `src/ui/settings/modal.js` applies viewer settings through `window.app?.controls` and `window.app?.renderer?.domElement`. These shortcuts bypass the intended app/module composition path.
   Best approach: Thread the required app/controller/viewer dependencies through the existing coordinators and panel constructors instead of storing them on `window`. Keep any dev-only diagnostics behind explicit debug registration helpers so runtime code never depends on ambient globals.
-  Progress: March 12, 2026. A first ambient-global cleanup slice now constructs `SimulationPanel` with its `app` dependency and removes the runtime `window.__waveguideApp` assignment/fallback from the UI module and simulation export helpers. The remaining work in this backlog item is the viewer/settings path that still reads `window.app`.
+  Completed: March 12, 2026. This item landed in two slices. The first constructed `SimulationPanel` with its `app` dependency and removed the runtime `window.__waveguideApp` assignment/fallback from the UI module and simulation export helpers. The second threaded explicit viewer-control and renderer-element adapters into `openSettingsModal()`, removing the remaining `window.app` reads from the settings modal while keeping the dev-only backend diagnostic hook behind an explicit app-edge registration helper.
   Implementation plan:
   1. Add explicit dependency injection for viewer controls, renderer DOM access, and simulation export coordination.
   2. Update settings/export entrypoints to receive those dependencies from `App` or the UI coordinator rather than reading `window`.

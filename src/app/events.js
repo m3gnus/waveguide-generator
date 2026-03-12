@@ -58,7 +58,16 @@ export function bindButtonEvents(app) {
       type: 'click'
     },
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
-    { id: 'settings-btn', handler: () => openAppSettings(), type: 'click' }
+    {
+      id: 'settings-btn',
+      handler: () => openAppSettings({
+        viewerRuntime: {
+          getControls: () => app.controls || null,
+          getDomElement: () => app.renderer?.domElement || null
+        }
+      }),
+      type: 'click'
+    }
   ];
 
   buttonBindings.forEach(({ id, handler, type }) => {
