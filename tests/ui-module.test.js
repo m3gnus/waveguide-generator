@@ -83,6 +83,7 @@ test('UiModule app coordinator binds AppEvents and lazily creates the simulation
 
 test('UiModule simulation-panel coordinator resolves mesh requests and syncs state updates', async () => {
   const syncedStates = [];
+  let refreshCalls = 0;
   const requestedEvents = [];
   const onMeshRequested = () => {
     requestedEvents.push('mesh-requested');
@@ -93,6 +94,9 @@ test('UiModule simulation-panel coordinator resolves mesh requests and syncs sta
     const panel = {
       syncSimulationSettings(state) {
         syncedStates.push(state);
+      },
+      async refreshJobFeed() {
+        refreshCalls += 1;
       }
     };
 
@@ -112,6 +116,10 @@ test('UiModule simulation-panel coordinator resolves mesh requests and syncs sta
     assert.equal(requestedEvents.length, 1);
     assert.equal(mesh.format, 'msh');
 
+    AppEvents.emit('ui:folder-workspace-changed', { label: 'workspace' });
+    await Promise.resolve();
+    assert.equal(refreshCalls, 1);
+
     coordinator.dispose();
   } finally {
     AppEvents.off('simulation:mesh-requested', onMeshRequested);
@@ -120,6 +128,7 @@ test('UiModule simulation-panel coordinator resolves mesh requests and syncs sta
 
 test('UiModule simulation-panel coordinator removes listeners and rejects pending mesh on dispose', async () => {
   const syncedStates = [];
+  let refreshCalls = 0;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
   const clearedIds = [];
@@ -135,6 +144,9 @@ test('UiModule simulation-panel coordinator removes listeners and rejects pendin
     const panel = {
       syncSimulationSettings(state) {
         syncedStates.push(state);
+      },
+      async refreshJobFeed() {
+        refreshCalls += 1;
       }
     };
 
@@ -149,7 +161,10 @@ test('UiModule simulation-panel coordinator removes listeners and rejects pendin
     await assert.rejects(meshPromise, /disposed while waiting for mesh data/i);
 
     AppEvents.emit('state:updated', { freqEnd: 2000 });
+    AppEvents.emit('ui:folder-workspace-changed', { label: 'ignored' });
+    await Promise.resolve();
     assert.deepEqual(syncedStates, []);
+    assert.equal(refreshCalls, 0);
     assert.equal(clearedIds.length, 1);
   } finally {
     global.setTimeout = originalSetTimeout;
