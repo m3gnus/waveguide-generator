@@ -4,9 +4,112 @@ const AXIS_CHECKBOX_IDS = {
   vertical: 'polar-axis-vertical',
   diagonal: 'polar-axis-diagonal'
 };
-
+const POLAR_NUMERIC_FIELDS = Object.freeze([
+  {
+    id: 'polar-angle-start',
+    uiKey: 'angleStart',
+    stateKey: 'polarAngleStart',
+    fallback: 0,
+    label: 'Angle Start',
+    unit: 'deg',
+    help: 'Starting angle for the directivity map sweep.',
+    min: 0,
+    max: 360,
+    step: 1
+  },
+  {
+    id: 'polar-angle-end',
+    uiKey: 'angleEnd',
+    stateKey: 'polarAngleEnd',
+    fallback: 180,
+    label: 'Angle End',
+    unit: 'deg',
+    help: 'Ending angle for the directivity map sweep.',
+    min: 0,
+    max: 360,
+    step: 1
+  },
+  {
+    id: 'polar-angle-step',
+    uiKey: 'angleStep',
+    stateKey: 'polarAngleStep',
+    fallback: 5,
+    label: 'Angle Step',
+    unit: 'deg',
+    help: 'Angular increment between directivity samples. Smaller steps produce more angular samples.',
+    min: 1,
+    max: 90,
+    step: 1
+  },
+  {
+    id: 'polar-distance',
+    uiKey: 'distance',
+    stateKey: 'polarDistance',
+    fallback: 2,
+    label: 'Distance',
+    unit: 'm',
+    help: 'Evaluation distance used when generating the directivity map.',
+    min: 0.1,
+    max: 10,
+    step: 0.1
+  },
+  {
+    id: 'polar-norm-angle',
+    uiKey: 'normAngle',
+    stateKey: 'polarNormAngle',
+    fallback: 5,
+    label: 'Norm Angle',
+    unit: 'deg',
+    help: 'Reference angle used to normalize the directivity map output.',
+    min: 0,
+    max: 90,
+    step: 1
+  },
+  {
+    id: 'polar-inclination',
+    uiKey: 'diagonalAngle',
+    stateKey: 'polarDiagonalAngle',
+    fallback: 45,
+    label: 'Diagonal Angle',
+    unit: 'deg',
+    help: 'Inclination used for the diagonal directivity plane when the diagonal axis is enabled.',
+    min: 0,
+    max: 360,
+    step: 1
+  }
+]);
 const DIAGONAL_ANGLE_INPUT_ID = 'polar-inclination';
+const POLAR_SETTINGS_CONTAINER_ID = 'polar-settings-container';
 const EPSILON = 1e-6;
+const DEFAULT_POLAR_UI_STATE = Object.freeze({
+  angleStart: 0,
+  angleEnd: 180,
+  angleStep: 5,
+  distance: 2,
+  normAngle: 5,
+  diagonalAngle: 45,
+  enabledAxes: [...POLAR_AXIS_ORDER]
+});
+const POLAR_AXIS_METADATA = Object.freeze([
+  {
+    axis: 'horizontal',
+    id: AXIS_CHECKBOX_IDS.horizontal,
+    label: 'Horizontal (0deg)',
+    help: 'Generate the horizontal directivity plane.'
+  },
+  {
+    axis: 'vertical',
+    id: AXIS_CHECKBOX_IDS.vertical,
+    label: 'Vertical (90deg)',
+    help: 'Generate the vertical directivity plane.'
+  },
+  {
+    axis: 'diagonal',
+    id: AXIS_CHECKBOX_IDS.diagonal,
+    label: 'Diagonal',
+    help: 'Generate an additional inclined directivity plane using the diagonal angle below.'
+  }
+]);
 
 function getElement(doc, id) {
   return doc && typeof doc.getElementById === 'function' ? doc.getElementById(id) : null;
@@ -44,6 +147,29 @@ function formatNumeric(value) {
   if (!Number.isFinite(numeric)) return '0';
   if (Number.isInteger(numeric)) return String(numeric);
   return String(numeric);
+}
+
+function cloneDefaultPolarUiState() {
+  return {
+    ...DEFAULT_POLAR_UI_STATE,
+    enabledAxes: [...DEFAULT_POLAR_UI_STATE.enabledAxes]
+  };
+}
+
+function isPolarAxisControlId(id) {
+  return Object.values(AXIS_CHECKBOX_IDS).includes(id);
+}
+
+function getNumericFieldById(id) {
+  return POLAR_NUMERIC_FIELDS.find((field) => field.id === id) || null;
+}
+
+function normalizeEnabledAxes(enabledAxes) {
+  if (!Array.isArray(enabledAxes)) {
+    return [...DEFAULT_POLAR_UI_STATE.enabledAxes];
+  }
+  const normalized = POLAR_AXIS_ORDER.filter((axis) => enabledAxes.includes(axis));
+  return normalized;
 }
 
 function getEnabledAxesFromDom(doc) {
@@ -119,6 +245,254 @@ export function derivePolarSelectionFromBlocks(blocks) {
   };
 }
 
+function parsePolarRange(value) {
+  if (typeof value !== 'string') return null;
+  const parts = value.split(',').map((part) => Number(part.trim()));
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+    return null;
+  }
+  const [angleStart, angleEnd, rawAngleCount] = parts;
+  const angleCount = Math.max(2, Math.floor(rawAngleCount));
+  const angleStep = angleCount > 1 ? (angleEnd - angleStart) / (angleCount - 1) : DEFAULT_POLAR_UI_STATE.angleStep;
+  return { angleStart, angleEnd, angleStep };
+}
+
+function derivePolarUiStateFromBlocks(blocks) {
+  const resolved = cloneDefaultPolarUiState();
+  const entries = toPolarEntries(blocks);
+  if (entries.length === 0) {
+    return resolved;
+  }
+
+  const firstBlock = entries[0]?.[1];
+  const firstItems = firstBlock && typeof firstBlock === 'object' ? (firstBlock._items || {}) : {};
+  const parsedRange = parsePolarRange(firstItems.MapAngleRange);
+  if (parsedRange) {
+    resolved.angleStart = parsedRange.angleStart;
+    resolved.angleEnd = parsedRange.angleEnd;
+    resolved.angleStep = parsedRange.angleStep;
+  }
+  resolved.distance = toFiniteNumber(firstItems.Distance, resolved.distance);
+  resolved.normAngle = toFiniteNumber(firstItems.NormAngle, resolved.normAngle);
+
+  const selection = derivePolarSelectionFromBlocks(blocks);
+  resolved.enabledAxes = [...selection.enabledAxes];
+  resolved.diagonalAngle = selection.diagonalAngle;
+  return resolved;
+}
+
+function derivePolarUiStateFromConfig(polarConfig) {
+  const resolved = cloneDefaultPolarUiState();
+  if (!polarConfig || typeof polarConfig !== 'object') {
+    return resolved;
+  }
+
+  const [angleStart, angleEnd, rawAngleCount] = Array.isArray(polarConfig.angle_range)
+    ? polarConfig.angle_range
+    : [];
+  if (Number.isFinite(Number(angleStart))) {
+    resolved.angleStart = Number(angleStart);
+  }
+  if (Number.isFinite(Number(angleEnd))) {
+    resolved.angleEnd = Number(angleEnd);
+  }
+  if (Number.isFinite(Number(rawAngleCount))) {
+    const angleCount = Math.max(2, Math.floor(Number(rawAngleCount)));
+    resolved.angleStep = angleCount > 1
+      ? (resolved.angleEnd - resolved.angleStart) / (angleCount - 1)
+      : resolved.angleStep;
+  }
+  resolved.distance = toFiniteNumber(polarConfig.distance, resolved.distance);
+  resolved.normAngle = toFiniteNumber(polarConfig.norm_angle, resolved.normAngle);
+  resolved.diagonalAngle = toFiniteNumber(polarConfig.inclination, resolved.diagonalAngle);
+  resolved.enabledAxes = normalizeEnabledAxes(polarConfig.enabled_axes);
+  return resolved;
+}
+
+function applyExplicitPolarStateOverrides(resolved, params) {
+  if (!params || typeof params !== 'object') {
+    return resolved;
+  }
+
+  POLAR_NUMERIC_FIELDS.forEach(({ uiKey, stateKey }) => {
+    if (params[stateKey] !== undefined && params[stateKey] !== null) {
+      resolved[uiKey] = toFiniteNumber(params[stateKey], resolved[uiKey]);
+    }
+  });
+
+  if (Array.isArray(params.polarEnabledAxes)) {
+    resolved.enabledAxes = normalizeEnabledAxes(params.polarEnabledAxes);
+  }
+
+  return resolved;
+}
+
+function computeAngleRange(uiState) {
+  const angleStart = toFiniteNumber(uiState.angleStart, DEFAULT_POLAR_UI_STATE.angleStart);
+  const angleEnd = toFiniteNumber(uiState.angleEnd, DEFAULT_POLAR_UI_STATE.angleEnd);
+  const angleStepRaw = toFiniteNumber(uiState.angleStep, DEFAULT_POLAR_UI_STATE.angleStep);
+  const angleStep = angleStepRaw > 0 ? angleStepRaw : DEFAULT_POLAR_UI_STATE.angleStep;
+  const angleCount = Math.max(2, Math.floor((angleEnd - angleStart) / angleStep) + 1);
+  return {
+    angleStart,
+    angleEnd,
+    angleStep,
+    angleCount
+  };
+}
+
+function buildCanonicalPolarBlockMap(uiState) {
+  const { angleStart, angleEnd, angleCount } = computeAngleRange(uiState);
+  return buildCanonicalPolarBlocks({
+    enabledAxes: uiState.enabledAxes,
+    polarRange: `${angleStart},${angleEnd},${angleCount}`,
+    distance: uiState.distance,
+    normAngle: uiState.normAngle,
+    diagonalAngle: uiState.diagonalAngle
+  });
+}
+
+function mergePolarBlocks(existingBlocks, nextPolarBlocks) {
+  const merged = {};
+  if (existingBlocks && typeof existingBlocks === 'object') {
+    Object.entries(existingBlocks).forEach(([name, block]) => {
+      if (!String(name).startsWith('ABEC.Polars:')) {
+        merged[name] = block;
+      }
+    });
+  }
+  return {
+    ...merged,
+    ...nextPolarBlocks
+  };
+}
+
+function buildPersistedPolarStatePatch(currentParams, nextUiState) {
+  const patch = {
+    polarAngleStart: nextUiState.angleStart,
+    polarAngleEnd: nextUiState.angleEnd,
+    polarAngleStep: nextUiState.angleStep,
+    polarDistance: nextUiState.distance,
+    polarNormAngle: nextUiState.normAngle,
+    polarDiagonalAngle: nextUiState.diagonalAngle,
+    polarEnabledAxes: [...nextUiState.enabledAxes]
+  };
+  patch._blocks = mergePolarBlocks(currentParams?._blocks, buildCanonicalPolarBlockMap(nextUiState));
+  return patch;
+}
+
+export function resolvePolarUiState(params = {}) {
+  const resolved = cloneDefaultPolarUiState();
+  const withBlocks = params && typeof params === 'object' && params._blocks
+    ? derivePolarUiStateFromBlocks(params._blocks)
+    : resolved;
+  return applyExplicitPolarStateOverrides(withBlocks, params);
+}
+
+function createLabel(doc, text, htmlFor, helpText) {
+  const label = doc.createElement('label');
+  label.textContent = text;
+  if (htmlFor) {
+    label.htmlFor = htmlFor;
+  }
+  if (helpText) {
+    label.title = helpText;
+    if (label.classList && typeof label.classList.add === 'function') {
+      label.classList.add('has-tooltip');
+    }
+  }
+  return label;
+}
+
+function appendPolarNumberRow(section, field, doc) {
+  const row = doc.createElement('div');
+  row.className = 'input-row';
+
+  const label = createLabel(
+    doc,
+    field.unit ? `${field.label} (${field.unit})` : field.label,
+    field.id,
+    field.help
+  );
+  row.appendChild(label);
+
+  const input = doc.createElement('input');
+  input.type = 'number';
+  input.id = field.id;
+  input.value = formatNumeric(field.fallback);
+  if (field.min !== undefined) input.min = String(field.min);
+  if (field.max !== undefined) input.max = String(field.max);
+  if (field.step !== undefined) input.step = String(field.step);
+  row.appendChild(input);
+
+  section.appendChild(row);
+}
+
+function appendPolarAxisRow(section, doc) {
+  const row = doc.createElement('div');
+  row.className = 'input-row';
+
+  row.appendChild(createLabel(doc, 'Polar Axes', '', 'Choose which directivity planes to generate.'));
+
+  const options = doc.createElement('div');
+  options.className = 'polar-axis-options';
+
+  POLAR_AXIS_METADATA.forEach((option) => {
+    const optionLabel = doc.createElement('label');
+    optionLabel.className = 'polar-axis-option';
+    optionLabel.title = option.help;
+
+    const input = doc.createElement('input');
+    input.type = 'checkbox';
+    input.id = option.id;
+    input.checked = true;
+    optionLabel.appendChild(input);
+
+    const text = doc.createElement('span');
+    text.textContent = option.label;
+    optionLabel.appendChild(text);
+
+    options.appendChild(optionLabel);
+  });
+
+  row.appendChild(options);
+  section.appendChild(row);
+}
+
+export function renderPolarSettingsSection(doc = document) {
+  const container = getElement(doc, POLAR_SETTINGS_CONTAINER_ID);
+  if (!container || typeof doc?.createElement !== 'function') {
+    return null;
+  }
+
+  container.innerHTML = '';
+
+  const section = doc.createElement('div');
+  section.className = 'section';
+
+  const title = doc.createElement('h4');
+  title.className = 'section-subtitle';
+  title.textContent = 'DIRECTIVITY MAP';
+  section.appendChild(title);
+
+  POLAR_NUMERIC_FIELDS
+    .filter((field) => field.id !== DIAGONAL_ANGLE_INPUT_ID)
+    .forEach((field) => appendPolarNumberRow(section, field, doc));
+
+  appendPolarAxisRow(section, doc);
+  appendPolarNumberRow(section, getNumericFieldById(DIAGONAL_ANGLE_INPUT_ID), doc);
+
+  container.appendChild(section);
+  return section;
+}
+
+export function ensurePolarControlsRendered(doc = document) {
+  if (getElement(doc, 'polar-angle-start')) {
+    return getElement(doc, POLAR_SETTINGS_CONTAINER_ID) || true;
+  }
+  return renderPolarSettingsSection(doc);
+}
+
 export function setDiagonalAngleEnabled(enabled, doc = document) {
   const diagonalAngleInput = getElement(doc, DIAGONAL_ANGLE_INPUT_ID);
   if (!diagonalAngleInput) return;
@@ -145,20 +519,35 @@ export function applyPolarSelectionToDom(selection, doc = document) {
   setDiagonalAngleEnabled(enabled.has('diagonal'), doc);
 }
 
-export function syncPolarControlsFromBlocks(blocks, doc = document) {
-  const selection = derivePolarSelectionFromBlocks(blocks);
-  applyPolarSelectionToDom(selection, doc);
-  return selection;
+export function applyPolarUiStateToDom(uiState, doc = document) {
+  if (!uiState || typeof uiState !== 'object') return;
+
+  POLAR_NUMERIC_FIELDS.forEach(({ id, uiKey }) => {
+    const element = getElement(doc, id);
+    if (!element) return;
+    const nextValue = formatNumeric(uiState[uiKey]);
+    if (element.value !== nextValue) {
+      element.value = nextValue;
+    }
+  });
+
+  applyPolarSelectionToDom(uiState, doc);
 }
 
-export function bindPolarUiToggleHandlers(doc = document) {
-  const diagonalCheckbox = getElement(doc, AXIS_CHECKBOX_IDS.diagonal);
-  if (diagonalCheckbox) {
-    diagonalCheckbox.addEventListener('change', () => {
-      setDiagonalAngleEnabled(diagonalCheckbox.checked, doc);
-    });
-    setDiagonalAngleEnabled(diagonalCheckbox.checked, doc);
-  }
+export function syncPolarControlsFromBlocks(blocks, doc = document) {
+  const uiState = derivePolarUiStateFromBlocks(blocks);
+  applyPolarUiStateToDom(uiState, doc);
+  return uiState;
+}
+
+export function syncPolarControlsFromState(params = {}, doc = document) {
+  const uiState = resolvePolarUiState(params);
+  applyPolarUiStateToDom(uiState, doc);
+  return uiState;
+}
+
+export function getPolarStateSignature(params = {}) {
+  return JSON.stringify(resolvePolarUiState(params));
 }
 
 export function readPolarUiSettings(doc = document) {
@@ -188,6 +577,53 @@ export function readPolarUiSettings(doc = document) {
     diagonalAngle,
     enabledAxes
   };
+}
+
+export function readPolarStateSettings(params = {}) {
+  const uiState = resolvePolarUiState(params);
+  const { angleStart, angleEnd, angleCount } = computeAngleRange(uiState);
+
+  if (uiState.enabledAxes.length === 0) {
+    return {
+      ok: false,
+      validationError: 'Select at least one polar axis (horizontal, vertical, or diagonal).'
+    };
+  }
+
+  return {
+    ok: true,
+    angleRangeArray: [angleStart, angleEnd, angleCount],
+    polarRange: `${angleStart},${angleEnd},${angleCount}`,
+    distance: uiState.distance,
+    normAngle: uiState.normAngle,
+    diagonalAngle: uiState.diagonalAngle,
+    enabledAxes: [...uiState.enabledAxes]
+  };
+}
+
+export function isPolarControlId(id) {
+  return Boolean(getNumericFieldById(id) || isPolarAxisControlId(id));
+}
+
+export function buildPolarStatePatchForControl(id, currentParams = {}, doc = document) {
+  if (!isPolarControlId(id)) {
+    return null;
+  }
+
+  const nextUiState = resolvePolarUiState(currentParams);
+  const numericField = getNumericFieldById(id);
+  if (numericField) {
+    nextUiState[numericField.uiKey] = readNumberInput(doc, numericField.id, nextUiState[numericField.uiKey]);
+  } else if (isPolarAxisControlId(id)) {
+    nextUiState.enabledAxes = getEnabledAxesFromDom(doc);
+  }
+
+  return buildPersistedPolarStatePatch(currentParams, nextUiState);
+}
+
+export function buildPolarStatePatchFromConfig(currentParams = {}, polarConfig = null) {
+  const nextUiState = derivePolarUiStateFromConfig(polarConfig);
+  return buildPersistedPolarStatePatch(currentParams, nextUiState);
 }
 
 export function buildCanonicalPolarBlocks(settings) {

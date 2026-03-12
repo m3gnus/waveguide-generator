@@ -3,30 +3,53 @@ import {
   updateSimulationStateParams
 } from '../../modules/simulation/state.js';
 import {
-  bindPolarUiToggleHandlers,
-  getPolarBlocksSignature,
-  syncPolarControlsFromBlocks
+  buildPolarStatePatchForControl,
+  ensurePolarControlsRendered,
+  getPolarStateSignature,
+  isPolarControlId,
+  syncPolarControlsFromState
 } from './polarSettings.js';
 
+function statePatchMatches(currentParams, nextPatch) {
+  return Object.entries(nextPatch).every(([key, value]) => {
+    const currentValue = currentParams?.[key];
+    if (Array.isArray(value) || (value && typeof value === 'object')) {
+      return JSON.stringify(currentValue) === JSON.stringify(value);
+    }
+    return currentValue === value;
+  });
+}
+
 export function setupSimulationParamBindings(panel) {
-  bindPolarUiToggleHandlers();
+  ensurePolarControlsRendered(document);
 
   if (!panel._simulationParamBindingsAttached) {
     const bindingsById = new Map(
       panel.simulationParamBindings.map((binding) => [binding.id, binding])
     );
     const changeHandler = (e) => {
-      const binding = bindingsById.get(e?.target?.id);
-      if (!binding) return;
-
-      const nextValue = binding.parse(e.target.value);
-      if (Number.isNaN(nextValue)) return;
-
       const currentState = readSimulationState();
-      const currentValue = currentState?.params?.[binding.key];
-      if (currentValue === nextValue) return;
+      const targetId = e?.target?.id;
+      if (!targetId) return;
 
-      updateSimulationStateParams({ [binding.key]: nextValue });
+      const binding = bindingsById.get(targetId);
+      if (binding) {
+        const nextValue = binding.parse(e.target.value);
+        if (Number.isNaN(nextValue)) return;
+
+        const currentValue = currentState?.params?.[binding.key];
+        if (currentValue === nextValue) return;
+
+        updateSimulationStateParams({ [binding.key]: nextValue });
+        return;
+      }
+
+      if (!isPolarControlId(targetId)) return;
+
+      const nextPatch = buildPolarStatePatchForControl(targetId, currentState?.params, document);
+      if (!nextPatch || statePatchMatches(currentState?.params, nextPatch)) return;
+
+      updateSimulationStateParams(nextPatch);
     };
 
     document.addEventListener('change', changeHandler);
@@ -63,10 +86,9 @@ export function syncSimulationSettings(panel, state) {
     }
   });
 
-  const blocks = state.params._blocks;
-  const signature = getPolarBlocksSignature(blocks);
-  if (panel._lastPolarBlocksSignature !== signature) {
-    syncPolarControlsFromBlocks(blocks);
-    panel._lastPolarBlocksSignature = signature;
+  const signature = getPolarStateSignature(state.params);
+  if (panel._lastPolarStateSignature !== signature) {
+    syncPolarControlsFromState(state.params);
+    panel._lastPolarStateSignature = signature;
   }
 }
