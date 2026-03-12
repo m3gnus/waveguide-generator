@@ -127,6 +127,7 @@ Windows/Linux note:
 - Explicit task-history source modes: folder-backed tasks when a workspace is selected, backend jobs otherwise
 - Simulation task bundle exports with settings-selected formats and once-per-completion auto-export
 - Folder workspace routing for manual exports at the selected folder root plus completed-task bundles under `<workspace>/<jobId>/`, with save-picker/download fallback if workspace writes fail
+- Pre-submit simulation diagnostics that report geometry surface identities as triangle counts while keeping canonical solver tags as a secondary debug summary
 - Task-history ratings plus persisted sort and minimum-rating filters for larger simulation archives
 - Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
 - Export: STL, CSV profiles, MWG config text, simulation mesh download, and VACS-style result text

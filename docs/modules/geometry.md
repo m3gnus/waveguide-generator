@@ -33,6 +33,7 @@ Invariants:
 - Source tag `2` must exist
 - Tag mapping remains code-owned in `src/geometry/tags.js`
 - Interface tag `4` is only valid when enclosure/interface geometry is actually present
+- `metadata.identityTriangleCounts` is triangle-based and derived from geometry group ranges, not vertex participation
 
 ## Important Runtime Notes
 

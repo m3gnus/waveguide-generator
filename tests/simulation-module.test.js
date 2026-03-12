@@ -370,12 +370,19 @@ test('simulation use case summarizes canonical tag counts and warnings', () => {
   const summary = summarizeCanonicalSimulationMesh({
     vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
     indices: [0, 1, 2, 0, 2, 1],
-    surfaceTags: [1, 4]
+    surfaceTags: [1, 4],
+    groups: {
+      throat_disc: { start: 0, end: 1 },
+      inner_wall: { start: 1, end: 2 }
+    }
   });
 
   assert.equal(summary.vertexCount, 3);
   assert.equal(summary.triangleCount, 2);
   assert.deepEqual(summary.tagCounts, { 1: 1, 2: 0, 3: 0, 4: 1 });
+  assert.equal(summary.identityTriangleCounts.throat_disc, 1);
+  assert.equal(summary.identityTriangleCounts.inner_wall, 1);
+  assert.equal(summary.identityTriangleCounts.enc_side, 0);
   assert.equal(summary.ok, false);
   assert.match(summary.warnings[0], /source surface tag/i);
 });
