@@ -3,10 +3,6 @@ import assert from 'node:assert/strict';
 
 import { AppEvents } from '../src/events.js';
 import { UiModule } from '../src/modules/ui/index.js';
-import {
-  getSelectedFolderHandle,
-  resetSelectedFolder
-} from '../src/ui/workspace/folderWorkspace.js';
 
 function makeMeshPayload(overrides = {}) {
   return {
@@ -20,6 +16,21 @@ function makeMeshPayload(overrides = {}) {
       mouth: { type: 'robin', surfaceTag: 1, impedance: 'spherical' }
     },
     metadata: { fullCircle: true, ringCount: 3 },
+    ...overrides
+  };
+}
+
+function makeFileOps(overrides = {}) {
+  return {
+    deriveExportFieldsFromFileName(fileName) {
+      return { outputName: fileName, counter: 1 };
+    },
+    markParametersChanged() {},
+    resetParameterChangeTracking() {},
+    async selectOutputFolder() {
+      return null;
+    },
+    setExportFields() {},
     ...overrides
   };
 }
@@ -56,7 +67,8 @@ test('UiModule app coordinator binds AppEvents and lazily creates the simulation
     const coordinator = UiModule.output.app(
       UiModule.task(
         UiModule.importApp(app, {
-          loadSimulationPanel: async () => ({ SimulationPanel: FakeSimulationPanel })
+          loadSimulationPanel: async () => ({ SimulationPanel: FakeSimulationPanel }),
+          fileOps: makeFileOps()
         })
       )
     );
@@ -114,7 +126,8 @@ test('UiModule app coordinator exposes feedback helpers through the app edge', a
         },
         {
           loadSimulationPanel: async () => ({ SimulationPanel: class {} }),
-          feedback
+          feedback,
+          fileOps: makeFileOps()
         }
       )
     )
@@ -135,6 +148,7 @@ test('UiModule app coordinator exposes feedback helpers through the app edge', a
 });
 
 test('UiModule app coordinator exposes file operation helpers through the app edge', async () => {
+  const calls = [];
   const coordinator = UiModule.output.app(
     UiModule.task(
       UiModule.importApp(
@@ -145,50 +159,50 @@ test('UiModule app coordinator exposes file operation helpers through the app ed
           schedulePanelAutoSize() {}
         },
         {
-          loadSimulationPanel: async () => ({ SimulationPanel: class {} })
+          loadSimulationPanel: async () => ({ SimulationPanel: class {} }),
+          fileOps: makeFileOps({
+            deriveExportFieldsFromFileName(fileName, options = {}) {
+              calls.push(['derive', fileName, options]);
+              return { outputName: 'waveguide', counter: 12 };
+            },
+            setExportFields(fields, doc) {
+              calls.push(['set', fields]);
+              doc.prefix.value = fields.outputName;
+              doc.counter.value = String(fields.counter);
+            },
+            resetParameterChangeTracking(options = {}) {
+              calls.push(['reset', options]);
+            },
+            async selectOutputFolder() {
+              calls.push(['choose']);
+              return { name: 'workspace' };
+            }
+          })
         }
       )
     )
   );
 
-  const originalWindow = global.window;
-  global.window = {
-    showDirectoryPicker: async () => ({
-      name: 'workspace',
-      queryPermission: async () => 'granted',
-      getFileHandle: async () => ({
-        createWritable: async () => ({
-          async write() {},
-          async close() {}
-        })
-      })
-    })
+  const derived = coordinator.deriveExportFieldsFromFileName('waveguide_12.cfg');
+  assert.deepEqual(derived, { outputName: 'waveguide', counter: 12 });
+
+  const doc = {
+    prefix: { value: 'initial' },
+    counter: { value: '1' }
   };
+  coordinator.setExportFields({ outputName: 'horn', counter: 7 }, doc);
+  assert.equal(doc.prefix.value, 'horn');
+  assert.equal(doc.counter.value, '7');
 
-  try {
-    const derived = coordinator.deriveExportFieldsFromFileName('waveguide_12.cfg');
-    assert.deepEqual(derived, { outputName: 'waveguide', counter: 12 });
-
-    const doc = {
-      prefix: { value: 'initial' },
-      counter: { value: '1' },
-      getElementById(id) {
-        if (id === 'export-prefix') return this.prefix;
-        if (id === 'export-counter') return this.counter;
-        return null;
-      }
-    };
-    coordinator.setExportFields({ outputName: 'horn', counter: 7 }, doc);
-    assert.equal(doc.prefix.value, 'horn');
-    assert.equal(doc.counter.value, '7');
-
-    coordinator.resetParameterChangeTracking({ skipNext: true });
-    await coordinator.chooseOutputFolder();
-    assert.equal(getSelectedFolderHandle()?.name, 'workspace');
-  } finally {
-    resetSelectedFolder();
-    global.window = originalWindow;
-  }
+  coordinator.resetParameterChangeTracking({ skipNext: true });
+  const folder = await coordinator.chooseOutputFolder();
+  assert.equal(folder?.name, 'workspace');
+  assert.deepEqual(calls, [
+    ['derive', 'waveguide_12.cfg', {}],
+    ['set', { outputName: 'horn', counter: 7 }],
+    ['reset', { skipNext: true }],
+    ['choose']
+  ]);
 });
 
 test('UiModule simulation-panel coordinator resolves mesh requests and syncs state updates', async () => {

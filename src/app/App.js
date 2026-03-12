@@ -1,5 +1,6 @@
 import { GlobalState } from '../state.js';
 import { UiModule } from '../modules/ui/index.js';
+import { appUiFeedback, appUiFileOps } from './uiAdapters.js';
 
 import { initializeLogging } from './logging.js';
 import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } from './scene.js';
@@ -27,7 +28,10 @@ export class App {
     this.simulationPanel = null;
     this.uiCoordinator = UiModule.output.app(
       UiModule.task(
-        UiModule.importApp(this)
+        UiModule.importApp(this, {
+          feedback: appUiFeedback,
+          fileOps: appUiFileOps
+        })
       )
     );
 

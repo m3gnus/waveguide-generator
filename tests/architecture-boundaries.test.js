@@ -8,15 +8,15 @@ const SRC_ROOT = path.join(ROOT, 'src');
 
 const LEGACY_EXCEPTIONS = new Set([
   'app/exports.js->ui/feedback.js',
-  'app/exports.js->ui/fileOps.js'
+  'app/exports.js->ui/fileOps.js',
+  'app/uiAdapters.js->ui/feedback.js',
+  'app/uiAdapters.js->ui/fileOps.js'
 ]);
 const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
   'modules/simulation/state.js->state.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/folderWorkspace.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskIndex.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskManifest.js',
-  'modules/ui/index.js->ui/feedback.js',
-  'modules/ui/index.js->ui/fileOps.js',
 ]);
 
 const BOUNDARY_RULES = [
