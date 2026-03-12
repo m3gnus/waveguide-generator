@@ -148,6 +148,8 @@ Required regression coverage:
 ### P1. Parameter Inventory, Naming, Hover Help, and Ordering
 
 - [ ] Build a source-of-truth inventory of every user-facing parameter, then use it to rework naming, hover help, and ordering into one coherent UI pass.
+  - [x] Move the simulation frequency controls into the schema-driven panel with stable DOM IDs, and expose the existing `throatSliceDensity` and `verticalOffset` schema controls in the rendered mesh section.
+  - [ ] Fold the remaining directivity-map controls into the same naming/help system and finish the broader label/order cleanup across geometry and simulation sections.
   - Reorganize geometry/simulation parameters into clearer groups with a predictable order instead of the current split between schema-driven sections and hard-coded simulation controls.
   - Rewrite parameter titles into more understandable user-facing names while preserving current internal keys and config compatibility.
   - Replace the current native-tooltip-only approach with a deliberate hover-help pattern that works consistently for parameters and settings.
