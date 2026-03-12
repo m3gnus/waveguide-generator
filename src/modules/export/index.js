@@ -1,9 +1,9 @@
 import {
   exportProfilesCSV,
   exportSlicesCSV,
-  generateMWGConfigContent,
-  exportSTLBinary
-} from '../../export/index.js';
+} from '../../export/profiles.js';
+import { generateMWGConfigContent } from '../../export/mwgConfig.js';
+import { exportSTLBinary } from '../../export/stl.browser.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import {
   buildCanonicalMeshPayloadFromShape,
