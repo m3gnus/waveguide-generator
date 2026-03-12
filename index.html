@@ -40,51 +40,7 @@
         <!-- Simulation Tab Content -->
         <div id="simulation-tab" class="tab-content" role="tabpanel" aria-labelledby="simulation-tab-btn" hidden>
             <div id="simulation-settings-container"></div>
-            <div class="section">
-                <h4 class="section-subtitle">DIRECTIVITY MAP</h4>
-                <div class="input-row">
-                    <label for="polar-angle-start">Angle Start (deg)</label>
-                    <input type="number" id="polar-angle-start" value="0" min="0" max="360" step="1">
-                </div>
-                <div class="input-row">
-                    <label for="polar-angle-end">Angle End (deg)</label>
-                    <input type="number" id="polar-angle-end" value="180" min="0" max="360" step="1">
-                </div>
-                <div class="input-row">
-                    <label for="polar-angle-step">Angle Step (deg)</label>
-                    <input type="number" id="polar-angle-step" value="5" min="1" max="90" step="1">
-                </div>
-                <div class="input-row">
-                    <label for="polar-norm-angle">Norm Angle (deg)</label>
-                    <input type="number" id="polar-norm-angle" value="5" min="0" max="90" step="1">
-                </div>
-                <div class="input-row">
-                    <label for="polar-distance">Distance (m)</label>
-                    <input type="number" id="polar-distance" value="2" min="0.1" max="10" step="0.1">
-                </div>
-                <div class="input-row">
-                    <label>Polar Axes</label>
-                    <div class="polar-axis-options">
-                        <label class="polar-axis-option">
-                            <input type="checkbox" id="polar-axis-horizontal" checked>
-                            Horizontal (0°)
-                        </label>
-                        <label class="polar-axis-option">
-                            <input type="checkbox" id="polar-axis-vertical" checked>
-                            Vertical (90°)
-                        </label>
-                        <label class="polar-axis-option">
-                            <input type="checkbox" id="polar-axis-diagonal" checked>
-                            Diagonal
-                        </label>
-                    </div>
-                </div>
-                <div class="input-row">
-                    <label for="polar-inclination">Diagonal Angle (deg)</label>
-                    <input type="number" id="polar-inclination" value="45" min="0" max="360" step="1">
-                </div>
-            </div>
-
+            <div id="polar-settings-container"></div>
             <div id="simulation-param-container"></div>
         </div>
     </div>
