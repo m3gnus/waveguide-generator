@@ -173,6 +173,7 @@ Work the backlog from upstream runtime truth to downstream UX:
   Will it improve the program: Yes. It will reduce hidden dependencies, make lazy-loaded UI flows easier to test, and keep module boundaries honest.
   Research findings: `src/modules/ui/index.js` still assigns `window.__waveguideApp` during simulation-panel bootstrapping, `src/ui/simulation/exports.js` falls back to that global when resolving the app instance, and `src/ui/settings/modal.js` applies viewer settings through `window.app?.controls` and `window.app?.renderer?.domElement`. These shortcuts bypass the intended app/module composition path.
   Best approach: Thread the required app/controller/viewer dependencies through the existing coordinators and panel constructors instead of storing them on `window`. Keep any dev-only diagnostics behind explicit debug registration helpers so runtime code never depends on ambient globals.
+  Progress: March 12, 2026. A first ambient-global cleanup slice now constructs `SimulationPanel` with its `app` dependency and removes the runtime `window.__waveguideApp` assignment/fallback from the UI module and simulation export helpers. The remaining work in this backlog item is the viewer/settings path that still reads `window.app`.
   Implementation plan:
   1. Add explicit dependency injection for viewer controls, renderer DOM access, and simulation export coordination.
   2. Update settings/export entrypoints to receive those dependencies from `App` or the UI coordinator rather than reading `window`.

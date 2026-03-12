@@ -28,13 +28,7 @@ const EXPORT_FORMAT_LABELS = Object.freeze({
 });
 
 function resolveApp(panel) {
-  if (panel?.app) {
-    return panel.app;
-  }
-  if (typeof window !== 'undefined' && window.__waveguideApp) {
-    return window.__waveguideApp;
-  }
-  return null;
+  return panel?.app || null;
 }
 
 function normalizeSelectedFormats(formatIds) {

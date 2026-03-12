@@ -194,7 +194,6 @@ test('frontend import boundaries only allow approved cross-layer dependencies', 
 
 test('module use-case files do not reference browser globals directly outside approved adapters', () => {
   const allowedFiles = new Set([
-    'modules/ui/index.js',
     'modules/ui/useCases.js'
   ]);
   const files = listJsFiles(path.join(SRC_ROOT, 'modules'));
@@ -208,6 +207,25 @@ test('module use-case files do not reference browser globals directly outside ap
 
     const content = fs.readFileSync(file, 'utf8');
     if (/\bwindow\b|\bdocument\b/.test(content)) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
+
+test('runtime frontend files do not rely on the __waveguideApp ambient global', () => {
+  const files = listJsFiles(SRC_ROOT);
+  const violations = [];
+
+  for (const file of files) {
+    const relativePath = toSrcRelative(file);
+    const content = fs.readFileSync(file, 'utf8');
+    if (content.includes('__waveguideApp')) {
       violations.push(relativePath);
     }
   }
