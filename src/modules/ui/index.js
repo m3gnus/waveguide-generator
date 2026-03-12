@@ -189,6 +189,14 @@ function buildSimulationPanelCoordinator(input) {
     const message = errorData?.message || 'Simulation mesh generation failed.';
     rejectPendingMeshRequest(new Error(message));
   };
+  const onFolderWorkspaceChanged = () => {
+    if (typeof panel.refreshJobFeed !== 'function') {
+      return;
+    }
+    Promise.resolve(panel.refreshJobFeed()).catch((error) => {
+      console.warn('Failed to refresh simulation jobs after workspace change:', error);
+    });
+  };
 
   return Object.freeze({
     bind() {
@@ -198,6 +206,7 @@ function buildSimulationPanelCoordinator(input) {
       AppEvents.on('state:updated', onStateUpdated);
       AppEvents.on('simulation:mesh-ready', onMeshReady);
       AppEvents.on('simulation:mesh-error', onMeshError);
+      AppEvents.on('ui:folder-workspace-changed', onFolderWorkspaceChanged);
       eventsBound = true;
     },
 
@@ -228,6 +237,7 @@ function buildSimulationPanelCoordinator(input) {
       AppEvents.off('state:updated', onStateUpdated);
       AppEvents.off('simulation:mesh-ready', onMeshReady);
       AppEvents.off('simulation:mesh-error', onMeshError);
+      AppEvents.off('ui:folder-workspace-changed', onFolderWorkspaceChanged);
       eventsBound = false;
     }
   });
