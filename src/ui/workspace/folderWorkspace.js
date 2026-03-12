@@ -1,3 +1,5 @@
+import { AppEvents } from '../../events.js';
+
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
 
 let selectedFolderHandle = null;
@@ -11,6 +13,7 @@ function emitChange() {
     handle: selectedFolderHandle,
     label: selectedFolderLabel
   };
+  AppEvents.emit('ui:folder-workspace-changed', snapshot);
   for (const listener of changeListeners) {
     try {
       listener(snapshot);

@@ -22,7 +22,6 @@ import {
   restoreSimulationPanelRuntime,
   disposeSimulationPanelRuntime
 } from './controller.js';
-import { subscribeAppFolderWorkspace } from '../../modules/ui/useCases.js';
 import { displayResults } from './results.js';
 import {
   exportResults,
@@ -46,7 +45,6 @@ export class SimulationPanel {
     this.runtime = createSimulationPanelRuntime(this);
     this.controller = this.runtime.controller;
     this.uiCoordinator = this.runtime.uiCoordinator;
-    this.folderWorkspaceUnsubscribe = null;
 
     this.setupEventListeners();
     this.setupMeshListener();
@@ -55,7 +53,6 @@ export class SimulationPanel {
     this.setupSimulationParamBindings();
     this.checkSolverConnection();
     this.restoreJobs();
-    this.bindFolderWorkspaceRefresh();
   }
 
   async restoreJobs() {
@@ -69,17 +66,6 @@ export class SimulationPanel {
       onRecoverFromManifests: () => {
         showMessage('Recovered folder task history from manifests.', { type: 'warning', duration: 2800 });
       }
-    });
-  }
-
-  bindFolderWorkspaceRefresh() {
-    let sawInitialSnapshot = false;
-    this.folderWorkspaceUnsubscribe = subscribeAppFolderWorkspace(() => {
-      if (!sawInitialSnapshot) {
-        sawInitialSnapshot = true;
-        return;
-      }
-      this.refreshJobFeed();
     });
   }
 
@@ -174,10 +160,6 @@ export class SimulationPanel {
    * Call when the panel is being unmounted or replaced.
    */
   dispose() {
-    if (typeof this.folderWorkspaceUnsubscribe === 'function') {
-      this.folderWorkspaceUnsubscribe();
-      this.folderWorkspaceUnsubscribe = null;
-    }
     disposeSimulationPanelRuntime(this.runtime);
   }
 }
