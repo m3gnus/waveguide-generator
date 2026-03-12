@@ -40,6 +40,7 @@ Researched UI/runtime findings:
 - The primary folder-selection action should live in the simulation jobs header beside `Clear Failed` and `Refresh`, with the settings modal kept as the explanatory/status surface rather than the only picker entry point.
 - Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder root when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`. If either direct-write path fails, the app clears the selected folder and falls back to the browser picker/download flow.
 - The simulation diagnostics panel now reports geometry face identities such as `throat_disc`, `inner_wall`/`horn_wall`, `outer_wall`, `rear_cap`, and enclosure faces as triangle counts before submit. Canonical numeric tags (`1/2/3/4`) remain available only as a secondary debug summary.
+- Those geometry diagnostics currently come from the frontend JS canonical/preview mesh before submit, not from the backend OCC/Gmsh mesh used by `occ_adaptive` solves. Inference: equal `inner_wall` / `outer_wall` counts in free-standing wall cases can be expected from the frontend tessellation even when `rear_res` should make the backend OCC wall shell coarser.
 - The simulation job list no longer spends header space on a redundant `Backend Jobs` pill; folder-backed history can still surface source context through folder mode and row-level badges when that label adds information.
 
 Remaining work:
@@ -144,6 +145,38 @@ Implementation notes:
 Required regression coverage:
 - `tests/simulation-job-tracker.test.js`
 - `tests/simulation-controller.test.js`
+
+### P1. OCC Mesh Diagnostics Must Reflect The Backend Solve Mesh
+
+- [ ] Replace the current pre-submit geometry diagnostics contract with diagnostics sourced from the backend OCC mesh build used by the actual BEM job.
+  - Do not present JS preview-group counts as if they describe the adaptive OCC solve mesh.
+  - Show actual backend OCC triangle/vertex diagnostics after the job mesh has been built, using backend-produced data tied to the same mesh artifact/canonical extraction that the solver consumes.
+  - Preserve the distinction between preview geometry and solve geometry explicitly in the UI. If pre-submit preview counts remain visible, label them as preview-only and keep backend OCC diagnostics as the authoritative post-build/job view.
+  - Ensure free-standing wall cases can show different effective rear-domain density from the throat/mouth region instead of implying `inner_wall` and `outer_wall` parity when `rear_res` is coarser.
+  - For enclosure cases, ensure the shown diagnostics come from the OCC build path rather than the frontend enclosure tessellation.
+  - Because the persisted `.msh` physical groups currently collapse all rigid walls into tag `1`, extend the backend diagnostics contract so face-identity rows such as `inner_wall`, `outer_wall`, `rear_cap`, `enc_front`, `enc_side`, `enc_rear`, and `enc_edge` can be derived from backend OCC truth instead of frontend group ranges.
+
+Research notes:
+- `src/ui/simulation/jobActions.js` currently renders diagnostics from `summarizeCanonicalSimulationMesh(meshData)` immediately after `panel.prepareMeshForSimulation()`, which uses the frontend JS canonical mesh path.
+- The adaptive solve path in `server/services/simulation_runner.py` already builds the OCC mesh with `include_canonical=True`, extracts backend canonical arrays, and stores mesh stats plus the `.msh` artifact for the job.
+- `server/solver/waveguide_builder.py` applies `rear_res` to free-standing outer/rear surfaces, so backend OCC density can legitimately differ from the JS preview tessellation.
+- The current backend `.msh` physical-group contract only preserves `SD1G0` (`1`) and `SD1D1001` (`2`), so backend-derived face-identity diagnostics need either expanded exported metadata or a separate per-identity diagnostics payload recorded during OCC meshing.
+
+Implementation notes:
+- `src/ui/simulation/jobActions.js`
+- `src/modules/simulation/domain.js`
+- `src/ui/simulation/controller.js`
+- `src/ui/simulation/jobTracker.js`
+- `server/services/simulation_runner.py`
+- `server/solver/waveguide_builder.py`
+- `server/api/routes_simulation.py`
+- job persistence layers that currently store only `mesh_stats` and the `.msh` artifact
+
+Required regression coverage:
+- `tests/simulation-module.test.js`
+- `tests/simulation-controller.test.js`
+- `server/tests/test_api_validation.py`
+- `server/tests/test_occ_resolution_semantics.py`
 
 ### P1. Parameter Inventory, Naming, Hover Help, and Ordering
 
