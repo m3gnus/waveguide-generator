@@ -105,7 +105,7 @@ flowchart LR
 1. UI parameter updates mutate `GlobalState`.
 2. `App` schedules render.
 3. `src/app/scene.js` resolves prepared design inputs via `DesignModule`, gets a geometry shape from `GeometryModule`, then tessellates it for viewport rendering.
-4. Returned mesh is rendered in Three.js.
+4. Returned mesh is rendered in Three.js. The viewport path may detach `throat_disc` vertices before normal generation so the source cap keeps a crisp render seam without changing the canonical simulation payload.
 
 ### 3.2 Simulation flow
 

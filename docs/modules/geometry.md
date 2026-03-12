@@ -38,6 +38,7 @@ Invariants:
 
 - Frontend simulation payload topology is full-domain and is not trimmed by `quadrants`.
 - JS canonical payload is a contract/validation artifact; active simulation meshing is OCC-adaptive in the backend.
+- Viewport-only rendering may duplicate `throat_disc` vertices before Three.js normal generation so the source cap shades crisply without changing canonical mesh topology or tags.
 - Adaptive phi tessellation is only for full-circle horn-only render usage.
 - Outer build mode is exclusive: enclosure (`encDepth > 0`) or freestanding wall shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
 - Enclosure generation is OSSE-only. `R-OSSE` with `encDepth > 0` is rejected.
