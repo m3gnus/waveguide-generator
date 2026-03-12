@@ -41,7 +41,8 @@ import { openViewResultsModal } from './viewResults.js';
  */
 
 export class SimulationPanel {
-  constructor() {
+  constructor({ app = null } = {}) {
+    this.app = app;
     this.runtime = createSimulationPanelRuntime(this);
     this.controller = this.runtime.controller;
     this.uiCoordinator = this.runtime.uiCoordinator;
