@@ -37,7 +37,7 @@ export function openAppSettings(options = {}) {
   return openSettingsModal(options);
 }
 
-export function isFolderSelectionSupported(targetWindow = window) {
+export function isFolderSelectionSupported(targetWindow) {
   return typeof targetWindow?.showDirectoryPicker === 'function';
 }
 
@@ -88,7 +88,7 @@ export function deriveExportFieldsFromImportedFileName(fileName, options = {}) {
   return deriveExportFieldsFromFileName(fileName, options);
 }
 
-export function setAppExportFields(fields = {}, doc = document) {
+export function setAppExportFields(fields = {}, doc) {
   return setExportFields(fields, doc);
 }
 

@@ -192,9 +192,7 @@ test('frontend import boundaries only allow approved cross-layer dependencies', 
 });
 
 test('module use-case files do not reference browser globals directly outside approved adapters', () => {
-  const allowedFiles = new Set([
-    'modules/ui/useCases.js'
-  ]);
+  const allowedFiles = new Set();
   const files = listJsFiles(path.join(SRC_ROOT, 'modules'));
   const violations = [];
 
