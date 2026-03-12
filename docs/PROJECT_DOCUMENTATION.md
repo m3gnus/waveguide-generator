@@ -127,7 +127,8 @@ flowchart LR
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
    - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Task Exports settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
    - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and folder manifests/index when available.
-   - Solver results now include both `metadata.symmetry` (applied reduction summary) and `metadata.symmetry_policy` (decision/rejection reason, detected type/planes, reduction factor, and centered-source check) so research and future UI work can inspect the automatic symmetry decision without parsing logs.
+  - Solver results now include both `metadata.symmetry` (applied reduction summary) and `metadata.symmetry_policy` (decision/rejection reason, detected type/planes, reduction factor, and centered-source check).
+  - The Simulation Jobs feed persists a compact symmetry summary alongside each job, combining the requested `enable_symmetry` setting with the fetched solver decision once results are available.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow

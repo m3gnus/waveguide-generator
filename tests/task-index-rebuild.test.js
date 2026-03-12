@@ -67,7 +67,21 @@ function createMemoryDirectory(name = 'root') {
 
 test('writeTaskIndex and loadTaskIndex round-trip normalized items', async () => {
   const root = createMemoryDirectory();
-  await writeTaskIndex(root, [{ id: 'job-1', status: 'complete', exportedFiles: ['a.csv'] }]);
+  await writeTaskIndex(root, [{
+    id: 'job-1',
+    status: 'complete',
+    exportedFiles: ['a.csv'],
+    symmetrySummary: {
+      badge: 'Reduced',
+      headline: 'Applied half-domain reduction',
+      details: 'The solver applied half-domain reduction.',
+      tone: 'success',
+      items: [
+        { label: 'Requested', value: 'Enabled' },
+        { label: 'Decision', value: 'Half-domain (X symmetry)' }
+      ]
+    }
+  }]);
 
   const loaded = await loadTaskIndex(root);
   assert.equal(loaded.warning, null);
@@ -75,6 +89,7 @@ test('writeTaskIndex and loadTaskIndex round-trip normalized items', async () =>
   assert.equal(loaded.items.length, 1);
   assert.equal(loaded.items[0].id, 'job-1');
   assert.deepEqual(loaded.items[0].exportedFiles, ['a.csv']);
+  assert.equal(loaded.items[0].symmetrySummary?.badge, 'Reduced');
 });
 
 test('loadTaskIndex reports warning for missing and corrupt index', async () => {
@@ -96,7 +111,17 @@ test('rebuildIndexFromManifests scans task folders and returns repair payload', 
     label: 'job_1',
     status: 'complete',
     createdAt: '2026-02-28T12:00:00.000Z',
-    exportedFiles: ['results.csv']
+    exportedFiles: ['results.csv'],
+    symmetrySummary: {
+      badge: 'Full model',
+      headline: 'Symmetry reduction disabled',
+      details: 'The solve request disabled symmetry reduction.',
+      tone: 'neutral',
+      items: [
+        { label: 'Requested', value: 'Disabled' },
+        { label: 'Decision', value: 'Full model' }
+      ]
+    }
   });
 
   const rebuilt = await rebuildIndexFromManifests(root);
@@ -104,6 +129,7 @@ test('rebuildIndexFromManifests scans task folders and returns repair payload', 
   assert.equal(rebuilt.items.length, 1);
   assert.equal(rebuilt.items[0].id, 'job-1');
   assert.deepEqual(rebuilt.items[0].exportedFiles, ['results.csv']);
+  assert.equal(rebuilt.items[0].symmetrySummary?.items?.[0]?.value, 'Disabled');
 });
 
 test('buildTaskIndexEntriesFromJobs preserves manifest metadata fields', () => {
@@ -114,6 +140,16 @@ test('buildTaskIndexEntriesFromJobs preserves manifest metadata fields', () => {
       rating: 5,
       autoExportCompletedAt: '2026-03-11T10:10:00.000Z',
       exportedFiles: ['export.csv'],
+      symmetrySummary: {
+        badge: 'Requested',
+        headline: 'Symmetry reduction requested',
+        details: 'The solve request allows symmetry reduction.',
+        tone: 'neutral',
+        items: [
+          { label: 'Requested', value: 'Enabled' },
+          { label: 'Decision', value: 'Pending results' }
+        ]
+      },
       scriptSchemaVersion: 2,
       scriptSnapshot: { outputName: 'horn' }
     }
@@ -124,4 +160,5 @@ test('buildTaskIndexEntriesFromJobs preserves manifest metadata fields', () => {
   assert.equal(entries[0].rating, 5);
   assert.equal(entries[0].autoExportCompletedAt, '2026-03-11T10:10:00.000Z');
   assert.deepEqual(entries[0].exportedFiles, ['export.csv']);
+  assert.equal(entries[0].symmetrySummary?.badge, 'Requested');
 });

@@ -7,6 +7,7 @@ import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
 import {
+  getJobSymmetrySummary,
   getSymmetryPolicySummary,
   renderSymmetryPolicySummary
 } from '../src/ui/simulation/results.js';
@@ -283,6 +284,18 @@ test('renderSymmetryPolicySummary returns result-modal markup only when policy m
   assert.match(markup, /Kept full model with symmetry disabled/);
   assert.match(markup, /view-results-summary/);
   assert.equal(renderSymmetryPolicySummary({ metadata: {} }), '');
+});
+
+test('getJobSymmetrySummary falls back to requested symmetry when results are not cached yet', () => {
+  const summary = getJobSymmetrySummary({
+    configSummary: {
+      enable_symmetry: false
+    }
+  });
+
+  assert.equal(summary.badge, 'Full model');
+  assert.equal(summary.items.find((item) => item.label === 'Requested')?.value, 'Disabled');
+  assert.equal(summary.items.find((item) => item.label === 'Decision')?.value, 'Full model');
 });
 
 test('validateCanonicalMeshPayload rejects malformed canonical mesh', () => {
@@ -616,6 +629,52 @@ test('renderJobList keeps backend-only feeds free of redundant row source badges
     assert.equal(sourceLabel.textContent, 'Backend Jobs');
     assert.doesNotMatch(list.innerHTML, /simulation-job-source-badge/);
     assert.doesNotMatch(list.innerHTML, />Backend</);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test('renderJobList shows requested symmetry and fetched symmetry policy decisions on job rows', () => {
+  const originalDocument = global.document;
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    }
+  };
+
+  try {
+    renderJobList({
+      jobSourceMode: 'backend',
+      activeJobId: null,
+      jobs: new Map([
+        ['job-backend-1', {
+          id: 'job-backend-1',
+          label: 'backend-task',
+          status: 'complete',
+          configSummary: { enable_symmetry: true },
+          symmetrySummary: {
+            badge: 'Reduced',
+            headline: 'Applied quarter-domain reduction',
+            details: 'The solver applied quarter-domain reduction.',
+            tone: 'success',
+            items: [
+              { label: 'Requested', value: 'Enabled' },
+              { label: 'Decision', value: 'Quarter-domain (X/Z symmetry)' }
+            ]
+          },
+          createdAt: '2026-03-11T09:00:00.000Z',
+          completedAt: '2026-03-11T09:10:00.000Z'
+        }]
+      ])
+    });
+
+    assert.match(list.innerHTML, /Symmetry: Requested Enabled/);
+    assert.match(list.innerHTML, /Decision Quarter-domain \(X\/Z symmetry\)/);
   } finally {
     global.document = originalDocument;
   }

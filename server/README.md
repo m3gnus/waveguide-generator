@@ -240,6 +240,13 @@ Returns live job status payload:
 
 Returns simulation results for completed job.
 
+### `GET /api/jobs`
+
+Returns paginated persisted job rows.
+
+- `config_summary` includes the submitted `enable_symmetry` flag alongside formula/frequency metadata so frontend job feeds can show the requested symmetry policy even after a reload.
+- Completed jobs still require `GET /api/results/{job_id}` to fetch full `metadata.symmetry` / `metadata.symmetry_policy`.
+
 ### `POST /api/stop/{job_id}`
 
 Cancels queued/running job.

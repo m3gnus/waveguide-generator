@@ -22,6 +22,7 @@ import {
   buildPolarStatePatchFromConfig,
   readPolarStateSettings
 } from './polarSettings.js';
+import { getJobSymmetrySummary } from './results.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import {
   allJobs,
@@ -203,6 +204,17 @@ function renderRatingStars(job) {
   `;
 }
 
+function getSymmetrySummaryLine(job) {
+  const summary = getJobSymmetrySummary(job);
+  if (!summary) {
+    return '';
+  }
+
+  const requested = summary.items.find((item) => item.label === 'Requested')?.value || 'Unknown';
+  const decision = summary.items.find((item) => item.label === 'Decision')?.value || summary.headline;
+  return `Symmetry: Requested ${requested} | Decision ${decision}`;
+}
+
 function syncJobListPreferenceControls() {
   const settings = getCurrentSimulationManagementSettings();
   const sortEl = document.getElementById('simulation-jobs-sort');
@@ -308,7 +320,9 @@ export function renderJobList(panel) {
     return;
   }
 
-  list.innerHTML = jobs.map((job) => `
+  list.innerHTML = jobs.map((job) => {
+    const symmetryLine = getSymmetrySummaryLine(job);
+    return `
     <div class="simulation-job-item ${panel.activeJobId === job.id ? 'is-active' : ''}" data-job-id="${job.id}">
       <div class="simulation-job-header">
         <div class="simulation-job-info">
@@ -317,6 +331,7 @@ export function renderJobList(panel) {
             ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ''}
           </div>
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
+          ${symmetryLine ? `<div class="simulation-job-meta">${escapeHtml(symmetryLine)}</div>` : ''}
         </div>
         <div class="simulation-job-actions">
           ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results for this simulation">View</button>` : ''}
@@ -334,7 +349,8 @@ export function renderJobList(panel) {
         ${renderRatingStars(job)}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 export async function viewJobResults(panel, jobId) {
