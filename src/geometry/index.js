@@ -1,4 +1,4 @@
-export { calculateROSSE, calculateOSSE, validateParameters, buildHornMesh, buildWaveguideMesh } from './waveguide.js';
+export { calculateROSSE, calculateOSSE, validateParameters, buildHornMesh, buildWaveguideMesh } from './engine/index.js';
 export { parseExpression } from './expression.js';
 export { evalParam, parseQuadrants } from './common.js';
 export {
