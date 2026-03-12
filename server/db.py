@@ -38,6 +38,7 @@ class SimulationDB:
                   config_summary_json TEXT NOT NULL,
                   has_results INTEGER NOT NULL DEFAULT 0,
                   has_mesh_artifact INTEGER NOT NULL DEFAULT 0,
+                  mesh_stats_json TEXT,
                   label TEXT
                 )
                 """
@@ -66,7 +67,13 @@ class SimulationDB:
                   ON simulation_jobs(status, created_at DESC)
                 """
             )
-            conn.execute("PRAGMA user_version = 1")
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(simulation_jobs)").fetchall()
+            }
+            if "mesh_stats_json" not in columns:
+                conn.execute("ALTER TABLE simulation_jobs ADD COLUMN mesh_stats_json TEXT")
+            conn.execute("PRAGMA user_version = 2")
 
     def create_job(self, job: Dict[str, Any]) -> None:
         with self._lock, self._managed_connection() as conn:
@@ -76,8 +83,8 @@ class SimulationDB:
                   id, status, created_at, updated_at, queued_at,
                   started_at, completed_at, progress, stage, stage_message,
                   error_message, cancellation_requested, config_json,
-                  config_summary_json, has_results, has_mesh_artifact, label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  config_summary_json, has_results, has_mesh_artifact, mesh_stats_json, label
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job["id"],
@@ -96,6 +103,7 @@ class SimulationDB:
                     json.dumps(job["config_summary_json"]),
                     1 if job.get("has_results") else 0,
                     1 if job.get("has_mesh_artifact") else 0,
+                    json.dumps(job["mesh_stats"]) if job.get("mesh_stats") is not None else None,
                     job.get("label"),
                 ),
             )
@@ -343,5 +351,6 @@ class SimulationDB:
             "config_summary_json": json.loads(row["config_summary_json"] or "{}"),
             "has_results": bool(row["has_results"]),
             "has_mesh_artifact": bool(row["has_mesh_artifact"]),
+            "mesh_stats": json.loads(row["mesh_stats_json"]) if row["mesh_stats_json"] else None,
             "label": row["label"],
         }

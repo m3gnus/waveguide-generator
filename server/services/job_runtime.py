@@ -6,6 +6,7 @@ queue one job at a time (max_concurrent_jobs=1).
 """
 
 import asyncio
+import json
 import logging
 import threading
 import uuid
@@ -104,6 +105,7 @@ def create_simulation_job(request: SimulationRequest) -> str:
         "request_obj": request,
         "results": None,
         "mesh_artifact": None,
+        "mesh_stats": None,
         "cancellation_requested": False,
         "config_summary": config_summary,
         "has_results": False,
@@ -127,6 +129,7 @@ def create_simulation_job(request: SimulationRequest) -> str:
             "config_summary_json": config_summary,
             "has_results": False,
             "has_mesh_artifact": False,
+            "mesh_stats": None,
             "label": None,
         }
     )
@@ -286,6 +289,7 @@ def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
         "error_message": row.get("error_message"),
         "has_results": row.get("has_results"),
         "has_mesh_artifact": row.get("has_mesh_artifact"),
+        "mesh_stats": row.get("mesh_stats"),
         "label": row.get("label"),
         "cancellation_requested": row.get("cancellation_requested"),
         "config_summary": row.get("config_summary_json"),
@@ -335,6 +339,10 @@ def _set_job_fields(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
         ]
         if key in mapped
     }
+    if "mesh_stats" in mapped:
+        db_fields["mesh_stats_json"] = (
+            json.dumps(mapped["mesh_stats"]) if mapped["mesh_stats"] is not None else None
+        )
     if db_fields:
         db.update_job(job_id, **db_fields)
 
@@ -548,6 +556,7 @@ async def startup_jobs_runtime() -> None:
                 "error": row.get("error_message"),
                 "results": None,
                 "mesh_artifact": None,
+                "mesh_stats": row.get("mesh_stats"),
                 "cancellation_requested": row.get("cancellation_requested", False),
                 "config_summary": row.get("config_summary_json", {}),
                 "has_results": row.get("has_results", False),

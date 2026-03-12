@@ -3,6 +3,7 @@ BEM simulation runner — executes a single simulation job asynchronously.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, Callable, Optional
 
@@ -112,12 +113,31 @@ def _build_mesh_stats(
     indices: list[Any],
     *,
     source: str,
+    surface_tags: Optional[list[int]] = None,
+    metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    return {
+    mesh_stats = {
         "vertex_count": len(vertices) // 3,
         "triangle_count": len(indices) // 3,
         "source": source,
     }
+    if isinstance(surface_tags, list):
+        tag_counts = {1: 0, 2: 0, 3: 0, 4: 0}
+        for raw_tag in surface_tags:
+            tag = int(raw_tag)
+            if tag in tag_counts:
+                tag_counts[tag] += 1
+        mesh_stats["tag_counts"] = tag_counts
+    metadata_identity_counts = (
+        metadata.get("identityTriangleCounts")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if isinstance(metadata_identity_counts, dict):
+        mesh_stats["identity_triangle_counts"] = json.loads(
+            json.dumps(metadata_identity_counts)
+        )
+    return mesh_stats
 
 
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
@@ -194,12 +214,19 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             )
             _cancellation_callback("Cancellation requested after adaptive mesh build completed")
             vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
+            canonical_metadata = (
+                occ_result.get("canonical_mesh", {}).get("metadata")
+                if isinstance(occ_result.get("canonical_mesh"), dict)
+                else None
+            )
             _set_job_fields(
                 job_id,
                 mesh_stats=_build_mesh_stats(
                     vertices,
                     indices,
                     source="occ_adaptive_canonical",
+                    surface_tags=surface_tags,
+                    metadata=canonical_metadata,
                 ),
             )
 
@@ -254,6 +281,8 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                     request.mesh.vertices,
                     request.mesh.indices,
                     source="canonical_payload",
+                    surface_tags=request.mesh.surfaceTags,
+                    metadata=request.mesh.metadata,
                 ),
             )
             mesh = solver.prepare_mesh(
