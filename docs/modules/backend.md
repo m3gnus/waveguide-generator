@@ -21,6 +21,7 @@ Primary files:
 - `POST /api/mesh/build` is the supported OCC-authored mesh endpoint.
 - `POST /api/solve` requires canonical mesh shape plus valid OCC adaptive options when that strategy is used.
 - Backend dependency/runtime truth lives in `server/solver/deps.py`.
+- The backend runs as a standalone headless FastAPI service; the browser UI is optional and not required for backend startup.
 - Maintained docs must match the current dependency matrix and supported fallback behavior.
 
 ## Operational References
