@@ -89,6 +89,38 @@ $HOME/.waveguide-generator/opencl-cpu-env/bin/python server/app.py
 
 This starts Uvicorn on `0.0.0.0:8000`.
 
+### 2.1 Headless / backend-only mode
+
+The backend already runs headless. It is a standalone FastAPI service and does not require the browser UI, a local desktop GUI, or an X/Wayland display server to start.
+
+Minimal backend-only workflow from repository root:
+
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install --upgrade pip
+./.venv/bin/pip install -r server/requirements.txt
+./.venv/bin/pip install -r server/requirements-gmsh.txt
+./.venv/bin/python server/app.py
+```
+
+Optional for `/api/solve`:
+
+```bash
+./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
+```
+
+Notes:
+- `/api/mesh/build` requires the Python `gmsh` package.
+- `/api/solve` additionally requires `bempp-cl`.
+- Plot rendering uses the non-interactive Matplotlib `Agg` backend, so chart/directivity endpoints do not require a display server.
+- On headless Linux, prefer the Gmsh `-nox` wheel index documented above if the default wheel is unavailable.
+
+Quick verification:
+
+```bash
+curl http://localhost:8000/health
+```
+
 ## 3. API Endpoints
 
 ### `GET /health`
