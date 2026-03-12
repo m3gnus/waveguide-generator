@@ -195,6 +195,7 @@ Research notes:
 - MDN currently marks `showDirectoryPicker()` as limited-availability and secure-context only, which means the feature is not baseline web platform behavior across major browsers.
 - Chrome’s File System Access documentation says directory picking requires a secure context (`https://` or `http://localhost`) and is implemented in Chromium-family browsers. Inference: unsupported browsers and non-secure contexts must stay on the save-picker/download fallback path until the product adopts a different workspace mechanism.
 - Product wording should stay precise: without folder workspace support, manual exports and completed simulation bundles use the browser save/download path instead of workspace writes.
+- Follow-up copy/product requirement: treat this as a browser-capability constraint, not a backend-jobs/settings discovery issue, and keep the primary output-folder action visible in the simulation jobs header even when it can only explain the fallback path.
 
 Implementation notes:
 - `index.html`
