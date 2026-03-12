@@ -71,7 +71,7 @@ export function createAppParamPanel(containerId = 'param-container') {
 
 export function loadSimulationPanelModule() {
   if (!simulationPanelModulePromise) {
-    simulationPanelModulePromise = import('../../ui/simulation/index.js');
+    simulationPanelModulePromise = import('../../ui/simulation/SimulationPanel.js');
   }
   return simulationPanelModulePromise;
 }
