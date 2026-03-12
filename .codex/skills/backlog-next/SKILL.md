@@ -28,7 +28,6 @@ The skill should:
 7. Run the narrowest relevant tests first, then broader tests if the slice completes.
 8. Update docs affected by the change, including `docs/backlog.md` when priorities, relevance, or approach notes need to change.
 9. Stop only when the backlog is empty, a blocker requires user input, or a test failure means the slice is not safely shippable.
-10. When a broad Markdown documentation-overhaul item exists, keep it as the final cleanup slice after behavior-changing backlog work has settled.
 </objective>
 
 <process>
@@ -91,16 +90,7 @@ Continue phase execution until one of these conditions is true:
 
 If stopping early, report the exact blocker and the next candidate slice.
 
-## 6. Documentation-overhaul trailing slice
-If the backlog includes a broad Markdown-documentation overhaul, treat it as the last slice in the active phase rather than mixing it into earlier runtime refactors.
-
-For that slice:
-- re-audit maintained `.md` docs against current code, tests, and architecture boundaries
-- optimize for readability, navigation, and source-of-truth clarity
-- avoid rewriting archived historical records except for archive indexes or cross-links
-- add or refresh docs-parity coverage when maintained claims should stay machine-checked
-
-## 7. Required end-of-turn output
+## 6. Required end-of-turn output
 Report:
 - slices completed in this run
 - reasoning level used for each slice
