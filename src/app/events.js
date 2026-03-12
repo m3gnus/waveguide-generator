@@ -1,8 +1,4 @@
 import { GlobalState } from '../state.js';
-import {
-  openAppSettings,
-  isFolderSelectionSupported
-} from '../modules/ui/useCases.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
@@ -23,7 +19,7 @@ export function setupEventListeners(app) {
   });
 
   // Hide folder selection button if not supported by the browser
-  if (!isFolderSelectionSupported(window)) {
+  if (!app.uiCoordinator.isFolderSelectionSupported(window)) {
     const folderRow = document.getElementById('output-folder-row');
     if (folderRow) folderRow.style.display = 'none';
   }
@@ -59,7 +55,7 @@ export function bindButtonEvents(app) {
     { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
     {
       id: 'settings-btn',
-      handler: () => openAppSettings({
+      handler: () => app.uiCoordinator.openSettings({
         viewerRuntime: {
           getControls: () => app.controls || null,
           getDomElement: () => app.renderer?.domElement || null
