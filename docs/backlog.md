@@ -185,12 +185,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Research findings: the backend already has automatic symmetry detection/reduction plus a repeatable benchmark script in `server/scripts/benchmark_solver.py`, but there is no fixture-backed harness that compares full versus half versus quarter-domain runs or captures UI-facing policy decisions. This is real research work, not a thin UI tweak.
   Best approach: Build repeatable full/half/quarter benchmark cases first, then decide whether UI controls such as `auto` versus `force_full` are justified by the data.
 
-- [ ] Decide whether the Gmsh export stack should remain a long-term dependency.
+- [x] Decide whether the Gmsh export stack should remain a long-term dependency.
   Source: archived future additions doc.
   Relevant: Maybe. It depends on whether remaining MSH/STL export needs can be met without OCC/Gmsh.
   Will it improve the program: Potentially, if dependency burden and setup friction drop without sacrificing export quality.
   Research findings: the current active runtime still uses `waveguide_builder.py` for `/api/mesh/build` and for adaptive solve meshing, and completed-job mesh download still depends on persisted `.msh` artifacts. That makes Gmsh removal a downstream architectural decision after current export/simulation needs are either reduced or replaced with parity.
   Best approach: Audit every remaining Gmsh touchpoint, compare against JS/export alternatives, and only plan removal if parity for the remaining export use cases is realistic.
+  Completed: March 12, 2026. The audit in `research/gmsh-dependency-audit-2026-03-12.md` concludes that Gmsh should remain in the active runtime for now. The live backend still depends on the Python Gmsh API for `/api/mesh/build`, OCC-adaptive solve mesh generation, persisted `.msh` job artifacts, and optional `use_gmsh=True` canonical-mesh refinement, while the frontend export stack no longer provides a parity `.msh` alternative. Removal should be treated as a future architecture project only after export-artifact and task-history parity exist without Gmsh.
 
 - [ ] Consider optional internal decomposition of `solve_optimized()` and `waveguide_builder.py` if those areas need further feature work.
   Source: `docs/archive/PRODUCTION_READINESS_REPORT_2026-02-25.md` Gate C deferred notes.
