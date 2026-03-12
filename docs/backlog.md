@@ -58,6 +58,69 @@ When new work lands, continue to work the backlog from upstream runtime truth to
 
 ## Active Backlog
 
+### P1. Cross-Platform Installation Hardening and Supported Runtime Matrix
+
+- Replace the current “best effort” setup story with one explicit supported matrix and one verified install lane per supported OS/architecture.
+- Publish support tiers instead of treating all Windows/macOS/Linux machines as equivalent:
+  - Windows 10/11 x64: supported for the core app and OCC meshing; full simulation requires a verified OpenCL ICD/runtime.
+  - macOS 13+ Intel x64: supported for the core app, OCC meshing, and a verified CPU-OpenCL simulation lane.
+  - macOS 13+ Apple Silicon: supported for the core app and OCC meshing; full simulation remains a separately validated managed-env lane and must not be documented as parity-complete until it is verified end to end.
+  - Linux x86_64: support Ubuntu 22.04/24.04 as the primary full-runtime target; keep other distros best effort unless they are added to CI.
+  - Windows ARM64 and Linux ARM64: mark full simulation unsupported until gmsh/bempp/OpenCL parity is proven.
+- Narrow the installer targets to exact repo-owned versions instead of open-ended ranges:
+  - Node.js: pin one current LTS major for the repo and record it in a version file (`.nvmrc`, Volta, or equivalent).
+  - Python: pin one tested minor for installation guidance and environment creation instead of accepting any `3.10 - 3.14` interpreter on PATH.
+- Make installation modes explicit:
+  - `Core app ready`: preview plus STL/CSV/config exports.
+  - `OCC mesh ready`: `/api/mesh/build` available with supported Python + gmsh runtime.
+  - `Simulation ready`: `/api/solve` available with supported bempp-cl + OpenCL runtime.
+- Do not end installation with a generic success banner unless the achieved readiness level is stated clearly. If bempp/OpenCL is missing, finish as `Core app ready` or `OCC mesh ready`, not “fully installed”.
+- Add one backend/runtime preflight command that installers and launchers both call. It should verify:
+  - selected interpreter path and version
+  - active `pip` target / environment root
+  - `gmsh` import + version
+  - `bempp-cl` import + version
+  - `pyopencl.get_platforms()`
+  - `/health` dependency matrix alignment once the backend starts
+- Fail early on unsupported newer Python as well as too-old Python. The current installers only enforce the lower bound, which still allows an unsupported interpreter to install partially and fail later at runtime.
+- Stop reintroducing interpreter drift after setup:
+  - launchers should prefer the installer-created environment deterministically
+  - do not silently fall back to an arbitrary system `python3` once a managed project/runtime environment exists
+  - persist the chosen backend interpreter path so launchers and diagnostics use the same runtime the installer validated
+- Replace optimistic fallback wording in launch/start flows with actual runtime truth. Do not imply mock solver support or a working simulation path when dependencies are absent.
+- Add install smoke coverage in CI across the supported matrix so dependency regressions are caught before release:
+  - Windows x64
+  - macOS Intel or the closest available runner approximation
+  - macOS Apple Silicon when runner availability allows, otherwise keep a manual verification lane until CI exists
+  - Ubuntu x86_64
+- Consolidate install/operator docs into one canonical installation guide, then keep `README.md`, `server/README.md`, and `docs/PROJECT_DOCUMENTATION.md` in parity with that guide and with `server/solver/deps.py`.
+
+Research notes:
+- `server/solver/deps.py` is the runtime truth: Python `>=3.10,<3.15`, gmsh `>=4.11,<5.0`, bempp-cl `>=0.4,<0.5`.
+- `install/install.sh` and `install/install.bat` currently only reject Python older than 3.10. They do not reject unsupported newer Python, even though the backend dependency matrix does.
+- `scripts/start-all.js` and `server/start.sh` can still fall back to a system `python3`, which can bypass the environment the installer configured.
+- The official gmsh snapshot indexes currently publish wheels for `win_amd64`, `macosx_10_15_x86_64`, `macosx_12_0_arm64`, and `manylinux_x86_64`; the headless `-nox` index is Linux x86_64 only.
+- pyopencl upstream documents Conda Forge as the easiest install path and states that `PLATFORM_NOT_FOUND_KHR` means pyopencl is installed but no OpenCL ICD/driver is present.
+- bempp-cl upstream declares `requires-python = ">=3.8.0"` in `pyproject.toml`, while its installation guide still describes Conda as the easiest environment path and `pocl` as the default CPU OpenCL backend.
+- As of March 12, 2026, Node.js lists `v24.14.0 (LTS)` on the official download page, and python.org shows active 3.12 and 3.13 release lines. The repo should choose one tested Python minor for installation instead of accepting every runtime in the supported matrix.
+
+Implementation notes:
+- `install/install.sh`
+- `install/install.bat`
+- `scripts/start-all.js`
+- `server/start.sh`
+- `README.md`
+- `server/README.md`
+- `docs/PROJECT_DOCUMENTATION.md`
+- add a shared runtime-check script invoked by both installers and launchers
+- add repo-owned toolchain version files / environment spec
+
+Required regression coverage:
+- `tests/docs-parity.test.js`
+- `server/tests/test_dependency_runtime.py`
+- add install/runtime smoke coverage for the supported OS matrix
+- add launcher/preflight regression coverage for interpreter selection and readiness messaging
+
 ### P1. Remove Stale Local-Only Jobs From the Backend Feed
 
 - Fix the backend jobs feed so terminal jobs that exist only in the browser cache are not shown as backend-managed rows.
