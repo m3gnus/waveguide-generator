@@ -39,18 +39,24 @@ def get_settings_capabilities() -> Dict[str, Any]:
             "notes": "Current backend support is limited to the existing /api/solve runtime overrides.",
         },
         "simulationAdvanced": {
-            "available": False,
-            "plannedControls": [
+            "available": True,
+            "controls": [
                 "enable_warmup",
+                "use_burton_miller",
+                "symmetry_tolerance",
+            ],
+            "plannedControls": [
                 "method",
                 "tol",
                 "restart",
                 "maxiter",
                 "strong_form",
-                "use_burton_miller",
-                "symmetry_tolerance",
             ],
-            "reason": "This backend does not expose advanced solve-option overrides yet.",
+            "reason": (
+                "The public solve contract now exposes warm-up, Burton-Miller coupling, "
+                "and symmetry-tolerance overrides. GMRES precision and method controls "
+                "remain pending product definition."
+            ),
         },
     }
 

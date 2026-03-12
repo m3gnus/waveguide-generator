@@ -147,6 +147,7 @@ Includes:
 - settings capability metadata under `capabilities`, including:
   - `simulationBasic.controls`
   - `simulationAdvanced.available`
+  - `simulationAdvanced.controls`
   - `simulationAdvanced.reason`
   - `simulationAdvanced.plannedControls`
 - selected BEM device metadata under `deviceInterface`, including:
@@ -195,6 +196,10 @@ Optional:
 - optimization flags (`use_optimized`, `enable_symmetry`, `verbose`)
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu`, default `auto`)
+- `advanced_settings`:
+  - `enable_warmup` (bool, optimized solver only)
+  - `use_burton_miller` (bool, optimized solver only)
+  - `symmetry_tolerance` (positive float, optimized solver only)
 
 Validation behavior:
 
@@ -203,6 +208,7 @@ Validation behavior:
 - `surfaceTags.length` must equal triangle count (`indices.length / 3`)
 - `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
 - malformed payloads return `422`
+- `advanced_settings.symmetry_tolerance` must be a positive finite number when provided
 
 Runtime metadata behavior:
 

@@ -43,6 +43,7 @@ export function buildQueuedSimulationJob({
       useOptimized: config.useOptimized,
       enableSymmetry: config.enableSymmetry,
       verbose: config.verbose,
+      advancedSettings: config.advancedSettings ? { ...config.advancedSettings } : null,
       polarConfig: config.polarConfig,
       params: { ...preparedParams },
       stateSnapshot

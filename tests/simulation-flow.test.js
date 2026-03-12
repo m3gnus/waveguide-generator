@@ -78,6 +78,11 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         useOptimized: false,
         enableSymmetry: false,
         verbose: false,
+        advancedSettings: {
+          enableWarmup: false,
+          useBurtonMiller: false,
+          symmetryTolerance: 0.0025
+        },
         polarConfig: {
           angle_range: [0, 180, 37],
           norm_angle: 5,
@@ -114,6 +119,11 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.use_optimized, false);
     assert.equal(payload.enable_symmetry, false);
     assert.equal(payload.verbose, false);
+    assert.deepEqual(payload.advanced_settings, {
+      enable_warmup: false,
+      use_burton_miller: false,
+      symmetry_tolerance: 0.0025
+    });
   } finally {
     global.fetch = originalFetch;
   }
@@ -145,7 +155,12 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
         deviceMode: '',
         useOptimized: 'yes please',
         enableSymmetry: null,
-        verbose: undefined
+        verbose: undefined,
+        advancedSettings: {
+          enableWarmup: 'sometimes',
+          useBurtonMiller: null,
+          symmetryTolerance: -1
+        }
       },
       {
         vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
@@ -164,6 +179,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
     assert.equal('use_optimized' in payload, false);
     assert.equal('enable_symmetry' in payload, false);
     assert.equal('verbose' in payload, false);
+    assert.equal('advanced_settings' in payload, false);
   } finally {
     global.fetch = originalFetch;
   }

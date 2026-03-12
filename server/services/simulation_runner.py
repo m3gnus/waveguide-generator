@@ -337,6 +337,11 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             mesh_validation_mode=request.mesh_validation_mode,
             frequency_spacing=request.frequency_spacing,
             device_mode=request.device_mode,
+            advanced_settings=(
+                request.advanced_settings.model_dump(exclude_none=True)
+                if request.advanced_settings
+                else None
+            ),
             cancellation_callback=lambda: _cancellation_callback(
                 "Cancellation requested during BEM solve"
             ),

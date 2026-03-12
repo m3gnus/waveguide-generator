@@ -1,5 +1,6 @@
 """Shared Pydantic API contracts for backend routes and services."""
 
+import math
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, field_validator
@@ -67,6 +68,22 @@ class PolarConfig(BaseModel):
         return normalized
 
 
+class AdvancedSimulationSettings(BaseModel):
+    enable_warmup: Optional[bool] = None
+    use_burton_miller: Optional[bool] = None
+    symmetry_tolerance: Optional[float] = None
+
+    @field_validator("symmetry_tolerance")
+    @classmethod
+    def validate_symmetry_tolerance(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return value
+        numeric = float(value)
+        if not math.isfinite(numeric) or numeric <= 0.0:
+            raise ValueError("advanced_settings.symmetry_tolerance must be a positive finite number.")
+        return numeric
+
+
 def normalize_contract_device_mode(value: Any) -> str:
     raw = str(value or "auto").strip().lower()
     normalized = DEVICE_MODE_ALIASES.get(raw, raw)
@@ -82,6 +99,7 @@ class SimulationRequest(BaseModel):
     sim_type: str
     options: Optional[Dict[str, Any]] = {}
     polar_config: Optional[PolarConfig] = None
+    advanced_settings: Optional[AdvancedSimulationSettings] = None
     use_optimized: bool = True
     enable_symmetry: bool = True
     verbose: bool = True
@@ -212,6 +230,7 @@ class DirectivityRenderRequest(BaseModel):
 
 
 __all__ = [
+    "AdvancedSimulationSettings",
     "BoundaryCondition",
     "ChartsRenderRequest",
     "DirectivityRenderRequest",

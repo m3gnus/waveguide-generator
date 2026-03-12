@@ -145,17 +145,19 @@ test('summarizeRuntimeCapabilities reports advanced controls unavailable until b
     occBuilderReady: true,
     capabilities: {
       simulationAdvanced: {
-        available: false,
-        reason: 'This backend does not expose advanced solve-option overrides yet.',
-        plannedControls: ['enable_warmup', 'method']
+        available: true,
+        controls: ['enable_warmup', 'use_burton_miller'],
+        reason: 'The public solve contract now exposes warm-up and Burton-Miller overrides.',
+        plannedControls: ['method']
       }
     }
   });
 
   assert.equal(summary.fullyReady, true);
-  assert.equal(summary.simulationAdvanced.available, false);
-  assert.equal(summary.simulationAdvanced.reason, 'This backend does not expose advanced solve-option overrides yet.');
-  assert.deepEqual(summary.simulationAdvanced.plannedControls, ['enable_warmup', 'method']);
+  assert.equal(summary.simulationAdvanced.available, true);
+  assert.equal(summary.simulationAdvanced.reason, 'The public solve contract now exposes warm-up and Burton-Miller overrides.');
+  assert.deepEqual(summary.simulationAdvanced.controls, ['enable_warmup', 'use_burton_miller']);
+  assert.deepEqual(summary.simulationAdvanced.plannedControls, ['method']);
 });
 
 test('describeSelectedDevice includes device name only when it adds signal', () => {
@@ -514,6 +516,18 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
     assert.ok(
       createdElements.some((el) => el.id === 'settings-choose-folder-btn'),
       'Workspace section should expose a folder selection action'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'simadvanced-enableWarmup'),
+      'Simulation section should expose the warm-up advanced control'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'simadvanced-useBurtonMiller'),
+      'Simulation section should expose the Burton-Miller advanced control'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'simadvanced-symmetryTolerance'),
+      'Simulation section should expose the symmetry-tolerance advanced control'
     );
   } finally {
     global.document = originalDocument;

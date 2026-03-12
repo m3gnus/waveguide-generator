@@ -22,6 +22,15 @@ import {
   resetSimBasicSettings,
 } from './simBasicSettings.js';
 import {
+  RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
+  getCurrentSimAdvancedSettings,
+  getEnableWarmup,
+  getSymmetryTolerance,
+  getUseBurtonMiller,
+  resetSimAdvancedSettings,
+  saveSimAdvancedSettings,
+} from './simAdvancedSettings.js';
+import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getCurrentSimulationManagementSettings,
   resetSimulationManagementSettings,
@@ -84,10 +93,15 @@ const SIMULATION_BASIC_HELP = Object.freeze({
   enableSymmetry: 'Allows the backend symmetry policy to reduce eligible models before solving.',
   verbose: 'Includes detailed backend logging in job progress output and server logs.'
 });
+const SIMULATION_ADVANCED_HELP = Object.freeze({
+  enableWarmup: 'Optimized-solver only. Front-loads the one-time operator/OpenCL warm-up before the solved frequency loop begins.',
+  useBurtonMiller: 'Optimized-solver only. Keeps the Burton-Miller coupling enabled for the main boundary solve.',
+  symmetryTolerance: 'Optimized-solver only. Smaller values require tighter mirror symmetry before the backend reduces the model.'
+});
 const ADVANCED_CONTROL_COPY = Object.freeze({
   enable_warmup: {
     label: 'Warm-up Pass',
-    help: 'Planned one-time backend warm-up before repeated solve loops.'
+    help: 'Runs a one-time optimized-solver warm-up before the timed frequency loop so OpenCL and operator caches are ready.'
   },
   method: {
     label: 'Linear Solver Method',
@@ -111,13 +125,18 @@ const ADVANCED_CONTROL_COPY = Object.freeze({
   },
   use_burton_miller: {
     label: 'Burton-Miller Coupling',
-    help: 'Planned coupling toggle for high-frequency stability and uniqueness.'
+    help: 'Keeps the optimized solver on the Burton-Miller formulation for improved uniqueness and high-frequency stability.'
   },
   symmetry_tolerance: {
     label: 'Symmetry Tolerance',
-    help: 'Planned tolerance override for backend symmetry detection and reduction.'
+    help: 'Sets the geometric tolerance used when the backend checks whether symmetry reduction is safe.'
   }
 });
+const ACTIVE_ADVANCED_CONTROL_IDS = Object.freeze([
+  'enable_warmup',
+  'use_burton_miller',
+  'symmetry_tolerance',
+]);
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
   { key: 'simulation', label: 'Simulation' },
@@ -254,6 +273,14 @@ function _buildModal(viewerRuntime) {
       settings.enableSymmetry = document.getElementById('simbasic-enableSymmetry')?.checked ?? settings.enableSymmetry;
       settings.verbose = document.getElementById('simbasic-verbose')?.checked ?? settings.verbose;
       saveSimBasicSettings(settings);
+    }
+
+    if (t.id && t.id.startsWith('simadvanced-')) {
+      const settings = getCurrentSimAdvancedSettings();
+      settings.enableWarmup = getEnableWarmup();
+      settings.useBurtonMiller = getUseBurtonMiller();
+      settings.symmetryTolerance = getSymmetryTolerance();
+      saveSimAdvancedSettings(settings);
     }
 
     if (_isSimulationManagementControl(t)) {
@@ -701,7 +728,7 @@ function _buildSimulationSection() {
   _appendSectionHeading(
     sec,
     'Simulation',
-    'Persistent solve defaults live here. Advanced solver work stays visible, but separated until the backend contract exposes it.'
+    'Persistent solve defaults live here. Advanced controls apply to the optimized solver path, while GMRES precision work stays separated until product defines it.'
   );
 
   const currentSimBasic = getCurrentSimBasicSettings();
@@ -810,16 +837,65 @@ function _buildSimulationSection() {
   const advancedHeader = _buildSubSectionHeader('Advanced Solver Controls');
   sec.appendChild(advancedHeader);
 
+  const currentSimAdvanced = getCurrentSimAdvancedSettings();
   const advancedIntro = document.createElement('p');
   advancedIntro.className = 'settings-section-help';
-  advancedIntro.textContent = 'These controls are capability-gated and remain read-only until the backend explicitly exposes them through the public solve contract.';
+  advancedIntro.textContent = 'These settings are sent through the public solve contract today. Method, restart, tolerance, and any “single precision” control remain intentionally planned-only.';
   sec.appendChild(advancedIntro);
+
+  const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
+    const resetSettings = resetSimAdvancedSettings();
+    const ew = document.getElementById('simadvanced-enableWarmup');
+    if (ew) ew.checked = resetSettings.enableWarmup;
+    const ubm = document.getElementById('simadvanced-useBurtonMiller');
+    if (ubm) ubm.checked = resetSettings.useBurtonMiller;
+    const st = document.getElementById('simadvanced-symmetryTolerance');
+    if (st) st.value = String(resetSettings.symmetryTolerance);
+    if (ewBadge) ewBadge.hidden = false;
+    if (ubmBadge) ubmBadge.hidden = false;
+    if (stBadge) stBadge.hidden = false;
+  });
+  sec.appendChild(advancedActiveHeader);
+
+  const ewResult = _buildSimBasicCheckboxRow(
+    ADVANCED_CONTROL_COPY.enable_warmup.label,
+    'simadvanced-enableWarmup',
+    currentSimAdvanced.enableWarmup,
+    SIM_ADVANCED_DEFAULTS.enableWarmup,
+    SIMULATION_ADVANCED_HELP.enableWarmup
+  );
+  sec.appendChild(ewResult.row);
+  let ewBadge = ewResult.badge;
+
+  const ubmResult = _buildSimBasicCheckboxRow(
+    ADVANCED_CONTROL_COPY.use_burton_miller.label,
+    'simadvanced-useBurtonMiller',
+    currentSimAdvanced.useBurtonMiller,
+    SIM_ADVANCED_DEFAULTS.useBurtonMiller,
+    SIMULATION_ADVANCED_HELP.useBurtonMiller
+  );
+  sec.appendChild(ubmResult.row);
+  let ubmBadge = ubmResult.badge;
+
+  const stResult = _buildSimAdvancedNumberRow(
+    ADVANCED_CONTROL_COPY.symmetry_tolerance.label,
+    'simadvanced-symmetryTolerance',
+    currentSimAdvanced.symmetryTolerance,
+    SIM_ADVANCED_DEFAULTS.symmetryTolerance,
+    { min: '0.0001', step: '0.0001' },
+    SIMULATION_ADVANCED_HELP.symmetryTolerance
+  );
+  sec.appendChild(stResult.row);
+  let stBadge = stResult.badge;
 
   const status = document.createElement('p');
   status.id = 'simadvanced-capability-status';
   status.className = 'settings-placeholder-text';
   status.textContent = 'Checking backend capability...';
   sec.appendChild(status);
+
+  const plannedHeader = _buildSubSectionHeader('Still Planned');
+  sec.appendChild(plannedHeader);
 
   const advancedControls = document.createElement('div');
   advancedControls.id = 'simadvanced-planned-controls';
@@ -1086,6 +1162,47 @@ function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultV
   return { row, badge, checkbox };
 }
 
+function _buildSimAdvancedNumberRow(
+  labelText,
+  inputId,
+  currentValue,
+  defaultValue,
+  { min = '', max = '', step = '0.0001' } = {},
+  helpText = ''
+) {
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
+  row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
+
+  const valueWrapper = document.createElement('div');
+  valueWrapper.className = 'settings-control-value';
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.id = inputId;
+  input.value = String(currentValue);
+  if (min) input.min = min;
+  if (max) input.max = max;
+  input.step = step;
+
+  const badge = _makeDefaultBadge(currentValue, defaultValue);
+  input.addEventListener('change', () => {
+    const numeric = Number(input.value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      input.value = String(defaultValue);
+      badge.hidden = false;
+      return;
+    }
+    badge.hidden = numeric === defaultValue;
+  });
+
+  valueWrapper.appendChild(input);
+  valueWrapper.appendChild(badge);
+  row.appendChild(valueWrapper);
+
+  return { row, badge, input };
+}
+
 function _buildSimulationExportFormatsRow(managementSettings) {
   const exportFormatsRow = document.createElement('div');
   exportFormatsRow.className = 'settings-control-row';
@@ -1126,7 +1243,12 @@ function _buildSimulationExportFormatsRow(managementSettings) {
   return exportFormatsRow;
 }
 
-function _renderSimAdvancedControls(container, plannedControls = Object.keys(ADVANCED_CONTROL_COPY)) {
+function _renderSimAdvancedControls(
+  container,
+  plannedControls = Object.keys(ADVANCED_CONTROL_COPY).filter(
+    (controlId) => !ACTIVE_ADVANCED_CONTROL_IDS.includes(controlId)
+  )
+) {
   if (!container) return;
   container.innerHTML = '';
 
@@ -1261,11 +1383,17 @@ function _applySimAdvancedCapabilityState(health) {
       controlsEl,
       runtime.simulationAdvanced.plannedControls.length > 0
         ? runtime.simulationAdvanced.plannedControls
-        : Object.keys(ADVANCED_CONTROL_COPY)
+        : Object.keys(ADVANCED_CONTROL_COPY).filter(
+          (controlId) => !ACTIVE_ADVANCED_CONTROL_IDS.includes(controlId)
+        )
     );
   }
   statusEl.textContent = runtime.simulationAdvanced.available
-    ? 'Backend capability metadata reports advanced support, but these controls remain read-only until the public solve request contract expands.'
+    ? (
+      runtime.simulationAdvanced.controls.length > 0
+        ? `Backend exposes: ${runtime.simulationAdvanced.controls.join(', ')}. ${runtime.simulationAdvanced.reason}`
+        : runtime.simulationAdvanced.reason
+    )
     : runtime.simulationAdvanced.reason;
 }
 

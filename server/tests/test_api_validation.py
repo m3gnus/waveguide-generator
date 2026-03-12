@@ -127,6 +127,24 @@ class ApiValidationTest(unittest.TestCase):
                 device_mode='opencl_magic'
             )
 
+    def test_negative_advanced_symmetry_tolerance_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            SimulationRequest(
+                mesh=MeshData(
+                    vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    indices=[0, 1, 2],
+                    surfaceTags=[2],
+                    format='msh',
+                    boundaryConditions={},
+                    metadata={}
+                ),
+                frequency_range=[100.0, 1000.0],
+                num_frequencies=10,
+                sim_type='2',
+                options={},
+                advanced_settings={'symmetry_tolerance': -0.001}
+            )
+
     def test_occ_adaptive_requires_waveguide_params(self):
         request = SimulationRequest(
             mesh=MeshData(
