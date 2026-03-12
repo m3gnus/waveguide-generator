@@ -34,8 +34,8 @@ Researched UI/runtime findings:
 - Not every schema parameter is visible. `PARAM_SCHEMA.MESH` includes `throatSliceDensity` and `verticalOffset`, but the current parameter UI does not render either control.
 - Simulation frequency and polar controls remain outside the settings modal, but they now share the same naming/order pass and hover-help affordance as the schema-driven parameter controls.
 - The settings modal now groups persistent preferences into `Viewer`, `Simulation`, `Task Exports`, `Workspace`, and `System` sections, and every visible viewer/task-setting row uses the shared hover-help affordance.
-- The Simulation section exposes the active runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`) while keeping advanced solver placeholders visibly separated and aligned with backend capability metadata.
-- Advanced solver controls remain placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
+- The Simulation section exposes the active runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`) plus optimized-solver advanced overrides for `enableWarmup`, `useBurtonMiller`, and `symmetryTolerance`.
+- Backend capability metadata now reports `simulationAdvanced.controls` for the shipped advanced overrides while keeping GMRES precision/method/restart/tolerance items in `plannedControls` until product defines the requested precision scope.
 - Folder workspace support is now visible inside the settings modal even when `window.showDirectoryPicker` is unavailable, so unsupported browsers show an explicit fallback explanation instead of no discoverable workspace entry point.
 - Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder root when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`. If either direct-write path fails, the app clears the selected folder and falls back to the browser picker/download flow.
 - The simulation diagnostics panel now reports geometry face identities such as `throat_disc`, `inner_wall`/`horn_wall`, `outer_wall`, `rear_cap`, and enclosure faces as triangle counts before submit. Canonical numeric tags (`1/2/3/4`) remain available only as a secondary debug summary.
@@ -215,14 +215,16 @@ Implementation notes:
 ### P2. Advanced Solver Controls and GMRES Precision Scope
 
 - [ ] Define what the requested “single precision for GMRES” setting actually means before implementation starts.
-  - If the requirement means real advanced solver overrides, extend the backend/frontend contract so advanced settings can be exposed intentionally instead of remaining placeholder rows.
-  - After the contract exists, add understandable settings labels/help for advanced solver controls such as warm-up, method, tolerance, restart, max iterations, strong-form usage, Burton-Miller coupling, and symmetry tolerance.
-  - Add parity tests for any new backend-exposed solver settings before changing runtime behavior.
+  - [x] Extend the backend/frontend contract so the already-implemented advanced overrides (`enable_warmup`, `use_burton_miller`, `symmetry_tolerance`) are exposed intentionally instead of remaining placeholder rows.
+  - [x] Add understandable settings labels/help for the shipped advanced overrides and keep the remaining GMRES-focused items clearly marked as planned-only.
+  - [x] Add parity tests for the new backend-exposed advanced settings before changing runtime behavior.
+  - [ ] Clarify whether the requested precision control should mean a true FP32 solve path, a looser GMRES tolerance/restart preset, or reduced precision only in stored/exported result data.
+  - [ ] If product wants additional GMRES method/tolerance/restart/max-iteration controls, extend the public contract for those controls after the precision definition lands.
 
 Research notes:
-- Current public request contract exposes only `use_optimized`, `enable_symmetry`, `verbose`, `mesh_validation_mode`, `frequency_spacing`, and `device_mode`.
-- `server/services/solver_runtime.py` advertises advanced controls only as `plannedControls`.
-- The optimized solver currently hardcodes GMRES tolerance and uses the existing Bempp runtime path; there is no exposed float32/complex64 or result-precision toggle today.
+- The public request contract now exposes `advanced_settings.enable_warmup`, `advanced_settings.use_burton_miller`, and `advanced_settings.symmetry_tolerance` alongside the existing basic runtime flags.
+- `server/services/solver_runtime.py` now advertises shipped advanced controls separately from `plannedControls`, so the settings modal can render live controls and remaining placeholders from backend truth.
+- The optimized solver still hardcodes GMRES tolerance and uses the existing Bempp runtime path; there is no exposed float32/complex64 or result-precision toggle today.
 
 Open product question:
 - Clarify whether “single precision for GMRES” means a true FP32 solve path, a looser convergence/tolerance preset, or reduced precision only in stored/exported result data.

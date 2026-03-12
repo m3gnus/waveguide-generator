@@ -339,6 +339,11 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       useOptimized: false,
       enableSymmetry: false,
       verbose: true,
+      advancedSettings: {
+        enableWarmup: false,
+        useBurtonMiller: false,
+        symmetryTolerance: 0.002
+      },
       polarConfig: {
         angle_range: [0, 90, 15],
         norm_angle: 0,
@@ -364,6 +369,11 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.script.useOptimized, false);
   assert.equal(job.script.enableSymmetry, false);
   assert.equal(job.script.verbose, true);
+  assert.deepEqual(job.script.advancedSettings, {
+    enableWarmup: false,
+    useBurtonMiller: false,
+    symmetryTolerance: 0.002
+  });
 });
 
 test('simulation use case summarizes canonical tag counts and warnings', () => {

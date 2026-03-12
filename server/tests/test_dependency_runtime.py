@@ -48,7 +48,19 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "verbose",
             ],
         )
-        self.assertFalse(response["capabilities"]["simulationAdvanced"]["available"])
+        self.assertTrue(response["capabilities"]["simulationAdvanced"]["available"])
+        self.assertEqual(
+            response["capabilities"]["simulationAdvanced"]["controls"],
+            [
+                "enable_warmup",
+                "use_burton_miller",
+                "symmetry_tolerance",
+            ],
+        )
+        self.assertIn(
+            "GMRES precision and method controls remain pending product definition",
+            response["capabilities"]["simulationAdvanced"]["reason"],
+        )
 
     def test_mesh_build_dependency_gate_returns_matrix_details(self):
         dependency_status = {

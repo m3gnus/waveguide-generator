@@ -77,6 +77,7 @@ class BEMSolver:
         mesh_validation_mode: str = "warn",
         frequency_spacing: str = "linear",
         device_mode: str = "auto",
+        advanced_settings: Optional[Dict] = None,
         cancellation_callback: Optional[callable] = None,
     ) -> Dict:
         """
@@ -92,6 +93,8 @@ class BEMSolver:
             use_optimized: Use optimized solver with symmetry, caching, correct polars (default: True)
             enable_symmetry: Enable automatic symmetry detection and reduction (default: True)
             verbose: Print detailed progress and validation reports (default: False)
+            advanced_settings: Optional optimized-solver-only overrides exposed by
+                the public contract.
 
         Returns:
             Results dictionary with simulation data and metadata
@@ -111,6 +114,7 @@ class BEMSolver:
             )
 
         if use_optimized:
+            runtime_advanced_settings = dict(advanced_settings or {})
             return solve_optimized(
                 mesh, frequency_range, num_frequencies, sim_type,
                 polar_config, progress_callback, stage_callback,
@@ -118,6 +122,7 @@ class BEMSolver:
                 mesh_validation_mode=mesh_validation_mode,
                 frequency_spacing=frequency_spacing,
                 device_mode=device_mode,
+                **runtime_advanced_settings,
                 cancellation_callback=cancellation_callback,
             )
         else:

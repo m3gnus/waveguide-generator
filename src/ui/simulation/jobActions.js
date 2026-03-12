@@ -8,6 +8,11 @@ import {
   getVerbose
 } from '../settings/simBasicSettings.js';
 import {
+  getEnableWarmup,
+  getSymmetryTolerance,
+  getUseBurtonMiller,
+} from '../settings/simAdvancedSettings.js';
+import {
   getCurrentSimulationManagementSettings,
   getTaskListMinRatingFilter,
   getTaskListSortPreference
@@ -509,7 +514,12 @@ export async function runSimulation(panel) {
     deviceMode: getDeviceMode(),
     useOptimized: getUseOptimized(),
     enableSymmetry: getEnableSymmetry(),
-    verbose: getVerbose()
+    verbose: getVerbose(),
+    advancedSettings: {
+      enableWarmup: getEnableWarmup(),
+      useBurtonMiller: getUseBurtonMiller(),
+      symmetryTolerance: getSymmetryTolerance(),
+    }
   };
 
   const polarSettings = readPolarStateSettings(readSimulationState()?.params);
