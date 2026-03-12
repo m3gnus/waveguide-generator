@@ -221,16 +221,57 @@ test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', 
         enc_edge: 0
       },
       tagCounts: { 1: 2, 2: 0, 3: 1, 4: 1 },
-      warnings: ['Source surface tag (2) missing from the canonical simulation mesh.']
+      warnings: ['Source surface tag (2) missing from the canonical simulation mesh.'],
+      provenance: 'preview'
     });
 
     assert.match(diagnosticsEl.innerHTML, /12 vertices/);
     assert.match(diagnosticsEl.innerHTML, /Geometry Diagnostics/);
+    assert.match(diagnosticsEl.innerHTML, /Preview Geometry Only/);
     assert.match(diagnosticsEl.innerHTML, /throat_disc/);
     assert.match(diagnosticsEl.innerHTML, /Inner Wall/);
     assert.match(diagnosticsEl.innerHTML, /Source/);
-    assert.match(diagnosticsEl.innerHTML, /triangle counts/i);
+    assert.match(diagnosticsEl.innerHTML, /preview-only triangle counts/i);
     assert.match(diagnosticsEl.innerHTML, /missing from the canonical simulation mesh/i);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test('renderSimulationMeshDiagnostics shows authoritative backend OCC provenance when mesh stats are authoritative', () => {
+  const originalDocument = global.document;
+  const diagnosticsEl = { innerHTML: '' };
+  global.document = {
+    getElementById(id) {
+      return id === 'simulation-mesh-diagnostics' ? diagnosticsEl : null;
+    }
+  };
+
+  try {
+    renderSimulationMeshDiagnostics({
+      vertexCount: 18,
+      triangleCount: 6,
+      identityTriangleCounts: {
+        throat_disc: 1,
+        horn_wall: 0,
+        inner_wall: 2,
+        outer_wall: 2,
+        mouth_rim: 0,
+        throat_return: 0,
+        rear_cap: 1,
+        enc_front: 0,
+        enc_side: 0,
+        enc_rear: 0,
+        enc_edge: 0
+      },
+      tagCounts: { 1: 5, 2: 1, 3: 0, 4: 0 },
+      warnings: [],
+      provenance: 'backend'
+    });
+
+    assert.match(diagnosticsEl.innerHTML, /Authoritative Backend OCC Solve Mesh/);
+    assert.match(diagnosticsEl.innerHTML, /backend OCC solve mesh used by this job/i);
+    assert.match(diagnosticsEl.innerHTML, /Authoritative backend OCC geometry diagnostics are available/i);
   } finally {
     global.document = originalDocument;
   }

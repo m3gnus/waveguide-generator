@@ -10,7 +10,8 @@ import {
   validateSimulationConfig,
   prepareCanonicalSimulationMesh,
   prepareOccAdaptiveSolveRequest,
-  summarizeCanonicalSimulationMesh
+  summarizeCanonicalSimulationMesh,
+  summarizePersistedSimulationMeshStats
 } from '../src/modules/simulation/domain.js';
 import {
   readSimulationState,
@@ -409,6 +410,28 @@ test('simulation use case flags tag-count mismatches in canonical summaries', ()
 
   assert.equal(summary.ok, false);
   assert.match(summary.warnings[0], /surface tag count/i);
+});
+
+test('simulation use case normalizes persisted backend mesh diagnostics', () => {
+  const summary = summarizePersistedSimulationMeshStats({
+    vertex_count: 12,
+    triangle_count: 4,
+    tag_counts: { 1: 3, 2: 1, 4: 0 },
+    identity_triangle_counts: {
+      inner_wall: 2,
+      throat_disc: 1,
+      rear_cap: 1
+    }
+  });
+
+  assert.equal(summary.vertexCount, 12);
+  assert.equal(summary.triangleCount, 4);
+  assert.deepEqual(summary.tagCounts, { 1: 3, 2: 1, 3: 0, 4: 0 });
+  assert.equal(summary.identityTriangleCounts.inner_wall, 2);
+  assert.equal(summary.identityTriangleCounts.throat_disc, 1);
+  assert.equal(summary.identityTriangleCounts.enc_side, 0);
+  assert.equal(summary.provenance, 'backend');
+  assert.equal(summary.ok, true);
 });
 
 test('simulation workspace service rebuilds folder index from task manifests', async () => {

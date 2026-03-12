@@ -4,6 +4,34 @@ import { FACE_IDENTITY_ORDER, countFaceIdentityTriangles } from '../../geometry/
 
 const CANONICAL_TAG_ORDER = Object.freeze([1, 2, 3, 4]);
 
+function normalizeIdentityTriangleCounts(rawCounts = {}) {
+  const counts = Object.fromEntries(FACE_IDENTITY_ORDER.map((identity) => [identity, 0]));
+  if (!rawCounts || typeof rawCounts !== 'object') {
+    return counts;
+  }
+  for (const identity of FACE_IDENTITY_ORDER) {
+    const rawCount = Number(rawCounts[identity]);
+    if (Number.isFinite(rawCount) && rawCount >= 0) {
+      counts[identity] = Math.floor(rawCount);
+    }
+  }
+  return counts;
+}
+
+function normalizeTagCounts(rawCounts = {}) {
+  const counts = Object.fromEntries(CANONICAL_TAG_ORDER.map((tag) => [tag, 0]));
+  if (!rawCounts || typeof rawCounts !== 'object') {
+    return counts;
+  }
+  for (const tag of CANONICAL_TAG_ORDER) {
+    const rawCount = Number(rawCounts[tag] ?? rawCounts[String(tag)]);
+    if (Number.isFinite(rawCount) && rawCount >= 0) {
+      counts[tag] = Math.floor(rawCount);
+    }
+  }
+  return counts;
+}
+
 function createSimulationDesignTask(state) {
   return DesignModule.task(
     DesignModule.importState(state, {
@@ -47,7 +75,7 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
   }
 
   const vertexCount = Math.floor(vertices.length / 3);
-  const tagCounts = Object.fromEntries(CANONICAL_TAG_ORDER.map((tag) => [tag, 0]));
+  const tagCounts = normalizeTagCounts();
   const identityTriangleCounts = countFaceIdentityTriangles(meshData?.groups, triangleCount);
   const metadataIdentityTriangleCounts = meshData?.metadata?.identityTriangleCounts;
   const unsupportedTags = new Set();
@@ -89,6 +117,47 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
     identityTriangleCounts,
     warnings,
     ok: warnings.length === 0
+  };
+}
+
+export function summarizePersistedSimulationMeshStats(meshStats = {}) {
+  const warnings = [];
+  const rawVertexCount = Number(meshStats?.vertexCount ?? meshStats?.vertex_count);
+  const rawTriangleCount = Number(meshStats?.triangleCount ?? meshStats?.triangle_count);
+  const vertexCount = Number.isFinite(rawVertexCount) && rawVertexCount >= 0
+    ? Math.floor(rawVertexCount)
+    : 0;
+  const triangleCount = Number.isFinite(rawTriangleCount) && rawTriangleCount >= 0
+    ? Math.floor(rawTriangleCount)
+    : 0;
+
+  if (!Number.isFinite(rawVertexCount) || rawVertexCount < 0) {
+    warnings.push('Backend OCC mesh diagnostics reported an invalid vertex count.');
+  }
+  if (!Number.isFinite(rawTriangleCount) || rawTriangleCount < 0) {
+    warnings.push('Backend OCC mesh diagnostics reported an invalid triangle count.');
+  }
+
+  const tagCounts = normalizeTagCounts(meshStats?.tagCounts ?? meshStats?.tag_counts);
+  const identityTriangleCounts = normalizeIdentityTriangleCounts(
+    meshStats?.identityTriangleCounts ?? meshStats?.identity_triangle_counts
+  );
+
+  if (tagCounts[2] === 0) {
+    warnings.push('Backend OCC mesh diagnostics report no source surface tag (2).');
+  }
+  if (!Object.values(identityTriangleCounts).some((count) => count > 0)) {
+    warnings.push('Backend OCC face-identity diagnostics are unavailable for this job.');
+  }
+
+  return {
+    vertexCount,
+    triangleCount,
+    tagCounts,
+    identityTriangleCounts,
+    warnings,
+    ok: warnings.length === 0,
+    provenance: 'backend'
   };
 }
 
