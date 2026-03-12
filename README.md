@@ -126,6 +126,7 @@ Windows/Linux note:
 - BEM simulation workflow with backend job submission and result plotting
 - Explicit task-history source modes: folder-backed tasks when a workspace is selected, backend jobs otherwise
 - Simulation task bundle exports with settings-selected formats and once-per-completion auto-export
+- Folder workspace routing for manual exports at the selected folder root plus completed-task bundles under `<workspace>/<jobId>/`, with save-picker/download fallback if workspace writes fail
 - Task-history ratings plus persisted sort and minimum-rating filters for larger simulation archives
 - Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
 - Export: STL, CSV profiles, MWG config text, simulation mesh download, and VACS-style result text
