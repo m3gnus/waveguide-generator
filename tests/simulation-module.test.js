@@ -12,15 +12,17 @@ import {
   updateSimulationStateParams,
   loadSimulationStateSnapshot,
   applySimulationJobScriptState,
-  readSimulationWorkspaceJobs,
-  syncSimulationWorkspaceIndex,
-  syncSimulationWorkspaceJobManifest,
   buildQueuedSimulationJob,
   buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds,
   summarizeCanonicalSimulationMesh
 } from '../src/modules/simulation/useCases.js';
+import {
+  readSimulationWorkspaceJobs,
+  syncSimulationWorkspaceIndex,
+  syncSimulationWorkspaceJobManifest
+} from '../src/modules/simulation/workspaceTasks.js';
 import {
   resetSelectedFolder,
   setSelectedFolderHandle

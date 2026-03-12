@@ -4,13 +4,15 @@ import {
   createSimulationClient,
   prepareOccAdaptiveSolveRequest
 } from '../../modules/simulation/useCases.js';
+import {
+  readSimulationWorkspaceJobs,
+  syncSimulationWorkspaceJobManifest
+} from '../../modules/simulation/workspaceTasks.js';
 import { UiModule } from '../../modules/ui/index.js';
 import {
   buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
-  buildQueuedSimulationJob,
-  readSimulationWorkspaceJobs,
-  syncSimulationWorkspaceJobManifest
+  buildQueuedSimulationJob
 } from '../../modules/simulation/useCases.js';
 import {
   allJobs,
