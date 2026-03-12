@@ -38,15 +38,17 @@ test('normalizeParamInput parses numeric literals consistently', () => {
 });
 
 test('mesh control labels separate viewport tessellation from solve mesh sizing', () => {
-  assert.equal(PARAM_SCHEMA.MESH.angularSegments.label, 'Viewport Angular Segs');
-  assert.equal(PARAM_SCHEMA.MESH.lengthSegments.label, 'Viewport Length Segs');
-  assert.equal(PARAM_SCHEMA.MESH.throatResolution.label, 'Solve Throat Resolution');
-  assert.equal(PARAM_SCHEMA.MESH.mouthResolution.label, 'Solve Mouth Resolution');
-  assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, 'Solve Rear Resolution');
-  assert.equal(PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label, 'Solve Front Baffle Resolution');
-  assert.equal(PARAM_SCHEMA.ENCLOSURE.encBackResolution.label, 'Solve Back Baffle Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.angularSegments.label, 'Preview Angular Segments');
+  assert.equal(PARAM_SCHEMA.MESH.lengthSegments.label, 'Preview Length Segments');
+  assert.equal(PARAM_SCHEMA.MESH.throatResolution.label, 'Throat Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.mouthResolution.label, 'Mouth Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, 'Rear Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label, 'Front Baffle Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.ENCLOSURE.encBackResolution.label, 'Rear Baffle Mesh Resolution');
   assert.match(PARAM_SCHEMA.MESH.angularSegments.tooltip, /Three\.js viewport/i);
   assert.match(PARAM_SCHEMA.MESH.throatResolution.tooltip, /backend OCC solve\/export mesh/i);
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.label, 'Sweep Start');
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.label, 'Sweep End');
   assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.controlId, 'freq-start');
   assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.controlId, 'freq-end');
   assert.equal(PARAM_SCHEMA.SIMULATION.numFreqs.controlId, 'freq-steps');

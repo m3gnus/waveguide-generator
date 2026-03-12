@@ -1,6 +1,8 @@
 import { PARAM_SCHEMA } from '../config/schema.js';
 import { GlobalState } from '../state.js';
 import { normalizeParamInput } from './paramInput.js';
+import { appendSectionNote, createLabelRow } from './helpAffordance.js';
+import { getParameterSections } from './parameterInventory.js';
 
 // Available mathematical functions from ATH user guide (Appendix A)
 const FORMULA_REFERENCE = {
@@ -74,10 +76,6 @@ export class ParamPanel {
     }
 
     renderParams() {
-        const state = GlobalState.get();
-        const type = state.type;
-        const params = state.params;
-
         this.container.innerHTML = ''; // Clear existing
 
         // 1. Model Type Selector (Always present)
@@ -103,157 +101,20 @@ export class ParamPanel {
         const state = GlobalState.get();
         const type = state.type;
 
-        // --- Model Type Selector ---
-        const typeSection = this.createSection('MODEL TYPE');
-        const typeRow = document.createElement('div');
-        typeRow.className = 'input-row';
-        const typeSelect = document.createElement('select');
-        typeSelect.id = 'model-type'; // Keep ID for compatibility if needed, but not strictly necessary
-
-        ['R-OSSE', 'OSSE'].forEach(t => {
-            const opt = document.createElement('option');
-            opt.value = t;
-            opt.textContent = t;
-            if (t === type) opt.selected = true;
-            typeSelect.appendChild(opt);
+        this.renderSections(this.container, getParameterSections('geometry', type), state.params, {
+            includeOwners: ['paramPanel']
         });
 
-        typeSelect.onchange = (e) => {
-            GlobalState.update({}, e.target.value);
-        };
-
-        typeRow.appendChild(typeSelect);
-        typeSection.appendChild(typeRow);
-        this.container.appendChild(typeSection);
-
-        // --- Model Specific Params ---
-        const coreSchema = PARAM_SCHEMA[type];
-        if (coreSchema) {
-            const section = document.createElement('div');
-            section.className = 'section';
-            const header = document.createElement('div');
-            header.className = 'section-header';
-            const title = document.createElement('h3');
-            title.textContent = `${type} PARAMETERS`;
-            header.appendChild(title);
-            section.appendChild(header);
-            for (const [key, def] of Object.entries(coreSchema)) {
-                section.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-            this.container.appendChild(section);
-        }
-
-        // --- Morphing (for OSSE) ---
-        // Architecture ref says: "Improve morphing... OSSE model".
-        if (type === 'OSSE') {
-            const morphSection = this.createDetailsSection('Morphing & Corner', 'osse-morph-details');
-            const morphSchema = PARAM_SCHEMA.MORPH;
-            for (const [key, def] of Object.entries(morphSchema)) {
-                morphSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-            this.container.appendChild(morphSection);
-        }
-
-        // --- Enclosure & Wall (available for both OSSE and R-OSSE) ---
-        const meshSchema = PARAM_SCHEMA.MESH || {};
-        const enclosureSection = this.createDetailsSection('Enclosure', 'enclosure-details');
-
-        // Wall thickness is controlled in the geometry tab.
-        const geomMeshKeys = ['wallThickness'];
-        geomMeshKeys.forEach((key) => {
-            const def = meshSchema[key];
-            if (def) {
-                enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-        });
-
-        // All enclosure parameters (now visible for both OSSE and R-OSSE)
-        // Resolution params are in Simulation tab — skip here
-        const encGeomExclude = new Set(['encFrontResolution', 'encBackResolution']);
-        const encSchema = PARAM_SCHEMA.ENCLOSURE;
-        if (encSchema) {
-            for (const [key, def] of Object.entries(encSchema)) {
-                if (encGeomExclude.has(key)) continue;
-                enclosureSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-        }
-
-        this.container.appendChild(enclosureSection);
-
-        // --- Geometry Advanced (at bottom of Geometry tab) ---
-        const geomSection = this.createDetailsSection('Geometry Advanced', 'geometry-advanced-details');
-        const geomSchema = PARAM_SCHEMA.GEOMETRY;
-        for (const [key, def] of Object.entries(geomSchema)) {
-            geomSection.appendChild(this.createControlRow(key, def, state.params[key]));
-        }
-        this.container.appendChild(geomSection);
-
-        // --- Output (Advanced) ---
-        const outputSchema = PARAM_SCHEMA.OUTPUT;
-        if (outputSchema) {
-            const outputSection = this.createDetailsSection('Output Settings', 'output-details');
-            for (const [key, def] of Object.entries(outputSchema)) {
-                outputSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-            this.container.appendChild(outputSection);
-        }
-
-        // --- Simulation Tab ---
         if (this.simulationSettingsContainer) {
-            const simulationSection = this.createDetailsSection('Simulation Settings', 'simulation-settings-details');
-            const simulationNote = document.createElement('div');
-            simulationNote.className = 'section-note';
-            simulationNote.textContent = 'Frequency controls define the backend BEM sweep and stay aligned with config import/export keys.';
-            simulationSection.appendChild(simulationNote);
-
-            for (const [key, def] of Object.entries(PARAM_SCHEMA.SIMULATION || {})) {
-                simulationSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-
-            this.simulationSettingsContainer.appendChild(simulationSection);
+            this.renderSections(this.simulationSettingsContainer, getParameterSections('simulation', type), state.params, {
+                includeIds: ['frequency-sweep']
+            });
         }
 
         if (this.simulationContainer) {
-            const sourceSection = this.createDetailsSection('Source', 'source-details');
-            for (const [key, def] of Object.entries(PARAM_SCHEMA.SOURCE)) {
-                sourceSection.appendChild(this.createControlRow(key, def, state.params[key]));
-            }
-            this.simulationContainer.appendChild(sourceSection);
-
-            // Mesh controls section (viewport tessellation + backend solve/export mesh sizing)
-            const combinedMeshSection = this.createDetailsSection('Mesh Controls', 'mesh-details');
-            const meshNote = document.createElement('div');
-            meshNote.className = 'section-note';
-            meshNote.textContent = 'Viewport controls affect only the 3D preview. Solve controls affect the backend OCC mesh and downloaded simulation mesh artifacts.';
-            combinedMeshSection.appendChild(meshNote);
-
-            // Params moved to Geometry tab — skip here
-            const geomTabKeys = new Set(['wallThickness']);
-
-            // Mesh density parameters (affect tessellation, not geometry shape)
-            const meshDensityOrder = [
-                'angularSegments',
-                'lengthSegments',
-                'cornerSegments',
-                'throatSegments',
-                'throatResolution',
-                'mouthResolution',
-                'throatSliceDensity',
-                'encFrontResolution',
-                'encBackResolution',
-                'rearResolution',
-                'verticalOffset'
-            ];
-
-            meshDensityOrder.forEach((key) => {
-                if (geomTabKeys.has(key)) return;
-                const def = meshSchema[key] || (PARAM_SCHEMA.ENCLOSURE && PARAM_SCHEMA.ENCLOSURE[key]);
-                if (def) {
-                    combinedMeshSection.appendChild(this.createControlRow(key, def, state.params[key]));
-                }
+            this.renderSections(this.simulationContainer, getParameterSections('simulation', type), state.params, {
+                includeIds: ['source-definition', 'preview-mesh', 'solve-export-mesh']
             });
-
-            this.simulationContainer.appendChild(combinedMeshSection);
         }
     }
 
@@ -276,27 +137,76 @@ export class ParamPanel {
         return section;
     }
 
+    renderSections(target, sections, params, { includeIds = null, includeOwners = null } = {}) {
+        if (!target) return;
+
+        sections.forEach((section) => {
+            if (Array.isArray(includeIds) && !includeIds.includes(section.id)) {
+                return;
+            }
+            if (Array.isArray(includeOwners) && !includeOwners.includes(section.owner)) {
+                return;
+            }
+
+            if (section.kind === 'model-selector') {
+                target.appendChild(this.createModelTypeSection());
+                return;
+            }
+
+            const sectionNode = this.createDetailsSection(section.title, section.id);
+            appendSectionNote(sectionNode, document, section.description);
+            (section.groups || []).forEach(({ group, keys }) => {
+                const schemaGroup = PARAM_SCHEMA[group] || {};
+                keys.forEach((key) => {
+                    const def = schemaGroup[key];
+                    if (def) {
+                        sectionNode.appendChild(this.createControlRow(key, def, params[key]));
+                    }
+                });
+            });
+            target.appendChild(sectionNode);
+        });
+    }
+
+    createModelTypeSection() {
+        const typeSection = this.createSection('Model Type');
+        const typeRow = document.createElement('div');
+        typeRow.className = 'input-row';
+        const typeSelect = document.createElement('select');
+        typeSelect.id = 'model-type';
+
+        const currentType = GlobalState.get().type;
+        ['R-OSSE', 'OSSE'].forEach((type) => {
+            const option = document.createElement('option');
+            option.value = type;
+            option.textContent = type;
+            if (type === currentType) {
+                option.selected = true;
+            }
+            typeSelect.appendChild(option);
+        });
+
+        typeSelect.onchange = (e) => {
+            GlobalState.update({}, e.target.value);
+        };
+
+        typeRow.appendChild(typeSelect);
+        typeSection.appendChild(typeRow);
+        return typeSection;
+    }
+
     createControlRow(key, def, currentValue) {
         const row = document.createElement('div');
         row.className = 'input-row';
         row.setAttribute('data-param-key', key);
 
-        const labelRow = document.createElement('div');
-        labelRow.className = 'input-label-row';
-
-        const label = document.createElement('label');
         const controlId = def.controlId || `param-${key}-${this.controlIdCounter++}`;
-        label.textContent = def.label;
-        if (def.unit) label.textContent += ` (${def.unit})`;
-        label.htmlFor = controlId;
-
-        // Add tooltip if available
-        if (def.tooltip) {
-            label.title = def.tooltip;
-            label.classList.add('has-tooltip');
-        }
-
-        labelRow.appendChild(label);
+        const labelText = def.unit ? `${def.label} (${def.unit})` : def.label;
+        const { row: labelRow } = createLabelRow(document, {
+            labelText,
+            htmlFor: controlId,
+            helpText: def.tooltip || ''
+        });
         row.appendChild(labelRow);
 
         const inputMode = getControlInputMode(def);
