@@ -88,6 +88,7 @@ class JobPersistenceTest(unittest.TestCase):
                     "frequency_range": [100.0, 1000.0],
                     "num_frequencies": 8,
                     "sim_type": "2",
+                    "enable_symmetry": True,
                 },
                 "has_results": status == "complete",
                 "has_mesh_artifact": False,
@@ -129,6 +130,7 @@ class JobPersistenceTest(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], "queued")
         self.assertEqual(row["config_json"]["mesh"]["surfaceTags"], [2])
+        self.assertEqual(row["config_summary_json"]["enable_symmetry"], True)
         create_task.assert_called_once()
 
     def test_delete_job_rejects_active_and_allows_terminal(self):

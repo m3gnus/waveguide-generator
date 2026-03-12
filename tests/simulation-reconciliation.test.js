@@ -79,6 +79,16 @@ test('mergeJobs preserves manifest metadata when backend omits fields', () => {
         status: 'queued',
         rating: 4,
         exportedFiles: ['first.csv'],
+        symmetrySummary: {
+          badge: 'Requested',
+          headline: 'Symmetry reduction requested',
+          details: 'The solve request allows symmetry reduction.',
+          tone: 'neutral',
+          items: [
+            { label: 'Requested', value: 'Enabled' },
+            { label: 'Decision', value: 'Pending results' }
+          ]
+        },
         scriptSchemaVersion: 2,
         scriptSnapshot: { outputName: 'horn' }
       }
@@ -90,6 +100,7 @@ test('mergeJobs preserves manifest metadata when backend omits fields', () => {
   assert.equal(merged[0].status, 'running');
   assert.equal(merged[0].rating, 4);
   assert.deepEqual(merged[0].exportedFiles, ['first.csv']);
+  assert.equal(merged[0].symmetrySummary?.badge, 'Requested');
   assert.equal(merged[0].scriptSchemaVersion, 2);
   assert.deepEqual(merged[0].scriptSnapshot, { outputName: 'horn' });
 });

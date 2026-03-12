@@ -38,6 +38,7 @@ export function normalizeTaskIndexEntry(raw = {}) {
     autoExportCompletedAt: fromManifest.autoExportCompletedAt ?? null,
     rating: fromManifest.rating ?? null,
     exportedFiles: normalizeExportedFiles(fromManifest.exportedFiles),
+    symmetrySummary: fromManifest.symmetrySummary ?? null,
     scriptSchemaVersion: Number.isFinite(Number(fromManifest.scriptSchemaVersion))
       ? Number(fromManifest.scriptSchemaVersion)
       : 1,
