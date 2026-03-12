@@ -230,6 +230,7 @@ Work the backlog from upstream runtime truth to downstream UX:
   Will it improve the program: Potentially. It would make symmetry reduction more explainable and measurable.
   Research findings: the backend already has automatic symmetry detection/reduction plus a repeatable benchmark script in `server/scripts/benchmark_solver.py`, but there is no fixture-backed harness that compares full versus half versus quarter-domain runs or captures UI-facing policy decisions. This is real research work, not a thin UI tweak.
   Best approach: Build repeatable full/half/quarter benchmark cases first, then decide whether UI controls such as `auto` versus `force_full` are justified by the data.
+  Progress: March 12, 2026. The first slice is now in place: `server/solver/symmetry_benchmark.py` and `server/scripts/benchmark_symmetry.py` provide deterministic full/half/quarter/off-center fixtures for repeatable policy benchmarking, and `/api/results` now exposes `metadata.symmetry_policy` alongside `metadata.symmetry`. Remaining work is product-facing: decide whether the benchmark evidence justifies explicit symmetry controls (for example `auto` versus `force_full`) and, if so, thread the new policy metadata into the simulation UI.
 
 - [x] Decide whether the Gmsh export stack should remain a long-term dependency.
   Source: archived future additions doc.

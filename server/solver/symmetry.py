@@ -33,6 +33,192 @@ class SymmetryPlane(Enum):
     XZ = "xz"  # Y = 0 plane
 
 
+def symmetry_type_value(symmetry_type: Optional[object]) -> str:
+    if isinstance(symmetry_type, SymmetryType):
+        return symmetry_type.value
+    if symmetry_type is None:
+        return SymmetryType.FULL.value
+    return str(symmetry_type)
+
+
+def symmetry_plane_values(symmetry_planes: Optional[List[object]]) -> List[str]:
+    values: List[str] = []
+    for plane in symmetry_planes or []:
+        if isinstance(plane, SymmetryPlane):
+            values.append(plane.value)
+        else:
+            values.append(str(plane))
+    return values
+
+
+def reduction_factor_for_symmetry_type(symmetry_type: Optional[object]) -> float:
+    normalized = symmetry_type_value(symmetry_type)
+    if normalized == SymmetryType.QUARTER_XZ.value:
+        return 4.0
+    if normalized in (SymmetryType.HALF_X.value, SymmetryType.HALF_Z.value):
+        return 2.0
+    return 1.0
+
+
+def serialize_symmetry_info(symmetry_info: Optional[Dict]) -> Dict:
+    info = dict(symmetry_info or {})
+    info["symmetry_type"] = symmetry_type_value(info.get("symmetry_type"))
+    info["symmetry_planes"] = symmetry_plane_values(info.get("symmetry_planes"))
+
+    if "reduction_factor" in info:
+        info["reduction_factor"] = float(info["reduction_factor"])
+
+    for key in (
+        "symmetry_face_tag",
+        "original_vertices",
+        "reduced_vertices",
+        "original_triangles",
+        "reduced_triangles",
+    ):
+        if key in info and info[key] is not None:
+            info[key] = int(info[key])
+
+    return info
+
+
+def build_symmetry_policy(
+    *,
+    requested: bool,
+    reason: str,
+    detected_symmetry_type: Optional[object] = None,
+    detected_symmetry_planes: Optional[List[object]] = None,
+    applied: bool = False,
+    eligible: bool = False,
+    reduction_factor: float = 1.0,
+    detected_reduction_factor: Optional[float] = None,
+    excitation_centered: Optional[bool] = None,
+    throat_center: Optional[np.ndarray] = None,
+    error: Optional[str] = None,
+) -> Dict[str, object]:
+    normalized_type = symmetry_type_value(detected_symmetry_type)
+    normalized_planes = symmetry_plane_values(detected_symmetry_planes)
+    normalized_detected_reduction = float(
+        detected_reduction_factor
+        if detected_reduction_factor is not None
+        else reduction_factor_for_symmetry_type(normalized_type)
+    )
+
+    return {
+        "requested": bool(requested),
+        "decision": "reduced" if applied else "full_model",
+        "reason": str(reason),
+        "applied": bool(applied),
+        "eligible": bool(eligible),
+        "detected_symmetry_type": normalized_type,
+        "detected_symmetry_planes": normalized_planes,
+        "detected_reduction_factor": normalized_detected_reduction,
+        "reduction_factor": float(reduction_factor),
+        "excitation_centered": None if excitation_centered is None else bool(excitation_centered),
+        "throat_center": None if throat_center is None else [float(value) for value in throat_center],
+        "error": None if error is None else str(error),
+    }
+
+
+def evaluate_symmetry_policy(
+    *,
+    vertices: Optional[np.ndarray],
+    indices: Optional[np.ndarray],
+    surface_tags: Optional[np.ndarray],
+    throat_elements: Optional[np.ndarray],
+    enable_symmetry: bool,
+    tolerance: float = 1e-3,
+) -> Dict[str, object]:
+    if not enable_symmetry:
+        return {
+            "policy": build_symmetry_policy(requested=False, reason="disabled"),
+            "symmetry": {"symmetry_type": SymmetryType.FULL.value, "reduction_factor": 1.0},
+            "reduced_vertices": vertices,
+            "reduced_indices": indices,
+            "reduced_surface_tags": surface_tags,
+            "symmetry_info": None,
+        }
+
+    if vertices is None or indices is None:
+        return {
+            "policy": build_symmetry_policy(requested=True, reason="missing_original_mesh"),
+            "symmetry": {"symmetry_type": SymmetryType.FULL.value, "reduction_factor": 1.0},
+            "reduced_vertices": vertices,
+            "reduced_indices": indices,
+            "reduced_surface_tags": surface_tags,
+            "symmetry_info": None,
+        }
+
+    symmetry_type, symmetry_planes = detect_geometric_symmetry(vertices, tolerance=tolerance)
+    base_policy = build_symmetry_policy(
+        requested=True,
+        reason="no_geometric_symmetry",
+        detected_symmetry_type=symmetry_type,
+        detected_symmetry_planes=symmetry_planes,
+        detected_reduction_factor=reduction_factor_for_symmetry_type(symmetry_type),
+    )
+
+    if symmetry_type == SymmetryType.FULL:
+        return {
+            "policy": base_policy,
+            "symmetry": {"symmetry_type": SymmetryType.FULL.value, "reduction_factor": 1.0},
+            "reduced_vertices": vertices,
+            "reduced_indices": indices,
+            "reduced_surface_tags": surface_tags,
+            "symmetry_info": None,
+        }
+
+    resolved_throat_elements = throat_elements
+    if resolved_throat_elements is None:
+        resolved_throat_elements = np.array([], dtype=int)
+
+    throat_center = find_throat_center(vertices, resolved_throat_elements, indices)
+    excitation_ok = check_excitation_symmetry(throat_center, symmetry_planes, tolerance=1e-3)
+
+    if not excitation_ok:
+        policy = build_symmetry_policy(
+            requested=True,
+            reason="excitation_off_center",
+            detected_symmetry_type=symmetry_type,
+            detected_symmetry_planes=symmetry_planes,
+            detected_reduction_factor=reduction_factor_for_symmetry_type(symmetry_type),
+            excitation_centered=False,
+            throat_center=throat_center,
+        )
+        return {
+            "policy": policy,
+            "symmetry": {"symmetry_type": SymmetryType.FULL.value, "reduction_factor": 1.0},
+            "reduced_vertices": vertices,
+            "reduced_indices": indices,
+            "reduced_surface_tags": surface_tags,
+            "symmetry_info": None,
+        }
+
+    reduced_vertices, reduced_indices, reduced_surface_tags, symmetry_info = apply_symmetry_reduction(
+        vertices, indices, surface_tags, symmetry_type, symmetry_planes
+    )
+    serialized_info = serialize_symmetry_info(symmetry_info)
+    policy = build_symmetry_policy(
+        requested=True,
+        reason="applied",
+        detected_symmetry_type=symmetry_type,
+        detected_symmetry_planes=symmetry_planes,
+        applied=True,
+        eligible=True,
+        reduction_factor=float(serialized_info["reduction_factor"]),
+        detected_reduction_factor=float(serialized_info["reduction_factor"]),
+        excitation_centered=True,
+        throat_center=throat_center,
+    )
+    return {
+        "policy": policy,
+        "symmetry": serialized_info,
+        "reduced_vertices": reduced_vertices,
+        "reduced_indices": reduced_indices,
+        "reduced_surface_tags": reduced_surface_tags,
+        "symmetry_info": serialized_info,
+    }
+
+
 def detect_geometric_symmetry(
     vertices: np.ndarray,
     tolerance: float = 1e-3

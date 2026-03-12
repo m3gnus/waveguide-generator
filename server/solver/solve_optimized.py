@@ -33,11 +33,8 @@ from .directivity_correct import (
 from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
 from .observation import infer_observation_frame
 from .symmetry import (
-    SymmetryType,
-    apply_symmetry_reduction,
-    check_excitation_symmetry,
-    detect_geometric_symmetry,
-    find_throat_center,
+    build_symmetry_policy,
+    evaluate_symmetry_policy,
     validate_symmetry_reduction,
 )
 
@@ -269,7 +266,11 @@ def solve_optimized(
     else:
         frequencies = np.linspace(frequency_range[0], frequency_range[1], num_frequencies)
 
-    symmetry_info = None
+    symmetry_info = {"symmetry_type": "full", "reduction_factor": 1.0}
+    symmetry_policy = build_symmetry_policy(
+        requested=bool(enable_symmetry),
+        reason="missing_original_mesh" if enable_symmetry else "disabled",
+    )
     reduction_factor = 1.0
     if stage_callback:
         stage_callback("setup", 0.0, "Preparing optimized solver")
@@ -277,44 +278,56 @@ def solve_optimized(
     if cancellation_callback:
         cancellation_callback()
 
-    if enable_symmetry and original_vertices is not None:
+    if enable_symmetry and original_vertices is not None and original_indices is not None:
         if verbose:
             logger.info("=" * 70)
             logger.info("SYMMETRY DETECTION")
             logger.info("=" * 70)
 
         try:
-            symmetry_type, symmetry_planes = detect_geometric_symmetry(
-                original_vertices, tolerance=symmetry_tolerance
+            symmetry_result = evaluate_symmetry_policy(
+                vertices=original_vertices,
+                indices=original_indices,
+                surface_tags=original_tags,
+                throat_elements=throat_elements,
+                enable_symmetry=enable_symmetry,
+                tolerance=symmetry_tolerance,
             )
+            symmetry_policy = symmetry_result["policy"]
+            symmetry_info = symmetry_result["symmetry"]
 
-            if symmetry_type != SymmetryType.FULL:
-                throat_center = find_throat_center(
-                    original_vertices, throat_elements, original_indices
-                )
-                excitation_ok = check_excitation_symmetry(
-                    throat_center, symmetry_planes, tolerance=1e-3
-                )
-
-                if excitation_ok:
-                    if verbose:
-                        logger.info("[BEM] Symmetry detected: %s", symmetry_type.value)
-                        logger.info("[BEM] Excitation centered: %s", throat_center)
-
-                    reduced_v, reduced_i, reduced_tags, symmetry_info = apply_symmetry_reduction(
-                        original_vertices, original_indices, original_tags, symmetry_type, symmetry_planes
+            if symmetry_policy["applied"]:
+                if verbose:
+                    logger.info(
+                        "[BEM] Symmetry detected: %s",
+                        symmetry_policy["detected_symmetry_type"],
                     )
-                    grid = bempp_api.grid_from_element_data(reduced_v, reduced_i, reduced_tags)
-                    reduction_factor = float(symmetry_info["reduction_factor"])
-                    validate_symmetry_reduction(symmetry_info, verbose=verbose)
-                    apply_neumann_bc_on_symmetry_planes(grid, symmetry_info)
-                    # Re-identify throat elements in reduced grid
-                    throat_elements = np.where(reduced_tags == 2)[0]
-                elif verbose:
-                    logger.info("[BEM] Symmetry rejected: excitation not centered (%s)", throat_center)
+                    logger.info("[BEM] Excitation centered: %s", symmetry_policy["throat_center"])
+
+                reduced_v = symmetry_result["reduced_vertices"]
+                reduced_i = symmetry_result["reduced_indices"]
+                reduced_tags = symmetry_result["reduced_surface_tags"]
+                grid = bempp_api.grid_from_element_data(reduced_v, reduced_i, reduced_tags)
+                reduction_factor = float(symmetry_info["reduction_factor"])
+                validate_symmetry_reduction(symmetry_info, verbose=verbose)
+                apply_neumann_bc_on_symmetry_planes(grid, symmetry_info)
+                # Re-identify throat elements in reduced grid
+                throat_elements = np.where(reduced_tags == 2)[0]
             elif verbose:
-                logger.info("[BEM] No symmetry detected - using full model")
+                if symmetry_policy["reason"] == "excitation_off_center":
+                    logger.info(
+                        "[BEM] Symmetry rejected: excitation not centered (%s)",
+                        symmetry_policy["throat_center"],
+                    )
+                else:
+                    logger.info("[BEM] No symmetry detected - using full model")
         except Exception as exc:
+            symmetry_policy = build_symmetry_policy(
+                requested=True,
+                reason="error_fallback",
+                error=str(exc),
+            )
+            symmetry_info = {"symmetry_type": "full", "reduction_factor": 1.0}
             if verbose:
                 logger.warning("[BEM] Symmetry detection failed: %s", exc, exc_info=True)
                 logger.info("[BEM] Falling back to full model")
@@ -372,7 +385,8 @@ def solve_optimized(
         "impedance": {"frequencies": frequencies.tolist(), "real": [], "imaginary": []},
         "di": {"frequencies": frequencies.tolist(), "di": []},
         "metadata": {
-            "symmetry": symmetry_info if symmetry_info else {"symmetry_type": "full", "reduction_factor": 1.0},
+            "symmetry": symmetry_info,
+            "symmetry_policy": symmetry_policy,
             "axisymmetric": axisymmetric_info,
             "device_interface": selected_device_metadata(device_mode),
             "mesh_validation": mesh_validation,
