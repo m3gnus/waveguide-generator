@@ -166,6 +166,7 @@ Work the backlog from upstream runtime truth to downstream UX:
   Will it improve the program: Yes. It reduces maintenance noise and future confusion.
   Research findings: recent Phase 8 cleanup already removed several deprecated frontend/export aliases, so the obvious low-hanging cleanup has mostly been harvested. What remains should be handled as a deliberate import/callsite audit with small removals, not as opportunistic drive-by deletion during product work.
   Best approach: Start with an import/callsite inventory, remove only code with no active UI/runtime/test path, and keep each cleanup slice small enough for targeted verification.
+  Progress: March 12, 2026. A reachability audit from `src/main.js` confirmed the entire `src/validation/` subsystem was orphaned from runtime, docs, and tests, so the first cleanup slice removed that directory. Remaining candidates should continue from the same import/callsite inventory instead of broad file-by-file pruning.
 
 - [x] Retire the legacy frontend `.msh` export surface once tests/tooling no longer need it.
   Source: architecture audit on March 11, 2026; `src/export/index.js`; `src/export/msh.js`; `tests/geometry-artifacts.test.js`.
