@@ -55,6 +55,20 @@ import {
 
 export { validateSimulationConfig };
 
+const GEOMETRY_DIAGNOSTIC_ROWS = Object.freeze([
+  ['throat_disc', 'Throat Disc'],
+  ['horn_wall', 'Horn Wall'],
+  ['inner_wall', 'Inner Wall'],
+  ['outer_wall', 'Outer Wall'],
+  ['mouth_rim', 'Mouth Rim'],
+  ['throat_return', 'Throat Return'],
+  ['rear_cap', 'Rear Cap'],
+  ['enc_front', 'Enclosure Front'],
+  ['enc_side', 'Enclosure Side'],
+  ['enc_rear', 'Enclosure Rear'],
+  ['enc_edge', 'Enclosure Edge']
+]);
+
 export function renderSimulationMeshDiagnostics(summary = null) {
   const container = document.getElementById('simulation-mesh-diagnostics');
   if (!container) {
@@ -62,33 +76,36 @@ export function renderSimulationMeshDiagnostics(summary = null) {
   }
 
   if (!summary) {
-    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Canonical tag diagnostics appear here before submit.</div>';
+    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Geometry diagnostics appear here before submit.</div>';
     return;
   }
 
-  const tagRows = [
-    ['1', 'Wall', summary.tagCounts?.[1] ?? 0],
-    ['2', 'Source', summary.tagCounts?.[2] ?? 0],
-    ['3', 'Secondary', summary.tagCounts?.[3] ?? 0],
-    ['4', 'Interface', summary.tagCounts?.[4] ?? 0]
-  ].map(([tag, label, count]) => `
+  const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(([identity, label]) => `
     <div class="simulation-mesh-diagnostics-tag">
-      <span class="simulation-mesh-diagnostics-tag-id">Tag ${tag}</span>
+      <span class="simulation-mesh-diagnostics-tag-id">${escapeHtml(identity)}</span>
       <span class="simulation-mesh-diagnostics-tag-label">${label}</span>
-      <span class="simulation-mesh-diagnostics-tag-count">${count}</span>
+      <span class="simulation-mesh-diagnostics-tag-count">${summary.identityTriangleCounts?.[identity] ?? 0}</span>
     </div>
   `).join('');
+  const debugTagSummary = [
+    `Wall (1): ${summary.tagCounts?.[1] ?? 0}`,
+    `Source (2): ${summary.tagCounts?.[2] ?? 0}`,
+    `Secondary (3): ${summary.tagCounts?.[3] ?? 0}`,
+    `Interface (4): ${summary.tagCounts?.[4] ?? 0}`
+  ].join(' • ');
+  const infoMarkup = `<div class="simulation-mesh-diagnostics-note">Surface rows report triangle counts. Canonical tags (debug): ${debugTagSummary}</div>`;
 
   const warningMarkup = Array.isArray(summary.warnings) && summary.warnings.length > 0
     ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join('<br>')}</div>`
-    : '<div class="simulation-mesh-diagnostics-ok">Canonical mesh tags look ready for submit.</div>';
+    : '<div class="simulation-mesh-diagnostics-ok">Geometry identities and canonical tags look ready for submit.</div>';
 
   container.innerHTML = `
     <div class="simulation-mesh-diagnostics-header">
-      <span>Canonical Mesh Diagnostics</span>
+      <span>Geometry Diagnostics</span>
       <span>${summary.vertexCount} vertices • ${summary.triangleCount} triangles</span>
     </div>
-    <div class="simulation-mesh-diagnostics-tags">${tagRows}</div>
+    <div class="simulation-mesh-diagnostics-tags">${identityRows}</div>
+    ${infoMarkup}
     ${warningMarkup}
   `;
 }

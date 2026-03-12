@@ -115,6 +115,7 @@ flowchart LR
 1. Simulation UI emits `simulation:mesh-requested`.
 2. `src/app/mesh.js` resolves prepared design inputs via `DesignModule`, and `SimulationModule` builds canonical payload from those inputs before emitting `simulation:mesh-ready`.
    - For OCC-adaptive `/api/solve`, frontend may send `waveguide_params.quadrants`; the backend submission boundary builds a queued full-domain OCC request with `quadrants=1234`.
+   - The same pre-submit payload also carries `metadata.identityTriangleCounts`, which the UI uses to show geometry-face triangle counts without changing the downstream numeric `surfaceTags` solver contract.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
@@ -442,6 +443,7 @@ Required invariants:
 
 - The frontend canonical payload remains numeric-tag-first: `vertices`, `indices`, and `surfaceTags` are the downstream simulation contract.
 - Face identities remain available through `meshData.groups` and are mapped via `src/geometry/tags.js`.
+- `metadata.identityTriangleCounts` preserves geometry-face triangle totals (`throat_disc`, `inner_wall`/`horn_wall`, enclosure faces, etc.) for UI diagnostics while leaving `surfaceTags` as the authoritative solver-facing tagging contract.
 - OCC meshing consumes raw prepared parameters only; it does not consume a frontend-generated mesh contract.
 
 ### 8.4 Authoritative normalization spec

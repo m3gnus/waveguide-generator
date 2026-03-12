@@ -1,5 +1,6 @@
 import { DesignModule } from '../design/index.js';
 import { SimulationModule } from './index.js';
+import { FACE_IDENTITY_ORDER, countFaceIdentityTriangles } from '../../geometry/tags.js';
 
 const CANONICAL_TAG_ORDER = Object.freeze([1, 2, 3, 4]);
 
@@ -35,6 +36,7 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
   const vertices = Array.isArray(meshData?.vertices) ? meshData.vertices : [];
   const indices = Array.isArray(meshData?.indices) ? meshData.indices : [];
   const surfaceTags = Array.isArray(meshData?.surfaceTags) ? meshData.surfaceTags : [];
+  const triangleCount = Math.floor(indices.length / 3);
   const warnings = [];
 
   if (vertices.length % 3 !== 0) {
@@ -45,9 +47,19 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
   }
 
   const vertexCount = Math.floor(vertices.length / 3);
-  const triangleCount = Math.floor(indices.length / 3);
   const tagCounts = Object.fromEntries(CANONICAL_TAG_ORDER.map((tag) => [tag, 0]));
+  const identityTriangleCounts = countFaceIdentityTriangles(meshData?.groups, triangleCount);
+  const metadataIdentityTriangleCounts = meshData?.metadata?.identityTriangleCounts;
   const unsupportedTags = new Set();
+
+  if (metadataIdentityTriangleCounts && typeof metadataIdentityTriangleCounts === 'object') {
+    for (const identity of FACE_IDENTITY_ORDER) {
+      const rawCount = Number(metadataIdentityTriangleCounts[identity]);
+      if (Number.isFinite(rawCount) && rawCount >= 0) {
+        identityTriangleCounts[identity] = Math.floor(rawCount);
+      }
+    }
+  }
 
   for (const rawTag of surfaceTags) {
     const tag = Number(rawTag);
@@ -74,6 +86,7 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
     vertexCount,
     triangleCount,
     tagCounts,
+    identityTriangleCounts,
     warnings,
     ok: warnings.length === 0
   };

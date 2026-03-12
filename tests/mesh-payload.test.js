@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { buildCanonicalMeshPayload } from '../src/geometry/pipeline.js';
-import { SURFACE_TAGS } from '../src/geometry/tags.js';
+import { FACE_IDENTITY, SURFACE_TAGS } from '../src/geometry/tags.js';
 import { assertBemMeshIntegrity } from '../src/geometry/meshIntegrity.js';
 
 function quietBuild(params, options = {}) {
@@ -53,6 +53,8 @@ test('canonical mesh payload includes surface tags and source coverage', () => {
   assert.equal(payload.surfaceTags.length, payload.indices.length / 3);
   assert.ok(payload.surfaceTags.includes(SURFACE_TAGS.SOURCE));
   assert.ok(payload.metadata.tagCounts[SURFACE_TAGS.SOURCE] > 0);
+  assert.ok(payload.metadata.identityTriangleCounts[FACE_IDENTITY.INNER_WALL] > 0);
+  assert.ok(payload.metadata.identityTriangleCounts[FACE_IDENTITY.THROAT_DISC] > 0);
   assert.equal(payload.metadata.units, 'mm');
   assert.equal(payload.metadata.unitScaleToMeter, 0.001);
   assert.equal(payload.format, 'msh');
@@ -78,6 +80,10 @@ test('legacy interface params are ignored for enclosure payload tagging', () => 
   );
   assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.SECONDARY], 0);
   assert.equal(payload.metadata.tagCounts[SURFACE_TAGS.INTERFACE], 0);
+  assert.ok(payload.metadata.identityTriangleCounts[FACE_IDENTITY.HORN_WALL] > 0);
+  assert.ok(payload.metadata.identityTriangleCounts[FACE_IDENTITY.ENC_FRONT] > 0);
+  assert.ok(payload.metadata.identityTriangleCounts[FACE_IDENTITY.ENC_SIDE] > 0);
+  assert.ok(payload.metadata.identityTriangleCounts[FACE_IDENTITY.ENC_REAR] > 0);
 });
 
 test('enclosure surfaces remain wall-tagged', () => {

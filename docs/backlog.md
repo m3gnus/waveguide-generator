@@ -38,8 +38,7 @@ Researched UI/runtime findings:
 - Advanced solver controls remain placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
 - Folder workspace support is now visible inside the settings modal even when `window.showDirectoryPicker` is unavailable, so unsupported browsers show an explicit fallback explanation instead of no discoverable workspace entry point.
 - Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder root when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`. If either direct-write path fails, the app clears the selected folder and falls back to the browser picker/download flow.
-- The simulation diagnostics panel currently shows numeric canonical surface-tag counts (`1/2/3/4`) from `surfaceTags`. It does not show geometry-identity counts such as `throat_disc`, `horn_wall`, `enc_side`, or `rear_cap`.
-- The current diagnostics count triangles per tag, not vertices, even though users may describe the numbers as “vertices.”
+- The simulation diagnostics panel now reports geometry face identities such as `throat_disc`, `inner_wall`/`horn_wall`, `outer_wall`, `rear_cap`, and enclosure faces as triangle counts before submit. Canonical numeric tags (`1/2/3/4`) remain available only as a secondary debug summary.
 - The simulation job list renders a `Backend` badge on every row when the feed source is backend-only, which is redundant with the header/source labeling.
 
 Remaining work:
@@ -199,10 +198,10 @@ Implementation notes:
 
 ### P2. Geometry Diagnostics Instead of Numeric BEM Tag Diagnostics
 
-- [ ] Replace or augment the current numeric tag table with geometry-identity diagnostics such as `throat_disc`, `horn_wall`/`inner_wall`, `outer_wall`, `rear_cap`, `enc_front`, `enc_side`, and `enc_rear`.
-  - Decide whether the UI should report triangle counts, true vertex counts, or both. The current implementation counts triangles per numeric tag.
-  - Preserve numeric canonical tags as a secondary debug view if solver-contract troubleshooting still needs them.
-  - Ensure enclosure and freestanding-wall cases produce understandable labels and stable zero/non-zero diagnostics.
+- [x] Replace or augment the current numeric tag table with geometry-identity diagnostics such as `throat_disc`, `horn_wall`/`inner_wall`, `outer_wall`, `rear_cap`, `enc_front`, `enc_side`, and `enc_rear`.
+  - [x] Decide that the UI reports triangle counts, not vertex counts, because the geometry groups are triangle-index ranges and the canonical solver contract is triangle-tagged.
+  - [x] Preserve numeric canonical tags as a secondary debug view for solver-contract troubleshooting.
+  - [x] Ensure enclosure and freestanding-wall cases produce understandable labels and stable zero/non-zero diagnostics.
 
 Implementation notes:
 - `src/ui/simulation/jobActions.js`
