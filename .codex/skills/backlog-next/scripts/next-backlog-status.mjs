@@ -74,13 +74,6 @@ function extractActiveBacklogSections(markdown) {
 }
 
 const backlogSections = extractActiveBacklogSections(backlog);
-if (backlogSections.length === 0) {
-  fail('Could not find unchecked backlog items in docs/backlog.md');
-}
-
-const currentPriority = backlogSections[0].title;
-const currentPriorityTitle = backlogSections[0].title;
-const openItems = backlogSections[0].items;
 const baselineNotes = extractBulletList(extractSectionBody(backlog, 'Current Baseline'));
 
 function runGit(command) {
@@ -111,16 +104,23 @@ function inferReasoning(title, tasks, notes) {
   return 'low';
 }
 
-const defaultReasoning = inferReasoning(currentPriorityTitle, openItems, baselineNotes);
-const prompt = [
-  `Continue the current backlog in docs/backlog.md by executing one unfinished slice after another.`,
-  `Ground on the active backlog priority and the recent commits below, and rerun this status check after each committed slice.`,
-  `Use a fresh Codex 5.3 subagent for each slice and choose reasoning effort from slice complexity (${defaultReasoning} by default, adjust per slice).`,
-  `Pick the smallest coherent unfinished slice, run targeted tests first, update affected docs including docs/backlog.md when priorities change, commit the completed slice, then continue until the backlog is empty or blocked.`
-].join(' ');
+const backlogEmpty = backlogSections.length === 0;
+const currentPriority = backlogEmpty ? null : backlogSections[0].title;
+const currentPriorityTitle = backlogEmpty ? null : backlogSections[0].title;
+const openItems = backlogEmpty ? [] : backlogSections[0].items;
+const defaultReasoning = backlogEmpty ? 'low' : inferReasoning(currentPriorityTitle, openItems, baselineNotes);
+const prompt = backlogEmpty
+  ? 'The active backlog in docs/backlog.md is empty. Reopen it only when a new requirement, blocker, or tracked follow-up needs implementation.'
+  : [
+      `Continue the current backlog in docs/backlog.md by executing one unfinished slice after another.`,
+      `Ground on the active backlog priority and the recent commits below, and rerun this status check after each committed slice.`,
+      `Use a fresh Codex 5.3 subagent for each slice and choose reasoning effort from slice complexity (${defaultReasoning} by default, adjust per slice).`,
+      `Pick the smallest coherent unfinished slice, run targeted tests first, update affected docs including docs/backlog.md when priorities change, commit the completed slice, then continue until the backlog is empty or blocked.`
+    ].join(' ');
 
 const payload = {
   backlogPath: 'docs/backlog.md',
+  backlogEmpty,
   currentPriority,
   currentPriorityTitle,
   recentCommits,
@@ -132,6 +132,26 @@ const payload = {
 
 if (asJson) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (backlogEmpty) {
+  console.log(`# Backlog Status`);
+  console.log(``);
+  console.log(`Current priority: none`);
+  console.log(`Default reasoning: ${defaultReasoning}`);
+  console.log(``);
+  console.log(`Recent commits:`);
+  for (const commit of recentCommits) console.log(`- ${commit}`);
+  console.log(``);
+  console.log(`Open items:`);
+  console.log(`- none`);
+  console.log(``);
+  console.log(`Baseline notes:`);
+  for (const note of baselineNotes) console.log(`- ${note}`);
+  console.log(``);
+  console.log(`Suggested fresh-session prompt:`);
+  console.log(prompt);
   process.exit(0);
 }
 

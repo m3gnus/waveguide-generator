@@ -3,10 +3,12 @@
 Last updated: March 12, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
+Detailed completion history from the March 11-12, 2026 cleanup phase now lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
+
 Superseded planning inputs were folded in from:
 - `docs/archive/FUTURE_ADDITIONS_2026-03-11.md`
 - `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`
-- selected deferred notes in archived readiness documents
+- selected decisions preserved from earlier local planning notes before those files were removed from the repository
 
 ## Working Rules
 
@@ -25,16 +27,15 @@ status as of date:
 - The architecture cleanup plan is complete.
 - The settings modal exists, viewer settings persist, and the folder workspace manifest/index model exists.
 - Active runtime docs are `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `tests/TESTING.md`, `server/README.md`, and `AGENTS.md`.
-- Remaining work is now a mix of user-reported bugs, unfinished simulation-management product work carried over from earlier planning, and a smaller set of hardening/research follow-ups.
-- The active execution backlog is complete; the remaining P4 notes are deferred watchpoints, not scheduled implementation work.
+- The active execution backlog is empty. Re-open this file only when a new product/runtime requirement lands or a deferred watchpoint becomes an active bottleneck.
 
 Remaining work:
-- Re-open backlog work only when new product/runtime requirements land or a deferred watchpoint becomes an active bottleneck.
 - Keep diagnostics, regression coverage, and documentation current as new changes land.
+- Convert new requirements into the smallest coherent backlog slices instead of rebuilding a long completed log here.
 
 ## Recommended Execution Order
 
-Work the backlog from upstream runtime truth to downstream UX:
+When new work lands, continue to work the backlog from upstream runtime truth to downstream UX:
 
 1. Runtime job lifecycle and solve-request contract correctness.
 2. Canonical solve diagnostics and regression lanes that lock those contracts in.
@@ -44,219 +45,20 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ## Active Backlog
 
-### P0 Upstream Runtime And Contract Seams
+There are no scheduled implementation items right now.
 
-- [x] Make the Stop action cancel backend work cooperatively instead of only updating UI state.
-  Source: user report; `server/api/routes_simulation.py`; `server/services/simulation_runner.py`; `src/ui/simulation/controller.js`.
-  Relevant: Yes. The current route marks running jobs as cancelled, but the worker thread continues through meshing/solve and only notices cancellation after the solve returns.
-  Will it improve the program: Yes. It prevents wasted compute, misleading UI, and inconsistent job state.
-  Research findings: `stop_simulation()` marks running jobs `cancelled` immediately, `run_simulation()` only checks cancellation after `solver.solve(...)` returns, and `stopSimulationControllerJob()` / `stopSimulation()` also flip the frontend feed to `cancelled` immediately. This is the highest-leverage runtime seam because several downstream UX states currently trust a cancellation that did not happen yet.
-  Completed: March 11, 2026. Running-job stops now remain `running` with stage `cancelling` until the worker acknowledges the stop request, queued jobs still cancel immediately, the runner checks `cancellation_requested` before expensive stages and threads a cooperative cancellation callback through OCC preparation and both solver frequency loops, and the frontend now renders a truthful “stopping” state instead of faking local `cancelled` status. Backend/API, solver-hardening, and frontend controller/module regressions now cover queued cancellation, running cancellation requests, worker acknowledgement, and UI stop semantics.
+Re-open the backlog when:
+- a new product or runtime requirement lands
+- a deferred watchpoint becomes an active delivery bottleneck
+- a regression or documentation drift needs tracked follow-through across multiple slices
 
-- [x] Wire Simulation Basic settings all the way into `/api/solve` payloads and runtime availability messaging.
-  Source: earlier simulation-management planning notes; `src/ui/settings/simBasicSettings.js`; `src/ui/simulation/jobActions.js`.
-  Relevant: Yes. The settings UI exists, but `runSimulation()` still hardcodes `frequencySpacing: 'log'` and `deviceMode: 'auto'` instead of consuming the saved Simulation Basic settings consistently.
-  Will it improve the program: Yes. It makes settings trustworthy and closes the gap between visible controls and actual solve behavior.
-  Research findings: `src/ui/settings/simBasicSettings.js` already persists `deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, and `verbose`, and the modal already polls `/health` for device availability. The runtime submit path still only forwards hardcoded `frequencySpacing` / `deviceMode` from `src/ui/simulation/jobActions.js`, while `src/solver/index.js` only serializes `mesh_validation_mode`, `frequency_spacing`, and `device_mode`.
-  Completed: March 11, 2026. `runSimulation()` now reads all persisted Simulation Basic settings, the `/api/solve` serializer forwards only valid runtime overrides while leaving backend defaults authoritative for invalid/unset values, the inline device-mode status derives its message from `/health` mode availability, and the request-contract/UI tests now cover `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose`.
+## Deferred Watchpoints
 
-- [x] Add an explicit no-Gmsh regression lane for `/api/solve`.
-  Source: archived future additions doc.
-  Relevant: Yes. Current tests cover runtime gating and tag contracts, but not a dedicated “Gmsh unavailable while canonical `/api/solve` remains valid” lane.
-  Will it improve the program: Yes. It protects a useful runtime mode from future regressions and makes the solve contract less fragile while OCC-specific work continues.
-  Research findings: `server/tests/test_dependency_runtime.py` and `server/tests/test_api_validation.py` already assert OCC runtime failure paths, and `server/tests/test_mesh_validation.py` covers `use_gmsh=True` behavior. There is still no test that forces `occBuilderReady=False` while keeping solver readiness intact and proves canonical payload solves are still accepted.
-  Completed: March 11, 2026. `server/tests/test_dependency_runtime.py` now locks the `solverReady=true` / `occBuilderReady=false` configuration, proves canonical `/api/solve` submission still enqueues successfully, and asserts that the OCC/Gmsh dependency branch is not consulted for canonical payloads.
+- Symmetry-policy controls remain read-only unless new benchmark data or user requirements justify explicit override controls.
+- The Gmsh export stack remains part of the active runtime until solve-mesh and export-artifact parity exists without it.
+- Internal decomposition of `server/solver/solve_optimized.py` and `server/solver/waveguide_builder.py` stays deferred unless new feature work makes those files a delivery bottleneck.
+- Internal decomposition of `server/services/job_runtime.py` stays deferred unless queueing, persistence, or multi-worker lifecycle requirements expand materially.
 
-- [x] Introduce a public job-runtime service surface and stop letting `server/api/routes_simulation.py` mutate job state internals directly.
-  Source: architecture audit on March 11, 2026; `server/api/routes_simulation.py`; `server/services/job_runtime.py`.
-  Relevant: Yes. The route layer currently imports private helpers plus mutable runtime state from `job_runtime` and writes to the DB/cache/queue directly instead of going through a service boundary.
-  Will it improve the program: Yes. It restores the intended API -> services -> solver layering and makes job lifecycle behavior easier to test and evolve safely.
-  Research findings: `job_runtime.py` declares ownership of the in-memory cache, queue, and scheduler, but `routes_simulation.py` still imports `_build_config_summary`, `_set_job_fields`, `_drain_scheduler_queue`, `jobs`, `job_queue`, `running_jobs`, `jobs_lock`, and `_jrt.db`. The import-boundary tests pass because they only check package-level edges, not direct access to private service internals.
-  Best approach: Add explicit public service functions for create/stop/list/delete/result retrieval, migrate the route handlers to those functions, and tighten the backend boundary tests to reject direct API access to underscore-prefixed service internals.
-  Completed: March 11, 2026. `server/services/job_runtime.py` now owns the public create/stop/status/result/artifact/list/delete operations, `server/api/routes_simulation.py` maps HTTP semantics onto that service surface instead of mutating DB/cache/queue internals directly, and backend regressions now cover the public submit path plus an import-boundary rule that blocks `routes_simulation.py` from importing private `job_runtime` names again.
+## Historical Notes
 
-- [x] Add pre-submit canonical tag diagnostics to the simulation UI.
-  Source: archived future additions doc.
-  Relevant: Yes. Contract validation exists, but users still do not get a concise pre-submit view of tag counts or missing-source problems.
-  Will it improve the program: Yes. It shortens debug loops before a solve request is sent.
-  Research findings: frontend preflight already rejects malformed canonical payloads in `src/solver/index.js`, backend validation rejects tag/triangle mismatches and missing tag `2`, and `prepareCanonicalSimulationMesh()` already has the data needed to count triangles per tag. The gap is purely the absence of a small read-only UI summary before submit.
-  Completed: March 11, 2026. The simulation panel now renders a read-only canonical diagnostics card before submit with vertex/triangle totals, counts for tags `1/2/3/4`, and warnings for missing source coverage or tag/triangle mismatches, driven by a lightweight frontend summary helper over the canonical payload.
-
-### P1 Simulation UX That Depends On Runtime Truth
-
-- [x] Show simulation mesh vertex/triangle counts in the stats widget once the `.msh`/simulation mesh is built.
-  Source: user request; `src/app/scene.js`; `src/modules/simulation/useCases.js`; `server/services/simulation_runner.py`.
-  Relevant: Yes. The current stats widget always shows viewport tessellation counts from `renderModel()`, which diverges from the actual simulation mesh.
-  Will it improve the program: Yes. It gives users the complexity they actually submitted to BEM instead of a potentially misleading viewport proxy.
-  Research findings: `src/app/scene.js` always writes viewport counts into `app.stats`, while `server/services/simulation_runner.py` stores `mesh_artifact` and OCC stats but does not publish canonical vertex/triangle counts into job state. There is no shared app/panel state that can swap the stats widget from viewport counts to solve-mesh counts after OCC mesh generation succeeds.
-  Completed: March 11, 2026. The backend job payload now publishes `mesh_stats` as soon as canonical/occ-adaptive solve mesh arrays exist, the simulation job cache persists those counts through polling/local job state, and the stats widget now flips from `Viewport` counts to `Simulation` counts once a live job reports solve-mesh geometry. Regression coverage now locks the backend `mesh_stats` publication, job-cache normalization, and polling-to-widget handoff.
-
-- [x] Clarify solve-mesh versus export-mesh controls in the UI and docs.
-  Source: archived future additions doc.
-  Relevant: Yes. Current controls mix viewport/export/solve semantics in ways that are not obvious.
-  Will it improve the program: Yes. It should reduce incorrect expectations about what affects the backend OCC mesh.
-  Research findings: the runtime docs already state that the viewport mesh is not the active simulation mesh, and `throatSliceDensity` already documents that it is viewport-only. The UI still groups mixed controls under `Mesh Density`, including viewport-only tessellation, OCC enclosure resolution fields, and simulation-only mesh download behavior, so the contract is still not obvious at the point of use.
-  Completed: March 11, 2026. The simulation panel now labels the mixed section as `Mesh Controls`, adds an inline note separating preview tessellation from backend solve/export meshing, renames the relevant schema labels/tooltips to `Viewport ...` versus `Solve ...`, and relabels the settings checkbox to `Auto-download solve mesh artifact (.msh)`. `README.md` and `docs/PROJECT_DOCUMENTATION.md` now include a short control matrix so viewport tessellation, solve/export mesh density, and download behavior are documented in one place.
-
-- [x] Move the formula affordance from the section header to the relevant input fields and audit which fields should support formulas.
-  Source: user request; `src/ui/paramPanel.js`; `src/config/schema.js`.
-  Relevant: Yes. Formula discovery is currently global and detached from the fields that actually benefit from it.
-  Will it improve the program: Yes. It should make formula support easier to discover and reduce clutter in the section header.
-  Research findings: `src/ui/paramPanel.js` currently renders one section-header `ƒ` button and treats every `range`, `number`, and `expression` field as a formula-capable text input. `src/config/schema.js` already marks the true expression-oriented fields explicitly, but that set currently includes geometry-defining fields and lower-value fields such as enclosure resolutions and `sourceContours`, so an allowlist pass is still needed.
-  Best approach: Treat `PARAM_SCHEMA` fields with `type: 'expression'` as the starting set, then narrow to geometry-defining fields first: OSSE/R-OSSE core profile fields, morphing/profile-transform fields, throat-extension/slot/rotation fields, and guiding-curve parameters. Keep mesh-density, source-path, and admin-style fields on an allowlist basis only if real formula use cases exist. Add a small per-row `ƒ` affordance that opens the existing formula reference panel in context.
-  Completed: March 11, 2026. The schema now carries an explicit formula-field allowlist for the audited geometry-defining inputs, `src/ui/paramPanel.js` renders per-row `ƒ` buttons beside only those fields and opens the existing formula reference panel with field context, and non-audited inputs such as enclosure resolution lists, source contours, and mesh-density controls now render with normal text/number inputs instead of blanket formula UI treatment.
-
-- [x] Gate Simulation Advanced / expert controls by backend capability and finish the remaining hardening/docs pass around them.
-  Source: earlier simulation-management planning notes; `src/ui/settings/modal.js`; runtime capability checks.
-  Relevant: Yes, but lower priority than the bugs and Phase 3 work above.
-  Will it improve the program: Yes. It prevents dead or misleading controls while keeping the settings layout future-proof.
-  Research findings: `src/ui/settings/modal.js` already contains a placeholder Simulation Advanced section, and the app already has two separate `/health` consumers: Sim Basic device-mode polling and the connection banner. There is not yet one shared capability model or any advanced-control availability flow, so this work should follow the Simulation Basic wiring rather than race it.
-  Best approach: Check capability at startup and when opening Settings, keep unavailable controls in normal flow but disabled/explained instead of hidden if possible, and pair rollout with regression/docs updates rather than adding placeholder controls alone.
-  Completed: March 11, 2026. `/health` now advertises a small `capabilities` payload for simulation settings, the frontend caches the latest runtime health snapshot from startup polling and reuses it when Settings opens, Sim Basic device availability and the connection banner now derive from the same capability helper, and the Simulation Advanced pane renders explicit read-only Phase 2 controls with backend-driven explanations instead of a dead placeholder. Regression coverage now locks both the backend health payload and the frontend capability-summary behavior.
-
-### P1.5 Viewport Geometry UX
-
-- [x] Align the viewport throat-disc appearance between OSSE and R-OSSE so R-OSSE no longer looks visually smoothed over at the source cap.
-  Source: user report on March 12, 2026; `src/geometry/engine/buildWaveguideMesh.js`; `src/geometry/engine/mesh/source.js`; `src/app/scene.js`; `src/geometry/engine/profiles/rosse.js`; `src/geometry/engine/profiles/osse.js`.
-  Relevant: Yes. The inconsistency is visible in the main viewport, so it affects day-to-day geometry inspection even though the canonical source tag contract remains correct.
-  Will it improve the program: Yes. It will make OSSE and R-OSSE throat presentation feel consistent and avoid implying a geometry difference where the runtime contract expects the same source-cap identity.
-  Research findings: `buildWaveguideMesh()` builds the throat disc the same way for both model types by calling `generateThroatSource(vertices, throatRingCount, fullCircle)` on the first ring and then fanning triangles from an averaged center point; there is no OSSE-versus-R-OSSE branch in that source-cap path. The viewport renderer in `src/app/scene.js` then uses `geometry.computeVertexNormals()`, so the visible seam is driven by shared rim vertices plus the local horn-wall slope. `R-OSSE` also exposes `k - Rounding` explicitly as a throat smoothness control in `src/config/schema.js` and `src/geometry/engine/profiles/rosse.js`, which likely makes the shared normals blend the disc into the wall more softly than OSSE.
-  Best approach: Treat this as a viewport shading/tessellation follow-up rather than a source-tag contract change. Investigate whether the throat disc should use duplicated rim vertices, flat/source-cap normals, or a small render-only disc material split so the cap keeps a crisp OSSE-like presentation without changing canonical mesh tags or solver payloads.
-  Completed: March 12, 2026. The viewport render path now duplicates the `throat_disc` triangle group's vertices before Three.js computes normals, so the source cap shades independently from the horn wall while the canonical geometry/simulation payload remains unchanged. `tests/viewport-throat-disc.test.js` locks the seam by proving the detached viewport mesh no longer shares source-cap vertices with the horn wall.
-
-### P2 Folder-Backed Completion And Export Flow
-
-- [x] Build selected-format bundle export and idempotent auto-export on simulation completion.
-  Source: `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`; current export/task code.
-  Relevant: Yes. The data model for task manifests/index exists, but export orchestration across formats is still fragmented.
-  Will it improve the program: Yes. It turns completed simulations into reusable artifacts without manual repetition and matches the folder-workspace design.
-  Research findings: current export use cases in `src/modules/export/useCases.js` are per-format only, and completed-job export in `src/ui/simulation/jobActions.js` only records a synthetic token into `exportedFiles` after a manual export. The manifest/index model is ready for bundle bookkeeping, but there is no bundle coordinator, selected-format settings model, or once-per-completion idempotency flow.
-  Best approach: Add one bundle coordinator over existing exporters, drive it from settings-selected formats, record per-task exported files, and store an idempotency marker so auto-export only runs once per completion event while preserving partial-failure reporting.
-  Completed: March 11, 2026. Simulation Basic settings now persist `autoExportOnComplete` plus stable string-based export format selections, completed-task `Export` runs the full configured bundle instead of a one-off picker, bundle writes route into the task folder when a workspace is active, task manifests/index entries record real exported file tokens plus `autoExportCompletedAt`, and polling auto-exports a completed job exactly once per completion transition while still surfacing partial-format failures.
-
-- [x] Finish completed-task source modes so folder-backed tasks and backend jobs have clear, non-mixed browsing behavior.
-  Source: earlier simulation-management planning notes; current folder workspace and job-feed code.
-  Relevant: Yes. Folder workspace storage exists, but the user-facing source model is still incomplete.
-  Will it improve the program: Yes. It makes task history understandable at scale and aligns export folders with browsing behavior.
-  Research findings: `restoreSimulationControllerJobs()` currently merges local storage, workspace index items, and remote backend jobs into one combined feed, and `renderJobList()` shows no source label or badge. That mixed-source behavior is exactly the ambiguity the original phase was trying to eliminate, so this remains the upstream seam for task-history UX.
-  Best approach: Introduce an explicit source abstraction, show folder tasks when folder context is active, fall back to backend jobs otherwise, and expose the current source with a header label plus compact badge rather than mixing both sources in one list.
-  Completed: March 11, 2026. The simulation feed now has explicit source modes: selecting a folder workspace loads folder task manifests/index only and skips backend job listing, backend mode still restores/polls remote jobs plus the local cache when no folder is active, the Refresh action reloads the active source instead of assuming backend polling, and the UI now labels the active source in the header plus a compact per-row badge instead of mixing sources silently.
-
-- [x] Add task ratings plus stable sorting and filtering controls.
-  Source: earlier simulation-management planning notes; existing manifest/index `rating` fields.
-  Relevant: Yes. The schema already carries `rating`, but there is no complete user flow that makes it useful.
-  Will it improve the program: Yes. It helps users manage larger simulation histories instead of treating every result as flat output.
-  Research findings: the rating field already persists through `task.manifest.json`, task index rebuild, local job tracking, and merge logic, but there is no rating editor in `renderJobList()`. Sorting is currently hardcoded to newest-first in `src/ui/simulation/jobTracker.js`, and there are no filter controls or persisted task-list preferences.
-  Best approach: Implement star editing against manifest/index persistence, default to newest-first, persist last-used sort/filter preferences, and use fast preset filters rather than freeform controls.
-  Completed: March 11, 2026. The simulation jobs header now includes persisted sort and minimum-rating controls, job rows expose inline 1-5 star rating buttons, rating changes sync through controller persistence into local cache plus folder task manifests/index, and task-list rendering uses stable preference-driven sorting (`Newest`, `Highest Rated`, `Label A-Z`) with rating filtering instead of hardcoded newest-first ordering.
-
-### P3 Docs, Hardening, And Cleanup
-
-- [x] Tighten frontend module boundaries and expand the boundary-test lane so `src/modules/*` remains an app-facing API layer instead of a second UI/runtime layer.
-  Source: architecture review on March 12, 2026; `src/modules/export/useCases.js`; `src/modules/simulation/useCases.js`; `src/modules/ui/useCases.js`; `tests/architecture-boundaries.test.js`.
-  Relevant: Yes. The intended frontend layering is visible in `docs/architecture.md`, and the existing JS boundary tests already protect some package edges, but the module layer still imports `GlobalState`, `src/ui/*`, folder-workspace internals, file-save helpers, and browser-only dev hooks directly.
-  Will it improve the program: Yes. It will make the frontend dependency graph more truthful, reduce accidental cross-layer coupling, and make future refactors less risky.
-  Research findings: `tests/architecture-boundaries.test.js` currently blocks `src/app` and `src/ui` from importing core internals, but it does not stop `src/modules/*` from importing UI/browser concerns. `src/modules/export/useCases.js` previously mixed export orchestration with `GlobalState`, `saveFile()`, `showError()`, and a `window.testBackendConnection` diagnostic surface; the simulation layer now isolates its pure domain helpers, `GlobalState` bridge, and job-shape helpers into separate files with `src/modules/simulation/useCases.js` reduced to a compatibility barrel; the former `src/modules/ui/useCases.js` compatibility wrapper has now been retired after its settings/viewer/param-panel adapters moved onto the existing `UiModule` app coordinator.
-  Best approach: First strengthen `tests/architecture-boundaries.test.js` so the desired layering is executable. Then treat `src/modules/*` as application-service boundaries that accept dependencies or plain inputs instead of reaching into `window`, `document`, `GlobalState`, or `src/ui/*` helpers directly. Keep each slice narrow enough to preserve behavior while moving one dependency seam at a time.
-  Completed: March 12, 2026. This work landed in four follow-up slices after the original export-domain cleanup. The first split the simulation module into explicit domain/state/job/workspace services and introduced the first boundary guard. The second moved the geometry viewport bridge onto an explicit app-state snapshot in `App`/`scene.js`, removing `GlobalState` from `src/modules/geometry/useCases.js`. The third moved `UiModule` file-ops and feedback delegation onto an explicit `src/app/uiAdapters.js` app-edge adapter so `src/modules/ui/index.js` no longer imports `src/ui/fileOps.js` or `src/ui/feedback.js`. The fourth moved folder-workspace index/manifest/task-bundle helpers out of `src/modules/simulation/` and into the UI simulation edge at `src/ui/simulation/workspaceTasks.js`, eliminating the final grandfathered module-to-workspace dependency while keeping folder-workspace internals behind a single adapter. `tests/architecture-boundaries.test.js` now passes without any `src/modules/* -> src/ui/workspace/*` exceptions.
-  Implementation plan:
-  1. Add new frontend boundary rules that fail when `src/modules/*` imports browser-only helpers (`src/ui/fileOps.js`, `src/ui/feedback.js`, folder-workspace internals) or ambient state directly without an approved adapter.
-  2. Carve out explicit adapters for file save/toast/workspace access and move those adapters to the app or UI edge, leaving module functions to consume plain callbacks/data.
-  3. Re-run the frontend architecture-boundary lane plus targeted simulation/export tests after each seam move so the rules stay enforceable.
-
-- [x] Split `src/modules/simulation/useCases.js` into smaller frontend services with single responsibilities.
-  Source: architecture review on March 12, 2026; `src/modules/simulation/useCases.js`; `src/app/mesh.js`; `src/ui/simulation/jobActions.js`.
-  Relevant: Yes. The simulation module is currently the busiest frontend seam and has become the place where domain preparation, state mutation, workspace persistence, and task-bundle file writing all accumulate.
-  Will it improve the program: Yes. It will make simulation behavior easier to reason about, test, and change without breaking unrelated task-history or folder-workspace flows.
-  Research findings: `src/modules/simulation/useCases.js` is 410 lines and currently owns simulation-state reads/writes, snapshot loading, canonical mesh prep, OCC adaptive request prep, workspace index rebuild/write flows, manifest persistence, task-bundle file writes, and validation helpers. UI code such as `src/ui/simulation/jobActions.js` depends on that mixed surface even though only part of it is true simulation-domain behavior.
-  Best approach: Keep one small simulation-domain surface for canonical mesh and OCC request prep, then move workspace/index/manifest/file-write responsibilities into separate adapters or services with explicit names. The app/UI layer should compose those services rather than importing one catch-all simulation helper module.
-  Completed: March 12, 2026. This work landed in three slices. The first moved folder-workspace index/manifest sync plus task-bundle file writes into `src/modules/simulation/workspaceTasks.js`. The second extracted canonical mesh prep, OCC request prep, solver-client creation, mesh diagnostics, and config validation into `src/modules/simulation/domain.js`, and rewired the app/UI callers to use that pure state-input surface directly. The third isolated the `GlobalState` bridge in `src/modules/simulation/state.js`, moved job-shape helpers into `src/modules/simulation/jobs.js`, and reduced `src/modules/simulation/useCases.js` to a compatibility barrel so each surviving service has a single responsibility.
-  Implementation plan:
-  1. Extract a pure simulation-domain service for canonical mesh summary, request prep, and config validation.
-  2. Move folder-workspace index/manifest syncing into a dedicated workspace-task service.
-  3. Move task-bundle file writes into an export/workspace adapter that the UI controller calls explicitly.
-
-- [x] Remove ambient frontend globals such as `window.app` and `window.__waveguideApp` in favor of explicit composition.
-  Source: architecture review on March 12, 2026; `src/modules/ui/index.js`; `src/ui/settings/modal.js`; `src/ui/simulation/exports.js`.
-  Relevant: Yes. The current runtime mostly composes through modules and coordinators, but a few important UI flows still rely on global app handles.
-  Will it improve the program: Yes. It will reduce hidden dependencies, make lazy-loaded UI flows easier to test, and keep module boundaries honest.
-  Research findings: `src/modules/ui/index.js` still assigns `window.__waveguideApp` during simulation-panel bootstrapping, `src/ui/simulation/exports.js` falls back to that global when resolving the app instance, and `src/ui/settings/modal.js` applies viewer settings through `window.app?.controls` and `window.app?.renderer?.domElement`. These shortcuts bypass the intended app/module composition path.
-  Best approach: Thread the required app/controller/viewer dependencies through the existing coordinators and panel constructors instead of storing them on `window`. Keep any dev-only diagnostics behind explicit debug registration helpers so runtime code never depends on ambient globals.
-  Completed: March 12, 2026. This item landed in two slices. The first constructed `SimulationPanel` with its `app` dependency and removed the runtime `window.__waveguideApp` assignment/fallback from the UI module and simulation export helpers. The second threaded explicit viewer-control and renderer-element adapters into `openSettingsModal()`, removing the remaining `window.app` reads from the settings modal while keeping the dev-only backend diagnostic hook behind an explicit app-edge registration helper.
-  Implementation plan:
-  1. Add explicit dependency injection for viewer controls, renderer DOM access, and simulation export coordination.
-  2. Update settings/export entrypoints to receive those dependencies from `App` or the UI coordinator rather than reading `window`.
-  3. Keep the optional debug console hooks behind a separate dev-only registration helper that does not participate in normal runtime flow.
-
-- [x] Create a smaller durable architecture doc and split stable per-module contracts out of large narrative docs.
-  Source: user rules for this backlog; pending doc-maintenance work around trimming `docs/PROJECT_DOCUMENTATION.md`.
-  Relevant: Yes. The project now has one large runtime document but no focused `docs/architecture.md` or `docs/modules/` contract set.
-  Will it improve the program: Yes. It reduces doc drift and makes future maintenance cheaper.
-  Research findings: the working rules in this very backlog already refer to `docs/architecture.md` and `docs/modules/`, but those paths do not exist yet. The architecture cleanup work is complete enough that this is now straightforward documentation debt rather than a blocker for product work.
-  Best approach: Extract durable architecture decisions into `docs/architecture.md`, move contract details into `docs/modules/`, and keep `docs/PROJECT_DOCUMENTATION.md` as a concise runtime map until the split is complete.
-  Completed: March 11, 2026. The repo now has a dedicated `docs/architecture.md` durable architecture guide plus `docs/modules/` contract docs for geometry, simulation, export, and backend boundaries, and the README/runtime documentation now point readers to those extracted references instead of relying on `docs/PROJECT_DOCUMENTATION.md` alone.
-
-- [x] Add a maintained-doc parity audit so runtime/device-mode changes cannot leave `docs/PROJECT_DOCUMENTATION.md` and `server/README.md` describing removed fallback behavior.
-  Source: architecture audit on March 11, 2026; `docs/PROJECT_DOCUMENTATION.md`; `server/README.md`; `server/contracts/__init__.py`; `server/solver/device_interface.py`.
-  Relevant: Yes. The maintained docs drifted into describing `numba` and legacy fallback paths after the runtime had already narrowed to OpenCL-only device modes and explicit hard failures.
-  Will it improve the program: Yes. It protects the repo’s stated “docs plus tests plus code” source-of-truth model and reduces future audit noise.
-  Research findings: the March 11 audit found stale claims about `numba` mode/fallback and legacy `bempp_api` support in maintained docs even though the runtime contract and validation layer no longer exposed those paths. The repo needs a repeatable way to catch that class of drift.
-  Best approach: Keep the maintained architecture docs short, derive contract tables from code where practical, and add a small regression/doc-review checklist whenever runtime enums, dependency matrices, or fallback rules change.
-  Completed: March 11, 2026. README’s backend dependency matrix now states the live `bempp-cl`-only solve contract, and `tests/docs-parity.test.js` keeps the maintained docs aligned on supported device modes plus the explicit no-legacy-fallback wording across `README.md`, `docs/PROJECT_DOCUMENTATION.md`, and `server/README.md`.
-
-- [x] Run a structured dead-code audit on `src/` and remove utility paths with no runtime entry.
-  Source: archived future additions doc.
-  Relevant: Yes, but only after the higher-value UX/product work above.
-  Will it improve the program: Yes. It reduces maintenance noise and future confusion.
-  Research findings: recent Phase 8 cleanup already removed several deprecated frontend/export aliases, so the obvious low-hanging cleanup has mostly been harvested. What remains should be handled as a deliberate import/callsite audit with small removals, not as opportunistic drive-by deletion during product work.
-  Best approach: Start with an import/callsite inventory, remove only code with no active UI/runtime/test path, and keep each cleanup slice small enough for targeted verification.
-  Completed: March 12, 2026. A reachability audit from `src/main.js` confirmed the entire `src/validation/` subsystem was orphaned from runtime, docs, and tests, so the first cleanup slice removed that directory. The same audit also identified `src/workflow/index.js` as a standalone unused workflow manager with no surviving imports, and a second cleanup slice removed it. A third slice removed the superseded helpers `src/app/params.js` and `src/config/validator.js`; their responsibilities now live behind `DesignModule` and `src/config/index.js`. A fourth slice removed the orphan top-level entrypoints `src/presets/index.js` and `src/results/index.js`, which had no runtime or test consumers. A fifth slice removed the legacy solver wrappers `src/solver/client.js` and `src/solver/status.js`, which had no remaining callsites after the backend-only solver surface converged on `src/solver/index.js`. A sixth slice removed `src/viewer/annotations.js`, an unreferenced SVG cross-section helper with no surviving runtime, test, or doc consumers. A seventh slice removed `src/geometry/waveguide.js`, an unused geometry re-export layer whose only surviving consumer was `src/geometry/index.js`; the public geometry surface now exports straight from `src/geometry/engine/index.js`. An eighth slice removed `src/ui/simulation/index.js`, a one-line lazy-load adapter whose only surviving consumer was `src/modules/ui/useCases.js`; the UI module now lazy-loads `src/ui/simulation/SimulationPanel.js` directly. A ninth slice removed `src/export/index.js`, an export barrel whose only surviving consumer was `src/modules/export/index.js`; the export module now imports the concrete CSV/config/STL helpers directly. A tenth slice removed `src/ui/simulation/charts.js`, a superseded inline SVG chart renderer whose only remaining consumer was dead-only regression coverage after result visualization standardized on backend-rendered Matplotlib images. An eleventh slice removed `src/export/csv.js`, an obsolete debug CSV helper module with no surviving runtime, test, script, or documentation callsites after the export stack narrowed to the active profile/config/STL surfaces. The final audit pass leaves `src/geometry/index.js` as the only non-runtime JS entrypoint under `src/`, and it remains intentional because tests and diagnostics still use it as a compatibility facade over the staged geometry/module surfaces.
-
-- [x] Retire the legacy frontend `.msh` export surface once tests/tooling no longer need it.
-  Source: architecture audit on March 11, 2026; `src/export/index.js`; `src/export/msh.js`; `tests/geometry-artifacts.test.js`.
-  Relevant: Yes, but below active runtime correctness work.
-  Will it improve the program: Yes. It removes a public export path that bypasses the backend-only OCC mesh flow described by the active architecture.
-  Research findings: the active runtime uses `/api/mesh/build` for authored `.msh` output, but `src/export/index.js` still publicly re-exports `exportMSH()` and `src/export/msh.js` still contains dead helper code that is only exercised by tests. That leaves legacy API surface area in place after the runtime moved on.
-  Best approach: First move any remaining regression coverage to the active backend/export contract, then delete or explicitly quarantine the legacy helper so app-facing exports cannot accidentally depend on it again.
-  Completed: March 11, 2026. The app-facing `src/export/index.js` surface no longer re-exports `exportMSH()`, the old frontend helper has been removed from `src/export/`, and the one remaining regression that still checks historical physical-name behavior now uses a quarantined test-only helper under `tests/helpers/legacyMsh.js`.
-
-### P4 Research And Optional Engineering Tracks
-
-- [x] Add a symmetry benchmark harness and expose symmetry-policy decisions more clearly.
-  Source: archived future additions doc.
-  Relevant: Probably, but not urgent.
-  Will it improve the program: Potentially. It would make symmetry reduction more explainable and measurable.
-  Research findings: the backend already has automatic symmetry detection/reduction plus a repeatable benchmark script in `server/scripts/benchmark_solver.py`, but there is no fixture-backed harness that compares full versus half versus quarter-domain runs or captures UI-facing policy decisions. This is real research work, not a thin UI tweak.
-  Best approach: Build repeatable full/half/quarter benchmark cases first, then decide whether UI controls such as `auto` versus `force_full` are justified by the data.
-  Completed: March 12, 2026. `server/solver/symmetry_benchmark.py` and `server/scripts/benchmark_symmetry.py` now provide deterministic full/half/quarter/off-center fixtures for repeatable policy benchmarking, `/api/results` exposes `metadata.symmetry_policy` alongside `metadata.symmetry`, and the simulation View Results modal renders that metadata as a read-only symmetry-policy summary. A benchmark decision run (`cd server && python3 scripts/benchmark_symmetry.py --iterations 10 --json`) passed all reference cases, so explicit `auto` / `force_full` controls are not justified today; the decision and revisit triggers are recorded in `research/symmetry-policy-controls-2026-03-12.md`.
-
-- [x] Decide whether the Gmsh export stack should remain a long-term dependency.
-  Source: archived future additions doc.
-  Relevant: Maybe. It depends on whether remaining MSH/STL export needs can be met without OCC/Gmsh.
-  Will it improve the program: Potentially, if dependency burden and setup friction drop without sacrificing export quality.
-  Research findings: the current active runtime still uses `waveguide_builder.py` for `/api/mesh/build` and for adaptive solve meshing, and completed-job mesh download still depends on persisted `.msh` artifacts. That makes Gmsh removal a downstream architectural decision after current export/simulation needs are either reduced or replaced with parity.
-  Best approach: Audit every remaining Gmsh touchpoint, compare against JS/export alternatives, and only plan removal if parity for the remaining export use cases is realistic.
-  Completed: March 12, 2026. The audit in `research/gmsh-dependency-audit-2026-03-12.md` concludes that Gmsh should remain in the active runtime for now. The live backend still depends on the Python Gmsh API for `/api/mesh/build`, OCC-adaptive solve mesh generation, persisted `.msh` job artifacts, and optional `use_gmsh=True` canonical-mesh refinement, while the frontend export stack no longer provides a parity `.msh` alternative. Removal should be treated as a future architecture project only after export-artifact and task-history parity exist without Gmsh.
-
-- [x] Consider optional internal decomposition of `solve_optimized()` and `waveguide_builder.py` if those areas need further feature work.
-  Source: `docs/archive/PRODUCTION_READINESS_REPORT_2026-02-25.md` Gate C deferred notes.
-  Relevant: Low right now.
-  Will it improve the program: Mostly maintenance-oriented, not immediately user-visible.
-  Research findings: `server/solver/solve_optimized.py` is currently 693 lines and `server/solver/waveguide_builder.py` is 2723 lines, so the maintenance concern is real. The existing backlog does not require those refactors yet, and recent work has not shown them to be the current delivery bottleneck.
-  Best approach: Treat it as opportunistic refactor work only when a feature or bug fix needs deeper changes in those files; do not schedule it as standalone cleanup unless those modules become a bottleneck.
-  Completed: March 12, 2026. Reviewed again after the architecture-cleanup phase. The maintenance risk is acknowledged, but there is still no active feature or defect forcing structural work inside these files. This item is now closed as a deferred watchpoint: reopen it only when new solver/meshing feature work has to touch these internals deeply enough that extraction reduces delivery risk.
-
-- [x] Consider decomposing `server/services/job_runtime.py` into smaller scheduler/state/persistence units if job lifecycle work expands further.
-  Source: architecture review on March 12, 2026; `server/services/job_runtime.py`; `server/api/routes_simulation.py`.
-  Relevant: Low for now. The backend layering is mostly good, and the recent public job-runtime service surface fixed the highest-value boundary problem.
-  Will it improve the program: Potentially. It would reduce the maintenance load in the job lifecycle area if more queueing, persistence, or multi-worker features are added.
-  Research findings: `server/api/routes_simulation.py` is now appropriately thin, but `server/services/job_runtime.py` is still a 562-line service that owns in-memory cache state, queue management, scheduler triggering, DB merge logic, and public job operations in one file. That is workable today, but it is the most obvious backend concentration point after the recent route/service cleanup.
-  Best approach: Leave it alone unless new lifecycle requirements land, then split by responsibility: repository/persistence access, runtime state store, and scheduler/worker coordination. Do not do this as standalone cleanup while the current single-worker queue model remains stable.
-  Completed: March 12, 2026. Reviewed after the public service-surface extraction. The current single-worker queue model is stable enough that a scheduler/state/persistence split would be speculative cleanup today. This item is now closed as a deferred watchpoint: reopen it only if queueing, persistence, or multi-worker requirements expand the lifecycle surface enough to justify the extra seams.
-
-## Imported Historical Planning Work
-
-The unfinished planning work folded into this backlog came from:
-- `docs/archive/SIMULATION_MANAGEMENT_PLAN_2026-03-11.md`
-- `docs/archive/FUTURE_ADDITIONS_2026-03-11.md`
-- selected decisions preserved from earlier local planning notes before those files were removed from the repository
+The detailed March 11-12, 2026 execution record, including the completed P0-P4 slices and their rationale, has been archived in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
