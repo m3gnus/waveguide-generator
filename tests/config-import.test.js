@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { handleFileUpload } from '../src/app/configImport.js';
+import {
+  deriveExportFieldsFromFileName,
+  resetParameterChangeTracking,
+  setExportFields
+} from '../src/ui/fileOps.js';
 import { GlobalState } from '../src/state.js';
 
 function installDocumentMock({ outputName = 'horn_design', counter = '1' } = {}) {
@@ -31,6 +36,17 @@ function installFileReaderMock() {
   };
 }
 
+function createUiAdapter() {
+  return {
+    deriveExportFieldsFromFileName,
+    setExportFields,
+    resetParameterChangeTracking,
+    showError(message) {
+      console.error(message);
+    }
+  };
+}
+
 test('handleFileUpload sets output fields from imported filename and clears file input value', () => {
   const originalFileReader = global.FileReader;
   const originalDocument = global.document;
@@ -56,7 +72,7 @@ test('handleFileUpload sets output fields from imported filename and clears file
   };
 
   try {
-    handleFileUpload({ target: fileInputTarget });
+    handleFileUpload({ target: fileInputTarget }, createUiAdapter());
 
     assert.equal(prefixEl.value, '260219superhorn');
     assert.equal(counterEl.value, '35');
@@ -101,7 +117,7 @@ test('handleFileUpload leaves output fields unchanged on parse failure and still
   };
 
   try {
-    handleFileUpload({ target: fileInputTarget });
+    handleFileUpload({ target: fileInputTarget }, createUiAdapter());
 
     assert.equal(prefixEl.value, 'existing_name');
     assert.equal(counterEl.value, '42');

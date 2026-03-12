@@ -1,6 +1,5 @@
 import { GlobalState } from '../state.js';
 import {
-  chooseOutputFolder,
   openAppSettings,
   isFolderSelectionSupported
 } from '../modules/ui/useCases.js';
@@ -46,7 +45,7 @@ export function bindButtonEvents(app) {
   const buttonBindings = [
     { id: 'render-btn', handler: () => app.requestRender(), type: 'click' },
     { id: 'export-config-btn', handler: () => app.exportMWGConfig(), type: 'click' },
-    { id: 'choose-folder-btn', handler: chooseOutputFolder, type: 'click' },
+    { id: 'choose-folder-btn', handler: () => app.uiCoordinator.chooseOutputFolder(), type: 'click' },
     { id: 'zoom-in', handler: () => app.zoom(0.8), type: 'click' },
     { id: 'zoom-out', handler: () => app.zoom(1.2), type: 'click' },
     { id: 'camera-toggle', handler: () => app.toggleCamera(), type: 'click' },

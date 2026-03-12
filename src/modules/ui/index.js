@@ -1,5 +1,11 @@
 import { AppEvents } from '../../events.js';
-import { markParametersChanged } from '../../ui/fileOps.js';
+import {
+  deriveExportFieldsFromFileName,
+  markParametersChanged,
+  resetParameterChangeTracking,
+  selectOutputFolder,
+  setExportFields
+} from '../../ui/fileOps.js';
 import {
   showCommandSuggestion,
   showError,
@@ -149,6 +155,22 @@ function buildAppCoordinator(input) {
 
     showCommandSuggestion(options = {}) {
       return (feedback.showCommandSuggestion || showCommandSuggestion)(options);
+    },
+
+    deriveExportFieldsFromFileName(fileName, options = {}) {
+      return deriveExportFieldsFromFileName(fileName, options);
+    },
+
+    setExportFields(fields = {}, doc) {
+      return setExportFields(fields, doc);
+    },
+
+    resetParameterChangeTracking(options = {}) {
+      return resetParameterChangeTracking(options);
+    },
+
+    chooseOutputFolder() {
+      return selectOutputFolder();
     },
 
     dispose() {

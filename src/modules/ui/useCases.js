@@ -10,12 +10,6 @@ import {
   getCurrentViewerSettings
 } from '../../ui/settings/viewerSettings.js';
 import { ParamPanel } from '../../ui/paramPanel.js';
-import {
-  deriveExportFieldsFromFileName,
-  setExportFields,
-  resetParameterChangeTracking,
-  selectOutputFolder
-} from '../../ui/fileOps.js';
 
 let simulationPanelModulePromise = null;
 
@@ -60,20 +54,4 @@ export function loadSimulationPanelModule() {
     simulationPanelModulePromise = import('../../ui/simulation/SimulationPanel.js');
   }
   return simulationPanelModulePromise;
-}
-
-export function deriveExportFieldsFromImportedFileName(fileName, options = {}) {
-  return deriveExportFieldsFromFileName(fileName, options);
-}
-
-export function setAppExportFields(fields = {}, doc) {
-  return setExportFields(fields, doc);
-}
-
-export function resetAppParameterChangeTracking(options = {}) {
-  return resetParameterChangeTracking(options);
-}
-
-export async function chooseOutputFolder() {
-  return selectOutputFolder();
 }
