@@ -1,11 +1,4 @@
 import { AppEvents } from '../../events.js';
-import {
-  deriveExportFieldsFromFileName,
-  markParametersChanged,
-  resetParameterChangeTracking,
-  selectOutputFolder,
-  setExportFields
-} from '../../ui/fileOps.js';
 import { ParamPanel } from '../../ui/paramPanel.js';
 import {
   getLiveUpdateEnabled,
@@ -18,12 +11,6 @@ import {
   setInvertWheelZoom,
   getCurrentViewerSettings
 } from '../../ui/settings/viewerSettings.js';
-import {
-  showCommandSuggestion,
-  showError,
-  showMessage,
-  showSuccess
-} from '../../ui/feedback.js';
 
 const UI_MODULE_ID = 'ui';
 const UI_IMPORT_STAGE = 'import';
@@ -94,12 +81,13 @@ function buildAppCoordinator(input) {
   const app = input.app;
   const loadSimulationPanel = input.loadSimulationPanel || (() => import('../../ui/simulation/SimulationPanel.js'));
   const feedback = input.feedback || {};
+  const fileOps = input.fileOps || {};
   let simulationPanelInitPromise = null;
   let eventsBound = false;
 
   const onStateUpdated = (state) => {
     app.onStateUpdate(state);
-    markParametersChanged();
+    fileOps.markParametersChanged?.();
   };
   const onMeshRequested = () => {
     app.provideMeshForSimulation();
@@ -154,35 +142,35 @@ function buildAppCoordinator(input) {
     },
 
     showError(message, duration) {
-      return (feedback.showError || showError)(message, duration);
+      return feedback.showError?.(message, duration);
     },
 
     showMessage(message, options) {
-      return (feedback.showMessage || showMessage)(message, options);
+      return feedback.showMessage?.(message, options);
     },
 
     showSuccess(message, duration) {
-      return (feedback.showSuccess || showSuccess)(message, duration);
+      return feedback.showSuccess?.(message, duration);
     },
 
     showCommandSuggestion(options = {}) {
-      return (feedback.showCommandSuggestion || showCommandSuggestion)(options);
+      return feedback.showCommandSuggestion?.(options);
     },
 
     deriveExportFieldsFromFileName(fileName, options = {}) {
-      return deriveExportFieldsFromFileName(fileName, options);
+      return fileOps.deriveExportFieldsFromFileName?.(fileName, options);
     },
 
     setExportFields(fields = {}, doc) {
-      return setExportFields(fields, doc);
+      return fileOps.setExportFields?.(fields, doc);
     },
 
     resetParameterChangeTracking(options = {}) {
-      return resetParameterChangeTracking(options);
+      return fileOps.resetParameterChangeTracking?.(options);
     },
 
     chooseOutputFolder() {
-      return selectOutputFolder();
+      return fileOps.selectOutputFolder?.();
     },
 
     readLiveUpdateSetting() {
@@ -340,7 +328,8 @@ export function importAppUi(app, options = {}) {
   return createUiImportEnvelope(UI_KINDS.APP, {
     app,
     loadSimulationPanel: options.loadSimulationPanel,
-    feedback: options.feedback
+    feedback: options.feedback,
+    fileOps: options.fileOps
   });
 }
 
