@@ -33,10 +33,10 @@ Researched UI/runtime findings:
 - `src/ui/paramPanel.js` now renders geometry/source/mesh controls from an explicit parameter-section inventory, and both schema-driven controls and directivity controls use the shared hover-help trigger pattern. Settings modal controls still need parity with that affordance.
 - Not every schema parameter is visible. `PARAM_SCHEMA.MESH` includes `throatSliceDensity` and `verticalOffset`, but the current parameter UI does not render either control.
 - Simulation frequency and polar controls remain outside the settings modal, but they now share the same naming/order pass and hover-help affordance as the schema-driven parameter controls.
-- The settings modal fully exposes viewer settings, the active Simulation Basic runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`), and the persisted task-list preferences (`defaultSort`, `minRatingFilter`).
-- Persisted simulation-management settings now have a home in the settings modal, but the broader section ordering/copy pass is still unfinished.
-- The Simulation Advanced section is placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
-- Folder workspace support exists in code, but visibility is conditional. The `Choose Folder` row in `index.html` is hidden by `src/app/events.js` when `window.showDirectoryPicker` is unavailable, so some user environments will show no folder button at all.
+- The settings modal now groups persistent preferences into `Viewer`, `Simulation`, `Task Exports`, `Workspace`, and `System` sections, and every visible viewer/task-setting row uses the shared hover-help affordance.
+- The Simulation section exposes the active runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`) while keeping advanced solver placeholders visibly separated and aligned with backend capability metadata.
+- Advanced solver controls remain placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
+- Folder workspace support is now visible inside the settings modal even when `window.showDirectoryPicker` is unavailable, so unsupported browsers show an explicit fallback explanation instead of no discoverable workspace entry point.
 - Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`.
 - The simulation diagnostics panel currently shows numeric canonical surface-tag counts (`1/2/3/4`) from `surfaceTags`. It does not show geometry-identity counts such as `throat_disc`, `horn_wall`, `enc_side`, or `rear_cap`.
 - The current diagnostics count triangles per tag, not vertices, even though users may describe the numbers as “vertices.”
@@ -165,12 +165,12 @@ Implementation notes:
 
 ### P1. Settings Panel Completeness and Information Architecture
 
-- [ ] Audit all active settings sources and make the settings modal the primary discoverable home for persistent user preferences.
-  - [x] Mirror task-list preferences `defaultSort` and `minRatingFilter` into the Simulation Basic settings modal with the same hover-help affordance used by the parameter UI.
-  - Add understandable titles and hover clarifications for each visible setting.
-  - Keep the simulation-jobs toolbar in sync with the settings-modal task-list preferences while it remains visible as a quick-access surface.
-  - Reorder modal sections so viewer behavior, simulation defaults, task export behavior, folder/workspace behavior, and system actions are grouped predictably.
-  - Keep the modal aligned with backend capability metadata so unsupported advanced controls are clearly separated from active controls.
+- [x] Audit all active settings sources and make the settings modal the primary discoverable home for persistent user preferences.
+  - [x] Mirror task-list preferences `defaultSort` and `minRatingFilter` into the settings modal with the same hover-help affordance used by the parameter UI.
+  - [x] Add understandable titles and hover clarifications for each visible setting.
+  - [x] Keep the simulation-jobs toolbar in sync with the settings-modal task-list preferences while it remains visible as a quick-access surface.
+  - [x] Reorder modal sections so viewer behavior, simulation defaults, task export behavior, folder/workspace behavior, and system actions are grouped predictably.
+  - [x] Keep the modal aligned with backend capability metadata so unsupported advanced controls are clearly separated from active controls.
 
 Implementation notes:
 - `src/ui/settings/viewerSettings.js`
@@ -182,7 +182,7 @@ Implementation notes:
 ### P2. Folder Workspace Discoverability and Export Routing
 
 - [ ] Make folder selection discoverable near Settings and/or inside the settings modal without relying on users finding the current output-row placement.
-  - Treat “folder button not visible” as a real product gap: when folder picker support is unavailable, provide a visible fallback/explanation instead of silently hiding the control.
+  - [x] Treat “folder button not visible” as a real product gap: when folder picker support is unavailable, provide a visible fallback/explanation instead of silently hiding the control.
   - Document and verify expected routing behavior when a folder workspace is active:
     - manual exports write into the selected folder root
     - completed simulation bundles write into `<workspace>/<jobId>/`
