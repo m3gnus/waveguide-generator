@@ -13,7 +13,7 @@ const LEGACY_EXCEPTIONS = new Set([
 const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
   'modules/design/useCases.js->state.js',
   'modules/geometry/useCases.js->state.js',
-  'modules/simulation/useCases.js->state.js',
+  'modules/simulation/state.js->state.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/folderWorkspace.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskIndex.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskManifest.js',

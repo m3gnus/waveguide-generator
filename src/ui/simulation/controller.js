@@ -6,7 +6,7 @@ import {
 } from '../../modules/simulation/domain.js';
 import {
   readSimulationState
-} from '../../modules/simulation/useCases.js';
+} from '../../modules/simulation/state.js';
 import {
   readSimulationWorkspaceJobs,
   syncSimulationWorkspaceJobManifest
@@ -16,7 +16,7 @@ import {
   buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
   buildQueuedSimulationJob
-} from '../../modules/simulation/useCases.js';
+} from '../../modules/simulation/jobs.js';
 import {
   allJobs,
   createJobTracker,

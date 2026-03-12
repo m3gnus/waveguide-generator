@@ -33,9 +33,11 @@ import {
   validateSimulationConfig
 } from '../../modules/simulation/domain.js';
 import {
-  applySimulationJobScriptState,
+  applySimulationJobScriptState
+} from '../../modules/simulation/state.js';
+import {
   resolveClearedFailedJobIds
-} from '../../modules/simulation/useCases.js';
+} from '../../modules/simulation/jobs.js';
 import {
   clearSimulationControllerJobs,
   ensureSimulationControllerJobResults,

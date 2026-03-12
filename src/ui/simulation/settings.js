@@ -1,7 +1,7 @@
 import {
   readSimulationState,
   updateSimulationStateParams
-} from '../../modules/simulation/useCases.js';
+} from '../../modules/simulation/state.js';
 import {
   bindPolarUiToggleHandlers,
   getPolarBlocksSignature,
