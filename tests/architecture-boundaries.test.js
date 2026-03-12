@@ -237,6 +237,25 @@ test('runtime frontend files do not rely on the __waveguideApp ambient global', 
   );
 });
 
+test('runtime frontend files do not rely on the window.app ambient global', () => {
+  const files = listJsFiles(SRC_ROOT);
+  const violations = [];
+
+  for (const file of files) {
+    const relativePath = toSrcRelative(file);
+    const content = fs.readFileSync(file, 'utf8');
+    if (content.includes('window.app')) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
+
 test('ui simulation workflow files must not import GlobalState directly', () => {
   const simulationUiRoot = path.join(SRC_ROOT, 'ui', 'simulation');
   const files = listJsFiles(simulationUiRoot);

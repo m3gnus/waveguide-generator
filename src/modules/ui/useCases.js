@@ -37,8 +37,8 @@ export function readDisplayModeSetting() {
   return getDisplayMode();
 }
 
-export function openAppSettings() {
-  return openSettingsModal();
+export function openAppSettings(options = {}) {
+  return openSettingsModal(options);
 }
 
 export function isFolderSelectionSupported(targetWindow = window) {
