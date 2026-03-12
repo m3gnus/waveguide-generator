@@ -1,4 +1,4 @@
-import { syncSimulationWorkspaceIndex } from '../../modules/simulation/workspaceTasks.js';
+import { syncSimulationWorkspaceIndex } from './workspaceTasks.js';
 
 const STORAGE_KEY = 'ath_simulation_jobs:v1';
 const STORAGE_VERSION = 1;

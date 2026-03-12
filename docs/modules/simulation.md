@@ -11,6 +11,7 @@ Primary files:
 - `src/modules/simulation/useCases.js` (compatibility barrel)
 - `src/ui/simulation/controller.js`
 - `src/ui/simulation/polling.js`
+- `src/ui/simulation/workspaceTasks.js`
 - `src/ui/workspace/taskManifest.js`
 - `src/ui/workspace/taskIndex.js`
 

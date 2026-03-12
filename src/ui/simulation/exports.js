@@ -7,7 +7,7 @@ import {
 import {
   readSimulationState
 } from '../../modules/simulation/state.js';
-import { writeSimulationTaskBundleFile } from '../../modules/simulation/workspaceTasks.js';
+import { writeSimulationTaskBundleFile } from './workspaceTasks.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats
