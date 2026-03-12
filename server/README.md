@@ -121,6 +121,21 @@ Quick verification:
 curl http://localhost:8000/health
 ```
 
+### 2.2 Symmetry benchmark harness
+
+For repeatable symmetry-policy experiments that do not require `gmsh` or `bempp-cl`, run:
+
+```bash
+cd server
+python3 scripts/benchmark_symmetry.py --iterations 25
+```
+
+This uses deterministic synthetic fixtures for:
+- full-domain reference
+- half-domain symmetry reduction
+- quarter-domain symmetry reduction
+- rejected reduction when the source tag is off-center
+
 ## 3. API Endpoints
 
 ### `GET /health`
@@ -197,6 +212,8 @@ Runtime metadata behavior:
   - `metadata.failure_count`
   - `metadata.partial_success`
   - `metadata.mesh_validation`
+  - `metadata.symmetry`
+  - `metadata.symmetry_policy` (`applied`, `reason`, detected symmetry type/planes, reduction factor, centered-excitation check)
   - `metadata.unit_detection`
   - `metadata.device_interface` (selected interface/device information and fallback details)
 

@@ -72,6 +72,7 @@ Supporting fixtures:
 - `server/tests/test_occ_resolution_semantics.py`
 - `server/tests/test_reference_smoke.py`
 - `server/tests/test_solver_hardening.py`
+- `server/tests/test_symmetry_benchmark.py`
 - `server/tests/test_solver_tag_contract.py`
 - `server/tests/test_units.py`
 - `server/tests/test_updates_endpoint.py`
@@ -79,6 +80,10 @@ Supporting fixtures:
 ## Manual diagnostics (`scripts/diagnostics/`)
 
 These are ad-hoc debugging helpers and are not part of the automated suites.
+
+Backend research helpers:
+- `cd server && python3 scripts/benchmark_solver.py <mesh.msh> [options]`
+- `cd server && python3 scripts/benchmark_symmetry.py [--case NAME] [--iterations N] [--json]`
 
 Run from repository root:
 
