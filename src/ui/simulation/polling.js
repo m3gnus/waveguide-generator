@@ -6,7 +6,10 @@ import { getAutoExportOnComplete } from '../settings/simulationManagementSetting
 import {
   hasActiveJobs
 } from './jobTracker.js';
-import { renderJobList } from './jobActions.js';
+import {
+  renderBackendSimulationMeshDiagnostics,
+  renderJobList
+} from './jobActions.js';
 import { setPollTimer } from './jobOrchestration.js';
 import {
   ensureSimulationControllerJobResults,
@@ -79,6 +82,7 @@ export function pollSimulationStatus(panel) {
       if (activeJob) {
         if (activeJob.meshStats && typeof panel.app?.setSimulationMeshStats === 'function') {
           panel.app.setSimulationMeshStats(activeJob.meshStats);
+          renderBackendSimulationMeshDiagnostics(activeJob.meshStats);
         }
         updateStageUi(panel, {
           progress: activeJob.progress ?? 0,
