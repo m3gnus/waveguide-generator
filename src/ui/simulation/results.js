@@ -8,6 +8,13 @@ function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function cloneSummaryItem(item = {}) {
+  return {
+    label: String(item.label || '').trim(),
+    value: String(item.value || '').trim()
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -197,6 +204,90 @@ export function getSymmetryPolicySummary(results = null) {
       { label: 'Reduction', value: reductionText },
       { label: 'Reason', value: formatSymmetryReasonLabel(reason) },
     ],
+  };
+}
+
+function readRequestedSymmetryFromJob(job = null) {
+  if (!isObject(job)) {
+    return null;
+  }
+
+  if (typeof job?.script?.enableSymmetry === 'boolean') {
+    return job.script.enableSymmetry;
+  }
+
+  const configSummary = isObject(job.configSummary) ? job.configSummary : {};
+  if (typeof configSummary.enable_symmetry === 'boolean') {
+    return configSummary.enable_symmetry;
+  }
+  if (typeof configSummary.enableSymmetry === 'boolean') {
+    return configSummary.enableSymmetry;
+  }
+
+  return null;
+}
+
+function normalizeStoredSymmetrySummary(summary = null) {
+  if (!isObject(summary)) {
+    return null;
+  }
+
+  const badge = String(summary.badge || '').trim();
+  const headline = String(summary.headline || '').trim();
+  if (!badge || !headline) {
+    return null;
+  }
+
+  const details = String(summary.details || '').trim();
+  const tone = String(summary.tone || 'neutral').trim() || 'neutral';
+  const items = Array.isArray(summary.items)
+    ? summary.items
+        .map((item) => cloneSummaryItem(item))
+        .filter((item) => item.label && item.value)
+    : [];
+
+  return {
+    badge,
+    headline,
+    details,
+    tone,
+    items
+  };
+}
+
+export function getJobSymmetrySummary(job = null) {
+  const stored = normalizeStoredSymmetrySummary(job?.symmetrySummary ?? job?.symmetry_summary ?? null);
+  if (stored) {
+    return stored;
+  }
+
+  const requested = readRequestedSymmetryFromJob(job);
+  if (typeof requested !== 'boolean') {
+    return null;
+  }
+
+  if (requested) {
+    return {
+      badge: 'Requested',
+      headline: 'Symmetry reduction requested',
+      details: 'The solve request allows symmetry reduction. The final solver policy appears after results are fetched.',
+      tone: 'neutral',
+      items: [
+        { label: 'Requested', value: 'Enabled' },
+        { label: 'Decision', value: 'Pending results' }
+      ]
+    };
+  }
+
+  return {
+    badge: 'Full model',
+    headline: 'Symmetry reduction disabled',
+    details: 'The solve request disabled symmetry reduction, so the solver keeps the full model.',
+    tone: 'neutral',
+    items: [
+      { label: 'Requested', value: 'Disabled' },
+      { label: 'Decision', value: 'Full model' }
+    ]
   };
 }
 

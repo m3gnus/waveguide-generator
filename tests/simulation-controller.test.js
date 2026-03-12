@@ -355,7 +355,26 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   const controller = createSimulationControllerStore({
     solver: {
       async getResults(jobId) {
-        return { jobId, spl_on_axis: { frequencies: [100], spl: [90] } };
+        return {
+          jobId,
+          spl_on_axis: { frequencies: [100], spl: [90] },
+          metadata: {
+            symmetry: {
+              symmetry_type: 'half_x',
+              reduction_factor: 2
+            },
+            symmetry_policy: {
+              requested: true,
+              applied: true,
+              reason: 'applied',
+              detected_symmetry_type: 'half_x',
+              detected_symmetry_planes: ['YZ'],
+              detected_reduction_factor: 2,
+              reduction_factor: 2,
+              excitation_centered: true
+            }
+          }
+        };
       }
     }
   });
@@ -389,6 +408,14 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   assert.equal(controller.activeJobId, 'job-complete');
   assert.equal(controller.currentJobId, 'job-complete');
   assert.equal(controller.resultCache.has('job-complete'), true);
+  assert.equal(
+    controller.jobs.get('job-complete')?.symmetrySummary?.items?.find((item) => item.label === 'Requested')?.value,
+    'Enabled'
+  );
+  assert.equal(
+    controller.jobs.get('job-complete')?.symmetrySummary?.items?.find((item) => item.label === 'Decision')?.value,
+    'Half-domain (X symmetry)'
+  );
 });
 
 test('reconcileSimulationControllerRemoteJobs merges remote data and marks missing active jobs as lost', async () => {

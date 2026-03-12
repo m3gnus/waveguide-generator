@@ -21,7 +21,8 @@ export function buildQueuedSimulationJob({
       formula_type: waveguidePayload.formula_type,
       frequency_range: [config.frequencyStart, config.frequencyEnd],
       num_frequencies: config.numFrequencies,
-      sim_type: '2'
+      sim_type: '2',
+      enable_symmetry: config.enableSymmetry
     },
     hasResults: false,
     hasMeshArtifact: false,

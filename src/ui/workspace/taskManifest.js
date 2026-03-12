@@ -23,6 +23,13 @@ function normalizeExportedFiles(value) {
     .filter(Boolean);
 }
 
+function normalizeSymmetrySummary(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value;
+}
+
 export function normalizeTaskManifest(raw = {}, fallback = {}) {
   const id = String(raw.id || fallback.id || '').trim();
   const createdAt = raw.createdAt ?? raw.created_at ?? fallback.createdAt ?? null;
@@ -57,6 +64,12 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
     autoExportCompletedAt,
     rating: raw.rating ?? fallback.rating ?? null,
     exportedFiles: normalizeExportedFiles(raw.exportedFiles ?? raw.exported_files ?? fallback.exportedFiles),
+    symmetrySummary: normalizeSymmetrySummary(
+      raw.symmetrySummary
+      ?? raw.symmetry_summary
+      ?? fallback.symmetrySummary
+      ?? fallback.symmetry_summary
+    ),
     scriptSchemaVersion: Number.isFinite(Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion))
       ? Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion)
       : TASK_SCRIPT_SCHEMA_VERSION,
@@ -78,6 +91,7 @@ export function createTaskManifestFromJob(job = {}) {
     autoExportCompletedAt: job.autoExportCompletedAt,
     rating: job.rating,
     exportedFiles: job.exportedFiles,
+    symmetrySummary: job.symmetrySummary,
     scriptSchemaVersion: job.scriptSchemaVersion,
     scriptSnapshot: job.scriptSnapshot ?? job.script
   });
@@ -136,6 +150,7 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
         ?? base.autoExportCompletedAt
         ?? existing.manifest?.autoExportCompletedAt,
       exportedFiles: updates.exportedFiles ?? base.exportedFiles ?? existing.manifest?.exportedFiles,
+      symmetrySummary: updates.symmetrySummary ?? base.symmetrySummary ?? existing.manifest?.symmetrySummary,
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });
 
