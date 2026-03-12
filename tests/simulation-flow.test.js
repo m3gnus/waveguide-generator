@@ -6,6 +6,7 @@ import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
 import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
+import { openViewResultsModal } from '../src/ui/simulation/viewResults.js';
 import {
   getJobSymmetrySummary,
   getSymmetryPolicySummary,
@@ -208,6 +209,81 @@ test('smoothing update sets panel state without submitting a new job', () => {
   assert.equal(submitCalls, 0);
 });
 
+test('view results modal keeps smoothing control and close button in a shared header actions row', async () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const originalFetch = global.fetch;
+
+  const appendedChildren = [];
+  const createdElements = [];
+  const fetchBodies = [];
+  const fakeDocument = createModalDocument(createdElements, appendedChildren);
+
+  global.document = fakeDocument;
+  global.window = {
+    addEventListener() {},
+    removeEventListener() {}
+  };
+  global.fetch = async (_url, options = {}) => {
+    fetchBodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      async json() {
+        return { charts: {} };
+      }
+    };
+  };
+
+  try {
+    const panel = {
+      currentSmoothing: 'none',
+      solver: { backendUrl: 'http://localhost:8000' },
+      activeJobId: 'job-1',
+      currentJobId: 'job-1',
+      resultCache: new Map([
+        ['job-1', {
+          spl_on_axis: { frequencies: [100, 200], spl: [90, 92] },
+          di: { frequencies: [100, 200], di: [5, 6] },
+          impedance: { frequencies: [100, 200], real: [8, 9], imaginary: [1, 2] },
+          directivity: {}
+        }]
+      ]),
+      lastResults: null
+    };
+
+    await openViewResultsModal(panel);
+    await flushModalAsyncWork();
+
+    assert.equal(appendedChildren.length, 1, 'Expected the backdrop to be mounted');
+    assert.equal(fetchBodies.length, 1, 'Expected initial chart render fetch');
+
+    const headerActions = createdElements.find((el) => el.className === 'view-results-header-actions');
+    const smoothingContainer = createdElements.find((el) => el.className === 'view-results-smoothing');
+    const closeButton = createdElements.find((el) => el.className === 'view-results-close');
+    const smoothingSelect = fakeDocument.getElementById('vr-smoothing-select');
+
+    assert.ok(headerActions, 'Expected a dedicated header actions container');
+    assert.ok(smoothingContainer, 'Expected smoothing control to be rendered');
+    assert.ok(closeButton, 'Expected close button to be rendered');
+    assert.ok(smoothingSelect, 'Expected smoothing select to be addressable by id');
+    assert.equal(headerActions._children.includes(smoothingContainer), true);
+    assert.equal(headerActions._children.includes(closeButton), true);
+
+    const changeListeners = smoothingSelect._eventListeners.change || [];
+    assert.equal(changeListeners.length, 1, 'Expected smoothing select change listener');
+    changeListeners[0]({ target: { value: '1/6' } });
+    await flushModalAsyncWork();
+
+    assert.equal(panel.currentSmoothing, '1/6');
+    assert.equal(fakeDocument.body._children.length, 1, 'Modal should remain mounted after smoothing change');
+    assert.equal(fetchBodies.length, 2, 'Expected smoothing change to re-render charts');
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+    global.fetch = originalFetch;
+  }
+});
+
 test('getSymmetryPolicySummary formats applied symmetry reductions for the results UI', () => {
   const summary = getSymmetryPolicySummary({
     metadata: {
@@ -235,6 +311,101 @@ test('getSymmetryPolicySummary formats applied symmetry reductions for the resul
   assert.equal(summary.items.find((item) => item.label === 'Source alignment')?.value, 'Centered');
   assert.equal(summary.items.find((item) => item.label === 'Reduction')?.value, '4x applied');
 });
+
+function createModalDocument(createdElements, appendedChildren) {
+  const walk = (node, visitor) => {
+    if (!node) return;
+    visitor(node);
+    const children = Array.isArray(node._children) ? node._children : [];
+    for (const child of children) {
+      walk(child, visitor);
+    }
+  };
+
+  const detach = (node) => {
+    const parent = node?._parent;
+    if (!parent || !Array.isArray(parent._children)) return;
+    parent._children = parent._children.filter((child) => child !== node);
+    node._parent = null;
+  };
+
+  const body = {
+    _children: [],
+    appendChild(child) {
+      child._parent = this;
+      this._children.push(child);
+      appendedChildren.push(child);
+      return child;
+    },
+    removeChild(child) {
+      detach(child);
+    }
+  };
+
+  return {
+    body,
+    createElement(tag) {
+      const el = {
+        _tag: tag,
+        _children: [],
+        _attrs: {},
+        _eventListeners: {},
+        _parent: null,
+        id: '',
+        className: '',
+        textContent: '',
+        type: '',
+        title: '',
+        value: '',
+        selected: false,
+        _innerHTML: '',
+        setAttribute(key, value) {
+          this._attrs[key] = value;
+        },
+        getAttribute(key) {
+          return this._attrs[key];
+        },
+        addEventListener(event, fn) {
+          this._eventListeners[event] = this._eventListeners[event] || [];
+          this._eventListeners[event].push(fn);
+        },
+        appendChild(child) {
+          child._parent = this;
+          this._children.push(child);
+          return child;
+        },
+        remove() {
+          detach(this);
+        },
+        get firstElementChild() {
+          return this._children[0] ?? null;
+        },
+        set innerHTML(value) {
+          this._innerHTML = value;
+          this._children = [];
+        },
+        get innerHTML() {
+          return this._innerHTML;
+        }
+      };
+      createdElements.push(el);
+      return el;
+    },
+    getElementById(id) {
+      let match = null;
+      walk(body, (node) => {
+        if (!match && node?.id === id) {
+          match = node;
+        }
+      });
+      return match;
+    }
+  };
+}
+
+function flushModalAsyncWork() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 test('getSymmetryPolicySummary explains when detected symmetry is rejected by source alignment', () => {
   const summary = getSymmetryPolicySummary({
