@@ -42,6 +42,7 @@ def get_settings_capabilities() -> Dict[str, Any]:
             "available": True,
             "controls": [
                 "enable_warmup",
+                "bem_precision",
                 "use_burton_miller",
                 "symmetry_tolerance",
             ],
@@ -53,9 +54,10 @@ def get_settings_capabilities() -> Dict[str, Any]:
                 "strong_form",
             ],
             "reason": (
-                "The public solve contract now exposes warm-up, Burton-Miller coupling, "
-                "and symmetry-tolerance overrides. GMRES precision and method controls "
-                "remain pending product definition."
+                "The public solve contract now exposes warm-up, BEM precision, "
+                "Burton-Miller coupling, and symmetry-tolerance overrides. GMRES "
+                "method, restart, tolerance, max-iteration, and explicit strong-form "
+                "policy controls remain planned-only."
             ),
         },
     }

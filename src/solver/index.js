@@ -44,6 +44,7 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @property {boolean} [verbose]
  * @property {{
  *   enableWarmup?: boolean,
+ *   bemPrecision?: 'single'|'double',
  *   useBurtonMiller?: boolean,
  *   symmetryTolerance?: number
  * }} [advancedSettings]
@@ -153,6 +154,7 @@ async function fetchOrApiError(url, options, operation) {
 const VALID_MESH_VALIDATION_MODES = new Set(['strict', 'warn', 'off']);
 const VALID_FREQUENCY_SPACING = new Set(['linear', 'log']);
 const VALID_DEVICE_MODES = new Set(['auto', 'opencl_cpu', 'opencl_gpu']);
+const VALID_BEM_PRECISIONS = new Set(['single', 'double']);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
   if (typeof value !== 'string') {
@@ -178,6 +180,7 @@ function buildAdvancedSettingsPayload(settings) {
 
   const payload = {};
   assignBooleanSetting(payload, 'enable_warmup', settings.enableWarmup);
+  assignEnumSetting(payload, 'bem_precision', settings.bemPrecision, VALID_BEM_PRECISIONS);
   assignBooleanSetting(payload, 'use_burton_miller', settings.useBurtonMiller);
 
   const symmetryTolerance = Number(settings.symmetryTolerance);

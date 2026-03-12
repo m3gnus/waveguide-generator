@@ -146,8 +146,8 @@ test('summarizeRuntimeCapabilities reports advanced controls unavailable until b
     capabilities: {
       simulationAdvanced: {
         available: true,
-        controls: ['enable_warmup', 'use_burton_miller'],
-        reason: 'The public solve contract now exposes warm-up and Burton-Miller overrides.',
+        controls: ['enable_warmup', 'bem_precision', 'use_burton_miller'],
+        reason: 'The public solve contract now exposes warm-up, BEM precision, and Burton-Miller overrides.',
         plannedControls: ['method']
       }
     }
@@ -155,8 +155,8 @@ test('summarizeRuntimeCapabilities reports advanced controls unavailable until b
 
   assert.equal(summary.fullyReady, true);
   assert.equal(summary.simulationAdvanced.available, true);
-  assert.equal(summary.simulationAdvanced.reason, 'The public solve contract now exposes warm-up and Burton-Miller overrides.');
-  assert.deepEqual(summary.simulationAdvanced.controls, ['enable_warmup', 'use_burton_miller']);
+  assert.equal(summary.simulationAdvanced.reason, 'The public solve contract now exposes warm-up, BEM precision, and Burton-Miller overrides.');
+  assert.deepEqual(summary.simulationAdvanced.controls, ['enable_warmup', 'bem_precision', 'use_burton_miller']);
   assert.deepEqual(summary.simulationAdvanced.plannedControls, ['method']);
 });
 
@@ -520,6 +520,10 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
     assert.ok(
       createdElements.some((el) => el.id === 'simadvanced-enableWarmup'),
       'Simulation section should expose the warm-up advanced control'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'simadvanced-bemPrecision'),
+      'Simulation section should expose the BEM precision advanced control'
     );
     assert.ok(
       createdElements.some((el) => el.id === 'simadvanced-useBurtonMiller'),

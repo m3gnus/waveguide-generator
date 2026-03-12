@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, field_validator
 
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
+VALID_BEM_PRECISIONS = {"single", "double"}
 DEVICE_MODE_ALIASES = {
     "opencl": "opencl_cpu",
     "cpu_opencl": "opencl_cpu",
@@ -70,8 +71,19 @@ class PolarConfig(BaseModel):
 
 class AdvancedSimulationSettings(BaseModel):
     enable_warmup: Optional[bool] = None
+    bem_precision: Optional[str] = None
     use_burton_miller: Optional[bool] = None
     symmetry_tolerance: Optional[float] = None
+
+    @field_validator("bem_precision")
+    @classmethod
+    def validate_bem_precision(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = str(value).strip().lower()
+        if normalized not in VALID_BEM_PRECISIONS:
+            raise ValueError("advanced_settings.bem_precision must be one of: single, double.")
+        return normalized
 
     @field_validator("symmetry_tolerance")
     @classmethod

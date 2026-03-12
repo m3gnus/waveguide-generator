@@ -54,12 +54,32 @@ def _detect_gmres_kwargs() -> Dict[str, bool]:
 
 
 _GMRES_KWARGS = _detect_gmres_kwargs()
+_VALID_BEM_PRECISIONS = {"single", "double"}
+
+
+def _normalize_bem_precision(value: Optional[str]) -> str:
+    raw = str(value or "double").strip().lower()
+    if raw not in _VALID_BEM_PRECISIONS:
+        raise ValueError("bem_precision must be one of: single, double.")
+    return raw
+
+
+def _configure_bempp_precision(precision: str) -> None:
+    if bempp_api is not None and hasattr(bempp_api, "DEFAULT_PRECISION"):
+        setattr(bempp_api, "DEFAULT_PRECISION", precision)
+
+
+def _operator_kwargs(device_interface: str, precision: str) -> Dict[str, str]:
+    return {
+        "device_interface": device_interface,
+        "precision": precision,
+    }
 
 
 class CachedOperators:
     """Cache for BEMPP operators to reuse across frequencies."""
 
-    def __init__(self, boundary_interface: str, potential_interface: str):
+    def __init__(self, boundary_interface: str, potential_interface: str, bem_precision: str):
         self.grid = None
         self.space_p = None
         self.space_u = None
@@ -67,6 +87,7 @@ class CachedOperators:
         self.rhs_identity = None
         self.boundary_interface = boundary_interface
         self.potential_interface = potential_interface
+        self.bem_precision = bem_precision
         self.dlp_cache = {}
         self.slp_cache = {}
         self.hyp_cache = {}
@@ -91,18 +112,19 @@ class CachedOperators:
     def get_or_create_operators(self, space_p, space_u, k: float, use_burton_miller: bool = True):
         k_key = f"{k:.6f}"
         if k_key not in self.dlp_cache:
+            operator_kwargs = _operator_kwargs(self.boundary_interface, self.bem_precision)
             self.dlp_cache[k_key] = bempp_api.operators.boundary.helmholtz.double_layer(
-                space_p, space_p, space_p, k, device_interface=self.boundary_interface
+                space_p, space_p, space_p, k, **operator_kwargs
             )
             self.slp_cache[k_key] = bempp_api.operators.boundary.helmholtz.single_layer(
-                space_u, space_p, space_p, k, device_interface=self.boundary_interface
+                space_u, space_p, space_p, k, **operator_kwargs
             )
             if use_burton_miller:
                 self.hyp_cache[k_key] = bempp_api.operators.boundary.helmholtz.hypersingular(
-                    space_p, space_p, space_p, k, device_interface=self.boundary_interface
+                    space_p, space_p, space_p, k, **operator_kwargs
                 )
                 self.adlp_cache[k_key] = bempp_api.operators.boundary.helmholtz.adjoint_double_layer(
-                    space_u, space_p, space_p, k, device_interface=self.boundary_interface
+                    space_u, space_p, space_p, k, **operator_kwargs
                 )
         return (
             self.dlp_cache[k_key],
@@ -192,11 +214,12 @@ def solve_frequency_cached(
     obs_xyz = origin_center + frame["axis"] * float(observation_distance_m)
     obs_point = obs_xyz.reshape(3, 1)
 
+    potential_kwargs = _operator_kwargs(cached_ops.potential_interface, cached_ops.bem_precision)
     dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
-        space_p, obs_point, k, device_interface=cached_ops.potential_interface
+        space_p, obs_point, k, **potential_kwargs
     )
     slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
-        space_u, obs_point, k, device_interface=cached_ops.potential_interface
+        space_u, obs_point, k, **potential_kwargs
     )
     pressure_far = dlp_pot * p_total - 1j * omega * rho * slp_pot * u_total
 
@@ -226,6 +249,7 @@ def solve_optimized(
     verbose: bool = True,
     mesh_validation_mode: str = "warn",
     use_burton_miller: bool = True,
+    bem_precision: str = "double",
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
     enable_warmup: bool = True,
@@ -234,6 +258,8 @@ def solve_optimized(
     """Run optimized BEM simulation with explicit metadata and failure reporting."""
     start_time = time.time()
     mesh_validation_mode = normalize_mesh_validation_mode(mesh_validation_mode)
+    bem_precision = _normalize_bem_precision(bem_precision)
+    _configure_bempp_precision(bem_precision)
 
     if isinstance(mesh, dict):
         grid = mesh["grid"]
@@ -403,6 +429,7 @@ def solve_optimized(
     cached_ops = CachedOperators(
         boundary_interface=boundary_interface,
         potential_interface=potential_interface,
+        bem_precision=bem_precision,
     )
     solutions: List[Optional[tuple]] = []
     gmres_iterations: List[Optional[int]] = []
@@ -488,6 +515,7 @@ def solve_optimized(
                     cached_ops = CachedOperators(
                         boundary_interface=boundary_interface,
                         potential_interface=potential_interface,
+                        bem_precision=bem_precision,
                     )
                     logger.warning(
                         "[BEM] OpenCL runtime error at %.1f Hz; retrying with OpenCL safe CPU profile.", freq
@@ -593,6 +621,7 @@ def solve_optimized(
             filtered_directivity = calculate_directivity_patterns_correct(
                 grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config,
                 device_interface=potential_interface,
+                precision=bem_precision,
                 observation_frame=observation_frame,
             )
 
@@ -684,6 +713,7 @@ def solve_optimized(
         "gmres_iterations_per_frequency": gmres_iterations,
         "avg_gmres_iterations": round(avg_gmres, 1),
         "gmres_strong_form_supported": _GMRES_KWARGS["use_strong_form"],
+        "bem_precision": bem_precision,
     }
 
     if verbose:

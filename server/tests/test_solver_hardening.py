@@ -167,7 +167,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         validate_freq.assert_not_called()
         self.assertFalse(results["metadata"]["mesh_validation"]["enabled"])
 
-    def test_advanced_settings_control_warmup_burton_miller_and_symmetry_tolerance(self):
+    def test_advanced_settings_control_precision_warmup_burton_miller_and_symmetry_tolerance(self):
         mesh = _mesh_stub()
         symmetry_result = {
             "policy": {
@@ -200,6 +200,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 enable_symmetry=True,
                 symmetry_tolerance=0.025,
                 enable_warmup=False,
+                bem_precision="single",
                 use_burton_miller=False,
                 verbose=False,
                 mesh_validation_mode="off",
@@ -208,7 +209,9 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         get_spaces.assert_not_called()
         get_operators.assert_not_called()
         self.assertEqual(evaluate_symmetry_policy.call_args.kwargs["tolerance"], 0.025)
+        self.assertEqual(solve_frequency_cached.call_args.args[5].bem_precision, "single")
         self.assertFalse(solve_frequency_cached.call_args.args[7])
+        self.assertEqual(results["metadata"]["performance"]["bem_precision"], "single")
         self.assertEqual(results["metadata"]["failure_count"], 0)
 
     def test_frequency_failures_do_not_use_placeholder_metrics(self):

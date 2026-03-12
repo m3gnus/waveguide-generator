@@ -8,6 +8,7 @@ import {
   getVerbose
 } from '../settings/simBasicSettings.js';
 import {
+  getBemPrecision,
   getEnableWarmup,
   getSymmetryTolerance,
   getUseBurtonMiller,
@@ -176,7 +177,7 @@ function describeJobFeedSource(panel) {
   return {
     mode,
     label: mode === 'folder' ? 'Folder Tasks' : 'Backend Jobs',
-    badge: mode === 'folder' ? 'Folder' : 'Backend'
+    badge: mode === 'folder' ? 'Folder' : ''
   };
 }
 
@@ -313,7 +314,7 @@ export function renderJobList(panel) {
         <div class="simulation-job-info">
           <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
             <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
-            <span class="simulation-job-source-badge">${source.badge}</span>
+            ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ''}
           </div>
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
         </div>
@@ -517,6 +518,7 @@ export async function runSimulation(panel) {
     verbose: getVerbose(),
     advancedSettings: {
       enableWarmup: getEnableWarmup(),
+      bemPrecision: getBemPrecision(),
       useBurtonMiller: getUseBurtonMiller(),
       symmetryTolerance: getSymmetryTolerance(),
     }
