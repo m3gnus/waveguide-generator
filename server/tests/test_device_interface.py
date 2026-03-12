@@ -67,6 +67,27 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             profile = di._selected_device_profile("auto")
         self.assertEqual(profile["selected_mode"], "opencl_cpu")
 
+    def test_gpu_mode_remains_available_when_only_gpu_driver_exists(self):
+        di.clear_device_selection_caches()
+        with patch(
+            "solver.device_interface._opencl_inventory",
+            return_value={
+                "base_ready": True,
+                "base_reason": None,
+                "cpu_available": False,
+                "gpu_available": True,
+                "cpu_device_name": None,
+                "gpu_device_name": "Fake GPU",
+                "cpu_reason": "no suitable OpenCL CPU driver.",
+                "gpu_reason": None,
+            },
+        ):
+            self.assertEqual(
+                di._mode_unavailable_reason("opencl_cpu"),
+                "no suitable OpenCL CPU driver.",
+            )
+            self.assertIsNone(di._mode_unavailable_reason("opencl_gpu"))
+
     def test_auto_with_no_opencl_modes_marks_unavailable(self):
         di.clear_device_selection_caches()
         with patch("solver.device_interface._available_concrete_modes", return_value=[]), patch(
@@ -189,6 +210,56 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         self.assertTrue(call_flags["cpu_context_called"])
         self.assertEqual(fake_bempp_api.BOUNDARY_OPERATOR_DEVICE_TYPE, "cpu")
         self.assertEqual(fake_bempp_api.POTENTIAL_OPERATOR_DEVICE_TYPE, "cpu")
+
+    def test_apply_opencl_gpu_aliases_cpu_context_when_only_gpu_exists(self):
+        fake_bempp_api = SimpleNamespace(
+            BOUNDARY_OPERATOR_DEVICE_TYPE="cpu",
+            POTENTIAL_OPERATOR_DEVICE_TYPE="cpu",
+        )
+        fake_gpu_device = SimpleNamespace(name="Fake GPU")
+        fake_gpu_context = object()
+
+        with patch("solver.device_interface.bempp_api", fake_bempp_api), patch(
+            "solver.device_interface._opencl_inventory",
+            return_value={
+                "base_ready": True,
+                "base_reason": None,
+                "cpu_available": False,
+                "gpu_available": True,
+                "cpu_device_name": None,
+                "gpu_device_name": "Fake GPU",
+                "cpu_reason": "no suitable OpenCL CPU driver.",
+                "gpu_reason": None,
+            },
+        ), patch(
+            "bempp_cl.core.opencl_kernels.default_gpu_device",
+            side_effect=lambda: fake_gpu_device,
+        ), patch(
+            "bempp_cl.core.opencl_kernels.default_gpu_context",
+            side_effect=lambda: fake_gpu_context,
+        ), patch(
+            "bempp_cl.core.opencl_kernels.default_cpu_device",
+            side_effect=RuntimeError("cpu unavailable"),
+        ), patch(
+            "bempp_cl.core.opencl_kernels.default_cpu_context",
+            side_effect=RuntimeError("cpu unavailable"),
+        ), patch(
+            "bempp_cl.core.opencl_kernels.default_context",
+            side_effect=RuntimeError("cpu unavailable"),
+        ):
+            applied, interface, device_type, device_name = di._apply_opencl_mode("opencl_gpu")
+            import bempp_cl.core.opencl_kernels as opencl_kernels
+
+            self.assertIs(opencl_kernels.default_cpu_device(), fake_gpu_device)
+            self.assertIs(opencl_kernels.default_cpu_context(), fake_gpu_context)
+            self.assertIs(opencl_kernels.default_context(), fake_gpu_context)
+
+        self.assertTrue(applied)
+        self.assertEqual(interface, "opencl")
+        self.assertEqual(device_type, "gpu")
+        self.assertEqual(device_name, "Fake GPU")
+        self.assertEqual(fake_bempp_api.BOUNDARY_OPERATOR_DEVICE_TYPE, "gpu")
+        self.assertEqual(fake_bempp_api.POTENTIAL_OPERATOR_DEVICE_TYPE, "gpu")
 
 
 if __name__ == "__main__":

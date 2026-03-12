@@ -178,6 +178,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
         mesh = _mesh_stub()
         sentinel_frame = {
             "axis": np.array([0.0, 0.0, 1.0]),
+            "origin_center": np.zeros(3),
             "mouth_center": np.zeros(3),
             "u": np.array([1.0, 0.0, 0.0]),
             "v": np.array([0.0, 1.0, 0.0]),
@@ -214,6 +215,56 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
         self.assertEqual(infer_mock.call_count, 1)
         self.assertEqual(seen_frames, [sentinel_frame, sentinel_frame])
         self.assertEqual(directivity_frames, [sentinel_frame])
+
+    def test_optimized_solver_adjusts_distance_and_reuses_it_for_directivity(self):
+        mesh = _mesh_stub()
+        mesh["grid"].vertices = np.array(
+            [[0.0, 0.1, -0.1], [0.0, 0.0, 0.0], [0.0, 0.0, 2.5]], dtype=float
+        )
+        sentinel_frame = {
+            "axis": np.array([0.0, 0.0, 1.0]),
+            "origin_center": np.zeros(3),
+            "mouth_center": np.array([0.0, 0.0, 2.5]),
+            "u": np.array([1.0, 0.0, 0.0]),
+            "v": np.array([0.0, 1.0, 0.0]),
+        }
+        seen_distances = []
+        seen_directivity_distances = []
+
+        def _solve_frequency_cached_stub(*_args, **kwargs):
+            seen_distances.append(kwargs.get("observation_distance_m"))
+            return (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15)
+
+        def _directivity_stub(*args, **kwargs):
+            polar_config = args[5] if len(args) > 5 else kwargs.get("polar_config", {})
+            seen_directivity_distances.append((polar_config or {}).get("distance"))
+            return {"horizontal": [], "vertical": [], "diagonal": []}
+
+        with patch(
+            "solver.solve_optimized.solve_frequency_cached",
+            side_effect=_solve_frequency_cached_stub,
+        ), patch(
+            "solver.solve_optimized.infer_observation_frame",
+            return_value=sentinel_frame,
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            side_effect=_directivity_stub,
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 200.0],
+                num_frequencies=1,
+                sim_type="2",
+                polar_config={"distance": 1.0},
+                enable_symmetry=False,
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        adjusted_distance = seen_distances[0]
+        self.assertGreater(adjusted_distance, 1.0)
+        self.assertEqual(seen_directivity_distances, [adjusted_distance])
+        self.assertTrue(results["metadata"]["observation"]["adjusted"])
 
 
 if __name__ == "__main__":
