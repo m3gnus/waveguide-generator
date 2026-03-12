@@ -224,7 +224,9 @@ export function mergeJobs(localItems, remoteItems) {
         errorMessage: 'Job state was lost after backend restart or reset.',
         completedAt: item.completedAt || nowIso()
       });
+      continue;
     }
+    merged.delete(id);
   }
 
   return prune(Array.from(merged.values()));

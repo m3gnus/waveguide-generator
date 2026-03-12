@@ -73,18 +73,19 @@ test('mergeJobs keeps backend as source of truth and marks missing active local 
   const merged = mergeJobs(
     [
       { id: 'local-running', status: 'running' },
-      { id: 'local-complete', status: 'complete' }
+      { id: 'local-terminal', status: 'complete' }
     ],
     [
       { id: 'remote-running', status: 'running' },
-      { id: 'local-complete', status: 'error' }
+      { id: 'remote-terminal', status: 'error' }
     ]
   );
 
   const byId = new Map(merged.map((item) => [item.id, item]));
-  assert.equal(byId.get('local-complete').status, 'error');
   assert.equal(byId.get('remote-running').status, 'running');
+  assert.equal(byId.get('remote-terminal').status, 'error');
   assert.equal(byId.get('local-running').status, 'error');
+  assert.equal(byId.has('local-terminal'), false);
   assert.match(byId.get('local-running').errorMessage, /lost/i);
 });
 

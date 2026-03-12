@@ -124,7 +124,7 @@ Required regression coverage:
 
 ### P1. Remove Stale Local-Only Jobs From the Backend Feed
 
-- [ ] Fix the backend jobs feed so terminal jobs that exist only in the browser cache are not shown as backend-managed rows.
+- [x] Fix the backend jobs feed so terminal jobs that exist only in the browser cache are not shown as backend-managed rows.
   - Treat `/api/jobs` as the source of truth whenever the panel is in backend mode. Keep local cached metadata only as an overlay for matching backend job IDs, not as permission to keep rendering backend-missing jobs indefinitely.
   - Purge stale local-only backend jobs from the `ath_simulation_jobs:v1` cache during restore/reconcile once the backend job list has loaded, so pre-update rows disappear automatically without adding a legacy recovery UI.
   - Do not add a special delete fallback for these stale rows. Once backend mode stops retaining them, the existing delete flow can remain a true backend delete for real backend jobs.

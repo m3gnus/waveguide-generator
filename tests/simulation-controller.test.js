@@ -24,6 +24,23 @@ import {
   resetSelectedFolder,
   setSelectedFolderHandle
 } from '../src/ui/workspace/folderWorkspace.js';
+import { JOB_TRACKER_CONSTANTS } from '../src/ui/simulation/jobTracker.js';
+
+function installLocalStorageMock() {
+  const store = new Map();
+  global.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    }
+  };
+  return store;
+}
 
 function createMemoryDirectory(name = 'root') {
   const files = new Map();
@@ -153,6 +170,59 @@ test('restoreSimulationControllerJobs hydrates job state and signals polling for
   assert.equal(controller.currentJobId, 'job-live-1');
   assert.equal(startPollingCalls, 1);
   assert.equal(jobsUpdatedCalls >= 2, true);
+});
+
+test('restoreSimulationControllerJobs purges stale terminal local-only backend rows after remote restore', async () => {
+  const originalLocalStorage = global.localStorage;
+  const store = installLocalStorageMock();
+  store.set(
+    JOB_TRACKER_CONSTANTS.STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      saved_at: '2026-03-12T09:00:00.000Z',
+      items: [
+        { id: 'job-stale-complete', status: 'complete', completed_at: '2026-03-12T08:00:00.000Z' },
+        { id: 'job-real-running', status: 'queued', created_at: '2026-03-12T08:30:00.000Z' }
+      ]
+    })
+  );
+
+  try {
+    const controller = createSimulationControllerStore({
+      solver: {
+        async listJobs() {
+          return {
+            items: [
+              {
+                id: 'job-real-running',
+                status: 'running',
+                progress: 0.6,
+                created_at: '2026-03-12T08:30:00.000Z',
+                started_at: '2026-03-12T08:31:00.000Z'
+              }
+            ]
+          };
+        }
+      }
+    });
+
+    await restoreSimulationControllerJobs(controller);
+
+    assert.equal(controller.jobs.has('job-stale-complete'), false);
+    assert.equal(controller.jobs.get('job-real-running')?.status, 'running');
+
+    const saved = JSON.parse(store.get(JOB_TRACKER_CONSTANTS.STORAGE_KEY));
+    assert.deepEqual(
+      saved.items.map((item) => item.id),
+      ['job-real-running']
+    );
+  } finally {
+    if (originalLocalStorage === undefined) {
+      delete global.localStorage;
+    } else {
+      global.localStorage = originalLocalStorage;
+    }
+  }
 });
 
 test('restoreSimulationControllerJobs uses folder tasks only when a workspace is active', async () => {
