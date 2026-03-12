@@ -1,5 +1,4 @@
 import { MWGConfigParser } from '../../config/index.js';
-import { GlobalState } from '../../state.js';
 import {
   coerceConfigParams,
   applyAthImportDefaults,
