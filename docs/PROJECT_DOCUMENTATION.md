@@ -382,7 +382,8 @@ Runtime status:
 - `src/geometry/tags.js` maps those identities deterministically to mesh sizing classes and solver boundary classes.
 - JS geometry outer-build selection is exclusive: enclosure (`encDepth > 0`) or freestanding shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
 - JS enclosure generation is OSSE-only; `R-OSSE` with `encDepth > 0` is rejected.
-- JS freestanding wall thickness is generated in local `(axial, radial)` profile sections and keeps the outer throat ring at the same axial station as the inner throat ring.
+- JS freestanding wall thickness is generated from local 3D horn-surface normals and keeps the outer throat ring at the same axial station as the inner throat ring.
+- The freestanding wall `throat_return` subset is the rear transition from that throat-side outer ring into the back plate; the back plate sits `wallThickness` behind the throat plate and the transition follows the outer back-side slope instead of a straight cylinder.
 - JS morphing derives implicit target extents from each current slice when `morphTarget` is active but `morphWidth` / `morphHeight` are unset.
 
 #### Mesh sizing classes

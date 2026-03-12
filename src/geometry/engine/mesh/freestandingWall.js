@@ -28,81 +28,169 @@ function pushTri(vertices, indices, a, b, c) {
   indices.push(a, b, c);
 }
 
+function normalize3(x, y, z, fallback = [0, -1, 0]) {
+  const len = Math.hypot(x, y, z);
+  if (len <= 1e-12) return fallback;
+  return [x / len, y / len, z / len];
+}
+
+function computeInnerVertexNormals(vertices, indices, innerVertexCount) {
+  const normals = new Float64Array(innerVertexCount * 3);
+  const triCount = indices.length / 3;
+
+  for (let t = 0; t < triCount; t += 1) {
+    const off = t * 3;
+    const a = indices[off];
+    const b = indices[off + 1];
+    const c = indices[off + 2];
+    if (a >= innerVertexCount || b >= innerVertexCount || c >= innerVertexCount) continue;
+
+    const ax = vertices[a * 3];
+    const ay = vertices[a * 3 + 1];
+    const az = vertices[a * 3 + 2];
+    const bx = vertices[b * 3];
+    const by = vertices[b * 3 + 1];
+    const bz = vertices[b * 3 + 2];
+    const cx = vertices[c * 3];
+    const cy = vertices[c * 3 + 1];
+    const cz = vertices[c * 3 + 2];
+
+    const abx = bx - ax;
+    const aby = by - ay;
+    const abz = bz - az;
+    const acx = cx - ax;
+    const acy = cy - ay;
+    const acz = cz - az;
+
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+
+    normals[a * 3] += nx;
+    normals[a * 3 + 1] += ny;
+    normals[a * 3 + 2] += nz;
+    normals[b * 3] += nx;
+    normals[b * 3 + 1] += ny;
+    normals[b * 3 + 2] += nz;
+    normals[c * 3] += nx;
+    normals[c * 3 + 1] += ny;
+    normals[c * 3 + 2] += nz;
+  }
+
+  return normals;
+}
+
+function fillMissingNormals(normals, vertices, ringCount, lengthSteps) {
+  const innerVertexCount = (lengthSteps + 1) * ringCount;
+  const hasNormal = (idx) => Math.hypot(
+    normals[idx * 3],
+    normals[idx * 3 + 1],
+    normals[idx * 3 + 2]
+  ) > 1e-12;
+
+  for (let idx = 0; idx < innerVertexCount; idx += 1) {
+    if (hasNormal(idx)) continue;
+
+    const row = Math.floor(idx / ringCount);
+    const col = idx % ringCount;
+    const neighborIndices = [];
+
+    if (col > 0) neighborIndices.push(idx - 1);
+    if (col < ringCount - 1) neighborIndices.push(idx + 1);
+    if (row > 0) neighborIndices.push(idx - ringCount);
+    if (row < lengthSteps) neighborIndices.push(idx + ringCount);
+
+    let sx = 0;
+    let sy = 0;
+    let sz = 0;
+    for (const nidx of neighborIndices) {
+      if (!hasNormal(nidx)) continue;
+      sx += normals[nidx * 3];
+      sy += normals[nidx * 3 + 1];
+      sz += normals[nidx * 3 + 2];
+    }
+
+    if (Math.hypot(sx, sy, sz) <= 1e-12) {
+      const x = vertices[idx * 3];
+      const z = vertices[idx * 3 + 2];
+      [sx, sy, sz] = normalize3(x, 0, z);
+    }
+
+    normals[idx * 3] = sx;
+    normals[idx * 3 + 1] = sy;
+    normals[idx * 3 + 2] = sz;
+  }
+}
+
+function resolveOffsetSign(vertices, normals, innerVertexCount) {
+  const sampleStep = Math.max(1, Math.floor(innerVertexCount / 64));
+  let dotSum = 0;
+  let samples = 0;
+
+  for (let idx = 0; idx < innerVertexCount; idx += sampleStep) {
+    const x = vertices[idx * 3];
+    const z = vertices[idx * 3 + 2];
+    const radialLen = Math.hypot(x, z);
+    if (radialLen <= 1e-9) continue;
+
+    const nx = normals[idx * 3];
+    const nz = normals[idx * 3 + 2];
+    const normalLen = Math.hypot(nx, normals[idx * 3 + 1], nz);
+    if (normalLen <= 1e-12) continue;
+
+    const rx = x / radialLen;
+    const rz = z / radialLen;
+    dotSum += (nx / normalLen) * rx + (nz / normalLen) * rz;
+    samples += 1;
+  }
+
+  if (samples === 0) return -1;
+  return dotSum < 0 ? -1 : 1;
+}
+
 function getRadialSteps(ringCount, fullCircle) {
   return fullCircle ? ringCount : Math.max(0, ringCount - 1);
 }
 
-function indexOf(row, col, ringCount) {
-  return row * ringCount + col;
-}
-
-function getRadiusAt(vertices, idx) {
-  const x = vertices[idx * 3];
-  const z = vertices[idx * 3 + 2];
-  return Math.hypot(x, z);
-}
-
-function getRadialDirection(vertices, idx, col, ringCount) {
-  const x = vertices[idx * 3];
-  const z = vertices[idx * 3 + 2];
-  const radialLen = Math.hypot(x, z);
-  if (radialLen > 1e-9) {
-    return [x / radialLen, z / radialLen];
+function computeThroatPlateY(vertices, ringCount) {
+  let sumY = 0;
+  for (let i = 0; i < ringCount; i += 1) {
+    sumY += vertices[i * 3 + 1];
   }
-
-  const phi = (col / ringCount) * Math.PI * 2;
-  return [Math.cos(phi), Math.sin(phi)];
+  return sumY / ringCount;
 }
 
-function getSectionNormal(vertices, row, col, ringCount, lengthSteps) {
-  if (row === 0) return [0, 1];
-
-  const prevRow = Math.max(0, row - 1);
-  const nextRow = Math.min(lengthSteps, row + 1);
-  if (prevRow === nextRow) return [0, 1];
-
-  const prevIdx = indexOf(prevRow, col, ringCount);
-  const nextIdx = indexOf(nextRow, col, ringCount);
-  const dy = vertices[nextIdx * 3 + 1] - vertices[prevIdx * 3 + 1];
-  const dr = getRadiusAt(vertices, nextIdx) - getRadiusAt(vertices, prevIdx);
-
-  // 2D section normal in (axial y, radial r): tangent is (dy, dr), normal is (-dr, dy).
-  let nY = -dr;
-  let nR = dy;
-  const len = Math.hypot(nY, nR);
-  if (len <= 1e-12) return [0, 1];
-
-  nY /= len;
-  nR /= len;
-  if (nR < 0) {
-    nY *= -1;
-    nR *= -1;
-  }
-
-  return [nY, nR];
-}
-
-function appendOuterSectionOffsetShell(vertices, ringCount, lengthSteps, thickness) {
+function appendOuterOffsetShell(
+  vertices,
+  innerNormals,
+  innerVertexCount,
+  ringCount,
+  thickness,
+  offsetSign
+) {
   const outerStart = vertices.length / 3;
 
-  for (let row = 0; row <= lengthSteps; row += 1) {
-    for (let col = 0; col < ringCount; col += 1) {
-      const idx = indexOf(row, col, ringCount);
-      const x = vertices[idx * 3];
-      const y = vertices[idx * 3 + 1];
-      const z = vertices[idx * 3 + 2];
-      const [rx, rz] = getRadialDirection(vertices, idx, col, ringCount);
+  for (let idx = 0; idx < innerVertexCount; idx += 1) {
+    const row = Math.floor(idx / ringCount);
+    const x = vertices[idx * 3];
+    const y = vertices[idx * 3 + 1];
+    const z = vertices[idx * 3 + 2];
+    const [nx, ny, nz] = normalize3(
+      innerNormals[idx * 3],
+      innerNormals[idx * 3 + 1],
+      innerNormals[idx * 3 + 2]
+    );
 
-      let nY = 0;
-      let nR = 1;
-      if (row > 0) {
-        [nY, nR] = getSectionNormal(vertices, row, col, ringCount, lengthSteps);
-      }
-
+    if (row === 0) {
+      const radialLen = Math.hypot(nx, nz);
+      const rx = radialLen > 1e-12 ? nx / radialLen : 0;
+      const rz = radialLen > 1e-12 ? nz / radialLen : 0;
+      vertices.push(x + offsetSign * thickness * rx, y, z + offsetSign * thickness * rz);
+    } else {
       vertices.push(
-        x + thickness * nR * rx,
-        y + thickness * nY,
-        z + thickness * nR * rz
+        x + offsetSign * thickness * nx,
+        y + offsetSign * thickness * ny,
+        z + offsetSign * thickness * nz
       );
     }
   }
@@ -145,23 +233,48 @@ function stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, o
   }
 }
 
-function addThroatReturnAndRearCap(
+function extrapolateRearRimVertex(vertices, outerStart, ringCount, lengthSteps, col, rearDiscY) {
+  const throatIdx = outerStart + col;
+  const x0 = vertices[throatIdx * 3];
+  const y0 = vertices[throatIdx * 3 + 1];
+  const z0 = vertices[throatIdx * 3 + 2];
+
+  if (lengthSteps <= 0) {
+    return [x0, rearDiscY, z0];
+  }
+
+  const nextIdx = outerStart + ringCount + col;
+  const x1 = vertices[nextIdx * 3];
+  const y1 = vertices[nextIdx * 3 + 1];
+  const z1 = vertices[nextIdx * 3 + 2];
+  const dy = y1 - y0;
+  if (Math.abs(dy) <= 1e-9) {
+    return [x0, rearDiscY, z0];
+  }
+
+  const t = (rearDiscY - y0) / dy;
+  return [
+    x0 + (x1 - x0) * t,
+    rearDiscY,
+    z0 + (z1 - z0) * t
+  ];
+}
+
+function addRearTransitionAndCap(
   vertices,
   indices,
   ringCount,
   fullCircle,
   outerStart,
+  lengthSteps,
   rearDiscY
 ) {
   const throatReturnStartTri = indices.length / 3;
   const discRimStart = vertices.length / 3;
 
   for (let col = 0; col < ringCount; col += 1) {
-    const outerIdx = outerStart + col;
     vertices.push(
-      vertices[outerIdx * 3],
-      rearDiscY,
-      vertices[outerIdx * 3 + 2]
+      ...extrapolateRearRimVertex(vertices, outerStart, ringCount, lengthSteps, col, rearDiscY)
     );
   }
 
@@ -198,14 +311,6 @@ function addThroatReturnAndRearCap(
   };
 }
 
-function computeThroatY(vertices, ringCount) {
-  let sum = 0;
-  for (let col = 0; col < ringCount; col += 1) {
-    sum += vertices[col * 3 + 1];
-  }
-  return sum / ringCount;
-}
-
 export function addFreestandingWallGeometry(
   vertices,
   indices,
@@ -224,8 +329,18 @@ export function addFreestandingWallGeometry(
   if (!Number.isFinite(innerVertexCount) || innerVertexCount <= 0) return;
 
   const wallStartTri = indices.length / 3;
-  const outerStart = appendOuterSectionOffsetShell(vertices, ringCount, lengthSteps, thickness);
-  const throatY = computeThroatY(vertices, ringCount);
+  const innerNormals = computeInnerVertexNormals(vertices, indices, innerVertexCount);
+  fillMissingNormals(innerNormals, vertices, ringCount, lengthSteps);
+  const offsetSign = resolveOffsetSign(vertices, innerNormals, innerVertexCount);
+  const outerStart = appendOuterOffsetShell(
+    vertices,
+    innerNormals,
+    innerVertexCount,
+    ringCount,
+    thickness,
+    offsetSign
+  );
+  const throatY = computeThroatPlateY(vertices, ringCount);
   const rearDiscY = throatY - thickness;
 
   const outerWallStartTri = indices.length / 3;
@@ -239,12 +354,13 @@ export function addFreestandingWallGeometry(
     throatReturnStartTri,
     throatReturnEndTri,
     rearCapEndTri
-  } = addThroatReturnAndRearCap(
+  } = addRearTransitionAndCap(
     vertices,
     indices,
     ringCount,
     fullCircle,
     outerStart,
+    lengthSteps,
     rearDiscY
   );
 
