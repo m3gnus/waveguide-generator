@@ -30,7 +30,9 @@ import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
 import { downloadMeshArtifact } from './meshDownload.js';
 import {
   summarizeCanonicalSimulationMesh,
-  validateSimulationConfig,
+  validateSimulationConfig
+} from '../../modules/simulation/domain.js';
+import {
   applySimulationJobScriptState,
   resolveClearedFailedJobIds
 } from '../../modules/simulation/useCases.js';

@@ -8,6 +8,11 @@ import { DesignModule } from '../src/modules/design/index.js';
 import { GlobalState } from '../src/state.js';
 import {
   validateSimulationConfig,
+  prepareCanonicalSimulationMesh,
+  prepareOccAdaptiveSolveRequest,
+  summarizeCanonicalSimulationMesh
+} from '../src/modules/simulation/domain.js';
+import {
   readSimulationState,
   updateSimulationStateParams,
   loadSimulationStateSnapshot,
@@ -15,8 +20,7 @@ import {
   buildQueuedSimulationJob,
   buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
-  resolveClearedFailedJobIds,
-  summarizeCanonicalSimulationMesh
+  resolveClearedFailedJobIds
 } from '../src/modules/simulation/useCases.js';
 import {
   readSimulationWorkspaceJobs,
@@ -184,6 +188,41 @@ test('simulation use case validates frequency configuration', () => {
     }),
     null
   );
+});
+
+test('simulation domain prepares canonical mesh from an explicit state snapshot', () => {
+  const state = {
+    type: 'OSSE',
+    params: makeRawParams({ encDepth: 180, quadrants: '1' })
+  };
+  const payload = prepareCanonicalSimulationMesh(state);
+  const expectedPrepared = prepareGeometryParams(state.params, {
+    type: 'OSSE',
+    applyVerticalOffset: true
+  });
+  const expected = buildCanonicalMeshPayload(expectedPrepared, {
+    includeEnclosure: true,
+    adaptivePhi: false
+  });
+
+  assert.deepEqual(payload, expected);
+});
+
+test('simulation domain prepares OCC adaptive solve requests from an explicit state snapshot', () => {
+  const state = {
+    type: 'OSSE',
+    params: makeRawParams({ encDepth: 220, wallThickness: 6 })
+  };
+  const request = prepareOccAdaptiveSolveRequest(state, {
+    mshVersion: '2.2',
+    simType: 2
+  });
+
+  assert.equal(request.waveguidePayload.formula_type, 'OSSE');
+  assert.equal(request.waveguidePayload.sim_type, 2);
+  assert.equal(request.submitOptions.mesh.strategy, 'occ_adaptive');
+  assert.deepEqual(request.stateSnapshot, state);
+  assert.notEqual(request.stateSnapshot, state);
 });
 
 test('simulation state facade reads and updates GlobalState through module boundary', () => {

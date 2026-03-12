@@ -5,6 +5,7 @@
 Primary files:
 
 - `src/modules/simulation/index.js`
+- `src/modules/simulation/domain.js`
 - `src/modules/simulation/useCases.js`
 - `src/ui/simulation/controller.js`
 - `src/ui/simulation/polling.js`
@@ -14,6 +15,7 @@ Primary files:
 ## Responsibilities
 
 - Prepare canonical simulation payloads and OCC adaptive submit options.
+- Keep pure simulation-domain helpers separate from state/job facades.
 - Submit jobs through the backend solver client.
 - Track backend jobs and folder-backed task history.
 - Persist task metadata such as exports, ratings, and script snapshots.
