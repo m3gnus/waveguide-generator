@@ -1,6 +1,6 @@
 /**
- * Settings modal — popup with sections for Viewer, Simulation Basic,
- * Simulation Advanced, and System.
+ * Settings modal — popup with grouped sections for viewer behavior,
+ * simulation defaults, task exports, workspace routing, and system actions.
  *
  * Interaction style mirrors the View Results popup: backdrop click or ESC closes.
  */
@@ -22,7 +22,6 @@ import {
   resetSimBasicSettings,
 } from './simBasicSettings.js';
 import {
-  RECOMMENDED_DEFAULTS as SIM_MANAGEMENT_DEFAULTS,
   SIMULATION_EXPORT_FORMAT_IDS,
   getCurrentSimulationManagementSettings,
   resetSimulationManagementSettings,
@@ -35,6 +34,12 @@ import {
   summarizeRuntimeCapabilities,
 } from '../runtimeCapabilities.js';
 import { createHelpTrigger } from '../helpAffordance.js';
+import {
+  getSelectedFolderLabel,
+  requestFolderSelection,
+  subscribeFolderWorkspace,
+  supportsFolderSelection,
+} from '../workspace/folderWorkspace.js';
 
 export { describeSimBasicDeviceAvailability } from '../runtimeCapabilities.js';
 
@@ -59,6 +64,18 @@ const SIMULATION_MANAGEMENT_HELP = Object.freeze({
   autoExportOnComplete: 'Automatically exports the selected bundle formats whenever a simulation finishes successfully.',
   selectedFormats: 'Chooses which files are included in a completed-task export bundle.'
 });
+const VIEWER_HELP = Object.freeze({
+  liveUpdate: 'Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.',
+  displayMode: 'Switches the viewport shading mode used to inspect the current waveguide surface.',
+  rotateSpeed: 'Controls how quickly the camera orbits the model while dragging.',
+  zoomSpeed: 'Controls how quickly scroll and pinch gestures move the camera toward the model.',
+  panSpeed: 'Controls how quickly the viewport shifts when you pan the camera.',
+  dampingEnabled: 'Keeps orbit movement eased instead of stopping abruptly after drag input ends.',
+  dampingFactor: 'Adjusts how quickly the eased orbit motion settles after input stops.',
+  startupCameraMode: 'Sets which camera projection opens by default the next time the app starts.',
+  invertWheelZoom: 'Reverses the mouse-wheel zoom direction for viewport navigation.',
+  keyboardPanEnabled: 'Enables arrow-key style camera panning shortcuts while the viewport is focused.'
+});
 const SIMULATION_BASIC_HELP = Object.freeze({
   deviceMode: 'Chooses the preferred OpenCL device lane. Auto follows the backend capability policy.',
   meshValidationMode: 'Controls whether canonical mesh validation warns, fails, or is skipped before solve submission.',
@@ -67,6 +84,47 @@ const SIMULATION_BASIC_HELP = Object.freeze({
   enableSymmetry: 'Allows the backend symmetry policy to reduce eligible models before solving.',
   verbose: 'Includes detailed backend logging in job progress output and server logs.'
 });
+const ADVANCED_CONTROL_COPY = Object.freeze({
+  enable_warmup: {
+    label: 'Warm-up Pass',
+    help: 'Planned one-time backend warm-up before repeated solve loops.'
+  },
+  method: {
+    label: 'Linear Solver Method',
+    help: 'Planned solver-method override such as GMRES versus other iterative methods.'
+  },
+  tol: {
+    label: 'Linear Solver Tolerance',
+    help: 'Planned convergence tolerance override for iterative solver accuracy.'
+  },
+  restart: {
+    label: 'GMRES Restart',
+    help: 'Planned restart or Krylov-window size override for GMRES.'
+  },
+  maxiter: {
+    label: 'Max Iterations',
+    help: 'Planned cap for the linear solver iteration budget.'
+  },
+  strong_form: {
+    label: 'Strong-form Preconditioner',
+    help: 'Planned preconditioner policy override for advanced solver tuning.'
+  },
+  use_burton_miller: {
+    label: 'Burton-Miller Coupling',
+    help: 'Planned coupling toggle for high-frequency stability and uniqueness.'
+  },
+  symmetry_tolerance: {
+    label: 'Symmetry Tolerance',
+    help: 'Planned tolerance override for backend symmetry detection and reduction.'
+  }
+});
+const SETTINGS_SECTION_ITEMS = Object.freeze([
+  { key: 'viewer', label: 'Viewer' },
+  { key: 'simulation', label: 'Simulation' },
+  { key: 'task-exports', label: 'Task Exports' },
+  { key: 'workspace', label: 'Workspace' },
+  { key: 'system', label: 'System' },
+]);
 
 /**
  * Get the current live-update preference.
@@ -138,6 +196,7 @@ function _buildModal(viewerRuntime) {
   const backdrop = document.createElement('div');
   backdrop.id = 'settings-modal-backdrop';
   backdrop.className = 'settings-modal-backdrop';
+  const cleanupFns = [];
 
   const dialog = document.createElement('div');
   dialog.className = 'settings-modal-dialog';
@@ -169,8 +228,8 @@ function _buildModal(viewerRuntime) {
   const body = document.createElement('div');
   body.className = 'settings-modal-body';
 
-  const nav = _buildNav();
-  const content = _buildContent(viewerRuntime);
+  const nav = _buildNav(SETTINGS_SECTION_ITEMS);
+  const content = _buildContent(viewerRuntime, cleanupFns);
 
   body.appendChild(nav);
   body.appendChild(content);
@@ -212,6 +271,13 @@ function _buildModal(viewerRuntime) {
     if (closed) return;
     closed = true;
     window.removeEventListener('keydown', onKeyDown);
+    cleanupFns.splice(0).forEach((cleanup) => {
+      try {
+        cleanup();
+      } catch (error) {
+        console.warn('settings modal cleanup failed:', error);
+      }
+    });
     backdrop.remove();
   };
 
@@ -248,17 +314,10 @@ function _buildModal(viewerRuntime) {
   return backdrop;
 }
 
-function _buildNav() {
+function _buildNav(items = SETTINGS_SECTION_ITEMS) {
   const nav = document.createElement('nav');
   nav.className = 'settings-modal-nav';
   nav.setAttribute('aria-label', 'Settings sections');
-
-  const items = [
-    { key: 'viewer', label: 'Viewer' },
-    { key: 'sim-basic', label: 'Simulation Basic' },
-    { key: 'sim-advanced', label: 'Simulation Advanced' },
-    { key: 'system', label: 'System' },
-  ];
 
   items.forEach((item, i) => {
     const btn = document.createElement('button');
@@ -274,13 +333,14 @@ function _buildNav() {
   return nav;
 }
 
-function _buildContent(viewerRuntime) {
+function _buildContent(viewerRuntime, cleanupFns = []) {
   const content = document.createElement('div');
   content.className = 'settings-modal-content';
 
   content.appendChild(_buildViewerSection(viewerRuntime));
-  content.appendChild(_buildSimBasicSection());
-  content.appendChild(_buildSimAdvancedSection());
+  content.appendChild(_buildSimulationSection());
+  content.appendChild(_buildTaskExportsSection());
+  content.appendChild(_buildWorkspaceSection(cleanupFns));
   content.appendChild(_buildSystemSection(viewerRuntime));
 
   void _refreshSimulationCapabilityState();
@@ -304,6 +364,7 @@ function _buildViewerSection(viewerRuntime) {
   _appendInlineRow(sec, {
     labelText: 'Real-time Updates',
     labelFor: 'live-update',
+    helpText: VIEWER_HELP.liveUpdate,
     controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? ' checked' : ''}>`,
   });
 
@@ -320,6 +381,7 @@ function _buildViewerSection(viewerRuntime) {
   _appendInlineRow(sec, {
     labelText: 'Display Mode',
     labelFor: 'display-mode',
+    helpText: VIEWER_HELP.displayMode,
     controlHtml: `<select id="display-mode">${modeOptionsHtml}</select>`,
   });
 
@@ -346,23 +408,23 @@ function _buildViewerSection(viewerRuntime) {
   const orbitHeader = _buildSubSectionHeader('Orbit Controls', onResetOrbit);
   sec.appendChild(orbitHeader);
 
-  const rotateResult = _buildSliderRow('Rotate Speed', 'rotateSpeed', 0.1, 5.0, 0.1, _viewerState);
+  const rotateResult = _buildSliderRow('Rotate Speed', 'rotateSpeed', 0.1, 5.0, 0.1, _viewerState, VIEWER_HELP.rotateSpeed);
   sec.appendChild(rotateResult.row);
 
-  const zoomResult = _buildSliderRow('Zoom Speed', 'zoomSpeed', 0.1, 5.0, 0.1, _viewerState);
+  const zoomResult = _buildSliderRow('Zoom Speed', 'zoomSpeed', 0.1, 5.0, 0.1, _viewerState, VIEWER_HELP.zoomSpeed);
   sec.appendChild(zoomResult.row);
 
-  const panResult = _buildSliderRow('Pan Speed', 'panSpeed', 0.1, 5.0, 0.1, _viewerState);
+  const panResult = _buildSliderRow('Pan Speed', 'panSpeed', 0.1, 5.0, 0.1, _viewerState, VIEWER_HELP.panSpeed);
   sec.appendChild(panResult.row);
 
   // Damping enabled toggle
-  const dampingEnabledResult = _buildToggleRow('Enable Damping', 'dampingEnabled', _viewerState);
+  const dampingEnabledResult = _buildToggleRow('Enable Damping', 'dampingEnabled', _viewerState, VIEWER_HELP.dampingEnabled);
   const dampingEnabledBadge = dampingEnabledResult.badge;
   const dampingToggle = dampingEnabledResult.checkbox;
   sec.appendChild(dampingEnabledResult.row);
 
   // Damping factor slider (hidden when damping disabled)
-  const dampingFactorResult = _buildSliderRow('Damping Factor', 'dampingFactor', 0.01, 0.5, 0.01, _viewerState);
+  const dampingFactorResult = _buildSliderRow('Damping Factor', 'dampingFactor', 0.01, 0.5, 0.01, _viewerState, VIEWER_HELP.dampingFactor);
   dampingFactorResult.row.hidden = !_viewerState.dampingEnabled;
   sec.appendChild(dampingFactorResult.row);
 
@@ -384,9 +446,7 @@ function _buildViewerSection(viewerRuntime) {
   const cameraRow = document.createElement('div');
   cameraRow.className = 'settings-control-row';
 
-  const cameraLabel = document.createElement('label');
-  cameraLabel.textContent = 'Startup Camera Mode';
-  cameraRow.appendChild(cameraLabel);
+  cameraRow.appendChild(_buildSettingsLabelCopy('Startup Camera Mode', '', VIEWER_HELP.startupCameraMode));
 
   const cameraValueWrapper = document.createElement('div');
   cameraValueWrapper.className = 'settings-control-value';
@@ -455,10 +515,10 @@ function _buildViewerSection(viewerRuntime) {
   const inputHeader = _buildSubSectionHeader('Input', onResetInput);
   sec.appendChild(inputHeader);
 
-  const invertWheelResult = _buildToggleRow('Invert Scroll Zoom', 'invertWheelZoom', _viewerState);
+  const invertWheelResult = _buildToggleRow('Invert Scroll Zoom', 'invertWheelZoom', _viewerState, VIEWER_HELP.invertWheelZoom);
   sec.appendChild(invertWheelResult.row);
 
-  const keyboardPanResult = _buildToggleRow('Keyboard Pan Shortcuts', 'keyboardPanEnabled', _viewerState);
+  const keyboardPanResult = _buildToggleRow('Keyboard Pan Shortcuts', 'keyboardPanEnabled', _viewerState, VIEWER_HELP.keyboardPanEnabled);
   sec.appendChild(keyboardPanResult.row);
 
   // ---------- Per-section reset handlers ----------
@@ -530,16 +590,13 @@ function _buildViewerSection(viewerRuntime) {
     return hdr;
   }
 
-  function _buildSliderRow(labelText, settingKey, min, max, step, currentSettingsSnapshot) {
+  function _buildSliderRow(labelText, settingKey, min, max, step, currentSettingsSnapshot, helpText = '') {
     const row = document.createElement('div');
     row.className = 'settings-control-row';
 
     const inputId = `viewer-${settingKey}`;
 
-    const label = document.createElement('label');
-    label.setAttribute('for', inputId);
-    label.textContent = labelText;
-    row.appendChild(label);
+    row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
     const valueWrapper = document.createElement('div');
     valueWrapper.className = 'settings-control-value';
@@ -582,16 +639,13 @@ function _buildViewerSection(viewerRuntime) {
     return { row, badge, slider, readout };
   }
 
-  function _buildToggleRow(labelText, settingKey, currentSettingsSnapshot) {
+  function _buildToggleRow(labelText, settingKey, currentSettingsSnapshot, helpText = '') {
     const row = document.createElement('div');
     row.className = 'settings-control-row';
 
     const inputId = `viewer-${settingKey}`;
 
-    const label = document.createElement('label');
-    label.setAttribute('for', inputId);
-    label.textContent = labelText;
-    row.appendChild(label);
+    row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
     const valueWrapper = document.createElement('div');
     valueWrapper.className = 'settings-control-value';
@@ -637,35 +691,166 @@ function _buildViewerSection(viewerRuntime) {
   return sec;
 }
 
-function _buildSimBasicSection() {
+function _buildSimulationSection() {
   const sec = document.createElement('div');
-  sec.id = 'settings-section-sim-basic';
+  sec.id = 'settings-section-simulation';
   sec.className = 'settings-section';
   sec.hidden = true;
   sec.setAttribute('role', 'tabpanel');
 
   _appendSectionHeading(
     sec,
-    'Simulation Basic',
-    'BEM solver defaults and solve-mesh behavior.'
+    'Simulation',
+    'Persistent solve defaults live here. Advanced solver work stays visible, but separated until the backend contract exposes it.'
   );
 
-  // Keep existing "Download simulation mesh on start" checkbox
-  _appendInlineRow(sec, {
-    labelText: 'Auto-download solve mesh artifact (.msh)',
-    labelFor: 'download-sim-mesh',
-    helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
-    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
+  const currentSimBasic = getCurrentSimBasicSettings();
+  const solverHeader = _buildSubSectionHeader('Solve Defaults', () => {
+    resetSimBasicSettings();
+    const dm = document.getElementById('simbasic-deviceMode');
+    if (dm) dm.value = SIM_BASIC_DEFAULTS.deviceMode;
+    const mvm = document.getElementById('simbasic-meshValidationMode');
+    if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
+    const fs = document.getElementById('simbasic-frequencySpacing');
+    if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
+    const uo = document.getElementById('simbasic-useOptimized');
+    if (uo) uo.checked = SIM_BASIC_DEFAULTS.useOptimized;
+    const es = document.getElementById('simbasic-enableSymmetry');
+    if (es) es.checked = SIM_BASIC_DEFAULTS.enableSymmetry;
+    const vb = document.getElementById('simbasic-verbose');
+    if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
+    if (dmBadge) dmBadge.hidden = true;
+    if (mvmBadge) mvmBadge.hidden = true;
+    if (fsBadge) fsBadge.hidden = true;
+    if (uoBadge) uoBadge.hidden = true;
+    if (esBadge) esBadge.hidden = true;
+    if (vbBadge) vbBadge.hidden = true;
   });
+  sec.appendChild(solverHeader);
+
+  const dmResult = _buildSimBasicSelectRow(
+    'Compute Device',
+    'simbasic-deviceMode',
+    [
+      { value: 'auto', label: 'Auto' },
+      { value: 'opencl_gpu', label: 'OpenCL GPU' },
+      { value: 'opencl_cpu', label: 'OpenCL CPU' },
+    ],
+    currentSimBasic.deviceMode,
+    SIM_BASIC_DEFAULTS.deviceMode,
+    SIMULATION_BASIC_HELP.deviceMode
+  );
+  sec.appendChild(dmResult.row);
+  let dmBadge = dmResult.badge;
+
+  const dmStatusSpan = document.createElement('span');
+  dmStatusSpan.id = 'simbasic-deviceMode-status';
+  dmStatusSpan.setAttribute('style', 'font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;');
+  dmResult.row.appendChild(dmStatusSpan);
+
+  const mvmResult = _buildSimBasicSelectRow(
+    'Mesh Validation Policy',
+    'simbasic-meshValidationMode',
+    [
+      { value: 'warn', label: 'Warn' },
+      { value: 'strict', label: 'Strict' },
+      { value: 'off', label: 'Off' },
+    ],
+    currentSimBasic.meshValidationMode,
+    SIM_BASIC_DEFAULTS.meshValidationMode,
+    SIMULATION_BASIC_HELP.meshValidationMode
+  );
+  sec.appendChild(mvmResult.row);
+  let mvmBadge = mvmResult.badge;
+
+  const fsResult = _buildSimBasicSelectRow(
+    'Sweep Spacing',
+    'simbasic-frequencySpacing',
+    [
+      { value: 'log', label: 'Logarithmic' },
+      { value: 'linear', label: 'Linear' },
+    ],
+    currentSimBasic.frequencySpacing,
+    SIM_BASIC_DEFAULTS.frequencySpacing,
+    SIMULATION_BASIC_HELP.frequencySpacing
+  );
+  sec.appendChild(fsResult.row);
+  let fsBadge = fsResult.badge;
+
+  const uoResult = _buildSimBasicCheckboxRow(
+    'Use Optimized Solver Path',
+    'simbasic-useOptimized',
+    currentSimBasic.useOptimized,
+    SIM_BASIC_DEFAULTS.useOptimized,
+    SIMULATION_BASIC_HELP.useOptimized
+  );
+  sec.appendChild(uoResult.row);
+  let uoBadge = uoResult.badge;
+
+  const esResult = _buildSimBasicCheckboxRow(
+    'Allow Symmetry Reduction',
+    'simbasic-enableSymmetry',
+    currentSimBasic.enableSymmetry,
+    SIM_BASIC_DEFAULTS.enableSymmetry,
+    SIMULATION_BASIC_HELP.enableSymmetry
+  );
+  sec.appendChild(esResult.row);
+  let esBadge = esResult.badge;
+
+  const vbResult = _buildSimBasicCheckboxRow(
+    'Verbose Backend Logging',
+    'simbasic-verbose',
+    currentSimBasic.verbose,
+    SIM_BASIC_DEFAULTS.verbose,
+    SIMULATION_BASIC_HELP.verbose
+  );
+  sec.appendChild(vbResult.row);
+  let vbBadge = vbResult.badge;
+
+  const advancedHeader = _buildSubSectionHeader('Advanced Solver Controls');
+  sec.appendChild(advancedHeader);
+
+  const advancedIntro = document.createElement('p');
+  advancedIntro.className = 'settings-section-help';
+  advancedIntro.textContent = 'These controls are capability-gated and remain read-only until the backend explicitly exposes them through the public solve contract.';
+  sec.appendChild(advancedIntro);
+
+  const status = document.createElement('p');
+  status.id = 'simadvanced-capability-status';
+  status.className = 'settings-placeholder-text';
+  status.textContent = 'Checking backend capability...';
+  sec.appendChild(status);
+
+  const advancedControls = document.createElement('div');
+  advancedControls.id = 'simadvanced-planned-controls';
+  sec.appendChild(advancedControls);
+  _renderSimAdvancedControls(advancedControls);
+
+  const cachedHealth = getCachedRuntimeHealth();
+  if (cachedHealth) {
+    _applySimBasicDeviceAvailability(cachedHealth);
+    _applySimAdvancedCapabilityState(cachedHealth);
+  }
+
+  return sec;
+}
+
+function _buildTaskExportsSection() {
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-task-exports';
+  sec.className = 'settings-section';
+  sec.hidden = true;
+  sec.setAttribute('role', 'tabpanel');
+
+  _appendSectionHeading(
+    sec,
+    'Task Exports',
+    'Job-list preferences, automatic result bundles, and optional mesh artifact downloads all live together here.'
+  );
 
   const managementSettings = getCurrentSimulationManagementSettings();
-  const taskListHeader = document.createElement('div');
-  taskListHeader.className = 'settings-subsection-header';
 
-  const taskListTitle = document.createElement('h4');
-  taskListTitle.className = 'settings-subsection-title';
-  taskListTitle.textContent = 'Task List';
-  taskListHeader.appendChild(taskListTitle);
+  const taskListHeader = _buildSubSectionHeader('Simulation Jobs Toolbar');
   sec.appendChild(taskListHeader);
 
   _appendInlineRow(sec, {
@@ -693,19 +878,7 @@ function _buildSimBasicSection() {
     ])
   });
 
-  const exportHeader = document.createElement('div');
-  exportHeader.className = 'settings-subsection-header';
-
-  const exportTitle = document.createElement('h4');
-  exportTitle.className = 'settings-subsection-title';
-  exportTitle.textContent = 'Task Exports';
-  exportHeader.appendChild(exportTitle);
-
-  const exportResetBtn = document.createElement('button');
-  exportResetBtn.type = 'button';
-  exportResetBtn.className = 'settings-reset-btn';
-  exportResetBtn.textContent = 'Reset';
-  exportResetBtn.addEventListener('click', () => {
+  const exportHeader = _buildSubSectionHeader('Completed Task Bundles', () => {
     const resetSettings = resetSimulationManagementSettings();
     const autoExport = document.getElementById('simmanage-auto-export');
     if (autoExport) {
@@ -725,8 +898,14 @@ function _buildSimBasicSection() {
     }
     _syncTaskListPreferenceControls(resetSettings);
   });
-  exportHeader.appendChild(exportResetBtn);
   sec.appendChild(exportHeader);
+
+  _appendInlineRow(sec, {
+    labelText: 'Auto-download solve mesh (.msh)',
+    labelFor: 'download-sim-mesh',
+    helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
+    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
+  });
 
   _appendInlineRow(sec, {
     labelText: 'Auto-export completed task bundle',
@@ -735,6 +914,179 @@ function _buildSimBasicSection() {
     controlHtml: `<input type="checkbox" id="simmanage-auto-export"${managementSettings.autoExportOnComplete ? ' checked' : ''}>`,
   });
 
+  sec.appendChild(_buildSimulationExportFormatsRow(managementSettings));
+
+  return sec;
+}
+
+function _buildWorkspaceSection(cleanupFns = []) {
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-workspace';
+  sec.className = 'settings-section';
+  sec.hidden = true;
+  sec.setAttribute('role', 'tabpanel');
+
+  _appendSectionHeading(
+    sec,
+    'Workspace',
+    'Manage the folder workspace used for manual exports and completed simulation-task bundles.'
+  );
+
+  const statusRow = document.createElement('div');
+  statusRow.className = 'settings-control-row';
+  statusRow.appendChild(_buildSettingsLabelCopy(
+    'Selected Folder',
+    '',
+    'Manual exports write to the selected folder root when available, while completed simulation bundles write into a job-specific subfolder.'
+  ));
+  const statusValue = document.createElement('div');
+  statusValue.className = 'settings-control-value';
+  const statusText = document.createElement('span');
+  statusText.id = 'settings-workspace-folder-label';
+  statusValue.appendChild(statusText);
+  statusRow.appendChild(statusValue);
+  sec.appendChild(statusRow);
+
+  const chooseRow = document.createElement('div');
+  chooseRow.className = 'settings-action-row';
+
+  const chooseBtn = document.createElement('button');
+  chooseBtn.type = 'button';
+  chooseBtn.id = 'settings-choose-folder-btn';
+  chooseBtn.className = 'secondary';
+  chooseRow.appendChild(chooseBtn);
+
+  const chooseHelp = document.createElement('p');
+  chooseHelp.id = 'settings-workspace-support';
+  chooseHelp.className = 'settings-action-help';
+  chooseRow.appendChild(chooseHelp);
+  sec.appendChild(chooseRow);
+
+  const routingNote = document.createElement('p');
+  routingNote.id = 'settings-workspace-routing';
+  routingNote.className = 'settings-section-help';
+  sec.appendChild(routingNote);
+
+  const refreshWorkspaceCopy = () => {
+    const canPickFolder = supportsFolderSelection(globalThis?.window);
+    const selectedLabel = getSelectedFolderLabel();
+    statusText.textContent = selectedLabel;
+    chooseBtn.textContent = selectedLabel === 'No folder selected' ? 'Choose Folder' : 'Change Folder';
+    chooseBtn.disabled = !canPickFolder;
+    chooseHelp.textContent = canPickFolder
+      ? 'Choose a folder workspace here if you want exports to land in a stable location instead of the save picker.'
+      : 'Folder workspaces are unavailable in this browser. Manual exports and task bundles will continue to use the save picker or download fallback.';
+    routingNote.textContent = canPickFolder
+      ? 'Routing: manual exports write to the selected folder root when permission is available, and completed simulation bundles write into <workspace>/<jobId>/. If direct writes fail, the app clears the workspace and falls back to standard save/download behavior.'
+      : 'Routing fallback: without folder workspace support, manual exports and completed simulation bundles use the browser save/download path instead of workspace writes.';
+  };
+
+  chooseBtn.addEventListener('click', async () => {
+    if (!supportsFolderSelection(globalThis?.window)) {
+      refreshWorkspaceCopy();
+      return;
+    }
+    await requestFolderSelection(globalThis?.window);
+    refreshWorkspaceCopy();
+  });
+
+  const unsubscribe = subscribeFolderWorkspace(() => {
+    refreshWorkspaceCopy();
+  });
+  cleanupFns.push(unsubscribe);
+  refreshWorkspaceCopy();
+
+  return sec;
+}
+
+function _buildSubSectionHeader(titleText, onReset = null) {
+  const hdr = document.createElement('div');
+  hdr.className = 'settings-subsection-header';
+
+  const h4 = document.createElement('h4');
+  h4.className = 'settings-subsection-title';
+  h4.textContent = titleText;
+  hdr.appendChild(h4);
+
+  if (typeof onReset === 'function') {
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'settings-reset-btn';
+    resetBtn.textContent = 'Reset';
+    resetBtn.addEventListener('click', onReset);
+    hdr.appendChild(resetBtn);
+  }
+
+  return hdr;
+}
+
+function _makeDefaultBadge(currentValue, defaultValue) {
+  const badge = document.createElement('span');
+  badge.setAttribute('style', 'font-size:0.7rem;opacity:0.6;margin-left:6px;');
+  badge.textContent = 'Default';
+  badge.hidden = currentValue === defaultValue;
+  return badge;
+}
+
+function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, defaultValue, helpText = '') {
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
+  row.appendChild(_buildSettingsLabelCopy(labelText, selectId, helpText));
+
+  const valueWrapper = document.createElement('div');
+  valueWrapper.className = 'settings-control-value';
+
+  const select = document.createElement('select');
+  select.id = selectId;
+
+  for (const { value, label: optLabel } of options) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = optLabel;
+    if (value === currentValue) opt.selected = true;
+    select.appendChild(opt);
+  }
+
+  const badge = _makeDefaultBadge(currentValue, defaultValue);
+
+  select.addEventListener('change', () => {
+    badge.hidden = select.value === defaultValue;
+  });
+
+  valueWrapper.appendChild(select);
+  valueWrapper.appendChild(badge);
+  row.appendChild(valueWrapper);
+
+  return { row, badge, select };
+}
+
+function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultValue, helpText = '') {
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
+  row.appendChild(_buildSettingsLabelCopy(labelText, checkboxId, helpText));
+
+  const valueWrapper = document.createElement('div');
+  valueWrapper.className = 'settings-control-value';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.id = checkboxId;
+  checkbox.checked = currentValue;
+
+  const badge = _makeDefaultBadge(currentValue, defaultValue);
+
+  checkbox.addEventListener('change', () => {
+    badge.hidden = checkbox.checked === defaultValue;
+  });
+
+  valueWrapper.appendChild(checkbox);
+  valueWrapper.appendChild(badge);
+  row.appendChild(valueWrapper);
+
+  return { row, badge, checkbox };
+}
+
+function _buildSimulationExportFormatsRow(managementSettings) {
   const exportFormatsRow = document.createElement('div');
   exportFormatsRow.className = 'settings-control-row';
   exportFormatsRow.appendChild(_buildSettingsLabelCopy('Bundle Formats', '', SIMULATION_MANAGEMENT_HELP.selectedFormats));
@@ -771,244 +1123,17 @@ function _buildSimBasicSection() {
   });
 
   exportFormatsRow.appendChild(exportFormatsValue);
-  sec.appendChild(exportFormatsRow);
-
-  // --- Solver Settings sub-section ---
-  const currentSimBasic = getCurrentSimBasicSettings();
-
-  // Sub-section header with Reset button
-  const solverHeader = document.createElement('div');
-  solverHeader.className = 'settings-subsection-header';
-
-  const solverTitle = document.createElement('h4');
-  solverTitle.className = 'settings-subsection-title';
-  solverTitle.textContent = 'Solver Settings';
-  solverHeader.appendChild(solverTitle);
-
-  const resetBtn = document.createElement('button');
-  resetBtn.type = 'button';
-  resetBtn.className = 'settings-reset-btn';
-  resetBtn.textContent = 'Reset';
-  resetBtn.addEventListener('click', () => {
-    resetSimBasicSettings();
-    // Sync all Sim Basic DOM controls to RECOMMENDED_DEFAULTS
-    const dm = document.getElementById('simbasic-deviceMode');
-    if (dm) dm.value = SIM_BASIC_DEFAULTS.deviceMode;
-    const mvm = document.getElementById('simbasic-meshValidationMode');
-    if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
-    const fs = document.getElementById('simbasic-frequencySpacing');
-    if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
-    const uo = document.getElementById('simbasic-useOptimized');
-    if (uo) uo.checked = SIM_BASIC_DEFAULTS.useOptimized;
-    const es = document.getElementById('simbasic-enableSymmetry');
-    if (es) es.checked = SIM_BASIC_DEFAULTS.enableSymmetry;
-    const vb = document.getElementById('simbasic-verbose');
-    if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
-    // Update badge visibility
-    if (dmBadge) dmBadge.hidden = true;
-    if (mvmBadge) mvmBadge.hidden = true;
-    if (fsBadge) fsBadge.hidden = true;
-    if (uoBadge) uoBadge.hidden = true;
-    if (esBadge) esBadge.hidden = true;
-    if (vbBadge) vbBadge.hidden = true;
-  });
-  solverHeader.appendChild(resetBtn);
-  sec.appendChild(solverHeader);
-
-  // Helper: create a subtle "Default" badge
-  function _makeDefaultBadge(currentValue, defaultValue) {
-    const badge = document.createElement('span');
-    badge.setAttribute('style', 'font-size:0.7rem;opacity:0.6;margin-left:6px;');
-    badge.textContent = 'Default';
-    badge.hidden = currentValue === defaultValue;
-    return badge;
-  }
-
-  // Helper: build a select control row for Sim Basic
-  function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, defaultValue, helpText = '') {
-    const row = document.createElement('div');
-    row.className = 'settings-control-row';
-    row.appendChild(_buildSettingsLabelCopy(labelText, selectId, helpText));
-
-    const valueWrapper = document.createElement('div');
-    valueWrapper.className = 'settings-control-value';
-
-    const select = document.createElement('select');
-    select.id = selectId;
-
-    for (const { value, label: optLabel } of options) {
-      const opt = document.createElement('option');
-      opt.value = value;
-      opt.textContent = optLabel;
-      if (value === currentValue) opt.selected = true;
-      select.appendChild(opt);
-    }
-
-    const badge = _makeDefaultBadge(currentValue, defaultValue);
-
-    select.addEventListener('change', () => {
-      badge.hidden = select.value === defaultValue;
-    });
-
-    valueWrapper.appendChild(select);
-    valueWrapper.appendChild(badge);
-    row.appendChild(valueWrapper);
-
-    return { row, badge, select };
-  }
-
-  // Helper: build a checkbox control row for Sim Basic
-  function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultValue, helpText = '') {
-    const row = document.createElement('div');
-    row.className = 'settings-control-row';
-    row.appendChild(_buildSettingsLabelCopy(labelText, checkboxId, helpText));
-
-    const valueWrapper = document.createElement('div');
-    valueWrapper.className = 'settings-control-value';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.id = checkboxId;
-    checkbox.checked = currentValue;
-
-    const badge = _makeDefaultBadge(currentValue, defaultValue);
-
-    checkbox.addEventListener('change', () => {
-      badge.hidden = checkbox.checked === defaultValue;
-    });
-
-    valueWrapper.appendChild(checkbox);
-    valueWrapper.appendChild(badge);
-    row.appendChild(valueWrapper);
-
-    return { row, badge, checkbox };
-  }
-
-  // 1. Device Mode select
-  const dmResult = _buildSimBasicSelectRow(
-    'Device Mode',
-    'simbasic-deviceMode',
-    [
-      { value: 'auto', label: 'Auto' },
-      { value: 'opencl_gpu', label: 'OpenCL GPU' },
-      { value: 'opencl_cpu', label: 'OpenCL CPU' },
-    ],
-    currentSimBasic.deviceMode,
-    SIM_BASIC_DEFAULTS.deviceMode,
-    SIMULATION_BASIC_HELP.deviceMode
-  );
-  sec.appendChild(dmResult.row);
-  let dmBadge = dmResult.badge;
-
-  // Inline device mode availability status span (starts empty, populated async)
-  const dmStatusSpan = document.createElement('span');
-  dmStatusSpan.id = 'simbasic-deviceMode-status';
-  dmStatusSpan.setAttribute('style', 'font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;');
-  dmResult.row.appendChild(dmStatusSpan);
-
-  // 2. Mesh Validation Mode select
-  const mvmResult = _buildSimBasicSelectRow(
-    'Mesh Validation',
-    'simbasic-meshValidationMode',
-    [
-      { value: 'warn', label: 'Warn' },
-      { value: 'strict', label: 'Strict' },
-      { value: 'off', label: 'Off' },
-    ],
-    currentSimBasic.meshValidationMode,
-    SIM_BASIC_DEFAULTS.meshValidationMode,
-    SIMULATION_BASIC_HELP.meshValidationMode
-  );
-  sec.appendChild(mvmResult.row);
-  let mvmBadge = mvmResult.badge;
-
-  // 3. Frequency Spacing select
-  const fsResult = _buildSimBasicSelectRow(
-    'Frequency Spacing',
-    'simbasic-frequencySpacing',
-    [
-      { value: 'log', label: 'Logarithmic' },
-      { value: 'linear', label: 'Linear' },
-    ],
-    currentSimBasic.frequencySpacing,
-    SIM_BASIC_DEFAULTS.frequencySpacing,
-    SIMULATION_BASIC_HELP.frequencySpacing
-  );
-  sec.appendChild(fsResult.row);
-  let fsBadge = fsResult.badge;
-
-  // 4. Use Optimized checkbox
-  const uoResult = _buildSimBasicCheckboxRow(
-    'Use Optimized Solver',
-    'simbasic-useOptimized',
-    currentSimBasic.useOptimized,
-    SIM_BASIC_DEFAULTS.useOptimized,
-    SIMULATION_BASIC_HELP.useOptimized
-  );
-  sec.appendChild(uoResult.row);
-  let uoBadge = uoResult.badge;
-
-  // 5. Enable Symmetry checkbox
-  const esResult = _buildSimBasicCheckboxRow(
-    'Enable Symmetry',
-    'simbasic-enableSymmetry',
-    currentSimBasic.enableSymmetry,
-    SIM_BASIC_DEFAULTS.enableSymmetry,
-    SIMULATION_BASIC_HELP.enableSymmetry
-  );
-  sec.appendChild(esResult.row);
-  let esBadge = esResult.badge;
-
-  // 6. Verbose Logging checkbox
-  const vbResult = _buildSimBasicCheckboxRow(
-    'Verbose Backend Logging',
-    'simbasic-verbose',
-    currentSimBasic.verbose,
-    SIM_BASIC_DEFAULTS.verbose,
-    SIMULATION_BASIC_HELP.verbose
-  );
-  sec.appendChild(vbResult.row);
-  let vbBadge = vbResult.badge;
-
-  const cachedHealth = getCachedRuntimeHealth();
-  if (cachedHealth) {
-    _applySimBasicDeviceAvailability(cachedHealth);
-  }
-
-  return sec;
+  return exportFormatsRow;
 }
 
-function _buildSimAdvancedSection() {
-  const sec = document.createElement('div');
-  sec.id = 'settings-section-sim-advanced';
-  sec.className = 'settings-section';
-  sec.hidden = true;
-  sec.setAttribute('role', 'tabpanel');
+function _renderSimAdvancedControls(container, plannedControls = Object.keys(ADVANCED_CONTROL_COPY)) {
+  if (!container) return;
+  container.innerHTML = '';
 
-  _appendSectionHeading(
-    sec,
-    'Simulation Advanced',
-    'Phase-2 solver controls stay visible here, but remain read-only until the backend explicitly exposes them.'
-  );
+  plannedControls.forEach((controlId) => {
+    const copy = ADVANCED_CONTROL_COPY[controlId];
+    if (!copy) return;
 
-  const status = document.createElement('p');
-  status.id = 'simadvanced-capability-status';
-  status.className = 'settings-placeholder-text';
-  status.textContent = 'Checking backend capability...';
-  sec.appendChild(status);
-
-  const controlSpecs = [
-    ['Warm-up Pass', 'Controls one-time backend warm-up before solve loops.'],
-    ['Linear Solver Method', 'Planned solver-method override (for example GMRES vs CG).'],
-    ['Linear Solver Tolerance', 'Planned convergence tolerance override.'],
-    ['GMRES Restart', 'Planned restart/window size override for iterative solves.'],
-    ['Max Iterations', 'Planned cap for the linear solver iteration budget.'],
-    ['Strong-form Preconditioner', 'Planned strong-form preconditioner policy override.'],
-    ['Burton-Miller Coupling', 'Planned coupling toggle for high-frequency stability.'],
-    ['Symmetry Tolerance', 'Planned tolerance override for symmetry detection/reduction.'],
-  ];
-
-  for (const [labelText, helpText] of controlSpecs) {
     const row = document.createElement('div');
     row.className = 'settings-action-row';
 
@@ -1020,18 +1145,11 @@ function _buildSimAdvancedSection() {
 
     const label = document.createElement('p');
     label.className = 'settings-action-help';
-    label.textContent = `${labelText}: ${helpText}`;
+    label.textContent = `${copy.label}: ${copy.help}`;
     row.appendChild(label);
 
-    sec.appendChild(row);
-  }
-
-  const cachedHealth = getCachedRuntimeHealth();
-  if (cachedHealth) {
-    _applySimAdvancedCapabilityState(cachedHealth);
-  }
-
-  return sec;
+    container.appendChild(row);
+  });
 }
 
 function _buildSystemSection(viewerRuntime) {
@@ -1069,13 +1187,13 @@ function _buildSystemSection(viewerRuntime) {
   resetAllBtn.type = 'button';
   resetAllBtn.id = 'reset-all-settings-btn';
   resetAllBtn.className = 'secondary';
-  resetAllBtn.textContent = 'Reset All Settings to Defaults';
+  resetAllBtn.textContent = 'Reset Viewer Settings to Defaults';
   resetAllRow.appendChild(resetAllBtn);
 
   const resetAllHelp = document.createElement('p');
   resetAllHelp.className = 'settings-action-help';
   resetAllHelp.textContent =
-    'Restores all viewer controls to their recommended default values. Takes effect immediately.';
+    'Restores viewer controls to their recommended default values. Simulation, export, and workspace preferences stay unchanged.';
   resetAllRow.appendChild(resetAllHelp);
 
   resetAllBtn.addEventListener('click', () => {
@@ -1134,11 +1252,20 @@ function _applySimAdvancedCapabilityState(health) {
   if (!doc) return;
 
   const statusEl = doc.getElementById('simadvanced-capability-status');
+  const controlsEl = doc.getElementById('simadvanced-planned-controls');
   if (!statusEl) return;
 
   const runtime = summarizeRuntimeCapabilities(health);
+  if (controlsEl) {
+    _renderSimAdvancedControls(
+      controlsEl,
+      runtime.simulationAdvanced.plannedControls.length > 0
+        ? runtime.simulationAdvanced.plannedControls
+        : Object.keys(ADVANCED_CONTROL_COPY)
+    );
+  }
   statusEl.textContent = runtime.simulationAdvanced.available
-    ? 'Advanced solve overrides are available for this backend.'
+    ? 'Backend capability metadata reports advanced support, but these controls remain read-only until the public solve request contract expands.'
     : runtime.simulationAdvanced.reason;
 }
 

@@ -377,7 +377,7 @@ test('settings getters read DOM values when elements are present', () => {
   }
 });
 
-test('openSettingsModal creates modal with all four required section names', () => {
+test('openSettingsModal creates the grouped settings sections and workspace action', () => {
   // Minimal DOM environment for on-demand modal construction.
   const originalDocument = global.document;
   const originalWindow = global.window;
@@ -481,18 +481,23 @@ test('openSettingsModal creates modal with all four required section names', () 
     // Collect all textContent values from created elements to find section headings
     const allText = createdElements.map((el) => el.textContent).filter(Boolean);
 
-    // All four required section nav labels must be present
+    // The grouped settings sections must be present in the modal nav/content.
     assert.ok(allText.some(t => t === 'Viewer'), 'Viewer section must be present');
-    assert.ok(allText.some(t => t === 'Simulation Basic'), 'Simulation Basic section must be present');
-    assert.ok(allText.some(t => t === 'Simulation Advanced'), 'Simulation Advanced section must be present');
+    assert.ok(allText.some(t => t === 'Simulation'), 'Simulation section must be present');
+    assert.ok(allText.some(t => t === 'Task Exports'), 'Task Exports section must be present');
+    assert.ok(allText.some(t => t === 'Workspace'), 'Workspace section must be present');
     assert.ok(allText.some(t => t === 'System'), 'System section must be present');
     assert.ok(
       createdElements.some((el) => el.id === 'simmanage-default-sort'),
-      'Simulation Basic should expose a default task sort control'
+      'Task Exports should expose a default task sort control'
     );
     assert.ok(
       createdElements.some((el) => el.id === 'simmanage-min-rating'),
-      'Simulation Basic should expose a minimum rating filter control'
+      'Task Exports should expose a minimum rating filter control'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'settings-choose-folder-btn'),
+      'Workspace section should expose a folder selection action'
     );
   } finally {
     global.document = originalDocument;
@@ -563,6 +568,31 @@ test('openSettingsModal places check-updates-btn inside the modal, not in the ac
     // Verify it is NOT directly in the static DOM (getElementById returns null before modal open)
     const staticBtn = global.document.getElementById('check-updates-btn');
     assert.equal(staticBtn, null, 'check-updates-btn should not exist in static DOM before modal is opened');
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+  }
+});
+
+test('openSettingsModal keeps folder-workspace fallback copy visible when picker support is unavailable', () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+
+  const appendedChildren = [];
+  const createdElements = [];
+
+  global.window = { addEventListener: () => {}, removeEventListener: () => {} };
+  global.document = createSettingsModalDocument(createdElements, appendedChildren);
+
+  try {
+    openSettingsModal();
+
+    const supportCopy = createdElements.find((el) => el.id === 'settings-workspace-support');
+    const chooseBtn = createdElements.find((el) => el.id === 'settings-choose-folder-btn');
+
+    assert.ok(supportCopy, 'Workspace support copy should be rendered');
+    assert.match(supportCopy.textContent, /unavailable in this browser/i);
+    assert.equal(chooseBtn?.disabled, true);
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;

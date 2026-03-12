@@ -49,7 +49,7 @@ Primary entry points:
   - Parameter and simulation UI behavior, including schema-driven formula affordances in the parameter panel
   - `src/ui/parameterInventory.js` is the source of truth for parameter-section grouping/order across geometry, sweep, directivity placement, source, and mesh sections
   - `src/ui/helpAffordance.js` renders the shared hover-help trigger used by schema-driven controls and the directivity panel
-  - Settings-modal Simulation Basic rows reuse the same help-trigger pattern for task-management preferences and live solver defaults
+  - The settings modal groups persistent preferences into `Viewer`, `Simulation`, `Task Exports`, `Workspace`, and `System`, and those rows reuse the shared help-trigger pattern
 - `src/state.js`
   - Global app state, undo/redo, persistence
 
@@ -118,14 +118,14 @@ flowchart LR
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
    - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
-   - Simulation Basic settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
+   - Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
    - Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
    - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
-   - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Simulation Basic task-export settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
-   - Task-list UI preferences now persist through simulation-management settings: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and folder manifests/index when available.
+   - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Task Exports settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
+   - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and folder manifests/index when available.
    - Solver results now include both `metadata.symmetry` (applied reduction summary) and `metadata.symmetry_policy` (decision/rejection reason, detected type/planes, reduction factor, and centered-source check) so research and future UI work can inspect the automatic symmetry decision without parsing logs.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
@@ -134,8 +134,8 @@ flowchart LR
 1. Local file exports (`exportSTL`, `exportMWGConfig`, `exportProfileCSV`) run through `src/modules/export/useCases.js`.
 2. OCC-backed mesh export uses `prepareExportArtifacts(...)`, which normalizes export params through `DesignModule` and requests `POST /api/mesh/build`.
 3. If `/api/mesh/build` returns `503`, the export path fails explicitly and does not fall back to a legacy frontend mesher.
-4. Completed-task exports now run through a bundle coordinator in `src/ui/simulation/exports.js`, driven by persisted Simulation Basic task-export settings (`autoExportOnComplete`, `selectedFormats`).
-5. When a folder workspace is active, bundle files write into the task subfolder (`<workspace>/<jobId>/...`) and manifests/index rows record `exportedFiles` plus `autoExportCompletedAt`; without folder access the same bundle falls back to standard file-save/download behavior.
+4. Completed-task exports now run through a bundle coordinator in `src/ui/simulation/exports.js`, driven by persisted Task Exports settings (`autoExportOnComplete`, `selectedFormats`).
+5. When a folder workspace is active, bundle files write into the task subfolder (`<workspace>/<jobId>/...`) and manifests/index rows record `exportedFiles` plus `autoExportCompletedAt`; the settings modal also surfaces the active workspace label and routing copy. Without folder access the same bundle falls back to standard file-save/download behavior.
 6. ABEC bundle generation is not part of the active runtime; remaining ABEC compatibility is limited to config/result text conventions used by import/export helpers.
 
 ## 4. Mesh Pipelines
@@ -236,7 +236,7 @@ Active runtime export surfaces:
 
 Task-history controls:
 - `src/ui/simulation/jobActions.js` renders inline 1-5 star rating controls and applies persisted sort/filter preferences.
-- `src/ui/settings/simulationManagementSettings.js` stores task export settings plus task-list preferences (`defaultSort`, `minRatingFilter`).
+- `src/ui/settings/simulationManagementSettings.js` stores task export settings plus task-list preferences (`defaultSort`, `minRatingFilter`) used by the `Task Exports` settings section and Simulation Jobs toolbar.
 - `src/ui/simulation/controller.js` persists rating updates through the same job/task-manifest contract used for export bookkeeping.
 
 ABEC bundle export is removed from the active runtime. The live solver path is fully backend-driven via `/api/solve`.
