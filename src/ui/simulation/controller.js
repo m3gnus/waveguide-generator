@@ -10,7 +10,7 @@ import {
 import {
   readSimulationWorkspaceJobs,
   syncSimulationWorkspaceJobManifest
-} from '../../modules/simulation/workspaceTasks.js';
+} from './workspaceTasks.js';
 import { UiModule } from '../../modules/ui/index.js';
 import {
   buildCancellationRequestedSimulationJob,

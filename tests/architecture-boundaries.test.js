@@ -14,9 +14,6 @@ const LEGACY_EXCEPTIONS = new Set([
 ]);
 const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
   'modules/simulation/state.js->state.js',
-  'modules/simulation/workspaceTasks.js->ui/workspace/folderWorkspace.js',
-  'modules/simulation/workspaceTasks.js->ui/workspace/taskIndex.js',
-  'modules/simulation/workspaceTasks.js->ui/workspace/taskManifest.js',
 ]);
 
 const BOUNDARY_RULES = [
@@ -277,8 +274,14 @@ test('ui simulation workflow files must not import workspace internals directly'
   const simulationUiRoot = path.join(SRC_ROOT, 'ui', 'simulation');
   const files = listJsFiles(simulationUiRoot);
   const violations = [];
+  const allowedFiles = new Set([
+    'ui/simulation/workspaceTasks.js'
+  ]);
 
   for (const file of files) {
+    if (allowedFiles.has(toSrcRelative(file))) {
+      continue;
+    }
     const content = fs.readFileSync(file, 'utf8');
     const specs = extractImportSpecs(content);
     for (const spec of specs) {

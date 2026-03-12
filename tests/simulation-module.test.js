@@ -28,7 +28,7 @@ import {
   readSimulationWorkspaceJobs,
   syncSimulationWorkspaceIndex,
   syncSimulationWorkspaceJobManifest
-} from '../src/modules/simulation/workspaceTasks.js';
+} from '../src/ui/simulation/workspaceTasks.js';
 import {
   resetSelectedFolder,
   setSelectedFolderHandle

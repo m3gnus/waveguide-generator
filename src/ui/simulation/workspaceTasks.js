@@ -1,15 +1,15 @@
-import { getSelectedFolderHandle } from '../../ui/workspace/folderWorkspace.js';
+import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
 import {
   ensureFolderWritePermission,
   resetSelectedFolder
-} from '../../ui/workspace/folderWorkspace.js';
+} from '../workspace/folderWorkspace.js';
 import {
   buildTaskIndexEntriesFromJobs,
   loadTaskIndex,
   rebuildIndexFromManifests,
   writeTaskIndex
-} from '../../ui/workspace/taskIndex.js';
-import { updateTaskManifestForJob } from '../../ui/workspace/taskManifest.js';
+} from '../workspace/taskIndex.js';
+import { updateTaskManifestForJob } from '../workspace/taskManifest.js';
 
 let pendingSimulationWorkspaceIndexSync = Promise.resolve({
   synced: false,
