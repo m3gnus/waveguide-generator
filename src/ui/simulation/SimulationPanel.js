@@ -13,7 +13,11 @@ import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
 import { setupSmoothingListener, setupKeyboardShortcuts } from './smoothing.js';
-import { setupSimulationParamBindings, syncSimulationSettings } from './settings.js';
+import {
+  setupSimulationParamBindings,
+  syncSimulationSettings,
+  teardownSimulationParamBindings
+} from './settings.js';
 import { checkSolverConnection } from './connection.js';
 import { pollSimulationStatus } from './polling.js';
 import { runSimulation, runMockSimulation, renderJobList } from './jobActions.js';
@@ -160,6 +164,7 @@ export class SimulationPanel {
    * Call when the panel is being unmounted or replaced.
    */
   dispose() {
+    teardownSimulationParamBindings(this);
     disposeSimulationPanelRuntime(this.runtime);
   }
 }
