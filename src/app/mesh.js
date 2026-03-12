@@ -1,8 +1,9 @@
-import { prepareCanonicalSimulationMesh } from '../modules/simulation/useCases.js';
+import { prepareCanonicalSimulationMesh } from '../modules/simulation/domain.js';
+import { readSimulationState } from '../modules/simulation/useCases.js';
 
 export function provideMeshForSimulation(app) {
   try {
-    const payload = prepareCanonicalSimulationMesh();
+    const payload = prepareCanonicalSimulationMesh(readSimulationState());
 
     const vertexCount = payload.vertices.length / 3;
     const triangleCount = payload.indices.length / 3;

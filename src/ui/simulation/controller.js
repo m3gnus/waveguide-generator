@@ -3,6 +3,9 @@
 import {
   createSimulationClient,
   prepareOccAdaptiveSolveRequest
+} from '../../modules/simulation/domain.js';
+import {
+  readSimulationState
 } from '../../modules/simulation/useCases.js';
 import {
   readSimulationWorkspaceJobs,
@@ -321,7 +324,7 @@ export async function recordSimulationControllerRating(
 export function prepareSimulationControllerSubmission(
   options = {}
 ) {
-  return prepareOccAdaptiveSolveRequest({
+  return prepareOccAdaptiveSolveRequest(readSimulationState(), {
     mshVersion: options.mshVersion || '2.2',
     simType: options.simType ?? 2
   });
