@@ -19,9 +19,9 @@ export function prepareViewportMesh() {
     adaptivePhi: false
   });
   const geometryShape = GeometryModule.output.shape(geometryTask);
-  const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
+  const { vertices, indices, groups } = buildGeometryMeshFromShape(geometryShape, {
     adaptivePhi: false
   });
 
-  return { vertices, indices, preparedParams };
+  return { vertices, indices, groups, preparedParams };
 }

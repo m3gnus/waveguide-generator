@@ -7,6 +7,7 @@ import {
   ZebraShader
 } from '../viewer/index.js';
 import { prepareViewportMesh } from '../modules/geometry/useCases.js';
+import { detachThroatDiscVertices } from './viewportMesh.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -75,8 +76,9 @@ export function renderModel(app) {
     app.hornMesh.material.dispose();
   }
 
-  const { vertices, indices, preparedParams } = prepareViewportMesh();
-  applyMeshToScene(app, vertices, indices, preparedParams);
+  const viewportMesh = prepareViewportMesh();
+  const renderMesh = detachThroatDiscVertices(viewportMesh);
+  applyMeshToScene(app, renderMesh.vertices, renderMesh.indices, viewportMesh.preparedParams);
 }
 
 /**
