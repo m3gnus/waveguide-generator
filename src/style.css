@@ -599,6 +599,13 @@ h3 {
     margin-bottom: 8px;
 }
 
+.section-note {
+    margin: -2px 0 10px;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
 .input-row {
     display: flex;
     flex-direction: column;
@@ -618,6 +625,61 @@ h3 {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+}
+
+button.control-help-trigger {
+    position: relative;
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--input-bg);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    flex: 0 0 auto;
+}
+
+button.control-help-trigger:hover:not(:disabled),
+button.control-help-trigger:focus-visible {
+    opacity: 1;
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    background: var(--input-bg);
+    transform: none;
+}
+
+button.control-help-trigger::after {
+    content: attr(data-help-text);
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: min(260px, 60vw);
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(18, 20, 24, 0.96);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.45;
+    text-align: left;
+    white-space: normal;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 30;
+}
+
+button.control-help-trigger:hover::after,
+button.control-help-trigger:focus-visible::after {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 .param-input-wrapper {
@@ -665,6 +727,12 @@ h3 {
     gap: 8px;
     font-size: 0.82rem;
     color: var(--text-color);
+}
+
+.polar-axis-option-copy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .input-row-inline {
@@ -949,15 +1017,6 @@ h3 {
 
 .formula-list.scrollable::-webkit-scrollbar-thumb:hover {
     background: var(--accent-color);
-}
-
-label[title] {
-    position: relative;
-}
-
-label.has-tooltip {
-    cursor: help;
-    border-bottom: 1px dotted var(--text-secondary);
 }
 
 .input-row input[type="range"] {

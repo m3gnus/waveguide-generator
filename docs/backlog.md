@@ -30,9 +30,9 @@ status as of date:
 - The backlog is re-opened for a UI/settings parity pass plus the earlier symmetry-control/runtime follow-through.
 
 Researched UI/runtime findings:
-- `src/ui/paramPanel.js` already renders most geometry/source/mesh controls from `src/config/schema.js` and applies native browser tooltips through `label.title`, but settings controls do not yet have the same per-control hover help pattern.
+- `src/ui/paramPanel.js` now renders geometry/source/mesh controls from an explicit parameter-section inventory, and both schema-driven controls and directivity controls use the shared hover-help trigger pattern. Settings modal controls still need parity with that affordance.
 - Not every schema parameter is visible. `PARAM_SCHEMA.MESH` includes `throatSliceDensity` and `verticalOffset`, but the current parameter UI does not render either control.
-- Simulation frequency and polar controls are visible in `index.html`, but they live outside the settings modal and do not share the same copy/help system as schema-driven parameter controls.
+- Simulation frequency and polar controls remain outside the settings modal, but they now share the same naming/order pass and hover-help affordance as the schema-driven parameter controls.
 - The settings modal fully exposes viewer settings and the active Simulation Basic runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`).
 - Persisted simulation-management settings are only partially exposed in the settings modal. `autoExportOnComplete` and `selectedFormats` are visible there, while `defaultSort` and `minRatingFilter` still live only in the simulation-jobs toolbar.
 - The Simulation Advanced section is placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
@@ -147,15 +147,15 @@ Required regression coverage:
 
 ### P1. Parameter Inventory, Naming, Hover Help, and Ordering
 
-- [ ] Build a source-of-truth inventory of every user-facing parameter, then use it to rework naming, hover help, and ordering into one coherent UI pass.
+- [x] Build a source-of-truth inventory of every user-facing parameter, then use it to rework naming, hover help, and ordering into one coherent UI pass.
   - [x] Move the simulation frequency controls into the schema-driven panel with stable DOM IDs, and expose the existing `throatSliceDensity` and `verticalOffset` schema controls in the rendered mesh section.
   - [x] Make the directivity-map controls state-backed like the frequency controls, keep their canonical `ABEC.Polars:*` blocks in sync from UI state, and treat `src/ui/simulation/polarSettings.js` as the single metadata/domain source for their defaults, labels, help text, ordering, validation, and state-to-ABEC block translation.
-  - [ ] Finish the broader label/order cleanup across geometry and simulation sections now that frequency and directivity controls both have a single state/metadata source.
-  - Reorganize geometry/simulation parameters into clearer groups with a predictable order instead of the current split between schema-driven sections and hard-coded simulation controls.
-  - Rewrite parameter titles into more understandable user-facing names while preserving current internal keys and config compatibility.
-  - Replace the current native-tooltip-only approach with a deliberate hover-help pattern that works consistently for parameters and settings.
-  - Expose currently hidden schema parameters `throatSliceDensity` and `verticalOffset`, or explicitly document them as intentionally internal if product decides they should remain hidden.
-  - Include simulation frequency and polar controls in the same naming/help/order pass so the whole UI reads as one system.
+  - [x] Finish the broader label/order cleanup across geometry and simulation sections now that frequency and directivity controls both have a single state/metadata source.
+  - [x] Reorganize geometry/simulation parameters into clearer groups with a predictable order instead of the current split between schema-driven sections and hard-coded simulation controls.
+  - [x] Rewrite parameter titles into more understandable user-facing names while preserving current internal keys and config compatibility.
+  - [x] Replace the current native-tooltip-only approach with a deliberate hover-help pattern for the parameter and directivity UI. Settings-modal parity continues under `P1. Settings Panel Completeness and Information Architecture`.
+  - [x] Expose currently hidden schema parameters `throatSliceDensity` and `verticalOffset`, or explicitly document them as intentionally internal if product decides they should remain hidden.
+  - [x] Include simulation frequency and polar controls in the same naming/help/order pass so the whole UI reads as one system.
 
 Implementation notes:
 - `src/config/schema.js`
