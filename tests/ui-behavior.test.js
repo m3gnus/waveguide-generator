@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { normalizeParamInput } from '../src/ui/paramInput.js';
 import { formatJobSummary, renderSimulationMeshDiagnostics } from '../src/ui/simulation/jobActions.js';
-import { validateSimulationConfig } from '../src/modules/simulation/useCases.js';
+import { validateSimulationConfig } from '../src/modules/simulation/domain.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
   deriveExportFieldsFromFileName,
