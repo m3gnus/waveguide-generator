@@ -17,8 +17,8 @@ const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
   'modules/simulation/workspaceTasks.js->ui/workspace/folderWorkspace.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskIndex.js',
   'modules/simulation/workspaceTasks.js->ui/workspace/taskManifest.js',
+  'modules/ui/index.js->ui/feedback.js',
   'modules/ui/index.js->ui/fileOps.js',
-  'modules/ui/useCases.js->ui/feedback.js',
   'modules/ui/useCases.js->ui/fileOps.js'
 ]);
 

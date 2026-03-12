@@ -107,7 +107,7 @@ export class App {
 
 
   handleFileUpload(event) {
-    return handleFileUpload(event);
+    return handleFileUpload(event, this.uiCoordinator);
   }
 
   renderModel() {
@@ -186,7 +186,7 @@ export class App {
   }
 
   async checkForUpdates(buttonEl) {
-    return checkForUpdates(buttonEl);
+    return checkForUpdates(buttonEl, this.uiCoordinator);
   }
 }
 

@@ -1,5 +1,11 @@
 import { AppEvents } from '../../events.js';
 import { markParametersChanged } from '../../ui/fileOps.js';
+import {
+  showCommandSuggestion,
+  showError,
+  showMessage,
+  showSuccess
+} from '../../ui/feedback.js';
 
 const UI_MODULE_ID = 'ui';
 const UI_IMPORT_STAGE = 'import';
@@ -69,6 +75,7 @@ function validateSimulationMeshPayload(meshData) {
 function buildAppCoordinator(input) {
   const app = input.app;
   const loadSimulationPanel = input.loadSimulationPanel;
+  const feedback = input.feedback || {};
   let simulationPanelInitPromise = null;
   let eventsBound = false;
 
@@ -126,6 +133,22 @@ function buildAppCoordinator(input) {
     publishSimulationMeshError(message) {
       AppEvents.emit('simulation:mesh-error', { message });
       return null;
+    },
+
+    showError(message, duration) {
+      return (feedback.showError || showError)(message, duration);
+    },
+
+    showMessage(message, options) {
+      return (feedback.showMessage || showMessage)(message, options);
+    },
+
+    showSuccess(message, duration) {
+      return (feedback.showSuccess || showSuccess)(message, duration);
+    },
+
+    showCommandSuggestion(options = {}) {
+      return (feedback.showCommandSuggestion || showCommandSuggestion)(options);
     },
 
     dispose() {
@@ -246,7 +269,8 @@ function buildSimulationPanelCoordinator(input) {
 export function importAppUi(app, options = {}) {
   return createUiImportEnvelope(UI_KINDS.APP, {
     app,
-    loadSimulationPanel: options.loadSimulationPanel
+    loadSimulationPanel: options.loadSimulationPanel,
+    feedback: options.feedback
   });
 }
 

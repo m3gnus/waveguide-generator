@@ -81,6 +81,55 @@ test('UiModule app coordinator binds AppEvents and lazily creates the simulation
   }
 });
 
+test('UiModule app coordinator exposes feedback helpers through the app edge', async () => {
+  const calls = [];
+  const feedback = {
+    showError(message, duration) {
+      calls.push(['error', message, duration]);
+    },
+    showMessage(message, options) {
+      calls.push(['message', message, options]);
+    },
+    showSuccess(message, duration) {
+      calls.push(['success', message, duration]);
+    },
+    showCommandSuggestion(options) {
+      calls.push(['command', options]);
+      return Promise.resolve(true);
+    }
+  };
+
+  const coordinator = UiModule.output.app(
+    UiModule.task(
+      UiModule.importApp(
+        {
+          simulationPanel: null,
+          onStateUpdate() {},
+          provideMeshForSimulation() {},
+          schedulePanelAutoSize() {}
+        },
+        {
+          loadSimulationPanel: async () => ({ SimulationPanel: class {} }),
+          feedback
+        }
+      )
+    )
+  );
+
+  coordinator.showError('boom', 1000);
+  coordinator.showMessage('info', { type: 'info' });
+  coordinator.showSuccess('ok', 800);
+  const copied = await coordinator.showCommandSuggestion({ command: 'git pull' });
+
+  assert.equal(copied, true);
+  assert.deepEqual(calls, [
+    ['error', 'boom', 1000],
+    ['message', 'info', { type: 'info' }],
+    ['success', 'ok', 800],
+    ['command', { command: 'git pull' }]
+  ]);
+});
+
 test('UiModule simulation-panel coordinator resolves mesh requests and syncs state updates', async () => {
   const syncedStates = [];
   let refreshCalls = 0;

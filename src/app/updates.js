@@ -1,10 +1,4 @@
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
-import {
-  showUiCommandSuggestion,
-  showUiError,
-  showUiMessage,
-  showUiSuccess
-} from '../modules/ui/useCases.js';
 
 function shortCommit(sha) {
   const text = String(sha || '').trim();
@@ -25,7 +19,7 @@ function parseErrorDetail(payload) {
  *   When provided, the button is disabled and its label updated while the request is in flight.
  *   Falls back to `document.getElementById('check-updates-btn')` for backwards compatibility.
  */
-export async function checkForUpdates(buttonEl) {
+export async function checkForUpdates(buttonEl, ui = {}) {
   const button = buttonEl ?? document.getElementById('check-updates-btn');
   const originalLabel = button?.textContent || 'Check for App Updates';
 
@@ -57,29 +51,29 @@ export async function checkForUpdates(buttonEl) {
 
     if (behind > 0) {
       const pullCommand = `git pull --ff-only origin ${branch}`;
-      const copied = await showUiCommandSuggestion({
+      const copied = await ui.showCommandSuggestion?.({
         title: 'Update Available',
         subtitle: `${behind} commit(s) behind origin/${branch} (${localSha} -> ${remoteSha}).`,
         command: pullCommand
-      });
+      }) ?? false;
 
       if (!copied) {
-        showUiMessage(`Run in terminal: ${pullCommand}`, { type: 'info', duration: 7000 });
+        ui.showMessage?.(`Run in terminal: ${pullCommand}`, { type: 'info', duration: 7000 });
       }
       return;
     }
 
     if (ahead > 0) {
-      showUiMessage(
+      ui.showMessage?.(
         `Local branch is ${ahead} commit(s) ahead of origin/${branch} (${localSha}).`,
         { type: 'info', duration: 4200 }
       );
       return;
     }
 
-    showUiSuccess(`Up to date with origin/${branch} (${localSha}).`);
+    ui.showSuccess?.(`Up to date with origin/${branch} (${localSha}).`);
   } catch (error) {
-    showUiError(`Update check failed: ${error?.message || 'Unknown error'}`);
+    ui.showError?.(`Update check failed: ${error?.message || 'Unknown error'}`);
   } finally {
     if (button) {
       button.disabled = false;
