@@ -163,7 +163,11 @@ export function buildWaveguideMesh(params, options = {}) {
     console.error(`[Geometry] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`);
   }
 
-  if (options.useLegacyOrientationRepair === true || meshParams.useLegacyOrientationRepair === true) {
+  if (
+    hasEnclosure
+    || options.useLegacyOrientationRepair === true
+    || meshParams.useLegacyOrientationRepair === true
+  ) {
     orientMeshConsistently(vertices, indices, {
       preferOutward: fullCircle
     });
