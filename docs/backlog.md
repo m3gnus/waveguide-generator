@@ -55,6 +55,7 @@ When new work lands, continue to work the backlog from upstream runtime truth to
 3. Rework settings and parameter information architecture, naming, and hover-help in one coordinated UI pass.
 4. Clean up diagnostics/task-feed presentation once the underlying data and labels are settled.
 5. Treat advanced solver controls as a separate contract-expansion track after product clarifies the requested GMRES precision behavior.
+6. Finish with a maintained Markdown-document overhaul so user-facing docs read cleanly and match the shipped architecture after the higher-risk runtime work has settled.
 
 ## Active Backlog
 
@@ -123,10 +124,10 @@ Required regression coverage:
 
 ### P1. Remove Stale Local-Only Jobs From the Backend Feed
 
-- Fix the backend jobs feed so terminal jobs that exist only in the browser cache are not shown as backend-managed rows.
-- Treat `/api/jobs` as the source of truth whenever the panel is in backend mode. Keep local cached metadata only as an overlay for matching backend job IDs, not as permission to keep rendering backend-missing jobs indefinitely.
-- Purge stale local-only backend jobs from the `ath_simulation_jobs:v1` cache during restore/reconcile once the backend job list has loaded, so pre-update rows disappear automatically without adding a legacy recovery UI.
-- Do not add a special delete fallback for these stale rows. Once backend mode stops retaining them, the existing delete flow can remain a true backend delete for real backend jobs.
+- [ ] Fix the backend jobs feed so terminal jobs that exist only in the browser cache are not shown as backend-managed rows.
+  - Treat `/api/jobs` as the source of truth whenever the panel is in backend mode. Keep local cached metadata only as an overlay for matching backend job IDs, not as permission to keep rendering backend-missing jobs indefinitely.
+  - Purge stale local-only backend jobs from the `ath_simulation_jobs:v1` cache during restore/reconcile once the backend job list has loaded, so pre-update rows disappear automatically without adding a legacy recovery UI.
+  - Do not add a special delete fallback for these stale rows. Once backend mode stops retaining them, the existing delete flow can remain a true backend delete for real backend jobs.
 
 Research notes:
 - `src/ui/simulation/controller.js` restores backend mode from `loadLocalIndex()` before fetching `/api/jobs`, then merges the two sources through `mergeJobs(seedItems, remote.items || [])`.
@@ -146,12 +147,12 @@ Required regression coverage:
 
 ### P1. Parameter Inventory, Naming, Hover Help, and Ordering
 
-- Build a source-of-truth inventory of every user-facing parameter, recording its owner file, current UI location, label/help text, and whether it is visible, hidden, duplicated, or placeholder-only.
-- Reorganize geometry/simulation parameters into clearer groups with a predictable order instead of the current split between schema-driven sections and hard-coded simulation controls.
-- Rewrite parameter titles into more understandable user-facing names while preserving current internal keys and config compatibility.
-- Replace the current native-tooltip-only approach with a deliberate hover-help pattern that works consistently for parameters and settings.
-- Expose currently hidden schema parameters `throatSliceDensity` and `verticalOffset`, or explicitly document them as intentionally internal if product decides they should remain hidden.
-- Include simulation frequency and polar controls in the same naming/help/order pass so the whole UI reads as one system.
+- [ ] Build a source-of-truth inventory of every user-facing parameter, then use it to rework naming, hover help, and ordering into one coherent UI pass.
+  - Reorganize geometry/simulation parameters into clearer groups with a predictable order instead of the current split between schema-driven sections and hard-coded simulation controls.
+  - Rewrite parameter titles into more understandable user-facing names while preserving current internal keys and config compatibility.
+  - Replace the current native-tooltip-only approach with a deliberate hover-help pattern that works consistently for parameters and settings.
+  - Expose currently hidden schema parameters `throatSliceDensity` and `verticalOffset`, or explicitly document them as intentionally internal if product decides they should remain hidden.
+  - Include simulation frequency and polar controls in the same naming/help/order pass so the whole UI reads as one system.
 
 Implementation notes:
 - `src/config/schema.js`
@@ -161,11 +162,11 @@ Implementation notes:
 
 ### P1. Settings Panel Completeness and Information Architecture
 
-- Audit all active settings sources and make the settings modal the primary discoverable home for persistent user preferences.
-- Add understandable titles and hover clarifications for each visible setting.
-- Move or mirror task-list preferences `defaultSort` and `minRatingFilter` into the settings modal, or intentionally keep them in the jobs toolbar with matching copy and documentation.
-- Reorder modal sections so viewer behavior, simulation defaults, task export behavior, folder/workspace behavior, and system actions are grouped predictably.
-- Keep the modal aligned with backend capability metadata so unsupported advanced controls are clearly separated from active controls.
+- [ ] Audit all active settings sources and make the settings modal the primary discoverable home for persistent user preferences.
+  - Add understandable titles and hover clarifications for each visible setting.
+  - Move or mirror task-list preferences `defaultSort` and `minRatingFilter` into the settings modal, or intentionally keep them in the jobs toolbar with matching copy and documentation.
+  - Reorder modal sections so viewer behavior, simulation defaults, task export behavior, folder/workspace behavior, and system actions are grouped predictably.
+  - Keep the modal aligned with backend capability metadata so unsupported advanced controls are clearly separated from active controls.
 
 Implementation notes:
 - `src/ui/settings/viewerSettings.js`
@@ -176,13 +177,13 @@ Implementation notes:
 
 ### P2. Folder Workspace Discoverability and Export Routing
 
-- Make folder selection discoverable near Settings and/or inside the settings modal without relying on users finding the current output-row placement.
-- Treat “folder button not visible” as a real product gap: when folder picker support is unavailable, provide a visible fallback/explanation instead of silently hiding the control.
-- Document and verify expected routing behavior when a folder workspace is active:
-  - manual exports write into the selected folder root
-  - completed simulation bundles write into `<workspace>/<jobId>/`
-  - folder write failures currently clear the selected folder and fall back to picker/download behavior
-- Decide whether “each generation goes into that folder” should cover only manual exports plus simulation bundles, or every generated artifact including config/script/history outputs.
+- [ ] Make folder selection discoverable near Settings and/or inside the settings modal without relying on users finding the current output-row placement.
+  - Treat “folder button not visible” as a real product gap: when folder picker support is unavailable, provide a visible fallback/explanation instead of silently hiding the control.
+  - Document and verify expected routing behavior when a folder workspace is active:
+    - manual exports write into the selected folder root
+    - completed simulation bundles write into `<workspace>/<jobId>/`
+    - folder write failures currently clear the selected folder and fall back to picker/download behavior
+  - Decide whether “each generation goes into that folder” should cover only manual exports plus simulation bundles, or every generated artifact including config/script/history outputs.
 
 Implementation notes:
 - `index.html`
@@ -194,10 +195,10 @@ Implementation notes:
 
 ### P2. Geometry Diagnostics Instead of Numeric BEM Tag Diagnostics
 
-- Replace or augment the current numeric tag table with geometry-identity diagnostics such as `throat_disc`, `horn_wall`/`inner_wall`, `outer_wall`, `rear_cap`, `enc_front`, `enc_side`, and `enc_rear`.
-- Decide whether the UI should report triangle counts, true vertex counts, or both. The current implementation counts triangles per numeric tag.
-- Preserve numeric canonical tags as a secondary debug view if solver-contract troubleshooting still needs them.
-- Ensure enclosure and freestanding-wall cases produce understandable labels and stable zero/non-zero diagnostics.
+- [ ] Replace or augment the current numeric tag table with geometry-identity diagnostics such as `throat_disc`, `horn_wall`/`inner_wall`, `outer_wall`, `rear_cap`, `enc_front`, `enc_side`, and `enc_rear`.
+  - Decide whether the UI should report triangle counts, true vertex counts, or both. The current implementation counts triangles per numeric tag.
+  - Preserve numeric canonical tags as a secondary debug view if solver-contract troubleshooting still needs them.
+  - Ensure enclosure and freestanding-wall cases produce understandable labels and stable zero/non-zero diagnostics.
 
 Implementation notes:
 - `src/ui/simulation/jobActions.js`
@@ -210,10 +211,10 @@ Implementation notes:
 
 ### P2. Advanced Solver Controls and GMRES Precision Scope
 
-- Define what the requested “single precision for GMRES” setting actually means before implementation starts.
-- If the requirement means real advanced solver overrides, extend the backend/frontend contract so advanced settings can be exposed intentionally instead of remaining placeholder rows.
-- After the contract exists, add understandable settings labels/help for advanced solver controls such as warm-up, method, tolerance, restart, max iterations, strong-form usage, Burton-Miller coupling, and symmetry tolerance.
-- Add parity tests for any new backend-exposed solver settings before changing runtime behavior.
+- [ ] Define what the requested “single precision for GMRES” setting actually means before implementation starts.
+  - If the requirement means real advanced solver overrides, extend the backend/frontend contract so advanced settings can be exposed intentionally instead of remaining placeholder rows.
+  - After the contract exists, add understandable settings labels/help for advanced solver controls such as warm-up, method, tolerance, restart, max iterations, strong-form usage, Burton-Miller coupling, and symmetry tolerance.
+  - Add parity tests for any new backend-exposed solver settings before changing runtime behavior.
 
 Research notes:
 - Current public request contract exposes only `use_optimized`, `enable_symmetry`, `verbose`, `mesh_validation_mode`, `frequency_spacing`, and `device_mode`.
@@ -237,20 +238,29 @@ Required parity tests if this item becomes active:
 
 ### P3. Simulation Job Feed Source-Badge Cleanup
 
-- Remove or reduce the redundant per-row `Backend` badge when the entire feed is already backend-only.
-- Keep source labeling only where it adds information, such as header-level labeling or explicit `Folder` markers when folder-backed history is active.
-- Review finished-task UI copy so the feed reads cleanly without repeating the same source label on every completed row.
+- [ ] Remove or reduce the redundant per-row `Backend` badge when the entire feed is already backend-only.
+  - Keep source labeling only where it adds information, such as header-level labeling or explicit `Folder` markers when folder-backed history is active.
+  - Review finished-task UI copy so the feed reads cleanly without repeating the same source label on every completed row.
 
 Implementation notes:
 - `src/ui/simulation/jobActions.js`
 
 ### P3. Symmetry Runtime Truth and Operator Control Follow-Through
 
-- Add a reproducible diagnostics lane for the ATH reference configs already called out in the earlier symmetry investigation, capturing imported params, canonical mesh topology, and resulting `metadata.symmetry_policy` / `metadata.symmetry`.
-- Add regression coverage for those reference cases so future geometry or solver changes cannot silently change reduction eligibility.
-- Audit the existing `Enable Symmetry` control in the Settings modal and verify that it is visible in the live modal, persists correctly, and changes submitted `/api/solve` payloads as expected.
-- Surface the requested symmetry setting and the resulting `symmetry_policy` together in user-visible job/result surfaces so users can tell whether a run kept the full model because symmetry was disabled, rejected, or successfully applied.
-- Update runtime docs to clarify that imported ATH `Mesh.Quadrants` values do not directly trim the canonical simulation payload; full-model vs reduced-model behavior is determined by the solver symmetry policy.
+- [ ] Add a reproducible diagnostics lane for the ATH reference configs already called out in the earlier symmetry investigation, capturing imported params, canonical mesh topology, and resulting `metadata.symmetry_policy` / `metadata.symmetry`.
+  - Add regression coverage for those reference cases so future geometry or solver changes cannot silently change reduction eligibility.
+  - Audit the existing `Enable Symmetry` control in the Settings modal and verify that it is visible in the live modal, persists correctly, and changes submitted `/api/solve` payloads as expected.
+  - Surface the requested symmetry setting and the resulting `symmetry_policy` together in user-visible job/result surfaces so users can tell whether a run kept the full model because symmetry was disabled, rejected, or successfully applied.
+  - Update runtime docs to clarify that imported ATH `Mesh.Quadrants` values do not directly trim the canonical simulation payload; full-model vs reduced-model behavior is determined by the solver symmetry policy.
+
+### P4. Maintained Markdown Document Overhaul
+
+- [ ] Audit the maintained Markdown documentation set, then rewrite it for readability and architecture parity without inventing behavior that the code does not ship.
+  - Scope the pass to the maintained `.md` docs that describe the live system: `README.md`, `AGENTS.md`, `docs/architecture.md`, `docs/PROJECT_DOCUMENTATION.md`, `docs/modules/*.md`, `tests/TESTING.md`, `server/README.md`, and `docs/archive/README.md`.
+  - Verify each document against the actual runtime entry points, layer boundaries, active backend capabilities, supported export/simulation flows, and the current test map before rewriting copy.
+  - Improve scannability with clearer section ordering, tighter wording, explicit source-of-truth links, and removal of stale or duplicated explanations that drift from the real architecture.
+  - Keep historical plan/report snapshots in `docs/archive/` archived rather than rewriting them into maintained-truth docs; only their index/links should be updated in this pass.
+  - Add or extend parity checks when the overhaul changes maintained claims that should stay synchronized with code.
 
 Re-open the backlog when:
 - a new product or runtime requirement lands
