@@ -60,6 +60,7 @@ export class ParamPanel {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         if (!this.container) throw new Error(`Container ${containerId} not found`);
+        this.simulationSettingsContainer = document.getElementById('simulation-settings-container');
         this.simulationContainer = document.getElementById('simulation-param-container');
         this.formulaInfoVisible = false;
         this.controlIdCounter = 0;
@@ -92,6 +93,9 @@ export class ParamPanel {
     // Create the full UI structure
     createFullPanel() {
         this.container.innerHTML = '';
+        if (this.simulationSettingsContainer) {
+            this.simulationSettingsContainer.innerHTML = '';
+        }
         if (this.simulationContainer) {
             this.simulationContainer.innerHTML = '';
         }
@@ -195,6 +199,20 @@ export class ParamPanel {
         }
 
         // --- Simulation Tab ---
+        if (this.simulationSettingsContainer) {
+            const simulationSection = this.createDetailsSection('Simulation Settings', 'simulation-settings-details');
+            const simulationNote = document.createElement('div');
+            simulationNote.className = 'section-note';
+            simulationNote.textContent = 'Frequency controls define the backend BEM sweep and stay aligned with config import/export keys.';
+            simulationSection.appendChild(simulationNote);
+
+            for (const [key, def] of Object.entries(PARAM_SCHEMA.SIMULATION || {})) {
+                simulationSection.appendChild(this.createControlRow(key, def, state.params[key]));
+            }
+
+            this.simulationSettingsContainer.appendChild(simulationSection);
+        }
+
         if (this.simulationContainer) {
             const sourceSection = this.createDetailsSection('Source', 'source-details');
             for (const [key, def] of Object.entries(PARAM_SCHEMA.SOURCE)) {
@@ -220,9 +238,11 @@ export class ParamPanel {
                 'throatSegments',
                 'throatResolution',
                 'mouthResolution',
+                'throatSliceDensity',
                 'encFrontResolution',
                 'encBackResolution',
-                'rearResolution'
+                'rearResolution',
+                'verticalOffset'
             ];
 
             meshDensityOrder.forEach((key) => {
@@ -265,7 +285,7 @@ export class ParamPanel {
         labelRow.className = 'input-label-row';
 
         const label = document.createElement('label');
-        const controlId = `param-${key}-${this.controlIdCounter++}`;
+        const controlId = def.controlId || `param-${key}-${this.controlIdCounter++}`;
         label.textContent = def.label;
         if (def.unit) label.textContent += ` (${def.unit})`;
         label.htmlFor = controlId;

@@ -47,6 +47,10 @@ test('mesh control labels separate viewport tessellation from solve mesh sizing'
   assert.equal(PARAM_SCHEMA.ENCLOSURE.encBackResolution.label, 'Solve Back Baffle Resolution');
   assert.match(PARAM_SCHEMA.MESH.angularSegments.tooltip, /Three\.js viewport/i);
   assert.match(PARAM_SCHEMA.MESH.throatResolution.tooltip, /backend OCC solve\/export mesh/i);
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.controlId, 'freq-start');
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.controlId, 'freq-end');
+  assert.equal(PARAM_SCHEMA.SIMULATION.numFreqs.controlId, 'freq-steps');
+  assert.match(PARAM_SCHEMA.SIMULATION.numFreqs.tooltip, /number of solved frequencies/i);
 });
 
 test('validateSimulationConfig catches invalid ranges and counts', () => {

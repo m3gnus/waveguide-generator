@@ -104,6 +104,9 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
   const paramContainer = fakeDocument.createElement('div');
   paramContainer.id = 'param-container';
   fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement('div');
+  simulationSettingsContainer.id = 'simulation-settings-container';
+  fakeDocument.body.appendChild(simulationSettingsContainer);
   const simulationContainer = fakeDocument.createElement('div');
   simulationContainer.id = 'simulation-param-container';
   fakeDocument.body.appendChild(simulationContainer);
@@ -139,6 +142,33 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
         node.tagName === 'BUTTON' && node.attributes['data-param-key'] === 'sourceContours',
     );
     assert.equal(sourceContourButtons.length, 0);
+
+    const freqStartInput = fakeDocument.getElementById('freq-start');
+    const freqEndInput = fakeDocument.getElementById('freq-end');
+    const freqStepsInput = fakeDocument.getElementById('freq-steps');
+    assert.equal(String(freqStartInput?.value), String(getDefaults('R-OSSE').freqStart));
+    assert.equal(String(freqEndInput?.value), String(getDefaults('R-OSSE').freqEnd));
+    assert.equal(String(freqStepsInput?.value), String(getDefaults('R-OSSE').numFreqs));
+
+    const simulationLabel = collectNodes(
+      simulationSettingsContainer,
+      (node) => node.tagName === 'LABEL' && node.textContent === 'Start Frequency (Hz)',
+    );
+    assert.equal(simulationLabel.length, 1);
+    assert.match(simulationLabel[0].title, /backend BEM sweep/i);
+
+    const throatSliceDensityRows = collectNodes(
+      simulationContainer,
+      (node) =>
+        node.attributes['data-param-key'] === 'throatSliceDensity' && node.className === 'input-row',
+    );
+    const verticalOffsetRows = collectNodes(
+      simulationContainer,
+      (node) =>
+        node.attributes['data-param-key'] === 'verticalOffset' && node.className === 'input-row',
+    );
+    assert.equal(throatSliceDensityRows.length, 1);
+    assert.equal(verticalOffsetRows.length, 1);
   } finally {
     GlobalState.loadState(previousState, 'param-panel-test-restore');
     global.document = originalDocument;

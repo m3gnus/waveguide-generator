@@ -199,9 +199,38 @@ export const PARAM_SCHEMA = {
         sourceContours: { type: 'expression', label: 'Source Contours', default: '', tooltip: 'Path or inline script for source contours.' }
     },
     'SIMULATION': {
-        freqStart: { type: 'number', label: 'Start Freq', unit: 'Hz', default: 400 },
-        freqEnd: { type: 'number', label: 'End Freq', unit: 'Hz', default: 16000 },
-        numFreqs: { type: 'number', label: 'Num Freqs', default: 40 }
+        freqStart: {
+            type: 'number',
+            label: 'Start Frequency',
+            unit: 'Hz',
+            default: 400,
+            min: 20,
+            max: 20000,
+            step: 10,
+            controlId: 'freq-start',
+            tooltip: 'Lowest frequency in the backend BEM sweep.'
+        },
+        freqEnd: {
+            type: 'number',
+            label: 'End Frequency',
+            unit: 'Hz',
+            default: 16000,
+            min: 20,
+            max: 20000,
+            step: 10,
+            controlId: 'freq-end',
+            tooltip: 'Highest frequency in the backend BEM sweep.'
+        },
+        numFreqs: {
+            type: 'number',
+            label: 'Frequency Samples',
+            default: 40,
+            min: 10,
+            max: 200,
+            step: 1,
+            controlId: 'freq-steps',
+            tooltip: 'Number of solved frequencies between the start and end values.'
+        }
     },
     // Output actions are handled via export buttons in the UI.
 };
