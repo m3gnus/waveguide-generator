@@ -47,6 +47,8 @@ Primary entry points:
   - Backend client and payload validation
 - `src/ui/`
   - Parameter and simulation UI behavior, including schema-driven formula affordances in the parameter panel
+  - `src/ui/parameterInventory.js` is the source of truth for parameter-section grouping/order across geometry, sweep, directivity placement, source, and mesh sections
+  - `src/ui/helpAffordance.js` renders the shared hover-help trigger used by schema-driven controls and the directivity panel
 - `src/state.js`
   - Global app state, undo/redo, persistence
 
@@ -213,8 +215,8 @@ OCC mesh-resolution semantics:
   Quadrant mapping: `Q1(+x,+y)`, `Q2(-x,+y)`, `Q3(-x,-y)`, `Q4(+x,-y)`.
 
 UI control mapping:
-- `Viewport Angular/Length/Corner/Throat Segs` and `Throat Slice Density` affect only Three.js preview tessellation.
-- `Solve Throat/Mouth/Rear Resolution` and `Solve Front/Back Baffle Resolution` affect backend OCC solve/export mesh density.
+- `Preview Angular/Length/Corner/Throat Segments` and `Preview Slice Bias` affect only Three.js preview tessellation.
+- `Throat/Mouth/Rear Mesh Resolution`, `Front/Rear Baffle Mesh Resolution`, and `Export Vertical Offset` affect backend OCC solve/export mesh density or coordinates.
 - `Auto-download solve mesh artifact (.msh)` affects only whether the persisted backend `.msh` artifact is downloaded.
 
 Physical groups written by OCC builder:

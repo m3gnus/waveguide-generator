@@ -122,6 +122,7 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
     const coreHeader = coreSection.children[0];
     const headerButtons = collectNodes(coreHeader, (node) => node.tagName === 'BUTTON');
     assert.equal(headerButtons.length, 0);
+    assert.equal(coreHeader.textContent, 'Profile Dimensions');
 
     const rButtons = collectNodes(
       paramContainer,
@@ -152,10 +153,17 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
 
     const simulationLabel = collectNodes(
       simulationSettingsContainer,
-      (node) => node.tagName === 'LABEL' && node.textContent === 'Start Frequency (Hz)',
+      (node) => node.tagName === 'LABEL' && node.textContent === 'Sweep Start (Hz)',
     );
     assert.equal(simulationLabel.length, 1);
-    assert.match(simulationLabel[0].title, /backend BEM sweep/i);
+    const simulationHelpButtons = collectNodes(
+      simulationSettingsContainer,
+      (node) =>
+        node.tagName === 'BUTTON' &&
+        node.className === 'control-help-trigger' &&
+        /backend BEM sweep/i.test(node.attributes['data-help-text'] || ''),
+    );
+    assert.equal(simulationHelpButtons.length, 2);
 
     const throatSliceDensityRows = collectNodes(
       simulationContainer,
@@ -169,6 +177,9 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
     );
     assert.equal(throatSliceDensityRows.length, 1);
     assert.equal(verticalOffsetRows.length, 1);
+
+    const simulationSectionTitles = simulationContainer.children.map((child) => child.children[0]?.textContent);
+    assert.deepEqual(simulationSectionTitles, ['Source Definition', 'Preview Mesh', 'Solve & Export Mesh']);
   } finally {
     GlobalState.loadState(previousState, 'param-panel-test-restore');
     global.document = originalDocument;

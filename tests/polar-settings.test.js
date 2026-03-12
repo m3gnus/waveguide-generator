@@ -42,6 +42,7 @@ class FakeRenderElement {
     this.tagName = String(tagName || '').toUpperCase();
     this.ownerDocument = ownerDocument;
     this.children = [];
+    this.attributes = {};
     this.className = '';
     this.title = '';
     this.textContent = '';
@@ -85,6 +86,10 @@ class FakeRenderElement {
       this.ownerDocument.elementsById.set(child.id, child);
     }
     return child;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
   }
 }
 
@@ -278,6 +283,7 @@ test('renderPolarSettingsSection builds the directivity block from polar metadat
   assert.ok(doc.getElementById('polar-axis-horizontal'));
   assert.ok(doc.getElementById('polar-axis-diagonal'));
   const section = container.children[0];
-  assert.equal(section.children[0].textContent, 'DIRECTIVITY MAP');
+  assert.equal(section.children[0].textContent, 'Directivity Map');
+  assert.match(section.children[1].textContent, /Polar planes and angular sampling/i);
   assert.equal(container.children.length, 1);
 });

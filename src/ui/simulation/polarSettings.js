@@ -1,3 +1,6 @@
+import { appendSectionNote, createHelpTrigger, createLabelRow } from '../helpAffordance.js';
+import { getParameterSection } from '../parameterInventory.js';
+
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'];
 const AXIS_CHECKBOX_IDS = {
   horizontal: 'polar-axis-horizontal',
@@ -10,7 +13,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
     uiKey: 'angleStart',
     stateKey: 'polarAngleStart',
     fallback: 0,
-    label: 'Angle Start',
+    label: 'Sweep Start',
     unit: 'deg',
     help: 'Starting angle for the directivity map sweep.',
     min: 0,
@@ -22,7 +25,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
     uiKey: 'angleEnd',
     stateKey: 'polarAngleEnd',
     fallback: 180,
-    label: 'Angle End',
+    label: 'Sweep End',
     unit: 'deg',
     help: 'Ending angle for the directivity map sweep.',
     min: 0,
@@ -34,7 +37,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
     uiKey: 'angleStep',
     stateKey: 'polarAngleStep',
     fallback: 5,
-    label: 'Angle Step',
+    label: 'Angular Step',
     unit: 'deg',
     help: 'Angular increment between directivity samples. Smaller steps produce more angular samples.',
     min: 1,
@@ -46,7 +49,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
     uiKey: 'distance',
     stateKey: 'polarDistance',
     fallback: 2,
-    label: 'Distance',
+    label: 'Measurement Distance',
     unit: 'm',
     help: 'Evaluation distance used when generating the directivity map.',
     min: 0.1,
@@ -58,7 +61,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
     uiKey: 'normAngle',
     stateKey: 'polarNormAngle',
     fallback: 5,
-    label: 'Norm Angle',
+    label: 'Normalization Angle',
     unit: 'deg',
     help: 'Reference angle used to normalize the directivity map output.',
     min: 0,
@@ -70,7 +73,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
     uiKey: 'diagonalAngle',
     stateKey: 'polarDiagonalAngle',
     fallback: 45,
-    label: 'Diagonal Angle',
+    label: 'Diagonal Plane Angle',
     unit: 'deg',
     help: 'Inclination used for the diagonal directivity plane when the diagonal axis is enabled.',
     min: 0,
@@ -90,17 +93,23 @@ const DEFAULT_POLAR_UI_STATE = Object.freeze({
   diagonalAngle: 45,
   enabledAxes: [...POLAR_AXIS_ORDER]
 });
+const POLAR_SECTION_METADATA = Object.freeze(
+  getParameterSection('simulation', 'directivity-map') || {
+    title: 'Directivity Map',
+    description: 'Polar planes and angular sampling used for directivity exports and plots.'
+  }
+);
 const POLAR_AXIS_METADATA = Object.freeze([
   {
     axis: 'horizontal',
     id: AXIS_CHECKBOX_IDS.horizontal,
-    label: 'Horizontal (0deg)',
+    label: 'Horizontal (0 deg)',
     help: 'Generate the horizontal directivity plane.'
   },
   {
     axis: 'vertical',
     id: AXIS_CHECKBOX_IDS.vertical,
-    label: 'Vertical (90deg)',
+    label: 'Vertical (90 deg)',
     help: 'Generate the vertical directivity plane.'
   },
   {
@@ -389,32 +398,16 @@ export function resolvePolarUiState(params = {}) {
   return applyExplicitPolarStateOverrides(withBlocks, params);
 }
 
-function createLabel(doc, text, htmlFor, helpText) {
-  const label = doc.createElement('label');
-  label.textContent = text;
-  if (htmlFor) {
-    label.htmlFor = htmlFor;
-  }
-  if (helpText) {
-    label.title = helpText;
-    if (label.classList && typeof label.classList.add === 'function') {
-      label.classList.add('has-tooltip');
-    }
-  }
-  return label;
-}
-
 function appendPolarNumberRow(section, field, doc) {
   const row = doc.createElement('div');
   row.className = 'input-row';
 
-  const label = createLabel(
-    doc,
-    field.unit ? `${field.label} (${field.unit})` : field.label,
-    field.id,
-    field.help
-  );
-  row.appendChild(label);
+  const { row: labelRow } = createLabelRow(doc, {
+    labelText: field.unit ? `${field.label} (${field.unit})` : field.label,
+    htmlFor: field.id,
+    helpText: field.help
+  });
+  row.appendChild(labelRow);
 
   const input = doc.createElement('input');
   input.type = 'number';
@@ -432,7 +425,11 @@ function appendPolarAxisRow(section, doc) {
   const row = doc.createElement('div');
   row.className = 'input-row';
 
-  row.appendChild(createLabel(doc, 'Polar Axes', '', 'Choose which directivity planes to generate.'));
+  const { row: labelRow } = createLabelRow(doc, {
+    labelText: 'Directivity Planes',
+    helpText: 'Choose which directivity planes to generate.'
+  });
+  row.appendChild(labelRow);
 
   const options = doc.createElement('div');
   options.className = 'polar-axis-options';
@@ -440,17 +437,25 @@ function appendPolarAxisRow(section, doc) {
   POLAR_AXIS_METADATA.forEach((option) => {
     const optionLabel = doc.createElement('label');
     optionLabel.className = 'polar-axis-option';
-    optionLabel.title = option.help;
-
     const input = doc.createElement('input');
     input.type = 'checkbox';
     input.id = option.id;
     input.checked = true;
     optionLabel.appendChild(input);
 
+    const copy = doc.createElement('div');
+    copy.className = 'polar-axis-option-copy';
+
     const text = doc.createElement('span');
     text.textContent = option.label;
-    optionLabel.appendChild(text);
+    copy.appendChild(text);
+
+    const helpTrigger = createHelpTrigger(doc, { labelText: option.label, helpText: option.help });
+    if (helpTrigger) {
+      copy.appendChild(helpTrigger);
+    }
+
+    optionLabel.appendChild(copy);
 
     options.appendChild(optionLabel);
   });
@@ -469,11 +474,12 @@ export function renderPolarSettingsSection(doc = document) {
 
   const section = doc.createElement('div');
   section.className = 'section';
+  section.id = 'directivity-map';
 
-  const title = doc.createElement('h4');
-  title.className = 'section-subtitle';
-  title.textContent = 'DIRECTIVITY MAP';
+  const title = doc.createElement('h3');
+  title.textContent = POLAR_SECTION_METADATA.title;
   section.appendChild(title);
+  appendSectionNote(section, doc, POLAR_SECTION_METADATA.description);
 
   POLAR_NUMERIC_FIELDS
     .filter((field) => field.id !== DIAGONAL_ANGLE_INPUT_ID)
