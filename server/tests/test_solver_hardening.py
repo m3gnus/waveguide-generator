@@ -167,6 +167,50 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         validate_freq.assert_not_called()
         self.assertFalse(results["metadata"]["mesh_validation"]["enabled"])
 
+    def test_advanced_settings_control_warmup_burton_miller_and_symmetry_tolerance(self):
+        mesh = _mesh_stub()
+        symmetry_result = {
+            "policy": {
+                "requested": True,
+                "applied": False,
+                "reason": "no_symmetry_detected",
+                "detected_symmetry_type": "full",
+                "throat_center": [0.0, 0.0, 0.0],
+            },
+            "symmetry": {"symmetry_type": "full", "reduction_factor": 1.0},
+        }
+
+        with patch("solver.solve_optimized.CachedOperators.get_or_create_spaces") as get_spaces, patch(
+            "solver.solve_optimized.CachedOperators.get_or_create_operators"
+        ) as get_operators, patch(
+            "solver.solve_optimized.evaluate_symmetry_policy",
+            return_value=symmetry_result,
+        ) as evaluate_symmetry_policy, patch(
+            "solver.solve_optimized.solve_frequency_cached",
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
+        ) as solve_frequency_cached, patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value=_directivity_stub(),
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[100.0, 1000.0],
+                num_frequencies=2,
+                sim_type="2",
+                enable_symmetry=True,
+                symmetry_tolerance=0.025,
+                enable_warmup=False,
+                use_burton_miller=False,
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        get_spaces.assert_not_called()
+        get_operators.assert_not_called()
+        self.assertEqual(evaluate_symmetry_policy.call_args.kwargs["tolerance"], 0.025)
+        self.assertFalse(solve_frequency_cached.call_args.args[7])
+        self.assertEqual(results["metadata"]["failure_count"], 0)
+
     def test_frequency_failures_do_not_use_placeholder_metrics(self):
         mesh = _mesh_stub()
         calls = {"count": 0}

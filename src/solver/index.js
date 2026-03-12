@@ -42,6 +42,11 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @property {boolean} [useOptimized]
  * @property {boolean} [enableSymmetry]
  * @property {boolean} [verbose]
+ * @property {{
+ *   enableWarmup?: boolean,
+ *   useBurtonMiller?: boolean,
+ *   symmetryTolerance?: number
+ * }} [advancedSettings]
  */
 
 /**
@@ -166,6 +171,23 @@ function assignBooleanSetting(payload, key, value) {
   }
 }
 
+function buildAdvancedSettingsPayload(settings) {
+  if (!settings || typeof settings !== 'object') {
+    return null;
+  }
+
+  const payload = {};
+  assignBooleanSetting(payload, 'enable_warmup', settings.enableWarmup);
+  assignBooleanSetting(payload, 'use_burton_miller', settings.useBurtonMiller);
+
+  const symmetryTolerance = Number(settings.symmetryTolerance);
+  if (Number.isFinite(symmetryTolerance) && symmetryTolerance > 0) {
+    payload.symmetry_tolerance = symmetryTolerance;
+  }
+
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
 export class BemSolver {
   constructor() {
     /** @type {string} */
@@ -240,6 +262,10 @@ export class BemSolver {
     assignBooleanSetting(payload, 'use_optimized', config.useOptimized);
     assignBooleanSetting(payload, 'enable_symmetry', config.enableSymmetry);
     assignBooleanSetting(payload, 'verbose', config.verbose);
+    const advancedSettingsPayload = buildAdvancedSettingsPayload(config.advancedSettings);
+    if (advancedSettingsPayload) {
+      payload.advanced_settings = advancedSettingsPayload;
+    }
 
     const response = await fetchOrApiError(`${this.backendUrl}/api/solve`, {
       method: 'POST',

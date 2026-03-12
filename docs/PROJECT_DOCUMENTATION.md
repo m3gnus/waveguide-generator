@@ -272,6 +272,7 @@ Base URL: `http://localhost:8000`
   - Includes `capabilities` metadata for frontend settings gating:
     - `simulationBasic.controls`
     - `simulationAdvanced.available`
+    - `simulationAdvanced.controls`
     - `simulationAdvanced.reason`
     - `simulationAdvanced.plannedControls`
   - Includes `deviceInterface` metadata for current device policy resolution:
@@ -301,6 +302,10 @@ Base URL: `http://localhost:8000`
     and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`)
+  - Supports optimized-solver `advanced_settings`:
+    - `enable_warmup`
+    - `use_burton_miller`
+    - `symmetry_tolerance` (positive finite float)
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
 
@@ -340,6 +345,7 @@ Notes:
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
+- Public advanced solver overrides currently expose warm-up, Burton-Miller coupling, and symmetry tolerance only. GMRES precision/method/restart/tolerance controls remain outside the contract pending product definition.
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata

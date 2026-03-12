@@ -112,6 +112,10 @@ export function summarizeRuntimeCapabilities(health) {
     statusText = 'Adaptive BEM solver runtime unavailable.';
   } else if (!occBuilderReady) {
     statusText = 'Adaptive solve meshing unavailable.';
+  } else if (backendDeclaresAdvancedSupport) {
+    statusText = String(
+      advancedCapability?.reason || 'Advanced solver overrides are available through the public solve contract.'
+    );
   } else if (!backendDeclaresAdvancedSupport) {
     statusText = String(
       advancedCapability?.reason || 'This backend currently exposes Simulation Basic overrides only.'
@@ -123,8 +127,11 @@ export function summarizeRuntimeCapabilities(health) {
     occBuilderReady,
     fullyReady,
     simulationAdvanced: {
-      available: fullyReady && backendDeclaresAdvancedSupport,
+      available: backendDeclaresAdvancedSupport,
       reason: statusText,
+      controls: Array.isArray(advancedCapability?.controls)
+        ? advancedCapability.controls
+        : [],
       plannedControls: Array.isArray(advancedCapability?.plannedControls)
         ? advancedCapability.plannedControls
         : [],
