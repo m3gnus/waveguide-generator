@@ -41,7 +41,7 @@ Invariants:
 - Adaptive phi tessellation is only for full-circle horn-only render usage.
 - Outer build mode is exclusive: enclosure (`encDepth > 0`) or freestanding wall shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
 - Enclosure generation is OSSE-only. `R-OSSE` with `encDepth > 0` is rejected.
-- Freestanding wall thickness is generated from local axial/radial profile-section normals, not a global radial expansion.
+- Freestanding wall thickness is generated from the horn surface's local 3D normals. The rear `throat_return` transition continues the outer back-side slope into a back plate located `wallThickness` behind the throat plate, rather than using a straight cylindrical drop.
 - When `morphTarget` is enabled and `morphWidth` / `morphHeight` are unset, target extents are derived from the current slice.
 
 ## Regression Coverage
