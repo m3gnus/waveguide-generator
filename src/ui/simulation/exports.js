@@ -4,7 +4,10 @@ import {
   buildProfileCsvExportFiles,
   buildStlExportFiles
 } from '../../modules/export/useCases.js';
-import { writeSimulationTaskBundleFile } from '../../modules/simulation/useCases.js';
+import {
+  readSimulationState,
+  writeSimulationTaskBundleFile
+} from '../../modules/simulation/useCases.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats
@@ -53,6 +56,10 @@ function normalizeSelectedFormats(formatIds) {
 function resolveExportBaseName(job = null) {
   const label = String(job?.label || '').trim();
   return label || getExportBaseName() || 'simulation';
+}
+
+function readExportState() {
+  return readSimulationState();
 }
 
 async function writeExportFile(file, { writer = null } = {}) {
@@ -500,11 +507,14 @@ async function runExportFormat(panel, formatId, options = {}) {
     case 'vacs':
       return writeExportFiles([buildVacSpectrumFile(panel, { baseName })], options);
     case 'stl':
-      return writeExportFiles(buildStlExportFiles({ baseName }), options);
+      return writeExportFiles(buildStlExportFiles(readExportState(), { baseName }), options);
     case 'fusion_csv': {
       const app = resolveApp(panel);
       const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
-      const files = buildProfileCsvExportFiles(vertices, { baseName });
+      const files = buildProfileCsvExportFiles(vertices, {
+        state: readExportState(),
+        baseName
+      });
       if (!files) {
         throw new Error('Fusion CSV export requires an active viewport mesh.');
       }
@@ -682,7 +692,9 @@ export async function exportAsImpedanceCSV(panel, options = {}) {
 
 export async function exportAsWaveguideSTL(panel, options = {}) {
   return writeExportFiles(
-    buildStlExportFiles({ baseName: options.baseName || resolveExportBaseName(options.job) }),
+    buildStlExportFiles(readExportState(), {
+      baseName: options.baseName || resolveExportBaseName(options.job)
+    }),
     options
   );
 }
@@ -691,6 +703,7 @@ export async function exportAsFusionCurvesCSV(panel, options = {}) {
   const app = resolveApp(panel);
   const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
   const files = buildProfileCsvExportFiles(vertices, {
+    state: readExportState(),
     baseName: options.baseName || resolveExportBaseName(options.job)
   });
   if (!files) {

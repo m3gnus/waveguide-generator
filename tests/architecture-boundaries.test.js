@@ -6,7 +6,22 @@ import path from 'node:path';
 const ROOT = process.cwd();
 const SRC_ROOT = path.join(ROOT, 'src');
 
-const LEGACY_EXCEPTIONS = new Set([]);
+const LEGACY_EXCEPTIONS = new Set([
+  'app/exports.js->ui/feedback.js',
+  'app/exports.js->ui/fileOps.js'
+]);
+const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
+  'modules/design/useCases.js->state.js',
+  'modules/geometry/useCases.js->state.js',
+  'modules/simulation/useCases.js->state.js',
+  'modules/simulation/useCases.js->ui/workspace/folderWorkspace.js',
+  'modules/simulation/useCases.js->ui/workspace/taskIndex.js',
+  'modules/simulation/useCases.js->ui/workspace/taskManifest.js',
+  'modules/ui/index.js->ui/fileOps.js',
+  'modules/ui/useCases.js->ui/feedback.js',
+  'modules/ui/useCases.js->ui/fileOps.js',
+  'modules/ui/useCases.js->ui/workspace/folderWorkspace.js'
+]);
 
 const BOUNDARY_RULES = [
   {
@@ -32,6 +47,24 @@ const BOUNDARY_RULES = [
     fromLayer: 'viewer',
     forbiddenTargets: new Set(['app', 'modules', 'ui', 'solver', 'export']),
     message: 'src/viewer should remain a rendering package and avoid app/module/ui/solver/export dependencies.'
+  }
+];
+
+const MODULE_BROWSER_EDGE_RULES = [
+  {
+    id: 'modules-must-not-import-ambient-state',
+    matchesTarget: (toRel) => toRel === 'state.js',
+    message: 'src/modules should receive state snapshots from the app edge instead of importing GlobalState directly.'
+  },
+  {
+    id: 'modules-must-not-import-browser-file-feedback-helpers',
+    matchesTarget: (toRel) => toRel === 'ui/fileOps.js' || toRel === 'ui/feedback.js',
+    message: 'src/modules should use app/UI adapters for file writing and toast feedback instead of browser helpers directly.'
+  },
+  {
+    id: 'modules-must-not-import-workspace-internals',
+    matchesTarget: (toRel) => toRel.startsWith('ui/workspace/'),
+    message: 'src/modules should not own folder-workspace persistence internals directly.'
   }
 ];
 
@@ -127,6 +160,20 @@ function collectViolations() {
           message: rule.message
         });
       }
+
+      if (importerLayer !== 'modules') {
+        continue;
+      }
+
+      for (const rule of MODULE_BROWSER_EDGE_RULES) {
+        if (!rule.matchesTarget(toRel)) continue;
+        if (MODULE_BROWSER_EDGE_EXCEPTIONS.has(edgeKey)) continue;
+        violations.push({
+          ruleId: rule.id,
+          edgeKey,
+          message: rule.message
+        });
+      }
     }
   }
 
@@ -142,6 +189,33 @@ test('frontend import boundaries only allow approved cross-layer dependencies', 
     violations
       .map((entry) => `[${entry.ruleId}] ${entry.edgeKey} :: ${entry.message}`)
       .join('\n')
+  );
+});
+
+test('module use-case files do not reference browser globals directly outside approved adapters', () => {
+  const allowedFiles = new Set([
+    'modules/ui/index.js',
+    'modules/ui/useCases.js'
+  ]);
+  const files = listJsFiles(path.join(SRC_ROOT, 'modules'));
+  const violations = [];
+
+  for (const file of files) {
+    const relativePath = toSrcRelative(file);
+    if (allowedFiles.has(relativePath)) {
+      continue;
+    }
+
+    const content = fs.readFileSync(file, 'utf8');
+    if (/\bwindow\b|\bdocument\b/.test(content)) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
   );
 });
 
