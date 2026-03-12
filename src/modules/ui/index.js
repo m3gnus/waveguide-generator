@@ -1,5 +1,4 @@
 import { AppEvents } from '../../events.js';
-import { isDevRuntime } from '../../config/runtimeMode.js';
 import { markParametersChanged } from '../../ui/fileOps.js';
 
 const UI_MODULE_ID = 'ui';
@@ -108,11 +107,10 @@ function buildAppCoordinator(input) {
 
       simulationPanelInitPromise = Promise.resolve(loadSimulationPanel()).then(({ SimulationPanel }) => {
         if (!app.simulationPanel) {
-          app.simulationPanel = new SimulationPanel();
-          app.simulationPanel.app = app;
-        }
-        if (typeof window !== 'undefined' && isDevRuntime()) {
-          window.__waveguideApp = app;
+          app.simulationPanel = new SimulationPanel({ app });
+          if (!app.simulationPanel.app) {
+            app.simulationPanel.app = app;
+          }
         }
         return app.simulationPanel;
       });
