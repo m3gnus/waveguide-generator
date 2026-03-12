@@ -21,18 +21,16 @@ Keep durable decisions in `docs/architecture.md`, active work in this file, and 
 ## Current Baseline
 
 status as of date:
-- March 11, 2026
+- March 12, 2026
 - The architecture cleanup plan is complete.
 - The settings modal exists, viewer settings persist, and the folder workspace manifest/index model exists.
 - Active runtime docs are `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `tests/TESTING.md`, `server/README.md`, and `AGENTS.md`.
 - Remaining work is now a mix of user-reported bugs, unfinished simulation-management product work carried over from earlier planning, and a smaller set of hardening/research follow-ups.
+- The active execution backlog is complete; the remaining P4 notes are deferred watchpoints, not scheduled implementation work.
 
 Remaining work:
-- Improve simulation UX around mesh visibility, formula entry, and settings-to-runtime parity.
-- Finish the remaining simulation-management roadmap slices that were carried into this backlog.
-- Consolidate durable architecture/contracts into smaller maintained docs over time.
-- Tighten frontend module boundaries so `src/modules/*` stop absorbing UI/browser responsibilities.
-- Keep diagnostics, regression coverage, and optional engineering cleanup focused on shipped value.
+- Re-open backlog work only when new product/runtime requirements land or a deferred watchpoint becomes an active bottleneck.
+- Keep diagnostics, regression coverage, and documentation current as new changes land.
 
 ## Recommended Execution Order
 
@@ -240,19 +238,21 @@ Work the backlog from upstream runtime truth to downstream UX:
   Best approach: Audit every remaining Gmsh touchpoint, compare against JS/export alternatives, and only plan removal if parity for the remaining export use cases is realistic.
   Completed: March 12, 2026. The audit in `research/gmsh-dependency-audit-2026-03-12.md` concludes that Gmsh should remain in the active runtime for now. The live backend still depends on the Python Gmsh API for `/api/mesh/build`, OCC-adaptive solve mesh generation, persisted `.msh` job artifacts, and optional `use_gmsh=True` canonical-mesh refinement, while the frontend export stack no longer provides a parity `.msh` alternative. Removal should be treated as a future architecture project only after export-artifact and task-history parity exist without Gmsh.
 
-- [ ] Consider optional internal decomposition of `solve_optimized()` and `waveguide_builder.py` if those areas need further feature work.
+- [x] Consider optional internal decomposition of `solve_optimized()` and `waveguide_builder.py` if those areas need further feature work.
   Source: `docs/archive/PRODUCTION_READINESS_REPORT_2026-02-25.md` Gate C deferred notes.
   Relevant: Low right now.
   Will it improve the program: Mostly maintenance-oriented, not immediately user-visible.
   Research findings: `server/solver/solve_optimized.py` is currently 693 lines and `server/solver/waveguide_builder.py` is 2723 lines, so the maintenance concern is real. The existing backlog does not require those refactors yet, and recent work has not shown them to be the current delivery bottleneck.
   Best approach: Treat it as opportunistic refactor work only when a feature or bug fix needs deeper changes in those files; do not schedule it as standalone cleanup unless those modules become a bottleneck.
+  Completed: March 12, 2026. Reviewed again after the architecture-cleanup phase. The maintenance risk is acknowledged, but there is still no active feature or defect forcing structural work inside these files. This item is now closed as a deferred watchpoint: reopen it only when new solver/meshing feature work has to touch these internals deeply enough that extraction reduces delivery risk.
 
-- [ ] Consider decomposing `server/services/job_runtime.py` into smaller scheduler/state/persistence units if job lifecycle work expands further.
+- [x] Consider decomposing `server/services/job_runtime.py` into smaller scheduler/state/persistence units if job lifecycle work expands further.
   Source: architecture review on March 12, 2026; `server/services/job_runtime.py`; `server/api/routes_simulation.py`.
   Relevant: Low for now. The backend layering is mostly good, and the recent public job-runtime service surface fixed the highest-value boundary problem.
   Will it improve the program: Potentially. It would reduce the maintenance load in the job lifecycle area if more queueing, persistence, or multi-worker features are added.
   Research findings: `server/api/routes_simulation.py` is now appropriately thin, but `server/services/job_runtime.py` is still a 562-line service that owns in-memory cache state, queue management, scheduler triggering, DB merge logic, and public job operations in one file. That is workable today, but it is the most obvious backend concentration point after the recent route/service cleanup.
   Best approach: Leave it alone unless new lifecycle requirements land, then split by responsibility: repository/persistence access, runtime state store, and scheduler/worker coordination. Do not do this as standalone cleanup while the current single-worker queue model remains stable.
+  Completed: March 12, 2026. Reviewed after the public service-surface extraction. The current single-worker queue model is stable enough that a scheduler/state/persistence split would be speculative cleanup today. This item is now closed as a deferred watchpoint: reopen it only if queueing, persistence, or multi-worker requirements expand the lifecycle surface enough to justify the extra seams.
 
 ## Imported Historical Planning Work
 
