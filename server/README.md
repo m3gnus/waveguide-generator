@@ -198,6 +198,7 @@ Optional:
 - `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu`, default `auto`)
 - `advanced_settings`:
   - `enable_warmup` (bool, optimized solver only)
+  - `bem_precision` (`single` | `double`, optimized solver only)
   - `use_burton_miller` (bool, optimized solver only)
   - `symmetry_tolerance` (positive float, optimized solver only)
 
@@ -208,6 +209,7 @@ Validation behavior:
 - `surfaceTags.length` must equal triangle count (`indices.length / 3`)
 - `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
 - malformed payloads return `422`
+- `advanced_settings.bem_precision` must be `single` or `double` when provided
 - `advanced_settings.symmetry_tolerance` must be a positive finite number when provided
 
 Runtime metadata behavior:
@@ -222,6 +224,7 @@ Runtime metadata behavior:
   - `metadata.symmetry_policy` (`applied`, `reason`, detected symmetry type/planes, reduction factor, centered-excitation check)
   - `metadata.unit_detection`
   - `metadata.device_interface` (selected interface/device information and fallback details)
+  - `metadata.performance.bem_precision` (`single` or `double` for optimized solves)
 
 ### `GET /api/status/{job_id}`
 

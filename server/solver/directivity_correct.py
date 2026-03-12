@@ -34,6 +34,7 @@ def evaluate_far_field_sphere(
     theta_range: Tuple[float, float, int] = (0, 180, 37),
     phi_angles: Optional[List[float]] = None,
     device_interface: Optional[str] = None,
+    precision: str = "double",
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, np.ndarray]:
     """
@@ -118,10 +119,10 @@ def evaluate_far_field_sphere(
         try:
             # TWO operator constructions for ALL points (instead of 2*N)
             dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
-                space_p, obs_array, k, device_interface=interface_name
+                space_p, obs_array, k, device_interface=interface_name, precision=precision
             )
             slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
-                space_u, obs_array, k, device_interface=interface_name
+                space_u, obs_array, k, device_interface=interface_name, precision=precision
             )
 
             # Evaluate far-field pressure at all points at once
@@ -168,6 +169,7 @@ def calculate_directivity_patterns_correct(
     p_solutions: List,  # List of (p_total, u_total, space_p, space_u) per frequency
     polar_config: Optional[Dict] = None,
     device_interface: Optional[str] = None,
+    precision: str = "double",
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, List[List[float]]]:
     """
@@ -254,6 +256,7 @@ def calculate_directivity_patterns_correct(
                 theta_range=(angle_start, angle_end, angle_points),
                 phi_angles=[axis_phi[axis] for axis in active_axes],
                 device_interface=device_interface,
+                precision=precision,
                 observation_frame=frame,
             )
 

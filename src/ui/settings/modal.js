@@ -23,6 +23,7 @@ import {
 } from './simBasicSettings.js';
 import {
   RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
+  getBemPrecision,
   getCurrentSimAdvancedSettings,
   getEnableWarmup,
   getSymmetryTolerance,
@@ -95,6 +96,7 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   enableWarmup: 'Optimized-solver only. Front-loads the one-time operator/OpenCL warm-up before the solved frequency loop begins.',
+  bemPrecision: 'Optimized-solver only. Requests single or double BEMPP operator assembly/evaluation precision for the solve path.',
   useBurtonMiller: 'Optimized-solver only. Keeps the Burton-Miller coupling enabled for the main boundary solve.',
   symmetryTolerance: 'Optimized-solver only. Smaller values require tighter mirror symmetry before the backend reduces the model.'
 });
@@ -102,6 +104,10 @@ const ADVANCED_CONTROL_COPY = Object.freeze({
   enable_warmup: {
     label: 'Warm-up Pass',
     help: 'Runs a one-time optimized-solver warm-up before the timed frequency loop so OpenCL and operator caches are ready.'
+  },
+  bem_precision: {
+    label: 'BEM Precision',
+    help: 'Requests single or double precision for BEMPP operator assembly and potential evaluation in the optimized solve path.'
   },
   method: {
     label: 'Linear Solver Method',
@@ -134,6 +140,7 @@ const ADVANCED_CONTROL_COPY = Object.freeze({
 });
 const ACTIVE_ADVANCED_CONTROL_IDS = Object.freeze([
   'enable_warmup',
+  'bem_precision',
   'use_burton_miller',
   'symmetry_tolerance',
 ]);
@@ -278,6 +285,7 @@ function _buildModal(viewerRuntime) {
     if (t.id && t.id.startsWith('simadvanced-')) {
       const settings = getCurrentSimAdvancedSettings();
       settings.enableWarmup = getEnableWarmup();
+      settings.bemPrecision = getBemPrecision();
       settings.useBurtonMiller = getUseBurtonMiller();
       settings.symmetryTolerance = getSymmetryTolerance();
       saveSimAdvancedSettings(settings);
@@ -840,18 +848,21 @@ function _buildSimulationSection() {
   const currentSimAdvanced = getCurrentSimAdvancedSettings();
   const advancedIntro = document.createElement('p');
   advancedIntro.className = 'settings-section-help';
-  advancedIntro.textContent = 'These settings are sent through the public solve contract today. Method, restart, tolerance, and any “single precision” control remain intentionally planned-only.';
+  advancedIntro.textContent = 'These settings are sent through the public solve contract today. GMRES method, restart, tolerance, max-iteration, and explicit strong-form policy remain planned-only.';
   sec.appendChild(advancedIntro);
 
   const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
     const resetSettings = resetSimAdvancedSettings();
     const ew = document.getElementById('simadvanced-enableWarmup');
     if (ew) ew.checked = resetSettings.enableWarmup;
+    const bp = document.getElementById('simadvanced-bemPrecision');
+    if (bp) bp.value = resetSettings.bemPrecision;
     const ubm = document.getElementById('simadvanced-useBurtonMiller');
     if (ubm) ubm.checked = resetSettings.useBurtonMiller;
     const st = document.getElementById('simadvanced-symmetryTolerance');
     if (st) st.value = String(resetSettings.symmetryTolerance);
     if (ewBadge) ewBadge.hidden = false;
+    if (bpBadge) bpBadge.hidden = false;
     if (ubmBadge) ubmBadge.hidden = false;
     if (stBadge) stBadge.hidden = false;
   });
@@ -866,6 +877,20 @@ function _buildSimulationSection() {
   );
   sec.appendChild(ewResult.row);
   let ewBadge = ewResult.badge;
+
+  const bpResult = _buildSimBasicSelectRow(
+    ADVANCED_CONTROL_COPY.bem_precision.label,
+    'simadvanced-bemPrecision',
+    [
+      { value: 'double', label: 'Double' },
+      { value: 'single', label: 'Single' },
+    ],
+    currentSimAdvanced.bemPrecision,
+    SIM_ADVANCED_DEFAULTS.bemPrecision,
+    SIMULATION_ADVANCED_HELP.bemPrecision
+  );
+  sec.appendChild(bpResult.row);
+  let bpBadge = bpResult.badge;
 
   const ubmResult = _buildSimBasicCheckboxRow(
     ADVANCED_CONTROL_COPY.use_burton_miller.label,

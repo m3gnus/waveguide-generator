@@ -304,6 +304,7 @@ Base URL: `http://localhost:8000`
   - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`)
   - Supports optimized-solver `advanced_settings`:
     - `enable_warmup`
+    - `bem_precision` (`single` or `double`)
     - `use_burton_miller`
     - `symmetry_tolerance` (positive finite float)
   - Creates async job and returns `{ job_id }`
@@ -345,7 +346,7 @@ Notes:
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
-- Public advanced solver overrides currently expose warm-up, Burton-Miller coupling, and symmetry tolerance only. GMRES precision/method/restart/tolerance controls remain outside the contract pending product definition.
+- Public advanced solver overrides currently expose warm-up, BEM precision, Burton-Miller coupling, and symmetry tolerance. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata
@@ -362,6 +363,7 @@ Every `/api/solve` result includes `metadata.performance`:
 | `gmres_iterations_per_frequency` | list[int\|null] | GMRES iteration count per frequency; `null` for failed frequencies |
 | `avg_gmres_iterations` | float | Mean iteration count across successful frequencies |
 | `gmres_strong_form_supported` | bool | Whether strong-form preconditioner was active for this run |
+| `bem_precision` | string | Active BEMPP operator precision for the optimized solve path (`single` or `double`) |
 | `reduction_speedup` | float | Symmetry reduction factor applied (1.0 = no reduction) |
 
 ## 8. Canonical Contract

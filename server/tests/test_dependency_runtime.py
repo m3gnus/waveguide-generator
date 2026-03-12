@@ -53,12 +53,13 @@ class DependencyRuntimeTest(unittest.TestCase):
             response["capabilities"]["simulationAdvanced"]["controls"],
             [
                 "enable_warmup",
+                "bem_precision",
                 "use_burton_miller",
                 "symmetry_tolerance",
             ],
         )
         self.assertIn(
-            "GMRES precision and method controls remain pending product definition",
+            "BEM precision",
             response["capabilities"]["simulationAdvanced"]["reason"],
         )
 
