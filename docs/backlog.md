@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 11, 2026
+Last updated: March 12, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Superseded planning inputs were folded in from:
@@ -28,10 +28,10 @@ status as of date:
 - Remaining work is now a mix of user-reported bugs, unfinished simulation-management product work carried over from earlier planning, and a smaller set of hardening/research follow-ups.
 
 Remaining work:
-- Fix real cancellation behavior for running backend solves.
 - Improve simulation UX around mesh visibility, formula entry, and settings-to-runtime parity.
 - Finish the remaining simulation-management roadmap slices that were carried into this backlog.
 - Consolidate durable architecture/contracts into smaller maintained docs over time.
+- Tighten frontend module boundaries so `src/modules/*` stop absorbing UI/browser responsibilities.
 - Keep diagnostics, regression coverage, and optional engineering cleanup focused on shipped value.
 
 ## Recommended Execution Order
@@ -144,6 +144,39 @@ Work the backlog from upstream runtime truth to downstream UX:
 
 ### P3 Docs, Hardening, And Cleanup
 
+- [ ] Tighten frontend module boundaries and expand the boundary-test lane so `src/modules/*` remains an app-facing API layer instead of a second UI/runtime layer.
+  Source: architecture review on March 12, 2026; `src/modules/export/useCases.js`; `src/modules/simulation/useCases.js`; `src/modules/ui/useCases.js`; `tests/architecture-boundaries.test.js`.
+  Relevant: Yes. The intended frontend layering is visible in `docs/architecture.md`, and the existing JS boundary tests already protect some package edges, but the module layer still imports `GlobalState`, `src/ui/*`, folder-workspace internals, file-save helpers, and browser-only dev hooks directly.
+  Will it improve the program: Yes. It will make the frontend dependency graph more truthful, reduce accidental cross-layer coupling, and make future refactors less risky.
+  Research findings: `tests/architecture-boundaries.test.js` currently blocks `src/app` and `src/ui` from importing core internals, but it does not stop `src/modules/*` from importing UI/browser concerns. `src/modules/export/useCases.js` currently mixes export orchestration with `GlobalState`, `saveFile()`, `showError()`, and a `window.testBackendConnection` diagnostic surface; `src/modules/simulation/useCases.js` mixes simulation-domain helpers with folder workspace and task-manifest/index persistence; `src/modules/ui/useCases.js` is mostly a pass-through wrapper over `src/ui/*`.
+  Best approach: First strengthen `tests/architecture-boundaries.test.js` so the desired layering is executable. Then treat `src/modules/*` as application-service boundaries that accept dependencies or plain inputs instead of reaching into `window`, `document`, `GlobalState`, or `src/ui/*` helpers directly. Keep each slice narrow enough to preserve behavior while moving one dependency seam at a time.
+  Implementation plan:
+  1. Add new frontend boundary rules that fail when `src/modules/*` imports browser-only helpers (`src/ui/fileOps.js`, `src/ui/feedback.js`, folder-workspace internals) or ambient state directly without an approved adapter.
+  2. Carve out explicit adapters for file save/toast/workspace access and move those adapters to the app or UI edge, leaving module functions to consume plain callbacks/data.
+  3. Re-run the frontend architecture-boundary lane plus targeted simulation/export tests after each seam move so the rules stay enforceable.
+
+- [ ] Split `src/modules/simulation/useCases.js` into smaller frontend services with single responsibilities.
+  Source: architecture review on March 12, 2026; `src/modules/simulation/useCases.js`; `src/app/mesh.js`; `src/ui/simulation/jobActions.js`.
+  Relevant: Yes. The simulation module is currently the busiest frontend seam and has become the place where domain preparation, state mutation, workspace persistence, and task-bundle file writing all accumulate.
+  Will it improve the program: Yes. It will make simulation behavior easier to reason about, test, and change without breaking unrelated task-history or folder-workspace flows.
+  Research findings: `src/modules/simulation/useCases.js` is 410 lines and currently owns simulation-state reads/writes, snapshot loading, canonical mesh prep, OCC adaptive request prep, workspace index rebuild/write flows, manifest persistence, task-bundle file writes, and validation helpers. UI code such as `src/ui/simulation/jobActions.js` depends on that mixed surface even though only part of it is true simulation-domain behavior.
+  Best approach: Keep one small simulation-domain surface for canonical mesh and OCC request prep, then move workspace/index/manifest/file-write responsibilities into separate adapters or services with explicit names. The app/UI layer should compose those services rather than importing one catch-all simulation helper module.
+  Implementation plan:
+  1. Extract a pure simulation-domain service for canonical mesh summary, request prep, and config validation.
+  2. Move folder-workspace index/manifest syncing into a dedicated workspace-task service.
+  3. Move task-bundle file writes into an export/workspace adapter that the UI controller calls explicitly.
+
+- [ ] Remove ambient frontend globals such as `window.app` and `window.__waveguideApp` in favor of explicit composition.
+  Source: architecture review on March 12, 2026; `src/modules/ui/index.js`; `src/ui/settings/modal.js`; `src/ui/simulation/exports.js`.
+  Relevant: Yes. The current runtime mostly composes through modules and coordinators, but a few important UI flows still rely on global app handles.
+  Will it improve the program: Yes. It will reduce hidden dependencies, make lazy-loaded UI flows easier to test, and keep module boundaries honest.
+  Research findings: `src/modules/ui/index.js` still assigns `window.__waveguideApp` during simulation-panel bootstrapping, `src/ui/simulation/exports.js` falls back to that global when resolving the app instance, and `src/ui/settings/modal.js` applies viewer settings through `window.app?.controls` and `window.app?.renderer?.domElement`. These shortcuts bypass the intended app/module composition path.
+  Best approach: Thread the required app/controller/viewer dependencies through the existing coordinators and panel constructors instead of storing them on `window`. Keep any dev-only diagnostics behind explicit debug registration helpers so runtime code never depends on ambient globals.
+  Implementation plan:
+  1. Add explicit dependency injection for viewer controls, renderer DOM access, and simulation export coordination.
+  2. Update settings/export entrypoints to receive those dependencies from `App` or the UI coordinator rather than reading `window`.
+  3. Keep the optional debug console hooks behind a separate dev-only registration helper that does not participate in normal runtime flow.
+
 - [x] Create a smaller durable architecture doc and split stable per-module contracts out of large narrative docs.
   Source: user rules for this backlog; pending doc-maintenance work around trimming `docs/PROJECT_DOCUMENTATION.md`.
   Relevant: Yes. The project now has one large runtime document but no focused `docs/architecture.md` or `docs/modules/` contract set.
@@ -199,6 +232,13 @@ Work the backlog from upstream runtime truth to downstream UX:
   Will it improve the program: Mostly maintenance-oriented, not immediately user-visible.
   Research findings: `server/solver/solve_optimized.py` is currently 693 lines and `server/solver/waveguide_builder.py` is 2723 lines, so the maintenance concern is real. The existing backlog does not require those refactors yet, and recent work has not shown them to be the current delivery bottleneck.
   Best approach: Treat it as opportunistic refactor work only when a feature or bug fix needs deeper changes in those files; do not schedule it as standalone cleanup unless those modules become a bottleneck.
+
+- [ ] Consider decomposing `server/services/job_runtime.py` into smaller scheduler/state/persistence units if job lifecycle work expands further.
+  Source: architecture review on March 12, 2026; `server/services/job_runtime.py`; `server/api/routes_simulation.py`.
+  Relevant: Low for now. The backend layering is mostly good, and the recent public job-runtime service surface fixed the highest-value boundary problem.
+  Will it improve the program: Potentially. It would reduce the maintenance load in the job lifecycle area if more queueing, persistence, or multi-worker features are added.
+  Research findings: `server/api/routes_simulation.py` is now appropriately thin, but `server/services/job_runtime.py` is still a 562-line service that owns in-memory cache state, queue management, scheduler triggering, DB merge logic, and public job operations in one file. That is workable today, but it is the most obvious backend concentration point after the recent route/service cleanup.
+  Best approach: Leave it alone unless new lifecycle requirements land, then split by responsibility: repository/persistence access, runtime state store, and scheduler/worker coordination. Do not do this as standalone cleanup while the current single-worker queue model remains stable.
 
 ## Imported Historical Planning Work
 
