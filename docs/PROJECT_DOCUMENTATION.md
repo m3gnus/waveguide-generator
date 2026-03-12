@@ -114,7 +114,7 @@ flowchart LR
 
 1. Simulation UI emits `simulation:mesh-requested`.
 2. `src/app/mesh.js` resolves prepared design inputs via `DesignModule`, and `SimulationModule` builds canonical payload from those inputs before emitting `simulation:mesh-ready`.
-   - For OCC-adaptive `/api/solve`, frontend may send `waveguide_params.quadrants`; the backend submission boundary builds a queued full-domain OCC request with `quadrants=1234`.
+   - For OCC-adaptive `/api/solve`, frontend may send imported `waveguide_params.quadrants`, but that does not trim the canonical simulation payload. The backend submission boundary still builds a queued full-domain OCC request with `quadrants=1234`.
    - The same pre-submit payload also carries `metadata.identityTriangleCounts`, which the UI uses to show geometry-face triangle counts without changing the downstream numeric `surfaceTags` solver contract.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
@@ -167,6 +167,7 @@ Important behavior:
 - JS canonical payload currently emits only tags `1` and `2`; tag counters for `3`/`4` remain zero in runtime tests.
 - Simulation payload topology is full-domain and does not trim by `quadrants`.
 - OCC-adaptive `/api/solve` builds a full-domain queued OCC request with `quadrants=1234` at the submission boundary instead of mutating the caller-owned request in place.
+- Imported ATH `Mesh.Quadrants` values therefore remain import metadata only; whether a run stays full-domain or reduces to half/quarter domain is decided later by `metadata.symmetry_policy` in the solve path.
 - `/api/solve` rejects mesh payloads that do not already contain source tag `2`, instead of waiting for solver-side mesh preparation to fail.
 - The OCC runner passes canonical mesh `surfaceTags` through unchanged; later stages validate contracts rather than collapsing non-source tags into `1`.
 - Adaptive phi tessellation is restricted to full-circle horn-only render usage.

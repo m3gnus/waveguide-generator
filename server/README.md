@@ -215,6 +215,7 @@ Validation behavior:
 Runtime metadata behavior:
 
 - If mesh unit metadata is missing, backend auto-detects scale with heuristic fallback.
+- Imported ATH `Mesh.Quadrants` does not directly reduce the canonical simulation payload or queued OCC solve request; `/api/solve` still runs from the full-domain mesh/OCC request and only reduces later when the symmetry policy approves it.
 - `/api/results/{job_id}` includes:
   - `metadata.failures`
   - `metadata.failure_count`
