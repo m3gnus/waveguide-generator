@@ -341,6 +341,7 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       verbose: true,
       advancedSettings: {
         enableWarmup: false,
+        bemPrecision: 'single',
         useBurtonMiller: false,
         symmetryTolerance: 0.002
       },
@@ -371,6 +372,7 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.script.verbose, true);
   assert.deepEqual(job.script.advancedSettings, {
     enableWarmup: false,
+    bemPrecision: 'single',
     useBurtonMiller: false,
     symmetryTolerance: 0.002
   });

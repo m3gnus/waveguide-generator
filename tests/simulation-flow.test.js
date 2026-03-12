@@ -80,6 +80,7 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         verbose: false,
         advancedSettings: {
           enableWarmup: false,
+          bemPrecision: 'single',
           useBurtonMiller: false,
           symmetryTolerance: 0.0025
         },
@@ -121,6 +122,7 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.verbose, false);
     assert.deepEqual(payload.advanced_settings, {
       enable_warmup: false,
+      bem_precision: 'single',
       use_burton_miller: false,
       symmetry_tolerance: 0.0025
     });
@@ -158,6 +160,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
         verbose: undefined,
         advancedSettings: {
           enableWarmup: 'sometimes',
+          bemPrecision: 'fp16',
           useBurtonMiller: null,
           symmetryTolerance: -1
         }
@@ -577,6 +580,42 @@ test('renderJobList exposes folder source mode in the header and rows', () => {
     assert.equal(sourceLabel.textContent, 'Folder Tasks');
     assert.match(list.innerHTML, /simulation-job-source-badge/);
     assert.match(list.innerHTML, />Folder</);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test('renderJobList keeps backend-only feeds free of redundant row source badges', () => {
+  const originalDocument = global.document;
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    }
+  };
+
+  try {
+    renderJobList({
+      jobSourceMode: 'backend',
+      activeJobId: null,
+      jobs: new Map([
+        ['job-backend-1', {
+          id: 'job-backend-1',
+          label: 'backend-task',
+          status: 'complete',
+          createdAt: '2026-03-11T09:00:00.000Z',
+          completedAt: '2026-03-11T09:10:00.000Z'
+        }]
+      ])
+    });
+
+    assert.equal(sourceLabel.textContent, 'Backend Jobs');
+    assert.doesNotMatch(list.innerHTML, /simulation-job-source-badge/);
+    assert.doesNotMatch(list.innerHTML, />Backend</);
   } finally {
     global.document = originalDocument;
   }
