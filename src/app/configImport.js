@@ -26,7 +26,7 @@ export function handleFileUpload(event) {
         // Loading a config establishes a new baseline; skip this update as a "user change".
         resetAppParameterChangeTracking({ skipNext: true });
         GlobalState.update(result.params, result.type);
-        setAppExportFields(deriveExportFieldsFromImportedFileName(file.name));
+        setAppExportFields(deriveExportFieldsFromImportedFileName(file.name), document);
       } else {
         showUiError(result.error || 'Failed to parse config file.');
       }
