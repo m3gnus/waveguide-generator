@@ -531,6 +531,21 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                     3, 0, 4,
                 ],
                 "surfaceTags": [1, 2, 3, 4],
+                "metadata": {
+                    "identityTriangleCounts": {
+                        "inner_wall": 1,
+                        "outer_wall": 0,
+                        "mouth_rim": 0,
+                        "throat_return": 0,
+                        "rear_cap": 0,
+                        "horn_wall": 0,
+                        "throat_disc": 1,
+                        "enc_front": 0,
+                        "enc_side": 0,
+                        "enc_rear": 0,
+                        "enc_edge": 0,
+                    }
+                },
             },
         }
 
@@ -583,6 +598,21 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                     3, 0, 4,
                 ],
                 "surfaceTags": [1, 2, 3, 4],
+                "metadata": {
+                    "identityTriangleCounts": {
+                        "inner_wall": 1,
+                        "outer_wall": 0,
+                        "mouth_rim": 0,
+                        "throat_return": 0,
+                        "rear_cap": 0,
+                        "horn_wall": 0,
+                        "throat_disc": 1,
+                        "enc_front": 0,
+                        "enc_side": 0,
+                        "enc_rear": 0,
+                        "enc_edge": 0,
+                    }
+                },
             },
         }
 
@@ -614,6 +644,20 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                     "vertex_count": 5,
                     "triangle_count": 4,
                     "source": "occ_adaptive_canonical",
+                    "tag_counts": {1: 1, 2: 1, 3: 1, 4: 1},
+                    "identity_triangle_counts": {
+                        "inner_wall": 1,
+                        "outer_wall": 0,
+                        "mouth_rim": 0,
+                        "throat_return": 0,
+                        "rear_cap": 0,
+                        "horn_wall": 0,
+                        "throat_disc": 1,
+                        "enc_front": 0,
+                        "enc_side": 0,
+                        "enc_rear": 0,
+                        "enc_edge": 0,
+                    },
                 },
             )
         finally:

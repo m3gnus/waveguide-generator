@@ -354,6 +354,64 @@ class OccResolutionSemanticsTest(unittest.TestCase):
         self.assertEqual(fine["inner"], coarse["inner"])
         self.assertEqual(fine["throat_disc"], coarse["throat_disc"])
 
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_freestanding_canonical_metadata_reports_backend_face_identity_counts(self):
+        params = {
+            "formula_type": "R-OSSE",
+            "R": "160",
+            "a": "60",
+            "r0": 12.7,
+            "a0": 15.5,
+            "k": 2.0,
+            "r": 0.4,
+            "b": 0.2,
+            "m": 0.85,
+            "q": 3.4,
+            "tmax": 1.0,
+            "quadrants": 1234,
+            "enc_depth": 0.0,
+            "wall_thickness": 6.0,
+            "n_angular": 100,
+            "n_length": 20,
+            "throat_res": 5.0,
+            "mouth_res": 8.0,
+            "rear_res": 25.0,
+        }
+
+        result = build_waveguide_mesh(params, include_canonical=True)
+        counts = result["canonical_mesh"]["metadata"]["identityTriangleCounts"]
+
+        self.assertGreater(counts["inner_wall"], 0)
+        self.assertGreater(counts["outer_wall"], 0)
+        self.assertGreater(counts["rear_cap"], 0)
+        self.assertGreater(counts["throat_disc"], 0)
+        self.assertNotEqual(
+            counts["inner_wall"],
+            counts["outer_wall"],
+            "Backend OCC diagnostics must reflect distinct rear-domain density when rear_res is coarser.",
+        )
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
+    def test_enclosure_canonical_metadata_reports_backend_face_identity_counts(self):
+        params = self._osse_enclosure_base_params()
+        params["enc_front_resolution"] = "6,7,8,9"
+        params["enc_back_resolution"] = "12,13,14,15"
+
+        result = build_waveguide_mesh(params, include_canonical=True)
+        counts = result["canonical_mesh"]["metadata"]["identityTriangleCounts"]
+
+        self.assertGreater(counts["horn_wall"], 0)
+        self.assertGreater(counts["enc_front"], 0)
+        self.assertGreater(counts["enc_side"], 0)
+        self.assertGreater(counts["enc_rear"], 0)
+        self.assertEqual(counts["inner_wall"], 0)
+
     @staticmethod
     def _mesh_group_triangle_counts(rear_res: float) -> Dict[str, int]:
         params = {

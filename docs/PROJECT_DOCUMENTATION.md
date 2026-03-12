@@ -118,10 +118,11 @@ flowchart LR
    - The same pre-submit payload also carries `metadata.identityTriangleCounts`, which the UI uses to show geometry-face triangle counts without changing the downstream numeric `surfaceTags` solver contract.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
-   - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
-   - Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
-   - Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
-   - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
+- `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
+- Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
+- Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
+- Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
+- On GPU-only OpenCL runtimes without a CPU device, `opencl_gpu` now installs a bempp-cl CPU-context surrogate that reuses the active GPU context for singular assembly.
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
@@ -314,7 +315,8 @@ Base URL: `http://localhost:8000`
 
 - `GET /api/jobs`
   - Lists jobs with optional `status` filter and `limit`/`offset` pagination
-  - Returns compact job metadata, status/progress/stage timestamps, and `has_results`/`has_mesh_artifact`
+  - Returns compact job metadata, status/progress/stage timestamps, `has_results`/`has_mesh_artifact`, and persisted `mesh_stats`
+  - `mesh_stats` is the authoritative solve-mesh summary for adaptive OCC jobs, including vertex/triangle counts plus canonical tag counts and OCC-derived face-identity triangle counts
 
 - `DELETE /api/jobs/{job_id}`
   - Deletes terminal jobs (`complete|error|cancelled`)
@@ -584,7 +586,7 @@ High-signal test suites:
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
-If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`.
+If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. On GPU-only runtimes, `opencl_gpu` can still run by reusing the GPU context for bempp-cl's CPU-context singular-assembly hooks.
 
 ## 11. Key File Map
 

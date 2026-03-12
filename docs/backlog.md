@@ -149,6 +149,8 @@ Required regression coverage:
 ### P1. OCC Mesh Diagnostics Must Reflect The Backend Solve Mesh
 
 - [ ] Replace the current pre-submit geometry diagnostics contract with diagnostics sourced from the backend OCC mesh build used by the actual BEM job.
+  - [x] Extend the backend OCC diagnostics contract so `canonical_mesh.metadata.identityTriangleCounts` is derived during Gmsh/OCC extraction and persisted on each job as `mesh_stats.identity_triangle_counts`/`mesh_stats.tag_counts` through `/api/jobs`, instead of relying on frontend preview group ranges for authoritative solve-mesh counts.
+  - [ ] Update the simulation UI so preview diagnostics are labeled as preview-only and post-build/backend job diagnostics become the authoritative view after the OCC mesh exists.
   - Do not present JS preview-group counts as if they describe the adaptive OCC solve mesh.
   - Show actual backend OCC triangle/vertex diagnostics after the job mesh has been built, using backend-produced data tied to the same mesh artifact/canonical extraction that the solver consumes.
   - Preserve the distinction between preview geometry and solve geometry explicitly in the UI. If pre-submit preview counts remain visible, label them as preview-only and keep backend OCC diagnostics as the authoritative post-build/job view.
@@ -158,9 +160,9 @@ Required regression coverage:
 
 Research notes:
 - `src/ui/simulation/jobActions.js` currently renders diagnostics from `summarizeCanonicalSimulationMesh(meshData)` immediately after `panel.prepareMeshForSimulation()`, which uses the frontend JS canonical mesh path.
-- The adaptive solve path in `server/services/simulation_runner.py` already builds the OCC mesh with `include_canonical=True`, extracts backend canonical arrays, and stores mesh stats plus the `.msh` artifact for the job.
+- The adaptive solve path in `server/services/simulation_runner.py` now builds the OCC mesh with `include_canonical=True`, extracts backend canonical arrays, and persists `mesh_stats` with authoritative vertex/triangle counts, canonical tag counts, and backend-derived face-identity triangle counts alongside the `.msh` artifact.
 - `server/solver/waveguide_builder.py` applies `rear_res` to free-standing outer/rear surfaces, so backend OCC density can legitimately differ from the JS preview tessellation.
-- The current backend `.msh` physical-group contract only preserves `SD1G0` (`1`) and `SD1D1001` (`2`), so backend-derived face-identity diagnostics need either expanded exported metadata or a separate per-identity diagnostics payload recorded during OCC meshing.
+- The current backend `.msh` physical-group contract still preserves only `SD1G0` (`1`) and `SD1D1001` (`2`), so authoritative face-identity diagnostics now come from the canonical OCC extraction metadata persisted with each job rather than from the `.msh` physical-group rows alone.
 
 Implementation notes:
 - `src/ui/simulation/jobActions.js`
@@ -170,7 +172,8 @@ Implementation notes:
 - `server/services/simulation_runner.py`
 - `server/solver/waveguide_builder.py`
 - `server/api/routes_simulation.py`
-- job persistence layers that currently store only `mesh_stats` and the `.msh` artifact
+- `server/services/job_runtime.py`
+- `server/db.py`
 
 Required regression coverage:
 - `tests/simulation-module.test.js`
@@ -290,6 +293,12 @@ Implementation notes:
 
 - [ ] Add a reproducible diagnostics lane for the ATH reference configs already called out in the earlier symmetry investigation, capturing imported params, canonical mesh topology, and resulting `metadata.symmetry_policy` / `metadata.symmetry`.
   - Add regression coverage for those reference cases so future geometry or solver changes cannot silently change reduction eligibility.
+  - Expand that diagnostics lane to capture both the pre-mesh OCC/profile symmetry evidence and the post-mesh OCC canonical bounds so false negatives can be localized before they reach `metadata.symmetry_policy`.
+  - Root cause found on March 12, 2026: the live `occ_adaptive` solve path checks symmetry on the extracted Gmsh canonical mesh, but `server/solver/symmetry.py` assumes the frontend canonical axis convention (`X`, axial `Y`, `Z`) and only tests `X=0` / `Z=0`; the OCC builder emits `[x_radial, y_radial, z_axial]`, so the second quarter-symmetry plane is evaluated on the axial axis instead of the second radial axis.
+  - Root cause found on March 12, 2026: `_check_plane_symmetry()` requires one-to-one mirrored vertex matches inside a very tight tolerance, which works for the synthetic structured benchmark meshes but not for the unstructured OCC/Gmsh canonical meshes used in production. That is why the benchmark lane passes while the real ATH references all report `reason=no_geometric_symmetry`.
+  - Proposed fix: move OCC symmetry detection upstream of triangle extraction and make it axis-aware. Detect symmetry from `_compute_point_grids(...)` / pre-mesh profile samples (or equivalent OCC geometry metadata), record the detected symmetry planes in the OCC canonical metadata, and let the solve path consume that explicit symmetry description instead of re-inferring it from raw mesh vertices.
+  - Guardrail: keep asymmetric enclosure spacing or other genuinely asymmetric shell geometry as a hard stop for reduction; only the symmetric horn / wall-shell cases should become eligible again.
+  - Validation target: add reference expectations for the user-reported matrix (most ATH references quarter-symmetric, Tritonia family half-symmetric once the intended reference variant is confirmed) and cover both OCC wall-shell and enclosure-backed solves.
   - [x] Audit the existing `Enable Symmetry` control in the Settings modal and verify that it is visible in the live modal, persists correctly, and changes submitted `/api/solve` payloads as expected.
   - [x] Surface the requested symmetry setting and the resulting `symmetry_policy` together in user-visible job/result surfaces so users can tell whether a run kept the full model because symmetry was disabled, rejected, or successfully applied.
   - [x] Update runtime docs to clarify that imported ATH `Mesh.Quadrants` values do not directly trim the canonical simulation payload; full-model vs reduced-model behavior is determined by the solver symmetry policy.

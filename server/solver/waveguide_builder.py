@@ -48,6 +48,21 @@ from .deps import GMSH_AVAILABLE, gmsh
 from .gmsh_utils import gmsh_lock, parse_msh_stats, GmshMeshingError
 
 
+FACE_IDENTITY_ORDER: Tuple[str, ...] = (
+    "inner_wall",
+    "outer_wall",
+    "mouth_rim",
+    "throat_return",
+    "rear_cap",
+    "horn_wall",
+    "throat_disc",
+    "enc_front",
+    "enc_side",
+    "enc_rear",
+    "enc_edge",
+)
+
+
 # ATH expression evaluation
 # ---------------------------------------------------------------------------
 
@@ -2011,8 +2026,56 @@ def _extract_triangle_block(
     return [], []
 
 
-def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str, List[float]]:
-    """Extract flat canonical mesh arrays (vertices, indices, surfaceTags, elementTags) from current gmsh model."""
+def _build_surface_identity_by_entity(
+    surface_groups: Dict[str, List[int]],
+    *,
+    has_enclosure: bool,
+) -> Dict[int, str]:
+    """Map gmsh surface entities to stable frontend face-identity keys."""
+    group_to_identity = {
+        "throat_disc": "throat_disc",
+    }
+    if has_enclosure:
+        group_to_identity.update(
+            {
+                "inner": "horn_wall",
+                "enclosure_front": "enc_front",
+                "enclosure_back": "enc_rear",
+                "enclosure_sides": "enc_side",
+            }
+        )
+    else:
+        group_to_identity.update(
+            {
+                "inner": "inner_wall",
+                "outer": "outer_wall",
+                "rear": "rear_cap",
+                "mouth": "mouth_rim",
+            }
+        )
+
+    surface_identity_by_entity: Dict[int, str] = {}
+    for group_name, identity in group_to_identity.items():
+        for entity_tag in surface_groups.get(group_name, []):
+            surface_identity_by_entity[int(entity_tag)] = identity
+    return surface_identity_by_entity
+
+
+def _count_triangle_identities(triangle_identities: List[Any]) -> Dict[str, int]:
+    counts = {identity: 0 for identity in FACE_IDENTITY_ORDER}
+    for raw_identity in triangle_identities:
+        identity = str(raw_identity or "").strip()
+        if identity in counts:
+            counts[identity] += 1
+    return counts
+
+
+def _extract_canonical_mesh_from_model(
+    default_surface_tag: int = 1,
+    *,
+    surface_identity_by_entity: Optional[Dict[int, str]] = None,
+) -> Dict[str, Any]:
+    """Extract flat canonical mesh arrays from current gmsh model."""
     node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
     if len(node_tags) == 0 or len(node_coords) == 0:
         return {"vertices": [], "indices": [], "surfaceTags": []}
@@ -2029,17 +2092,28 @@ def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str
         raise GmshMeshingError("Unexpected triangle node buffer size while extracting canonical mesh.")
 
     element_surface_tag: Dict[int, int] = {}
+    element_identity: Dict[int, str] = {}
     for _, physical_tag in gmsh.model.getPhysicalGroups(2):
         entities = gmsh.model.getEntitiesForPhysicalGroup(2, physical_tag)
         for entity in entities:
+            entity_i = int(entity)
+            identity = (
+                surface_identity_by_entity.get(entity_i)
+                if isinstance(surface_identity_by_entity, dict)
+                else None
+            )
             etypes_e, etags_e, enodes_e = gmsh.model.mesh.getElements(2, entity)
             tri_tags_e, _ = _extract_triangle_block(etypes_e, etags_e, enodes_e)
             for elem_tag in tri_tags_e:
-                element_surface_tag[int(elem_tag)] = int(physical_tag)
+                elem_tag_i = int(elem_tag)
+                element_surface_tag[elem_tag_i] = int(physical_tag)
+                if identity:
+                    element_identity[elem_tag_i] = identity
 
     indices: List[int] = []
     surface_tags: List[int] = []
     element_tags: List[int] = []
+    triangle_identities: List[Optional[str]] = []
     for tri_idx, elem_tag in enumerate(tri_tags):
         n0 = tri_nodes[tri_idx * 3]
         n1 = tri_nodes[tri_idx * 3 + 1]
@@ -2056,13 +2130,17 @@ def _extract_canonical_mesh_from_model(default_surface_tag: int = 1) -> Dict[str
             ) from exc
         surface_tags.append(int(element_surface_tag.get(int(elem_tag), default_surface_tag)))
         element_tags.append(int(elem_tag))
+        triangle_identities.append(element_identity.get(int(elem_tag)))
 
-    return {
+    canonical_mesh: Dict[str, Any] = {
         "vertices": node_coords_f,
         "indices": indices,
         "surfaceTags": surface_tags,
         "elementTags": element_tags,
     }
+    if triangle_identities:
+        canonical_mesh["triangleIdentities"] = triangle_identities
+    return canonical_mesh
 
 
 def _orient_and_validate_canonical_mesh(
@@ -2078,6 +2156,7 @@ def _orient_and_validate_canonical_mesh(
     indices = list(canonical_mesh.get("indices", []))
     surface_tags = list(canonical_mesh.get("surfaceTags", []))
     element_tags = list(canonical_mesh.get("elementTags", []))
+    triangle_identities = list(canonical_mesh.get("triangleIdentities", []))
 
     if len(vertices) % 3 != 0:
         raise GmshMeshingError("Canonical mesh has invalid vertex buffer length.")
@@ -2087,7 +2166,10 @@ def _orient_and_validate_canonical_mesh(
     vertex_count = len(vertices) // 3
     tri_count = len(indices) // 3
     if tri_count == 0:
-        return {"vertices": vertices, "indices": indices, "surfaceTags": surface_tags}
+        result = {"vertices": vertices, "indices": indices, "surfaceTags": surface_tags}
+        if triangle_identities:
+            result["triangleIdentities"] = triangle_identities
+        return result
 
     # OCC seams can retain numerically-near duplicate nodes after meshing.
     # Weld by position before topology checks so connectivity/watertightness
@@ -2110,6 +2192,7 @@ def _orient_and_validate_canonical_mesh(
     welded_indices: List[int] = []
     welded_surface_tags: List[int] = []
     welded_element_tags: List[int] = []
+    welded_triangle_identities: List[Optional[str]] = []
     for tri_idx in range(tri_count):
         a = int(old_to_new[int(indices[tri_idx * 3])])
         b = int(old_to_new[int(indices[tri_idx * 3 + 1])])
@@ -2120,11 +2203,14 @@ def _orient_and_validate_canonical_mesh(
         welded_surface_tags.append(int(surface_tags[tri_idx]))
         if element_tags:
             welded_element_tags.append(int(element_tags[tri_idx]))
+        if triangle_identities:
+            welded_triangle_identities.append(triangle_identities[tri_idx])
 
     vertices = np.asarray(welded_points, dtype=float).reshape(-1).tolist()
     indices = welded_indices
     surface_tags = welded_surface_tags
     element_tags = welded_element_tags
+    triangle_identities = welded_triangle_identities
     vertex_count = len(vertices) // 3
     tri_count = len(indices) // 3
     if tri_count == 0:
@@ -2321,7 +2407,7 @@ def _orient_and_validate_canonical_mesh(
 
     edge_uses = build_edge_uses(indices, vertex_count)
     if require_watertight and allow_tagged_loop_bridge:
-        if stitch_tagged_boundary_loops(
+        bridge_result = stitch_tagged_boundary_loops(
             vertices,
             indices,
             surface_tags,
@@ -2329,13 +2415,16 @@ def _orient_and_validate_canonical_mesh(
             tag_a=1,
             tag_b=1,
             bridge_tag=1,
-        ):
+        )
+        if bridge_result:
             tri_count = len(indices) // 3
             # If we stitch, the new triangles don't have element tags matching
             # the Gmsh model yet, so we don't track them in flipped_mask for reverseElements.
             old_mask_len = len(flipped_mask)
             if tri_count > old_mask_len:
                 flipped_mask = np.append(flipped_mask, np.zeros(tri_count - old_mask_len, dtype=bool))
+            if triangle_identities:
+                triangle_identities.extend([None] * int(bridge_result[0]))
             edge_uses = build_edge_uses(indices, vertex_count)
 
     adjacency: Dict[int, List[Tuple[int, int]]] = {i: [] for i in range(tri_count)}
@@ -2476,12 +2565,15 @@ def _orient_and_validate_canonical_mesh(
             if is_flipped and tri_idx < len(element_tags):
                 flipped_element_tags.append(element_tags[tri_idx])
 
-    return {
+    result = {
         "vertices": vertices,
         "indices": indices,
         "surfaceTags": surface_tags,
         "flippedElementTags": flipped_element_tags,
     }
+    if triangle_identities:
+        result["triangleIdentities"] = triangle_identities
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2681,7 +2773,17 @@ def build_waveguide_mesh(
             _run_cancellation_callback(cancellation_callback)
             gmsh.model.mesh.generate(2)
             gmsh.model.mesh.removeDuplicateNodes()
-            canonical_mesh = _extract_canonical_mesh_from_model() if include_canonical else None
+            surface_identity_by_entity = _build_surface_identity_by_entity(
+                surface_groups,
+                has_enclosure=enc_depth > 0,
+            )
+            canonical_mesh = (
+                _extract_canonical_mesh_from_model(
+                    surface_identity_by_entity=surface_identity_by_entity,
+                )
+                if include_canonical
+                else None
+            )
 
             if canonical_mesh is not None:
                 canonical_mesh = _orient_and_validate_canonical_mesh(
@@ -2692,6 +2794,12 @@ def build_waveguide_mesh(
                 flipped_tags = canonical_mesh.get("flippedElementTags", [])
                 if flipped_tags:
                     gmsh.model.mesh.reverseElements(flipped_tags)
+                canonical_mesh["metadata"] = {
+                    "identityTriangleCounts": _count_triangle_identities(
+                        list(canonical_mesh.get("triangleIdentities", []))
+                    )
+                }
+                canonical_mesh.pop("triangleIdentities", None)
 
             # Trust Gmsh to produce valid, consistently-oriented mesh
             if canonical_mesh is not None:

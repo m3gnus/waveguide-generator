@@ -92,6 +92,7 @@ class JobPersistenceTest(unittest.TestCase):
                 },
                 "has_results": status == "complete",
                 "has_mesh_artifact": False,
+                "mesh_stats": None,
                 "label": None,
             }
         )
@@ -193,6 +194,27 @@ class JobPersistenceTest(unittest.TestCase):
 
         mesh_resp = asyncio.run(get_mesh_artifact("job-finished"))
         self.assertIn("$MeshFormat", mesh_resp.body.decode())
+
+    def test_list_jobs_preserves_persisted_mesh_stats_payload(self):
+        self._create_db_job("job-complete", "complete")
+        _jrt.db.update_job(
+            "job-complete",
+            mesh_stats_json=(
+                '{"vertex_count": 42, "triangle_count": 20, "source": "occ_adaptive_canonical", '
+                '"identity_triangle_counts": {"inner_wall": 8, "throat_disc": 2}}'
+            ),
+        )
+
+        _jrt.jobs.clear()
+        resp = asyncio.run(list_jobs(status="complete", limit=10, offset=0))
+
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual(resp["items"][0]["mesh_stats"]["vertex_count"], 42)
+        self.assertEqual(resp["items"][0]["mesh_stats"]["triangle_count"], 20)
+        self.assertEqual(
+            resp["items"][0]["mesh_stats"]["identity_triangle_counts"]["inner_wall"],
+            8,
+        )
 
 
 if __name__ == "__main__":
