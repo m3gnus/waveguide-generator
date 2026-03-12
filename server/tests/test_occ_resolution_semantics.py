@@ -386,6 +386,7 @@ class OccResolutionSemanticsTest(unittest.TestCase):
 
         self.assertGreater(counts["inner_wall"], 0)
         self.assertGreater(counts["outer_wall"], 0)
+        self.assertGreater(counts["throat_return"], 0)
         self.assertGreater(counts["rear_cap"], 0)
         self.assertGreater(counts["throat_disc"], 0)
         self.assertNotEqual(
@@ -409,6 +410,7 @@ class OccResolutionSemanticsTest(unittest.TestCase):
         self.assertGreater(counts["horn_wall"], 0)
         self.assertGreater(counts["enc_front"], 0)
         self.assertGreater(counts["enc_side"], 0)
+        self.assertGreater(counts["enc_edge"], 0)
         self.assertGreater(counts["enc_rear"], 0)
         self.assertEqual(counts["inner_wall"], 0)
 

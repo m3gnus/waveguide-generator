@@ -39,6 +39,7 @@ import {
 import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
 import { downloadMeshArtifact } from './meshDownload.js';
 import {
+  summarizePersistedSimulationMeshStats,
   summarizeCanonicalSimulationMesh,
   validateSimulationConfig
 } from '../../modules/simulation/domain.js';
@@ -83,9 +84,20 @@ export function renderSimulationMeshDiagnostics(summary = null) {
   }
 
   if (!summary) {
-    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Geometry diagnostics appear here before submit.</div>';
+    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Preview diagnostics appear here before submit. Backend OCC diagnostics replace them once the job mesh has been built.</div>';
     return;
   }
+
+  const provenance = summary.provenance === 'backend' ? 'backend' : 'preview';
+  const sourceLabel = provenance === 'backend'
+    ? 'Authoritative Backend OCC Solve Mesh'
+    : 'Preview Geometry Only';
+  const statusNote = provenance === 'backend'
+    ? 'Surface rows report triangle counts from the backend OCC solve mesh used by this job.'
+    : 'Surface rows report preview-only triangle counts from the frontend canonical mesh. Authoritative backend OCC diagnostics replace them after the job mesh is built.';
+  const okMessage = provenance === 'backend'
+    ? 'Authoritative backend OCC geometry diagnostics are available for this job.'
+    : 'Preview geometry identities and canonical tags look ready for submit.';
 
   const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(([identity, label]) => `
     <div class="simulation-mesh-diagnostics-tag">
@@ -100,16 +112,16 @@ export function renderSimulationMeshDiagnostics(summary = null) {
     `Secondary (3): ${summary.tagCounts?.[3] ?? 0}`,
     `Interface (4): ${summary.tagCounts?.[4] ?? 0}`
   ].join(' • ');
-  const infoMarkup = `<div class="simulation-mesh-diagnostics-note">Surface rows report triangle counts. Canonical tags (debug): ${debugTagSummary}</div>`;
+  const infoMarkup = `<div class="simulation-mesh-diagnostics-note">${escapeHtml(sourceLabel)}. ${escapeHtml(statusNote)} Canonical tags (debug): ${escapeHtml(debugTagSummary)}</div>`;
 
   const warningMarkup = Array.isArray(summary.warnings) && summary.warnings.length > 0
     ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join('<br>')}</div>`
-    : '<div class="simulation-mesh-diagnostics-ok">Geometry identities and canonical tags look ready for submit.</div>';
+    : `<div class="simulation-mesh-diagnostics-ok">${escapeHtml(okMessage)}</div>`;
 
   container.innerHTML = `
     <div class="simulation-mesh-diagnostics-header">
       <span>Geometry Diagnostics</span>
-      <span>${summary.vertexCount} vertices • ${summary.triangleCount} triangles</span>
+      <span>${escapeHtml(sourceLabel)} • ${summary.vertexCount} vertices • ${summary.triangleCount} triangles</span>
     </div>
     <div class="simulation-mesh-diagnostics-tags">${identityRows}</div>
     ${infoMarkup}
@@ -573,7 +585,10 @@ export async function runSimulation(panel) {
   try {
     // Get current mesh data
     const meshData = await panel.prepareMeshForSimulation();
-    renderSimulationMeshDiagnostics(summarizeCanonicalSimulationMesh(meshData));
+    renderSimulationMeshDiagnostics({
+      ...summarizeCanonicalSimulationMesh(meshData),
+      provenance: 'preview'
+    });
 
     updateStageUi(panel, {
       progress: 0.2,
@@ -641,4 +656,11 @@ export async function runMockSimulation(config) {
       resolve();
     }, 2000);
   });
+}
+
+export function renderBackendSimulationMeshDiagnostics(meshStats = null) {
+  if (!meshStats) {
+    return;
+  }
+  renderSimulationMeshDiagnostics(summarizePersistedSimulationMeshStats(meshStats));
 }

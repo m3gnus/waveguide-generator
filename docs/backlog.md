@@ -148,9 +148,9 @@ Required regression coverage:
 
 ### P1. OCC Mesh Diagnostics Must Reflect The Backend Solve Mesh
 
-- [ ] Replace the current pre-submit geometry diagnostics contract with diagnostics sourced from the backend OCC mesh build used by the actual BEM job.
+- [x] Replace the current pre-submit geometry diagnostics contract with diagnostics sourced from the backend OCC mesh build used by the actual BEM job.
   - [x] Extend the backend OCC diagnostics contract so `canonical_mesh.metadata.identityTriangleCounts` is derived during Gmsh/OCC extraction and persisted on each job as `mesh_stats.identity_triangle_counts`/`mesh_stats.tag_counts` through `/api/jobs`, instead of relying on frontend preview group ranges for authoritative solve-mesh counts.
-  - [ ] Update the simulation UI so preview diagnostics are labeled as preview-only and post-build/backend job diagnostics become the authoritative view after the OCC mesh exists.
+  - [x] Update the simulation UI so preview diagnostics are labeled as preview-only and post-build/backend job diagnostics become the authoritative view after the OCC mesh exists.
   - Do not present JS preview-group counts as if they describe the adaptive OCC solve mesh.
   - Show actual backend OCC triangle/vertex diagnostics after the job mesh has been built, using backend-produced data tied to the same mesh artifact/canonical extraction that the solver consumes.
   - Preserve the distinction between preview geometry and solve geometry explicitly in the UI. If pre-submit preview counts remain visible, label them as preview-only and keep backend OCC diagnostics as the authoritative post-build/job view.

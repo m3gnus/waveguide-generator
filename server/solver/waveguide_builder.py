@@ -1564,6 +1564,7 @@ def _build_enclosure_box(
         "front": [],
         "back": [],
         "sides": [],
+        "edges": [],
         "bounds": None,
         "opening_curves": [],
         "opening_ring_points": None,
@@ -1638,6 +1639,7 @@ def _build_enclosure_box(
         return empty
 
     generated_dimtags: List[Tuple[int, int]] = []
+    edge_dimtags: List[Tuple[int, int]] = []
     edge_depth = min(clamped_edge, max(0.0, enc_depth * 0.49))
 
     if closed:
@@ -1731,7 +1733,9 @@ def _build_enclosure_box(
             )
         ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
         ring_wire, _, _ = _make_wire(ring_pts, closed=closed)
-        generated_dimtags.extend(_add_ruled_section(current_profile, ring_wire))
+        front_edge_dimtags = _add_ruled_section(current_profile, ring_wire)
+        generated_dimtags.extend(front_edge_dimtags)
+        edge_dimtags.extend(front_edge_dimtags)
         current_profile = ring_wire
 
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
@@ -1767,7 +1771,9 @@ def _build_enclosure_box(
             )
         ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
         ring_wire, ring_curves, ring_eps = _make_wire(ring_pts, closed=closed)
-        generated_dimtags.extend(_add_ruled_section(current_profile, ring_wire))
+        back_edge_dimtags = _add_ruled_section(current_profile, ring_wire)
+        generated_dimtags.extend(back_edge_dimtags)
+        edge_dimtags.extend(back_edge_dimtags)
         current_profile = ring_wire
         current_curves = ring_curves
         profile_pts = ring_eps
@@ -1781,13 +1787,17 @@ def _build_enclosure_box(
 
     gmsh.model.occ.synchronize()
     dimtags = [(2, int(tag)) for dim, tag in generated_dimtags if int(dim) == 2]
+    edge_tags = {int(tag) for dim, tag in edge_dimtags if int(dim) == 2}
 
     split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
+    edge_surfaces = [tag for tag in split["sides"] if int(tag) in edge_tags]
+    side_surfaces = [tag for tag in split["sides"] if int(tag) not in edge_tags]
     return {
         "dimtags": dimtags,
         "front": split["front"],
         "back": split["back"],
-        "sides": split["sides"],
+        "sides": side_surfaces,
+        "edges": edge_surfaces,
         "bounds": bounds,
         "opening_curves": [],
         "opening_ring_points": None,
@@ -2042,6 +2052,7 @@ def _build_surface_identity_by_entity(
                 "enclosure_front": "enc_front",
                 "enclosure_back": "enc_rear",
                 "enclosure_sides": "enc_side",
+                "enclosure_edges": "enc_edge",
             }
         )
     else:
@@ -2049,7 +2060,8 @@ def _build_surface_identity_by_entity(
             {
                 "inner": "inner_wall",
                 "outer": "outer_wall",
-                "rear": "rear_cap",
+                "throat_return": "throat_return",
+                "rear_cap": "rear_cap",
                 "mouth": "mouth_rim",
             }
         )
@@ -2676,6 +2688,8 @@ def build_waveguide_mesh(
             outer_dimtags = []
             mouth_dimtags = []
             rear_dimtags: List[Tuple[int, int]] = []
+            rear_cap_dimtags: List[Tuple[int, int]] = []
+            throat_return_dimtags: List[Tuple[int, int]] = []
             if enc_depth == 0 and outer_points is not None:
                 wall_thickness = float(params.get("wall_thickness", 6.0))
 
@@ -2716,6 +2730,9 @@ def build_waveguide_mesh(
                 # possible; any remaining coincident seams are merged by
                 # mesh.removeDuplicateNodes() after surface meshing.
                 rear_dimtags = [dt for dt in rear_shell_dimtags if dt[0] == 2]
+                if rear_dimtags:
+                    throat_return_dimtags = rear_dimtags[:-1]
+                    rear_cap_dimtags = rear_dimtags[-1:]
 
             # Final synchronize flushes all fragmented entities.
             # Safe to call after enclosure's internal synchronize — it is idempotent.
@@ -2732,10 +2749,15 @@ def build_waveguide_mesh(
                 surface_groups["enclosure_front"] = list(enc_data.get("front", []))
                 surface_groups["enclosure_back"] = list(enc_data.get("back", []))
                 surface_groups["enclosure_sides"] = list(enc_data.get("sides", []))
+                surface_groups["enclosure_edges"] = list(enc_data.get("edges", []))
             elif outer_points is not None:
                 # After fragment, per-group lists track their own post-fragment tags.
                 surface_groups["outer"] = [tag for dim, tag in outer_dimtags if dim == 2]
                 surface_groups["rear"] = [tag for dim, tag in rear_dimtags if dim == 2]
+                surface_groups["throat_return"] = [
+                    tag for dim, tag in throat_return_dimtags if dim == 2
+                ]
+                surface_groups["rear_cap"] = [tag for dim, tag in rear_cap_dimtags if dim == 2]
                 surface_groups["mouth"] = [tag for dim, tag in mouth_dimtags if dim == 2]
 
             # --- Validate surface tags survived synchronize ---

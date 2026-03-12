@@ -949,7 +949,12 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
 
-  global.document = { getElementById() { return null; } };
+  const diagnosticsEl = { innerHTML: '' };
+  global.document = {
+    getElementById(id) {
+      return id === 'simulation-mesh-diagnostics' ? diagnosticsEl : null;
+    }
+  };
   global.setTimeout = () => 1;
   global.clearTimeout = () => {};
 
@@ -976,7 +981,18 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
               progress: 0.35,
               stage: 'mesh_prepare',
               stage_message: 'Building adaptive OCC mesh',
-              mesh_stats: { vertex_count: 144, triangle_count: 72, source: 'occ_adaptive_canonical' }
+              mesh_stats: {
+                vertex_count: 144,
+                triangle_count: 72,
+                source: 'occ_adaptive_canonical',
+                tag_counts: { 1: 68, 2: 4, 3: 0, 4: 0 },
+                identity_triangle_counts: {
+                  inner_wall: 28,
+                  outer_wall: 20,
+                  rear_cap: 20,
+                  throat_disc: 4
+                }
+              }
             }]
           };
         }
@@ -995,8 +1011,21 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
     await Promise.resolve();
 
     assert.deepEqual(publishedMeshStats, [
-      { vertex_count: 144, triangle_count: 72, source: 'occ_adaptive_canonical' }
+      {
+        vertex_count: 144,
+        triangle_count: 72,
+        source: 'occ_adaptive_canonical',
+        tag_counts: { 1: 68, 2: 4, 3: 0, 4: 0 },
+        identity_triangle_counts: {
+          inner_wall: 28,
+          outer_wall: 20,
+          rear_cap: 20,
+          throat_disc: 4
+        }
+      }
     ]);
+    assert.match(diagnosticsEl.innerHTML, /Authoritative Backend OCC Solve Mesh/);
+    assert.match(diagnosticsEl.innerHTML, /144 vertices/);
   } finally {
     global.document = originalDocument;
     global.setTimeout = originalSetTimeout;
