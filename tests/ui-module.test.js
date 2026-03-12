@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 
 import { AppEvents } from '../src/events.js';
 import { UiModule } from '../src/modules/ui/index.js';
+import {
+  getSelectedFolderHandle,
+  resetSelectedFolder
+} from '../src/ui/workspace/folderWorkspace.js';
 
 function makeMeshPayload(overrides = {}) {
   return {
@@ -128,6 +132,63 @@ test('UiModule app coordinator exposes feedback helpers through the app edge', a
     ['success', 'ok', 800],
     ['command', { command: 'git pull' }]
   ]);
+});
+
+test('UiModule app coordinator exposes file operation helpers through the app edge', async () => {
+  const coordinator = UiModule.output.app(
+    UiModule.task(
+      UiModule.importApp(
+        {
+          simulationPanel: null,
+          onStateUpdate() {},
+          provideMeshForSimulation() {},
+          schedulePanelAutoSize() {}
+        },
+        {
+          loadSimulationPanel: async () => ({ SimulationPanel: class {} })
+        }
+      )
+    )
+  );
+
+  const originalWindow = global.window;
+  global.window = {
+    showDirectoryPicker: async () => ({
+      name: 'workspace',
+      queryPermission: async () => 'granted',
+      getFileHandle: async () => ({
+        createWritable: async () => ({
+          async write() {},
+          async close() {}
+        })
+      })
+    })
+  };
+
+  try {
+    const derived = coordinator.deriveExportFieldsFromFileName('waveguide_12.cfg');
+    assert.deepEqual(derived, { outputName: 'waveguide', counter: 12 });
+
+    const doc = {
+      prefix: { value: 'initial' },
+      counter: { value: '1' },
+      getElementById(id) {
+        if (id === 'export-prefix') return this.prefix;
+        if (id === 'export-counter') return this.counter;
+        return null;
+      }
+    };
+    coordinator.setExportFields({ outputName: 'horn', counter: 7 }, doc);
+    assert.equal(doc.prefix.value, 'horn');
+    assert.equal(doc.counter.value, '7');
+
+    coordinator.resetParameterChangeTracking({ skipNext: true });
+    await coordinator.chooseOutputFolder();
+    assert.equal(getSelectedFolderHandle()?.name, 'workspace');
+  } finally {
+    resetSelectedFolder();
+    global.window = originalWindow;
+  }
 });
 
 test('UiModule simulation-panel coordinator resolves mesh requests and syncs state updates', async () => {

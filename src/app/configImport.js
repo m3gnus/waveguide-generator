@@ -1,10 +1,5 @@
 import { importMWGConfig } from '../modules/design/useCases.js';
 import { GlobalState } from '../state.js';
-import {
-  deriveExportFieldsFromImportedFileName,
-  setAppExportFields,
-  resetAppParameterChangeTracking
-} from '../modules/ui/useCases.js';
 
 export function handleFileUpload(event, ui = {}) {
   const target = event?.target;
@@ -26,9 +21,12 @@ export function handleFileUpload(event, ui = {}) {
       const result = importMWGConfig(e.target.result, file.name);
       if (result.success) {
         // Loading a config establishes a new baseline; skip this update as a "user change".
-        resetAppParameterChangeTracking({ skipNext: true });
+        ui.resetParameterChangeTracking?.({ skipNext: true });
         GlobalState.update(result.params, result.type);
-        setAppExportFields(deriveExportFieldsFromImportedFileName(file.name), document);
+        ui.setExportFields?.(
+          ui.deriveExportFieldsFromFileName?.(file.name),
+          document
+        );
       } else {
         showError(result.error || 'Failed to parse config file.');
       }
