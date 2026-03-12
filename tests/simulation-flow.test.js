@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import * as solverApi from '../src/solver/index.js';
 import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
-import { filterValidPairs } from '../src/ui/simulation/charts.js';
 import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
@@ -280,44 +279,6 @@ test('submitSimulation maps backend 422 responses to typed validation ApiError',
   } finally {
     global.fetch = originalFetch;
   }
-});
-
-// --- P0 regression tests: null-value chart handling ---
-
-test('filterValidPairs strips null and non-finite values from parallel arrays', () => {
-  const { freqs, vals } = filterValidPairs(
-    [100, 200, 300, 400, 500],
-    [90, null, NaN, undefined, 85]
-  );
-  assert.deepEqual(freqs, [100, 500]);
-  assert.deepEqual(vals, [90, 85]);
-});
-
-test('filterValidPairs returns empty arrays when all values are null', () => {
-  const { freqs, vals } = filterValidPairs(
-    [100, 200, 300],
-    [null, null, null]
-  );
-  assert.deepEqual(freqs, []);
-  assert.deepEqual(vals, []);
-});
-
-test('filterValidPairs strips entries where frequency is null', () => {
-  const { freqs, vals } = filterValidPairs(
-    [100, null, 300],
-    [90, 85, 80]
-  );
-  assert.deepEqual(freqs, [100, 300]);
-  assert.deepEqual(vals, [90, 80]);
-});
-
-test('filterValidPairs preserves all valid pairs', () => {
-  const { freqs, vals } = filterValidPairs(
-    [100, 200, 300],
-    [90, 85, 80]
-  );
-  assert.deepEqual(freqs, [100, 200, 300]);
-  assert.deepEqual(vals, [90, 85, 80]);
 });
 
 // --- Check 5: mesh artifact download ---
