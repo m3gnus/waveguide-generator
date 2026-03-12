@@ -34,6 +34,7 @@ Primary files:
 
 ## Folder Workspace Behavior
 
+- The primary folder-selection action lives in the simulation jobs header; the settings modal mirrors status and fallback copy.
 - When a folder workspace is active, manual exports write into the selected folder root.
 - When a folder workspace is active, completed-task bundle files write into `<workspace>/<jobId>/`.
 - The workspace contract covers manual exports and completed-task bundles; it is not a catch-all redirect for unrelated generated artifacts.

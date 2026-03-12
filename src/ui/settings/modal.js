@@ -1076,7 +1076,7 @@ function _buildWorkspaceSection(cleanupFns = []) {
     chooseBtn.disabled = !canPickFolder;
     chooseHelp.textContent = canPickFolder
       ? 'Choose a folder workspace here if you want manual exports and completed task bundles to land in a stable location instead of the save picker.'
-      : 'Folder workspaces are unavailable in this browser. Manual exports and task bundles will continue to use the save picker or download fallback.';
+      : 'Folder workspaces are unavailable in this browser/context. They require File System Access support on HTTPS or localhost. Manual exports and task bundles will continue to use the save picker or download fallback.';
     routingNote.textContent = canPickFolder
       ? 'Routing: manual exports write to the selected folder root when permission is available, and completed simulation bundles write into <workspace>/<jobId>/. Folder task manifests/index persist there for history, but the workspace is not a catch-all redirect for every generated artifact. If direct writes fail, the app clears the workspace and falls back to standard save/download behavior.'
       : 'Routing fallback: without folder workspace support, manual exports and completed simulation bundles use the browser save/download path instead of workspace writes.';

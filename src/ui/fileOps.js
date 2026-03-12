@@ -12,6 +12,7 @@ let hasPendingParameterChanges = false;
 let skipNextParameterChange = false;
 const DEFAULT_OUTPUT_NAME = 'horn_design';
 const DEFAULT_COUNTER = 1;
+const OUTPUT_FOLDER_BUTTON_LABEL = 'Output Folder';
 let folderWorkspaceBound = false;
 
 function bindFolderWorkspaceLabel() {
@@ -23,6 +24,17 @@ function bindFolderWorkspaceLabel() {
         const nameEl = document.getElementById('output-folder-name');
         if (nameEl) {
             nameEl.textContent = label;
+        }
+        const chooseBtn = document.getElementById('choose-folder-btn');
+        if (chooseBtn) {
+            const hasSelection = label && label !== 'No folder selected';
+            chooseBtn.textContent = OUTPUT_FOLDER_BUTTON_LABEL;
+            chooseBtn.title = hasSelection
+                ? `Selected output folder: ${label}`
+                : 'Choose output folder workspace';
+            if (typeof chooseBtn.setAttribute === 'function') {
+                chooseBtn.setAttribute('aria-label', chooseBtn.title);
+            }
         }
     });
 }
@@ -146,10 +158,12 @@ function finalizeExportCounter(options = {}) {
     hasPendingParameterChanges = false;
 }
 
+bindFolderWorkspaceLabel();
+
 export async function selectOutputFolder() {
     bindFolderWorkspaceLabel();
     if (!supportsFolderSelection(window)) {
-        showError('Your browser does not support folder selection.');
+        showError('Folder workspace selection requires File System Access support in a secure context (HTTPS or localhost). Standard save/download export remains available.');
         return;
     }
     const handle = await requestFolderSelection(window);

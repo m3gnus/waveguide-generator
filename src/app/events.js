@@ -18,12 +18,6 @@ export function setupEventListeners(app) {
     }
   });
 
-  // Hide folder selection button if not supported by the browser
-  if (!app.uiCoordinator.isFolderSelectionSupported(window)) {
-    const folderRow = document.getElementById('output-folder-row');
-    if (folderRow) folderRow.style.display = 'none';
-  }
-
   // Undo/Redo keys
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
