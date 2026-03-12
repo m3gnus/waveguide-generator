@@ -16,7 +16,7 @@ from .device_interface import (
     selected_device_metadata,
 )
 from .directivity import calculate_directivity_index_from_pressure, calculate_directivity_patterns
-from .observation import infer_observation_frame
+from .observation import infer_observation_frame, resolve_safe_observation_distance
 
 
 def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float = 1.0) -> float:
@@ -202,8 +202,28 @@ def solve(
     rho = 1.21
     boundary_interface = boundary_device_interface(device_mode)
     potential_interface = potential_device_interface(device_mode)
-    observation_distance_m = _resolve_observation_distance_m(polar_config, default=1.0)
     observation_frame = infer_observation_frame(grid)
+    observation_request_m = _resolve_observation_distance_m(polar_config, default=1.0)
+    observation_info = resolve_safe_observation_distance(
+        grid, observation_request_m, observation_frame
+    )
+    observation_distance_m = float(observation_info["effective_distance_m"])
+    effective_polar_config = dict(polar_config) if isinstance(polar_config, dict) else {}
+    effective_polar_config["distance"] = observation_distance_m
+    results["metadata"]["observation"] = observation_info
+    if observation_info["adjusted"]:
+        results["metadata"]["warnings"].append(
+            {
+                "stage": "setup",
+                "code": "observation_distance_adjusted",
+                "detail": (
+                    "Requested observation distance "
+                    f"{observation_info['requested_distance_m']:.3f} m was inside or too close to the model. "
+                    f"Using {observation_distance_m:.3f} m to keep the observer ahead of the baffle."
+                ),
+            }
+        )
+        results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
 
     success_count = 0
     opencl_safe_retry_consumed = False
@@ -337,7 +357,7 @@ def solve(
 
     try:
         results["directivity"] = calculate_directivity_patterns(
-            grid, frequencies, c, rho, sim_type, polar_config,
+            grid, frequencies, c, rho, sim_type, effective_polar_config,
             observation_frame=observation_frame,
         )
     except Exception as exc:

@@ -31,7 +31,7 @@ from .directivity_correct import (
     estimate_di_from_ka,
 )
 from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
-from .observation import infer_observation_frame
+from .observation import infer_observation_frame, resolve_safe_observation_distance
 from .symmetry import (
     build_symmetry_policy,
     evaluate_symmetry_policy,
@@ -282,7 +282,7 @@ def solve_optimized(
     rho = 1.21
     boundary_interface = boundary_device_interface(device_mode)
     potential_interface = potential_device_interface(device_mode)
-    observation_distance_m = _resolve_observation_distance_m(polar_config, default=1.0)
+    observation_request_m = _resolve_observation_distance_m(polar_config, default=1.0)
 
     num_frequencies = int(num_frequencies)
     if frequency_spacing == "log":
@@ -403,6 +403,12 @@ def solve_optimized(
         },
     }
     observation_frame = infer_observation_frame(grid)
+    observation_info = resolve_safe_observation_distance(
+        grid, observation_request_m, observation_frame
+    )
+    observation_distance_m = float(observation_info["effective_distance_m"])
+    effective_polar_config = dict(polar_config) if isinstance(polar_config, dict) else {}
+    effective_polar_config["distance"] = observation_distance_m
 
     results = {
         "frequencies": frequencies.tolist(),
@@ -423,8 +429,22 @@ def solve_optimized(
             "failure_count": 0,
             "partial_success": False,
             "performance": {},
+            "observation": observation_info,
         },
     }
+    if observation_info["adjusted"]:
+        results["metadata"]["warnings"].append(
+            {
+                "stage": "setup",
+                "code": "observation_distance_adjusted",
+                "detail": (
+                    "Requested observation distance "
+                    f"{observation_info['requested_distance_m']:.3f} m was inside or too close to the model. "
+                    f"Using {observation_distance_m:.3f} m to keep the observer ahead of the baffle."
+                ),
+            }
+        )
+        results["metadata"]["warning_count"] = len(results["metadata"]["warnings"])
 
     cached_ops = CachedOperators(
         boundary_interface=boundary_interface,
@@ -619,7 +639,7 @@ def solve_optimized(
         filtered_freqs = frequencies[list(indices)]
         try:
             filtered_directivity = calculate_directivity_patterns_correct(
-                grid, filtered_freqs, c, rho, list(filtered_solutions), polar_config,
+                grid, filtered_freqs, c, rho, list(filtered_solutions), effective_polar_config,
                 device_interface=potential_interface,
                 precision=bem_precision,
                 observation_frame=observation_frame,
@@ -631,8 +651,8 @@ def solve_optimized(
             _angle_count = 37
             _angle_start = 0.0
             _angle_end = 180.0
-            if polar_config:
-                ar = polar_config.get("angle_range", [0, 180, 37])
+            if effective_polar_config:
+                ar = effective_polar_config.get("angle_range", [0, 180, 37])
                 _angle_start, _angle_end, _angle_count = float(ar[0]), float(ar[1]), int(ar[2])
 
             for plane in ("horizontal", "vertical", "diagonal"):

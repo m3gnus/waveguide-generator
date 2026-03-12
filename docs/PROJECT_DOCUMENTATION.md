@@ -123,6 +123,7 @@ flowchart LR
 - Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
 - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 - On GPU-only OpenCL runtimes without a CPU device, `opencl_gpu` now installs a bempp-cl CPU-context surrogate that reuses the active GPU context for singular assembly.
+- On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.

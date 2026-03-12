@@ -165,3 +165,49 @@ def point_from_polar(
         + np.sin(theta_rad) * (np.cos(phi_rad) * u + np.sin(phi_rad) * v)
     )
     return origin_center + float(radius_m) * direction
+
+
+def observation_axis_bounds(
+    grid,
+    frame: Dict[str, np.ndarray],
+) -> Dict[str, float]:
+    vertices = np.asarray(grid.vertices, dtype=np.float64)
+    if vertices.ndim != 2 or vertices.shape[0] != 3 or vertices.shape[1] == 0:
+        return {"min_proj": 0.0, "max_proj": 0.0, "extent": 0.0}
+
+    origin_center = np.asarray(frame.get("origin_center", np.mean(vertices, axis=1)), dtype=np.float64)
+    axis = _normalize(np.asarray(frame.get("axis", np.array([0.0, 1.0, 0.0])), dtype=np.float64))
+    if float(np.linalg.norm(axis)) <= 1e-12:
+        axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+    projections = axis @ (vertices - origin_center[:, None])
+    min_proj = float(np.min(projections))
+    max_proj = float(np.max(projections))
+    return {
+        "min_proj": min_proj,
+        "max_proj": max_proj,
+        "extent": float(max_proj - min_proj),
+    }
+
+
+def resolve_safe_observation_distance(
+    grid,
+    requested_distance_m: float,
+    frame: Dict[str, np.ndarray],
+    minimum_clearance_m: float = 0.05,
+    relative_clearance: float = 0.05,
+) -> Dict[str, float | bool]:
+    requested = float(requested_distance_m)
+    bounds = observation_axis_bounds(grid, frame)
+    extent = max(float(bounds["extent"]), 0.0)
+    clearance = max(float(minimum_clearance_m), extent * float(relative_clearance))
+    min_safe_distance = float(bounds["max_proj"]) + clearance
+    effective_distance = max(requested, min_safe_distance)
+    return {
+        "requested_distance_m": requested,
+        "effective_distance_m": effective_distance,
+        "min_safe_distance_m": min_safe_distance,
+        "clearance_m": clearance,
+        "max_projection_m": float(bounds["max_proj"]),
+        "adjusted": effective_distance > requested + 1e-12,
+    }
