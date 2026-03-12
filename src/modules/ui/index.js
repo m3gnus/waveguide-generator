@@ -6,6 +6,18 @@ import {
   selectOutputFolder,
   setExportFields
 } from '../../ui/fileOps.js';
+import { ParamPanel } from '../../ui/paramPanel.js';
+import {
+  getLiveUpdateEnabled,
+  getDisplayMode,
+  openSettingsModal
+} from '../../ui/settings/modal.js';
+import {
+  loadViewerSettings,
+  applyViewerSettingsToControls,
+  setInvertWheelZoom,
+  getCurrentViewerSettings
+} from '../../ui/settings/viewerSettings.js';
 import {
   showCommandSuggestion,
   showError,
@@ -80,7 +92,7 @@ function validateSimulationMeshPayload(meshData) {
 
 function buildAppCoordinator(input) {
   const app = input.app;
-  const loadSimulationPanel = input.loadSimulationPanel;
+  const loadSimulationPanel = input.loadSimulationPanel || (() => import('../../ui/simulation/SimulationPanel.js'));
   const feedback = input.feedback || {};
   let simulationPanelInitPromise = null;
   let eventsBound = false;
@@ -171,6 +183,42 @@ function buildAppCoordinator(input) {
 
     chooseOutputFolder() {
       return selectOutputFolder();
+    },
+
+    readLiveUpdateSetting() {
+      return getLiveUpdateEnabled();
+    },
+
+    readDisplayModeSetting() {
+      return getDisplayMode();
+    },
+
+    openSettings(options = {}) {
+      return openSettingsModal(options);
+    },
+
+    isFolderSelectionSupported(targetWindow) {
+      return typeof targetWindow?.showDirectoryPicker === 'function';
+    },
+
+    loadViewerSettings() {
+      return loadViewerSettings();
+    },
+
+    applyViewerSettingsToControls(controls, settings) {
+      return applyViewerSettingsToControls(controls, settings);
+    },
+
+    configureWheelZoomInversion(domElement, invertEnabled) {
+      return setInvertWheelZoom(domElement, invertEnabled);
+    },
+
+    getViewerSettings() {
+      return getCurrentViewerSettings();
+    },
+
+    createParamPanel(containerId = 'param-container') {
+      return new ParamPanel(containerId);
     },
 
     dispose() {

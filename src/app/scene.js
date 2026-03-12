@@ -6,18 +6,11 @@ import {
   createOrthoCamera,
   ZebraShader
 } from '../viewer/index.js';
-import {
-  readDisplayModeSetting,
-  loadAppViewerSettings,
-  applyAppViewerSettingsToControls,
-  configureWheelZoomInversion,
-  getAppViewerSettings
-} from '../modules/ui/useCases.js';
 import { prepareViewportMesh } from '../modules/geometry/useCases.js';
 
 export function setupScene(app) {
   app.scene = createScene();
-  const viewerSettings = loadAppViewerSettings();
+  const viewerSettings = app.uiCoordinator.loadViewerSettings();
   app.cameraMode = viewerSettings.startupCameraMode || 'perspective';
 
   const width = Math.max(1, app.container.clientWidth);
@@ -45,8 +38,8 @@ export function setupScene(app) {
   }
 
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
-  applyAppViewerSettingsToControls(app.controls, viewerSettings);
-  configureWheelZoomInversion(app.renderer.domElement, viewerSettings.invertWheelZoom);
+  app.uiCoordinator.applyViewerSettingsToControls(app.controls, viewerSettings);
+  app.uiCoordinator.configureWheelZoomInversion(app.renderer.domElement, viewerSettings.invertWheelZoom);
   window.addEventListener('resize', () => onResize(app));
   animate(app);
   return true;
@@ -106,7 +99,7 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
     geometry.computeVertexNormals();
   }
 
-  const displayMode = readDisplayModeSetting();
+  const displayMode = app.uiCoordinator.readDisplayModeSetting();
   let material;
 
   if (displayMode === 'zebra') {
@@ -229,9 +222,9 @@ export function toggleCamera(app) {
   const oldControls = app.controls;
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);
   app.controls.target.copy(target);
-  const vs = getAppViewerSettings();
-  applyAppViewerSettingsToControls(app.controls, vs);
-  configureWheelZoomInversion(app.renderer.domElement, vs.invertWheelZoom);
+  const vs = app.uiCoordinator.getViewerSettings();
+  app.uiCoordinator.applyViewerSettingsToControls(app.controls, vs);
+  app.uiCoordinator.configureWheelZoomInversion(app.renderer.domElement, vs.invertWheelZoom);
   app.controls.update();
   oldControls.dispose();
 }

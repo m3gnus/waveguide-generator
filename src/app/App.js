@@ -14,11 +14,6 @@ import {
   exportStlFromApp,
   registerBackendDiagnosticTool
 } from './exports.js';
-import {
-  readLiveUpdateSetting,
-  createAppParamPanel,
-  loadSimulationPanelModule
-} from '../modules/ui/useCases.js';
 
 export class App {
   constructor() {
@@ -31,9 +26,7 @@ export class App {
     this.simulationPanel = null;
     this.uiCoordinator = UiModule.output.app(
       UiModule.task(
-        UiModule.importApp(this, {
-          loadSimulationPanel: loadSimulationPanelModule
-        })
+        UiModule.importApp(this)
       )
     );
 
@@ -41,7 +34,7 @@ export class App {
     this.initializeLogging();
 
     // Init UI
-    this.paramPanel = createAppParamPanel('param-container');
+    this.paramPanel = this.uiCoordinator.createParamPanel('param-container');
     this.uiCoordinator.bind();
     this.ensureSimulationPanel().catch((error) => {
       console.error('Failed to initialize simulation panel:', error);
@@ -90,7 +83,7 @@ export class App {
     this.schedulePanelAutoSize();
 
     // 2. Render
-    if (readLiveUpdateSetting()) {
+    if (this.uiCoordinator.readLiveUpdateSetting()) {
       this.requestRender();
     }
   }
