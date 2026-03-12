@@ -5,9 +5,9 @@ import {
   buildStlExportFiles
 } from '../../modules/export/useCases.js';
 import {
-  readSimulationState,
-  writeSimulationTaskBundleFile
+  readSimulationState
 } from '../../modules/simulation/useCases.js';
+import { writeSimulationTaskBundleFile } from '../../modules/simulation/workspaceTasks.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats
