@@ -73,10 +73,6 @@
                         <input type="number" id="export-counter" value="1" min="1" step="1">
                     </div>
                 </div>
-                <div class="input-row" id="output-folder-row">
-                    <button id="choose-folder-btn" class="secondary button-compact">Choose Folder</button>
-                    <span id="output-folder-name" class="output-folder-name">No folder selected</span>
-                </div>
                 <hr>
                 <h4 class="actions-group-title">Simulation</h4>
                 <div class="status-indicator" role="status" aria-live="polite" aria-atomic="true">
@@ -105,9 +101,9 @@
                     <div class="simulation-jobs-header">
                         <div class="simulation-jobs-header-copy">
                             <span>Simulation Jobs</span>
-                            <span id="simulation-jobs-source-label" class="simulation-jobs-source-label">Backend Jobs</span>
                         </div>
                         <div class="simulation-jobs-header-actions">
+                            <button id="choose-folder-btn" class="secondary button-compact" type="button" title="Choose output folder workspace">Output Folder</button>
                             <button id="clear-failed-jobs-btn" class="secondary button-compact" type="button">Clear Failed</button>
                             <button id="refresh-jobs-btn" class="secondary button-compact" type="button">Refresh</button>
                         </div>

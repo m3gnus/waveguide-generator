@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import { normalizeParamInput } from '../src/ui/paramInput.js';
 import { formatJobSummary, renderSimulationMeshDiagnostics } from '../src/ui/simulation/jobActions.js';
@@ -28,6 +29,17 @@ import {
   saveViewerSettings,
 } from '../src/ui/settings/viewerSettings.js';
 import { PARAM_SCHEMA } from '../src/config/schema.js';
+
+test('index.html places the output-folder action in the simulation jobs header', () => {
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+  assert.match(
+    html,
+    /<div class="simulation-jobs-header-actions">[\s\S]*id="choose-folder-btn"[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"/
+  );
+  assert.doesNotMatch(html, /id="simulation-jobs-source-label"/);
+  assert.doesNotMatch(html, /id="output-folder-row"/);
+});
 
 test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('1.0'), 1);

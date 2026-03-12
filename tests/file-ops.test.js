@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { saveFile } from '../src/ui/fileOps.js';
+import { saveFile, selectOutputFolder } from '../src/ui/fileOps.js';
 import {
   getSelectedFolderHandle,
   resetSelectedFolder,
@@ -59,6 +59,44 @@ test('saveFile clears the selected workspace and falls back to the picker when a
         content: 'manual-export'
       }
     ]);
+  } finally {
+    resetSelectedFolder();
+    global.document = originalDocument;
+    global.window = originalWindow;
+  }
+});
+
+test('selectOutputFolder keeps the simulation header button title in sync with the selected workspace', async () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+
+  const chooseBtn = {
+    textContent: '',
+    title: '',
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    }
+  };
+
+  global.document = {
+    getElementById(id) {
+      return id === 'choose-folder-btn' ? chooseBtn : null;
+    }
+  };
+  global.window = {
+    async showDirectoryPicker() {
+      return { name: 'exports' };
+    }
+  };
+
+  try {
+    await selectOutputFolder();
+
+    assert.equal(chooseBtn.textContent, 'Output Folder');
+    assert.equal(chooseBtn.title, 'Selected output folder: exports');
+    assert.equal(chooseBtn.attributes['aria-label'], 'Selected output folder: exports');
+    assert.equal(getSelectedFolderHandle()?.name, 'exports');
   } finally {
     resetSelectedFolder();
     global.document = originalDocument;
