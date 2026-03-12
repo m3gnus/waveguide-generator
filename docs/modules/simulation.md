@@ -37,6 +37,7 @@ Primary files:
 - Task rating metadata persists through:
   - local job storage
   - folder task manifests/index when a workspace is active
+- When a folder workspace is active, completed-task export bundles write into `<workspace>/<jobId>/`; if those writes fail, the app clears the workspace selection and falls back to the browser save/download path.
 
 ## UI Preference Contract
 

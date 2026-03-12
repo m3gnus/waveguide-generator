@@ -37,7 +37,7 @@ Researched UI/runtime findings:
 - The Simulation section exposes the active runtime overrides (`deviceMode`, `meshValidationMode`, `frequencySpacing`, `useOptimized`, `enableSymmetry`, `verbose`) while keeping advanced solver placeholders visibly separated and aligned with backend capability metadata.
 - Advanced solver controls remain placeholder-only. Backend capability metadata reports `simulationAdvanced.available = false`, and the public `/api/solve` request contract does not expose advanced GMRES/warm-up/tolerance/restart overrides yet.
 - Folder workspace support is now visible inside the settings modal even when `window.showDirectoryPicker` is unavailable, so unsupported browsers show an explicit fallback explanation instead of no discoverable workspace entry point.
-- Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`.
+- Manual exports route through `src/ui/fileOps.js` and write directly to the selected folder root when possible. Completed simulation task bundles route through `src/ui/simulation/workspaceTasks.js` and write into `<workspace>/<jobId>/`. If either direct-write path fails, the app clears the selected folder and falls back to the browser picker/download flow.
 - The simulation diagnostics panel currently shows numeric canonical surface-tag counts (`1/2/3/4`) from `surfaceTags`. It does not show geometry-identity counts such as `throat_disc`, `horn_wall`, `enc_side`, or `rear_cap`.
 - The current diagnostics count triangles per tag, not vertices, even though users may describe the numbers as “vertices.”
 - The simulation job list renders a `Backend` badge on every row when the feed source is backend-only, which is redundant with the header/source labeling.
@@ -181,13 +181,13 @@ Implementation notes:
 
 ### P2. Folder Workspace Discoverability and Export Routing
 
-- [ ] Make folder selection discoverable near Settings and/or inside the settings modal without relying on users finding the current output-row placement.
+- [x] Make folder selection discoverable near Settings and/or inside the settings modal without relying on users finding the current output-row placement.
   - [x] Treat “folder button not visible” as a real product gap: when folder picker support is unavailable, provide a visible fallback/explanation instead of silently hiding the control.
-  - Document and verify expected routing behavior when a folder workspace is active:
+  - [x] Document and verify expected routing behavior when a folder workspace is active:
     - manual exports write into the selected folder root
     - completed simulation bundles write into `<workspace>/<jobId>/`
     - folder write failures currently clear the selected folder and fall back to picker/download behavior
-  - Decide whether “each generation goes into that folder” should cover only manual exports plus simulation bundles, or every generated artifact including config/script/history outputs.
+  - [x] Decide that the workspace routing promise covers manual exports plus completed simulation bundles. Folder manifests/index still persist there for history, but there is no broader catch-all redirect for unrelated generated artifacts.
 
 Implementation notes:
 - `index.html`

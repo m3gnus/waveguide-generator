@@ -34,8 +34,10 @@ Primary files:
 
 ## Folder Workspace Behavior
 
+- When a folder workspace is active, manual exports write into the selected folder root.
 - When a folder workspace is active, completed-task bundle files write into `<workspace>/<jobId>/`.
-- If folder write access is unavailable, result bundle writes fall back to the standard save/download path.
+- The workspace contract covers manual exports and completed-task bundles; it is not a catch-all redirect for unrelated generated artifacts.
+- If folder write access is unavailable, the app clears the selected workspace and falls back to the standard save/download path.
 
 ## Regression Coverage
 
