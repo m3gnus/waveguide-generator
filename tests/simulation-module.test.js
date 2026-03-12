@@ -16,12 +16,14 @@ import {
   readSimulationState,
   updateSimulationStateParams,
   loadSimulationStateSnapshot,
-  applySimulationJobScriptState,
+  applySimulationJobScriptState
+} from '../src/modules/simulation/state.js';
+import {
   buildQueuedSimulationJob,
   buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds
-} from '../src/modules/simulation/useCases.js';
+} from '../src/modules/simulation/jobs.js';
 import {
   readSimulationWorkspaceJobs,
   syncSimulationWorkspaceIndex,

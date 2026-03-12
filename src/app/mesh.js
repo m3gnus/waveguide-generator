@@ -1,5 +1,5 @@
 import { prepareCanonicalSimulationMesh } from '../modules/simulation/domain.js';
-import { readSimulationState } from '../modules/simulation/useCases.js';
+import { readSimulationState } from '../modules/simulation/state.js';
 
 export function provideMeshForSimulation(app) {
   try {
