@@ -102,7 +102,12 @@ def _solve_frequency_chunk(solver_cfg: dict, frequencies: Sequence[float]):
     This function runs in a spawned child process.
     """
     child_solver = HornBEMSolver.from_config(solver_cfg)
-    return child_solver.solve_frequencies(list(frequencies), show_progress=False)
+    observation_distance_m = float(solver_cfg.get("observation_distance_m", 2.0))
+    return child_solver.solve_frequencies(
+        list(frequencies),
+        show_progress=False,
+        observation_distance_m=observation_distance_m,
+    )
 
 
 def _split_frequencies_evenly(
@@ -190,7 +195,7 @@ class HornBEMSolver:
         vertices = np.asarray(cfg["vertices"])
         elements = np.asarray(cfg["elements"], dtype=np.int32)
         physical_tags = np.asarray(cfg["physical_tags"], dtype=np.int32)
-        grid = bempp_api.Grid(vertices, elements)
+        grid = bempp_api.Grid(vertices, elements, physical_tags)
         return cls(
             grid=grid,
             physical_tags=physical_tags,
