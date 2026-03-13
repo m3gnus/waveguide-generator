@@ -24,12 +24,14 @@
 function intersectRayWithRoundedBox(
     angle, cx, cz,
     boxLeft, boxRight, boxBot, boxTop,
-    cr, edgeType
+    cr, edgeType,
+    params
 ) {
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
 
-    const EPS = 1e-12;
+    const scale = params.scale || 1;
+    const EPS = 1e-12 * scale;
     let bestT = Infinity;
     let hitX = cx + cosA;
     let hitZ = cz + sinA;
@@ -101,8 +103,9 @@ function intersectRayWithRoundedBox(
     const halfH = (boxTop - boxBot) / 2;
     const bCx = (boxRight + boxLeft) / 2;
     const bCz = (boxTop + boxBot) / 2;
-    const r = Math.min(cr, halfW - 0.1, halfH - 0.1);
-    const useCorners = r > 0.001;
+    const minDim = Math.min(halfW, halfH);
+    const r = Math.min(cr, halfW - 1e-4 * scale, halfH - 1e-4 * scale);
+    const useCorners = r > 1e-3 * scale;
 
     trySegment(boxRight, bCz - halfH + (useCorners ? r : 0), boxRight, bCz + halfH - (useCorners ? r : 0), 1, 0);
     trySegment(bCx + halfW - (useCorners ? r : 0), boxTop, bCx - halfW + (useCorners ? r : 0), boxTop, 0, 1);
@@ -127,7 +130,8 @@ function intersectRayWithRoundedBox(
 function generateEnclosurePointsFromAngles(
     angleList, cx, cz,
     boxLeft, boxRight, boxBot, boxTop,
-    edgeR, edgeType
+    edgeR, edgeType,
+    params
 ) {
     const ringSize = angleList.length;
     const outerPts = [];
@@ -135,14 +139,16 @@ function generateEnclosurePointsFromAngles(
     const halfW = (boxRight - boxLeft) / 2;
     const halfH = (boxTop - boxBot) / 2;
     const boxCR = parseFloat(edgeR) || 0;
-    const clampedBoxCR = Math.min(boxCR, halfW - 0.1, halfH - 0.1);
+    const scale = params.scale || 1;
+    const clampedBoxCR = Math.min(boxCR, halfW - 1e-4 * scale, halfH - 1e-4 * scale);
 
     for (let i = 0; i < ringSize; i++) {
         const angle = angleList[i];
         const hit = intersectRayWithRoundedBox(
             angle, cx, cz,
             boxLeft, boxRight, boxBot, boxTop,
-            clampedBoxCR, edgeType
+            clampedBoxCR, edgeType,
+            params
         );
         outerPts.push({ x: hit.x, z: hit.z, nx: hit.nx, nz: hit.nz });
         insetPts.push({
@@ -278,23 +284,24 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         minZ = Math.min(minZ, mz);
     }
 
+    const scale = params.scale || 1;
     if (params.useAthEnclosureRounding) {
-        if (Number.isFinite(maxX)) maxX = Math.ceil(maxX);
-        if (Number.isFinite(minX)) minX = Math.floor(minX);
-        if (Number.isFinite(maxZ)) maxZ = Math.ceil(maxZ);
-        if (Number.isFinite(minZ)) minZ = Math.floor(minZ);
+        if (Number.isFinite(maxX)) maxX = Math.ceil(maxX / scale) * scale;
+        if (Number.isFinite(minX)) minX = Math.floor(minX / scale) * scale;
+        if (Number.isFinite(maxZ)) maxZ = Math.ceil(maxZ / scale) * scale;
+        if (Number.isFinite(minZ)) minZ = Math.floor(minZ / scale) * scale;
     }
 
     // Compute enclosure box boundaries
-    const sL = parseFloat(params.encSpaceL) || 25;
-    const sT = parseFloat(params.encSpaceT) || 25;
-    const sR = parseFloat(params.encSpaceR) || 25;
-    const sB = parseFloat(params.encSpaceB) || 25;
+    const sL = (parseFloat(params.encSpaceL) ?? 25) * scale;
+    const sT = (parseFloat(params.encSpaceT) ?? 25) * scale;
+    const sR = (parseFloat(params.encSpaceR) ?? 25) * scale;
+    const sB = (parseFloat(params.encSpaceB) ?? 25) * scale;
 
     let boxRight = maxX + sR;
     let boxLeft = minX - sL;
-    let boxTop = maxZ + sT;
-    let boxBot = minZ - sB;
+    let boxTop = maxZ + sT + verticalOffset;
+    let boxBot = minZ - sB + verticalOffset;
 
     // Centroid for ray-casting
     let mCx = 0, mCz = 0;
@@ -318,7 +325,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const mouthResult = generateEnclosurePointsFromAngles(
         mouthAngles, cx, cz,
         boxLeft, boxRight, boxBot, boxTop,
-        edgeR, edgeType
+        edgeR, edgeType,
+        params
     );
     const clampedEdgeR = mouthResult.clampedBoxCR;
     const edgeDepth = Math.min(clampedEdgeR || 0, Math.max(0, depth * 0.49));
@@ -336,7 +344,8 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
         const refinedResult = generateEnclosurePointsFromAngles(
             refinedAngles, cx, cz,
             boxLeft, boxRight, boxBot, boxTop,
-            edgeR, edgeType
+            edgeR, edgeType,
+            params
         );
         outerPts = refinedResult.outerPts;
         insetPts = refinedResult.insetPts;
