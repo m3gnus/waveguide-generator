@@ -31,6 +31,32 @@ def _mesh_stub():
     }
 
 
+_SOLVE_FREQ_TARGET = "solver.solve_optimized.HornBEMSolver._solve_single_frequency"
+_HORN_INIT_TARGET = "solver.solve_optimized.HornBEMSolver.__init__"
+
+
+def _stub_horn_init(self, grid, physical_tags, **kwargs):
+    """Minimal HornBEMSolver.__init__ stub for unit tests."""
+    self.grid = grid
+    self.physical_tags = physical_tags
+    self.c = kwargs.get("sound_speed", 343.0)
+    self.rho = kwargs.get("rho", 1.21)
+    self.tag_throat = kwargs.get("tag_throat", 2)
+    self.boundary_interface = kwargs.get("boundary_interface", "opencl")
+    self.potential_interface = kwargs.get("potential_interface", "opencl")
+    self.bem_precision = kwargs.get("bem_precision", "double")
+    self.use_burton_miller = kwargs.get("use_burton_miller", True)
+    self.p1_space = None
+    self.dp0_space = None
+    self.lhs_identity = None
+    self.rhs_identity = None
+    self.driver_dofs = np.array([0], dtype=np.int32)
+    self.enclosure_dofs = np.array([], dtype=np.int32)
+    self.throat_element_areas = np.array([0.5], dtype=float)
+    self.throat_p1_dofs = np.array([[0, 1, 2]], dtype=np.int32)
+    self.unit_velocity_fun = None
+
+
 class ObservationDistanceForwardingTest(unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -75,6 +101,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
                     "runtime_profile": "default",
                 },
             ),
+            patch(_HORN_INIT_TARGET, _stub_horn_init),
         ]
         for patcher in self._patchers:
             patcher.start()
@@ -116,7 +143,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             return (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15)
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_frequency_cached_stub,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
@@ -195,7 +222,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             return {"horizontal": [], "vertical": [], "diagonal": []}
 
         with patch("solver.solve_optimized.infer_observation_frame", return_value=sentinel_frame) as infer_mock, patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_frequency_cached_stub,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
@@ -241,7 +268,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             return {"horizontal": [], "vertical": [], "diagonal": []}
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_frequency_cached_stub,
         ), patch(
             "solver.solve_optimized.infer_observation_frame",

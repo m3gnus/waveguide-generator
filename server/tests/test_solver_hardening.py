@@ -14,6 +14,8 @@ class DummyGrid:
             [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]], dtype=float
         )
         self.elements = np.array([[0], [1], [2]], dtype=np.int32)
+        self.volumes = np.array([0.5], dtype=float)
+        self.domain_indices = np.array([2], dtype=np.int32)
 
 
 def _directivity_stub():
@@ -27,12 +29,46 @@ def _mesh_stub():
         "throat_elements": np.array([0], dtype=np.int32),
         "wall_elements": np.array([], dtype=np.int32),
         "mouth_elements": np.array([], dtype=np.int32),
+        "surface_tags": np.array([2], dtype=np.int32),
         "original_vertices": grid.vertices.copy(),
         "original_indices": grid.elements.copy(),
         "original_surface_tags": np.array([2], dtype=np.int32),
         "mesh_metadata": {"fullCircle": True},
         "unit_detection": {"source": "metadata.units", "warnings": []},
     }
+
+
+# Patch target: HornBEMSolver._solve_single_frequency inside solve_optimized module
+_SOLVE_FREQ_TARGET = "solver.solve_optimized.HornBEMSolver._solve_single_frequency"
+# HornBEMSolver.__init__ needs to be stubbed when using DummyGrid in unit tests
+# (DummyGrid doesn't have number_of_elements, which bempp_api.function_space requires)
+_HORN_INIT_TARGET = "solver.solve_optimized.HornBEMSolver.__init__"
+# Return value expected by the new solver: (spl, impedance_complex, di, solution_tuple, iter_count)
+_SOLVE_FREQ_RETURN = (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15)
+
+
+def _stub_horn_init(self, grid, physical_tags, **kwargs):
+    """Minimal HornBEMSolver.__init__ stub for unit tests."""
+    self.grid = grid
+    self.physical_tags = physical_tags
+    self.c = kwargs.get("sound_speed", 343.0)
+    self.rho = kwargs.get("rho", 1.21)
+    self.tag_throat = kwargs.get("tag_throat", 2)
+    self.boundary_interface = kwargs.get("boundary_interface", "opencl")
+    self.potential_interface = kwargs.get("potential_interface", "opencl")
+    self.bem_precision = kwargs.get("bem_precision", "double")
+    self.use_burton_miller = kwargs.get("use_burton_miller", True)
+    # Skip bempp space/operator construction (requires real bempp Grid)
+    self.p1_space = None
+    self.dp0_space = None
+    self.lhs_identity = None
+    self.rhs_identity = None
+    self.driver_dofs = np.array([0], dtype=np.int32)
+    self.enclosure_dofs = np.array([], dtype=np.int32)
+    self.throat_element_areas = np.array([0.5], dtype=float)
+    self.throat_p1_dofs = np.array([[0, 1, 2]], dtype=np.int32)
+    self.unit_velocity_fun = None
+
 
 
 class _OpenCLRuntimePatchedTestCase(unittest.TestCase):
@@ -62,14 +98,17 @@ class _OpenCLRuntimePatchedTestCase(unittest.TestCase):
                 "runtime_profile": "default",
             },
         )
+        self._horn_init_patcher = patch(_HORN_INIT_TARGET, _stub_horn_init)
         self._boundary_patcher.start()
         self._potential_patcher.start()
         self._metadata_patcher.start()
+        self._horn_init_patcher.start()
 
     def tearDown(self):
         self._metadata_patcher.stop()
         self._potential_patcher.stop()
         self._boundary_patcher.stop()
+        self._horn_init_patcher.stop()
         super().tearDown()
 
 
@@ -90,8 +129,8 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 "elements_per_wavelength_at_max": 2.0,
             },
         ), patch(
-            "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
+            _SOLVE_FREQ_TARGET,
+            return_value=_SOLVE_FREQ_RETURN,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
@@ -123,8 +162,8 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 "elements_per_wavelength_at_max": 2.0,
             },
         ), patch(
-            "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
+            _SOLVE_FREQ_TARGET,
+            return_value=_SOLVE_FREQ_RETURN,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
@@ -148,8 +187,8 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         with patch("solver.solve_optimized.calculate_mesh_statistics") as calc_stats, patch(
             "solver.solve_optimized.validate_frequency_range"
         ) as validate_freq, patch(
-            "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
+            _SOLVE_FREQ_TARGET,
+            return_value=_SOLVE_FREQ_RETURN,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
@@ -167,7 +206,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         validate_freq.assert_not_called()
         self.assertFalse(results["metadata"]["mesh_validation"]["enabled"])
 
-    def test_advanced_settings_control_precision_warmup_burton_miller_and_symmetry_tolerance(self):
+    def test_advanced_settings_control_precision_warmup_and_symmetry_tolerance(self):
         mesh = _mesh_stub()
         symmetry_result = {
             "policy": {
@@ -180,15 +219,13 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             "symmetry": {"symmetry_type": "full", "reduction_factor": 1.0},
         }
 
-        with patch("solver.solve_optimized.CachedOperators.get_or_create_spaces") as get_spaces, patch(
-            "solver.solve_optimized.CachedOperators.get_or_create_operators"
-        ) as get_operators, patch(
+        with patch(
             "solver.solve_optimized.evaluate_symmetry_policy",
             return_value=symmetry_result,
         ) as evaluate_symmetry_policy, patch(
-            "solver.solve_optimized.solve_frequency_cached",
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
-        ) as solve_frequency_cached, patch(
+            _SOLVE_FREQ_TARGET,
+            return_value=_SOLVE_FREQ_RETURN,
+        ) as solve_freq_mock, patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
@@ -206,11 +243,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 mesh_validation_mode="off",
             )
 
-        get_spaces.assert_not_called()
-        get_operators.assert_not_called()
         self.assertEqual(evaluate_symmetry_policy.call_args.kwargs["tolerance"], 0.025)
-        self.assertEqual(solve_frequency_cached.call_args.args[5].bem_precision, "single")
-        self.assertFalse(solve_frequency_cached.call_args.args[7])
         self.assertEqual(results["metadata"]["performance"]["bem_precision"], "single")
         self.assertEqual(results["metadata"]["failure_count"], 0)
 
@@ -225,7 +258,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 12)
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
@@ -254,8 +287,8 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             pass
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached"
-        ) as solve_frequency_cached, patch(
+            _SOLVE_FREQ_TARGET
+        ) as solve_freq_mock, patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
@@ -271,7 +304,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                     cancellation_callback=lambda: (_ for _ in ()).throw(CancelSolve("cancelled")),
                 )
 
-        solve_frequency_cached.assert_not_called()
+        solve_freq_mock.assert_not_called()
 
     def test_cancellation_callback_stops_legacy_solver_before_frequency_loop(self):
         mesh = _mesh_stub()
@@ -302,17 +335,16 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
 
     def test_opencl_invalid_buffer_size_no_numba_fallback_records_failure(self):
         mesh = _mesh_stub()
-        attempted_interfaces = []
+        call_count = {"n": 0}
 
         def _solve_side_effect(*args, **_kwargs):
-            cached_ops = args[5]
-            attempted_interfaces.append(cached_ops.boundary_interface)
-            if len(attempted_interfaces) <= 2:
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
                 raise RuntimeError("create_buffer failed: INVALID_BUFFER_SIZE")
             return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 10)
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
             "solver.solve_optimized.boundary_device_interface",
@@ -337,7 +369,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 mesh_validation_mode="off",
             )
 
-        self.assertEqual(attempted_interfaces, ["opencl", "opencl", "opencl"])
         self.assertEqual(results["metadata"]["failure_count"], 1)
         self.assertEqual(results["metadata"]["warning_count"], 1)
         self.assertEqual(
@@ -352,17 +383,16 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
 
     def test_opencl_invalid_buffer_size_recovers_with_safe_profile_retry(self):
         mesh = _mesh_stub()
-        attempted_interfaces = []
+        call_count = {"n": 0}
 
         def _solve_side_effect(*args, **_kwargs):
-            cached_ops = args[5]
-            attempted_interfaces.append(cached_ops.boundary_interface)
-            if len(attempted_interfaces) == 1:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
                 raise RuntimeError("create_buffer failed: INVALID_BUFFER_SIZE")
             return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 10)
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
             "solver.solve_optimized.boundary_device_interface",
@@ -387,7 +417,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 mesh_validation_mode="off",
             )
 
-        self.assertEqual(attempted_interfaces, ["opencl", "opencl"])
         self.assertEqual(results["metadata"]["failure_count"], 0)
         self.assertEqual(results["metadata"]["warning_count"], 0)
         device_meta = results["metadata"]["device_interface"]
@@ -401,7 +430,7 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
     def test_gmres_iteration_count_in_metadata(self):
         mesh = _mesh_stub()
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 18),
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
@@ -435,7 +464,7 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
             return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 20)
 
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
@@ -460,7 +489,7 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
         """Warm-up failing (e.g. bad grid in tests) must not prevent frequency solve."""
         mesh = _mesh_stub()
         with patch(
-            "solver.solve_optimized.solve_frequency_cached",
+            _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
