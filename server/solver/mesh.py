@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .deps import GMSH_AVAILABLE, bempp_api, gmsh
 from .gmsh_utils import gmsh_lock
+from .mesh_cleaner import clean_mesh, extract_physical_tags, load_and_clean_msh as _clean_load_msh
 
 logger = logging.getLogger(__name__)
 
@@ -356,3 +357,69 @@ def prepare_mesh(
         'original_indices': original_indices,
         'original_surface_tags': original_surface_tags
     }
+
+
+def load_msh_for_bem(
+    msh_path: str,
+    merge_tol: float = 1e-9,
+    area_tol: float = 0.0,
+    scale_factor: float = 0.001,
+) -> Dict:
+    """
+    Load a Gmsh .msh surface file, clean it with mesh_cleaner, and prepare it
+    for BEM simulation via HornBEMSolver.
+
+    This replaces the waveguide_builder-generated mesh path when working directly
+    with .msh files produced by Gmsh outside the OCC pipeline.
+
+    Args:
+        msh_path: Path to .msh file (vertices assumed in mm unless scale_factor overrides).
+        merge_tol: Vertex merge tolerance in mesh file units (default 1e-9).
+        area_tol: Minimum triangle area; smaller faces removed (default 0.0).
+        scale_factor: Multiply raw mesh coordinates to convert to metres (default 0.001 = mm).
+
+    Returns:
+        Dict as returned by prepare_mesh(), compatible with HornBEMSolver and BEMSolver.solve().
+    """
+    cleaned_mesh, changes, stats_before, stats_after = _clean_load_msh(
+        msh_path, merge_tol=merge_tol, area_tol=area_tol
+    )
+
+    import meshio as _meshio
+    from .mesh_cleaner import _find_triangle_block as _ftb
+    _, triangles_np = _ftb(cleaned_mesh)
+    vertices_np = np.asarray(cleaned_mesh.points, dtype=float)  # (N, 3)
+    physical_tags = extract_physical_tags(cleaned_mesh)  # (M,) or None
+
+    # Validate physical tags exist - BEM requires source-tagged elements
+    if physical_tags is None:
+        raise ValueError(
+            "Mesh file has no physical groups (gmsh:physical). "
+            "BEM simulation requires surface tags: 1=wall, 2=source, 3=secondary, 4=interface. "
+            "Ensure the .msh file was exported with physical group definitions."
+        )
+    if 2 not in physical_tags:
+        raise ValueError(
+            "Mesh file has no source-tagged elements (tag 2). "
+            "BEM simulation requires at least one source surface element."
+        )
+
+    # Convert to column-major (3, N) / (3, M) for bempp
+    vertices_col = (vertices_np * scale_factor).T  # (3, N)
+    elements_col = triangles_np.T.astype(np.int32)  # (3, M)
+
+    surface_tags_list = physical_tags.tolist()
+
+    logger.info(
+        "[load_msh_for_bem] Loaded %s — %d verts, %d tris (after cleaning). "
+        "Changes: %s",
+        msh_path, stats_after.vertices, stats_after.triangles, changes,
+    )
+
+    # Delegate to prepare_mesh for validation, bempp grid creation, and dict assembly.
+    return prepare_mesh(
+        vertices=vertices_col.T.ravel().tolist(),   # flat [x0,y0,z0, x1,y1,z1, ...]
+        indices=elements_col.T.ravel().tolist(),    # flat [i0,i1,i2, i3,i4,i5, ...]
+        surface_tags=surface_tags_list,
+        mesh_metadata={"unitScaleToMeter": 1.0},   # already scaled above
+    )
