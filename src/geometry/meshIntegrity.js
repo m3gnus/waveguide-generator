@@ -128,9 +128,11 @@ function indexTriangleKey(a, b, c) {
 
 function geometricTriangleKey(vertices, a, b, c, epsilon) {
   const points = [a, b, c].map((idx) => {
-    const x = quantize(vertices[idx * 3], epsilon);
-    const y = quantize(vertices[idx * 3 + 1], epsilon);
-    const z = quantize(vertices[idx * 3 + 2], epsilon);
+    // Quantize by dividing by epsilon and rounding to an integer string.
+    // Use toPrecision to avoid floating point noise from the division itself at extreme scales.
+    const x = Math.round(vertices[idx * 3] / epsilon).toPrecision(10);
+    const y = Math.round(vertices[idx * 3 + 1] / epsilon).toPrecision(10);
+    const z = Math.round(vertices[idx * 3 + 2] / epsilon).toPrecision(10);
     return `${x}/${y}/${z}`;
   });
   points.sort();
@@ -225,9 +227,14 @@ export function analyzeBemMeshIntegrity(
   {
     requireClosed = false,
     requireSingleComponent = true,
+    scale = 1,
     geometricEpsilon = GEOMETRIC_DUPLICATE_EPSILON
   } = {}
 ) {
+  const effectiveEpsilon = geometricEpsilon * scale;
+  if (scale !== 1) {
+    console.error(`[Integrity Check] model scale: ${scale}, using adjusted epsilon: ${effectiveEpsilon}`);
+  }
   const triCount = indices.length / 3;
   const edgeUses = buildEdgeTopology(indices);
 
@@ -241,7 +248,7 @@ export function analyzeBemMeshIntegrity(
     const a = indices[off];
     const b = indices[off + 1];
     const c = indices[off + 2];
-    if (triangleArea2(vertices, a, b, c) <= DEGENERATE_AREA_EPSILON) {
+    if (triangleArea2(vertices, a, b, c) <= DEGENERATE_AREA_EPSILON * scale * scale) {
       degenerateTriangles += 1;
     }
   }
@@ -270,7 +277,7 @@ export function analyzeBemMeshIntegrity(
     indexSeen.set(indexKey, indexCount);
     if (indexCount > 1) duplicateTrianglesByIndex += 1;
 
-    const geomKey = geometricTriangleKey(vertices, a, b, c, geometricEpsilon);
+    const geomKey = geometricTriangleKey(vertices, a, b, c, effectiveEpsilon);
     const geomCount = (geometrySeen.get(geomKey) || 0) + 1;
     geometrySeen.set(geomKey, geomCount);
     if (geomCount > 1) duplicateTrianglesByGeometry += 1;
