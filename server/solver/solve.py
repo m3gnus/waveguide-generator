@@ -19,7 +19,7 @@ from .directivity import calculate_directivity_index_from_pressure, calculate_di
 from .observation import infer_observation_frame, resolve_safe_observation_distance
 
 
-def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float = 1.0) -> float:
+def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float = 2.0) -> float:
     if not isinstance(polar_config, dict):
         return float(default)
     try:
@@ -52,7 +52,7 @@ def solve_frequency(
     boundary_interface: Optional[str] = None,
     potential_interface: Optional[str] = None,
     use_burton_miller: bool = True,
-    observation_distance_m: float = 1.0,
+    observation_distance_m: float = 2.0,
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Tuple[float, complex, float]:
     """
@@ -203,7 +203,7 @@ def solve(
     boundary_interface = boundary_device_interface(device_mode)
     potential_interface = potential_device_interface(device_mode)
     observation_frame = infer_observation_frame(grid)
-    observation_request_m = _resolve_observation_distance_m(polar_config, default=1.0)
+    observation_request_m = _resolve_observation_distance_m(polar_config, default=2.0)
     observation_info = resolve_safe_observation_distance(
         grid, observation_request_m, observation_frame
     )
