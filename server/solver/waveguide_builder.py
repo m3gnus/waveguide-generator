@@ -1695,14 +1695,15 @@ def _build_enclosure_box(
             generated_dimtags.extend(_add_ruled_section(current_profile, ring0_wire))
         current_profile = ring0_wire
     else:
-        # Build front baffle without inset ring (when enc_edge == 0)
-        # Create a front plane surface from the outer boundary box points at z_front
-        # This creates a flat front baffle that seals the enclosure at the horn mouth
+        # Build front baffle without inset ring (when enc_edge == 0, mouth coincides with inset).
+        # The front panel must be annular: outer enclosure boundary MINUS the horn mouth opening.
+        # Using addPlaneSurface([outer_loop, mouth_loop]) cuts the mouth hole out of the front
+        # panel, matching the enc_edge>0 path and ensuring the horn opening is not sealed.
         front_pts = _ring_points_from_xy_plan(outer_pts, z=z_front)
         front_wire, front_curves, front_eps = _make_wire(front_pts, closed=closed)
         front_loop = _close_wire_for_surface(front_curves, front_eps[0], front_eps[1])
         try:
-            front_tag = int(gmsh.model.occ.addPlaneSurface([int(front_loop)]))
+            front_tag = int(gmsh.model.occ.addPlaneSurface([int(front_loop), int(mouth_loop)]))
             generated_dimtags.append((2, front_tag))
         except Exception:
             # Fallback: ruled surface from mouth to front
