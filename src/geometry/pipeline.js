@@ -100,7 +100,8 @@ function buildSimulationPayloadFromMesh(
     const requireClosed = Boolean(meshData.fullCircle && (meshData.groups?.freestandingWall || meshData.groups?.enclosure));
     assertBemMeshIntegrity(vertices, indices, {
       requireClosed,
-      requireSingleComponent: true
+      requireSingleComponent: true,
+      scale: buildParams.scale || 1
     });
   }
 
@@ -124,7 +125,7 @@ function buildSimulationPayloadFromMesh(
       tagCounts,
       identityTriangleCounts,
       units: 'mm',
-      unitScaleToMeter: 0.001,
+      unitScaleToMeter: 0.001 / (buildParams.scale || 1),
       verticalOffset: Number(buildParams.verticalOffset || 0)
     }
   };
