@@ -8,6 +8,7 @@ import {
   readSimulationState
 } from '../../modules/simulation/state.js';
 import { writeSimulationTaskBundleFile } from './workspaceTasks.js';
+import { getServerFolderPath, setServerFolderPath } from '../workspace/folderWorkspace.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats
@@ -539,17 +540,28 @@ function formatBundleMessage({ exportedFiles, failures, selectedFormats, auto = 
     : `${exportedSummary} Failed formats: ${failureSummary}`;
 }
 
-function createTaskExportWriter(job) {
+function createTaskExportWriter(job, baseName) {
   return async (file) => {
-    const result = await writeSimulationTaskBundleFile(job, file, {
-      fallbackWrite: async (nextFile) => {
-        await saveFile(nextFile.content, nextFile.fileName, {
-          ...nextFile.saveOptions,
-          incrementCounter: false
-        });
-      }
-    });
-    return result.fileName;
+    // For server-side folder: temporarily scope path to baseName subdirectory
+    const serverPath = getServerFolderPath();
+    const subDirPath = serverPath && baseName ? `${serverPath}/${baseName}` : null;
+    if (subDirPath) setServerFolderPath(subDirPath);
+
+    try {
+      const result = await writeSimulationTaskBundleFile(job, file, {
+        dirName: baseName,
+        fallbackWrite: async (nextFile) => {
+          await saveFile(nextFile.content, nextFile.fileName, {
+            ...nextFile.saveOptions,
+            incrementCounter: false
+          });
+        }
+      });
+      return result.fileName;
+    } finally {
+      // Restore original server path
+      if (subDirPath) setServerFolderPath(serverPath);
+    }
   };
 }
 
@@ -569,10 +581,10 @@ export async function exportResults(panel, { job = null, auto = false, selectedF
     };
   }
 
-  const writer = createTaskExportWriter(job);
   const exportedFiles = [];
   const failures = [];
   const baseName = resolveExportBaseName(job);
+  const writer = createTaskExportWriter(job, baseName);
 
   for (const formatId of normalizedFormats) {
     try {
