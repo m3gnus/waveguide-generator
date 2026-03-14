@@ -56,6 +56,29 @@ export function showError(message, duration = 5000) {
   showMessage(message, { type: 'error', duration });
 }
 
+/**
+ * Show error with categorization for better UX
+ * Automatically determines duration and can extract details from errors
+ */
+export function showDetailedError(error, { duration = 6000, context = '' } = {}) {
+  let message = 'An error occurred';
+
+  if (error instanceof Error) {
+    message = error.message;
+  } else if (typeof error === 'string') {
+    message = error;
+  } else if (error && typeof error === 'object') {
+    message = error.message || error.detail || String(error);
+  }
+
+  // Add context prefix if provided
+  if (context) {
+    message = `${context}: ${message}`;
+  }
+
+  showError(message, Math.max(duration, 4000)); // Minimum 4 seconds for errors
+}
+
 export function showSuccess(message, duration = 2400) {
   showMessage(message, { type: 'success', duration });
 }

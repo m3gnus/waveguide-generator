@@ -66,11 +66,17 @@
                 <div class="button-row">
                     <div class="input-row">
                         <label for="export-prefix">Output Name</label>
-                        <input type="text" id="export-prefix" value="horn_design">
+                        <input type="text" id="export-prefix" value="horn_design" maxlength="128"
+                               pattern="[a-zA-Z0-9_\-]+"
+                               title="Only letters, numbers, underscore, and hyphen allowed"
+                               aria-describedby="export-prefix-help">
+                        <small id="export-prefix-help" style="font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; display: block;">Max 128 characters. Use only letters, numbers, - and _</small>
                     </div>
                     <div class="input-row">
                         <label for="export-counter">Counter</label>
-                        <input type="number" id="export-counter" value="1" min="1" step="1">
+                        <input type="number" id="export-counter" value="1" min="1" max="999999" step="1"
+                               aria-describedby="export-counter-help">
+                        <small id="export-counter-help" style="font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; display: block;">1 to 999,999</small>
                     </div>
                 </div>
                 <hr>
