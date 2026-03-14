@@ -56,8 +56,8 @@ export function describeSelectedDevice(health) {
   const shouldShowDeviceSuffix = hasDeviceName && !(modeAlreadyMentionsCpu && deviceNameIsCpuLabel);
 
   return shouldShowDeviceSuffix
-    ? `Selected solver backend: ${selectedMode} (${deviceName})`
-    : `Selected solver backend: ${selectedMode}`;
+    ? `Using: ${selectedMode} (${deviceName})`
+    : `Using: ${selectedMode}`;
 }
 
 export function describeSimBasicDeviceAvailability(health, requestedMode = 'auto') {
@@ -68,7 +68,7 @@ export function describeSimBasicDeviceAvailability(health, requestedMode = 'auto
   if (!availability || typeof availability !== 'object') {
     return {
       unavailableModes: ['opencl_gpu', 'opencl_cpu'],
-      statusText: 'Solver runtime unavailable. Auto mode only.',
+      statusText: 'Solver unavailable. Auto mode only.',
     };
   }
 
@@ -107,18 +107,18 @@ export function summarizeRuntimeCapabilities(health) {
   const advancedCapability = health?.capabilities?.simulationAdvanced;
   const backendDeclaresAdvancedSupport = advancedCapability?.available === true;
 
-  let statusText = 'Backend capability status unavailable.';
+  let statusText = 'Backend status unavailable.';
   if (!solverReady) {
-    statusText = 'Adaptive BEM solver runtime unavailable.';
+    statusText = 'Solver is not available.';
   } else if (!occBuilderReady) {
-    statusText = 'Adaptive solve meshing unavailable.';
+    statusText = 'Mesh builder is not available.';
   } else if (backendDeclaresAdvancedSupport) {
     statusText = String(
-      advancedCapability?.reason || 'Advanced solver overrides are available through the public solve contract.'
+      advancedCapability?.reason || 'Advanced solver overrides are available.'
     );
   } else if (!backendDeclaresAdvancedSupport) {
     statusText = String(
-      advancedCapability?.reason || 'This backend currently exposes Simulation Basic overrides only.'
+      advancedCapability?.reason || 'Advanced overrides are not supported by this backend.'
     );
   }
 

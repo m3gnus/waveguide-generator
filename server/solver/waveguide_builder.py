@@ -1572,9 +1572,6 @@ def _build_enclosure_box(
     if not inner_dimtags:
         return empty
 
-    if not inner_dimtags:
-        return empty
-
     enc_depth = float(params.get("enc_depth", 0) or 0)
     if enc_depth <= 0:
         return empty
@@ -1590,6 +1587,23 @@ def _build_enclosure_box(
     y_min = float(mouth_pts[:, 1].min())
     y_max = float(mouth_pts[:, 1].max())
     z_front = float(mouth_pts[:, 2].max())
+
+    # Clamp enc_depth so the back wall never intersects the inner horn tube.
+    # The horn extends from throat (inner_points[:, 0, :]) to mouth (z_front).
+    # If enc_depth < horn_length, the back wall cuts through the horn surface,
+    # creating self-intersecting geometry that produces wrong BEM results.
+    z_throat = float(np.min(inner_points[:, 0, 2]))
+    horn_length = z_front - z_throat
+    clearance_mm = 1.0
+    min_enc_depth = horn_length + clearance_mm
+    if enc_depth < min_enc_depth:
+        logger.warning(
+            "[MWG] enc_depth (%.1f mm) < horn length (%.1f mm); "
+            "clamping to %.1f mm to prevent back wall / horn intersection.",
+            enc_depth, horn_length, min_enc_depth,
+        )
+        enc_depth = min_enc_depth
+
     z_back = z_front - enc_depth
 
     bx0 = x_min - enc_space_l

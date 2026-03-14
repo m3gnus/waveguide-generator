@@ -2,15 +2,15 @@
 // DOM refs are lazily cached on first use to reduce repeated getElementById calls in hot paths.
 
 export const STAGE_LABELS = {
-  mesh_generation: 'Mesh generation',
+  mesh_generation: 'Building mesh',
   queued: 'Queued',
   initializing: 'Initializing solver',
-  mesh_prepare: 'Preparing backend mesh',
+  mesh_prepare: 'Preparing mesh',
   mesh_ready: 'Mesh ready',
-  solver_setup: 'BEM setup',
-  bem_solve: 'BEM solve',
-  frequency_solve: 'BEM solve',
-  directivity: 'Spectra and directivity',
+  solver_setup: 'Setting up solver',
+  bem_solve: 'Solving',
+  frequency_solve: 'Solving',
+  directivity: 'Computing directivity',
   finalizing: 'Finalizing results',
   cancelling: 'Stopping',
   complete: 'Complete',
@@ -86,30 +86,30 @@ export function resolveStageDetail(stage, message, pct) {
 
   if (key === 'directivity') {
     if (!raw || /computing spectra\/directivity/i.test(raw)) {
-      return `Generating polar maps (horizontal/vertical/diagonal) and deriving DI from solved frequencies (${pct}%).`;
+      return `Generating directivity maps and computing DI (${pct}%).`;
     }
     return raw;
   }
 
   if (key === 'frequency_solve' || key === 'bem_solve') {
     if (raw) return raw;
-    return `Solving BEM system across requested frequencies (${pct}%).`;
+    return `Solving across frequency range (${pct}%).`;
   }
 
   if (key === 'solver_setup') {
-    return raw || 'Preparing solver operators and boundary conditions.';
+    return raw || 'Configuring solver parameters.';
   }
 
   if (key === 'mesh_generation' || key === 'mesh_prepare') {
-    return raw || 'Building canonical mesh payload and validating tags.';
+    return raw || 'Building solve mesh.';
   }
 
   if (key === 'finalizing') {
-    return raw || 'Packaging solver output and preparing charts.';
+    return raw || 'Packaging results.';
   }
 
   if (key === 'cancelling') {
-    return raw || 'Stop requested. Waiting for backend worker to stop.';
+    return raw || 'Stop requested. Waiting for the solver to finish.';
   }
 
   return raw;

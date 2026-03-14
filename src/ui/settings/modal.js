@@ -68,11 +68,11 @@ const _state = {
   downloadSimMesh: false,
 };
 const SIMULATION_MANAGEMENT_HELP = Object.freeze({
-  downloadMesh: 'Automatically downloads the backend-generated .msh artifact when a solve starts.',
+  downloadMesh: 'Automatically downloads the solver mesh file (.msh) when a job starts.',
   defaultSort: 'Sets the default order used in the Simulation Jobs list.',
   minRatingFilter: 'Hides completed jobs rated below this threshold in the Simulation Jobs list.',
-  autoExportOnComplete: 'Automatically exports the selected bundle formats whenever a simulation finishes successfully.',
-  selectedFormats: 'Chooses which files are included in a completed-task export bundle.'
+  autoExportOnComplete: 'Automatically exports results in the selected formats when a simulation completes.',
+  selectedFormats: 'Selects which file formats are included when exporting results.'
 });
 const VIEWER_HELP = Object.freeze({
   liveUpdate: 'Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.',
@@ -87,55 +87,55 @@ const VIEWER_HELP = Object.freeze({
   keyboardPanEnabled: 'Enables arrow-key style camera panning shortcuts while the viewport is focused.'
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
-  deviceMode: 'Chooses the preferred OpenCL device lane. Auto follows the backend capability policy.',
-  meshValidationMode: 'Controls whether canonical mesh validation warns, fails, or is skipped before solve submission.',
+  deviceMode: 'Selects the compute device for solving. Auto picks the best available option.',
+  meshValidationMode: 'Controls whether mesh validation blocks or only warns before submitting a solve.',
   frequencySpacing: 'Controls how solved frequencies are distributed between the sweep start and end values.',
-  useOptimized: 'Uses the optimized backend solve path when the runtime supports it.',
-  enableSymmetry: 'Allows the backend symmetry policy to reduce eligible models before solving.',
-  verbose: 'Includes detailed backend logging in job progress output and server logs.'
+  useOptimized: 'Enables the faster solve path when available.',
+  enableSymmetry: 'Reduces solve time by exploiting geometry symmetry when possible.',
+  verbose: 'Shows detailed solver output in job progress and server logs.'
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
-  enableWarmup: 'Optimized-solver only. Front-loads the one-time operator/OpenCL warm-up before the solved frequency loop begins.',
-  bemPrecision: 'Optimized-solver only. Requests single or double BEMPP operator assembly/evaluation precision for the solve path.',
-  useBurtonMiller: 'Optimized-solver only. Keeps the Burton-Miller coupling enabled for the main boundary solve.',
-  symmetryTolerance: 'Optimized-solver only. Smaller values require tighter mirror symmetry before the backend reduces the model.'
+  enableWarmup: 'Optimized solver only. Warms up operator and OpenCL caches before the frequency loop starts.',
+  bemPrecision: 'Optimized solver only. Single precision is faster; double is more accurate.',
+  useBurtonMiller: 'Optimized solver only. Keeps Burton-Miller formulation active for better high-frequency accuracy.',
+  symmetryTolerance: 'Optimized solver only. Lower values require stricter geometric symmetry before the model is reduced.'
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   enable_warmup: {
     label: 'Warm-up Pass',
-    help: 'Runs a one-time optimized-solver warm-up before the timed frequency loop so OpenCL and operator caches are ready.'
+    help: 'Warms up OpenCL and operator caches before the frequency loop starts, for more consistent timing.'
   },
   bem_precision: {
     label: 'BEM Precision',
-    help: 'Requests single or double precision for BEMPP operator assembly and potential evaluation in the optimized solve path.'
+    help: 'Single precision is faster; double precision is more accurate. Only applies to the optimized solve path.'
   },
   method: {
     label: 'Linear Solver Method',
-    help: 'Planned solver-method override such as GMRES versus other iterative methods.'
+    help: 'Override the iterative solver method (e.g. GMRES). Not yet active.'
   },
   tol: {
     label: 'Linear Solver Tolerance',
-    help: 'Planned convergence tolerance override for iterative solver accuracy.'
+    help: 'Override the convergence tolerance for iterative solving. Not yet active.'
   },
   restart: {
     label: 'GMRES Restart',
-    help: 'Planned restart or Krylov-window size override for GMRES.'
+    help: 'Override the GMRES restart window size. Not yet active.'
   },
   maxiter: {
     label: 'Max Iterations',
-    help: 'Planned cap for the linear solver iteration budget.'
+    help: 'Override the maximum number of solver iterations. Not yet active.'
   },
   strong_form: {
     label: 'Strong-form Preconditioner',
-    help: 'Planned preconditioner policy override for advanced solver tuning.'
+    help: 'Override the preconditioner policy for solver tuning. Not yet active.'
   },
   use_burton_miller: {
     label: 'Burton-Miller Coupling',
-    help: 'Keeps the optimized solver on the Burton-Miller formulation for improved uniqueness and high-frequency stability.'
+    help: 'Uses the Burton-Miller formulation for better high-frequency accuracy and fewer spurious solutions.'
   },
   symmetry_tolerance: {
     label: 'Symmetry Tolerance',
-    help: 'Sets the geometric tolerance used when the backend checks whether symmetry reduction is safe.'
+    help: 'How strictly the solver checks for symmetry before reducing the model. Lower values are stricter.'
   }
 });
 const ACTIVE_ADVANCED_CONTROL_IDS = Object.freeze([

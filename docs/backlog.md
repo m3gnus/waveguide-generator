@@ -60,6 +60,85 @@ When new work lands, continue to work the backlog from upstream runtime truth to
 
 ## Active Backlog
 
+### P0. Enclosure BEM Simulation Produces Wrong Directivity
+
+Root cause identified March 14, 2026: when `enc_depth < horn_length`, the enclosure back wall is positioned partway along the inner horn tube. The inner horn surface passes through the solid back wall, creating self-intersecting geometry. The BEM solver cannot determine interior/exterior correctly at the intersection region, producing omnidirectional-looking directivity (sound appears to come from all directions).
+
+Example: Tritonia config — L=135mm, enc_depth=100mm → back wall at z=35mm, horn extends from z=0 to z=135mm → horn passes through back wall at z=35mm.
+
+Fix applied: `_build_enclosure_box` now clamps `enc_depth` to at least `horn_length + 1mm` so the back wall is always behind the throat. This prevents self-intersection while preserving correct BEM topology.
+
+Remaining validation:
+- [ ] A/B test: compare thickened-waveguide simulation vs enclosure simulation on the same horn geometry — directivity should match above ~500 Hz where the enclosure size is small relative to wavelength.
+- [ ] Verify the fix works for Tritonia and other user configs that previously failed.
+- [ ] Consider whether the viewport mesh should also apply this clamp, or show a warning when the user sets enc_depth < horn_length.
+- [ ] Consider adding a UI warning when enc_depth is clamped during simulation.
+
+Implementation notes:
+- `server/solver/waveguide_builder.py` (`_build_enclosure_box`)
+
+### P1. Symmetry Detection Not Working for OCC Meshes
+
+Status: symmetry detection is functionally correct but effectively disabled for all real OCC meshes due to two root causes documented on March 12, 2026:
+
+1. **Wrong symmetry planes**: `server/solver/symmetry.py` checks X=0 / Z=0 planes assuming frontend axis convention (X radial, Y axial, Z radial), but the OCC builder emits [x_radial, y_radial, z_axial]. The second quarter-symmetry plane is evaluated on the axial axis instead of the second radial axis.
+2. **Tolerance too tight for unstructured meshes**: `_check_plane_symmetry()` requires one-to-one mirrored vertex matches within a very tight tolerance. Synthetic benchmark meshes pass, but unstructured OCC/Gmsh meshes always fail, so every real simulation falls back to full model.
+
+Impact: no incorrect results (full model is correct, just slower). Quarter-symmetry would give ~4x speedup. Half-symmetry ~2x.
+
+Action plan:
+- [ ] Decide whether to disable symmetry entirely (remove dead code path) or fix it properly.
+- [ ] If fixing: move symmetry detection upstream of triangle extraction; detect from OCC profile samples rather than raw mesh vertices; use axis-aware plane definitions.
+- [ ] A/B test: full-model vs symmetry-reduced simulation on a known-symmetric config — results must match within 0.5 dB across all angles.
+- [ ] Only re-enable after A/B test confirms both correctness and measurable speedup.
+- [ ] Add committed ATH reference fixtures for reproducible regression testing.
+
+Implementation notes:
+- `server/solver/symmetry.py`
+- `server/solver/solve_optimized.py` (symmetry policy evaluation)
+
+### P1. Enclosure Mesh Resolution — Edge Over-Refinement
+
+The front and back roundover/chamfer edges of enclosure meshes have much higher resolution than needed. The edges between the sides (stretching front-to-back) have correct resolution, but the transverse edges (e.g., front top-left to front top-right) are over-refined.
+
+The resolution of these transverse edges should match the nearest mesh resolution parameter (e.g., the front resolution for front edges, back resolution for back edges).
+
+This only applies to the simulation mesh (.msh), not the viewport tessellation.
+
+Action plan:
+- [ ] Audit `_configure_mesh_size` in `waveguide_builder.py` — check how enclosure edge curves inherit mesh size from the bilinear corner interpolation.
+- [ ] Ensure transverse edge curves use the front/back resolution parameter rather than the finer throat/mouth resolution that may leak from the inner horn field.
+- [ ] Verify with a test mesh that edge element counts are proportional to the user's resolution setting.
+
+Implementation notes:
+- `server/solver/waveguide_builder.py` (`_configure_mesh_size`, enclosure field section)
+
+### P2. Tessellation Architecture — Geometry vs Mesh Separation
+
+The current architecture should follow a clean separation: a geometry workflow constructs geometric data, then hands it to (a) the viewport tessellation module and (b) the .msh generation module. Neither tessellation module should construct geometry — they only translate and tessellate.
+
+Audit status (March 14, 2026):
+- The Python OCC path (`waveguide_builder.py`) combines geometry construction and meshing in one function. The geometry construction (`_compute_point_grids`, `_build_surface_from_points`, `_build_enclosure_box`) is interleaved with mesh configuration and Gmsh calls.
+- The JS viewport path (`buildWaveguideMesh.js`) also combines geometry computation with Three.js mesh construction.
+- Both paths independently compute the same horn geometry from the same parameters — no shared geometric representation.
+
+Action plan:
+- [ ] Document the current geometry → mesh boundaries within each path.
+- [ ] Evaluate whether extracting a shared geometry representation (point grids + topology description) consumed by both paths is feasible without a full rewrite.
+- [ ] If feasible, design the shared geometry contract and implement incrementally.
+
+### P2. Reduce Unnecessary Safety Mechanisms in .msh Generation
+
+The .msh generation path contains several safety mechanisms that may mask upstream issues rather than preventing them:
+- `removeDuplicateNodes()` after meshing (line 2806) — compensates for surfaces not sharing OCC curve entities.
+- `_orient_and_validate_canonical_mesh` with `require_watertight` — catches topology errors post-hoc rather than preventing them in geometry construction.
+- Multiple fallback paths in enclosure construction (e.g., `SurfaceFilling` when `PlaneSurface` fails).
+
+Action plan:
+- [ ] Audit which safety mechanisms catch real issues vs mask upstream bugs.
+- [ ] For each mechanism: either fix the upstream cause (making the mechanism unnecessary) or document why it's genuinely needed.
+- [ ] `removeDuplicateNodes` should ideally be unnecessary if all surfaces share OCC curve entities — verify this for all geometry paths.
+
 ### P1. Cross-Platform Installation Hardening and Supported Runtime Matrix
 
 - Replace the current “best effort” setup story with one explicit supported matrix and one verified install lane per supported OS/architecture.

@@ -84,20 +84,20 @@ export function renderSimulationMeshDiagnostics(summary = null) {
   }
 
   if (!summary) {
-    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Preview diagnostics appear here before submit. Backend OCC diagnostics replace them once the job mesh has been built.</div>';
+    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Mesh stats appear here before you submit. Updated with solver data once the job starts.</div>';
     return;
   }
 
   const provenance = summary.provenance === 'backend' ? 'backend' : 'preview';
   const sourceLabel = provenance === 'backend'
-    ? 'Authoritative Backend OCC Solve Mesh'
-    : 'Preview Geometry Only';
+    ? 'Solver Mesh'
+    : 'Preview Mesh';
   const statusNote = provenance === 'backend'
-    ? 'Surface rows report triangle counts from the backend OCC solve mesh used by this job.'
-    : 'Surface rows report preview-only triangle counts from the frontend canonical mesh. Authoritative backend OCC diagnostics replace them after the job mesh is built.';
+    ? 'Triangle counts from the solver mesh used by this job.'
+    : 'Showing preview mesh triangle counts. Solver mesh data will replace these once the job starts.';
   const okMessage = provenance === 'backend'
-    ? 'Authoritative backend OCC geometry diagnostics are available for this job.'
-    : 'Preview geometry identities and canonical tags look ready for submit.';
+    ? 'Solver mesh diagnostics loaded for this job.'
+    : 'Preview geometry looks ready to submit.';
 
   const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(([identity, label]) => `
     <div class="simulation-mesh-diagnostics-tag">
@@ -112,7 +112,7 @@ export function renderSimulationMeshDiagnostics(summary = null) {
     `Secondary (3): ${summary.tagCounts?.[3] ?? 0}`,
     `Interface (4): ${summary.tagCounts?.[4] ?? 0}`
   ].join(' • ');
-  const infoMarkup = `<div class="simulation-mesh-diagnostics-note">${escapeHtml(sourceLabel)}. ${escapeHtml(statusNote)} Canonical tags (debug): ${escapeHtml(debugTagSummary)}</div>`;
+  const infoMarkup = `<div class="simulation-mesh-diagnostics-note">${escapeHtml(sourceLabel)}. ${escapeHtml(statusNote)} Tags: ${escapeHtml(debugTagSummary)}</div>`;
 
   const warningMarkup = Array.isArray(summary.warnings) && summary.warnings.length > 0
     ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join('<br>')}</div>`
@@ -348,8 +348,8 @@ export function renderJobList(panel) {
         <div class="simulation-job-actions">
           ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results for this simulation">View</button>` : ''}
           ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export simulation results to file">Export</button>` : ''}
-          ${job.script ? `<button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Restore geometry and solver parameters from this simulation">Script</button>` : ''}
-          ${(job.status === 'error' || job.status === 'cancelled') && job.script ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Restore parameters and re-run this simulation">Redo</button>` : ''}
+          ${job.script ? `<button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters from this simulation">Load</button>` : ''}
+          ${(job.status === 'error' || job.status === 'cancelled') && job.script ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Restore parameters and rerun this simulation">Rerun</button>` : ''}
           ${(job.status === 'queued' || job.status === 'running') && job.stage !== 'cancelling'
             ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop this running simulation">Stop</button>`
             : ''}
