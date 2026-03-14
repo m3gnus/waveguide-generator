@@ -220,6 +220,14 @@ class WaveguideParamsRequest(BaseModel):
     enc_front_resolution: Optional[str] = "25,25,25,25"
     enc_back_resolution: Optional[str] = "40,40,40,40"
 
+    source_shape: int = 2       # 1=spherical cap, 2=flat disc
+    source_radius: float = -1.0  # -1=auto (derived from r0), >0=override
+    source_curv: int = 0        # 0=auto, 1=convex, -1=concave
+    source_velocity: int = 1    # 1=normal, 2=axial
+    source_contours: Optional[str] = None
+
+    vertical_offset: float = 0.0  # z-axis offset applied to export coordinates
+
     sim_type: int = 2
     msh_version: str = "2.2"
 

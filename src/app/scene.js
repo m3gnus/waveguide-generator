@@ -4,7 +4,8 @@ import {
   createScene,
   createPerspectiveCamera,
   createOrthoCamera,
-  ZebraShader
+  ZebraShader,
+  getSceneThemeColors
 } from '../viewer/index.js';
 import { prepareViewportMesh } from '../modules/geometry/useCases.js';
 import { detachThroatDiscVertices } from './viewportMesh.js';
@@ -42,6 +43,16 @@ export function setupScene(app) {
   app.uiCoordinator.applyViewerSettingsToControls(app.controls, viewerSettings);
   app.uiCoordinator.configureWheelZoomInversion(app.renderer.domElement, viewerSettings.invertWheelZoom);
   window.addEventListener('resize', () => onResize(app));
+
+  // Update scene background when OS color scheme changes
+  const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  darkQuery.addEventListener('change', () => {
+    if (app.scene) {
+      const colors = getSceneThemeColors();
+      app.scene.background = colors.bg;
+    }
+  });
+
   animate(app);
   return true;
 }

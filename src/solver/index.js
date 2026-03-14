@@ -263,7 +263,7 @@ export class BemSolver {
     );
     assignEnumSetting(payload, 'device_mode', config.deviceMode, VALID_DEVICE_MODES);
     assignBooleanSetting(payload, 'use_optimized', config.useOptimized);
-    assignBooleanSetting(payload, 'enable_symmetry', config.enableSymmetry);
+    assignBooleanSetting(payload, 'enable_symmetry', false);
     assignBooleanSetting(payload, 'verbose', config.verbose);
     const advancedSettingsPayload = buildAdvancedSettingsPayload(config.advancedSettings);
     if (advancedSettingsPayload) {

@@ -16,7 +16,7 @@ export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
 ]);
 
 export const RECOMMENDED_DEFAULTS = Object.freeze({
-  autoExportOnComplete: true,
+  autoExportOnComplete: false,
   selectedFormats: [...SIMULATION_EXPORT_FORMAT_IDS],
   defaultSort: 'completed_desc',
   minRatingFilter: 0

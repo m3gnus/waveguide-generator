@@ -1,12 +1,14 @@
 """
-Miscellaneous routes: health, updates, chart rendering, directivity rendering.
+Miscellaneous routes: health, updates, chart rendering, directivity rendering, file export.
 """
 
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from contracts import ChartsRenderRequest, DirectivityRenderRequest
 from services.solver_runtime import (
@@ -106,3 +108,45 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Rendering failed: {exc}") from exc
+
+
+@router.post("/api/export-file")
+async def export_file(
+    file: UploadFile = File(...),
+    folder_path: str = Form(...),
+) -> Dict[str, str]:
+    """
+    Save an exported file to a server-side folder.
+    folder_path should be a relative path from repo root (e.g., 'output/my_project').
+    """
+    if not folder_path:
+        raise HTTPException(status_code=400, detail="folder_path is required")
+
+    # Prevent path traversal attacks
+    folder_path = folder_path.strip()
+    if ".." in folder_path or folder_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+
+    # Get repo root (assuming server is in /server subdirectory)
+    repo_root = Path(__file__).parent.parent.parent
+    target_dir = repo_root / folder_path
+
+    try:
+        # Create folder if it doesn't exist
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save file
+        file_path = target_dir / file.filename
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        logger.info(f"File exported: {file_path}")
+        return {
+            "status": "success",
+            "path": str(file_path),
+            "filename": file.filename
+        }
+    except Exception as exc:
+        logger.error(f"Export failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc

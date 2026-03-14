@@ -134,6 +134,18 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     enc_front_resolution: requireStringValue('encFrontResolution', preparedParams.encFrontResolution),
     enc_back_resolution: requireStringValue('encBackResolution', preparedParams.encBackResolution),
 
+    // Source definition
+    source_shape: toFiniteNumber(preparedParams.sourceShape, 2),
+    source_radius: toFiniteNumber(preparedParams.sourceRadius, -1),
+    source_curv: toFiniteNumber(preparedParams.sourceCurv, 0),
+    source_velocity: toFiniteNumber(preparedParams.sourceVelocity, 1),
+    source_contours: preparedParams.sourceContours != null && String(preparedParams.sourceContours).trim()
+      ? String(preparedParams.sourceContours)
+      : undefined,
+
+    // Export coordinate offset
+    vertical_offset: toFiniteNumber(preparedParams.verticalOffset, 0),
+
     // Simulation / output
     sim_type: 2,
     msh_version: mshVersion

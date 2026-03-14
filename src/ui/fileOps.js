@@ -5,7 +5,10 @@ import {
     requestFolderSelection,
     resetSelectedFolder,
     subscribeFolderWorkspace,
-    supportsFolderSelection
+    supportsFolderSelection,
+    setServerFolderPath,
+    getServerFolderPath,
+    loadServerFolderPathFromStorage
 } from './workspace/folderWorkspace.js';
 
 let hasPendingParameterChanges = false;
@@ -159,25 +162,75 @@ function finalizeExportCounter(options = {}) {
 }
 
 bindFolderWorkspaceLabel();
+loadServerFolderPathFromStorage();
 
 export async function selectOutputFolder() {
     bindFolderWorkspaceLabel();
-    if (!supportsFolderSelection(window)) {
-        showError('Folder workspace selection requires File System Access support in a secure context (HTTPS or localhost). Standard save/download export remains available.');
+
+    // Try native File System Access API first (Chrome/Edge/Firefox with flag)
+    if (supportsFolderSelection(window)) {
+        const handle = await requestFolderSelection(window);
+        if (handle) {
+            setServerFolderPath(null); // Clear server path if using native API
+        }
         return;
     }
-    const handle = await requestFolderSelection(window);
-    if (!handle) {
+
+    // Fallback: Prompt for server-side folder path
+    const currentPath = getServerFolderPath();
+    const defaultPath = 'output';
+    const promptText = `Enter server output folder path (relative to repo root):\n\nExamples: "output", "exports/my_project"`;
+    const folderPath = prompt(promptText, currentPath || defaultPath);
+
+    if (folderPath === null) {
+        // User cancelled
         return;
     }
+
+    if (!folderPath.trim()) {
+        showError('Folder path cannot be empty.');
+        return;
+    }
+
+    setServerFolderPath(folderPath);
 }
 
 export async function saveFile(content, fileName, options = {}) {
     bindFolderWorkspaceLabel();
     const finalName = fileName || `${getExportBaseName()}${options.extension || ''}`;
-    const outputDirHandle = getSelectedFolderHandle();
 
-    // If a folder is selected, write directly to it
+    // Check if server-side folder is configured
+    const serverFolderPath = getServerFolderPath();
+    if (serverFolderPath) {
+        try {
+            const formData = new FormData();
+            const blob = content instanceof Blob
+                ? content
+                : new Blob([content], { type: options.contentType || 'text/plain' });
+            formData.append('file', blob, finalName);
+            formData.append('folder_path', serverFolderPath);
+
+            const response = await fetch('http://localhost:8000/api/export-file', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || `Upload failed: ${response.statusText}`);
+            }
+
+            finalizeExportCounter(options);
+            return;
+        } catch (err) {
+            console.warn('Server-side export failed:', err);
+            showError(`Export to server failed: ${err.message}`);
+            return;
+        }
+    }
+
+    // Fallback to native File System Access API
+    const outputDirHandle = getSelectedFolderHandle();
     if (outputDirHandle) {
         try {
             const permissionGranted = await ensureFolderWritePermission(outputDirHandle);

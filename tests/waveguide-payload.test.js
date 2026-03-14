@@ -118,6 +118,42 @@ test('buildWaveguidePayload uses canonical quadrants from DesignModule normaliza
   );
 });
 
+test('buildWaveguidePayload includes source definition fields', () => {
+  const payload = buildWaveguidePayload(
+    prepareOccSimulationParams({
+      type: 'R-OSSE',
+      sourceShape: 1,
+      sourceRadius: 14.5,
+      sourceCurv: -1,
+      sourceVelocity: 2,
+      sourceContours: 'custom-contours',
+      verticalOffset: 3.5
+    }),
+    '2.2'
+  );
+
+  assert.equal(payload.source_shape, 1);
+  assert.equal(payload.source_radius, 14.5);
+  assert.equal(payload.source_curv, -1);
+  assert.equal(payload.source_velocity, 2);
+  assert.equal(payload.source_contours, 'custom-contours');
+  assert.equal(payload.vertical_offset, 3.5);
+});
+
+test('buildWaveguidePayload uses defaults for source definition fields when omitted', () => {
+  const payload = buildWaveguidePayload(
+    prepareOccSimulationParams({ type: 'R-OSSE' }),
+    '2.2'
+  );
+
+  assert.equal(payload.source_shape, 2);
+  assert.equal(payload.source_radius, -1);
+  assert.equal(payload.source_curv, 0);
+  assert.equal(payload.source_velocity, 1);
+  assert.equal(payload.source_contours, undefined);
+  assert.equal(payload.vertical_offset, 0);
+});
+
 test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
   const payload = buildWaveguidePayload(
     prepareOccSimulationParams({

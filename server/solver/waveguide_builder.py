@@ -1707,7 +1707,14 @@ def _build_enclosure_box(
             generated_dimtags.append((2, front_tag))
         except Exception:
             # Fallback: ruled surface from mouth to front
-            generated_dimtags.extend(_add_ruled_section(mouth_loop, front_wire))
+            generated_dimtags.extend(_add_ruled_section(current_profile, front_wire))
+        # CRITICAL: advance current_profile to the outer front boundary so that the
+        # side walls are built from the outer enclosure perimeter at z_front to the
+        # outer enclosure perimeter at z_back — NOT from the horn mouth to the back.
+        # Without this, the side wall was a cone from the small horn mouth to the
+        # large outer back, leaving the true enclosure sides open and causing
+        # incorrect BEM radiation results.
+        current_profile = front_wire
 
     edge_slices = max(1, axial_segs) if edge_depth > 0.0 else 0
     for j in range(1, edge_slices + 1):
@@ -2629,6 +2636,7 @@ def build_waveguide_mesh(
 
     enc_depth = float(params.get("enc_depth", 0) or 0)
     msh_version = str(params.get("msh_version", "2.2"))
+    vertical_offset = float(params.get("vertical_offset", 0) or 0)
     # sim_type is passed through to ABEC project files but does not affect geometry
     quadrants = int(params.get("quadrants", 1234))
     closed = (quadrants == 1234)
@@ -2820,7 +2828,8 @@ def build_waveguide_mesh(
                 canonical_mesh["metadata"] = {
                     "identityTriangleCounts": _count_triangle_identities(
                         list(canonical_mesh.get("triangleIdentities", []))
-                    )
+                    ),
+                    "verticalOffset": vertical_offset,
                 }
                 canonical_mesh.pop("triangleIdentities", None)
 
