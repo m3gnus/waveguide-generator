@@ -1,4 +1,5 @@
 import { showError } from './feedback.js';
+import { validateOutputName, validateCounter, sanitizeFileName } from './inputValidation.js';
 import {
     ensureFolderWritePermission,
     getSelectedFolderHandle,
@@ -16,6 +17,8 @@ let skipNextParameterChange = false;
 const DEFAULT_OUTPUT_NAME = 'horn_design';
 const DEFAULT_COUNTER = 1;
 const OUTPUT_FOLDER_BUTTON_LABEL = 'Output Folder';
+const MAX_OUTPUT_NAME_LENGTH = 128;
+const MAX_COUNTER = 999999;
 let folderWorkspaceBound = false;
 
 function bindFolderWorkspaceLabel() {
@@ -123,16 +126,37 @@ export function setExportFields({ outputName, counter } = {}, doc = document) {
 }
 
 export function getExportBaseName() {
-    const prefix = document.getElementById('export-prefix')?.value || 'horn';
+    const prefixEl = document.getElementById('export-prefix');
     const counterEl = document.getElementById('export-counter');
-    const counter = counterEl ? counterEl.value : '1';
+
+    // Validate prefix
+    const rawPrefix = prefixEl?.value || '';
+    const prefixValidation = validateOutputName(rawPrefix);
+    const prefix = prefixValidation.valid ? prefixValidation.normalized : 'horn';
+
+    // Validate counter
+    const rawCounter = counterEl?.value || '1';
+    const counterValidation = validateCounter(Number(rawCounter));
+    const counter = counterValidation.valid ? counterValidation.normalized : 1;
+
     return `${prefix}_${counter}`;
 }
 
 export function incrementExportCounter() {
     const counterEl = document.getElementById('export-counter');
     if (!counterEl) return;
-    counterEl.value = String(parseInt(counterEl.value, 10) + 1);
+
+    const current = Number(counterEl.value) || 1;
+    const next = current + 1;
+
+    // Respect maximum counter value
+    if (next > MAX_COUNTER) {
+        counterEl.value = String(MAX_COUNTER);
+        showError(`Counter reached maximum (${MAX_COUNTER}). Set manually to continue.`);
+        return;
+    }
+
+    counterEl.value = String(next);
 }
 
 export function markParametersChanged() {
@@ -169,9 +193,15 @@ export async function selectOutputFolder() {
 
     // Try native File System Access API first (Chrome/Edge/Firefox with flag)
     if (supportsFolderSelection(window)) {
-        const handle = await requestFolderSelection(window);
-        if (handle) {
-            setServerFolderPath(null); // Clear server path if using native API
+        try {
+            const handle = await requestFolderSelection(window);
+            if (handle) {
+                setServerFolderPath(null); // Clear server path if using native API
+            }
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                showError('Failed to select folder. Your browser may not support this feature.');
+            }
         }
         return;
     }
@@ -179,7 +209,7 @@ export async function selectOutputFolder() {
     // Fallback: Prompt for server-side folder path
     const currentPath = getServerFolderPath();
     const defaultPath = 'output';
-    const promptText = `Enter server output folder path (relative to repo root):\n\nExamples: "output", "exports/my_project"`;
+    const promptText = `Enter server output folder path (relative to repo root):\n\nExamples: "output", "exports/my_project"\nLeave blank to use browser download.`;
     const folderPath = prompt(promptText, currentPath || defaultPath);
 
     if (folderPath === null) {
@@ -187,17 +217,31 @@ export async function selectOutputFolder() {
         return;
     }
 
-    if (!folderPath.trim()) {
-        showError('Folder path cannot be empty.');
+    const trimmedPath = folderPath.trim();
+    if (!trimmedPath) {
+        // User cleared path; use browser download
+        setServerFolderPath(null);
         return;
     }
 
-    setServerFolderPath(folderPath);
+    // Basic path validation
+    if (trimmedPath.includes('..') || trimmedPath.includes('~')) {
+        showError('Folder path cannot contain .. or ~ for security reasons.');
+        return;
+    }
+
+    setServerFolderPath(trimmedPath);
 }
 
 export async function saveFile(content, fileName, options = {}) {
     bindFolderWorkspaceLabel();
-    const finalName = fileName || `${getExportBaseName()}${options.extension || ''}`;
+
+    // Sanitize and validate filename
+    const finalName = sanitizeFileName(fileName || `${getExportBaseName()}${options.extension || ''}`);
+    if (!finalName) {
+        showError('Invalid filename. Please set a valid output name.');
+        return;
+    }
 
     // Check if server-side folder is configured
     const serverFolderPath = getServerFolderPath();
@@ -212,19 +256,40 @@ export async function saveFile(content, fileName, options = {}) {
 
             const response = await fetch('http://localhost:8000/api/export-file', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                signal: AbortSignal.timeout(30000) // 30 second timeout
             });
 
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
-                throw new Error(error.detail || `Upload failed: ${response.statusText}`);
+                const statusCode = response.status;
+                let errorMsg = error.detail || response.statusText || 'Unknown error';
+
+                // Provide more specific error messages
+                if (statusCode === 401 || statusCode === 403) {
+                    errorMsg = 'Permission denied: Cannot write to output folder';
+                } else if (statusCode === 413) {
+                    errorMsg = 'File too large. Please reduce output size or split into multiple exports.';
+                } else if (statusCode === 500 || statusCode === 503) {
+                    errorMsg = 'Server error. Please try again or choose a different output folder.';
+                }
+
+                throw new Error(errorMsg);
             }
 
             finalizeExportCounter(options);
             return;
         } catch (err) {
             console.warn('Server-side export failed:', err);
-            showError(`Export to server failed: ${err.message}`);
+
+            // Distinguish between network and other errors
+            if (err.name === 'AbortError') {
+                showError('Export timeout. Server took too long to respond. Try again or use local folder.');
+            } else if (err instanceof TypeError) {
+                showError('Network error: Cannot reach export server. Check server connection.');
+            } else {
+                showError(`Export failed: ${err.message}`);
+            }
             return;
         }
     }
