@@ -257,6 +257,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                     "requestedQuadrants": queued_quadrants,
                     "effectiveQuadrants": queued_quadrants,
                     "occStats": occ_result.get("stats") or {},
+                    "verticalOffset": float(validated_payload.get("vertical_offset", 0) or 0),
                 }
             )
 
