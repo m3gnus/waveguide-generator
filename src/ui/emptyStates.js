@@ -18,11 +18,11 @@ const EMPTY_STATE_MESSAGES = {
   },
   noSimulationRunning: {
     title: 'Ready to Simulate',
-    description: 'Click "Start BEM Simulation" to begin analysis.'
+    description: 'Press "Start BEM Simulation" to begin.'
   },
   connectionError: {
-    title: 'Server Offline',
-    description: 'Cannot connect to BEM solver. Ensure the backend is running on localhost:8000.'
+    title: 'Solver Offline',
+    description: 'Cannot connect to the solver. Make sure the Python backend is running on localhost:8000.'
   },
   noExportFormats: {
     title: 'No Export Formats',

@@ -106,7 +106,7 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   return result.manifest;
 }
 
-export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null } = {}) {
+export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null, dirName = null } = {}) {
   const folderHandle = getSelectedFolderHandle();
   if (folderHandle && job?.id) {
     try {
@@ -115,7 +115,8 @@ export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite =
         throw new Error('Write permission for selected folder was denied.');
       }
 
-      const taskDir = await folderHandle.getDirectoryHandle(String(job.id), { create: true });
+      const subDirName = dirName || String(job.id);
+      const taskDir = await folderHandle.getDirectoryHandle(subDirName, { create: true });
       const fileHandle = await taskDir.getFileHandle(file.fileName, { create: true });
       const writable = await fileHandle.createWritable();
       const blob = file.content instanceof Blob

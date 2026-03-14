@@ -9,7 +9,7 @@ export async function checkSolverConnection(panel) {
   const statusText = document.getElementById('solver-status-text');
   const statusHelp = document.getElementById('solver-status-help');
   const runButton = document.getElementById('run-simulation-btn');
-  const defaultHelpText = 'BEM solver requires Python backend running on localhost:8000';
+  const defaultHelpText = 'Requires the Python backend running on localhost:8000';
 
   const scheduleNextCheck = () => {
     if (panel.connectionPollTimer) {
@@ -34,7 +34,7 @@ export async function checkSolverConnection(panel) {
     // Preserve live stage text while simulation is running.
     if (!panel.stageStatusActive) {
       if (isConnected) {
-        statusText.textContent = panel.completedStatusMessage || 'Connected to adaptive BEM solver';
+        statusText.textContent = panel.completedStatusMessage || 'Solver ready';
         runButton.disabled = false;
         const deviceText = describeSelectedDevice(health);
         if (statusHelp) {
@@ -47,7 +47,7 @@ export async function checkSolverConnection(panel) {
         }
       } else {
         panel.completedStatusMessage = null;
-        statusText.textContent = 'Backend online, adaptive solver runtime unavailable';
+        statusText.textContent = 'Backend connected — solver not available';
         runButton.disabled = true;
         if (statusHelp) {
           statusHelp.textContent = defaultHelpText;
@@ -59,7 +59,7 @@ export async function checkSolverConnection(panel) {
     statusDot.className = 'status-dot disconnected';
     if (!panel.stageStatusActive) {
       panel.completedStatusMessage = null;
-      statusText.textContent = 'BEM solver backend unavailable';
+      statusText.textContent = 'Solver offline';
       runButton.disabled = true;
       if (statusHelp) {
         statusHelp.textContent = defaultHelpText;
