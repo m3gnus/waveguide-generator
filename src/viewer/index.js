@@ -59,25 +59,42 @@ export const Materials = {
     })
 };
 
+// --- THEME HELPERS ---
+function getCssVar(name, fallback) {
+    const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return val || fallback;
+}
+
+export function getSceneThemeColors() {
+    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return {
+        bg:      new THREE.Color(dark ? '#080D16' : '#F4F0E8'),
+        gridA:   new THREE.Color(dark ? '#192538' : '#D8D2C4'),
+        gridB:   new THREE.Color(dark ? '#111B2D' : '#E6E1D8'),
+        topLight:new THREE.Color(dark ? '#5B8FE8' : '#E8A83A'),
+    };
+}
+
 // --- SCENE ---
 export function createScene() {
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d0d0d);
+    const colors = getSceneThemeColors();
+    scene.background = colors.bg;
 
     // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
     dirLight.position.set(100, 200, 100);
     scene.add(dirLight);
 
-    const topLight = new THREE.DirectionalLight(0x00ffcc, 0.5);
+    const topLight = new THREE.DirectionalLight(colors.topLight, 0.45);
     topLight.position.set(-100, 500, -100);
     scene.add(topLight);
 
-    // Grid - Horizontal ground plane
-    const grid = new THREE.GridHelper(1000, 20, 0x333333, 0x222222);
+    // Grid
+    const grid = new THREE.GridHelper(1000, 20, colors.gridA, colors.gridB);
     scene.add(grid);
 
     // Helpers

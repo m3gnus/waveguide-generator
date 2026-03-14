@@ -128,13 +128,28 @@ export class ParamPanel {
     }
 
     createDetailsSection(summaryText, id) {
-        const section = document.createElement('div');
-        section.className = 'section';
-        if (id) section.id = id;
-        const h3 = document.createElement('h3');
-        h3.textContent = summaryText;
-        section.appendChild(h3);
-        return section;
+        const details = document.createElement('details');
+        details.className = 'section';
+        if (id) details.id = id;
+
+        // Restore collapse state from localStorage (guarded for non-browser envs)
+        const storageKey = `wg-section-collapsed-${id || summaryText}`;
+        const store = typeof localStorage !== 'undefined' ? localStorage : null;
+        const wasCollapsed = store ? store.getItem(storageKey) : null;
+        details.open = wasCollapsed !== 'true'; // default open
+
+        const summary = document.createElement('summary');
+        summary.textContent = summaryText;
+        details.appendChild(summary);
+
+        // Persist collapse state on toggle
+        if (store) {
+            details.addEventListener('toggle', () => {
+                store.setItem(storageKey, details.open ? 'false' : 'true');
+            });
+        }
+
+        return details;
     }
 
     renderSections(target, sections, params, { includeIds = null, includeOwners = null } = {}) {

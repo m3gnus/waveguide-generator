@@ -22,21 +22,24 @@ MAX_DB = 0.0
 FRACTIONAL_OCTAVE = 24.0
 ANGLE_SAMPLES = 361
 FREQ_SAMPLES = 500
-FIGURE_BG = "#101820"
-AXES_BG = "#16212d"
-TEXT_COLOR = "#e2e8f0"
-TICK_COLOR = "#cbd5e1"
-SPINE_COLOR = "#4a5d73"
-GRID_COLOR = "white"
-PRIMARY_GRID_ALPHA = 0.24
-SECONDARY_GRID_ALPHA = 0.10
+# Arctic Night palette — matches the app dark mode
+FIGURE_BG = "#080D16"   # --scene-bg dark
+AXES_BG   = "#0F1927"   # --surface dark
+TEXT_COLOR  = "#C8D8EC"   # --text dark (slightly dimmer for print)
+TICK_COLOR  = "#6A90B8"   # --text-sec dark
+SPINE_COLOR = "#1E3050"   # --border dark
+GRID_COLOR  = "white"
+PRIMARY_GRID_ALPHA   = 0.22
+SECONDARY_GRID_ALPHA = 0.08
+# Heatmap: deep arctic blue → indigo → warm amber at top
 HEATMAP_CMAP = LinearSegmentedColormap.from_list(
-    "waveguide_dark_red",
-    ["#07121d", "#0f2742", "#1b3f63", "#3d2a4f", "#6b1f2e", "#99161d"],
+    "waveguide_arctic",
+    ["#050C18", "#0A1E36", "#0E3058", "#1A4A7A", "#2D6090", "#4D78A8",
+     "#3A3A7A", "#5A3090", "#7A2060", "#A83040", "#C84428"],
     N=256,
 )
-CONTOUR_OUTLINE = "#0b1118"
-REFERENCE_CONTOUR_COLOR = "#ff4d4d"
+CONTOUR_OUTLINE = "#050C18"
+REFERENCE_CONTOUR_COLOR = "#E8A83A"  # --accent-warm
 
 
 def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-6.0):

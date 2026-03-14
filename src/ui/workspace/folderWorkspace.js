@@ -1,9 +1,11 @@
 import { AppEvents } from '../../events.js';
 
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
+const STORAGE_KEY = 'mwg_server_folder_path';
 
 let selectedFolderHandle = null;
 let selectedFolderLabel = DEFAULT_FOLDER_LABEL;
+let serverFolderPath = null;
 
 const changeListeners = new Set();
 const warningListeners = new Set();
@@ -43,6 +45,42 @@ export function getSelectedFolderHandle() {
 
 export function getSelectedFolderLabel() {
   return selectedFolderLabel;
+}
+
+export function setServerFolderPath(path) {
+  serverFolderPath = path ? String(path).trim() : null;
+  if (serverFolderPath) {
+    try {
+      localStorage.setItem(STORAGE_KEY, serverFolderPath);
+      selectedFolderLabel = `Server: ${serverFolderPath}`;
+    } catch (err) {
+      console.warn('Failed to save folder path to localStorage:', err);
+      selectedFolderLabel = `Server: ${serverFolderPath}`;
+    }
+  } else {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (err) {
+      console.warn('Failed to clear folder path from localStorage:', err);
+    }
+    selectedFolderLabel = DEFAULT_FOLDER_LABEL;
+  }
+  emitChange();
+}
+
+export function getServerFolderPath() {
+  return serverFolderPath;
+}
+
+export function loadServerFolderPathFromStorage() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      setServerFolderPath(saved);
+    }
+  } catch (err) {
+    console.warn('Failed to load folder path from localStorage:', err);
+  }
 }
 
 export function setSelectedFolderHandle(handle, options = {}) {
