@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 15, 2026
+Last updated: March 16, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -56,25 +56,51 @@ Implementation notes:
 - `index.html` (button)
 - `server/solver/mesh.py` (`load_msh_for_bem` — existing, for optional simulation path)
 
-### P1. Symmetry Detection Not Working for OCC Meshes
+### P1. Return to Parametric — Viewport Blank + MSH Import Naming
 
-Status: symmetry detection is functionally correct but effectively disabled for all real OCC meshes due to two root causes documented on March 12, 2026:
+Two bugs in the MSH import / Return to Parametric flow.
 
-1. **Wrong symmetry planes**: `server/solver/symmetry.py` checks X=0 / Z=0 planes assuming frontend axis convention (X radial, Y axial, Z radial), but the OCC builder emits [x_radial, y_radial, z_axial]. The second quarter-symmetry plane is evaluated on the axial axis instead of the second radial axis.
-2. **Tolerance too tight for unstructured meshes**: `_check_plane_symmetry()` requires one-to-one mirrored vertex matches within a very tight tolerance. Synthetic benchmark meshes pass, but unstructured OCC/Gmsh meshes always fail, so every real simulation falls back to full model.
+**Bug 1: Viewport goes blank after clicking Return to Parametric.**
+The handler in `src/app/events.js` clears `ImportedMeshState` and emits `state:updated` with `null` as the state argument. `onStateUpdate(null)` sets `app.currentState = null`, then calls `renderModel(app)`. Inside `renderModel`, the imported-mesh branch is correctly skipped (active is now false), but the next guard `if (!app.currentState) return` fires early — because currentState is null — and the parametric model is never rebuilt. The viewport is left empty. The user must manually change a parameter to trigger a valid state update and see the model again.
 
-Impact: no incorrect results (full model is correct, just slower). Quarter-symmetry would give ~4x speedup. Half-symmetry ~2x.
+**Bug 2: MSH import doesn't update the output name or job counter.**
+Config import correctly calls `deriveExportFieldsFromFileName(file.name)` + `setExportFields()` to set `#export-prefix` and `#export-counter` from the loaded filename. The MSH import handler does not call these functions, so the task name used for the next simulation is whatever was set before the import, not derived from the imported filename (e.g. importing `myhorn_3.msh` should set output name to `myhorn`, counter to `3`).
 
 Action plan:
-- [ ] Decide whether to disable symmetry entirely (remove dead code path) or fix it properly.
-- [ ] If fixing: move symmetry detection upstream of triangle extraction; detect from OCC profile samples rather than raw mesh vertices; use axis-aware plane definitions.
-- [ ] A/B test: full-model vs symmetry-reduced simulation on a known-symmetric config — results must match within 0.5 dB across all angles.
-- [ ] Only re-enable after A/B test confirms both correctness and measurable speedup.
+- [ ] Fix return-to-parametric handler in `src/app/events.js`: emit `state:updated` with the current `GlobalState` value (not `null`) so `renderModel()` has valid state and rebuilds the parametric model.
+- [ ] Verify the Three.js scene is fully clean after return (no leftover imported mesh geometry or references in `app.hornMesh`).
+- [ ] In the MSH import handler (`src/app/events.js`), call `deriveExportFieldsFromFileName(file.name)` + `setExportFields()` immediately after populating `ImportedMeshState`, following the same pattern as config import in `src/app/configImport.js`.
+
+Implementation notes:
+- `src/app/events.js` (return-to-parametric handler, mesh import handler)
+- `src/ui/fileOps.js` (`deriveExportFieldsFromFileName`, `setExportFields`)
+- `src/app/scene.js` (`renderModel`)
+
+### P1. Symmetry Performance — Half-Model Slower Than Full Model
+
+Decision made (March 2026): fix symmetry rather than disable it. Approach changed: auto-detection from raw mesh vertices removed; symmetry reduction is now controlled by the `Mesh.Quadrants` parameter.
+
+Remaining issue: a 1/2-symmetry simulation currently runs slower than a full-model simulation, which defeats the purpose of the feature. This needs investigation and resolution before symmetry is of any practical benefit.
+
+Known constraints from code audit: `simulation_runner.py` currently enforces `quadrants == 1234` for the `occ_adaptive` path (raises `ValueError` otherwise), and `src/solver/index.js` line 266 hardcodes `enable_symmetry: false` in the OCC adaptive submission branch regardless of the UI toggle. These constraints likely need revisiting as part of this work.
+
+The O(N²) vertex-matching cost in `_check_plane_symmetry()` may itself be the cause — if symmetry detection still runs before the BEM solve, its overhead can exceed the savings from a smaller matrix, especially for moderate mesh sizes.
+
+Action plan:
+- [x] Decide whether to disable symmetry entirely or fix it — decided: fix.
+- [ ] Profile a half-model vs full-model solve: break down time by phase (geometry build, mesh gen, BEM operator assembly, linear solve, post-processing).
+- [ ] Verify that a quadrant-controlled geometry actually produces a proportionally smaller BEM matrix (fewer DOF) after the full pipeline.
+- [ ] Remove or replace the O(N²) vertex-matching detection with a geometry-parameter-driven policy that costs O(1) since the quadrant count is already known.
+- [ ] Remove the `enable_symmetry: false` override in `src/solver/index.js` line 266 once the approach is proven correct.
+- [ ] Remove the `quadrants == 1234` enforcement in `simulation_runner.py` once the half/quarter mesh path is validated.
+- [ ] A/B test: half-model vs full-model on a known-symmetric config — results must match within 0.5 dB across all angles, and half-model must be measurably faster.
 - [ ] Add committed ATH reference fixtures for reproducible regression testing.
 
 Implementation notes:
 - `server/solver/symmetry.py`
 - `server/solver/solve_optimized.py` (symmetry policy evaluation)
+- `server/services/simulation_runner.py` (quadrants enforcement)
+- `src/solver/index.js` (line 266 override)
 
 ### P1. Enclosure Mesh Resolution — Edge Over-Refinement
 
@@ -138,6 +164,83 @@ Implementation notes:
 - add a shared runtime-check script invoked by both installers and launchers
 - add repo-owned toolchain version files / environment spec
 
+### P2. Solver Settings Audit — Correctness, Defaults, and Tooltips
+
+Review all solver settings for end-to-end correctness, appropriate defaults, and add mouse-over explanation text to every control.
+
+Issues identified:
+- `symmetryTolerance` is persisted in localStorage and sent in the API contract but has no UI control rendered and no tooltip — completely invisible to users. Only changeable by editing localStorage directly.
+- `enable_symmetry` UI default is `true` but `src/solver/index.js` line 266 hardcodes it to `false` for the OCC adaptive path — the UI toggle has no practical effect. Should be documented or removed until the symmetry work is complete.
+- `verbose` defaults to `true` (always detailed server logging) — consider whether `false` is a better default for typical users.
+- The "Planned Controls" section in the Advanced modal shows GMRES tolerance, restart, max iterations, and strong-form preconditioner as stubs. These are not implemented on the backend. They may create confusion for users who try to set them.
+
+Action plan:
+- [ ] Audit each active setting end-to-end: UI control → localStorage → API contract → backend solver. Confirm no silent overrides or dead paths.
+- [ ] Add `symmetryTolerance` UI control (numeric input or slider) to the Advanced settings modal with a tooltip explaining its effect.
+- [ ] Decide the fate of the `enable_symmetry` UI toggle: either document that it has no effect until symmetry work is resolved (P1 Symmetry Performance), or remove it from the UI temporarily to avoid false expectations.
+- [ ] Review `verbose` default — consider defaulting to `false` to reduce server log noise for typical users.
+- [ ] Either implement or remove the "Planned Controls" stubs (GMRES params, strong-form preconditioner). If kept as stubs, add a visible note that they are not yet active.
+- [ ] Ensure every active setting has a tooltip that explains: what the setting does, what changes when you raise/lower it, and what the recommended default is.
+
+Implementation notes:
+- `src/ui/settings/simBasicSettings.js`
+- `src/ui/settings/simAdvancedSettings.js`
+- `src/solver/index.js` (line 266 enable_symmetry override)
+- `server/solver/solve_optimized.py`
+- `server/contracts/__init__.py`
+
+### P2. Firefox Output Folder — Path Display, Finder Link, and Setup Instructions
+
+When using Firefox, the output folder UX is poor: there is no `showDirectoryPicker` API available (Firefox does not implement it and there is no browser setting to enable it), so users currently get a raw `window.prompt()` asking for a server-relative path string. The "Choose Folder" button in the Settings modal is disabled with generic help text.
+
+Desired behavior:
+- Show the current output folder as a human-readable absolute path (default when nothing is selected: `{repo_root}/output`).
+- Provide a clickable link or button that opens the output folder in Finder (macOS) / Explorer (Windows) / file manager (Linux) directly from the browser.
+- Replace the `window.prompt()` fallback with a proper in-UI panel: current path display at the top, "Open in Finder" button, and clear messaging that Firefox cannot select a custom folder via the browser (not a settings issue — the API is simply not implemented in Firefox).
+- If the user is on Chrome/Edge and folder selection is supported, the existing `showDirectoryPicker` flow continues as-is.
+
+Note: Firefox does NOT support `showDirectoryPicker` — not even behind a flag. There is nothing to instruct users to enable in browser settings. The messaging should be honest: Firefox users must use the server-side path mechanism, and the UI should make that path visible and usable.
+
+Action plan:
+- [ ] Add a backend endpoint `GET /api/workspace/path` that returns the absolute path of the current output folder (defaulting to `{repo_root}/output`).
+- [ ] Add a backend endpoint `POST /api/workspace/open` that opens the folder in the OS file manager (`open` on macOS, `explorer` on Windows, `xdg-open` on Linux) via subprocess.
+- [ ] Set a hardcoded default output folder of `{repo_root}/output` so there is always a path to display, even before the user has selected anything.
+- [ ] Replace the `window.prompt()` fallback in `src/ui/fileOps.js` / `folderWorkspace.js` with a proper dialog/panel that: shows the current absolute path, has an "Open in Finder" button wired to the backend endpoint, and explains the Firefox limitation clearly.
+- [ ] In the Settings modal, when `supportsFolderSelection()` is false, show the path display + Finder button + explanation instead of a disabled button with generic help text.
+
+Implementation notes:
+- `src/ui/workspace/folderWorkspace.js`
+- `src/ui/fileOps.js`
+- `server/app.py` or `server/api/` (new workspace endpoints)
+
+### P2. OpenCL GPU Support — macOS Research and Setup Instructions in UI
+
+The system currently shows CPU-only OpenCL support when GPU support was expected. Research is complete (see below). The remaining work is exposing this context and platform-specific setup guidance in the UI.
+
+**Research findings:**
+- **Apple Silicon (M-series)**: No OpenCL GPU support is possible. Apple dropped first-class OpenCL after macOS 10.14 Mojave. The Apple GPU is Metal-only and has no OpenCL driver. `pocl` (via `brew install pocl` + `ocl-icd`) can provide a CPU-only OpenCL device, which is what the solver can use.
+- **Intel Mac (macOS ≤12)**: OpenCL GPU may work via Apple's built-in driver for Intel HD/Iris/UHD or AMD Radeon GPUs. Apple's driver has known workgroup-size quirks (hence the existing `configure_opencl_safe_profile()` workaround in the codebase).
+- **Intel Mac (macOS 13+)**: OpenCL is increasingly deprecated and unreliable.
+- **Linux**: Full OpenCL GPU support available via `intel-opencl-icd`, `rocm-opencl-runtime`, or `nvidia-opencl-icd` depending on GPU vendor.
+- **Windows**: OpenCL GPU available via Intel OpenCL Runtime or CUDA toolkit (NVIDIA).
+
+The backend already probes OpenCL at runtime via `_opencl_inventory()` in `device_interface.py` and exposes diagnostics through the `/health` endpoint. The settings modal already disables unavailable device options. What's missing is user-facing guidance explaining *why* a device is unavailable and *what to do about it*.
+
+Action plan:
+- [ ] Add OS and architecture fields to the `_opencl_inventory()` result (`sys.platform`, `platform.machine()`) so the frontend can show platform-specific instructions.
+- [ ] Add an expandable "Setup Help" affordance near the Compute Device control in the Settings modal that appears when the selected or requested device mode is unavailable.
+- [ ] Show platform-specific instructions dynamically based on OS/arch from the health endpoint:
+  - Apple Silicon: explain GPU is Metal-only, provide pocl CPU setup via Homebrew (`brew install pocl ocl-icd`).
+  - Intel Mac: suggest checking Apple driver status, note macOS 13+ deprecation.
+  - Linux: suggest installing the appropriate OpenCL ICD package for the GPU vendor.
+  - Windows: link to Intel OpenCL Runtime or CUDA toolkit.
+- [ ] The help section should be collapsed/hidden when the selected device is available, and shown automatically when it is not.
+
+Implementation notes:
+- `server/solver/device_interface.py` (`_opencl_inventory` — add OS/arch fields)
+- `src/ui/settings/simBasicSettings.js` (add help affordance near device mode select)
+- `server/api/routes_misc.py` (health endpoint — carry new fields through)
+
 ### P2. Observation Distance Measurement Origin
 
 The BEM solver measures observation distance from the throat disc centroid (`source_center` in `infer_observation_frame`), but the correct origin may be the mouth plane. At 2m distance, the throat-vs-mouth offset (~120mm) introduces ~6% error. At near-field (0.5m), error reaches ~20%.
@@ -183,6 +286,40 @@ Implementation notes:
 - `src/ui/helpAffordance.js` (`createLabelRow`)
 - `src/ui/paramPanel.js` (`createControlRow`)
 - `src/style.css`
+
+### P3. Remove Simulation Jobs Refresh Button
+
+The manual "Refresh" button in the simulation jobs panel header (`id="refresh-jobs-btn"`) may no longer be needed, since auto-refresh already covers the primary scenarios: app startup (`SimulationPanel` constructor calls `restoreJobs()`) and folder change (via `ui:folder-workspace-changed` event → `panel.refreshJobFeed()`).
+
+Remaining edge cases where manual refresh could still be useful:
+- Jobs created in another browser session or by an external tool, without a folder change event being fired.
+- Folder contents modified externally (e.g. backend wrote a manifest file outside the watched event).
+- Recovery after a backend restart or transient network error that left the auto-polling in a failed state.
+
+Action plan:
+- [ ] Confirm whether any of the above edge cases are realistic user scenarios (e.g. does the backend auto-reconnect path already trigger a refresh?).
+- [ ] If the edge cases are covered or negligible: remove `id="refresh-jobs-btn"` from `index.html` and the corresponding listener in `src/ui/simulation/events.js`.
+- [ ] If keeping: move to a less prominent position (e.g. icon-only, lower visual weight) so it does not imply the panel does not auto-refresh.
+
+Implementation notes:
+- `index.html` (button element)
+- `src/ui/simulation/events.js` (listener)
+- `src/ui/simulation/SimulationPanel.js` (`refreshJobFeed`)
+
+### P3. Directivity Map Section — Add Expand/Collapse
+
+The "Directivity Map" settings section in the Simulation tab lacks the expand/collapse functionality present in the geometry tab parameter sections.
+
+Current state: `renderPolarSettingsSection()` in `src/ui/simulation/polarSettings.js` builds a plain `div.section` element. The geometry tab uses native HTML `<details>`/`<summary>` elements (via `createDetailsSection()` in `src/ui/paramPanel.js`) with collapse state persisted to `localStorage` under `wg-section-collapsed-${id}`.
+
+Action plan:
+- [ ] Change `renderPolarSettingsSection()` to use `<details>`/`<summary>` (or the equivalent JS-driven pattern already used in paramPanel.js).
+- [ ] Persist collapse state to `localStorage` under key `wg-section-collapsed-directivity-map`. Default: open.
+- [ ] Check if other simulation-tab sections (Simulation Settings, Advanced Settings) should also get the same treatment for consistency.
+
+Implementation notes:
+- `src/ui/simulation/polarSettings.js` (`renderPolarSettingsSection`)
+- `src/style.css` (verify `<details>.section` styling matches existing collapsible sections)
 
 ### P3. Pre-Existing Test Failures
 
