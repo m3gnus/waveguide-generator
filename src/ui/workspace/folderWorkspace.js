@@ -63,7 +63,11 @@ export function setServerFolderPath(path) {
     } catch (err) {
       console.warn('Failed to clear folder path from localStorage:', err);
     }
-    selectedFolderLabel = DEFAULT_FOLDER_LABEL;
+    // Only reset the label when no native folder handle is active.
+    // When requestFolderSelection sets a handle, its label takes precedence.
+    if (!selectedFolderHandle) {
+      selectedFolderLabel = DEFAULT_FOLDER_LABEL;
+    }
   }
   emitChange();
 }
