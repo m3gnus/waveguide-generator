@@ -472,13 +472,27 @@ export function renderPolarSettingsSection(doc = document) {
 
   container.innerHTML = '';
 
-  const section = doc.createElement('div');
+  const section = doc.createElement('details');
   section.className = 'section';
   section.id = 'directivity-map';
 
-  const title = doc.createElement('h3');
-  title.textContent = POLAR_SECTION_METADATA.title;
-  section.appendChild(title);
+  // Restore collapse state from localStorage (guarded for non-browser envs)
+  const storageKey = 'wg-section-collapsed-directivity-map';
+  const store = typeof localStorage !== 'undefined' ? localStorage : null;
+  const wasCollapsed = store ? store.getItem(storageKey) : null;
+  section.open = wasCollapsed !== 'true'; // default open
+
+  const summary = doc.createElement('summary');
+  summary.textContent = POLAR_SECTION_METADATA.title;
+  section.appendChild(summary);
+
+  // Persist collapse state on toggle
+  if (store) {
+    section.addEventListener('toggle', () => {
+      store.setItem(storageKey, section.open ? 'false' : 'true');
+    });
+  }
+
   appendSectionNote(section, doc, POLAR_SECTION_METADATA.description);
 
   POLAR_NUMERIC_FIELDS
