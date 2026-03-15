@@ -95,11 +95,11 @@ Issues identified:
 Action plan:
 - [x] Remove `enable_symmetry` toggle from the Settings modal UI.
 - [x] Remove the `enable_symmetry: false` hardcode in `src/solver/index.js` line 266 (no longer needed once the toggle is gone).
-- [ ] Audit each remaining active setting end-to-end: UI control → localStorage → API contract → backend solver.
+- [x] Audit each remaining active setting end-to-end: UI control → localStorage → API contract → backend solver.
 - [ ] Defer `symmetryTolerance` UI control until the P1 Symmetry Performance work is complete.
 - [x] Review `verbose` default — consider defaulting to `false`.
 - [x] Either implement or remove the "Planned Controls" stubs (GMRES params, strong-form preconditioner).
-- [ ] Ensure every active setting has a tooltip explaining what it does, what changes when you raise/lower it, and what the recommended default is.
+- [x] Ensure every active setting has a tooltip explaining what it does, what changes when you raise/lower it, and what the recommended default is.
 
 Implementation notes:
 - `src/ui/settings/simBasicSettings.js`
