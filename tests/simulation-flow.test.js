@@ -78,7 +78,6 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         frequencySpacing: 'linear',
         deviceMode: 'opencl_cpu',
         useOptimized: false,
-        enableSymmetry: false,
         verbose: false,
         advancedSettings: {
           enableWarmup: false,
@@ -120,7 +119,6 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.frequency_spacing, 'linear');
     assert.equal(payload.device_mode, 'opencl_cpu');
     assert.equal(payload.use_optimized, false);
-    assert.equal(payload.enable_symmetry, false);
     assert.equal(payload.verbose, false);
     assert.deepEqual(payload.advanced_settings, {
       enable_warmup: false,
@@ -158,7 +156,6 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
         frequencySpacing: 'bogus',
         deviceMode: '',
         useOptimized: 'yes please',
-        enableSymmetry: null,
         verbose: undefined,
         advancedSettings: {
           enableWarmup: 'sometimes',
@@ -182,8 +179,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
     assert.equal('frequency_spacing' in payload, false);
     assert.equal('device_mode' in payload, false);
     assert.equal('use_optimized' in payload, false);
-    // enable_symmetry is always set to false (hardcoded disable) regardless of input
-    assert.equal(payload.enable_symmetry, false);
+    assert.equal('enable_symmetry' in payload, false);
     assert.equal('verbose' in payload, false);
     assert.equal('advanced_settings' in payload, false);
   } finally {
