@@ -178,3 +178,16 @@ export class AppState {
 }
 
 export const GlobalState = new AppState();
+
+/**
+ * Module-level state for imported mesh mode.
+ * Separate from AppState/GlobalState which is for parametric state.
+ */
+export const ImportedMeshState = {
+  active: false,
+  filename: null,
+  vertices: null,
+  indices: null,
+  physicalTags: null,
+  physicalNames: null
+};

@@ -9,6 +9,8 @@ import {
 } from '../viewer/index.js';
 import { prepareViewportMesh } from '../modules/geometry/useCases.js';
 import { detachThroatDiscVertices } from './viewportMesh.js';
+import { ImportedMeshState } from '../state.js';
+import { AppEvents } from '../events.js';
 
 export function setupScene(app) {
   app.scene = createScene();
@@ -53,6 +55,9 @@ export function setupScene(app) {
     }
   });
 
+  // Re-render when an external mesh is imported
+  AppEvents.on('mesh:imported', () => renderModel(app));
+
   animate(app);
   return true;
 }
@@ -81,6 +86,18 @@ export function onResize(app) {
 
 export function renderModel(app) {
   if (!app.scene || !app.renderer) return;
+
+  // Imported mesh mode — render imported data instead of parametric model
+  if (ImportedMeshState.active && ImportedMeshState.vertices && ImportedMeshState.indices) {
+    if (app.hornMesh) {
+      app.scene.remove(app.hornMesh);
+      app.hornMesh.geometry.dispose();
+      app.hornMesh.material.dispose();
+    }
+    applyMeshToScene(app, ImportedMeshState.vertices, ImportedMeshState.indices, {});
+    return;
+  }
+
   if (!app.currentState) return;
   if (app.hornMesh) {
     app.scene.remove(app.hornMesh);
