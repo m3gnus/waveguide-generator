@@ -1,6 +1,7 @@
 import { GlobalState, ImportedMeshState } from '../state.js';
 import { AppEvents } from '../events.js';
 import { parseMSH } from '../import/mshParser.js';
+import { appUiFileOps } from './uiAdapters.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
@@ -105,7 +106,7 @@ export function bindButtonEvents(app) {
       ImportedMeshState.physicalNames = null;
       const banner = document.getElementById('imported-mesh-banner');
       if (banner) banner.classList.add('is-hidden');
-      AppEvents.emit('state:updated', null, { source: 'return-to-parametric' });
+      AppEvents.emit('state:updated', GlobalState.get(), { source: 'return-to-parametric' });
     });
     console.log('Bound return-to-parametric handler');
   }
@@ -128,6 +129,7 @@ export function bindButtonEvents(app) {
           ImportedMeshState.indices = result.indices;
           ImportedMeshState.physicalTags = result.physicalTags;
           ImportedMeshState.physicalNames = result.physicalNames;
+          appUiFileOps.setExportFields(appUiFileOps.deriveExportFieldsFromFileName(file.name));
           const banner = document.getElementById('imported-mesh-banner');
           const filenameSpan = document.getElementById('imported-mesh-filename');
           if (banner) {
