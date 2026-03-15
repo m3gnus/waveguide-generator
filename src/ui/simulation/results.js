@@ -291,6 +291,40 @@ export function getJobSymmetrySummary(job = null) {
   };
 }
 
+export function renderObservationDistanceSummary(results = null) {
+  const metadata = isObject(results?.metadata) ? results.metadata : null;
+  if (!metadata) return '';
+
+  const obs = isObject(metadata.observation) ? metadata.observation : null;
+  const effectiveDistM = obs ? Number(obs.effective_distance_m) : NaN;
+  if (!obs || !isFinite(effectiveDistM)) return '';
+
+  const warnings = Array.isArray(metadata.warnings) ? metadata.warnings : [];
+  const clampWarning = warnings.find(
+    (w) => isObject(w) && String(w.code || '') === 'observation_distance_adjusted'
+  );
+
+  const distText = `${effectiveDistM.toFixed(2)} m`;
+
+  let warningMarkup = '';
+  if (clampWarning) {
+    const requested = Number(clampWarning.requested_m ?? clampWarning.requested);
+    const effective = Number(clampWarning.effective_m ?? clampWarning.effective ?? effectiveDistM);
+    const fromText = isFinite(requested) ? `${requested.toFixed(2)} m` : 'requested';
+    const toText = isFinite(effective) ? `${effective.toFixed(2)} m` : distText;
+    const msg = escapeHtml(`Distance adjusted from ${fromText} to ${toText} by solver`);
+    warningMarkup = `<div class="view-results-obs-warning">${msg}</div>`;
+  }
+
+  return `
+    <div class="view-results-obs-row">
+      <span class="view-results-obs-label">Observation distance</span>
+      <span class="view-results-obs-value">${escapeHtml(distText)}</span>
+      ${warningMarkup}
+    </div>
+  `;
+}
+
 export function renderSymmetryPolicySummary(results = null) {
   const summary = getSymmetryPolicySummary(results);
   if (!summary) {

@@ -1646,6 +1646,40 @@ button.secondary:hover:not(:disabled) {
     color: var(--text);
 }
 
+.view-results-obs-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--sp-2) var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    font-size: var(--text-base);
+}
+
+.view-results-obs-label {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.view-results-obs-value {
+    font-weight: 600;
+    color: var(--text);
+    flex-shrink: 0;
+}
+
+.view-results-obs-warning {
+    font-size: var(--text-sm);
+    color: var(--warning);
+    flex-basis: 100%;
+    margin-top: 1px;
+}
+
 .view-results-chart {
     border: 1px solid var(--border);
     border-radius: var(--r-md);
