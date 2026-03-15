@@ -313,9 +313,9 @@ The "Directivity Map" settings section in the Simulation tab lacks the expand/co
 Current state: `renderPolarSettingsSection()` in `src/ui/simulation/polarSettings.js` builds a plain `div.section` element. The geometry tab uses native HTML `<details>`/`<summary>` elements (via `createDetailsSection()` in `src/ui/paramPanel.js`) with collapse state persisted to `localStorage` under `wg-section-collapsed-${id}`.
 
 Action plan:
-- [ ] Change `renderPolarSettingsSection()` to use `<details>`/`<summary>` (or the equivalent JS-driven pattern already used in paramPanel.js).
-- [ ] Persist collapse state to `localStorage` under key `wg-section-collapsed-directivity-map`. Default: open.
-- [ ] Check if other simulation-tab sections (Simulation Settings, Advanced Settings) should also get the same treatment for consistency.
+- [x] Change `renderPolarSettingsSection()` to use `<details>`/`<summary>` (or the equivalent JS-driven pattern already used in paramPanel.js).
+- [x] Persist collapse state to `localStorage` under key `wg-section-collapsed-directivity-map`. Default: open.
+- [x] Check if other simulation-tab sections (Simulation Settings, Advanced Settings) should also get the same treatment for consistency.
 
 Implementation notes:
 - `src/ui/simulation/polarSettings.js` (`renderPolarSettingsSection`)
