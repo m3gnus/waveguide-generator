@@ -26,7 +26,6 @@ import {
   getBemPrecision,
   getCurrentSimAdvancedSettings,
   getEnableWarmup,
-  getSymmetryTolerance,
   getUseBurtonMiller,
   resetSimAdvancedSettings,
   saveSimAdvancedSettings,
@@ -98,7 +97,6 @@ const SIMULATION_ADVANCED_HELP = Object.freeze({
   enableWarmup: 'Optimized solver only. Warms up operator and OpenCL caches before the frequency loop starts.',
   bemPrecision: 'Optimized solver only. Single precision is faster; double is more accurate.',
   useBurtonMiller: 'Optimized solver only. Keeps Burton-Miller formulation active for better high-frequency accuracy.',
-  symmetryTolerance: 'Optimized solver only. Lower values require stricter geometric symmetry before the model is reduced.'
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   enable_warmup: {
@@ -133,16 +131,11 @@ const ADVANCED_CONTROL_COPY = Object.freeze({
     label: 'Burton-Miller Coupling',
     help: 'Uses the Burton-Miller formulation for better high-frequency accuracy and fewer spurious solutions.'
   },
-  symmetry_tolerance: {
-    label: 'Symmetry Tolerance',
-    help: 'How strictly the solver checks for symmetry before reducing the model. Lower values are stricter.'
-  }
 });
 const ACTIVE_ADVANCED_CONTROL_IDS = Object.freeze([
   'enable_warmup',
   'bem_precision',
   'use_burton_miller',
-  'symmetry_tolerance',
 ]);
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
@@ -287,7 +280,6 @@ function _buildModal(viewerRuntime) {
       settings.enableWarmup = getEnableWarmup();
       settings.bemPrecision = getBemPrecision();
       settings.useBurtonMiller = getUseBurtonMiller();
-      settings.symmetryTolerance = getSymmetryTolerance();
       saveSimAdvancedSettings(settings);
     }
 
@@ -859,12 +851,9 @@ function _buildSimulationSection() {
     if (bp) bp.value = resetSettings.bemPrecision;
     const ubm = document.getElementById('simadvanced-useBurtonMiller');
     if (ubm) ubm.checked = resetSettings.useBurtonMiller;
-    const st = document.getElementById('simadvanced-symmetryTolerance');
-    if (st) st.value = String(resetSettings.symmetryTolerance);
     if (ewBadge) ewBadge.hidden = false;
     if (bpBadge) bpBadge.hidden = false;
     if (ubmBadge) ubmBadge.hidden = false;
-    if (stBadge) stBadge.hidden = false;
   });
   sec.appendChild(advancedActiveHeader);
 
@@ -901,17 +890,6 @@ function _buildSimulationSection() {
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
-
-  const stResult = _buildSimAdvancedNumberRow(
-    ADVANCED_CONTROL_COPY.symmetry_tolerance.label,
-    'simadvanced-symmetryTolerance',
-    currentSimAdvanced.symmetryTolerance,
-    SIM_ADVANCED_DEFAULTS.symmetryTolerance,
-    { min: '0.0001', step: '0.0001' },
-    SIMULATION_ADVANCED_HELP.symmetryTolerance
-  );
-  sec.appendChild(stResult.row);
-  let stBadge = stResult.badge;
 
   const status = document.createElement('p');
   status.id = 'simadvanced-capability-status';

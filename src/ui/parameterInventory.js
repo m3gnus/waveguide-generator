@@ -161,7 +161,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             groups: Object.freeze([
                 Object.freeze({
                     group: 'MESH',
-                    keys: Object.freeze(['throatResolution', 'mouthResolution', 'rearResolution', 'verticalOffset'])
+                    keys: Object.freeze(['throatResolution', 'mouthResolution', 'rearResolution', 'verticalOffset', 'quadrants'])
                 }),
                 Object.freeze({
                     group: 'ENCLOSURE',

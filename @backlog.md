@@ -197,6 +197,36 @@ const sL = (parseFloat(params.encSpaceL) || 25) * scale;
 
 ---
 
+## UI: Move Help Tooltip to Parameter Label Hover
+
+**Status**: Not started — researched and feasible
+
+**Current behavior**:
+- Each parameter row has a `?` button (class `control-help-trigger`) in the label row
+- CSS `::after` tooltip displays on hover/focus of the `?` button
+- The `ƒ` formula button lives in the input wrapper area
+
+**Proposed change**:
+- Remove the `?` button entirely
+- Attach `data-help-text` directly to the `<label>` element
+- Move CSS tooltip (`:hover::after`) from `.control-help-trigger` to `label[data-help-text]`
+- Move the `ƒ` formula button into the label row (where `?` was)
+
+**Feasibility**: Fully feasible — pure CSS `::after` tooltip works on any element. No new tooltip infrastructure needed.
+
+**Files to change**:
+- `src/ui/helpAffordance.js` — `createLabelRow()`: attach `data-help-text` to label instead of creating `?` button
+- `src/ui/paramPanel.js` — `createControlRow()`: move `formula-info-btn` into label row, remove from input wrapper
+- `src/style.css` — update selector from `button.control-help-trigger` to `label[data-help-text]`, add `position: relative; cursor: help`
+
+**Action Items**:
+- [ ] Update `createLabelRow()` in `helpAffordance.js` to set `data-help-text` on the label and skip `createHelpTrigger()`
+- [ ] Move `formula-info-btn` creation into the label row in `createControlRow()` (paramPanel.js)
+- [ ] Update CSS: retarget tooltip `::after` to `label[data-help-text]`, tune positioning (tooltip should appear below label row, not below button)
+- [ ] Verify tooltip still works on hover and `cursor: help` provides affordance
+
+---
+
 ## Test Failures
 **Current Status**:
 - 46 tests total: 36 pass, 10 fail (pre-existing as of 2026-02-10)

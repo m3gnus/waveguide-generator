@@ -146,6 +146,18 @@ export const PARAM_SCHEMA = {
         verticalOffset: { type: 'number', label: 'Export Vertical Offset', unit: 'mm', default: 0.0, tooltip: 'Vertical offset for the simulation and export coordinate system. Does not affect the 3D viewer.' },
         wallThickness: { type: 'number', label: 'Wall Thickness', unit: 'mm', default: 0, tooltip: 'Applies only to freestanding horns (Enclosure Depth = 0). Builds a normal-offset wall shell one wall-thickness from the horn surface and a rear disc behind the throat.' },
         rearResolution: { type: 'number', label: 'Rear Mesh Resolution', unit: 'mm', default: 40.0, tooltip: 'Backend OCC solve/export mesh element size for the rear wall on freestanding thickened horns.' },
+        quadrants: {
+            type: 'select',
+            label: 'Quadrants',
+            default: '1234',
+            tooltip: 'Portion of the 3D mesh used for BEM analysis. 1 = Q1 only (x≥0, y≥0); 12 = Q1+Q2 (y≥0); 14 = Q1+Q4 (x≥0); 1234 = full mesh.',
+            options: [
+                { value: '1234', label: 'Full (1234)' },
+                { value: '12', label: 'Half Y≥0 (12)' },
+                { value: '14', label: 'Half X≥0 (14)' },
+                { value: '1', label: 'Quarter Q1 (1)' },
+            ]
+        },
     },
     'ENCLOSURE': {
         encDepth: { type: 'number', label: 'Enclosure Depth', unit: 'mm', default: 0 },
