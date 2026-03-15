@@ -40,6 +40,7 @@ import {
   describeSimBasicDeviceAvailability,
   fetchRuntimeHealth,
   getCachedRuntimeHealth,
+  getOpenCLSetupHelp,
 } from '../runtimeCapabilities.js';
 import { createHelpTrigger } from '../helpAffordance.js';
 import {
@@ -49,7 +50,7 @@ import {
   supportsFolderSelection,
 } from '../workspace/folderWorkspace.js';
 
-export { describeSimBasicDeviceAvailability } from '../runtimeCapabilities.js';
+export { describeSimBasicDeviceAvailability, getOpenCLSetupHelp } from '../runtimeCapabilities.js';
 
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
@@ -242,6 +243,14 @@ function _buildModal(viewerRuntime) {
       settings.useOptimized = document.getElementById('simbasic-useOptimized')?.checked ?? settings.useOptimized;
       settings.verbose = document.getElementById('simbasic-verbose')?.checked ?? settings.verbose;
       saveSimBasicSettings(settings);
+
+      // Re-evaluate Setup Help visibility when device mode changes
+      if (t.id === 'simbasic-deviceMode') {
+        const cachedHealth = getCachedRuntimeHealth();
+        if (cachedHealth) {
+          _applySimBasicDeviceAvailability(cachedHealth);
+        }
+      }
     }
 
     if (t.id && t.id.startsWith('simadvanced-')) {
@@ -740,6 +749,24 @@ function _buildSimulationSection() {
   dmStatusSpan.id = 'simbasic-deviceMode-status';
   dmStatusSpan.setAttribute('style', 'font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;');
   dmResult.row.appendChild(dmStatusSpan);
+
+  // Setup Help expandable section — shown when selected device mode is unavailable
+  const setupHelpDetails = document.createElement('details');
+  setupHelpDetails.id = 'simbasic-opencl-setup-help';
+  setupHelpDetails.setAttribute('style', 'margin-top:6px;font-size:0.78rem;');
+  setupHelpDetails.hidden = true;
+
+  const setupHelpSummary = document.createElement('summary');
+  setupHelpSummary.setAttribute('style', 'cursor:pointer;color:var(--accent,#7bb3f0);user-select:none;');
+  setupHelpSummary.textContent = 'Setup Help';
+  setupHelpDetails.appendChild(setupHelpSummary);
+
+  const setupHelpText = document.createElement('p');
+  setupHelpText.id = 'simbasic-opencl-setup-help-text';
+  setupHelpText.setAttribute('style', 'margin:6px 0 0 0;line-height:1.5;opacity:0.85;white-space:pre-wrap;');
+  setupHelpDetails.appendChild(setupHelpText);
+
+  sec.appendChild(setupHelpDetails);
 
   const mvmResult = _buildSimBasicSelectRow(
     'Mesh Validation Policy',
@@ -1282,6 +1309,27 @@ function _applySimBasicDeviceAvailability(health) {
     _setOptionLabel(opt, isUnavailable && opt.value !== 'auto' ? `${baseLabel} (unavailable)` : baseLabel);
   }
   statusEl.textContent = availability.statusText;
+
+  // Setup Help: show when selected device mode is unavailable
+  const setupHelpEl = doc.getElementById('simbasic-opencl-setup-help');
+  const setupHelpTextEl = doc.getElementById('simbasic-opencl-setup-help-text');
+  if (setupHelpEl && setupHelpTextEl) {
+    const selectedMode = String(select.value || 'auto').trim().toLowerCase();
+    const isSelectedUnavailable =
+      selectedMode !== 'auto' && availability.unavailableModes.includes(selectedMode);
+    const allOpenCLUnavailable =
+      selectedMode === 'auto' && availability.unavailableModes.length >= 2;
+    const shouldShow = isSelectedUnavailable || allOpenCLUnavailable;
+
+    setupHelpEl.hidden = !shouldShow;
+    if (shouldShow) {
+      const helpText = getOpenCLSetupHelp(health);
+      setupHelpTextEl.textContent = helpText || 'Check your OpenCL driver installation.';
+      if (shouldShow && !setupHelpEl.open) {
+        setupHelpEl.open = true;
+      }
+    }
+  }
 }
 
 function _applySimAdvancedCapabilityState(_health) {
