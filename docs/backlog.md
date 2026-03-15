@@ -36,7 +36,7 @@ Implementation plan:
 - [x] Add an "Import Mesh" button in the Project section of the actions panel (`index.html`), next to the existing "Load Config" button. Wire a hidden file input accepting `.msh` files, similar to the existing config upload pattern in `src/app/events.js`.
 - [x] Add an "imported mesh mode" flag to `GlobalState` (`src/state.js`). When active, the viewport renders the imported mesh instead of the parametric model. The parametric controls remain visible but are visually dimmed or annotated to indicate they are not driving the display.
 - [x] Feed imported vertices/indices into the existing `applyMeshToScene()` in `src/app/scene.js`. The Three.js rendering path already handles arbitrary `BufferGeometry` — no changes needed to the renderer itself.
-- [ ] Add a "Return to Parametric" button or indicator so users can exit imported-mesh mode and return to the normal parametric workflow.
+- [x] Add a "Return to Parametric" button or indicator so users can exit imported-mesh mode and return to the normal parametric workflow.
 - [ ] Optionally extract physical group tags from the imported MSH and color-code surface groups in the viewport (wall=grey, source=green, enclosure=blue) to help users verify mesh topology visually.
 - [ ] Consider whether imported meshes should be submittable for BEM simulation directly. The backend `load_msh_for_bem()` already validates physical tags and converts to bempp grid format. This would allow users to import externally-generated meshes and run simulations on them without going through the parametric → OCC → Gmsh pipeline.
 
