@@ -261,16 +261,48 @@ Implementation notes:
 
 The "Measurement Distance (m)" control exists in the settings but it is unclear if it properly propagates through to the BEM solver in all code paths (single-process and parallel worker).
 
+Audit completed March 15, 2026. Full pipeline verified — the value propagates correctly end to end. See findings below.
+
+**Trace findings:**
+
+1. **UI control → state** (`src/ui/simulation/polarSettings.js`): The `polar-distance` input (`id="polar-distance"`) is declared in `POLAR_NUMERIC_FIELDS` with `stateKey: 'polarDistance'`, fallback `2`. On change, `buildPolarStatePatchForControl()` reads the DOM value and writes it to simulation state via `updateSimulationStateParams({ polarDistance: <value> })`. Default of 2.0m is applied via `toFiniteNumber()` fallback when field is blank/NaN.
+
+2. **State → `runSimulation()`** (`src/ui/simulation/jobActions.js` line 555–566): `readPolarStateSettings(readSimulationState()?.params)` calls `resolvePolarUiState(params)` which reads `params.polarDistance` (the persisted state key). Returns `{ distance: uiState.distance, ... }`. This is assembled into `config.polarConfig = { ..., distance: polarSettings.distance }`.
+
+3. **`config.polarConfig` → HTTP payload** (`src/solver/index.js` line 249): `polar_config: config.polarConfig || null` is included verbatim in the JSON body sent to `POST /api/solve`.
+
+4. **HTTP → Pydantic contract** (`server/contracts/__init__.py`): `PolarConfig.distance` is a `float` with default `2.0`. Pydantic parses and validates it at request boundary. Request stored as `request.polar_config`.
+
+5. **`request.polar_config` → solver** (`server/services/simulation_runner.py` line 359–361): `request.polar_config.model_dump()` is passed as `polar_config` to `solver.solve()`.
+
+6. **`solver.solve()` → `solve_optimized()`** (`server/solver/bem_solver.py` line 116–127): `polar_config` is forwarded as-is.
+
+7. **`solve_optimized()` → `_resolve_observation_distance_m()`** (`server/solver/solve_optimized.py` line 581): `_resolve_observation_distance_m(polar_config, default=2.0)` extracts `polar_config["distance"]`, returns default 2.0 if missing/invalid/non-positive.
+
+8. **Safe-distance clamping** (`server/solver/solve_optimized.py` lines 702–739): `resolve_safe_observation_distance(grid, observation_request_m, observation_frame)` from `observation.py` computes `min_safe_distance = max_projection + clearance` and takes `effective_distance = max(requested, min_safe_distance)`. If adjusted, a warning is added to `results["metadata"]["warnings"]` with `code: "observation_distance_adjusted"` and the effective distance is logged. The `observation_info` dict is also stored in `results["metadata"]["observation"]`.
+
+9. **Legacy solver path** (`server/solver/solve.py`): Same `_resolve_observation_distance_m` function and same `resolve_safe_observation_distance` call — identical behavior.
+
+10. **Parallel worker path**: `solve_optimized` is called directly in `asyncio.to_thread` — the same code path, no wrapper that drops `polar_config`.
+
+**Findings:**
+- All three trace items (propagation, default, clamping) are correctly implemented. No bugs found.
+- Item 4 (UI feedback showing actual distance used): The effective distance is returned in `results.metadata.observation.effective_distance_m` and any clamping is recorded in `results.metadata.warnings` with `code: "observation_distance_adjusted"`. However, this data is not surfaced in the frontend UI. The View Results modal does not currently display it. Adding it would require reading `results.metadata.observation` in `src/ui/simulation/results.js` or the view-results modal — a straightforward read, but the task says to note rather than implement if significant. Left as a future improvement.
+
 Action plan:
-- [ ] Trace measurement distance from UI control → `polarSettings.distance` → `exportABECProject()` → `_resolve_observation_distance_m()` → BEM solver
-- [ ] Verify default (2.0m) is applied when field is empty
-- [ ] Verify safe-distance clamping (distance > mesh extent) works correctly
-- [ ] Add UI feedback showing actual distance used by solver
+- [x] Trace measurement distance from UI control → `polarSettings.distance` → `runSimulation()` → `_resolve_observation_distance_m()` → BEM solver
+- [x] Verify default (2.0m) is applied when field is empty
+- [x] Verify safe-distance clamping (distance > mesh extent) works correctly
+- [ ] Add UI feedback showing actual distance used by solver (data is available in `results.metadata.observation.effective_distance_m` and `results.metadata.warnings`; not yet surfaced in the View Results modal)
 
 Implementation notes:
-- `src/ui/settings/simulationManagementSettings.js`
-- `src/app/exports.js` (`exportABECProject`)
-- `server/solver/observation.py` (`_resolve_observation_distance_m`)
+- `src/ui/simulation/polarSettings.js` (UI control, state read/write)
+- `src/ui/simulation/jobActions.js` (`runSimulation`, assembles `config.polarConfig`)
+- `src/solver/index.js` (`submitSimulation`, line 249 — `polar_config` in HTTP payload)
+- `server/contracts/__init__.py` (`PolarConfig.distance`)
+- `server/services/simulation_runner.py` (passes `polar_config` to `solver.solve`)
+- `server/solver/solve_optimized.py` (`_resolve_observation_distance_m`, `resolve_safe_observation_distance`)
+- `server/solver/observation.py` (`resolve_safe_observation_distance`)
 
 ### P2. Help Tooltip — Move from Button to Label Hover
 
