@@ -85,29 +85,26 @@ const VIEWER_HELP = Object.freeze({
   keyboardPanEnabled: 'Enables arrow-key style camera panning shortcuts while the viewport is focused.'
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
-  deviceMode: 'Selects the compute device for solving. Auto picks the best available option.',
-  meshValidationMode: 'Controls whether mesh validation blocks or only warns before submitting a solve.',
-  frequencySpacing: 'Controls how solved frequencies are distributed between the sweep start and end values.',
-  useOptimized: 'Enables the faster solve path when available.',
-  verbose: 'Shows detailed solver output in job progress and server logs.'
+  deviceMode: 'Selects the compute device for BEM operator assembly. Auto uses the best available OpenCL device. opencl_cpu forces CPU-only OpenCL; opencl_gpu forces GPU OpenCL (requires a compatible GPU driver). Recommended default: Auto.',
+  meshValidationMode: 'Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.',
+  frequencySpacing: 'Determines how the N frequency points are placed between the start and end frequency. Log spaces them evenly on a logarithmic scale (equal ratios between steps — perceptually uniform for audio). Linear spaces them evenly in Hz. Recommended default: Log.',
+  useOptimized: 'Enables the optimized HornBEMSolver code path, which pre-computes function spaces once and reuses them across all frequencies. Turning this off falls back to a simpler per-frequency solver. Leave enabled unless debugging. Recommended default: On.',
+  verbose: 'Emits per-frequency solver progress and diagnostic messages to the server log and job status stream. Useful for monitoring long sweeps or diagnosing convergence issues; adds minor overhead. Recommended default: Off.',
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
-  enableWarmup: 'Optimized solver only. Warms up operator and OpenCL caches before the frequency loop starts.',
-  bemPrecision: 'Optimized solver only. Single precision is faster; double is more accurate.',
-  useBurtonMiller: 'Optimized solver only. Keeps Burton-Miller formulation active for better high-frequency accuracy.',
+  enableWarmup: 'Optimized solver only. Before the main frequency loop, assembles and pre-caches one BEM operator at the median frequency to warm up OpenCL JIT and operator assembly pipelines. Costs one extra solve but makes timing for subsequent frequencies more consistent. Recommended default: On.',
+  bemPrecision: 'Optimized solver only. Single (float32) is 2–4× faster and uses half the GPU memory, but may lose accuracy at very high frequencies or on ill-conditioned meshes. Double (float64) is the safe choice for production results. Recommended default: Double.',
+  useBurtonMiller: 'Optimized solver only. Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation — without it, the solver can produce large errors at certain frequencies even when GMRES converges. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.',
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   enable_warmup: {
     label: 'Warm-up Pass',
-    help: 'Warms up OpenCL and operator caches before the frequency loop starts, for more consistent timing.'
   },
   bem_precision: {
     label: 'BEM Precision',
-    help: 'Single precision is faster; double precision is more accurate. Only applies to the optimized solve path.'
   },
   use_burton_miller: {
     label: 'Burton-Miller Coupling',
-    help: 'Uses the Burton-Miller formulation for better high-frequency accuracy and fewer spurious solutions.'
   },
 });
 const SETTINGS_SECTION_ITEMS = Object.freeze([
