@@ -48,6 +48,8 @@ import {
   requestFolderSelection,
   subscribeFolderWorkspace,
   supportsFolderSelection,
+  fetchWorkspacePath,
+  openWorkspaceInFinder,
 } from '../workspace/folderWorkspace.js';
 
 export { describeSimBasicDeviceAvailability, getOpenCLSetupHelp } from '../runtimeCapabilities.js';
@@ -995,6 +997,39 @@ function _buildWorkspaceSection(cleanupFns = []) {
   statusRow.appendChild(statusValue);
   sec.appendChild(statusRow);
 
+  // Firefox-fallback: path display row (shown when showDirectoryPicker is unavailable)
+  const pathRow = document.createElement('div');
+  pathRow.className = 'settings-control-row';
+  pathRow.hidden = true;
+  const pathLabel = document.createElement('div');
+  pathLabel.className = 'settings-control-label';
+  pathLabel.textContent = 'Output Folder Path';
+  pathRow.appendChild(pathLabel);
+  const pathValueBox = document.createElement('pre');
+  pathValueBox.className = 'ui-command-box settings-workspace-path-box';
+  pathValueBox.textContent = 'Loading…';
+  const pathValueWrap = document.createElement('div');
+  pathValueWrap.className = 'settings-control-value';
+  pathValueWrap.appendChild(pathValueBox);
+  pathRow.appendChild(pathValueWrap);
+  sec.appendChild(pathRow);
+
+  // Firefox-fallback: "Open in Finder" button row
+  const finderRow = document.createElement('div');
+  finderRow.className = 'settings-action-row';
+  finderRow.hidden = true;
+  const finderBtn = document.createElement('button');
+  finderBtn.type = 'button';
+  finderBtn.className = 'secondary';
+  finderBtn.textContent = 'Open in Finder';
+  const finderHelp = document.createElement('p');
+  finderHelp.className = 'settings-action-help';
+  finderHelp.textContent = 'Opens the output folder in the OS file manager (Finder / Explorer).';
+  finderRow.appendChild(finderBtn);
+  finderRow.appendChild(finderHelp);
+  sec.appendChild(finderRow);
+
+  // Chrome/Edge: folder picker row (hidden when showDirectoryPicker is unavailable)
   const chooseRow = document.createElement('div');
   chooseRow.className = 'settings-action-row';
 
@@ -1015,18 +1050,40 @@ function _buildWorkspaceSection(cleanupFns = []) {
   routingNote.className = 'settings-section-help';
   sec.appendChild(routingNote);
 
+  finderBtn.addEventListener('click', async () => {
+    finderBtn.disabled = true;
+    const ok = await openWorkspaceInFinder();
+    finderBtn.disabled = false;
+    if (!ok) {
+      finderHelp.textContent = 'Could not open folder — is the backend running?';
+    }
+  });
+
   const refreshWorkspaceCopy = () => {
     const canPickFolder = supportsFolderSelection(globalThis?.window);
     const selectedLabel = getSelectedFolderLabel();
     statusText.textContent = selectedLabel;
     chooseBtn.textContent = selectedLabel === 'No folder selected' ? 'Choose Folder' : 'Change Folder';
     chooseBtn.disabled = !canPickFolder;
+
+    // Show/hide the Firefox-specific path + finder rows
+    pathRow.hidden = canPickFolder;
+    finderRow.hidden = canPickFolder;
+    chooseRow.hidden = !canPickFolder;
+
     chooseHelp.textContent = canPickFolder
       ? 'Choose a folder workspace here if you want manual exports and completed task bundles to land in a stable location instead of the save picker.'
-      : 'Folder workspaces are unavailable in this browser/context. They require File System Access support on HTTPS or localhost. Manual exports and task bundles will continue to use the save picker or download fallback.';
+      : '';
     routingNote.textContent = canPickFolder
       ? 'Routing: manual exports write to the selected folder root when permission is available, and completed simulation bundles write into <workspace>/<jobId>/. Folder task manifests/index persist there for history, but the workspace is not a catch-all redirect for every generated artifact. If direct writes fail, the app clears the workspace and falls back to standard save/download behavior.'
-      : 'Routing fallback: without folder workspace support, manual exports and completed simulation bundles use the browser save/download path instead of workspace writes.';
+      : 'Firefox does not support selecting a custom output folder via the browser (the File System Access API is not implemented in Firefox). Files are saved to the server output folder shown above. Use "Open in Finder" to browse the folder directly.';
+
+    // Fetch path from backend when showing the Firefox panel
+    if (!canPickFolder) {
+      fetchWorkspacePath().then((path) => {
+        pathValueBox.textContent = path || 'Backend unavailable — path unknown.';
+      });
+    }
   };
 
   chooseBtn.addEventListener('click', async () => {

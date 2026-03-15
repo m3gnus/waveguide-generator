@@ -2,6 +2,7 @@ import { AppEvents } from '../../events.js';
 
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
 const STORAGE_KEY = 'mwg_server_folder_path';
+const BACKEND_URL = 'http://localhost:8000';
 
 let selectedFolderHandle = null;
 let selectedFolderLabel = DEFAULT_FOLDER_LABEL;
@@ -174,4 +175,146 @@ export async function requestFolderSelection(targetWindow = globalThis?.window) 
     emitWarning('Folder selection failed.', error);
     return null;
   }
+}
+
+/**
+ * Fetch the current output folder path from the backend.
+ * Returns the absolute path string or null on failure.
+ */
+export async function fetchWorkspacePath() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/workspace/path`, {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.path || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask the backend to open the output folder in the OS file manager.
+ * Returns true on success, false on failure.
+ */
+export async function openWorkspaceInFinder() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/workspace/open`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(8000)
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Show a proper panel dialog for browsers that do not support showDirectoryPicker
+ * (e.g. Firefox). Displays the current output folder path and an "Open in Finder"
+ * button wired to the backend endpoint.
+ *
+ * Returns a Promise that resolves when the user closes the dialog.
+ */
+export function showOutputFolderPanel() {
+  if (typeof document === 'undefined') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'ui-choice-backdrop';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'ui-choice-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', 'Output Folder');
+
+    const title = document.createElement('h4');
+    title.className = 'ui-choice-title';
+    title.textContent = 'Output Folder';
+    dialog.appendChild(title);
+
+    const subtitle = document.createElement('p');
+    subtitle.className = 'ui-choice-subtitle';
+    subtitle.textContent =
+      'Firefox does not support selecting a custom output folder via the browser ' +
+      '(the File System Access API is not implemented in Firefox). Files are saved ' +
+      'to the default server output folder shown below.';
+    dialog.appendChild(subtitle);
+
+    // Path display
+    const pathBox = document.createElement('pre');
+    pathBox.className = 'ui-command-box';
+    pathBox.textContent = 'Loading…';
+    dialog.appendChild(pathBox);
+
+    // Actions
+    const actions = document.createElement('div');
+    actions.className = 'ui-choice-actions';
+    dialog.appendChild(actions);
+
+    const finalize = () => {
+      window.removeEventListener('keydown', onKeyDown);
+      backdrop.remove();
+      resolve();
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finalize();
+      }
+    };
+
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'ui-choice-btn';
+    openBtn.disabled = true;
+
+    const openBtnLabel = document.createElement('span');
+    openBtnLabel.className = 'ui-choice-btn-label';
+    openBtnLabel.textContent = 'Open in Finder';
+    openBtn.appendChild(openBtnLabel);
+
+    const openBtnHelp = document.createElement('span');
+    openBtnHelp.className = 'ui-choice-btn-help';
+    openBtnHelp.textContent = 'Opens the output folder in the OS file manager.';
+    openBtn.appendChild(openBtnHelp);
+
+    openBtn.addEventListener('click', async () => {
+      openBtn.disabled = true;
+      const ok = await openWorkspaceInFinder();
+      openBtn.disabled = false;
+      if (!ok) {
+        openBtnHelp.textContent = 'Could not open folder — is the backend running?';
+      }
+    });
+    actions.appendChild(openBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'ui-choice-btn secondary';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', finalize);
+    actions.appendChild(closeBtn);
+
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) finalize();
+    });
+
+    window.addEventListener('keydown', onKeyDown);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    // Fetch path asynchronously after dialog is shown
+    fetchWorkspacePath().then((path) => {
+      if (path) {
+        pathBox.textContent = path;
+        openBtn.disabled = false;
+      } else {
+        pathBox.textContent = 'Backend unavailable — path unknown.';
+      }
+    });
+  });
 }

@@ -9,7 +9,8 @@ import {
     supportsFolderSelection,
     setServerFolderPath,
     getServerFolderPath,
-    loadServerFolderPathFromStorage
+    loadServerFolderPathFromStorage,
+    showOutputFolderPanel
 } from './workspace/folderWorkspace.js';
 
 let hasPendingParameterChanges = false;
@@ -206,31 +207,9 @@ export async function selectOutputFolder() {
         return;
     }
 
-    // Fallback: Prompt for server-side folder path
-    const currentPath = getServerFolderPath();
-    const defaultPath = 'output';
-    const promptText = `Enter server output folder path (relative to repo root):\n\nExamples: "output", "exports/my_project"\nLeave blank to use browser download.`;
-    const folderPath = prompt(promptText, currentPath || defaultPath);
-
-    if (folderPath === null) {
-        // User cancelled
-        return;
-    }
-
-    const trimmedPath = folderPath.trim();
-    if (!trimmedPath) {
-        // User cleared path; use browser download
-        setServerFolderPath(null);
-        return;
-    }
-
-    // Basic path validation
-    if (trimmedPath.includes('..') || trimmedPath.includes('~')) {
-        showError('Folder path cannot contain .. or ~ for security reasons.');
-        return;
-    }
-
-    setServerFolderPath(trimmedPath);
+    // Fallback for browsers without showDirectoryPicker (e.g. Firefox):
+    // Show a proper panel with the current output path and an "Open in Finder" button.
+    await showOutputFolderPanel();
 }
 
 export async function saveFile(content, fileName, options = {}) {

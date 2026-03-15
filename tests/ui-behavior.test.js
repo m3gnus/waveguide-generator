@@ -671,11 +671,13 @@ test('openSettingsModal keeps folder-workspace fallback copy visible when picker
   try {
     openSettingsModal();
 
-    const supportCopy = createdElements.find((el) => el.id === 'settings-workspace-support');
+    const routingNote = createdElements.find((el) => el.id === 'settings-workspace-routing');
     const chooseBtn = createdElements.find((el) => el.id === 'settings-choose-folder-btn');
 
-    assert.ok(supportCopy, 'Workspace support copy should be rendered');
-    assert.match(supportCopy.textContent, /unavailable in this browser/i);
+    // When showDirectoryPicker is unavailable (Firefox), explanation moves to routingNote
+    // and the choose button row is hidden (disabled).
+    assert.ok(routingNote, 'Workspace routing note should be rendered');
+    assert.match(routingNote.textContent, /firefox/i);
     assert.equal(chooseBtn?.disabled, true);
   } finally {
     global.document = originalDocument;

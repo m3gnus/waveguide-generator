@@ -1,9 +1,12 @@
 """
-Miscellaneous routes: health, updates, chart rendering, directivity rendering, file export.
+Miscellaneous routes: health, updates, chart rendering, directivity rendering, file export,
+workspace path/open.
 """
 
 import logging
 import os
+import platform
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -150,3 +153,48 @@ async def export_file(
     except Exception as exc:
         logger.error(f"Export failed: {exc}")
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+
+
+# ── Workspace path / open ──────────────────────────────────────────────────────
+
+def _get_default_output_path() -> Path:
+    """Return the absolute path of the default output folder (repo_root/output)."""
+    # routes_misc.py lives at server/api/routes_misc.py → repo_root is three levels up
+    return (Path(__file__).parent.parent.parent / "output").resolve()
+
+
+@router.get("/api/workspace/path")
+async def workspace_path() -> Dict[str, str]:
+    """Return the absolute path of the current output folder."""
+    output_path = _get_default_output_path()
+    return {"path": str(output_path)}
+
+
+@router.post("/api/workspace/open")
+async def workspace_open() -> Dict[str, str]:
+    """Open the output folder in the OS file manager."""
+    output_path = _get_default_output_path()
+
+    # Ensure the folder exists so the file manager can open it
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Cannot create output folder: {exc}") from exc
+
+    if not output_path.exists():
+        raise HTTPException(status_code=404, detail=f"Output folder not found: {output_path}")
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", str(output_path)])
+        elif system == "Windows":
+            subprocess.Popen(["explorer", str(output_path)])
+        else:
+            subprocess.Popen(["xdg-open", str(output_path)])
+    except Exception as exc:
+        logger.error(f"Failed to open folder in file manager: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
+
+    logger.info(f"Opened output folder in file manager: {output_path}")
+    return {"status": "opened", "path": str(output_path)}
