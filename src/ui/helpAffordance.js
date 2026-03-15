@@ -31,14 +31,13 @@ export function createLabelRow(doc, { labelText = '', htmlFor = '', helpText = '
     if (htmlFor) {
         label.htmlFor = htmlFor;
     }
+    if (helpText) {
+        setAttribute(label, 'data-help-text', helpText);
+        setAttribute(label, 'title', helpText);
+    }
     row.appendChild(label);
 
-    const helpTrigger = createHelpTrigger(doc, { labelText, helpText });
-    if (helpTrigger) {
-        row.appendChild(helpTrigger);
-    }
-
-    return { row, label, helpTrigger };
+    return { row, label, helpTrigger: null };
 }
 
 export function appendSectionNote(section, doc, text) {

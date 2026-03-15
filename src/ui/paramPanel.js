@@ -217,15 +217,31 @@ export class ParamPanel {
 
         const controlId = def.controlId || `param-${key}-${this.controlIdCounter++}`;
         const labelText = def.unit ? `${def.label} (${def.unit})` : def.label;
+        const inputMode = getControlInputMode(def);
+        const isFormulaField = inputMode === 'formula';
+
         const { row: labelRow } = createLabelRow(document, {
             labelText,
             htmlFor: controlId,
             helpText: def.tooltip || ''
         });
-        row.appendChild(labelRow);
 
-        const inputMode = getControlInputMode(def);
-        const isFormulaField = inputMode === 'formula';
+        if (isFormulaField) {
+            const infoBtn = document.createElement('button');
+            infoBtn.type = 'button';
+            infoBtn.className = 'formula-info-btn';
+            infoBtn.textContent = 'ƒ';
+            infoBtn.title = `View formula reference for ${def.label}`;
+            infoBtn.setAttribute('aria-label', `View formula reference for ${def.label}`);
+            infoBtn.setAttribute('data-param-key', key);
+            infoBtn.onclick = (e) => {
+                e.preventDefault();
+                this.showFormulaInfo(def.label);
+            };
+            labelRow.appendChild(infoBtn);
+        }
+
+        row.appendChild(labelRow);
 
         if (inputMode === 'formula' || inputMode === 'number' || inputMode === 'text') {
             const wrapper = document.createElement('div');
@@ -259,21 +275,6 @@ export class ParamPanel {
             };
 
             wrapper.appendChild(input);
-            if (isFormulaField) {
-                const infoBtn = document.createElement('button');
-                infoBtn.type = 'button';
-                infoBtn.className = 'formula-info-btn';
-                infoBtn.textContent = 'ƒ';
-                infoBtn.title = `View formula reference for ${def.label}`;
-                infoBtn.setAttribute('aria-label', `View formula reference for ${def.label}`);
-                infoBtn.setAttribute('data-param-key', key);
-                infoBtn.onclick = (e) => {
-                    e.preventDefault();
-                    this.showFormulaInfo(def.label);
-                };
-                wrapper.appendChild(infoBtn);
-            }
-
             row.appendChild(wrapper);
         } else if (inputMode === 'select') {
             const select = document.createElement('select');

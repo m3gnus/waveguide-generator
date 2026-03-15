@@ -277,10 +277,10 @@ Implementation notes:
 Replace the `?` button tooltip with a hover tooltip on the parameter label itself, freeing the button slot for the `ƒ` formula button.
 
 Action plan:
-- [ ] Update `createLabelRow()` in `src/ui/helpAffordance.js`: set `data-help-text` on the `<label>` element, remove `createHelpTrigger()` button
-- [ ] Move `formula-info-btn` creation into the label row in `createControlRow()` (`src/ui/paramPanel.js`)
-- [ ] Update CSS: retarget tooltip `::after` from `button.control-help-trigger` to `label[data-help-text]`, add `position: relative; cursor: help`
-- [ ] Verify tooltip appears on hover and `cursor: help` provides affordance
+- [x] Update `createLabelRow()` in `src/ui/helpAffordance.js`: set `data-help-text` on the `<label>` element, remove `createHelpTrigger()` button
+- [x] Move `formula-info-btn` creation into the label row in `createControlRow()` (`src/ui/paramPanel.js`)
+- [x] Update CSS: retarget tooltip `::after` from `button.control-help-trigger` to `label[data-help-text]`, add `position: relative; cursor: help`
+- [x] Verify tooltip appears on hover and `cursor: help` provides affordance
 
 Implementation notes:
 - `src/ui/helpAffordance.js` (`createLabelRow`)
