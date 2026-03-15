@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -75,6 +77,8 @@ def _opencl_inventory() -> Dict[str, object]:
         "gpu_device_name": None,
         "cpu_reason": None,
         "gpu_reason": None,
+        "os_platform": sys.platform,
+        "os_arch": platform.machine(),
     }
     base_reason = _opencl_prerequisite_reason()
     inventory["base_reason"] = base_reason

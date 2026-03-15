@@ -195,14 +195,14 @@ The system currently shows CPU-only OpenCL support when GPU support was expected
 The backend already probes OpenCL at runtime via `_opencl_inventory()` in `device_interface.py` and exposes diagnostics through the `/health` endpoint. The settings modal already disables unavailable device options. What's missing is user-facing guidance explaining *why* a device is unavailable and *what to do about it*.
 
 Action plan:
-- [ ] Add OS and architecture fields to the `_opencl_inventory()` result (`sys.platform`, `platform.machine()`) so the frontend can show platform-specific instructions.
-- [ ] Add an expandable "Setup Help" affordance near the Compute Device control in the Settings modal that appears when the selected or requested device mode is unavailable.
-- [ ] Show platform-specific instructions dynamically based on OS/arch from the health endpoint:
+- [x] Add OS and architecture fields to the `_opencl_inventory()` result (`sys.platform`, `platform.machine()`) so the frontend can show platform-specific instructions.
+- [x] Add an expandable "Setup Help" affordance near the Compute Device control in the Settings modal that appears when the selected or requested device mode is unavailable.
+- [x] Show platform-specific instructions dynamically based on OS/arch from the health endpoint:
   - Apple Silicon: explain GPU is Metal-only, provide pocl CPU setup via Homebrew (`brew install pocl ocl-icd`).
   - Intel Mac: suggest checking Apple driver status, note macOS 13+ deprecation.
   - Linux: suggest installing the appropriate OpenCL ICD package for the GPU vendor.
   - Windows: link to Intel OpenCL Runtime or CUDA toolkit.
-- [ ] The help section should be collapsed/hidden when the selected device is available, and shown automatically when it is not.
+- [x] The help section should be collapsed/hidden when the selected device is available, and shown automatically when it is not.
 
 Implementation notes:
 - `server/solver/device_interface.py` (`_opencl_inventory` — add OS/arch fields)

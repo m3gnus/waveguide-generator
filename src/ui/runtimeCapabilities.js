@@ -100,6 +100,47 @@ export function describeSimBasicDeviceAvailability(health, requestedMode = 'auto
   };
 }
 
+/**
+ * Return platform-specific OpenCL setup instructions based on OS/arch fields
+ * from the health endpoint's opencl_diagnostics.
+ *
+ * @param {object|null} health - Cached health response from /health
+ * @returns {string} Setup help text, or empty string if no guidance is available.
+ */
+export function getOpenCLSetupHelp(health) {
+  const diagnostics = health?.deviceInterface?.opencl_diagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    return '';
+  }
+
+  const osPlatform = String(diagnostics.os_platform || '').toLowerCase();
+  const osArch = String(diagnostics.os_arch || '').toLowerCase();
+
+  if (osPlatform === 'darwin' && (osArch === 'arm64' || osArch.startsWith('aarch'))) {
+    return (
+      'GPU is Metal-only on Apple Silicon. For CPU-based OpenCL, install pocl via Homebrew: ' +
+      '`brew install pocl ocl-icd`'
+    );
+  }
+
+  if (osPlatform === 'darwin') {
+    return 'Check Apple OpenCL driver status. Note: OpenCL is deprecated on macOS 13+.';
+  }
+
+  if (osPlatform === 'linux') {
+    return (
+      'Install the appropriate OpenCL ICD package for your GPU vendor: ' +
+      'intel-opencl-icd, rocm-opencl-runtime, or nvidia-opencl-icd'
+    );
+  }
+
+  if (osPlatform === 'win32') {
+    return 'Install Intel OpenCL Runtime or CUDA toolkit (NVIDIA)';
+  }
+
+  return '';
+}
+
 export function summarizeRuntimeCapabilities(health) {
   const solverReady = Boolean(health?.solverReady);
   const occBuilderReady = Boolean(health?.occBuilderReady);
