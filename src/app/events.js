@@ -93,6 +93,23 @@ export function bindButtonEvents(app) {
     if (!fileInput) console.warn('Element config-upload not found');
   }
 
+  // Return to Parametric button
+  const returnBtn = document.getElementById('return-parametric-btn');
+  if (returnBtn) {
+    returnBtn.addEventListener('click', () => {
+      ImportedMeshState.active = false;
+      ImportedMeshState.filename = null;
+      ImportedMeshState.vertices = null;
+      ImportedMeshState.indices = null;
+      ImportedMeshState.physicalTags = null;
+      ImportedMeshState.physicalNames = null;
+      const banner = document.getElementById('imported-mesh-banner');
+      if (banner) banner.classList.add('is-hidden');
+      AppEvents.emit('state:updated', null, { source: 'return-to-parametric' });
+    });
+    console.log('Bound return-to-parametric handler');
+  }
+
   // Mesh import handling
   const importMeshBtn = document.getElementById('import-mesh-btn');
   const meshInput = document.getElementById('mesh-upload');
@@ -111,6 +128,12 @@ export function bindButtonEvents(app) {
           ImportedMeshState.indices = result.indices;
           ImportedMeshState.physicalTags = result.physicalTags;
           ImportedMeshState.physicalNames = result.physicalNames;
+          const banner = document.getElementById('imported-mesh-banner');
+          const filenameSpan = document.getElementById('imported-mesh-filename');
+          if (banner) {
+            banner.classList.remove('is-hidden');
+            if (filenameSpan) filenameSpan.textContent = `Imported: ${file.name}`;
+          }
           AppEvents.emit('mesh:imported', ImportedMeshState);
         } catch (err) {
           console.error('MSH import failed:', err);

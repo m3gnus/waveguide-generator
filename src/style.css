@@ -342,6 +342,17 @@ hr {
     color: var(--text-muted);
 }
 
+.imported-mesh-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--success-bg);
+    border-radius: var(--radius);
+    font-size: var(--text-sm);
+    margin-bottom: var(--sp-2);
+}
+
 #stats {
     flex: 1;
     text-align: right;
