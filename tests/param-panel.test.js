@@ -156,14 +156,13 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
       (node) => node.tagName === 'LABEL' && node.textContent === 'Sweep Start (Hz)',
     );
     assert.equal(simulationLabel.length, 1);
-    const simulationHelpButtons = collectNodes(
+    const simulationHelpLabels = collectNodes(
       simulationSettingsContainer,
       (node) =>
-        node.tagName === 'BUTTON' &&
-        node.className === 'control-help-trigger' &&
+        node.tagName === 'LABEL' &&
         /backend BEM sweep/i.test(node.attributes['data-help-text'] || ''),
     );
-    assert.equal(simulationHelpButtons.length, 2);
+    assert.equal(simulationHelpLabels.length, 2);
 
     const throatSliceDensityRows = collectNodes(
       simulationContainer,
