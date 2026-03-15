@@ -1,6 +1,6 @@
 import { applySmoothing } from '../../results/smoothing.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import { renderSymmetryPolicySummary } from './results.js';
+import { renderSymmetryPolicySummary, renderObservationDistanceSummary } from './results.js';
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -88,6 +88,16 @@ export async function openViewResultsModal(panel) {
     const summarySection = summaryWrapper.firstElementChild;
     if (summarySection) {
       body.appendChild(summarySection);
+    }
+  }
+
+  const obsDistMarkup = renderObservationDistanceSummary(results);
+  if (obsDistMarkup) {
+    const obsWrapper = document.createElement('div');
+    obsWrapper.innerHTML = obsDistMarkup.trim();
+    const obsEl = obsWrapper.firstElementChild;
+    if (obsEl) {
+      body.appendChild(obsEl);
     }
   }
 
