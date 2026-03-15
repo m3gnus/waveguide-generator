@@ -77,11 +77,17 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
     """
     Infer a robust radiation frame from the mesh.
 
+    Observation distance is measured from the mouth plane center, not the throat/source.
+    Using the throat as origin introduces a ~6% error at 2m (throat-to-mouth offset ~120mm)
+    and ~20% error at near-field (0.5m). The mouth center is the physically correct origin
+    because measurement distance conventions (e.g. IEC 60268-5) reference the radiating aperture.
+
     Returns:
         {
             "axis": forward unit vector (throat -> mouth),
-            "origin_center": center point of source origin (throat disc centroid),
-            "mouth_center": center point near mouth plane,
+            "origin_center": measurement origin at the mouth plane center,
+            "mouth_center": same as origin_center (mouth plane center),
+            "source_center": throat disc centroid (retained for diagnostic use),
             "u": transverse unit vector (horizontal reference),
             "v": transverse unit vector orthogonal to u (vertical reference)
         }
@@ -90,8 +96,9 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
     if vertices.ndim != 2 or vertices.shape[0] != 3 or vertices.shape[1] == 0:
         return {
             "axis": np.array([0.0, 1.0, 0.0], dtype=np.float64),
-            "origin_center": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            "origin_center": np.array([0.0, 0.0, 0.0], dtype=np.float64),  # mouth plane (fallback)
             "mouth_center": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            "source_center": np.array([0.0, 0.0, 0.0], dtype=np.float64),
             "u": np.array([1.0, 0.0, 0.0], dtype=np.float64),
             "v": np.array([0.0, 0.0, 1.0], dtype=np.float64),
         }
@@ -142,10 +149,14 @@ def infer_observation_frame(grid) -> Dict[str, np.ndarray]:
     if float(np.linalg.norm(v)) <= 1e-12:
         v = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
+    # Use mouth_center as the measurement origin (not throat/source_center).
+    # Observation distance is measured from the mouth plane so that the stated
+    # distance matches the physical distance from the radiating aperture.
     return {
         "axis": axis_candidate,
-        "origin_center": source_center,
+        "origin_center": mouth_center,   # measurement origin = mouth plane center
         "mouth_center": mouth_center,
+        "source_center": source_center,  # throat disc centroid (diagnostic only)
         "u": u,
         "v": v,
     }
