@@ -1,4 +1,6 @@
-import { GlobalState } from '../state.js';
+import { GlobalState, ImportedMeshState } from '../state.js';
+import { AppEvents } from '../events.js';
+import { parseMSH } from '../import/mshParser.js';
 
 export function setupEventListeners(app) {
   // Bind all button events using a helper method
@@ -89,5 +91,41 @@ export function bindButtonEvents(app) {
   } else {
     if (!loadBtn) console.warn('Element load-config-btn not found');
     if (!fileInput) console.warn('Element config-upload not found');
+  }
+
+  // Mesh import handling
+  const importMeshBtn = document.getElementById('import-mesh-btn');
+  const meshInput = document.getElementById('mesh-upload');
+  if (importMeshBtn && meshInput) {
+    importMeshBtn.addEventListener('click', () => meshInput.click());
+    meshInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        try {
+          const result = parseMSH(evt.target.result);
+          ImportedMeshState.active = true;
+          ImportedMeshState.filename = file.name;
+          ImportedMeshState.vertices = result.vertices;
+          ImportedMeshState.indices = result.indices;
+          ImportedMeshState.physicalTags = result.physicalTags;
+          ImportedMeshState.physicalNames = result.physicalNames;
+          AppEvents.emit('mesh:imported', ImportedMeshState);
+        } catch (err) {
+          console.error('MSH import failed:', err);
+          const statsEl = document.getElementById('stats');
+          if (statsEl) {
+            statsEl.innerText = `Import failed: ${err.message}`;
+          }
+        }
+      };
+      reader.readAsText(file);
+      meshInput.value = ''; // reset for re-import
+    });
+    console.log('Bound mesh import handlers');
+  } else {
+    if (!importMeshBtn) console.warn('Element import-mesh-btn not found');
+    if (!meshInput) console.warn('Element mesh-upload not found');
   }
 }
