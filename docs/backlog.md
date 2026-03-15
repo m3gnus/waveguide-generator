@@ -138,6 +138,61 @@ Implementation notes:
 - add a shared runtime-check script invoked by both installers and launchers
 - add repo-owned toolchain version files / environment spec
 
+### P2. Observation Distance Measurement Origin
+
+The BEM solver measures observation distance from the throat disc centroid (`source_center` in `infer_observation_frame`), but the correct origin may be the mouth plane. At 2m distance, the throat-vs-mouth offset (~120mm) introduces ~6% error. At near-field (0.5m), error reaches ~20%.
+
+The mouth center is already computed in `infer_observation_frame` (line 129-131) but not used as the measurement origin.
+
+Action plan:
+- [ ] Clarify correct measurement origin: throat disc or mouth plane
+- [ ] Run test at 0.5m distance with both origins, measure directivity difference
+- [ ] If mouth plane is correct, update `infer_observation_frame` to use `mouth_center` instead of `source_center`
+- [ ] Document the measurement convention in code comments
+
+Implementation notes:
+- `server/solver/observation.py` (`infer_observation_frame`)
+- `server/solver/solve_optimized.py` (line 348, `_solve_single_frequency`)
+
+### P2. Measurement Distance UI Propagation Verification
+
+The "Measurement Distance (m)" control exists in the settings but it is unclear if it properly propagates through to the BEM solver in all code paths (single-process and parallel worker).
+
+Action plan:
+- [ ] Trace measurement distance from UI control → `polarSettings.distance` → `exportABECProject()` → `_resolve_observation_distance_m()` → BEM solver
+- [ ] Verify default (2.0m) is applied when field is empty
+- [ ] Verify safe-distance clamping (distance > mesh extent) works correctly
+- [ ] Add UI feedback showing actual distance used by solver
+
+Implementation notes:
+- `src/ui/settings/simulationManagementSettings.js`
+- `src/app/exports.js` (`exportABECProject`)
+- `server/solver/observation.py` (`_resolve_observation_distance_m`)
+
+### P2. Help Tooltip — Move from Button to Label Hover
+
+Replace the `?` button tooltip with a hover tooltip on the parameter label itself, freeing the button slot for the `ƒ` formula button.
+
+Action plan:
+- [ ] Update `createLabelRow()` in `src/ui/helpAffordance.js`: set `data-help-text` on the `<label>` element, remove `createHelpTrigger()` button
+- [ ] Move `formula-info-btn` creation into the label row in `createControlRow()` (`src/ui/paramPanel.js`)
+- [ ] Update CSS: retarget tooltip `::after` from `button.control-help-trigger` to `label[data-help-text]`, add `position: relative; cursor: help`
+- [ ] Verify tooltip appears on hover and `cursor: help` provides affordance
+
+Implementation notes:
+- `src/ui/helpAffordance.js` (`createLabelRow`)
+- `src/ui/paramPanel.js` (`createControlRow`)
+- `src/style.css`
+
+### P3. Pre-Existing Test Failures
+
+10 tests currently fail (out of 46 total, as of 2026-02-10): enclosure-regression tests and gmsh-geo-builder test, plus a settings modal test expecting a `symmetry-tolerance` control.
+
+Action plan:
+- [ ] Investigate each failure: expected (known issues) or regression?
+- [ ] Update tests to match current behavior if intentional changes were made
+- [ ] Or fix code if tests reveal actual bugs
+
 ### P2. Tessellation Architecture — Geometry vs Mesh Separation
 
 The current architecture should follow a clean separation: a geometry workflow constructs geometric data, then hands it to (a) the viewport tessellation module and (b) the .msh generation module. Neither tessellation module should construct geometry — they only translate and tessellate.
