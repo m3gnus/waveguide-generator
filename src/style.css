@@ -1212,6 +1212,11 @@ button.secondary:hover:not(:disabled) {
     line-height: 1.5;
 }
 
+.settings-workspace-path-box {
+    margin: 0;
+    font-size: var(--text-xs);
+}
+
 
 /* ── 16. Formula Input ────────────────────────────────────── */
 
