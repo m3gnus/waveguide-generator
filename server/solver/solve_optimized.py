@@ -698,7 +698,12 @@ def solve_optimized(
         },
     }
 
-    observation_frame = infer_observation_frame(grid)
+    observation_origin = (
+        str(polar_config.get("observation_origin", "mouth")).strip().lower()
+        if isinstance(polar_config, dict)
+        else "mouth"
+    )
+    observation_frame = infer_observation_frame(grid, observation_origin=observation_origin)
     observation_info = resolve_safe_observation_distance(
         grid, observation_request_m, observation_frame
     )

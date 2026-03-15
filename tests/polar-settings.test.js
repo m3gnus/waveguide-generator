@@ -22,7 +22,8 @@ function makeDoc(overrides = {}) {
     'polar-inclination': { value: '45', disabled: false },
     'polar-axis-horizontal': { checked: true },
     'polar-axis-vertical': { checked: true },
-    'polar-axis-diagonal': { checked: true }
+    'polar-axis-diagonal': { checked: true },
+    'polar-observation-origin': { value: 'mouth' }
   };
 
   Object.entries(overrides).forEach(([id, patch]) => {
@@ -282,8 +283,54 @@ test('renderPolarSettingsSection builds the directivity block from polar metadat
   assert.ok(doc.getElementById('polar-angle-end'));
   assert.ok(doc.getElementById('polar-axis-horizontal'));
   assert.ok(doc.getElementById('polar-axis-diagonal'));
+  assert.ok(doc.getElementById('polar-observation-origin'));
   const section = container.children[0];
   assert.equal(section.children[0].textContent, 'Directivity Map');
   assert.match(section.children[1].textContent, /Polar planes and angular sampling/i);
   assert.equal(container.children.length, 1);
+});
+
+test('readPolarUiSettings returns observationOrigin from DOM', () => {
+  const doc = makeDoc({ 'polar-observation-origin': { value: 'throat' } });
+  const settings = readPolarUiSettings(doc);
+
+  assert.equal(settings.ok, true);
+  assert.equal(settings.observationOrigin, 'throat');
+});
+
+test('readPolarUiSettings defaults observationOrigin to mouth when element absent', () => {
+  const doc = makeDoc();
+  delete doc._elements['polar-observation-origin'];
+  const settings = readPolarUiSettings(doc);
+
+  assert.equal(settings.ok, true);
+  assert.equal(settings.observationOrigin, 'mouth');
+});
+
+test('buildPolarStatePatchForControl handles observation-origin select', () => {
+  const doc = makeDoc({ 'polar-observation-origin': { value: 'throat' } });
+  const patch = buildPolarStatePatchForControl('polar-observation-origin', {}, doc);
+
+  assert.ok(patch !== null);
+  assert.equal(patch.polarObservationOrigin, 'throat');
+});
+
+test('readPolarStateSettings includes observationOrigin in returned settings', () => {
+  const settings = readPolarStateSettings({ polarObservationOrigin: 'throat' });
+
+  assert.equal(settings.ok, true);
+  assert.equal(settings.observationOrigin, 'throat');
+});
+
+test('buildPolarStatePatchFromConfig maps observation_origin from polar config', () => {
+  const patch = buildPolarStatePatchFromConfig({}, {
+    angle_range: [0, 180, 37],
+    norm_angle: 5,
+    distance: 2,
+    inclination: 45,
+    enabled_axes: ['horizontal'],
+    observation_origin: 'throat'
+  });
+
+  assert.equal(patch.polarObservationOrigin, 'throat');
 });

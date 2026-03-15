@@ -82,8 +82,10 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
   }
 ]);
 const DIAGONAL_ANGLE_INPUT_ID = 'polar-inclination';
+const OBSERVATION_ORIGIN_SELECT_ID = 'polar-observation-origin';
 const POLAR_SETTINGS_CONTAINER_ID = 'polar-settings-container';
 const EPSILON = 1e-6;
+const VALID_OBSERVATION_ORIGINS = Object.freeze(['mouth', 'throat']);
 const DEFAULT_POLAR_UI_STATE = Object.freeze({
   angleStart: 0,
   angleEnd: 180,
@@ -91,7 +93,8 @@ const DEFAULT_POLAR_UI_STATE = Object.freeze({
   distance: 2,
   normAngle: 5,
   diagonalAngle: 45,
-  enabledAxes: [...POLAR_AXIS_ORDER]
+  enabledAxes: [...POLAR_AXIS_ORDER],
+  observationOrigin: 'mouth'
 });
 const POLAR_SECTION_METADATA = Object.freeze(
   getParameterSection('simulation', 'directivity-map') || {
@@ -161,7 +164,8 @@ function formatNumeric(value) {
 function cloneDefaultPolarUiState() {
   return {
     ...DEFAULT_POLAR_UI_STATE,
-    enabledAxes: [...DEFAULT_POLAR_UI_STATE.enabledAxes]
+    enabledAxes: [...DEFAULT_POLAR_UI_STATE.enabledAxes],
+    observationOrigin: DEFAULT_POLAR_UI_STATE.observationOrigin
   };
 }
 
@@ -181,6 +185,11 @@ function normalizeEnabledAxes(enabledAxes) {
   return normalized;
 }
 
+function normalizeObservationOrigin(value) {
+  const s = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return VALID_OBSERVATION_ORIGINS.includes(s) ? s : DEFAULT_POLAR_UI_STATE.observationOrigin;
+}
+
 function getEnabledAxesFromDom(doc) {
   const enabledAxes = [];
   POLAR_AXIS_ORDER.forEach((axis) => {
@@ -190,6 +199,12 @@ function getEnabledAxesFromDom(doc) {
     }
   });
   return enabledAxes;
+}
+
+function getObservationOriginFromDom(doc) {
+  const select = getElement(doc, OBSERVATION_ORIGIN_SELECT_ID);
+  if (!select) return DEFAULT_POLAR_UI_STATE.observationOrigin;
+  return normalizeObservationOrigin(select.value);
 }
 
 export function classifyInclinationAngle(angleDeg) {
@@ -315,6 +330,9 @@ function derivePolarUiStateFromConfig(polarConfig) {
   resolved.normAngle = toFiniteNumber(polarConfig.norm_angle, resolved.normAngle);
   resolved.diagonalAngle = toFiniteNumber(polarConfig.inclination, resolved.diagonalAngle);
   resolved.enabledAxes = normalizeEnabledAxes(polarConfig.enabled_axes);
+  if (polarConfig.observation_origin !== undefined) {
+    resolved.observationOrigin = normalizeObservationOrigin(polarConfig.observation_origin);
+  }
   return resolved;
 }
 
@@ -331,6 +349,10 @@ function applyExplicitPolarStateOverrides(resolved, params) {
 
   if (Array.isArray(params.polarEnabledAxes)) {
     resolved.enabledAxes = normalizeEnabledAxes(params.polarEnabledAxes);
+  }
+
+  if (params.polarObservationOrigin !== undefined && params.polarObservationOrigin !== null) {
+    resolved.observationOrigin = normalizeObservationOrigin(params.polarObservationOrigin);
   }
 
   return resolved;
@@ -384,7 +406,8 @@ function buildPersistedPolarStatePatch(currentParams, nextUiState) {
     polarDistance: nextUiState.distance,
     polarNormAngle: nextUiState.normAngle,
     polarDiagonalAngle: nextUiState.diagonalAngle,
-    polarEnabledAxes: [...nextUiState.enabledAxes]
+    polarEnabledAxes: [...nextUiState.enabledAxes],
+    polarObservationOrigin: nextUiState.observationOrigin
   };
   patch._blocks = mergePolarBlocks(currentParams?._blocks, buildCanonicalPolarBlockMap(nextUiState));
   return patch;
@@ -396,6 +419,34 @@ export function resolvePolarUiState(params = {}) {
     ? derivePolarUiStateFromBlocks(params._blocks)
     : resolved;
   return applyExplicitPolarStateOverrides(withBlocks, params);
+}
+
+function appendPolarSelectRow(section, { id, label, help, options, defaultValue }, doc) {
+  const row = doc.createElement('div');
+  row.className = 'input-row';
+
+  const { row: labelRow } = createLabelRow(doc, {
+    labelText: label,
+    htmlFor: id,
+    helpText: help
+  });
+  row.appendChild(labelRow);
+
+  const select = doc.createElement('select');
+  select.id = id;
+
+  options.forEach(({ value, text }) => {
+    const opt = doc.createElement('option');
+    opt.value = value;
+    opt.textContent = text;
+    if (value === defaultValue) {
+      opt.selected = true;
+    }
+    select.appendChild(opt);
+  });
+
+  row.appendChild(select);
+  section.appendChild(row);
 }
 
 function appendPolarNumberRow(section, field, doc) {
@@ -502,6 +553,17 @@ export function renderPolarSettingsSection(doc = document) {
   appendPolarAxisRow(section, doc);
   appendPolarNumberRow(section, getNumericFieldById(DIAGONAL_ANGLE_INPUT_ID), doc);
 
+  appendPolarSelectRow(section, {
+    id: OBSERVATION_ORIGIN_SELECT_ID,
+    label: 'Measurement Origin',
+    help: 'Reference point for observation distance. Mouth (default, IEC 60268-5) measures from the radiating aperture. Throat measures from the driver position.',
+    options: [
+      { value: 'mouth', text: 'Mouth (default)' },
+      { value: 'throat', text: 'Throat' }
+    ],
+    defaultValue: DEFAULT_POLAR_UI_STATE.observationOrigin
+  }, doc);
+
   container.appendChild(section);
   return section;
 }
@@ -552,6 +614,14 @@ export function applyPolarUiStateToDom(uiState, doc = document) {
   });
 
   applyPolarSelectionToDom(uiState, doc);
+
+  const originSelect = getElement(doc, OBSERVATION_ORIGIN_SELECT_ID);
+  if (originSelect) {
+    const nextOrigin = normalizeObservationOrigin(uiState.observationOrigin);
+    if (originSelect.value !== nextOrigin) {
+      originSelect.value = nextOrigin;
+    }
+  }
 }
 
 export function syncPolarControlsFromBlocks(blocks, doc = document) {
@@ -580,6 +650,7 @@ export function readPolarUiSettings(doc = document) {
   const normAngle = readNumberInput(doc, 'polar-norm-angle', 5);
   const diagonalAngle = readNumberInput(doc, DIAGONAL_ANGLE_INPUT_ID, 45);
   const enabledAxes = getEnabledAxesFromDom(doc);
+  const observationOrigin = getObservationOriginFromDom(doc);
 
   if (enabledAxes.length === 0) {
     return {
@@ -595,7 +666,8 @@ export function readPolarUiSettings(doc = document) {
     distance,
     normAngle,
     diagonalAngle,
-    enabledAxes
+    enabledAxes,
+    observationOrigin
   };
 }
 
@@ -617,12 +689,13 @@ export function readPolarStateSettings(params = {}) {
     distance: uiState.distance,
     normAngle: uiState.normAngle,
     diagonalAngle: uiState.diagonalAngle,
-    enabledAxes: [...uiState.enabledAxes]
+    enabledAxes: [...uiState.enabledAxes],
+    observationOrigin: uiState.observationOrigin
   };
 }
 
 export function isPolarControlId(id) {
-  return Boolean(getNumericFieldById(id) || isPolarAxisControlId(id));
+  return Boolean(getNumericFieldById(id) || isPolarAxisControlId(id) || id === OBSERVATION_ORIGIN_SELECT_ID);
 }
 
 export function buildPolarStatePatchForControl(id, currentParams = {}, doc = document) {
@@ -636,6 +709,8 @@ export function buildPolarStatePatchForControl(id, currentParams = {}, doc = doc
     nextUiState[numericField.uiKey] = readNumberInput(doc, numericField.id, nextUiState[numericField.uiKey]);
   } else if (isPolarAxisControlId(id)) {
     nextUiState.enabledAxes = getEnabledAxesFromDom(doc);
+  } else if (id === OBSERVATION_ORIGIN_SELECT_ID) {
+    nextUiState.observationOrigin = getObservationOriginFromDom(doc);
   }
 
   return buildPersistedPolarStatePatch(currentParams, nextUiState);

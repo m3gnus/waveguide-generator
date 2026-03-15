@@ -560,7 +560,8 @@ export async function runSimulation(panel) {
     norm_angle: polarSettings.normAngle,
     distance: polarSettings.distance,
     inclination: polarSettings.diagonalAngle,
-    enabled_axes: polarSettings.enabledAxes
+    enabled_axes: polarSettings.enabledAxes,
+    observation_origin: polarSettings.observationOrigin
   };
 
   // Validate settings
