@@ -170,11 +170,11 @@ Desired behavior:
 - If the user is on Chrome/Edge and folder selection is supported, the existing `showDirectoryPicker` flow continues as-is.
 
 Action plan:
-- [ ] Add a backend endpoint `GET /api/workspace/path` that returns the absolute path of the current output folder (defaulting to `{repo_root}/output`).
-- [ ] Add a backend endpoint `POST /api/workspace/open` that opens the folder in the OS file manager (`open` on macOS, `explorer` on Windows, `xdg-open` on Linux) via subprocess.
-- [ ] Set a hardcoded default output folder of `{repo_root}/output` so there is always a path to display, even before the user has selected anything.
-- [ ] Replace the `window.prompt()` fallback in `src/ui/fileOps.js` / `folderWorkspace.js` with a proper dialog/panel that: shows the current absolute path, has an "Open in Finder" button wired to the backend endpoint, and explains the Firefox limitation clearly.
-- [ ] In the Settings modal, when `supportsFolderSelection()` is false, show the path display + Finder button + explanation instead of a disabled button with generic help text.
+- [x] Add a backend endpoint `GET /api/workspace/path` that returns the absolute path of the current output folder (defaulting to `{repo_root}/output`).
+- [x] Add a backend endpoint `POST /api/workspace/open` that opens the folder in the OS file manager (`open` on macOS, `explorer` on Windows, `xdg-open` on Linux) via subprocess.
+- [x] Set a hardcoded default output folder of `{repo_root}/output` so there is always a path to display, even before the user has selected anything.
+- [x] Replace the `window.prompt()` fallback in `src/ui/fileOps.js` / `folderWorkspace.js` with a proper dialog/panel that: shows the current absolute path, has an "Open in Finder" button wired to the backend endpoint, and explains the Firefox limitation clearly.
+- [x] In the Settings modal, when `supportsFolderSelection()` is false, show the path display + Finder button + explanation instead of a disabled button with generic help text.
 
 Implementation notes:
 - `src/ui/workspace/folderWorkspace.js`
