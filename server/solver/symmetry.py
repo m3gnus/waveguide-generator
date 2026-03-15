@@ -119,6 +119,28 @@ def build_symmetry_policy(
     }
 
 
+def _symmetry_from_quadrants(
+    quadrants: object,
+) -> Tuple[SymmetryType, List[SymmetryPlane]]:
+    """Derive symmetry type and planes from the Mesh.Quadrants parameter.
+
+    Quadrant values follow the ATH/frontend convention:
+      '1'    → quarter-symmetry (both XZ and YZ planes)
+      '12'   → half-symmetry about X=0 (YZ plane)
+      '14'   → half-symmetry about Z=0 (XY plane)
+      '1234' → full model (no symmetry)
+    """
+    q = str(quadrants).strip()
+    if q == "1":
+        return SymmetryType.QUARTER_XZ, [SymmetryPlane.YZ, SymmetryPlane.XY]
+    if q == "12":
+        return SymmetryType.HALF_X, [SymmetryPlane.YZ]
+    if q == "14":
+        return SymmetryType.HALF_Z, [SymmetryPlane.XY]
+    # '1234' or any unrecognised value → full model
+    return SymmetryType.FULL, []
+
+
 def evaluate_symmetry_policy(
     *,
     vertices: Optional[np.ndarray],
@@ -127,6 +149,7 @@ def evaluate_symmetry_policy(
     throat_elements: Optional[np.ndarray],
     enable_symmetry: bool,
     tolerance: float = 1e-3,
+    quadrants: Optional[object] = None,
 ) -> Dict[str, object]:
     if not enable_symmetry:
         return {
@@ -148,7 +171,26 @@ def evaluate_symmetry_policy(
             "symmetry_info": None,
         }
 
-    symmetry_type, symmetry_planes = detect_geometric_symmetry(vertices, tolerance=tolerance)
+    # --- Parameter-driven symmetry detection (O(1)) ---
+    # When the quadrants parameter is available, use it directly instead of
+    # the O(N²) vertex-matching heuristic which always fails on OCC meshes
+    # because free meshing does not produce mirror-symmetric vertices.
+    if quadrants is not None:
+        symmetry_type, symmetry_planes = _symmetry_from_quadrants(quadrants)
+        logger.info(
+            "[Symmetry] Parameter-driven detection: quadrants=%s → %s, planes=%s",
+            quadrants, symmetry_type.value,
+            [p.value for p in symmetry_planes],
+        )
+    else:
+        # Legacy fallback: vertex-based detection (kept for non-OCC paths)
+        symmetry_type, symmetry_planes = detect_geometric_symmetry(vertices, tolerance=tolerance)
+        logger.info(
+            "[Symmetry] Vertex-based detection (legacy): %s, planes=%s",
+            symmetry_type.value,
+            [p.value for p in symmetry_planes],
+        )
+
     base_policy = build_symmetry_policy(
         requested=True,
         reason="no_geometric_symmetry",

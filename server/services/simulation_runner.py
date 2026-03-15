@@ -68,13 +68,15 @@ def _finalize_cancelled_job(
     )
 
 
-def _require_occ_adaptive_full_domain_quadrants(validated_payload: dict[str, Any]) -> int:
-    quadrants = int(validated_payload.get("quadrants", 1234))
-    if quadrants != 1234:
-        raise ValueError(
-            "Queued occ_adaptive solve request must already use full-domain quadrants=1234."
-        )
-    return quadrants
+def _resolve_occ_adaptive_quadrants(validated_payload: dict[str, Any]) -> int:
+    """Extract the quadrants value from the validated OCC adaptive payload.
+
+    Previously this enforced ``quadrants == 1234`` and raised ``ValueError``
+    for any other value.  The enforcement has been removed: the OCC builder
+    still builds full geometry, but the solver now applies symmetry reduction
+    via BEM boundary conditions based on the quadrants parameter.
+    """
+    return int(validated_payload.get("quadrants", 1234))
 
 
 def _extract_occ_adaptive_canonical_mesh(
@@ -204,7 +206,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             validated = WaveguideParamsRequest(**waveguide_params)
             validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
-            queued_quadrants = _require_occ_adaptive_full_domain_quadrants(validated_payload)
+            queued_quadrants = _resolve_occ_adaptive_quadrants(validated_payload)
             occ_result = build_waveguide_mesh(
                 validated_payload,
                 include_canonical=True,

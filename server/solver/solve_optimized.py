@@ -609,6 +609,12 @@ def solve_optimized(
             logger.info("SYMMETRY DETECTION")
             logger.info("=" * 70)
         try:
+            # Extract quadrants from mesh metadata for parameter-driven
+            # symmetry detection (O(1) vs O(N²) vertex matching).
+            _quadrants = (mesh_metadata or {}).get(
+                "requestedQuadrants",
+                (mesh_metadata or {}).get("effectiveQuadrants"),
+            )
             symmetry_result = evaluate_symmetry_policy(
                 vertices=original_vertices,
                 indices=original_indices,
@@ -616,6 +622,7 @@ def solve_optimized(
                 throat_elements=throat_elements,
                 enable_symmetry=enable_symmetry,
                 tolerance=symmetry_tolerance,
+                quadrants=_quadrants,
             )
             symmetry_policy = symmetry_result["policy"]
             symmetry_info = symmetry_result["symmetry"]

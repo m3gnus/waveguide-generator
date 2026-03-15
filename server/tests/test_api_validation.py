@@ -294,7 +294,9 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(result["job_id"], job_id)
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
-        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
+        # quadrants is no longer forced to 1234 — the original value is
+        # preserved so the solver can apply parameter-driven symmetry reduction.
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
 
     def test_occ_adaptive_accepts_rosse_b_expression(self):
         request = SimulationRequest(
@@ -483,14 +485,29 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "occ_adaptive BEM build must preserve wall_thickness (outer wall is part of BEM mesh).",
         )
 
-    def test_occ_adaptive_rejects_non_full_domain_queued_request(self):
+    def test_occ_adaptive_accepts_non_full_domain_quadrants(self):
+        """Non-1234 quadrants are accepted — the OCC builder builds full geometry
+        and the solver applies symmetry reduction via BEM boundary conditions."""
         request = self._make_occ_adaptive_request({"quadrants": 14})
+
+        fake_occ_result = {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 5, "elementCount": 4},
+            "canonical_mesh": {
+                "vertices": [0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0, 0.5, 0.5, 0.5, 0],
+                "indices": [0, 1, 2, 1, 2, 3, 2, 3, 4, 0, 2, 4],
+                "surfaceTags": [1, 1, 2, 1],
+                "metadata": {},
+            },
+        }
 
         class MockSolver:
             def prepare_mesh(self, *args, **kwargs):
-                raise AssertionError("prepare_mesh must not run for invalid queued quadrants")
+                return {"grid": None, "surface_tags": None}
+            def solve(self, *args, **kwargs):
+                return {"frequencies": [100.0], "directivity": {}}
 
-        job_id = "test-occ-quadrants-rejected"
+        job_id = "test-occ-quadrants-accepted"
         _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
@@ -500,12 +517,18 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                 "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
             ), patch(
                 "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
-            ), patch("services.simulation_runner.build_waveguide_mesh") as build_mesh:
+            ), patch(
+                "services.simulation_runner.build_waveguide_mesh",
+                return_value=fake_occ_result,
+            ) as build_mesh, patch(
+                "services.simulation_runner.db"
+            ):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
 
-            build_mesh.assert_not_called()
-            self.assertEqual(_jrt.jobs[job_id]["status"], "error")
-            self.assertIn("quadrants=1234", _jrt.jobs[job_id]["error_message"])
+            build_mesh.assert_called_once()
+            # The job should not be in error state — non-1234 quadrants are allowed now.
+            self.assertNotEqual(_jrt.jobs[job_id].get("status"), "error",
+                "Non-1234 quadrants should be accepted for occ_adaptive path")
         finally:
             _jrt.jobs.pop(job_id, None)
 
