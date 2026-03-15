@@ -1849,6 +1849,8 @@ def _configure_mesh_size(
     Throat disc: constant throat_res.
     Rear wall (free-standing only): constant rear_res.
     Enclosure: continuous front/back bilinear corner interpolation over x/y/z.
+    Enclosure edges (roundovers/chamfers): explicit enclosure resolution to
+        prevent inheriting finer horn sizing via shared boundary curves.
     """
     fields: List[int] = []
     z_throat = float(np.mean(inner_points[:, 0, 2]))
@@ -1983,6 +1985,17 @@ def _configure_mesh_size(
         )
         if enclosure_field:
             fields.append(enclosure_field)
+
+        # Explicit field for enclosure roundover/chamfer edges so they use
+        # enclosure resolution rather than inheriting finer horn sizing via
+        # shared boundary curves in the Min field.
+        enc_edge_field = add_restricted_matheval(
+            enclosure_formula,
+            surface_groups.get("enclosure_edges", []),
+            curve_groups.get("enclosure_edges", []),
+        )
+        if enc_edge_field:
+            fields.append(enc_edge_field)
     else:
         # Fallback for partial/no-enclosure metadata in reduced-domain modes.
         side_field = add_restricted_matheval(
@@ -1992,6 +2005,15 @@ def _configure_mesh_size(
         )
         if side_field:
             fields.append(side_field)
+
+        # Explicit field for enclosure edges in fallback mode.
+        edge_field = add_restricted_matheval(
+            f"{mouth_res:.6g}",
+            surface_groups.get("enclosure_edges", []),
+            curve_groups.get("enclosure_edges", []),
+        )
+        if edge_field:
+            fields.append(edge_field)
 
     if fields:
         f_min = gmsh.model.mesh.field.add("Min")
