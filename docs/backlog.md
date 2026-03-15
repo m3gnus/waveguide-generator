@@ -233,10 +233,56 @@ Audit status (March 14, 2026):
 - The JS viewport path (`buildWaveguideMesh.js`) also combines geometry computation with Three.js mesh construction.
 - Both paths independently compute the same horn geometry from the same parameters — no shared geometric representation.
 
+#### Geometry/mesh boundary analysis (March 15, 2026)
+
+**Python OCC path (`server/solver/waveguide_builder.py`)**
+
+Geometry layer (pure computation, no Gmsh calls):
+- `_compute_rosse_profile` / `_compute_osse_profile_arrays` — evaluate the axial (x) and radial (y) profile at each (t, phi) sample.
+- `_apply_morph` / `_compute_morph_target_info` — apply morph transformation to the radial coordinate.
+- `_compute_outer_points` — offset inner surface by wall_thickness in the 2D profile plane.
+- `_compute_point_grids` — the top-level geometry function. Takes the full params dict and returns `inner_points` (n_phi × n_length+1 × 3) and optionally `outer_points` (same shape). This is the geometry layer's output contract.
+
+Meshing layer (everything that calls into `gmsh.model.occ.*`):
+- Begins immediately after `_compute_point_grids` returns. `_build_surface_from_points` converts the point grid into BSpline surface patches using Gmsh OCC. All subsequent helpers (`_make_wire`, `_build_throat_disc_from_inner_boundary`, `_build_mouth_rim_from_boundaries`, `_build_enclosure_box`, `_build_rear_disc_assembly`, etc.) are Gmsh API calls only.
+- The `build_waveguide_mesh` public entry point (not shown above, ~line 1700+) calls `_compute_point_grids`, then immediately invokes the Gmsh construction functions — there is no intermediate data hand-off.
+
+**JS viewport path (`src/geometry/engine/`)**
+
+Geometry layer:
+- `src/geometry/engine/profiles/osse.js` (`calculateOSSE`) and `profiles/rosse.js` (`calculateROSSE`) — evaluate the 2D cross-section profile `{x, y}` at a given axial position `t` and azimuthal angle `p`.
+- `src/geometry/engine/mesh/horn.js` (`evaluateInnerProfileAt`, `computeMouthExtents`, `buildMorphTargets`) — evaluate profiles and precompute morph extents. Also `createRingVertices` and `createAdaptiveRingVertices` which convert (t, phi) samples to flat `vertices[]` arrays.
+- `src/geometry/engine/mesh/sliceMap.js` (`buildSliceMap`) — computes the axial slice distribution (t-values).
+
+The geometry layer's implicit output is the flat `vertices` array (packed x/y/z triples) produced by `createRingVertices` / `createAdaptiveRingVertices`. There is no named struct or class that captures this as a "geometry result" — it is produced and immediately extended with indices in `buildWaveguideMesh`.
+
+Meshing layer:
+- `createHornIndices` / `createAdaptiveFanIndices` — generate the triangle index buffer from the vertex layout. This is the tessellation step.
+- `addEnclosureGeometry` / `addFreestandingWallGeometry` — append additional vertex/index data for outer geometry.
+- `generateThroatSource` — appends the throat disc fan.
+- `orientMeshConsistently` / `validateMeshQuality` — post-processing on the completed mesh.
+- The final output is `{ vertices, indices, ringCount, fullCircle, groups }` — a Three.js-ready flat mesh.
+
+The boundary in both paths is the **point grid**: a 2D array of 3D sample points (n_phi × n_axial × 3), one per (phi, t) pair, with morph already applied. In the Python path this is explicitly named `inner_points`/`outer_points`. In the JS path it is the implicit pre-index state of `vertices[]` after `createRingVertices` returns but before `createHornIndices` runs.
+
+#### Feasibility of a shared geometry representation
+
+Not feasible as a simple shared module, for these reasons:
+
+1. **Language barrier.** The geometry is computed in JS (for the viewport) and Python (for the mesh). The profile math is already duplicated and kept in parity (OSSE/R-OSSE both exist in `profiles/osse.js` and `waveguide_builder.py`). Sharing code would require either (a) running JS in Python (impractical), (b) running Python in the browser (impractical), or (c) extracting a JSON "geometry description" that gets sent over HTTP and consumed by the other side — which turns every viewport redraw into a network round-trip.
+
+2. **Different resolution requirements.** The viewport uses `angularSegments` / `lengthSegments` (low-to-medium resolution, interactive). The BEM mesh uses `n_angular` / `n_length` (medium-to-high, controlled by solver quality settings). These are different numbers; a shared point grid would need to be generated at each path's own resolution anyway.
+
+3. **Different topology needs.** The JS path uses a flat `vertices + indices` buffer optimised for GPU upload. The Python OCC path feeds point grids into Gmsh's BSpline surface constructor — it does not consume triangle meshes. The Gmsh path needs the raw control-point grid, not a triangulated surface.
+
+4. **The existing parity is well-tested.** Both paths are kept in sync by the ATH parity test suite (`npm run test:ath`). Adding a shared layer would add complexity and a new failure mode without reducing duplication of the underlying math.
+
+**Conclusion:** The architecture is intentionally duplicated and that is appropriate given the constraints. The correct boundary to maintain is the conceptual one already present: each path independently computes a point grid from parameters, then passes it to its own tessellation/meshing step. The action items below are closed without further implementation work.
+
 Action plan:
-- [ ] Document the current geometry → mesh boundaries within each path.
-- [ ] Evaluate whether extracting a shared geometry representation (point grids + topology description) consumed by both paths is feasible without a full rewrite.
-- [ ] If feasible, design the shared geometry contract and implement incrementally.
+- [x] Document the current geometry → mesh boundaries within each path.
+- [x] Evaluate whether extracting a shared geometry representation (point grids + topology description) consumed by both paths is feasible without a full rewrite.
+- [x] If feasible, design the shared geometry contract and implement incrementally. — **Not feasible (see analysis above). Closed.**
 
 ### ~~P3. Remove Simulation Jobs Refresh Button~~ — Done (2026-03-15)
 
