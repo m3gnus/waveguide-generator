@@ -214,7 +214,7 @@ Action plan:
 - [x] Trace and verify full propagation: UI → state → HTTP → solver (all correct)
 - [x] Verify default (2.0m) applied when field is empty (correct)
 - [x] Verify safe-distance clamping works (correct)
-- [ ] Show effective distance in the View Results modal (read from `results.metadata.observation`). Display any clamping warning when the solver adjusted the distance.
+- [x] Show effective distance in the View Results modal (read from `results.metadata.observation`). Display any clamping warning when the solver adjusted the distance.
 
 Implementation notes:
 - `src/ui/simulation/viewResults.js` (display effective distance + clamping warning)
