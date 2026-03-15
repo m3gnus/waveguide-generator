@@ -67,11 +67,11 @@ Action plan:
 - [x] Clarify correct measurement origin — decided: mouth plane as default.
 - [x] Update `infer_observation_frame` to use `mouth_center` as default origin.
 - [x] Document the measurement convention in code comments.
-- [ ] Add `observation_origin` field to `PolarConfig` in `server/contracts/__init__.py` (values: `"mouth"` | `"throat"`, default `"mouth"`).
-- [ ] Thread `observation_origin` through `solve_optimized.py` → `infer_observation_frame`.
-- [ ] Make `infer_observation_frame` select `mouth_center` or `source_center` based on the parameter.
-- [ ] Add a "Measurement Origin" select control to polar settings UI (`polarSettings.js`).
-- [ ] Add tooltip: "Reference point for observation distance. Mouth (default, IEC 60268-5) or Throat."
+- [x] Add `observation_origin` field to `PolarConfig` in `server/contracts/__init__.py` (values: `"mouth"` | `"throat"`, default `"mouth"`).
+- [x] Thread `observation_origin` through `solve_optimized.py` → `infer_observation_frame`.
+- [x] Make `infer_observation_frame` select `mouth_center` or `source_center` based on the parameter.
+- [x] Add a "Measurement Origin" select control to polar settings UI (`polarSettings.js`).
+- [x] Add tooltip: "Reference point for observation distance. Mouth (default, IEC 60268-5) or Throat."
 - [ ] Run test at 0.5m with both origins, verify results differ as expected.
 
 Implementation notes:
@@ -96,7 +96,7 @@ Action plan:
 - [x] Remove `enable_symmetry` toggle from the Settings modal UI.
 - [x] Remove the `enable_symmetry: false` hardcode in `src/solver/index.js` line 266 (no longer needed once the toggle is gone).
 - [x] Audit each remaining active setting end-to-end: UI control → localStorage → API contract → backend solver.
-- [ ] Defer `symmetryTolerance` UI control until the P1 Symmetry Performance work is complete.
+- [x] Defer `symmetryTolerance` UI control until the P1 Symmetry Performance work is complete. (Confirmed: getter exists with default 0.001, no UI control needed until symmetry is working.)
 - [x] Review `verbose` default — consider defaulting to `false`.
 - [x] Either implement or remove the "Planned Controls" stubs (GMRES params, strong-form preconditioner).
 - [x] Ensure every active setting has a tooltip explaining what it does, what changes when you raise/lower it, and what the recommended default is.
