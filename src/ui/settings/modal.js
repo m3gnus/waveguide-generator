@@ -40,7 +40,6 @@ import {
   describeSimBasicDeviceAvailability,
   fetchRuntimeHealth,
   getCachedRuntimeHealth,
-  summarizeRuntimeCapabilities,
 } from '../runtimeCapabilities.js';
 import { createHelpTrigger } from '../helpAffordance.js';
 import {
@@ -106,36 +105,11 @@ const ADVANCED_CONTROL_COPY = Object.freeze({
     label: 'BEM Precision',
     help: 'Single precision is faster; double precision is more accurate. Only applies to the optimized solve path.'
   },
-  method: {
-    label: 'Linear Solver Method',
-    help: 'Override the iterative solver method (e.g. GMRES). Not yet active.'
-  },
-  tol: {
-    label: 'Linear Solver Tolerance',
-    help: 'Override the convergence tolerance for iterative solving. Not yet active.'
-  },
-  restart: {
-    label: 'GMRES Restart',
-    help: 'Override the GMRES restart window size. Not yet active.'
-  },
-  maxiter: {
-    label: 'Max Iterations',
-    help: 'Override the maximum number of solver iterations. Not yet active.'
-  },
-  strong_form: {
-    label: 'Strong-form Preconditioner',
-    help: 'Override the preconditioner policy for solver tuning. Not yet active.'
-  },
   use_burton_miller: {
     label: 'Burton-Miller Coupling',
     help: 'Uses the Burton-Miller formulation for better high-frequency accuracy and fewer spurious solutions.'
   },
 });
-const ACTIVE_ADVANCED_CONTROL_IDS = Object.freeze([
-  'enable_warmup',
-  'bem_precision',
-  'use_burton_miller',
-]);
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
   { key: 'simulation', label: 'Simulation' },
@@ -726,7 +700,7 @@ function _buildSimulationSection() {
   _appendSectionHeading(
     sec,
     'Simulation',
-    'Persistent solve defaults live here. Advanced controls apply to the optimized solver path, while GMRES precision work stays separated until product defines it.'
+    'Persistent solve defaults live here. Advanced controls apply to the optimized solver path only.'
   );
 
   const currentSimBasic = getCurrentSimBasicSettings();
@@ -825,7 +799,7 @@ function _buildSimulationSection() {
   const currentSimAdvanced = getCurrentSimAdvancedSettings();
   const advancedIntro = document.createElement('p');
   advancedIntro.className = 'settings-section-help';
-  advancedIntro.textContent = 'These settings are sent through the public solve contract today. GMRES method, restart, tolerance, max-iteration, and explicit strong-form policy remain planned-only.';
+  advancedIntro.textContent = 'These settings apply to the optimized solver path only. All three controls are active and sent through the public solve contract.';
   sec.appendChild(advancedIntro);
 
   const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
@@ -875,20 +849,6 @@ function _buildSimulationSection() {
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
-
-  const status = document.createElement('p');
-  status.id = 'simadvanced-capability-status';
-  status.className = 'settings-placeholder-text';
-  status.textContent = 'Checking backend capability...';
-  sec.appendChild(status);
-
-  const plannedHeader = _buildSubSectionHeader('Still Planned');
-  sec.appendChild(plannedHeader);
-
-  const advancedControls = document.createElement('div');
-  advancedControls.id = 'simadvanced-planned-controls';
-  sec.appendChild(advancedControls);
-  _renderSimAdvancedControls(advancedControls);
 
   const cachedHealth = getCachedRuntimeHealth();
   if (cachedHealth) {
@@ -1231,36 +1191,6 @@ function _buildSimulationExportFormatsRow(managementSettings) {
   return exportFormatsRow;
 }
 
-function _renderSimAdvancedControls(
-  container,
-  plannedControls = Object.keys(ADVANCED_CONTROL_COPY).filter(
-    (controlId) => !ACTIVE_ADVANCED_CONTROL_IDS.includes(controlId)
-  )
-) {
-  if (!container) return;
-  container.innerHTML = '';
-
-  plannedControls.forEach((controlId) => {
-    const copy = ADVANCED_CONTROL_COPY[controlId];
-    if (!copy) return;
-
-    const row = document.createElement('div');
-    row.className = 'settings-action-row';
-
-    const control = document.createElement('input');
-    control.type = 'text';
-    control.disabled = true;
-    control.value = 'Backend capability required';
-    row.appendChild(control);
-
-    const label = document.createElement('p');
-    label.className = 'settings-action-help';
-    label.textContent = `${copy.label}: ${copy.help}`;
-    row.appendChild(label);
-
-    container.appendChild(row);
-  });
-}
 
 function _buildSystemSection(viewerRuntime) {
   const sec = document.createElement('div');
@@ -1357,32 +1287,9 @@ function _applySimBasicDeviceAvailability(health) {
   statusEl.textContent = availability.statusText;
 }
 
-function _applySimAdvancedCapabilityState(health) {
-  const doc = _getDocument();
-  if (!doc) return;
-
-  const statusEl = doc.getElementById('simadvanced-capability-status');
-  const controlsEl = doc.getElementById('simadvanced-planned-controls');
-  if (!statusEl) return;
-
-  const runtime = summarizeRuntimeCapabilities(health);
-  if (controlsEl) {
-    _renderSimAdvancedControls(
-      controlsEl,
-      runtime.simulationAdvanced.plannedControls.length > 0
-        ? runtime.simulationAdvanced.plannedControls
-        : Object.keys(ADVANCED_CONTROL_COPY).filter(
-          (controlId) => !ACTIVE_ADVANCED_CONTROL_IDS.includes(controlId)
-        )
-    );
-  }
-  statusEl.textContent = runtime.simulationAdvanced.available
-    ? (
-      runtime.simulationAdvanced.controls.length > 0
-        ? `Backend exposes: ${runtime.simulationAdvanced.controls.join(', ')}. ${runtime.simulationAdvanced.reason}`
-        : runtime.simulationAdvanced.reason
-    )
-    : runtime.simulationAdvanced.reason;
+function _applySimAdvancedCapabilityState(_health) {
+  // No-op: planned controls section removed. The three active advanced controls
+  // (enable_warmup, bem_precision, use_burton_miller) are always shown unconditionally.
 }
 
 async function _refreshSimulationCapabilityState() {
