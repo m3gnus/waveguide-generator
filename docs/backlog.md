@@ -238,24 +238,14 @@ Action plan:
 - [ ] Evaluate whether extracting a shared geometry representation (point grids + topology description) consumed by both paths is feasible without a full rewrite.
 - [ ] If feasible, design the shared geometry contract and implement incrementally.
 
-### P3. Remove Simulation Jobs Refresh Button
+### ~~P3. Remove Simulation Jobs Refresh Button~~ — Done (2026-03-15)
 
-The manual "Refresh" button in the simulation jobs panel header (`id="refresh-jobs-btn"`) may no longer be needed, since auto-refresh already covers the primary scenarios: app startup (`SimulationPanel` constructor calls `restoreJobs()`) and folder change (via `ui:folder-workspace-changed` event → `panel.refreshJobFeed()`).
+Decision: keep but reduce to icon-only. The connection poller (`checkSolverConnection`, 10 s interval) does NOT trigger `refreshJobFeed`, so the edge cases (backend restart, external file changes, other browser sessions) remain realistic. Removed the text label; the button is now a small ↻ icon at 55% opacity, full opacity on hover/focus.
 
-Remaining edge cases where manual refresh could still be useful:
-- Jobs created in another browser session or by an external tool, without a folder change event being fired.
-- Folder contents modified externally (e.g. backend wrote a manifest file outside the watched event).
-- Recovery after a backend restart or transient network error that left the auto-polling in a failed state.
+- [x] Confirm whether any of the above edge cases are realistic user scenarios — yes, connection poller does not call `refreshJobFeed`.
+- [x] If keeping: move to a less prominent position (icon-only, lower visual weight) — done via `.button-icon-only` CSS class.
 
-Action plan:
-- [ ] Confirm whether any of the above edge cases are realistic user scenarios (e.g. does the backend auto-reconnect path already trigger a refresh?).
-- [ ] If the edge cases are covered or negligible: remove `id="refresh-jobs-btn"` from `index.html` and the corresponding listener in `src/ui/simulation/events.js`.
-- [ ] If keeping: move to a less prominent position (e.g. icon-only, lower visual weight) so it does not imply the panel does not auto-refresh.
-
-Implementation notes:
-- `index.html` (button element)
-- `src/ui/simulation/events.js` (listener)
-- `src/ui/simulation/SimulationPanel.js` (`refreshJobFeed`)
+Files changed: `index.html`, `src/style.css`.
 
 ### P3. Symmetry Runtime Truth and Operator Control Follow-Through
 
