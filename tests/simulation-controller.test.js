@@ -529,7 +529,6 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     frequencySpacing: 'log',
     deviceMode: 'auto',
     useOptimized: true,
-    enableSymmetry: true,
     verbose: false,
     polarConfig: {}
   };

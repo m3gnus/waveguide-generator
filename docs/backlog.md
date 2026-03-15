@@ -46,7 +46,7 @@ Action plan:
 - [ ] Profile a half-model vs full-model solve: break down time by phase (geometry build, mesh gen, BEM operator assembly, linear solve, post-processing).
 - [ ] Verify that a quadrant-controlled geometry actually produces a proportionally smaller BEM matrix (fewer DOF) after the full pipeline.
 - [ ] Remove or replace the O(N²) vertex-matching detection with a geometry-parameter-driven policy that costs O(1) since the quadrant count is already known.
-- [ ] Remove the `enable_symmetry: false` override in `src/solver/index.js` line 266 once the approach is proven correct.
+- [x] Remove the `enable_symmetry: false` override in `src/solver/index.js` line 266 once the approach is proven correct.
 - [ ] Remove the `quadrants == 1234` enforcement in `simulation_runner.py` once the half/quarter mesh path is validated.
 - [ ] A/B test: half-model vs full-model on a known-symmetric config — results must match within 0.5 dB across all angles, and half-model must be measurably faster.
 - [ ] Add committed ATH reference fixtures for reproducible regression testing.
@@ -88,8 +88,8 @@ Issues identified:
 - "Planned Controls" stubs (GMRES params) show in Advanced modal but are not implemented on the backend.
 
 Action plan:
-- [ ] Remove `enable_symmetry` toggle from the Settings modal UI.
-- [ ] Remove the `enable_symmetry: false` hardcode in `src/solver/index.js` line 266 (no longer needed once the toggle is gone).
+- [x] Remove `enable_symmetry` toggle from the Settings modal UI.
+- [x] Remove the `enable_symmetry: false` hardcode in `src/solver/index.js` line 266 (no longer needed once the toggle is gone).
 - [ ] Audit each remaining active setting end-to-end: UI control → localStorage → API contract → backend solver.
 - [ ] Defer `symmetryTolerance` UI control until the P1 Symmetry Performance work is complete.
 - [ ] Review `verbose` default — consider defaulting to `false`.

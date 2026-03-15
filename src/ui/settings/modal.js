@@ -90,7 +90,6 @@ const SIMULATION_BASIC_HELP = Object.freeze({
   meshValidationMode: 'Controls whether mesh validation blocks or only warns before submitting a solve.',
   frequencySpacing: 'Controls how solved frequencies are distributed between the sweep start and end values.',
   useOptimized: 'Enables the faster solve path when available.',
-  enableSymmetry: 'Reduces solve time by exploiting geometry symmetry when possible.',
   verbose: 'Shows detailed solver output in job progress and server logs.'
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
@@ -270,7 +269,6 @@ function _buildModal(viewerRuntime) {
       settings.meshValidationMode = document.getElementById('simbasic-meshValidationMode')?.value ?? settings.meshValidationMode;
       settings.frequencySpacing = document.getElementById('simbasic-frequencySpacing')?.value ?? settings.frequencySpacing;
       settings.useOptimized = document.getElementById('simbasic-useOptimized')?.checked ?? settings.useOptimized;
-      settings.enableSymmetry = document.getElementById('simbasic-enableSymmetry')?.checked ?? settings.enableSymmetry;
       settings.verbose = document.getElementById('simbasic-verbose')?.checked ?? settings.verbose;
       saveSimBasicSettings(settings);
     }
@@ -742,15 +740,12 @@ function _buildSimulationSection() {
     if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
     const uo = document.getElementById('simbasic-useOptimized');
     if (uo) uo.checked = SIM_BASIC_DEFAULTS.useOptimized;
-    const es = document.getElementById('simbasic-enableSymmetry');
-    if (es) es.checked = SIM_BASIC_DEFAULTS.enableSymmetry;
     const vb = document.getElementById('simbasic-verbose');
     if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
     if (dmBadge) dmBadge.hidden = true;
     if (mvmBadge) mvmBadge.hidden = true;
     if (fsBadge) fsBadge.hidden = true;
     if (uoBadge) uoBadge.hidden = true;
-    if (esBadge) esBadge.hidden = true;
     if (vbBadge) vbBadge.hidden = true;
   });
   sec.appendChild(solverHeader);
@@ -813,16 +808,6 @@ function _buildSimulationSection() {
   );
   sec.appendChild(uoResult.row);
   let uoBadge = uoResult.badge;
-
-  const esResult = _buildSimBasicCheckboxRow(
-    'Allow Symmetry Reduction',
-    'simbasic-enableSymmetry',
-    currentSimBasic.enableSymmetry,
-    SIM_BASIC_DEFAULTS.enableSymmetry,
-    SIMULATION_BASIC_HELP.enableSymmetry
-  );
-  sec.appendChild(esResult.row);
-  let esBadge = esResult.badge;
 
   const vbResult = _buildSimBasicCheckboxRow(
     'Verbose Backend Logging',
