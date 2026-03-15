@@ -1,6 +1,6 @@
 ---
 name: backlog-organize
-description: Review and reorganize docs/backlog.md — remove resolved items, reprioritize, reorder by importance/upstream-first, and update stale plans.
+description: Review and reorganize docs/backlog.md — remove resolved items, resolve blocked items by asking targeted questions, reprioritize, reorder by importance/upstream-first, and update stale plans.
 user-invokable: true
 args:
   - name: focus
@@ -39,11 +39,30 @@ For each unchecked item in the Active Backlog, spawn Explore subagents (in paral
 - **Right priority?** Has context changed (new bugs, user feedback, dependencies resolved) that should shift priority?
 - **Blocked or unblocked?** Have dependencies been resolved that previously blocked this item?
 
-### 4. Propose changes
+### 4. Resolve blocked items
+
+For items marked `[blocked]` or that need decisions before work can proceed:
+
+1. **Identify** all blocked/decision-needed items from the backlog
+2. **Research** each one — spawn subagents to gather context (what does the codebase look like now? have upstream blockers been resolved? what are the trade-offs for each option?)
+3. **Ask the user** targeted questions using AskUserQuestion. For each blocked item, present:
+   - What the item is about (brief reminder)
+   - What decision or clarification is needed
+   - Concrete options with trade-offs (informed by the research)
+   - A recommended option if one is clearly better
+4. **Update or unblock** each item based on the user's answers:
+   - If the user makes a decision → update the item's plan with the decision and remove the `[blocked]` tag
+   - If the user says it's no longer needed → mark for removal
+   - If the user needs more time → leave blocked but update the blocking reason with any new context gathered
+
+Batch related questions together to minimize back-and-forth, but don't overwhelm — group into at most 3-4 questions per ask.
+
+### 5. Propose changes
 
 Compile findings into a change summary:
 
 - **Remove**: Items that are fully resolved (move to Completed section with date)
+- **Unblock**: Items where decisions were made (show the decision)
 - **Update**: Items where the description or plan needs adjustment
 - **Reprioritize**: Items that should move up or down
 - **Reorder**: Within each priority level, order by:
@@ -51,7 +70,7 @@ Compile findings into a change summary:
   2. Impact (higher user/correctness impact first)
   3. Effort (smaller items first when impact is similar)
 
-### 5. Review with user
+### 6. Review with user
 
 Present the proposed changes to the user. For each change, briefly explain why. Ask for confirmation before applying, especially for:
 - Any item being removed (might still be wanted)
@@ -60,17 +79,18 @@ Present the proposed changes to the user. For each change, briefly explain why. 
 
 Use AskUserQuestion if there are items where the right action is genuinely ambiguous.
 
-### 6. Apply changes
+### 7. Apply changes
 
 Edit `docs/backlog.md` with all approved changes:
 - Move resolved items to the Completed section
+- Unblock items with updated plans
 - Update descriptions and plans
 - Reorder items within priority sections
 - Update the "Last updated" date
 
 Commit with message: `docs(backlog): reorganize — [brief summary of changes]`
 
-### 7. Report
+### 8. Report
 
 Summarize what changed:
 - Items removed (and why)
