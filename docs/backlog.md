@@ -67,9 +67,9 @@ The handler in `src/app/events.js` clears `ImportedMeshState` and emits `state:u
 Config import correctly calls `deriveExportFieldsFromFileName(file.name)` + `setExportFields()` to set `#export-prefix` and `#export-counter` from the loaded filename. The MSH import handler does not call these functions, so the task name used for the next simulation is whatever was set before the import, not derived from the imported filename (e.g. importing `myhorn_3.msh` should set output name to `myhorn`, counter to `3`).
 
 Action plan:
-- [ ] Fix return-to-parametric handler in `src/app/events.js`: emit `state:updated` with the current `GlobalState` value (not `null`) so `renderModel()` has valid state and rebuilds the parametric model.
-- [ ] Verify the Three.js scene is fully clean after return (no leftover imported mesh geometry or references in `app.hornMesh`).
-- [ ] In the MSH import handler (`src/app/events.js`), call `deriveExportFieldsFromFileName(file.name)` + `setExportFields()` immediately after populating `ImportedMeshState`, following the same pattern as config import in `src/app/configImport.js`.
+- [x] Fix return-to-parametric handler in `src/app/events.js`: emit `state:updated` with the current `GlobalState` value (not `null`) so `renderModel()` has valid state and rebuilds the parametric model.
+- [x] Verify the Three.js scene is fully clean after return (no leftover imported mesh geometry or references in `app.hornMesh`).
+- [x] In the MSH import handler (`src/app/events.js`), call `deriveExportFieldsFromFileName(file.name)` + `setExportFields()` immediately after populating `ImportedMeshState`, following the same pattern as config import in `src/app/configImport.js`.
 
 Implementation notes:
 - `src/app/events.js` (return-to-parametric handler, mesh import handler)
