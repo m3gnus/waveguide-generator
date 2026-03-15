@@ -45,9 +45,9 @@ Action plan:
 - [x] Decide whether to disable symmetry entirely or fix it — decided: fix.
 - [ ] Profile a half-model vs full-model solve: break down time by phase (geometry build, mesh gen, BEM operator assembly, linear solve, post-processing).
 - [ ] Verify that a quadrant-controlled geometry actually produces a proportionally smaller BEM matrix (fewer DOF) after the full pipeline.
-- [ ] Remove or replace the O(N²) vertex-matching detection with a geometry-parameter-driven policy that costs O(1) since the quadrant count is already known.
+- [x] Remove or replace the O(N²) vertex-matching detection with a geometry-parameter-driven policy that costs O(1) since the quadrant count is already known. — Done: `evaluate_symmetry_policy` now accepts a `quadrants` parameter; when provided, uses `_symmetry_from_quadrants()` (O(1)) instead of `_check_plane_symmetry()` (O(N²)). Legacy vertex-based detection kept as fallback for non-OCC paths.
 - [x] Remove the `enable_symmetry: false` override in `src/solver/index.js` line 266 once the approach is proven correct.
-- [ ] Remove the `quadrants == 1234` enforcement in `simulation_runner.py` once the half/quarter mesh path is validated.
+- [x] Remove the `quadrants == 1234` enforcement in `simulation_runner.py` once the half/quarter mesh path is validated. — Done: `_require_occ_adaptive_full_domain_quadrants` replaced with `_resolve_occ_adaptive_quadrants` (pass-through). Also removed the forced `quadrants = 1234` override in `simulation_validation.py`.
 - [ ] A/B test: half-model vs full-model on a known-symmetric config — results must match within 0.5 dB across all angles, and half-model must be measurably faster.
 - [ ] Add committed ATH reference fixtures for reproducible regression testing.
 
