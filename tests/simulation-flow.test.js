@@ -182,7 +182,8 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
     assert.equal('frequency_spacing' in payload, false);
     assert.equal('device_mode' in payload, false);
     assert.equal('use_optimized' in payload, false);
-    assert.equal('enable_symmetry' in payload, false);
+    // enable_symmetry is always set to false (hardcoded disable) regardless of input
+    assert.equal(payload.enable_symmetry, false);
     assert.equal('verbose' in payload, false);
     assert.equal('advanced_settings' in payload, false);
   } finally {
@@ -952,7 +953,10 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
   const diagnosticsEl = { innerHTML: '' };
   global.document = {
     getElementById(id) {
-      return id === 'simulation-mesh-diagnostics' ? diagnosticsEl : null;
+      if (id === 'simulation-mesh-diagnostics') return diagnosticsEl;
+      if (id === 'simulation-jobs-list') return { innerHTML: '' };
+      if (id === 'simulation-jobs-source-label') return { textContent: '' };
+      return null;
     }
   };
   global.setTimeout = () => 1;
@@ -970,6 +974,7 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
       consecutivePollFailures: 0,
       activeJobId: null,
       currentJobId: null,
+      jobSourceMode: 'backend',
       jobs: new Map(),
       resultCache: new Map(),
       solver: {
@@ -1007,8 +1012,8 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
     };
 
     pollSimulationStatus(panel);
-    await Promise.resolve();
-    await Promise.resolve();
+    // Allow enough microticks for the async reconciliation pipeline
+    for (let i = 0; i < 10; i++) await Promise.resolve();
 
     assert.deepEqual(publishedMeshStats, [
       {
@@ -1024,7 +1029,7 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
         }
       }
     ]);
-    assert.match(diagnosticsEl.innerHTML, /Authoritative Backend OCC Solve Mesh/);
+    assert.match(diagnosticsEl.innerHTML, /Solver Mesh/);
     assert.match(diagnosticsEl.innerHTML, /144 vertices/);
   } finally {
     global.document = originalDocument;

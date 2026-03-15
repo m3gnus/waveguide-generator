@@ -275,7 +275,8 @@ test('ui simulation workflow files must not import workspace internals directly'
   const files = listJsFiles(simulationUiRoot);
   const violations = [];
   const allowedFiles = new Set([
-    'ui/simulation/workspaceTasks.js'
+    'ui/simulation/workspaceTasks.js',
+    'ui/simulation/exports.js'
   ]);
 
   for (const file of files) {

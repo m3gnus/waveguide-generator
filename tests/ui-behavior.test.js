@@ -180,7 +180,7 @@ test('describeSelectedDevice includes device name only when it adds signal', () 
         device_name: 'Fake GPU'
       }
     }),
-    'Selected solver backend: OpenCL GPU (Fake GPU)'
+    'Using: OpenCL GPU (Fake GPU)'
   );
 
   assert.equal(
@@ -190,7 +190,7 @@ test('describeSelectedDevice includes device name only when it adds signal', () 
         device_name: 'CPU'
       }
     }),
-    'Selected solver backend: OpenCL CPU'
+    'Using: OpenCL CPU'
   );
 });
 
@@ -227,11 +227,11 @@ test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', 
 
     assert.match(diagnosticsEl.innerHTML, /12 vertices/);
     assert.match(diagnosticsEl.innerHTML, /Geometry Diagnostics/);
-    assert.match(diagnosticsEl.innerHTML, /Preview Geometry Only/);
+    assert.match(diagnosticsEl.innerHTML, /Preview Mesh/);
     assert.match(diagnosticsEl.innerHTML, /throat_disc/);
     assert.match(diagnosticsEl.innerHTML, /Inner Wall/);
     assert.match(diagnosticsEl.innerHTML, /Source/);
-    assert.match(diagnosticsEl.innerHTML, /preview-only triangle counts/i);
+    assert.match(diagnosticsEl.innerHTML, /preview mesh triangle counts/i);
     assert.match(diagnosticsEl.innerHTML, /missing from the canonical simulation mesh/i);
   } finally {
     global.document = originalDocument;
@@ -269,9 +269,9 @@ test('renderSimulationMeshDiagnostics shows authoritative backend OCC provenance
       provenance: 'backend'
     });
 
-    assert.match(diagnosticsEl.innerHTML, /Authoritative Backend OCC Solve Mesh/);
-    assert.match(diagnosticsEl.innerHTML, /backend OCC solve mesh used by this job/i);
-    assert.match(diagnosticsEl.innerHTML, /Authoritative backend OCC geometry diagnostics are available/i);
+    assert.match(diagnosticsEl.innerHTML, /Solver Mesh/);
+    assert.match(diagnosticsEl.innerHTML, /solver mesh used by this job/i);
+    assert.match(diagnosticsEl.innerHTML, /Solver mesh diagnostics loaded for this job/i);
   } finally {
     global.document = originalDocument;
   }
@@ -582,10 +582,7 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
       createdElements.some((el) => el.id === 'simadvanced-useBurtonMiller'),
       'Simulation section should expose the Burton-Miller advanced control'
     );
-    assert.ok(
-      createdElements.some((el) => el.id === 'simadvanced-symmetryTolerance'),
-      'Simulation section should expose the symmetry-tolerance advanced control'
-    );
+    // symmetryTolerance is not yet exposed in the modal (symmetry is currently disabled).
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;

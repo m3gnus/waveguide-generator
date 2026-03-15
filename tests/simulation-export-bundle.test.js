@@ -97,7 +97,8 @@ test('exportResults writes selected bundle files into the task folder workspace'
     ]);
     assert.deepEqual(bundle.failures, []);
 
-    const taskDir = await root.getDirectoryHandle('job-1');
+    // exportResults uses baseName (job.label) as the subdirectory name, not job.id
+    const taskDir = await root.getDirectoryHandle('horn_12');
     assert.equal(taskDir.files.has('horn_12_results.csv'), true);
     assert.equal(taskDir.files.has('horn_12_results.json'), true);
     assert.match(taskDir.files.get('horn_12_results.csv'), /Frequency \(Hz\),SPL \(dB\)/);
