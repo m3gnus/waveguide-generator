@@ -57,23 +57,28 @@ Implementation notes:
 - `server/services/simulation_runner.py` (quadrants enforcement)
 - `src/solver/index.js` (line 266 override)
 
-### P2. Observation Distance Measurement Origin
+### P2. Observation Distance Measurement Origin — User-Selectable Reference Point
 
-**UNBLOCKED (March 15, 2026)** — decision made: use **mouth plane** as measurement origin.
+The observation frame origin was changed from throat to mouth (commit `caa3ce7`, IEC 60268-5). Instead of hardcoding either choice, expose it as a user-selectable parameter so the user can choose `mouth` (default) or `throat` as the measurement reference point.
 
-The BEM solver currently measures observation distance from the throat disc centroid (`source_center` in `infer_observation_frame`). The correct origin is the mouth plane. At 2m distance, the throat-vs-mouth offset (~120mm) introduces ~6% error. At near-field (0.5m), error reaches ~20%.
-
-The mouth center is already computed in `infer_observation_frame` (line 129-131) but not used as the measurement origin.
+The full data flow is straightforward — `PolarConfig` already passes through cleanly from UI → API → solver, so a new field flows end-to-end with no plumbing changes outside the listed files.
 
 Action plan:
-- [x] Clarify correct measurement origin — decided: mouth plane.
-- [x] Update `infer_observation_frame` to use `mouth_center` instead of `source_center` as the measurement origin.
-- [ ] Run test at 0.5m distance with both origins, verify directivity improvement.
+- [x] Clarify correct measurement origin — decided: mouth plane as default.
+- [x] Update `infer_observation_frame` to use `mouth_center` as default origin.
 - [x] Document the measurement convention in code comments.
+- [ ] Add `observation_origin` field to `PolarConfig` in `server/contracts/__init__.py` (values: `"mouth"` | `"throat"`, default `"mouth"`).
+- [ ] Thread `observation_origin` through `solve_optimized.py` → `infer_observation_frame`.
+- [ ] Make `infer_observation_frame` select `mouth_center` or `source_center` based on the parameter.
+- [ ] Add a "Measurement Origin" select control to polar settings UI (`polarSettings.js`).
+- [ ] Add tooltip: "Reference point for observation distance. Mouth (default, IEC 60268-5) or Throat."
+- [ ] Run test at 0.5m with both origins, verify results differ as expected.
 
 Implementation notes:
+- `server/contracts/__init__.py` (`PolarConfig`)
 - `server/solver/observation.py` (`infer_observation_frame`)
-- `server/solver/solve_optimized.py` (line 348, `_solve_single_frequency`)
+- `server/solver/solve_optimized.py` (pass-through)
+- `src/ui/simulation/polarSettings.js` (new select control)
 
 ### P2. Solver Settings Audit — Correctness, Defaults, and Tooltips
 
