@@ -16,7 +16,7 @@ export const RECOMMENDED_DEFAULTS = {
   meshValidationMode: 'warn',
   frequencySpacing: 'log',
   useOptimized: true,
-  verbose: true,
+  verbose: false,
 };
 
 // Module-level in-memory cache — lazily populated by loadSimBasicSettings().

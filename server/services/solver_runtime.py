@@ -46,18 +46,9 @@ def get_settings_capabilities() -> Dict[str, Any]:
                 "use_burton_miller",
                 "symmetry_tolerance",
             ],
-            "plannedControls": [
-                "method",
-                "tol",
-                "restart",
-                "maxiter",
-                "strong_form",
-            ],
             "reason": (
-                "The public solve contract now exposes warm-up, BEM precision, "
-                "Burton-Miller coupling, and symmetry-tolerance overrides. GMRES "
-                "method, restart, tolerance, max-iteration, and explicit strong-form "
-                "policy controls remain planned-only."
+                "The public solve contract exposes warm-up, BEM precision, "
+                "Burton-Miller coupling, and symmetry-tolerance overrides."
             ),
         },
     }

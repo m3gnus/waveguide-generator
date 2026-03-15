@@ -97,8 +97,8 @@ Action plan:
 - [x] Remove the `enable_symmetry: false` hardcode in `src/solver/index.js` line 266 (no longer needed once the toggle is gone).
 - [ ] Audit each remaining active setting end-to-end: UI control → localStorage → API contract → backend solver.
 - [ ] Defer `symmetryTolerance` UI control until the P1 Symmetry Performance work is complete.
-- [ ] Review `verbose` default — consider defaulting to `false`.
-- [ ] Either implement or remove the "Planned Controls" stubs (GMRES params, strong-form preconditioner).
+- [x] Review `verbose` default — consider defaulting to `false`.
+- [x] Either implement or remove the "Planned Controls" stubs (GMRES params, strong-form preconditioner).
 - [ ] Ensure every active setting has a tooltip explaining what it does, what changes when you raise/lower it, and what the recommended default is.
 
 Implementation notes:
