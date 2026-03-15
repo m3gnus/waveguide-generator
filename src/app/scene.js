@@ -95,6 +95,19 @@ export function renderModel(app) {
       app.hornMesh.material.dispose();
     }
     applyMeshToScene(app, ImportedMeshState.vertices, ImportedMeshState.indices, {});
+
+    // Color-code by physical group tags if available
+    if (ImportedMeshState.physicalTags && app.hornMesh) {
+      const colors = buildPhysicalGroupColors(
+        ImportedMeshState.vertices, ImportedMeshState.indices, ImportedMeshState.physicalTags
+      );
+      app.hornMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      app.hornMesh.material.dispose();
+      app.hornMesh.material = new THREE.MeshPhongMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide
+      });
+    }
     return;
   }
 
@@ -202,6 +215,39 @@ export function calculateCurvatureColors(geometry, radialSteps, lengthSteps) {
       colors[idx] = c;
       colors[idx + 1] = 1 - c;
       colors[idx + 2] = 0.5;
+    }
+  }
+  return colors;
+}
+
+/**
+ * Build per-vertex colors from per-triangle physical group tags.
+ * Tag 1 (wall) = grey, Tag 2 (source) = green, Tag 3 (enclosure) = blue, other = orange.
+ */
+export function buildPhysicalGroupColors(vertices, indices, physicalTags) {
+  const TAG_COLORS = {
+    1: [0.8, 0.8, 0.8],   // wall (SD1G0) — grey
+    2: [0.3, 0.8, 0.3],   // source/throat (SD1D1001) — green
+    3: [0.4, 0.6, 0.9]    // enclosure (SD2G0) — blue
+  };
+  const DEFAULT_COLOR = [0.9, 0.6, 0.3]; // orange
+
+  const vertexCount = vertices.length / 3;
+  const colors = new Float32Array(vertexCount * 3);
+  const assigned = new Uint8Array(vertexCount); // 0 = not yet assigned
+
+  const triCount = indices.length / 3;
+  for (let t = 0; t < triCount; t++) {
+    const tag = physicalTags[t];
+    const rgb = TAG_COLORS[tag] || DEFAULT_COLOR;
+    for (let k = 0; k < 3; k++) {
+      const vi = indices[t * 3 + k];
+      if (!assigned[vi]) {
+        colors[vi * 3] = rgb[0];
+        colors[vi * 3 + 1] = rgb[1];
+        colors[vi * 3 + 2] = rgb[2];
+        assigned[vi] = 1;
+      }
     }
   }
   return colors;
