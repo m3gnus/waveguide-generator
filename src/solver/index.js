@@ -40,7 +40,6 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @property {'linear'|'log'} [frequencySpacing]
  * @property {'auto'|'opencl_cpu'|'opencl_gpu'} [deviceMode]
  * @property {boolean} [useOptimized]
- * @property {boolean} [enableSymmetry]
  * @property {boolean} [verbose]
  * @property {{
  *   enableWarmup?: boolean,
@@ -263,7 +262,6 @@ export class BemSolver {
     );
     assignEnumSetting(payload, 'device_mode', config.deviceMode, VALID_DEVICE_MODES);
     assignBooleanSetting(payload, 'use_optimized', config.useOptimized);
-    assignBooleanSetting(payload, 'enable_symmetry', false);
     assignBooleanSetting(payload, 'verbose', config.verbose);
     const advancedSettingsPayload = buildAdvancedSettingsPayload(config.advancedSettings);
     if (advancedSettingsPayload) {

@@ -1,7 +1,6 @@
 import { showError, showMessage } from '../feedback.js';
 import {
   getDeviceMode,
-  getEnableSymmetry,
   getFrequencySpacing,
   getMeshValidationMode,
   getUseOptimized,
@@ -542,7 +541,6 @@ export async function runSimulation(panel) {
     frequencySpacing: getFrequencySpacing(),
     deviceMode: getDeviceMode(),
     useOptimized: getUseOptimized(),
-    enableSymmetry: getEnableSymmetry(),
     verbose: getVerbose(),
     advancedSettings: {
       enableWarmup: getEnableWarmup(),

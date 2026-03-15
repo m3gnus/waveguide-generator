@@ -16,7 +16,6 @@ export const RECOMMENDED_DEFAULTS = {
   meshValidationMode: 'warn',
   frequencySpacing: 'log',
   useOptimized: true,
-  enableSymmetry: true,
   verbose: true,
 };
 
@@ -137,15 +136,6 @@ export function getUseOptimized() {
   const el = typeof document !== 'undefined' ? document.getElementById('simbasic-useOptimized') : null;
   if (el) return el.checked;
   return _current?.useOptimized ?? RECOMMENDED_DEFAULTS.useOptimized;
-}
-
-/**
- * DOM-first getter for enable_symmetry.
- */
-export function getEnableSymmetry() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simbasic-enableSymmetry') : null;
-  if (el) return el.checked;
-  return _current?.enableSymmetry ?? RECOMMENDED_DEFAULTS.enableSymmetry;
 }
 
 /**

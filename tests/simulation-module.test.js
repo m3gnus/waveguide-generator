@@ -338,7 +338,6 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       frequencySpacing: 'log',
       deviceMode: 'auto',
       useOptimized: false,
-      enableSymmetry: false,
       verbose: true,
       advancedSettings: {
         enableWarmup: false,
@@ -364,13 +363,13 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.label, 'simulation_7');
   assert.equal(job.configSummary.formula_type, 'OSSE');
   assert.deepEqual(job.configSummary.frequency_range, [100, 1000]);
-  assert.equal(job.configSummary.enable_symmetry, false);
+  assert.equal('enable_symmetry' in job.configSummary, false);
   assert.deepEqual(job.script.params, { L: 120, a: 45 });
   assert.equal(job.script.meshValidationMode, 'strict');
   assert.equal(job.script.frequencySpacing, 'log');
   assert.equal(job.script.deviceMode, 'auto');
   assert.equal(job.script.useOptimized, false);
-  assert.equal(job.script.enableSymmetry, false);
+  assert.equal('enableSymmetry' in job.script, false);
   assert.equal(job.script.verbose, true);
   assert.deepEqual(job.script.advancedSettings, {
     enableWarmup: false,
