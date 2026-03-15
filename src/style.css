@@ -740,6 +740,19 @@ button.secondary:hover:not(:disabled) {
     padding: 4px var(--sp-2) !important;
 }
 
+.button-icon-only {
+    padding: 4px 6px !important;
+    font-size: 1rem !important;
+    line-height: 1;
+    opacity: 0.55;
+    min-width: unset;
+}
+
+.button-icon-only:hover,
+.button-icon-only:focus-visible {
+    opacity: 1;
+}
+
 .output-folder-name {
     font-size: var(--text-sm);
     color: var(--text-muted);
