@@ -67,9 +67,9 @@ The mouth center is already computed in `infer_observation_frame` (line 129-131)
 
 Action plan:
 - [x] Clarify correct measurement origin — decided: mouth plane.
-- [ ] Update `infer_observation_frame` to use `mouth_center` instead of `source_center` as the measurement origin.
+- [x] Update `infer_observation_frame` to use `mouth_center` instead of `source_center` as the measurement origin.
 - [ ] Run test at 0.5m distance with both origins, verify directivity improvement.
-- [ ] Document the measurement convention in code comments.
+- [x] Document the measurement convention in code comments.
 
 Implementation notes:
 - `server/solver/observation.py` (`infer_observation_frame`)
