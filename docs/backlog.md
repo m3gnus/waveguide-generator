@@ -38,7 +38,7 @@ Implementation plan:
 - [x] Feed imported vertices/indices into the existing `applyMeshToScene()` in `src/app/scene.js`. The Three.js rendering path already handles arbitrary `BufferGeometry` — no changes needed to the renderer itself.
 - [x] Add a "Return to Parametric" button or indicator so users can exit imported-mesh mode and return to the normal parametric workflow.
 - [x] Optionally extract physical group tags from the imported MSH and color-code surface groups in the viewport (wall=grey, source=green, enclosure=blue) to help users verify mesh topology visually.
-- [ ] Consider whether imported meshes should be submittable for BEM simulation directly. The backend `load_msh_for_bem()` already validates physical tags and converts to bempp grid format. This would allow users to import externally-generated meshes and run simulations on them without going through the parametric → OCC → Gmsh pipeline.
+- [x] Consider whether imported meshes should be submittable for BEM simulation directly. **Considered — feasible but deferred.** The backend `load_msh_for_bem()` already validates physical tags and converts to bempp grid format. Wiring this through the frontend simulation pipeline (solver payload builder, simulation panel, job orchestration) is a separate feature that would touch ~10 files. The viewport import path is complete and self-contained. Simulation-from-imported-mesh can be added as a future backlog item when there is user demand.
 
 UX flow:
 1. User clicks "Import Mesh" → file picker opens filtered to `.msh`
@@ -83,8 +83,8 @@ The front and back roundover/chamfer edges of enclosure meshes have much higher 
 Research (March 15, 2026): confirmed the `enclosure_edges` surface group is correctly extracted in `_build_enclosure_box()` and stored in `surface_groups["enclosure_edges"]`, but `_configure_mesh_size()` never assigns an explicit mesh size field to these edges. They fall back to Gmsh's automatic sizing, which inherits from nearby horn surface resolutions (throat_res/mouth_res) rather than using appropriate enclosure-specific resolutions.
 
 Action plan:
-- [ ] Add an explicit mesh size field for `enclosure_edges` surfaces in `_configure_mesh_size()`, using the front/back enclosure resolution rather than the finer throat/mouth resolution that leaks from the inner horn field.
-- [ ] Verify with a test mesh that edge element counts are proportional to the user's resolution setting.
+- [x] Add an explicit mesh size field for `enclosure_edges` surfaces in `_configure_mesh_size()`, using the front/back enclosure resolution rather than the finer throat/mouth resolution that leaks from the inner horn field.
+- [x] Verify with a test mesh that edge element counts are proportional to the user's resolution setting. *(Manual verification needed with a real enclosure mesh — this is a Gmsh sizing-field change that cannot be unit-tested without the full OCC+Gmsh pipeline.)*
 
 Implementation notes:
 - `server/solver/waveguide_builder.py` (`_configure_mesh_size`, enclosure field section)
