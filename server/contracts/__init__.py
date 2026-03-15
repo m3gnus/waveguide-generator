@@ -30,6 +30,9 @@ class MeshData(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+VALID_OBSERVATION_ORIGINS = {"mouth", "throat"}
+
+
 class PolarConfig(BaseModel):
     """
     Configuration for ABEC.Polars directivity map.
@@ -43,6 +46,17 @@ class PolarConfig(BaseModel):
     distance: float = 2.0
     inclination: float = 35.0
     enabled_axes: List[str] = ["horizontal", "vertical", "diagonal"]
+    observation_origin: str = "mouth"
+
+    @field_validator("observation_origin")
+    @classmethod
+    def validate_observation_origin(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in VALID_OBSERVATION_ORIGINS:
+            raise ValueError(
+                "polar_config.observation_origin must be one of: mouth, throat."
+            )
+        return normalized
 
     @field_validator("enabled_axes")
     @classmethod
@@ -260,6 +274,7 @@ __all__ = [
     "SimulationRequest",
     "SimulationResults",
     "VALID_DEVICE_MODES",
+    "VALID_OBSERVATION_ORIGINS",
     "WaveguideParamsRequest",
     "normalize_contract_device_mode",
 ]
