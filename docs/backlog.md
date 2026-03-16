@@ -503,7 +503,7 @@ Depends on P1 Symmetry Performance. Partially unblocked now that the B-Rep cut w
 
 - [x] Add a reproducible diagnostics lane for ATH reference configs, capturing imported params, canonical mesh topology, and resulting `metadata.symmetry_policy` / `metadata.symmetry`.
 - [x] Add regression coverage for reference cases so future geometry or solver changes cannot silently change reduction eligibility.
-- [ ] _(GLM 5: SIMPLE)_ Commit ATH reference fixtures or agreed repo-owned surrogate set for reproducible regression testing.
+- [x] Commit ATH reference fixtures or agreed repo-owned surrogate set for reproducible regression testing. (Fixtures already in `tests/fixtures/ath/`)
 
 Previously completed:
 
