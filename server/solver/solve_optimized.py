@@ -904,7 +904,16 @@ def solve_optimized(
         if isinstance(polar_config, dict)
         else "mouth"
     )
-    observation_frame = infer_observation_frame(grid, observation_origin=observation_origin)
+    _symmetry_plane_for_observation = None
+    if symmetry_info.get("symmetry_planes"):
+        _planes = symmetry_info["symmetry_planes"]
+        if isinstance(_planes, (list, tuple)) and len(_planes) > 0:
+            _symmetry_plane_for_observation = str(_planes[0])
+    observation_frame = infer_observation_frame(
+        grid,
+        observation_origin=observation_origin,
+        symmetry_plane=_symmetry_plane_for_observation,
+    )
     observation_info = resolve_safe_observation_distance(
         grid, observation_request_m, observation_frame
     )
@@ -1203,7 +1212,11 @@ def solve_optimized(
             directivity_grid = bempp_api.Grid(full_v, full_i)
             full_p1 = bempp_api.function_space(directivity_grid, "P", 1)
             full_dp0 = bempp_api.function_space(directivity_grid, "DP", 0)
-            directivity_frame = infer_observation_frame(directivity_grid, observation_origin=observation_origin)
+            directivity_frame = infer_observation_frame(
+                directivity_grid,
+                observation_origin=observation_origin,
+                symmetry_plane=None,
+            )
 
             # Re-expand each solution: replicate coefficients for each mirror section
             n_mirrors = len(solver.mirror_grids)
