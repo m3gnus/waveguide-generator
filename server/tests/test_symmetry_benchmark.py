@@ -165,8 +165,15 @@ class SymmetryBenchmarkTest(unittest.TestCase):
             "unit_detection": {"source": "benchmark", "warnings": []},
         }
 
+        def make_grid(vertices, indices, domain_indices=None):
+            if domain_indices is None:
+                domain_indices = np.array([])
+            return DummyGrid(vertices, indices, domain_indices)
+
         fake_bempp = types.SimpleNamespace(
-            grid_from_element_data=lambda vertices, indices, tags: DummyGrid(vertices, indices, tags)
+            Grid=make_grid,
+            grid_from_element_data=lambda vertices, indices, tags: DummyGrid(vertices, indices, tags),
+            function_space=lambda grid, family, order: None,
         )
 
         with patch("solver.solve_optimized.bempp_api", fake_bempp), patch(
