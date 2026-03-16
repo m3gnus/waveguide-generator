@@ -3,6 +3,7 @@
 Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-wide Definition of Done.
 
 ## Responsibilities
+
 - Backend mesh conversion, validation, and optional refinement (`mesh.py`).
 - OCC mesh builder support (`waveguide_builder.py`).
 - BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve*.py`).
@@ -10,6 +11,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 - Unit handling and normalization behavior used by solver paths (`units.py`).
 
 ## Invariants
+
 - Canonical tag mapping is fixed:
   - `1 = SD1G0 (wall)`, `2 = SD1D1001 (source)`, `3 = SD2G0`, `4 = I1-2`.
 - Source boundary space selection must remain `segments=[2]` in solver paths.
@@ -21,6 +23,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 - Gmsh Python calls must stay thread-safe (`gmsh_lock`) and avoid unsafe worker-thread initialization patterns.
 
 ## Required Tests Before Merge
+
 - For `waveguide_builder.py` and OCC meshing changes:
   - `server/tests/test_dependency_runtime.py`
   - `server/tests/test_occ_resolution_semantics.py`
@@ -30,6 +33,8 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 - For `solve.py` / `solve_optimized.py` changes:
   - `server/tests/test_solver_tag_contract.py`
   - `server/tests/test_solver_hardening.py`
+- For `device_interface.py` changes:
+  - `server/tests/test_device_interface.py`
 - For `units.py` or unit-sensitive behavior:
   - `server/tests/test_units.py`
   - `server/tests/test_observation_distance.py`
@@ -39,6 +44,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 - Always run full server suite before merge (from repo root): `npm run test:server`
 
 ## Known Pitfalls
+
 - Dependency support ranges in docs must match `SUPPORTED_DEPENDENCY_MATRIX`.
 - OCC builder and gmsh mesher have different availability rules (Python API vs CLI fallback).
 - Job state is in-memory; restarts clear job history.
