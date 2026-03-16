@@ -73,7 +73,11 @@ def _source_axis_and_center(
     return normals_sum / axis_norm, source_center
 
 
-def infer_observation_frame(grid, observation_origin: str = "mouth") -> Dict[str, np.ndarray]:
+def infer_observation_frame(
+    grid,
+    observation_origin: str = "mouth",
+    symmetry_plane: str | None = None,
+) -> Dict[str, np.ndarray]:
     """
     Infer a robust radiation frame from the mesh.
 
@@ -86,6 +90,9 @@ def infer_observation_frame(grid, observation_origin: str = "mouth") -> Dict[str
         grid: BEM grid object with .vertices, .elements, and .domain_indices attributes.
         observation_origin: "mouth" (default, IEC 60268-5) — measures from the radiating
             aperture; "throat" — measures from the driver/source disc centroid.
+        symmetry_plane: Optional symmetry plane identifier ("yz", "xy", or None).
+            When "yz" is active (half-model in X>=0), the observation origin's X-coordinate
+            is projected to X=0 for correct image-source physics and comparison with full models.
 
     Returns:
         {
@@ -158,7 +165,17 @@ def infer_observation_frame(grid, observation_origin: str = "mouth") -> Dict[str
     # "mouth" (default, IEC 60268-5): distance measured from the radiating aperture.
     # "throat": distance measured from the driver/source disc centroid.
     use_throat = str(observation_origin).strip().lower() == "throat"
-    origin_center = source_center if use_throat else mouth_center
+    origin_center = source_center.copy() if use_throat else mouth_center.copy()
+
+    # Project origin to symmetry plane for half/quarter models.
+    # For YZ symmetry (X=0 plane), the half-mesh has vertices at X>=0, but the
+    # effective acoustic center for the full model is at X=0 (symmetry plane).
+    if symmetry_plane is not None:
+        plane = str(symmetry_plane).strip().lower()
+        if plane == "yz":
+            origin_center[0] = 0.0
+        elif plane == "xy":
+            origin_center[2] = 0.0
 
     return {
         "axis": axis_candidate,

@@ -23,7 +23,7 @@ Keep durable decisions in `docs/architecture.md`, active work in this file, and 
 
 ## Current Baseline
 
-Status as of March 16, 2026 (evening session):
+Status as of March 16, 2026 (night session):
 
 - The architecture cleanup plan is complete.
 - The enclosure BEM simulation bug (self-intersecting geometry when `enc_depth < horn_length`) is fixed — depth clamping applied in `_build_enclosure_box`.
@@ -36,16 +36,17 @@ Status as of March 16, 2026 (evening session):
 - Enclosure mesh edge over-refinement fixed — explicit Gmsh sizing field for enclosure edges.
 - All 268 JS tests pass. 162/165 Python tests pass (3 pre-existing failures: 2 in test_mesh_validation, 1 in test_observation).
 - B-Rep symmetry cut (`symmetry_cut="yz"`) now works for free-standing horn geometry. Half mesh: 204 verts / 357 tris from full 352 verts / 700 tris (1.96x element reduction).
+- **Symmetry investigation complete**: ~8 dB SPL error root cause identified as observation frame mismatch. All LHS/RHS/pressure operators verified correct. Fix pending.
 
 ## Active Backlog
 
 ### P1. Symmetry Performance — Half-Model Slower Than Full Model
 
-**IN PROGRESS — B-Rep cut working, awaiting A/B validation with bempp-cl.**
+**IN PROGRESS — Root cause identified (observation frame mismatch), fix pending.**
 
-#### Status (March 16, 2026)
+#### Status (March 16, 2026 night)
 
-Profiling and A/B testing complete. The performance potential is real (2.66x speedup, 2.96x DOF reduction at 700 elements; scales quadratically so ~4x speedup expected at 4000 elements).
+Investigation complete. The ~8 dB SPL error is caused by observation frame mismatch, not operator signs. All LHS/RHS/pressure operators are correct. The fix is to project the observation frame origin to the symmetry plane (X=0) for half models. Performance potential confirmed: 2.66x speedup, 2.96x DOF reduction at 700 elements (~4x at 4000 elements).
 
 **Key finding**: Post-tessellation mesh clipping is fundamentally flawed — OCC free-meshing produces asymmetric vertices (171 vs 172 DOFs per side), so clipping a tessellated mesh creates a different discretization (measured 14.8 dB BEM error). The image source method itself is correct (validated at 0.000 dB error on a proper symmetric mesh), but must operate on a mesh that was **purpose-built as a half-model** by the OCC builder.
 
@@ -226,13 +227,64 @@ If Approach A's cross-grid operator assembly turns out to be unsupported by bemp
 - [x] **Update diagnostic and A/B test scripts** — Use the same observation frame for half and full models when comparing image source BEM results. The half model's observation point should be at the symmetry plane (X=0), not at the half mesh's mouth center (X>0).
 - [x] **Run A/B test** — Symmetry now activates correctly (`applied=True`), but ~8 dB SPL errors remain. The issue is in the image source operator assembly or pressure evaluation, not the symmetry policy.
 
-#### Remaining work for image source BEM
+#### Investigation findings (March 16, 2026 night session)
 
-**Run A/B test with proper half mesh** _(BLOCKED — requires deeper investigation)_: The symmetry policy fix allows image source BEM to activate, but A/B tests still show ~8 dB SPL errors. The issue is in the image source operator assembly or pressure evaluation. Needs investigation of:
+Five parallel sub-agents investigated the ~8 dB SPL error. Key findings:
 
-- LHS/RHS operator signs for cross-grid assembly
-- Pressure evaluation formula for image contributions
-- Observation frame handling in image source potential evaluation
+**A/B test results** (Agent 5):
+| Frequency | Full (dB) | Half (dB) | Diff (dB) |
+|-----------|-----------|-----------|-----------|
+| 500 Hz | 78.83 | 70.56 | **8.27** |
+| 1375 Hz | 93.40 | 86.76 | 6.64 |
+| 2250 Hz | 99.28 | 96.19 | 3.10 |
+| 3125 Hz | 103.93 | 102.53 | 1.40 |
+| 4000 Hz | 106.78 | 105.78 | 1.00 |
+
+The **frequency-dependent error** (8.3 dB at low freq → 1.0 dB at high freq) is the critical clue. A constant ~6 dB error would indicate a sign/doubling bug; the frequency dependence indicates a **geometric mismatch** in observation frame handling.
+
+**LHS operator assembly** (Agent 1):
+
+- Direct: `0.5*I - D + coupling*H` ✓ correct
+- Image: `-D_img + coupling*H_img` ✓ correct
+- Signs are consistent; no bug found in LHS.
+
+**RHS operator assembly** (Agent 2):
+
+- Direct: `[-S - (i/k)(D' + ½I)]·u_n` ✓ correct
+- Image: `[-S_img - (i/k)D'_img]·u_n` ✓ correct (no identity jump for cross-grid)
+- Missing identity term is intentional; no bug found in RHS.
+
+**Pressure evaluation** (Agent 3):
+
+- Formulation: `p = DLP[p] - SLP[v]` for both direct and image ✓ correct
+- DLP image contribution uses correct sign with winding-reversed mirror normals
+- No bug found in pressure evaluation formula.
+
+**Mirror grid construction** (Agent 4):
+
+- X-coordinate flipping: ✓ correct (`out[0, :] = -out[0, :]`)
+- Winding reversal: ✓ correct (produces reflected normal `(-n_x, n_y, n_z)`)
+- Quarter-model handling: ✓ correct (3 images with appropriate winding)
+- **Winding reversal is mathematically correct** and should NOT be removed.
+
+**Root cause identified** (Agent 5):
+The observation frame for half models is computed from mesh geometry (throat/mouth center at X>0), but for valid comparison with full models and correct image-source physics, the observation point should be at the **symmetry plane (X=0)**. The `infer_observation_frame()` function does not account for symmetry — it centers on the half-mesh's acoustic center, which is offset from X=0.
+
+#### Action plan
+
+**Step 7 — Fix observation frame for symmetric meshes**
+
+- [x] Modify `infer_observation_frame()` in `server/solver/observation.py` to accept symmetry plane information
+- [x] When symmetry is active (YZ plane), project the observation frame origin to X=0 (the symmetry plane)
+- [x] The mouth/source center should still be computed from mesh geometry, but the observation origin's X-coordinate should be clamped to 0
+- [ ] Update `ab_test_symmetry.py` to verify the observation frame is correctly centered
+- [ ] Re-run A/B test — expect <0.5 dB error across all frequencies
+
+**Step 8 — Validate and close**
+
+- [ ] Run A/B test with fixed observation frame — target: <0.5 dB SPL error at all frequencies
+- [ ] Run full test suite (`npm test`, `npm run test:server`)
+- [ ] Update documentation if observation frame semantics change
 
 **Step 6 tasks** _(COMPLETE)_:
 
