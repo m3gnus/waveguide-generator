@@ -33,6 +33,73 @@ class SymmetryPlane(Enum):
     XZ = "xz"  # Y = 0 plane
 
 
+def create_mirror_grid(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    symmetry_planes: List[SymmetryPlane],
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Build image-source mirror grids for BEM symmetry reduction.
+
+    For each unique combination of the given symmetry planes, reflects the
+    mesh and reverses triangle winding so that bempp computes correct
+    reflected normals for the DLP and HYP operators.
+
+    Args:
+        vertices: Vertex array, shape (3, N), rows are [X, Y, Z].
+        indices:  Triangle index array, shape (3, M) — bempp column-major.
+        symmetry_planes: Which planes to mirror across.
+            SymmetryPlane.YZ  → X = 0  (flip X coordinate)
+            SymmetryPlane.XY  → Z = 0  (flip Z coordinate)
+
+    Returns:
+        List of (mirrored_vertices, mirrored_indices) tuples, one per image
+        contribution (not including the original mesh):
+          - Single plane  → 1 tuple  (the mirror across that plane)
+          - Two planes    → 3 tuples (X-mirror, Z-mirror, XZ-mirror)
+
+    Notes:
+        * Input arrays are never modified; all mirrors are independent copies.
+        * Winding is reversed on every mirror by swapping index rows 1 and 2.
+        * Only SymmetryPlane.YZ and SymmetryPlane.XY are currently handled;
+          SymmetryPlane.XZ is a no-op and will produce no output tuple.
+    """
+    has_yz = SymmetryPlane.YZ in symmetry_planes   # X = 0 plane
+    has_xy = SymmetryPlane.XY in symmetry_planes   # Z = 0 plane
+
+    def _mirror(v: np.ndarray, flip_x: bool, flip_z: bool) -> np.ndarray:
+        """Return a copy of v with the requested sign flips."""
+        out = v.copy()
+        if flip_x:
+            out[0, :] = -out[0, :]
+        if flip_z:
+            out[2, :] = -out[2, :]
+        return out
+
+    def _reverse_winding(idx: np.ndarray) -> np.ndarray:
+        """Return a copy of idx with rows 1 and 2 swapped (reverses triangle winding)."""
+        out = idx.copy()
+        out[1, :], out[2, :] = idx[2, :].copy(), idx[1, :].copy()
+        return out
+
+    result: List[Tuple[np.ndarray, np.ndarray]] = []
+
+    if has_yz and not has_xy:
+        # Half model — single mirror across X = 0
+        result.append((_mirror(vertices, flip_x=True, flip_z=False), _reverse_winding(indices)))
+
+    elif has_xy and not has_yz:
+        # Half model — single mirror across Z = 0
+        result.append((_mirror(vertices, flip_x=False, flip_z=True), _reverse_winding(indices)))
+
+    elif has_yz and has_xy:
+        # Quarter model — three image contributions
+        result.append((_mirror(vertices, flip_x=True,  flip_z=False), _reverse_winding(indices)))  # X-mirror
+        result.append((_mirror(vertices, flip_x=False, flip_z=True),  _reverse_winding(indices)))  # Z-mirror
+        result.append((_mirror(vertices, flip_x=True,  flip_z=True),  indices.copy()))             # XZ-mirror: double reflection restores winding
+
+    return result
+
+
 def symmetry_type_value(symmetry_type: Optional[object]) -> str:
     if isinstance(symmetry_type, SymmetryType):
         return symmetry_type.value
@@ -235,10 +302,59 @@ def evaluate_symmetry_policy(
             "symmetry_info": None,
         }
 
-    reduced_vertices, reduced_indices, reduced_surface_tags, symmetry_info = apply_symmetry_reduction(
+    # ------------------------------------------------------------------
+    # Geometry-first path: if the mesh was already built as a half/quarter
+    # model by the OCC builder (quadrants != 1234), the mesh IS the reduced
+    # mesh and no clipping is needed.  This follows the tessellation-last
+    # principle — geometry is cut BEFORE meshing, not after.
+    # ------------------------------------------------------------------
+    _effective_q = int(quadrants) if quadrants is not None else 1234
+    if _effective_q != 1234:
+        # Mesh was built for a partial geometry — use as-is.
+        _reduction = reduction_factor_for_symmetry_type(symmetry_type)
+        _sym_info_dict = {
+            'symmetry_type': symmetry_type,
+            'symmetry_planes': symmetry_planes,
+            'symmetry_face_tag': None,
+            'reduction_factor': _reduction,
+        }
+        serialized_info = serialize_symmetry_info(_sym_info_dict)
+        policy = build_symmetry_policy(
+            requested=True,
+            reason="applied",
+            detected_symmetry_type=symmetry_type,
+            detected_symmetry_planes=symmetry_planes,
+            applied=True,
+            eligible=True,
+            reduction_factor=float(_reduction),
+            detected_reduction_factor=float(_reduction),
+            excitation_centered=True,
+            throat_center=throat_center,
+        )
+        logger.info(
+            "[Symmetry] Geometry-first: mesh already built as %s (quadrants=%s). "
+            "No post-tessellation clipping needed.",
+            symmetry_type.value, quadrants,
+        )
+        return {
+            "policy": policy,
+            "symmetry": serialized_info,
+            "reduced_vertices": vertices,
+            "reduced_indices": indices,
+            "reduced_surface_tags": surface_tags,
+            "symmetry_info": serialized_info,
+        }
+
+    # ------------------------------------------------------------------
+    # Legacy fallback: clip the mesh at symmetry planes post-tessellation.
+    # This path is only reached for full-model meshes (quadrants=1234)
+    # where the vertex-matching heuristic found symmetry.  Not recommended
+    # (tessellation-last principle — see docs/backlog.md Working Rules).
+    # ------------------------------------------------------------------
+    reduced_vertices, reduced_indices, reduced_surface_tags, symmetry_info_dict = apply_symmetry_reduction(
         vertices, indices, surface_tags, symmetry_type, symmetry_planes
     )
-    serialized_info = serialize_symmetry_info(symmetry_info)
+    serialized_info = serialize_symmetry_info(symmetry_info_dict)
     policy = build_symmetry_policy(
         requested=True,
         reason="applied",
@@ -521,6 +637,179 @@ def identify_symmetry_faces(
     return symmetry_faces
 
 
+def clip_mesh_at_plane(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    surface_tags: Optional[np.ndarray],
+    axis: int,
+    keep_positive: bool = True,
+    tolerance: float = 1e-6,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Clip a triangle mesh against a plane, splitting straddling triangles.
+
+    Args:
+        vertices: Vertex array, shape (3, N).
+        indices: Triangle index array, shape (3, M) or (M, 3).
+        surface_tags: Per-triangle tags, shape (M,), or None.
+        axis: Perpendicular axis of the clipping plane (0=X, 1=Y, 2=Z).
+        keep_positive: If True, keep the side where coord >= 0.
+        tolerance: Vertices within this distance of the plane are considered on-plane.
+
+    Returns:
+        (clipped_vertices, clipped_indices, clipped_tags) where
+        clipped_vertices is (3, N'), clipped_indices is (3, M'),
+        clipped_tags is (M',) or None.
+    """
+    # Normalise indices to (M, 3) for processing
+    if indices.ndim == 2 and indices.shape[0] == 3 and indices.shape[1] != 3:
+        idx = indices.T.copy()
+    elif indices.ndim == 2 and indices.shape[1] == 3:
+        idx = indices.copy()
+    elif indices.ndim == 2 and indices.shape[0] == 3 and indices.shape[1] == 3:
+        # Ambiguous 3x3 — treat as bempp column-major (3, M)
+        idx = indices.T.copy()
+    else:
+        idx = indices.copy()
+
+    num_tris = idx.shape[0]
+
+    # Build a mutable vertex list (start from existing vertices)
+    verts = vertices.copy()  # (3, N)
+    new_verts_list: List[np.ndarray] = []  # extra vertices to append
+    next_vert_id = verts.shape[1]
+
+    # Classify all vertices: +1 = positive/kept, -1 = negative/discarded, 0 = on-plane (kept)
+    coords = verts[axis, :]
+    classification = np.zeros(verts.shape[1], dtype=int)
+    classification[coords > tolerance] = 1
+    classification[coords < -tolerance] = -1
+    # on-plane (|coord| <= tolerance) stays 0
+
+    if not keep_positive:
+        classification = -classification
+
+    # For kept-side logic: +1 and 0 are kept, -1 is discarded
+    # kept = classification >= 0
+
+    def _get_or_create_intersection(p1_idx: int, p2_idx: int) -> int:
+        """Compute intersection of edge p1->p2 with the plane, return vertex index."""
+        nonlocal next_vert_id
+        p1 = verts[:, p1_idx] if p1_idx < verts.shape[1] else new_verts_list[p1_idx - verts.shape[1]]
+        p2 = verts[:, p2_idx] if p2_idx < verts.shape[1] else new_verts_list[p2_idx - verts.shape[1]]
+        # t such that p1[axis] + t*(p2[axis] - p1[axis]) = 0
+        denom = p2[axis] - p1[axis]
+        if abs(denom) < 1e-15:
+            # Edge is parallel to the plane — shouldn't happen if one is positive and one negative
+            t = 0.5
+        else:
+            t = -p1[axis] / denom
+        intersection = p1 + t * (p2 - p1)
+        intersection[axis] = 0.0  # Snap to plane exactly
+        new_verts_list.append(intersection)
+        vid = next_vert_id
+        next_vert_id += 1
+        return vid
+
+    def _classify(v_idx: int) -> int:
+        if v_idx < len(classification):
+            return classification[v_idx]
+        # New vertex — it's on the plane
+        return 0
+
+    out_tris: List[List[int]] = []
+    out_tags: List[int] = []
+
+    for ti in range(num_tris):
+        v0, v1, v2 = int(idx[ti, 0]), int(idx[ti, 1]), int(idx[ti, 2])
+        c0, c1, c2 = _classify(v0), _classify(v1), _classify(v2)
+
+        # Kept = classification >= 0 (positive or on-plane)
+        k0, k1, k2 = (c0 >= 0), (c1 >= 0), (c2 >= 0)
+        kept_count = int(k0) + int(k1) + int(k2)
+
+        tag = surface_tags[ti] if surface_tags is not None and ti < len(surface_tags) else 1
+
+        if kept_count == 3:
+            # All kept
+            out_tris.append([v0, v1, v2])
+            out_tags.append(tag)
+        elif kept_count == 0:
+            # All discarded
+            continue
+        elif kept_count == 1:
+            # Case A: 1 vertex kept, 2 discarded
+            # Find the kept vertex
+            if k0:
+                a, b, c = v0, v1, v2
+            elif k1:
+                a, b, c = v1, v2, v0
+            else:
+                a, b, c = v2, v0, v1
+
+            ca = _classify(a)
+            cb = _classify(b)
+            cc = _classify(c)
+
+            # Intersect edges a->b and a->c (a is kept, b and c are discarded)
+            i_ab = _get_or_create_intersection(a, b) if cb < 0 else b
+            i_ac = _get_or_create_intersection(a, c) if cc < 0 else c
+
+            out_tris.append([a, i_ab, i_ac])
+            out_tags.append(tag)
+        else:
+            # Case B: 2 vertices kept, 1 discarded
+            # Find the discarded vertex
+            if not k0:
+                c_disc, a_kept, b_kept = v0, v1, v2
+            elif not k1:
+                c_disc, a_kept, b_kept = v1, v2, v0
+            else:
+                c_disc, a_kept, b_kept = v2, v0, v1
+
+            cc = _classify(c_disc)
+            ca = _classify(a_kept)
+            cb = _classify(b_kept)
+
+            # Intersect edges a->c and b->c (c is discarded, a and b are kept)
+            i_ac = _get_or_create_intersection(a_kept, c_disc) if cc < 0 else c_disc
+            i_bc = _get_or_create_intersection(b_kept, c_disc) if cc < 0 else c_disc
+
+            out_tris.append([a_kept, b_kept, i_bc])
+            out_tags.append(tag)
+            out_tris.append([a_kept, i_bc, i_ac])
+            out_tags.append(tag)
+
+    if len(out_tris) == 0:
+        raise ValueError("clip_mesh_at_plane: clipping resulted in empty mesh")
+
+    # Build final vertex array
+    if new_verts_list:
+        extra = np.array(new_verts_list).T  # (3, K)
+        clipped_verts = np.hstack([verts, extra])
+    else:
+        clipped_verts = verts
+
+    clipped_indices = np.array(out_tris, dtype=int).T  # (3, M')
+    clipped_tags_arr = np.array(out_tags, dtype=int) if surface_tags is not None else None
+
+    # --- Remove degenerate (zero-area) triangles produced by clipping ---
+    v0 = clipped_verts[:, clipped_indices[0]]  # (3, M')
+    v1 = clipped_verts[:, clipped_indices[1]]
+    v2 = clipped_verts[:, clipped_indices[2]]
+    cross = np.cross((v1 - v0).T, (v2 - v0).T).T  # (3, M')
+    areas = 0.5 * np.sqrt(np.sum(cross ** 2, axis=0))
+    min_area = 1e-14  # ~0.1 nm² — filters only truly degenerate triangles
+    valid = areas > min_area
+    if not np.all(valid):
+        clipped_indices = clipped_indices[:, valid]
+        if clipped_tags_arr is not None:
+            clipped_tags_arr = clipped_tags_arr[valid]
+        if clipped_indices.shape[1] == 0:
+            raise ValueError("clip_mesh_at_plane: all triangles degenerate after clipping")
+
+    return clipped_verts, clipped_indices, clipped_tags_arr
+
+
 def apply_symmetry_reduction(
     vertices: np.ndarray,
     indices: np.ndarray,
@@ -558,71 +847,66 @@ def apply_symmetry_reduction(
             'reduction_factor': 1.0
         }
 
-    # Reshape indices if needed
-    if indices.ndim == 1:
-        indices = indices.reshape(-1, 3)
-    elif indices.shape[0] == 3:
-        indices = indices.T
+    # Reshape indices to (3, M) bempp column-major if needed
+    work_indices = indices
+    if work_indices.ndim == 1:
+        work_indices = work_indices.reshape(-1, 3).T
+    elif work_indices.shape[0] != 3 and work_indices.shape[1] == 3:
+        work_indices = work_indices.T
 
     # Tag for symmetry plane faces (canonical contract: 1=wall, 2=source, 3=secondary, 4=interface/symmetry)
     SYMMETRY_TAG = 4
 
-    # Determine which vertices to keep
-    keep_mask = np.ones(vertices.shape[1], dtype=bool)
+    # --- Clip mesh at each symmetry plane (splits straddling triangles) ---
+    clipped_verts = vertices
+    clipped_indices = work_indices
+    clipped_tags = surface_tags
 
     if SymmetryPlane.YZ in symmetry_planes:
-        # Keep X >= 0
-        keep_mask &= (vertices[0, :] >= -1e-6)
+        # Clip at X=0 plane, keep X >= 0
+        clipped_verts, clipped_indices, clipped_tags = clip_mesh_at_plane(
+            clipped_verts, clipped_indices, clipped_tags, axis=0, keep_positive=True
+        )
 
     if SymmetryPlane.XY in symmetry_planes:
-        # Keep Z >= 0
-        keep_mask &= (vertices[2, :] >= -1e-6)
+        # Clip at Z=0 plane, keep Z >= 0
+        clipped_verts, clipped_indices, clipped_tags = clip_mesh_at_plane(
+            clipped_verts, clipped_indices, clipped_tags, axis=2, keep_positive=True
+        )
 
-    # Build vertex mapping
-    old_to_new = np.full(vertices.shape[1], -1, dtype=int)
-    new_idx = 0
-    for old_idx in range(vertices.shape[1]):
-        if keep_mask[old_idx]:
-            old_to_new[old_idx] = new_idx
-            new_idx += 1
+    # --- Compact vertices (remove unused vertices after clipping) ---
+    # clipped_indices is (3, M') from clip_mesh_at_plane
+    used_verts = np.unique(clipped_indices.ravel())
+    old_to_new = np.full(clipped_verts.shape[1], -1, dtype=int)
+    for new_idx, old_idx in enumerate(used_verts):
+        old_to_new[old_idx] = new_idx
 
-    # Extract kept vertices
-    reduced_vertices = vertices[:, keep_mask]
+    reduced_vertices = clipped_verts[:, used_verts]
+    reduced_indices = old_to_new[clipped_indices]  # (3, M')
 
-    # Process triangles
-    reduced_triangles = []
-    reduced_tags = []
-
-    # Identify symmetry plane faces
+    # --- Identify symmetry plane faces on the clipped mesh and apply tag ---
     symmetry_face_dict = identify_symmetry_faces(
-        vertices, indices, symmetry_planes, tolerance=1e-3
+        reduced_vertices, reduced_indices, symmetry_planes, tolerance=1e-3
     )
     symmetry_face_set = set()
     for plane, faces in symmetry_face_dict.items():
         symmetry_face_set.update(faces)
 
-    for tri_idx in range(indices.shape[0]):
-        tri = indices[tri_idx, :]
+    num_clipped_tris = reduced_indices.shape[1]
+    # Build reduced tags: start from clipped_tags, then override symmetry faces
+    reduced_tags_list = []
+    for ti in range(num_clipped_tris):
+        if ti in symmetry_face_set:
+            reduced_tags_list.append(SYMMETRY_TAG)
+        elif clipped_tags is not None and ti < len(clipped_tags):
+            reduced_tags_list.append(clipped_tags[ti])
+        else:
+            reduced_tags_list.append(1)  # Default to wall
 
-        # Check if all vertices are kept
-        if np.all(keep_mask[tri]):
-            # Remap vertex indices
-            new_tri = [old_to_new[v] for v in tri]
-            reduced_triangles.append(new_tri)
-
-            # Determine tag
-            if tri_idx in symmetry_face_set:
-                reduced_tags.append(SYMMETRY_TAG)
-            elif surface_tags is not None and tri_idx < len(surface_tags):
-                reduced_tags.append(surface_tags[tri_idx])
-            else:
-                reduced_tags.append(1)  # Default to wall
-
-    if len(reduced_triangles) == 0:
+    if num_clipped_tris == 0:
         raise ValueError("Symmetry reduction resulted in empty mesh")
 
-    reduced_indices = np.array(reduced_triangles, dtype=int).T  # (3, M) — matches bempp Grid format
-    reduced_surface_tags = np.array(reduced_tags, dtype=int) if reduced_tags else None
+    reduced_surface_tags = np.array(reduced_tags_list, dtype=int) if reduced_tags_list else None
 
     # Calculate reduction factor
     if symmetry_type == SymmetryType.QUARTER_XZ:
@@ -639,7 +923,7 @@ def apply_symmetry_reduction(
         'reduction_factor': reduction_factor,
         'original_vertices': vertices.shape[1],
         'reduced_vertices': reduced_vertices.shape[1],
-        'original_triangles': indices.shape[0],
+        'original_triangles': work_indices.shape[1],
         'reduced_triangles': reduced_indices.shape[1]
     }
 

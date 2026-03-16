@@ -69,24 +69,33 @@ def _finalize_cancelled_job(
 
 
 def _resolve_occ_adaptive_quadrants(validated_payload: dict[str, Any]) -> int:
-    """Extract and enforce quadrants for the OCC adaptive path.
+    """Extract and potentially reduce quadrants for BEM symmetry.
 
-    Currently enforces ``quadrants == 1234`` because the BEM symmetry
-    reduction is not yet properly implemented — the
-    ``apply_neumann_bc_on_symmetry_planes`` function is a no-op and A/B
-    testing shows 18-25 dB errors when using a half-model.  Once a proper
-    BEM symmetry formulation (image method or modified Green's function)
-    is implemented, this enforcement can be relaxed.
+    For full-circle geometries (quadrants=1234) with symmetric params
+    (no guiding curves, no morph), the geometry has YZ symmetry.  We
+    can build a half-model mesh (quadrants=12) and use the image source
+    method in BEM for a ~4× speedup.  This follows the tessellation-last
+    principle: cut the B-Rep geometry BEFORE meshing, not after.
     """
     q = int(validated_payload.get("quadrants", 1234))
     if q != 1234:
-        logger.warning(
-            "Quadrants=%d requested but BEM symmetry reduction is not yet "
-            "implemented correctly. Forcing quadrants=1234 (full model).", q
-        )
-        validated_payload["quadrants"] = 1234
+        # User explicitly requested a partial horn — honour it.
+        return q
+
+    # Check if geometry supports YZ symmetry exploitation.
+    gcurve = int(validated_payload.get("gcurve_type", 0) or 0)
+    morph = int(validated_payload.get("morph_target", 0) or 0)
+    if gcurve != 0 or morph != 0:
+        # Non-axisymmetric features break YZ symmetry.
         return 1234
-    return q
+
+    # Symmetric full-circle geometry → build half-model for BEM.
+    logger.info(
+        "Symmetric geometry detected (gcurve=0, morph=0). "
+        "Building half-model mesh (quadrants=12) for BEM image-source method."
+    )
+    validated_payload["quadrants"] = 12
+    return 12
 
 
 def _extract_occ_adaptive_canonical_mesh(
@@ -217,12 +226,20 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
             queued_quadrants = _resolve_occ_adaptive_quadrants(validated_payload)
+            # Determine if B-Rep symmetry cut is needed (tessellation-last).
+            # When _resolve returns 12, we should build full geometry but cut at
+            # the B-Rep level before tessellation.
+            _symmetry_cut = "yz" if queued_quadrants == 12 else None
+            # The builder always uses quadrants=1234 for full geometry construction;
+            # the symmetry_cut parameter handles the B-Rep clipping.
+            validated_payload["quadrants"] = 1234
             occ_result = build_waveguide_mesh(
                 validated_payload,
                 include_canonical=True,
                 cancellation_callback=lambda: _cancellation_callback(
                     "Cancellation requested while preparing adaptive mesh"
                 ),
+                symmetry_cut=_symmetry_cut,
             )
             _cancellation_callback("Cancellation requested after adaptive mesh build completed")
             vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
