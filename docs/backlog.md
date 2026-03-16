@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 15, 2026
+Last updated: March 16, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -10,6 +10,12 @@ Detailed completion history from the March 11-12, 2026 cleanup phase lives in `d
 ### Upstream-downstream integrity
 
 Modules must not compensate for defects that belong upstream. Each module should receive correct input and fail visibly if it does not. When downstream code contains a workaround for an upstream defect, the fix belongs in the upstream module, not in the workaround.
+
+### Tessellation-last principle
+
+Tessellation (mesh generation) must always be the **last** geometry transformation step. Never modify, clip, or transform a tessellated mesh to achieve geometric changes — instead, modify the upstream parametric/B-Rep geometry and re-tessellate. Tessellated meshes are consumed directly by solvers and exporters without further geometric mutation.
+
+Rationale: OCC free-meshing does not produce mirror-symmetric vertices, so post-tessellation clipping creates meshes that are not equivalent to the original (measured: 14.8 dB BEM error from clipping artifacts). Cutting the smooth B-Rep geometry before tessellation produces clean, purpose-built meshes.
 
 ### Docs and audit discipline
 
@@ -37,7 +43,17 @@ Status as of March 15, 2026:
 
 #### Status (March 16, 2026)
 
-Profiling and A/B testing complete. The performance potential is real (2.66x speedup, 2.96x DOF reduction at 700 elements; scales quadratically so ~4x speedup expected at 4000 elements). The current mesh-slicing implementation is wrong — must use the image source method instead.
+Profiling and A/B testing complete. The performance potential is real (2.66x speedup, 2.96x DOF reduction at 700 elements; scales quadratically so ~4x speedup expected at 4000 elements).
+
+**Key finding**: Post-tessellation mesh clipping is fundamentally flawed — OCC free-meshing produces asymmetric vertices (171 vs 172 DOFs per side), so clipping a tessellated mesh creates a different discretization (measured 14.8 dB BEM error). The image source method itself is correct (validated at 0.000 dB error on a proper symmetric mesh), but must operate on a mesh that was **purpose-built as a half-model** by the OCC builder.
+
+**Revised approach**: Cut the B-Rep geometry at the symmetry plane BEFORE tessellation (tessellation-last principle). Two approaches were attempted:
+
+1. **`quadrants=12` in OCC builder** — The builder already supports this (limits φ ∈ [0, π]), but `closed=False` changes upstream geometry construction in fundamental ways (`_build_annular_surface_from_boundaries`, `_build_mouth_rim_from_boundaries` etc. all assume closed loops when `quadrants=1234`), causing "Curve loop is not closed" errors. Not viable without significant refactoring of the builder's topology construction.
+
+2. **B-Rep symmetry cut via `_apply_symmetry_cut_yz()`** — Build full geometry with `quadrants=1234`, then use `gmsh.model.occ.fragment()` to split all surfaces at the YZ plane (X=0) before tessellation. This is implemented in `waveguide_builder.py` with a `symmetry_cut="yz"` parameter. **Current blocker**: The cut function has a bug — the Gmsh `addRectangle()` API creates surfaces in the XY plane only. The function was creating the cutting surface in the wrong plane (XY instead of YZ). Fixed to use explicit point/line/surface construction, but now hits a new Gmsh error: `Unknown surface 2` during `fragment()` — likely the OCC `fragment` operation is failing because the cutting surface intersects complex BSpline patches in ways that OCC cannot resolve cleanly.
+
+**SPL error status**: When the cut function was creating a wrongly-oriented cutting plane (no actual cut), the half mesh was identical to the full mesh (same verts/tris) but the image source BEM still showed 12-13 dB errors. This confirms the image source implementation itself has remaining issues beyond just the mesh cut. The 0.000 dB validation was on a synthetically-constructed symmetric mesh, not on the actual OCC-built mesh.
 
 #### Decisions
 
@@ -77,58 +93,62 @@ bempp-cl has no built-in image/symmetry support, but supports cross-grid operato
 - [x] Remove `enable_symmetry: false` override in `src/solver/index.js`.
 - [x] A/B test — FAILED: 18-25 dB SPL errors. Script: `server/scripts/ab_test_symmetry.py`.
 - [x] Re-enable `quadrants == 1234` safety gate — Done in `simulation_runner.py` and `simulation_validation.py`.
+- [x] Implement image source operators (`_assemble_image_operators`, cross-grid assembly) in `solve_optimized.py`.
+- [x] Implement `create_mirror_grid()` in `symmetry.py` (flip + reverse winding).
+- [x] Add `symmetry_cut` parameter to `build_waveguide_mesh()` and `_apply_symmetry_cut_yz()`.
+- [x] Add `_resolve_occ_adaptive_quadrants()` to detect symmetric geometries in `simulation_runner.py`.
+- [x] Update `evaluate_symmetry_policy()` to skip clipping when mesh is already a half-model.
+- [x] Validate image source method at 0.000 dB on synthetic symmetric mesh.
+- [x] Identify tessellation-last principle and add as working rule.
+- [x] Fix `_apply_symmetry_cut_yz` to construct cutting plane in correct orientation (YZ, not XY).
+- [x] Fix tool surface removal in `_apply_symmetry_cut_yz` (pure tool fragments were not being removed).
+- [x] Fix `closed` flag regression (`closed` must not depend on `symmetry_cut`).
 
-#### Action plan
+#### Action plan (revised — geometry-first approach)
 
-**Step 1 — Add `create_mirror_grid()` to `server/solver/symmetry.py`**
-- Input: `(vertices: np.ndarray (3,N), indices: np.ndarray (3,M), symmetry_planes: List[SymmetryPlane])`
-- For `SymmetryPlane.YZ` (X=0): flip sign of vertices[0, :]
-- For `SymmetryPlane.XY` (Z=0): flip sign of vertices[2, :]
-- Reverse triangle winding: swap `indices[1, :]` ↔ `indices[2, :]` — this produces correct reflected normals n_ȳ in bempp
-- For both planes (quarter model): build three additional grids (X-mirror, Z-mirror, XZ-mirror), each with the appropriate flips and winding
-- Return list of `(mirrored_vertices, mirrored_indices)` tuples — one per image contribution
+**Step 0 — Build half-model mesh at the geometry level** *(BLOCKED — see problems below)*
 
-**Step 2 — Add `_assemble_image_operators()` to `HornBEMSolver` in `server/solver/solve_optimized.py`**
-- Called after building function spaces on the reduced grid
-- For each mirror grid (from Step 1):
-  - Build `bempp_api.Grid(mirror_verts, mirror_indices, domain_indices=mirror_tags)`
-  - Build DP0 and P1 function spaces on the mirror grid
-  - Assemble all 4 image operators:
-    - `slp_img = helmholtz.single_layer(dp0_mirror, p1_reduced, p1_reduced, k)` — no normals: sign is always +1
-    - `dlp_img = helmholtz.double_layer(p1_mirror, p1_reduced, p1_reduced, k)` — uses mirror normals from reversed winding ✓
-    - `hyp_img = helmholtz.hypersingular(p1_mirror, p1_reduced, dp0_reduced, k)` — trial=mirror (correct n_ȳ), test=reduced (correct n_x) ✓
-    - `adlp_img = helmholtz.adjoint_double_layer(dp0_mirror, p1_reduced, dp0_reduced, k)` — uses test normals from reduced grid ✓
-  - Accumulate: total operator = direct + sum of image operators
-- Store image spaces on `self` for use in `_solve_single_frequency`
+Two sub-approaches were attempted:
 
-Note on cross-grid operators: bempp-cl assembles operators by evaluating the kernel between all test/trial pairs regardless of which grid they sit on. Cross-grid assembly (test and trial on different grids) is standard BEM and supported by bempp-cl.
+**0a. Direct `quadrants=12` build** — FAILED
+- The builder's `closed` flag gates all downstream topology construction (throat disc, mouth rim, rear disc, annular surfaces). Setting `closed=False` via `quadrants≠1234` causes "Curve loop is not closed" errors because surface constructors assume closed curve loops.
+- Would require significant refactoring of `_build_annular_surface_from_boundaries`, `_build_mouth_rim_from_boundaries`, `_build_throat_disc_from_inner_boundary`, and `_build_rear_disc_assembly` to handle open-topology half-models.
 
-**Step 3 — Modify `_solve_single_frequency()` to use image operators**
-- When `self.symmetry_info` is set (half/quarter model):
-  - Replace `dlp`, `slp`, `hyp`, `adlp` with summed versions from Step 2
-  - Double the excitation RHS: the throat source and its mirror image both contribute, with equal amplitude for Neumann BC (rigid wall), so `neumann_rhs_image = neumann_rhs_direct` and `total_rhs = rhs_direct + rhs_image`
-    - Image RHS: assemble neumann_fun projected onto `p1_mirror` space, then apply image SLP/ADLP to get p1_reduced DOFs
-  - The GMRES solve is then on the reduced system (N/2 DOFs) with the image-augmented operators — correct physics, genuine speedup
+**0b. B-Rep symmetry cut (`symmetry_cut="yz"`)** — PARTIALLY IMPLEMENTED, NEEDS DEBUGGING
+- Build full geometry with `quadrants=1234`, then use `gmsh.model.occ.fragment()` to split all surfaces at the YZ plane before meshing.
+- **Implementation**: `_apply_symmetry_cut_yz()` in `waveguide_builder.py` (~line 2041). Creates a planar surface at X=0, fragments all model surfaces against it, removes surfaces with COM at X<0, removes tool surface fragments, updates `surface_groups` mapping.
+- **Bug fixed**: `addRectangle()` always creates in XY plane — replaced with explicit point/line/planeSurface construction in the YZ plane (X=0).
+- **Bug fixed**: Tool surface fragments (from the cutting rectangle) were not being removed, causing the half mesh to have more elements than the full mesh.
+- **Bug fixed**: `closed` flag was incorrectly gated on `symmetry_cut` (`closed = (quadrants == 1234) and not symmetry_cut`), breaking upstream geometry construction. Reverted to `closed = (quadrants == 1234)`. Watertight validation now uses `require_watertight=closed and not symmetry_cut`.
+- **Current error**: `Unknown surface 2` — the `fragment()` call fails because OCC cannot cleanly fragment complex BSpline surface patches against a planar surface. This may be a fundamental limitation of the OCC boolean fragment operation on the BSpline patches used by the builder.
+- **Possible fix**: Instead of fragmenting BSpline surfaces (which OCC may not handle well), try a 3D approach: create a large half-space box (X≥0) and use `gmsh.model.occ.intersect()` on individual surfaces. Or try `gmsh.model.occ.cut()`. Alternatively, synchronize the OCC model before fragment (call `occ.synchronize()` before the fragment step) — the surfaces may not be registered in the OCC kernel yet when fragment is called.
 
-**Step 4 — Update `solve_optimized()` entry point**
-- Pass `symmetry_info` through to `HornBEMSolver` constructor (already partially there)
-- Remove the "no-op" `apply_neumann_bc_on_symmetry_planes` call and replace with the actual image operator setup
+**Step 1 — `create_mirror_grid()` in `server/solver/symmetry.py`** *(already implemented)*
+- Flip vertex coordinates + reverse winding for mirror grids
+- Returns `(mirrored_vertices, mirrored_indices)` tuples
 
-**Step 5 — Directivity post-processing**
-- The solution `p` is on the reduced mesh with correct Neumann BC on the symmetry plane
-- Directivity evaluation (`calculate_directivity_patterns_correct`) integrates over the mesh — this must also use the image Green's function to correctly evaluate the far-field pressure
-- Either: (a) also build image potential operators for directivity, or (b) re-expand solution to the full mesh before directivity evaluation
-- Option (b) is simpler: mirror the solution values (`p_full = [p_reduced; p_mirror]` for Neumann) and evaluate directivity on the full reconstructed mesh
-- Keep option (b) as the first implementation; switch to (a) if directivity accuracy is insufficient
+**Step 2 — `_assemble_image_operators()` in `HornBEMSolver`** *(already implemented)*
+- Builds bempp Grid + DP0/P1 spaces on each mirror grid
+- Cross-grid operators assembled per-frequency in `_solve_single_frequency`
 
-**Step 6 — Validate with A/B test**
-- Run `server/scripts/ab_test_symmetry.py` — must pass 0.5 dB threshold across all planes and frequencies
-- Run full server test suite: `cd server && python3 -m pytest tests/ -q`
-- Run frontend tests: `npm test`
+**Step 3 — Dense matrix image solve in `_solve_single_frequency()`** *(already implemented)*
+- LHS: `A = A_direct + A_image` (dense matrices)
+- RHS: `b = b_direct + b_image`
+- Scipy GMRES on the dense system
+- On-axis SPL via direct + image potential operators
 
-**Step 7 — Remove safety gate and update docs**
-- Remove the `quadrants=1234` override in `simulation_validation.py`
-- Remove the warning-and-override in `simulation_runner.py`
+**Step 4 — Directivity re-expansion** *(already implemented)*
+- Reconstruct full mesh by concatenating reduced + mirror grids
+- Replicate P1/DP0 solution coefficients for each mirror section
+
+**Step 5 — Validate with A/B test** *(blocked on Step 0)*
+- The image method itself validated at 0.000 dB on a synthetically-constructed symmetric mesh
+- **WARNING**: When the B-Rep cut was broken (no actual cut, same mesh used for both), image source BEM still showed 12-13 dB errors vs full model. This suggests the image source operator assembly/solve has issues beyond just the mesh quality. The 0.000 dB validation used a handcrafted symmetric mesh, not the actual OCC mesh pipeline. Need to investigate whether the image source operators are being assembled correctly on real OCC meshes.
+- A/B test script: `server/scripts/ab_test_symmetry.py`
+
+**Step 6 — Remove safety gate and update docs**
+- Remove `quadrants=1234` override in `simulation_validation.py` and `simulation_runner.py`
+- Remove `clip_mesh_at_plane()` and related post-tessellation clipping code from `symmetry.py`
 - Update backlog
 
 **Fallback: Approach B (block-Toeplitz)**
@@ -147,12 +167,27 @@ If Approach A's cross-grid operator assembly turns out to be unsupported by bemp
 - Fixed `reduced_indices` shape `(M,3)` → `(3,M)` in `symmetry.py` (bempp Grid expects column-major indices).
 
 #### Key files
-- `server/solver/symmetry.py` — parameter-driven detection + mesh reduction
-- `server/solver/solve_optimized.py` — BEM solver (operator construction, `apply_neumann_bc_on_symmetry_planes` no-op)
-- `server/services/simulation_runner.py` — quadrants enforcement (safety gate)
+- `server/solver/symmetry.py` — parameter-driven detection + mesh reduction + `create_mirror_grid()`
+- `server/solver/solve_optimized.py` — BEM solver with image source operators (`_assemble_image_operators`, `_solve_single_frequency`)
+- `server/solver/waveguide_builder.py` — OCC builder with `symmetry_cut` parameter, `_apply_symmetry_cut_yz()`
+- `server/services/simulation_runner.py` — quadrants enforcement (safety gate) + `_resolve_occ_adaptive_quadrants()`
 - `server/services/simulation_validation.py` — quadrants=1234 force
 - `server/scripts/benchmark_bem_symmetry.py` — performance profiler
-- `server/scripts/ab_test_symmetry.py` — directivity comparison test
+- `server/scripts/ab_test_symmetry.py` — A/B directivity comparison test (geometry-first approach)
+
+#### Suggested next steps for a fresh session
+
+1. **Debug `_apply_symmetry_cut_yz()`**: The `gmsh.model.occ.fragment()` call fails with "Unknown surface 2". Try:
+   - Add `gmsh.model.occ.synchronize()` BEFORE the fragment call (surfaces may not be registered in OCC kernel yet)
+   - If that fails, try `gmsh.model.occ.cut()` or `gmsh.model.occ.intersect()` with a half-space box instead of fragment with a plane
+   - As a last resort, consider approach 0a (refactoring builder for open-topology half-models)
+
+2. **Investigate image source BEM errors independently**: Even with identical meshes (no cut), the image source method shows 12-13 dB errors. Run a controlled test: use the SAME full mesh for both full and half solves, but apply image source operators on the half. If errors persist, the operator assembly/solve has bugs independent of mesh quality. Check:
+   - Sign conventions in cross-grid operators (especially hypersingular + adjoint double-layer)
+   - Whether bempp-cl cross-grid assembly handles P1 DOF deduplication correctly at mesh boundaries
+   - The dense matrix solve (GMRES) convergence and condition number
+
+3. **Run test suites**: `cd server && python -m pytest` and `npm test` to check for regressions from the current changes.
 
 ### P2. Observation Distance Measurement Origin — User-Selectable Reference Point
 

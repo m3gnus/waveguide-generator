@@ -2038,6 +2038,129 @@ def _configure_mesh_size(
 # Physical group assignment (ABEC convention)
 # ---------------------------------------------------------------------------
 
+def _apply_symmetry_cut_yz(surface_groups: Dict[str, List[int]]) -> None:
+    """Cut all model surfaces at the YZ plane (X=0), keeping X >= 0.
+
+    Uses OCC BooleanFragment to split surfaces at the cutting plane,
+    then removes entities whose centre-of-mass is at X < 0.  The
+    ``surface_groups`` dict is updated in-place so that downstream
+    physical-group assignment references the correct post-cut tags.
+
+    This implements the *tessellation-last* principle: geometry is
+    modified at the B-Rep level BEFORE Gmsh generates the mesh.
+    """
+    all_surface_dimtags = gmsh.model.getEntities(2)
+    if not all_surface_dimtags:
+        return
+
+    # Build a large planar surface at X=0 (in the YZ plane) to use as
+    # the cutting tool.  We construct it from 4 points because
+    # addRectangle always creates in the XY plane.
+    bb = gmsh.model.getBoundingBox(-1, -1)  # xmin,ymin,zmin,xmax,ymax,zmax
+    pad = max(abs(bb[3] - bb[0]), abs(bb[4] - bb[1]), abs(bb[5] - bb[2])) * 2
+    y_lo, y_hi = bb[1] - pad, bb[4] + pad
+    z_lo, z_hi = bb[2] - pad, bb[5] + pad
+    p1 = gmsh.model.occ.addPoint(0, y_lo, z_lo)
+    p2 = gmsh.model.occ.addPoint(0, y_hi, z_lo)
+    p3 = gmsh.model.occ.addPoint(0, y_hi, z_hi)
+    p4 = gmsh.model.occ.addPoint(0, y_lo, z_hi)
+    l1 = gmsh.model.occ.addLine(p1, p2)
+    l2 = gmsh.model.occ.addLine(p2, p3)
+    l3 = gmsh.model.occ.addLine(p3, p4)
+    l4 = gmsh.model.occ.addLine(p4, p1)
+    cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
+    cut_rect = gmsh.model.occ.addPlaneSurface([cl])
+
+    # Fragment all existing surfaces with the cutting rectangle.
+    # This splits any surface that crosses X=0 into two pieces.
+    object_dimtags = list(all_surface_dimtags)
+    tool_dimtags = [(2, cut_rect)]
+    try:
+        out_dimtags, out_map = gmsh.model.occ.fragment(
+            object_dimtags, tool_dimtags
+        )
+    except Exception as exc:
+        logger.warning(
+            "[MWG] Symmetry cut fragment failed: %s — skipping cut.", exc
+        )
+        # Clean up the rectangle and bail
+        try:
+            gmsh.model.occ.remove(tool_dimtags, recursive=True)
+        except Exception:
+            pass
+        gmsh.model.occ.synchronize()
+        return
+
+    gmsh.model.occ.synchronize()
+
+    # Build a mapping from old surface tags → new (post-fragment) tags.
+    # out_map[i] lists the output entities that correspond to object_dimtags[i].
+    # out_map has len(object_dimtags) + len(tool_dimtags) entries.
+    old_to_new: Dict[int, List[int]] = {}
+    for i, obj_dt in enumerate(object_dimtags):
+        old_tag = obj_dt[1]
+        new_tags = [t for d, t in out_map[i] if d == 2]
+        old_to_new[old_tag] = new_tags
+
+    # Identify surfaces that came from the cutting tool (rectangle).
+    # These are in out_map[len(object_dimtags):] and must always be removed.
+    tool_surface_tags: set[int] = set()
+    for i in range(len(object_dimtags), len(out_map)):
+        for d, t in out_map[i]:
+            if d == 2:
+                tool_surface_tags.add(t)
+    # Tool fragments that also appear as object fragments are shared topology
+    # (e.g. where the rectangle overlaps an existing surface).  Only remove
+    # tags that are EXCLUSIVELY from the tool.
+    object_surface_tags: set[int] = set()
+    for i in range(len(object_dimtags)):
+        for d, t in out_map[i]:
+            if d == 2:
+                object_surface_tags.add(t)
+    pure_tool_tags = tool_surface_tags - object_surface_tags
+
+    # Classify post-fragment surfaces: remove X < 0 AND pure tool surfaces.
+    all_post_surfaces = gmsh.model.getEntities(2)
+    to_remove = []
+    for dim, tag in all_post_surfaces:
+        if tag in pure_tool_tags:
+            to_remove.append((dim, tag))
+            continue
+        try:
+            com = gmsh.model.occ.getCenterOfMass(dim, tag)
+            if com[0] < -1e-8:
+                to_remove.append((dim, tag))
+        except Exception:
+            pass  # Entity may have been consumed by fragment
+
+    if to_remove:
+        gmsh.model.occ.remove(to_remove, recursive=True)
+        gmsh.model.occ.synchronize()
+
+    removed_tags = {t for _, t in to_remove}
+
+    # Update surface_groups in-place: replace old tags with surviving new tags.
+    surviving = {t for _, t in gmsh.model.getEntities(2)}
+    for group_name in list(surface_groups.keys()):
+        old_tags = surface_groups[group_name]
+        new_tags = []
+        for ot in old_tags:
+            if ot in old_to_new:
+                # This tag was fragmented → use its children that survived
+                new_tags.extend(t for t in old_to_new[ot] if t in surviving)
+            elif ot in surviving:
+                # Tag wasn't involved in fragment but still exists
+                new_tags.append(ot)
+            # else: tag no longer exists (removed or consumed)
+        surface_groups[group_name] = new_tags
+
+    logger.info(
+        "[MWG] Symmetry cut: removed %d surfaces (%d X<0, %d tool), %d surviving.",
+        len(to_remove), len(to_remove) - len(pure_tool_tags & removed_tags),
+        len(pure_tool_tags & removed_tags), len(surviving),
+    )
+
+
 def _assign_physical_groups(
     surface_groups: Dict[str, List[int]],
 ) -> None:
@@ -2641,11 +2764,21 @@ def build_waveguide_mesh(
     *,
     include_canonical: bool = False,
     cancellation_callback: Optional[Callable[[], None]] = None,
+    symmetry_cut: Optional[str] = None,
 ) -> dict:
     """Build a .msh from ATH parameters using Gmsh OCC Python API.
 
     Accepts both R-OSSE and OSSE formula types. See WaveguideParamsRequest
     in server/app.py for the full parameter schema.
+
+    Args:
+        params: Waveguide parameter dictionary.
+        include_canonical: If True, extract canonical mesh arrays.
+        cancellation_callback: Optional cancellation check.
+        symmetry_cut: If set, cut the B-Rep geometry at a symmetry plane
+            BEFORE tessellation (tessellation-last principle).  Values:
+            ``"yz"`` — cut at X=0, keep X >= 0 (half model).
+            ``None`` — no cut (default).
 
     Returns:
         {
@@ -2828,6 +2961,10 @@ def build_waveguide_mesh(
                 enclosure_bounds=enc_data.get("bounds"),
             )
 
+            # --- Symmetry cut (tessellation-last: cut B-Rep BEFORE meshing) ---
+            if symmetry_cut == "yz":
+                _apply_symmetry_cut_yz(surface_groups)
+
             # --- Physical groups (ABEC-compatible) ---
             _assign_physical_groups(surface_groups)
 
@@ -2855,7 +2992,7 @@ def build_waveguide_mesh(
             if canonical_mesh is not None:
                 canonical_mesh = _orient_and_validate_canonical_mesh(
                     canonical_mesh,
-                    require_watertight=closed,
+                    require_watertight=closed and not symmetry_cut,
                     require_single_boundary_loop=False,
                 )
                 flipped_tags = canonical_mesh.get("flippedElementTags", [])

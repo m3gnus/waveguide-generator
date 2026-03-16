@@ -44,7 +44,9 @@ from .directivity_correct import (
 from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
 from .observation import infer_observation_frame, resolve_safe_observation_distance
 from .symmetry import (
+    SymmetryPlane,
     build_symmetry_policy,
+    create_mirror_grid,
     evaluate_symmetry_policy,
     validate_symmetry_reduction,
 )
@@ -175,6 +177,12 @@ class HornBEMSolver:
             self.dp0_space, self.p1_space, self.p1_space
         )
 
+        # Symmetry / image-source state (populated by _assemble_image_operators)
+        self.symmetry_info: Optional[Dict] = None
+        self.symmetry_planes: Optional[List] = None
+        self.mirror_grids: List[Tuple[np.ndarray, np.ndarray]] = []
+        self.mirror_spaces: List[Tuple] = []
+
         # Geometry setup
         self._setup_driver_geometry()
 
@@ -270,6 +278,46 @@ class HornBEMSolver:
         return bempp_api.GridFunction(self.dp0_space, coefficients=coeffs)
 
     # ------------------------------------------------------------------
+    # Image-source operators for symmetry reduction
+    # ------------------------------------------------------------------
+
+    def _assemble_image_operators(
+        self,
+        mirror_grids: List[Tuple[np.ndarray, np.ndarray]],
+        symmetry_planes: List,
+        symmetry_info: Dict,
+    ) -> None:
+        """
+        Build bempp function spaces on each mirror grid for cross-grid
+        image-source operators.
+
+        The actual Helmholtz operators are wavenumber-dependent and are
+        assembled per-frequency inside ``_solve_single_frequency``.
+
+        Args:
+            mirror_grids: List of (mirror_vertices, mirror_indices) tuples
+                          produced by ``create_mirror_grid``.
+            symmetry_planes: List of SymmetryPlane enums used.
+            symmetry_info: Symmetry metadata dict from evaluate_symmetry_policy.
+        """
+        self.symmetry_planes = symmetry_planes
+        self.symmetry_info = symmetry_info
+        self.mirror_grids = mirror_grids
+        self.mirror_spaces = []
+
+        for mg_verts, mg_indices in mirror_grids:
+            # Mirror grid — no domain_indices / surface_tags needed
+            mg_grid = bempp_api.Grid(mg_verts, mg_indices)
+            dp0_mirror = bempp_api.function_space(mg_grid, "DP", 0)
+            p1_mirror = bempp_api.function_space(mg_grid, "P", 1)
+            self.mirror_spaces.append((dp0_mirror, p1_mirror))
+
+        logger.info(
+            "[HornBEM] Image-source operators prepared: %d mirror grid(s)",
+            len(self.mirror_spaces),
+        )
+
+    # ------------------------------------------------------------------
     # Single-frequency solve
     # ------------------------------------------------------------------
 
@@ -317,8 +365,113 @@ class HornBEMSolver:
                 self.dp0_space, self.p1_space, self.p1_space, k, **op_kwargs
             )
             coupling = 1j / k
-            lhs = 0.5 * self.lhs_identity - dlp - coupling * (-hyp)
-            rhs = (-slp - coupling * (adlp + 0.5 * self.rhs_identity)) * neumann_fun
+
+            # ----------------------------------------------------------
+            # Image-source contributions (cross-grid operators)
+            # ----------------------------------------------------------
+            if self.mirror_spaces:
+                # Cross-grid operators can't be added to direct operators
+                # via bempp's __add__ (different domain spaces). Assemble to
+                # dense matrices and sum at the numpy level instead.
+                from scipy.sparse.linalg import gmres as _scipy_gmres
+
+                lhs_direct = 0.5 * self.lhs_identity - dlp - coupling * (-hyp)
+                A = lhs_direct.weak_form().to_dense()
+
+                # RHS: direct part
+                rhs_direct_gf = (-slp - coupling * (adlp + 0.5 * self.rhs_identity)) * neumann_fun
+                b = np.asarray(rhs_direct_gf.projections(self.p1_space))
+
+                for dp0_mirror, p1_mirror in self.mirror_spaces:
+                    slp_img = bempp_api.operators.boundary.helmholtz.single_layer(
+                        dp0_mirror, self.p1_space, self.p1_space, k, **op_kwargs
+                    )
+                    dlp_img = bempp_api.operators.boundary.helmholtz.double_layer(
+                        p1_mirror, self.p1_space, self.p1_space, k, **op_kwargs
+                    )
+                    hyp_img = bempp_api.operators.boundary.helmholtz.hypersingular(
+                        p1_mirror, self.p1_space, self.p1_space, k, **op_kwargs
+                    )
+                    adlp_img = bempp_api.operators.boundary.helmholtz.adjoint_double_layer(
+                        dp0_mirror, self.p1_space, self.p1_space, k, **op_kwargs
+                    )
+
+                    # LHS image: same Burton-Miller form without identity jump
+                    A_img = (-dlp_img + coupling * hyp_img).weak_form().to_dense()
+                    A += A_img
+
+                    # RHS image: neumann_fun on mirror grid (same coeff pattern)
+                    mirror_coeffs = np.zeros(dp0_mirror.global_dof_count, dtype=np.complex128)
+                    valid_dofs = self.driver_dofs[self.driver_dofs < dp0_mirror.global_dof_count]
+                    mirror_coeffs[valid_dofs] = 1.0
+                    neumann_mirror = bempp_api.GridFunction(
+                        dp0_mirror,
+                        coefficients=1j * self.rho * omega * mirror_coeffs,
+                    )
+                    rhs_img_gf = (-slp_img - coupling * adlp_img) * neumann_mirror
+                    b += np.asarray(rhs_img_gf.projections(self.p1_space))
+
+                # Direct scipy GMRES solve on the dense system
+                x, info = _scipy_gmres(A, b, atol=1e-5, restart=100)
+                if info != 0:
+                    logger.warning("[HornBEM] GMRES did not converge (info=%d) at %.1f Hz", info, freq)
+                p_total = bempp_api.GridFunction(self.p1_space, coefficients=x)
+                iter_count = None  # scipy gmres doesn't expose iteration count in this path
+
+                # On-axis SPL (skip the standard GMRES path below)
+                frame = (
+                    observation_frame
+                    if isinstance(observation_frame, dict)
+                    else infer_observation_frame(self.grid)
+                )
+                origin_center = frame["origin_center"]
+                obs_xyz = origin_center + frame["axis"] * float(observation_distance_m)
+                obs_point = obs_xyz.reshape(3, 1)
+
+                pot_kwargs = _operator_kwargs(self.potential_interface, self.bem_precision)
+                dlp_pot = bempp_api.operators.potential.helmholtz.double_layer(
+                    self.p1_space, obs_point, k, **pot_kwargs
+                )
+                slp_pot = bempp_api.operators.potential.helmholtz.single_layer(
+                    self.dp0_space, obs_point, k, **pot_kwargs
+                )
+                pressure_on_axis = dlp_pot * p_total - slp_pot * neumann_fun
+
+                # Add image potential contributions
+                for dp0_mirror, p1_mirror in self.mirror_spaces:
+                    dlp_pot_img = bempp_api.operators.potential.helmholtz.double_layer(
+                        p1_mirror, obs_point, k, **pot_kwargs
+                    )
+                    slp_pot_img = bempp_api.operators.potential.helmholtz.single_layer(
+                        dp0_mirror, obs_point, k, **pot_kwargs
+                    )
+                    p_mirror = bempp_api.GridFunction(
+                        p1_mirror, coefficients=p_total.coefficients
+                    )
+                    m_coeffs = np.zeros(dp0_mirror.global_dof_count, dtype=np.complex128)
+                    v_dofs = self.driver_dofs[self.driver_dofs < dp0_mirror.global_dof_count]
+                    m_coeffs[v_dofs] = 1.0
+                    n_mirror = bempp_api.GridFunction(
+                        dp0_mirror,
+                        coefficients=1j * self.rho * omega * m_coeffs,
+                    )
+                    pressure_on_axis = pressure_on_axis + dlp_pot_img * p_mirror - slp_pot_img * n_mirror
+
+                p_ref = 20e-6
+                p_amplitude = np.abs(pressure_on_axis[0, 0])
+                spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
+
+                impedance = calculate_throat_impedance_horn(
+                    self.grid, p_total, self.driver_dofs,
+                    self.throat_p1_dofs, self.throat_element_areas
+                )
+                di = estimate_di_from_ka(self.grid, k, observation_frame=frame)
+                solution = (p_total, velocity_fun, self.p1_space, self.dp0_space)
+                return float(spl), impedance, float(di), solution, iter_count
+            else:
+                # No image sources — standard Burton-Miller
+                lhs = 0.5 * self.lhs_identity - dlp - coupling * (-hyp)
+                rhs = (-slp - coupling * (adlp + 0.5 * self.rhs_identity)) * neumann_fun
         else:
             lhs = dlp - 0.5 * self.lhs_identity
             rhs = slp * neumann_fun
@@ -638,7 +791,6 @@ def solve_optimized(
                 physical_tags = reduced_tags
                 reduction_factor = float(symmetry_info["reduction_factor"])
                 validate_symmetry_reduction(symmetry_info, verbose=verbose)
-                apply_neumann_bc_on_symmetry_planes(grid, symmetry_info)
                 throat_elements = np.where(reduced_tags == 2)[0]
             elif verbose:
                 if symmetry_policy["reason"] == "excitation_off_center":
@@ -775,6 +927,30 @@ def solve_optimized(
         bem_precision=bem_precision,
         use_burton_miller=use_burton_miller,
     )
+
+    # ------------------------------------------------------------------
+    # Image-source operators for symmetry reduction
+    # ------------------------------------------------------------------
+    if symmetry_policy.get("applied") and symmetry_info.get("symmetry_planes"):
+        try:
+            # Convert serialized plane strings back to SymmetryPlane enums
+            _plane_str_map = {p.value: p for p in SymmetryPlane}
+            _sym_planes_enum = [
+                _plane_str_map[s]
+                for s in symmetry_info["symmetry_planes"]
+                if s in _plane_str_map
+            ]
+            if _sym_planes_enum:
+                _mirror_grids = create_mirror_grid(reduced_v, reduced_i, _sym_planes_enum)
+                solver._assemble_image_operators(
+                    _mirror_grids, _sym_planes_enum, symmetry_info
+                )
+        except Exception as exc:
+            logger.warning(
+                "[HornBEM] Image-source operator setup failed: %s — "
+                "falling back to standard BEM (no image contribution).",
+                exc, exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Optional warm-up
@@ -963,15 +1139,93 @@ def solve_optimized(
         )
 
     valid_solutions = [(i, sol) for i, sol in enumerate(solutions) if sol is not None]
+
+    # ------------------------------------------------------------------
+    # Re-expand reduced solution to full mesh for directivity (Option b)
+    # ------------------------------------------------------------------
+    directivity_grid = grid
+    directivity_solutions = solutions
+    directivity_frame = observation_frame
+    if solver.mirror_spaces and solver.mirror_grids:
+        try:
+            # Build full grid by concatenating reduced + all mirror grids
+            all_verts = [grid.vertices]
+            all_indices = [grid.elements]
+            offset = grid.vertices.shape[1]
+            for mg_verts, mg_indices in solver.mirror_grids:
+                all_verts.append(mg_verts)
+                all_indices.append(mg_indices + offset)
+                offset += mg_verts.shape[1]
+            full_v = np.concatenate(all_verts, axis=1)
+            full_i = np.concatenate(all_indices, axis=1)
+            directivity_grid = bempp_api.Grid(full_v, full_i)
+            full_p1 = bempp_api.function_space(directivity_grid, "P", 1)
+            full_dp0 = bempp_api.function_space(directivity_grid, "DP", 0)
+            directivity_frame = infer_observation_frame(directivity_grid, observation_origin=observation_origin)
+
+            # Re-expand each solution: replicate coefficients for each mirror section
+            n_mirrors = len(solver.mirror_grids)
+            directivity_solutions = []
+            for sol in solutions:
+                if sol is None:
+                    directivity_solutions.append(None)
+                    continue
+                p_total_reduced, u_total_reduced, _, _ = sol
+                # P1 pressure: Neumann → same coefficients on each mirror section
+                p_coeffs_reduced = np.asarray(p_total_reduced.coefficients)
+                p_coeffs_full = np.tile(p_coeffs_reduced, 1 + n_mirrors)
+                if len(p_coeffs_full) != full_p1.global_dof_count:
+                    # Fallback: pad or trim to match
+                    _target = full_p1.global_dof_count
+                    if len(p_coeffs_full) < _target:
+                        p_coeffs_full = np.pad(p_coeffs_full, (0, _target - len(p_coeffs_full)))
+                    else:
+                        p_coeffs_full = p_coeffs_full[:_target]
+                p_full = bempp_api.GridFunction(full_p1, coefficients=p_coeffs_full)
+                # DP0 velocity: replicate
+                u_coeffs_reduced = np.asarray(u_total_reduced.coefficients)
+                u_coeffs_full = np.tile(u_coeffs_reduced, 1 + n_mirrors)
+                if len(u_coeffs_full) != full_dp0.global_dof_count:
+                    _target = full_dp0.global_dof_count
+                    if len(u_coeffs_full) < _target:
+                        u_coeffs_full = np.pad(u_coeffs_full, (0, _target - len(u_coeffs_full)))
+                    else:
+                        u_coeffs_full = u_coeffs_full[:_target]
+                u_full = bempp_api.GridFunction(full_dp0, coefficients=u_coeffs_full)
+                directivity_solutions.append((p_full, u_full, full_p1, full_dp0))
+
+            if verbose:
+                logger.info(
+                    "[HornBEM] Re-expanded solution to full mesh for directivity: "
+                    "%d vertices, %d elements",
+                    full_v.shape[1], full_i.shape[1],
+                )
+        except Exception as exc:
+            logger.warning(
+                "[HornBEM] Full-mesh re-expansion failed: %s — "
+                "directivity will use reduced mesh only.",
+                exc, exc_info=True,
+            )
+            directivity_grid = grid
+            directivity_solutions = solutions
+            directivity_frame = observation_frame
+
     if len(valid_solutions) > 0:
         indices, filtered_solutions = zip(*valid_solutions)
         filtered_freqs = frequencies[list(indices)]
+        # Use re-expanded solutions for directivity if available
+        filtered_dir_solutions = [
+            directivity_solutions[i] for i in indices
+            if directivity_solutions[i] is not None
+        ]
+        if len(filtered_dir_solutions) != len(filtered_freqs):
+            filtered_dir_solutions = list(filtered_solutions)
         try:
             filtered_directivity = calculate_directivity_patterns_correct(
-                grid, filtered_freqs, c, rho, list(filtered_solutions), effective_polar_config,
+                directivity_grid, filtered_freqs, c, rho, filtered_dir_solutions, effective_polar_config,
                 device_interface=potential_interface,
                 precision=bem_precision,
-                observation_frame=observation_frame,
+                observation_frame=directivity_frame,
             )
 
             _angle_count = 37
