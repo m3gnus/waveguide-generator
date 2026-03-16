@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from solver.observation import infer_observation_frame
 from solver.solve import solve
 from solver.solve_optimized import solve_optimized
 
@@ -296,6 +297,101 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
         self.assertGreater(adjusted_distance, 1.0)
         self.assertEqual(seen_directivity_distances, [adjusted_distance])
         self.assertTrue(results["metadata"]["observation"]["adjusted"])
+
+
+class ObservationOriginTest(unittest.TestCase):
+    def _create_horn_grid(self, horn_length_m: float = 0.12):
+        class HornGridStub:
+            pass
+
+        grid = HornGridStub()
+        throat_y = 0.0
+        mouth_y = horn_length_m
+        grid.vertices = np.array(
+            [
+                [0.0, throat_y, 0.0],
+                [0.01, throat_y, 0.0],
+                [0.0, throat_y, 0.01],
+                [0.05, mouth_y, 0.0],
+                [-0.05, mouth_y, 0.0],
+                [0.0, mouth_y, 0.05],
+                [0.0, mouth_y + 0.001, 0.0],
+            ],
+            dtype=np.float64,
+        ).T
+        grid.elements = np.array(
+            [[0, 1, 2], [3, 4, 5], [3, 5, 6]],
+            dtype=np.int64,
+        )
+        grid.domain_indices = np.array([2, 1, 1], dtype=np.int64)
+        return grid, horn_length_m
+
+    def test_mouth_vs_throat_origin_produces_different_origins(self):
+        grid, _ = self._create_horn_grid()
+        frame_mouth = infer_observation_frame(grid, observation_origin="mouth")
+        frame_throat = infer_observation_frame(grid, observation_origin="throat")
+
+        self.assertIn("origin_center", frame_mouth)
+        self.assertIn("origin_center", frame_throat)
+        self.assertIn("mouth_center", frame_mouth)
+        self.assertIn("source_center", frame_mouth)
+
+        mouth_origin = np.asarray(frame_mouth["origin_center"], dtype=np.float64)
+        throat_origin = np.asarray(frame_throat["origin_center"], dtype=np.float64)
+        mouth_center = np.asarray(frame_mouth["mouth_center"], dtype=np.float64)
+        source_center = np.asarray(frame_mouth["source_center"], dtype=np.float64)
+
+        np.testing.assert_array_almost_equal(mouth_origin, mouth_center)
+        np.testing.assert_array_almost_equal(throat_origin, source_center)
+
+    def test_horn_length_equals_mouth_throat_distance(self):
+        grid, horn_length = self._create_horn_grid()
+        frame = infer_observation_frame(grid, observation_origin="mouth")
+
+        mouth_center = np.asarray(frame["mouth_center"], dtype=np.float64)
+        source_center = np.asarray(frame["source_center"], dtype=np.float64)
+        axis = np.asarray(frame["axis"], dtype=np.float64)
+
+        along_axis = mouth_center - source_center
+        measured_length = float(np.abs(np.dot(along_axis, axis)))
+
+        self.assertGreater(measured_length, 0.0, "Horn length should be positive")
+        self.assertLess(
+            abs(measured_length - horn_length),
+            0.06,
+            f"Measured {measured_length:.4f}m should be within 0.06m of expected {horn_length}m",
+        )
+
+    def test_observation_origin_throat_uses_source_center(self):
+        grid, _ = self._create_horn_grid()
+        frame = infer_observation_frame(grid, observation_origin="throat")
+
+        origin_center = np.asarray(frame["origin_center"], dtype=np.float64)
+        source_center = np.asarray(frame["source_center"], dtype=np.float64)
+
+        np.testing.assert_array_almost_equal(origin_center, source_center)
+
+    def test_observation_origin_mouth_uses_mouth_center(self):
+        grid, _ = self._create_horn_grid()
+        frame = infer_observation_frame(grid, observation_origin="mouth")
+
+        origin_center = np.asarray(frame["origin_center"], dtype=np.float64)
+        mouth_center = np.asarray(frame["mouth_center"], dtype=np.float64)
+
+        np.testing.assert_array_almost_equal(origin_center, mouth_center)
+
+    def test_observation_origin_case_insensitive(self):
+        grid, _ = self._create_horn_grid()
+        frame_lower = infer_observation_frame(grid, observation_origin="throat")
+        frame_upper = infer_observation_frame(grid, observation_origin="THROAT")
+        frame_mixed = infer_observation_frame(grid, observation_origin="  Throat  ")
+
+        np.testing.assert_array_almost_equal(
+            frame_lower["origin_center"], frame_upper["origin_center"]
+        )
+        np.testing.assert_array_almost_equal(
+            frame_lower["origin_center"], frame_mixed["origin_center"]
+        )
 
 
 if __name__ == "__main__":
