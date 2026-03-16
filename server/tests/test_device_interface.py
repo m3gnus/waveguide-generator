@@ -261,6 +261,55 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         self.assertEqual(fake_bempp_api.BOUNDARY_OPERATOR_DEVICE_TYPE, "gpu")
         self.assertEqual(fake_bempp_api.POTENTIAL_OPERATOR_DEVICE_TYPE, "gpu")
 
+    def test_pocl_detection_identifies_pocl_devices(self):
+        self.assertTrue(di._is_pocl_device(SimpleNamespace(name="pocl CPU", vendor="pocl")))
+        self.assertTrue(di._is_pocl_device(SimpleNamespace(name="pocl - Apple M1", vendor="Apple")))
+        self.assertTrue(di._is_pocl_device(SimpleNamespace(name="Intel CPU", vendor="pocl")))
+        self.assertTrue(di._is_pocl_device(SimpleNamespace(name="POCL-CUDA", vendor="NVIDIA")))
+        self.assertFalse(di._is_pocl_device(SimpleNamespace(name="NVIDIA GeForce RTX 3080", vendor="NVIDIA")))
+        self.assertFalse(di._is_pocl_device(SimpleNamespace(name="Intel HD Graphics", vendor="Intel")))
+        self.assertFalse(di._is_pocl_device(None))
+        self.assertFalse(di._is_pocl_device(SimpleNamespace(name="", vendor="")))
+
+    def test_pocl_device_reclassified_as_cpu(self):
+        di.clear_device_selection_caches()
+        fake_pocl_device = SimpleNamespace(name="pocl - Apple M1", vendor="pocl")
+        
+        with patch("solver.device_interface._opencl_prerequisite_reason", return_value=None), patch(
+            "bempp_cl.core.opencl_kernels.find_cpu_driver",
+            side_effect=RuntimeError("no cpu driver"),
+        ), patch(
+            "bempp_cl.core.opencl_kernels.find_gpu_driver",
+            return_value=(object(), fake_pocl_device),
+        ):
+            inventory = di._opencl_inventory()
+        
+        self.assertFalse(inventory["gpu_available"])
+        self.assertTrue(inventory["gpu_reclassified_as_cpu"])
+        self.assertTrue(inventory["cpu_available"])
+        self.assertEqual(inventory["cpu_device_name"], "pocl - Apple M1")
+        self.assertIn("pocl", str(inventory["gpu_reason"]).lower())
+
+    def test_auto_mode_avoids_reclassified_pocl_gpu(self):
+        di.clear_device_selection_caches()
+        with patch(
+            "solver.device_interface._available_concrete_modes",
+            return_value=["opencl_cpu"],
+        ), patch(
+            "solver.device_interface._mode_availability",
+            return_value={
+                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "opencl_cpu": {"available": True, "reason": None},
+                "opencl_gpu": {
+                    "available": False,
+                    "reason": "pocl CPU-only device was misclassified as GPU",
+                    "gpu_reclassified_as_cpu": True,
+                },
+            },
+        ):
+            profile = di._selected_device_profile("auto")
+        self.assertEqual(profile["selected_mode"], "opencl_cpu")
+
 
 if __name__ == "__main__":
     unittest.main()

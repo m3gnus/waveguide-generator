@@ -186,7 +186,7 @@ If Approach A's cross-grid operator assembly turns out to be unsupported by bemp
 #### Additional items (approach-independent)
 
 - [x] Add committed ATH reference fixtures for reproducible regression testing.
-- [ ] _(GLM 5: SIMPLE)_ Fix OpenCL `kernel_function` error on Apple M1 Max — investigate whether pocl is being selected as "GPU" (it's CPU-only), and whether switching to `opencl_cpu` explicitly makes it work. This is separate from the symmetry work.
+- [x] Fix OpenCL `kernel_function` error on Apple M1 Max — pocl devices are now detected and reclassified as CPU-only. When bempp-cl's `find_gpu_driver()` returns a pocl device, it is marked as unavailable for GPU mode and falls back to CPU mode.
 
 #### Bugs fixed during this investigation
 

@@ -66,6 +66,21 @@ def _opencl_prerequisite_reason() -> Optional[str]:
     return None
 
 
+def _is_pocl_device(device) -> bool:
+    """
+    Detect if an OpenCL device is pocl (Portable OpenCL CPU runtime).
+    
+    pocl is a CPU-only OpenCL implementation that may be misclassified as "GPU"
+    by bempp-cl's find_gpu_driver() on platforms without native GPU OpenCL
+    (e.g., Apple Silicon which is Metal-only).
+    """
+    if device is None:
+        return False
+    device_name = str(getattr(device, "name", "") or "").lower()
+    vendor = str(getattr(device, "vendor", "") or "").lower()
+    return "pocl" in device_name or "pocl" in vendor
+
+
 @lru_cache(maxsize=1)
 def _opencl_inventory() -> Dict[str, object]:
     inventory: Dict[str, object] = {
@@ -79,6 +94,7 @@ def _opencl_inventory() -> Dict[str, object]:
         "gpu_reason": None,
         "os_platform": sys.platform,
         "os_arch": platform.machine(),
+        "gpu_reclassified_as_cpu": False,
     }
     base_reason = _opencl_prerequisite_reason()
     inventory["base_reason"] = base_reason
@@ -102,8 +118,26 @@ def _opencl_inventory() -> Dict[str, object]:
 
     try:
         _ctx_gpu, gpu_device = find_gpu_driver()
-        inventory["gpu_available"] = True
-        inventory["gpu_device_name"] = str(getattr(gpu_device, "name", None) or "OpenCL GPU")
+        gpu_device_name = str(getattr(gpu_device, "name", None) or "OpenCL GPU")
+        
+        if _is_pocl_device(gpu_device):
+            logger.info(
+                "[BEM] Detected pocl device misclassified as GPU: '%s'. "
+                "Reclassifying as CPU-only OpenCL device.",
+                gpu_device_name
+            )
+            inventory["gpu_reclassified_as_cpu"] = True
+            inventory["gpu_reason"] = (
+                f"pocl CPU-only device '{gpu_device_name}' was misclassified as GPU. "
+                "Use opencl_cpu mode instead."
+            )
+            if not inventory["cpu_available"]:
+                inventory["cpu_available"] = True
+                inventory["cpu_device_name"] = gpu_device_name
+                inventory["cpu_reason"] = None
+        else:
+            inventory["gpu_available"] = True
+            inventory["gpu_device_name"] = gpu_device_name
     except Exception as exc:  # pragma: no cover - runtime-specific
         inventory["gpu_reason"] = f"no suitable OpenCL GPU driver ({exc})."
 
@@ -175,6 +209,7 @@ def _mode_availability() -> Dict[str, Dict[str, object]]:
             "available": gpu_reason is None,
             "reason": gpu_reason,
             "device_name": inventory.get("gpu_device_name"),
+            "gpu_reclassified_as_cpu": inventory.get("gpu_reclassified_as_cpu", False),
         },
     }
 
