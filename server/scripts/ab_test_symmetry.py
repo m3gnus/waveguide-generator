@@ -83,8 +83,15 @@ def build_mesh(symmetry_cut=None):
     return mesh, build_time
 
 
-def run_solve(label, mesh, frequencies, compute_directivity=True):
-    """Run BEM solve with parameter-driven symmetry."""
+def run_solve(label, mesh, frequencies, compute_directivity=True, reference_observation_frame=None):
+    """Run BEM solve with parameter-driven symmetry.
+    
+    Args:
+        reference_observation_frame: If provided and image source is applied,
+            use this observation frame instead of computing from the mesh.
+            This ensures the half model uses the same observation point as
+            the full model (important for valid comparison).
+    """
     from solver.solve_optimized import HornBEMSolver
     from solver.symmetry import evaluate_symmetry_policy, create_mirror_grid, SymmetryPlane
     from solver.deps import bempp_api
@@ -149,6 +156,12 @@ def run_solve(label, mesh, frequencies, compute_directivity=True):
     obs_frame = infer_observation_frame(grid, observation_origin="mouth")
     obs_info = resolve_safe_observation_distance(grid, 2.0, obs_frame)
     obs_dist = float(obs_info["effective_distance_m"])
+
+    # For image source BEM, use the reference observation frame if provided.
+    # This ensures the half model uses the same observation point as the full model.
+    if applied and reference_observation_frame is not None:
+        obs_frame = reference_observation_frame
+        obs_dist = float(resolve_safe_observation_distance(grid, 2.0, obs_frame)["effective_distance_m"])
 
     # Solve frequencies
     solutions = []
@@ -238,6 +251,7 @@ def run_solve(label, mesh, frequencies, compute_directivity=True):
         "solutions": solutions,
         "directivity": directivity,
         "frequencies": frequencies,
+        "observation_frame": obs_frame,
     }
 
 
@@ -317,7 +331,8 @@ def main():
 
     # Half model (built by OCC as half, image source method in BEM)
     print("Running HALF MODEL (OCC-built quadrants=12, image source BEM)...")
-    half = run_solve("HALF", mesh_half, freqs, not args.skip_directivity)
+    half = run_solve("HALF", mesh_half, freqs, not args.skip_directivity,
+                     reference_observation_frame=full["observation_frame"])
     print(f"  DOF: P1={half['dof_p1']}, DP0={half['dof_dp0']}")
     print(f"  Symmetry: {half['symmetry_type']} (applied={half['symmetry_applied']})")
     print(f"  Solve: {half['timings']['solve']:.2f}s, Total: {half['timings']['total']:.2f}s")
