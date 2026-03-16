@@ -171,7 +171,7 @@ If Approach A's cross-grid operator assembly turns out to be unsupported by bemp
 
 #### Additional items (approach-independent)
 
-- [ ] Add committed ATH reference fixtures for reproducible regression testing.
+- [x] Add committed ATH reference fixtures for reproducible regression testing.
 - [ ] Fix OpenCL `kernel_function` error on Apple M1 Max — investigate whether pocl is being selected as "GPU" (it's CPU-only), and whether switching to `opencl_cpu` explicitly makes it work. This is separate from the symmetry work.
 
 #### Bugs fixed during this investigation
