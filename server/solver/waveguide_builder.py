@@ -2315,6 +2315,24 @@ def _extract_canonical_mesh_from_model(
         element_tags.append(int(elem_tag))
         triangle_identities.append(element_identity.get(int(elem_tag)))
 
+    # Compact: strip vertices not referenced by any triangle.
+    # After a symmetry cut, getNodes() returns orphan nodes from curves on
+    # the removed side.  Keeping them inflates the vertex array and can
+    # confuse downstream consumers (e.g. symmetry-plane guards).
+    used_indices = set(indices)
+    n_total = len(node_tags_i)
+    if len(used_indices) < n_total:
+        old_to_new_idx = {}
+        compacted_coords: List[float] = []
+        new_idx = 0
+        for old_idx in range(n_total):
+            if old_idx in used_indices:
+                old_to_new_idx[old_idx] = new_idx
+                compacted_coords.extend(node_coords_f[old_idx * 3 : old_idx * 3 + 3])
+                new_idx += 1
+        indices = [old_to_new_idx[i] for i in indices]
+        node_coords_f = compacted_coords
+
     canonical_mesh: Dict[str, Any] = {
         "vertices": node_coords_f,
         "indices": indices,
@@ -2952,6 +2970,13 @@ def build_waveguide_mesh(
                         group_name, missing,
                     )
 
+            # --- Symmetry cut (tessellation-last: cut B-Rep BEFORE meshing) ---
+            # Must run BEFORE _configure_mesh_size because fragment() replaces
+            # surface/curve entity tags. Mesh size Restrict fields referencing
+            # pre-cut tags would cause "Unknown surface" errors during meshing.
+            if symmetry_cut == "yz":
+                _apply_symmetry_cut_yz(surface_groups)
+
             # --- Mesh size fields ---
             _run_cancellation_callback(cancellation_callback)
             _configure_mesh_size(
@@ -2964,10 +2989,6 @@ def build_waveguide_mesh(
                 enc_back_resolution=enc_back_resolution,
                 enclosure_bounds=enc_data.get("bounds"),
             )
-
-            # --- Symmetry cut (tessellation-last: cut B-Rep BEFORE meshing) ---
-            if symmetry_cut == "yz":
-                _apply_symmetry_cut_yz(surface_groups)
 
             # --- Physical groups (ABEC-compatible) ---
             _assign_physical_groups(surface_groups)

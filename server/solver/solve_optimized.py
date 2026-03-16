@@ -300,6 +300,48 @@ class HornBEMSolver:
             symmetry_planes: List of SymmetryPlane enums used.
             symmetry_info: Symmetry metadata dict from evaluate_symmetry_policy.
         """
+        # Guard: verify the mesh is actually a half/quarter mesh.
+        # If the B-Rep cut failed silently and we're operating on a full
+        # mesh, the image source method would double the pressure (~6 dB
+        # error).  Check that vertex coordinates respect the symmetry
+        # plane(s).
+        grid_verts = self.grid.vertices  # (3, N)
+        for plane in symmetry_planes:
+            if hasattr(plane, 'value'):
+                pv = plane.value
+            else:
+                pv = str(plane)
+            if pv == "yz":
+                axis_vals = grid_verts[0, :]  # X coords
+                axis_name = "X"
+            elif pv == "xy":
+                axis_vals = grid_verts[2, :]  # Z coords
+                axis_name = "Z"
+            else:
+                continue
+            n_violating = int(np.sum(axis_vals < -1e-4))
+            if n_violating > 0:
+                n_total = grid_verts.shape[1]
+                pct = 100.0 * n_violating / n_total
+                if pct > 5.0:
+                    logger.error(
+                        "[HornBEM] Image-source ABORTED: mesh is NOT a half mesh. "
+                        "%d/%d vertices (%.1f%%) have %s < 0. "
+                        "The B-Rep symmetry cut likely failed silently.",
+                        n_violating, n_total, pct, axis_name,
+                    )
+                    self.symmetry_planes = []
+                    self.symmetry_info = {}
+                    self.mirror_grids = []
+                    self.mirror_spaces = []
+                    return
+                else:
+                    logger.warning(
+                        "[HornBEM] %d vertices slightly past %s=0 plane "
+                        "(%.2f%% — likely numerical noise, proceeding).",
+                        n_violating, axis_name, pct,
+                    )
+
         self.symmetry_planes = symmetry_planes
         self.symmetry_info = symmetry_info
         self.mirror_grids = mirror_grids
