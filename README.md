@@ -6,12 +6,14 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) - durable layer and contract overview
-- [Module Contracts](docs/modules/README.md) - stable module boundaries and invariants
-- [Project Documentation](docs/PROJECT_DOCUMENTATION.md) - maintained architecture and runtime reference
-- [Backlog](docs/backlog.md) - active unfinished work and prioritized follow-ups
-- [Testing Guide](tests/TESTING.md) - canonical test map, commands, and diagnostics
-- [Archive Index](docs/archive/README.md) - superseded plans and historical reports
+| Document                                               | Purpose                                 |
+| ------------------------------------------------------ | --------------------------------------- |
+| [Architecture](docs/architecture.md)                   | Durable layer and contract overview     |
+| [Module Contracts](docs/modules/README.md)             | Stable module boundaries and invariants |
+| [Project Documentation](docs/PROJECT_DOCUMENTATION.md) | Runtime reference and API details       |
+| [Testing Guide](tests/TESTING.md)                      | Test map, commands, and diagnostics     |
+| [Backlog](docs/backlog.md)                             | Active unfinished work                  |
+| [Archive](docs/archive/README.md)                      | Historical plans and reports            |
 
 ## Get the project files
 
@@ -35,7 +37,7 @@ The **project folder** means the folder that contains `package.json`.
 Two things need to be installed on your computer before you begin:
 
 - **[Node.js 18+](https://nodejs.org/)** — download and install the LTS version
-- **[Python 3.10 - 3.14](https://www.python.org/downloads/)** — on Windows, tick *"Add python.exe to PATH"* during install
+- **[Python 3.10 - 3.14](https://www.python.org/downloads/)** — on Windows, tick _"Add python.exe to PATH"_ during install
 
 That's all. Everything else is handled by the setup script.
 
@@ -60,21 +62,19 @@ The installer checks your environment, installs all dependencies, and sets up a 
 
 The app opens automatically in your browser at `http://localhost:3000`. Close the terminal window to stop it.
 
-## Optional: BEM Solver
+## BEM Solver (Optional)
 
-The setup script now automatically attempts to install `bempp-cl` (a BEM acoustic solver) without a Y/N prompt. This enables the **Start BEM Simulation** feature. It remains optional — 3D preview plus the local STL/config/profile exports still work without it.
+The setup script attempts to install `bempp-cl` automatically. If it fails, the app still works for 3D preview and local STL/config/profile exports — only the **Start BEM Simulation** feature requires it.
 
-If automatic `gmsh` install fails, setup stops and prints manual retry commands because `/api/mesh/build` requires Python `gmsh`.
-If automatic `bempp-cl` install fails, setup continues and prints a manual retry command.
+**Dependency matrix:**
 
-Supported backend dependency matrix:
 - Python: `>=3.10,<3.15`
-- gmsh Python package: `>=4.11,<5.0`
-- bempp-cl: `>=0.4,<0.5` (`/api/solve`)
+- gmsh: `>=4.11,<5.0` (required for `/api/mesh/build`)
+- bempp-cl: `>=0.4,<0.5` (required for `/api/solve`)
 
 The maintained runtime only supports `bempp-cl` for `/api/solve`; there is no legacy `bempp_api` fallback path.
 
-To install it later:
+Manual install:
 
 ```bash
 # macOS / Linux
@@ -84,9 +84,9 @@ To install it later:
 .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
 ```
 
-## Gmsh install fallback
+## Gmsh Install Fallback
 
-Setup first tries default package indexes for `gmsh>=4.11,<5.0`. If that fails, it retries with the official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/), including the Linux headless (`-nox`) index. If all retries fail or `import gmsh` still fails, setup exits with an error.
+Setup first tries default package indexes for `gmsh>=4.11,<5.0`. If that fails, it retries with official gmsh snapshot indexes from [gmsh.info](https://gmsh.info/). If all retries fail, setup exits with an error.
 
 Manual retry:
 
@@ -94,54 +94,47 @@ Manual retry:
 # macOS / Linux
 .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt
 
-# Headless Linux fallback
+# Headless Linux (no X11)
 .venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt
 
 # Windows
 .venv\Scripts\python.exe -m pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server\requirements-gmsh.txt
 ```
 
-For macOS Apple Silicon, use the OpenCL CPU helper to get true bempp OpenCL runtime:
+## OpenCL Setup (macOS Apple Silicon)
+
+For macOS Apple Silicon, use the OpenCL CPU helper:
 
 ```bash
 ./scripts/setup-opencl-backend.sh
 ```
 
-This creates and configures:
+This creates a dedicated environment at `$HOME/.waveguide-generator/opencl-cpu-env/`. `npm start` will automatically prefer that interpreter when it exists.
 
-```bash
-$HOME/.waveguide-generator/opencl-cpu-env/bin/python
-```
+**Other platforms:**
 
-`npm start` will automatically prefer that interpreter when it exists.
-
-Windows/Linux note:
-- GPU OpenCL runtime setup depends on vendor drivers (NVIDIA/AMD/Intel) and is not fully automated by this repository.
-- Linux CPU fallback can use distro packages such as `pocl-opencl-icd`.
+- **Windows/Linux**: OpenCL GPU setup depends on vendor drivers (NVIDIA/AMD/Intel).
+- **Linux CPU fallback**: Install `pocl-opencl-icd` via your package manager.
 
 ## Features
 
-- R-OSSE and OSSE horn profile generation with live parameter controls
-- Real-time 3D rendering (standard, zebra, wireframe, curvature)
-- BEM simulation workflow with backend job submission and result plotting
-- Explicit task-history source modes: folder-backed tasks when a workspace is selected, backend jobs otherwise
-- Simulation task bundle exports with settings-selected formats and once-per-completion auto-export
-- Folder workspace routing for manual exports at the selected folder root plus completed-task bundles under `<workspace>/<jobId>/`, with save-picker/download fallback if workspace writes fail
-- Pre-submit simulation diagnostics that report geometry surface identities as triangle counts while keeping canonical solver tags as a secondary debug summary
-- Task-history ratings plus persisted sort and minimum-rating filters for larger simulation archives
-- Polar directivity controls for horizontal, vertical, and diagonal axes (ATH-compatible inclination mapping)
-- Export: STL, CSV profiles, MWG config text, simulation mesh download, and VACS-style result text
+- **Geometry**: R-OSSE and OSSE horn profile generation with live parameter controls
+- **3D Rendering**: Real-time viewport with standard, zebra, wireframe, and curvature modes
+- **Simulation**: BEM workflow with backend job submission, progress tracking, and result plotting
+- **Polar Directivity**: Horizontal, vertical, and diagonal axes with ATH-compatible inclination mapping
+- **Exports**: STL, CSV profiles, MWG config text, simulation mesh (.msh), and VACS-style results
+- **Task Management**: Folder workspace routing, task-history ratings, auto-export on completion, and simulation diagnostics
 
 ## Mesh Control Guide
 
-| Control family | What it affects | What it does not affect |
-| --- | --- | --- |
-| `Viewport * Segs` + `Throat Slice Density` | Three.js preview tessellation and slice distribution | Backend OCC solve mesh, `/api/mesh/build`, `.msh` artifact quality |
-| `Solve * Resolution` + enclosure front/back resolutions | Backend OCC solve mesh and OCC-authored `.msh` artifacts | Three.js triangle count except for minor slice-spacing hints |
-| `Auto-download solve mesh artifact (.msh)` | Whether the persisted backend `.msh` file is downloaded for a simulation job | Mesh generation itself |
-| `Task Exports` settings | Which completed-simulation bundle formats run for manual task export and auto-export-on-complete | Solver execution or canonical mesh generation |
+| Control                                      | Affects                                   | Does not affect                           |
+| -------------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `Viewport * Segs` + `Throat Slice Density`   | Three.js preview tessellation             | Backend OCC mesh, `.msh` artifact quality |
+| `Solve * Resolution` + enclosure resolutions | Backend OCC mesh and `.msh` artifacts     | Three.js triangle count                   |
+| `Auto-download solve mesh`                   | Whether `.msh` is downloaded after solve  | Mesh generation itself                    |
+| `Task Exports` settings                      | Export bundle formats for completed tasks | Solver execution                          |
 
-Imported ATH `Mesh.Quadrants` values do not trim the canonical simulation payload. The frontend keeps the canonical payload full-domain, the queued OCC-adaptive solve request is normalized to `quadrants=1234`, and any half/quarter reduction happens later only if the backend symmetry policy approves it.
+**Note:** Imported ATH `Mesh.Quadrants` values do not trim the canonical simulation payload. The frontend keeps full-domain geometry; any half/quarter reduction is decided later by the backend symmetry policy.
 
 ## Project layout
 
@@ -165,17 +158,17 @@ npm run build         # Production bundle
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidelines.
-See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for architecture and API details.
-See [tests/TESTING.md](tests/TESTING.md) for the full test inventory and diagnostics scripts.
 
 ## Troubleshooting
 
 **Backend not connected** — start the app via a launcher or `npm start`, then check:
+
 ```bash
 curl http://localhost:8000/health
 ```
 
 **Backend meshing/runtime checks**:
+
 ```bash
 python3 -c "import gmsh; print(gmsh.__version__)"
 gmsh -version
@@ -188,7 +181,7 @@ curl http://localhost:8000/health
 
 **`npm ci` says `package-lock.json` is missing** — make sure you extracted or cloned the full project folder before running `install/install.bat` or `bash install/install.sh`. If the lockfile is missing, the installer falls back to `npm install`, but re-downloading a complete project copy is recommended.
 
-**Python not found on Windows** — reinstall Python from [python.org](https://www.python.org/downloads/windows/) and tick *"Add python.exe to PATH"*.
+**Python not found on Windows** — reinstall Python from [python.org](https://www.python.org/downloads/windows/) and tick _"Add python.exe to PATH"_.
 
 **Windows shows Python but installer still fails** — open Command Prompt and run `py -0p` to inspect installed interpreters. If the detected path is under `WindowsApps`, disable `python.exe` / `python3.exe` aliases in:
 `Settings > Apps > Advanced app settings > App execution aliases`.
@@ -201,10 +194,6 @@ curl http://localhost:8000/health
 - [bempp-cl](https://github.com/bempp/bempp-cl)
 - [Gmsh](https://gmsh.info/)
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
