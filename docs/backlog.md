@@ -33,36 +33,41 @@ Status as of March 15, 2026:
 
 ### P1. Symmetry Performance — Half-Model Slower Than Full Model
 
-**BLOCKED — needs decision on implementation approach (see below).**
+**IN PROGRESS — implementing Approach A (image source method).**
 
 #### Status (March 16, 2026)
 
-Profiling and A/B testing complete. The performance potential is real (2.66x speedup, 2.96x DOF reduction), but the current mesh-slicing implementation is fundamentally wrong — cutting the mesh in half without proper BEM boundary conditions produces 18-25 dB errors.
+Profiling and A/B testing complete. The performance potential is real (2.66x speedup, 2.96x DOF reduction at 700 elements; scales quadratically so ~4x speedup expected at 4000 elements). The current mesh-slicing implementation is wrong — must use the image source method instead.
 
-#### Root cause
+#### Decisions
 
-`apply_neumann_bc_on_symmetry_planes` in `solve_optimized.py` is a **no-op** — it logs a message but enforces nothing. BEM requires the Green's function itself to encode the symmetry plane (rigid wall = image source), not just a boundary condition on the mesh.
+1. **Approach A** (image source method) — implement now. Keep **Approach B** (block-Toeplitz) as a fallback or future settings option.
+2. **OpenCL on Apple Silicon**: Apple Silicon has no OpenCL GPU driver (Metal-only). The pocl library provides CPU-only OpenCL. The current "GPU" detection in the API is probably selecting the pocl CPU device and misclassifying it — or hitting a pocl kernel compilation issue. This is a separate bug to investigate later; not blocking the symmetry work (numba backend works fine for development).
+3. **Typical mesh size**: ~4000 elements. At N=4000: full solve ≈ (4000/700)² × 10.7s ≈ 350s, half-model ≈ 87s — roughly 4× speedup, well worth implementing.
 
-#### What bempp-cl supports (and doesn't)
+#### Root cause (why mesh-slicing fails)
 
-Investigated the bempp-cl 0.4.2 source code. Key findings:
-- **No built-in symmetry reduction.** No image method, no half-space Green's function, no DOF constraint API.
-- **Green's functions are hardcoded** in `numba_kernels.py` and compiled `.cl` files. The full-space Helmholtz kernel `G(r) = e^{ikr}/(4π|r|)` is baked into the numba JIT and OpenCL pipelines with no hook to inject a custom kernel.
-- **No custom kernel API.** The operator construction chain (`create_operator → OperatorDescriptor → kernel function`) has no callable hook for user-supplied Green's functions.
+`apply_neumann_bc_on_symmetry_planes` in `solve_optimized.py` is a **no-op**. BEM requires the **Green's function** to encode the symmetry plane, not just a boundary condition tag. For a rigid (Neumann) wall at X=0:
 
-#### Three possible approaches
+> G_half(x, y) = G(x, y) + G(x, ȳ)   where ȳ = (−y_x, y_y, y_z)
 
-| Approach | True DOF reduction | Solve speedup | Complexity | bempp-cl compatible |
-|----------|-------------------|---------------|------------|---------------------|
-| **A. Half-space Green's function wrapper** | Yes (2-4x) | Yes (2-4x) | High — must wrap every operator call (SLP, DLP, HYP, ADLP) with a second evaluation at the mirror point and sum the two matrices | Requires assembling each operator twice and summing — uses the existing API but doubles assembly work. Net solve speedup ~2x for half-model (halved matrix, doubled assembly). |
-| **B. Block-Toeplitz matrix exploitation** | No | Partial | Medium — after assembling the full matrix, partition into symmetric/antisymmetric blocks and solve two half-sized systems | Works with unmodified bempp-cl. Requires intercepting the dense matrix after assembly. Solve time halved, assembly time unchanged. |
-| **C. Deprioritize symmetry, optimize elsewhere** | No | No | None | Focus on OpenCL GPU acceleration (already available on this machine), adaptive mesh refinement, and frequency parallelism instead. The 2.66x symmetry gain may be less impactful than fixing the OpenCL `kernel_function` bug which would unlock GPU-accelerated solves. |
+This means each BEM operator O must be replaced by O_direct + O_image, where O_image assembles the same kernel but with trial sources at their mirror positions (and mirror normals). The solve is then done on the reduced mesh (fewer DOFs) with correct physics.
 
-#### Decision needed from you
+#### How the image method works in bempp-cl
 
-1. **Which approach?** A gives the best theoretical speedup but is the most work. C is zero-effort and may yield comparable gains via other means.
-2. **Is the OpenCL GPU `kernel_function` error on Apple Silicon a known issue?** Fixing GPU acceleration might give more speedup than symmetry reduction. The benchmark ran on numba (CPU-only); the API path fails with `'kernel_function' was not found as a program info attribute or as a kernel name` on Apple M1 Max.
-3. **What mesh sizes do you typically solve?** The 700-element test mesh is small — symmetry savings scale with DOF² (BEM is dense O(N²)), so larger meshes benefit much more. At 5000+ elements, half-model could be 4-8x faster.
+bempp-cl has no built-in image/symmetry support, but supports cross-grid operators (test and trial on different grids). This lets us implement the image method manually:
+
+1. Build **mirrored grid**: flip X-coordinates of all vertices, **reverse triangle winding** (swap index columns 1↔2). The winding reversal is critical — it produces the correct reflected normals n_ȳ = (−n_x, n_y, n_z) for all operators that involve trial normals (DLP, HYP).
+
+2. For each of the 4 BEM operators, assemble two matrices:
+   - Direct: trial on reduced grid, test on reduced grid (standard)
+   - Image: trial on **mirrored** grid, test on reduced grid
+
+3. Sum: A_total = A_direct + A_image. The matrix is the same size as the half-model (N/2 DOFs) but encodes the rigid wall correctly.
+
+4. Similarly double the RHS: for Neumann BC the throat source and its mirror have equal amplitude, so b_total = b_direct + b_image.
+
+5. For quarter-model (quadrants=1, both planes): 4 contributions — direct + X-mirror + Z-mirror + XZ-mirror.
 
 #### Completed work
 - [x] Decide whether to disable symmetry entirely or fix it — decided: fix.
@@ -73,28 +78,69 @@ Investigated the bempp-cl 0.4.2 source code. Key findings:
 - [x] A/B test — FAILED: 18-25 dB SPL errors. Script: `server/scripts/ab_test_symmetry.py`.
 - [x] Re-enable `quadrants == 1234` safety gate — Done in `simulation_runner.py` and `simulation_validation.py`.
 
-#### Remaining action plan (gated on decision above)
+#### Action plan
 
-If **Approach A** (half-space Green's function wrapper):
-- [ ] Implement `_assemble_image_operator()` in `solve_optimized.py`: for each BEM operator (SLP, DLP, HYP, ADLP), assemble a second operator with trial points mirrored across the symmetry plane, then sum the two dense matrices. This encodes a rigid (Neumann) symmetry plane.
-- [ ] Modify `HornBEMSolver._solve_single_frequency()` to use image operators when `symmetry_info` is present.
-- [ ] Handle source (throat) mirroring: the excitation must also include its mirror image.
-- [ ] Re-run A/B test — must match within 0.5 dB.
-- [ ] Remove quadrants safety gate once validated.
+**Step 1 — Add `create_mirror_grid()` to `server/solver/symmetry.py`**
+- Input: `(vertices: np.ndarray (3,N), indices: np.ndarray (3,M), symmetry_planes: List[SymmetryPlane])`
+- For `SymmetryPlane.YZ` (X=0): flip sign of vertices[0, :]
+- For `SymmetryPlane.XY` (Z=0): flip sign of vertices[2, :]
+- Reverse triangle winding: swap `indices[1, :]` ↔ `indices[2, :]` — this produces correct reflected normals n_ȳ in bempp
+- For both planes (quarter model): build three additional grids (X-mirror, Z-mirror, XZ-mirror), each with the appropriate flips and winding
+- Return list of `(mirrored_vertices, mirrored_indices)` tuples — one per image contribution
 
-If **Approach B** (block-Toeplitz exploitation):
-- [ ] After assembling the full BEM matrix A, partition into blocks: A = [[A₁₁, A₁₂], [A₂₁, A₂₂]] where indices are split by symmetry plane. For a symmetric mesh: A₁₂ = A₂₁ᵀ and A₁₁ = A₂₂. Solve (A₁₁+A₁₂)x_s = b_s and (A₁₁-A₁₂)x_a = b_a independently.
-- [ ] This requires intercepting the assembled matrix via `operator.weak_form().to_dense()` — verify this works in bempp-cl without excessive memory.
-- [ ] Re-run A/B test.
+**Step 2 — Add `_assemble_image_operators()` to `HornBEMSolver` in `server/solver/solve_optimized.py`**
+- Called after building function spaces on the reduced grid
+- For each mirror grid (from Step 1):
+  - Build `bempp_api.Grid(mirror_verts, mirror_indices, domain_indices=mirror_tags)`
+  - Build DP0 and P1 function spaces on the mirror grid
+  - Assemble all 4 image operators:
+    - `slp_img = helmholtz.single_layer(dp0_mirror, p1_reduced, p1_reduced, k)` — no normals: sign is always +1
+    - `dlp_img = helmholtz.double_layer(p1_mirror, p1_reduced, p1_reduced, k)` — uses mirror normals from reversed winding ✓
+    - `hyp_img = helmholtz.hypersingular(p1_mirror, p1_reduced, dp0_reduced, k)` — trial=mirror (correct n_ȳ), test=reduced (correct n_x) ✓
+    - `adlp_img = helmholtz.adjoint_double_layer(dp0_mirror, p1_reduced, dp0_reduced, k)` — uses test normals from reduced grid ✓
+  - Accumulate: total operator = direct + sum of image operators
+- Store image spaces on `self` for use in `_solve_single_frequency`
 
-If **Approach C** (deprioritize):
-- [ ] Close this P1 item as "deferred — insufficient bempp-cl support".
-- [ ] Open a new item to fix the OpenCL GPU kernel compilation error on Apple Silicon.
-- [ ] Investigate frequency-level parallelism (each frequency is independent → trivially parallelizable with `concurrent.futures`).
+Note on cross-grid operators: bempp-cl assembles operators by evaluating the kernel between all test/trial pairs regardless of which grid they sit on. Cross-grid assembly (test and trial on different grids) is standard BEM and supported by bempp-cl.
 
-#### Additional remaining items (approach-independent)
+**Step 3 — Modify `_solve_single_frequency()` to use image operators**
+- When `self.symmetry_info` is set (half/quarter model):
+  - Replace `dlp`, `slp`, `hyp`, `adlp` with summed versions from Step 2
+  - Double the excitation RHS: the throat source and its mirror image both contribute, with equal amplitude for Neumann BC (rigid wall), so `neumann_rhs_image = neumann_rhs_direct` and `total_rhs = rhs_direct + rhs_image`
+    - Image RHS: assemble neumann_fun projected onto `p1_mirror` space, then apply image SLP/ADLP to get p1_reduced DOFs
+  - The GMRES solve is then on the reduced system (N/2 DOFs) with the image-augmented operators — correct physics, genuine speedup
+
+**Step 4 — Update `solve_optimized()` entry point**
+- Pass `symmetry_info` through to `HornBEMSolver` constructor (already partially there)
+- Remove the "no-op" `apply_neumann_bc_on_symmetry_planes` call and replace with the actual image operator setup
+
+**Step 5 — Directivity post-processing**
+- The solution `p` is on the reduced mesh with correct Neumann BC on the symmetry plane
+- Directivity evaluation (`calculate_directivity_patterns_correct`) integrates over the mesh — this must also use the image Green's function to correctly evaluate the far-field pressure
+- Either: (a) also build image potential operators for directivity, or (b) re-expand solution to the full mesh before directivity evaluation
+- Option (b) is simpler: mirror the solution values (`p_full = [p_reduced; p_mirror]` for Neumann) and evaluate directivity on the full reconstructed mesh
+- Keep option (b) as the first implementation; switch to (a) if directivity accuracy is insufficient
+
+**Step 6 — Validate with A/B test**
+- Run `server/scripts/ab_test_symmetry.py` — must pass 0.5 dB threshold across all planes and frequencies
+- Run full server test suite: `cd server && python3 -m pytest tests/ -q`
+- Run frontend tests: `npm test`
+
+**Step 7 — Remove safety gate and update docs**
+- Remove the `quadrants=1234` override in `simulation_validation.py`
+- Remove the warning-and-override in `simulation_runner.py`
+- Update backlog
+
+**Fallback: Approach B (block-Toeplitz)**
+If Approach A's cross-grid operator assembly turns out to be unsupported by bempp-cl at runtime, fall back to:
+- Assemble full BEM matrix on the full mesh (quadrants=1234)
+- After `operator.weak_form().to_dense()`, partition into blocks: A = [[A₁₁, A₁₂], [A₂₁, A₂₂]]
+- By symmetry: A₁₁ ≈ A₂₂ and A₁₂ ≈ A₂₁. Solve symmetric mode: (A₁₁ + A₁₂)x_s = b_s. This halves GMRES time; assembly is unchanged.
+- This approach is a settings-selectable option if both methods are implemented.
+
+#### Additional items (approach-independent)
 - [ ] Add committed ATH reference fixtures for reproducible regression testing.
-- [ ] Fix OpenCL `kernel_function` error — the API path fails on Apple M1 Max. The numba backend works but is CPU-only. This blocks real-world solver performance.
+- [ ] Fix OpenCL `kernel_function` error on Apple M1 Max — investigate whether pocl is being selected as "GPU" (it's CPU-only), and whether switching to `opencl_cpu` explicitly makes it work. This is separate from the symmetry work.
 
 #### Bugs fixed during this investigation
 - Fixed `grid_from_element_data` → `bempp_api.Grid()` in `solve_optimized.py` (bempp-cl API mismatch).
