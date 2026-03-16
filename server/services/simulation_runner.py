@@ -69,14 +69,24 @@ def _finalize_cancelled_job(
 
 
 def _resolve_occ_adaptive_quadrants(validated_payload: dict[str, Any]) -> int:
-    """Extract the quadrants value from the validated OCC adaptive payload.
+    """Extract and enforce quadrants for the OCC adaptive path.
 
-    Previously this enforced ``quadrants == 1234`` and raised ``ValueError``
-    for any other value.  The enforcement has been removed: the OCC builder
-    still builds full geometry, but the solver now applies symmetry reduction
-    via BEM boundary conditions based on the quadrants parameter.
+    Currently enforces ``quadrants == 1234`` because the BEM symmetry
+    reduction is not yet properly implemented — the
+    ``apply_neumann_bc_on_symmetry_planes`` function is a no-op and A/B
+    testing shows 18-25 dB errors when using a half-model.  Once a proper
+    BEM symmetry formulation (image method or modified Green's function)
+    is implemented, this enforcement can be relaxed.
     """
-    return int(validated_payload.get("quadrants", 1234))
+    q = int(validated_payload.get("quadrants", 1234))
+    if q != 1234:
+        logger.warning(
+            "Quadrants=%d requested but BEM symmetry reduction is not yet "
+            "implemented correctly. Forcing quadrants=1234 (full model).", q
+        )
+        validated_payload["quadrants"] = 1234
+        return 1234
+    return q
 
 
 def _extract_occ_adaptive_canonical_mesh(

@@ -621,7 +621,7 @@ def apply_symmetry_reduction(
     if len(reduced_triangles) == 0:
         raise ValueError("Symmetry reduction resulted in empty mesh")
 
-    reduced_indices = np.array(reduced_triangles, dtype=int)
+    reduced_indices = np.array(reduced_triangles, dtype=int).T  # (3, M) — matches bempp Grid format
     reduced_surface_tags = np.array(reduced_tags, dtype=int) if reduced_tags else None
 
     # Calculate reduction factor
@@ -640,7 +640,7 @@ def apply_symmetry_reduction(
         'original_vertices': vertices.shape[1],
         'reduced_vertices': reduced_vertices.shape[1],
         'original_triangles': indices.shape[0],
-        'reduced_triangles': reduced_indices.shape[0]
+        'reduced_triangles': reduced_indices.shape[1]
     }
 
     return reduced_vertices, reduced_indices, reduced_surface_tags, reduction_info
