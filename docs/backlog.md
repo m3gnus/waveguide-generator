@@ -171,7 +171,9 @@ Two sub-approaches were attempted:
 
 - [x] Remove `quadrants=1234` override in `simulation_validation.py` (note: `simulation_runner.py` line 235 sets quadrants=1234 as part of tessellation-last approach, not a safety gate — the symmetry_cut param handles B-Rep clipping)
 - [x] Remove `clip_mesh_at_plane()` and related post-tessellation clipping code from `symmetry.py`
-- [ ] Update backlog
+- [x] Update backlog (ongoing as items are completed)
+
+**Step 6 COMPLETE** — Safety gate removed, post-tessellation clipping code removed, backlog updated.
 
 **Fallback: Approach B (block-Toeplitz)**
 If Approach A's cross-grid operator assembly turns out to be unsupported by bempp-cl at runtime, fall back to:
@@ -232,11 +234,11 @@ If Approach A's cross-grid operator assembly turns out to be unsupported by bemp
 - Pressure evaluation formula for image contributions
 - Observation frame handling in image source potential evaluation
 
-**Step 6 tasks** _(GLM 5: SIMPLE — mechanical cleanup)_:
+**Step 6 tasks** _(COMPLETE)_:
 
-- [x] Remove `quadrants=1234` override in `simulation_validation.py` (note: `simulation_runner.py` line 235 sets quadrants=1234 as part of tessellation-last approach, not a safety gate — the symmetry_cut param handles B-Rep clipping)
+- [x] Remove `quadrants=1234` override in `simulation_validation.py`
 - [x] Remove `clip_mesh_at_plane()` and related post-tessellation clipping code from `symmetry.py`
-- [ ] Update backlog
+- [x] Update backlog
 
 ### P2. Observation Distance Measurement Origin — User-Selectable Reference Point
 
