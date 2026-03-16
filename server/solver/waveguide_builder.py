@@ -2071,6 +2071,10 @@ def _apply_symmetry_cut_yz(surface_groups: Dict[str, List[int]]) -> None:
     cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
     cut_rect = gmsh.model.occ.addPlaneSurface([cl])
 
+    # Synchronize the OCC model before fragmenting. The surfaces may not be
+    # registered in the OCC kernel yet, which can cause "Unknown surface" errors.
+    gmsh.model.occ.synchronize()
+
     # Fragment all existing surfaces with the cutting rectangle.
     # This splits any surface that crosses X=0 into two pieces.
     object_dimtags = list(all_surface_dimtags)
