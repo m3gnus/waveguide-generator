@@ -513,8 +513,9 @@ Previously completed:
 
 ### P4. Maintained Markdown Document Overhaul _(GLM 5: SIMPLE)_
 
-- [ ] _(GLM 5: SIMPLE)_ Audit the maintained Markdown documentation set, then rewrite it for readability and architecture parity without inventing behavior that the code does not ship.
-  - Scope the pass to the maintained `.md` docs that describe the live system: `README.md`, `AGENTS.md`, `docs/architecture.md`, `docs/PROJECT_DOCUMENTATION.md`, `docs/modules/*.md`, `tests/TESTING.md`, `server/README.md`, and `docs/archive/README.md`.
+- [x] `README.md` audited (March 16, 2026): consolidated sections for scannability, verified links and dependency matrix accuracy, preserved runtime contract statements required by tests.
+- [ ] _(GLM 5: SIMPLE)_ Audit remaining maintained Markdown documentation set, then rewrite for readability and architecture parity without inventing behavior that the code does not ship.
+  - Scope the pass to the remaining `.md` docs that describe the live system: `AGENTS.md`, `docs/architecture.md`, `docs/PROJECT_DOCUMENTATION.md`, `docs/modules/*.md`, `tests/TESTING.md`, `server/README.md`, and `docs/archive/README.md`.
   - Verify each document against the actual runtime entry points, layer boundaries, active backend capabilities, supported export/simulation flows, and the current test map before rewriting copy.
   - Improve scannability with clearer section ordering, tighter wording, explicit source-of-truth links, and removal of stale or duplicated explanations that drift from the real architecture.
 
