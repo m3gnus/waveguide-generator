@@ -33,32 +33,80 @@ Status as of March 15, 2026:
 
 ### P1. Symmetry Performance — Half-Model Slower Than Full Model
 
-**BLOCKED — A/B test (March 15, 2026) revealed that the current symmetry mesh-slicing approach is fundamentally wrong. Cutting the mesh in half without proper BEM symmetry boundary conditions produces 18-25 dB errors. The `apply_neumann_bc_on_symmetry_planes` function is a no-op. Proper implementation requires either a modified Green's function (image method), native BEM symmetry support, or mesh mirroring with reduced DOF solving. Performance potential is confirmed: 2.66x speedup with half DOFs.**
+**BLOCKED — needs decision on implementation approach (see below).**
 
-Decision (March 2026): fix symmetry rather than disable it. Symmetry reduction controlled by the `Mesh.Quadrants` parameter (auto-detection from raw mesh vertices removed). The `enable_symmetry` UI toggle should be removed (see P2 Solver Settings Audit); `Mesh.Quadrants` is the sole control.
+#### Status (March 16, 2026)
 
-Remaining issue: the current mesh-slicing symmetry reduction is physically incorrect — BEM requires proper symmetry boundary conditions (modified Green's function or image sources) to give correct results with a half-model. Simply cutting the mesh in half creates an open boundary that radiates differently.
+Profiling and A/B testing complete. The performance potential is real (2.66x speedup, 2.96x DOF reduction), but the current mesh-slicing implementation is fundamentally wrong — cutting the mesh in half without proper BEM boundary conditions produces 18-25 dB errors.
 
-Known constraints: `apply_neumann_bc_on_symmetry_planes` in `solve_optimized.py` is a no-op — it logs a message but does not actually enforce Neumann BCs on the symmetry plane. The OCC builder also cannot build partial geometry (curve loop errors for quadrants != 1234). Both the `quadrants == 1234` enforcement in `simulation_runner.py` and the `enable_symmetry: false` override were removed, but symmetry should NOT be enabled until the BEM formulation is fixed.
+#### Root cause
 
-Action plan:
+`apply_neumann_bc_on_symmetry_planes` in `solve_optimized.py` is a **no-op** — it logs a message but enforces nothing. BEM requires the Green's function itself to encode the symmetry plane (rigid wall = image source), not just a boundary condition on the mesh.
+
+#### What bempp-cl supports (and doesn't)
+
+Investigated the bempp-cl 0.4.2 source code. Key findings:
+- **No built-in symmetry reduction.** No image method, no half-space Green's function, no DOF constraint API.
+- **Green's functions are hardcoded** in `numba_kernels.py` and compiled `.cl` files. The full-space Helmholtz kernel `G(r) = e^{ikr}/(4π|r|)` is baked into the numba JIT and OpenCL pipelines with no hook to inject a custom kernel.
+- **No custom kernel API.** The operator construction chain (`create_operator → OperatorDescriptor → kernel function`) has no callable hook for user-supplied Green's functions.
+
+#### Three possible approaches
+
+| Approach | True DOF reduction | Solve speedup | Complexity | bempp-cl compatible |
+|----------|-------------------|---------------|------------|---------------------|
+| **A. Half-space Green's function wrapper** | Yes (2-4x) | Yes (2-4x) | High — must wrap every operator call (SLP, DLP, HYP, ADLP) with a second evaluation at the mirror point and sum the two matrices | Requires assembling each operator twice and summing — uses the existing API but doubles assembly work. Net solve speedup ~2x for half-model (halved matrix, doubled assembly). |
+| **B. Block-Toeplitz matrix exploitation** | No | Partial | Medium — after assembling the full matrix, partition into symmetric/antisymmetric blocks and solve two half-sized systems | Works with unmodified bempp-cl. Requires intercepting the dense matrix after assembly. Solve time halved, assembly time unchanged. |
+| **C. Deprioritize symmetry, optimize elsewhere** | No | No | None | Focus on OpenCL GPU acceleration (already available on this machine), adaptive mesh refinement, and frequency parallelism instead. The 2.66x symmetry gain may be less impactful than fixing the OpenCL `kernel_function` bug which would unlock GPU-accelerated solves. |
+
+#### Decision needed from you
+
+1. **Which approach?** A gives the best theoretical speedup but is the most work. C is zero-effort and may yield comparable gains via other means.
+2. **Is the OpenCL GPU `kernel_function` error on Apple Silicon a known issue?** Fixing GPU acceleration might give more speedup than symmetry reduction. The benchmark ran on numba (CPU-only); the API path fails with `'kernel_function' was not found as a program info attribute or as a kernel name` on Apple M1 Max.
+3. **What mesh sizes do you typically solve?** The 700-element test mesh is small — symmetry savings scale with DOF² (BEM is dense O(N²)), so larger meshes benefit much more. At 5000+ elements, half-model could be 4-8x faster.
+
+#### Completed work
 - [x] Decide whether to disable symmetry entirely or fix it — decided: fix.
-- [x] Profile a half-model vs full-model solve: break down time by phase (geometry build, mesh gen, BEM operator assembly, linear solve, post-processing). — Done: benchmark script `server/scripts/benchmark_bem_symmetry.py` shows 2.74x speedup on frequency solve (700-element mesh, 3 freqs). Full: 12.2s, Half: 4.5s.
-- [x] Verify that a quadrant-controlled geometry actually produces a proportionally smaller BEM matrix (fewer DOF) after the full pipeline. — Done: P1 DOF full=352, half=119 (2.96x ratio). DP0 DOF full=700, half=297 (2.36x).
-- [x] Remove or replace the O(N²) vertex-matching detection with a geometry-parameter-driven policy that costs O(1) since the quadrant count is already known. — Done: `evaluate_symmetry_policy` now accepts a `quadrants` parameter; when provided, uses `_symmetry_from_quadrants()` (O(1)) instead of `_check_plane_symmetry()` (O(N²)). Legacy vertex-based detection kept as fallback for non-OCC paths.
-- [x] Remove the `enable_symmetry: false` override in `src/solver/index.js` line 266 once the approach is proven correct.
-- [x] Remove the `quadrants == 1234` enforcement in `simulation_runner.py` once the half/quarter mesh path is validated. — Done: `_require_occ_adaptive_full_domain_quadrants` replaced with `_resolve_occ_adaptive_quadrants` (pass-through). Also removed the forced `quadrants = 1234` override in `simulation_validation.py`.
-- [x] A/B test: half-model vs full-model on a known-symmetric config — FAILED: 18-25 dB SPL errors. Half model is 2.66x faster (DOF: 352→119, solve: 10.7s→4.0s) but results are physically wrong because `apply_neumann_bc_on_symmetry_planes` is a no-op. Script: `server/scripts/ab_test_symmetry.py`.
-- [ ] Implement proper BEM symmetry formulation: either modified Green's function with image sources, or use bempp-cl's native symmetry support if available. The current mesh-slicing approach cannot work without this.
-- [ ] Re-run A/B test after implementing proper BEM symmetry BCs — must match within 0.5 dB.
-- [ ] Add committed ATH reference fixtures for reproducible regression testing.
-- [x] Re-enable `quadrants == 1234` enforcement until BEM symmetry is properly implemented (safety gate). — Done: `_resolve_occ_adaptive_quadrants` silently overrides to 1234 with warning; `simulation_validation.py` forces 1234.
+- [x] Profile a half-model vs full-model solve — Done: `server/scripts/benchmark_bem_symmetry.py`. Full: 12.2s, Half: 4.5s (3 freqs, 700 elements, numba backend).
+- [x] Verify proportional DOF reduction — Done: P1 DOF full=352, half=119 (2.96x). DP0 full=700, half=297 (2.36x).
+- [x] Replace O(N²) vertex-matching with parameter-driven detection — Done: `_symmetry_from_quadrants()` in `symmetry.py`, O(1).
+- [x] Remove `enable_symmetry: false` override in `src/solver/index.js`.
+- [x] A/B test — FAILED: 18-25 dB SPL errors. Script: `server/scripts/ab_test_symmetry.py`.
+- [x] Re-enable `quadrants == 1234` safety gate — Done in `simulation_runner.py` and `simulation_validation.py`.
 
-Implementation notes:
-- `server/solver/symmetry.py`
-- `server/solver/solve_optimized.py` (symmetry policy evaluation)
-- `server/services/simulation_runner.py` (quadrants enforcement)
-- `src/solver/index.js` (line 266 override)
+#### Remaining action plan (gated on decision above)
+
+If **Approach A** (half-space Green's function wrapper):
+- [ ] Implement `_assemble_image_operator()` in `solve_optimized.py`: for each BEM operator (SLP, DLP, HYP, ADLP), assemble a second operator with trial points mirrored across the symmetry plane, then sum the two dense matrices. This encodes a rigid (Neumann) symmetry plane.
+- [ ] Modify `HornBEMSolver._solve_single_frequency()` to use image operators when `symmetry_info` is present.
+- [ ] Handle source (throat) mirroring: the excitation must also include its mirror image.
+- [ ] Re-run A/B test — must match within 0.5 dB.
+- [ ] Remove quadrants safety gate once validated.
+
+If **Approach B** (block-Toeplitz exploitation):
+- [ ] After assembling the full BEM matrix A, partition into blocks: A = [[A₁₁, A₁₂], [A₂₁, A₂₂]] where indices are split by symmetry plane. For a symmetric mesh: A₁₂ = A₂₁ᵀ and A₁₁ = A₂₂. Solve (A₁₁+A₁₂)x_s = b_s and (A₁₁-A₁₂)x_a = b_a independently.
+- [ ] This requires intercepting the assembled matrix via `operator.weak_form().to_dense()` — verify this works in bempp-cl without excessive memory.
+- [ ] Re-run A/B test.
+
+If **Approach C** (deprioritize):
+- [ ] Close this P1 item as "deferred — insufficient bempp-cl support".
+- [ ] Open a new item to fix the OpenCL GPU kernel compilation error on Apple Silicon.
+- [ ] Investigate frequency-level parallelism (each frequency is independent → trivially parallelizable with `concurrent.futures`).
+
+#### Additional remaining items (approach-independent)
+- [ ] Add committed ATH reference fixtures for reproducible regression testing.
+- [ ] Fix OpenCL `kernel_function` error — the API path fails on Apple M1 Max. The numba backend works but is CPU-only. This blocks real-world solver performance.
+
+#### Bugs fixed during this investigation
+- Fixed `grid_from_element_data` → `bempp_api.Grid()` in `solve_optimized.py` (bempp-cl API mismatch).
+- Fixed `reduced_indices` shape `(M,3)` → `(3,M)` in `symmetry.py` (bempp Grid expects column-major indices).
+
+#### Key files
+- `server/solver/symmetry.py` — parameter-driven detection + mesh reduction
+- `server/solver/solve_optimized.py` — BEM solver (operator construction, `apply_neumann_bc_on_symmetry_planes` no-op)
+- `server/services/simulation_runner.py` — quadrants enforcement (safety gate)
+- `server/services/simulation_validation.py` — quadrants=1234 force
+- `server/scripts/benchmark_bem_symmetry.py` — performance profiler
+- `server/scripts/ab_test_symmetry.py` — directivity comparison test
 
 ### P2. Observation Distance Measurement Origin — User-Selectable Reference Point
 
