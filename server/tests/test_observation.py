@@ -108,6 +108,69 @@ class ObservationFrameTest(unittest.TestCase):
             resolved["min_safe_distance_m"],
         )
 
+    def test_yz_symmetry_projects_origin_x_to_zero(self):
+        vertices = np.array([
+            [0.05, 0.15, 0.10, 0.05, 0.20, 0.12],
+            [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.1, -0.1, 0.0, 0.1, -0.1, 0.0],
+        ], dtype=np.float64)
+        elements = np.array([
+            [0, 1, 2, 3],
+            [1, 2, 0, 4],
+            [2, 0, 1, 5],
+        ], dtype=np.int64)
+        domain_indices = np.array([2, 2, 2, 1], dtype=np.int64)
+        grid = _GridStub(vertices, elements, domain_indices)
+
+        frame_no_symmetry = infer_observation_frame(grid)
+        frame_with_symmetry = infer_observation_frame(grid, symmetry_plane="yz")
+
+        self.assertGreater(frame_no_symmetry["origin_center"][0], 0.0)
+        self.assertAlmostEqual(frame_with_symmetry["origin_center"][0], 0.0, places=12)
+        self.assertAlmostEqual(frame_with_symmetry["origin_center"][1], frame_no_symmetry["origin_center"][1], places=12)
+        self.assertAlmostEqual(frame_with_symmetry["origin_center"][2], frame_no_symmetry["origin_center"][2], places=12)
+
+    def test_xy_symmetry_projects_origin_z_to_zero(self):
+        vertices = np.array([
+            [0.0, 0.1, -0.1, 0.0, 0.2, -0.2],
+            [0.1, -0.1, 0.0, 0.1, -0.1, 0.0],
+            [0.05, 0.10, 0.08, 1.05, 1.10, 1.08],
+        ], dtype=np.float64)
+        elements = np.array([
+            [0, 1, 2, 3],
+            [1, 2, 0, 4],
+            [2, 0, 1, 5],
+        ], dtype=np.int64)
+        domain_indices = np.array([2, 2, 2, 1], dtype=np.int64)
+        grid = _GridStub(vertices, elements, domain_indices)
+
+        frame_no_symmetry = infer_observation_frame(grid)
+        frame_with_symmetry = infer_observation_frame(grid, symmetry_plane="xy")
+
+        self.assertGreater(frame_no_symmetry["origin_center"][2], 0.0)
+        self.assertAlmostEqual(frame_with_symmetry["origin_center"][2], 0.0, places=12)
+        self.assertAlmostEqual(frame_with_symmetry["origin_center"][0], frame_no_symmetry["origin_center"][0], places=12)
+        self.assertAlmostEqual(frame_with_symmetry["origin_center"][1], frame_no_symmetry["origin_center"][1], places=12)
+
+    def test_symmetry_none_leaves_origin_unchanged(self):
+        vertices = np.array([
+            [0.05, 0.15, 0.10, 0.05, 0.20, 0.12],
+            [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.1, -0.1, 0.0, 0.1, -0.1, 0.0],
+        ], dtype=np.float64)
+        elements = np.array([
+            [0, 1, 2, 3],
+            [1, 2, 0, 4],
+            [2, 0, 1, 5],
+        ], dtype=np.int64)
+        domain_indices = np.array([2, 2, 2, 1], dtype=np.int64)
+        grid = _GridStub(vertices, elements, domain_indices)
+
+        frame_default = infer_observation_frame(grid)
+        frame_none = infer_observation_frame(grid, symmetry_plane=None)
+
+        np.testing.assert_array_almost_equal(frame_default["origin_center"], frame_none["origin_center"])
+
 
 if __name__ == "__main__":
     unittest.main()
