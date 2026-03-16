@@ -33,23 +33,26 @@ Status as of March 15, 2026:
 
 ### P1. Symmetry Performance — Half-Model Slower Than Full Model
 
-**BLOCKED — requires running backend with BEM solver dependencies (bempp-cl, OpenCL) to profile and A/B test. Cannot be progressed in a code-only session.**
+**BLOCKED — A/B test (March 15, 2026) revealed that the current symmetry mesh-slicing approach is fundamentally wrong. Cutting the mesh in half without proper BEM symmetry boundary conditions produces 18-25 dB errors. The `apply_neumann_bc_on_symmetry_planes` function is a no-op. Proper implementation requires either a modified Green's function (image method), native BEM symmetry support, or mesh mirroring with reduced DOF solving. Performance potential is confirmed: 2.66x speedup with half DOFs.**
 
 Decision (March 2026): fix symmetry rather than disable it. Symmetry reduction controlled by the `Mesh.Quadrants` parameter (auto-detection from raw mesh vertices removed). The `enable_symmetry` UI toggle should be removed (see P2 Solver Settings Audit); `Mesh.Quadrants` is the sole control.
 
-Remaining issue: a 1/2-symmetry simulation currently runs slower than a full-model simulation, which defeats the purpose of the feature.
+Remaining issue: the current mesh-slicing symmetry reduction is physically incorrect — BEM requires proper symmetry boundary conditions (modified Green's function or image sources) to give correct results with a half-model. Simply cutting the mesh in half creates an open boundary that radiates differently.
 
-Known constraints: `simulation_runner.py` enforces `quadrants == 1234` for the `occ_adaptive` path (raises `ValueError`), and `src/solver/index.js` line 266 hardcodes `enable_symmetry: false`. Both need revisiting as part of this work.
+Known constraints: `apply_neumann_bc_on_symmetry_planes` in `solve_optimized.py` is a no-op — it logs a message but does not actually enforce Neumann BCs on the symmetry plane. The OCC builder also cannot build partial geometry (curve loop errors for quadrants != 1234). Both the `quadrants == 1234` enforcement in `simulation_runner.py` and the `enable_symmetry: false` override were removed, but symmetry should NOT be enabled until the BEM formulation is fixed.
 
 Action plan:
 - [x] Decide whether to disable symmetry entirely or fix it — decided: fix.
-- [ ] Profile a half-model vs full-model solve: break down time by phase (geometry build, mesh gen, BEM operator assembly, linear solve, post-processing).
-- [ ] Verify that a quadrant-controlled geometry actually produces a proportionally smaller BEM matrix (fewer DOF) after the full pipeline.
+- [x] Profile a half-model vs full-model solve: break down time by phase (geometry build, mesh gen, BEM operator assembly, linear solve, post-processing). — Done: benchmark script `server/scripts/benchmark_bem_symmetry.py` shows 2.74x speedup on frequency solve (700-element mesh, 3 freqs). Full: 12.2s, Half: 4.5s.
+- [x] Verify that a quadrant-controlled geometry actually produces a proportionally smaller BEM matrix (fewer DOF) after the full pipeline. — Done: P1 DOF full=352, half=119 (2.96x ratio). DP0 DOF full=700, half=297 (2.36x).
 - [x] Remove or replace the O(N²) vertex-matching detection with a geometry-parameter-driven policy that costs O(1) since the quadrant count is already known. — Done: `evaluate_symmetry_policy` now accepts a `quadrants` parameter; when provided, uses `_symmetry_from_quadrants()` (O(1)) instead of `_check_plane_symmetry()` (O(N²)). Legacy vertex-based detection kept as fallback for non-OCC paths.
 - [x] Remove the `enable_symmetry: false` override in `src/solver/index.js` line 266 once the approach is proven correct.
 - [x] Remove the `quadrants == 1234` enforcement in `simulation_runner.py` once the half/quarter mesh path is validated. — Done: `_require_occ_adaptive_full_domain_quadrants` replaced with `_resolve_occ_adaptive_quadrants` (pass-through). Also removed the forced `quadrants = 1234` override in `simulation_validation.py`.
-- [ ] A/B test: half-model vs full-model on a known-symmetric config — results must match within 0.5 dB across all angles, and half-model must be measurably faster.
+- [x] A/B test: half-model vs full-model on a known-symmetric config — FAILED: 18-25 dB SPL errors. Half model is 2.66x faster (DOF: 352→119, solve: 10.7s→4.0s) but results are physically wrong because `apply_neumann_bc_on_symmetry_planes` is a no-op. Script: `server/scripts/ab_test_symmetry.py`.
+- [ ] Implement proper BEM symmetry formulation: either modified Green's function with image sources, or use bempp-cl's native symmetry support if available. The current mesh-slicing approach cannot work without this.
+- [ ] Re-run A/B test after implementing proper BEM symmetry BCs — must match within 0.5 dB.
 - [ ] Add committed ATH reference fixtures for reproducible regression testing.
+- [x] Re-enable `quadrants == 1234` enforcement until BEM symmetry is properly implemented (safety gate). — Done: `_resolve_occ_adaptive_quadrants` silently overrides to 1234 with warning; `simulation_validation.py` forces 1234.
 
 Implementation notes:
 - `server/solver/symmetry.py`

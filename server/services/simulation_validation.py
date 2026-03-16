@@ -80,9 +80,10 @@ def validate_submit_simulation_request(
     )
 
     normalized_waveguide_params = validated_waveguide.model_dump()
-    # Note: quadrants is no longer forced to 1234.  The OCC builder still
-    # builds full geometry, but the solver applies symmetry reduction via
-    # BEM boundary conditions based on the original quadrants value.
+    # Force quadrants=1234 until BEM symmetry is properly implemented.
+    # A/B testing showed 18-25 dB errors with the current mesh-slicing approach
+    # because apply_neumann_bc_on_symmetry_planes is a no-op.
+    normalized_waveguide_params["quadrants"] = 1234
 
     return SimulationRequestValidation(
         mesh_strategy=mesh_strategy,

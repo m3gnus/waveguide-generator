@@ -634,7 +634,7 @@ def solve_optimized(
                 reduced_v = symmetry_result["reduced_vertices"]
                 reduced_i = symmetry_result["reduced_indices"]
                 reduced_tags = symmetry_result["reduced_surface_tags"]
-                grid = bempp_api.grid_from_element_data(reduced_v, reduced_i, reduced_tags)
+                grid = bempp_api.Grid(reduced_v, reduced_i, reduced_tags)
                 physical_tags = reduced_tags
                 reduction_factor = float(symmetry_info["reduction_factor"])
                 validate_symmetry_reduction(symmetry_info, verbose=verbose)
