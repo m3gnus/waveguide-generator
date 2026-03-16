@@ -281,32 +281,16 @@ def evaluate_symmetry_policy(
         resolved_throat_elements = np.array([], dtype=int)
 
     throat_center = find_throat_center(vertices, resolved_throat_elements, indices)
-    excitation_ok = check_excitation_symmetry(throat_center, symmetry_planes, tolerance=1e-3)
-
-    if not excitation_ok:
-        policy = build_symmetry_policy(
-            requested=True,
-            reason="excitation_off_center",
-            detected_symmetry_type=symmetry_type,
-            detected_symmetry_planes=symmetry_planes,
-            detected_reduction_factor=reduction_factor_for_symmetry_type(symmetry_type),
-            excitation_centered=False,
-            throat_center=throat_center,
-        )
-        return {
-            "policy": policy,
-            "symmetry": {"symmetry_type": SymmetryType.FULL.value, "reduction_factor": 1.0},
-            "reduced_vertices": vertices,
-            "reduced_indices": indices,
-            "reduced_surface_tags": surface_tags,
-            "symmetry_info": None,
-        }
 
     # ------------------------------------------------------------------
     # Geometry-first path: if the mesh was already built as a half/quarter
     # model by the OCC builder (quadrants != 1234), the mesh IS the reduced
     # mesh and no clipping is needed.  This follows the tessellation-last
     # principle — geometry is cut BEFORE meshing, not after.
+    #
+    # IMPORTANT: This check must happen BEFORE excitation symmetry check.
+    # For geometry-first half-models, the throat is not at X=0 (it's on the
+    # X>=0 side only), so the excitation check would incorrectly reject it.
     # ------------------------------------------------------------------
     _effective_q = int(quadrants) if quadrants is not None else 1234
     if _effective_q != 1234:
@@ -343,6 +327,30 @@ def evaluate_symmetry_policy(
             "reduced_indices": indices,
             "reduced_surface_tags": surface_tags,
             "symmetry_info": serialized_info,
+        }
+
+    # ------------------------------------------------------------------
+    # For full-model meshes (quadrants=1234), check excitation symmetry.
+    # The throat must be centered on the symmetry plane for valid reduction.
+    # ------------------------------------------------------------------
+    excitation_ok = check_excitation_symmetry(throat_center, symmetry_planes, tolerance=1e-3)
+    if not excitation_ok:
+        policy = build_symmetry_policy(
+            requested=True,
+            reason="excitation_off_center",
+            detected_symmetry_type=symmetry_type,
+            detected_symmetry_planes=symmetry_planes,
+            detected_reduction_factor=reduction_factor_for_symmetry_type(symmetry_type),
+            excitation_centered=False,
+            throat_center=throat_center,
+        )
+        return {
+            "policy": policy,
+            "symmetry": {"symmetry_type": SymmetryType.FULL.value, "reduction_factor": 1.0},
+            "reduced_vertices": vertices,
+            "reduced_indices": indices,
+            "reduced_surface_tags": surface_tags,
+            "symmetry_info": None,
         }
 
     # ------------------------------------------------------------------

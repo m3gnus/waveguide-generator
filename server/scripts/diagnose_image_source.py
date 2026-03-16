@@ -323,9 +323,16 @@ def diagnose_solve(full_data, half_data, frequencies):
             print(f"      Grid {i}: {mgv.shape[1]} verts, {mgi.shape[1]} tris, "
                   f"X range [{mgv[0,:].min():.4f}, {mgv[0,:].max():.4f}]")
 
+    # For half model with image source, use the FULL model's observation frame.
+    # The half mesh has its mouth center at X>0, but the observation point for
+    # image source BEM should be at X=0 (the symmetry plane) to match the full model.
     half_frame = infer_observation_frame(half_grid_sym, observation_origin="mouth")
     half_obs = resolve_safe_observation_distance(half_grid_sym, 2.0, half_frame)
     half_dist = float(half_obs["effective_distance_m"])
+
+    if applied:
+        half_frame = full_frame.copy()
+        half_dist = full_dist
 
     # Check observation frames match
     print(f"\n    Full obs origin: {full_frame['origin_center']}")

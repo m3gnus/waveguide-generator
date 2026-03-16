@@ -218,11 +218,22 @@ If Approach A's cross-grid operator assembly turns out to be unsupported by bemp
 - [x] **Write diagnostic script** — `server/scripts/diagnose_image_source.py` tests B-Rep cut, mirror grid, mesh validity, and BEM solve comparison in a single run.
 - [x] **Run test suites** — All 268 JS tests pass, 162/165 Python tests pass (3 pre-existing failures in test_mesh_validation and test_observation, unrelated to symmetry).
 
+#### Progress in current session (March 16 night)
+
+- [x] **Fix symmetry policy evaluation order** — The geometry-first check (`quadrants != 1234`) must happen BEFORE the excitation symmetry check. For half-models built by OCC, the throat is on the X≥0 side only, not at X=0, so the excitation check would incorrectly reject it as "off center".
+- [x] **Update diagnostic and A/B test scripts** — Use the same observation frame for half and full models when comparing image source BEM results. The half model's observation point should be at the symmetry plane (X=0), not at the half mesh's mouth center (X>0).
+- [x] **Run A/B test** — Symmetry now activates correctly (`applied=True`), but ~8 dB SPL errors remain. The issue is in the image source operator assembly or pressure evaluation, not the symmetry policy.
+
 #### Remaining work for image source BEM
 
-**Run A/B test with proper half mesh** _(GLM 5: SIMPLE — just run the script)_: The B-Rep cut now works. Run `server/scripts/ab_test_symmetry.py` and `server/scripts/diagnose_image_source.py` with bempp-cl installed. If the A/B test passes (< 0.5 dB), proceed to Step 6 (remove safety gate). If it fails, the diagnostic script will identify whether the issue is in operator assembly, GMRES convergence, or mesh quality.
+**Run A/B test with proper half mesh** _(BLOCKED — requires deeper investigation)_: The symmetry policy fix allows image source BEM to activate, but A/B tests still show ~8 dB SPL errors. The issue is in the image source operator assembly or pressure evaluation. Needs investigation of:
+
+- LHS/RHS operator signs for cross-grid assembly
+- Pressure evaluation formula for image contributions
+- Observation frame handling in image source potential evaluation
 
 **Step 6 tasks** _(GLM 5: SIMPLE — mechanical cleanup)_:
+
 - Remove `quadrants=1234` override in `simulation_validation.py` and `simulation_runner.py`
 - Remove `clip_mesh_at_plane()` and related post-tessellation clipping code from `symmetry.py`
 - Update backlog
