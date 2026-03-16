@@ -294,9 +294,9 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(result["job_id"], job_id)
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
-        # quadrants is no longer forced to 1234 — the original value is
-        # preserved so the solver can apply parameter-driven symmetry reduction.
-        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
+        # quadrants is forced to 1234 because BEM symmetry reduction is not yet
+        # properly implemented (apply_neumann_bc_on_symmetry_planes is a no-op).
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
 
     def test_occ_adaptive_accepts_rosse_b_expression(self):
         request = SimulationRequest(
@@ -486,8 +486,8 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         )
 
     def test_occ_adaptive_accepts_non_full_domain_quadrants(self):
-        """Non-1234 quadrants are accepted — the OCC builder builds full geometry
-        and the solver applies symmetry reduction via BEM boundary conditions."""
+        """Non-1234 quadrants are accepted (silently forced to 1234) — the solver
+        does not reject them but overrides to full model until BEM symmetry is fixed."""
         request = self._make_occ_adaptive_request({"quadrants": 14})
 
         fake_occ_result = {
