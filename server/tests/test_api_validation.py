@@ -294,9 +294,9 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(result["job_id"], job_id)
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
-        # quadrants is forced to 1234 because BEM symmetry reduction is not yet
-        # properly implemented (apply_neumann_bc_on_symmetry_planes is a no-op).
-        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
+        # Safety gate removed: quadrants is no longer forced to 1234.
+        # Geometry-first detection in simulation_runner.py handles symmetry.
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
 
     def test_occ_adaptive_accepts_rosse_b_expression(self):
         request = SimulationRequest(
