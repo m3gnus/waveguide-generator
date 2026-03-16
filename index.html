@@ -1,164 +1,283 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Waveguide Generator</title>
-    <link rel="stylesheet" href="src/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Space+Mono&display=swap"
-        rel="stylesheet">
+    <link rel="stylesheet" href="src/style.css" />
     <script type="importmap">
-        {
-            "imports": {
-                "three": "./node_modules/three/build/three.module.js",
-                "three/addons/": "./node_modules/three/examples/jsm/"
-            }
+      {
+        "imports": {
+          "three": "./node_modules/three/build/three.module.js",
+          "three/addons/": "./node_modules/three/examples/jsm/"
         }
+      }
     </script>
-</head>
+  </head>
 
-<body>
+  <body>
     <div id="ui-panel">
-        <h1>Waveguide Generator</h1>
+      <h1>Waveguide Generator</h1>
 
-        <!-- Tab Navigation -->
-        <div class="tab-navigation" role="tablist" aria-label="Main panels">
-            <button class="tab-btn active" id="geometry-tab-btn" data-tab="geometry" role="tab"
-                aria-controls="geometry-tab" aria-selected="true" tabindex="0">Geometry</button>
-            <button class="tab-btn" id="simulation-tab-btn" data-tab="simulation" role="tab"
-                aria-controls="simulation-tab" aria-selected="false" tabindex="-1">Simulation</button>
-        </div>
+      <!-- Tab Navigation -->
+      <div class="tab-navigation" role="tablist" aria-label="Main panels">
+        <button
+          class="tab-btn active"
+          id="geometry-tab-btn"
+          data-tab="geometry"
+          role="tab"
+          aria-controls="geometry-tab"
+          aria-selected="true"
+          tabindex="0"
+        >
+          Geometry
+        </button>
+        <button
+          class="tab-btn"
+          id="simulation-tab-btn"
+          data-tab="simulation"
+          role="tab"
+          aria-controls="simulation-tab"
+          aria-selected="false"
+          tabindex="-1"
+        >
+          Simulation
+        </button>
+      </div>
 
-        <!-- Geometry Tab Content -->
-        <div id="geometry-tab" class="tab-content active" role="tabpanel" aria-labelledby="geometry-tab-btn">
-            <div id="param-container"></div>
-        </div>
+      <!-- Geometry Tab Content -->
+      <div
+        id="geometry-tab"
+        class="tab-content active"
+        role="tabpanel"
+        aria-labelledby="geometry-tab-btn"
+      >
+        <div id="param-container"></div>
+      </div>
 
-        <!-- Simulation Tab Content -->
-        <div id="simulation-tab" class="tab-content" role="tabpanel" aria-labelledby="simulation-tab-btn" hidden>
-            <div id="simulation-settings-container"></div>
-            <div id="polar-settings-container"></div>
-            <div id="simulation-param-container"></div>
-        </div>
+      <!-- Simulation Tab Content -->
+      <div
+        id="simulation-tab"
+        class="tab-content"
+        role="tabpanel"
+        aria-labelledby="simulation-tab-btn"
+        hidden
+      >
+        <div id="simulation-settings-container"></div>
+        <div id="polar-settings-container"></div>
+        <div id="simulation-param-container"></div>
+      </div>
     </div>
     <div id="ui-panel-resizer" aria-hidden="true"></div>
     <div id="actions-panel">
-        <details id="actions-panel-details" open>
-            <summary>Actions <span id="stats">Vertices: 0 | Triangles: 0</span></summary>
-            <div class="section actions-section">
-                <button id="render-btn" class="is-hidden">Update Model</button>
+      <details id="actions-panel-details" open>
+        <summary>
+          Actions <span id="stats">Vertices: 0 | Triangles: 0</span>
+        </summary>
+        <div class="section actions-section">
+          <button id="render-btn" class="is-hidden">Update Model</button>
 
-                <h4 class="actions-group-title">Project</h4>
-                <div class="button-row">
-                    <button id="load-config-btn" class="secondary">Load Config</button>
-                    <button id="export-config-btn" class="secondary">Export Config</button>
-                </div>
-                <input type="file" id="config-upload" class="is-hidden" accept=".txt,.cfg">
-                <input type="file" id="mesh-upload" class="is-hidden" accept=".msh">
-                <div id="imported-mesh-banner" class="imported-mesh-banner is-hidden">
-                    <span id="imported-mesh-filename"></span>
-                    <button id="return-parametric-btn" class="secondary">Return to Parametric</button>
-                </div>
-                <div class="button-row">
-                    <button id="import-mesh-btn" class="secondary">Import Mesh</button>
-                    <button id="settings-btn" class="secondary">Settings</button>
-                </div>
+          <h4 class="actions-group-title">Project</h4>
+          <div class="button-row">
+            <button id="load-config-btn" class="secondary">Load Config</button>
+            <button id="export-config-btn" class="secondary">
+              Export Config
+            </button>
+          </div>
+          <input
+            type="file"
+            id="config-upload"
+            class="is-hidden"
+            accept=".txt,.cfg"
+          />
+          <input type="file" id="mesh-upload" class="is-hidden" accept=".msh" />
+          <div id="imported-mesh-banner" class="imported-mesh-banner is-hidden">
+            <span id="imported-mesh-filename"></span>
+            <button id="return-parametric-btn" class="secondary">
+              Return to Parametric
+            </button>
+          </div>
+          <div class="button-row">
+            <button id="import-mesh-btn" class="secondary">Import Mesh</button>
+            <button id="settings-btn" class="secondary">Settings</button>
+          </div>
 
-                <hr>
-                <h4 class="actions-group-title">Output & Viewer</h4>
-                <div class="button-row">
-                    <div class="input-row">
-                        <label for="export-prefix">Output Name</label>
-                        <input type="text" id="export-prefix" value="horn_design" maxlength="128"
-                               pattern="[a-zA-Z0-9_\-]+"
-                               title="Only letters, numbers, underscore, and hyphen allowed"
-                               aria-describedby="export-prefix-help">
-                        <small id="export-prefix-help" style="font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; display: block;">Max 128 characters. Use only letters, numbers, - and _</small>
-                    </div>
-                    <div class="input-row">
-                        <label for="export-counter">Counter</label>
-                        <input type="number" id="export-counter" value="1" min="1" max="999999" step="1"
-                               aria-describedby="export-counter-help">
-                        <small id="export-counter-help" style="font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; display: block;">1 to 999,999</small>
-                    </div>
-                </div>
-                <hr>
-                <h4 class="actions-group-title">Simulation</h4>
-                <div class="status-indicator" role="status" aria-live="polite" aria-atomic="true">
-                    <span id="solver-status" class="status-dot"></span>
-                    <span id="solver-status-text">Checking connection...</span>
-                </div>
-                <p id="solver-status-help" class="status-help">
-                    Requires the Python backend running on localhost:8000
-                </p>
-                <div id="simulation-progress" class="is-hidden">
-                    <div id="simulation-progressbar" class="progress-bar" role="progressbar"
-                        aria-label="Simulation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
-                        aria-valuetext="Not started">
-                        <div id="progress-fill" class="progress-fill"></div>
-                    </div>
-                    <p id="progress-text" class="progress-text" role="status" aria-live="polite"></p>
-                </div>
-                <div class="button-row">
-                    <button id="run-simulation-btn">Start BEM Simulation</button>
-                    <button id="stop-simulation-btn" class="secondary" disabled>Stop</button>
-                </div>
-                <div id="simulation-mesh-diagnostics" class="simulation-mesh-diagnostics" role="status" aria-live="polite">
-                    <div class="simulation-mesh-diagnostics-placeholder">Mesh stats appear here before you submit.</div>
-                </div>
-                <div id="simulation-jobs" class="simulation-jobs">
-                    <div class="simulation-jobs-header">
-                        <div class="simulation-jobs-header-copy">
-                            <span>Simulation Jobs</span>
-                        </div>
-                        <div class="simulation-jobs-header-actions">
-                            <button id="choose-folder-btn" class="secondary button-compact" type="button" title="Choose output folder workspace">Output Folder</button>
-                            <button id="clear-failed-jobs-btn" class="secondary button-compact" type="button">Clear Failed</button>
-                            <button id="refresh-jobs-btn" class="secondary button-compact button-icon-only" type="button" title="Refresh job list" aria-label="Refresh job list">↻</button>
-                        </div>
-                    </div>
-                    <div class="simulation-jobs-toolbar">
-                        <label class="simulation-jobs-toolbar-field" for="simulation-jobs-sort">
-                            <span>Sort</span>
-                            <select id="simulation-jobs-sort">
-                                <option value="completed_desc">Newest First</option>
-                                <option value="rating_desc">Highest Rated</option>
-                                <option value="label_asc">Label A-Z</option>
-                            </select>
-                        </label>
-                        <label class="simulation-jobs-toolbar-field" for="simulation-jobs-min-rating">
-                            <span>Min Rating</span>
-                            <select id="simulation-jobs-min-rating">
-                                <option value="0">All</option>
-                                <option value="1">1 star</option>
-                                <option value="2">2 stars</option>
-                                <option value="3">3 stars</option>
-                                <option value="4">4 stars</option>
-                                <option value="5">5 stars</option>
-                            </select>
-                        </label>
-                    </div>
-                    <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
-                </div>
+          <hr />
+          <h4 class="actions-group-title">Output & Viewer</h4>
+          <div class="button-row">
+            <div class="input-row">
+              <label for="export-prefix">Output Name</label>
+              <input
+                type="text"
+                id="export-prefix"
+                value="horn_design"
+                maxlength="128"
+                pattern="[a-zA-Z0-9_\-]+"
+                title="Only letters, numbers, underscore, and hyphen allowed"
+                aria-describedby="export-prefix-help"
+              />
+              <small
+                id="export-prefix-help"
+                style="
+                  font-size: var(--text-xs);
+                  color: var(--text-muted);
+                  margin-top: 2px;
+                  display: block;
+                "
+                >Max 128 characters. Use only letters, numbers, - and _</small
+              >
             </div>
-        </details>
+            <div class="input-row">
+              <label for="export-counter">Counter</label>
+              <input
+                type="number"
+                id="export-counter"
+                value="1"
+                min="1"
+                max="999999"
+                step="1"
+                aria-describedby="export-counter-help"
+              />
+              <small
+                id="export-counter-help"
+                style="
+                  font-size: var(--text-xs);
+                  color: var(--text-muted);
+                  margin-top: 2px;
+                  display: block;
+                "
+                >1 to 999,999</small
+              >
+            </div>
+          </div>
+          <hr />
+          <h4 class="actions-group-title">Simulation</h4>
+          <div
+            class="status-indicator"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <span id="solver-status" class="status-dot"></span>
+            <span id="solver-status-text">Checking connection...</span>
+          </div>
+          <p id="solver-status-help" class="status-help">
+            Requires the Python backend running on localhost:8000
+          </p>
+          <div id="simulation-progress" class="is-hidden">
+            <div
+              id="simulation-progressbar"
+              class="progress-bar"
+              role="progressbar"
+              aria-label="Simulation progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              aria-valuetext="Not started"
+            >
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <p
+              id="progress-text"
+              class="progress-text"
+              role="status"
+              aria-live="polite"
+            ></p>
+          </div>
+          <div class="button-row">
+            <button id="run-simulation-btn">Start BEM Simulation</button>
+            <button id="stop-simulation-btn" class="secondary" disabled>
+              Stop
+            </button>
+          </div>
+          <div
+            id="simulation-mesh-diagnostics"
+            class="simulation-mesh-diagnostics"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="simulation-mesh-diagnostics-placeholder">
+              Mesh stats appear here before you submit.
+            </div>
+          </div>
+          <div id="simulation-jobs" class="simulation-jobs">
+            <div class="simulation-jobs-header">
+              <div class="simulation-jobs-header-copy">
+                <span>Simulation Jobs</span>
+              </div>
+              <div class="simulation-jobs-header-actions">
+                <button
+                  id="choose-folder-btn"
+                  class="secondary button-compact"
+                  type="button"
+                  title="Choose output folder workspace"
+                >
+                  Output Folder
+                </button>
+                <button
+                  id="clear-failed-jobs-btn"
+                  class="secondary button-compact"
+                  type="button"
+                >
+                  Clear Failed
+                </button>
+                <button
+                  id="refresh-jobs-btn"
+                  class="secondary button-compact button-icon-only"
+                  type="button"
+                  title="Refresh job list"
+                  aria-label="Refresh job list"
+                >
+                  ↻
+                </button>
+              </div>
+            </div>
+            <div class="simulation-jobs-toolbar">
+              <label
+                class="simulation-jobs-toolbar-field"
+                for="simulation-jobs-sort"
+              >
+                <span>Sort</span>
+                <select id="simulation-jobs-sort">
+                  <option value="completed_desc">Newest First</option>
+                  <option value="rating_desc">Highest Rated</option>
+                  <option value="label_asc">Label A-Z</option>
+                </select>
+              </label>
+              <label
+                class="simulation-jobs-toolbar-field"
+                for="simulation-jobs-min-rating"
+              >
+                <span>Min Rating</span>
+                <select id="simulation-jobs-min-rating">
+                  <option value="0">All</option>
+                  <option value="1">1 star</option>
+                  <option value="2">2 stars</option>
+                  <option value="3">3 stars</option>
+                  <option value="4">4 stars</option>
+                  <option value="5">5 stars</option>
+                </select>
+              </label>
+            </div>
+            <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div id="canvas-container">
-        <div class="viewer-controls">
-            <button id="zoom-in" title="Zoom In">+</button>
-            <button id="zoom-out" title="Zoom Out">−</button>
-            <button id="camera-toggle" title="Toggle Perspective/Orthographic">⬚</button>
-            <button id="focus-horn" title="Focus on Horn">⊙</button>
-            <button id="zoom-reset" title="Reset View">⟲</button>
-        </div>
+      <div class="viewer-controls">
+        <button id="zoom-in" title="Zoom In">+</button>
+        <button id="zoom-out" title="Zoom Out">−</button>
+        <button id="camera-toggle" title="Toggle Perspective/Orthographic">
+          ⬚
+        </button>
+        <button id="focus-horn" title="Focus on Horn">⊙</button>
+        <button id="zoom-reset" title="Reset View">⟲</button>
+      </div>
     </div>
 
     <script src="./node_modules/jszip/dist/jszip.min.js"></script>
     <script type="module" src="src/main.js"></script>
-</body>
-
+  </body>
 </html>
