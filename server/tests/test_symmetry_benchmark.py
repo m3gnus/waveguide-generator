@@ -97,8 +97,9 @@ class SymmetryBenchmarkTest(unittest.TestCase):
 
         half_case = next(case for case in payload["cases"] if case["name"] == "half_yz")
         self.assertEqual(half_case["policy"]["detected_symmetry_type"], "half_x")
-        self.assertEqual(float(half_case["policy"]["reduction_factor"]), 2.0)
-        self.assertLess(half_case["mesh"]["reduced_triangles"], half_case["mesh"]["triangles"])
+        self.assertEqual(float(half_case["policy"]["reduction_factor"]), 1.0)
+        self.assertEqual(half_case["policy"]["reason"], "post_tessellation_clipping_disabled")
+        self.assertFalse(half_case["policy"]["applied"])
 
     def test_off_center_case_reports_rejection_reason_and_throat_center(self):
         case = get_symmetry_benchmark_cases()["quarter_xz_off_center_source"]
@@ -204,11 +205,11 @@ class SymmetryBenchmarkTest(unittest.TestCase):
             )
 
         policy = results["metadata"]["symmetry_policy"]
-        self.assertTrue(policy["applied"])
-        self.assertEqual(policy["reason"], "applied")
+        self.assertFalse(policy["applied"])
+        self.assertEqual(policy["reason"], "post_tessellation_clipping_disabled")
         self.assertEqual(policy["detected_symmetry_type"], "half_x")
-        self.assertEqual(float(policy["reduction_factor"]), 2.0)
-        self.assertEqual(results["metadata"]["symmetry"]["symmetry_type"], "half_x")
+        self.assertEqual(float(policy["reduction_factor"]), 1.0)
+        self.assertEqual(results["metadata"]["symmetry"]["symmetry_type"], "full")
 
 
 if __name__ == "__main__":
