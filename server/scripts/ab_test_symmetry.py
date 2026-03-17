@@ -111,6 +111,7 @@ def run_solve(label, mesh, frequencies, compute_directivity=True, reference_obse
     quadrants_value = mesh_metadata.get(
         "requestedQuadrants", mesh_metadata.get("effectiveQuadrants", 1234)
     )
+    print(f"  DEBUG run_solve({label}): quadrants_value={quadrants_value}")
 
     # Symmetry detection
     t0 = time.perf_counter()
@@ -139,33 +140,54 @@ def run_solve(label, mesh, frequencies, compute_directivity=True, reference_obse
         tag_throat=2, boundary_interface="numba", potential_interface="numba",
         bem_precision="double", use_burton_miller=True,
     )
-
-    # Set up image-source operators for symmetry reduction
-    if applied:
-        sym_info = sym_result.get("symmetry_info") or sym_result.get("symmetry", {})
-        plane_str_map = {p.value: p for p in SymmetryPlane}
-        sym_planes_enum = [
-            plane_str_map[s] for s in (sym_info.get("symmetry_planes") or [])
-            if s in plane_str_map
-        ]
-        if sym_planes_enum:
-            mirror_grids = create_mirror_grid(rv, ri, sym_planes_enum)
-            solver._assemble_image_operators(mirror_grids, sym_planes_enum, sym_info)
     construct_time = time.perf_counter() - t0
 
-    obs_frame = infer_observation_frame(grid, observation_origin="mouth")
+    # Assemble image-source operators if symmetry is applied
+    if applied:
+        sym_info = sym_result.get("symmetry_info") or sym_result.get("symmetry", {})
+        sym_planes_str = sym_info.get("symmetry_planes") or []
+        if sym_planes_str:
+            _plane_str_map = {p.value: p for p in SymmetryPlane}
+            _sym_planes_enum = [_plane_str_map[s] for s in sym_planes_str if s in _plane_str_map]
+            if _sym_planes_enum:
+                try:
+                    _mirror_grids = create_mirror_grid(rv, ri, _sym_planes_enum)
+                    solver._assemble_image_operators(_mirror_grids, _sym_planes_enum, sym_info)
+                    print(f"  DEBUG: image operators assembled, mirror_spaces={len(solver.mirror_spaces)}")
+                except Exception as exc:
+                    print(f"  WARNING: Image operator assembly failed: {exc}")
+
+    # Determine symmetry plane for observation frame projection
+    _sym_plane = None
+    if applied:
+        sym_info = sym_result.get("symmetry_info") or sym_result.get("symmetry", {})
+        sym_planes = sym_info.get("symmetry_planes") or []
+        if sym_planes:
+            _sym_plane = str(sym_planes[0])
+
+    obs_frame = infer_observation_frame(grid, observation_origin="mouth", symmetry_plane=_sym_plane)
+    print(f"  DEBUG: observation frame origin={obs_frame['origin_center']}, symmetry_plane={_sym_plane}")
     obs_info = resolve_safe_observation_distance(grid, 2.0, obs_frame)
     obs_dist = float(obs_info["effective_distance_m"])
 
     # For image source BEM, use the reference observation frame if provided.
     # This ensures the half model uses the same observation point as the full model.
+    # IMPORTANT: Project the reference frame origin to X=0 for symmetry.
     if applied and reference_observation_frame is not None:
-        obs_frame = reference_observation_frame
+        obs_frame = reference_observation_frame.copy()
+        if _sym_plane == "yz":
+            obs_frame["origin_center"] = obs_frame["origin_center"].copy()
+            obs_frame["origin_center"][0] = 0.0
+        elif _sym_plane == "xy":
+            obs_frame["origin_center"] = obs_frame["origin_center"].copy()
+            obs_frame["origin_center"][2] = 0.0
         obs_dist = float(resolve_safe_observation_distance(grid, 2.0, obs_frame)["effective_distance_m"])
+        print(f"  DEBUG: using reference frame, origin now={obs_frame['origin_center']}")
 
     # Solve frequencies
     solutions = []
     t0 = time.perf_counter()
+    print(f"  DEBUG: solver.mirror_spaces before solve: {len(solver.mirror_spaces) if solver.mirror_spaces else 'None'}")
     for freq in frequencies:
         try:
             spl, impedance, di, solution, iters = solver._solve_single_frequency(
