@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 17, 2026
+Last updated: March 18, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -37,7 +37,32 @@ Status as of March 17, 2026:
 
 ## Active Backlog
 
-_No active items. Backlog is clean._
+### P2. Design Quality — Distinctive Visual Identity & Hierarchy
+
+The interface functions but lacks visual distinction and hierarchy. Current state: system fonts with no personality, flat action hierarchy (all buttons similar weight), 3D canvas feels like an afterthought, weak status indicators, and passive empty states. The design says "functional prototype" not "professional acoustic engineering tool." This undermines user confidence in a precision engineering domain.
+
+**Implementation notes**:
+
+- Files: `src/style.css`, `index.html`, `src/ui/*.js`
+- Related: completed P2 UI Quality Audit (accessibility/theming) — this extends into visual design quality
+- Skills available: `/normalize`, `/distill`, `/bolder`, `/clarify`, `/onboard`
+
+Action plan:
+
+- [ ] Typography: Replace system fonts with distinctive UI font (consider IBM Plex Sans, Space Grotesk, or DM Sans); pair with non-default monospace (JetBrains Mono, Fira Code)
+- [ ] Action hierarchy: Create primary/secondary/tertiary button styles; make "Start BEM Simulation" visually dominant
+- [ ] Canvas presence: Add subtle framing (vignette, intentional grid styling, integrated controls)
+- [ ] Status indicators: Make connection/simulation status more prominent with bolder color, subtle glow/pulse
+- [ ] Empty states: Rewrite to explain what will appear and why it matters, guide users toward action
+
+**Research findings**:
+
+- Anti-patterns check: PASS — not typical AI-generated slop (warm palette, no glassmorphism/neon, light mode default)
+- Current aesthetic: competent but forgettable; rounded corners + subtle shadows everywhere
+- Opportunity: commit to a distinctive direction matching the domain (precision engineering, acoustic science)
+- Question to resolve: What does "precision" look like for this audience? (Swiss clinical, industrial brutalist, refined luxury engineering?)
+
+---
 
 Re-open when:
 
