@@ -235,14 +235,16 @@ Action plan:
 
 - [x] Add fallback message inside canvas container for non-WebGL browsers
 
-#### Section Collapse State
+#### Section Collapse State — VERIFIED
 
 - **Location**: `src/style.css:376-444`
 - **Description**: Collapsible sections use `<details>`; ensure `aria-expanded` synced if custom implementation used
 
 Action plan:
 
-- [ ] Verify native `<details>` accessibility; add `aria-expanded` if custom implementation
+- [x] Verify native `<details>` accessibility; add `aria-expanded` if custom implementation
+
+**Verified March 17, 2026**: Native `<details>` elements are used (see `index.html:96`). Native implementation has built-in accessibility — screen readers announce state via the `open` attribute, keyboard navigation works natively. No `aria-expanded` needed.
 
 ---
 
