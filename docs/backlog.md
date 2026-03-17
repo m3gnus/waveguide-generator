@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 18, 2026
+Last updated: March 17, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -38,7 +38,22 @@ Status as of March 17, 2026:
 
 ## Active Backlog
 
-_No active items. All priority work complete._
+### P3. Settings Modal — Replace "?" Help Buttons with Label Hover Tooltips
+
+The settings modal uses separate "?" buttons next to each setting label, creating visual clutter. The codebase already has a cleaner pattern (`data-help-text` on labels) that shows tooltips on hover without extra UI elements.
+
+**Implementation notes:**
+
+- `src/ui/settings/modal.js` — replace `createHelpTrigger()` calls with label `data-help-text` attribute
+- `src/ui/helpAffordance.js` — possibly refactor `_buildSettingsLabelCopy()` to use hover pattern
+- `src/style.css:634-662` — existing hover tooltip styles can be reused
+
+**Action plan:**
+
+- [ ] Modify `_buildSettingsLabelCopy()` to set `data-help-text` on label instead of creating "?" button
+- [ ] Remove `createHelpTrigger()` imports from settings files
+- [ ] Test hover behavior on all settings controls
+- [ ] Verify accessibility (keyboard users can still access help)
 
 ---
 
