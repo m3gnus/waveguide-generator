@@ -86,6 +86,20 @@ def _configure_bempp_precision(precision: str) -> None:
         setattr(bempp_api, "DEFAULT_PRECISION", precision)
 
 
+def _numpy_dtype_for_precision(precision: str) -> type:
+    """
+    Return the numpy complex dtype corresponding to a BEM precision setting.
+
+    Args:
+        precision: "single" or "double" (any casing)
+
+    Returns:
+        np.complex64 for "single", np.complex128 for "double"
+    """
+    normalized = _normalize_bem_precision(precision)
+    return np.complex64 if normalized == "single" else np.complex128
+
+
 def _operator_kwargs(device_interface: str, precision: str) -> Dict[str, str]:
     return {
         "device_interface": device_interface,
