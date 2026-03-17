@@ -1,6 +1,9 @@
-import { applySmoothing } from '../../results/smoothing.js';
-import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import { renderSymmetryPolicySummary, renderObservationDistanceSummary } from './results.js';
+import { applySmoothing } from "../../results/smoothing.js";
+import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
+import {
+  renderSymmetryPolicySummary,
+  renderObservationDistanceSummary,
+} from "./results.js";
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -8,57 +11,58 @@ import { renderSymmetryPolicySummary, renderObservationDistanceSummary } from '.
  */
 export async function openViewResultsModal(panel) {
   const preferredJobId = panel.activeJobId || panel.currentJobId;
-  const results = preferredJobId && panel.resultCache?.has(preferredJobId)
-    ? panel.resultCache.get(preferredJobId)
-    : panel.lastResults;
+  const results =
+    preferredJobId && panel.resultCache?.has(preferredJobId)
+      ? panel.resultCache.get(preferredJobId)
+      : panel.lastResults;
   if (!results) return;
 
   // Build modal DOM
-  const backdrop = document.createElement('div');
-  backdrop.className = 'ui-choice-backdrop';
+  const backdrop = document.createElement("div");
+  backdrop.className = "ui-choice-backdrop";
 
-  const dialog = document.createElement('div');
-  dialog.className = 'ui-choice-dialog view-results-dialog';
-  dialog.setAttribute('role', 'dialog');
-  dialog.setAttribute('aria-modal', 'true');
-  dialog.setAttribute('aria-label', 'View Results');
+  const dialog = document.createElement("div");
+  dialog.className = "ui-choice-dialog view-results-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", "View Results");
 
-  const header = document.createElement('div');
-  header.className = 'view-results-header';
+  const header = document.createElement("div");
+  header.className = "view-results-header";
 
-  const title = document.createElement('h4');
-  title.className = 'ui-choice-title';
-  title.textContent = 'Simulation Results';
+  const title = document.createElement("h4");
+  title.className = "ui-choice-title";
+  title.textContent = "Simulation Results";
   header.appendChild(title);
 
-  const headerActions = document.createElement('div');
-  headerActions.className = 'view-results-header-actions';
+  const headerActions = document.createElement("div");
+  headerActions.className = "view-results-header-actions";
 
   // Smoothing dropdown in header
-  const smoothingContainer = document.createElement('div');
-  smoothingContainer.className = 'view-results-smoothing';
-  const smoothingLabel = document.createElement('label');
-  smoothingLabel.textContent = 'Smoothing';
-  smoothingLabel.setAttribute('for', 'vr-smoothing-select');
+  const smoothingContainer = document.createElement("div");
+  smoothingContainer.className = "view-results-smoothing";
+  const smoothingLabel = document.createElement("label");
+  smoothingLabel.textContent = "Smoothing";
+  smoothingLabel.setAttribute("for", "vr-smoothing-select");
   smoothingContainer.appendChild(smoothingLabel);
 
-  const smoothingSelect = document.createElement('select');
-  smoothingSelect.id = 'vr-smoothing-select';
+  const smoothingSelect = document.createElement("select");
+  smoothingSelect.id = "vr-smoothing-select";
   const smoothingOptions = [
-    ['none', 'None'],
-    ['1/1', '1/1 Oct'],
-    ['1/2', '1/2 Oct'],
-    ['1/3', '1/3 Oct'],
-    ['1/6', '1/6 Oct'],
-    ['1/12', '1/12 Oct'],
-    ['1/24', '1/24 Oct'],
-    ['1/48', '1/48 Oct'],
-    ['variable', 'Variable'],
-    ['psychoacoustic', 'Psychoacoustic'],
-    ['erb', 'ERB'],
+    ["none", "None"],
+    ["1/1", "1/1 Oct"],
+    ["1/2", "1/2 Oct"],
+    ["1/3", "1/3 Oct"],
+    ["1/6", "1/6 Oct"],
+    ["1/12", "1/12 Oct"],
+    ["1/24", "1/24 Oct"],
+    ["1/48", "1/48 Oct"],
+    ["variable", "Variable"],
+    ["psychoacoustic", "Psychoacoustic"],
+    ["erb", "ERB"],
   ];
   for (const [value, text] of smoothingOptions) {
-    const opt = document.createElement('option');
+    const opt = document.createElement("option");
     opt.value = value;
     opt.textContent = text;
     if (value === panel.currentSmoothing) opt.selected = true;
@@ -67,23 +71,23 @@ export async function openViewResultsModal(panel) {
   smoothingContainer.appendChild(smoothingSelect);
   headerActions.appendChild(smoothingContainer);
 
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'view-results-close';
-  closeBtn.textContent = '\u00d7';
-  closeBtn.title = 'Close (Escape)';
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "view-results-close";
+  closeBtn.textContent = "\u00d7";
+  closeBtn.title = "Close (Escape)";
   headerActions.appendChild(closeBtn);
 
   header.appendChild(headerActions);
 
   dialog.appendChild(header);
 
-  const body = document.createElement('div');
-  body.className = 'view-results-body';
+  const body = document.createElement("div");
+  body.className = "view-results-body";
 
   const symmetryPolicyMarkup = renderSymmetryPolicySummary(results);
   if (symmetryPolicyMarkup) {
-    const summaryWrapper = document.createElement('div');
+    const summaryWrapper = document.createElement("div");
     summaryWrapper.innerHTML = symmetryPolicyMarkup.trim();
     const summarySection = summaryWrapper.firstElementChild;
     if (summarySection) {
@@ -93,7 +97,7 @@ export async function openViewResultsModal(panel) {
 
   const obsDistMarkup = renderObservationDistanceSummary(results);
   if (obsDistMarkup) {
-    const obsWrapper = document.createElement('div');
+    const obsWrapper = document.createElement("div");
     obsWrapper.innerHTML = obsDistMarkup.trim();
     const obsEl = obsWrapper.firstElementChild;
     if (obsEl) {
@@ -103,25 +107,26 @@ export async function openViewResultsModal(panel) {
 
   // Chart containers with loading placeholders
   const chartNames = [
-    { key: 'directivity_map', label: 'Polar Directivity Map' },
-    { key: 'impedance', label: 'Acoustic Impedance' },
-    { key: 'directivity_index', label: 'Directivity Index' },
-    { key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
+    { key: "directivity_map", label: "Polar Directivity Map" },
+    { key: "impedance", label: "Acoustic Impedance" },
+    { key: "directivity_index", label: "Directivity Index" },
+    { key: "frequency_response", label: "Frequency Response (SPL On-Axis)" },
   ];
 
   for (const chart of chartNames) {
-    const container = document.createElement('div');
-    container.className = 'view-results-chart';
+    const container = document.createElement("div");
+    container.className = "view-results-chart";
 
-    const chartTitle = document.createElement('div');
-    chartTitle.className = 'view-results-chart-title';
+    const chartTitle = document.createElement("div");
+    chartTitle.className = "view-results-chart-title";
     chartTitle.textContent = chart.label;
     container.appendChild(chartTitle);
 
-    const imgContainer = document.createElement('div');
+    const imgContainer = document.createElement("div");
     imgContainer.id = `vr-${chart.key}`;
-    imgContainer.className = 'view-results-img';
-    imgContainer.innerHTML = '<div class="view-results-loading">Rendering...</div>';
+    imgContainer.className = "view-results-img";
+    imgContainer.innerHTML =
+      '<div class="view-results-loading">Rendering...</div>';
     container.appendChild(imgContainer);
 
     body.appendChild(container);
@@ -135,22 +140,22 @@ export async function openViewResultsModal(panel) {
   const close = () => {
     if (closed) return;
     closed = true;
-    window.removeEventListener('keydown', onKeyDown);
+    window.removeEventListener("keydown", onKeyDown);
     backdrop.remove();
   };
 
   const onKeyDown = (event) => {
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       event.preventDefault();
       close();
     }
   };
 
-  closeBtn.addEventListener('click', close);
-  backdrop.addEventListener('click', (event) => {
+  closeBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (event) => {
     if (event.target === backdrop) close();
   });
-  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener("keydown", onKeyDown);
 
   document.body.appendChild(backdrop);
 
@@ -168,17 +173,27 @@ export async function openViewResultsModal(panel) {
     let impedanceImag = impedanceData.imaginary || [];
     const directivity = results.directivity || {};
 
-    if (panel.currentSmoothing !== 'none') {
+    if (panel.currentSmoothing !== "none") {
       spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
       di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
-      impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
-      impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
+      impedanceReal = applySmoothing(
+        impedanceFrequencies,
+        impedanceReal,
+        panel.currentSmoothing,
+      );
+      impedanceImag = applySmoothing(
+        impedanceFrequencies,
+        impedanceImag,
+        panel.currentSmoothing,
+      );
     }
 
     // Show loading state
     for (const chart of chartNames) {
       const container = document.getElementById(`vr-${chart.key}`);
-      if (container) container.innerHTML = '<div class="view-results-loading">Rendering...</div>';
+      if (container)
+        container.innerHTML =
+          '<div class="view-results-loading">Rendering...</div>';
     }
 
     const payload = {
@@ -195,14 +210,16 @@ export async function openViewResultsModal(panel) {
     const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
     try {
       const response = await fetch(`${backendUrl}/api/render-charts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
+        const detail = await response.text().catch(() => "");
+        console.warn(
+          `[view-results] Server returned ${response.status}: ${detail}`,
+        );
         _showMatplotlibRequired();
         return;
       }
@@ -216,19 +233,20 @@ export async function openViewResultsModal(panel) {
 
         const imgData = charts[chart.key];
         if (imgData) {
-          container.innerHTML = `<img src="${imgData}" alt="${chart.label}" style="width: 100%; border-radius: 4px;" />`;
+          container.innerHTML = `<img src="${imgData}" alt="${chart.label}" class="view-results-chart-img" />`;
         } else {
-          container.innerHTML = '<div class="view-results-loading">No data available</div>';
+          container.innerHTML =
+            '<div class="view-results-loading">No data available</div>';
         }
       }
     } catch (err) {
-      console.warn('[view-results] Fetch failed:', err.message);
+      console.warn("[view-results] Fetch failed:", err.message);
       _showMatplotlibRequired();
     }
   }
 
   // Re-fetch charts when smoothing changes
-  smoothingSelect.addEventListener('change', (e) => {
+  smoothingSelect.addEventListener("change", (e) => {
     panel.currentSmoothing = e.target.value;
     fetchCharts();
   });
@@ -239,10 +257,10 @@ export async function openViewResultsModal(panel) {
     for (const chart of chartNames) {
       const container = document.getElementById(`vr-${chart.key}`);
       if (!container) continue;
-      container.innerHTML = `<div class="view-results-loading" style="padding: 32px;">
-        <div style="font-weight: 600; margin-bottom: 8px;">Matplotlib is required for chart rendering</div>
-        <div style="opacity: 0.8; font-size: 0.8rem;">Install it with: <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">pip install matplotlib</code></div>
-        <div style="opacity: 0.6; font-size: 0.75rem; margin-top: 6px;">Then restart the backend server.</div>
+      container.innerHTML = `<div class="view-results-loading view-results-matplotlib-error">
+        <div class="view-results-matplotlib-error-title">Matplotlib is required for chart rendering</div>
+        <div class="view-results-matplotlib-error-detail">Install it with: <code>pip install matplotlib</code></div>
+        <div class="view-results-matplotlib-error-hint">Then restart the backend server.</div>
       </div>`;
     }
   }

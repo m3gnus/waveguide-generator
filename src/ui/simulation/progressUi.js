@@ -2,46 +2,52 @@
 // DOM refs are lazily cached on first use to reduce repeated getElementById calls in hot paths.
 
 export const STAGE_LABELS = {
-  mesh_generation: 'Building mesh',
-  queued: 'Queued',
-  initializing: 'Initializing solver',
-  mesh_prepare: 'Preparing mesh',
-  mesh_ready: 'Mesh ready',
-  solver_setup: 'Setting up solver',
-  bem_solve: 'Solving',
-  frequency_solve: 'Solving',
-  directivity: 'Computing directivity',
-  finalizing: 'Finalizing results',
-  cancelling: 'Stopping',
-  complete: 'Complete',
-  cancelled: 'Cancelled',
-  error: 'Error'
+  mesh_generation: "Building mesh",
+  queued: "Queued",
+  initializing: "Initializing solver",
+  mesh_prepare: "Preparing mesh",
+  mesh_ready: "Mesh ready",
+  solver_setup: "Setting up solver",
+  bem_solve: "Solving",
+  frequency_solve: "Solving",
+  directivity: "Computing directivity",
+  finalizing: "Finalizing results",
+  cancelling: "Stopping",
+  complete: "Complete",
+  cancelled: "Cancelled",
+  error: "Error",
 };
 
 function normalizeStage(stage) {
-  return typeof stage === 'string' && stage.trim() ? stage.trim() : 'bem_solve';
+  return typeof stage === "string" && stage.trim() ? stage.trim() : "bem_solve";
 }
 
 function stageStep(stage) {
   const key = normalizeStage(stage);
   if (
-    key === 'mesh_generation' ||
-    key === 'mesh_prepare' ||
-    key === 'mesh_ready' ||
-    key === 'solver_setup' ||
-    key === 'initializing'
+    key === "mesh_generation" ||
+    key === "mesh_prepare" ||
+    key === "mesh_ready" ||
+    key === "solver_setup" ||
+    key === "initializing"
   ) {
     return 1;
   }
-  if (key === 'queued') return 1;
-  if (key === 'directivity') return 3;
-  if (key === 'cancelling') return 4;
-  if (key === 'finalizing' || key === 'complete' || key === 'cancelled' || key === 'error') return 4;
+  if (key === "queued") return 1;
+  if (key === "directivity") return 3;
+  if (key === "cancelling") return 4;
+  if (
+    key === "finalizing" ||
+    key === "complete" ||
+    key === "cancelled" ||
+    key === "error"
+  )
+    return 4;
   return 2;
 }
 
 export function formatElapsedDuration(durationMs) {
-  if (durationMs === null || durationMs === undefined || durationMs === '') {
+  if (durationMs === null || durationMs === undefined || durationMs === "") {
     return null;
   }
   const numericDuration = Number(durationMs);
@@ -55,9 +61,9 @@ export function formatElapsedDuration(durationMs) {
   const seconds = roundedSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 export function parseTimestampMs(raw) {
@@ -68,7 +74,9 @@ export function parseTimestampMs(raw) {
 }
 
 export function resolveJobDurationMs(job) {
-  const startedAtMs = parseTimestampMs(job.startedAt || job.queuedAt || job.createdAt);
+  const startedAtMs = parseTimestampMs(
+    job.startedAt || job.queuedAt || job.createdAt,
+  );
   const completedAtMs = parseTimestampMs(job.completedAt);
   if (startedAtMs === null || completedAtMs === null) {
     return null;
@@ -82,34 +90,34 @@ export function resolveJobDurationMs(job) {
 
 export function resolveStageDetail(stage, message, pct) {
   const key = normalizeStage(stage);
-  const raw = typeof message === 'string' ? message.trim() : '';
+  const raw = typeof message === "string" ? message.trim() : "";
 
-  if (key === 'directivity') {
+  if (key === "directivity") {
     if (!raw || /computing spectra\/directivity/i.test(raw)) {
       return `Generating directivity maps and computing DI (${pct}%).`;
     }
     return raw;
   }
 
-  if (key === 'frequency_solve' || key === 'bem_solve') {
+  if (key === "frequency_solve" || key === "bem_solve") {
     if (raw) return raw;
     return `Solving across frequency range (${pct}%).`;
   }
 
-  if (key === 'solver_setup') {
-    return raw || 'Configuring solver parameters.';
+  if (key === "solver_setup") {
+    return raw || "Configuring solver parameters.";
   }
 
-  if (key === 'mesh_generation' || key === 'mesh_prepare') {
-    return raw || 'Building solve mesh.';
+  if (key === "mesh_generation" || key === "mesh_prepare") {
+    return raw || "Building solve mesh.";
   }
 
-  if (key === 'finalizing') {
-    return raw || 'Packaging results.';
+  if (key === "finalizing") {
+    return raw || "Packaging results.";
   }
 
-  if (key === 'cancelling') {
-    return raw || 'Stop requested. Waiting for the solver to finish.';
+  if (key === "cancelling") {
+    return raw || "Stop requested. Waiting for the solver to finish.";
   }
 
   return raw;
@@ -125,15 +133,15 @@ let _dom = null;
 export function getSimulationDom() {
   if (!_dom) {
     _dom = {
-      progressFill: document.getElementById('progress-fill'),
-      progressText: document.getElementById('progress-text'),
-      progressBar: document.getElementById('simulation-progressbar'),
-      progressDiv: document.getElementById('simulation-progress'),
-      runBtn: document.getElementById('run-simulation-btn'),
-      stopBtn: document.getElementById('stop-simulation-btn'),
-      statusDot: document.getElementById('solver-status'),
-      statusText: document.getElementById('solver-status-text'),
-      statusHelp: document.getElementById('solver-status-help'),
+      progressFill: document.getElementById("progress-fill"),
+      progressText: document.getElementById("progress-text"),
+      progressBar: document.getElementById("simulation-progressbar"),
+      progressDiv: document.getElementById("simulation-progress"),
+      runBtn: document.getElementById("run-simulation-btn"),
+      stopBtn: document.getElementById("stop-simulation-btn"),
+      statusDot: document.getElementById("solver-status"),
+      statusText: document.getElementById("solver-status-text"),
+      statusHelp: document.getElementById("solver-status-help"),
     };
   }
   return _dom;
@@ -143,18 +151,16 @@ export function setProgressVisible(visible) {
   const { progressDiv } = getSimulationDom();
   if (!progressDiv) return;
   if (visible) {
-    progressDiv.classList.remove('is-hidden');
-    progressDiv.style.display = 'block';
+    progressDiv.classList.remove("is-hidden");
   } else {
-    progressDiv.classList.add('is-hidden');
-    progressDiv.style.display = 'none';
+    progressDiv.classList.add("is-hidden");
   }
 }
 
 export function updateProgressUi({
   progress = 0,
-  stage = 'bem_solve',
-  message = ''
+  stage = "bem_solve",
+  message = "",
 } = {}) {
   const { progressFill, progressText, progressBar } = getSimulationDom();
   const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
@@ -167,20 +173,26 @@ export function updateProgressUi({
     progressFill.style.width = `${pct}%`;
   }
   if (progressBar) {
-    progressBar.setAttribute('aria-valuenow', String(pct));
-    progressBar.setAttribute('aria-valuetext', `Stage: ${label}. ${pct}% complete.`);
+    progressBar.setAttribute("aria-valuenow", String(pct));
+    progressBar.setAttribute(
+      "aria-valuetext",
+      `Stage: ${label}. ${pct}% complete.`,
+    );
   }
   if (progressText) {
-    progressText.textContent = detail || '';
+    progressText.textContent = detail || "";
   }
 }
 
-export function updateConnectionStageUi(panel, {
-  progress = 0,
-  stage = 'bem_solve',
-  message = ''
-} = {}) {
-  const { statusDot, statusText: statusTextEl, statusHelp } = getSimulationDom();
+export function updateConnectionStageUi(
+  panel,
+  { progress = 0, stage = "bem_solve", message = "" } = {},
+) {
+  const {
+    statusDot,
+    statusText: statusTextEl,
+    statusHelp,
+  } = getSimulationDom();
   const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
   const pct = Math.round(clamped * 100);
   const key = normalizeStage(stage);
@@ -189,9 +201,10 @@ export function updateConnectionStageUi(panel, {
   const detail = resolveStageDetail(key, message, pct);
 
   if (statusDot) {
-    statusDot.className = key === 'error' || key === 'cancelled'
-      ? 'status-dot disconnected'
-      : 'status-dot connected';
+    statusDot.className =
+      key === "error" || key === "cancelled"
+        ? "status-dot disconnected"
+        : "status-dot connected";
   }
   if (statusTextEl) {
     statusTextEl.textContent = `Stage ${step}/4: ${label} (${pct}%)`;
@@ -199,9 +212,9 @@ export function updateConnectionStageUi(panel, {
   if (statusHelp) {
     if (detail) {
       statusHelp.textContent = detail;
-      statusHelp.classList.remove('is-hidden');
+      statusHelp.classList.remove("is-hidden");
     } else {
-      statusHelp.classList.add('is-hidden');
+      statusHelp.classList.add("is-hidden");
     }
   }
   if (panel) {

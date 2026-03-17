@@ -69,33 +69,22 @@ def _finalize_cancelled_job(
 
 
 def _resolve_occ_adaptive_quadrants(validated_payload: dict[str, Any]) -> int:
-    """Extract and potentially reduce quadrants for BEM symmetry.
+    """Extract quadrants for BEM mesh construction.
 
-    For full-circle geometries (quadrants=1234) with symmetric params
-    (no guiding curves, no morph), the geometry has YZ symmetry.  We
-    can build a half-model mesh (quadrants=12) and use the image source
-    method in BEM for a ~4× speedup.  This follows the tessellation-last
-    principle: cut the B-Rep geometry BEFORE meshing, not after.
+    Safety gate: always returns 1234 (full model).  The image source
+    method (Approach A) is blocked by a bempp-cl 0.4.x singular
+    quadrature limitation — cross-grid operators miss near-field
+    contributions at the symmetry plane, producing ~8 dB SPL errors.
+    Half-model symmetry is deferred until a compatible BEM backend is
+    available.  See P1 in docs/backlog.md for details.
     """
     q = int(validated_payload.get("quadrants", 1234))
     if q != 1234:
         # User explicitly requested a partial horn — honour it.
         return q
 
-    # Check if geometry supports YZ symmetry exploitation.
-    gcurve = int(validated_payload.get("gcurve_type", 0) or 0)
-    morph = int(validated_payload.get("morph_target", 0) or 0)
-    if gcurve != 0 or morph != 0:
-        # Non-axisymmetric features break YZ symmetry.
-        return 1234
-
-    # Symmetric full-circle geometry → build half-model for BEM.
-    logger.info(
-        "Symmetric geometry detected (gcurve=0, morph=0). "
-        "Building half-model mesh (quadrants=12) for BEM image-source method."
-    )
-    validated_payload["quadrants"] = 12
-    return 12
+    # Safety gate: force full-model solve regardless of geometry symmetry.
+    return 1234
 
 
 def _extract_occ_adaptive_canonical_mesh(
