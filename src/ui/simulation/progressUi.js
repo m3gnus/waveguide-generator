@@ -213,10 +213,16 @@ export function updateConnectionStageUi(
   const detail = resolveStageDetail(key, message, pct);
 
   if (statusDot) {
-    statusDot.className =
-      key === "error" || key === "cancelled"
-        ? "status-dot disconnected"
-        : "status-dot connected";
+    const isTerminal =
+      key === "complete" || key === "cancelled" || key === "error";
+    if (isTerminal) {
+      statusDot.className =
+        key === "error" || key === "cancelled"
+          ? "status-dot disconnected"
+          : "status-dot connected";
+    } else {
+      statusDot.className = "status-dot simulating";
+    }
   }
   if (statusTextEl) {
     statusTextEl.textContent = `Stage ${step}/4: ${label} (${pct}%)`;
