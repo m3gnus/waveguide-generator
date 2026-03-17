@@ -224,7 +224,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Add skeleton placeholders for job list and results panels
+- [x] Add skeleton placeholders for job list and results panels
 
 #### Canvas Container No WebGL Fallback
 
