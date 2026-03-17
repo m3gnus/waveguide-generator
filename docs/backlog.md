@@ -215,7 +215,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Move toast container or adjust z-index for proper stacking
+- [x] Move toast container or adjust z-index for proper stacking
 
 #### No Loading Skeleton States
 
