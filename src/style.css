@@ -13,7 +13,7 @@
   --overlay: rgba(20, 16, 10, 0.5);
 
   --text: oklch(18% 0.02 268);
-  --text-muted: oklch(55% 0.015 268);
+  --text-muted: oklch(48% 0.015 268);
 
   --border: oklch(88% 0.014 78);
   --input-bg: oklch(96% 0.014 78);

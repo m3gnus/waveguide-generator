@@ -62,7 +62,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Darken `--text-muted` to at least `oklch(48% 0.015 268)` or increase font-weight
+- [x] Darken `--text-muted` to at least `oklch(48% 0.015 268)` or increase font-weight
 
 #### Hard-coded Scene Colors in JavaScript
 
