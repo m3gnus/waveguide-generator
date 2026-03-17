@@ -59,7 +59,7 @@ Status as of March 17, 2026:
 - [x] Fix line 448: mirror grid coefficients
 - [x] Fix line 495: image source coefficients
 - [x] Update `solve.py` `_build_source_velocity()` to accept precision param
-- [ ] Change default precision to `"single"` in `_normalize_bem_precision()` and constructor
+- [x] Change default precision to `"single"` in `_normalize_bem_precision()` and constructor
 - [ ] Add test verifying single precision produces valid results
 - [ ] Run full server test suite: `npm run test:server`
 
