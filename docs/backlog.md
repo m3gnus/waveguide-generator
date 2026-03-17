@@ -49,7 +49,7 @@ The interface functions but lacks visual distinction and hierarchy. Current stat
 
 Action plan:
 
-- [ ] Typography: Replace system fonts with distinctive UI font (consider IBM Plex Sans, Space Grotesk, or DM Sans); pair with non-default monospace (JetBrains Mono, Fira Code)
+- [x] Typography: Replace system fonts with distinctive UI font (consider IBM Plex Sans, Space Grotesk, or DM Sans); pair with non-default monospace (JetBrains Mono, Fira Code)
 - [ ] Action hierarchy: Create primary/secondary/tertiary button styles; make "Start BEM Simulation" visually dominant
 - [ ] Canvas presence: Add subtle framing (vignette, intentional grid styling, integrated controls)
 - [ ] Status indicators: Make connection/simulation status more prominent with bolder color, subtle glow/pulse
