@@ -170,7 +170,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Replace spinner with static "Loading..." text for reduced motion preference
+- [x] Replace spinner with static "Loading..." text for reduced motion preference
 
 ## Completed / Resolved
 

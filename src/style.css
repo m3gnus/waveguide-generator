@@ -2304,6 +2304,19 @@ textarea {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  .loading-spinner {
+    border: none;
+    width: auto;
+    height: auto;
+    animation: none;
+  }
+
+  .loading-spinner::after {
+    content: "Loading...";
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
 }
 
 @media (prefers-contrast: more) {
