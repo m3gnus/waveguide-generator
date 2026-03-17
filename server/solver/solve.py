@@ -4,6 +4,7 @@ import numpy as np
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .contract import frequency_failure
+from .solve_optimized import _numpy_dtype_for_precision
 
 logger = logging.getLogger(__name__)
 from .deps import bempp_api
@@ -31,14 +32,15 @@ def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float
     return float(distance)
 
 
-def _build_source_velocity(space_u, amplitude: float = 1.0):
+def _build_source_velocity(space_u, amplitude: float = 1.0, precision: str = "double"):
     dof_count = getattr(space_u, "grid_dof_count", None)
     if dof_count is None:
         dof_count = getattr(space_u, "global_dof_count", 0)
     if int(dof_count) <= 0:
         raise ValueError("Source velocity space contains no DOFs (segments=[2] is empty).")
 
-    coeffs = np.full(int(dof_count), complex(amplitude, 0.0), dtype=np.complex128)
+    dtype = _numpy_dtype_for_precision(precision)
+    coeffs = np.full(int(dof_count), complex(amplitude, 0.0), dtype=dtype)
     return bempp_api.GridFunction(space_u, coefficients=coeffs)
 
 
@@ -54,6 +56,7 @@ def solve_frequency(
     use_burton_miller: bool = True,
     observation_distance_m: float = 2.0,
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
+    precision: str = "double",
 ) -> Tuple[float, complex, float]:
     """
     Solve BEM for a single frequency using exterior Helmholtz BIE in SI units.
@@ -89,7 +92,7 @@ def solve_frequency(
     )
 
     # Explicit source-DOF excitation avoids orientation cancellation on symmetric meshes.
-    u_total = _build_source_velocity(space_u, amplitude=1.0)
+    u_total = _build_source_velocity(space_u, amplitude=1.0, precision=precision)
     neumann_fun = 1j * omega * rho * u_total
 
     if use_burton_miller:
@@ -154,6 +157,7 @@ def solve(
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
     cancellation_callback: Optional[Callable[[], None]] = None,
+    precision: str = "double",
 ) -> Dict:
     """Run legacy BEM simulation path with explicit failure reporting."""
     if isinstance(mesh, dict):
@@ -261,6 +265,7 @@ def solve(
                 potential_interface=potential_interface,
                 observation_distance_m=observation_distance_m,
                 observation_frame=observation_frame,
+                precision=precision,
             )
             success_count += 1
             results["spl_on_axis"]["spl"].append(float(spl))
@@ -291,6 +296,7 @@ def solve(
                             potential_interface=potential_interface,
                             observation_distance_m=observation_distance_m,
                             observation_frame=observation_frame,
+                            precision=precision,
                         )
                         success_count += 1
                         if isinstance(device_metadata, dict):
