@@ -647,11 +647,16 @@ button {
   font-family: var(--font-ui);
   cursor: pointer;
   margin-bottom: var(--sp-2);
-  transition: opacity var(--t-fast);
+  transition:
+    transform var(--t-fast),
+    box-shadow var(--t-fast),
+    filter var(--t-fast);
 }
 
 button:hover:not(:disabled) {
-  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px oklch(0% 0 0 / 0.15);
+  filter: brightness(1.05);
 }
 
 button:disabled {
