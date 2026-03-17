@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 
 from solver.solve import solve as solve_legacy
-from solver.solve_optimized import solve_optimized
+from solver.solve_optimized import solve_optimized, _numpy_dtype_for_precision, _normalize_bem_precision
 
 
 class DummyGrid:
@@ -513,6 +513,63 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
         self.assertEqual(results["metadata"]["failure_count"], 0)
         self.assertEqual(len(results["spl_on_axis"]["spl"]), 1)
         self.assertIsNotNone(results["spl_on_axis"]["spl"][0])
+
+
+class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
+    def test_numpy_dtype_for_precision_returns_correct_dtype(self):
+        self.assertEqual(_numpy_dtype_for_precision("single"), np.complex64)
+        self.assertEqual(_numpy_dtype_for_precision("double"), np.complex128)
+        self.assertEqual(_numpy_dtype_for_precision("SINGLE"), np.complex64)
+        self.assertEqual(_numpy_dtype_for_precision("Single"), np.complex64)
+        self.assertEqual(_numpy_dtype_for_precision("DOUBLE"), np.complex128)
+
+    def test_normalize_bem_precision_defaults_to_single(self):
+        self.assertEqual(_normalize_bem_precision(None), "single")
+        self.assertEqual(_normalize_bem_precision(""), "single")
+
+    def test_normalize_bem_precision_rejects_invalid(self):
+        with self.assertRaises(ValueError):
+            _normalize_bem_precision("triple")
+        with self.assertRaises(ValueError):
+            _normalize_bem_precision("float32")
+
+    def test_single_precision_solver_produces_valid_results(self):
+        mesh = _mesh_stub()
+        with patch(
+            _SOLVE_FREQ_TARGET,
+            return_value=(90.0, complex(1.0, 0.5), 6.0, ("p", "u", "sp", "su"), 15),
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value=_directivity_stub(),
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 400.0],
+                num_frequencies=2,
+                sim_type="2",
+                enable_symmetry=False,
+                verbose=False,
+                mesh_validation_mode="off",
+                bem_precision="single",
+            )
+
+        self.assertEqual(results["metadata"]["performance"]["bem_precision"], "single")
+        self.assertEqual(len(results["spl_on_axis"]["spl"]), 2)
+        self.assertEqual(len(results["impedance"]["real"]), 2)
+        self.assertEqual(len(results["impedance"]["imaginary"]), 2)
+        self.assertEqual(len(results["di"]["di"]), 2)
+
+        for spl in results["spl_on_axis"]["spl"]:
+            self.assertIsNotNone(spl)
+            self.assertFalse(np.isnan(spl))
+        for r, i in zip(results["impedance"]["real"], results["impedance"]["imaginary"]):
+            self.assertIsNotNone(r)
+            self.assertIsNotNone(i)
+            self.assertFalse(np.isnan(r))
+            self.assertFalse(np.isnan(i))
+        for di in results["di"]["di"]:
+            self.assertIsNotNone(di)
+            self.assertFalse(np.isnan(di))
 
 
 if __name__ == "__main__":
