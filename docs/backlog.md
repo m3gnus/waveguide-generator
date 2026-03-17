@@ -161,7 +161,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Ensure skip link is visible on focus with proper styling
+- [x] Ensure skip link is visible on focus with proper styling (done in commit fa1c380)
 
 #### Animation with Reduced Motion
 
