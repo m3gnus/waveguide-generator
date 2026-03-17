@@ -151,7 +151,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Add shape or icon differentiation alongside color
+- [x] Add shape or icon differentiation alongside color
 
 #### Skip Link Styling
 
