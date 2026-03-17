@@ -35,10 +35,82 @@ Status as of March 17, 2026:
 - **Symmetry optimization DISABLED** — image source method blocked by bempp-cl 0.4.x singular quadrature limitation. Code preserved for future revisit if bempp-cl adds cross-grid singular quadrature support.
 - **UI Quality Audit complete** — all P2/P3/P4 items resolved (March 17, 2026).
 - **Design Quality complete** — typography, button hierarchy, canvas framing, status indicators, empty states (March 18, 2026).
+- **UI Redesign Audit complete** — anti-pattern score 2/10 (excellent); 3 minor P4 polish items identified (March 18, 2026).
 
 ## Active Backlog
 
-(Empty — all items resolved or deferred)
+### P2. BEM Single Precision Solver Failure (March 18, 2026)
+
+**Status:** PENDING — bug affecting solver correctness
+
+**Description:** When `bem_precision='single'` is set in advanced solver settings, the BEM solver fails. The root cause is hardcoded `np.complex128` dtypes that conflict with bempp-cl's `complex64` single-precision mode. The JWSound/BEMPPSolver reference uses single precision successfully.
+
+**Implementation notes:**
+
+- Files: `server/solver/solve_optimized.py`, `server/solver/solve.py`, `server/solver/impedance.py`
+- Add `_numpy_dtype_for_precision()` helper to return correct complex dtype
+- Replace hardcoded `complex128` with precision-aware dtype selection
+- Change default precision from `"double"` to `"single"` after fix is verified
+
+**Action plan:**
+
+- [ ] Add `_numpy_dtype_for_precision(precision: str) -> type` helper in `solve_optimized.py`
+- [ ] Fix line 276: unit velocity coefficient array
+- [ ] Fix line 448: mirror grid coefficients
+- [ ] Fix line 495: image source coefficients
+- [ ] Update `solve.py` `_build_source_velocity()` to accept precision param
+- [ ] Change default precision to `"single"` in `_normalize_bem_precision()` and constructor
+- [ ] Add test verifying single precision produces valid results
+- [ ] Run full server test suite: `npm run test:server`
+
+### P4. UI Redesign — Accent Color Shift (March 18, 2026)
+
+**Status:** PENDING — low priority polish
+
+- **Location:** `src/style.css:21, 88` (`--accent` tokens)
+- **Description:** Current accent hue (262, purple-blue) reads as "AI palette" despite acceptable saturation (0.16)
+- **Impact:** Minor aesthetic concern; doesn't affect usability
+- **Recommendation:** Shift hue toward 230 (electric blue) or 200 (teal) for distinctive identity
+- **Effort:** 15 minutes — change 2 values in CSS variables
+
+### P4. UI Redesign — Status Glow Intensity (March 18, 2026)
+
+**Status:** PENDING — low priority polish
+
+- **Location:** `src/style.css:819-894` (`.status-dot` styles)
+- **Description:** Status indicator glows are functional but could be calmer
+- **Impact:** Visual noise in dark mode
+- **Recommendation:** Reduce `box-shadow` spread values by ~25%
+- **Effort:** 10 minutes
+
+### P4. UI Redesign — Button Active State Feedback (March 18, 2026)
+
+**Status:** PENDING — low priority polish
+
+- **Location:** `src/style.css:686-691` (button `:hover` states)
+- **Description:** Buttons lack tactile `:active` feedback
+- **Impact:** Missed micro-interaction opportunity
+- **Recommendation:** Add `transform: scale(0.98)` or `translateY(1px)` on `:active`
+- **Effort:** 10 minutes
+
+### P4. UI Redesign — Anti-Pattern Audit (March 18, 2026)
+
+**Status:** COMPLETE — audit finished
+
+**Anti-Pattern Score: 2/10** (Excellent — no significant AI slop detected)
+
+| Check                      | Status  | Notes                                                      |
+| -------------------------- | ------- | ---------------------------------------------------------- |
+| AI color palette           | PARTIAL | Accent is muted purple-blue (0.16 saturation) — acceptable |
+| Generic fonts              | PASS    | Space Grotesk + JetBrains Mono — distinctive               |
+| Gradient text              | PASS    | None found                                                 |
+| Centered hero              | N/A     | Tool UI, asymmetric layout                                 |
+| 3-column card grids        | PASS    | None found                                                 |
+| Glassmorphism              | MINOR   | Subtle blur on dark viewer-controls                        |
+| Dark mode glows            | MINOR   | Functional status indicators                               |
+| Generic content            | PASS    | Contextual placeholders                                    |
+| Empty/loading/error states | PASS    | Comprehensive implementation                               |
+| Oversaturated accents      | PASS    | 0.16 saturation                                            |
 
 ## Deferred Watchpoints
 
@@ -282,23 +354,24 @@ Detailed history in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
 
 ---
 
-**Audit Summary (March 17, 2026):**
+**Audit Summary (March 18, 2026):**
 
 | Metric    | Count |
 | --------- | ----- |
 | Critical  | 0     |
 | High      | 0     |
 | Medium    | 0     |
-| Low       | 0     |
-| **Total** | **0** |
+| Low       | 3     |
+| **Total** | **3** |
 
-**Overall Quality Score: A (92/100)**
+**Overall Quality Score: A (94/100)**
 
 - Accessibility: A- (90/100)
 - Performance: A- (88/100)
 - Theming: A (92/100)
 - Responsive: B+ (88/100)
 - Code Quality: A (92/100)
+- Design Identity: A- (90/100) — distinctive fonts, subtle accent, no AI slop
 
 **Positive Findings:**
 
@@ -308,3 +381,5 @@ Detailed history in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
 - Semantic HTML with proper ARIA roles
 - Skip link, accessible progress bar, toast notifications
 - Three.js render optimization with `needsRender` flag
+- **Anti-pattern score 2/10** — Space Grotesk + JetBrains Mono fonts avoid generic Inter
+- Comprehensive empty/loading/error/skeleton states
