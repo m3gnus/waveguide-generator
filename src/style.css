@@ -691,16 +691,48 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-button.secondary {
+button.secondary,
+.btn-secondary {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
 }
 
-button.secondary:hover:not(:disabled) {
+button.secondary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
   opacity: 1;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--text-base);
+  box-shadow: 0 2px 8px oklch(45% 0.22 262 / 0.25);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px oklch(45% 0.22 262 / 0.35);
+  filter: brightness(1.08);
+}
+
+.btn-tertiary {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.btn-tertiary:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--input-bg);
+  transform: none;
+  box-shadow: none;
 }
 
 .button-row {
