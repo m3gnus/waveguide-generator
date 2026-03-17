@@ -60,6 +60,24 @@ Action plan:
 - [ ] Verify viewport still functions correctly after cleanup
 - [ ] Run full test suite
 
+### P2. Restore Missing Load/Export Buttons in Job List
+
+**Added: March 17, 2026**
+
+**Description:** The "Load" and "Export" buttons for completed simulation tasks were accidentally removed during refactoring in commit e7b8814. The event handlers and function implementations still exist — only the button markup is missing.
+
+**Implementation notes:**
+
+- File: `src/ui/simulation/jobActions.js` — `renderJobList()` function (around line 371)
+- Event handlers exist in `events.js` (lines 90-96)
+- Functions exist: `exportJobResults()` (line 394), `loadJobScript()` (line 411)
+
+Action plan:
+
+- [ ] Add Load button: `data-job-action="load-script"` (condition: `job.script` exists)
+- [ ] Add Export button: `data-job-action="export"` (condition: `job.status === "complete"`)
+- [ ] Verify button handlers still wired correctly
+
 ### P2. UI Quality Audit — Accessibility & Theming
 
 **Audit date: March 17, 2026**
@@ -111,6 +129,47 @@ Action plan:
 - [ ] Decide on i18n approach (library vs. message file extraction)
 - [ ] Extract UI strings to messages file
 - [ ] Implement `Intl.MessageFormat` or similar
+
+### P3. Replace Symmetry Policy with Solve Statistics in Results View
+
+**Added: March 17, 2026**
+
+**Description:** The Symmetry Policy section in the View Results modal is no longer relevant since symmetry optimization is disabled. Replace it with useful solve statistics: measurement distance (from mouth or throat), solve time, frequency count/range, and mesh complexity (vertices/triangles).
+
+**Implementation notes:**
+
+- Files: `src/ui/simulation/results.js`, `src/ui/simulation/viewResults.js`
+- Available stats from backend response:
+  - Total solve time: `metadata.performance.total_time_seconds`
+  - Frequency count: `frequencies.length`, range from input config
+  - Mesh stats: `mesh_stats.vertex_count`, `mesh_stats.triangle_count` (from job status)
+  - Observation distance: `metadata.observation.effective_distance_m`, origin (mouth/throat)
+  - Optional: GMRES iterations, BEM precision
+
+Action plan:
+
+- [ ] Create `renderSolveStatsSummary()` function to replace `renderSymmetryPolicySummary()`
+- [ ] Display: solve time, frequency range/count, mesh complexity, measurement distance + origin
+- [ ] Update `viewResults.js` to call new summary renderer instead of symmetry policy
+
+### P3. Remove Symmetry Text from Job List Entries
+
+**Added: March 17, 2026**
+
+**Description:** The symmetry line "Symmetry: Requested Disabled | Decision Full model" displayed next to each solver task is unnecessary since symmetry optimization is disabled. Remove it to reduce visual noise.
+
+**Implementation notes:**
+
+- File: `src/ui/simulation/jobActions.js`
+- Function: `getSymmetrySummaryLine()` (line 219)
+- Render call in `renderJobList()` (line 368)
+- Test dependency: `tests/simulation-flow.test.js` line 844
+
+Action plan:
+
+- [ ] Remove `getSymmetrySummaryLine()` function from `jobActions.js`
+- [ ] Remove the symmetry line rendering in `renderJobList()`
+- [ ] Update/remove symmetry assertions in `tests/simulation-flow.test.js`
 
 ### P3. UI Quality Audit — Medium-Severity Issues
 
