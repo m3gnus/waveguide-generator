@@ -1,24 +1,31 @@
 # Testing Guide
 
-This is the canonical test inventory for the repository.
+This document is the canonical inventory of all automated tests and run commands.
 
-## Automated test commands
+## Quick Start
 
-Run from repository root:
+From repository root:
 
 ```bash
-npm test
-npm run test:server
+npm test              # Run all JS tests
+npm run test:server   # Run all Python tests
 ```
 
-Command behavior:
-- `npm test` runs Node tests from `tests/` only.
-- `npm run test:server` runs Python `unittest` discovery in `server/tests/`.
+**Behavior**:
+- `npm test` discovers and runs Node.js tests in `tests/*.test.js` using node:test
+- `npm run test:server` discovers and runs Python unittest cases in `server/tests/*.py`
+
+**Single-file execution**:
+```bash
+node --test tests/<name>.test.js                    # One JS test file
+cd server && python3 -m unittest tests.<module_name> # One Python test module
+```
 
 ## JS test suites (`tests/`)
 
 - `tests/app-mesh-integration.test.js`
 - `tests/architecture-boundaries.test.js`
+- `tests/ath-fixtures.test.js`
 - `tests/bem-mesh-integrity.test.js`
 - `tests/config-import.test.js`
 - `tests/config-roundtrip.test.js`
@@ -38,20 +45,26 @@ Command behavior:
 - `tests/geometry-quality.test.js`
 - `tests/mesh-payload.test.js`
 - `tests/morph-implicit-target.test.js`
+- `tests/mshParser.test.js`
+- `tests/param-panel.test.js`
 - `tests/polar-settings.test.js`
 - `tests/references-guard.test.js`
-- `tests/simulation-flow.test.js`
+- `tests/scale-regression.test.js`
+- `tests/simulation-controller.test.js`
 - `tests/simulation-export-bundle.test.js`
+- `tests/simulation-flow.test.js`
 - `tests/simulation-job-tracker.test.js`
 - `tests/simulation-management-settings.test.js`
 - `tests/simulation-module.test.js`
 - `tests/simulation-reconciliation.test.js`
+- `tests/simulation-settings.test.js`
 - `tests/task-index-rebuild.test.js`
 - `tests/task-manifest.test.js`
 - `tests/ui-behavior.test.js`
 - `tests/ui-module.test.js`
 - `tests/viewer-settings.test.js`
 - `tests/viewport-tessellation-consistency.test.js`
+- `tests/viewport-throat-disc.test.js`
 - `tests/waveguide-payload.test.js`
 
 Supporting fixtures:
@@ -67,14 +80,16 @@ Supporting fixtures:
 - `server/tests/test_impedance.py`
 - `server/tests/test_import_boundaries.py`
 - `server/tests/test_job_persistence.py`
+- `server/tests/test_mesh_cleaner.py`
 - `server/tests/test_mesh_validation.py`
 - `server/tests/test_observation.py`
 - `server/tests/test_observation_distance.py`
 - `server/tests/test_occ_resolution_semantics.py`
 - `server/tests/test_reference_smoke.py`
 - `server/tests/test_solver_hardening.py`
-- `server/tests/test_symmetry_benchmark.py`
 - `server/tests/test_solver_tag_contract.py`
+- `server/tests/test_symmetry_benchmark.py`
+- `server/tests/test_symmetry_regression.py`
 - `server/tests/test_units.py`
 - `server/tests/test_updates_endpoint.py`
 

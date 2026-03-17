@@ -3,80 +3,71 @@
 This is the durable architecture reference for Waveguide Generator.
 If this file and runtime code disagree, update the docs to match the code.
 
-## Scope
+## Overview
 
-Waveguide Generator has three stable runtime layers:
+Waveguide Generator is a browser-based horn design tool with a FastAPI backend. Three stable runtime layers:
 
-1. Frontend app/runtime in `src/`
-2. Backend API/services in `server/`
-3. Shared mesh/request contracts carried between them
+1. **Frontend** (vanilla JS + Three.js): Geometry rendering, UI, export orchestration in `src/`
+2. **Backend** (FastAPI + Python): OCC meshing, BEM solve, job scheduling in `server/`
+3. **Shared contracts**: Canonical mesh payloads, API request/response shapes
 
-Primary entry points:
-
-- Frontend boot: `src/main.js`
-- Frontend coordinator: `src/app/App.js`
-- Backend API: `server/app.py`
+**Entry points**:
+- Frontend: `src/main.js` → `src/app/App.js`
+- Backend: `server/app.py` (FastAPI app on port 8000)
 
 ## Layer Boundaries
 
-Frontend layering:
+**Frontend**:
+- `src/app/` — bootstrap, scene lifecycle, top-level event wiring
+- `src/modules/` — public boundaries for design, geometry, export, simulation, UI coordination
+  - Modules normalize state and route to implementation layer
+- `src/ui/` — interaction, panel rendering (calls modules, not internals)
+- `src/geometry/`, `src/export/`, `src/solver/` — implementation packages (private, behind module boundaries)
 
-- `src/app/` owns bootstrap, scene lifecycle, and top-level orchestration.
-- `src/modules/` is the app-facing boundary into design, geometry, export, simulation, and UI coordination.
-- `src/ui/` owns interaction details and panel rendering, but should call module boundaries instead of geometry/export/solver internals directly.
-- `src/geometry/`, `src/export/`, and `src/solver/` are implementation packages behind module boundaries.
+**Backend**:
+- `server/api/routes_*.py` — HTTP handlers (routes only, no business logic)
+- `server/services/*.py` — validation, job orchestration, state management, runtime checks
+- `server/solver/` — OCC mesh generation, BEM assembly/solve, mesh validation
 
-Backend layering:
+## Core Workflows
 
-- `server/api/` owns HTTP routes only.
-- `server/services/` owns validation, orchestration, persistence coordination, and runtime state.
-- `server/solver/` owns OCC meshing, payload validation, and BEM solve mechanics.
+**Render pipeline** (viewport update):
+1. UI parameter changes → `GlobalState`
+2. `App.requestRender()` → `DesignModule` (parameter normalization)
+3. `GeometryModule` builds shape definition
+4. Three.js tessellates + renders in WebGL
 
-## Runtime Pipelines
+**Simulation pipeline** (async job):
+1. UI submission → `SimulationModule` (payload + OCC adaptive params)
+2. `POST /api/solve` → backend job queue
+3. Frontend polls `GET /api/status/{job_id}` + `GET /api/results/{job_id}`
+4. Results cached in `GlobalState` + folder manifests (if workspace active)
 
-Render pipeline:
-
-1. UI mutates `GlobalState`.
-2. `App` resolves prepared params through `DesignModule`.
-3. `GeometryModule` returns shape definitions.
-4. Three.js tessellation/rendering happens from that shape output.
-
-Simulation pipeline:
-
-1. UI requests canonical simulation mesh from the app.
-2. `SimulationModule` builds the canonical payload and OCC adaptive request data.
-3. `BemSolver.submitSimulation(...)` posts to `POST /api/solve`.
-4. Frontend polls job status/results and restores task history from backend jobs or folder manifests.
-
-Export pipeline:
-
-1. Local STL / profile CSV / MWG config exports flow through `src/modules/export/useCases.js`.
-2. OCC-authored `.msh` export uses `POST /api/mesh/build` only.
-3. Completed-task result exports use the simulation bundle coordinator in `src/ui/simulation/exports.js`.
-4. Folder-backed workspaces write bundle artifacts into task subfolders and persist manifest/index metadata.
+**Export pipeline**:
+- **Local exports**: STL/CSV/config via `ExportModule.useCases.js`
+- **OCC mesh export**: `POST /api/mesh/build` → `.msh` file
+- **Result bundles**: Auto/manual via `src/ui/simulation/exports.js` (multi-format, workspace-aware)
 
 ## Durable Contracts
 
-Geometry contract:
+**Geometry payload**:
+- Required keys: `vertices`, `indices`, `surfaceTags`, `format`, `boundaryConditions`, `metadata`
+- Surface tags code-owned in `src/geometry/tags.js` (`1`=wall, `2`=source, `3`=secondary, `4`=interface)
+- Source tag `2` must exist in every simulation payload
 
-- Canonical payload keys are `vertices`, `indices`, `surfaceTags`, `format`, `boundaryConditions`, and `metadata`.
-- Surface tags remain code-governed in `src/geometry/tags.js`.
-- Source tag `2` must be present in every simulation payload.
+**Simulation**:
+- Backend `/api/solve` is required; no mock/fallback solver supported
+- History uses one source mode: folder workspace (manifests only) OR backend jobs + cache (never mixed)
+- Job metadata: `rating`, `exportedFiles`, `autoExportCompletedAt`
 
-Simulation/task-history contract:
+**Export**:
+- `/api/mesh/build` returns `.msh` files only (not `.geo`)
+- Result bundles: multi-format export coordinated via settings IDs
+- Auto-export: runs once per completion, records timestamp marker
 
-- Backend solve path is required for real simulation; there is no supported mock fallback.
-- Folder mode and backend-job mode are explicit source modes, not a mixed feed.
-- Task manifests/index entries may persist `rating`, `exportedFiles`, and `autoExportCompletedAt`.
+## Documentation Roadmap
 
-Export contract:
-
-- `/api/mesh/build` returns Gmsh-authored `.msh` (and optional STL text), not `.geo`.
-- Result bundle selection is settings-driven through stable string IDs.
-- Auto-export runs once per completion transition and records its completion marker.
-
-## Companion Docs
-
-- Runtime map: `docs/PROJECT_DOCUMENTATION.md`
-- Module contracts: `docs/modules/README.md`
-- Active backlog: `docs/backlog.md`
+**For architecture & design decisions**: `docs/architecture.md` (this file)
+**For current implementation**: `docs/PROJECT_DOCUMENTATION.md`
+**For module contracts**: `docs/modules/`
+**For active work**: `docs/backlog.md`
