@@ -44,7 +44,7 @@ import {
   getCachedRuntimeHealth,
   getOpenCLSetupHelp,
 } from "../runtimeCapabilities.js";
-import { createHelpTrigger } from "../helpAffordance.js";
+
 import {
   getSelectedFolderLabel,
   requestFolderSelection,
@@ -1701,12 +1701,10 @@ function _buildSettingsLabelCopy(labelText, labelFor, helpText = "") {
     label.setAttribute("for", labelFor);
   }
   label.textContent = labelText;
-  copy.appendChild(label);
-
-  const helpTrigger = createHelpTrigger(document, { labelText, helpText });
-  if (helpTrigger) {
-    copy.appendChild(helpTrigger);
+  if (helpText) {
+    label.setAttribute("data-help-text", helpText);
   }
+  copy.appendChild(label);
 
   return copy;
 }
