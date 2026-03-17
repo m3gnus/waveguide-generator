@@ -1,48 +1,50 @@
-# Export Contract
+# Export Module Contract
 
 ## Scope
 
-Primary files:
+**Core module files**:
+- `src/modules/export/useCases.js` — local file export logic (STL, CSV, config)
+- `src/modules/export/index.js` — public module interface
 
-- `src/modules/export/useCases.js`
-- `src/modules/export/index.js`
-- `src/ui/simulation/exports.js`
-- `src/ui/fileOps.js`
+**UI coordination files**:
+- `src/ui/simulation/exports.js` — completed-task bundle coordination
+- `src/ui/fileOps.js` — file I/O helpers
 
-## Responsibilities
+## Core Responsibilities
 
-- Produce local STL, profile CSV, and MWG config exports.
-- Orchestrate OCC-backed mesh export through the backend.
-- Build completed-task result bundles across settings-selected formats.
+- **Local exports**: Generate STL (binary), profile/slice CSV, and MWG config text files
+- **OCC mesh export**: Orchestrate `POST /api/mesh/build` requests (parameter normalization, response handling)
+- **Result bundles**: Coordinate multi-format exports for completed simulation jobs (PNG, CSV, JSON, STL, polar data, VACS, etc.)
 
 ## Runtime Contract
 
-- OCC-authored `.msh` export uses `POST /api/mesh/build` only.
-- `/api/mesh/build` returns `.msh` plus optional STL text, not `.geo`.
-- Result bundle formats are addressed by stable string IDs:
-  - `png`
-  - `csv`
-  - `json`
-  - `txt`
-  - `polar_csv`
-  - `impedance_csv`
-  - `vacs`
-  - `stl`
-  - `fusion_csv`
-- Manual completed-task export runs the full configured bundle.
-- Auto-export runs once per completion transition and records `autoExportCompletedAt`.
+**OCC mesh export**:
+- Uses `POST /api/mesh/build` exclusively (no `.geo` fallback)
+- Backend returns `.msh` file + optional STL text (never returns `.geo`)
+- Request normalized through `DesignModule.occExportParams()`
 
-## Folder Workspace Behavior
+**Result bundle formats** (settings-driven string IDs):
+- `png` — directivity plot image (Matplotlib server-side rendering)
+- `csv` — frequency response table
+- `json` — full results object
+- `txt` — result summary text
+- `polar_csv`, `impedance_csv` — polar/impedance data exports
+- `vacs` — VACS file format
+- `stl` — horn geometry STL
+- `fusion_csv` — Fusion 360-compatible CSV
 
-- The primary folder-selection action lives in the simulation jobs header; the settings modal mirrors status and fallback copy.
-- When a folder workspace is active, manual exports write into the selected folder root.
-- When a folder workspace is active, completed-task bundle files write into `<workspace>/<jobId>/`.
-- The workspace contract covers manual exports and completed-task bundles; it is not a catch-all redirect for unrelated generated artifacts.
-- If folder write access is unavailable, the app clears the selected workspace and falls back to the standard save/download path.
+**Bundle execution**:
+- Manual export: runs full configured bundle format set
+- Auto-export: runs once per job completion → records `autoExportCompletedAt` marker
 
-## Regression Coverage
+**Folder workspace behavior**:
+- When active: manual exports → selected folder root; bundles → `<workspace>/<jobId>/`
+- If folder write fails: app clears workspace selection, falls back to browser save/download
+- Workspace contract covers manual + auto-bundles ONLY (not unrelated generated artifacts)
 
-- `tests/export-gmsh-pipeline.test.js`
-- `tests/export-module.test.js`
-- `tests/csv-export.test.js`
-- `tests/simulation-export-bundle.test.js`
+## Test Coverage
+
+- `tests/export-module.test.js` — module interface
+- `tests/export-gmsh-pipeline.test.js` — OCC mesh orchestration
+- `tests/csv-export.test.js` — CSV export correctness
+- `tests/simulation-export-bundle.test.js` — bundle coordination

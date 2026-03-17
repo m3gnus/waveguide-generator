@@ -1,32 +1,27 @@
-# Waveguide Generator: Project Documentation
+# Project Documentation
 
-This document describes the current implementation in this repository.
-If code and docs disagree, update this file to match runtime behavior.
+**This is the canonical implementation reference.** If code and docs disagree, update this file to match the code.
 
-Companion docs:
-- `docs/architecture.md` for durable system-level architecture
-- `docs/modules/README.md` for stable per-module contracts
-- `docs/backlog.md` for active unfinished work
+**Companion references**:
+- `docs/architecture.md` — durable architecture, layer boundaries, design decisions
+- `docs/modules/` — per-module contracts and responsibilities
+- `tests/TESTING.md` — test inventory and run commands
+- `server/README.md` — backend setup, API, dependency matrix
+- `AGENTS.md` — multi-agent coding guardrails
+- `docs/backlog.md` — active unfinished work
 
-Active backlog:
-- `docs/backlog.md`
+## 1. Scope
 
-Historical cleanup record:
-- `docs/archive/ARCHITECTURE_CLEANUP_PLAN_2026-03-11.md`
+**What it does**:
+- Parametric horn geometry (OSSE / R-OSSE) with real-time Three.js viewport
+- BEM simulation via backend solver (frequency-domain acoustic FEM/BEM coupling)
+- OCC-based mesh generation (gmsh server-side)
+- Export to STL, CSV, MWG config, and result bundles (PNG, CSV, JSON, polar data, VACS, etc.)
+- Task history with folder-workspace persistence and auto-export automation
 
-## 1. Scope and Entry Points
-
-Waveguide Generator is a browser-based horn design tool with:
-- Parametric OSSE / R-OSSE geometry generation
-- Real-time Three.js rendering
-- Canonical mesh payload generation for BEM simulation
-- Backend meshing and solve APIs (FastAPI + gmsh + bempp)
-- STL / profile CSV / MWG config export workflows plus task-bundle result export automation
-
-Primary entry points:
-- Frontend boot: `src/main.js`
-- Frontend coordinator: `src/app/App.js`
-- Backend API: `server/app.py`
+**Entry points**:
+- Frontend: `src/main.js` → `src/app/App.js`
+- Backend: `server/app.py` (FastAPI on port 8000)
 
 ## 2. Runtime Architecture
 

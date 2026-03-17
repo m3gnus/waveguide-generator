@@ -2,62 +2,60 @@
 
 ## Scope
 
-Primary files:
+**Core module files**:
+- `src/modules/simulation/index.js` — public module interface
+- `src/modules/simulation/domain.js` — pure simulation logic (payload building, job submission)
+- `src/modules/simulation/state.js` — isolated `GlobalState` bridge
+- `src/modules/simulation/jobs.js` — job metadata and history
+- `src/modules/simulation/useCases.js` — compatibility barrel export
 
-- `src/modules/simulation/index.js`
-- `src/modules/simulation/domain.js`
-- `src/modules/simulation/state.js`
-- `src/modules/simulation/jobs.js`
-- `src/modules/simulation/useCases.js` (compatibility barrel)
-- `src/ui/simulation/controller.js`
-- `src/ui/simulation/polling.js`
-- `src/ui/simulation/workspaceTasks.js`
-- `src/ui/workspace/taskManifest.js`
-- `src/ui/workspace/taskIndex.js`
+**UI coordination files**:
+- `src/ui/simulation/controller.js` — job lifecycle and UI polling
+- `src/ui/simulation/workspaceTasks.js` — folder workspace task management
+- `src/ui/workspace/taskManifest.js`, `taskIndex.js` — folder-backed task persistence
 
-## Responsibilities
+## Core Responsibilities
 
-- Prepare canonical simulation payloads and OCC adaptive submit options.
-- Keep pure simulation-domain helpers separate from state/job facades.
-- Keep the `GlobalState` bridge isolated to `src/modules/simulation/state.js`.
-- Submit jobs through the backend solver client.
-- Track backend jobs and folder-backed task history.
-- Persist task metadata such as exports, ratings, and script snapshots.
+- **Payload preparation**: Build canonical simulation payloads and OCC adaptive submit options
+- **Job submission**: Route jobs to backend `/api/solve` with correct request shape
+- **Result handling**: Poll backend, fetch results, extract metadata (symmetry policy, performance)
+- **History management**: Track backend jobs and folder-workspace task manifests
+- **Metadata persistence**: Save task ratings, export status, auto-export markers, and script snapshots
 
 ## Runtime Contract
 
-- Real simulation requires the backend `/api/solve` path.
-- Completed-result UI reads backend result metadata directly; the View Results modal surfaces `metadata.symmetry_policy` / `metadata.symmetry` as a read-only symmetry decision summary when present.
-- Pre-submit diagnostics report geometry face identities as triangle counts and keep canonical numeric tag counts only as a secondary debug summary.
-- Frontend restore logic chooses one source mode at a time:
-  - folder workspace selected -> folder manifests/index only
-  - no folder workspace -> backend jobs plus local cache
-- Task export metadata persists through:
-  - `exportedFiles`
-  - `autoExportCompletedAt`
-- Task rating metadata persists through:
-  - local job storage
-  - folder task manifests/index when a workspace is active
-- When a folder workspace is active, completed-task export bundles write into `<workspace>/<jobId>/`; if those writes fail, the app clears the workspace selection and falls back to the browser save/download path.
+**Simulation execution**:
+- Real simulation requires backend `/api/solve` path; no mock/fallback solver supported
+- Payload submission includes canonical mesh + optional OCC adaptive parameters
+- Symmetry detection and reduction decided at solve-time (returned in `metadata.symmetry_policy`)
 
-## UI Preference Contract
+**Results handling**:
+- View Results modal displays `metadata.symmetry_policy` as read-only summary when present
+- Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)
+- Backend performance metadata included in results under `metadata.performance`
 
-Persisted simulation-management settings include:
+**History & source selection**:
+- **One source mode at a time**: either folder workspace (manifests only) OR backend jobs + local cache (never mixed)
+- Folder workspace: completed-task bundles write to `<workspace>/<jobId>/`; if writes fail, app clears workspace and falls back to browser download
 
-- `autoExportOnComplete`
-- `selectedFormats`
-- `defaultSort`
-- `minRatingFilter`
+**Task metadata persistence**:
+- Ratings: stored locally and in folder task manifests when workspace active
+- Exports: tracked via `exportedFiles` list and `autoExportCompletedAt` timestamp
+- Script snapshots: stored with task manifest for reproducibility
 
-These settings drive completed-task export bundles and task-list ordering/filtering.
+**Settings** (persisted):
+- `autoExportOnComplete` — auto-run exports on job completion
+- `selectedFormats` — export bundle format selection
+- `defaultSort` — task-list ordering (date, name, rating)
+- `minRatingFilter` — minimum star rating to display
 
-## Regression Coverage
+## Test Coverage
 
-- `tests/simulation-controller.test.js`
-- `tests/simulation-flow.test.js`
-- `tests/simulation-job-tracker.test.js`
-- `tests/simulation-module.test.js`
-- `tests/simulation-export-bundle.test.js`
-- `tests/simulation-management-settings.test.js`
-- `tests/task-manifest.test.js`
-- `tests/task-index-rebuild.test.js`
+Contract validation tests:
+- `tests/simulation-module.test.js` — module interface
+- `tests/simulation-controller.test.js` — job lifecycle and polling
+- `tests/simulation-flow.test.js` — end-to-end submission/polling/results
+- `tests/simulation-job-tracker.test.js` — job state management
+- `tests/simulation-export-bundle.test.js` — bundle coordination
+- `tests/simulation-management-settings.test.js` — settings persistence
+- `tests/task-manifest.test.js`, `task-index-rebuild.test.js` — folder workspace persistence

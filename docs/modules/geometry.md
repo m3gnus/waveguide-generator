@@ -1,51 +1,57 @@
-# Geometry Contract
+# Geometry Module Contract
 
 ## Scope
 
-Primary files:
+**Primary implementation files**:
+- `src/geometry/pipeline.js` — main payload assembly pipeline
+- `src/geometry/tags.js` — surface-tag assignment rules (source of truth)
+- `src/geometry/engine/*` — topology generation, enclosure/horn building
+- `src/modules/geometry/index.js` — public module interface
 
-- `src/geometry/pipeline.js`
-- `src/geometry/tags.js`
-- `src/geometry/engine/*`
-- `src/modules/geometry/index.js`
+## Core Responsibilities
 
-## Responsibilities
-
-- Evaluate horn/enclosure geometry inputs.
-- Build viewport mesh artifacts.
-- Build the canonical simulation payload.
-- Preserve deterministic surface-tag semantics.
+- **Formula evaluation**: Apply parameter values to geometry equations
+- **Mesh topology**: Generate viewport and simulation meshes with deterministic structure
+- **Payload assembly**: Build canonical simulation payloads with correct tag semantics
+- **Quality checks**: Validate mesh invariants and surface-tag consistency
 
 ## Canonical Payload Contract
 
-Required shape:
+**Required fields**:
+```javascript
+{
+  vertices,              // flat array [x, y, z, x, y, z, ...]
+  indices,              // flat array [i0, i1, i2, i0, i1, i2, ...]
+  surfaceTags,          // one integer per triangle
+  format,               // "msh"
+  boundaryConditions,   // BC object
+  metadata              // units, unitScaleToMeter, identityTriangleCounts
+}
+```
 
-- `vertices`
-- `indices`
-- `surfaceTags`
-- `format`
-- `boundaryConditions`
-- `metadata`
+**Critical invariants** (enforced by validation):
+- `surfaceTags.length === indices.length / 3` (one tag per triangle)
+- At least one source-tagged triangle (`2`) must exist
+- Tag values are code-owned in `src/geometry/tags.js` (`1`=wall, `2`=source, `3`=secondary, `4`=interface)
+- Interface tag (`4`) is only emitted when enclosure/interface geometry is actually present
+- `identityTriangleCounts` maps geometry face names to triangle counts (e.g., `throat_disc`, `inner_wall`); derived from face group ranges (triangle-indexed, not vertex-indexed)
 
-Invariants:
+## Important Runtime Behaviors
 
-- `surfaceTags.length === indices.length / 3`
-- Source tag `2` must exist
-- Tag mapping remains code-owned in `src/geometry/tags.js`
-- Interface tag `4` is only valid when enclosure/interface geometry is actually present
-- `metadata.identityTriangleCounts` is triangle-based and derived from geometry group ranges, not vertex participation
+**Mesh topology**:
+- Frontend payload is **always full-domain** (not trimmed by `quadrants`); OCC-adaptive meshing happens server-side
+- JS canonical payload is a **validation/contract artifact** only; actual simulation meshes are OCC-generated in the backend
+- Viewport rendering may internally duplicate `throat_disc` vertices for normal generation (crisp shading) without changing the canonical payload
 
-## Important Runtime Notes
+**Geometry construction**:
+- **Enclosure-geometry logic is exclusive**: either enclosure (`encDepth > 0`), or freestanding shell (`encDepth == 0 && wallThickness > 0`), or bare horn (no outer geometry)
+- Enclosure generation is **OSSE-only**; `R-OSSE` with `encDepth > 0` is rejected
+- When `encEdge > 0`, enclosure builder adds front/rear axial roundover strips in addition to sidewall corners
+- Freestanding wall thickness follows horn surface normals; rear `throat_return` transition slopes into the back plate (not a straight cylinder)
 
-- Frontend simulation payload topology is full-domain and is not trimmed by `quadrants`.
-- JS canonical payload is a contract/validation artifact; active simulation meshing is OCC-adaptive in the backend.
-- Viewport-only rendering may duplicate `throat_disc` vertices before Three.js normal generation so the source cap shades crisply without changing canonical mesh topology or tags.
-- Adaptive phi tessellation is only for full-circle horn-only render usage.
-- Outer build mode is exclusive: enclosure (`encDepth > 0`) or freestanding wall shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
-- Enclosure generation is OSSE-only. `R-OSSE` with `encDepth > 0` is rejected.
-- When `encEdge > 0`, the JS enclosure builder adds front and rear axial roundover strips in addition to the rounded/chamfered sidewall corners; `enc_edge` covers those roundover strips.
-- Freestanding wall thickness is generated from the horn surface's local 3D normals. The rear `throat_return` transition continues the outer back-side slope into a back plate located `wallThickness` behind the throat plate, rather than using a straight cylindrical drop.
-- When `morphTarget` is enabled and `morphWidth` / `morphHeight` are unset, target extents are derived from the current slice.
+**Tessellation**:
+- Adaptive phi-tessellation is **viewport-only** (full-circle horn rendering); not used for simulation
+- Morphing derives implicit target extents from the current slice when `morphTarget` is enabled but `morphWidth`/`morphHeight` are unset
 
 ## Regression Coverage
 
