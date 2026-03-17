@@ -308,12 +308,19 @@ export function buildPhysicalGroupColors(vertices, indices, physicalTags) {
 }
 
 export function focusOnModel(app) {
-  if (!app.hornMesh || !app.controls) return;
-  app.hornMesh.geometry.computeBoundingBox();
-  const box = app.hornMesh.geometry.boundingBox;
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  app.controls.target.copy(center);
+  if (!app.controls) return;
+  if (app.focusedOnModel) {
+    app.controls.target.set(0, 0, 0);
+    app.focusedOnModel = false;
+  } else {
+    if (!app.hornMesh) return;
+    app.hornMesh.geometry.computeBoundingBox();
+    const box = app.hornMesh.geometry.boundingBox;
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    app.controls.target.copy(center);
+    app.focusedOnModel = true;
+  }
   app.controls.update();
   app.needsRender = true;
 }
