@@ -56,8 +56,8 @@ Status as of March 17, 2026:
 
 - [x] Add `_numpy_dtype_for_precision(precision: str) -> type` helper in `solve_optimized.py`
 - [x] Fix line 276: unit velocity coefficient array
-- [ ] Fix line 448: mirror grid coefficients
-- [ ] Fix line 495: image source coefficients
+- [x] Fix line 448: mirror grid coefficients
+- [x] Fix line 495: image source coefficients
 - [ ] Update `solve.py` `_build_source_velocity()` to accept precision param
 - [ ] Change default precision to `"single"` in `_normalize_bem_precision()` and constructor
 - [ ] Add test verifying single precision produces valid results
