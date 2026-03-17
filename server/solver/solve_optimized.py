@@ -459,7 +459,7 @@ class HornBEMSolver:
                     A += A_img
 
                     # RHS image: neumann_fun on mirror grid (same coeff pattern)
-                    mirror_coeffs = np.zeros(dp0_mirror.global_dof_count, dtype=np.complex128)
+                    mirror_coeffs = np.zeros(dp0_mirror.global_dof_count, dtype=_numpy_dtype_for_precision(self.bem_precision))
                     valid_dofs = self.driver_dofs[self.driver_dofs < dp0_mirror.global_dof_count]
                     mirror_coeffs[valid_dofs] = 1.0
                     neumann_mirror = bempp_api.GridFunction(
@@ -506,7 +506,7 @@ class HornBEMSolver:
                     p_mirror = bempp_api.GridFunction(
                         p1_mirror, coefficients=p_total.coefficients
                     )
-                    m_coeffs = np.zeros(dp0_mirror.global_dof_count, dtype=np.complex128)
+                    m_coeffs = np.zeros(dp0_mirror.global_dof_count, dtype=_numpy_dtype_for_precision(self.bem_precision))
                     v_dofs = self.driver_dofs[self.driver_dofs < dp0_mirror.global_dof_count]
                     m_coeffs[v_dofs] = 1.0
                     n_mirror = bempp_api.GridFunction(
