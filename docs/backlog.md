@@ -31,7 +31,7 @@ Status as of March 17, 2026:
 - Active runtime docs are `README.md`, `docs/PROJECT_DOCUMENTATION.md`, `tests/TESTING.md`, `server/README.md`, and `AGENTS.md`.
 - MSH import: viewport display, return-to-parametric, and filename-derived export naming are all working.
 - Measurement distance propagation verified correct end-to-end (UI → solver → observation frame), with effective distance shown in View Results modal.
-- All 268 JS tests pass. Python tests pass.
+- All 267 JS tests pass. Python tests pass.
 - **Symmetry optimization DISABLED** — image source method blocked by bempp-cl 0.4.x singular quadrature limitation. Code preserved for future revisit if bempp-cl adds cross-grid singular quadrature support.
 - **Backlog effectively clean** — only UI quality issues and large-scope installation hardening remain.
 
@@ -110,25 +110,6 @@ Action plan:
 - [ ] Create `renderSolveStatsSummary()` function to replace `renderSymmetryPolicySummary()`
 - [ ] Display: solve time, frequency range/count, mesh complexity, measurement distance + origin
 - [ ] Update `viewResults.js` to call new summary renderer instead of symmetry policy
-
-### P3. Remove Symmetry Text from Job List Entries
-
-**Added: March 17, 2026**
-
-**Description:** The symmetry line "Symmetry: Requested Disabled | Decision Full model" displayed next to each solver task is unnecessary since symmetry optimization is disabled. Remove it to reduce visual noise.
-
-**Implementation notes:**
-
-- File: `src/ui/simulation/jobActions.js`
-- Function: `getSymmetrySummaryLine()` (line 219)
-- Render call in `renderJobList()` (line 368)
-- Test dependency: `tests/simulation-flow.test.js` line 844
-
-Action plan:
-
-- [ ] Remove `getSymmetrySummaryLine()` function from `jobActions.js`
-- [ ] Remove the symmetry line rendering in `renderJobList()`
-- [ ] Update/remove symmetry assertions in `tests/simulation-flow.test.js`
 
 ### P3. UI Quality Audit — Medium-Severity Issues
 
@@ -292,6 +273,16 @@ Action plan:
 - Three.js render optimization with `needsRender` flag
 
 ## Completed / Resolved
+
+### P3. Remove Symmetry Text from Job List Entries — COMPLETE
+
+**Resolved: March 17, 2026**
+
+Removed the unnecessary symmetry line from job list entries since symmetry optimization is disabled.
+
+- Removed `getSymmetrySummaryLine()` function from `src/ui/simulation/jobActions.js`
+- Removed symmetry line rendering in `renderJobList()`
+- Removed symmetry test from `tests/simulation-flow.test.js`
 
 ### P2. Restore Missing Load/Export Buttons in Job List — COMPLETE
 

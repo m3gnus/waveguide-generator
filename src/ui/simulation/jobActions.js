@@ -216,21 +216,6 @@ function renderRatingStars(job) {
   `;
 }
 
-function getSymmetrySummaryLine(job) {
-  const summary = getJobSymmetrySummary(job);
-  if (!summary) {
-    return "";
-  }
-
-  const requested =
-    summary.items.find((item) => item.label === "Requested")?.value ||
-    "Unknown";
-  const decision =
-    summary.items.find((item) => item.label === "Decision")?.value ||
-    summary.headline;
-  return `Symmetry: Requested ${requested} | Decision ${decision}`;
-}
-
 function syncJobListPreferenceControls() {
   const settings = getCurrentSimulationManagementSettings();
   const sortEl = document.getElementById("simulation-jobs-sort");
@@ -342,7 +327,6 @@ export function renderJobList(panel) {
 
   list.innerHTML = jobs
     .map((job) => {
-      const symmetryLine = getSymmetrySummaryLine(job);
       const statusClass =
         job.status === "running"
           ? "is-running"
@@ -365,7 +349,6 @@ export function renderJobList(panel) {
             ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ""}
           </div>
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
-          ${symmetryLine ? `<div class="simulation-job-meta">${escapeHtml(symmetryLine)}</div>` : ""}
         </div>
         <div class="simulation-job-actions">
           ${job.status === "complete" ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
