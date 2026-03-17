@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 17, 2026
+Last updated: March 18, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -38,30 +38,7 @@ Status as of March 17, 2026:
 
 ## Active Backlog
 
-### P3. Settings Modal — Replace "?" Help Buttons with Label Hover Tooltips
-
-The settings modal uses separate "?" buttons next to each setting label, creating visual clutter. The codebase already has a cleaner pattern (`data-help-text` on labels) that shows tooltips on hover without extra UI elements.
-
-**Implementation notes:**
-
-- `src/ui/settings/modal.js` — replace `createHelpTrigger()` calls with label `data-help-text` attribute
-- `src/ui/helpAffordance.js` — possibly refactor `_buildSettingsLabelCopy()` to use hover pattern
-- `src/style.css:634-662` — existing hover tooltip styles can be reused
-
-**Action plan:**
-
-- [x] Modify `_buildSettingsLabelCopy()` to set `data-help-text` on label instead of creating "?" button
-- [x] Remove `createHelpTrigger()` imports from settings files
-- [ ] Test hover behavior on all settings controls
-- [ ] Verify accessibility (keyboard users can still access help)
-
----
-
-Re-open when:
-
-- A new product or runtime requirement lands
-- A deferred watchpoint becomes an active delivery bottleneck
-- A regression or documentation drift needs tracked follow-through
+(Empty — all items resolved or deferred)
 
 ## Deferred Watchpoints
 
@@ -93,6 +70,13 @@ See archived plan for slicing strategy.
 - Internal decomposition of `server/services/job_runtime.py` stays deferred unless queueing, persistence, or multi-worker lifecycle requirements expand materially.
 
 ## Completed / Resolved
+
+### P3. Settings Modal — Replace "?" Help Buttons with Label Hover Tooltips (March 18, 2026)
+
+- Replaced `createHelpTrigger()` calls with `data-help-text` attribute on labels/spans
+- Removed `createHelpTrigger` function from `helpAffordance.js`
+- Updated CSS to support `[data-help-text]` on any element (not just labels)
+- `title` attribute provides keyboard accessibility fallback
 
 ### P2. Design Quality — Distinctive Visual Identity & Hierarchy (March 18, 2026)
 
