@@ -5,70 +5,72 @@ export function displayResults(panel, results = null) {
 }
 
 function isObject(value) {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function cloneSummaryItem(item = {}) {
   return {
-    label: String(item.label || '').trim(),
-    value: String(item.value || '').trim()
+    label: String(item.label || "").trim(),
+    value: String(item.value || "").trim(),
   };
 }
 
 function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function formatSymmetryTypeLabel(symmetryType) {
-  switch (String(symmetryType || 'full').toLowerCase()) {
-    case 'half_x':
-      return 'Half-domain (X symmetry)';
-    case 'half_z':
-      return 'Half-domain (Z symmetry)';
-    case 'quarter_xz':
-      return 'Quarter-domain (X/Z symmetry)';
-    case 'full':
-      return 'Full model';
+  switch (String(symmetryType || "full").toLowerCase()) {
+    case "half_x":
+      return "Half-domain (X symmetry)";
+    case "half_z":
+      return "Half-domain (Z symmetry)";
+    case "quarter_xz":
+      return "Quarter-domain (X/Z symmetry)";
+    case "full":
+      return "Full model";
     default:
-      return String(symmetryType || 'Unknown')
-        .replaceAll('_', ' ')
+      return String(symmetryType || "Unknown")
+        .replaceAll("_", " ")
         .replace(/\b\w/g, (match) => match.toUpperCase());
   }
 }
 
 function formatSymmetryPlaneLabel(plane) {
-  switch (String(plane || '').toUpperCase()) {
-    case 'YZ':
-      return 'YZ plane';
-    case 'XY':
-      return 'XY plane';
+  switch (String(plane || "").toUpperCase()) {
+    case "YZ":
+      return "YZ plane";
+    case "XY":
+      return "XY plane";
     default:
-      return String(plane || '')
-        .replaceAll('_', ' ')
-        .trim() || 'Unknown';
+      return (
+        String(plane || "")
+          .replaceAll("_", " ")
+          .trim() || "Unknown"
+      );
   }
 }
 
 function formatSymmetryReasonLabel(reason) {
-  switch (String(reason || '').toLowerCase()) {
-    case 'applied':
-      return 'Applied';
-    case 'disabled':
-      return 'Disabled';
-    case 'no_geometric_symmetry':
-      return 'No geometric symmetry';
-    case 'excitation_off_center':
-      return 'Off-center source';
-    case 'missing_original_mesh':
-      return 'Missing original mesh';
+  switch (String(reason || "").toLowerCase()) {
+    case "applied":
+      return "Applied";
+    case "disabled":
+      return "Disabled";
+    case "no_geometric_symmetry":
+      return "No geometric symmetry";
+    case "excitation_off_center":
+      return "Off-center source";
+    case "missing_original_mesh":
+      return "Missing original mesh";
     default:
-      return String(reason || 'Unknown')
-        .replaceAll('_', ' ')
+      return String(reason || "Unknown")
+        .replaceAll("_", " ")
         .replace(/\b\w/g, (match) => match.toUpperCase());
   }
 }
@@ -76,25 +78,27 @@ function formatSymmetryReasonLabel(reason) {
 function formatReductionFactor(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 1) {
-    return 'None';
+    return "None";
   }
-  const rounded = Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2).replace(/\.?0+$/, '');
+  const rounded = Number.isInteger(numeric)
+    ? String(numeric)
+    : numeric.toFixed(2).replace(/\.?0+$/, "");
   return `${rounded}x`;
 }
 
 function formatSourceAlignment(value) {
   if (value === true) {
-    return 'Centered';
+    return "Centered";
   }
   if (value === false) {
-    return 'Off-center';
+    return "Off-center";
   }
-  return 'Not checked';
+  return "Not checked";
 }
 
 function formatPlanesSummary(planes) {
   if (!planes.length) {
-    return 'no symmetry planes';
+    return "no symmetry planes";
   }
   if (planes.length === 1) {
     return formatSymmetryPlaneLabel(planes[0]);
@@ -102,7 +106,7 @@ function formatPlanesSummary(planes) {
   if (planes.length === 2) {
     return `${formatSymmetryPlaneLabel(planes[0])} and ${formatSymmetryPlaneLabel(planes[1])}`;
   }
-  return planes.map((plane) => formatSymmetryPlaneLabel(plane)).join(', ');
+  return planes.map((plane) => formatSymmetryPlaneLabel(plane)).join(", ");
 }
 
 function buildSummaryDetails({
@@ -115,21 +119,21 @@ function buildSummaryDetails({
 }) {
   const planesText = formatPlanesSummary(planes);
   if (!requested) {
-    return 'Symmetry reduction was disabled for this run, so the solver kept the full model.';
+    return "Symmetry reduction was disabled for this run, so the solver kept the full model.";
   }
   if (applied) {
     return `The solver applied ${decisionLabel.toLowerCase()} reduction using ${planesText}.`;
   }
-  if (reason === 'excitation_off_center') {
+  if (reason === "excitation_off_center") {
     return `The solver detected ${detectedLabel.toLowerCase()} across ${planesText}, but the source was off-center so it kept the full model.`;
   }
-  if (reason === 'missing_original_mesh') {
-    return 'The solver could not inspect the original mesh for symmetry, so it kept the full model.';
+  if (reason === "missing_original_mesh") {
+    return "The solver could not inspect the original mesh for symmetry, so it kept the full model.";
   }
-  if (reason === 'no_geometric_symmetry') {
-    return 'The solver did not find usable geometric symmetry, so it kept the full model.';
+  if (reason === "no_geometric_symmetry") {
+    return "The solver did not find usable geometric symmetry, so it kept the full model.";
   }
-  return 'The solver kept the full model for this run.';
+  return "The solver kept the full model for this run.";
 }
 
 export function getSymmetryPolicySummary(results = null) {
@@ -142,46 +146,55 @@ export function getSymmetryPolicySummary(results = null) {
   const symmetry = isObject(metadata.symmetry) ? metadata.symmetry : {};
   const requested = Boolean(policy.requested);
   const applied = Boolean(policy.applied);
-  const reason = String(policy.reason || '').toLowerCase();
-  const detectedType = String(policy.detected_symmetry_type || 'full').toLowerCase();
+  const reason = String(policy.reason || "").toLowerCase();
+  const detectedType = String(
+    policy.detected_symmetry_type || "full",
+  ).toLowerCase();
   const decisionType = applied
-    ? String(symmetry.symmetry_type || policy.detected_symmetry_type || 'full').toLowerCase()
-    : 'full';
+    ? String(
+        symmetry.symmetry_type || policy.detected_symmetry_type || "full",
+      ).toLowerCase()
+    : "full";
   const planes = Array.isArray(policy.detected_symmetry_planes)
     ? policy.detected_symmetry_planes
-        .map((plane) => String(plane || '').trim())
+        .map((plane) => String(plane || "").trim())
         .filter(Boolean)
     : [];
   const detectedReduction = Number(
-    policy.detected_reduction_factor ?? symmetry.reduction_factor ?? policy.reduction_factor ?? 1
+    policy.detected_reduction_factor ??
+      symmetry.reduction_factor ??
+      policy.reduction_factor ??
+      1,
   );
-  const appliedReduction = Number(policy.reduction_factor ?? symmetry.reduction_factor ?? 1);
+  const appliedReduction = Number(
+    policy.reduction_factor ?? symmetry.reduction_factor ?? 1,
+  );
   const decisionLabel = formatSymmetryTypeLabel(decisionType);
   const detectedLabel = formatSymmetryTypeLabel(detectedType);
   const reductionText = applied
     ? `${formatReductionFactor(appliedReduction)} applied`
-    : detectedType !== 'full'
+    : detectedType !== "full"
       ? `${formatReductionFactor(detectedReduction)} available`
-      : 'None';
+      : "None";
 
-  let headline = 'Kept full model';
-  let tone = 'neutral';
+  let headline = "Kept full model";
+  let tone = "neutral";
   if (applied) {
     headline = `Applied ${decisionLabel.toLowerCase()} reduction`;
-    tone = 'success';
-  } else if (reason === 'excitation_off_center') {
-    headline = 'Kept full model after source alignment check';
-    tone = 'warning';
+    tone = "success";
+  } else if (reason === "excitation_off_center") {
+    headline = "Kept full model after source alignment check";
+    tone = "warning";
   } else if (!requested) {
-    headline = 'Kept full model with symmetry disabled';
-  } else if (reason === 'no_geometric_symmetry') {
-    headline = 'Kept full model with no usable symmetry';
-  } else if (reason === 'missing_original_mesh') {
-    headline = 'Kept full model without original mesh';
+    headline = "Kept full model with symmetry disabled";
+  } else if (reason === "no_geometric_symmetry") {
+    headline = "Kept full model with no usable symmetry";
+  } else if (reason === "missing_original_mesh") {
+    headline = "Kept full model without original mesh";
   }
 
   return {
-    badge: applied ? 'Reduced' : 'Full model',
+    badge: applied ? "Reduced" : "Full model",
     headline,
     tone,
     details: buildSummaryDetails({
@@ -193,16 +206,21 @@ export function getSymmetryPolicySummary(results = null) {
       planes,
     }),
     items: [
-      { label: 'Requested', value: requested ? 'Enabled' : 'Disabled' },
-      { label: 'Decision', value: decisionLabel },
-      { label: 'Detected geometry', value: detectedLabel },
+      { label: "Requested", value: requested ? "Enabled" : "Disabled" },
+      { label: "Decision", value: decisionLabel },
+      { label: "Detected geometry", value: detectedLabel },
       {
-        label: 'Symmetry planes',
-        value: planes.length ? planes.map((plane) => formatSymmetryPlaneLabel(plane)).join(', ') : 'None',
+        label: "Symmetry planes",
+        value: planes.length
+          ? planes.map((plane) => formatSymmetryPlaneLabel(plane)).join(", ")
+          : "None",
       },
-      { label: 'Source alignment', value: formatSourceAlignment(policy.excitation_centered) },
-      { label: 'Reduction', value: reductionText },
-      { label: 'Reason', value: formatSymmetryReasonLabel(reason) },
+      {
+        label: "Source alignment",
+        value: formatSourceAlignment(policy.excitation_centered),
+      },
+      { label: "Reduction", value: reductionText },
+      { label: "Reason", value: formatSymmetryReasonLabel(reason) },
     ],
   };
 }
@@ -212,15 +230,15 @@ function readRequestedSymmetryFromJob(job = null) {
     return null;
   }
 
-  if (typeof job?.script?.enableSymmetry === 'boolean') {
+  if (typeof job?.script?.enableSymmetry === "boolean") {
     return job.script.enableSymmetry;
   }
 
   const configSummary = isObject(job.configSummary) ? job.configSummary : {};
-  if (typeof configSummary.enable_symmetry === 'boolean') {
+  if (typeof configSummary.enable_symmetry === "boolean") {
     return configSummary.enable_symmetry;
   }
-  if (typeof configSummary.enableSymmetry === 'boolean') {
+  if (typeof configSummary.enableSymmetry === "boolean") {
     return configSummary.enableSymmetry;
   }
 
@@ -232,14 +250,14 @@ function normalizeStoredSymmetrySummary(summary = null) {
     return null;
   }
 
-  const badge = String(summary.badge || '').trim();
-  const headline = String(summary.headline || '').trim();
+  const badge = String(summary.badge || "").trim();
+  const headline = String(summary.headline || "").trim();
   if (!badge || !headline) {
     return null;
   }
 
-  const details = String(summary.details || '').trim();
-  const tone = String(summary.tone || 'neutral').trim() || 'neutral';
+  const details = String(summary.details || "").trim();
+  const tone = String(summary.tone || "neutral").trim() || "neutral";
   const items = Array.isArray(summary.items)
     ? summary.items
         .map((item) => cloneSummaryItem(item))
@@ -251,68 +269,81 @@ function normalizeStoredSymmetrySummary(summary = null) {
     headline,
     details,
     tone,
-    items
+    items,
   };
 }
 
 export function getJobSymmetrySummary(job = null) {
-  const stored = normalizeStoredSymmetrySummary(job?.symmetrySummary ?? job?.symmetry_summary ?? null);
+  const stored = normalizeStoredSymmetrySummary(
+    job?.symmetrySummary ?? job?.symmetry_summary ?? null,
+  );
   if (stored) {
     return stored;
   }
 
   const requested = readRequestedSymmetryFromJob(job);
-  if (typeof requested !== 'boolean') {
+  if (typeof requested !== "boolean") {
     return null;
   }
 
   if (requested) {
     return {
-      badge: 'Requested',
-      headline: 'Symmetry reduction requested',
-      details: 'The solve request allows symmetry reduction. The final solver policy appears after results are fetched.',
-      tone: 'neutral',
+      badge: "Requested",
+      headline: "Symmetry reduction requested",
+      details:
+        "The solve request allows symmetry reduction. The final solver policy appears after results are fetched.",
+      tone: "neutral",
       items: [
-        { label: 'Requested', value: 'Enabled' },
-        { label: 'Decision', value: 'Pending results' }
-      ]
+        { label: "Requested", value: "Enabled" },
+        { label: "Decision", value: "Pending results" },
+      ],
     };
   }
 
   return {
-    badge: 'Full model',
-    headline: 'Symmetry reduction disabled',
-    details: 'The solve request disabled symmetry reduction, so the solver keeps the full model.',
-    tone: 'neutral',
+    badge: "Full model",
+    headline: "Symmetry reduction disabled",
+    details:
+      "The solve request disabled symmetry reduction, so the solver keeps the full model.",
+    tone: "neutral",
     items: [
-      { label: 'Requested', value: 'Disabled' },
-      { label: 'Decision', value: 'Full model' }
-    ]
+      { label: "Requested", value: "Disabled" },
+      { label: "Decision", value: "Full model" },
+    ],
   };
 }
 
 export function renderObservationDistanceSummary(results = null) {
   const metadata = isObject(results?.metadata) ? results.metadata : null;
-  if (!metadata) return '';
+  if (!metadata) return "";
 
   const obs = isObject(metadata.observation) ? metadata.observation : null;
   const effectiveDistM = obs ? Number(obs.effective_distance_m) : NaN;
-  if (!obs || !isFinite(effectiveDistM)) return '';
+  if (!obs || !isFinite(effectiveDistM)) return "";
 
   const warnings = Array.isArray(metadata.warnings) ? metadata.warnings : [];
   const clampWarning = warnings.find(
-    (w) => isObject(w) && String(w.code || '') === 'observation_distance_adjusted'
+    (w) =>
+      isObject(w) && String(w.code || "") === "observation_distance_adjusted",
   );
 
   const distText = `${effectiveDistM.toFixed(2)} m`;
 
-  let warningMarkup = '';
+  let warningMarkup = "";
   if (clampWarning) {
-    const requested = Number(clampWarning.requested_m ?? clampWarning.requested);
-    const effective = Number(clampWarning.effective_m ?? clampWarning.effective ?? effectiveDistM);
-    const fromText = isFinite(requested) ? `${requested.toFixed(2)} m` : 'requested';
+    const requested = Number(
+      clampWarning.requested_m ?? clampWarning.requested,
+    );
+    const effective = Number(
+      clampWarning.effective_m ?? clampWarning.effective ?? effectiveDistM,
+    );
+    const fromText = isFinite(requested)
+      ? `${requested.toFixed(2)} m`
+      : "requested";
     const toText = isFinite(effective) ? `${effective.toFixed(2)} m` : distText;
-    const msg = escapeHtml(`Distance adjusted from ${fromText} to ${toText} by solver`);
+    const msg = escapeHtml(
+      `Distance adjusted from ${fromText} to ${toText} by solver`,
+    );
     warningMarkup = `<div class="view-results-obs-warning">${msg}</div>`;
   }
 
@@ -328,7 +359,7 @@ export function renderObservationDistanceSummary(results = null) {
 export function renderSymmetryPolicySummary(results = null) {
   const summary = getSymmetryPolicySummary(results);
   if (!summary) {
-    return '';
+    return "";
   }
 
   const itemsMarkup = summary.items
@@ -338,9 +369,9 @@ export function renderSymmetryPolicySummary(results = null) {
           <span class="view-results-summary-label">${escapeHtml(item.label)}</span>
           <span class="view-results-summary-value">${escapeHtml(item.value)}</span>
         </div>
-      `
+      `,
     )
-    .join('');
+    .join("");
 
   return `
     <section class="view-results-summary" aria-label="Symmetry policy summary">
@@ -352,6 +383,110 @@ export function renderSymmetryPolicySummary(results = null) {
         <span class="view-results-summary-badge view-results-summary-badge--${escapeHtml(summary.tone)}">${escapeHtml(summary.badge)}</span>
       </div>
       <div class="view-results-summary-text">${escapeHtml(summary.details)}</div>
+      <div class="view-results-summary-grid">${itemsMarkup}</div>
+    </section>
+  `;
+}
+
+function formatSolveTime(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s <= 0) return "N/A";
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${mins}m ${secs.toFixed(0)}s`;
+}
+
+function formatFrequencyHz(hz) {
+  const v = Number(hz);
+  if (!Number.isFinite(v)) return "N/A";
+  if (v >= 1000) return `${(v / 1000).toFixed(1)} kHz`;
+  return `${v.toFixed(0)} Hz`;
+}
+
+function formatCount(count) {
+  const n = Number(count);
+  if (!Number.isFinite(n)) return "N/A";
+  return n.toLocaleString();
+}
+
+export function renderSolveStatsSummary(results = null, job = null) {
+  const metadata = isObject(results?.metadata) ? results.metadata : null;
+  if (!metadata) return "";
+
+  const performance = isObject(metadata.performance)
+    ? metadata.performance
+    : {};
+  const observation = isObject(metadata.observation)
+    ? metadata.observation
+    : null;
+  const frequencies = Array.isArray(results?.frequencies)
+    ? results.frequencies
+    : [];
+
+  const totalTime = performance.total_time_seconds;
+  const freqCount = frequencies.length;
+  const freqMin = freqCount > 0 ? Math.min(...frequencies) : null;
+  const freqMax = freqCount > 0 ? Math.max(...frequencies) : null;
+
+  const meshStats = isObject(job?.meshStats) ? job.meshStats : null;
+  const vertexCount = meshStats?.vertex_count ?? meshStats?.vertexCount;
+  const triangleCount = meshStats?.triangle_count ?? meshStats?.triangleCount;
+
+  const obsDistM = observation ? Number(observation.effective_distance_m) : NaN;
+  const configSummary = isObject(job?.configSummary) ? job.configSummary : {};
+  const obsOrigin = configSummary.observation_origin || "mouth";
+
+  const items = [];
+
+  if (Number.isFinite(totalTime) && totalTime > 0) {
+    items.push({ label: "Solve time", value: formatSolveTime(totalTime) });
+  }
+
+  if (freqCount > 0) {
+    const rangeStr =
+      freqMin != null && freqMax != null
+        ? `${formatFrequencyHz(freqMin)} – ${formatFrequencyHz(freqMax)}`
+        : "N/A";
+    items.push({ label: "Frequency range", value: rangeStr });
+    items.push({ label: "Frequency count", value: String(freqCount) });
+  }
+
+  if (Number.isFinite(vertexCount)) {
+    items.push({ label: "Vertices", value: formatCount(vertexCount) });
+  }
+  if (Number.isFinite(triangleCount)) {
+    items.push({ label: "Triangles", value: formatCount(triangleCount) });
+  }
+
+  if (Number.isFinite(obsDistM)) {
+    const originLabel = obsOrigin === "throat" ? "throat" : "mouth";
+    items.push({
+      label: "Observation",
+      value: `${obsDistM.toFixed(2)} m from ${originLabel}`,
+    });
+  }
+
+  if (items.length === 0) return "";
+
+  const itemsMarkup = items
+    .map(
+      (item) => `
+        <div class="view-results-summary-item">
+          <span class="view-results-summary-label">${escapeHtml(item.label)}</span>
+          <span class="view-results-summary-value">${escapeHtml(item.value)}</span>
+        </div>
+      `,
+    )
+    .join("");
+
+  return `
+    <section class="view-results-summary" aria-label="Solve statistics summary">
+      <div class="view-results-summary-header">
+        <div class="view-results-summary-copy">
+          <div class="view-results-summary-title">Solve Statistics</div>
+        </div>
+      </div>
       <div class="view-results-summary-grid">${itemsMarkup}</div>
     </section>
   `;
