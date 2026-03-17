@@ -1015,10 +1015,10 @@ button.secondary:hover:not(:disabled) {
 }
 
 .viewer-controls button {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   padding: 0;
-  font-size: var(--text-lg);
+  font-size: var(--text-xl);
   border-radius: var(--r-md);
   background: var(--panel);
   border: 1px solid var(--border);
