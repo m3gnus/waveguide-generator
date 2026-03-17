@@ -111,7 +111,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Add `aria-describedby` linking inputs to their error messages
+- [x] Add `aria-describedby` linking inputs to their error messages
 
 #### Modal Focus Management
 
