@@ -141,7 +141,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Convert to proper dialog with focus trap and Escape key handler
+- [x] Convert to proper dialog with focus trap and Escape key handler
 
 #### Status Dot Color-Only Indication
 

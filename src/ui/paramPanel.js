@@ -3,6 +3,7 @@ import { GlobalState } from "../state.js";
 import { normalizeParamInput } from "./paramInput.js";
 import { appendSectionNote, createLabelRow } from "./helpAffordance.js";
 import { getParameterSections } from "./parameterInventory.js";
+import { trapFocus } from "./focusTrap.js";
 import {
   validateOutputName,
   validateCounter,
@@ -363,31 +364,34 @@ export class ParamPanel {
   }
 
   showFormulaInfo(fieldLabel = null) {
-    // Check if info panel already exists
     let infoPanel = document.getElementById("formula-info-panel");
     if (infoPanel) {
       this.updateFormulaInfoContext(infoPanel, fieldLabel);
       infoPanel.classList.add("visible");
+      this._formulaInfoReleaseFocus = trapFocus(infoPanel, {
+        initialFocus: infoPanel.querySelector(".formula-info-close"),
+      });
       return;
     }
 
-    // Create the info panel
     infoPanel = document.createElement("div");
     infoPanel.id = "formula-info-panel";
     infoPanel.className = "formula-info-panel visible";
+    infoPanel.setAttribute("role", "dialog");
+    infoPanel.setAttribute("aria-modal", "true");
+    infoPanel.setAttribute("aria-labelledby", "formula-info-title");
 
     const header = document.createElement("div");
     header.className = "formula-info-header";
     header.innerHTML = `
             <div>
-                <h4 class="formula-info-title">Formula Reference</h4>
+                <h4 class="formula-info-title" id="formula-info-title">Formula Reference</h4>
                 <p class="formula-info-context"></p>
             </div>
             <button class="formula-info-close" title="Close">&times;</button>
         `;
     infoPanel.appendChild(header);
 
-    // Parameters section
     const paramsSection = document.createElement("div");
     paramsSection.className = "formula-info-section";
     paramsSection.innerHTML = `<h5>Parameters</h5>`;
@@ -402,7 +406,6 @@ export class ParamPanel {
     paramsSection.appendChild(paramsList);
     infoPanel.appendChild(paramsSection);
 
-    // Functions section
     const funcsSection = document.createElement("div");
     funcsSection.className = "formula-info-section";
     funcsSection.innerHTML = `<h5>Functions</h5>`;
@@ -417,7 +420,6 @@ export class ParamPanel {
     funcsSection.appendChild(funcsList);
     infoPanel.appendChild(funcsSection);
 
-    // Examples section
     const examplesSection = document.createElement("div");
     examplesSection.className = "formula-info-section";
     examplesSection.innerHTML = `<h5>Examples</h5>`;
@@ -432,13 +434,30 @@ export class ParamPanel {
     examplesSection.appendChild(examplesList);
     infoPanel.appendChild(examplesSection);
 
-    // Add close handler
-    header.querySelector(".formula-info-close").onclick = () => {
+    const closeBtn = header.querySelector(".formula-info-close");
+    const closePanel = () => {
       infoPanel.classList.remove("visible");
+      if (this._formulaInfoReleaseFocus) {
+        this._formulaInfoReleaseFocus();
+        this._formulaInfoReleaseFocus = null;
+      }
+      infoPanel.removeEventListener("keydown", escapeHandler);
     };
+
+    const escapeHandler = (e) => {
+      if (e.key === "Escape") {
+        closePanel();
+      }
+    };
+
+    closeBtn.onclick = closePanel;
+    infoPanel.addEventListener("keydown", escapeHandler);
 
     this.updateFormulaInfoContext(infoPanel, fieldLabel);
     document.body.appendChild(infoPanel);
+    this._formulaInfoReleaseFocus = trapFocus(infoPanel, {
+      initialFocus: closeBtn,
+    });
   }
 
   updateFormulaInfoContext(infoPanel, fieldLabel) {
