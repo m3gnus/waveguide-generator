@@ -57,8 +57,8 @@ export function setupScene(app) {
   });
 
   // Update scene background when OS color scheme changes
-  const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
-  darkQuery.addEventListener('change', () => {
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  darkQuery.addEventListener("change", () => {
     if (app.scene) {
       const colors = getSceneThemeColors();
       app.scene.background = colors.bg;
@@ -67,22 +67,14 @@ export function setupScene(app) {
   });
 
   // Re-render when an external mesh is imported
-  AppEvents.on('mesh:imported', () => {
+  AppEvents.on("mesh:imported", () => {
     renderModel(app);
     app.needsRender = true;
   });
 
-  app.controls.addEventListener('change', () => {
+  app.controls.addEventListener("change", () => {
     app.needsRender = true;
   });
-
-  animate(app);
-  return true;
-}
-  });
-
-  // Re-render when an external mesh is imported
-  AppEvents.on("mesh:imported", () => renderModel(app));
 
   animate(app);
   return true;
@@ -95,7 +87,7 @@ export function onResize(app) {
   if (width <= 0 || height <= 0) return;
   const aspect = width / height;
 
-  if (app.cameraMode === 'perspective') {
+  if (app.cameraMode === "perspective") {
     app.camera.aspect = aspect;
   } else {
     const size = getOrthoSize();
@@ -110,50 +102,20 @@ export function onResize(app) {
   app.needsRender = true;
 }
 
-  app.camera.updateProjectionMatrix();
-  app.renderer.setSize(width, height);
-}
-
 export function renderModel(app) {
   if (!app.scene || !app.renderer) return;
 
   // Imported mesh mode — render imported data instead of parametric model
-  if (ImportedMeshState.active && ImportedMeshState.vertices && ImportedMeshState.indices) {
+  if (
+    ImportedMeshState.active &&
+    ImportedMeshState.vertices &&
+    ImportedMeshState.indices
+  ) {
     if (app.hornMesh) {
       app.scene.remove(app.hornMesh);
       app.hornMesh.geometry.dispose();
       app.hornMesh.material.dispose();
     }
-    applyMeshToScene(app, ImportedMeshState.vertices, ImportedMeshState.indices, {});
-
-    // Color-code by physical group tags if available
-    if (ImportedMeshState.physicalTags && app.hornMesh) {
-      const colors = buildPhysicalGroupColors(
-        ImportedMeshState.vertices, ImportedMeshState.indices, ImportedMeshState.physicalTags
-      );
-      app.hornMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-      app.hornMesh.material.dispose();
-      app.hornMesh.material = new THREE.MeshPhongMaterial({
-        vertexColors: true,
-        side: THREE.DoubleSide
-      });
-    }
-    app.needsRender = true;
-    return;
-  }
-
-  if (!app.currentState) return;
-  if (app.hornMesh) {
-    app.scene.remove(app.hornMesh);
-    app.hornMesh.geometry.dispose();
-    app.hornMesh.material.dispose();
-  }
-
-  const viewportMesh = prepareViewportMesh(app.currentState);
-  const renderMesh = detachThroatDiscVertices(viewportMesh);
-  applyMeshToScene(app, renderMesh.vertices, renderMesh.indices, viewportMesh.preparedParams);
-  app.needsRender = true;
-}
     applyMeshToScene(
       app,
       ImportedMeshState.vertices,
@@ -178,6 +140,7 @@ export function renderModel(app) {
         side: THREE.DoubleSide,
       });
     }
+    app.needsRender = true;
     return;
   }
 
@@ -196,6 +159,7 @@ export function renderModel(app) {
     renderMesh.indices,
     viewportMesh.preparedParams,
   );
+  app.needsRender = true;
 }
 
 /**
@@ -354,18 +318,6 @@ export function focusOnModel(app) {
 
 export function zoom(app, factor) {
   if (!app.camera || !app.controls) return;
-  if (app.cameraMode === 'perspective') {
-    app.camera.position.multiplyScalar(factor);
-  } else {
-    app.camera.zoom /= factor;
-    app.camera.updateProjectionMatrix();
-  }
-  app.controls.update();
-  app.needsRender = true;
-}
-
-export function zoom(app, factor) {
-  if (!app.camera || !app.controls) return;
   if (app.cameraMode === "perspective") {
     app.camera.position.multiplyScalar(factor);
   } else {
@@ -373,6 +325,7 @@ export function zoom(app, factor) {
     app.camera.updateProjectionMatrix();
   }
   app.controls.update();
+  app.needsRender = true;
 }
 
 export function toggleCamera(app) {
@@ -383,33 +336,16 @@ export function toggleCamera(app) {
   const pos = app.camera.position.clone();
   const target = app.controls.target.clone();
 
-  if (app.cameraMode === 'perspective') {
+  if (app.cameraMode === "perspective") {
     const size = getOrthoSize();
     app.camera = createOrthoCamera(aspect, size);
-    app.cameraMode = 'orthographic';
-    document.getElementById('camera-toggle').innerText = '▲';
+    app.cameraMode = "orthographic";
+    document.getElementById("camera-toggle").innerText = "▲";
   } else {
     app.camera = createPerspectiveCamera(aspect);
-    app.cameraMode = 'perspective';
-    document.getElementById('camera-toggle').innerText = '⬚';
+    app.cameraMode = "perspective";
+    document.getElementById("camera-toggle").innerText = "⬚";
   }
-
-  app.camera.position.copy(pos);
-  app.scene.add(app.camera);
-
-  const oldControls = app.controls;
-  app.controls = new OrbitControls(app.camera, app.renderer.domElement);
-  app.controls.target.copy(target);
-  const vs = app.uiCoordinator.getViewerSettings();
-  app.uiCoordinator.applyViewerSettingsToControls(app.controls, vs);
-  app.uiCoordinator.configureWheelZoomInversion(app.renderer.domElement, vs.invertWheelZoom);
-  app.controls.addEventListener('change', () => {
-    app.needsRender = true;
-  });
-  app.controls.update();
-  oldControls.dispose();
-  app.needsRender = true;
-}
 
   app.camera.position.copy(pos);
   app.scene.add(app.camera);
@@ -423,8 +359,12 @@ export function toggleCamera(app) {
     app.renderer.domElement,
     vs.invertWheelZoom,
   );
+  app.controls.addEventListener("change", () => {
+    app.needsRender = true;
+  });
   app.controls.update();
   oldControls.dispose();
+  app.needsRender = true;
 }
 
 export function getOrthoSize() {
