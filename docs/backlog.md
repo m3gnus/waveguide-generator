@@ -73,7 +73,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Read CSS custom properties at runtime via `getComputedStyle()`, or
+- [x] Read CSS custom properties at runtime via `getComputedStyle()`, or
 - [ ] Define scene colors in shared config that CSS also references
 
 #### Missing Internationalization Infrastructure
@@ -82,6 +82,7 @@ Action plan:
 - **Severity**: High
 - **Description**: All UI strings hard-coded in English; no i18n library present
 - **Impact**: Cannot localize for non-English users
+- **Status**: Deferred — large scope, not blocking current release
 
 Action plan:
 
