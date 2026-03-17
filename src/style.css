@@ -631,12 +631,12 @@ input[type="checkbox"] {
 
 /* ── 8. Help Trigger ──────────────────────────────────────── */
 
-label[data-help-text] {
+[data-help-text] {
   position: relative;
   cursor: help;
 }
 
-label[data-help-text]::after {
+[data-help-text]::after {
   content: attr(data-help-text);
   position: absolute;
   top: calc(100% + 6px);
@@ -657,7 +657,7 @@ label[data-help-text]::after {
   z-index: 30;
 }
 
-label[data-help-text]:hover::after {
+[data-help-text]:hover::after {
   opacity: 1;
 }
 
