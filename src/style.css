@@ -18,7 +18,7 @@
   --border: oklch(88% 0.014 78);
   --input-bg: oklch(96% 0.014 78);
 
-  --accent: oklch(48% 0.16 262);
+  --accent: oklch(48% 0.16 230);
   --accent-text: #ffffff;
   --accent-warm: oklch(60% 0.14 52);
 
@@ -85,7 +85,7 @@
     --border: oklch(24% 0.025 258);
     --input-bg: oklch(14% 0.024 258);
 
-    --accent: oklch(72% 0.16 258);
+    --accent: oklch(72% 0.16 230);
     --accent-text: oklch(12% 0.025 258);
     --accent-warm: oklch(78% 0.12 68);
 
@@ -690,6 +690,10 @@ button:hover:not(:disabled) {
   filter: brightness(1.05);
 }
 
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
 button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -817,8 +821,8 @@ button.secondary:hover:not(:disabled),
 .status-dot.connected {
   background: oklch(55% 0.18 148);
   box-shadow:
-    0 0 8px oklch(55% 0.18 148 / 0.5),
-    0 0 16px oklch(55% 0.18 148 / 0.25);
+    0 0 6px oklch(55% 0.18 148 / 0.5),
+    0 0 12px oklch(55% 0.18 148 / 0.25);
 }
 .status-dot.connected::after {
   content: "✓";
@@ -826,7 +830,7 @@ button.secondary:hover:not(:disabled),
 
 .status-dot.disconnected {
   background: oklch(55% 0.2 27);
-  box-shadow: 0 0 6px oklch(55% 0.2 27 / 0.4);
+  box-shadow: 0 0 4px oklch(55% 0.2 27 / 0.4);
 }
 .status-dot.disconnected::after {
   content: "✗";
@@ -835,8 +839,8 @@ button.secondary:hover:not(:disabled),
 .status-dot.simulating {
   background: oklch(60% 0.18 52);
   box-shadow:
-    0 0 10px oklch(60% 0.18 52 / 0.6),
-    0 0 20px oklch(60% 0.18 52 / 0.3);
+    0 0 8px oklch(60% 0.18 52 / 0.6),
+    0 0 15px oklch(60% 0.18 52 / 0.3);
   animation: status-pulse 1.5s ease-in-out infinite;
 }
 .status-dot.simulating::after {
@@ -847,14 +851,14 @@ button.secondary:hover:not(:disabled),
   0%,
   100% {
     box-shadow:
-      0 0 10px oklch(60% 0.18 52 / 0.6),
-      0 0 20px oklch(60% 0.18 52 / 0.3);
+      0 0 8px oklch(60% 0.18 52 / 0.6),
+      0 0 15px oklch(60% 0.18 52 / 0.3);
     transform: scale(1);
   }
   50% {
     box-shadow:
-      0 0 14px oklch(60% 0.18 52 / 0.8),
-      0 0 28px oklch(60% 0.18 52 / 0.4);
+      0 0 10px oklch(60% 0.18 52 / 0.8),
+      0 0 20px oklch(60% 0.18 52 / 0.4);
     transform: scale(1.05);
   }
 }
@@ -863,31 +867,31 @@ button.secondary:hover:not(:disabled),
   .status-dot.connected {
     background: oklch(68% 0.16 148);
     box-shadow:
-      0 0 10px oklch(68% 0.16 148 / 0.6),
-      0 0 20px oklch(68% 0.16 148 / 0.3);
+      0 0 8px oklch(68% 0.16 148 / 0.6),
+      0 0 15px oklch(68% 0.16 148 / 0.3);
   }
   .status-dot.disconnected {
     background: oklch(68% 0.18 27);
-    box-shadow: 0 0 8px oklch(68% 0.18 27 / 0.5);
+    box-shadow: 0 0 6px oklch(68% 0.18 27 / 0.5);
   }
   .status-dot.simulating {
     background: oklch(75% 0.15 62);
     box-shadow:
-      0 0 12px oklch(75% 0.15 62 / 0.7),
-      0 0 24px oklch(75% 0.15 62 / 0.35);
+      0 0 9px oklch(75% 0.15 62 / 0.7),
+      0 0 18px oklch(75% 0.15 62 / 0.35);
   }
   @keyframes status-pulse {
     0%,
     100% {
       box-shadow:
-        0 0 12px oklch(75% 0.15 62 / 0.7),
-        0 0 24px oklch(75% 0.15 62 / 0.35);
+        0 0 9px oklch(75% 0.15 62 / 0.7),
+        0 0 18px oklch(75% 0.15 62 / 0.35);
       transform: scale(1);
     }
     50% {
       box-shadow:
-        0 0 16px oklch(75% 0.15 62 / 0.9),
-        0 0 32px oklch(75% 0.15 62 / 0.45);
+        0 0 12px oklch(75% 0.15 62 / 0.9),
+        0 0 24px oklch(75% 0.15 62 / 0.45);
       transform: scale(1.05);
     }
   }
