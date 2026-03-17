@@ -580,10 +580,12 @@ Previously completed:
 ### P4. Maintained Markdown Document Overhaul _(GLM 5: SIMPLE)_
 
 - [x] `README.md` audited (March 16, 2026): consolidated sections for scannability, verified links and dependency matrix accuracy, preserved runtime contract statements required by tests.
-- [ ] _(GLM 5: SIMPLE)_ Audit remaining maintained Markdown documentation set, then rewrite for readability and architecture parity without inventing behavior that the code does not ship.
-  - Scope the pass to the remaining `.md` docs that describe the live system: `AGENTS.md`, `docs/architecture.md`, `docs/PROJECT_DOCUMENTATION.md`, `docs/modules/*.md`, `tests/TESTING.md`, `server/README.md`, and `docs/archive/README.md`.
-  - Verify each document against the actual runtime entry points, layer boundaries, active backend capabilities, supported export/simulation flows, and the current test map before rewriting copy.
-  - Improve scannability with clearer section ordering, tighter wording, explicit source-of-truth links, and removal of stale or duplicated explanations that drift from the real architecture.
+- [x] _(GLM 5: SIMPLE)_ Audit remaining maintained Markdown documentation set, then rewrite for readability and architecture parity without inventing behavior that the code does not ship. — **COMPLETE** (March 17, 2026)
+  - Audited: `AGENTS.md`, `docs/architecture.md`, `docs/PROJECT_DOCUMENTATION.md`, `docs/modules/*.md`, `tests/TESTING.md`, `server/README.md`, `docs/archive/README.md`
+  - Verified entry points, layer boundaries, backend capabilities, export/simulation flows, test inventory against actual codebase
+  - Fixed: TESTING.md missing `test_mesh_cleaner.py` and `test_symmetry_regression.py` in Python test list
+  - Rewrote for clarity: better section ordering, tighter wording, explicit doc hierarchy, removed duplicated explanations
+  - All docs now scanned for architecture parity — no inventions of unsupported features
 
 ## Completed / Resolved
 
