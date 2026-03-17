@@ -75,7 +75,7 @@ _VALID_BEM_PRECISIONS = {"single", "double"}
 
 
 def _normalize_bem_precision(value: Optional[str]) -> str:
-    raw = str(value or "double").strip().lower()
+    raw = str(value or "single").strip().lower()
     if raw not in _VALID_BEM_PRECISIONS:
         raise ValueError("bem_precision must be one of: single, double.")
     return raw
@@ -166,7 +166,7 @@ class HornBEMSolver:
         tag_throat: int = 2,
         boundary_interface: str = "opencl",
         potential_interface: str = "opencl",
-        bem_precision: str = "double",
+        bem_precision: str = "single",
         use_burton_miller: bool = True,
     ):
         self.grid = grid
@@ -226,7 +226,7 @@ class HornBEMSolver:
             tag_throat=cfg.get("tag_throat", 2),
             boundary_interface=cfg.get("boundary_interface", "opencl"),
             potential_interface=cfg.get("potential_interface", "opencl"),
-            bem_precision=cfg.get("bem_precision", "double"),
+            bem_precision=cfg.get("bem_precision", "single"),
             use_burton_miller=cfg.get("use_burton_miller", True),
         )
 
@@ -747,7 +747,7 @@ def solve_optimized(
     verbose: bool = True,
     mesh_validation_mode: str = "warn",
     use_burton_miller: bool = True,
-    bem_precision: str = "double",
+    bem_precision: str = "single",
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
     enable_warmup: bool = True,
