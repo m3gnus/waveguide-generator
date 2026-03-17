@@ -2296,6 +2296,27 @@ textarea {
   }
 }
 
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: var(--sp-2);
+  z-index: 9999;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--accent);
+  color: var(--accent-text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: var(--sp-2);
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
