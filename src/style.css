@@ -36,8 +36,8 @@
   --scene-top-light: #e8a83a;
 
   /* Typography — 5 sizes */
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "SF Mono", "Monaco", "Inconsolata", monospace;
+  --font-ui: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", monospace;
 
   --text-xs: 0.7rem;
   --text-sm: 0.8rem;
