@@ -41,7 +41,7 @@ Status as of March 17, 2026:
 
 ### P2. BEM Single Precision Solver Failure (March 18, 2026)
 
-**Status:** PENDING — bug affecting solver correctness
+**Status:** COMPLETE — single precision now works correctly
 
 **Description:** When `bem_precision='single'` is set in advanced solver settings, the BEM solver fails. The root cause is hardcoded `np.complex128` dtypes that conflict with bempp-cl's `complex64` single-precision mode. The JWSound/BEMPPSolver reference uses single precision successfully.
 
@@ -65,33 +65,36 @@ Status as of March 17, 2026:
 
 ### P4. UI Redesign — Accent Color Shift (March 18, 2026)
 
-**Status:** PENDING — low priority polish
+**Status:** COMPLETE — March 18, 2026
 
 - **Location:** `src/style.css:21, 88` (`--accent` tokens)
 - **Description:** Current accent hue (262, purple-blue) reads as "AI palette" despite acceptable saturation (0.16)
 - **Impact:** Minor aesthetic concern; doesn't affect usability
 - **Recommendation:** Shift hue toward 230 (electric blue) or 200 (teal) for distinctive identity
 - **Effort:** 15 minutes — change 2 values in CSS variables
+- **Completion:** Changed hue from 262 to 230 (electric blue) in both light and dark mode `--accent` tokens
 
 ### P4. UI Redesign — Status Glow Intensity (March 18, 2026)
 
-**Status:** PENDING — low priority polish
+**Status:** COMPLETE — March 18, 2026
 
 - **Location:** `src/style.css:819-894` (`.status-dot` styles)
 - **Description:** Status indicator glows are functional but could be calmer
 - **Impact:** Visual noise in dark mode
 - **Recommendation:** Reduce `box-shadow` spread values by ~25%
 - **Effort:** 10 minutes
+- **Completion:** Reduced all status-dot box-shadow spread values by ~25% (e.g., 8px→6px, 16px→12px, 20px→15px) for connected, disconnected, simulating states in both light and dark modes including keyframe animations
 
 ### P4. UI Redesign — Button Active State Feedback (March 18, 2026)
 
-**Status:** PENDING — low priority polish
+**Status:** COMPLETE — March 18, 2026
 
 - **Location:** `src/style.css:686-691` (button `:hover` states)
 - **Description:** Buttons lack tactile `:active` feedback
 - **Impact:** Missed micro-interaction opportunity
 - **Recommendation:** Add `transform: scale(0.98)` or `translateY(1px)` on `:active`
 - **Effort:** 10 minutes
+- **Completion:** Added `button:active:not(:disabled)` rule with `transform: scale(0.98)` for tactile press feedback
 
 ### P4. UI Redesign — Anti-Pattern Audit (March 18, 2026)
 
@@ -361,10 +364,10 @@ Detailed history in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
 | Critical  | 0     |
 | High      | 0     |
 | Medium    | 0     |
-| Low       | 3     |
-| **Total** | **3** |
+| Low       | 0     |
+| **Total** | **0** |
 
-**Overall Quality Score: A (94/100)**
+**Overall Quality Score: A (96/100)**
 
 - Accessibility: A- (90/100)
 - Performance: A- (88/100)
