@@ -51,7 +51,7 @@ The settings modal uses separate "?" buttons next to each setting label, creatin
 **Action plan:**
 
 - [x] Modify `_buildSettingsLabelCopy()` to set `data-help-text` on label instead of creating "?" button
-- [ ] Remove `createHelpTrigger()` imports from settings files
+- [x] Remove `createHelpTrigger()` imports from settings files
 - [ ] Test hover behavior on all settings controls
 - [ ] Verify accessibility (keyboard users can still access help)
 
