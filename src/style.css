@@ -31,7 +31,9 @@
 
   /* 3D Scene */
   --scene-bg: #f2ede4;
-  --scene-grid: #d5cfbf;
+  --scene-grid-a: #d8d2c4;
+  --scene-grid-b: #e6e1d8;
+  --scene-top-light: #e8a83a;
 
   /* Typography — 5 sizes */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -95,7 +97,9 @@
     --error-bg: oklch(65% 0.15 27 / 0.08);
 
     --scene-bg: #0a1018;
-    --scene-grid: #1a2535;
+    --scene-grid-a: #192538;
+    --scene-grid-b: #111b2d;
+    --scene-top-light: #5b8fe8;
   }
 }
 
