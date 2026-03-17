@@ -296,6 +296,13 @@ export function showInputError(inputElement, message) {
     }
   }
   errorEl.textContent = message;
+
+  const inputId = inputElement.id;
+  if (inputId) {
+    const errorId = `${inputId}-error`;
+    errorEl.id = errorId;
+    inputElement.setAttribute("aria-describedby", errorId);
+  }
 }
 
 export function hideInputError(inputElement, showSuccess = false) {
@@ -303,6 +310,7 @@ export function hideInputError(inputElement, showSuccess = false) {
 
   inputElement.classList.remove("input-error");
   inputElement.removeAttribute("aria-invalid");
+  inputElement.removeAttribute("aria-describedby");
 
   if (showSuccess) {
     inputElement.classList.add("input-success");
