@@ -54,7 +54,7 @@ Status as of March 17, 2026:
 
 **Action plan:**
 
-- [ ] Add `_numpy_dtype_for_precision(precision: str) -> type` helper in `solve_optimized.py`
+- [x] Add `_numpy_dtype_for_precision(precision: str) -> type` helper in `solve_optimized.py`
 - [ ] Fix line 276: unit velocity coefficient array
 - [ ] Fix line 448: mirror grid coefficients
 - [ ] Fix line 495: image source coefficients
