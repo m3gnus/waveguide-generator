@@ -132,7 +132,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Throttle aria-live updates to major progress milestones
+- [x] Throttle aria-live updates to major progress milestones
 
 #### Formula Info Panel Not a Dialog
 

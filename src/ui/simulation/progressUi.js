@@ -125,6 +125,7 @@ export function resolveStageDetail(stage, message, pct) {
 
 // DOM cache — lazily populated on first use to reduce repeated getElementById calls in hot paths.
 let _dom = null;
+let _lastAnnouncedMilestone = -1;
 
 /**
  * Returns a cached reference to simulation progress DOM elements.
@@ -157,6 +158,10 @@ export function setProgressVisible(visible) {
   }
 }
 
+export function resetProgressAnnouncement() {
+  _lastAnnouncedMilestone = -1;
+}
+
 export function updateProgressUi({
   progress = 0,
   stage = "bem_solve",
@@ -179,7 +184,14 @@ export function updateProgressUi({
       `Stage: ${label}. ${pct}% complete.`,
     );
   }
-  if (progressText) {
+  const milestone = Math.floor(pct / 10) * 10;
+  const isTerminalStage =
+    key === "complete" || key === "cancelled" || key === "error";
+  if (
+    progressText &&
+    (milestone !== _lastAnnouncedMilestone || isTerminalStage)
+  ) {
+    _lastAnnouncedMilestone = milestone;
     progressText.textContent = detail || "";
   }
 }
