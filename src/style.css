@@ -1075,7 +1075,7 @@ button.secondary:hover:not(:disabled) {
 
 .ui-toast-container {
   position: fixed;
-  right: var(--sp-5);
+  left: var(--sp-5);
   bottom: var(--sp-5);
   z-index: 1100;
   display: flex;
