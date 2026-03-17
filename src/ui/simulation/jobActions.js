@@ -31,6 +31,7 @@ import {
   getSimulationDom,
   formatElapsedDuration,
   resolveJobDurationMs,
+  resetProgressAnnouncement,
 } from "./progressUi.js";
 import { clearPollTimer, setActiveJob } from "./jobOrchestration.js";
 import { downloadMeshArtifact } from "./meshDownload.js";
@@ -602,6 +603,7 @@ export async function runSimulation(panel) {
   panel.simulationStartedAtMs = Date.now();
   panel.lastSimulationDurationMs = null;
   if (dom.runBtn) dom.runBtn.disabled = true;
+  resetProgressAnnouncement();
   setProgressVisible(true);
   updateStageUi(panel, {
     progress: 0.05,
