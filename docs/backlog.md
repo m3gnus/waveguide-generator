@@ -50,8 +50,8 @@ Status as of March 17, 2026:
 
 Action plan:
 
-- [ ] Increase viewer control buttons to 44×44px minimum
-- [ ] Audit all interactive elements for touch target compliance
+- [x] Increase viewer control buttons to 44×44px minimum
+- [x] Audit all interactive elements for touch target compliance
 
 #### Low Contrast Muted Text
 
