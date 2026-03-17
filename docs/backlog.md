@@ -53,7 +53,7 @@ Action plan:
 - [x] Action hierarchy: Create primary/secondary/tertiary button styles; make "Start BEM Simulation" visually dominant
 - [x] Canvas presence: Add subtle framing (vignette, intentional grid styling, integrated controls)
 - [x] Status indicators: Make connection/simulation status more prominent with bolder color, subtle glow/pulse
-- [ ] Empty states: Rewrite to explain what will appear and why it matters, guide users toward action
+- [x] Empty states: Rewrite to explain what will appear and why it matters, guide users toward action
 
 **Research findings**:
 
