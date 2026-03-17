@@ -277,8 +277,22 @@ The observation frame for half models is computed from mesh geometry (throat/mou
 - [x] Modify `infer_observation_frame()` in `server/solver/observation.py` to accept symmetry plane information
 - [x] When symmetry is active (YZ plane), project the observation frame origin to X=0 (the symmetry plane)
 - [x] The mouth/source center should still be computed from mesh geometry, but the observation origin's X-coordinate should be clamped to 0
-- [ ] Update `ab_test_symmetry.py` to verify the observation frame is correctly centered
-- [ ] Re-run A/B test — expect <0.5 dB error across all frequencies
+- [x] Update `ab_test_symmetry.py` to verify the observation frame is correctly centered
+- [x] Update `ab_test_symmetry.py` to assemble image operators when symmetry is applied
+- [ ] Re-run A/B test — expect <0.5 dB error across all frequencies — **BLOCKED: ~8 dB error persists**
+
+**Investigation status (March 17, 2026):**
+
+The observation frame fix is complete and verified (X projected to 0 for YZ symmetry). Image operators are being assembled correctly (`mirror_spaces=1`). However, the A/B test still shows ~8 dB SPL error at low frequencies, decreasing to ~1 dB at high frequencies.
+
+Key findings:
+
+- Image LHS contribution is 10-20x smaller than direct (expected due to larger test-trial distances)
+- Matrix shapes are correct (155x155 for both direct and image)
+- DOF counts match between half and mirror grids (P1=157, DP0=361)
+- Throat area ratio is correct (~2x)
+
+The frequency-dependent error pattern suggests a systematic issue in the image source formulation that requires deeper investigation into bempp-cl's cross-grid operator assembly or the DOF mapping between half and mirror spaces.
 
 **Step 8 — Validate and close**
 

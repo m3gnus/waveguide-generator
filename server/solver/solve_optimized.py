@@ -412,6 +412,8 @@ class HornBEMSolver:
             # Image-source contributions (cross-grid operators)
             # ----------------------------------------------------------
             if self.mirror_spaces:
+                import sys
+                print(f"  [DEBUG solve_optimized] Image source path triggered, mirror_spaces={len(self.mirror_spaces)}", file=sys.stderr)
                 # Cross-grid operators can't be added to direct operators
                 # via bempp's __add__ (different domain spaces). Assemble to
                 # dense matrices and sum at the numpy level instead.
