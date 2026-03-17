@@ -5,63 +5,64 @@
 
 const EMPTY_STATE_MESSAGES = {
   noResults: {
-    title: "No simulation results yet",
+    title: "Simulation results will appear here",
     description:
-      "Run a BEM simulation to see frequency response, directivity, and impedance data here.",
+      "After running a BEM solve, you'll see frequency response curves, polar directivity plots, and SPL measurements—essential data for validating your horn's acoustic performance. Click \"Start BEM Simulation\" to generate your first results.",
   },
   noJobs: {
-    title: "No simulation history",
-    description: "Your completed and in-progress simulations will appear here.",
+    title: "Your simulation history is empty",
+    description:
+      "Each BEM solve creates a job record with frequency response and directivity data for comparison across design iterations. Run your first simulation to begin building a history of acoustic analyses.",
   },
   noData: {
     title: "Unable to load data",
     description:
-      "Something went wrong. Try refreshing the page or running the simulation again.",
+      "The requested data couldn't be retrieved. Refresh the page to restore state, or run a new simulation to generate fresh results.",
   },
   noSimulationRunning: {
-    title: "Ready to simulate",
+    title: "Ready for acoustic analysis",
     description:
-      'Click "Run BEM Simulation" to start analyzing your waveguide design.',
+      "Run a BEM simulation to compute how your waveguide performs across the frequency range. Results include on-axis response, beamwidth, and polar directivity—critical metrics for loudspeaker design.",
   },
   connectionError: {
-    title: "Solver not connected",
+    title: "Solver backend not connected",
     description:
-      'Start the Python backend server (localhost:8000) to run simulations. Run "python server/app.py" from the project directory.',
+      "The BEM solver runs locally and must be started before simulations. Open a terminal and run: python server/app.py. This enables mesh processing and acoustic field computation.",
   },
   noExportFormats: {
-    title: "No export formats selected",
+    title: "No export formats configured",
     description:
-      "Go to Settings and enable at least one export format (CSV, JSON, PNG, etc.) to export results.",
+      "Enable CSV for SPL data, JSON for complete results, or PNG for publication-ready plots. Configure formats in Settings to save your simulation data for analysis and documentation.",
   },
   exportPending: {
-    title: "Exporting results",
+    title: "Preparing export",
     description:
-      "Preparing your files. Large exports may take a few seconds...",
+      "Generating your simulation data files. Complex frequency sweeps with high resolution may take several seconds to process.",
   },
   fileTooLarge: {
-    title: "Export too large",
+    title: "Export exceeds size limit",
     description:
-      "The data exceeds size limits. Try exporting one format at a time, or reduce the frequency resolution.",
+      "High-frequency resolution creates large datasets. Export one format at a time, or reduce frequency point count in simulation settings to create smaller, faster exports.",
   },
   networkTimeout: {
     title: "Request timed out",
     description:
-      "The server took too long to respond. Check your network connection and try again.",
+      "The solver didn't respond in time. Large meshes and high frequency resolution increase solve time—try again or simplify the geometry for faster iteration.",
   },
   networkOffline: {
-    title: "No network connection",
+    title: "Network connection lost",
     description:
-      "You appear to be offline. Check your internet connection and try again.",
+      "Simulation jobs require connection to the local solver. Restore your network connection and try again.",
   },
   serverError: {
-    title: "Server error",
+    title: "Solver error",
     description:
-      "The backend encountered an unexpected error. Check the server logs for details.",
+      "The BEM solver encountered an unexpected condition. Check the server console for details—common causes include mesh topology issues or invalid boundary conditions.",
   },
   validationError: {
-    title: "Invalid input",
+    title: "Invalid parameters detected",
     description:
-      "Some values are out of range or invalid. Please check the highlighted fields.",
+      "Some geometry or simulation values are outside valid ranges. Review the highlighted fields—correct parameters ensure accurate acoustic predictions and prevent solver failures.",
   },
 };
 
