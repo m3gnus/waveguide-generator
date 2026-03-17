@@ -206,7 +206,7 @@ Removed the symmetry line "Symmetry: Requested Disabled | Decision Full model" f
 
 Action plan:
 
-- [ ] Enhance button hover states with background/border change
+- [x] Enhance button hover states with background/border change
 
 #### Toast Position May Overlap Actions Panel
 
