@@ -241,3 +241,51 @@ export function withRetry(fn, options = {}) {
     throw lastError;
   };
 }
+
+export function renderJobListSkeleton(container, count = 3) {
+  if (!container) return;
+
+  const skeletons = Array.from(
+    { length: count },
+    () => `
+    <div class="skeleton-job-item">
+      <div class="skeleton-job-header">
+        <div class="skeleton-job-info">
+          <div class="skeleton skeleton-job-title"></div>
+          <div class="skeleton skeleton-job-meta"></div>
+        </div>
+        <div class="skeleton-job-actions">
+          <div class="skeleton skeleton-job-btn"></div>
+          <div class="skeleton skeleton-job-btn"></div>
+        </div>
+      </div>
+      <div class="skeleton-job-footer">
+        <div class="skeleton skeleton-job-footer-label"></div>
+        <div class="skeleton-job-stars">
+          ${Array.from({ length: 5 }, () => '<div class="skeleton skeleton-job-star"></div>').join("")}
+        </div>
+      </div>
+    </div>
+  `,
+  ).join("");
+
+  container.innerHTML = skeletons;
+}
+
+export function renderResultsSkeleton(container) {
+  if (!container) return;
+
+  container.innerHTML = `
+    <div class="skeleton-results-panel">
+      <div class="skeleton skeleton-results-title"></div>
+      <div class="skeleton-results-grid">
+        <div class="skeleton skeleton-results-item"></div>
+        <div class="skeleton skeleton-results-item"></div>
+        <div class="skeleton skeleton-results-item"></div>
+        <div class="skeleton skeleton-results-item"></div>
+      </div>
+      <div class="skeleton skeleton-results-chart"></div>
+      <div class="skeleton skeleton-results-chart"></div>
+    </div>
+  `;
+}
