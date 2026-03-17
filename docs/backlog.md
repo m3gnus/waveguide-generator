@@ -37,24 +37,6 @@ Status as of March 17, 2026:
 
 ## Active Backlog
 
-### P2. Restore Missing Load/Export Buttons in Job List
-
-**Added: March 17, 2026**
-
-**Description:** The "Load" and "Export" buttons for completed simulation tasks were accidentally removed during refactoring in commit e7b8814. The event handlers and function implementations still exist — only the button markup is missing.
-
-**Implementation notes:**
-
-- File: `src/ui/simulation/jobActions.js` — `renderJobList()` function (around line 371)
-- Event handlers exist in `events.js` (lines 90-96)
-- Functions exist: `exportJobResults()` (line 394), `loadJobScript()` (line 411)
-
-Action plan:
-
-- [ ] Add Load button: `data-job-action="load-script"` (condition: `job.script` exists)
-- [ ] Add Export button: `data-job-action="export"` (condition: `job.status === "complete"`)
-- [ ] Verify button handlers still wired correctly
-
 ### P2. UI Quality Audit — Accessibility & Theming
 
 **Audit date: March 17, 2026**
@@ -310,6 +292,17 @@ Action plan:
 - Three.js render optimization with `needsRender` flag
 
 ## Completed / Resolved
+
+### P2. Restore Missing Load/Export Buttons in Job List — COMPLETE
+
+**Resolved: March 17, 2026**
+
+Restored the missing "Load" and "Export" buttons in the simulation job list that were accidentally removed during refactoring.
+
+- File: `src/ui/simulation/jobActions.js` — `renderJobList()` function
+- Event handlers in `events.js` (lines 90-96) were already wired
+- Load button: `data-job-action="load-script"` (condition: `job.script` exists)
+- Export button: `data-job-action="export"` (condition: `job.status === "complete"`)
 
 ### P1. Duplicate Function Definitions in scene.js — COMPLETE
 
