@@ -34,33 +34,11 @@ Status as of March 17, 2026:
 - All 267 JS tests pass. Python tests pass.
 - **Symmetry optimization DISABLED** — image source method blocked by bempp-cl 0.4.x singular quadrature limitation. Code preserved for future revisit if bempp-cl adds cross-grid singular quadrature support.
 - **UI Quality Audit complete** — all P2/P3/P4 items resolved (March 17, 2026).
+- **Design Quality complete** — typography, button hierarchy, canvas framing, status indicators, empty states (March 18, 2026).
 
 ## Active Backlog
 
-### P2. Design Quality — Distinctive Visual Identity & Hierarchy
-
-The interface functions but lacks visual distinction and hierarchy. Current state: system fonts with no personality, flat action hierarchy (all buttons similar weight), 3D canvas feels like an afterthought, weak status indicators, and passive empty states. The design says "functional prototype" not "professional acoustic engineering tool." This undermines user confidence in a precision engineering domain.
-
-**Implementation notes**:
-
-- Files: `src/style.css`, `index.html`, `src/ui/*.js`
-- Related: completed P2 UI Quality Audit (accessibility/theming) — this extends into visual design quality
-- Skills available: `/normalize`, `/distill`, `/bolder`, `/clarify`, `/onboard`
-
-Action plan:
-
-- [x] Typography: Replace system fonts with distinctive UI font (consider IBM Plex Sans, Space Grotesk, or DM Sans); pair with non-default monospace (JetBrains Mono, Fira Code)
-- [x] Action hierarchy: Create primary/secondary/tertiary button styles; make "Start BEM Simulation" visually dominant
-- [x] Canvas presence: Add subtle framing (vignette, intentional grid styling, integrated controls)
-- [x] Status indicators: Make connection/simulation status more prominent with bolder color, subtle glow/pulse
-- [x] Empty states: Rewrite to explain what will appear and why it matters, guide users toward action
-
-**Research findings**:
-
-- Anti-patterns check: PASS — not typical AI-generated slop (warm palette, no glassmorphism/neon, light mode default)
-- Current aesthetic: competent but forgettable; rounded corners + subtle shadows everywhere
-- Opportunity: commit to a distinctive direction matching the domain (precision engineering, acoustic science)
-- Question to resolve: What does "precision" look like for this audience? (Swiss clinical, industrial brutalist, refined luxury engineering?)
+_No active items. All priority work complete._
 
 ---
 
@@ -100,6 +78,14 @@ See archived plan for slicing strategy.
 - Internal decomposition of `server/services/job_runtime.py` stays deferred unless queueing, persistence, or multi-worker lifecycle requirements expand materially.
 
 ## Completed / Resolved
+
+### P2. Design Quality — Distinctive Visual Identity & Hierarchy (March 18, 2026)
+
+- **Typography:** Space Grotesk (UI) + JetBrains Mono (code) via Google Fonts
+- **Action hierarchy:** Primary/secondary/tertiary button styles; "Start BEM Simulation" visually dominant
+- **Canvas presence:** Subtle vignette framing, integrated viewer controls panel
+- **Status indicators:** Bolder colors, glow effects, pulse animation for simulating state
+- **Empty states:** Rewritten with value explanation and clear calls to action
 
 ### P2. UI Quality Audit — Accessibility & Theming (March 17, 2026)
 
