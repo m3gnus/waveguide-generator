@@ -1,7 +1,7 @@
 import { applySmoothing } from "../../results/smoothing.js";
 import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
 import {
-  renderSymmetryPolicySummary,
+  renderSolveStatsSummary,
   renderObservationDistanceSummary,
 } from "./results.js";
 
@@ -11,6 +11,7 @@ import {
  */
 export async function openViewResultsModal(panel) {
   const preferredJobId = panel.activeJobId || panel.currentJobId;
+  const job = preferredJobId ? panel.jobs?.get(preferredJobId) || null : null;
   const results =
     preferredJobId && panel.resultCache?.has(preferredJobId)
       ? panel.resultCache.get(preferredJobId)
@@ -85,10 +86,10 @@ export async function openViewResultsModal(panel) {
   const body = document.createElement("div");
   body.className = "view-results-body";
 
-  const symmetryPolicyMarkup = renderSymmetryPolicySummary(results);
-  if (symmetryPolicyMarkup) {
+  const solveStatsMarkup = renderSolveStatsSummary(results, job);
+  if (solveStatsMarkup) {
     const summaryWrapper = document.createElement("div");
-    summaryWrapper.innerHTML = symmetryPolicyMarkup.trim();
+    summaryWrapper.innerHTML = solveStatsMarkup.trim();
     const summarySection = summaryWrapper.firstElementChild;
     if (summarySection) {
       body.appendChild(summarySection);

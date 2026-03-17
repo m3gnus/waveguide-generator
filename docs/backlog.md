@@ -89,27 +89,18 @@ Action plan:
 - [ ] Extract UI strings to messages file
 - [ ] Implement `Intl.MessageFormat` or similar
 
-### P3. Replace Symmetry Policy with Solve Statistics in Results View
+## Completed / Resolved
 
-**Added: March 17, 2026**
+### P3. Replace Symmetry Policy with Solve Statistics in Results View — COMPLETE
 
-**Description:** The Symmetry Policy section in the View Results modal is no longer relevant since symmetry optimization is disabled. Replace it with useful solve statistics: measurement distance (from mouth or throat), solve time, frequency count/range, and mesh complexity (vertices/triangles).
+**Resolved: March 17, 2026**
 
-**Implementation notes:**
+Replaced the Symmetry Policy section in the View Results modal with useful solve statistics since symmetry optimization is disabled.
 
-- Files: `src/ui/simulation/results.js`, `src/ui/simulation/viewResults.js`
-- Available stats from backend response:
-  - Total solve time: `metadata.performance.total_time_seconds`
-  - Frequency count: `frequencies.length`, range from input config
-  - Mesh stats: `mesh_stats.vertex_count`, `mesh_stats.triangle_count` (from job status)
-  - Observation distance: `metadata.observation.effective_distance_m`, origin (mouth/throat)
-  - Optional: GMRES iterations, BEM precision
-
-Action plan:
-
-- [ ] Create `renderSolveStatsSummary()` function to replace `renderSymmetryPolicySummary()`
-- [ ] Display: solve time, frequency range/count, mesh complexity, measurement distance + origin
-- [ ] Update `viewResults.js` to call new summary renderer instead of symmetry policy
+- Created `renderSolveStatsSummary()` function in `src/ui/simulation/results.js`
+- Displays: solve time, frequency range/count, mesh complexity (vertices/triangles), measurement distance + origin
+- Updated `viewResults.js` to call new summary renderer instead of symmetry policy
+- Job mesh stats now accessed from panel.jobs to show vertex/triangle counts
 
 ### P3. UI Quality Audit — Medium-Severity Issues
 
