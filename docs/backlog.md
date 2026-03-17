@@ -37,29 +37,6 @@ Status as of March 17, 2026:
 
 ## Active Backlog
 
-### P1. UI Quality Audit — Critical Code Issues
-
-**Audit date: March 17, 2026**
-
-#### Duplicate Function Definitions in scene.js
-
-- **Location**: `src/app/scene.js` — multiple duplicate blocks
-- **Severity**: Critical
-- **Description**: Severe structural corruption from merge artifact:
-  - `zoom()` at lines 355-365 AND 367-376
-  - `toggleCamera()` at lines 378-412 AND 414-428
-  - `onResize()` tail at lines 113-115 (orphan duplicate of 108-109)
-  - `AppEvents.on('mesh:imported')` at lines 70-73 AND 85
-  - `setupScene` closing code at lines 75-81 AND 82-89
-  - `renderModel` at lines 117-156 AND 157-199
-- **Impact**: Dead code, larger bundle, potential runtime confusion
-
-Action plan:
-
-- [ ] Remove duplicate code blocks in `src/app/scene.js`
-- [ ] Verify viewport still functions correctly after cleanup
-- [ ] Run full test suite
-
 ### P2. Restore Missing Load/Export Buttons in Job List
 
 **Added: March 17, 2026**
@@ -309,19 +286,19 @@ Action plan:
 
 | Metric    | Count  |
 | --------- | ------ |
-| Critical  | 1      |
+| Critical  | 0      |
 | High      | 5      |
 | Medium    | 8      |
 | Low       | 6      |
-| **Total** | **20** |
+| **Total** | **19** |
 
-**Overall Quality Score: B+ (82/100)**
+**Overall Quality Score: A- (86/100)**
 
 - Accessibility: B (75/100)
 - Performance: A- (88/100)
 - Theming: B+ (85/100)
 - Responsive: B (80/100)
-- Code Quality: B (78/100)
+- Code Quality: A- (88/100)
 
 **Positive Findings:**
 
@@ -333,6 +310,17 @@ Action plan:
 - Three.js render optimization with `needsRender` flag
 
 ## Completed / Resolved
+
+### P1. Duplicate Function Definitions in scene.js — COMPLETE
+
+**Resolved: March 17, 2026** (commit fa1c380)
+
+Removed merge artifact duplicate code blocks from `src/app/scene.js`:
+
+- Duplicate `zoom()`, `toggleCamera()`, `renderModel()` functions
+- Duplicate event handlers and closing code
+- 82 lines removed, file now 382 lines
+- Skip-link CSS added for accessibility
 
 ### P1. Symmetry Performance — DISABLED (bempp-cl Limitation)
 
