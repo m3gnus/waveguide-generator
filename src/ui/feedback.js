@@ -1,3 +1,5 @@
+import { trapFocus } from "./focusTrap.js";
+
 const TOAST_CONTAINER_ID = "ui-toast-container";
 
 function hasDom() {
@@ -187,11 +189,13 @@ export function chooseExportFormat() {
       },
     ];
 
+    let releaseFocus;
     let settled = false;
     const finalize = (value) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("keydown", onKeyDown);
+      if (releaseFocus) releaseFocus();
       backdrop.remove();
       resolve(value);
     };
@@ -239,6 +243,7 @@ export function chooseExportFormat() {
     window.addEventListener("keydown", onKeyDown);
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
+    releaseFocus = trapFocus(dialog);
   });
 }
 
@@ -314,11 +319,13 @@ export function showCommandSuggestion({
     actions.className = "ui-choice-actions";
     dialog.appendChild(actions);
 
+    let releaseFocus;
     let settled = false;
     const finalize = (copied) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("keydown", onKeyDown);
+      if (releaseFocus) releaseFocus();
       backdrop.remove();
       resolve(Boolean(copied));
     };
@@ -367,5 +374,6 @@ export function showCommandSuggestion({
     window.addEventListener("keydown", onKeyDown);
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
+    releaseFocus = trapFocus(dialog);
   });
 }

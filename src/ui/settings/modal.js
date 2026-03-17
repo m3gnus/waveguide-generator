@@ -5,6 +5,8 @@
  * Interaction style mirrors the View Results popup: backdrop click or ESC closes.
  */
 
+import { trapFocus } from "../focusTrap.js";
+
 import {
   RECOMMENDED_DEFAULTS,
   getCurrentViewerSettings,
@@ -13,14 +15,14 @@ import {
   setInvertWheelZoom,
   resetViewerSection,
   resetAllViewerSettings,
-} from './viewerSettings.js';
+} from "./viewerSettings.js";
 
 import {
   RECOMMENDED_DEFAULTS as SIM_BASIC_DEFAULTS,
   getCurrentSimBasicSettings,
   saveSimBasicSettings,
   resetSimBasicSettings,
-} from './simBasicSettings.js';
+} from "./simBasicSettings.js";
 import {
   RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
   getBemPrecision,
@@ -29,20 +31,20 @@ import {
   getUseBurtonMiller,
   resetSimAdvancedSettings,
   saveSimAdvancedSettings,
-} from './simAdvancedSettings.js';
+} from "./simAdvancedSettings.js";
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getCurrentSimulationManagementSettings,
   resetSimulationManagementSettings,
   saveSimulationManagementSettings,
-} from './simulationManagementSettings.js';
+} from "./simulationManagementSettings.js";
 import {
   describeSimBasicDeviceAvailability,
   fetchRuntimeHealth,
   getCachedRuntimeHealth,
   getOpenCLSetupHelp,
-} from '../runtimeCapabilities.js';
-import { createHelpTrigger } from '../helpAffordance.js';
+} from "../runtimeCapabilities.js";
+import { createHelpTrigger } from "../helpAffordance.js";
 import {
   getSelectedFolderLabel,
   requestFolderSelection,
@@ -50,72 +52,96 @@ import {
   supportsFolderSelection,
   fetchWorkspacePath,
   openWorkspaceInFinder,
-} from '../workspace/folderWorkspace.js';
+} from "../workspace/folderWorkspace.js";
 
-export { describeSimBasicDeviceAvailability, getOpenCLSetupHelp } from '../runtimeCapabilities.js';
+export {
+  describeSimBasicDeviceAvailability,
+  getOpenCLSetupHelp,
+} from "../runtimeCapabilities.js";
 
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
-  liveUpdate: 'live-update',
-  displayMode: 'display-mode',
-  downloadSimMesh: 'download-sim-mesh',
-  checkUpdates: 'check-updates-btn',
+  liveUpdate: "live-update",
+  displayMode: "display-mode",
+  downloadSimMesh: "download-sim-mesh",
+  checkUpdates: "check-updates-btn",
 };
 
 // In-memory settings state so preferences survive modal close/reopen
 const _state = {
   liveUpdate: true,
-  displayMode: 'standard',
+  displayMode: "standard",
   downloadSimMesh: false,
 };
 const SIMULATION_MANAGEMENT_HELP = Object.freeze({
-  downloadMesh: 'Automatically downloads the solver mesh file (.msh) when a job starts.',
-  defaultSort: 'Sets the default order used in the Simulation Jobs list.',
-  minRatingFilter: 'Hides completed jobs rated below this threshold in the Simulation Jobs list.',
-  autoExportOnComplete: 'Automatically exports results in the selected formats when a simulation completes.',
-  selectedFormats: 'Selects which file formats are included when exporting results.'
+  downloadMesh:
+    "Automatically downloads the solver mesh file (.msh) when a job starts.",
+  defaultSort: "Sets the default order used in the Simulation Jobs list.",
+  minRatingFilter:
+    "Hides completed jobs rated below this threshold in the Simulation Jobs list.",
+  autoExportOnComplete:
+    "Automatically exports results in the selected formats when a simulation completes.",
+  selectedFormats:
+    "Selects which file formats are included when exporting results.",
 });
 const VIEWER_HELP = Object.freeze({
-  liveUpdate: 'Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.',
-  displayMode: 'Switches the viewport shading mode used to inspect the current waveguide surface.',
-  rotateSpeed: 'Controls how quickly the camera orbits the model while dragging.',
-  zoomSpeed: 'Controls how quickly scroll and pinch gestures move the camera toward the model.',
-  panSpeed: 'Controls how quickly the viewport shifts when you pan the camera.',
-  dampingEnabled: 'Keeps orbit movement eased instead of stopping abruptly after drag input ends.',
-  dampingFactor: 'Adjusts how quickly the eased orbit motion settles after input stops.',
-  startupCameraMode: 'Sets which camera projection opens by default the next time the app starts.',
-  invertWheelZoom: 'Reverses the mouse-wheel zoom direction for viewport navigation.',
-  keyboardPanEnabled: 'Enables arrow-key style camera panning shortcuts while the viewport is focused.'
+  liveUpdate:
+    "Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.",
+  displayMode:
+    "Switches the viewport shading mode used to inspect the current waveguide surface.",
+  rotateSpeed:
+    "Controls how quickly the camera orbits the model while dragging.",
+  zoomSpeed:
+    "Controls how quickly scroll and pinch gestures move the camera toward the model.",
+  panSpeed: "Controls how quickly the viewport shifts when you pan the camera.",
+  dampingEnabled:
+    "Keeps orbit movement eased instead of stopping abruptly after drag input ends.",
+  dampingFactor:
+    "Adjusts how quickly the eased orbit motion settles after input stops.",
+  startupCameraMode:
+    "Sets which camera projection opens by default the next time the app starts.",
+  invertWheelZoom:
+    "Reverses the mouse-wheel zoom direction for viewport navigation.",
+  keyboardPanEnabled:
+    "Enables arrow-key style camera panning shortcuts while the viewport is focused.",
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
-  deviceMode: 'Selects the compute device for BEM operator assembly. Auto uses the best available OpenCL device. opencl_cpu forces CPU-only OpenCL; opencl_gpu forces GPU OpenCL (requires a compatible GPU driver). Recommended default: Auto.',
-  meshValidationMode: 'Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.',
-  frequencySpacing: 'Determines how the N frequency points are placed between the start and end frequency. Log spaces them evenly on a logarithmic scale (equal ratios between steps — perceptually uniform for audio). Linear spaces them evenly in Hz. Recommended default: Log.',
-  useOptimized: 'Enables the optimized HornBEMSolver code path, which pre-computes function spaces once and reuses them across all frequencies. Turning this off falls back to a simpler per-frequency solver. Leave enabled unless debugging. Recommended default: On.',
-  verbose: 'Emits per-frequency solver progress and diagnostic messages to the server log and job status stream. Useful for monitoring long sweeps or diagnosing convergence issues; adds minor overhead. Recommended default: Off.',
+  deviceMode:
+    "Selects the compute device for BEM operator assembly. Auto uses the best available OpenCL device. opencl_cpu forces CPU-only OpenCL; opencl_gpu forces GPU OpenCL (requires a compatible GPU driver). Recommended default: Auto.",
+  meshValidationMode:
+    "Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.",
+  frequencySpacing:
+    "Determines how the N frequency points are placed between the start and end frequency. Log spaces them evenly on a logarithmic scale (equal ratios between steps — perceptually uniform for audio). Linear spaces them evenly in Hz. Recommended default: Log.",
+  useOptimized:
+    "Enables the optimized HornBEMSolver code path, which pre-computes function spaces once and reuses them across all frequencies. Turning this off falls back to a simpler per-frequency solver. Leave enabled unless debugging. Recommended default: On.",
+  verbose:
+    "Emits per-frequency solver progress and diagnostic messages to the server log and job status stream. Useful for monitoring long sweeps or diagnosing convergence issues; adds minor overhead. Recommended default: Off.",
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
-  enableWarmup: 'Optimized solver only. Before the main frequency loop, assembles and pre-caches one BEM operator at the median frequency to warm up OpenCL JIT and operator assembly pipelines. Costs one extra solve but makes timing for subsequent frequencies more consistent. Recommended default: On.',
-  bemPrecision: 'Optimized solver only. Single (float32) is 2–4× faster and uses half the GPU memory, but may lose accuracy at very high frequencies or on ill-conditioned meshes. Double (float64) is the safe choice for production results. Recommended default: Double.',
-  useBurtonMiller: 'Optimized solver only. Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation — without it, the solver can produce large errors at certain frequencies even when GMRES converges. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.',
+  enableWarmup:
+    "Optimized solver only. Before the main frequency loop, assembles and pre-caches one BEM operator at the median frequency to warm up OpenCL JIT and operator assembly pipelines. Costs one extra solve but makes timing for subsequent frequencies more consistent. Recommended default: On.",
+  bemPrecision:
+    "Optimized solver only. Single (float32) is 2–4× faster and uses half the GPU memory, but may lose accuracy at very high frequencies or on ill-conditioned meshes. Double (float64) is the safe choice for production results. Recommended default: Double.",
+  useBurtonMiller:
+    "Optimized solver only. Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation — without it, the solver can produce large errors at certain frequencies even when GMRES converges. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.",
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   enable_warmup: {
-    label: 'Warm-up Pass',
+    label: "Warm-up Pass",
   },
   bem_precision: {
-    label: 'BEM Precision',
+    label: "BEM Precision",
   },
   use_burton_miller: {
-    label: 'Burton-Miller Coupling',
+    label: "Burton-Miller Coupling",
   },
 });
 const SETTINGS_SECTION_ITEMS = Object.freeze([
-  { key: 'viewer', label: 'Viewer' },
-  { key: 'simulation', label: 'Simulation' },
-  { key: 'task-exports', label: 'Task Exports' },
-  { key: 'workspace', label: 'Workspace' },
-  { key: 'system', label: 'System' },
+  { key: "viewer", label: "Viewer" },
+  { key: "simulation", label: "Simulation" },
+  { key: "task-exports", label: "Task Exports" },
+  { key: "workspace", label: "Workspace" },
+  { key: "system", label: "System" },
 ]);
 
 /**
@@ -123,7 +149,7 @@ const SETTINGS_SECTION_ITEMS = Object.freeze([
  * Returns the DOM value when modal is open, otherwise the stored value.
  */
 export function getLiveUpdateEnabled() {
-  const el = document.getElementById('live-update');
+  const el = document.getElementById("live-update");
   if (el) return el.checked;
   return _state.liveUpdate;
 }
@@ -132,7 +158,7 @@ export function getLiveUpdateEnabled() {
  * Get the current display-mode value.
  */
 export function getDisplayMode() {
-  const el = document.getElementById('display-mode');
+  const el = document.getElementById("display-mode");
   if (el) return el.value;
   return _state.displayMode;
 }
@@ -141,13 +167,13 @@ export function getDisplayMode() {
  * Get the current download-sim-mesh preference.
  */
 export function getDownloadSimMeshEnabled() {
-  const el = document.getElementById('download-sim-mesh');
+  const el = document.getElementById("download-sim-mesh");
   if (el) return el.checked;
   return _state.downloadSimMesh;
 }
 
 function _getDocument() {
-  return typeof document !== 'undefined' ? document : null;
+  return typeof document !== "undefined" ? document : null;
 }
 
 /**
@@ -157,18 +183,20 @@ function _getDocument() {
 export function openSettingsModal(options = {}) {
   const viewerRuntime = _resolveViewerRuntime(options.viewerRuntime);
   // Prevent duplicate modals
-  const existing = document.getElementById('settings-modal-backdrop');
+  const existing = document.getElementById("settings-modal-backdrop");
   if (existing) {
-    existing.focus();
+    const dialog = existing.querySelector('[role="dialog"]');
+    if (dialog) dialog.focus();
     return existing;
   }
 
-  const backdrop = _buildModal(viewerRuntime);
+  const { backdrop, cleanup } = _buildModal(viewerRuntime);
   document.body.appendChild(backdrop);
 
-  // Focus the dialog for keyboard access
   const dialog = backdrop.querySelector('[role="dialog"]');
-  if (dialog) dialog.focus();
+  const closeBtn = backdrop.querySelector(".settings-modal-close");
+  const releaseFocus = trapFocus(dialog, { initialFocus: closeBtn });
+  cleanup.push(releaseFocus);
 
   return backdrop;
 }
@@ -179,46 +207,52 @@ export function openSettingsModal(options = {}) {
 
 function _resolveViewerRuntime(runtime = {}) {
   return {
-    getControls: typeof runtime?.getControls === 'function' ? runtime.getControls : () => null,
-    getDomElement: typeof runtime?.getDomElement === 'function' ? runtime.getDomElement : () => null
+    getControls:
+      typeof runtime?.getControls === "function"
+        ? runtime.getControls
+        : () => null,
+    getDomElement:
+      typeof runtime?.getDomElement === "function"
+        ? runtime.getDomElement
+        : () => null,
   };
 }
 
 function _buildModal(viewerRuntime) {
-  const backdrop = document.createElement('div');
-  backdrop.id = 'settings-modal-backdrop';
-  backdrop.className = 'settings-modal-backdrop';
+  const backdrop = document.createElement("div");
+  backdrop.id = "settings-modal-backdrop";
+  backdrop.className = "settings-modal-backdrop";
   const cleanupFns = [];
 
-  const dialog = document.createElement('div');
-  dialog.className = 'settings-modal-dialog';
-  dialog.setAttribute('role', 'dialog');
-  dialog.setAttribute('aria-modal', 'true');
-  dialog.setAttribute('aria-label', 'Settings');
-  dialog.setAttribute('tabindex', '-1');
+  const dialog = document.createElement("div");
+  dialog.className = "settings-modal-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", "Settings");
+  dialog.setAttribute("tabindex", "-1");
 
   // Header
-  const header = document.createElement('div');
-  header.className = 'settings-modal-header';
+  const header = document.createElement("div");
+  header.className = "settings-modal-header";
 
-  const title = document.createElement('h2');
-  title.className = 'settings-modal-title';
-  title.textContent = 'Settings';
+  const title = document.createElement("h2");
+  title.className = "settings-modal-title";
+  title.textContent = "Settings";
   header.appendChild(title);
 
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'settings-modal-close';
-  closeBtn.textContent = '\u00d7';
-  closeBtn.title = 'Close (Escape)';
-  closeBtn.setAttribute('aria-label', 'Close settings');
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "settings-modal-close";
+  closeBtn.textContent = "\u00d7";
+  closeBtn.title = "Close (Escape)";
+  closeBtn.setAttribute("aria-label", "Close settings");
   header.appendChild(closeBtn);
 
   dialog.appendChild(header);
 
   // Body: sidebar nav + content area
-  const body = document.createElement('div');
-  body.className = 'settings-modal-body';
+  const body = document.createElement("div");
+  body.className = "settings-modal-body";
 
   const nav = _buildNav(SETTINGS_SECTION_ITEMS);
   const content = _buildContent(viewerRuntime, cleanupFns);
@@ -229,25 +263,35 @@ function _buildModal(viewerRuntime) {
   backdrop.appendChild(dialog);
 
   // --- Persist state changes from within the modal ---
-  backdrop.addEventListener('change', (event) => {
+  backdrop.addEventListener("change", (event) => {
     const t = event.target;
     if (!t) return;
-    if (t.id === 'live-update') _state.liveUpdate = t.checked;
-    if (t.id === 'display-mode') _state.displayMode = t.value;
-    if (t.id === 'download-sim-mesh') _state.downloadSimMesh = t.checked;
+    if (t.id === "live-update") _state.liveUpdate = t.checked;
+    if (t.id === "display-mode") _state.displayMode = t.value;
+    if (t.id === "download-sim-mesh") _state.downloadSimMesh = t.checked;
 
     // Sim Basic settings: save on any simbasic-* control change
-    if (t.id && t.id.startsWith('simbasic-')) {
+    if (t.id && t.id.startsWith("simbasic-")) {
       const settings = getCurrentSimBasicSettings();
-      settings.deviceMode = document.getElementById('simbasic-deviceMode')?.value ?? settings.deviceMode;
-      settings.meshValidationMode = document.getElementById('simbasic-meshValidationMode')?.value ?? settings.meshValidationMode;
-      settings.frequencySpacing = document.getElementById('simbasic-frequencySpacing')?.value ?? settings.frequencySpacing;
-      settings.useOptimized = document.getElementById('simbasic-useOptimized')?.checked ?? settings.useOptimized;
-      settings.verbose = document.getElementById('simbasic-verbose')?.checked ?? settings.verbose;
+      settings.deviceMode =
+        document.getElementById("simbasic-deviceMode")?.value ??
+        settings.deviceMode;
+      settings.meshValidationMode =
+        document.getElementById("simbasic-meshValidationMode")?.value ??
+        settings.meshValidationMode;
+      settings.frequencySpacing =
+        document.getElementById("simbasic-frequencySpacing")?.value ??
+        settings.frequencySpacing;
+      settings.useOptimized =
+        document.getElementById("simbasic-useOptimized")?.checked ??
+        settings.useOptimized;
+      settings.verbose =
+        document.getElementById("simbasic-verbose")?.checked ??
+        settings.verbose;
       saveSimBasicSettings(settings);
 
       // Re-evaluate Setup Help visibility when device mode changes
-      if (t.id === 'simbasic-deviceMode') {
+      if (t.id === "simbasic-deviceMode") {
         const cachedHealth = getCachedRuntimeHealth();
         if (cachedHealth) {
           _applySimBasicDeviceAvailability(cachedHealth);
@@ -255,7 +299,7 @@ function _buildModal(viewerRuntime) {
       }
     }
 
-    if (t.id && t.id.startsWith('simadvanced-')) {
+    if (t.id && t.id.startsWith("simadvanced-")) {
       const settings = getCurrentSimAdvancedSettings();
       settings.enableWarmup = getEnableWarmup();
       settings.bemPrecision = getBemPrecision();
@@ -267,7 +311,8 @@ function _buildModal(viewerRuntime) {
       const settings = _readSimulationManagementSettings(backdrop);
       saveSimulationManagementSettings(settings);
       _syncTaskListPreferenceControls(settings, {
-        dispatchToolbarChange: t.id === 'simmanage-default-sort' || t.id === 'simmanage-min-rating'
+        dispatchToolbarChange:
+          t.id === "simmanage-default-sort" || t.id === "simmanage-min-rating",
       });
     }
   });
@@ -277,40 +322,43 @@ function _buildModal(viewerRuntime) {
   const close = () => {
     if (closed) return;
     closed = true;
-    window.removeEventListener('keydown', onKeyDown);
+    window.removeEventListener("keydown", onKeyDown);
     cleanupFns.splice(0).forEach((cleanup) => {
       try {
         cleanup();
       } catch (error) {
-        console.warn('settings modal cleanup failed:', error);
+        console.warn("settings modal cleanup failed:", error);
       }
     });
     backdrop.remove();
   };
 
   const onKeyDown = (event) => {
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       event.preventDefault();
       close();
     }
   };
 
-  closeBtn.addEventListener('click', close);
-  backdrop.addEventListener('click', (event) => {
+  closeBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (event) => {
     if (event.target === backdrop) close();
   });
-  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener("keydown", onKeyDown);
 
   // --- Section nav tab switching ---
-  const sectionBtns = nav.querySelectorAll('.settings-nav-btn');
-  const sections = content.querySelectorAll('.settings-section');
+  const sectionBtns = nav.querySelectorAll(".settings-nav-btn");
+  const sections = content.querySelectorAll(".settings-section");
 
   sectionBtns.forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener("click", () => {
       const target = btn.dataset.section;
       sectionBtns.forEach((b) => {
-        b.classList.toggle('active', b.dataset.section === target);
-        b.setAttribute('aria-selected', b.dataset.section === target ? 'true' : 'false');
+        b.classList.toggle("active", b.dataset.section === target);
+        b.setAttribute(
+          "aria-selected",
+          b.dataset.section === target ? "true" : "false",
+        );
       });
       sections.forEach((sec) => {
         sec.hidden = sec.id !== `settings-section-${target}`;
@@ -318,22 +366,22 @@ function _buildModal(viewerRuntime) {
     });
   });
 
-  return backdrop;
+  return { backdrop, cleanup: cleanupFns };
 }
 
 function _buildNav(items = SETTINGS_SECTION_ITEMS) {
-  const nav = document.createElement('nav');
-  nav.className = 'settings-modal-nav';
-  nav.setAttribute('aria-label', 'Settings sections');
+  const nav = document.createElement("nav");
+  nav.className = "settings-modal-nav";
+  nav.setAttribute("aria-label", "Settings sections");
 
   items.forEach((item, i) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'settings-nav-btn' + (i === 0 ? ' active' : '');
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "settings-nav-btn" + (i === 0 ? " active" : "");
     btn.dataset.section = item.key;
     btn.textContent = item.label;
-    btn.setAttribute('role', 'tab');
-    btn.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
     nav.appendChild(btn);
   });
 
@@ -341,8 +389,8 @@ function _buildNav(items = SETTINGS_SECTION_ITEMS) {
 }
 
 function _buildContent(viewerRuntime, cleanupFns = []) {
-  const content = document.createElement('div');
-  content.className = 'settings-modal-content';
+  const content = document.createElement("div");
+  content.className = "settings-modal-content";
 
   content.appendChild(_buildViewerSection(viewerRuntime));
   content.appendChild(_buildSimulationSection());
@@ -360,34 +408,41 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
 // ---------------------------------------------------------------------------
 
 function _buildViewerSection(viewerRuntime) {
-  const sec = document.createElement('div');
-  sec.id = 'settings-section-viewer';
-  sec.className = 'settings-section';
-  sec.setAttribute('role', 'tabpanel');
+  const sec = document.createElement("div");
+  sec.id = "settings-section-viewer";
+  sec.className = "settings-section";
+  sec.setAttribute("role", "tabpanel");
 
-  _appendSectionHeading(sec, 'Viewer', 'Viewport display and rendering preferences.');
+  _appendSectionHeading(
+    sec,
+    "Viewer",
+    "Viewport display and rendering preferences.",
+  );
 
   // Real-time Updates control
   _appendInlineRow(sec, {
-    labelText: 'Real-time Updates',
-    labelFor: 'live-update',
+    labelText: "Real-time Updates",
+    labelFor: "live-update",
     helpText: VIEWER_HELP.liveUpdate,
-    controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? ' checked' : ''}>`,
+    controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? " checked" : ""}>`,
   });
 
   // Display Mode control
   const modeOptions = [
-    { value: 'standard', label: 'Standard (Metal)' },
-    { value: 'zebra', label: 'Zebra Stripes' },
-    { value: 'grid', label: 'Grid / Wireframe' },
-    { value: 'curvature', label: 'Curvature Map' },
+    { value: "standard", label: "Standard (Metal)" },
+    { value: "zebra", label: "Zebra Stripes" },
+    { value: "grid", label: "Grid / Wireframe" },
+    { value: "curvature", label: "Curvature Map" },
   ];
-  const modeOptionsHtml = modeOptions.map(
-    (o) => `<option value="${o.value}"${_state.displayMode === o.value ? ' selected' : ''}>${o.label}</option>`
-  ).join('');
+  const modeOptionsHtml = modeOptions
+    .map(
+      (o) =>
+        `<option value="${o.value}"${_state.displayMode === o.value ? " selected" : ""}>${o.label}</option>`,
+    )
+    .join("");
   _appendInlineRow(sec, {
-    labelText: 'Display Mode',
-    labelFor: 'display-mode',
+    labelText: "Display Mode",
+    labelFor: "display-mode",
     helpText: VIEWER_HELP.displayMode,
     controlHtml: `<select id="display-mode">${modeOptionsHtml}</select>`,
   });
@@ -412,95 +467,150 @@ function _buildViewerSection(viewerRuntime) {
   }
 
   // ---------- SUB-SECTION: Orbit Controls ----------
-  const orbitHeader = _buildSubSectionHeader('Orbit Controls', onResetOrbit);
+  const orbitHeader = _buildSubSectionHeader("Orbit Controls", onResetOrbit);
   sec.appendChild(orbitHeader);
 
-  const rotateResult = _buildSliderRow('Rotate Speed', 'rotateSpeed', 0.1, 5.0, 0.1, _viewerState, VIEWER_HELP.rotateSpeed);
+  const rotateResult = _buildSliderRow(
+    "Rotate Speed",
+    "rotateSpeed",
+    0.1,
+    5.0,
+    0.1,
+    _viewerState,
+    VIEWER_HELP.rotateSpeed,
+  );
   sec.appendChild(rotateResult.row);
 
-  const zoomResult = _buildSliderRow('Zoom Speed', 'zoomSpeed', 0.1, 5.0, 0.1, _viewerState, VIEWER_HELP.zoomSpeed);
+  const zoomResult = _buildSliderRow(
+    "Zoom Speed",
+    "zoomSpeed",
+    0.1,
+    5.0,
+    0.1,
+    _viewerState,
+    VIEWER_HELP.zoomSpeed,
+  );
   sec.appendChild(zoomResult.row);
 
-  const panResult = _buildSliderRow('Pan Speed', 'panSpeed', 0.1, 5.0, 0.1, _viewerState, VIEWER_HELP.panSpeed);
+  const panResult = _buildSliderRow(
+    "Pan Speed",
+    "panSpeed",
+    0.1,
+    5.0,
+    0.1,
+    _viewerState,
+    VIEWER_HELP.panSpeed,
+  );
   sec.appendChild(panResult.row);
 
   // Damping enabled toggle
-  const dampingEnabledResult = _buildToggleRow('Enable Damping', 'dampingEnabled', _viewerState, VIEWER_HELP.dampingEnabled);
+  const dampingEnabledResult = _buildToggleRow(
+    "Enable Damping",
+    "dampingEnabled",
+    _viewerState,
+    VIEWER_HELP.dampingEnabled,
+  );
   const dampingEnabledBadge = dampingEnabledResult.badge;
   const dampingToggle = dampingEnabledResult.checkbox;
   sec.appendChild(dampingEnabledResult.row);
 
   // Damping factor slider (hidden when damping disabled)
-  const dampingFactorResult = _buildSliderRow('Damping Factor', 'dampingFactor', 0.01, 0.5, 0.01, _viewerState, VIEWER_HELP.dampingFactor);
+  const dampingFactorResult = _buildSliderRow(
+    "Damping Factor",
+    "dampingFactor",
+    0.01,
+    0.5,
+    0.01,
+    _viewerState,
+    VIEWER_HELP.dampingFactor,
+  );
   dampingFactorResult.row.hidden = !_viewerState.dampingEnabled;
   sec.appendChild(dampingFactorResult.row);
 
   // Override the default dampingEnabled change handler (need to show/hide dampingFactor row)
   // Remove default handler by replacing the element (simpler: add the special handler here)
-  dampingToggle.addEventListener('change', (e) => {
+  dampingToggle.addEventListener("change", (e) => {
     _viewerState.dampingEnabled = e.target.checked;
     dampingFactorResult.row.hidden = !e.target.checked;
-    _updateBadge(dampingEnabledBadge, e.target.checked, RECOMMENDED_DEFAULTS.dampingEnabled);
+    _updateBadge(
+      dampingEnabledBadge,
+      e.target.checked,
+      RECOMMENDED_DEFAULTS.dampingEnabled,
+    );
     debouncedSaveViewerSettings(_viewerState);
     _applyLive();
   });
 
   // ---------- SUB-SECTION: Camera ----------
-  const cameraHeader = _buildSubSectionHeader('Camera', onResetCamera);
+  const cameraHeader = _buildSubSectionHeader("Camera", onResetCamera);
   sec.appendChild(cameraHeader);
 
   // Startup Camera Mode radio row
-  const cameraRow = document.createElement('div');
-  cameraRow.className = 'settings-control-row';
+  const cameraRow = document.createElement("div");
+  cameraRow.className = "settings-control-row";
 
-  cameraRow.appendChild(_buildSettingsLabelCopy('Startup Camera Mode', '', VIEWER_HELP.startupCameraMode));
+  cameraRow.appendChild(
+    _buildSettingsLabelCopy(
+      "Startup Camera Mode",
+      "",
+      VIEWER_HELP.startupCameraMode,
+    ),
+  );
 
-  const cameraValueWrapper = document.createElement('div');
-  cameraValueWrapper.className = 'settings-control-value';
+  const cameraValueWrapper = document.createElement("div");
+  cameraValueWrapper.className = "settings-control-value";
 
-  const cameraBadge = document.createElement('span');
-  cameraBadge.className = 'settings-recommended-badge';
-  cameraBadge.textContent = 'Recommended';
-  cameraBadge.hidden = _viewerState.startupCameraMode !== RECOMMENDED_DEFAULTS.startupCameraMode;
+  const cameraBadge = document.createElement("span");
+  cameraBadge.className = "settings-recommended-badge";
+  cameraBadge.textContent = "Recommended";
+  cameraBadge.hidden =
+    _viewerState.startupCameraMode !== RECOMMENDED_DEFAULTS.startupCameraMode;
 
-  const radioGroup = document.createElement('div');
-  radioGroup.setAttribute('style', 'display:flex;gap:12px;align-items:center;');
+  const radioGroup = document.createElement("div");
+  radioGroup.setAttribute("style", "display:flex;gap:12px;align-items:center;");
 
   const radioOptions = [
-    { value: 'perspective', label: 'Perspective' },
-    { value: 'orthographic', label: 'Orthographic' },
+    { value: "perspective", label: "Perspective" },
+    { value: "orthographic", label: "Orthographic" },
   ];
 
   let perspectiveRadio;
   let orthographicRadio;
   radioOptions.forEach((opt) => {
     const radioId = `viewer-startupCameraMode-${opt.value}`;
-    const radioLabel = document.createElement('label');
-    radioLabel.setAttribute('style', 'display:flex;align-items:center;gap:4px;cursor:pointer;');
+    const radioLabel = document.createElement("label");
+    radioLabel.setAttribute(
+      "style",
+      "display:flex;align-items:center;gap:4px;cursor:pointer;",
+    );
 
-    const radio = document.createElement('input');
-    radio.type = 'radio';
+    const radio = document.createElement("input");
+    radio.type = "radio";
     radio.id = radioId;
-    radio.name = 'viewer-startupCameraMode';
+    radio.name = "viewer-startupCameraMode";
     radio.value = opt.value;
     radio.checked = _viewerState.startupCameraMode === opt.value;
-    radio.setAttribute('style', 'margin:0;');
+    radio.setAttribute("style", "margin:0;");
 
-    if (opt.value === 'perspective') perspectiveRadio = radio;
-    if (opt.value === 'orthographic') orthographicRadio = radio;
+    if (opt.value === "perspective") perspectiveRadio = radio;
+    if (opt.value === "orthographic") orthographicRadio = radio;
 
-    radio.addEventListener('change', (e) => {
+    radio.addEventListener("change", (e) => {
       if (e.target.checked) {
         _viewerState.startupCameraMode = opt.value;
-        _updateBadge(cameraBadge, opt.value, RECOMMENDED_DEFAULTS.startupCameraMode);
+        _updateBadge(
+          cameraBadge,
+          opt.value,
+          RECOMMENDED_DEFAULTS.startupCameraMode,
+        );
         debouncedSaveViewerSettings(_viewerState);
         // NOTE: does NOT call _applyLive() — startup camera mode takes effect on next launch
       }
     });
 
-    const radioText = document.createElement('span');
+    const radioText = document.createElement("span");
     radioText.textContent = opt.label;
-    radioText.setAttribute('style', 'font-size:0.85rem;');
+    radioText.setAttribute("style", "font-size:0.85rem;");
 
     radioLabel.appendChild(radio);
     radioLabel.appendChild(radioText);
@@ -512,66 +622,112 @@ function _buildViewerSection(viewerRuntime) {
   cameraRow.appendChild(cameraValueWrapper);
   sec.appendChild(cameraRow);
 
-  const cameraHelp = document.createElement('p');
-  cameraHelp.className = 'settings-section-help';
-  cameraHelp.setAttribute('style', 'margin-top:4px;font-style:italic;');
-  cameraHelp.textContent = 'Takes effect on next launch.';
+  const cameraHelp = document.createElement("p");
+  cameraHelp.className = "settings-section-help";
+  cameraHelp.setAttribute("style", "margin-top:4px;font-style:italic;");
+  cameraHelp.textContent = "Takes effect on next launch.";
   sec.appendChild(cameraHelp);
 
   // ---------- SUB-SECTION: Input ----------
-  const inputHeader = _buildSubSectionHeader('Input', onResetInput);
+  const inputHeader = _buildSubSectionHeader("Input", onResetInput);
   sec.appendChild(inputHeader);
 
-  const invertWheelResult = _buildToggleRow('Invert Scroll Zoom', 'invertWheelZoom', _viewerState, VIEWER_HELP.invertWheelZoom);
+  const invertWheelResult = _buildToggleRow(
+    "Invert Scroll Zoom",
+    "invertWheelZoom",
+    _viewerState,
+    VIEWER_HELP.invertWheelZoom,
+  );
   sec.appendChild(invertWheelResult.row);
 
-  const keyboardPanResult = _buildToggleRow('Keyboard Pan Shortcuts', 'keyboardPanEnabled', _viewerState, VIEWER_HELP.keyboardPanEnabled);
+  const keyboardPanResult = _buildToggleRow(
+    "Keyboard Pan Shortcuts",
+    "keyboardPanEnabled",
+    _viewerState,
+    VIEWER_HELP.keyboardPanEnabled,
+  );
   sec.appendChild(keyboardPanResult.row);
 
   // ---------- Per-section reset handlers ----------
 
   function onResetOrbit() {
-    const newSettings = resetViewerSection('orbit');
+    const newSettings = resetViewerSection("orbit");
     _viewerState = { ..._viewerState, ...newSettings };
 
     // Update orbit slider DOMs
-    _syncSliderRow(rotateResult, _viewerState.rotateSpeed, RECOMMENDED_DEFAULTS.rotateSpeed);
-    _syncSliderRow(zoomResult, _viewerState.zoomSpeed, RECOMMENDED_DEFAULTS.zoomSpeed);
-    _syncSliderRow(panResult, _viewerState.panSpeed, RECOMMENDED_DEFAULTS.panSpeed);
+    _syncSliderRow(
+      rotateResult,
+      _viewerState.rotateSpeed,
+      RECOMMENDED_DEFAULTS.rotateSpeed,
+    );
+    _syncSliderRow(
+      zoomResult,
+      _viewerState.zoomSpeed,
+      RECOMMENDED_DEFAULTS.zoomSpeed,
+    );
+    _syncSliderRow(
+      panResult,
+      _viewerState.panSpeed,
+      RECOMMENDED_DEFAULTS.panSpeed,
+    );
 
     // Update dampingEnabled toggle
     dampingToggle.checked = _viewerState.dampingEnabled;
-    _updateBadge(dampingEnabledBadge, _viewerState.dampingEnabled, RECOMMENDED_DEFAULTS.dampingEnabled);
+    _updateBadge(
+      dampingEnabledBadge,
+      _viewerState.dampingEnabled,
+      RECOMMENDED_DEFAULTS.dampingEnabled,
+    );
     dampingFactorResult.row.hidden = !_viewerState.dampingEnabled;
 
     // Update dampingFactor slider
-    _syncSliderRow(dampingFactorResult, _viewerState.dampingFactor, RECOMMENDED_DEFAULTS.dampingFactor);
+    _syncSliderRow(
+      dampingFactorResult,
+      _viewerState.dampingFactor,
+      RECOMMENDED_DEFAULTS.dampingFactor,
+    );
 
     _applyLive();
   }
 
   function onResetCamera() {
-    const newSettings = resetViewerSection('camera');
+    const newSettings = resetViewerSection("camera");
     _viewerState = { ..._viewerState, ...newSettings };
 
     // Update radio buttons
-    if (perspectiveRadio) perspectiveRadio.checked = _viewerState.startupCameraMode === 'perspective';
-    if (orthographicRadio) orthographicRadio.checked = _viewerState.startupCameraMode === 'orthographic';
-    _updateBadge(cameraBadge, _viewerState.startupCameraMode, RECOMMENDED_DEFAULTS.startupCameraMode);
+    if (perspectiveRadio)
+      perspectiveRadio.checked =
+        _viewerState.startupCameraMode === "perspective";
+    if (orthographicRadio)
+      orthographicRadio.checked =
+        _viewerState.startupCameraMode === "orthographic";
+    _updateBadge(
+      cameraBadge,
+      _viewerState.startupCameraMode,
+      RECOMMENDED_DEFAULTS.startupCameraMode,
+    );
     // NOTE: does NOT call _applyLive() — startup camera mode takes effect on next launch
   }
 
   function onResetInput() {
-    const newSettings = resetViewerSection('input');
+    const newSettings = resetViewerSection("input");
     _viewerState = { ..._viewerState, ...newSettings };
 
     // Update invertWheelZoom toggle
     invertWheelResult.checkbox.checked = _viewerState.invertWheelZoom;
-    _updateBadge(invertWheelResult.badge, _viewerState.invertWheelZoom, RECOMMENDED_DEFAULTS.invertWheelZoom);
+    _updateBadge(
+      invertWheelResult.badge,
+      _viewerState.invertWheelZoom,
+      RECOMMENDED_DEFAULTS.invertWheelZoom,
+    );
 
     // Update keyboardPanEnabled toggle
     keyboardPanResult.checkbox.checked = _viewerState.keyboardPanEnabled;
-    _updateBadge(keyboardPanResult.badge, _viewerState.keyboardPanEnabled, RECOMMENDED_DEFAULTS.keyboardPanEnabled);
+    _updateBadge(
+      keyboardPanResult.badge,
+      _viewerState.keyboardPanEnabled,
+      RECOMMENDED_DEFAULTS.keyboardPanEnabled,
+    );
 
     _applyLive();
   }
@@ -579,56 +735,68 @@ function _buildViewerSection(viewerRuntime) {
   // ---------- Private helpers (closures over _viewerState) ----------
 
   function _buildSubSectionHeader(titleText, onReset) {
-    const hdr = document.createElement('div');
-    hdr.className = 'settings-subsection-header';
+    const hdr = document.createElement("div");
+    hdr.className = "settings-subsection-header";
 
-    const h4 = document.createElement('h4');
-    h4.className = 'settings-subsection-title';
+    const h4 = document.createElement("h4");
+    h4.className = "settings-subsection-title";
     h4.textContent = titleText;
     hdr.appendChild(h4);
 
-    const resetBtn = document.createElement('button');
-    resetBtn.type = 'button';
-    resetBtn.className = 'settings-reset-btn';
-    resetBtn.textContent = 'Reset';
-    resetBtn.addEventListener('click', onReset);
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "settings-reset-btn";
+    resetBtn.textContent = "Reset";
+    resetBtn.addEventListener("click", onReset);
     hdr.appendChild(resetBtn);
 
     return hdr;
   }
 
-  function _buildSliderRow(labelText, settingKey, min, max, step, currentSettingsSnapshot, helpText = '') {
-    const row = document.createElement('div');
-    row.className = 'settings-control-row';
+  function _buildSliderRow(
+    labelText,
+    settingKey,
+    min,
+    max,
+    step,
+    currentSettingsSnapshot,
+    helpText = "",
+  ) {
+    const row = document.createElement("div");
+    row.className = "settings-control-row";
 
     const inputId = `viewer-${settingKey}`;
 
     row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
-    const valueWrapper = document.createElement('div');
-    valueWrapper.className = 'settings-control-value';
+    const valueWrapper = document.createElement("div");
+    valueWrapper.className = "settings-control-value";
 
-    const sliderGroup = document.createElement('div');
-    sliderGroup.className = 'settings-slider-group';
+    const sliderGroup = document.createElement("div");
+    sliderGroup.className = "settings-slider-group";
 
-    const slider = document.createElement('input');
-    slider.type = 'range';
+    const slider = document.createElement("input");
+    slider.type = "range";
     slider.id = inputId;
     slider.min = String(min);
     slider.max = String(max);
     slider.step = String(step);
     slider.value = String(currentSettingsSnapshot[settingKey]);
 
-    const readout = document.createElement('span');
-    readout.className = 'settings-slider-readout';
-    readout.textContent = _formatSliderValue(currentSettingsSnapshot[settingKey], step);
+    const readout = document.createElement("span");
+    readout.className = "settings-slider-readout";
+    readout.textContent = _formatSliderValue(
+      currentSettingsSnapshot[settingKey],
+      step,
+    );
 
-    const badge = document.createElement('span');
-    badge.className = 'settings-recommended-badge';
-    badge.textContent = 'Recommended';
-    badge.hidden = currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
+    const badge = document.createElement("span");
+    badge.className = "settings-recommended-badge";
+    badge.textContent = "Recommended";
+    badge.hidden =
+      currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
 
-    slider.addEventListener('input', () => {
+    slider.addEventListener("input", () => {
       const val = parseFloat(slider.value);
       readout.textContent = _formatSliderValue(val, step);
       _updateBadge(badge, val, RECOMMENDED_DEFAULTS[settingKey]);
@@ -646,28 +814,34 @@ function _buildViewerSection(viewerRuntime) {
     return { row, badge, slider, readout };
   }
 
-  function _buildToggleRow(labelText, settingKey, currentSettingsSnapshot, helpText = '') {
-    const row = document.createElement('div');
-    row.className = 'settings-control-row';
+  function _buildToggleRow(
+    labelText,
+    settingKey,
+    currentSettingsSnapshot,
+    helpText = "",
+  ) {
+    const row = document.createElement("div");
+    row.className = "settings-control-row";
 
     const inputId = `viewer-${settingKey}`;
 
     row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
-    const valueWrapper = document.createElement('div');
-    valueWrapper.className = 'settings-control-value';
+    const valueWrapper = document.createElement("div");
+    valueWrapper.className = "settings-control-value";
 
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
     checkbox.id = inputId;
     checkbox.checked = currentSettingsSnapshot[settingKey];
 
-    const badge = document.createElement('span');
-    badge.className = 'settings-recommended-badge';
-    badge.textContent = 'Recommended';
-    badge.hidden = currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
+    const badge = document.createElement("span");
+    badge.className = "settings-recommended-badge";
+    badge.textContent = "Recommended";
+    badge.hidden =
+      currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
 
-    checkbox.addEventListener('change', (e) => {
+    checkbox.addEventListener("change", (e) => {
       _viewerState[settingKey] = e.target.checked;
       _updateBadge(badge, e.target.checked, RECOMMENDED_DEFAULTS[settingKey]);
       debouncedSaveViewerSettings(_viewerState);
@@ -699,30 +873,30 @@ function _buildViewerSection(viewerRuntime) {
 }
 
 function _buildSimulationSection() {
-  const sec = document.createElement('div');
-  sec.id = 'settings-section-simulation';
-  sec.className = 'settings-section';
+  const sec = document.createElement("div");
+  sec.id = "settings-section-simulation";
+  sec.className = "settings-section";
   sec.hidden = true;
-  sec.setAttribute('role', 'tabpanel');
+  sec.setAttribute("role", "tabpanel");
 
   _appendSectionHeading(
     sec,
-    'Simulation',
-    'Persistent solve defaults live here. Advanced controls apply to the optimized solver path only.'
+    "Simulation",
+    "Persistent solve defaults live here. Advanced controls apply to the optimized solver path only.",
   );
 
   const currentSimBasic = getCurrentSimBasicSettings();
-  const solverHeader = _buildSubSectionHeader('Solve Defaults', () => {
+  const solverHeader = _buildSubSectionHeader("Solve Defaults", () => {
     resetSimBasicSettings();
-    const dm = document.getElementById('simbasic-deviceMode');
+    const dm = document.getElementById("simbasic-deviceMode");
     if (dm) dm.value = SIM_BASIC_DEFAULTS.deviceMode;
-    const mvm = document.getElementById('simbasic-meshValidationMode');
+    const mvm = document.getElementById("simbasic-meshValidationMode");
     if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
-    const fs = document.getElementById('simbasic-frequencySpacing');
+    const fs = document.getElementById("simbasic-frequencySpacing");
     if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
-    const uo = document.getElementById('simbasic-useOptimized');
+    const uo = document.getElementById("simbasic-useOptimized");
     if (uo) uo.checked = SIM_BASIC_DEFAULTS.useOptimized;
-    const vb = document.getElementById('simbasic-verbose');
+    const vb = document.getElementById("simbasic-verbose");
     if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
     if (dmBadge) dmBadge.hidden = true;
     if (mvmBadge) mvmBadge.hidden = true;
@@ -733,145 +907,158 @@ function _buildSimulationSection() {
   sec.appendChild(solverHeader);
 
   const dmResult = _buildSimBasicSelectRow(
-    'Compute Device',
-    'simbasic-deviceMode',
+    "Compute Device",
+    "simbasic-deviceMode",
     [
-      { value: 'auto', label: 'Auto' },
-      { value: 'opencl_gpu', label: 'OpenCL GPU' },
-      { value: 'opencl_cpu', label: 'OpenCL CPU' },
+      { value: "auto", label: "Auto" },
+      { value: "opencl_gpu", label: "OpenCL GPU" },
+      { value: "opencl_cpu", label: "OpenCL CPU" },
     ],
     currentSimBasic.deviceMode,
     SIM_BASIC_DEFAULTS.deviceMode,
-    SIMULATION_BASIC_HELP.deviceMode
+    SIMULATION_BASIC_HELP.deviceMode,
   );
   sec.appendChild(dmResult.row);
   let dmBadge = dmResult.badge;
 
-  const dmStatusSpan = document.createElement('span');
-  dmStatusSpan.id = 'simbasic-deviceMode-status';
-  dmStatusSpan.setAttribute('style', 'font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;');
+  const dmStatusSpan = document.createElement("span");
+  dmStatusSpan.id = "simbasic-deviceMode-status";
+  dmStatusSpan.setAttribute(
+    "style",
+    "font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;",
+  );
   dmResult.row.appendChild(dmStatusSpan);
 
   // Setup Help expandable section — shown when selected device mode is unavailable
-  const setupHelpDetails = document.createElement('details');
-  setupHelpDetails.id = 'simbasic-opencl-setup-help';
-  setupHelpDetails.setAttribute('style', 'margin-top:6px;font-size:0.78rem;');
+  const setupHelpDetails = document.createElement("details");
+  setupHelpDetails.id = "simbasic-opencl-setup-help";
+  setupHelpDetails.setAttribute("style", "margin-top:6px;font-size:0.78rem;");
   setupHelpDetails.hidden = true;
 
-  const setupHelpSummary = document.createElement('summary');
-  setupHelpSummary.setAttribute('style', 'cursor:pointer;color:var(--accent,#7bb3f0);user-select:none;');
-  setupHelpSummary.textContent = 'Setup Help';
+  const setupHelpSummary = document.createElement("summary");
+  setupHelpSummary.setAttribute(
+    "style",
+    "cursor:pointer;color:var(--accent,#7bb3f0);user-select:none;",
+  );
+  setupHelpSummary.textContent = "Setup Help";
   setupHelpDetails.appendChild(setupHelpSummary);
 
-  const setupHelpText = document.createElement('p');
-  setupHelpText.id = 'simbasic-opencl-setup-help-text';
-  setupHelpText.setAttribute('style', 'margin:6px 0 0 0;line-height:1.5;opacity:0.85;white-space:pre-wrap;');
+  const setupHelpText = document.createElement("p");
+  setupHelpText.id = "simbasic-opencl-setup-help-text";
+  setupHelpText.setAttribute(
+    "style",
+    "margin:6px 0 0 0;line-height:1.5;opacity:0.85;white-space:pre-wrap;",
+  );
   setupHelpDetails.appendChild(setupHelpText);
 
   sec.appendChild(setupHelpDetails);
 
   const mvmResult = _buildSimBasicSelectRow(
-    'Mesh Validation Policy',
-    'simbasic-meshValidationMode',
+    "Mesh Validation Policy",
+    "simbasic-meshValidationMode",
     [
-      { value: 'warn', label: 'Warn' },
-      { value: 'strict', label: 'Strict' },
-      { value: 'off', label: 'Off' },
+      { value: "warn", label: "Warn" },
+      { value: "strict", label: "Strict" },
+      { value: "off", label: "Off" },
     ],
     currentSimBasic.meshValidationMode,
     SIM_BASIC_DEFAULTS.meshValidationMode,
-    SIMULATION_BASIC_HELP.meshValidationMode
+    SIMULATION_BASIC_HELP.meshValidationMode,
   );
   sec.appendChild(mvmResult.row);
   let mvmBadge = mvmResult.badge;
 
   const fsResult = _buildSimBasicSelectRow(
-    'Sweep Spacing',
-    'simbasic-frequencySpacing',
+    "Sweep Spacing",
+    "simbasic-frequencySpacing",
     [
-      { value: 'log', label: 'Logarithmic' },
-      { value: 'linear', label: 'Linear' },
+      { value: "log", label: "Logarithmic" },
+      { value: "linear", label: "Linear" },
     ],
     currentSimBasic.frequencySpacing,
     SIM_BASIC_DEFAULTS.frequencySpacing,
-    SIMULATION_BASIC_HELP.frequencySpacing
+    SIMULATION_BASIC_HELP.frequencySpacing,
   );
   sec.appendChild(fsResult.row);
   let fsBadge = fsResult.badge;
 
   const uoResult = _buildSimBasicCheckboxRow(
-    'Use Optimized Solver Path',
-    'simbasic-useOptimized',
+    "Use Optimized Solver Path",
+    "simbasic-useOptimized",
     currentSimBasic.useOptimized,
     SIM_BASIC_DEFAULTS.useOptimized,
-    SIMULATION_BASIC_HELP.useOptimized
+    SIMULATION_BASIC_HELP.useOptimized,
   );
   sec.appendChild(uoResult.row);
   let uoBadge = uoResult.badge;
 
   const vbResult = _buildSimBasicCheckboxRow(
-    'Verbose Backend Logging',
-    'simbasic-verbose',
+    "Verbose Backend Logging",
+    "simbasic-verbose",
     currentSimBasic.verbose,
     SIM_BASIC_DEFAULTS.verbose,
-    SIMULATION_BASIC_HELP.verbose
+    SIMULATION_BASIC_HELP.verbose,
   );
   sec.appendChild(vbResult.row);
   let vbBadge = vbResult.badge;
 
-  const advancedHeader = _buildSubSectionHeader('Advanced Solver Controls');
+  const advancedHeader = _buildSubSectionHeader("Advanced Solver Controls");
   sec.appendChild(advancedHeader);
 
   const currentSimAdvanced = getCurrentSimAdvancedSettings();
-  const advancedIntro = document.createElement('p');
-  advancedIntro.className = 'settings-section-help';
-  advancedIntro.textContent = 'These settings apply to the optimized solver path only. All three controls are active and sent through the public solve contract.';
+  const advancedIntro = document.createElement("p");
+  advancedIntro.className = "settings-section-help";
+  advancedIntro.textContent =
+    "These settings apply to the optimized solver path only. All three controls are active and sent through the public solve contract.";
   sec.appendChild(advancedIntro);
 
-  const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
-    const resetSettings = resetSimAdvancedSettings();
-    const ew = document.getElementById('simadvanced-enableWarmup');
-    if (ew) ew.checked = resetSettings.enableWarmup;
-    const bp = document.getElementById('simadvanced-bemPrecision');
-    if (bp) bp.value = resetSettings.bemPrecision;
-    const ubm = document.getElementById('simadvanced-useBurtonMiller');
-    if (ubm) ubm.checked = resetSettings.useBurtonMiller;
-    if (ewBadge) ewBadge.hidden = false;
-    if (bpBadge) bpBadge.hidden = false;
-    if (ubmBadge) ubmBadge.hidden = false;
-  });
+  const advancedActiveHeader = _buildSubSectionHeader(
+    "Active Contract Overrides",
+    () => {
+      const resetSettings = resetSimAdvancedSettings();
+      const ew = document.getElementById("simadvanced-enableWarmup");
+      if (ew) ew.checked = resetSettings.enableWarmup;
+      const bp = document.getElementById("simadvanced-bemPrecision");
+      if (bp) bp.value = resetSettings.bemPrecision;
+      const ubm = document.getElementById("simadvanced-useBurtonMiller");
+      if (ubm) ubm.checked = resetSettings.useBurtonMiller;
+      if (ewBadge) ewBadge.hidden = false;
+      if (bpBadge) bpBadge.hidden = false;
+      if (ubmBadge) ubmBadge.hidden = false;
+    },
+  );
   sec.appendChild(advancedActiveHeader);
 
   const ewResult = _buildSimBasicCheckboxRow(
     ADVANCED_CONTROL_COPY.enable_warmup.label,
-    'simadvanced-enableWarmup',
+    "simadvanced-enableWarmup",
     currentSimAdvanced.enableWarmup,
     SIM_ADVANCED_DEFAULTS.enableWarmup,
-    SIMULATION_ADVANCED_HELP.enableWarmup
+    SIMULATION_ADVANCED_HELP.enableWarmup,
   );
   sec.appendChild(ewResult.row);
   let ewBadge = ewResult.badge;
 
   const bpResult = _buildSimBasicSelectRow(
     ADVANCED_CONTROL_COPY.bem_precision.label,
-    'simadvanced-bemPrecision',
+    "simadvanced-bemPrecision",
     [
-      { value: 'double', label: 'Double' },
-      { value: 'single', label: 'Single' },
+      { value: "double", label: "Double" },
+      { value: "single", label: "Single" },
     ],
     currentSimAdvanced.bemPrecision,
     SIM_ADVANCED_DEFAULTS.bemPrecision,
-    SIMULATION_ADVANCED_HELP.bemPrecision
+    SIMULATION_ADVANCED_HELP.bemPrecision,
   );
   sec.appendChild(bpResult.row);
   let bpBadge = bpResult.badge;
 
   const ubmResult = _buildSimBasicCheckboxRow(
     ADVANCED_CONTROL_COPY.use_burton_miller.label,
-    'simadvanced-useBurtonMiller',
+    "simadvanced-useBurtonMiller",
     currentSimAdvanced.useBurtonMiller,
     SIM_ADVANCED_DEFAULTS.useBurtonMiller,
-    SIMULATION_ADVANCED_HELP.useBurtonMiller
+    SIMULATION_ADVANCED_HELP.useBurtonMiller,
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
@@ -886,63 +1073,73 @@ function _buildSimulationSection() {
 }
 
 function _buildTaskExportsSection() {
-  const sec = document.createElement('div');
-  sec.id = 'settings-section-task-exports';
-  sec.className = 'settings-section';
+  const sec = document.createElement("div");
+  sec.id = "settings-section-task-exports";
+  sec.className = "settings-section";
   sec.hidden = true;
-  sec.setAttribute('role', 'tabpanel');
+  sec.setAttribute("role", "tabpanel");
 
   _appendSectionHeading(
     sec,
-    'Task Exports',
-    'Job-list preferences, automatic result bundles, and optional mesh artifact downloads all live together here.'
+    "Task Exports",
+    "Job-list preferences, automatic result bundles, and optional mesh artifact downloads all live together here.",
   );
 
   const managementSettings = getCurrentSimulationManagementSettings();
 
-  const taskListHeader = _buildSubSectionHeader('Simulation Jobs Toolbar');
+  const taskListHeader = _buildSubSectionHeader("Simulation Jobs Toolbar");
   sec.appendChild(taskListHeader);
 
   _appendInlineRow(sec, {
-    labelText: 'Default Task Sort',
-    labelFor: 'simmanage-default-sort',
+    labelText: "Default Task Sort",
+    labelFor: "simmanage-default-sort",
     helpText: SIMULATION_MANAGEMENT_HELP.defaultSort,
-    controlNode: _buildSelectElement('simmanage-default-sort', managementSettings.defaultSort, [
-      { value: 'completed_desc', label: 'Newest First' },
-      { value: 'rating_desc', label: 'Highest Rated' },
-      { value: 'label_asc', label: 'Label A-Z' }
-    ])
+    controlNode: _buildSelectElement(
+      "simmanage-default-sort",
+      managementSettings.defaultSort,
+      [
+        { value: "completed_desc", label: "Newest First" },
+        { value: "rating_desc", label: "Highest Rated" },
+        { value: "label_asc", label: "Label A-Z" },
+      ],
+    ),
   });
 
   _appendInlineRow(sec, {
-    labelText: 'Minimum Rating Filter',
-    labelFor: 'simmanage-min-rating',
+    labelText: "Minimum Rating Filter",
+    labelFor: "simmanage-min-rating",
     helpText: SIMULATION_MANAGEMENT_HELP.minRatingFilter,
-    controlNode: _buildSelectElement('simmanage-min-rating', String(managementSettings.minRatingFilter), [
-      { value: '0', label: 'All Ratings' },
-      { value: '1', label: '1 star or higher' },
-      { value: '2', label: '2 stars or higher' },
-      { value: '3', label: '3 stars or higher' },
-      { value: '4', label: '4 stars or higher' },
-      { value: '5', label: '5 stars only' }
-    ])
+    controlNode: _buildSelectElement(
+      "simmanage-min-rating",
+      String(managementSettings.minRatingFilter),
+      [
+        { value: "0", label: "All Ratings" },
+        { value: "1", label: "1 star or higher" },
+        { value: "2", label: "2 stars or higher" },
+        { value: "3", label: "3 stars or higher" },
+        { value: "4", label: "4 stars or higher" },
+        { value: "5", label: "5 stars only" },
+      ],
+    ),
   });
 
-  const exportHeader = _buildSubSectionHeader('Completed Task Bundles', () => {
+  const exportHeader = _buildSubSectionHeader("Completed Task Bundles", () => {
     const resetSettings = resetSimulationManagementSettings();
-    const autoExport = document.getElementById('simmanage-auto-export');
+    const autoExport = document.getElementById("simmanage-auto-export");
     if (autoExport) {
       autoExport.checked = resetSettings.autoExportOnComplete;
     }
-    Array.from(sec.querySelectorAll('input[data-sim-management-format]')).forEach((input) => {
-      const formatId = input.getAttribute('data-sim-management-format');
+    Array.from(
+      sec.querySelectorAll("input[data-sim-management-format]"),
+    ).forEach((input) => {
+      const formatId = input.getAttribute("data-sim-management-format");
       input.checked = resetSettings.selectedFormats.includes(formatId);
     });
-    const defaultSort = document.getElementById('simmanage-default-sort');
+    const defaultSort = document.getElementById("simmanage-default-sort");
     if (defaultSort) {
       defaultSort.value = resetSettings.defaultSort;
     }
-    const minRating = document.getElementById('simmanage-min-rating');
+    const minRating = document.getElementById("simmanage-min-rating");
     if (minRating) {
       minRating.value = String(resetSettings.minRatingFilter);
     }
@@ -951,17 +1148,17 @@ function _buildTaskExportsSection() {
   sec.appendChild(exportHeader);
 
   _appendInlineRow(sec, {
-    labelText: 'Auto-download solve mesh (.msh)',
-    labelFor: 'download-sim-mesh',
+    labelText: "Auto-download solve mesh (.msh)",
+    labelFor: "download-sim-mesh",
     helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
-    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
+    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? " checked" : ""}>`,
   });
 
   _appendInlineRow(sec, {
-    labelText: 'Auto-export completed task bundle',
-    labelFor: 'simmanage-auto-export',
+    labelText: "Auto-export completed task bundle",
+    labelFor: "simmanage-auto-export",
     helpText: SIMULATION_MANAGEMENT_HELP.autoExportOnComplete,
-    controlHtml: `<input type="checkbox" id="simmanage-auto-export"${managementSettings.autoExportOnComplete ? ' checked' : ''}>`,
+    controlHtml: `<input type="checkbox" id="simmanage-auto-export"${managementSettings.autoExportOnComplete ? " checked" : ""}>`,
   });
 
   sec.appendChild(_buildSimulationExportFormatsRow(managementSettings));
@@ -970,92 +1167,96 @@ function _buildTaskExportsSection() {
 }
 
 function _buildWorkspaceSection(cleanupFns = []) {
-  const sec = document.createElement('div');
-  sec.id = 'settings-section-workspace';
-  sec.className = 'settings-section';
+  const sec = document.createElement("div");
+  sec.id = "settings-section-workspace";
+  sec.className = "settings-section";
   sec.hidden = true;
-  sec.setAttribute('role', 'tabpanel');
+  sec.setAttribute("role", "tabpanel");
 
   _appendSectionHeading(
     sec,
-    'Workspace',
-    'Manage the folder workspace used for manual exports and completed simulation-task bundles.'
+    "Workspace",
+    "Manage the folder workspace used for manual exports and completed simulation-task bundles.",
   );
 
-  const statusRow = document.createElement('div');
-  statusRow.className = 'settings-control-row';
-  statusRow.appendChild(_buildSettingsLabelCopy(
-    'Selected Folder',
-    '',
-    'Manual exports write to the selected folder root when available, while completed simulation bundles write into a job-specific subfolder.'
-  ));
-  const statusValue = document.createElement('div');
-  statusValue.className = 'settings-control-value';
-  const statusText = document.createElement('span');
-  statusText.id = 'settings-workspace-folder-label';
+  const statusRow = document.createElement("div");
+  statusRow.className = "settings-control-row";
+  statusRow.appendChild(
+    _buildSettingsLabelCopy(
+      "Selected Folder",
+      "",
+      "Manual exports write to the selected folder root when available, while completed simulation bundles write into a job-specific subfolder.",
+    ),
+  );
+  const statusValue = document.createElement("div");
+  statusValue.className = "settings-control-value";
+  const statusText = document.createElement("span");
+  statusText.id = "settings-workspace-folder-label";
   statusValue.appendChild(statusText);
   statusRow.appendChild(statusValue);
   sec.appendChild(statusRow);
 
   // Firefox-fallback: path display row (shown when showDirectoryPicker is unavailable)
-  const pathRow = document.createElement('div');
-  pathRow.className = 'settings-control-row';
+  const pathRow = document.createElement("div");
+  pathRow.className = "settings-control-row";
   pathRow.hidden = true;
-  const pathLabel = document.createElement('div');
-  pathLabel.className = 'settings-control-label';
-  pathLabel.textContent = 'Output Folder Path';
+  const pathLabel = document.createElement("div");
+  pathLabel.className = "settings-control-label";
+  pathLabel.textContent = "Output Folder Path";
   pathRow.appendChild(pathLabel);
-  const pathValueBox = document.createElement('pre');
-  pathValueBox.className = 'ui-command-box settings-workspace-path-box';
-  pathValueBox.textContent = 'Loading…';
-  const pathValueWrap = document.createElement('div');
-  pathValueWrap.className = 'settings-control-value';
+  const pathValueBox = document.createElement("pre");
+  pathValueBox.className = "ui-command-box settings-workspace-path-box";
+  pathValueBox.textContent = "Loading…";
+  const pathValueWrap = document.createElement("div");
+  pathValueWrap.className = "settings-control-value";
   pathValueWrap.appendChild(pathValueBox);
   pathRow.appendChild(pathValueWrap);
   sec.appendChild(pathRow);
 
   // Firefox-fallback: "Open in Finder" button row
-  const finderRow = document.createElement('div');
-  finderRow.className = 'settings-action-row';
+  const finderRow = document.createElement("div");
+  finderRow.className = "settings-action-row";
   finderRow.hidden = true;
-  const finderBtn = document.createElement('button');
-  finderBtn.type = 'button';
-  finderBtn.className = 'secondary';
-  finderBtn.textContent = 'Open in Finder';
-  const finderHelp = document.createElement('p');
-  finderHelp.className = 'settings-action-help';
-  finderHelp.textContent = 'Opens the output folder in the OS file manager (Finder / Explorer).';
+  const finderBtn = document.createElement("button");
+  finderBtn.type = "button";
+  finderBtn.className = "secondary";
+  finderBtn.textContent = "Open in Finder";
+  const finderHelp = document.createElement("p");
+  finderHelp.className = "settings-action-help";
+  finderHelp.textContent =
+    "Opens the output folder in the OS file manager (Finder / Explorer).";
   finderRow.appendChild(finderBtn);
   finderRow.appendChild(finderHelp);
   sec.appendChild(finderRow);
 
   // Chrome/Edge: folder picker row (hidden when showDirectoryPicker is unavailable)
-  const chooseRow = document.createElement('div');
-  chooseRow.className = 'settings-action-row';
+  const chooseRow = document.createElement("div");
+  chooseRow.className = "settings-action-row";
 
-  const chooseBtn = document.createElement('button');
-  chooseBtn.type = 'button';
-  chooseBtn.id = 'settings-choose-folder-btn';
-  chooseBtn.className = 'secondary';
+  const chooseBtn = document.createElement("button");
+  chooseBtn.type = "button";
+  chooseBtn.id = "settings-choose-folder-btn";
+  chooseBtn.className = "secondary";
   chooseRow.appendChild(chooseBtn);
 
-  const chooseHelp = document.createElement('p');
-  chooseHelp.id = 'settings-workspace-support';
-  chooseHelp.className = 'settings-action-help';
+  const chooseHelp = document.createElement("p");
+  chooseHelp.id = "settings-workspace-support";
+  chooseHelp.className = "settings-action-help";
   chooseRow.appendChild(chooseHelp);
   sec.appendChild(chooseRow);
 
-  const routingNote = document.createElement('p');
-  routingNote.id = 'settings-workspace-routing';
-  routingNote.className = 'settings-section-help';
+  const routingNote = document.createElement("p");
+  routingNote.id = "settings-workspace-routing";
+  routingNote.className = "settings-section-help";
   sec.appendChild(routingNote);
 
-  finderBtn.addEventListener('click', async () => {
+  finderBtn.addEventListener("click", async () => {
     finderBtn.disabled = true;
     const ok = await openWorkspaceInFinder();
     finderBtn.disabled = false;
     if (!ok) {
-      finderHelp.textContent = 'Could not open folder — is the backend running?';
+      finderHelp.textContent =
+        "Could not open folder — is the backend running?";
     }
   });
 
@@ -1063,7 +1264,10 @@ function _buildWorkspaceSection(cleanupFns = []) {
     const canPickFolder = supportsFolderSelection(globalThis?.window);
     const selectedLabel = getSelectedFolderLabel();
     statusText.textContent = selectedLabel;
-    chooseBtn.textContent = selectedLabel === 'No folder selected' ? 'Choose Folder' : 'Change Folder';
+    chooseBtn.textContent =
+      selectedLabel === "No folder selected"
+        ? "Choose Folder"
+        : "Change Folder";
     chooseBtn.disabled = !canPickFolder;
 
     // Show/hide the Firefox-specific path + finder rows
@@ -1072,21 +1276,22 @@ function _buildWorkspaceSection(cleanupFns = []) {
     chooseRow.hidden = !canPickFolder;
 
     chooseHelp.textContent = canPickFolder
-      ? 'Choose a folder workspace here if you want manual exports and completed task bundles to land in a stable location instead of the save picker.'
-      : '';
+      ? "Choose a folder workspace here if you want manual exports and completed task bundles to land in a stable location instead of the save picker."
+      : "";
     routingNote.textContent = canPickFolder
-      ? 'Routing: manual exports write to the selected folder root when permission is available, and completed simulation bundles write into <workspace>/<jobId>/. Folder task manifests/index persist there for history, but the workspace is not a catch-all redirect for every generated artifact. If direct writes fail, the app clears the workspace and falls back to standard save/download behavior.'
+      ? "Routing: manual exports write to the selected folder root when permission is available, and completed simulation bundles write into <workspace>/<jobId>/. Folder task manifests/index persist there for history, but the workspace is not a catch-all redirect for every generated artifact. If direct writes fail, the app clears the workspace and falls back to standard save/download behavior."
       : 'Firefox does not support selecting a custom output folder via the browser (the File System Access API is not implemented in Firefox). Files are saved to the server output folder shown above. Use "Open in Finder" to browse the folder directly.';
 
     // Fetch path from backend when showing the Firefox panel
     if (!canPickFolder) {
       fetchWorkspacePath().then((path) => {
-        pathValueBox.textContent = path || 'Backend unavailable — path unknown.';
+        pathValueBox.textContent =
+          path || "Backend unavailable — path unknown.";
       });
     }
   };
 
-  chooseBtn.addEventListener('click', async () => {
+  chooseBtn.addEventListener("click", async () => {
     if (!supportsFolderSelection(globalThis?.window)) {
       refreshWorkspaceCopy();
       return;
@@ -1105,20 +1310,20 @@ function _buildWorkspaceSection(cleanupFns = []) {
 }
 
 function _buildSubSectionHeader(titleText, onReset = null) {
-  const hdr = document.createElement('div');
-  hdr.className = 'settings-subsection-header';
+  const hdr = document.createElement("div");
+  hdr.className = "settings-subsection-header";
 
-  const h4 = document.createElement('h4');
-  h4.className = 'settings-subsection-title';
+  const h4 = document.createElement("h4");
+  h4.className = "settings-subsection-title";
   h4.textContent = titleText;
   hdr.appendChild(h4);
 
-  if (typeof onReset === 'function') {
-    const resetBtn = document.createElement('button');
-    resetBtn.type = 'button';
-    resetBtn.className = 'settings-reset-btn';
-    resetBtn.textContent = 'Reset';
-    resetBtn.addEventListener('click', onReset);
+  if (typeof onReset === "function") {
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "settings-reset-btn";
+    resetBtn.textContent = "Reset";
+    resetBtn.addEventListener("click", onReset);
     hdr.appendChild(resetBtn);
   }
 
@@ -1126,26 +1331,33 @@ function _buildSubSectionHeader(titleText, onReset = null) {
 }
 
 function _makeDefaultBadge(currentValue, defaultValue) {
-  const badge = document.createElement('span');
-  badge.setAttribute('style', 'font-size:0.7rem;opacity:0.6;margin-left:6px;');
-  badge.textContent = 'Default';
+  const badge = document.createElement("span");
+  badge.setAttribute("style", "font-size:0.7rem;opacity:0.6;margin-left:6px;");
+  badge.textContent = "Default";
   badge.hidden = currentValue === defaultValue;
   return badge;
 }
 
-function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, defaultValue, helpText = '') {
-  const row = document.createElement('div');
-  row.className = 'settings-control-row';
+function _buildSimBasicSelectRow(
+  labelText,
+  selectId,
+  options,
+  currentValue,
+  defaultValue,
+  helpText = "",
+) {
+  const row = document.createElement("div");
+  row.className = "settings-control-row";
   row.appendChild(_buildSettingsLabelCopy(labelText, selectId, helpText));
 
-  const valueWrapper = document.createElement('div');
-  valueWrapper.className = 'settings-control-value';
+  const valueWrapper = document.createElement("div");
+  valueWrapper.className = "settings-control-value";
 
-  const select = document.createElement('select');
+  const select = document.createElement("select");
   select.id = selectId;
 
   for (const { value, label: optLabel } of options) {
-    const opt = document.createElement('option');
+    const opt = document.createElement("option");
     opt.value = value;
     opt.textContent = optLabel;
     if (value === currentValue) opt.selected = true;
@@ -1154,7 +1366,7 @@ function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, def
 
   const badge = _makeDefaultBadge(currentValue, defaultValue);
 
-  select.addEventListener('change', () => {
+  select.addEventListener("change", () => {
     badge.hidden = select.value === defaultValue;
   });
 
@@ -1165,22 +1377,28 @@ function _buildSimBasicSelectRow(labelText, selectId, options, currentValue, def
   return { row, badge, select };
 }
 
-function _buildSimBasicCheckboxRow(labelText, checkboxId, currentValue, defaultValue, helpText = '') {
-  const row = document.createElement('div');
-  row.className = 'settings-control-row';
+function _buildSimBasicCheckboxRow(
+  labelText,
+  checkboxId,
+  currentValue,
+  defaultValue,
+  helpText = "",
+) {
+  const row = document.createElement("div");
+  row.className = "settings-control-row";
   row.appendChild(_buildSettingsLabelCopy(labelText, checkboxId, helpText));
 
-  const valueWrapper = document.createElement('div');
-  valueWrapper.className = 'settings-control-value';
+  const valueWrapper = document.createElement("div");
+  valueWrapper.className = "settings-control-value";
 
-  const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox';
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
   checkbox.id = checkboxId;
   checkbox.checked = currentValue;
 
   const badge = _makeDefaultBadge(currentValue, defaultValue);
 
-  checkbox.addEventListener('change', () => {
+  checkbox.addEventListener("change", () => {
     badge.hidden = checkbox.checked === defaultValue;
   });
 
@@ -1196,18 +1414,18 @@ function _buildSimAdvancedNumberRow(
   inputId,
   currentValue,
   defaultValue,
-  { min = '', max = '', step = '0.0001' } = {},
-  helpText = ''
+  { min = "", max = "", step = "0.0001" } = {},
+  helpText = "",
 ) {
-  const row = document.createElement('div');
-  row.className = 'settings-control-row';
+  const row = document.createElement("div");
+  row.className = "settings-control-row";
   row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
-  const valueWrapper = document.createElement('div');
-  valueWrapper.className = 'settings-control-value';
+  const valueWrapper = document.createElement("div");
+  valueWrapper.className = "settings-control-value";
 
-  const input = document.createElement('input');
-  input.type = 'number';
+  const input = document.createElement("input");
+  input.type = "number";
   input.id = inputId;
   input.value = String(currentValue);
   if (min) input.min = min;
@@ -1215,7 +1433,7 @@ function _buildSimAdvancedNumberRow(
   input.step = step;
 
   const badge = _makeDefaultBadge(currentValue, defaultValue);
-  input.addEventListener('change', () => {
+  input.addEventListener("change", () => {
     const numeric = Number(input.value);
     if (!Number.isFinite(numeric) || numeric <= 0) {
       input.value = String(defaultValue);
@@ -1233,36 +1451,45 @@ function _buildSimAdvancedNumberRow(
 }
 
 function _buildSimulationExportFormatsRow(managementSettings) {
-  const exportFormatsRow = document.createElement('div');
-  exportFormatsRow.className = 'settings-control-row';
-  exportFormatsRow.appendChild(_buildSettingsLabelCopy('Bundle Formats', '', SIMULATION_MANAGEMENT_HELP.selectedFormats));
+  const exportFormatsRow = document.createElement("div");
+  exportFormatsRow.className = "settings-control-row";
+  exportFormatsRow.appendChild(
+    _buildSettingsLabelCopy(
+      "Bundle Formats",
+      "",
+      SIMULATION_MANAGEMENT_HELP.selectedFormats,
+    ),
+  );
 
-  const exportFormatsValue = document.createElement('div');
-  exportFormatsValue.className = 'settings-control-value';
-  exportFormatsValue.setAttribute('style', 'display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px 12px;align-items:start;');
+  const exportFormatsValue = document.createElement("div");
+  exportFormatsValue.className = "settings-control-value";
+  exportFormatsValue.setAttribute(
+    "style",
+    "display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px 12px;align-items:start;",
+  );
 
   const exportFormatLabels = new Map([
-    ['png', 'Chart Images (PNG)'],
-    ['csv', 'Frequency Data CSV'],
-    ['json', 'Full Results JSON'],
-    ['txt', 'Summary Text Report'],
-    ['polar_csv', 'Polar Directivity CSV'],
-    ['impedance_csv', 'Impedance CSV'],
-    ['vacs', 'ABEC Spectrum (VACS)'],
-    ['stl', 'Waveguide STL'],
-    ['fusion_csv', 'Fusion 360 CSV Curves']
+    ["png", "Chart Images (PNG)"],
+    ["csv", "Frequency Data CSV"],
+    ["json", "Full Results JSON"],
+    ["txt", "Summary Text Report"],
+    ["polar_csv", "Polar Directivity CSV"],
+    ["impedance_csv", "Impedance CSV"],
+    ["vacs", "ABEC Spectrum (VACS)"],
+    ["stl", "Waveguide STL"],
+    ["fusion_csv", "Fusion 360 CSV Curves"],
   ]);
 
   SIMULATION_EXPORT_FORMAT_IDS.forEach((formatId) => {
-    const option = document.createElement('label');
-    option.setAttribute('style', 'display:flex;align-items:center;gap:8px;');
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
+    const option = document.createElement("label");
+    option.setAttribute("style", "display:flex;align-items:center;gap:8px;");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
     checkbox.id = `simmanage-format-${formatId}`;
-    checkbox.setAttribute('data-sim-management-format', formatId);
+    checkbox.setAttribute("data-sim-management-format", formatId);
     checkbox.checked = managementSettings.selectedFormats.includes(formatId);
     option.appendChild(checkbox);
-    const text = document.createElement('span');
+    const text = document.createElement("span");
     text.textContent = exportFormatLabels.get(formatId) || formatId;
     option.appendChild(text);
     exportFormatsValue.appendChild(option);
@@ -1272,54 +1499,60 @@ function _buildSimulationExportFormatsRow(managementSettings) {
   return exportFormatsRow;
 }
 
-
 function _buildSystemSection(viewerRuntime) {
-  const sec = document.createElement('div');
-  sec.id = 'settings-section-system';
-  sec.className = 'settings-section';
+  const sec = document.createElement("div");
+  sec.id = "settings-section-system";
+  sec.className = "settings-section";
   sec.hidden = true;
-  sec.setAttribute('role', 'tabpanel');
+  sec.setAttribute("role", "tabpanel");
 
-  _appendSectionHeading(sec, 'System', 'Application updates and system information.');
+  _appendSectionHeading(
+    sec,
+    "System",
+    "Application updates and system information.",
+  );
 
-  const updateRow = document.createElement('div');
-  updateRow.className = 'settings-action-row';
+  const updateRow = document.createElement("div");
+  updateRow.className = "settings-action-row";
 
-  const updateBtn = document.createElement('button');
-  updateBtn.type = 'button';
-  updateBtn.id = 'check-updates-btn';
-  updateBtn.className = 'secondary';
-  updateBtn.textContent = 'Check for App Updates';
+  const updateBtn = document.createElement("button");
+  updateBtn.type = "button";
+  updateBtn.id = "check-updates-btn";
+  updateBtn.className = "secondary";
+  updateBtn.textContent = "Check for App Updates";
   updateRow.appendChild(updateBtn);
 
-  const updateHelp = document.createElement('p');
-  updateHelp.className = 'settings-action-help';
+  const updateHelp = document.createElement("p");
+  updateHelp.className = "settings-action-help";
   updateHelp.textContent =
-    'Queries the backend for the latest commit on the default remote branch and reports whether the local copy is behind, ahead, or up to date.';
+    "Queries the backend for the latest commit on the default remote branch and reports whether the local copy is behind, ahead, or up to date.";
   updateRow.appendChild(updateHelp);
 
   sec.appendChild(updateRow);
 
   // Reset All Settings action row
-  const resetAllRow = document.createElement('div');
-  resetAllRow.className = 'settings-action-row';
+  const resetAllRow = document.createElement("div");
+  resetAllRow.className = "settings-action-row";
 
-  const resetAllBtn = document.createElement('button');
-  resetAllBtn.type = 'button';
-  resetAllBtn.id = 'reset-all-settings-btn';
-  resetAllBtn.className = 'secondary';
-  resetAllBtn.textContent = 'Reset Viewer Settings to Defaults';
+  const resetAllBtn = document.createElement("button");
+  resetAllBtn.type = "button";
+  resetAllBtn.id = "reset-all-settings-btn";
+  resetAllBtn.className = "secondary";
+  resetAllBtn.textContent = "Reset Viewer Settings to Defaults";
   resetAllRow.appendChild(resetAllBtn);
 
-  const resetAllHelp = document.createElement('p');
-  resetAllHelp.className = 'settings-action-help';
+  const resetAllHelp = document.createElement("p");
+  resetAllHelp.className = "settings-action-help";
   resetAllHelp.textContent =
-    'Restores viewer controls to their recommended default values. Simulation, export, and workspace preferences stay unchanged.';
+    "Restores viewer controls to their recommended default values. Simulation, export, and workspace preferences stay unchanged.";
   resetAllRow.appendChild(resetAllHelp);
 
-  resetAllBtn.addEventListener('click', () => {
+  resetAllBtn.addEventListener("click", () => {
     resetAllViewerSettings();
-    applyViewerSettingsToControls(viewerRuntime.getControls(), RECOMMENDED_DEFAULTS);
+    applyViewerSettingsToControls(
+      viewerRuntime.getControls(),
+      RECOMMENDED_DEFAULTS,
+    );
     const domEl = viewerRuntime.getDomElement();
     if (domEl) setInvertWheelZoom(domEl, RECOMMENDED_DEFAULTS.invertWheelZoom);
   });
@@ -1335,7 +1568,7 @@ function _buildSystemSection(viewerRuntime) {
 
 function _getSelectOptions(select) {
   if (!select) return [];
-  if (select.options && typeof select.options[Symbol.iterator] === 'function') {
+  if (select.options && typeof select.options[Symbol.iterator] === "function") {
     return Array.from(select.options);
   }
   return Array.isArray(select._children) ? select._children : [];
@@ -1343,7 +1576,7 @@ function _getSelectOptions(select) {
 
 function _setOptionLabel(option, label) {
   if (!option) return;
-  if ('textContent' in option) {
+  if ("textContent" in option) {
     option.textContent = label;
     return;
   }
@@ -1354,34 +1587,46 @@ function _applySimBasicDeviceAvailability(health) {
   const doc = _getDocument();
   if (!doc) return;
 
-  const statusEl = doc.getElementById('simbasic-deviceMode-status');
-  const select = doc.getElementById('simbasic-deviceMode');
+  const statusEl = doc.getElementById("simbasic-deviceMode-status");
+  const select = doc.getElementById("simbasic-deviceMode");
   if (!statusEl || !select) return;
 
   const availability = describeSimBasicDeviceAvailability(health, select.value);
   for (const opt of _getSelectOptions(select)) {
     const isUnavailable = availability.unavailableModes.includes(opt.value);
     opt.disabled = isUnavailable;
-    const baseLabel = String(opt.textContent || opt.text || '').replace(' (unavailable)', '');
-    _setOptionLabel(opt, isUnavailable && opt.value !== 'auto' ? `${baseLabel} (unavailable)` : baseLabel);
+    const baseLabel = String(opt.textContent || opt.text || "").replace(
+      " (unavailable)",
+      "",
+    );
+    _setOptionLabel(
+      opt,
+      isUnavailable && opt.value !== "auto"
+        ? `${baseLabel} (unavailable)`
+        : baseLabel,
+    );
   }
   statusEl.textContent = availability.statusText;
 
   // Setup Help: show when selected device mode is unavailable
-  const setupHelpEl = doc.getElementById('simbasic-opencl-setup-help');
-  const setupHelpTextEl = doc.getElementById('simbasic-opencl-setup-help-text');
+  const setupHelpEl = doc.getElementById("simbasic-opencl-setup-help");
+  const setupHelpTextEl = doc.getElementById("simbasic-opencl-setup-help-text");
   if (setupHelpEl && setupHelpTextEl) {
-    const selectedMode = String(select.value || 'auto').trim().toLowerCase();
+    const selectedMode = String(select.value || "auto")
+      .trim()
+      .toLowerCase();
     const isSelectedUnavailable =
-      selectedMode !== 'auto' && availability.unavailableModes.includes(selectedMode);
+      selectedMode !== "auto" &&
+      availability.unavailableModes.includes(selectedMode);
     const allOpenCLUnavailable =
-      selectedMode === 'auto' && availability.unavailableModes.length >= 2;
+      selectedMode === "auto" && availability.unavailableModes.length >= 2;
     const shouldShow = isSelectedUnavailable || allOpenCLUnavailable;
 
     setupHelpEl.hidden = !shouldShow;
     if (shouldShow) {
       const helpText = getOpenCLSetupHelp(health);
-      setupHelpTextEl.textContent = helpText || 'Check your OpenCL driver installation.';
+      setupHelpTextEl.textContent =
+        helpText || "Check your OpenCL driver installation.";
       if (shouldShow && !setupHelpEl.open) {
         setupHelpEl.open = true;
       }
@@ -1401,9 +1646,9 @@ async function _refreshSimulationCapabilityState() {
     _applySimAdvancedCapabilityState(health);
   } catch {
     const doc = _getDocument();
-    const statusEl = doc?.getElementById('simbasic-deviceMode-status');
+    const statusEl = doc?.getElementById("simbasic-deviceMode-status");
     if (statusEl) {
-      statusEl.textContent = '';
+      statusEl.textContent = "";
     }
     _applySimAdvancedCapabilityState(null);
   }
@@ -1414,26 +1659,29 @@ async function _refreshSimulationCapabilityState() {
 // ---------------------------------------------------------------------------
 
 function _appendSectionHeading(parent, title, helpText) {
-  const h = document.createElement('h3');
-  h.className = 'settings-section-title';
+  const h = document.createElement("h3");
+  h.className = "settings-section-title";
   h.textContent = title;
   parent.appendChild(h);
 
   if (helpText) {
-    const p = document.createElement('p');
-    p.className = 'settings-section-help';
+    const p = document.createElement("p");
+    p.className = "settings-section-help";
     p.textContent = helpText;
     parent.appendChild(p);
   }
 }
 
-function _appendInlineRow(parent, { labelText, labelFor, controlHtml = '', controlNode = null, helpText = '' }) {
-  const row = document.createElement('div');
-  row.className = 'settings-control-row';
+function _appendInlineRow(
+  parent,
+  { labelText, labelFor, controlHtml = "", controlNode = null, helpText = "" },
+) {
+  const row = document.createElement("div");
+  row.className = "settings-control-row";
   row.appendChild(_buildSettingsLabelCopy(labelText, labelFor, helpText));
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'settings-control-value';
+  const wrapper = document.createElement("div");
+  wrapper.className = "settings-control-value";
   if (controlNode) {
     wrapper.appendChild(controlNode);
   } else {
@@ -1444,13 +1692,13 @@ function _appendInlineRow(parent, { labelText, labelFor, controlHtml = '', contr
   parent.appendChild(row);
 }
 
-function _buildSettingsLabelCopy(labelText, labelFor, helpText = '') {
-  const copy = document.createElement('div');
-  copy.className = 'settings-control-copy';
+function _buildSettingsLabelCopy(labelText, labelFor, helpText = "") {
+  const copy = document.createElement("div");
+  copy.className = "settings-control-copy";
 
-  const label = document.createElement('label');
+  const label = document.createElement("label");
   if (labelFor) {
-    label.setAttribute('for', labelFor);
+    label.setAttribute("for", labelFor);
   }
   label.textContent = labelText;
   copy.appendChild(label);
@@ -1464,11 +1712,11 @@ function _buildSettingsLabelCopy(labelText, labelFor, helpText = '') {
 }
 
 function _buildSelectElement(id, currentValue, options) {
-  const select = document.createElement('select');
+  const select = document.createElement("select");
   select.id = id;
 
   options.forEach(({ value, label }) => {
-    const option = document.createElement('option');
+    const option = document.createElement("option");
     option.value = value;
     option.textContent = label;
     if (String(value) === String(currentValue)) {
@@ -1482,34 +1730,44 @@ function _buildSelectElement(id, currentValue, options) {
 
 function _isSimulationManagementControl(target) {
   return Boolean(
-    target?.id === 'simmanage-auto-export'
-    || target?.id === 'simmanage-default-sort'
-    || target?.id === 'simmanage-min-rating'
-    || target?.getAttribute?.('data-sim-management-format')
+    target?.id === "simmanage-auto-export" ||
+    target?.id === "simmanage-default-sort" ||
+    target?.id === "simmanage-min-rating" ||
+    target?.getAttribute?.("data-sim-management-format"),
   );
 }
 
 function _readSimulationManagementSettings(root) {
   const current = getCurrentSimulationManagementSettings();
-  const selectedFormats = Array.from(root.querySelectorAll('input[data-sim-management-format]'))
+  const selectedFormats = Array.from(
+    root.querySelectorAll("input[data-sim-management-format]"),
+  )
     .filter((input) => input.checked)
-    .map((input) => input.getAttribute('data-sim-management-format'))
+    .map((input) => input.getAttribute("data-sim-management-format"))
     .filter(Boolean);
-  const minRating = Number(document.getElementById('simmanage-min-rating')?.value);
+  const minRating = Number(
+    document.getElementById("simmanage-min-rating")?.value,
+  );
 
   return {
     ...current,
-    autoExportOnComplete: document.getElementById('simmanage-auto-export')?.checked
-      ?? current.autoExportOnComplete,
+    autoExportOnComplete:
+      document.getElementById("simmanage-auto-export")?.checked ??
+      current.autoExportOnComplete,
     selectedFormats,
-    defaultSort: document.getElementById('simmanage-default-sort')?.value || current.defaultSort,
+    defaultSort:
+      document.getElementById("simmanage-default-sort")?.value ||
+      current.defaultSort,
     minRatingFilter: Number.isFinite(minRating)
       ? Math.max(0, Math.min(5, minRating))
-      : current.minRatingFilter
+      : current.minRatingFilter,
   };
 }
 
-function _syncTaskListPreferenceControls(settings, { dispatchToolbarChange = false } = {}) {
+function _syncTaskListPreferenceControls(
+  settings,
+  { dispatchToolbarChange = false } = {},
+) {
   const desiredSort = settings?.defaultSort;
   const desiredMinRating = String(settings?.minRatingFilter ?? 0);
   const syncValue = (id, nextValue, shouldDispatch) => {
@@ -1518,15 +1776,23 @@ function _syncTaskListPreferenceControls(settings, { dispatchToolbarChange = fal
       return;
     }
     element.value = nextValue;
-    if (shouldDispatch && typeof Event === 'function' && typeof element.dispatchEvent === 'function') {
-      element.dispatchEvent(new Event('change', { bubbles: true }));
+    if (
+      shouldDispatch &&
+      typeof Event === "function" &&
+      typeof element.dispatchEvent === "function"
+    ) {
+      element.dispatchEvent(new Event("change", { bubbles: true }));
     }
   };
 
   if (desiredSort) {
-    syncValue('simmanage-default-sort', desiredSort, false);
-    syncValue('simulation-jobs-sort', desiredSort, dispatchToolbarChange);
+    syncValue("simmanage-default-sort", desiredSort, false);
+    syncValue("simulation-jobs-sort", desiredSort, dispatchToolbarChange);
   }
-  syncValue('simmanage-min-rating', desiredMinRating, false);
-  syncValue('simulation-jobs-min-rating', desiredMinRating, dispatchToolbarChange);
+  syncValue("simmanage-min-rating", desiredMinRating, false);
+  syncValue(
+    "simulation-jobs-min-rating",
+    desiredMinRating,
+    dispatchToolbarChange,
+  );
 }

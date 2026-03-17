@@ -121,8 +121,8 @@ Action plan:
 
 Action plan:
 
-- [ ] Implement focus trapping for modals
-- [ ] Set initial focus to modal when opened
+- [x] Implement focus trapping for modals
+- [x] Set initial focus to modal when opened
 
 #### Progress Bar Announcements
 
