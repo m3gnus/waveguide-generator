@@ -721,17 +721,33 @@ button.secondary:hover:not(:disabled) {
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--text-muted);
+  font-size: 10px;
+  font-weight: bold;
+  color: white;
+}
+
+.status-dot::after {
+  content: "?";
 }
 
 .status-dot.connected {
   background: var(--success);
 }
+.status-dot.connected::after {
+  content: "✓";
+}
 .status-dot.disconnected {
   background: var(--error);
+}
+.status-dot.disconnected::after {
+  content: "✗";
 }
 
 .status-help {
