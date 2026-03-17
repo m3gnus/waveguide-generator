@@ -61,7 +61,7 @@ Notes:
 - With current bempp-cl `0.4.x`, the singular assembler still asks for a CPU OpenCL context. On GPU-only runtimes that expose no CPU OpenCL device, Waveguide Generator now aliases those CPU-context lookups to the active GPU context for `opencl_gpu` mode so Apple/other GPU-only systems can still solve.
 - The solver now clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
 
-## 1.2 Supported dependency matrix (P3-1)
+## 1.2 Supported dependency matrix
 
 The backend now enforces a version matrix at runtime:
 
@@ -260,6 +260,14 @@ Cancels queued/running job.
 - Queued jobs transition directly to `cancelled`.
 - Running jobs transition to stage `cancelling` while the worker checks `cancellation_requested`.
 - Final `cancelled` status is only written after the worker exits a safe checkpoint.
+
+### `DELETE /api/jobs/{job_id}`
+
+Deletes a terminal job (`complete`, `error`, or `cancelled`). Returns `409` for active jobs (`queued` or `running`).
+
+### `DELETE /api/jobs/clear-failed`
+
+Deletes all jobs in `error` state.
 
 ## 4. Canonical Surface Tags
 

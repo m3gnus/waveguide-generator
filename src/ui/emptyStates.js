@@ -5,37 +5,64 @@
 
 const EMPTY_STATE_MESSAGES = {
   noResults: {
-    title: 'No Results',
-    description: 'Run a simulation to generate results.'
+    title: "No simulation results yet",
+    description:
+      "Run a BEM simulation to see frequency response, directivity, and impedance data here.",
   },
   noJobs: {
-    title: 'No Simulations',
-    description: 'Start a new simulation to see results here.'
+    title: "No simulation history",
+    description: "Your completed and in-progress simulations will appear here.",
   },
   noData: {
-    title: 'No Data',
-    description: 'Unable to retrieve data. Please try again.'
+    title: "Unable to load data",
+    description:
+      "Something went wrong. Try refreshing the page or running the simulation again.",
   },
   noSimulationRunning: {
-    title: 'Ready to Simulate',
-    description: 'Press "Start BEM Simulation" to begin.'
+    title: "Ready to simulate",
+    description:
+      'Click "Run BEM Simulation" to start analyzing your waveguide design.',
   },
   connectionError: {
-    title: 'Solver Offline',
-    description: 'Cannot connect to the solver. Make sure the Python backend is running on localhost:8000.'
+    title: "Solver not connected",
+    description:
+      'Start the Python backend server (localhost:8000) to run simulations. Run "python server/app.py" from the project directory.',
   },
   noExportFormats: {
-    title: 'No Export Formats',
-    description: 'Select at least one export format in settings.'
+    title: "No export formats selected",
+    description:
+      "Go to Settings and enable at least one export format (CSV, JSON, PNG, etc.) to export results.",
   },
   exportPending: {
-    title: 'Export In Progress',
-    description: 'Please wait while your results are being exported...'
+    title: "Exporting results",
+    description:
+      "Preparing your files. Large exports may take a few seconds...",
   },
   fileTooLarge: {
-    title: 'File Too Large',
-    description: 'The export is too large. Try exporting a single format or reducing data resolution.'
-  }
+    title: "Export too large",
+    description:
+      "The data exceeds size limits. Try exporting one format at a time, or reduce the frequency resolution.",
+  },
+  networkTimeout: {
+    title: "Request timed out",
+    description:
+      "The server took too long to respond. Check your network connection and try again.",
+  },
+  networkOffline: {
+    title: "No network connection",
+    description:
+      "You appear to be offline. Check your internet connection and try again.",
+  },
+  serverError: {
+    title: "Server error",
+    description:
+      "The backend encountered an unexpected error. Check the server logs for details.",
+  },
+  validationError: {
+    title: "Invalid input",
+    description:
+      "Some values are out of range or invalid. Please check the highlighted fields.",
+  },
 };
 
 /**
@@ -44,29 +71,33 @@ const EMPTY_STATE_MESSAGES = {
  * @param {Object} options - Additional options
  * @returns {HTMLElement} Empty state container
  */
-export function createEmptyStateElement(type = 'noData', options = {}) {
+export function createEmptyStateElement(type = "noData", options = {}) {
   const config = EMPTY_STATE_MESSAGES[type] || EMPTY_STATE_MESSAGES.noData;
-  const { title = config.title, description = config.description, icon = null } = options;
+  const {
+    title = config.title,
+    description = config.description,
+    icon = null,
+  } = options;
 
-  const container = document.createElement('div');
-  container.className = 'empty-state';
-  container.setAttribute('role', 'status');
-  container.setAttribute('aria-live', 'polite');
+  const container = document.createElement("div");
+  container.className = "empty-state";
+  container.setAttribute("role", "status");
+  container.setAttribute("aria-live", "polite");
 
   if (icon) {
-    const iconEl = document.createElement('div');
-    iconEl.className = 'empty-state-icon';
+    const iconEl = document.createElement("div");
+    iconEl.className = "empty-state-icon";
     iconEl.textContent = icon;
     container.appendChild(iconEl);
   }
 
-  const titleEl = document.createElement('h3');
-  titleEl.className = 'empty-state-title';
+  const titleEl = document.createElement("h3");
+  titleEl.className = "empty-state-title";
   titleEl.textContent = title;
   container.appendChild(titleEl);
 
-  const descEl = document.createElement('p');
-  descEl.className = 'empty-state-description';
+  const descEl = document.createElement("p");
+  descEl.className = "empty-state-description";
   descEl.textContent = description;
   container.appendChild(descEl);
 
@@ -79,15 +110,15 @@ export function createEmptyStateElement(type = 'noData', options = {}) {
 export function isEmpty(value) {
   if (value === null || value === undefined) return true;
   if (Array.isArray(value)) return value.length === 0;
-  if (typeof value === 'object') return Object.keys(value).length === 0;
-  if (typeof value === 'string') return value.trim().length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  if (typeof value === "string") return value.trim().length === 0;
   return false;
 }
 
 /**
  * Get appropriate empty state message for a condition
  */
-export function getEmptyStateMessage(type = 'noData') {
+export function getEmptyStateMessage(type = "noData") {
   return EMPTY_STATE_MESSAGES[type] || EMPTY_STATE_MESSAGES.noData;
 }
 
@@ -98,28 +129,33 @@ export function getEmptyStateMessage(type = 'noData') {
  * @param {string} message - Error message
  * @param {Function} onRetry - Optional retry callback
  */
-export function renderErrorState(container, title = 'Error', message = 'An error occurred', onRetry = null) {
+export function renderErrorState(
+  container,
+  title = "Error",
+  message = "An error occurred",
+  onRetry = null,
+) {
   if (!container) return;
 
-  container.innerHTML = '';
-  container.className = 'error-state';
+  container.innerHTML = "";
+  container.className = "error-state";
 
-  const titleEl = document.createElement('h3');
-  titleEl.className = 'error-state-title';
+  const titleEl = document.createElement("h3");
+  titleEl.className = "error-state-title";
   titleEl.textContent = title;
   container.appendChild(titleEl);
 
-  const msgEl = document.createElement('p');
-  msgEl.className = 'error-state-message';
+  const msgEl = document.createElement("p");
+  msgEl.className = "error-state-message";
   msgEl.textContent = message;
   container.appendChild(msgEl);
 
-  if (typeof onRetry === 'function') {
-    const retryBtn = document.createElement('button');
-    retryBtn.className = 'error-state-retry-btn';
-    retryBtn.type = 'button';
-    retryBtn.textContent = 'Try Again';
-    retryBtn.addEventListener('click', onRetry);
+  if (typeof onRetry === "function") {
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "error-state-retry-btn";
+    retryBtn.type = "button";
+    retryBtn.textContent = "Try Again";
+    retryBtn.addEventListener("click", onRetry);
     container.appendChild(retryBtn);
   }
 }
@@ -129,18 +165,79 @@ export function renderErrorState(container, title = 'Error', message = 'An error
  * @param {HTMLElement} container - Target container
  * @param {string} message - Loading message
  */
-export function renderLoadingState(container, message = 'Loading...') {
+export function renderLoadingState(container, message = "Loading...") {
   if (!container) return;
 
-  container.innerHTML = '';
-  container.className = 'loading-state';
+  container.innerHTML = "";
+  container.className = "loading-state";
 
-  const spinner = document.createElement('div');
-  spinner.className = 'loading-spinner';
+  const spinner = document.createElement("div");
+  spinner.className = "loading-spinner";
   container.appendChild(spinner);
 
-  const msgEl = document.createElement('p');
-  msgEl.className = 'loading-message';
+  const msgEl = document.createElement("p");
+  msgEl.className = "loading-message";
   msgEl.textContent = message;
   container.appendChild(msgEl);
+}
+
+export function categorizeError(error) {
+  if (!error) return "noData";
+
+  if (error.isApiError) {
+    if (error.category === "network") {
+      if (error.cause?.name === "AbortError") {
+        return "networkTimeout";
+      }
+      if (!navigator.onLine) {
+        return "networkOffline";
+      }
+      return "connectionError";
+    }
+    if (error.category === "validation") {
+      return "validationError";
+    }
+    if (error.status >= 500) {
+      return "serverError";
+    }
+    if (error.status === 404) {
+      return "noData";
+    }
+  }
+
+  if (error.name === "TypeError" && error.message?.includes("fetch")) {
+    return "connectionError";
+  }
+
+  return "noData";
+}
+
+export function renderApiErrorState(container, error, onRetry = null) {
+  const errorType = categorizeError(error);
+  const config = EMPTY_STATE_MESSAGES[errorType] || EMPTY_STATE_MESSAGES.noData;
+  const title = error?.operation ? `${error.operation} failed` : config.title;
+  const message = error?.message || config.description;
+  renderErrorState(container, title, message, onRetry);
+}
+
+export function withRetry(fn, options = {}) {
+  const { maxRetries = 3, delayMs = 1000, onRetry = null } = options;
+
+  return async (...args) => {
+    let lastError = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn(...args);
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          if (typeof onRetry === "function") {
+            onRetry(attempt + 1, error);
+          }
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+    throw lastError;
+  };
 }

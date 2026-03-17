@@ -16,8 +16,17 @@
  * the simulation pipeline from geometry to acoustic results.
  */
 
-import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
-import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
+import { DEFAULT_BACKEND_URL } from "../config/backendUrl.js";
+import { createNetworkApiError, parseApiErrorResponse } from "./apiErrors.js";
+
+const DEFAULT_TIMEOUT_MS = 30000;
+const HEALTH_CHECK_TIMEOUT_MS = 5000;
+
+function createAbortController(timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  return { controller, timeoutId };
+}
 
 /**
  * @typedef {Object} CanonicalMeshPayload
@@ -76,29 +85,38 @@ import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
  * @returns {true}
  */
 export function validateCanonicalMeshPayload(meshData) {
-  if (!meshData || typeof meshData !== 'object') {
-    throw new Error('Invalid mesh payload: expected object.');
+  if (!meshData || typeof meshData !== "object") {
+    throw new Error("Invalid mesh payload: expected object.");
   }
   if (!Array.isArray(meshData.vertices) || !Array.isArray(meshData.indices)) {
-    throw new Error('Invalid mesh payload: missing vertices/indices arrays.');
+    throw new Error("Invalid mesh payload: missing vertices/indices arrays.");
   }
   if (meshData.vertices.length % 3 !== 0) {
-    throw new Error('Invalid mesh payload: vertices length must be divisible by 3.');
+    throw new Error(
+      "Invalid mesh payload: vertices length must be divisible by 3.",
+    );
   }
   if (meshData.indices.length % 3 !== 0) {
-    throw new Error('Invalid mesh payload: indices length must be divisible by 3.');
+    throw new Error(
+      "Invalid mesh payload: indices length must be divisible by 3.",
+    );
   }
   if (!Array.isArray(meshData.surfaceTags)) {
-    throw new Error('Invalid mesh payload: missing surfaceTags array.');
+    throw new Error("Invalid mesh payload: missing surfaceTags array.");
   }
   if (meshData.surfaceTags.length !== meshData.indices.length / 3) {
-    throw new Error('Invalid mesh payload: surfaceTags length must match triangle count.');
+    throw new Error(
+      "Invalid mesh payload: surfaceTags length must match triangle count.",
+    );
   }
   if (!meshData.format) {
-    throw new Error('Invalid mesh payload: missing format.');
+    throw new Error("Invalid mesh payload: missing format.");
   }
-  if (typeof meshData.boundaryConditions !== 'object' || meshData.boundaryConditions === null) {
-    throw new Error('Invalid mesh payload: missing boundaryConditions object.');
+  if (
+    typeof meshData.boundaryConditions !== "object" ||
+    meshData.boundaryConditions === null
+  ) {
+    throw new Error("Invalid mesh payload: missing boundaryConditions object.");
   }
   return true;
 }
@@ -116,16 +134,24 @@ export function validateSimulationPreflight(config, meshData) {
   const numFrequencies = Number(config?.numFrequencies);
 
   if (!Number.isFinite(frequencyStart) || !Number.isFinite(frequencyEnd)) {
-    throw new Error('Simulation preflight failed: frequency range must contain valid numbers.');
+    throw new Error(
+      "Simulation preflight failed: frequency range must contain valid numbers.",
+    );
   }
   if (frequencyStart >= frequencyEnd) {
-    throw new Error('Simulation preflight failed: start frequency must be less than end frequency.');
+    throw new Error(
+      "Simulation preflight failed: start frequency must be less than end frequency.",
+    );
   }
   if (!Number.isFinite(numFrequencies) || numFrequencies < 1) {
-    throw new Error('Simulation preflight failed: numFrequencies must be at least 1.');
+    throw new Error(
+      "Simulation preflight failed: numFrequencies must be at least 1.",
+    );
   }
   if (!meshData.surfaceTags.includes(2)) {
-    throw new Error('Simulation preflight failed: source surface tag (2) missing from mesh payload.');
+    throw new Error(
+      "Simulation preflight failed: source surface tag (2) missing from mesh payload.",
+    );
   }
 }
 
@@ -133,15 +159,29 @@ export function validateSimulationPreflight(config, meshData) {
  * @param {string} url
  * @param {RequestInit|undefined} options
  * @param {string} operation
+ * @param {number} [timeoutMs]
  * @returns {Promise<Response>}
  */
-async function fetchOrApiError(url, options, operation) {
+async function fetchOrApiError(
+  url,
+  options,
+  operation,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) {
+  const { controller, timeoutId } = createAbortController(timeoutMs);
+
   let response;
   try {
-    response = await fetch(url, options);
+    response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
   } catch (error) {
+    clearTimeout(timeoutId);
     throw createNetworkApiError(operation, error);
   }
+
+  clearTimeout(timeoutId);
 
   if (!response.ok) {
     throw await parseApiErrorResponse(response, { operation });
@@ -150,13 +190,13 @@ async function fetchOrApiError(url, options, operation) {
   return response;
 }
 
-const VALID_MESH_VALIDATION_MODES = new Set(['strict', 'warn', 'off']);
-const VALID_FREQUENCY_SPACING = new Set(['linear', 'log']);
-const VALID_DEVICE_MODES = new Set(['auto', 'opencl_cpu', 'opencl_gpu']);
-const VALID_BEM_PRECISIONS = new Set(['single', 'double']);
+const VALID_MESH_VALIDATION_MODES = new Set(["strict", "warn", "off"]);
+const VALID_FREQUENCY_SPACING = new Set(["linear", "log"]);
+const VALID_DEVICE_MODES = new Set(["auto", "opencl_cpu", "opencl_gpu"]);
+const VALID_BEM_PRECISIONS = new Set(["single", "double"]);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
-  if (typeof value !== 'string') {
+  if (typeof value !== "string") {
     return;
   }
   const normalized = value.trim().toLowerCase();
@@ -167,20 +207,25 @@ function assignEnumSetting(payload, key, value, allowedValues) {
 }
 
 function assignBooleanSetting(payload, key, value) {
-  if (typeof value === 'boolean') {
+  if (typeof value === "boolean") {
     payload[key] = value;
   }
 }
 
 function buildAdvancedSettingsPayload(settings) {
-  if (!settings || typeof settings !== 'object') {
+  if (!settings || typeof settings !== "object") {
     return null;
   }
 
   const payload = {};
-  assignBooleanSetting(payload, 'enable_warmup', settings.enableWarmup);
-  assignEnumSetting(payload, 'bem_precision', settings.bemPrecision, VALID_BEM_PRECISIONS);
-  assignBooleanSetting(payload, 'use_burton_miller', settings.useBurtonMiller);
+  assignBooleanSetting(payload, "enable_warmup", settings.enableWarmup);
+  assignEnumSetting(
+    payload,
+    "bem_precision",
+    settings.bemPrecision,
+    VALID_BEM_PRECISIONS,
+  );
+  assignBooleanSetting(payload, "use_burton_miller", settings.useBurtonMiller);
 
   const symmetryTolerance = Number(settings.symmetryTolerance);
   if (Number.isFinite(symmetryTolerance) && symmetryTolerance > 0) {
@@ -205,7 +250,8 @@ export class BemSolver {
     const response = await fetchOrApiError(
       `${this.backendUrl}/health`,
       undefined,
-      'Health check'
+      "Health check",
+      HEALTH_CHECK_TIMEOUT_MS,
     );
     return await response.json();
   }
@@ -237,42 +283,53 @@ export class BemSolver {
         vertices: meshData.vertices,
         indices: meshData.indices,
         surfaceTags: meshData.surfaceTags,
-        format: meshData.format || 'msh',
+        format: meshData.format || "msh",
         boundaryConditions: meshData.boundaryConditions || {},
-        metadata: meshData.metadata || {}
+        metadata: meshData.metadata || {},
       },
       frequency_range: [config.frequencyStart, config.frequencyEnd],
       num_frequencies: config.numFrequencies,
-      sim_type: String(config.simulationType ?? '2'),
+      sim_type: String(config.simulationType ?? "2"),
       options: options,
-      polar_config: config.polarConfig || null
+      polar_config: config.polarConfig || null,
     };
 
     assignEnumSetting(
       payload,
-      'mesh_validation_mode',
+      "mesh_validation_mode",
       config.meshValidationMode,
-      VALID_MESH_VALIDATION_MODES
+      VALID_MESH_VALIDATION_MODES,
     );
     assignEnumSetting(
       payload,
-      'frequency_spacing',
+      "frequency_spacing",
       config.frequencySpacing,
-      VALID_FREQUENCY_SPACING
+      VALID_FREQUENCY_SPACING,
     );
-    assignEnumSetting(payload, 'device_mode', config.deviceMode, VALID_DEVICE_MODES);
-    assignBooleanSetting(payload, 'use_optimized', config.useOptimized);
-    assignBooleanSetting(payload, 'verbose', config.verbose);
-    const advancedSettingsPayload = buildAdvancedSettingsPayload(config.advancedSettings);
+    assignEnumSetting(
+      payload,
+      "device_mode",
+      config.deviceMode,
+      VALID_DEVICE_MODES,
+    );
+    assignBooleanSetting(payload, "use_optimized", config.useOptimized);
+    assignBooleanSetting(payload, "verbose", config.verbose);
+    const advancedSettingsPayload = buildAdvancedSettingsPayload(
+      config.advancedSettings,
+    );
     if (advancedSettingsPayload) {
       payload.advanced_settings = advancedSettingsPayload;
     }
 
-    const response = await fetchOrApiError(`${this.backendUrl}/api/solve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }, 'Submit simulation');
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/solve`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+      "Submit simulation",
+    );
 
     const result = await response.json();
     return result.job_id;
@@ -286,7 +343,7 @@ export class BemSolver {
     const response = await fetchOrApiError(
       `${this.backendUrl}/api/status/${jobId}`,
       undefined,
-      'Fetch simulation status'
+      "Fetch simulation status",
     );
 
     return await response.json();
@@ -300,7 +357,7 @@ export class BemSolver {
     const response = await fetchOrApiError(
       `${this.backendUrl}/api/results/${jobId}`,
       undefined,
-      'Fetch simulation results'
+      "Fetch simulation results",
     );
 
     return await response.json();
@@ -312,16 +369,16 @@ export class BemSolver {
    */
   async listJobs({ status = null, limit = 50, offset = 0 } = {}) {
     const params = new URLSearchParams();
-    params.set('limit', String(limit));
-    params.set('offset', String(offset));
-    if (typeof status === 'string' && status.trim()) {
-      params.set('status', status.trim());
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (typeof status === "string" && status.trim()) {
+      params.set("status", status.trim());
     }
 
     const response = await fetchOrApiError(
       `${this.backendUrl}/api/jobs?${params.toString()}`,
       undefined,
-      'List simulation jobs'
+      "List simulation jobs",
     );
     return await response.json();
   }
@@ -331,10 +388,14 @@ export class BemSolver {
    * @param {string} jobId
    */
   async stopJob(jobId) {
-    const response = await fetchOrApiError(`${this.backendUrl}/api/stop/${jobId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }, 'Stop simulation');
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/stop/${jobId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      },
+      "Stop simulation",
+    );
     return await response.json();
   }
 
@@ -343,10 +404,14 @@ export class BemSolver {
    * @param {string} jobId
    */
   async deleteJob(jobId) {
-    const response = await fetchOrApiError(`${this.backendUrl}/api/jobs/${jobId}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' }
-    }, 'Delete simulation job');
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/jobs/${jobId}`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      },
+      "Delete simulation job",
+    );
     return await response.json();
   }
 
@@ -354,10 +419,14 @@ export class BemSolver {
    * Delete all failed jobs (status=error) from backend persistence.
    */
   async clearFailedJobs() {
-    const response = await fetchOrApiError(`${this.backendUrl}/api/jobs/clear-failed`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' }
-    }, 'Clear failed simulation jobs');
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/jobs/clear-failed`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      },
+      "Clear failed simulation jobs",
+    );
     return await response.json();
   }
 }

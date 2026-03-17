@@ -50,7 +50,7 @@ Primary runtime entry points:
 **Critical invariants** (must be enforced in code and docs):
 - Canonical surface-tag mapping stays code-owned in `src/geometry/tags.js` (tags: `1`=wall, `2`=source, `3`=secondary, `4`=interface)
 - Source tag (`2`) must exist in every simulation payload; solver rejects meshes without it
-- Interface tags (`4`) only applied when enclosure geometry AND `interfaceOffset > 0` exist
+- Interface tag (`4`) is only valid when enclosure/interface geometry is actually present; neither active JS runtime nor OCC mesh build currently emits tag `4`
 - `/api/mesh/build` returns `.msh` files ONLY; never state it returns `.geo` unless code changes
 
 **Development discipline**:
@@ -73,8 +73,6 @@ npm run test:server                    # all Python tests
 **Critical invariants**:
 - `surfaceTags.length === indices.length / 3` (one tag per triangle)
 - Group ranges index into triangle arrays, not vertex arrays
-- `interfaceOffset` may be a scalar OR array; never assume scalar-only
-
 **Common pitfalls**:
 - Post-tessellation mesh clipping breaks BEM accuracy (OCC free-meshing is asymmetric)
 - Viewport rendering and simulation payloads use different coordinate conventions (θ vs φ)

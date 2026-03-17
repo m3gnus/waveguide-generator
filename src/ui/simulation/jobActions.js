@@ -1,55 +1,50 @@
-import { showError, showMessage } from '../feedback.js';
+import { showError, showMessage } from "../feedback.js";
 import {
   getDeviceMode,
   getFrequencySpacing,
   getMeshValidationMode,
   getUseOptimized,
-  getVerbose
-} from '../settings/simBasicSettings.js';
+  getVerbose,
+} from "../settings/simBasicSettings.js";
 import {
   getBemPrecision,
   getEnableWarmup,
   getSymmetryTolerance,
   getUseBurtonMiller,
-} from '../settings/simAdvancedSettings.js';
+} from "../settings/simAdvancedSettings.js";
 import {
   getCurrentSimulationManagementSettings,
   getTaskListMinRatingFilter,
-  getTaskListSortPreference
-} from '../settings/simulationManagementSettings.js';
+  getTaskListSortPreference,
+} from "../settings/simulationManagementSettings.js";
 import {
   buildPolarStatePatchFromConfig,
-  readPolarStateSettings
-} from './polarSettings.js';
-import { getJobSymmetrySummary } from './results.js';
-import { getDownloadSimMeshEnabled } from '../settings/modal.js';
-import {
-  allJobs,
-  hasActiveJobs
-} from './jobTracker.js';
+  readPolarStateSettings,
+} from "./polarSettings.js";
+import { getJobSymmetrySummary } from "./results.js";
+import { getDownloadSimMeshEnabled } from "../settings/modal.js";
+import { allJobs, hasActiveJobs } from "./jobTracker.js";
 import {
   updateStageUi,
   setProgressVisible,
   restoreConnectionStatus,
   getSimulationDom,
   formatElapsedDuration,
-  resolveJobDurationMs
-} from './progressUi.js';
-import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
-import { downloadMeshArtifact } from './meshDownload.js';
+  resolveJobDurationMs,
+} from "./progressUi.js";
+import { clearPollTimer, setActiveJob } from "./jobOrchestration.js";
+import { downloadMeshArtifact } from "./meshDownload.js";
 import {
   summarizePersistedSimulationMeshStats,
   summarizeCanonicalSimulationMesh,
-  validateSimulationConfig
-} from '../../modules/simulation/domain.js';
+  validateSimulationConfig,
+} from "../../modules/simulation/domain.js";
 import {
   applySimulationJobScriptState,
   readSimulationState,
-  updateSimulationStateParams
-} from '../../modules/simulation/state.js';
-import {
-  resolveClearedFailedJobIds
-} from '../../modules/simulation/jobs.js';
+  updateSimulationStateParams,
+} from "../../modules/simulation/state.js";
+import { resolveClearedFailedJobIds } from "../../modules/simulation/jobs.js";
 import {
   clearSimulationControllerJobs,
   ensureSimulationControllerJobResults,
@@ -57,65 +52,69 @@ import {
   recordSimulationControllerExport,
   recordSimulationControllerRating,
   removeSimulationControllerJob,
-  stopSimulationControllerJob
-} from './controller.js';
+  stopSimulationControllerJob,
+} from "./controller.js";
 
 export { validateSimulationConfig };
 
 const GEOMETRY_DIAGNOSTIC_ROWS = Object.freeze([
-  ['throat_disc', 'Throat Disc'],
-  ['horn_wall', 'Horn Wall'],
-  ['inner_wall', 'Inner Wall'],
-  ['outer_wall', 'Outer Wall'],
-  ['mouth_rim', 'Mouth Rim'],
-  ['throat_return', 'Throat Return'],
-  ['rear_cap', 'Rear Cap'],
-  ['enc_front', 'Enclosure Front'],
-  ['enc_side', 'Enclosure Side'],
-  ['enc_rear', 'Enclosure Rear'],
-  ['enc_edge', 'Enclosure Edge']
+  ["throat_disc", "Throat Disc"],
+  ["horn_wall", "Horn Wall"],
+  ["inner_wall", "Inner Wall"],
+  ["outer_wall", "Outer Wall"],
+  ["mouth_rim", "Mouth Rim"],
+  ["throat_return", "Throat Return"],
+  ["rear_cap", "Rear Cap"],
+  ["enc_front", "Enclosure Front"],
+  ["enc_side", "Enclosure Side"],
+  ["enc_rear", "Enclosure Rear"],
+  ["enc_edge", "Enclosure Edge"],
 ]);
 
 export function renderSimulationMeshDiagnostics(summary = null) {
-  const container = document.getElementById('simulation-mesh-diagnostics');
+  const container = document.getElementById("simulation-mesh-diagnostics");
   if (!container) {
     return;
   }
 
   if (!summary) {
-    container.innerHTML = '<div class="simulation-mesh-diagnostics-placeholder">Mesh stats appear here before you submit. Updated with solver data once the job starts.</div>';
+    container.innerHTML =
+      '<div class="simulation-mesh-diagnostics-placeholder">Mesh stats appear here before you submit. Updated with solver data once the job starts.</div>';
     return;
   }
 
-  const provenance = summary.provenance === 'backend' ? 'backend' : 'preview';
-  const sourceLabel = provenance === 'backend'
-    ? 'Solver Mesh'
-    : 'Preview Mesh';
-  const statusNote = provenance === 'backend'
-    ? 'Triangle counts from the solver mesh used by this job.'
-    : 'Showing preview mesh triangle counts. Solver mesh data will replace these once the job starts.';
-  const okMessage = provenance === 'backend'
-    ? 'Solver mesh diagnostics loaded for this job.'
-    : 'Preview geometry looks ready to submit.';
+  const provenance = summary.provenance === "backend" ? "backend" : "preview";
+  const sourceLabel = provenance === "backend" ? "Solver Mesh" : "Preview Mesh";
+  const statusNote =
+    provenance === "backend"
+      ? "Triangle counts from the solver mesh used by this job."
+      : "Showing preview mesh triangle counts. Solver mesh data will replace these once the job starts.";
+  const okMessage =
+    provenance === "backend"
+      ? "Solver mesh diagnostics loaded for this job."
+      : "Preview geometry looks ready to submit.";
 
-  const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(([identity, label]) => `
+  const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(
+    ([identity, label]) => `
     <div class="simulation-mesh-diagnostics-tag">
       <span class="simulation-mesh-diagnostics-tag-id">${escapeHtml(identity)}</span>
       <span class="simulation-mesh-diagnostics-tag-label">${label}</span>
       <span class="simulation-mesh-diagnostics-tag-count">${summary.identityTriangleCounts?.[identity] ?? 0}</span>
     </div>
-  `).join('');
+  `,
+  ).join("");
   const debugTagSummary = [
     `Wall (1): ${summary.tagCounts?.[1] ?? 0}`,
     `Source (2): ${summary.tagCounts?.[2] ?? 0}`,
     `Secondary (3): ${summary.tagCounts?.[3] ?? 0}`,
-    `Interface (4): ${summary.tagCounts?.[4] ?? 0}`
-  ].join(' • ');
+    `Interface (4): ${summary.tagCounts?.[4] ?? 0}`,
+  ].join(" • ");
   const infoMarkup = `<div class="simulation-mesh-diagnostics-note">${escapeHtml(sourceLabel)}. ${escapeHtml(statusNote)} Tags: ${escapeHtml(debugTagSummary)}</div>`;
 
-  const warningMarkup = Array.isArray(summary.warnings) && summary.warnings.length > 0
-    ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join('<br>')}</div>`
-    : `<div class="simulation-mesh-diagnostics-ok">${escapeHtml(okMessage)}</div>`;
+  const warningMarkup =
+    Array.isArray(summary.warnings) && summary.warnings.length > 0
+      ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join("<br>")}</div>`
+      : `<div class="simulation-mesh-diagnostics-ok">${escapeHtml(okMessage)}</div>`;
 
   container.innerHTML = `
     <div class="simulation-mesh-diagnostics-header">
@@ -129,72 +128,74 @@ export function renderSimulationMeshDiagnostics(summary = null) {
 }
 
 export function formatJobSummary(job) {
-  const status = String(job.status || '').toLowerCase();
+  const status = String(job.status || "").toLowerCase();
   const progress = Math.round((Number(job.progress) || 0) * 100);
-  const detail = String(job.stageMessage || job.errorMessage || '').trim();
-  const stage = String(job.stage || '').toLowerCase();
+  const detail = String(job.stageMessage || job.errorMessage || "").trim();
+  const stage = String(job.stage || "").toLowerCase();
 
-  if (status === 'complete') {
+  if (status === "complete") {
     const duration = formatElapsedDuration(resolveJobDurationMs(job));
-    return duration ? `Complete (${duration})` : 'Complete';
+    return duration ? `Complete (${duration})` : "Complete";
   }
-  if (status === 'cancelled') return 'Cancelled';
-  if (stage === 'cancelling' || job.cancellationRequested) {
-    return detail || 'Stopping...';
+  if (status === "cancelled") return "Cancelled";
+  if (stage === "cancelling" || job.cancellationRequested) {
+    return detail || "Stopping...";
   }
-  if (status === 'queued') return 'Queued';
-  if (status === 'running') {
+  if (status === "queued") return "Queued";
+  if (status === "running") {
     if (detail && !/simulation\s+running|running/i.test(detail)) {
       return detail;
     }
     return `Running (${progress}%)`;
   }
-  if (status === 'error') {
+  if (status === "error") {
     if (detail && !/simulation\s+failed|error/i.test(detail)) {
       return `Failed: ${detail}`;
     }
-    return 'Failed';
+    return "Failed";
   }
 
-  return detail || `${String(job.status || 'Unknown')}`;
+  return detail || `${String(job.status || "Unknown")}`;
 }
 
 function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function formatTimestampTooltip(job) {
   const raw = job.startedAt || job.queuedAt || job.createdAt;
   if (!raw) {
-    return 'Simulation start time unavailable';
+    return "Simulation start time unavailable";
   }
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
-    return 'Simulation start time unavailable';
+    return "Simulation start time unavailable";
   }
   const formatted = new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'medium'
+    dateStyle: "medium",
+    timeStyle: "medium",
   }).format(parsed);
   return `Started: ${formatted}`;
 }
 
 function describeJobFeedSource(panel) {
-  const mode = panel?.jobSourceMode === 'folder' ? 'folder' : 'backend';
+  const mode = panel?.jobSourceMode === "folder" ? "folder" : "backend";
   return {
     mode,
-    label: mode === 'folder' ? 'Folder Tasks' : 'Backend Jobs',
-    badge: mode === 'folder' ? 'Folder' : ''
+    label: mode === "folder" ? "Folder Tasks" : "Backend Jobs",
+    badge: mode === "folder" ? "Folder" : "",
   };
 }
 
 function renderRatingStars(job) {
-  const currentRating = Number.isFinite(Number(job?.rating)) ? Math.max(0, Math.min(5, Number(job.rating))) : 0;
+  const currentRating = Number.isFinite(Number(job?.rating))
+    ? Math.max(0, Math.min(5, Number(job.rating)))
+    : 0;
   return `
     <div class="simulation-job-rating" aria-label="Task rating">
       ${Array.from({ length: 5 }, (_, index) => {
@@ -203,14 +204,14 @@ function renderRatingStars(job) {
         return `
           <button
             type="button"
-            class="simulation-job-rating-star${isActive ? ' is-active' : ''}"
+            class="simulation-job-rating-star${isActive ? " is-active" : ""}"
             data-job-rating="${ratingValue}"
             data-job-id="${escapeHtml(job.id)}"
             aria-label="Rate ${escapeHtml(job.label || job.id)} ${ratingValue} out of 5"
             title="Rate ${ratingValue} out of 5"
-          >${isActive ? '&#9733;' : '&#9734;'}</button>
+          >${isActive ? "&#9733;" : "&#9734;"}</button>
         `;
-      }).join('')}
+      }).join("")}
     </div>
   `;
 }
@@ -218,22 +219,26 @@ function renderRatingStars(job) {
 function getSymmetrySummaryLine(job) {
   const summary = getJobSymmetrySummary(job);
   if (!summary) {
-    return '';
+    return "";
   }
 
-  const requested = summary.items.find((item) => item.label === 'Requested')?.value || 'Unknown';
-  const decision = summary.items.find((item) => item.label === 'Decision')?.value || summary.headline;
+  const requested =
+    summary.items.find((item) => item.label === "Requested")?.value ||
+    "Unknown";
+  const decision =
+    summary.items.find((item) => item.label === "Decision")?.value ||
+    summary.headline;
   return `Symmetry: Requested ${requested} | Decision ${decision}`;
 }
 
 function syncJobListPreferenceControls() {
   const settings = getCurrentSimulationManagementSettings();
-  const sortEl = document.getElementById('simulation-jobs-sort');
+  const sortEl = document.getElementById("simulation-jobs-sort");
   if (sortEl && sortEl.value !== settings.defaultSort) {
     sortEl.value = settings.defaultSort;
   }
 
-  const ratingEl = document.getElementById('simulation-jobs-min-rating');
+  const ratingEl = document.getElementById("simulation-jobs-min-rating");
   const ratingValue = String(settings.minRatingFilter);
   if (ratingEl && ratingEl.value !== ratingValue) {
     ratingEl.value = ratingValue;
@@ -241,26 +246,30 @@ function syncJobListPreferenceControls() {
 }
 
 function readOutputNameAndCounter() {
-  const name = (document.getElementById('export-prefix')?.value || 'simulation').trim() || 'simulation';
-  const counterEl = document.getElementById('export-counter');
+  const name =
+    (document.getElementById("export-prefix")?.value || "simulation").trim() ||
+    "simulation";
+  const counterEl = document.getElementById("export-counter");
   const counterRaw = Number(counterEl?.value);
-  const counter = Number.isFinite(counterRaw) && counterRaw >= 1 ? Math.floor(counterRaw) : 1;
+  const counter =
+    Number.isFinite(counterRaw) && counterRaw >= 1 ? Math.floor(counterRaw) : 1;
   return { name, counter };
 }
 
 function incrementOutputCounter() {
-  const counterEl = document.getElementById('export-counter');
+  const counterEl = document.getElementById("export-counter");
   if (!counterEl) return;
   const currentRaw = Number(counterEl.value);
-  const current = Number.isFinite(currentRaw) && currentRaw >= 1 ? Math.floor(currentRaw) : 1;
+  const current =
+    Number.isFinite(currentRaw) && currentRaw >= 1 ? Math.floor(currentRaw) : 1;
   counterEl.value = String(current + 1);
 }
 
 function setSimulationInputsFromScript(script = {}) {
   const mappings = [
-    ['freq-start', script.frequencyStart],
-    ['freq-end', script.frequencyEnd],
-    ['freq-steps', script.numFrequencies]
+    ["freq-start", script.frequencyStart],
+    ["freq-end", script.frequencyEnd],
+    ["freq-steps", script.numFrequencies],
   ];
 
   for (const [id, value] of mappings) {
@@ -272,13 +281,13 @@ function setSimulationInputsFromScript(script = {}) {
   }
 
   if (script.outputName !== undefined) {
-    const nameEl = document.getElementById('export-prefix');
+    const nameEl = document.getElementById("export-prefix");
     if (nameEl) {
       nameEl.value = String(script.outputName);
     }
   }
   if (script.counter !== undefined) {
-    const counterEl = document.getElementById('export-counter');
+    const counterEl = document.getElementById("export-counter");
     if (counterEl) {
       counterEl.value = String(script.counter);
     }
@@ -287,7 +296,7 @@ function setSimulationInputsFromScript(script = {}) {
   if (script.polarConfig) {
     const currentState = readSimulationState();
     updateSimulationStateParams(
-      buildPolarStatePatchFromConfig(currentState?.params, script.polarConfig)
+      buildPolarStatePatchFromConfig(currentState?.params, script.polarConfig),
     );
   }
 }
@@ -297,25 +306,25 @@ async function ensureJobResults(panel, jobId, { display = true } = {}) {
     display,
     displayResults: (results) => {
       panel.displayResults(results);
-    }
+    },
   });
 
-  if (result.reason === 'missing_job') {
-    showError('Simulation task not found.');
+  if (result.reason === "missing_job") {
+    showError("Simulation task not found.");
     return null;
   }
-  if (result.reason === 'not_complete') {
-    showError('Results are only available for completed simulations.');
+  if (result.reason === "not_complete") {
+    showError("Results are only available for completed simulations.");
     return null;
   }
   return result.results;
 }
 
 export function renderJobList(panel) {
-  const list = document.getElementById('simulation-jobs-list');
+  const list = document.getElementById("simulation-jobs-list");
   if (!list) return;
 
-  const sourceEl = document.getElementById('simulation-jobs-source-label');
+  const sourceEl = document.getElementById("simulation-jobs-source-label");
   const source = describeJobFeedSource(panel);
   if (sourceEl) {
     sourceEl.textContent = source.label;
@@ -324,35 +333,45 @@ export function renderJobList(panel) {
   syncJobListPreferenceControls();
   const jobs = allJobs(panel, {
     sortBy: getTaskListSortPreference(),
-    minRating: getTaskListMinRatingFilter()
+    minRating: getTaskListMinRatingFilter(),
   });
   if (jobs.length === 0) {
-    list.innerHTML = `<div class="simulation-job-meta">No ${source.mode === 'folder' ? 'folder tasks' : 'backend jobs'} yet.</div>`;
+    list.innerHTML = `<div class="simulation-job-meta">No ${source.mode === "folder" ? "folder tasks" : "backend jobs"} yet.</div>`;
     return;
   }
 
-  list.innerHTML = jobs.map((job) => {
-    const symmetryLine = getSymmetrySummaryLine(job);
-    return `
-    <div class="simulation-job-item ${panel.activeJobId === job.id ? 'is-active' : ''}" data-job-id="${job.id}">
+  list.innerHTML = jobs
+    .map((job) => {
+      const symmetryLine = getSymmetrySummaryLine(job);
+      const statusClass =
+        job.status === "running"
+          ? "is-running"
+          : job.status === "complete"
+            ? "is-completed"
+            : job.status === "error"
+              ? "is-failed"
+              : "";
+      const canRerun =
+        (job.status === "error" || job.status === "cancelled") && job.script;
+      const canStop =
+        (job.status === "queued" || job.status === "running") &&
+        job.stage !== "cancelling";
+      return `
+    <div class="simulation-job-item ${panel.activeJobId === job.id ? "is-active" : ""} ${statusClass}" data-job-id="${job.id}">
       <div class="simulation-job-header">
         <div class="simulation-job-info">
           <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
             <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
-            ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ''}
+            ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ""}
           </div>
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
-          ${symmetryLine ? `<div class="simulation-job-meta">${escapeHtml(symmetryLine)}</div>` : ''}
+          ${symmetryLine ? `<div class="simulation-job-meta">${escapeHtml(symmetryLine)}</div>` : ""}
         </div>
         <div class="simulation-job-actions">
-          ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results for this simulation">View</button>` : ''}
-          ${job.status === 'complete' ? `<button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export simulation results to file">Export</button>` : ''}
-          ${job.script ? `<button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters from this simulation">Load</button>` : ''}
-          ${(job.status === 'error' || job.status === 'cancelled') && job.script ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Restore parameters and rerun this simulation">Rerun</button>` : ''}
-          ${(job.status === 'queued' || job.status === 'running') && job.stage !== 'cancelling'
-            ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop this running simulation">Stop</button>`
-            : ''}
-          <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove simulation from feed" title="Remove this simulation from the feed">&#x2715;</button>
+          ${job.status === "complete" ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
+          ${canRerun ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Rerun">Rerun</button>` : ""}
+          ${canStop ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop">Stop</button>` : ""}
+          <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
         </div>
       </div>
       <div class="simulation-job-footer">
@@ -361,7 +380,8 @@ export function renderJobList(panel) {
       </div>
     </div>
   `;
-  }).join('');
+    })
+    .join("");
 }
 
 export async function viewJobResults(panel, jobId) {
@@ -376,15 +396,14 @@ export async function exportJobResults(panel, jobId) {
   if (!results) return;
   const job = panel.jobs?.get(jobId) || null;
   const bundle = await panel.exportResults({ job });
-  if (bundle && (bundle.exportedFiles.length > 0 || bundle.failures.length > 0)) {
-    await recordSimulationControllerExport(
-      panel,
-      jobId,
-      {
-        exportedFiles: bundle.exportedFiles,
-        justCompleted: false
-      }
-    );
+  if (
+    bundle &&
+    (bundle.exportedFiles.length > 0 || bundle.failures.length > 0)
+  ) {
+    await recordSimulationControllerExport(panel, jobId, {
+      exportedFiles: bundle.exportedFiles,
+      justCompleted: false,
+    });
   }
   panel.pollSimulationStatus();
 }
@@ -392,23 +411,26 @@ export async function exportJobResults(panel, jobId) {
 export function loadJobScript(panel, jobId) {
   const job = panel.jobs?.get(jobId);
   if (!job?.script) {
-    showError('No saved parameters found for this simulation.');
+    showError("No saved parameters found for this simulation.");
     return;
   }
 
   const script = job.script;
   applySimulationJobScriptState(script, {
-    source: 'simulation-job-load-script'
+    source: "simulation-job-load-script",
   });
 
   setSimulationInputsFromScript(script);
-  showMessage(`Loaded parameters from ${job.label || jobId}.`, { type: 'info', duration: 2500 });
+  showMessage(`Loaded parameters from ${job.label || jobId}.`, {
+    type: "info",
+    duration: 2500,
+  });
 }
 
 export async function rateJob(panel, jobId, rating) {
   const next = await recordSimulationControllerRating(panel, jobId, rating);
   if (!next) {
-    showError('Simulation task not found.');
+    showError("Simulation task not found.");
     return;
   }
   renderJobList(panel);
@@ -417,13 +439,17 @@ export async function rateJob(panel, jobId, rating) {
 export async function redoJob(panel, jobId) {
   const job = panel.jobs?.get(jobId);
   if (!job?.script) {
-    showError('No saved parameters found for this simulation.');
+    showError("No saved parameters found for this simulation.");
     return;
   }
   loadJobScript(panel, jobId);
 
   // Remove the failed/cancelled job before re-running
-  try { await panel.solver.deleteJob(jobId); } catch (_) { /* best-effort */ }
+  try {
+    await panel.solver.deleteJob(jobId);
+  } catch (_) {
+    /* best-effort */
+  }
   removeSimulationControllerJob(panel, jobId);
   renderJobList(panel);
 
@@ -433,11 +459,13 @@ export async function redoJob(panel, jobId) {
 export async function removeJobFromFeed(panel, jobId) {
   const job = panel.jobs?.get(jobId);
   if (!job) return;
-  if (job.status === 'queued' || job.status === 'running') {
-    showError('Stop the running simulation before removing it from the feed.');
+  if (job.status === "queued" || job.status === "running") {
+    showError("Stop the running simulation before removing it from the feed.");
     return;
   }
-  if (!window.confirm(`Remove simulation "${job.label || jobId}" from the feed?`)) {
+  if (
+    !window.confirm(`Remove simulation "${job.label || jobId}" from the feed?`)
+  ) {
     return;
   }
 
@@ -456,11 +484,14 @@ export async function removeJobFromFeed(panel, jobId) {
 
 export async function clearFailedSimulations(panel) {
   const localFailedIds = allJobs(panel)
-    .filter((job) => job.status === 'error')
+    .filter((job) => job.status === "error")
     .map((job) => job.id);
 
   if (localFailedIds.length === 0) {
-    showMessage('No failed simulations to clear.', { type: 'info', duration: 2200 });
+    showMessage("No failed simulations to clear.", {
+      type: "info",
+      duration: 2200,
+    });
     return;
   }
 
@@ -469,39 +500,46 @@ export async function clearFailedSimulations(panel) {
     const response = await panel.solver.clearFailedJobs();
     deletedIds = resolveClearedFailedJobIds(localFailedIds, response);
   } catch (error) {
-    showError(`Failed to clear failed simulations from backend: ${error.message}`);
+    showError(
+      `Failed to clear failed simulations from backend: ${error.message}`,
+    );
     return;
   }
 
   const removed = clearSimulationControllerJobs(panel, deletedIds);
   renderJobList(panel);
   showMessage(
-    removed > 0 ? `Deleted ${removed} failed simulation${removed === 1 ? '' : 's'} from database.` : 'No failed simulations found in database.',
-    { type: 'info', duration: 2200 }
+    removed > 0
+      ? `Deleted ${removed} failed simulation${removed === 1 ? "" : "s"} from database.`
+      : "No failed simulations found in database.",
+    { type: "info", duration: 2200 },
   );
 }
 
 export async function stopSimulation(panel) {
   const dom = getSimulationDom();
   const targetJobId = panel.activeJobId || panel.currentJobId;
-  const { stopError, cancelledJob } = await stopSimulationControllerJob(panel, targetJobId);
+  const { stopError, cancelledJob } = await stopSimulationControllerJob(
+    panel,
+    targetJobId,
+  );
   if (stopError) {
-    console.warn('Failed to call stop API:', stopError);
+    console.warn("Failed to call stop API:", stopError);
     showError(`Failed to stop simulation: ${stopError.message}`);
     return;
   }
   renderJobList(panel);
 
-  if (cancelledJob?.status === 'cancelled') {
+  if (cancelledJob?.status === "cancelled") {
     panel.completedStatusMessage = null;
     panel.simulationStartedAtMs = null;
     panel.lastSimulationDurationMs = null;
     updateStageUi(panel, {
       progress: 0,
-      stage: 'cancelled',
-      message: cancelledJob.stageMessage || 'Simulation cancelled by user'
+      stage: "cancelled",
+      message: cancelledJob.stageMessage || "Simulation cancelled by user",
     });
-    showMessage('Simulation cancelled.', { type: 'info', duration: 2000 });
+    showMessage("Simulation cancelled.", { type: "info", duration: 2000 });
     if (dom.runBtn) {
       dom.runBtn.disabled = false;
     }
@@ -509,10 +547,15 @@ export async function stopSimulation(panel) {
     setProgressVisible(true);
     updateStageUi(panel, {
       progress: Number(cancelledJob.progress) || 0,
-      stage: cancelledJob.stage || 'cancelling',
-      message: cancelledJob.stageMessage || 'Cancellation requested. Waiting for backend worker to stop.'
+      stage: cancelledJob.stage || "cancelling",
+      message:
+        cancelledJob.stageMessage ||
+        "Cancellation requested. Waiting for backend worker to stop.",
     });
-    showMessage('Cancellation requested. Waiting for backend worker to stop.', { type: 'info', duration: 2400 });
+    showMessage("Cancellation requested. Waiting for backend worker to stop.", {
+      type: "info",
+      duration: 2400,
+    });
   }
   if (dom.stopBtn) {
     dom.stopBtn.disabled = true;
@@ -534,9 +577,9 @@ export async function runSimulation(panel) {
 
   // Get simulation settings
   const config = {
-    frequencyStart: Number(document.getElementById('freq-start').value),
-    frequencyEnd: Number(document.getElementById('freq-end').value),
-    numFrequencies: Number(document.getElementById('freq-steps').value),
+    frequencyStart: Number(document.getElementById("freq-start").value),
+    frequencyEnd: Number(document.getElementById("freq-end").value),
+    numFrequencies: Number(document.getElementById("freq-steps").value),
     meshValidationMode: getMeshValidationMode(),
     frequencySpacing: getFrequencySpacing(),
     deviceMode: getDeviceMode(),
@@ -547,7 +590,7 @@ export async function runSimulation(panel) {
       bemPrecision: getBemPrecision(),
       useBurtonMiller: getUseBurtonMiller(),
       symmetryTolerance: getSymmetryTolerance(),
-    }
+    },
   };
 
   const polarSettings = readPolarStateSettings(readSimulationState()?.params);
@@ -561,7 +604,7 @@ export async function runSimulation(panel) {
     distance: polarSettings.distance,
     inclination: polarSettings.diagonalAngle,
     enabled_axes: polarSettings.enabledAxes,
-    observation_origin: polarSettings.observationOrigin
+    observation_origin: polarSettings.observationOrigin,
   };
 
   // Validate settings
@@ -577,8 +620,8 @@ export async function runSimulation(panel) {
   setProgressVisible(true);
   updateStageUi(panel, {
     progress: 0.05,
-    stage: 'mesh_generation',
-    message: 'Preparing simulation mesh'
+    stage: "mesh_generation",
+    message: "Preparing simulation mesh",
   });
 
   try {
@@ -586,13 +629,13 @@ export async function runSimulation(panel) {
     const meshData = await panel.prepareMeshForSimulation();
     renderSimulationMeshDiagnostics({
       ...summarizeCanonicalSimulationMesh(meshData),
-      provenance: 'preview'
+      provenance: "preview",
     });
 
     updateStageUi(panel, {
       progress: 0.2,
-      stage: 'mesh_generation',
-      message: 'Mesh ready, submitting to BEM solver'
+      stage: "mesh_generation",
+      message: "Mesh ready, submitting to BEM solver",
     });
 
     // Disable stop button at start, enable it when simulation begins
@@ -605,15 +648,15 @@ export async function runSimulation(panel) {
       config,
       meshData,
       outputName,
-      counter
+      counter,
     });
     incrementOutputCounter();
     renderJobList(panel);
 
     updateStageUi(panel, {
       progress: 0.3,
-      stage: 'solver_setup',
-      message: 'Job accepted by backend'
+      stage: "solver_setup",
+      message: "Job accepted by backend",
     });
 
     if (dom.stopBtn) {
@@ -624,19 +667,24 @@ export async function runSimulation(panel) {
 
     // Non-blocking: download simulation mesh artifact if toggle is on
     if (getDownloadSimMeshEnabled() && panel.activeJobId) {
-      downloadMeshArtifact(panel.activeJobId, panel.solver.backendUrl).catch(err => {
-        console.warn('Mesh artifact download failed (non-blocking):', err.message);
-      });
+      downloadMeshArtifact(panel.activeJobId, panel.solver.backendUrl).catch(
+        (err) => {
+          console.warn(
+            "Mesh artifact download failed (non-blocking):",
+            err.message,
+          );
+        },
+      );
     }
   } catch (error) {
-    console.error('Simulation error:', error);
+    console.error("Simulation error:", error);
     panel.completedStatusMessage = null;
     panel.simulationStartedAtMs = null;
     panel.lastSimulationDurationMs = null;
     updateStageUi(panel, {
       progress: 1,
-      stage: 'error',
-      message: error.message
+      stage: "error",
+      message: error.message,
     });
     showError(`Simulation failed: ${error.message}`);
     if (dom.runBtn) dom.runBtn.disabled = false;
@@ -661,5 +709,7 @@ export function renderBackendSimulationMeshDiagnostics(meshStats = null) {
   if (!meshStats) {
     return;
   }
-  renderSimulationMeshDiagnostics(summarizePersistedSimulationMeshStats(meshStats));
+  renderSimulationMeshDiagnostics(
+    summarizePersistedSimulationMeshStats(meshStats),
+  );
 }
