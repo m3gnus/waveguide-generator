@@ -89,19 +89,6 @@ Action plan:
 - [ ] Extract UI strings to messages file
 - [ ] Implement `Intl.MessageFormat` or similar
 
-## Completed / Resolved
-
-### P3. Replace Symmetry Policy with Solve Statistics in Results View — COMPLETE
-
-**Resolved: March 17, 2026**
-
-Replaced the Symmetry Policy section in the View Results modal with useful solve statistics since symmetry optimization is disabled.
-
-- Created `renderSolveStatsSummary()` function in `src/ui/simulation/results.js`
-- Displays: solve time, frequency range/count, mesh complexity (vertices/triangles), measurement distance + origin
-- Updated `viewResults.js` to call new summary renderer instead of symmetry policy
-- Job mesh stats now accessed from panel.jobs to show vertex/triangle counts
-
 ### P3. UI Quality Audit — Medium-Severity Issues
 
 **Audit date: March 17, 2026**
@@ -184,6 +171,29 @@ Action plan:
 Action plan:
 
 - [ ] Replace spinner with static "Loading..." text for reduced motion preference
+
+## Completed / Resolved
+
+### P3. Replace Symmetry Policy with Solve Statistics in Results View — COMPLETE
+
+**Resolved: March 17, 2026**
+
+Replaced the Symmetry Policy section in the View Results modal with useful solve statistics since symmetry optimization is disabled.
+
+- Created `renderSolveStatsSummary()` function in `src/ui/simulation/results.js`
+- Displays: solve time, frequency range/count, mesh complexity (vertices/triangles), measurement distance + origin
+- Updated `viewResults.js` to call new summary renderer instead of symmetry policy
+- Job mesh stats now accessed from panel.jobs to show vertex/triangle counts
+
+### P3. Remove Symmetry Text from Job List Entries — COMPLETE
+
+**Resolved: March 17, 2026**
+
+Removed the symmetry line "Symmetry: Requested Disabled | Decision Full model" from job list entries since symmetry optimization is disabled.
+
+- Removed `getSymmetrySummaryLine()` function from `jobActions.js`
+- Removed the symmetry line rendering in `renderJobList()`
+- Updated test assertions in `tests/simulation-flow.test.js`
 
 ### P4. UI Quality Audit — Low-Severity Issues
 
