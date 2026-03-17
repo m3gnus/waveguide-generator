@@ -4,6 +4,7 @@ import {
   renderSolveStatsSummary,
   renderObservationDistanceSummary,
 } from "./results.js";
+import { trapFocus } from "../focusTrap.js";
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -136,12 +137,13 @@ export async function openViewResultsModal(panel) {
   dialog.appendChild(body);
   backdrop.appendChild(dialog);
 
-  // Close handlers
+  let releaseFocus;
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     window.removeEventListener("keydown", onKeyDown);
+    if (releaseFocus) releaseFocus();
     backdrop.remove();
   };
 
@@ -159,6 +161,7 @@ export async function openViewResultsModal(panel) {
   window.addEventListener("keydown", onKeyDown);
 
   document.body.appendChild(backdrop);
+  releaseFocus = trapFocus(dialog, { initialFocus: closeBtn });
 
   // Fetch and render charts (called on open and on smoothing change)
   async function fetchCharts() {
