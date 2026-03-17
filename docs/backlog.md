@@ -101,7 +101,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Add `aria-label` attributes to all viewer control buttons
+- [x] Add `aria-label` attributes to all viewer control buttons
 
 #### Form Field Error Recovery
 
