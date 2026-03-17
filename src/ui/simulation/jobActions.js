@@ -352,12 +352,12 @@ export function renderJobList(panel) {
           <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
         </div>
         <div class="simulation-job-actions">
-          ${job.status === "complete" ? `<button type="button" class="secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
-          ${job.status === "complete" ? `<button type="button" class="secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export results">Export</button>` : ""}
-          ${job.script ? `<button type="button" class="secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters">Load</button>` : ""}
-          ${canRerun ? `<button type="button" class="secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Rerun">Rerun</button>` : ""}
-          ${canStop ? `<button type="button" class="secondary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop">Stop</button>` : ""}
-          <button type="button" class="secondary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
+          ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
+          ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export results">Export</button>` : ""}
+          ${job.script ? `<button type="button" class="btn-secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters">Load</button>` : ""}
+          ${canRerun ? `<button type="button" class="btn-secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Rerun">Rerun</button>` : ""}
+          ${canStop ? `<button type="button" class="btn-tertiary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop">Stop</button>` : ""}
+          <button type="button" class="btn-tertiary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
         </div>
       </div>
       <div class="simulation-job-footer">

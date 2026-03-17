@@ -229,7 +229,7 @@ export function chooseExportFormat() {
 
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
-    cancelBtn.className = "ui-choice-btn secondary";
+    cancelBtn.className = "ui-choice-btn btn-tertiary";
     cancelBtn.textContent = "Cancel";
     cancelBtn.addEventListener("click", () => finalize(null));
     actions.appendChild(cancelBtn);
