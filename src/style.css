@@ -788,17 +788,26 @@ button.secondary:hover:not(:disabled),
   font-size: var(--text-sm);
 }
 
+.status-indicator.status-prominent {
+  padding: var(--sp-3);
+  border-width: 2px;
+}
+
 .status-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: bold;
   color: white;
+  flex-shrink: 0;
+  transition:
+    box-shadow var(--t-base),
+    background-color var(--t-base);
 }
 
 .status-dot::after {
@@ -806,16 +815,91 @@ button.secondary:hover:not(:disabled),
 }
 
 .status-dot.connected {
-  background: var(--success);
+  background: oklch(55% 0.18 148);
+  box-shadow:
+    0 0 8px oklch(55% 0.18 148 / 0.5),
+    0 0 16px oklch(55% 0.18 148 / 0.25);
 }
 .status-dot.connected::after {
   content: "✓";
 }
+
 .status-dot.disconnected {
-  background: var(--error);
+  background: oklch(55% 0.2 27);
+  box-shadow: 0 0 6px oklch(55% 0.2 27 / 0.4);
 }
 .status-dot.disconnected::after {
   content: "✗";
+}
+
+.status-dot.simulating {
+  background: oklch(60% 0.18 52);
+  box-shadow:
+    0 0 10px oklch(60% 0.18 52 / 0.6),
+    0 0 20px oklch(60% 0.18 52 / 0.3);
+  animation: status-pulse 1.5s ease-in-out infinite;
+}
+.status-dot.simulating::after {
+  content: "◌";
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 10px oklch(60% 0.18 52 / 0.6),
+      0 0 20px oklch(60% 0.18 52 / 0.3);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      0 0 14px oklch(60% 0.18 52 / 0.8),
+      0 0 28px oklch(60% 0.18 52 / 0.4);
+    transform: scale(1.05);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-dot.connected {
+    background: oklch(68% 0.16 148);
+    box-shadow:
+      0 0 10px oklch(68% 0.16 148 / 0.6),
+      0 0 20px oklch(68% 0.16 148 / 0.3);
+  }
+  .status-dot.disconnected {
+    background: oklch(68% 0.18 27);
+    box-shadow: 0 0 8px oklch(68% 0.18 27 / 0.5);
+  }
+  .status-dot.simulating {
+    background: oklch(75% 0.15 62);
+    box-shadow:
+      0 0 12px oklch(75% 0.15 62 / 0.7),
+      0 0 24px oklch(75% 0.15 62 / 0.35);
+  }
+  @keyframes status-pulse {
+    0%,
+    100% {
+      box-shadow:
+        0 0 12px oklch(75% 0.15 62 / 0.7),
+        0 0 24px oklch(75% 0.15 62 / 0.35);
+      transform: scale(1);
+    }
+    50% {
+      box-shadow:
+        0 0 16px oklch(75% 0.15 62 / 0.9),
+        0 0 32px oklch(75% 0.15 62 / 0.45);
+      transform: scale(1.05);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.simulating {
+    animation: none;
+  }
+  .status-dot {
+    transition: none;
+  }
 }
 
 .status-help {
