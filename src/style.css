@@ -214,6 +214,24 @@ body {
   min-width: 0;
 }
 
+.webgl-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--sp-6);
+  background: var(--scene-bg);
+  color: var(--text);
+}
+
+.webgl-fallback p {
+  margin: var(--sp-2) 0;
+  max-width: 400px;
+}
+
 #actions-panel {
   position: fixed;
   right: var(--sp-5);

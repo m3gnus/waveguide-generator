@@ -233,7 +233,7 @@ Action plan:
 
 Action plan:
 
-- [ ] Add fallback message inside canvas container for non-WebGL browsers
+- [x] Add fallback message inside canvas container for non-WebGL browsers
 
 #### Section Collapse State
 

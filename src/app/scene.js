@@ -39,6 +39,8 @@ export function setupScene(app) {
     app.controls = null;
     app.sceneInitError = error;
     console.error("Failed to initialize WebGL renderer:", error);
+    const fallback = document.getElementById("webgl-fallback");
+    if (fallback) fallback.style.display = "flex";
     app.stats.innerText = "Viewport unavailable: WebGL failed to initialize";
     return false;
   }
