@@ -32,7 +32,7 @@ def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float
     return float(distance)
 
 
-def _build_source_velocity(space_u, amplitude: float = 1.0, precision: str = "double"):
+def _build_source_velocity(space_u, amplitude: float = 1.0, precision: str = "single"):
     dof_count = getattr(space_u, "grid_dof_count", None)
     if dof_count is None:
         dof_count = getattr(space_u, "global_dof_count", 0)
@@ -56,7 +56,7 @@ def solve_frequency(
     use_burton_miller: bool = True,
     observation_distance_m: float = 2.0,
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
-    precision: str = "double",
+    precision: str = "single",
 ) -> Tuple[float, complex, float]:
     """
     Solve BEM for a single frequency using exterior Helmholtz BIE in SI units.
@@ -157,7 +157,7 @@ def solve(
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
     cancellation_callback: Optional[Callable[[], None]] = None,
-    precision: str = "double",
+    precision: str = "single",
 ) -> Dict:
     """Run legacy BEM simulation path with explicit failure reporting."""
     if isinstance(mesh, dict):
