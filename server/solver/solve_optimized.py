@@ -287,7 +287,7 @@ class HornBEMSolver:
 
     def _create_unit_velocity(self):
         """Create DP0 GridFunction: 1 m/s on throat elements, 0 elsewhere."""
-        coeffs = np.zeros(self.dp0_space.global_dof_count, dtype=np.complex128)
+        coeffs = np.zeros(self.dp0_space.global_dof_count, dtype=_numpy_dtype_for_precision(self.bem_precision))
         coeffs[self.driver_dofs] = 1.0
         return bempp_api.GridFunction(self.dp0_space, coefficients=coeffs)
 
