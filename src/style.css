@@ -18,16 +18,16 @@
   --border: oklch(88% 0.014 78);
   --input-bg: oklch(96% 0.014 78);
 
-  --accent: oklch(45% 0.22 262);
+  --accent: oklch(48% 0.16 262);
   --accent-text: #ffffff;
-  --accent-warm: oklch(60% 0.18 52);
+  --accent-warm: oklch(60% 0.14 52);
 
-  --success: oklch(50% 0.16 148);
-  --success-bg: oklch(50% 0.16 148 / 0.1);
-  --warning: oklch(58% 0.17 54);
-  --warning-bg: oklch(58% 0.17 54 / 0.1);
-  --error: oklch(50% 0.2 27);
-  --error-bg: oklch(50% 0.2 27 / 0.08);
+  --success: oklch(50% 0.12 148);
+  --success-bg: oklch(50% 0.12 148 / 0.1);
+  --warning: oklch(58% 0.13 54);
+  --warning-bg: oklch(58% 0.13 54 / 0.1);
+  --error: oklch(50% 0.15 27);
+  --error-bg: oklch(50% 0.15 27 / 0.08);
 
   /* 3D Scene */
   --scene-bg: #f2ede4;
@@ -55,10 +55,10 @@
   --r-md: 6px;
   --r-lg: 10px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.08);
-  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.1);
-  --shadow-lg: 0 16px 48px oklch(0% 0 0 / 0.15);
+  /* Shadows — Subdued for calmer aesthetic */
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.04);
+  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.06);
+  --shadow-lg: 0 16px 48px oklch(0% 0 0 / 0.1);
 
   /* Transitions */
   --t-fast: 0.15s ease;
@@ -83,16 +83,16 @@
     --border: oklch(24% 0.025 258);
     --input-bg: oklch(14% 0.024 258);
 
-    --accent: oklch(72% 0.2 258);
+    --accent: oklch(72% 0.16 258);
     --accent-text: oklch(12% 0.025 258);
-    --accent-warm: oklch(78% 0.15 68);
+    --accent-warm: oklch(78% 0.12 68);
 
-    --success: oklch(65% 0.18 148);
-    --success-bg: oklch(65% 0.18 148 / 0.12);
-    --warning: oklch(75% 0.16 62);
-    --warning-bg: oklch(75% 0.16 62 / 0.1);
-    --error: oklch(65% 0.2 27);
-    --error-bg: oklch(65% 0.2 27 / 0.08);
+    --success: oklch(65% 0.14 148);
+    --success-bg: oklch(65% 0.14 148 / 0.12);
+    --warning: oklch(75% 0.12 62);
+    --warning-bg: oklch(75% 0.12 62 / 0.1);
+    --error: oklch(65% 0.15 27);
+    --error-bg: oklch(65% 0.15 27 / 0.08);
 
     --scene-bg: #0a1018;
     --scene-grid: #1a2535;
@@ -143,6 +143,49 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   flex-shrink: 0;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-3);
+}
+
+.panel-header h1 {
+  margin-bottom: 0;
+}
+
+.panel-close-btn {
+  display: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-close-btn:hover:not(:disabled) {
+  background: var(--error);
+  color: white;
+  border-color: var(--error);
+}
+
+@media (max-width: 768px) {
+  .panel-close-btn {
+    display: flex;
+  }
+
+  #ui-panel {
+    padding: var(--sp-3);
+  }
 }
 
 #ui-panel::-webkit-scrollbar {
@@ -482,11 +525,15 @@ details.section[open] > summary {
   font-size: var(--text-base);
   font-family: var(--font-ui);
   outline: none;
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
 }
 
 .input-row input[type="number"]:focus,
 .input-row input[type="text"]:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px oklch(45% 0.22 262 / 0.15);
 }
 
 .input-row input[type="number"]:hover:not(:focus),
@@ -519,6 +566,9 @@ select {
   background-repeat: no-repeat;
   background-position: right 8px center;
   padding-right: 26px;
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
 }
 
 select:focus-visible,
@@ -528,9 +578,6 @@ summary:focus-visible {
   outline-offset: 2px;
 }
 
-select:focus {
-  border-color: var(--accent);
-}
 select:hover:not(:focus) {
   border-color: var(--text-muted);
 }
@@ -604,7 +651,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 button:disabled {
@@ -833,7 +880,7 @@ button.secondary:hover:not(:disabled) {
 
 .simulation-jobs-toolbar-field {
   display: grid;
-  gap: 3px;
+  gap: var(--sp-1);
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
@@ -853,7 +900,7 @@ button.secondary:hover:not(:disabled) {
   border-radius: var(--r-sm);
   background: var(--panel);
   display: grid;
-  gap: 3px;
+  gap: var(--sp-1);
 }
 
 .simulation-job-item.is-active {
@@ -1007,6 +1054,15 @@ button.secondary:hover:not(:disabled) {
   color: var(--text);
   font-size: var(--text-sm);
   box-shadow: var(--shadow-md);
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.2s ease-out;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .ui-toast-error {
@@ -1014,6 +1070,12 @@ button.secondary:hover:not(:disabled) {
 }
 .ui-toast-success {
   border-left: 3px solid var(--success);
+}
+.ui-toast-info {
+  border-left: 3px solid var(--info);
+}
+.ui-toast-warning {
+  border-left: 3px solid var(--warning);
 }
 
 /* ── 15. Choice Dialog ────────────────────────────────────── */
@@ -1518,9 +1580,11 @@ button.secondary:hover:not(:disabled) {
 .view-results-img {
   min-height: 80px;
 }
-.view-results-img img {
+.view-results-img img,
+.view-results-chart-img {
   display: block;
   width: 100%;
+  border-radius: var(--r-sm);
 }
 
 .view-results-loading {
@@ -1528,6 +1592,32 @@ button.secondary:hover:not(:disabled) {
   padding: var(--sp-5);
   color: var(--text-muted);
   font-size: var(--text-sm);
+}
+
+.view-results-matplotlib-error {
+  padding: var(--sp-6);
+}
+
+.view-results-matplotlib-error-title {
+  font-weight: 600;
+  margin-bottom: var(--sp-2);
+}
+
+.view-results-matplotlib-error-detail {
+  opacity: 0.8;
+  font-size: var(--text-sm);
+}
+
+.view-results-matplotlib-error-detail code {
+  background: var(--input-bg);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+}
+
+.view-results-matplotlib-error-hint {
+  opacity: 0.6;
+  font-size: var(--text-xs);
+  margin-top: var(--sp-1);
 }
 
 @media (max-width: 640px) {
@@ -1856,6 +1946,59 @@ button.secondary:hover:not(:disabled) {
 
 /* ── 22. Responsive ───────────────────────────────────────── */
 
+.mobile-panel-toggle {
+  display: none;
+  position: fixed;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 101;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-size: var(--text-lg);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
+
+.mobile-panel-toggle:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.mobile-panel-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  background: var(--overlay);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base);
+}
+
+.mobile-panel-backdrop.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --panel-width: 320px;
+  }
+
+  .settings-modal-nav {
+    width: 120px;
+  }
+}
+
 @media (max-width: 900px) {
   #actions-panel {
     width: min(320px, calc(100vw - 20px));
@@ -1863,11 +2006,168 @@ button.secondary:hover:not(:disabled) {
     bottom: 10px;
     max-height: calc(100vh - 200px);
   }
+
+  .settings-modal-body {
+    flex-direction: column;
+  }
+
+  .settings-modal-nav {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: var(--sp-1);
+  }
+
+  .settings-nav-btn {
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+  }
+
+  .settings-nav-btn.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --panel-width: 100%;
+    --panel-max: 100%;
+  }
+
+  body {
+    flex-direction: column;
+  }
+
+  #ui-panel {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    height: 100dvh;
+    width: 85%;
+    max-width: 360px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: var(--shadow-lg);
+  }
+
+  #ui-panel.is-open {
+    transform: translateX(0);
+  }
+
+  #ui-panel-resizer {
+    display: none;
+  }
+
+  #canvas-container {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  .mobile-panel-toggle {
+    display: flex;
+  }
+
+  .mobile-panel-backdrop {
+    display: block;
+  }
+
+  .viewer-controls {
+    top: var(--sp-3);
+    right: var(--sp-3);
+  }
+
+  #actions-panel {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: auto;
+    max-width: none;
+    max-height: 50vh;
+  }
+
+  .button-row {
+    grid-template-columns: 1fr;
+  }
+
+  .simulation-jobs-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .simulation-jobs-toolbar-field select {
+    width: 100%;
+  }
+
+  .input-row-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .view-results-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .view-results-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .formula-info-panel {
+    width: calc(100vw - 32px);
+    max-height: 90vh;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
 }
 
 @media (max-width: 640px) {
   .view-results-dialog {
     width: 100vw;
+  }
+
+  .tab-navigation {
+    gap: 0;
+  }
+
+  .tab-btn {
+    padding: var(--sp-2) var(--sp-1);
+    font-size: var(--text-xs);
+  }
+
+  .tab-btn .tab-icon {
+    display: none;
+  }
+
+  h1 {
+    font-size: var(--text-lg);
+  }
+
+  .viewer-controls button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .simulation-jobs-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
+  }
+
+  .simulation-jobs-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .view-results-summary-grid {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -2079,6 +2379,7 @@ textarea {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
+  will-change: transform;
 }
 
 @keyframes spin {
@@ -2106,4 +2407,62 @@ textarea {
 
 .input-success {
   border-color: var(--success) !important;
+}
+
+.copy-confirmation-chip {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-4);
+  box-shadow: var(--shadow-lg);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  animation: chip-appear 0.15s ease-out;
+  will-change: transform, opacity;
+}
+
+.copy-confirmation-chip .chip-icon {
+  color: var(--success);
+  font-size: var(--text-lg);
+}
+
+.copy-confirmation-chip .chip-label {
+  color: var(--text);
+}
+
+@keyframes chip-appear {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.copy-confirmation-chip.is-fading {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.9);
+  transition:
+    opacity var(--t-fast),
+    transform var(--t-fast);
+}
+
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px oklch(45% 0.22 262 / 0.15);
+}
+
+.ui-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
 }
