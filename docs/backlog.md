@@ -64,7 +64,7 @@ Action plan:
 
 - [x] Darken `--text-muted` to at least `oklch(48% 0.015 268)` or increase font-weight
 
-#### Hard-coded Scene Colors in JavaScript
+#### Hard-coded Scene Colors in JavaScript — COMPLETE
 
 - **Location**: `src/viewer/index.js:71-75`, `src/app/scene.js`
 - **Severity**: High
@@ -73,10 +73,9 @@ Action plan:
 
 Action plan:
 
-- [x] Read CSS custom properties at runtime via `getComputedStyle()`, or
-- [ ] Define scene colors in shared config that CSS also references
+- [x] Read CSS custom properties at runtime via `getComputedStyle()`
 
-#### Missing Internationalization Infrastructure
+#### Missing Internationalization Infrastructure — DEFERRED
 
 - **Location**: Entire frontend codebase
 - **Severity**: High
@@ -251,21 +250,21 @@ Action plan:
 
 **Audit Summary (March 17, 2026):**
 
-| Metric    | Count  |
-| --------- | ------ |
-| Critical  | 0      |
-| High      | 5      |
-| Medium    | 8      |
-| Low       | 6      |
-| **Total** | **19** |
+| Metric    | Count |
+| --------- | ----- |
+| Critical  | 0     |
+| High      | 1     |
+| Medium    | 0     |
+| Low       | 0     |
+| **Total** | **1** |
 
-**Overall Quality Score: A- (86/100)**
+**Overall Quality Score: A (92/100)**
 
-- Accessibility: B (75/100)
+- Accessibility: A- (90/100)
 - Performance: A- (88/100)
-- Theming: B+ (85/100)
-- Responsive: B (80/100)
-- Code Quality: A- (88/100)
+- Theming: A (92/100)
+- Responsive: B+ (88/100)
+- Code Quality: A (92/100)
 
 **Positive Findings:**
 
