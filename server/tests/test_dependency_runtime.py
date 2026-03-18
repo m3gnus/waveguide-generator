@@ -44,7 +44,6 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "mesh_validation_mode",
                 "frequency_spacing",
                 "use_optimized",
-                "enable_symmetry",
                 "verbose",
             ],
         )
@@ -55,7 +54,6 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "enable_warmup",
                 "bem_precision",
                 "use_burton_miller",
-                "symmetry_tolerance",
             ],
         )
         self.assertIn(

@@ -68,10 +68,6 @@ def _stub_horn_init(self, grid, physical_tags, **kwargs):
     self.throat_element_areas = np.array([0.5], dtype=float)
     self.throat_p1_dofs = np.array([[0, 1, 2]], dtype=np.int32)
     self.unit_velocity_fun = None
-    self.symmetry_info = None
-    self.symmetry_planes = None
-    self.mirror_grids = []
-    self.mirror_spaces = []
 
 
 
@@ -145,7 +141,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                     frequency_range=[100.0, 1000.0],
                     num_frequencies=2,
                     sim_type="2",
-                    enable_symmetry=False,
                     verbose=False,
                     mesh_validation_mode="strict",
                 )
@@ -177,7 +172,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[100.0, 1000.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="warn",
             )
@@ -202,7 +196,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[100.0, 1000.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -210,23 +203,10 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         validate_freq.assert_not_called()
         self.assertFalse(results["metadata"]["mesh_validation"]["enabled"])
 
-    def test_advanced_settings_control_precision_warmup_and_symmetry_tolerance(self):
+    def test_advanced_settings_control_precision_warmup_and_burton_miller(self):
         mesh = _mesh_stub()
-        symmetry_result = {
-            "policy": {
-                "requested": True,
-                "applied": False,
-                "reason": "no_symmetry_detected",
-                "detected_symmetry_type": "full",
-                "throat_center": [0.0, 0.0, 0.0],
-            },
-            "symmetry": {"symmetry_type": "full", "reduction_factor": 1.0},
-        }
 
         with patch(
-            "solver.solve_optimized.evaluate_symmetry_policy",
-            return_value=symmetry_result,
-        ) as evaluate_symmetry_policy, patch(
             _SOLVE_FREQ_TARGET,
             return_value=_SOLVE_FREQ_RETURN,
         ) as solve_freq_mock, patch(
@@ -238,8 +218,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[100.0, 1000.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=True,
-                symmetry_tolerance=0.025,
                 enable_warmup=False,
                 bem_precision="single",
                 use_burton_miller=False,
@@ -247,7 +225,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 mesh_validation_mode="off",
             )
 
-        self.assertEqual(evaluate_symmetry_policy.call_args.kwargs["tolerance"], 0.025)
         self.assertEqual(results["metadata"]["performance"]["bem_precision"], "single")
         self.assertEqual(results["metadata"]["failure_count"], 0)
 
@@ -273,7 +250,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 300.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -302,7 +278,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                     frequency_range=[200.0, 300.0],
                     num_frequencies=2,
                     sim_type="2",
-                    enable_symmetry=False,
                     verbose=False,
                     mesh_validation_mode="off",
                     cancellation_callback=lambda: (_ for _ in ()).throw(CancelSolve("cancelled")),
@@ -368,7 +343,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 300.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -416,7 +390,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 200.0],
                 num_frequencies=1,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -445,7 +418,6 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 400.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -479,7 +451,6 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 300.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -504,7 +475,6 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 200.0],
                 num_frequencies=1,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -547,7 +517,6 @@ class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
                 frequency_range=[200.0, 400.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
                 bem_precision="single",

@@ -77,7 +77,6 @@ def _build_config_summary(request: SimulationRequest) -> Dict[str, Any]:
         "frequency_range": request.frequency_range,
         "num_frequencies": request.num_frequencies,
         "sim_type": str(request.sim_type),
-        "enable_symmetry": bool(request.enable_symmetry),
     }
 
 

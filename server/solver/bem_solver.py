@@ -72,7 +72,6 @@ class BEMSolver:
         progress_callback: Optional[callable] = None,
         stage_callback: Optional[callable] = None,
         use_optimized: bool = True,
-        enable_symmetry: bool = True,
         verbose: bool = False,
         mesh_validation_mode: str = "warn",
         frequency_spacing: str = "linear",
@@ -90,8 +89,7 @@ class BEMSolver:
             sim_type: Simulation type
             polar_config: Polar directivity configuration
             progress_callback: Progress callback function
-            use_optimized: Use optimized solver with symmetry, caching, correct polars (default: True)
-            enable_symmetry: Enable automatic symmetry detection and reduction (default: True)
+            use_optimized: Use optimized solver with caching, correct polars (default: True)
             verbose: Print detailed progress and validation reports (default: False)
             advanced_settings: Optional optimized-solver-only overrides exposed by
                 the public contract.
@@ -118,7 +116,7 @@ class BEMSolver:
             return solve_optimized(
                 mesh, frequency_range, num_frequencies, sim_type,
                 polar_config, progress_callback, stage_callback,
-                enable_symmetry, verbose=verbose,
+                verbose=verbose,
                 mesh_validation_mode=mesh_validation_mode,
                 frequency_spacing=frequency_spacing,
                 device_mode=device_mode,
@@ -126,7 +124,7 @@ class BEMSolver:
                 cancellation_callback=cancellation_callback,
             )
         else:
-            # Legacy solver (no symmetry, analytical piston directivity)
+            # Legacy solver (analytical piston directivity)
             return solve(
                 mesh, frequency_range, num_frequencies, sim_type,
                 polar_config, progress_callback, stage_callback,

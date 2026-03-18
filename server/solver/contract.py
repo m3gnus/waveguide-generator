@@ -7,7 +7,6 @@ VALID_MESH_VALIDATION_MODES = {"strict", "warn", "off"}
 @dataclass(frozen=True)
 class SolverRunOptions:
     use_optimized: bool = True
-    enable_symmetry: bool = True
     verbose: bool = False
     mesh_validation_mode: str = "warn"
 
