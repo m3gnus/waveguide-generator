@@ -68,25 +68,6 @@ def _finalize_cancelled_job(
     )
 
 
-def _resolve_occ_adaptive_quadrants(validated_payload: dict[str, Any]) -> int:
-    """Extract quadrants for BEM mesh construction.
-
-    Safety gate: always returns 1234 (full model).  The image source
-    method (Approach A) is blocked by a bempp-cl 0.4.x singular
-    quadrature limitation — cross-grid operators miss near-field
-    contributions at the symmetry plane, producing ~8 dB SPL errors.
-    Half-model symmetry is deferred until a compatible BEM backend is
-    available.  See P1 in docs/backlog.md for details.
-    """
-    q = int(validated_payload.get("quadrants", 1234))
-    if q != 1234:
-        # User explicitly requested a partial horn — honour it.
-        return q
-
-    # Safety gate: force full-model solve regardless of geometry symmetry.
-    return 1234
-
-
 def _extract_occ_adaptive_canonical_mesh(
     occ_result: dict[str, Any],
 ) -> tuple[list[Any], list[Any], list[int]]:
@@ -214,21 +195,13 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             validated = WaveguideParamsRequest(**waveguide_params)
             validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
-            queued_quadrants = _resolve_occ_adaptive_quadrants(validated_payload)
-            # Determine if B-Rep symmetry cut is needed (tessellation-last).
-            # When _resolve returns 12, we should build full geometry but cut at
-            # the B-Rep level before tessellation.
-            _symmetry_cut = "yz" if queued_quadrants == 12 else None
-            # The builder always uses quadrants=1234 for full geometry construction;
-            # the symmetry_cut parameter handles the B-Rep clipping.
-            validated_payload["quadrants"] = 1234
+            queued_quadrants = int(validated_payload.get("quadrants", 1234))
             occ_result = build_waveguide_mesh(
                 validated_payload,
                 include_canonical=True,
                 cancellation_callback=lambda: _cancellation_callback(
                     "Cancellation requested while preparing adaptive mesh"
                 ),
-                symmetry_cut=_symmetry_cut,
             )
             _cancellation_callback("Cancellation requested after adaptive mesh build completed")
             vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
@@ -380,7 +353,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             progress_callback=lambda p: _solver_stage_callback("frequency_solve", progress=p),
             stage_callback=_solver_stage_callback,
             use_optimized=request.use_optimized,
-            enable_symmetry=request.enable_symmetry,
             verbose=request.verbose,
             mesh_validation_mode=request.mesh_validation_mode,
             frequency_spacing=request.frequency_spacing,

@@ -127,24 +127,6 @@ class ApiValidationTest(unittest.TestCase):
                 device_mode='opencl_magic'
             )
 
-    def test_negative_advanced_symmetry_tolerance_is_rejected(self):
-        with self.assertRaises(ValidationError):
-            SimulationRequest(
-                mesh=MeshData(
-                    vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    indices=[0, 1, 2],
-                    surfaceTags=[2],
-                    format='msh',
-                    boundaryConditions={},
-                    metadata={}
-                ),
-                frequency_range=[100.0, 1000.0],
-                num_frequencies=10,
-                sim_type='2',
-                options={},
-                advanced_settings={'symmetry_tolerance': -0.001}
-            )
-
     def test_invalid_advanced_bem_precision_is_rejected(self):
         with self.assertRaises(ValidationError):
             SimulationRequest(
@@ -294,8 +276,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(result["job_id"], job_id)
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
-        # Safety gate removed: quadrants is no longer forced to 1234.
-        # Geometry-first detection in simulation_runner.py handles symmetry.
+        # Submission preserves the requested quadrants in the queued payload.
         self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
 
     def test_occ_adaptive_accepts_rosse_b_expression(self):
@@ -486,8 +467,7 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         )
 
     def test_occ_adaptive_accepts_non_full_domain_quadrants(self):
-        """Non-1234 quadrants are accepted (silently forced to 1234) — the solver
-        does not reject them but overrides to full model until BEM symmetry is fixed."""
+        """Non-1234 quadrants are accepted and forwarded unchanged to OCC meshing."""
         request = self._make_occ_adaptive_request({"quadrants": 14})
 
         fake_occ_result = {
@@ -526,6 +506,8 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
 
             build_mesh.assert_called_once()
+            forwarded_params = build_mesh.call_args.args[0]
+            self.assertEqual(forwarded_params.get("quadrants"), 14)
             # The job should not be in error state — non-1234 quadrants are allowed now.
             self.assertNotEqual(_jrt.jobs[job_id].get("status"), "error",
                 "Non-1234 quadrants should be accepted for occ_adaptive path")
