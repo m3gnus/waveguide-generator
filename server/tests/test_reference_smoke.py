@@ -48,7 +48,6 @@ class ReferenceSmokeTest(unittest.TestCase):
             frequency_range=[1000.0, 1000.0],
             num_frequencies=1,
             sim_type="2",
-            enable_symmetry=False,
             verbose=False,
             mesh_validation_mode="off",
         )

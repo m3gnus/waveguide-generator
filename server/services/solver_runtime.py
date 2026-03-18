@@ -33,7 +33,6 @@ def get_settings_capabilities() -> Dict[str, Any]:
                 "mesh_validation_mode",
                 "frequency_spacing",
                 "use_optimized",
-                "enable_symmetry",
                 "verbose",
             ],
             "notes": "Current backend support is limited to the existing /api/solve runtime overrides.",
@@ -44,11 +43,10 @@ def get_settings_capabilities() -> Dict[str, Any]:
                 "enable_warmup",
                 "bem_precision",
                 "use_burton_miller",
-                "symmetry_tolerance",
             ],
             "reason": (
                 "The public solve contract exposes warm-up, BEM precision, "
-                "Burton-Miller coupling, and symmetry-tolerance overrides."
+                "and Burton-Miller coupling overrides."
             ),
         },
     }

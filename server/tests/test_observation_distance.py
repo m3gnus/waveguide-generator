@@ -56,10 +56,6 @@ def _stub_horn_init(self, grid, physical_tags, **kwargs):
     self.throat_element_areas = np.array([0.5], dtype=float)
     self.throat_p1_dofs = np.array([[0, 1, 2]], dtype=np.int32)
     self.unit_velocity_fun = None
-    self.symmetry_info = None
-    self.symmetry_planes = None
-    self.mirror_grids = []
-    self.mirror_spaces = []
 
 
 class ObservationDistanceForwardingTest(unittest.TestCase):
@@ -160,7 +156,6 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
                 num_frequencies=2,
                 sim_type="2",
                 polar_config={"distance": 2.5},
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -239,7 +234,6 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
                 num_frequencies=2,
                 sim_type="2",
                 polar_config={"distance": 2.5},
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )
@@ -288,7 +282,6 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
                 num_frequencies=1,
                 sim_type="2",
                 polar_config={"distance": 1.0},
-                enable_symmetry=False,
                 verbose=False,
                 mesh_validation_mode="off",
             )

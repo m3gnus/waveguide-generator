@@ -86,7 +86,6 @@ def run_benchmark(args):
         frequency_range=[args.freq_min, args.freq_max],
         num_frequencies=args.num_freq,
         sim_type="2",
-        enable_symmetry=True,
         verbose=True,
         mesh_validation_mode="warn",
         frequency_spacing=args.spacing,
@@ -107,8 +106,6 @@ def run_benchmark(args):
     print(f"  Frequency solve:          {perf['frequency_solve_time']:.2f}s")
     print(f"  Per-frequency (avg):      {perf['time_per_frequency']:.3f}s")
     print(f"  Directivity compute:      {perf['directivity_compute_time']:.2f}s")
-    if perf.get("reduction_speedup", 1.0) > 1.0:
-        print(f"  Symmetry speedup:         {perf['reduction_speedup']:.1f}x")
     print()
 
     iters = perf.get("gmres_iterations_per_frequency", [])
