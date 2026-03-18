@@ -54,7 +54,6 @@ function createAbortController(timeoutMs) {
  *   enableWarmup?: boolean,
  *   bemPrecision?: 'single'|'double',
  *   useBurtonMiller?: boolean,
- *   symmetryTolerance?: number
  * }} [advancedSettings]
  */
 
@@ -226,11 +225,6 @@ function buildAdvancedSettingsPayload(settings) {
     VALID_BEM_PRECISIONS,
   );
   assignBooleanSetting(payload, "use_burton_miller", settings.useBurtonMiller);
-
-  const symmetryTolerance = Number(settings.symmetryTolerance);
-  if (Number.isFinite(symmetryTolerance) && symmetryTolerance > 0) {
-    payload.symmetry_tolerance = symmetryTolerance;
-  }
 
   return Object.keys(payload).length > 0 ? payload : null;
 }

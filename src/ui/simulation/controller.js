@@ -17,7 +17,6 @@ import {
   buildCancelledSimulationJob,
   buildQueuedSimulationJob
 } from '../../modules/simulation/jobs.js';
-import { getSymmetryPolicySummary } from './results.js';
 import {
   allJobs,
   createJobTracker,
@@ -142,29 +141,6 @@ function mergeUniqueStrings(...lists) {
   return merged;
 }
 
-async function persistSimulationControllerSymmetrySummary(controller, jobId, results) {
-  const current = controller?.jobs?.get(jobId);
-  if (!current) {
-    return null;
-  }
-
-  const symmetrySummary = getSymmetryPolicySummary(results);
-  if (!symmetrySummary) {
-    return current;
-  }
-
-  const next = upsertJob(controller, {
-    ...current,
-    id: current.id,
-    symmetrySummary
-  });
-  persistControllerJobs(controller);
-  if (next) {
-    await syncSimulationWorkspaceJobManifest(next, { symmetrySummary });
-  }
-  return next;
-}
-
 function createSimulationPanelUiCoordinator(panelAdapter) {
   return UiModule.output.simulationPanel(
     UiModule.task(UiModule.importSimulationPanel(panelAdapter))
@@ -271,7 +247,6 @@ export async function ensureSimulationControllerJobResults(
   if (controller.resultCache?.has(jobId)) {
     const cached = controller.resultCache.get(jobId);
     controller.lastResults = cached;
-    await persistSimulationControllerSymmetrySummary(controller, jobId, cached);
     if (display && typeof displayResults === 'function') {
       displayResults(cached);
     }
@@ -285,11 +260,10 @@ export async function ensureSimulationControllerJobResults(
   const results = await controller.solver.getResults(jobId);
   controller.resultCache.set(jobId, results);
   controller.lastResults = results;
-  const updatedJob = await persistSimulationControllerSymmetrySummary(controller, jobId, results);
   if (display && typeof displayResults === 'function') {
     displayResults(results);
   }
-  return { ok: true, reason: 'fetched', results, job: updatedJob || controller.jobs.get(jobId) || job };
+  return { ok: true, reason: 'fetched', results, job: controller.jobs.get(jobId) || job };
 }
 
 export async function recordSimulationControllerExport(

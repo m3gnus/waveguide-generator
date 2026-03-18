@@ -134,7 +134,7 @@ This creates a dedicated environment at `$HOME/.waveguide-generator/opencl-cpu-e
 | `Auto-download solve mesh`                   | Whether `.msh` is downloaded after solve  | Mesh generation itself                    |
 | `Task Exports` settings                      | Export bundle formats for completed tasks | Solver execution                          |
 
-**Note:** Imported ATH `Mesh.Quadrants` values do not trim the canonical simulation payload. The frontend keeps full-domain geometry; any half/quarter reduction is decided later by the backend symmetry policy.
+**Note:** Imported ATH `Mesh.Quadrants` values do not trim the canonical simulation payload. The frontend and active backend solve path both run full-domain geometry for BEM; imported quadrant metadata remains informational unless a future solver path is added.
 
 ## Project layout
 

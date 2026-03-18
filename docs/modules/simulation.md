@@ -18,7 +18,7 @@
 
 - **Payload preparation**: Build canonical simulation payloads and OCC adaptive submit options
 - **Job submission**: Route jobs to backend `/api/solve` with correct request shape
-- **Result handling**: Poll backend, fetch results, extract metadata (symmetry policy, performance)
+- **Result handling**: Poll backend, fetch results, extract runtime metadata (performance, observation distance, failures)
 - **History management**: Track backend jobs and folder-workspace task manifests
 - **Metadata persistence**: Save task ratings, export status, auto-export markers, and script snapshots
 
@@ -27,10 +27,9 @@
 **Simulation execution**:
 - Real simulation requires backend `/api/solve` path; no mock/fallback solver supported
 - Payload submission includes canonical mesh + optional OCC adaptive parameters
-- Symmetry detection and reduction decided at solve-time (returned in `metadata.symmetry_policy`)
+- Active BEM solves run the full-domain mesh; imported quadrants remain metadata only
 
 **Results handling**:
-- View Results modal displays `metadata.symmetry_policy` as read-only summary when present
 - Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)
 - Backend performance metadata included in results under `metadata.performance`
 

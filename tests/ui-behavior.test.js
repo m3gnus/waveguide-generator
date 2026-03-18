@@ -582,7 +582,8 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
       createdElements.some((el) => el.id === 'simadvanced-useBurtonMiller'),
       'Simulation section should expose the Burton-Miller advanced control'
     );
-    // symmetryTolerance is not yet exposed in the modal (symmetry is currently disabled).
+    // No additional advanced controls should be rendered beyond the supported warm-up,
+    // precision, and Burton-Miller settings.
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;

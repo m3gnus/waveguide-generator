@@ -109,12 +109,12 @@ flowchart LR
 
 1. Simulation UI emits `simulation:mesh-requested`.
 2. `src/app/mesh.js` resolves prepared design inputs via `DesignModule`, and `SimulationModule` builds canonical payload from those inputs before emitting `simulation:mesh-ready`.
-   - For OCC-adaptive `/api/solve`, frontend may send imported `waveguide_params.quadrants`, but that does not trim the canonical simulation payload. The backend submission boundary still builds a queued full-domain OCC request with `quadrants=1234`.
+   - For OCC-adaptive `/api/solve`, frontend may send imported `waveguide_params.quadrants`, but that does not trim the canonical simulation payload or activate a reduced-domain BEM solve.
    - The same pre-submit payload also carries `metadata.identityTriangleCounts`, which the UI uses to show geometry-face triangle counts without changing the downstream numeric `surfaceTags` solver contract.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
-- Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, `enable_symmetry`, and `verbose` when the saved values are valid
+- Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, and `verbose` when the saved values are valid
 - Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
 - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 - On GPU-only OpenCL runtimes without a CPU device, `opencl_gpu` now installs a bempp-cl CPU-context surrogate that reuses the active GPU context for singular assembly.
@@ -124,8 +124,6 @@ flowchart LR
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
    - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Task Exports settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
    - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and folder manifests/index when available.
-  - Solver results now include both `metadata.symmetry` (applied reduction summary) and `metadata.symmetry_policy` (decision/rejection reason, detected type/planes, reduction factor, and centered-source check).
-  - The Simulation Jobs feed persists a compact symmetry summary alongside each job, combining the requested `enable_symmetry` setting with the fetched solver decision once results are available.
 5. If backend solver/OCC runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow
@@ -163,8 +161,7 @@ Important behavior:
 - Source triangles are explicit geometry and required; payload build throws if none are tagged.
 - JS canonical payload currently emits only tags `1` and `2`; tag counters for `3`/`4` remain zero in runtime tests.
 - Simulation payload topology is full-domain and does not trim by `quadrants`.
-- OCC-adaptive `/api/solve` builds a full-domain queued OCC request with `quadrants=1234` at the submission boundary instead of mutating the caller-owned request in place.
-- Imported ATH `Mesh.Quadrants` values therefore remain import metadata only; whether a run stays full-domain or reduces to half/quarter domain is decided later by `metadata.symmetry_policy` in the solve path.
+- Imported ATH `Mesh.Quadrants` values remain import metadata only; the active `/api/solve` runtime does not apply half/quarter-domain symmetry reduction.
 - `/api/solve` rejects mesh payloads that do not already contain source tag `2`, instead of waiting for solver-side mesh preparation to fail.
 - The OCC runner passes canonical mesh `surfaceTags` through unchanged; later stages validate contracts rather than collapsing non-source tags into `1`.
 - Adaptive phi tessellation is restricted to full-circle horn-only render usage.
@@ -305,7 +302,6 @@ Base URL: `http://localhost:8000`
     - `enable_warmup`
     - `bem_precision` (`single` or `double`)
     - `use_burton_miller`
-    - `symmetry_tolerance` (positive finite float)
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
 
@@ -346,7 +342,7 @@ Notes:
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
-- Public advanced solver overrides currently expose warm-up, BEM precision, Burton-Miller coupling, and symmetry tolerance. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
+- Public advanced solver overrides currently expose warm-up, BEM precision, and Burton-Miller coupling. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata
