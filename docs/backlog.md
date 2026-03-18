@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 18, 2026
+Last updated: March 18, 2026 (evening)
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -38,6 +38,78 @@ Status as of March 17, 2026:
 - **UI Redesign Audit complete** — anti-pattern score 2/10 (excellent); 3 minor P4 polish items identified (March 18, 2026).
 
 ## Active Backlog
+
+### P3. Document Symmetry Solver Investigation (March 18, 2026)
+
+**Status:** COMPLETE — March 18, 2026
+
+**Description:** Create `docs/symmetry-investigation.md` documenting the full BEM symmetry optimization journey. The image source method was investigated for bempp-cl 0.4.x to exploit geometric symmetry (quarter/half models) for 2–4× speedups. The approach is fundamentally blocked: bempp-cl only applies Duffy-transform singular quadrature for elements sharing vertex indices (not just vertex positions). For any image-source implementation — cross-grid operators OR merged grids — elements at the symmetry plane touch physically but don't share indices, producing ~8 dB error. This document preserves the investigation for future revisit.
+
+**Implementation notes:**
+
+- Single new file: `docs/symmetry-investigation.md`
+- Cover: approaches tried (cross-grid operators, merged grids), root cause analysis, measured errors, future paths (custom Green's function, manual Duffy corrections, different BEM library)
+- Reference the benchmark data: 2.66× speedup potential, 2.96× DOF reduction at 700 elements
+
+**Action plan:**
+
+- [x] Write `docs/symmetry-investigation.md` covering approaches, root cause, measurements, and future options
+- [x] Reference relevant commits and research artifacts
+
+### P2. Remove All Symmetry Solver Code (March 18, 2026)
+
+**Status:** NOT STARTED — depends on P3 documentation being written first
+
+**Description:** Remove all BEM symmetry solving code from the program. The image source method is permanently blocked by bempp-cl 0.4.x's singular quadrature limitation (~8 dB error). The code adds significant complexity (~27 files touched) with zero runtime benefit since symmetry is already force-disabled. Clean removal reduces maintenance burden and cognitive overhead.
+
+**Implementation notes:**
+
+- **Delete entirely (8+ files):** `server/solver/symmetry.py`, `server/solver/symmetry_benchmark.py`, `server/tests/test_symmetry_regression.py`, `server/tests/test_symmetry_benchmark.py`, `server/scripts/ab_test_symmetry.py`, `server/scripts/benchmark_bem_symmetry.py`, `server/scripts/benchmark_symmetry.py`, `server/scripts/diagnose_image_source.py`, `server/scripts/diagnose_image_lhs.py`, `server/scripts/diagnose_image_detail.py`, `server/scripts/diagnose_ath_symmetry.py`
+- **Clean up `solve_optimized.py`:** remove symmetry imports (lines 46–51), `HornBEMSolver` symmetry state (lines 195–198), `_assemble_image_operators()` method (~75 lines), symmetry policy evaluation (~60 lines), mirror-space solve path (~25 lines), `apply_neumann_bc_on_symmetry_planes()` function, `enable_symmetry`/`symmetry_tolerance` parameters
+- **Clean up backend:** `bem_solver.py` (`enable_symmetry` param), `contract.py` (`enable_symmetry` field), `contracts/__init__.py` (`symmetry_tolerance`, `enable_symmetry` + validators), `simulation_runner.py` (symmetry gating, `_symmetry_cut` logic), `job_runtime.py` (`enable_symmetry` recording), `solver_runtime.py` (symmetry fields)
+- **Clean up frontend:** `simAdvancedSettings.js` (`symmetryTolerance` control + `getSymmetryTolerance()`), `results.js` (symmetry display logic), `jobActions.js` (`symmetryTolerance` in payload), `controller.js`/`jobTracker.js` (symmetry state), `taskIndex.js`/`taskManifest.js` (symmetry references)
+- **Delete research doc:** `research/symmetry-policy-controls-2026-03-12.md`
+- Keep `src/geometry/symmetry.js` (frontend auto-detection for ABEC export quadrants — unrelated to BEM solving)
+
+**Action plan:**
+
+- [ ] Delete all standalone symmetry files (solver modules, tests, scripts)
+- [ ] Clean `solve_optimized.py` — remove mirror grid / image operator code paths
+- [ ] Clean backend contracts, services, and solver entry points
+- [ ] Clean frontend UI — remove symmetry tolerance setting and display references
+- [ ] Delete research doc
+- [ ] Update `docs/backlog.md` Current Baseline to remove symmetry-disabled note
+- [ ] Run full test suite (`npm test` + `npm run test:server`) to verify nothing breaks
+- [ ] Single commit with descriptive message
+
+### P2. Verify BEM Precision Against Reference & Default to Single (March 18, 2026)
+
+**Status:** NOT STARTED
+
+**Description:** Verify BEM solver precision implementation against the JWSound/BEMPPSolver reference, which uses `bempp_cl.api.DEFAULT_PRECISION = 'single'` as default. Our optimized solver already propagates precision correctly (global default + per-operator kwargs + NumPy dtypes), which is actually **more thorough** than the reference (which only sets global default and inconsistently uses `complex128` for coefficients). However, the UI default is `"double"` while it should be `"single"` to match the reference. Additionally, `directivity_correct.py` has misleading `"double"` defaults on function signatures (overridden at call sites but confusing).
+
+**Research findings (JWSound/BEMPPSolver comparison):**
+
+| Aspect | JWSound Reference | Our Solver |
+|--------|------------------|------------|
+| Global default | `DEFAULT_PRECISION = 'single'` | ✅ Sets via `_configure_bempp_precision()` |
+| Per-operator kwargs | Not passed (relies on global) | ✅ Passes `precision=` to every operator |
+| Coefficient dtype | ❌ `complex128` (inconsistent with single) | ✅ `complex64`/`complex128` based on precision |
+| UI default | N/A | ❌ `"double"` — should be `"single"` |
+| Directivity defaults | N/A | ⚠️ `"double"` in function signatures (dead path) |
+
+**Implementation notes:**
+
+- Files: `src/ui/settings/simAdvancedSettings.js` (change `RECOMMENDED_DEFAULTS.bemPrecision` from `'double'` to `'single'`), `src/ui/settings/modal.js` (reorder `<option>` elements so single is first), `server/solver/directivity_correct.py` (change default params from `"double"` to `"single"` for consistency)
+- Legacy `solve.py` doesn't pass `precision=` to operator kwargs — low priority since optimized solver is the active path
+
+**Action plan:**
+
+- [ ] Change `RECOMMENDED_DEFAULTS.bemPrecision` to `'single'` in `simAdvancedSettings.js`
+- [ ] Update `modal.js` select element ordering (single first)
+- [ ] Change `directivity_correct.py` function signature defaults from `"double"` to `"single"`
+- [ ] Verify both single and double work end-to-end (run a test solve with each)
+- [ ] Update tooltip text if needed (currently favors double as "safe choice")
 
 ### P2. BEM Single Precision Solver Failure (March 18, 2026)
 
