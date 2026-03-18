@@ -9,7 +9,6 @@ import {
 import {
   getBemPrecision,
   getEnableWarmup,
-  getSymmetryTolerance,
   getUseBurtonMiller,
 } from "../settings/simAdvancedSettings.js";
 import {
@@ -21,7 +20,6 @@ import {
   buildPolarStatePatchFromConfig,
   readPolarStateSettings,
 } from "./polarSettings.js";
-import { getJobSymmetrySummary } from "./results.js";
 import { getDownloadSimMeshEnabled } from "../settings/modal.js";
 import { allJobs, hasActiveJobs } from "./jobTracker.js";
 import {
@@ -575,7 +573,6 @@ export async function runSimulation(panel) {
       enableWarmup: getEnableWarmup(),
       bemPrecision: getBemPrecision(),
       useBurtonMiller: getUseBurtonMiller(),
-      symmetryTolerance: getSymmetryTolerance(),
     },
   };
 
