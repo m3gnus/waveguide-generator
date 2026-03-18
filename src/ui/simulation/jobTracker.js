@@ -7,13 +7,6 @@ const MAX_LOCAL_ITEMS = 50;
 const TERMINAL = new Set(['complete', 'error', 'cancelled']);
 const ACTIVE = new Set(['queued', 'running']);
 
-function normalizeSymmetrySummary(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-  return value;
-}
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -56,7 +49,6 @@ function normalizeItem(raw = {}) {
     rating: raw.rating ?? null,
     exportedFiles,
     justCompleted: Boolean(raw.justCompleted),
-    symmetrySummary: normalizeSymmetrySummary(raw.symmetrySummary ?? raw.symmetry_summary),
     scriptSchemaVersion: Number.isFinite(Number(scriptSchemaInput))
       ? Number(scriptSchemaInput)
       : null,
@@ -86,7 +78,6 @@ function toStorageItem(item) {
     script: item.script,
     rating: item.rating ?? null,
     exported_files: Array.isArray(item.exportedFiles) ? item.exportedFiles : [],
-    symmetry_summary: item.symmetrySummary ?? null,
     script_schema_version: item.scriptSchemaVersion !== null
       && item.scriptSchemaVersion !== undefined
       && Number.isFinite(Number(item.scriptSchemaVersion))
@@ -206,7 +197,6 @@ export function mergeJobs(localItems, remoteItems) {
         exportedFiles: normalized.exportedFiles?.length
           ? normalized.exportedFiles
           : (existing.exportedFiles ?? []),
-        symmetrySummary: normalized.symmetrySummary ?? existing.symmetrySummary ?? null,
         justCompleted: normalized.status === 'complete' && existing.status !== 'complete',
         scriptSchemaVersion: normalized.scriptSchemaVersion !== null
           && normalized.scriptSchemaVersion !== undefined
@@ -274,7 +264,6 @@ export function upsertJob(panel, rawEntry) {
     exportedFiles: next.exportedFiles?.length
       ? next.exportedFiles
       : (existing?.exportedFiles ?? []),
-    symmetrySummary: next.symmetrySummary ?? existing?.symmetrySummary ?? null,
     justCompleted: next.justCompleted ?? existing?.justCompleted ?? false,
     scriptSchemaVersion: next.scriptSchemaVersion !== null
       && next.scriptSchemaVersion !== undefined

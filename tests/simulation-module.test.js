@@ -342,8 +342,7 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       advancedSettings: {
         enableWarmup: false,
         bemPrecision: 'single',
-        useBurtonMiller: false,
-        symmetryTolerance: 0.002
+        useBurtonMiller: false
       },
       polarConfig: {
         angle_range: [0, 90, 15],
@@ -374,8 +373,7 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.deepEqual(job.script.advancedSettings, {
     enableWarmup: false,
     bemPrecision: 'single',
-    useBurtonMiller: false,
-    symmetryTolerance: 0.002
+    useBurtonMiller: false
   });
 });
 
@@ -442,17 +440,7 @@ test('simulation workspace service rebuilds folder index from task manifests', a
       id: 'job-folder-1',
       label: 'horn_1',
       status: 'queued',
-      createdAt: '2026-03-11T12:00:00.000Z',
-      symmetrySummary: {
-        badge: 'Reduced',
-        headline: 'Applied half-domain reduction',
-        details: 'The solver applied half-domain reduction.',
-        tone: 'success',
-        items: [
-          { label: 'Requested', value: 'Enabled' },
-          { label: 'Decision', value: 'Half-domain (X symmetry)' }
-        ]
-      }
+      createdAt: '2026-03-11T12:00:00.000Z'
     });
 
     assert.equal(manifest.id, 'job-folder-1');
@@ -462,7 +450,6 @@ test('simulation workspace service rebuilds folder index from task manifests', a
     assert.equal(restored.repaired, true);
     assert.equal(restored.items.length, 1);
     assert.equal(restored.items[0].id, 'job-folder-1');
-    assert.equal(restored.items[0].symmetrySummary?.badge, 'Reduced');
     assert.equal(root.files.has('.waveguide-tasks.index.v1.json'), true);
   } finally {
     resetSelectedFolder();
@@ -479,16 +466,6 @@ test('simulation workspace service writes normalized folder index entries', asyn
         id: 'job-folder-2',
         status: 'complete',
         exportedFiles: ['result.csv'],
-        symmetrySummary: {
-          badge: 'Full model',
-          headline: 'Symmetry reduction disabled',
-          details: 'The solve request disabled symmetry reduction.',
-          tone: 'neutral',
-          items: [
-            { label: 'Requested', value: 'Disabled' },
-            { label: 'Decision', value: 'Full model' }
-          ]
-        },
         scriptSnapshot: { outputName: 'horn' }
       }
     ]);
@@ -501,7 +478,6 @@ test('simulation workspace service writes normalized folder index entries', asyn
     assert.equal(restored.items.length, 1);
     assert.equal(restored.items[0].id, 'job-folder-2');
     assert.deepEqual(restored.items[0].exportedFiles, ['result.csv']);
-    assert.equal(restored.items[0].symmetrySummary?.items?.[0]?.value, 'Disabled');
     assert.deepEqual(restored.items[0].scriptSnapshot, { outputName: 'horn' });
   } finally {
     resetSelectedFolder();

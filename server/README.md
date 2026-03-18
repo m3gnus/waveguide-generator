@@ -194,14 +194,13 @@ Optional:
     - `horizontal`: 0° plane
     - `vertical`: 90° plane
     - `diagonal`: `inclination` plane
-- optimization flags (`use_optimized`, `enable_symmetry`, `verbose`)
+- optimization flags (`use_optimized`, `verbose`)
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu`, default `auto`)
 - `advanced_settings`:
   - `enable_warmup` (bool, optimized solver only)
   - `bem_precision` (`single` | `double`, optimized solver only)
   - `use_burton_miller` (bool, optimized solver only)
-  - `symmetry_tolerance` (positive float, optimized solver only)
 
 Validation behavior:
 
@@ -211,19 +210,16 @@ Validation behavior:
 - `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
 - malformed payloads return `422`
 - `advanced_settings.bem_precision` must be `single` or `double` when provided
-- `advanced_settings.symmetry_tolerance` must be a positive finite number when provided
 
 Runtime metadata behavior:
 
 - If mesh unit metadata is missing, backend auto-detects scale with heuristic fallback.
-- Imported ATH `Mesh.Quadrants` does not directly reduce the canonical simulation payload or queued OCC solve request; `/api/solve` still runs from the full-domain mesh/OCC request and only reduces later when the symmetry policy approves it.
+- Imported ATH `Mesh.Quadrants` does not directly reduce the canonical simulation payload or queued OCC solve request; `/api/solve` runs the full-domain mesh/OCC request in the active runtime.
 - `/api/results/{job_id}` includes:
   - `metadata.failures`
   - `metadata.failure_count`
   - `metadata.partial_success`
   - `metadata.mesh_validation`
-  - `metadata.symmetry`
-  - `metadata.symmetry_policy` (`applied`, `reason`, detected symmetry type/planes, reduction factor, centered-excitation check)
   - `metadata.unit_detection`
   - `metadata.device_interface` (selected interface/device information and fallback details)
   - `metadata.performance.bem_precision` (`single` or `double` for optimized solves)
@@ -246,12 +242,10 @@ Returns simulation results for completed job.
 
 Returns paginated persisted job rows.
 
-- `config_summary` includes the submitted `enable_symmetry` flag alongside formula/frequency metadata so frontend job feeds can show the requested symmetry policy even after a reload.
 - `mesh_stats` persists the authoritative solve-mesh diagnostics for each job:
   - `vertex_count` / `triangle_count`
   - canonical `tag_counts`
   - OCC-derived `identity_triangle_counts` sourced from the same canonical extraction the solver consumes
-- Completed jobs still require `GET /api/results/{job_id}` to fetch full `metadata.symmetry` / `metadata.symmetry_policy`.
 
 ### `POST /api/stop/{job_id}`
 

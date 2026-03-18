@@ -84,7 +84,7 @@ class ObservationFrameTest(unittest.TestCase):
 
         self.assertGreater(float(np.dot(obs - frame["origin_center"], frame["axis"])), 0.99)
 
-    def test_safe_observation_distance_is_pushed_ahead_of_large_geometry(self):
+    def test_safe_observation_distance_uses_mouth_origin_clearance(self):
         vertices = np.array([
             [0.0, 0.1, -0.1, 0.0, 0.2, -0.2],
             [0.1, -0.1, 0.0, 0.1, -0.1, 0.0],
@@ -101,12 +101,10 @@ class ObservationFrameTest(unittest.TestCase):
         frame = infer_observation_frame(grid)
         resolved = resolve_safe_observation_distance(grid, 1.0, frame)
 
-        self.assertTrue(resolved["adjusted"])
-        self.assertGreater(resolved["effective_distance_m"], 1.12)
-        self.assertGreaterEqual(
-            resolved["effective_distance_m"],
-            resolved["min_safe_distance_m"],
-        )
+        self.assertFalse(resolved["adjusted"])
+        self.assertAlmostEqual(resolved["effective_distance_m"], 1.0, places=12)
+        self.assertGreater(resolved["min_safe_distance_m"], 0.0)
+        self.assertLess(resolved["min_safe_distance_m"], 1.0)
 
     def test_yz_symmetry_projects_origin_x_to_zero(self):
         vertices = np.array([

@@ -32,7 +32,7 @@ Status as of March 17, 2026:
 - MSH import: viewport display, return-to-parametric, and filename-derived export naming are all working.
 - Measurement distance propagation verified correct end-to-end (UI → solver → observation frame), with effective distance shown in View Results modal.
 - All 267 JS tests pass. Python tests pass.
-- **Symmetry optimization DISABLED** — image source method blocked by bempp-cl 0.4.x singular quadrature limitation. Code preserved for future revisit if bempp-cl adds cross-grid singular quadrature support.
+- **Symmetry solver cleanup complete** — the blocked image-source optimization path was removed from the active runtime after the investigation was documented.
 - **UI Quality Audit complete** — all P2/P3/P4 items resolved (March 17, 2026).
 - **Design Quality complete** — typography, button hierarchy, canvas framing, status indicators, empty states (March 18, 2026).
 - **UI Redesign Audit complete** — anti-pattern score 2/10 (excellent); 3 minor P4 polish items identified (March 18, 2026).
@@ -58,7 +58,7 @@ Status as of March 17, 2026:
 
 ### P2. Remove All Symmetry Solver Code (March 18, 2026)
 
-**Status:** NOT STARTED — depends on P3 documentation being written first
+**Status:** COMPLETE — March 18, 2026
 
 **Description:** Remove all BEM symmetry solving code from the program. The image source method is permanently blocked by bempp-cl 0.4.x's singular quadrature limitation (~8 dB error). The code adds significant complexity (~27 files touched) with zero runtime benefit since symmetry is already force-disabled. Clean removal reduces maintenance burden and cognitive overhead.
 
@@ -73,14 +73,14 @@ Status as of March 17, 2026:
 
 **Action plan:**
 
-- [ ] Delete all standalone symmetry files (solver modules, tests, scripts)
-- [ ] Clean `solve_optimized.py` — remove mirror grid / image operator code paths
-- [ ] Clean backend contracts, services, and solver entry points
-- [ ] Clean frontend UI — remove symmetry tolerance setting and display references
-- [ ] Delete research doc
-- [ ] Update `docs/backlog.md` Current Baseline to remove symmetry-disabled note
-- [ ] Run full test suite (`npm test` + `npm run test:server`) to verify nothing breaks
-- [ ] Single commit with descriptive message
+- [x] Delete all standalone symmetry files (solver modules, tests, scripts)
+- [x] Clean `solve_optimized.py` — remove mirror grid / image operator code paths
+- [x] Clean backend contracts, services, and solver entry points
+- [x] Clean frontend UI — remove symmetry tolerance setting and display references
+- [x] Delete research doc
+- [x] Update `docs/backlog.md` Current Baseline to remove symmetry-disabled note
+- [x] Run full test suite (`npm test` + `npm run test:server`) to verify nothing breaks
+- [x] Single commit with descriptive message
 
 ### P2. Verify BEM Precision Against Reference & Default to Single (March 18, 2026)
 

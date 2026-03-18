@@ -118,9 +118,7 @@ Diagnostic scripts: `diagnose_merged_grid.py`, `diagnose_merged_solve.py`.
 
 ## Current State
 
-Symmetry solving is **disabled**. `simulation_runner.py` forces `quadrants=1234` (full model) before passing to the BEM solver. The `enable_symmetry` parameter and all image operator code paths in `solve_optimized.py` are preserved but never reached.
-
-The symmetry detection code (`solver/symmetry.py`) still runs correctly — it is used for reporting in job metadata, and the geometry-first path correctly identifies when a mesh was built as a half/quarter model. Only the BEM image source solve path is blocked.
+The symmetry-solving experiment is **removed from the active runtime**. The maintained BEM path runs full-domain solves only, while this document preserves the investigation record and the measured reason the image-source approach was abandoned.
 
 ---
 

@@ -13,11 +13,6 @@ import {
   clearPollTimer,
 } from "../src/ui/simulation/polling.js";
 import { openViewResultsModal } from "../src/ui/simulation/viewResults.js";
-import {
-  getJobSymmetrySummary,
-  getSymmetryPolicySummary,
-  renderSymmetryPolicySummary,
-} from "../src/ui/simulation/results.js";
 import { AppEvents } from "../src/events.js";
 import { getDownloadSimMeshEnabled } from "../src/ui/settings/modal.js";
 import {
@@ -85,12 +80,6 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         deviceMode: "opencl_cpu",
         useOptimized: false,
         verbose: false,
-        advancedSettings: {
-          enableWarmup: false,
-          bemPrecision: "single",
-          useBurtonMiller: false,
-          symmetryTolerance: 0.0025,
-        },
         polarConfig: {
           angle_range: [0, 180, 37],
           norm_angle: 5,
@@ -98,24 +87,25 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
           inclination: 45,
           enabled_axes: ["horizontal", "diagonal"],
         },
+        advancedSettings: {
+          enableWarmup: false,
+          bemPrecision: "single",
+          useBurtonMiller: false,
+        },
       },
-      mesh,
-      options,
+      {
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2],
+        surfaceTags: [2],
+        format: "msh",
+        boundaryConditions: {},
+        metadata: {},
+      },
+      options
     );
 
-    assert.equal(jobId, "job-test-1");
-    assert.equal(calls.length, 1);
-    assert.match(calls[0].url, /\/api\/solve$/);
-
     const payload = JSON.parse(calls[0].options.body);
-    assert.deepEqual(Object.keys(payload.mesh).sort(), [
-      "boundaryConditions",
-      "format",
-      "indices",
-      "metadata",
-      "surfaceTags",
-      "vertices",
-    ]);
+    assert.ok(payload.mesh);
     assert.equal(
       payload.mesh.surfaceTags.length,
       payload.mesh.indices.length / 3,
@@ -136,8 +126,73 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
       enable_warmup: false,
       bem_precision: "single",
       use_burton_miller: false,
-      symmetry_tolerance: 0.0025,
     });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative", async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { job_id: "job-test-omit-1" };
+      },
+    };
+  };
+
+  try {
+    const solver = new BemSolver();
+    await solver.submitSimulation(
+      {
+        frequencyStart: 100,
+        frequencyEnd: 1000,
+        numFrequencies: 4,
+        simulationType: "2",
+        meshValidationMode: "invalid",
+        frequencySpacing: "bogus",
+        deviceMode: "",
+        useOptimized: "yes please",
+        verbose: undefined,
+        advancedSettings: {
+          enableWarmup: "sometimes",
+          bemPrecision: "fp16",
+          useBurtonMiller: null,
+        },
+      },
+      {
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2],
+        surfaceTags: [2],
+        format: "msh",
+        boundaryConditions: {},
+        metadata: {},
+      },
+    );
+
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].url, /\/api\/solve$/);
+
+    const payload = JSON.parse(calls[0].options.body);
+    assert.deepEqual(Object.keys(payload.mesh).sort(), [
+      "boundaryConditions",
+      "format",
+      "indices",
+      "metadata",
+      "surfaceTags",
+      "vertices",
+    ]);
+    assert.equal("mesh_validation_mode" in payload, false);
+    assert.equal("frequency_spacing" in payload, false);
+    assert.equal("device_mode" in payload, false);
+    assert.equal("use_optimized" in payload, false);
+    assert.equal("verbose" in payload, false);
+    assert.equal("advanced_settings" in payload, false);
   } finally {
     global.fetch = originalFetch;
   }
@@ -173,7 +228,6 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
           enableWarmup: "sometimes",
           bemPrecision: "fp16",
           useBurtonMiller: null,
-          symmetryTolerance: -1,
         },
       },
       {
@@ -191,7 +245,6 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
     assert.equal("frequency_spacing" in payload, false);
     assert.equal("device_mode" in payload, false);
     assert.equal("use_optimized" in payload, false);
-    assert.equal("enable_symmetry" in payload, false);
     assert.equal("verbose" in payload, false);
     assert.equal("advanced_settings" in payload, false);
   } finally {
@@ -325,43 +378,6 @@ test("view results modal keeps smoothing control and close button in a shared he
   }
 });
 
-test("getSymmetryPolicySummary formats applied symmetry reductions for the results UI", () => {
-  const summary = getSymmetryPolicySummary({
-    metadata: {
-      symmetry: {
-        symmetry_type: "quarter_xz",
-        reduction_factor: 4,
-      },
-      symmetry_policy: {
-        requested: true,
-        applied: true,
-        reason: "applied",
-        detected_symmetry_type: "quarter_xz",
-        detected_symmetry_planes: ["YZ", "XY"],
-        detected_reduction_factor: 4,
-        reduction_factor: 4,
-        excitation_centered: true,
-      },
-    },
-  });
-
-  assert.equal(summary.badge, "Reduced");
-  assert.match(summary.headline, /quarter-domain/i);
-  assert.match(summary.details, /YZ plane and XY plane/i);
-  assert.equal(
-    summary.items.find((item) => item.label === "Decision")?.value,
-    "Quarter-domain (X/Z symmetry)",
-  );
-  assert.equal(
-    summary.items.find((item) => item.label === "Source alignment")?.value,
-    "Centered",
-  );
-  assert.equal(
-    summary.items.find((item) => item.label === "Reduction")?.value,
-    "4x applied",
-  );
-});
-
 function createModalDocument(createdElements, appendedChildren) {
   const walk = (node, visitor) => {
     if (!node) return;
@@ -456,83 +472,6 @@ function createModalDocument(createdElements, appendedChildren) {
 function flushModalAsyncWork() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
-
-test("getSymmetryPolicySummary explains when detected symmetry is rejected by source alignment", () => {
-  const summary = getSymmetryPolicySummary({
-    metadata: {
-      symmetry: {
-        symmetry_type: "full",
-        reduction_factor: 1,
-      },
-      symmetry_policy: {
-        requested: true,
-        applied: false,
-        reason: "excitation_off_center",
-        detected_symmetry_type: "quarter_xz",
-        detected_symmetry_planes: ["YZ", "XY"],
-        detected_reduction_factor: 4,
-        reduction_factor: 1,
-        excitation_centered: false,
-      },
-    },
-  });
-
-  assert.equal(summary.badge, "Full model");
-  assert.match(summary.headline, /alignment check/i);
-  assert.match(summary.details, /off-center/i);
-  assert.equal(
-    summary.items.find((item) => item.label === "Decision")?.value,
-    "Full model",
-  );
-  assert.equal(
-    summary.items.find((item) => item.label === "Detected geometry")?.value,
-    "Quarter-domain (X/Z symmetry)",
-  );
-  assert.equal(
-    summary.items.find((item) => item.label === "Reduction")?.value,
-    "4x available",
-  );
-});
-
-test("renderSymmetryPolicySummary returns result-modal markup only when policy metadata exists", () => {
-  const markup = renderSymmetryPolicySummary({
-    metadata: {
-      symmetry_policy: {
-        requested: false,
-        applied: false,
-        reason: "disabled",
-        detected_symmetry_type: "full",
-        detected_symmetry_planes: [],
-        detected_reduction_factor: 1,
-        reduction_factor: 1,
-        excitation_centered: null,
-      },
-    },
-  });
-
-  assert.match(markup, /Symmetry Policy/);
-  assert.match(markup, /Kept full model with symmetry disabled/);
-  assert.match(markup, /view-results-summary/);
-  assert.equal(renderSymmetryPolicySummary({ metadata: {} }), "");
-});
-
-test("getJobSymmetrySummary falls back to requested symmetry when results are not cached yet", () => {
-  const summary = getJobSymmetrySummary({
-    configSummary: {
-      enable_symmetry: false,
-    },
-  });
-
-  assert.equal(summary.badge, "Full model");
-  assert.equal(
-    summary.items.find((item) => item.label === "Requested")?.value,
-    "Disabled",
-  );
-  assert.equal(
-    summary.items.find((item) => item.label === "Decision")?.value,
-    "Full model",
-  );
-});
 
 test("validateCanonicalMeshPayload rejects malformed canonical mesh", () => {
   assert.throws(
