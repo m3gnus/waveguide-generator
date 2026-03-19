@@ -125,6 +125,49 @@ class OccResolutionSemanticsTest(unittest.TestCase):
         GMSH_OCC_RUNTIME_READY,
         "Requires supported gmsh Python runtime for OCC meshing integration test.",
     )
+    def test_osse_enclosure_edge_strips_follow_local_front_back_resolution(self):
+        coarse = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="22,22,22,22",
+            enc_back_resolution="22,22,22,22",
+        )
+        fine_front_only = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="2,2,2,2",
+            enc_back_resolution="22,22,22,22",
+        )
+        fine_back_only = self._mesh_osse_enclosure_triangle_counts(
+            enc_front_resolution="22,22,22,22",
+            enc_back_resolution="2,2,2,2",
+        )
+
+        self.assertGreater(coarse["enclosure_edges_front"], 0)
+        self.assertGreater(coarse["enclosure_edges_back"], 0)
+
+        self.assertGreater(
+            fine_front_only["enclosure_edges_front"],
+            coarse["enclosure_edges_front"] * 2,
+            "Front edge strips should refine with front corner resolution.",
+        )
+        self.assertLess(
+            fine_front_only["enclosure_edges_back"],
+            coarse["enclosure_edges_back"] * 1.5,
+            "Back edge strips should stay near coarse sizing when only front is refined.",
+        )
+
+        self.assertGreater(
+            fine_back_only["enclosure_edges_back"],
+            coarse["enclosure_edges_back"] * 2,
+            "Back edge strips should refine with back corner resolution.",
+        )
+        self.assertLess(
+            fine_back_only["enclosure_edges_front"],
+            coarse["enclosure_edges_front"] * 1.5,
+            "Front edge strips should stay near coarse sizing when only back is refined.",
+        )
+
+    @unittest.skipUnless(
+        GMSH_OCC_RUNTIME_READY,
+        "Requires supported gmsh Python runtime for OCC meshing integration test.",
+    )
     def test_osse_enclosure_edge_radius_and_type_affect_occ_mesh_geometry(self):
         base = self._build_osse_enclosure_mesh(enc_edge=0.0, enc_edge_type=1)
         rounded = self._build_osse_enclosure_mesh(enc_edge=6.0, enc_edge_type=1)
@@ -561,6 +604,9 @@ class OccResolutionSemanticsTest(unittest.TestCase):
                     "enclosure_front": list(enc_data.get("front", [])),
                     "enclosure_back": list(enc_data.get("back", [])),
                     "enclosure_sides": list(enc_data.get("sides", [])),
+                    "enclosure_edges": list(enc_data.get("edges", [])),
+                    "enclosure_edges_front": list(enc_data.get("front_edges", [])),
+                    "enclosure_edges_back": list(enc_data.get("back_edges", [])),
                 }
 
                 _configure_mesh_size(

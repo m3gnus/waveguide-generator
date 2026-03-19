@@ -1565,6 +1565,8 @@ def _build_enclosure_box(
         "back": [],
         "sides": [],
         "edges": [],
+        "front_edges": [],
+        "back_edges": [],
         "bounds": None,
         "opening_curves": [],
         "opening_ring_points": None,
@@ -1654,6 +1656,8 @@ def _build_enclosure_box(
 
     generated_dimtags: List[Tuple[int, int]] = []
     edge_dimtags: List[Tuple[int, int]] = []
+    front_edge_dimtags_all: List[Tuple[int, int]] = []
+    back_edge_dimtags_all: List[Tuple[int, int]] = []
     edge_depth = min(clamped_edge, max(0.0, enc_depth * 0.49))
 
     if closed:
@@ -1755,9 +1759,10 @@ def _build_enclosure_box(
             )
         ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
         ring_wire, _, _ = _make_wire(ring_pts, closed=closed)
-        front_edge_dimtags = _add_ruled_section(current_profile, ring_wire)
-        generated_dimtags.extend(front_edge_dimtags)
-        edge_dimtags.extend(front_edge_dimtags)
+        front_edge_step_dimtags = _add_ruled_section(current_profile, ring_wire)
+        generated_dimtags.extend(front_edge_step_dimtags)
+        edge_dimtags.extend(front_edge_step_dimtags)
+        front_edge_dimtags_all.extend(front_edge_step_dimtags)
         current_profile = ring_wire
 
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
@@ -1793,9 +1798,10 @@ def _build_enclosure_box(
             )
         ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
         ring_wire, ring_curves, ring_eps = _make_wire(ring_pts, closed=closed)
-        back_edge_dimtags = _add_ruled_section(current_profile, ring_wire)
-        generated_dimtags.extend(back_edge_dimtags)
-        edge_dimtags.extend(back_edge_dimtags)
+        back_edge_step_dimtags = _add_ruled_section(current_profile, ring_wire)
+        generated_dimtags.extend(back_edge_step_dimtags)
+        edge_dimtags.extend(back_edge_step_dimtags)
+        back_edge_dimtags_all.extend(back_edge_step_dimtags)
         current_profile = ring_wire
         current_curves = ring_curves
         profile_pts = ring_eps
@@ -1810,9 +1816,13 @@ def _build_enclosure_box(
     gmsh.model.occ.synchronize()
     dimtags = [(2, int(tag)) for dim, tag in generated_dimtags if int(dim) == 2]
     edge_tags = {int(tag) for dim, tag in edge_dimtags if int(dim) == 2}
+    front_edge_tags = {int(tag) for dim, tag in front_edge_dimtags_all if int(dim) == 2}
+    back_edge_tags = {int(tag) for dim, tag in back_edge_dimtags_all if int(dim) == 2}
 
     split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
     edge_surfaces = [tag for tag in split["sides"] if int(tag) in edge_tags]
+    front_edge_surfaces = [tag for tag in split["sides"] if int(tag) in front_edge_tags]
+    back_edge_surfaces = [tag for tag in split["sides"] if int(tag) in back_edge_tags]
     side_surfaces = [tag for tag in split["sides"] if int(tag) not in edge_tags]
     return {
         "dimtags": dimtags,
@@ -1820,6 +1830,8 @@ def _build_enclosure_box(
         "back": split["back"],
         "sides": side_surfaces,
         "edges": edge_surfaces,
+        "front_edges": front_edge_surfaces,
+        "back_edges": back_edge_surfaces,
         "bounds": bounds,
         "opening_curves": [],
         "opening_ring_points": None,
@@ -1849,8 +1861,10 @@ def _configure_mesh_size(
     Throat disc: constant throat_res.
     Rear wall (free-standing only): constant rear_res.
     Enclosure: continuous front/back bilinear corner interpolation over x/y/z.
-    Enclosure edges (roundovers/chamfers): explicit enclosure resolution to
-        prevent inheriting finer horn sizing via shared boundary curves.
+    Enclosure edges (roundovers/chamfers):
+      - Front edge strips follow front-panel corner interpolation.
+      - Back edge strips follow back-panel corner interpolation.
+      - Any remaining connector edges use the continuous front↔back formula.
     """
     fields: List[int] = []
     z_throat = float(np.mean(inner_points[:, 0, 2]))
@@ -1954,6 +1968,26 @@ def _configure_mesh_size(
 
     enclosure_resolution_values: List[float] = []
 
+    enclosure_edge_front_surfaces = list(surface_groups.get("enclosure_edges_front", []))
+    enclosure_edge_back_surfaces = list(surface_groups.get("enclosure_edges_back", []))
+    enclosure_edge_front_curves = list(curve_groups.get("enclosure_edges_front", []))
+    enclosure_edge_back_curves = list(curve_groups.get("enclosure_edges_back", []))
+    enclosure_edge_surfaces_all = list(surface_groups.get("enclosure_edges", []))
+    enclosure_edge_curves_all = list(curve_groups.get("enclosure_edges", []))
+
+    edge_split_surface_tags = {
+        int(tag) for tag in (enclosure_edge_front_surfaces + enclosure_edge_back_surfaces)
+    }
+    edge_split_curve_tags = {
+        int(tag) for tag in (enclosure_edge_front_curves + enclosure_edge_back_curves)
+    }
+    enclosure_edge_connector_surfaces = [
+        int(tag) for tag in enclosure_edge_surfaces_all if int(tag) not in edge_split_surface_tags
+    ]
+    enclosure_edge_connector_curves = [
+        int(tag) for tag in enclosure_edge_curves_all if int(tag) not in edge_split_curve_tags
+    ]
+
     # Enclosure uses a continuous interpolation between front/back corner resolutions.
     if enclosure_bounds:
         bx0 = float(enclosure_bounds["bx0"])
@@ -1968,6 +2002,20 @@ def _configure_mesh_size(
         enclosure_resolution_values.extend(front_q)
         enclosure_resolution_values.extend(back_q)
 
+        front_panel_formula = _panel_bilinear_resolution_formula(
+            front_q,
+            bx0=bx0,
+            bx1=bx1,
+            by0=by0,
+            by1=by1,
+        )
+        back_panel_formula = _panel_bilinear_resolution_formula(
+            back_q,
+            bx0=bx0,
+            bx1=bx1,
+            by0=by0,
+            by1=by1,
+        )
         enclosure_formula = _enclosure_resolution_formula(
             front_q,
             back_q,
@@ -1986,16 +2034,32 @@ def _configure_mesh_size(
         if enclosure_field:
             fields.append(enclosure_field)
 
-        # Explicit field for enclosure roundover/chamfer edges so they use
-        # enclosure resolution rather than inheriting finer horn sizing via
-        # shared boundary curves in the Min field.
-        enc_edge_field = add_restricted_matheval(
-            enclosure_formula,
-            surface_groups.get("enclosure_edges", []),
-            curve_groups.get("enclosure_edges", []),
+        # Front/back roundover strips should follow their nearby panel corner
+        # resolution instead of inheriting the opposite panel's values.
+        front_edge_field = add_restricted_matheval(
+            front_panel_formula,
+            enclosure_edge_front_surfaces,
+            enclosure_edge_front_curves,
         )
-        if enc_edge_field:
-            fields.append(enc_edge_field)
+        if front_edge_field:
+            fields.append(front_edge_field)
+
+        back_edge_field = add_restricted_matheval(
+            back_panel_formula,
+            enclosure_edge_back_surfaces,
+            enclosure_edge_back_curves,
+        )
+        if back_edge_field:
+            fields.append(back_edge_field)
+
+        # Legacy/connector edge entities (if any) keep the continuous formula.
+        connector_edge_field = add_restricted_matheval(
+            enclosure_formula,
+            enclosure_edge_connector_surfaces,
+            enclosure_edge_connector_curves,
+        )
+        if connector_edge_field:
+            fields.append(connector_edge_field)
     else:
         # Fallback for partial/no-enclosure metadata in reduced-domain modes.
         side_field = add_restricted_matheval(
@@ -2007,10 +2071,26 @@ def _configure_mesh_size(
             fields.append(side_field)
 
         # Explicit field for enclosure edges in fallback mode.
+        front_edge_field = add_restricted_matheval(
+            f"{mouth_res:.6g}",
+            enclosure_edge_front_surfaces,
+            enclosure_edge_front_curves,
+        )
+        if front_edge_field:
+            fields.append(front_edge_field)
+
+        back_edge_field = add_restricted_matheval(
+            f"{mouth_res:.6g}",
+            enclosure_edge_back_surfaces,
+            enclosure_edge_back_curves,
+        )
+        if back_edge_field:
+            fields.append(back_edge_field)
+
         edge_field = add_restricted_matheval(
             f"{mouth_res:.6g}",
-            surface_groups.get("enclosure_edges", []),
-            curve_groups.get("enclosure_edges", []),
+            enclosure_edge_connector_surfaces if edge_split_surface_tags else enclosure_edge_surfaces_all,
+            enclosure_edge_connector_curves if edge_split_curve_tags else enclosure_edge_curves_all,
         )
         if edge_field:
             fields.append(edge_field)
@@ -2863,6 +2943,9 @@ def build_waveguide_mesh(
                 "front": [],
                 "back": [],
                 "sides": [],
+                "edges": [],
+                "front_edges": [],
+                "back_edges": [],
                 "bounds": None,
                 "opening_curves": [],
                 "opening_ring_points": None,
@@ -2950,6 +3033,8 @@ def build_waveguide_mesh(
                 surface_groups["enclosure_back"] = list(enc_data.get("back", []))
                 surface_groups["enclosure_sides"] = list(enc_data.get("sides", []))
                 surface_groups["enclosure_edges"] = list(enc_data.get("edges", []))
+                surface_groups["enclosure_edges_front"] = list(enc_data.get("front_edges", []))
+                surface_groups["enclosure_edges_back"] = list(enc_data.get("back_edges", []))
             elif outer_points is not None:
                 # After fragment, per-group lists track their own post-fragment tags.
                 surface_groups["outer"] = [tag for dim, tag in outer_dimtags if dim == 2]
