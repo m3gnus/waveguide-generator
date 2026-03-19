@@ -19,6 +19,11 @@ const SCHEMA_GROUPS = [
   "SIMULATION",
 ];
 
+// Keys that represent physical lengths in mm and should scale with geometry.
+// Mesh resolution fields (throatResolution, mouthResolution, etc.) are intentionally
+// EXCLUDED because they are element SIZES (mm) that must scale with geometry,
+// but scaling is handled in DesignModule OCC param preparation (not here) to ensure
+// consistent single-scaling for both simulation and export pipelines.
 const SCALE_LENGTH_KEYS = [
   "L",
   "R",
@@ -33,9 +38,6 @@ const SCALE_LENGTH_KEYS = [
   "sourceRadius",
   "wallThickness",
   "verticalOffset",
-  "throatResolution",
-  "mouthResolution",
-  "rearResolution",
 ];
 
 export function isNumericString(value) {
