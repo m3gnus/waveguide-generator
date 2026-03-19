@@ -4,6 +4,38 @@ Created: March 19, 2026
 
 This document stores the resolved, shipped, superseded, and audit-history sections that were removed from `docs/backlog.md` during the March 19, 2026 backlog cleanup. `docs/backlog.md` now contains active unfinished work only.
 
+## Completed on March 19, 2026
+
+### P1. Rebuild Output Workspace Contract and Fix Firefox Server-Folder Regression
+
+- Unified workspace/export writes around backend-managed workspace APIs plus optional direct-write File System Access behavior on supporting browsers.
+- Moved manifests, script snapshots, raw results, mesh artifacts, and selected exports into deterministic generation folders with `waveguide.project.v1.json` as the user-facing artifact index.
+- Added regression coverage for backend workspace path/open/export routes and frontend workspace-subdirectory export routing.
+
+### P1. Restrict Scale to Waveguide Geometry Only
+
+- Removed enclosure-only fields from upstream `scale` application in the JS geometry pipeline.
+- Kept OCC/export mesh resolution fields scaling with geometry as explicit element-size semantics in `prepareOccSimulationParams(...)`.
+- Removed formula support for `scale`, updated UI copy, and added regression coverage for geometry/design/param-panel behavior.
+
+### P2. Audit Dependencies and Add Cross-Platform Runtime Doctor
+
+- Removed dead dependencies (`jszip`, `trimesh`, `express`) and replaced the frontend dev server dependency with built-in Node code.
+- Enforced a shared backend interpreter-selection contract across install/setup, `npm start`, and backend startup, including repo marker `.waveguide/backend-python.path`.
+- Added backend preflight/doctor commands, `/health` doctor payload exposure, frontend dependency-status rendering, and blocked-feature guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib.
+
+### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers
+
+- Changed recommended BEM precision defaults and UI guidance to single precision.
+- Aligned `server/solver/directivity_correct.py` helper defaults with the maintained single-precision runtime contract.
+- Added coverage for UI defaults/copy and preserved both single and double precision lanes.
+
+### P2. Enrich Simulation Results Metadata and Add Fast Directivity Re-render
+
+- Persisted solve timestamps plus effective directivity-map metadata in results so the View Results modal can render solve-time settings directly from saved output.
+- Added a fast post-solve directivity heatmap re-render path through `/api/render-directivity` for display-only reference-level changes.
+- Added frontend/backend regression coverage for metadata persistence, results summary content, and re-render behavior.
+
 ## Completed on March 18, 2026
 
 ### P3. Document Symmetry Solver Investigation
