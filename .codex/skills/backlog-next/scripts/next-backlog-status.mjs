@@ -104,18 +104,45 @@ function inferReasoning(title, tasks, notes) {
   return 'low';
 }
 
+function selectExecutor(reasoning) {
+  return reasoning === 'high' ? 'codex' : 'glm-5';
+}
+
+function buildVerificationChecklist(reasoning) {
+  const checklist = [
+    'Inspect the working tree and diff instead of trusting the worker summary.',
+    'Run the narrowest relevant tests locally after the worker returns.',
+    'Confirm the edited files still match the selected backlog slice.',
+    'Verify affected docs, including docs/backlog.md, reflect what actually landed.',
+  ];
+
+  if (reasoning === 'high') {
+    checklist.push('Run broader regression coverage because the slice touches a contract, entry point, or cross-module seam.');
+  }
+
+  return checklist;
+}
+
 const backlogEmpty = backlogSections.length === 0;
 const currentPriority = backlogEmpty ? null : backlogSections[0].title;
 const currentPriorityTitle = backlogEmpty ? null : backlogSections[0].title;
 const openItems = backlogEmpty ? [] : backlogSections[0].items;
 const defaultReasoning = backlogEmpty ? 'low' : inferReasoning(currentPriorityTitle, openItems, baselineNotes);
+const defaultExecutor = backlogEmpty ? 'glm-5' : selectExecutor(defaultReasoning);
+const executorPolicy = {
+  low: 'glm-5',
+  medium: 'glm-5',
+  high: 'codex',
+};
+const verificationChecklist = buildVerificationChecklist(defaultReasoning);
 const prompt = backlogEmpty
   ? 'The active backlog in docs/backlog.md is empty. Reopen it only when a new requirement, blocker, or tracked follow-up needs implementation.'
   : [
       `Continue the current backlog in docs/backlog.md by executing one unfinished slice after another.`,
       `Ground on the active backlog priority and the recent commits below, and rerun this status check after each committed slice.`,
-      `Use a fresh Codex 5.3 subagent for each slice and choose reasoning effort from slice complexity (${defaultReasoning} by default, adjust per slice).`,
-      `Pick the smallest coherent unfinished slice, run targeted tests first, update affected docs including docs/backlog.md when priorities change, commit the completed slice, then continue until the backlog is empty or blocked.`
+      `Use GLM-5 via opencode for low/medium slices and Codex for high-complexity slices (${defaultReasoning} => ${defaultExecutor} by default for the current priority).`,
+      `Treat GLM as an implementation worker only: inspect the diff yourself, rerun targeted tests locally, escalate to broader tests or Codex when the slice touches contracts or fails verification.`,
+      `Pick the smallest coherent unfinished slice, run targeted tests first, update affected docs including docs/backlog.md when priorities change, commit the completed and verified slice, then continue until the backlog is empty or blocked.`
     ].join(' ');
 
 const payload = {
@@ -127,6 +154,9 @@ const payload = {
   openItems,
   baselineNotes,
   defaultReasoning,
+  defaultExecutor,
+  executorPolicy,
+  verificationChecklist,
   prompt,
 };
 
@@ -140,6 +170,7 @@ if (backlogEmpty) {
   console.log(``);
   console.log(`Current priority: none`);
   console.log(`Default reasoning: ${defaultReasoning}`);
+  console.log(`Default executor: ${defaultExecutor}`);
   console.log(``);
   console.log(`Recent commits:`);
   for (const commit of recentCommits) console.log(`- ${commit}`);
@@ -150,6 +181,9 @@ if (backlogEmpty) {
   console.log(`Baseline notes:`);
   for (const note of baselineNotes) console.log(`- ${note}`);
   console.log(``);
+  console.log(`Verification checklist:`);
+  for (const step of verificationChecklist) console.log(`- ${step}`);
+  console.log(``);
   console.log(`Suggested fresh-session prompt:`);
   console.log(prompt);
   process.exit(0);
@@ -159,6 +193,7 @@ console.log(`# Backlog Status`);
 console.log(``);
 console.log(`Current priority: ${currentPriority}`);
 console.log(`Default reasoning: ${defaultReasoning}`);
+console.log(`Default executor: ${defaultExecutor}`);
 console.log(``);
 console.log(`Recent commits:`);
 for (const commit of recentCommits) console.log(`- ${commit}`);
@@ -168,6 +203,9 @@ for (const task of openItems) console.log(`- ${task}`);
 console.log(``);
 console.log(`Baseline notes:`);
 for (const note of baselineNotes) console.log(`- ${note}`);
+console.log(``);
+console.log(`Verification checklist:`);
+for (const step of verificationChecklist) console.log(`- ${step}`);
 console.log(``);
 console.log(`Suggested fresh-session prompt:`);
 console.log(prompt);
