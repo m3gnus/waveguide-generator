@@ -8,6 +8,7 @@ This folder stores superseded planning artifacts, reports, and historical execut
 
 | Document | Period | Notes |
 |---|---|---|
+| `BACKLOG_REORGANIZATION_2026-03-19.md` | Mar 19, 2026 | Resolved/superseded backlog items moved out of `docs/backlog.md` during active-backlog cleanup |
 | `BACKLOG_EXECUTION_LOG_2026-03-12.md` | Mar 11-12, 2026 | Completion log from architecture cleanup phase |
 | `ARCHITECTURE_CLEANUP_PLAN_2026-03-11.md` | Mar 11, 2026 | Cleanup execution record (now complete) |
 | `BEM_SETTINGS_MENU_PLAN_2026-02-25.md` | Feb 25, 2026 | Original settings UI spec snapshot |

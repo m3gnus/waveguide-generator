@@ -12,7 +12,7 @@ Codex skills-first mode:
 </codex_skill_adapter>
 
 <objective>
-Keep `docs/backlog.md` accurate, current, and ordered for execution.
+Keep `docs/backlog.md` accurate, current, and ordered for execution, while moving resolved history into the archive instead of letting it accumulate in the active backlog.
 
 The skill should:
 1. Audit the active backlog against the current codebase and recent commits.
@@ -26,6 +26,8 @@ The skill should:
 ## 1. Read the current state
 Read `docs/backlog.md` fully.
 Also gather:
+- `docs/archive/README.md`
+- the most relevant existing backlog archive doc(s), if any
 - recent commits, such as `git log --oneline -20`
 - current code and tests for items that may already be resolved
 
@@ -66,6 +68,7 @@ Before editing, present a short plan grouped as:
 - update
 - reprioritize
 - reorder
+- archive
 
 Order remaining items within a priority by:
 1. upstream blockers first
@@ -75,7 +78,8 @@ Order remaining items within a priority by:
 ## 6. Apply the approved reorganization
 After approval:
 - update `docs/backlog.md`
-- move resolved items to the completed section if the file uses one
+- move resolved or superseded items into an existing relevant archive doc, or create a new dated backlog archive doc under `docs/archive/` when needed
+- update `docs/archive/README.md` when adding a new archive doc
 - refresh stale descriptions and action plans
 - reorder sections and items consistently
 - update the "Last updated" date
@@ -84,6 +88,7 @@ After approval:
 ## 7. End-of-turn report
 Report:
 - items removed, updated, or reprioritized
+- items archived and where they were moved
 - any still-blocked items and the missing decisions
 - backlog size after cleanup
 - commit hash
