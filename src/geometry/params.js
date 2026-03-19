@@ -1,51 +1,52 @@
-import { PARAM_SCHEMA } from '../config/schema.js';
-import { parseExpression } from './expression.js';
+import { PARAM_SCHEMA } from "../config/schema.js";
+import { parseExpression } from "./expression.js";
 
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 
 const RAW_EXPRESSION_KEYS = new Set([
-  'gcurveSf',
-  'encFrontResolution',
-  'encBackResolution',
-  'sourceContours'
+  "gcurveSf",
+  "encFrontResolution",
+  "encBackResolution",
+  "sourceContours",
 ]);
 
-const SCHEMA_GROUPS = ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE', 'SIMULATION'];
+const SCHEMA_GROUPS = [
+  "GEOMETRY",
+  "MORPH",
+  "MESH",
+  "ENCLOSURE",
+  "SOURCE",
+  "SIMULATION",
+];
 
 const SCALE_LENGTH_KEYS = [
-  'L',
-  'R',
-  'r0',
-  'throatExtLength',
-  'slotLength',
-  'circArcRadius',
-  'morphCorner',
-  'morphWidth',
-  'morphHeight',
-  'gcurveWidth',
-  'sourceRadius',
-  'wallThickness',
-  'verticalOffset',
-  'encDepth',
-  'encEdge',
-  'encSpaceL',
-  'encSpaceT',
-  'encSpaceR',
-  'encSpaceB',
-  'throatResolution',
-  'mouthResolution',
-  'rearResolution'
+  "L",
+  "R",
+  "r0",
+  "throatExtLength",
+  "slotLength",
+  "circArcRadius",
+  "morphCorner",
+  "morphWidth",
+  "morphHeight",
+  "gcurveWidth",
+  "sourceRadius",
+  "wallThickness",
+  "verticalOffset",
+  "throatResolution",
+  "mouthResolution",
+  "rearResolution",
 ];
 
 export function isNumericString(value) {
-  if (typeof value !== 'string') return false;
+  if (typeof value !== "string") return false;
   const trimmed = value.trim();
   if (!trimmed) return false;
   return NUMERIC_PATTERN.test(trimmed);
 }
 
 export function isMWGConfig(content) {
-  if (typeof content !== 'string') return false;
+  if (typeof content !== "string") return false;
   return /;\s*MWG config/i.test(content);
 }
 
@@ -54,20 +55,28 @@ export function coerceConfigParams(params = {}) {
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null) continue;
     const stringValue = String(value).trim();
-    typedParams[key] = isNumericString(stringValue) ? Number(stringValue) : stringValue;
+    typedParams[key] = isNumericString(stringValue)
+      ? Number(stringValue)
+      : stringValue;
   }
   return typedParams;
 }
 
 export function applyAthImportDefaults(parsed, typedParams) {
-  if (!parsed || !parsed.type || !typedParams || typeof typedParams !== 'object') return;
+  if (
+    !parsed ||
+    !parsed.type ||
+    !typedParams ||
+    typeof typedParams !== "object"
+  )
+    return;
 
-  const isOSSE = parsed.type === 'OSSE';
+  const isOSSE = parsed.type === "OSSE";
   if (typedParams.morphTarget === undefined) {
     typedParams.morphTarget = 0;
   }
 
-  const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
+  const hasMeshEnclosure = parsed.blocks && parsed.blocks["Mesh.Enclosure"];
   if (!hasMeshEnclosure && typedParams.encDepth === undefined) {
     typedParams.encDepth = 0;
   }
@@ -88,9 +97,9 @@ function applySchemaToParams(params, schema) {
     const val = params[key];
     if (val === undefined || val === null) continue;
 
-    if (def.type === 'expression') {
+    if (def.type === "expression") {
       if (RAW_EXPRESSION_KEYS.has(key)) continue;
-      if (typeof val !== 'string') continue;
+      if (typeof val !== "string") continue;
       const trimmed = val.trim();
       if (!trimmed) continue;
       if (isNumericString(trimmed)) {
@@ -98,7 +107,10 @@ function applySchemaToParams(params, schema) {
       } else {
         params[key] = parseExpression(trimmed);
       }
-    } else if ((def.type === 'number' || def.type === 'range') && typeof val === 'string') {
+    } else if (
+      (def.type === "number" || def.type === "range") &&
+      typeof val === "string"
+    ) {
       const trimmed = val.trim();
       if (!trimmed) continue;
       if (isNumericString(trimmed)) {
@@ -112,7 +124,7 @@ function applySchemaToParams(params, schema) {
 
 export function prepareGeometryParams(
   rawParams = {},
-  { type = rawParams.type, applyVerticalOffset = true } = {}
+  { type = rawParams.type, applyVerticalOffset = true } = {},
 ) {
   const preparedParams = { ...rawParams };
   const resolvedType = type || preparedParams.type;
@@ -129,23 +141,23 @@ export function prepareGeometryParams(
   }
 
   const rawScale = preparedParams.scale ?? preparedParams.Scale ?? 1;
-  const scaleNum = typeof rawScale === 'number' ? rawScale : Number(rawScale);
+  const scaleNum = typeof rawScale === "number" ? rawScale : Number(rawScale);
   const scale = Number.isFinite(scaleNum) ? scaleNum : 1;
   preparedParams.scale = scale;
 
   if (scale !== 1) {
     SCALE_LENGTH_KEYS.forEach((key) => {
       const value = preparedParams[key];
-      if (value === undefined || value === null || value === '') return;
-      if (typeof value === 'function') {
+      if (value === undefined || value === null || value === "") return;
+      if (typeof value === "function") {
         const scaledFn = (p) => scale * value(p);
         if (value._rawExpr !== undefined) {
           scaledFn._rawExpr = `(${value._rawExpr}) * ${scale}`;
         }
         preparedParams[key] = scaledFn;
-      } else if (typeof value === 'number' && Number.isFinite(value)) {
+      } else if (typeof value === "number" && Number.isFinite(value)) {
         preparedParams[key] = value * scale;
-      } else if (typeof value === 'string' && isNumericString(value)) {
+      } else if (typeof value === "string" && isNumericString(value)) {
         preparedParams[key] = Number(value) * scale;
       }
     });
