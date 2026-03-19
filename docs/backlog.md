@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 18, 2026 (evening)
+Last updated: March 19, 2026
 
 This file is the active source of truth for unfinished product and engineering work.
 Detailed completion history from the March 11-12, 2026 cleanup phase lives in `docs/archive/BACKLOG_EXECUTION_LOG_2026-03-12.md`.
@@ -38,6 +38,48 @@ Status as of March 17, 2026:
 - **UI Redesign Audit complete** — anti-pattern score 2/10 (excellent); 3 minor P4 polish items identified (March 18, 2026).
 
 ## Active Backlog
+
+### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
+
+**Status:** NOT STARTED
+
+**Description:** `scale` currently mutates enclosure dimensions as well as horn dimensions, so changing waveguide scale also changes `encDepth`, `encEdge`, and the enclosure margins. It is also marked as formula-capable in the UI, which is misleading because the current intent is numeric-only scaling.
+
+**Implementation notes:**
+
+- Current coupling is upstream in `src/geometry/params.js`, where `SCALE_LENGTH_KEYS` includes enclosure fields.
+- `scale` is exposed as formula-capable via `src/config/schema.js`, and that behavior is locked in by `tests/param-panel.test.js`.
+- OCC/export normalization in `src/modules/design/index.js` also scales mesh resolution fields; review that code in the same slice so waveguide-only scale semantics stay consistent across preview, export, and solve paths.
+
+**Action plan:**
+
+- [ ] Remove enclosure-only fields (`encDepth`, `encEdge`, `encSpaceL`, `encSpaceT`, `encSpaceR`, `encSpaceB`) from upstream scale application in `src/geometry/params.js`
+- [ ] Remove `scale` from the formula allowlist and keep it numeric-only in `src/config/schema.js`
+- [ ] Update the Scale tooltip/copy to say it affects waveguide geometry only
+- [ ] Audit OCC/export normalization so scale semantics stay consistent for preview mesh, OCC export, and solve payloads
+- [ ] Update/add tests in `tests/geometry-params.test.js`, `tests/design-module.test.js`, and `tests/param-panel.test.js`
+
+### P2. Enrich Simulation Results Metadata and Add Fast Directivity Re-render (March 19, 2026)
+
+**Status:** NOT STARTED
+
+**Description:** The View Results modal shows observation distance twice, omits solve timestamp and directivity-map settings, and does not expose any post-solve directivity-map refresh path even though the current chart rendering pipeline can already redraw from cached result data without rerunning BEM.
+
+**Implementation notes:**
+
+- Duplicate observation display comes from `src/ui/simulation/viewResults.js` rendering both `renderSolveStatsSummary()` and `renderObservationDistanceSummary()` from `src/ui/simulation/results.js`.
+- Job timestamps already exist in `server/services/job_runtime.py`, but directivity-related config is barely summarized there.
+- The solver computes an `effective_polar_config` in `server/solver/solve_optimized.py` but does not persist it in result metadata.
+- Fast post-solve redraw is feasible only for display-only map options. Solve-time polar settings like sweep angles, enabled axes, or measurement distance still require a new solve because they change generated directivity data.
+
+**Action plan:**
+
+- [ ] Remove the standalone observation-distance row outside the main solve statistics block
+- [ ] Add simulation date/time to the results summary using persisted job timestamps
+- [ ] Persist and display directivity-map details used for the solve: angle range, angular step/sample count, enabled axes, diagonal angle, normalization angle, effective observation distance, and observation origin
+- [ ] Extend result/job metadata plumbing so the View Results modal can read those details without reconstructing them heuristically
+- [ ] Add a lightweight post-solve directivity-map re-render path for display-only options that do not require a new BEM solve
+- [ ] Add/update frontend and backend tests covering results summary content and metadata persistence
 
 ### P3. Document Symmetry Solver Investigation (March 18, 2026)
 
