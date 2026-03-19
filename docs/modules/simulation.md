@@ -33,6 +33,7 @@
 - Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)
 - Backend performance metadata included in results under `metadata.performance`
 - Backend solve metadata includes `metadata.observation` and `metadata.directivity` for effective observation distance and persisted directivity-map settings
+- View Results re-renders the directivity heatmap through `/api/render-directivity` for display-only reference-level changes without requesting a new solve
 
 **History & source selection**:
 - **One source mode at a time**: either folder workspace (manifests only) OR backend jobs + local cache (never mixed)
