@@ -53,7 +53,8 @@ backend.on('error', (err) => {
   console.error('   - Run: ./scripts/setup-opencl-backend.sh (macOS OpenCL CPU env)');
   console.error('   - Or: python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt');
   console.error('');
-  console.error('The frontend will still work, but simulations will use mock data.');
+  console.error('Frontend remains available, but backend-dependent features are blocked until the backend starts.');
+  console.error('Blocked features include simulation solve, OCC mesh build, and backend chart rendering.');
 });
 
 frontend.on('exit', (code) => {
@@ -66,7 +67,7 @@ frontend.on('exit', (code) => {
 backend.on('exit', (code) => {
   if (code !== 0 && code !== null) {
     console.error(`⚠️  Backend server exited with code ${code}`);
-    console.error('   Frontend is still running - simulations will use mock data');
+    console.error('   Frontend is still running, but backend-dependent features are blocked until restart.');
   }
 });
 

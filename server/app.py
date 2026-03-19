@@ -55,5 +55,7 @@ if __name__ == "__main__":
     print(f"Solver available: {SOLVER_AVAILABLE}")
     print(f"OCC builder ready: {WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY}")
     if not SOLVER_AVAILABLE:
-        print("Warning: bempp-cl not installed. Install it to enable simulations.")
+        print(
+            "Warning: bempp-cl not installed. /api/solve is unavailable until bempp-cl is installed."
+        )
     uvicorn.run(app, host="0.0.0.0", port=8000)
