@@ -141,21 +141,20 @@ Progress note (March 19, 2026):
 
 ### P2. Enrich Simulation Results Metadata and Add Fast Directivity Re-render (March 19, 2026)
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 **Execution lane:** Reserved — Codex `high`; Opus `medium-high`
 
-**Description:** The View Results modal still shows observation distance twice, omits solve timestamp and directivity-map settings, and does not expose any post-solve directivity-map refresh path even though the chart-rendering pipeline can already redraw from cached result data without rerunning BEM.
+**Description:** The View Results modal still omits solve timestamp and directivity-map settings, and it does not expose any post-solve directivity-map refresh path even though the chart-rendering pipeline can already redraw from cached result data without rerunning BEM.
 
 **Implementation notes:**
 
-- Duplicate observation display comes from `src/ui/simulation/viewResults.js` rendering both `renderSolveStatsSummary()` and `renderObservationDistanceSummary()` from `src/ui/simulation/results.js`.
 - Job timestamps already exist in `server/services/job_runtime.py`, but the current result-summary plumbing does not surface them in the modal.
 - The solver computes an `effective_polar_config` in `server/solver/solve_optimized.py` but does not persist the full effective directivity configuration in result metadata.
 - Fast post-solve redraw is feasible only for display-only map options. Solve-time polar settings like sweep angles, enabled axes, diagonal angle, and observation distance still require a new solve because they change generated directivity data.
 
 **Action plan:**
 
-- [ ] Remove the standalone observation-distance row outside the main solve-statistics block
+- [x] Remove the standalone observation-distance row outside the main solve-statistics block
 - [ ] Add simulation date/time to the results summary using persisted job timestamps
 - [ ] Persist and display directivity-map details used for the solve: angle range, angular step/sample count, enabled axes, diagonal angle, normalization angle, effective observation distance, and observation origin
 - [ ] Extend result/job metadata plumbing so the View Results modal can read those details without reconstructing them heuristically
