@@ -1,6 +1,6 @@
 ---
 name: "backlog-next"
-description: "Continue docs/backlog.md by running one unfinished backlog slice after another, grounding on the latest git commits, and orchestrating fresh Codex 5.3 subagents with reasoning scaled to each slice"
+description: "Continue docs/backlog.md by running one unfinished backlog slice after another, grounding on the latest git commits, and routing each slice to GLM-5 or Codex with local verification before acceptance"
 metadata:
   short-description: "Run backlog slices in sequence"
 ---
@@ -22,12 +22,13 @@ The skill should:
 1. Read the backlog status helper output.
 2. Inspect the latest commit(s) only as additional grounding, not as the sole source of truth.
 3. Choose the smallest coherent unfinished slice from the highest active backlog priority.
-4. Orchestrate a fresh Codex 5.3 subagent to execute that slice.
-5. After the slice lands and is committed, rerun the helper, choose the next slice, and hand it to a new Codex 5.3 subagent.
-6. Pick reasoning effort per slice complexity, not once for the whole phase.
-7. Run the narrowest relevant tests first, then broader tests if the slice completes.
-8. Update docs affected by the change, including `docs/backlog.md` when priorities, relevance, or approach notes need to change.
-9. Stop only when the backlog is empty, a blocker requires user input, or a test failure means the slice is not safely shippable.
+4. Route low/medium slices to a fresh GLM-5 worker via `opencode`, and route high-complexity slices to a fresh Codex subagent.
+5. Verify every GLM-produced change locally before acceptance by reviewing the diff, running the relevant tests yourself, and confirming the resulting code still matches the selected slice.
+6. After the slice lands, is verified, and is committed, rerun the helper, choose the next slice, and hand it to a new worker.
+7. Pick reasoning effort per slice complexity, not once for the whole phase.
+8. Run the narrowest relevant tests first, then broader tests if the slice completes.
+9. Update docs affected by the change, including `docs/backlog.md` when priorities, relevance, or approach notes need to change.
+10. Stop only when the backlog is empty, a blocker requires user input, or a test failure means the slice is not safely shippable.
 </objective>
 
 <process>
@@ -40,12 +41,15 @@ Work in a loop for the active backlog:
    - `openItems`
    - `baselineNotes`
    - `defaultReasoning`
+   - `defaultExecutor`
+   - `executorPolicy`
+   - `verificationChecklist`
 2. Merge any user-supplied constraints after the generated briefing.
 3. Pick the next slice using the selection rules below.
-4. Spawn a fresh implementation subagent for that slice.
-5. When the slice returns with code, tests, docs, and a commit, rerun the helper and repeat.
+4. Route the slice to a fresh worker using the executor rules below.
+5. Verify the returned change locally, commit the accepted slice, then rerun the helper and repeat.
 
-Do not keep implementing multiple slices in one long-lived worker. The whole point is to keep slice context isolated.
+Do not keep implementing multiple slices in one long-lived worker. The whole point is to keep slice context isolated. That rule applies to both `opencode` GLM runs and Codex subagents.
 
 ## 2. Pick the next slice
 Use the active backlog priority as the planning boundary. Select the next slice with these rules:
@@ -58,28 +62,60 @@ Use the active backlog priority as the planning boundary. Select the next slice 
 
 State the chosen slice explicitly before execution in one sentence.
 
-## 3. Subagent model and reasoning policy
-Use Codex 5.3 for subagents.
+## 3. Executor and reasoning policy
+Use two worker types:
+- `glm-5` via `opencode run` for most slices.
+- a native Codex subagent for complex slices or recovery when GLM output fails verification.
 
 Reasoning policy:
 - `low`: docs-only, tests-only, single-file adapter cleanup, or obvious mechanical import rewires.
 - `medium`: 2-5 file refactors inside one subsystem, targeted API reshaping, or controller/service extraction with stable contracts.
 - `high`: cross-module contract moves, public API changes, task orchestration rewrites, or anything likely to require broad regression testing.
 
-Default to one implementation subagent. Use a second subagent only when there is a clean split such as:
+Executor policy:
+- `low` => use `glm-5`.
+- `medium` => use `glm-5`.
+- `high` => use Codex.
+- Escalate a `low` or `medium` slice from `glm-5` to Codex when GLM output fails verification, stalls, or starts spreading outside the selected seam.
+
+When using `glm-5`, run it non-interactively through `opencode` and treat it as an implementation worker only. The orchestrator remains responsible for:
+- selecting the slice
+- protecting repo state and unrelated user changes
+- checking the resulting diff
+- running acceptance tests
+- deciding whether the slice is actually complete
+
+Default to one implementation worker. Use a second worker only when there is a clean split such as:
 - implementation + test/doc follow-through
 - parallel investigation of two independent candidate seams
 
-Keep the orchestrator lean. Subagents should read only the files needed for the selected slice plus any scoped `AGENTS.md`.
+Keep the orchestrator lean. Workers should read only the files needed for the selected slice plus any scoped `AGENTS.md`.
 
 ## 4. Execution requirements
-Subagents must:
+Workers must:
 - preserve the plan invariants from `AGENTS.md`
 - keep edits local to the selected slice
 - avoid unrelated cleanup
 - run targeted tests first
 - update plan notes/docs in the same slice when behavior or boundaries change
 - commit the finished slice before handing back
+
+Additional GLM verification requirements:
+- never trust the worker summary by itself; inspect the actual working tree and diff
+- rerun the narrowest relevant tests yourself after the worker returns
+- run broader tests when the slice touches a contract, entry point, shared helper, or exported behavior
+- confirm docs and `docs/backlog.md` reflect what actually landed
+- if the change is incomplete or suspect, either repair it locally or hand the same slice to Codex with the verification findings
+
+Keep a local acceptance snapshot per slice with:
+- selected slice
+- executor used
+- reasoning level
+- files changed
+- targeted tests run and result
+- broader tests run and result
+- commit hash
+- residual risks or follow-up notes
 
 ## 5. Loop stop conditions
 Continue phase execution until one of these conditions is true:
@@ -93,9 +129,10 @@ If stopping early, report the exact blocker and the next candidate slice.
 ## 6. Required end-of-turn output
 Report:
 - slices completed in this run
+- executor used for each slice
 - reasoning level used for each slice
 - files changed
-- tests run
+- tests run and whether the orchestrator verified them locally
 - commit hashes
 - whether the backlog is empty
 - what the next likely slice is if backlog items remain
