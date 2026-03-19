@@ -53,6 +53,7 @@ Run this **once** from the project folder to install all dependencies:
 
 These setup scripts validate that you are in the full project folder before installing dependencies.
 The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It now automatically attempts to install both `gmsh` and `bempp-cl`, with fallback handling if platform wheels are missing.
+Installer contract: setup writes the preferred backend interpreter to `.waveguide/backend-python.path` (default: project `.venv`), and `npm start` / launchers / `server/start.sh` consume that same marker unless you explicitly override with `PYTHON_BIN` or `WG_BACKEND_PYTHON`.
 
 ## Run the app
 
@@ -109,7 +110,8 @@ For macOS Apple Silicon, use the OpenCL CPU helper:
 ./scripts/setup-opencl-backend.sh
 ```
 
-This creates a dedicated environment at `$HOME/.waveguide-generator/opencl-cpu-env/`. `npm start` will automatically prefer that interpreter when it exists.
+This creates a dedicated environment at `$HOME/.waveguide-generator/opencl-cpu-env/`.
+The helper updates `.waveguide/backend-python.path` so launcher and backend startup use the OpenCL environment by default for this repo.
 
 **Other platforms:**
 
