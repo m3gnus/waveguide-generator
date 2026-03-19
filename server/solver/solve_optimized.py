@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 import multiprocessing as mp
 import numpy as np
 
-from .contract import frequency_failure, normalize_mesh_validation_mode
+from .contract import (
+    build_directivity_metadata,
+    frequency_failure,
+    normalize_mesh_validation_mode,
+)
 from .deps import bempp_api
 from .device_interface import (
     boundary_device_interface,
@@ -650,6 +654,7 @@ def solve_optimized(
     )
     observation_distance_m = float(observation_info["effective_distance_m"])
     effective_polar_config = dict(polar_config) if isinstance(polar_config, dict) else {}
+    effective_polar_config["observation_origin"] = observation_origin
     effective_polar_config["distance"] = observation_distance_m
 
     results = {
@@ -670,6 +675,9 @@ def solve_optimized(
             "partial_success": False,
             "performance": {},
             "observation": observation_info,
+            "directivity": build_directivity_metadata(
+                effective_polar_config, observation_info
+            ),
         },
     }
     if observation_info["adjusted"]:
