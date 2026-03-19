@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -34,13 +35,77 @@ function readPreferredPythonFromMarker(rootDir, { existsSync, readFileSync }) {
   }
 }
 
+function buildFallbackCandidates(rootDir, { existsSync, homeDir }) {
+  const candidates = [];
+
+  const venvPythonUnix = path.join(rootDir, '.venv', 'bin', 'python');
+  if (existsSync(venvPythonUnix)) {
+    candidates.push({ python: venvPythonUnix, source: 'fallback:.venv' });
+  }
+
+  const venvPythonWindows = path.join(rootDir, '.venv', 'Scripts', 'python.exe');
+  if (existsSync(venvPythonWindows)) {
+    candidates.push({ python: venvPythonWindows, source: 'fallback:.venv' });
+  }
+
+  const openclCpuEnvPython = path.join(homeDir, '.waveguide-generator', 'opencl-cpu-env', 'bin', 'python');
+  if (existsSync(openclCpuEnvPython)) {
+    candidates.push({ python: openclCpuEnvPython, source: 'fallback:opencl-cpu-env' });
+  }
+
+  candidates.push({ python: 'python3', source: 'fallback:python3' });
+  return candidates;
+}
+
+function parseDoctorReport(stdout) {
+  const text = String(stdout ?? '').trim();
+  if (!text) {
+    return null;
+  }
+
+  const jsonStart = text.indexOf('{');
+  if (jsonStart === -1) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text.slice(jsonStart));
+  } catch {
+    return null;
+  }
+}
+
+function runtimeDoctorReady(rootDir, candidate, { env, spawnSyncFn }) {
+  const doctorScript = path.join(rootDir, 'server', 'scripts', 'runtime_preflight.py');
+  const child = spawnSyncFn(
+    candidate.python,
+    [doctorScript, '--doctor', '--json'],
+    {
+      cwd: rootDir,
+      env: {
+        ...env,
+        WG_BACKEND_PYTHON_SOURCE: `${candidate.source}:probe`
+      },
+      encoding: 'utf8'
+    }
+  );
+
+  if (child?.error || child?.status !== 0) {
+    return false;
+  }
+
+  const report = parseDoctorReport(child.stdout);
+  return Boolean(report?.summary?.requiredReady);
+}
+
 export function resolveBackendPython(
   rootDir,
   {
     env = process.env,
     existsSync = fs.existsSync,
     readFileSync = fs.readFileSync,
-    homeDir = os.homedir()
+    homeDir = os.homedir(),
+    spawnSyncFn = spawnSync
   } = {}
 ) {
   const envPythonBin = normalizeText(env?.PYTHON_BIN);
@@ -61,20 +126,12 @@ export function resolveBackendPython(
     };
   }
 
-  const venvPythonUnix = path.join(rootDir, '.venv', 'bin', 'python');
-  if (existsSync(venvPythonUnix)) {
-    return { python: venvPythonUnix, source: 'fallback:.venv' };
+  const fallbackCandidates = buildFallbackCandidates(rootDir, { existsSync, homeDir });
+  for (const candidate of fallbackCandidates) {
+    if (runtimeDoctorReady(rootDir, candidate, { env, spawnSyncFn })) {
+      return candidate;
+    }
   }
 
-  const venvPythonWindows = path.join(rootDir, '.venv', 'Scripts', 'python.exe');
-  if (existsSync(venvPythonWindows)) {
-    return { python: venvPythonWindows, source: 'fallback:.venv' };
-  }
-
-  const openclCpuEnvPython = path.join(homeDir, '.waveguide-generator', 'opencl-cpu-env', 'bin', 'python');
-  if (existsSync(openclCpuEnvPython)) {
-    return { python: openclCpuEnvPython, source: 'fallback:opencl-cpu-env' };
-  }
-
-  return { python: 'python3', source: 'fallback:python3' };
+  return fallbackCandidates[0] ?? { python: 'python3', source: 'fallback:python3' };
 }

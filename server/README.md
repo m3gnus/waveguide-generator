@@ -49,9 +49,9 @@ After that, the helper writes this repo marker:
 1. `PYTHON_BIN`
 2. `WG_BACKEND_PYTHON`
 3. `.waveguide/backend-python.path`
-4. project `.venv`
-5. OpenCL CPU env fallback
-6. `python3`
+4. fallback probe across project `.venv`, OpenCL CPU env fallback, then `python3`
+
+When step 4 is used, startup prefers the first interpreter whose runtime doctor reports all required dependencies ready; if none are ready, it falls back to the same raw order (`.venv` -> OpenCL CPU env -> `python3`).
 
 For OpenCL CPU setup, the marker value is:
 
