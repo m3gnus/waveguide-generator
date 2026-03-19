@@ -117,7 +117,6 @@
         <div class="section actions-section">
           <button id="render-btn" class="is-hidden">Update Model</button>
 
-          <h4 class="actions-group-title">Project</h4>
           <div class="button-row">
             <button id="load-config-btn" class="secondary">Load Config</button>
             <button id="export-config-btn" class="secondary">
@@ -216,16 +215,23 @@
               Stop
             </button>
           </div>
-          <div
-            id="simulation-mesh-diagnostics"
-            class="simulation-mesh-diagnostics"
-            role="status"
-            aria-live="polite"
+          <details
+            id="simulation-mesh-diagnostics-window"
+            class="section simulation-mesh-diagnostics-window"
+            open
           >
-            <div class="simulation-mesh-diagnostics-placeholder">
-              Mesh stats appear here before you submit.
+            <summary>Geometry Diagnostics</summary>
+            <div
+              id="simulation-mesh-diagnostics"
+              class="simulation-mesh-diagnostics"
+              role="status"
+              aria-live="polite"
+            >
+              <div class="simulation-mesh-diagnostics-placeholder">
+                Mesh stats appear here before you submit.
+              </div>
             </div>
-          </div>
+          </details>
           <div id="simulation-jobs" class="simulation-jobs">
             <div class="simulation-jobs-header">
               <span>Simulations</span>

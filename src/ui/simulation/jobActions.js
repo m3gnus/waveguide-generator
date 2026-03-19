@@ -84,14 +84,6 @@ export function renderSimulationMeshDiagnostics(summary = null) {
 
   const provenance = summary.provenance === "backend" ? "backend" : "preview";
   const sourceLabel = provenance === "backend" ? "Solver Mesh" : "Preview Mesh";
-  const statusNote =
-    provenance === "backend"
-      ? "Triangle counts from the solver mesh used by this job."
-      : "Showing preview mesh triangle counts. Solver mesh data will replace these once the job starts.";
-  const okMessage =
-    provenance === "backend"
-      ? "Solver mesh diagnostics loaded for this job."
-      : "Preview geometry looks ready to submit.";
 
   const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(
     ([identity, label]) => `
@@ -102,26 +94,33 @@ export function renderSimulationMeshDiagnostics(summary = null) {
     </div>
   `,
   ).join("");
-  const debugTagSummary = [
-    `Wall (1): ${summary.tagCounts?.[1] ?? 0}`,
-    `Source (2): ${summary.tagCounts?.[2] ?? 0}`,
-    `Secondary (3): ${summary.tagCounts?.[3] ?? 0}`,
-    `Interface (4): ${summary.tagCounts?.[4] ?? 0}`,
-  ].join(" • ");
-  const infoMarkup = `<div class="simulation-mesh-diagnostics-note">${escapeHtml(sourceLabel)}. ${escapeHtml(statusNote)} Tags: ${escapeHtml(debugTagSummary)}</div>`;
+  const tagSummaryRows = [
+    ["Wall (1)", summary.tagCounts?.[1] ?? 0],
+    ["Source (2)", summary.tagCounts?.[2] ?? 0],
+    ["Secondary (3)", summary.tagCounts?.[3] ?? 0],
+    ["Interface (4)", summary.tagCounts?.[4] ?? 0],
+  ]
+    .map(
+      ([label, value]) => `
+      <div class="simulation-mesh-diagnostics-tag-summary-item">
+        <span class="simulation-mesh-diagnostics-tag-summary-label">${escapeHtml(label)}</span>
+        <span class="simulation-mesh-diagnostics-tag-summary-value">${escapeHtml(value)}</span>
+      </div>
+    `,
+    )
+    .join("");
 
   const warningMarkup =
     Array.isArray(summary.warnings) && summary.warnings.length > 0
       ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join("<br>")}</div>`
-      : `<div class="simulation-mesh-diagnostics-ok">${escapeHtml(okMessage)}</div>`;
+      : "";
 
   container.innerHTML = `
     <div class="simulation-mesh-diagnostics-header">
-      <span>Geometry Diagnostics</span>
       <span>${escapeHtml(sourceLabel)} • ${summary.vertexCount} vertices • ${summary.triangleCount} triangles</span>
     </div>
+    <div class="simulation-mesh-diagnostics-tag-summary">${tagSummaryRows}</div>
     <div class="simulation-mesh-diagnostics-tags">${identityRows}</div>
-    ${infoMarkup}
     ${warningMarkup}
   `;
 }
