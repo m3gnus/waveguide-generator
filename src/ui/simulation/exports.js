@@ -8,7 +8,6 @@ import {
   readSimulationState
 } from '../../modules/simulation/state.js';
 import { writeSimulationTaskBundleFile } from './workspaceTasks.js';
-import { getServerFolderPath, setServerFolderPath } from '../workspace/folderWorkspace.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats
@@ -542,26 +541,17 @@ function formatBundleMessage({ exportedFiles, failures, selectedFormats, auto = 
 
 function createTaskExportWriter(job, baseName) {
   return async (file) => {
-    // For server-side folder: temporarily scope path to baseName subdirectory
-    const serverPath = getServerFolderPath();
-    const subDirPath = serverPath && baseName ? `${serverPath}/${baseName}` : null;
-    if (subDirPath) setServerFolderPath(subDirPath);
-
-    try {
-      const result = await writeSimulationTaskBundleFile(job, file, {
-        dirName: baseName,
-        fallbackWrite: async (nextFile) => {
-          await saveFile(nextFile.content, nextFile.fileName, {
-            ...nextFile.saveOptions,
-            incrementCounter: false
-          });
-        }
-      });
-      return result.fileName;
-    } finally {
-      // Restore original server path
-      if (subDirPath) setServerFolderPath(serverPath);
-    }
+    const result = await writeSimulationTaskBundleFile(job, file, {
+      dirName: baseName,
+      fallbackWrite: async (nextFile) => {
+        await saveFile(nextFile.content, nextFile.fileName, {
+          ...nextFile.saveOptions,
+          workspaceSubdir: baseName,
+          incrementCounter: false
+        });
+      }
+    });
+    return result.fileName;
   };
 }
 

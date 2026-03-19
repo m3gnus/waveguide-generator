@@ -7,10 +7,8 @@ import {
     resetSelectedFolder,
     subscribeFolderWorkspace,
     supportsFolderSelection,
-    setServerFolderPath,
-    getServerFolderPath,
-    loadServerFolderPathFromStorage,
-    showOutputFolderPanel
+    showOutputFolderPanel,
+    writeWorkspaceFile
 } from './workspace/folderWorkspace.js';
 
 let hasPendingParameterChanges = false;
@@ -187,7 +185,6 @@ function finalizeExportCounter(options = {}) {
 }
 
 bindFolderWorkspaceLabel();
-loadServerFolderPathFromStorage();
 
 export async function selectOutputFolder() {
     bindFolderWorkspaceLabel();
@@ -195,10 +192,7 @@ export async function selectOutputFolder() {
     // Try native File System Access API first (Chrome/Edge/Firefox with flag)
     if (supportsFolderSelection(window)) {
         try {
-            const handle = await requestFolderSelection(window);
-            if (handle) {
-                setServerFolderPath(null); // Clear server path if using native API
-            }
+            await requestFolderSelection(window);
         } catch (err) {
             if (err.name !== 'AbortError') {
                 showError('Failed to select folder. Your browser may not support this feature.');
@@ -222,58 +216,7 @@ export async function saveFile(content, fileName, options = {}) {
         return;
     }
 
-    // Check if server-side folder is configured
-    const serverFolderPath = getServerFolderPath();
-    if (serverFolderPath) {
-        try {
-            const formData = new FormData();
-            const blob = content instanceof Blob
-                ? content
-                : new Blob([content], { type: options.contentType || 'text/plain' });
-            formData.append('file', blob, finalName);
-            formData.append('folder_path', serverFolderPath);
-
-            const response = await fetch('http://localhost:8000/api/export-file', {
-                method: 'POST',
-                body: formData,
-                signal: AbortSignal.timeout(30000) // 30 second timeout
-            });
-
-            if (!response.ok) {
-                const error = await response.json().catch(() => ({}));
-                const statusCode = response.status;
-                let errorMsg = error.detail || response.statusText || 'Unknown error';
-
-                // Provide more specific error messages
-                if (statusCode === 401 || statusCode === 403) {
-                    errorMsg = 'Permission denied: Cannot write to output folder';
-                } else if (statusCode === 413) {
-                    errorMsg = 'File too large. Please reduce output size or split into multiple exports.';
-                } else if (statusCode === 500 || statusCode === 503) {
-                    errorMsg = 'Server error. Please try again or choose a different output folder.';
-                }
-
-                throw new Error(errorMsg);
-            }
-
-            finalizeExportCounter(options);
-            return;
-        } catch (err) {
-            console.warn('Server-side export failed:', err);
-
-            // Distinguish between network and other errors
-            if (err.name === 'AbortError') {
-                showError('Export timeout. Server took too long to respond. Try again or use local folder.');
-            } else if (err instanceof TypeError) {
-                showError('Network error: Cannot reach export server. Check server connection.');
-            } else {
-                showError(`Export failed: ${err.message}`);
-            }
-            return;
-        }
-    }
-
-    // Fallback to native File System Access API
+    // Prefer direct-write optimization when an explicit folder handle is available.
     const outputDirHandle = getSelectedFolderHandle();
     if (outputDirHandle) {
         try {
@@ -296,9 +239,46 @@ export async function saveFile(content, fileName, options = {}) {
         }
     }
 
-    if ('showSaveFilePicker' in window) {
+    const shouldTryWorkspaceWrite =
+        options.forceWorkspaceWrite === true
+        || Boolean(options.workspaceSubdir)
+        || !supportsFolderSelection(globalThis?.window);
+
+    if (shouldTryWorkspaceWrite) {
         try {
-            const handle = await window.showSaveFilePicker({
+            await writeWorkspaceFile(finalName, content, {
+                contentType: options.contentType,
+                workspaceSubdir: options.workspaceSubdir,
+                timeoutMs: 30000
+            });
+            finalizeExportCounter(options);
+            return;
+        } catch (err) {
+            console.warn('Backend workspace export failed:', err);
+
+            // Distinguish between network and other errors
+            if (err.name === 'AbortError') {
+                showError('Workspace export timed out. Falling back to browser download path.');
+            } else if (err instanceof TypeError) {
+                showError('Cannot reach backend workspace. Falling back to browser download path.');
+            } else {
+                const statusCode = Number(err.statusCode || 0);
+                let prefix = 'Workspace export failed';
+                if (statusCode === 401 || statusCode === 403) {
+                    prefix = 'Workspace permission denied';
+                } else if (statusCode === 413) {
+                    prefix = 'Workspace export too large';
+                } else if (statusCode >= 500) {
+                    prefix = 'Workspace server error';
+                }
+                showError(`${prefix}. Falling back to browser download path.`);
+            }
+        }
+    }
+
+    if ('showSaveFilePicker' in (globalThis?.window || {})) {
+        try {
+            const handle = await globalThis.window.showSaveFilePicker({
                 suggestedName: finalName,
                 types: options.typeInfo ? [options.typeInfo] : undefined
             });
