@@ -1,31 +1,35 @@
-import {
-  exportProfilesCSV,
-  exportSlicesCSV,
-} from '../../export/profiles.js';
-import { generateMWGConfigContent } from '../../export/mwgConfig.js';
-import { exportSTLBinary } from '../../export/stl.browser.js';
-import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
+import { exportProfilesCSV, exportSlicesCSV } from "../../export/profiles.js";
+import { generateMWGConfigContent } from "../../export/mwgConfig.js";
+import { exportSTLBinary } from "../../export/stl.browser.js";
+import { buildWaveguidePayload } from "../../solver/waveguidePayload.js";
 import {
   buildCanonicalMeshPayloadFromShape,
-  buildGeometryMeshFromShape
-} from '../../geometry/pipeline.js';
-import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
-import { GeometryModule } from '../geometry/index.js';
-import { prepareOccExportParams, prepareProfileCsvParams } from '../design/index.js';
+  buildGeometryMeshFromShape,
+} from "../../geometry/pipeline.js";
+import {
+  mapVertexToAth,
+  transformVerticesToAth,
+} from "../../geometry/transforms.js";
+import { GeometryModule } from "../geometry/index.js";
+import {
+  prepareOccExportParams,
+  prepareProfileCsvParams,
+} from "../design/index.js";
+import { formatDependencyBlockMessage } from "../runtime/health.js";
 
-const EXPORT_MODULE_ID = 'export';
-const EXPORT_IMPORT_STAGE = 'import';
-const EXPORT_TASK_STAGE = 'task';
+const EXPORT_MODULE_ID = "export";
+const EXPORT_IMPORT_STAGE = "import";
+const EXPORT_TASK_STAGE = "task";
 
 const EXPORT_KINDS = Object.freeze({
-  OCC_MESH: 'occ-mesh',
-  STL: 'stl',
-  PROFILE_CSV: 'profile-csv',
-  CONFIG: 'config'
+  OCC_MESH: "occ-mesh",
+  STL: "stl",
+  PROFILE_CSV: "profile-csv",
+  CONFIG: "config",
 });
 
 function isObject(value) {
-  return value !== null && typeof value === 'object';
+  return value !== null && typeof value === "object";
 }
 
 function createExportImportEnvelope(kind, payload) {
@@ -33,7 +37,7 @@ function createExportImportEnvelope(kind, payload) {
     module: EXPORT_MODULE_ID,
     stage: EXPORT_IMPORT_STAGE,
     kind,
-    ...payload
+    ...payload,
   });
 }
 
@@ -43,10 +47,14 @@ function assertExportImportEnvelope(input, expectedKind = null) {
     input.module !== EXPORT_MODULE_ID ||
     input.stage !== EXPORT_IMPORT_STAGE
   ) {
-    throw new Error('Export module task requires input created by ExportModule import helpers.');
+    throw new Error(
+      "Export module task requires input created by ExportModule import helpers.",
+    );
   }
   if (expectedKind && input.kind !== expectedKind) {
-    throw new Error(`Export module task expected "${expectedKind}" input but received "${input.kind}".`);
+    throw new Error(
+      `Export module task expected "${expectedKind}" input but received "${input.kind}".`,
+    );
   }
 }
 
@@ -56,14 +64,18 @@ function assertExportTaskEnvelope(result, expectedKind = null) {
     result.module !== EXPORT_MODULE_ID ||
     result.stage !== EXPORT_TASK_STAGE
   ) {
-    throw new Error('Export module output requires a result from ExportModule.task().');
+    throw new Error(
+      "Export module output requires a result from ExportModule.task().",
+    );
   }
   if (expectedKind && result.kind !== expectedKind) {
-    throw new Error(`Export module output expected "${expectedKind}" result but received "${result.kind}".`);
+    throw new Error(
+      `Export module output expected "${expectedKind}" result but received "${result.kind}".`,
+    );
   }
 }
 
-async function checkBackendReachable(backendUrl) {
+async function fetchBackendHealth(backendUrl) {
   const controller = new AbortController();
   const timeoutMs = 10000;
   const timer = setTimeout(() => {
@@ -71,12 +83,17 @@ async function checkBackendReachable(backendUrl) {
   }, timeoutMs);
 
   try {
-    const res = await fetch(`${backendUrl}/health`, { signal: controller.signal });
+    const res = await fetch(`${backendUrl}/health`, {
+      signal: controller.signal,
+    });
     clearTimeout(timer);
-    return res.ok;
+    if (!res.ok) {
+      return null;
+    }
+    return await res.json();
   } catch (_error) {
     clearTimeout(timer);
-    return false;
+    return null;
   }
 }
 
@@ -102,68 +119,90 @@ function buildExportArtifacts(mesh, payload) {
         return transformVerticesToAth(vertices, {
           verticalOffset,
           offsetSign: 1,
-          ...transformOptions
+          ...transformOptions,
         });
-      }
-    }
+      },
+    },
   };
 }
 
 async function runOccMeshExportTask(input, options = {}) {
   assertExportImportEnvelope(input, EXPORT_KINDS.OCC_MESH);
 
-  input.onStatus?.('Connecting to backend...');
+  input.onStatus?.("Connecting to backend...");
 
-  let reachable = await checkBackendReachable(input.backendUrl);
-  if (!reachable) {
+  let health = await fetchBackendHealth(input.backendUrl);
+  if (!health) {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    reachable = await checkBackendReachable(input.backendUrl);
+    health = await fetchBackendHealth(input.backendUrl);
   }
-  if (!reachable) {
+  if (!health) {
     throw new Error(
-      `Backend health check failed at ${input.backendUrl}.\nStart with: npm start`
+      `Backend health check failed at ${input.backendUrl}.\nStart with: npm start`,
     );
   }
 
-  input.onStatus?.('Building mesh (Python OCC)...');
+  if (health?.occBuilderReady === false) {
+    throw new Error(
+      formatDependencyBlockMessage(health, {
+        features: ["meshBuild"],
+        fallback: "OCC mesh export is unavailable.",
+      }),
+    );
+  }
 
-  const mshVersion = options.mshVersion || '2.2';
+  input.onStatus?.("Building mesh (Python OCC)...");
+
+  const mshVersion = options.mshVersion || "2.2";
   const occParams = prepareOccExportParams(input.params);
   const requestPayload = buildWaveguidePayload(occParams, mshVersion);
 
   let response;
   try {
     const res = await fetch(`${input.backendUrl}/api/mesh/build`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload)
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestPayload),
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-      throw new Error(`/api/mesh/build failed: ${err.detail || res.statusText}`);
+      const err = await res
+        .json()
+        .catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(
+        `/api/mesh/build failed: ${err.detail || res.statusText}`,
+      );
     }
 
     response = await res.json();
   } catch (err) {
-    if (err.message?.includes('/api/mesh/build failed')) throw err;
+    if (err.message?.includes("/api/mesh/build failed")) throw err;
     throw new Error(`/api/mesh/build request failed: ${err.message}`);
   }
 
-  if (!response || response.generatedBy !== 'gmsh-occ' || typeof response.msh !== 'string') {
-    throw new Error('Invalid response from /api/mesh/build: expected gmsh-occ mesh data.');
+  if (
+    !response ||
+    response.generatedBy !== "gmsh-occ" ||
+    typeof response.msh !== "string"
+  ) {
+    throw new Error(
+      "Invalid response from /api/mesh/build: expected gmsh-occ mesh data.",
+    );
   }
 
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(occParams), {
-    includeEnclosure: Number(occParams.encDepth || 0) > 0
-  });
+  const geometryTask = GeometryModule.task(
+    GeometryModule.importPrepared(occParams),
+    {
+      includeEnclosure: Number(occParams.encDepth || 0) > 0,
+    },
+  );
   const geometryShape = GeometryModule.output.shape(geometryTask);
   const payload = buildCanonicalMeshPayloadFromShape(geometryShape, {
     includeEnclosure: Number(occParams.encDepth || 0) > 0,
-    validateIntegrity: false
+    validateIntegrity: false,
   });
   const mesh = buildGeometryMeshFromShape(geometryShape, {
-    includeEnclosure: Number(occParams.encDepth || 0) > 0
+    includeEnclosure: Number(occParams.encDepth || 0) > 0,
   });
 
   return Object.freeze({
@@ -175,27 +214,30 @@ async function runOccMeshExportTask(input, options = {}) {
       artifacts: buildExportArtifacts(mesh, payload),
       payload,
       msh: response.msh,
-      meshStats: response.stats || null
-    }
+      meshStats: response.stats || null,
+    },
   });
 }
 
 function runStlExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.STL);
 
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(input.params), {
-    includeEnclosure: false,
-    adaptivePhi: true
-  });
+  const geometryTask = GeometryModule.task(
+    GeometryModule.importPrepared(input.params),
+    {
+      includeEnclosure: false,
+      adaptivePhi: true,
+    },
+  );
   const geometryShape = GeometryModule.output.shape(geometryTask);
   const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
     includeEnclosure: false,
-    adaptivePhi: true
+    adaptivePhi: true,
   });
   const stlBinary = exportSTLBinary(
     rotateVerticesForStl(Float32Array.from(vertices)),
     Uint32Array.from(indices),
-    input.modelName
+    input.modelName,
   );
 
   return Object.freeze({
@@ -208,11 +250,14 @@ function runStlExportTask(input) {
         content: stlBinary,
         fileName: `${input.baseName}.stl`,
         saveOptions: {
-          contentType: 'application/sla',
-          typeInfo: { description: 'STL Model', accept: { 'model/stl': ['.stl'] } }
-        }
-      }
-    ]
+          contentType: "application/sla",
+          typeInfo: {
+            description: "STL Model",
+            accept: { "model/stl": [".stl"] },
+          },
+        },
+      },
+    ],
   });
 }
 
@@ -222,7 +267,7 @@ function runProfileCsvExportTask(input) {
   const csvParams = prepareProfileCsvParams(input.params);
   const meshParams = {
     angularSegments: csvParams.angularSegments,
-    lengthSegments: csvParams.lengthSegments
+    lengthSegments: csvParams.lengthSegments,
   };
 
   return Object.freeze({
@@ -235,19 +280,25 @@ function runProfileCsvExportTask(input) {
         content: exportProfilesCSV(input.vertices, meshParams),
         fileName: `${input.baseName}_profiles.csv`,
         saveOptions: {
-          contentType: 'text/csv',
-          typeInfo: { description: 'Angular Profiles', accept: { 'text/csv': ['.csv'] } }
-        }
+          contentType: "text/csv",
+          typeInfo: {
+            description: "Angular Profiles",
+            accept: { "text/csv": [".csv"] },
+          },
+        },
       },
       {
         content: exportSlicesCSV(input.vertices, meshParams),
         fileName: `${input.baseName}_slices.csv`,
         saveOptions: {
-          contentType: 'text/csv',
-          typeInfo: { description: 'Length Slices', accept: { 'text/csv': ['.csv'] } }
-        }
-      }
-    ]
+          contentType: "text/csv",
+          typeInfo: {
+            description: "Length Slices",
+            accept: { "text/csv": [".csv"] },
+          },
+        },
+      },
+    ],
   });
 }
 
@@ -264,42 +315,54 @@ function runConfigExportTask(input) {
         content: generateMWGConfigContent(input.params),
         fileName: `${input.baseName}.txt`,
         saveOptions: {
-          contentType: 'text/plain',
-          typeInfo: { description: 'MWG Config', accept: { 'text/plain': ['.txt'] } }
-        }
-      }
-    ]
+          contentType: "text/plain",
+          typeInfo: {
+            description: "MWG Config",
+            accept: { "text/plain": [".txt"] },
+          },
+        },
+      },
+    ],
   });
 }
 
-export function importOccMeshBuild(preparedParams, { backendUrl, onStatus } = {}) {
+export function importOccMeshBuild(
+  preparedParams,
+  { backendUrl, onStatus } = {},
+) {
   return createExportImportEnvelope(EXPORT_KINDS.OCC_MESH, {
     params: preparedParams,
     backendUrl,
-    onStatus
+    onStatus,
   });
 }
 
-export function importStlExport(preparedParams, { baseName = 'waveguide', modelName = 'MWG Horn' } = {}) {
+export function importStlExport(
+  preparedParams,
+  { baseName = "waveguide", modelName = "MWG Horn" } = {},
+) {
   return createExportImportEnvelope(EXPORT_KINDS.STL, {
     params: preparedParams,
     baseName,
-    modelName
+    modelName,
   });
 }
 
-export function importProfileCsvExport(preparedParams, { vertices, baseName = 'waveguide' } = {}) {
+export function importProfileCsvExport(
+  preparedParams,
+  { vertices, baseName = "waveguide" } = {},
+) {
   return createExportImportEnvelope(EXPORT_KINDS.PROFILE_CSV, {
     params: preparedParams,
     vertices,
-    baseName
+    baseName,
   });
 }
 
-export function importConfigExport({ params, baseName = 'waveguide' }) {
+export function importConfigExport({ params, baseName = "waveguide" }) {
   return createExportImportEnvelope(EXPORT_KINDS.CONFIG, {
     params,
-    baseName
+    baseName,
   });
 }
 
@@ -339,6 +402,6 @@ export const ExportModule = Object.freeze({
   task: runExportTask,
   output: Object.freeze({
     files: getExportFiles,
-    occMesh: getOccMeshBuildResult
-  })
+    occMesh: getOccMeshBuildResult,
+  }),
 });

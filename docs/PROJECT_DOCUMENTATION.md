@@ -267,6 +267,10 @@ Base URL: `http://localhost:8000`
 
 - `GET /health`
   - Health status + dependency matrix/runtime payload from `deps.py`
+  - Includes `dependencyDoctor` summary + component guidance for frontend dependency-status rendering and blocked-feature messaging:
+    - `summary.requiredReady`
+    - `summary.requiredIssues`
+    - `components[].id|name|category|status|requiredFor|featureImpact|guidance`
   - Includes `capabilities` metadata for frontend settings gating:
     - `simulationBasic.controls`
     - `simulationAdvanced.available`
