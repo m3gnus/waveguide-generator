@@ -569,6 +569,13 @@ High-signal test suites:
 - Frontend dev server: `http://localhost:3000` (`scripts/dev-server.js`)
 - Backend API server: `http://localhost:8000` (`server/app.py`)
 - Combined startup script: `npm start` (`scripts/start-all.js`)
+- Backend interpreter selection contract for `npm start` and `server/start.sh`:
+  1. `PYTHON_BIN`
+  2. `WG_BACKEND_PYTHON`
+  3. repo marker `.waveguide/backend-python.path` (written by install/setup scripts)
+  4. project `.venv`
+  5. OpenCL CPU env fallback (`$HOME/.waveguide-generator/opencl-cpu-env/bin/python`)
+  6. `python3`
 - Backend jobs are in-memory; restarting backend clears job history.
 - gmsh Python API calls are guarded for thread-safety and main-thread constraints.
 

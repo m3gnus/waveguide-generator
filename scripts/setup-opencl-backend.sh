@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PREFERRED_PYTHON_FILE="$ROOT_DIR/.waveguide/backend-python.path"
 
 if [ "$(uname -s)" != "Darwin" ]; then
     echo "This helper currently targets macOS (Darwin) only."
@@ -60,11 +61,17 @@ _ = bempp.as_matrix(op.weak_form())
 print("bempp-cl OpenCL boundary assembly test: OK")
 PY
 
+echo "Recording backend interpreter contract..."
+mkdir -p "$ROOT_DIR/.waveguide"
+printf '%s\n' "$ENV_PREFIX/bin/python" > "$PREFERRED_PYTHON_FILE"
+echo "  Marker file: $PREFERRED_PYTHON_FILE"
+
 echo
 echo "Setup complete."
 echo "Backend interpreter:"
 echo "  $ENV_PREFIX/bin/python"
 echo
-echo "Use one of:"
+echo "npm start and server/start.sh will now use the marker above by default."
+echo "Optional overrides:"
 echo "  WG_BACKEND_PYTHON=\"$ENV_PREFIX/bin/python\" npm start"
 echo "  PYTHON_BIN=\"$ENV_PREFIX/bin/python\" npm start"

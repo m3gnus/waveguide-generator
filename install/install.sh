@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+PREFERRED_PYTHON_FILE="$ROOT/.waveguide/backend-python.path"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  WG - Waveguide Generator — Setup                           ║"
@@ -246,6 +247,13 @@ else
         fi
     fi
 fi
+echo ""
+
+echo "Recording backend interpreter contract..."
+mkdir -p "$ROOT/.waveguide"
+printf '%s\n' "$ROOT/.venv/bin/python" > "$PREFERRED_PYTHON_FILE"
+echo "  Preferred backend interpreter: $ROOT/.venv/bin/python"
+echo "  Marker file: $PREFERRED_PYTHON_FILE"
 echo ""
 
 echo "╔══════════════════════════════════════════════════════════════╗"

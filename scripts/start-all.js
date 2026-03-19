@@ -1,21 +1,13 @@
 import { spawn, exec } from 'child_process';
 import path from 'path';
-import fs from 'fs';
-import os from 'os';
 import { fileURLToPath } from 'url';
+import { resolveBackendPython } from './backend-python.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 const serverDir = path.join(rootDir, 'server');
-const venvPythonUnix = path.join(rootDir, '.venv', 'bin', 'python');
-const venvPythonWindows = path.join(rootDir, '.venv', 'Scripts', 'python.exe');
-const openclCpuEnvPython = path.join(os.homedir(), '.waveguide-generator', 'opencl-cpu-env', 'bin', 'python');
-const backendPython = process.env.PYTHON_BIN
-  || process.env.WG_BACKEND_PYTHON
-  || (fs.existsSync(openclCpuEnvPython) ? openclCpuEnvPython : null)
-  || (fs.existsSync(venvPythonUnix) ? venvPythonUnix : null)
-  || (fs.existsSync(venvPythonWindows) ? venvPythonWindows : null)
-  || 'python3';
+const backendPythonResolution = resolveBackendPython(rootDir);
+const backendPython = backendPythonResolution.python;
 
 console.log('╔══════════════════════════════════════════════════════════════╗');
 console.log('║  WG - Waveguide Generator                     ║');
@@ -82,7 +74,7 @@ console.log('');
 console.log('📡 Servers starting...');
 console.log('   Frontend: http://localhost:3000');
 console.log('   Backend:  http://localhost:8000');
-console.log(`   Python:   ${backendPython}`);
+console.log(`   Python:   ${backendPython} (${backendPythonResolution.source})`);
 console.log('');
 console.log('Press Ctrl+C to stop both servers');
 console.log('');

@@ -1,6 +1,9 @@
 #!/bin/bash
 # MWG Horn BEM Solver Startup Script
 
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PREFERRED_PYTHON_FILE="$ROOT_DIR/.waveguide/backend-python.path"
+
 echo "🚀 Starting MWG Horn BEM Solver Backend..."
 echo ""
 
@@ -10,21 +13,50 @@ if [ ! -f "app.py" ]; then
     exit 1
 fi
 
-# Check if Python 3 is available
-if [ -n "${WG_BACKEND_PYTHON:-}" ] && [ -x "${WG_BACKEND_PYTHON}" ]; then
-    PYTHON_BIN="${WG_BACKEND_PYTHON}"
-elif [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
+PYTHON_BIN_OVERRIDE="${PYTHON_BIN:-}"
+WG_BACKEND_PYTHON_OVERRIDE="${WG_BACKEND_PYTHON:-}"
+PYTHON_BIN=""
+PYTHON_SOURCE=""
+
+# Resolve backend interpreter using the same priority contract as npm start.
+if [ -n "$PYTHON_BIN_OVERRIDE" ]; then
+    PYTHON_BIN="$PYTHON_BIN_OVERRIDE"
+    PYTHON_SOURCE="env:PYTHON_BIN"
+elif [ -n "$WG_BACKEND_PYTHON_OVERRIDE" ]; then
+    PYTHON_BIN="$WG_BACKEND_PYTHON_OVERRIDE"
+    PYTHON_SOURCE="env:WG_BACKEND_PYTHON"
+elif [ -f "$PREFERRED_PYTHON_FILE" ]; then
+    MARKER_PYTHON="$(head -n 1 "$PREFERRED_PYTHON_FILE" | tr -d '\r')"
+    if [ -n "$MARKER_PYTHON" ] && [ -x "$MARKER_PYTHON" ]; then
+        PYTHON_BIN="$MARKER_PYTHON"
+        PYTHON_SOURCE="marker:$PREFERRED_PYTHON_FILE"
+    fi
+fi
+
+if [ -z "$PYTHON_BIN" ] && [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+    PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+    PYTHON_SOURCE="fallback:.venv"
+elif [ -z "$PYTHON_BIN" ] && [ -x "$ROOT_DIR/.venv/Scripts/python.exe" ]; then
+    PYTHON_BIN="$ROOT_DIR/.venv/Scripts/python.exe"
+    PYTHON_SOURCE="fallback:.venv"
+elif [ -z "$PYTHON_BIN" ] && [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
     PYTHON_BIN="$HOME/.waveguide-generator/opencl-cpu-env/bin/python"
-elif [ -x "../.venv/bin/python" ]; then
-    PYTHON_BIN="../.venv/bin/python"
-elif command -v python3 &> /dev/null; then
+    PYTHON_SOURCE="fallback:opencl-cpu-env"
+elif [ -z "$PYTHON_BIN" ] && command -v python3 &> /dev/null; then
     PYTHON_BIN="python3"
-else
+    PYTHON_SOURCE="fallback:python3"
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
     echo "❌ Error: Python 3 is not installed."
     exit 1
 fi
 
 echo "✅ Python found: $($PYTHON_BIN --version)"
+echo "   Source: $PYTHON_SOURCE"
+if [ "$PYTHON_SOURCE" = "fallback:python3" ]; then
+    echo "⚠️  No verified project interpreter found. Re-run install/install.sh or install/install.bat."
+fi
 
 # Check minimum Python version
 $PYTHON_BIN - <<'PY'
