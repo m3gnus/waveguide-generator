@@ -41,7 +41,8 @@
 **Task metadata persistence**:
 - Ratings: stored locally and in folder task manifests when workspace active
 - Exports: tracked via `exportedFiles` list and `autoExportCompletedAt` timestamp
-- Script snapshots: stored with task manifest for reproducibility
+- Script snapshots: stored with task manifest and mirrored to deterministic generation artifact `script.snapshot.mwg`
+- User-facing project manifest: `waveguide.project.v1.json` in each generation folder records selected exports and script-snapshot artifact metadata
 - Manifest/index folders use generation naming (`<workspace>/<jobLabel>/`) when available, but manifest/index `id` remains the stable backend job identity
 
 **Settings** (persisted):
@@ -60,3 +61,4 @@ Contract validation tests:
 - `tests/simulation-export-bundle.test.js` — bundle coordination
 - `tests/simulation-management-settings.test.js` — settings persistence
 - `tests/task-manifest.test.js`, `task-index-rebuild.test.js` — folder workspace persistence
+- `tests/generation-artifacts.test.js` — generation project manifest and deterministic artifact naming
