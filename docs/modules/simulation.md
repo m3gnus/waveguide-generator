@@ -42,6 +42,7 @@
 - Ratings: stored locally and in folder task manifests when workspace active
 - Exports: tracked via `exportedFiles` list and `autoExportCompletedAt` timestamp
 - Script snapshots: stored with task manifest for reproducibility
+- Manifest/index folders use generation naming (`<workspace>/<jobLabel>/`) when available, but manifest/index `id` remains the stable backend job identity
 
 **Settings** (persisted):
 - `autoExportOnComplete` — auto-run exports on job completion
