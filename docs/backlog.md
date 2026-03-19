@@ -178,15 +178,16 @@ Progress note (March 19, 2026):
 
 - [x] Remove the standalone observation-distance row outside the main solve-statistics block
 - [x] Add simulation date/time to the results summary using persisted job timestamps
-- [ ] Persist and display directivity-map details used for the solve: angle range, angular step/sample count, enabled axes, diagonal angle, normalization angle, effective observation distance, and observation origin
-- [ ] Extend result/job metadata plumbing so the View Results modal can read those details without reconstructing them heuristically
+- [x] Persist and display directivity-map details used for the solve: angle range, angular step/sample count, enabled axes, diagonal angle, normalization angle, effective observation distance, and observation origin
+- [x] Extend result/job metadata plumbing so the View Results modal can read those details without reconstructing them heuristically
 - [ ] Add a lightweight post-solve directivity-map re-render path for display-only options that do not require a new BEM solve
-- [ ] Add/update frontend and backend tests covering results summary content and metadata persistence
+- [x] Add/update frontend and backend tests covering results summary content and metadata persistence
 
 Progress note (March 19, 2026):
 
 - The View Results solve-statistics summary now surfaces persisted job timestamps, preferring `completedAt` and falling back to `startedAt`/`createdAt` when needed.
 - Solver results now persist `metadata.directivity` with effective polar-map settings, including angle range, angular step/sample count, enabled axes, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
+- The View Results summary now reads persisted `metadata.directivity` first, shows the solve-time polar settings, and only falls back to older job/config data when directivity metadata is absent.
 
 ## Deferred Watchpoints
 

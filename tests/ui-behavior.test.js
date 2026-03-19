@@ -168,6 +168,51 @@ test("renderSolveStatsSummary includes persisted job completion timestamp", () =
   assert.match(markup, /2026-03-19 \d{2}:45/);
 });
 
+test("renderSolveStatsSummary uses persisted directivity metadata for solve settings", () => {
+  const markup = renderSolveStatsSummary(
+    {
+      frequencies: [100, 1000],
+      metadata: {
+        performance: { total_time_seconds: 12.4 },
+        observation: {
+          effective_distance_m: 9.9,
+          requested_distance_m: 9.9,
+        },
+        directivity: {
+          angle_range_degrees: [0, 90],
+          sample_count: 10,
+          angular_step_degrees: 10,
+          enabled_axes: ["horizontal", "diagonal"],
+          normalization_angle_degrees: 7.5,
+          diagonal_angle_degrees: 35,
+          observation_origin: "throat",
+          requested_distance_m: 1.0,
+          effective_distance_m: 1.75,
+        },
+      },
+    },
+    {
+      configSummary: {
+        observation_origin: "mouth",
+      },
+    },
+  );
+
+  assert.match(markup, /Observation/);
+  assert.match(markup, /1\.75 m from throat \(requested 1\.00 m\)/);
+  assert.doesNotMatch(markup, /from mouth/);
+  assert.match(markup, /Polar sweep/);
+  assert.match(markup, /0° – 90°/);
+  assert.match(markup, /Angular sampling/);
+  assert.match(markup, /10° step, 10 samples/);
+  assert.match(markup, /Axes/);
+  assert.match(markup, /Horizontal, Diagonal/);
+  assert.match(markup, /Normalization/);
+  assert.match(markup, /7\.5°/);
+  assert.match(markup, /Diagonal plane/);
+  assert.match(markup, /35°/);
+});
+
 test("describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes", () => {
   const summary = describeSimBasicDeviceAvailability(
     {
