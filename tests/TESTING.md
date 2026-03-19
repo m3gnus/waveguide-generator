@@ -27,6 +27,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/architecture-boundaries.test.js`
 - `tests/ath-fixtures.test.js`
 - `tests/backend-python-resolver.test.js`
+- `tests/backend-runtime-doctor.test.js`
 - `tests/backend-runtime-preflight.test.js`
 - `tests/bem-mesh-integrity.test.js`
 - `tests/config-import.test.js`

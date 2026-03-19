@@ -120,7 +120,7 @@ Progress note (March 19, 2026):
 - [x] Define and enforce one interpreter-selection contract across installer, launchers, `npm start`, and backend startup so the app always prefers the environment it installed and verifies
 - [x] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
 - [x] Add a post-install verification/preflight step that proves `fastapi`, `gmsh`, `bempp-cl`, and OpenCL detection status for the exact interpreter that will be launched
-- [ ] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
+- [x] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
 - [ ] Surface dependency status in the UI before backend start/export/solve actions fail, including feature impact and guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
 - [ ] Add regression tests for dependency doctor output and dependency-status rendering
 
@@ -131,6 +131,8 @@ Progress note (March 19, 2026):
 - Installer/setup scripts now write a repo-local backend interpreter marker (`.waveguide/backend-python.path`), and both `npm start` (`scripts/start-all.js`) and `server/start.sh` resolve Python from the same priority contract: explicit env override -> marker -> `.venv` -> OpenCL env fallback -> `python3`.
 - Startup/entrypoint messaging now states backend-dependent features are blocked (not mocked) when backend or `bempp-cl` is unavailable, with explicit install/recovery guidance in `scripts/start-all.js`, `server/start.sh`, and `server/app.py`.
 - Added backend preflight CLI (`npm run preflight:backend[:strict]`) that runs under the exact interpreter selected by the startup contract and reports required runtime readiness for `fastapi`, `gmsh`, `bempp-cl`, and OpenCL. Install/setup scripts now run this preflight after writing the interpreter marker.
+- Added backend dependency doctor CLI (`npm run doctor:backend[[:strict]|:json]`) with stable structured payload + text rendering, component status classification (`installed`/`missing`/`unsupported`), feature impact, and OS-specific guidance for `fastapi`, `gmsh`, `bempp-cl`, OpenCL runtime, and optional `matplotlib`.
+- Added regression coverage for backend doctor payload/rendering and CLI wrapper invocation; UI dependency-status rendering remains pending.
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)
 

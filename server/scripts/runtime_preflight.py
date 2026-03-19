@@ -11,7 +11,7 @@ SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from services.runtime_preflight import run_runtime_preflight  # noqa: E402
+from services.runtime_preflight import run_runtime_doctor, run_runtime_preflight  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,11 +36,23 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Device mode probe for OpenCL availability (default: auto).",
     )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Emit dependency doctor report (installed/missing/unsupported + guidance).",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if bool(args.doctor):
+        return run_runtime_doctor(
+            strict=bool(args.strict),
+            json_output=bool(args.json),
+            preferred_mode=str(args.device_mode or "auto"),
+        )
+
     return run_runtime_preflight(
         strict=bool(args.strict),
         json_output=bool(args.json),
@@ -50,4 +62,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
