@@ -121,7 +121,7 @@ const SIMULATION_ADVANCED_HELP = Object.freeze({
   enableWarmup:
     "Optimized solver only. Before the main frequency loop, assembles and pre-caches one BEM operator at the median frequency to warm up OpenCL JIT and operator assembly pipelines. Costs one extra solve but makes timing for subsequent frequencies more consistent. Recommended default: On.",
   bemPrecision:
-    "Optimized solver only. Single (float32) is 2–4× faster and uses half the GPU memory, but may lose accuracy at very high frequencies or on ill-conditioned meshes. Double (float64) is the safe choice for production results. Recommended default: Double.",
+    "Optimized solver only. Single (float32) is 2–4× faster, uses half the GPU memory, and is accurate for typical simulations. Double (float64) is available as a fallback for numerical stability in edge cases (e.g., very high frequencies or ill-conditioned meshes). Recommended default: Single.",
   useBurtonMiller:
     "Optimized solver only. Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation — without it, the solver can produce large errors at certain frequencies even when GMRES converges. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.",
 });
