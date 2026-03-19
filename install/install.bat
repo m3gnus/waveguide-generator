@@ -232,6 +232,17 @@ echo   Preferred backend interpreter: %CD%\.venv\Scripts\python.exe
 echo   Marker file: %PREFERRED_PYTHON_FILE%
 echo.
 
+echo Running backend dependency preflight...
+node scripts\preflight-backend-runtime.js --strict
+if errorlevel 1 (
+    echo   WARNING: Backend preflight detected missing/unsupported required checks.
+    echo            Fix the reported items, then re-run:
+    echo              npm.cmd run preflight:backend:strict
+) else (
+    echo   Backend preflight: required checks ready.
+)
+echo.
+
 echo ===============================================================
 echo Setup complete.
 echo ===============================================================

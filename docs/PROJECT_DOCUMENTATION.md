@@ -569,6 +569,8 @@ High-signal test suites:
 - Frontend dev server: `http://localhost:3000` (`scripts/dev-server.js`)
 - Backend API server: `http://localhost:8000` (`server/app.py`)
 - Combined startup script: `npm start` (`scripts/start-all.js`)
+- Backend preflight command (selected interpreter): `npm run preflight:backend`
+- Strict backend preflight command: `npm run preflight:backend:strict`
 - Backend interpreter selection contract for `npm start` and `server/start.sh`:
   1. `PYTHON_BIN`
   2. `WG_BACKEND_PYTHON`

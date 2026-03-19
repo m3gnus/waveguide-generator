@@ -59,6 +59,26 @@ For OpenCL CPU setup, the marker value is:
 $HOME/.waveguide-generator/opencl-cpu-env/bin/python
 ```
 
+### 1.0.1 Backend preflight verification
+
+Run from repository root:
+
+```bash
+npm run preflight:backend
+```
+
+Strict mode exits non-zero when any required runtime check fails:
+
+```bash
+npm run preflight:backend:strict
+```
+
+Preflight always runs under the interpreter selected by the shared startup contract and reports required readiness for:
+- `fastapi` (backend startup)
+- `gmsh` (`/api/mesh/build`)
+- `bempp-cl` (`/api/solve`)
+- OpenCL runtime availability (`/api/solve`)
+
 Cross-platform notes:
 - Windows/Linux GPU OpenCL relies on vendor driver packages (NVIDIA/AMD/Intel).
 - This repository does not currently provide a fully automatic cross-vendor GPU driver installer.
