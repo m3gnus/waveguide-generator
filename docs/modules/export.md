@@ -38,8 +38,10 @@
 - Auto-export: runs once per job completion → records `autoExportCompletedAt` marker
 
 **Folder workspace behavior**:
-- When active: manual exports → selected folder root; bundles → `<workspace>/<jobId>/`
-- If folder write fails: app clears workspace selection, falls back to browser save/download
+- Backend workspace root is the canonical export target (`/api/export-file` + optional `workspace_subdir`)
+- On supporting browsers, a selected folder handle is an in-browser direct-write optimization
+- Bundle exports use job label/base name as subdirectory (`<workspace>/<jobLabel>/`) for both direct-write and backend-write paths
+- If direct-write or backend-write fails: app falls back to browser save/download
 - Workspace contract covers manual + auto-bundles ONLY (not unrelated generated artifacts)
 
 ## Test Coverage

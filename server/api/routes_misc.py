@@ -4,12 +4,11 @@ workspace path/open.
 """
 
 import logging
-import os
 import platform
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
@@ -30,6 +29,10 @@ from services.update_service import get_update_status
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _coerce_form_string(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 @router.get("/")
@@ -116,23 +119,31 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
 @router.post("/api/export-file")
 async def export_file(
     file: UploadFile = File(...),
-    folder_path: str = Form(...),
+    workspace_subdir: str = Form(""),
+    folder_path: Optional[str] = Form(None),
 ) -> Dict[str, str]:
     """
-    Save an exported file to a server-side folder.
-    folder_path should be a relative path from repo root (e.g., 'output/my_project').
+    Save an exported file to the backend-managed workspace root.
+    Optional workspace_subdir writes into a nested folder under that root.
     """
-    if not folder_path:
-        raise HTTPException(status_code=400, detail="folder_path is required")
+    workspace_root = _get_default_output_path()
 
-    # Prevent path traversal attacks
-    folder_path = folder_path.strip()
-    if ".." in folder_path or folder_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid folder path")
+    # Backward-compatible alias while frontend migrates fully.
+    requested_subdir = _coerce_form_string(workspace_subdir)
+    if not requested_subdir:
+        requested_subdir = _coerce_form_string(folder_path)
 
-    # Get repo root (assuming server is in /server subdirectory)
-    repo_root = Path(__file__).parent.parent.parent
-    target_dir = repo_root / folder_path
+    if requested_subdir.startswith("/") or requested_subdir.startswith("\\"):
+        raise HTTPException(status_code=400, detail="workspace_subdir must be relative to workspace root")
+
+    subdir_parts = requested_subdir.replace("\\", "/").split("/")
+    normalized_parts = [part.strip() for part in subdir_parts if part.strip()]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise HTTPException(status_code=400, detail="Invalid workspace_subdir")
+
+    target_dir = (workspace_root / Path(*normalized_parts)).resolve()
+    if workspace_root != target_dir and workspace_root not in target_dir.parents:
+        raise HTTPException(status_code=400, detail="Invalid workspace_subdir")
 
     try:
         # Create folder if it doesn't exist
@@ -148,7 +159,9 @@ async def export_file(
         return {
             "status": "success",
             "path": str(file_path),
-            "filename": file.filename
+            "filename": file.filename,
+            "workspaceRoot": str(workspace_root),
+            "workspaceSubdir": str(Path(*normalized_parts)) if normalized_parts else ""
         }
     except Exception as exc:
         logger.error(f"Export failed: {exc}")

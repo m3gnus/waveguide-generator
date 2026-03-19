@@ -1185,7 +1185,7 @@ function _buildWorkspaceSection(cleanupFns = []) {
     _buildSettingsLabelCopy(
       "Selected Folder",
       "",
-      "Manual exports write to the selected folder root when available, while completed simulation bundles write into a job-specific subfolder.",
+      "The backend workspace is the default export root. On supporting browsers, choosing a folder enables direct writes as an optimization.",
     ),
   );
   const statusValue = document.createElement("div");
@@ -1276,11 +1276,11 @@ function _buildWorkspaceSection(cleanupFns = []) {
     chooseRow.hidden = !canPickFolder;
 
     chooseHelp.textContent = canPickFolder
-      ? "Choose a folder workspace here if you want manual exports and completed task bundles to land in a stable location instead of the save picker."
+      ? "Choose a folder workspace here to use browser direct-write optimization. Without a selected folder, exports use the backend workspace root."
       : "";
     routingNote.textContent = canPickFolder
-      ? "Routing: manual exports write to the selected folder root when permission is available, and completed simulation bundles write into <workspace>/<jobId>/. Folder task manifests/index persist there for history, but the workspace is not a catch-all redirect for every generated artifact. If direct writes fail, the app clears the workspace and falls back to standard save/download behavior."
-      : 'Firefox does not support selecting a custom output folder via the browser (the File System Access API is not implemented in Firefox). Files are saved to the server output folder shown above. Use "Open in Finder" to browse the folder directly.';
+      ? "Routing: exports always target a workspace root. With a selected folder and permission, files write directly there in-browser. Otherwise, the app writes through the backend workspace root and uses browser download/save only as fallback."
+      : 'Firefox does not support selecting a custom output folder via the browser (the File System Access API is not implemented in Firefox). Exports write to the backend workspace folder shown above. Use "Open in Finder" to browse the folder directly.';
 
     // Fetch path from backend when showing the Firefox panel
     if (!canPickFolder) {
