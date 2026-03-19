@@ -108,7 +108,7 @@ Progress note (March 19, 2026):
   - `trimesh` appears unused across active runtime and tests
   - `express` was only used by `scripts/dev-server.js` before the built-in Node replacement
   - `uvicorn[standard]` should be re-validated against actual runtime needs versus plain `uvicorn`
-- `scripts/start-all.js` and `server/start.sh` still say the app/server can continue with mock-data or mock-solver behavior, which conflicts with the maintained no-mock runtime contract.
+- Startup/runtime messaging previously implied mock fallback behavior; that language must stay aligned with the maintained no-mock-solver contract.
 - Launchers (`launch/*.bat|*.sh|*.command`) still delegate to `npm start`, so successful startup depends on `scripts/start-all.js` selecting the same interpreter/environment that `install/install.*` populated.
 - Backend runtime gating already exists for Python/gmsh/bempp-cl and parts of the UI already consume `/health`, but the current product still lacks a single early preflight/doctor surface before users hit a failing backend start, export, or solve path.
 - Treat OpenCL separately from ordinary Python package installation: package install may succeed while solve performance or device availability remains broken because the host OpenCL runtime/driver stack is missing or misconfigured.
@@ -118,7 +118,7 @@ Progress note (March 19, 2026):
 - [x] Audit every declared dependency against actual runtime/build/test usage and remove dead packages or document why they remain
 - [x] Replace simple single-purpose dependencies with local code where that meaningfully reduces install burden
 - [x] Define and enforce one interpreter-selection contract across installer, launchers, `npm start`, and backend startup so the app always prefers the environment it installed and verifies
-- [ ] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
+- [x] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
 - [ ] Add a post-install verification/preflight step that proves `fastapi`, `gmsh`, `bempp-cl`, and OpenCL detection status for the exact interpreter that will be launched
 - [ ] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
 - [ ] Surface dependency status in the UI before backend start/export/solve actions fail, including feature impact and guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
@@ -129,6 +129,7 @@ Progress note (March 19, 2026):
 - Replaced single-purpose `express` usage with a built-in Node frontend dev server (`scripts/dev-server.js`) and removed `express` from package dependencies.
 - Kept `uvicorn[standard]` because backend startup still runs through `uvicorn` in `server/app.py`; extras policy (plain vs standard) is deferred to the doctor/preflight/interpreter-contract slices.
 - Installer/setup scripts now write a repo-local backend interpreter marker (`.waveguide/backend-python.path`), and both `npm start` (`scripts/start-all.js`) and `server/start.sh` resolve Python from the same priority contract: explicit env override -> marker -> `.venv` -> OpenCL env fallback -> `python3`.
+- Startup/entrypoint messaging now states backend-dependent features are blocked (not mocked) when backend or `bempp-cl` is unavailable, with explicit install/recovery guidance in `scripts/start-all.js`, `server/start.sh`, and `server/app.py`.
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)
 
