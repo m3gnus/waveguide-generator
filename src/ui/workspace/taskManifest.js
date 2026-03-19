@@ -1,3 +1,10 @@
+import { buildMwgConfigExportFiles } from '../../modules/export/useCases.js';
+import {
+  GENERATION_PROJECT_MANIFEST_FILE_NAME,
+  buildGenerationProjectManifest,
+  resolveGenerationScriptSnapshotFileName
+} from './generationArtifacts.js';
+
 export const TASK_MANIFEST_FILE_NAME = 'task.manifest.json';
 export const TASK_MANIFEST_VERSION = 1;
 export const TASK_SCRIPT_SCHEMA_VERSION = 1;
@@ -14,6 +21,10 @@ function safeJsonParse(raw) {
   }
 }
 
+function isObject(value) {
+  return value !== null && typeof value === 'object';
+}
+
 function normalizeExportedFiles(value) {
   if (!Array.isArray(value)) {
     return [];
@@ -26,6 +37,11 @@ function normalizeExportedFiles(value) {
 function normalizeDirectoryName(value) {
   const text = String(value ?? '').trim();
   return text || null;
+}
+
+function combineWarnings(...values) {
+  const warnings = values.map((value) => String(value || '').trim()).filter(Boolean);
+  return warnings.length > 0 ? warnings.join(' | ') : null;
 }
 
 function deriveGenerationFolderNameFromScript(scriptSnapshot) {
@@ -43,6 +59,89 @@ function deriveGenerationFolderNameFromScript(scriptSnapshot) {
     return `${outputName}_${Math.floor(counter)}`;
   }
   return outputName;
+}
+
+function buildScriptSnapshotExportState(scriptSnapshot) {
+  if (!isObject(scriptSnapshot)) {
+    return null;
+  }
+
+  const params = isObject(scriptSnapshot.params)
+    ? { ...scriptSnapshot.params }
+    : isObject(scriptSnapshot.stateSnapshot?.params)
+      ? { ...scriptSnapshot.stateSnapshot.params }
+      : null;
+  if (!isObject(params)) {
+    return null;
+  }
+
+  const type = params.type ?? scriptSnapshot.stateSnapshot?.type;
+  if (!type) return null;
+
+  if (scriptSnapshot.frequencyStart !== undefined) params.freqStart = scriptSnapshot.frequencyStart;
+  if (scriptSnapshot.frequencyEnd !== undefined) params.freqEnd = scriptSnapshot.frequencyEnd;
+  if (scriptSnapshot.numFrequencies !== undefined) params.numFreqs = scriptSnapshot.numFrequencies;
+
+  return {
+    type: String(type),
+    params
+  };
+}
+
+async function writeWorkspaceTextFile(taskDirectoryHandle, fileName, content) {
+  const fileHandle = await taskDirectoryHandle.getFileHandle(fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(content);
+  await writable.close();
+}
+
+async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest) {
+  const exportState = buildScriptSnapshotExportState(manifest?.scriptSnapshot);
+  if (!exportState) {
+    return { fileName: null, warning: null };
+  }
+
+  try {
+    const fileName = resolveGenerationScriptSnapshotFileName();
+    const files = buildMwgConfigExportFiles(exportState, { baseName: 'script.snapshot' });
+    const content = typeof files?.[0]?.content === 'string'
+      ? files[0].content
+      : null;
+    if (!content) {
+      return { fileName: null, warning: 'Script snapshot build failed: config content missing.' };
+    }
+    await writeWorkspaceTextFile(taskDirectoryHandle, fileName, content);
+    return { fileName, warning: null };
+  } catch (error) {
+    return {
+      fileName: null,
+      warning: `Script snapshot write failed: ${error?.message || 'unknown error'}`
+    };
+  }
+}
+
+async function writeGenerationProjectManifest(taskDirectoryHandle, {
+  directoryName,
+  manifest,
+  scriptSnapshotFileName
+} = {}) {
+  try {
+    const payload = buildGenerationProjectManifest({
+      directoryName,
+      job: manifest,
+      exportedFiles: manifest?.exportedFiles || [],
+      scriptSnapshotFileName,
+      updatedAt: manifest?.updatedAt
+    });
+    await writeWorkspaceTextFile(
+      taskDirectoryHandle,
+      GENERATION_PROJECT_MANIFEST_FILE_NAME,
+      `${JSON.stringify(payload, null, 2)}\n`
+    );
+    return null;
+  } catch (error) {
+    return `Project manifest write failed: ${error?.message || 'unknown error'}`;
+  }
 }
 
 export function resolveTaskWorkspaceDirectoryName(job = {}, { fallbackId = null } = {}) {
@@ -200,11 +299,26 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
         ?? existing.manifest?.autoExportCompletedAt,
       exportedFiles: updates.exportedFiles
         ?? (hasJobExportedFiles ? base.exportedFiles : existing.manifest?.exportedFiles ?? base.exportedFiles),
+      scriptSnapshot: updates.scriptSnapshot
+        ?? base.scriptSnapshot
+        ?? existing.manifest?.scriptSnapshot
+        ?? null,
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });
 
     const taskDir = await rootDirectoryHandle.getDirectoryHandle(preferredDirectoryName, { create: true });
-    return { manifest: await writeTaskManifest(taskDir, next), warning: existing.warning };
+    const manifest = await writeTaskManifest(taskDir, next);
+    const snapshotResult = await writeScriptSnapshotArtifact(taskDir, manifest);
+    const projectWarning = await writeGenerationProjectManifest(taskDir, {
+      directoryName: preferredDirectoryName,
+      manifest,
+      scriptSnapshotFileName: snapshotResult.fileName
+    });
+
+    return {
+      manifest,
+      warning: combineWarnings(existing.warning, snapshotResult.warning, projectWarning)
+    };
   } catch (error) {
     return { manifest: null, warning: `Task manifest update failed: ${error?.message || 'unknown error'}` };
   }

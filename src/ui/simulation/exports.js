@@ -14,6 +14,7 @@ import {
 } from '../settings/simulationManagementSettings.js';
 import { showError, showMessage } from '../feedback.js';
 import { getExportBaseName, saveFile } from '../fileOps.js';
+import { resolveGenerationExportFileName } from '../workspace/generationArtifacts.js';
 
 const EXPORT_FORMAT_LABELS = Object.freeze({
   png: 'Chart Images (PNG)',
@@ -82,6 +83,25 @@ function createDownloadFile(fileName, content, saveOptions = {}) {
     content,
     saveOptions
   };
+}
+
+function createGenerationDownloadFile(formatId, baseName, content, saveOptions = {}, options = {}) {
+  const fileName = resolveGenerationExportFileName(formatId, {
+    baseName,
+    chartKey: options.chartKey,
+    originalFileName: options.originalFileName
+  });
+  return createDownloadFile(fileName, content, saveOptions);
+}
+
+function normalizeGenerationExportFiles(files = [], formatId, baseName) {
+  return (files || []).map((file) => ({
+    ...file,
+    fileName: resolveGenerationExportFileName(formatId, {
+      baseName,
+      originalFileName: file?.fileName
+    })
+  }));
 }
 
 function localTimestampParts() {
@@ -160,13 +180,15 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
       ia[i] = byteString.charCodeAt(i);
     }
 
-    return createDownloadFile(
-      `${baseName}_${key}.png`,
+    return createGenerationDownloadFile(
+      'png',
+      baseName,
       new Blob([ab], { type: 'image/png' }),
       {
         contentType: 'image/png',
         typeInfo: { description: 'PNG Image', accept: { 'image/png': ['.png'] } }
-      }
+      },
+      { chartKey: key }
     );
   });
 }
@@ -204,7 +226,7 @@ function buildCsvFile(panel, { baseName } = {}) {
     csv = `# Smoothing: ${panel.currentSmoothing}\n${csv}`;
   }
 
-  return createDownloadFile(`${baseName}_results.csv`, csv, {
+  return createGenerationDownloadFile('csv', baseName, csv, {
     contentType: 'text/csv',
     typeInfo: { description: 'CSV File', accept: { 'text/csv': ['.csv'] } }
   });
@@ -222,7 +244,7 @@ function buildJsonFile(panel, { baseName } = {}) {
     results: panel.lastResults
   };
 
-  return createDownloadFile(`${baseName}_results.json`, JSON.stringify(exportData, null, 2), {
+  return createGenerationDownloadFile('json', baseName, JSON.stringify(exportData, null, 2), {
     contentType: 'application/json',
     typeInfo: { description: 'JSON File', accept: { 'application/json': ['.json'] } }
   });
@@ -290,7 +312,7 @@ function buildTextFile(panel, { baseName } = {}) {
     report += `${((impedanceData.imaginary && impedanceData.imaginary[i]) || 0).toFixed(2)}\n`;
   }
 
-  return createDownloadFile(`${baseName}_report.txt`, report, {
+  return createGenerationDownloadFile('txt', baseName, report, {
     contentType: 'text/plain',
     typeInfo: { description: 'Text Report', accept: { 'text/plain': ['.txt'] } }
   });
@@ -316,7 +338,7 @@ function buildPolarCsvFile(panel, { baseName } = {}) {
     }
   }
 
-  return createDownloadFile(`${baseName}_polar.csv`, csv, {
+  return createGenerationDownloadFile('polar_csv', baseName, csv, {
     contentType: 'text/csv',
     typeInfo: { description: 'CSV File', accept: { 'text/csv': ['.csv'] } }
   });
@@ -455,7 +477,7 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
     }
   }
 
-  return createDownloadFile(`${baseName}_spectrum.txt`, out, {
+  return createGenerationDownloadFile('vacs', baseName, out, {
     contentType: 'text/plain',
     typeInfo: { description: 'Spectrum Text', accept: { 'text/plain': ['.txt'] } }
   });
@@ -476,7 +498,7 @@ function buildImpedanceCsvFile(panel, { baseName } = {}) {
     csv += `${freqs[i]},${real[i] ?? ''},${imag[i] ?? ''}\n`;
   }
 
-  return createDownloadFile(`${baseName}_impedance.csv`, csv, {
+  return createGenerationDownloadFile('impedance_csv', baseName, csv, {
     contentType: 'text/csv',
     typeInfo: { description: 'CSV File', accept: { 'text/csv': ['.csv'] } }
   });
@@ -501,7 +523,14 @@ async function runExportFormat(panel, formatId, options = {}) {
     case 'vacs':
       return writeExportFiles([buildVacSpectrumFile(panel, { baseName })], options);
     case 'stl':
-      return writeExportFiles(buildStlExportFiles(readExportState(), { baseName }), options);
+      return writeExportFiles(
+        normalizeGenerationExportFiles(
+          buildStlExportFiles(readExportState(), { baseName }),
+          'stl',
+          baseName
+        ),
+        options
+      );
     case 'fusion_csv': {
       const app = resolveApp(panel);
       const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
@@ -512,7 +541,10 @@ async function runExportFormat(panel, formatId, options = {}) {
       if (!files) {
         throw new Error('Fusion CSV export requires an active viewport mesh.');
       }
-      return writeExportFiles(files, options);
+      return writeExportFiles(
+        normalizeGenerationExportFiles(files, 'fusion_csv', baseName),
+        options
+      );
     }
     default:
       throw new Error(`Unsupported export format: ${formatId}`);
@@ -687,10 +719,13 @@ export async function exportAsImpedanceCSV(panel, options = {}) {
 }
 
 export async function exportAsWaveguideSTL(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
-    buildStlExportFiles(readExportState(), {
-      baseName: options.baseName || resolveExportBaseName(options.job)
-    }),
+    normalizeGenerationExportFiles(
+      buildStlExportFiles(readExportState(), { baseName }),
+      'stl',
+      baseName
+    ),
     options
   );
 }
@@ -698,12 +733,16 @@ export async function exportAsWaveguideSTL(panel, options = {}) {
 export async function exportAsFusionCurvesCSV(panel, options = {}) {
   const app = resolveApp(panel);
   const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   const files = buildProfileCsvExportFiles(vertices, {
     state: readExportState(),
-    baseName: options.baseName || resolveExportBaseName(options.job)
+    baseName
   });
   if (!files) {
     throw new Error('Fusion CSV export requires an active viewport mesh.');
   }
-  return writeExportFiles(files, options);
+  return writeExportFiles(
+    normalizeGenerationExportFiles(files, 'fusion_csv', baseName),
+    options
+  );
 }
