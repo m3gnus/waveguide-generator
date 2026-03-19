@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 
 const repoRoot = process.cwd();
 const scriptPath = path.join(repoRoot, '.codex', 'skills', 'backlog-next', 'scripts', 'next-backlog-status.mjs');
+const workerScriptPath = path.join(repoRoot, '.codex', 'skills', 'backlog-next', 'scripts', 'run-backlog-worker.mjs');
 
 function writeFile(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -77,4 +78,62 @@ test('backlog helper routes high-complexity slices to codex', () => {
   assert.equal(status.defaultReasoning, 'high');
   assert.equal(status.defaultExecutor, 'codex');
   assert.match(status.prompt, /GLM-5 via opencode for low\/medium slices and Codex for high-complexity slices/);
+});
+
+test('worker helper selects glm-5 for medium slices and emits an opencode command', () => {
+  const raw = execFileSync(
+    process.execPath,
+    [
+      workerScriptPath,
+      '--executor',
+      'auto',
+      '--reasoning',
+      'medium',
+      '--prompt',
+      'Implement the selected slice.',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+
+  const payload = JSON.parse(raw);
+  assert.equal(payload.executor, 'glm-5');
+  assert.equal(payload.glm.model, 'zai-coding-plan/glm-5');
+  assert.deepEqual(payload.glm.command.slice(0, 6), [
+    'opencode',
+    'run',
+    '--dir',
+    repoRoot,
+    '--model',
+    'zai-coding-plan/glm-5',
+  ]);
+  assert.equal(payload.codex, null);
+});
+
+test('worker helper selects codex for high-complexity slices and emits a handoff payload', () => {
+  const raw = execFileSync(
+    process.execPath,
+    [
+      workerScriptPath,
+      '--executor',
+      'auto',
+      '--reasoning',
+      'high',
+      '--prompt',
+      'Implement the selected slice.',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+
+  const payload = JSON.parse(raw);
+  assert.equal(payload.executor, 'codex');
+  assert.equal(payload.glm, null);
+  assert.equal(payload.codex.model, 'gpt-5.3-codex');
+  assert.equal(payload.codex.handoff.reasoning_effort, 'high');
+  assert.equal(payload.codex.handoff.message, 'Implement the selected slice.');
 });

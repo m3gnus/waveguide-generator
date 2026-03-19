@@ -13,6 +13,7 @@ Codex skills-first mode:
 Execution helper:
 - Run `node ./.codex/skills/backlog-next/scripts/next-backlog-status.mjs --json` from repo root first.
 - Use that output as the source of truth for the current backlog priority, recent commits, and the active backlog task list.
+- Route each selected slice through `node ./.codex/skills/backlog-next/scripts/run-backlog-worker.mjs`.
 </codex_skill_adapter>
 
 <objective>
@@ -84,6 +85,15 @@ When using `glm-5`, run it non-interactively through `opencode` and treat it as 
 - checking the resulting diff
 - running acceptance tests
 - deciding whether the slice is actually complete
+
+Recommended helper usage:
+- Build or inspect the worker route:
+  `node ./.codex/skills/backlog-next/scripts/run-backlog-worker.mjs --executor auto --reasoning <low|medium|high> --prompt-file <slice-prompt.txt>`
+- Run a GLM slice:
+  `node ./.codex/skills/backlog-next/scripts/run-backlog-worker.mjs --executor auto --reasoning <low|medium> --prompt-file <slice-prompt.txt> --run`
+- Hand a Codex slice to a native subagent:
+  `node ./.codex/skills/backlog-next/scripts/run-backlog-worker.mjs --executor auto --reasoning high --prompt-file <slice-prompt.txt>`
+  Then use the returned `codex.handoff` payload when spawning the subagent.
 
 Default to one implementation worker. Use a second worker only when there is a clean split such as:
 - implementation + test/doc follow-through
