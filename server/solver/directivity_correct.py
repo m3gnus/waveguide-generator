@@ -34,7 +34,7 @@ def evaluate_far_field_sphere(
     theta_range: Tuple[float, float, int] = (0, 180, 37),
     phi_angles: Optional[List[float]] = None,
     device_interface: Optional[str] = None,
-    precision: str = "double",
+    precision: str = "single",
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, np.ndarray]:
     """
@@ -169,7 +169,7 @@ def calculate_directivity_patterns_correct(
     p_solutions: List,  # List of (p_total, u_total, space_p, space_u) per frequency
     polar_config: Optional[Dict] = None,
     device_interface: Optional[str] = None,
-    precision: str = "double",
+    precision: str = "single",
     observation_frame: Optional[Dict[str, np.ndarray]] = None,
 ) -> Dict[str, List[List[float]]]:
     """
