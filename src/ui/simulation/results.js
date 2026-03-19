@@ -39,6 +39,40 @@ function formatCount(count) {
   return n.toLocaleString();
 }
 
+function formatLocalDateTime(isoString) {
+  const parsed = Date.parse(String(isoString || ""));
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  const date = new Date(parsed);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+function resolveJobTimestampSummary(job = null) {
+  const completed = formatLocalDateTime(job?.completedAt);
+  if (completed) {
+    return { label: "Completed", value: completed };
+  }
+
+  const started = formatLocalDateTime(job?.startedAt);
+  if (started) {
+    return { label: "Started", value: started };
+  }
+
+  const created = formatLocalDateTime(job?.createdAt);
+  if (created) {
+    return { label: "Queued", value: created };
+  }
+
+  return null;
+}
+
 export function renderSolveStatsSummary(results = null, job = null) {
   const metadata = isObject(results?.metadata) ? results.metadata : null;
   if (!metadata) return "";
@@ -67,6 +101,11 @@ export function renderSolveStatsSummary(results = null, job = null) {
   const obsOrigin = configSummary.observation_origin || "mouth";
 
   const items = [];
+  const timestampSummary = resolveJobTimestampSummary(job);
+
+  if (timestampSummary) {
+    items.push(timestampSummary);
+  }
 
   if (Number.isFinite(totalTime) && totalTime > 0) {
     items.push({ label: "Solve time", value: formatSolveTime(totalTime) });
