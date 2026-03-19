@@ -1,9 +1,6 @@
 import { applySmoothing } from "../../results/smoothing.js";
 import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
-import {
-  renderSolveStatsSummary,
-  renderObservationDistanceSummary,
-} from "./results.js";
+import { renderSolveStatsSummary } from "./results.js";
 import { trapFocus } from "../focusTrap.js";
 
 /**
@@ -94,16 +91,6 @@ export async function openViewResultsModal(panel) {
     const summarySection = summaryWrapper.firstElementChild;
     if (summarySection) {
       body.appendChild(summarySection);
-    }
-  }
-
-  const obsDistMarkup = renderObservationDistanceSummary(results);
-  if (obsDistMarkup) {
-    const obsWrapper = document.createElement("div");
-    obsWrapper.innerHTML = obsDistMarkup.trim();
-    const obsEl = obsWrapper.firstElementChild;
-    if (obsEl) {
-      body.appendChild(obsEl);
     }
   }
 
