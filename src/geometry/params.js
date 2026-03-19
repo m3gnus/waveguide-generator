@@ -2,6 +2,7 @@ import { PARAM_SCHEMA } from "../config/schema.js";
 import { parseExpression } from "./expression.js";
 
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const PREPARED_GEOMETRY_PARAMS = Symbol("preparedGeometryParams");
 
 const RAW_EXPRESSION_KEYS = new Set([
   "gcurveSf",
@@ -39,6 +40,25 @@ const SCALE_LENGTH_KEYS = [
   "wallThickness",
   "verticalOffset",
 ];
+
+function markPreparedGeometryParams(params) {
+  if (!params || typeof params !== "object") return params;
+  Object.defineProperty(params, PREPARED_GEOMETRY_PARAMS, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+    writable: false,
+  });
+  return params;
+}
+
+export function isPreparedGeometryParams(params) {
+  return Boolean(
+    params &&
+      typeof params === "object" &&
+      params[PREPARED_GEOMETRY_PARAMS] === true,
+  );
+}
 
 export function isNumericString(value) {
   if (typeof value !== "string") return false;
@@ -169,5 +189,5 @@ export function prepareGeometryParams(
     preparedParams.verticalOffset = 0;
   }
 
-  return preparedParams;
+  return markPreparedGeometryParams(preparedParams);
 }

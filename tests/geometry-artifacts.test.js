@@ -49,6 +49,35 @@ function countTrianglesOnPlane(vertices, indices, axis, epsilon = 1e-7) {
   return count;
 }
 
+function measureGroupBounds(mesh, groupName) {
+  const range = mesh.groups?.[groupName];
+  assert.ok(range, `Expected ${groupName} group to be present`);
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+
+  for (let t = range.start; t < range.end; t += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const idx = mesh.indices[t * 3 + k];
+      const x = mesh.vertices[idx * 3];
+      const y = mesh.vertices[idx * 3 + 1];
+      const z = mesh.vertices[idx * 3 + 2];
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+  }
+
+  return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
 test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
   const params = makePreparedParams({
     encDepth: 0,
@@ -184,4 +213,67 @@ test('non-divisible angular segments still include symmetry boundary vertices', 
 
   assert.equal(hasXBoundary, true);
   assert.equal(hasZBoundary, true);
+});
+
+test('scale below 1 keeps enclosure clearances absolute in the raw geometry pipeline', () => {
+  const rawParams = {
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    L: '100',
+    a: '45',
+    a0: '15.5',
+    r0: '12.7',
+    angularSegments: 32,
+    lengthSegments: 12,
+    scale: 0.5,
+    encDepth: 40,
+    encSpaceL: 8,
+    encSpaceT: 8,
+    encSpaceR: 8,
+    encSpaceB: 8,
+    wallThickness: 0
+  };
+
+  const artifacts = buildGeometryArtifacts(rawParams, { includeEnclosure: true });
+  const hornBounds = measureGroupBounds(artifacts.mesh, 'horn');
+  const enclosureBounds = measureGroupBounds(artifacts.mesh, 'enclosure');
+
+  assert.ok(Math.abs(hornBounds.minX - enclosureBounds.minX - 8) < 1e-6);
+  assert.ok(Math.abs(enclosureBounds.maxX - hornBounds.maxX - 8) < 1e-6);
+  assert.ok(Math.abs(hornBounds.minZ - enclosureBounds.minZ - 8) < 1e-6);
+  assert.ok(Math.abs(enclosureBounds.maxZ - hornBounds.maxZ - 8) < 1e-6);
+  assert.ok(Math.abs(hornBounds.maxY - enclosureBounds.minY - 40) < 1e-6);
+});
+
+test('scaled rounded enclosure still reserves the requested horn clearances', () => {
+  const rawParams = {
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    L: '100',
+    a: '45',
+    a0: '15.5',
+    r0: '12.7',
+    angularSegments: 32,
+    lengthSegments: 12,
+    scale: 0.5,
+    encDepth: 40,
+    encEdge: 10,
+    cornerSegments: 6,
+    encSpaceL: 8,
+    encSpaceT: 8,
+    encSpaceR: 8,
+    encSpaceB: 8,
+    wallThickness: 0
+  };
+
+  const artifacts = buildGeometryArtifacts(rawParams, { includeEnclosure: true });
+  const hornBounds = measureGroupBounds(artifacts.mesh, 'horn');
+  const enclosureBounds = measureGroupBounds(artifacts.mesh, 'enclosure');
+
+  assert.ok(hornBounds.minX >= enclosureBounds.minX + 8 - 1e-6);
+  assert.ok(hornBounds.maxX <= enclosureBounds.maxX - 8 + 1e-6);
+  assert.ok(hornBounds.minZ >= enclosureBounds.minZ + 8 - 1e-6);
+  assert.ok(hornBounds.maxZ <= enclosureBounds.maxZ - 8 + 1e-6);
+  assert.ok(hornBounds.maxY <= enclosureBounds.maxY + 1e-6);
+  assert.ok(hornBounds.maxY - enclosureBounds.minY <= 40 + 1e-6);
 });

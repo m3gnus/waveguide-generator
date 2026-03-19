@@ -14,6 +14,7 @@
 - **Mesh topology**: Generate viewport and simulation meshes with deterministic structure
 - **Payload assembly**: Build canonical simulation payloads with correct tag semantics
 - **Quality checks**: Validate mesh invariants and surface-tag consistency
+- **Prepared-parameter contract**: `prepareGeometryParams(...)` runs once at the design boundary; module paths consume prepared params via prepared-only geometry entrypoints so `scale` is not applied twice
 
 ## Canonical Payload Contract
 
@@ -48,6 +49,7 @@
 - Enclosure generation is **OSSE-only**; `R-OSSE` with `encDepth > 0` is rejected
 - When `encEdge > 0`, enclosure builder adds front/rear axial roundover strips in addition to sidewall corners
 - Freestanding wall thickness follows horn surface normals; rear `throat_return` transition slopes into the back plate (not a straight cylinder)
+- `scale` affects horn geometry only; enclosure depth, edge radius, and enclosure clearances remain absolute millimeter values
 
 **Tessellation**:
 - Adaptive phi-tessellation is **viewport-only** (full-circle horn rendering); not used for simulation

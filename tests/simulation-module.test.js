@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
-import { prepareGeometryParams, buildCanonicalMeshPayload } from '../src/geometry/index.js';
+import {
+  prepareGeometryParams,
+  buildCanonicalMeshPayload,
+  buildPreparedCanonicalMeshPayload
+} from '../src/geometry/index.js';
 import { SimulationModule } from '../src/modules/simulation/index.js';
 import { DesignModule } from '../src/modules/design/index.js';
 import { GlobalState } from '../src/state.js';
@@ -208,6 +212,32 @@ test('simulation domain prepares canonical mesh from an explicit state snapshot'
     adaptivePhi: false
   });
 
+  assert.deepEqual(payload, expected);
+});
+
+test('simulation domain applies scale exactly once when building canonical mesh from raw state', () => {
+  const state = {
+    type: 'OSSE',
+    params: makeRawParams({
+      scale: 0.5,
+      L: '100',
+      r0: '10',
+      encDepth: 0,
+      wallThickness: 0
+    })
+  };
+
+  const payload = prepareCanonicalSimulationMesh(state);
+  const expectedPrepared = prepareGeometryParams(state.params, {
+    type: 'OSSE',
+    applyVerticalOffset: true
+  });
+  const expected = buildPreparedCanonicalMeshPayload(expectedPrepared, {
+    includeEnclosure: false,
+    adaptivePhi: false
+  });
+
+  assert.equal(expectedPrepared.L, 50);
   assert.deepEqual(payload, expected);
 });
 
