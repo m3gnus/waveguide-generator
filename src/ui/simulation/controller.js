@@ -92,11 +92,18 @@ function cloneSimulationParamBindings() {
 }
 
 function normalizeExportPatch(exportPatch) {
+  const normalizeArtifactFileName = (value) => {
+    const text = String(value ?? '').trim();
+    return text || null;
+  };
+
   if (typeof exportPatch === 'string') {
     return {
       exportedFiles: [exportPatch],
       autoExportCompletedAt: null,
-      justCompleted: false
+      justCompleted: false,
+      rawResultsFile: null,
+      meshArtifactFile: null
     };
   }
 
@@ -104,7 +111,9 @@ function normalizeExportPatch(exportPatch) {
     return {
       exportedFiles: exportPatch.map((item) => String(item || '').trim()).filter(Boolean),
       autoExportCompletedAt: null,
-      justCompleted: false
+      justCompleted: false,
+      rawResultsFile: null,
+      meshArtifactFile: null
     };
   }
 
@@ -112,7 +121,9 @@ function normalizeExportPatch(exportPatch) {
     return {
       exportedFiles: [],
       autoExportCompletedAt: null,
-      justCompleted: false
+      justCompleted: false,
+      rawResultsFile: null,
+      meshArtifactFile: null
     };
   }
 
@@ -121,7 +132,9 @@ function normalizeExportPatch(exportPatch) {
       ? exportPatch.exportedFiles.map((item) => String(item || '').trim()).filter(Boolean)
       : [],
     autoExportCompletedAt: exportPatch.autoExportCompletedAt ?? null,
-    justCompleted: exportPatch.justCompleted ?? false
+    justCompleted: exportPatch.justCompleted ?? false,
+    rawResultsFile: normalizeArtifactFileName(exportPatch.rawResultsFile),
+    meshArtifactFile: normalizeArtifactFileName(exportPatch.meshArtifactFile)
   };
 }
 
@@ -282,13 +295,17 @@ export async function recordSimulationControllerExport(
     id: current.id,
     exportedFiles: mergeUniqueStrings(current.exportedFiles, normalizedPatch.exportedFiles),
     autoExportCompletedAt: normalizedPatch.autoExportCompletedAt ?? current.autoExportCompletedAt ?? null,
-    justCompleted: normalizedPatch.justCompleted
+    justCompleted: normalizedPatch.justCompleted,
+    rawResultsFile: normalizedPatch.rawResultsFile ?? current.rawResultsFile ?? null,
+    meshArtifactFile: normalizedPatch.meshArtifactFile ?? current.meshArtifactFile ?? null
   });
   persistControllerJobs(controller);
   if (next) {
     await syncSimulationWorkspaceJobManifest(next, {
       exportedFiles: next.exportedFiles,
-      autoExportCompletedAt: next.autoExportCompletedAt
+      autoExportCompletedAt: next.autoExportCompletedAt,
+      rawResultsFile: next.rawResultsFile ?? null,
+      meshArtifactFile: next.meshArtifactFile ?? null
     });
   }
   return next;

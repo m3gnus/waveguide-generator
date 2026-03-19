@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 19, 2026 (workspace generation manifest slice landed; dependency/runtime doctor item clarified)
+Last updated: March 19, 2026 (workspace generation artifact unification slice landed; dependency/runtime doctor item clarified)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -42,7 +42,7 @@ Status as of March 19, 2026:
 
 ### P1. Rebuild Output Workspace Contract and Fix Firefox Server-Folder Regression (March 19, 2026)
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Execution lane:** Reserved — Codex `high`; Opus `high`
 
 **Description:** The current output-folder flow is still misleading and fragmented. Firefox shows a backend output folder, but manual export writes do not actually bind to that folder, so files fall through to browser download/save behavior instead of landing in the displayed directory. Workspace metadata and exported artifacts are also split across different naming roots (`job.id` vs `outputName_counter`), so there is no single understandable generation folder for users.
@@ -60,8 +60,8 @@ Status as of March 19, 2026:
 - [x] Define one cross-browser workspace model: backend-managed workspace root plus optional direct-write File System Access optimization on supporting browsers
 - [x] Replace the current absolute-path display + relative-path export mismatch with explicit backend workspace configuration/read/write APIs
 - [x] Fix Firefox/non-`showDirectoryPicker` behavior so exports either land in the shown workspace or clearly announce that the browser download path is being used
-- [ ] Unify manifests, raw simulation data, mesh artifacts, and selected exports under one human-readable generation folder named from `<outputName>_<counter>`
-- [ ] Add a user-facing project manifest/file format plus deterministic naming rules for ATH/MWG script snapshots, raw results, mesh artifacts, and optional exported files
+- [x] Unify manifests, raw simulation data, mesh artifacts, and selected exports under one human-readable generation folder named from `<outputName>_<counter>`
+- [x] Add a user-facing project manifest/file format plus deterministic naming rules for ATH/MWG script snapshots, raw results, mesh artifacts, and optional exported files
 - [x] Update docs and add regression tests for workspace/export routing and deterministic folder naming
 
 Progress note (March 19, 2026):
@@ -69,6 +69,7 @@ Progress note (March 19, 2026):
 - Regression coverage added for backend workspace path/open/export routes and frontend workspace-subdirectory export routing.
 - Folder task manifests/index now persist to the same generation folder naming contract used by bundle exports (legacy `job.id` folders remain readable and rebuild deduplicates by stable job id).
 - Generation folders now include user-facing `waveguide.project.v1.json`, deterministic bundle artifact naming, and deterministic script snapshot artifact `script.snapshot.mwg`; regression tests cover naming/manifest behavior.
+- Completion-time runtime artifacts now persist to the same generation folder contract: deterministic raw-results snapshot (`<jobLabel>_raw.results.json`) and deterministic mesh artifact mirror (`<jobLabel>_solver.mesh.msh`) are indexed in `waveguide.project.v1.json`.
 
 ### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
 

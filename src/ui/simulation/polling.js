@@ -3,6 +3,7 @@
 import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
 import { showError } from '../feedback.js';
 import { getAutoExportOnComplete } from '../settings/simulationManagementSettings.js';
+import { persistSimulationGenerationArtifacts } from './workspaceTasks.js';
 import {
   hasActiveJobs
 } from './jobTracker.js';
@@ -26,6 +27,7 @@ const MAX_POLL_BACKOFF_MS = 30000;
  * @typedef {Object} SolverPollingApi
  * @property {(query?: {limit?: number, offset?: number}) => Promise<{items?: unknown[]}>} listJobs
  * @property {(jobId: string) => Promise<unknown>} getResults
+ * @property {(jobId: string) => Promise<string>} [getMeshArtifact]
  */
 
 /**
@@ -111,17 +113,40 @@ export function pollSimulationStatus(panel) {
               message: 'Results ready'
             });
 
-            if (activeJob.justCompleted && getAutoExportOnComplete()) {
-              const bundle = await panel.exportResults({
-                job: activeJob,
-                auto: true
-              });
+            if (activeJob.justCompleted) {
+              let meshArtifactText = null;
+              if (activeJob.hasMeshArtifact && typeof panel.solver?.getMeshArtifact === 'function') {
+                try {
+                  meshArtifactText = await panel.solver.getMeshArtifact(activeJob.id);
+                } catch (error) {
+                  console.warn('Mesh artifact fetch failed during completion persistence:', error);
+                }
+              }
 
-              await recordSimulationControllerExport(panel, activeJob.id, {
-                exportedFiles: bundle?.exportedFiles ?? [],
-                autoExportCompletedAt: activeJob.completedAt ?? new Date().toISOString(),
-                justCompleted: false
+              const persistedArtifacts = await persistSimulationGenerationArtifacts(activeJob, {
+                results: result.results,
+                meshArtifactText
               });
+              if (persistedArtifacts.warnings.length > 0) {
+                console.warn('Generation artifact persistence warnings:', persistedArtifacts.warnings);
+              }
+
+              const exportPatch = {
+                rawResultsFile: persistedArtifacts.rawResultsFile,
+                meshArtifactFile: persistedArtifacts.meshArtifactFile,
+                justCompleted: false
+              };
+
+              if (getAutoExportOnComplete()) {
+                const bundle = await panel.exportResults({
+                  job: activeJob,
+                  auto: true
+                });
+                exportPatch.exportedFiles = bundle?.exportedFiles ?? [];
+                exportPatch.autoExportCompletedAt = activeJob.completedAt ?? new Date().toISOString();
+              }
+
+              await recordSimulationControllerExport(panel, activeJob.id, exportPatch);
             }
           }
         } else if (activeJob.status === 'error' || activeJob.status === 'cancelled') {

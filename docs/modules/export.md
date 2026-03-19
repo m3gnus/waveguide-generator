@@ -52,7 +52,7 @@
   - `stl` → `<jobLabel>.stl`
   - `fusion_csv` → `<jobLabel>_profiles.csv` and `<jobLabel>_slices.csv`
 - Folder task manifests/index entries now persist against the same generation folder naming contract (job identity stays in manifest/index `id`)
-- Generation folders also include `waveguide.project.v1.json` as a user-facing artifact index for selected exports and script snapshots
+- Generation folders also include `waveguide.project.v1.json` as a user-facing artifact index for selected exports and script snapshots (plus simulation-owned raw-results/mesh entries written at completion)
 - If direct-write or backend-write fails: app falls back to browser save/download
 - Workspace contract covers manual + auto-bundles ONLY (not unrelated generated artifacts)
 

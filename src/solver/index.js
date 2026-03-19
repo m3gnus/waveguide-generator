@@ -358,6 +358,20 @@ export class BemSolver {
   }
 
   /**
+   * Retrieve mesh artifact text (.msh) generated for a completed simulation.
+   * @param {string} jobId
+   */
+  async getMeshArtifact(jobId) {
+    const response = await fetchOrApiError(
+      `${this.backendUrl}/api/mesh-artifact/${jobId}`,
+      undefined,
+      "Fetch simulation mesh artifact",
+    );
+
+    return await response.text();
+  }
+
+  /**
    * List simulation jobs with optional filtering and pagination.
    * @param {{ status?: string|null, limit?: number, offset?: number }} [query]
    */
