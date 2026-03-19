@@ -21,6 +21,9 @@
     "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py",
     "preflight:backend": "node scripts/preflight-backend-runtime.js",
     "preflight:backend:strict": "node scripts/preflight-backend-runtime.js --strict",
+    "doctor:backend": "node scripts/doctor-backend-runtime.js",
+    "doctor:backend:json": "node scripts/doctor-backend-runtime.js --json",
+    "doctor:backend:strict": "node scripts/doctor-backend-runtime.js --strict",
     "backlog:next": "node ./.codex/skills/backlog-next/scripts/next-backlog-status.mjs"
   },
   "keywords": [
