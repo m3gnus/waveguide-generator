@@ -1,4 +1,4 @@
-import { buildGeometryShape } from '../../geometry/pipeline.js';
+import { buildPreparedGeometryShape } from '../../geometry/pipeline.js';
 import { DesignModule } from '../design/index.js';
 
 const GEOMETRY_MODULE_ID = 'geometry';
@@ -70,7 +70,7 @@ export function runGeometryTask(input, options = {}) {
     module: GEOMETRY_MODULE_ID,
     stage: GEOMETRY_TASK_STAGE,
     input,
-    geometryShape: buildGeometryShape(input.params, options)
+    geometryShape: buildPreparedGeometryShape(input.params, options)
   });
 }
 

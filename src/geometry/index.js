@@ -6,16 +6,21 @@ export {
   isMWGConfig,
   coerceConfigParams,
   applyAthImportDefaults,
-  prepareGeometryParams
+  prepareGeometryParams,
+  isPreparedGeometryParams
 } from './params.js';
 export { SURFACE_TAGS } from './tags.js';
 export { mapVertexToAth, transformVerticesToAth } from './transforms.js';
 export {
   buildGeometryShape,
+  buildPreparedGeometryShape,
   buildGeometryMeshFromShape,
   buildCanonicalMeshPayloadFromShape,
+  buildPreparedCanonicalMeshPayload,
   buildCanonicalMeshPayload,
+  buildPreparedGeometryArtifacts,
   buildGeometryArtifacts,
+  buildPreparedGeometryMesh,
   buildGeometryMesh
 } from './pipeline.js';
 export {

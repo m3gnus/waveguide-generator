@@ -5,7 +5,8 @@ import { getDefaults } from '../src/config/defaults.js';
 import {
   GeometryModule,
   prepareGeometryParams,
-  buildGeometryShape,
+  buildPreparedGeometryShape,
+  buildPreparedGeometryMesh,
   buildGeometryMeshFromShape
 } from '../src/geometry/index.js';
 import { DesignModule } from '../src/modules/design/index.js';
@@ -39,7 +40,7 @@ test('GeometryModule exposes import, task, and shape-only output stages', () => 
     type: 'OSSE',
     applyVerticalOffset: true
   });
-  const expectedShape = buildGeometryShape(expectedPrepared, {
+  const expectedShape = buildPreparedGeometryShape(expectedPrepared, {
     includeEnclosure: true
   });
 
@@ -84,7 +85,7 @@ test('GeometryModule.importPrepared preserves already prepared geometry params',
   const geometryTask = GeometryModule.task(geometryInput, {
     includeEnclosure: false
   });
-  const expectedShape = buildGeometryShape(preparedParams, {
+  const expectedShape = buildPreparedGeometryShape(preparedParams, {
     includeEnclosure: false
   });
 
@@ -130,14 +131,39 @@ test('prepareViewportMesh consumes an explicit state snapshot instead of ambient
     type: state.type,
     applyVerticalOffset: true
   });
-  const expectedShape = buildGeometryShape(expectedPrepared, {
-    adaptivePhi: false
-  });
-  const expectedMesh = buildGeometryMeshFromShape(expectedShape, {
+  const expectedMesh = buildPreparedGeometryMesh(expectedPrepared, {
     adaptivePhi: false
   });
 
   assert.equal(viewportMesh.preparedParams.type, expectedPrepared.type);
+  assert.deepEqual(viewportMesh.vertices, expectedMesh.vertices);
+  assert.deepEqual(viewportMesh.indices, expectedMesh.indices);
+  assert.deepEqual(viewportMesh.groups, expectedMesh.groups);
+});
+
+test('prepareViewportMesh applies scale exactly once when building from raw app state', () => {
+  const state = {
+    type: 'OSSE',
+    params: makeRawParams({
+      scale: 0.5,
+      L: '100',
+      r0: '10',
+      encDepth: 0,
+      wallThickness: 0
+    })
+  };
+
+  const viewportMesh = prepareViewportMesh(state);
+  const expectedPrepared = prepareGeometryParams(state.params, {
+    type: state.type,
+    applyVerticalOffset: true
+  });
+  const expectedMesh = buildPreparedGeometryMesh(expectedPrepared, {
+    includeEnclosure: false,
+    adaptivePhi: false
+  });
+
+  assert.equal(viewportMesh.preparedParams.L, 50);
   assert.deepEqual(viewportMesh.vertices, expectedMesh.vertices);
   assert.deepEqual(viewportMesh.indices, expectedMesh.indices);
   assert.deepEqual(viewportMesh.groups, expectedMesh.groups);

@@ -9,7 +9,7 @@ import {
 } from './tags.js';
 import { assertBemMeshIntegrity } from './meshIntegrity.js';
 import { mapVertexToAth, transformVerticesToAth } from './transforms.js';
-import { prepareGeometryParams } from './params.js';
+import { isPreparedGeometryParams, prepareGeometryParams } from './params.js';
 
 const GEOMETRY_SHAPE_KIND = 'waveguide-shape';
 
@@ -33,8 +33,7 @@ function assertGeometryShape(shape) {
   }
 }
 
-export function buildGeometryShape(params, options = {}) {
-  const preparedParams = prepareGeometryParams(params, { type: params?.type });
+function createGeometryShape(preparedParams, options = {}) {
   const buildParams = normalizeBuildParams(preparedParams, options);
   const buildOptions = resolveBuildOptions(buildParams, options);
 
@@ -46,6 +45,17 @@ export function buildGeometryShape(params, options = {}) {
       adaptivePhi: Boolean(buildOptions.adaptivePhi)
     }
   };
+}
+
+export function buildPreparedGeometryShape(preparedParams, options = {}) {
+  return createGeometryShape(preparedParams, options);
+}
+
+export function buildGeometryShape(params, options = {}) {
+  const preparedParams = isPreparedGeometryParams(params)
+    ? params
+    : prepareGeometryParams(params, { type: params?.type });
+  return buildPreparedGeometryShape(preparedParams, options);
 }
 
 function buildMeshDataFromShape(shape, options = {}) {
@@ -60,10 +70,18 @@ function buildMeshDataFromShape(shape, options = {}) {
   return buildWaveguideMesh(buildParams, buildOptions);
 }
 
-function buildMeshData(params, options = {}) {
-  const geometryShape = buildGeometryShape(params, options);
+function buildMeshDataFromPreparedParams(preparedParams, options = {}) {
+  const geometryShape = buildPreparedGeometryShape(preparedParams, options);
   const meshData = buildMeshDataFromShape(geometryShape, options);
   return { geometryShape, buildParams: geometryShape.buildParams, meshData };
+}
+
+function buildMeshData(params, options = {}) {
+  if (isPreparedGeometryParams(params)) {
+    return buildMeshDataFromPreparedParams(params, options);
+  }
+  const preparedParams = prepareGeometryParams(params, { type: params?.type });
+  return buildMeshDataFromPreparedParams(preparedParams, options);
 }
 
 function buildGeometryMeshOutput(meshData) {
@@ -139,6 +157,13 @@ export function buildCanonicalMeshPayloadFromShape(shape, options = {}) {
   });
 }
 
+export function buildPreparedCanonicalMeshPayload(preparedParams, options = {}) {
+  const { buildParams, meshData } = buildMeshDataFromPreparedParams(preparedParams, options);
+  return buildSimulationPayloadFromMesh(meshData, buildParams, {
+    validateIntegrity: options.validateIntegrity ?? true
+  });
+}
+
 export function buildCanonicalMeshPayload(params, options = {}) {
   const { buildParams, meshData } = buildMeshData(params, options);
   return buildSimulationPayloadFromMesh(meshData, buildParams, {
@@ -146,13 +171,18 @@ export function buildCanonicalMeshPayload(params, options = {}) {
   });
 }
 
+export function buildPreparedGeometryMesh(preparedParams, options = {}) {
+  const { meshData } = buildMeshDataFromPreparedParams(preparedParams, options);
+  return buildGeometryMeshOutput(meshData);
+}
+
 export function buildGeometryMesh(params, options = {}) {
   const { meshData } = buildMeshData(params, options);
   return buildGeometryMeshOutput(meshData);
 }
 
-export function buildGeometryArtifacts(params, options = {}) {
-  const { geometryShape, buildParams, meshData } = buildMeshData(params, options);
+export function buildPreparedGeometryArtifacts(preparedParams, options = {}) {
+  const { geometryShape, buildParams, meshData } = buildMeshDataFromPreparedParams(preparedParams, options);
   const simulation = buildSimulationPayloadFromMesh(meshData, buildParams, {
     validateIntegrity: options.validateIntegrity === true
   });
@@ -174,4 +204,12 @@ export function buildGeometryArtifacts(params, options = {}) {
       }
     }
   };
+}
+
+export function buildGeometryArtifacts(params, options = {}) {
+  if (isPreparedGeometryParams(params)) {
+    return buildPreparedGeometryArtifacts(params, options);
+  }
+  const preparedParams = prepareGeometryParams(params, { type: params?.type });
+  return buildPreparedGeometryArtifacts(preparedParams, options);
 }

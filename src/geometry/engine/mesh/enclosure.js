@@ -293,10 +293,10 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     }
 
     // Compute enclosure box boundaries
-    const sL = (parseFloat(params.encSpaceL) || 25) * scale;
-    const sT = (parseFloat(params.encSpaceT) || 25) * scale;
-    const sR = (parseFloat(params.encSpaceR) || 25) * scale;
-    const sB = (parseFloat(params.encSpaceB) || 25) * scale;
+    const sL = parseFloat(params.encSpaceL) || 25;
+    const sT = parseFloat(params.encSpaceT) || 25;
+    const sR = parseFloat(params.encSpaceR) || 25;
+    const sB = parseFloat(params.encSpaceB) || 25;
 
     let boxRight = maxX + sR;
     let boxLeft = minX - sL;
