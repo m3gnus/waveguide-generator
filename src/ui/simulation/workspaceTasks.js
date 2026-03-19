@@ -1,8 +1,10 @@
 import { getSelectedFolderHandle } from '../workspace/folderWorkspace.js';
 import {
   ensureFolderWritePermission,
-  resetSelectedFolder
+  resetSelectedFolder,
+  writeWorkspaceFile
 } from '../workspace/folderWorkspace.js';
+import { resolveGenerationRuntimeArtifactFileName } from '../workspace/generationArtifacts.js';
 import {
   buildTaskIndexEntriesFromJobs,
   loadTaskIndex,
@@ -26,6 +28,28 @@ function isObject(value) {
 
 function normalizeWarningList(...values) {
   return values.flat().map((value) => String(value || '').trim()).filter(Boolean);
+}
+
+function buildArtifactWriteInput(fileName, content, contentType) {
+  return {
+    fileName,
+    content,
+    saveOptions: {
+      contentType
+    }
+  };
+}
+
+async function writeGenerationArtifactWithFallback(job, file, subDirName) {
+  return writeSimulationTaskBundleFile(job, file, {
+    dirName: subDirName,
+    fallbackWrite: async (nextFile) => {
+      await writeWorkspaceFile(nextFile.fileName, nextFile.content, {
+        contentType: nextFile.saveOptions?.contentType,
+        workspaceSubdir: subDirName
+      });
+    }
+  });
 }
 
 export async function readSimulationWorkspaceJobs() {
@@ -144,5 +168,65 @@ export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite =
   return {
     fileName: file.fileName,
     wroteToTaskFolder: false
+  };
+}
+
+export async function persistSimulationGenerationArtifacts(
+  job,
+  {
+    results = null,
+    meshArtifactText = null
+  } = {}
+) {
+  const jobId = String(job?.id || '').trim();
+  if (!jobId) {
+    return {
+      rawResultsFile: null,
+      meshArtifactFile: null,
+      warnings: ['Cannot persist generation artifacts without a job id.']
+    };
+  }
+
+  const subDirName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: jobId });
+  const warnings = [];
+  let rawResultsFile = null;
+  let meshArtifactFile = null;
+
+  if (results && typeof results === 'object') {
+    rawResultsFile = resolveGenerationRuntimeArtifactFileName('raw_results', { baseName: subDirName });
+    const rawResultsContent = `${JSON.stringify(results, null, 2)}\n`;
+    try {
+      await writeGenerationArtifactWithFallback(
+        job,
+        buildArtifactWriteInput(rawResultsFile, rawResultsContent, 'application/json'),
+        subDirName
+      );
+    } catch (error) {
+      rawResultsFile = null;
+      warnings.push(`Raw results artifact write failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  const normalizedMeshText = typeof meshArtifactText === 'string'
+    ? meshArtifactText.trim()
+    : '';
+  if (normalizedMeshText) {
+    meshArtifactFile = resolveGenerationRuntimeArtifactFileName('mesh_artifact', { baseName: subDirName });
+    try {
+      await writeGenerationArtifactWithFallback(
+        job,
+        buildArtifactWriteInput(meshArtifactFile, `${normalizedMeshText}\n`, 'text/plain'),
+        subDirName
+      );
+    } catch (error) {
+      meshArtifactFile = null;
+      warnings.push(`Mesh artifact write failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  return {
+    rawResultsFile,
+    meshArtifactFile,
+    warnings
   };
 }

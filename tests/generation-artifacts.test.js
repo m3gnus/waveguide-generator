@@ -5,6 +5,7 @@ import {
   buildGenerationProjectManifest,
   parseExportedFileRecord,
   resolveGenerationExportFileName,
+  resolveGenerationRuntimeArtifactFileName,
   resolveGenerationScriptSnapshotFileName
 } from '../src/ui/workspace/generationArtifacts.js';
 
@@ -39,6 +40,17 @@ test('resolveGenerationExportFileName maps fusion exports to profiles/slices det
   );
 });
 
+test('resolveGenerationRuntimeArtifactFileName returns deterministic names for raw results and mesh artifact', () => {
+  assert.equal(
+    resolveGenerationRuntimeArtifactFileName('raw_results', { baseName: 'horn_12' }),
+    'horn_12_raw.results.json'
+  );
+  assert.equal(
+    resolveGenerationRuntimeArtifactFileName('mesh_artifact', { baseName: 'horn_12' }),
+    'horn_12_solver.mesh.msh'
+  );
+});
+
 test('parseExportedFileRecord enforces formatId:fileName shape', () => {
   assert.deepEqual(parseExportedFileRecord('csv:horn_12_results.csv'), {
     formatId: 'csv',
@@ -62,6 +74,8 @@ test('buildGenerationProjectManifest includes script and selected export artifac
       'csv:horn_12_results.csv'
     ],
     scriptSnapshotFileName: resolveGenerationScriptSnapshotFileName(),
+    rawResultsFileName: 'horn_12_raw.results.json',
+    meshArtifactFileName: 'horn_12_solver.mesh.msh',
     updatedAt: '2026-03-19T10:00:00.000Z'
   });
 
@@ -69,6 +83,8 @@ test('buildGenerationProjectManifest includes script and selected export artifac
   assert.equal(payload.generation.id, 'job-12');
   assert.equal(payload.updatedAt, '2026-03-19T10:00:00.000Z');
   assert.equal(payload.artifacts.scriptSnapshot.fileName, resolveGenerationScriptSnapshotFileName());
+  assert.equal(payload.artifacts.rawResults.fileName, 'horn_12_raw.results.json');
+  assert.equal(payload.artifacts.meshArtifact.fileName, 'horn_12_solver.mesh.msh');
   assert.deepEqual(payload.artifacts.selectedExports, [
     { formatId: 'csv', fileName: 'horn_12_results.csv' },
     { formatId: 'json', fileName: 'horn_12_results.json' }

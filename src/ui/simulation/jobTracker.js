@@ -49,6 +49,8 @@ function normalizeItem(raw = {}) {
     rating: raw.rating ?? null,
     exportedFiles,
     justCompleted: Boolean(raw.justCompleted),
+    rawResultsFile: raw.rawResultsFile ?? raw.raw_results_file ?? null,
+    meshArtifactFile: raw.meshArtifactFile ?? raw.mesh_artifact_file ?? null,
     scriptSchemaVersion: Number.isFinite(Number(scriptSchemaInput))
       ? Number(scriptSchemaInput)
       : null,
@@ -78,6 +80,8 @@ function toStorageItem(item) {
     script: item.script,
     rating: item.rating ?? null,
     exported_files: Array.isArray(item.exportedFiles) ? item.exportedFiles : [],
+    raw_results_file: item.rawResultsFile ?? null,
+    mesh_artifact_file: item.meshArtifactFile ?? null,
     script_schema_version: item.scriptSchemaVersion !== null
       && item.scriptSchemaVersion !== undefined
       && Number.isFinite(Number(item.scriptSchemaVersion))
@@ -198,6 +202,8 @@ export function mergeJobs(localItems, remoteItems) {
           ? normalized.exportedFiles
           : (existing.exportedFiles ?? []),
         justCompleted: normalized.status === 'complete' && existing.status !== 'complete',
+        rawResultsFile: normalized.rawResultsFile ?? existing.rawResultsFile ?? null,
+        meshArtifactFile: normalized.meshArtifactFile ?? existing.meshArtifactFile ?? null,
         scriptSchemaVersion: normalized.scriptSchemaVersion !== null
           && normalized.scriptSchemaVersion !== undefined
           && Number.isFinite(Number(normalized.scriptSchemaVersion))
@@ -265,6 +271,8 @@ export function upsertJob(panel, rawEntry) {
       ? next.exportedFiles
       : (existing?.exportedFiles ?? []),
     justCompleted: next.justCompleted ?? existing?.justCompleted ?? false,
+    rawResultsFile: next.rawResultsFile ?? existing?.rawResultsFile ?? null,
+    meshArtifactFile: next.meshArtifactFile ?? existing?.meshArtifactFile ?? null,
     scriptSchemaVersion: next.scriptSchemaVersion !== null
       && next.scriptSchemaVersion !== undefined
       && Number.isFinite(Number(next.scriptSchemaVersion))

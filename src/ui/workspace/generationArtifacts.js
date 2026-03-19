@@ -1,6 +1,8 @@
 export const GENERATION_PROJECT_MANIFEST_FILE_NAME = 'waveguide.project.v1.json';
 export const GENERATION_PROJECT_MANIFEST_VERSION = 1;
 export const GENERATION_SCRIPT_SNAPSHOT_FILE_NAME = 'script.snapshot.mwg';
+export const GENERATION_RAW_RESULTS_FILE_SUFFIX = 'raw.results.json';
+export const GENERATION_MESH_ARTIFACT_FILE_SUFFIX = 'solver.mesh.msh';
 
 const EXPORT_FILE_SUFFIX_BY_FORMAT = Object.freeze({
   csv: 'results.csv',
@@ -89,6 +91,21 @@ export function resolveGenerationScriptSnapshotFileName() {
   return GENERATION_SCRIPT_SNAPSHOT_FILE_NAME;
 }
 
+export function resolveGenerationRuntimeArtifactFileName(kind, { baseName } = {}) {
+  const normalizedBaseName = normalizeBaseName(baseName);
+  const normalizedKind = String(kind || '').trim();
+
+  if (normalizedKind === 'raw_results') {
+    return `${normalizedBaseName}_${GENERATION_RAW_RESULTS_FILE_SUFFIX}`;
+  }
+
+  if (normalizedKind === 'mesh_artifact') {
+    return `${normalizedBaseName}_${GENERATION_MESH_ARTIFACT_FILE_SUFFIX}`;
+  }
+
+  return `${normalizedBaseName}_${normalizeToken(normalizedKind, 'artifact')}.dat`;
+}
+
 export function parseExportedFileRecord(value) {
   const text = String(value || '').trim();
   if (!text) {
@@ -114,6 +131,8 @@ export function buildGenerationProjectManifest({
   job,
   exportedFiles = [],
   scriptSnapshotFileName = null,
+  rawResultsFileName = null,
+  meshArtifactFileName = null,
   updatedAt = null
 } = {}) {
   const normalizedDirectoryName = normalizeBaseName(directoryName, '');
@@ -150,13 +169,29 @@ export function buildGenerationProjectManifest({
     },
     naming: {
       generationFolderContract: '<outputName>_<counter> (fallback: <jobId>)',
-      scriptSnapshotFile: resolveGenerationScriptSnapshotFileName()
+      scriptSnapshotFile: resolveGenerationScriptSnapshotFileName(),
+      rawResultsFileSuffix: GENERATION_RAW_RESULTS_FILE_SUFFIX,
+      meshArtifactFileSuffix: GENERATION_MESH_ARTIFACT_FILE_SUFFIX
     },
     artifacts: {
       scriptSnapshot: scriptSnapshotFileName
         ? {
           fileName: scriptSnapshotFileName,
           format: 'mwg'
+        }
+        : null,
+      rawResults: rawResultsFileName
+        ? {
+          fileName: rawResultsFileName,
+          format: 'json',
+          source: '/api/results/{jobId}'
+        }
+        : null,
+      meshArtifact: meshArtifactFileName
+        ? {
+          fileName: meshArtifactFileName,
+          format: 'msh',
+          source: '/api/mesh-artifact/{jobId}'
         }
         : null,
       selectedExports: parsedExports
