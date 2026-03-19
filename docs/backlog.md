@@ -50,7 +50,7 @@ Status as of March 19, 2026:
 **Implementation notes:**
 
 - Current contract mismatch spans `src/ui/workspace/folderWorkspace.js`, `src/ui/fileOps.js`, and `server/api/routes_misc.py`: the UI displays an absolute backend path, while `/api/export-file` only accepts repo-relative folder paths.
-- Completed-task bundle exports currently route through `src/ui/simulation/exports.js` using `job.label` / base name as the bundle folder, while task manifests in `src/ui/workspace/taskManifest.js` persist under `job.id`.
+- Completed-task bundle exports and folder task manifests/index now align on `job.label` / base-name folders when that generation name is available, while manifest/index job identity remains stable under `id`.
 - The earlier Firefox output-folder slice shipped `/api/workspace/path`, `/api/workspace/open`, and the settings-panel affordance, but it did not complete the end-to-end write contract. Treat that item as groundwork, not as the final solution.
 - `docs/modules/export.md`, `docs/modules/simulation.md`, and settings copy still describe `<workspace>/<jobId>/`, which does not match the current runtime behavior.
 - No tests currently cover `/api/export-file`, `/api/workspace/path`, `/api/workspace/open`, or Firefox/non-File-System-Access export routing.
@@ -67,6 +67,7 @@ Status as of March 19, 2026:
 Progress note (March 19, 2026):
 - Backend workspace export contract now writes via `/api/export-file` with optional `workspace_subdir`; Firefox/non-File-System-Access path now routes manual and bundle export writes through backend workspace root before browser fallback.
 - Regression coverage added for backend workspace path/open/export routes and frontend workspace-subdirectory export routing.
+- Folder task manifests/index now persist to the same generation folder naming contract used by bundle exports (legacy `job.id` folders remain readable and rebuild deduplicates by stable job id).
 
 ### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
 
