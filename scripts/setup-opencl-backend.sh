@@ -67,6 +67,16 @@ printf '%s\n' "$ENV_PREFIX/bin/python" > "$PREFERRED_PYTHON_FILE"
 echo "  Marker file: $PREFERRED_PYTHON_FILE"
 
 echo
+echo "Running backend dependency preflight..."
+if node "$ROOT_DIR/scripts/preflight-backend-runtime.js" --strict; then
+    echo "  Backend preflight: required checks ready."
+else
+    echo "  WARNING: Backend preflight detected missing/unsupported required checks."
+    echo "           Fix the reported items, then re-run:"
+    echo "             npm run preflight:backend:strict"
+fi
+
+echo
 echo "Setup complete."
 echo "Backend interpreter:"
 echo "  $ENV_PREFIX/bin/python"

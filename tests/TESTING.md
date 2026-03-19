@@ -27,6 +27,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/architecture-boundaries.test.js`
 - `tests/ath-fixtures.test.js`
 - `tests/backend-python-resolver.test.js`
+- `tests/backend-runtime-preflight.test.js`
 - `tests/bem-mesh-integrity.test.js`
 - `tests/config-import.test.js`
 - `tests/config-roundtrip.test.js`
@@ -89,6 +90,7 @@ Supporting fixtures:
 - `server/tests/test_observation_distance.py`
 - `server/tests/test_occ_resolution_semantics.py`
 - `server/tests/test_reference_smoke.py`
+- `server/tests/test_runtime_preflight.py`
 - `server/tests/test_solver_hardening.py`
 - `server/tests/test_solver_tag_contract.py`
 - `server/tests/test_symmetry_benchmark.py`
