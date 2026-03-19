@@ -38,6 +38,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/export-module.test.js`
 - `tests/file-ops.test.js`
 - `tests/folder-workspace.test.js`
+- `tests/generation-artifacts.test.js`
 - `tests/geometry-artifacts.test.js`
 - `tests/geometry-module.test.js`
 - `tests/geometry-params.test.js`

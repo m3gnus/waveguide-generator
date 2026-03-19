@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 19, 2026 (Scale restriction complete)
+Last updated: March 19, 2026 (workspace generation manifest slice landed; dependency/runtime doctor item clarified)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -62,12 +62,13 @@ Status as of March 19, 2026:
 - [x] Fix Firefox/non-`showDirectoryPicker` behavior so exports either land in the shown workspace or clearly announce that the browser download path is being used
 - [ ] Unify manifests, raw simulation data, mesh artifacts, and selected exports under one human-readable generation folder named from `<outputName>_<counter>`
 - [ ] Add a user-facing project manifest/file format plus deterministic naming rules for ATH/MWG script snapshots, raw results, mesh artifacts, and optional exported files
-- [ ] Update docs and add regression tests for workspace/export routing and deterministic folder naming
+- [x] Update docs and add regression tests for workspace/export routing and deterministic folder naming
 
 Progress note (March 19, 2026):
 - Backend workspace export contract now writes via `/api/export-file` with optional `workspace_subdir`; Firefox/non-File-System-Access path now routes manual and bundle export writes through backend workspace root before browser fallback.
 - Regression coverage added for backend workspace path/open/export routes and frontend workspace-subdirectory export routing.
 - Folder task manifests/index now persist to the same generation folder naming contract used by bundle exports (legacy `job.id` folders remain readable and rebuild deduplicates by stable job id).
+- Generation folders now include user-facing `waveguide.project.v1.json`, deterministic bundle artifact naming, and deterministic script snapshot artifact `script.snapshot.mwg`; regression tests cover naming/manifest behavior.
 
 ### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
 
@@ -96,7 +97,7 @@ Progress note (March 19, 2026):
 **Status:** NOT STARTED
 **Execution lane:** Reserved — Codex `high`; Opus `high`
 
-**Description:** Dependency installation and status reporting are inconsistent. The repo has installer scripts and backend dependency gating, but startup scripts and UI still contain stale messaging, there is no single cross-platform doctor flow that reports what is missing and how to install it, and at least some declared dependencies appear unused or replaceable with simpler local code.
+**Description:** Dependency installation pain is coming from two different sources that currently blur together: some dependencies are genuinely hard to provision across operating systems (`bempp-cl`, OpenCL runtimes, and some `gmsh` wheel combinations), while the repo also has fixable install-flow and messaging defects. Right now dependency truth is fragmented, launcher/runtime selection can drift away from the interpreter the installer populated, startup scripts still contain stale mock-solver messaging, and there is no single cross-platform preflight/doctor flow that tells users exactly what is missing, which features are blocked, and how to fix the current machine.
 
 **Implementation notes:**
 
@@ -106,16 +107,20 @@ Progress note (March 19, 2026):
   - `trimesh` appears unused across active runtime and tests
   - `express` is only used by `scripts/dev-server.js`
   - `uvicorn[standard]` should be re-validated against actual runtime needs versus plain `uvicorn`
-- Startup messaging in `server/start.sh` still says the server can run with a mock solver, which conflicts with the maintained runtime contract.
-- Backend runtime gating already exists for Python/gmsh/bempp-cl, but the frontend only surfaces partial dependency issues after the user hits a failing path.
+- `scripts/start-all.js` and `server/start.sh` still say the app/server can continue with mock-data or mock-solver behavior, which conflicts with the maintained no-mock runtime contract.
+- Launchers (`launch/*.bat|*.sh|*.command`) still delegate to `npm start`, so successful startup depends on `scripts/start-all.js` selecting the same interpreter/environment that `install/install.*` populated.
+- Backend runtime gating already exists for Python/gmsh/bempp-cl and parts of the UI already consume `/health`, but the current product still lacks a single early preflight/doctor surface before users hit a failing backend start, export, or solve path.
+- Treat OpenCL separately from ordinary Python package installation: package install may succeed while solve performance or device availability remains broken because the host OpenCL runtime/driver stack is missing or misconfigured.
 
 **Action plan:**
 
 - [ ] Audit every declared dependency against actual runtime/build/test usage and remove dead packages or document why they remain
 - [ ] Replace simple single-purpose dependencies with local code where that meaningfully reduces install burden
+- [ ] Define and enforce one interpreter-selection contract across installer, launchers, `npm start`, and backend startup so the app always prefers the environment it installed and verifies
 - [ ] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
+- [ ] Add a post-install verification/preflight step that proves `fastapi`, `gmsh`, `bempp-cl`, and OpenCL detection status for the exact interpreter that will be launched
 - [ ] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
-- [ ] Surface dependency status in the UI before export/solve actions fail, including guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
+- [ ] Surface dependency status in the UI before backend start/export/solve actions fail, including feature impact and guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
 - [ ] Add regression tests for dependency doctor output and dependency-status rendering
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)

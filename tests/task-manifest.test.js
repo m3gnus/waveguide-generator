@@ -10,6 +10,10 @@ import {
   resolveTaskWorkspaceDirectoryName,
   updateTaskManifestForJob
 } from '../src/ui/workspace/taskManifest.js';
+import {
+  GENERATION_PROJECT_MANIFEST_FILE_NAME,
+  GENERATION_SCRIPT_SNAPSHOT_FILE_NAME
+} from '../src/ui/workspace/generationArtifacts.js';
 
 function createMemoryDirectory(name = 'root') {
   const files = new Map();
@@ -135,6 +139,14 @@ test('updateTaskManifestForJob writes and reads task.manifest.json with defaults
   assert.equal(reread.warning, null);
   assert.equal(reread.manifest.id, 'job-5');
   assert.deepEqual(reread.manifest.exportedFiles, []);
+
+  const projectFileHandle = await taskDir.getFileHandle(GENERATION_PROJECT_MANIFEST_FILE_NAME);
+  const projectFile = await projectFileHandle.getFile();
+  const projectPayload = JSON.parse(await projectFile.text());
+  assert.equal(projectPayload.generation.id, 'job-5');
+  assert.equal(projectPayload.generation.folder, 'horn_5');
+  assert.equal(projectPayload.artifacts.scriptSnapshot, null);
+  assert.deepEqual(projectPayload.artifacts.selectedExports, []);
 });
 
 test('updateTaskManifestForJob falls back to job id directory when no generation name is available', async () => {
@@ -176,4 +188,55 @@ test('updateTaskManifestForJob reuses legacy job-id manifest data when migrating
   const reread = await readTaskManifest(migratedDir);
   assert.equal(reread.manifest.id, 'job-7');
   assert.equal(root.directories.has('job-7'), true);
+});
+
+test('updateTaskManifestForJob writes deterministic script snapshot and project artifact metadata', async () => {
+  const root = createMemoryDirectory();
+
+  await updateTaskManifestForJob(root, {
+    id: 'job-8',
+    label: 'horn_8',
+    status: 'complete',
+    exportedFiles: ['csv:horn_8_results.csv', 'json:horn_8_results.json'],
+    scriptSnapshot: {
+      outputName: 'horn',
+      counter: 8,
+      frequencyStart: 100,
+      frequencyEnd: 1000,
+      numFrequencies: 5,
+      stateSnapshot: { type: 'R-OSSE' },
+      params: {
+        type: 'R-OSSE',
+        R: 1.2,
+        a: 90,
+        a0: 45,
+        b: 0.5,
+        k: 1.1,
+        m: 0.8,
+        q: 0.7,
+        r: 42,
+        r0: 10,
+        tmax: 1,
+        angularSegments: 40,
+        lengthSegments: 20
+      }
+    }
+  });
+
+  const taskDir = await root.getDirectoryHandle('horn_8');
+  const snapshotHandle = await taskDir.getFileHandle(GENERATION_SCRIPT_SNAPSHOT_FILE_NAME);
+  const snapshotText = await (await snapshotHandle.getFile()).text();
+  assert.match(snapshotText, /; MWG config/);
+  assert.match(snapshotText, /Simulation.F1 = 100/);
+  assert.match(snapshotText, /Simulation.F2 = 1000/);
+  assert.match(snapshotText, /Simulation.NumFrequencies = 5/);
+
+  const projectHandle = await taskDir.getFileHandle(GENERATION_PROJECT_MANIFEST_FILE_NAME);
+  const projectPayload = JSON.parse(await (await projectHandle.getFile()).text());
+  assert.equal(projectPayload.generation.folder, 'horn_8');
+  assert.equal(projectPayload.artifacts.scriptSnapshot.fileName, GENERATION_SCRIPT_SNAPSHOT_FILE_NAME);
+  assert.deepEqual(projectPayload.artifacts.selectedExports, [
+    { formatId: 'csv', fileName: 'horn_8_results.csv' },
+    { formatId: 'json', fileName: 'horn_8_results.json' }
+  ]);
 });
