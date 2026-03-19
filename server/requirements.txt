@@ -12,8 +12,6 @@ scipy
 meshio>=4.0.16
 pyopencl
 
-# Mesh Processing
-trimesh>=4.0.5
 # Gmsh Python API is managed separately in server/requirements-gmsh.txt
 # because wheel availability can vary by platform.
 
