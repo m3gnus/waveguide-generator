@@ -25,7 +25,11 @@ const frontend = spawn('node', ['scripts/dev-server.js'], {
 // Start backend server
 const backend = spawn(backendPython, ['app.py'], {
   cwd: serverDir,
-  stdio: 'inherit'
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    WG_BACKEND_PYTHON_SOURCE: backendPythonResolution.source
+  }
 });
 
 // Handle shutdown

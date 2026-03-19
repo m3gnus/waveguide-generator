@@ -18,6 +18,62 @@ WG_BACKEND_PYTHON_OVERRIDE="${WG_BACKEND_PYTHON:-}"
 PYTHON_BIN=""
 PYTHON_SOURCE=""
 
+runtime_doctor_ready() {
+    local candidate="$1"
+    WG_BACKEND_PYTHON_SOURCE="probe:${candidate}" "$candidate" - <<'PY' >/dev/null 2>&1
+import pathlib
+import sys
+
+server_dir = pathlib.Path.cwd()
+if str(server_dir) not in sys.path:
+    sys.path.insert(0, str(server_dir))
+
+from services.runtime_preflight import collect_runtime_doctor_report
+
+report = collect_runtime_doctor_report("auto")
+raise SystemExit(0 if report.get("summary", {}).get("requiredReady") else 1)
+PY
+}
+
+select_fallback_python() {
+    local -a candidates=()
+    local -a sources=()
+    local idx=0
+
+    if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+        candidates+=("$ROOT_DIR/.venv/bin/python")
+        sources+=("fallback:.venv")
+    fi
+    if [ -x "$ROOT_DIR/.venv/Scripts/python.exe" ]; then
+        candidates+=("$ROOT_DIR/.venv/Scripts/python.exe")
+        sources+=("fallback:.venv")
+    fi
+    if [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
+        candidates+=("$HOME/.waveguide-generator/opencl-cpu-env/bin/python")
+        sources+=("fallback:opencl-cpu-env")
+    fi
+    if command -v python3 &> /dev/null; then
+        candidates+=("python3")
+        sources+=("fallback:python3")
+    fi
+
+    if [ "${#candidates[@]}" -eq 0 ]; then
+        return 1
+    fi
+
+    for idx in "${!candidates[@]}"; do
+        if runtime_doctor_ready "${candidates[$idx]}"; then
+            PYTHON_BIN="${candidates[$idx]}"
+            PYTHON_SOURCE="${sources[$idx]}"
+            return 0
+        fi
+    done
+
+    PYTHON_BIN="${candidates[0]}"
+    PYTHON_SOURCE="${sources[0]}"
+    return 0
+}
+
 # Resolve backend interpreter using the same priority contract as npm start.
 if [ -n "$PYTHON_BIN_OVERRIDE" ]; then
     PYTHON_BIN="$PYTHON_BIN_OVERRIDE"
@@ -34,17 +90,13 @@ elif [ -f "$PREFERRED_PYTHON_FILE" ]; then
 fi
 
 if [ -z "$PYTHON_BIN" ] && [ -x "$ROOT_DIR/.venv/bin/python" ]; then
-    PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
-    PYTHON_SOURCE="fallback:.venv"
+    select_fallback_python
 elif [ -z "$PYTHON_BIN" ] && [ -x "$ROOT_DIR/.venv/Scripts/python.exe" ]; then
-    PYTHON_BIN="$ROOT_DIR/.venv/Scripts/python.exe"
-    PYTHON_SOURCE="fallback:.venv"
+    select_fallback_python
 elif [ -z "$PYTHON_BIN" ] && [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
-    PYTHON_BIN="$HOME/.waveguide-generator/opencl-cpu-env/bin/python"
-    PYTHON_SOURCE="fallback:opencl-cpu-env"
+    select_fallback_python
 elif [ -z "$PYTHON_BIN" ] && command -v python3 &> /dev/null; then
-    PYTHON_BIN="python3"
-    PYTHON_SOURCE="fallback:python3"
+    select_fallback_python
 fi
 
 if [ -z "$PYTHON_BIN" ]; then
@@ -91,4 +143,5 @@ echo "Press Ctrl+C to stop"
 echo ""
 
 # Start the server
+export WG_BACKEND_PYTHON_SOURCE="$PYTHON_SOURCE"
 $PYTHON_BIN app.py

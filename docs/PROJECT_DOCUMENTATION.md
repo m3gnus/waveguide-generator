@@ -583,9 +583,8 @@ High-signal test suites:
   1. `PYTHON_BIN`
   2. `WG_BACKEND_PYTHON`
   3. repo marker `.waveguide/backend-python.path` (written by install/setup scripts)
-  4. project `.venv`
-  5. OpenCL CPU env fallback (`$HOME/.waveguide-generator/opencl-cpu-env/bin/python`)
-  6. `python3`
+  4. fallback probe across project `.venv`, OpenCL CPU env (`$HOME/.waveguide-generator/opencl-cpu-env/bin/python`), then `python3`
+  5. if no fallback candidate is runtime-ready, keep the same raw fallback order: `.venv` -> OpenCL CPU env -> `python3`
 - Backend jobs are in-memory; restarting backend clears job history.
 - gmsh Python API calls are guarded for thread-safety and main-thread constraints.
 
