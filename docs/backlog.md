@@ -128,7 +128,7 @@ Status as of March 19, 2026:
 
 **Action plan:**
 
-- [ ] Change `RECOMMENDED_DEFAULTS.bemPrecision` to `'single'` in `src/ui/settings/simAdvancedSettings.js`
+- [x] Change `RECOMMENDED_DEFAULTS.bemPrecision` to `'single'` in `src/ui/settings/simAdvancedSettings.js`
 - [ ] Update `src/ui/settings/modal.js` copy so single precision is the recommended default and double is framed as the higher-cost fallback when needed
 - [ ] Change `server/solver/directivity_correct.py` function signature defaults from `"double"` to `"single"` for consistency
 - [ ] Verify both single and double still work end-to-end
