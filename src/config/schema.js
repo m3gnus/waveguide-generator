@@ -41,7 +41,7 @@ export const PARAM_SCHEMA = {
       step: 0.001,
       default: 1.0,
       tooltip:
-        "Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.",
+        "Scaling factor for waveguide geometry only. Values < 1 shrink the waveguide, > 1 enlarge it. Does not affect enclosure dimensions.",
     },
     R: {
       type: "expression",
@@ -136,7 +136,7 @@ export const PARAM_SCHEMA = {
       step: 0.001,
       default: 1.0,
       tooltip:
-        "Global scaling factor for all length dimensions. Values < 1 shrink the waveguide, > 1 enlarge it. Affects L, r0, morphCorner, and all other length parameters.",
+        "Scaling factor for waveguide geometry only. Values < 1 shrink the waveguide, > 1 enlarge it. Does not affect enclosure dimensions.",
     },
     L: {
       type: "expression",
