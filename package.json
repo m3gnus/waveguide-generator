@@ -36,7 +36,6 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "jszip": "^3.10.1",
     "three": "^0.160.0"
   },
   "devDependencies": {

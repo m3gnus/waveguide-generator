@@ -95,7 +95,7 @@ Progress note (March 19, 2026):
 
 ### P2. Audit Dependencies and Add Cross-Platform Runtime Doctor (March 19, 2026)
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 **Execution lane:** Reserved — Codex `high`; Opus `high`
 
 **Description:** Dependency installation pain is coming from two different sources that currently blur together: some dependencies are genuinely hard to provision across operating systems (`bempp-cl`, OpenCL runtimes, and some `gmsh` wheel combinations), while the repo also has fixable install-flow and messaging defects. Right now dependency truth is fragmented, launcher/runtime selection can drift away from the interpreter the installer populated, startup scripts still contain stale mock-solver messaging, and there is no single cross-platform preflight/doctor flow that tells users exactly what is missing, which features are blocked, and how to fix the current machine.
@@ -115,7 +115,7 @@ Progress note (March 19, 2026):
 
 **Action plan:**
 
-- [ ] Audit every declared dependency against actual runtime/build/test usage and remove dead packages or document why they remain
+- [x] Audit every declared dependency against actual runtime/build/test usage and remove dead packages or document why they remain
 - [ ] Replace simple single-purpose dependencies with local code where that meaningfully reduces install burden
 - [ ] Define and enforce one interpreter-selection contract across installer, launchers, `npm start`, and backend startup so the app always prefers the environment it installed and verifies
 - [ ] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
@@ -123,6 +123,11 @@ Progress note (March 19, 2026):
 - [ ] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
 - [ ] Surface dependency status in the UI before backend start/export/solve actions fail, including feature impact and guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
 - [ ] Add regression tests for dependency doctor output and dependency-status rendering
+
+Progress note (March 19, 2026):
+- Removed dead dependencies proved unused across active runtime/tests: frontend `jszip` (plus stale `index.html` script include) and backend `trimesh`.
+- Kept `express` because it is the current frontend dev server runtime (`scripts/dev-server.js`, `npm start:frontend`, `npm run dev`).
+- Kept `uvicorn[standard]` because backend startup still runs through `uvicorn` in `server/app.py`; extras policy (plain vs standard) is deferred to the doctor/preflight/interpreter-contract slices.
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)
 
