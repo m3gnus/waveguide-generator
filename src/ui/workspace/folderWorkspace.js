@@ -1,12 +1,10 @@
 import { AppEvents } from '../../events.js';
 
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
-const STORAGE_KEY = 'mwg_server_folder_path';
 const BACKEND_URL = 'http://localhost:8000';
 
 let selectedFolderHandle = null;
 let selectedFolderLabel = DEFAULT_FOLDER_LABEL;
-let serverFolderPath = null;
 
 const changeListeners = new Set();
 const warningListeners = new Set();
@@ -46,46 +44,6 @@ export function getSelectedFolderHandle() {
 
 export function getSelectedFolderLabel() {
   return selectedFolderLabel;
-}
-
-export function setServerFolderPath(path) {
-  serverFolderPath = path ? String(path).trim() : null;
-  if (serverFolderPath) {
-    try {
-      localStorage.setItem(STORAGE_KEY, serverFolderPath);
-      selectedFolderLabel = `Server: ${serverFolderPath}`;
-    } catch (err) {
-      console.warn('Failed to save folder path to localStorage:', err);
-      selectedFolderLabel = `Server: ${serverFolderPath}`;
-    }
-  } else {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (err) {
-      console.warn('Failed to clear folder path from localStorage:', err);
-    }
-    // Only reset the label when no native folder handle is active.
-    // When requestFolderSelection sets a handle, its label takes precedence.
-    if (!selectedFolderHandle) {
-      selectedFolderLabel = DEFAULT_FOLDER_LABEL;
-    }
-  }
-  emitChange();
-}
-
-export function getServerFolderPath() {
-  return serverFolderPath;
-}
-
-export function loadServerFolderPathFromStorage() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      setServerFolderPath(saved);
-    }
-  } catch (err) {
-    console.warn('Failed to load folder path from localStorage:', err);
-  }
 }
 
 export function setSelectedFolderHandle(handle, options = {}) {
@@ -210,6 +168,55 @@ export async function openWorkspaceInFinder() {
   }
 }
 
+function normalizeWorkspaceSubdir(subdir) {
+  const raw = String(subdir ?? '').trim();
+  if (!raw) return '';
+
+  const normalized = raw.replace(/\\/g, '/').split('/').map((part) => part.trim()).filter(Boolean);
+  if (normalized.some((part) => part === '.' || part === '..')) {
+    throw new Error('Invalid workspace subdirectory');
+  }
+  return normalized.join('/');
+}
+
+/**
+ * Write a file into the backend-managed workspace root.
+ * `workspaceSubdir` is always interpreted relative to the backend workspace root.
+ */
+export async function writeWorkspaceFile(fileName, content, options = {}) {
+  const formData = new FormData();
+  const blob = content instanceof Blob
+    ? content
+    : new Blob([content], { type: options.contentType || 'text/plain' });
+  formData.append('file', blob, fileName);
+
+  const workspaceSubdir = normalizeWorkspaceSubdir(options.workspaceSubdir);
+  if (workspaceSubdir) {
+    formData.append('workspace_subdir', workspaceSubdir);
+  }
+
+  const response = await fetch(`${BACKEND_URL}/api/export-file`, {
+    method: 'POST',
+    body: formData,
+    signal: AbortSignal.timeout(options.timeoutMs || 30000)
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({}));
+    const detailValue = errorPayload?.detail;
+    const detail = typeof detailValue === 'string'
+      ? detailValue
+      : detailValue
+        ? JSON.stringify(detailValue)
+        : (response.statusText || 'Unknown error');
+    const error = new Error(detail);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  return response.json();
+}
+
 /**
  * Show a proper panel dialog for browsers that do not support showDirectoryPicker
  * (e.g. Firefox). Displays the current output folder path and an "Open in Finder"
@@ -240,7 +247,7 @@ export function showOutputFolderPanel() {
     subtitle.textContent =
       'Firefox does not support selecting a custom output folder via the browser ' +
       '(the File System Access API is not implemented in Firefox). Files are saved ' +
-      'to the default server output folder shown below.';
+      'to the backend workspace folder shown below.';
     dialog.appendChild(subtitle);
 
     // Path display

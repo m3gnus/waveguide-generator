@@ -143,3 +143,47 @@ test('writeSimulationTaskBundleFile clears the selected workspace and falls back
     resetSelectedFolder();
   }
 });
+
+test('exportResults routes fallback bundle writes through backend workspace subdirectory', async () => {
+  const originalFetch = global.fetch;
+
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
+
+  const panel = {
+    currentSmoothing: 'none',
+    lastResults: {
+      spl_on_axis: { frequencies: [100], spl: [90] },
+      di: { di: [8] },
+      impedance: { frequencies: [100], real: [6], imaginary: [1] },
+      directivity: {}
+    }
+  };
+
+  try {
+    const bundle = await exportResults(panel, {
+      job: {
+        id: 'job-3',
+        label: 'horn_34'
+      },
+      selectedFormats: ['csv']
+    });
+
+    assert.deepEqual(bundle.exportedFiles, ['csv:horn_34_results.csv']);
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
+    const body = fetchCalls[0].options.body;
+    assert.equal(body.get('workspace_subdir'), 'horn_34');
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});

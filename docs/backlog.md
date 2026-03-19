@@ -42,7 +42,7 @@ Status as of March 19, 2026:
 
 ### P1. Rebuild Output Workspace Contract and Fix Firefox Server-Folder Regression (March 19, 2026)
 
-**Status:** NOT STARTED
+**Status:** IN PROGRESS
 **Execution lane:** Reserved — Codex `high`; Opus `high`
 
 **Description:** The current output-folder flow is still misleading and fragmented. Firefox shows a backend output folder, but manual export writes do not actually bind to that folder, so files fall through to browser download/save behavior instead of landing in the displayed directory. Workspace metadata and exported artifacts are also split across different naming roots (`job.id` vs `outputName_counter`), so there is no single understandable generation folder for users.
@@ -57,12 +57,16 @@ Status as of March 19, 2026:
 
 **Action plan:**
 
-- [ ] Define one cross-browser workspace model: backend-managed workspace root plus optional direct-write File System Access optimization on supporting browsers
-- [ ] Replace the current absolute-path display + relative-path export mismatch with explicit backend workspace configuration/read/write APIs
-- [ ] Fix Firefox/non-`showDirectoryPicker` behavior so exports either land in the shown workspace or clearly announce that the browser download path is being used
+- [x] Define one cross-browser workspace model: backend-managed workspace root plus optional direct-write File System Access optimization on supporting browsers
+- [x] Replace the current absolute-path display + relative-path export mismatch with explicit backend workspace configuration/read/write APIs
+- [x] Fix Firefox/non-`showDirectoryPicker` behavior so exports either land in the shown workspace or clearly announce that the browser download path is being used
 - [ ] Unify manifests, raw simulation data, mesh artifacts, and selected exports under one human-readable generation folder named from `<outputName>_<counter>`
 - [ ] Add a user-facing project manifest/file format plus deterministic naming rules for ATH/MWG script snapshots, raw results, mesh artifacts, and optional exported files
 - [ ] Update docs and add regression tests for workspace/export routing and deterministic folder naming
+
+Progress note (March 19, 2026):
+- Backend workspace export contract now writes via `/api/export-file` with optional `workspace_subdir`; Firefox/non-File-System-Access path now routes manual and bundle export writes through backend workspace root before browser fallback.
+- Regression coverage added for backend workspace path/open/export routes and frontend workspace-subdirectory export routing.
 
 ### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
 

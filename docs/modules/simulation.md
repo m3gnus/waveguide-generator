@@ -35,7 +35,8 @@
 
 **History & source selection**:
 - **One source mode at a time**: either folder workspace (manifests only) OR backend jobs + local cache (never mixed)
-- Folder workspace: completed-task bundles write to `<workspace>/<jobId>/`; if writes fail, app clears workspace and falls back to browser download
+- Folder workspace: completed-task bundles write to `<workspace>/<jobLabel>/`; when File System Access is unavailable, exports use backend workspace root + `workspace_subdir`
+- If task-folder/direct writes fail, app falls back through backend workspace writes and finally browser download/save
 
 **Task metadata persistence**:
 - Ratings: stored locally and in folder task manifests when workspace active
