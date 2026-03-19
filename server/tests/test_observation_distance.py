@@ -135,6 +135,40 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
 
         self.assertEqual(seen_distances, [2.5, 2.5])
 
+    def test_legacy_solver_persists_effective_directivity_metadata(self):
+        mesh = _mesh_stub()
+
+        with patch("solver.solve.solve_frequency", return_value=(90.0, complex(1.0, 0.0), 6.0)), patch(
+            "solver.solve.calculate_directivity_patterns",
+            return_value={"horizontal": [], "vertical": [], "diagonal": []},
+        ):
+            results = solve(
+                mesh=mesh,
+                frequency_range=[200.0, 200.0],
+                num_frequencies=1,
+                sim_type="2",
+                polar_config={
+                    "distance": 2.5,
+                    "angle_range": [10.0, 90.0, 9],
+                    "enabled_axes": [" vertical ", "horizontal", "invalid", "horizontal"],
+                    "norm_angle": "12.5",
+                    "inclination": 42,
+                    "observation_origin": "throat",
+                },
+                mesh_validation_mode="off",
+            )
+
+        metadata = results["metadata"]["directivity"]
+        self.assertEqual(metadata["angle_range_degrees"], [10.0, 90.0])
+        self.assertEqual(metadata["sample_count"], 9)
+        self.assertEqual(metadata["angular_step_degrees"], 10.0)
+        self.assertEqual(metadata["enabled_axes"], ["vertical", "horizontal"])
+        self.assertEqual(metadata["normalization_angle_degrees"], 12.5)
+        self.assertEqual(metadata["diagonal_angle_degrees"], 42.0)
+        self.assertEqual(metadata["observation_origin"], "mouth")
+        self.assertEqual(metadata["requested_distance_m"], 2.5)
+        self.assertEqual(metadata["effective_distance_m"], 2.5)
+
     def test_optimized_solver_forwards_polar_distance_to_on_axis_observer(self):
         mesh = _mesh_stub()
         seen_distances = []
@@ -281,15 +315,32 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
                 frequency_range=[200.0, 200.0],
                 num_frequencies=1,
                 sim_type="2",
-                polar_config={"distance": 1.0},
+                polar_config={
+                    "distance": 1.0,
+                    "angle_range": [0.0, 90.0, 10],
+                    "enabled_axes": ["diagonal", "horizontal"],
+                    "norm_angle": 7.5,
+                    "inclination": 22.0,
+                    "observation_origin": "throat",
+                },
                 verbose=False,
                 mesh_validation_mode="off",
             )
 
         adjusted_distance = seen_distances[0]
+        metadata = results["metadata"]["directivity"]
         self.assertGreater(adjusted_distance, 1.0)
         self.assertEqual(seen_directivity_distances, [adjusted_distance])
         self.assertTrue(results["metadata"]["observation"]["adjusted"])
+        self.assertEqual(metadata["angle_range_degrees"], [0.0, 90.0])
+        self.assertEqual(metadata["sample_count"], 10)
+        self.assertEqual(metadata["angular_step_degrees"], 10.0)
+        self.assertEqual(metadata["enabled_axes"], ["diagonal", "horizontal"])
+        self.assertEqual(metadata["normalization_angle_degrees"], 7.5)
+        self.assertEqual(metadata["diagonal_angle_degrees"], 22.0)
+        self.assertEqual(metadata["observation_origin"], "throat")
+        self.assertEqual(metadata["requested_distance_m"], 1.0)
+        self.assertEqual(metadata["effective_distance_m"], adjusted_distance)
 
 
 class ObservationOriginTest(unittest.TestCase):

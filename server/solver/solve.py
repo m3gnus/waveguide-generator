@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .contract import frequency_failure
+from .contract import build_directivity_metadata, frequency_failure
 from .solve_optimized import _numpy_dtype_for_precision
 
 logger = logging.getLogger(__name__)
@@ -213,8 +213,12 @@ def solve(
     )
     observation_distance_m = float(observation_info["effective_distance_m"])
     effective_polar_config = dict(polar_config) if isinstance(polar_config, dict) else {}
+    effective_polar_config["observation_origin"] = "mouth"
     effective_polar_config["distance"] = observation_distance_m
     results["metadata"]["observation"] = observation_info
+    results["metadata"]["directivity"] = build_directivity_metadata(
+        effective_polar_config, observation_info
+    )
     if observation_info["adjusted"]:
         results["metadata"]["warnings"].append(
             {

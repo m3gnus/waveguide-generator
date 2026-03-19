@@ -18,7 +18,7 @@
 
 - **Payload preparation**: Build canonical simulation payloads and OCC adaptive submit options
 - **Job submission**: Route jobs to backend `/api/solve` with correct request shape
-- **Result handling**: Poll backend, fetch results, extract runtime metadata (performance, observation distance, failures)
+- **Result handling**: Poll backend, fetch results, extract runtime metadata (performance, observation/directivity settings, failures)
 - **History management**: Track backend jobs and folder-workspace task manifests
 - **Metadata persistence**: Save task ratings, export status, auto-export markers, and script snapshots
 
@@ -32,6 +32,7 @@
 **Results handling**:
 - Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)
 - Backend performance metadata included in results under `metadata.performance`
+- Backend solve metadata includes `metadata.observation` and `metadata.directivity` for effective observation distance and persisted directivity-map settings
 
 **History & source selection**:
 - **One source mode at a time**: either folder workspace (manifests only) OR backend jobs + local cache (never mixed)
