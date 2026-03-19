@@ -7,6 +7,7 @@ import {
   formatJobSummary,
   renderSimulationMeshDiagnostics,
 } from "../src/ui/simulation/jobActions.js";
+import { renderSolveStatsSummary } from "../src/ui/simulation/results.js";
 import { validateSimulationConfig } from "../src/modules/simulation/domain.js";
 import { applyExportSelection } from "../src/ui/simulation/exports.js";
 import {
@@ -147,6 +148,24 @@ test("formatJobSummary appends complete duration in h:mm:ss", () => {
     completedAt: "2026-02-24T13:04:32.000Z",
   });
   assert.equal(summary, "Complete (1:04:32)");
+});
+
+test("renderSolveStatsSummary includes persisted job completion timestamp", () => {
+  const markup = renderSolveStatsSummary(
+    {
+      frequencies: [100, 1000],
+      metadata: {
+        performance: { total_time_seconds: 12.4 },
+      },
+    },
+    {
+      completedAt: "2026-03-19T08:45:00.000Z",
+    },
+  );
+
+  assert.match(markup, /Completed/);
+  assert.match(markup, /2026-03-19/);
+  assert.match(markup, /2026-03-19 \d{2}:45/);
 });
 
 test("describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes", () => {
