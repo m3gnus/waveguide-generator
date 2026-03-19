@@ -186,6 +186,7 @@ Progress note (March 19, 2026):
 Progress note (March 19, 2026):
 
 - The View Results solve-statistics summary now surfaces persisted job timestamps, preferring `completedAt` and falling back to `startedAt`/`createdAt` when needed.
+- Solver results now persist `metadata.directivity` with effective polar-map settings, including angle range, angular step/sample count, enabled axes, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
 
 ## Deferred Watchpoints
 
