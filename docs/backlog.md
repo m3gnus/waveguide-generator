@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 19, 2026
+Last updated: March 19, 2026 (Scale restriction complete)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -66,7 +66,7 @@ Status as of March 19, 2026:
 
 ### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
 
-**Status:** IN PROGRESS — first two action items complete
+**Status:** COMPLETE
 **Execution lane:** GLM-5 suitable — medium complexity, not reserved
 
 **Description:** `scale` currently mutates enclosure dimensions as well as horn dimensions, so changing waveguide scale also changes `encDepth`, `encEdge`, enclosure margins, and downstream OCC export resolutions. It is also still treated as formula-capable in the UI, even though current intent is numeric-only scaling.
@@ -84,7 +84,7 @@ Status as of March 19, 2026:
   - **Decision:** Resolution fields (throatResolution, mouthResolution, rearResolution, encFrontResolution, encBackResolution) represent mesh ELEMENT SIZE in mm, not element count. They MUST scale with geometry to maintain consistent mesh density. Scaling now happens once in `prepareOccSimulationParams` (for both simulation and export), not in `prepareGeometryParams`. Removed from `SCALE_LENGTH_KEYS` to avoid double-scaling.
 - [x] Remove `scale` from the formula allowlist and keep it numeric-only in `src/config/schema.js`
 - [x] Update Scale tooltip/copy to say it affects waveguide geometry only
-- [ ] Update/add tests in `tests/geometry-params.test.js`, `tests/design-module.test.js`, and `tests/param-panel.test.js`
+- [x] Update/add tests in `tests/geometry-params.test.js`, `tests/design-module.test.js`, and `tests/param-panel.test.js`
 
 ### P2. Audit Dependencies and Add Cross-Platform Runtime Doctor (March 19, 2026)
 
