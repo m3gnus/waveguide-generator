@@ -53,7 +53,7 @@ Run this **once** from the project folder to install all dependencies:
 
 These setup scripts validate that you are in the full project folder before installing dependencies.
 The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It now automatically attempts to install both `gmsh` and `bempp-cl`, with fallback handling if platform wheels are missing.
-Installer contract: setup writes the preferred backend interpreter to `.waveguide/backend-python.path` (default: project `.venv`), and `npm start` / launchers / `server/start.sh` consume that same marker unless you explicitly override with `PYTHON_BIN` or `WG_BACKEND_PYTHON`.
+Installer contract: setup writes the preferred backend interpreter to `.waveguide/backend-python.path` (default: project `.venv`), and `npm start` / launchers / `server/start.sh` consume that same marker unless you explicitly override with `PYTHON_BIN` or `WG_BACKEND_PYTHON`. If there is no explicit override or marker, startup probes the fallback interpreters and prefers the first runtime-ready option before falling back to raw existence order.
 Installer verification: setup now runs backend preflight immediately after writing the interpreter marker and prints required-runtime readiness for `fastapi`, `gmsh`, `bempp-cl`, and OpenCL.
 
 ## Run the app

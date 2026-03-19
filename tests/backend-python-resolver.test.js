@@ -50,7 +50,59 @@ test('resolveBackendPython falls back to .venv when marker is missing', () => {
 
   const resolved = resolveBackendPython(rootDir, {
     env: {},
-    existsSync: createExistsSync([venvPython])
+    existsSync: createExistsSync([venvPython]),
+    spawnSyncFn() {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ summary: { requiredReady: true } })
+      };
+    }
+  });
+
+  assert.equal(resolved.python, venvPython);
+  assert.equal(resolved.source, 'fallback:.venv');
+});
+
+test('resolveBackendPython prefers the first runtime-ready fallback interpreter', () => {
+  const rootDir = '/repo';
+  const venvPython = path.join(rootDir, '.venv', 'bin', 'python');
+  const openclPython = '/home/user/.waveguide-generator/opencl-cpu-env/bin/python';
+
+  const resolved = resolveBackendPython(rootDir, {
+    env: {},
+    homeDir: '/home/user',
+    existsSync: createExistsSync([venvPython, openclPython]),
+    spawnSyncFn(python) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          summary: {
+            requiredReady: python === openclPython
+          }
+        })
+      };
+    }
+  });
+
+  assert.equal(resolved.python, openclPython);
+  assert.equal(resolved.source, 'fallback:opencl-cpu-env');
+});
+
+test('resolveBackendPython keeps the original fallback order when no candidate is runtime-ready', () => {
+  const rootDir = '/repo';
+  const venvPython = path.join(rootDir, '.venv', 'bin', 'python');
+  const openclPython = '/home/user/.waveguide-generator/opencl-cpu-env/bin/python';
+
+  const resolved = resolveBackendPython(rootDir, {
+    env: {},
+    homeDir: '/home/user',
+    existsSync: createExistsSync([venvPython, openclPython]),
+    spawnSyncFn() {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ summary: { requiredReady: false } })
+      };
+    }
   });
 
   assert.equal(resolved.python, venvPython);
@@ -60,7 +112,13 @@ test('resolveBackendPython falls back to .venv when marker is missing', () => {
 test('resolveBackendPython falls back to python3 when no managed interpreter exists', () => {
   const resolved = resolveBackendPython('/repo', {
     env: {},
-    existsSync: createExistsSync()
+    existsSync: createExistsSync(),
+    spawnSyncFn() {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ summary: { requiredReady: false } })
+      };
+    }
   });
 
   assert.equal(resolved.python, 'python3');
