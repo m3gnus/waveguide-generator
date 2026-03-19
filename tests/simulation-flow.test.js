@@ -271,14 +271,15 @@ test("smoothing update sets panel state without submitting a new job", () => {
   assert.equal(submitCalls, 0);
 });
 
-test("view results modal keeps smoothing control and close button in a shared header actions row", async () => {
+test("view results modal keeps header controls together and rerenders directivity separately", async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalFetch = global.fetch;
 
   const appendedChildren = [];
   const createdElements = [];
-  const fetchBodies = [];
+  const chartRenderBodies = [];
+  const directivityBodies = [];
   const fakeDocument = createModalDocument(createdElements, appendedChildren);
 
   global.document = fakeDocument;
@@ -286,8 +287,19 @@ test("view results modal keeps smoothing control and close button in a shared he
     addEventListener() {},
     removeEventListener() {},
   };
-  global.fetch = async (_url, options = {}) => {
-    fetchBodies.push(JSON.parse(options.body));
+  global.fetch = async (url, options = {}) => {
+    const body = JSON.parse(options.body);
+    if (String(url).endsWith("/api/render-directivity")) {
+      directivityBodies.push(body);
+      return {
+        ok: true,
+        async json() {
+          return { image: "data:image/png;base64,directivity" };
+        },
+      };
+    }
+
+    chartRenderBodies.push(body);
     return {
       ok: true,
       async json() {
@@ -299,6 +311,7 @@ test("view results modal keeps smoothing control and close button in a shared he
   try {
     const panel = {
       currentSmoothing: "none",
+      currentDirectivityReferenceLevel: -6,
       solver: { backendUrl: "http://localhost:8000" },
       activeJobId: "job-1",
       currentJobId: "job-1",
@@ -313,7 +326,12 @@ test("view results modal keeps smoothing control and close button in a shared he
               real: [8, 9],
               imaginary: [1, 2],
             },
-            directivity: {},
+            directivity: {
+              horizontal: [
+                [[0, 0], [10, -3]],
+                [[0, 0], [10, -4]],
+              ],
+            },
           },
         ],
       ]),
@@ -328,27 +346,35 @@ test("view results modal keeps smoothing control and close button in a shared he
       1,
       "Expected the backdrop to be mounted",
     );
-    assert.equal(fetchBodies.length, 1, "Expected initial chart render fetch");
+    assert.equal(chartRenderBodies.length, 1, "Expected initial chart render fetch");
+    assert.equal(directivityBodies.length, 1, "Expected initial directivity render fetch");
+    assert.equal(directivityBodies[0].reference_level, -6);
 
     const headerActions = createdElements.find(
       (el) => el.className === "view-results-header-actions",
     );
-    const smoothingContainer = createdElements.find(
+    const controlContainers = createdElements.filter(
       (el) => el.className === "view-results-smoothing",
     );
     const closeButton = createdElements.find(
       (el) => el.className === "view-results-close",
     );
     const smoothingSelect = fakeDocument.getElementById("vr-smoothing-select");
+    const directivitySelect = fakeDocument.getElementById("vr-directivity-ref-select");
 
     assert.ok(headerActions, "Expected a dedicated header actions container");
-    assert.ok(smoothingContainer, "Expected smoothing control to be rendered");
+    assert.equal(controlContainers.length, 2, "Expected smoothing and map-ref controls");
     assert.ok(closeButton, "Expected close button to be rendered");
     assert.ok(
       smoothingSelect,
       "Expected smoothing select to be addressable by id",
     );
-    assert.equal(headerActions._children.includes(smoothingContainer), true);
+    assert.ok(
+      directivitySelect,
+      "Expected directivity reference select to be addressable by id",
+    );
+    assert.equal(headerActions._children.includes(smoothingSelect._parent), true);
+    assert.equal(headerActions._children.includes(directivitySelect._parent), true);
     assert.equal(headerActions._children.includes(closeButton), true);
 
     const changeListeners = smoothingSelect._eventListeners.change || [];
@@ -367,10 +393,37 @@ test("view results modal keeps smoothing control and close button in a shared he
       "Modal should remain mounted after smoothing change",
     );
     assert.equal(
-      fetchBodies.length,
+      chartRenderBodies.length,
       2,
       "Expected smoothing change to re-render charts",
     );
+    assert.equal(
+      directivityBodies.length,
+      2,
+      "Expected smoothing change to refresh the directivity map",
+    );
+
+    const directivityChangeListeners = directivitySelect._eventListeners.change || [];
+    assert.equal(
+      directivityChangeListeners.length,
+      1,
+      "Expected directivity reference change listener",
+    );
+    directivityChangeListeners[0]({ target: { value: "-9" } });
+    await flushModalAsyncWork();
+
+    assert.equal(panel.currentDirectivityReferenceLevel, -9);
+    assert.equal(
+      chartRenderBodies.length,
+      2,
+      "Expected directivity-only refresh to avoid re-rendering non-directivity charts",
+    );
+    assert.equal(
+      directivityBodies.length,
+      3,
+      "Expected directivity-only refresh to request just the heatmap",
+    );
+    assert.equal(directivityBodies[2].reference_level, -9);
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;

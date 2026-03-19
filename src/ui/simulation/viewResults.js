@@ -3,6 +3,14 @@ import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
 import { renderSolveStatsSummary } from "./results.js";
 import { trapFocus } from "../focusTrap.js";
 
+const DEFAULT_DIRECTIVITY_REFERENCE_LEVEL = -6;
+const DIRECTIVITY_REFERENCE_OPTIONS = [
+  [-3, "-3 dB"],
+  [-6, "-6 dB"],
+  [-9, "-9 dB"],
+  [-12, "-12 dB"],
+];
+
 /**
  * Open a modal dialog displaying all result charts rendered server-side
  * by Matplotlib as high-quality PNG images.
@@ -69,6 +77,28 @@ export async function openViewResultsModal(panel) {
   }
   smoothingContainer.appendChild(smoothingSelect);
   headerActions.appendChild(smoothingContainer);
+
+  const directivityContainer = document.createElement("div");
+  directivityContainer.className = "view-results-smoothing";
+  const directivityLabel = document.createElement("label");
+  directivityLabel.textContent = "Map Ref";
+  directivityLabel.setAttribute("for", "vr-directivity-ref-select");
+  directivityContainer.appendChild(directivityLabel);
+
+  const directivitySelect = document.createElement("select");
+  directivitySelect.id = "vr-directivity-ref-select";
+  const selectedReferenceLevel = resolveDirectivityReferenceLevel(
+    panel?.currentDirectivityReferenceLevel,
+  );
+  for (const [value, text] of DIRECTIVITY_REFERENCE_OPTIONS) {
+    const opt = document.createElement("option");
+    opt.value = String(value);
+    opt.textContent = text;
+    if (value === selectedReferenceLevel) opt.selected = true;
+    directivitySelect.appendChild(opt);
+  }
+  directivityContainer.appendChild(directivitySelect);
+  headerActions.appendChild(directivityContainer);
 
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
@@ -151,6 +181,84 @@ export async function openViewResultsModal(panel) {
   releaseFocus = trapFocus(dialog, { initialFocus: closeBtn });
 
   // Fetch and render charts (called on open and on smoothing change)
+  function setChartLoading(chartKey) {
+    const container = document.getElementById(`vr-${chartKey}`);
+    if (container) {
+      container.innerHTML =
+        '<div class="view-results-loading">Rendering...</div>';
+    }
+  }
+
+  function setChartImage(chartKey, label, imgData) {
+    const container = document.getElementById(`vr-${chartKey}`);
+    if (!container) return;
+    if (imgData) {
+      container.innerHTML = `<img src="${imgData}" alt="${label}" class="view-results-chart-img" />`;
+    } else {
+      container.innerHTML =
+        '<div class="view-results-loading">No data available</div>';
+    }
+  }
+
+  function showMatplotlibRequiredForCharts(chartKeys = []) {
+    for (const chartKey of chartKeys) {
+      const container = document.getElementById(`vr-${chartKey}`);
+      if (!container) continue;
+      container.innerHTML = `<div class="view-results-loading view-results-matplotlib-error">
+        <div class="view-results-matplotlib-error-title">Matplotlib is required for chart rendering</div>
+        <div class="view-results-matplotlib-error-detail">Install it with: <code>pip install matplotlib</code></div>
+        <div class="view-results-matplotlib-error-hint">Then restart the backend server.</div>
+      </div>`;
+    }
+  }
+
+  const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
+
+  async function renderDirectivityMap() {
+    const chart = chartNames.find((item) => item.key === "directivity_map");
+    if (!chart) return;
+
+    setChartLoading(chart.key);
+
+    const directivity = results.directivity || {};
+    const splData = results.spl_on_axis || {};
+    const frequencies = splData.frequencies || [];
+
+    if (!frequencies.length || !Object.keys(directivity).length) {
+      setChartImage(chart.key, chart.label, null);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${backendUrl}/api/render-directivity`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          frequencies,
+          directivity,
+          reference_level: resolveDirectivityReferenceLevel(
+            panel?.currentDirectivityReferenceLevel,
+          ),
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        console.warn(
+          `[view-results] Directivity render returned ${response.status}: ${detail}`,
+        );
+        showMatplotlibRequiredForCharts([chart.key]);
+        return;
+      }
+
+      const data = await response.json();
+      setChartImage(chart.key, chart.label, data.image || null);
+    } catch (err) {
+      console.warn("[view-results] Directivity render failed:", err.message);
+      showMatplotlibRequiredForCharts([chart.key]);
+    }
+  }
+
   async function fetchCharts() {
     const splData = results.spl_on_axis || {};
     const frequencies = splData.frequencies || [];
@@ -198,7 +306,6 @@ export async function openViewResultsModal(panel) {
       directivity,
     };
 
-    const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
     try {
       const response = await fetch(`${backendUrl}/api/render-charts`, {
         method: "POST",
@@ -211,7 +318,7 @@ export async function openViewResultsModal(panel) {
         console.warn(
           `[view-results] Server returned ${response.status}: ${detail}`,
         );
-        _showMatplotlibRequired();
+        showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
         return;
       }
 
@@ -219,20 +326,16 @@ export async function openViewResultsModal(panel) {
       const charts = data.charts || {};
 
       for (const chart of chartNames) {
-        const container = document.getElementById(`vr-${chart.key}`);
-        if (!container) continue;
-
-        const imgData = charts[chart.key];
-        if (imgData) {
-          container.innerHTML = `<img src="${imgData}" alt="${chart.label}" class="view-results-chart-img" />`;
-        } else {
-          container.innerHTML =
-            '<div class="view-results-loading">No data available</div>';
+        if (chart.key === "directivity_map") {
+          continue;
         }
+        setChartImage(chart.key, chart.label, charts[chart.key] || null);
       }
+
+      await renderDirectivityMap();
     } catch (err) {
       console.warn("[view-results] Fetch failed:", err.message);
-      _showMatplotlibRequired();
+      showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
     }
   }
 
@@ -242,17 +345,23 @@ export async function openViewResultsModal(panel) {
     fetchCharts();
   });
 
-  fetchCharts();
+  directivitySelect.addEventListener("change", (e) => {
+    panel.currentDirectivityReferenceLevel = resolveDirectivityReferenceLevel(
+      e.target.value,
+    );
+    renderDirectivityMap();
+  });
 
-  function _showMatplotlibRequired() {
-    for (const chart of chartNames) {
-      const container = document.getElementById(`vr-${chart.key}`);
-      if (!container) continue;
-      container.innerHTML = `<div class="view-results-loading view-results-matplotlib-error">
-        <div class="view-results-matplotlib-error-title">Matplotlib is required for chart rendering</div>
-        <div class="view-results-matplotlib-error-detail">Install it with: <code>pip install matplotlib</code></div>
-        <div class="view-results-matplotlib-error-hint">Then restart the backend server.</div>
-      </div>`;
-    }
+  fetchCharts();
+}
+
+function resolveDirectivityReferenceLevel(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return DEFAULT_DIRECTIVITY_REFERENCE_LEVEL;
   }
+  const supportedLevels = DIRECTIVITY_REFERENCE_OPTIONS.map(([level]) => level);
+  return supportedLevels.includes(numericValue)
+    ? numericValue
+    : DEFAULT_DIRECTIVITY_REFERENCE_LEVEL;
 }
