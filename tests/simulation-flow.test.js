@@ -1070,7 +1070,7 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
         },
       },
     ]);
-    assert.match(diagnosticsEl.innerHTML, /Solver Mesh/);
+    assert.match(diagnosticsEl.innerHTML, /Solver Geometry/);
     assert.match(diagnosticsEl.innerHTML, /144 vertices/);
   } finally {
     global.document = originalDocument;

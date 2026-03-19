@@ -83,44 +83,40 @@ export function renderSimulationMeshDiagnostics(summary = null) {
   }
 
   const provenance = summary.provenance === "backend" ? "backend" : "preview";
-  const sourceLabel = provenance === "backend" ? "Solver Mesh" : "Preview Mesh";
+  const sourceLabel = provenance === "backend" ? "Solver Geometry" : "Preview Geometry";
+  const activeGeometryRows = GEOMETRY_DIAGNOSTIC_ROWS.filter(
+    ([identity]) => Number(summary.identityTriangleCounts?.[identity] ?? 0) > 0,
+  );
 
-  const identityRows = GEOMETRY_DIAGNOSTIC_ROWS.map(
+  const identityRows = activeGeometryRows.map(
     ([identity, label]) => `
-    <div class="simulation-mesh-diagnostics-tag">
-      <span class="simulation-mesh-diagnostics-tag-id">${escapeHtml(identity)}</span>
+    <div class="simulation-mesh-diagnostics-region">
       <span class="simulation-mesh-diagnostics-tag-label">${label}</span>
-      <span class="simulation-mesh-diagnostics-tag-count">${summary.identityTriangleCounts?.[identity] ?? 0}</span>
+      <span class="simulation-mesh-diagnostics-tag-count">${summary.identityTriangleCounts?.[identity] ?? 0} tris</span>
     </div>
   `,
   ).join("");
-  const tagSummaryRows = [
-    ["Wall (1)", summary.tagCounts?.[1] ?? 0],
-    ["Source (2)", summary.tagCounts?.[2] ?? 0],
-    ["Secondary (3)", summary.tagCounts?.[3] ?? 0],
-    ["Interface (4)", summary.tagCounts?.[4] ?? 0],
-  ]
-    .map(
-      ([label, value]) => `
-      <div class="simulation-mesh-diagnostics-tag-summary-item">
-        <span class="simulation-mesh-diagnostics-tag-summary-label">${escapeHtml(label)}</span>
-        <span class="simulation-mesh-diagnostics-tag-summary-value">${escapeHtml(value)}</span>
-      </div>
-    `,
-    )
-    .join("");
+  const emptyStateMarkup =
+    activeGeometryRows.length === 0
+      ? '<div class="simulation-mesh-diagnostics-empty">No geometry regions were classified for this mesh.</div>'
+      : "";
+  const warnings = formatGeometryDiagnosticWarnings(summary);
 
   const warningMarkup =
-    Array.isArray(summary.warnings) && summary.warnings.length > 0
-      ? `<div class="simulation-mesh-diagnostics-warning">${summary.warnings.map((warning) => escapeHtml(warning)).join("<br>")}</div>`
+    warnings.length > 0
+      ? `<div class="simulation-mesh-diagnostics-warning">${warnings.map((warning) => escapeHtml(warning)).join("<br>")}</div>`
       : "";
 
   container.innerHTML = `
     <div class="simulation-mesh-diagnostics-header">
-      <span>${escapeHtml(sourceLabel)} • ${summary.vertexCount} vertices • ${summary.triangleCount} triangles</span>
+      <span class="simulation-mesh-diagnostics-header-title">${escapeHtml(sourceLabel)}</span>
+      <span class="simulation-mesh-diagnostics-header-meta">${summary.vertexCount} vertices</span>
+      <span class="simulation-mesh-diagnostics-header-meta">${summary.triangleCount} triangles</span>
     </div>
-    <div class="simulation-mesh-diagnostics-tag-summary">${tagSummaryRows}</div>
-    <div class="simulation-mesh-diagnostics-tags">${identityRows}</div>
+    <div class="simulation-mesh-diagnostics-body">
+      <div class="simulation-mesh-diagnostics-section-label">Geometry Regions</div>
+      <div class="simulation-mesh-diagnostics-tags">${identityRows}${emptyStateMarkup}</div>
+    </div>
     ${warningMarkup}
   `;
 }
@@ -163,6 +159,38 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function formatGeometryDiagnosticWarnings(summary = null) {
+  const formatted = [];
+  const warnings = Array.isArray(summary?.warnings) ? summary.warnings : [];
+  const throatDiscCount = Number(summary?.identityTriangleCounts?.throat_disc ?? 0);
+
+  for (const rawWarning of warnings) {
+    const warning = String(rawWarning ?? "").trim();
+    if (!warning) {
+      continue;
+    }
+    if (/source surface tag/i.test(warning) || /no source surface tag/i.test(warning)) {
+      formatted.push(
+        throatDiscCount > 0
+          ? "Throat Disc is present, but it is not classified as the source region."
+          : "Throat Disc is missing from the mesh."
+      );
+      continue;
+    }
+    if (/face-identity diagnostics are unavailable/i.test(warning)) {
+      formatted.push("Geometry region breakdown is unavailable for this job.");
+      continue;
+    }
+    if (/unsupported surface tags/i.test(warning)) {
+      formatted.push("Mesh contains unsupported surface classifications.");
+      continue;
+    }
+    formatted.push(warning);
+  }
+
+  return Array.from(new Set(formatted));
 }
 
 function formatTimestampTooltip(job) {

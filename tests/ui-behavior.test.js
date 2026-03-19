@@ -226,12 +226,13 @@ test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', 
     });
 
     assert.match(diagnosticsEl.innerHTML, /12 vertices/);
-    assert.match(diagnosticsEl.innerHTML, /Preview Mesh/);
-    assert.match(diagnosticsEl.innerHTML, /throat_disc/);
+    assert.match(diagnosticsEl.innerHTML, /Preview Geometry/);
+    assert.match(diagnosticsEl.innerHTML, /Geometry Regions/);
+    assert.match(diagnosticsEl.innerHTML, /Throat Disc/);
     assert.match(diagnosticsEl.innerHTML, /Inner Wall/);
-    assert.match(diagnosticsEl.innerHTML, /Source/);
-    assert.match(diagnosticsEl.innerHTML, /Source \(2\)/);
-    assert.match(diagnosticsEl.innerHTML, /missing from the canonical simulation mesh/i);
+    assert.doesNotMatch(diagnosticsEl.innerHTML, /throat_disc/);
+    assert.doesNotMatch(diagnosticsEl.innerHTML, /Source \(2\)/);
+    assert.match(diagnosticsEl.innerHTML, /Throat Disc is present, but it is not classified as the source region/i);
   } finally {
     global.document = originalDocument;
   }
@@ -268,9 +269,10 @@ test('renderSimulationMeshDiagnostics shows authoritative backend OCC provenance
       provenance: 'backend'
     });
 
-    assert.match(diagnosticsEl.innerHTML, /Solver Mesh/);
+    assert.match(diagnosticsEl.innerHTML, /Solver Geometry/);
     assert.match(diagnosticsEl.innerHTML, /18 vertices/);
-    assert.match(diagnosticsEl.innerHTML, /Source \(2\)/);
+    assert.match(diagnosticsEl.innerHTML, /Rear Cap/);
+    assert.doesNotMatch(diagnosticsEl.innerHTML, /Source \(2\)/);
   } finally {
     global.document = originalDocument;
   }
