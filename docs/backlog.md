@@ -115,7 +115,7 @@ Status as of March 19, 2026:
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)
 
-**Status:** PARTIALLY COMPLETE — backend and UI defaults aligned; end-to-end validation remains
+**Status:** COMPLETE
 **Execution lane:** GLM-5 suitable — low-to-medium complexity, not reserved
 
 **Description:** The backend precision normalization already defaults to single precision, and server tests cover that behavior. The remaining gap is in UI defaults and messaging: advanced solver settings still default to `"double"`, the tooltip still recommends double as the default, and `server/solver/directivity_correct.py` still advertises `"double"` in helper signatures even though active runtime behavior now centers on single precision.
@@ -131,8 +131,8 @@ Status as of March 19, 2026:
 - [x] Change `RECOMMENDED_DEFAULTS.bemPrecision` to `'single'` in `src/ui/settings/simAdvancedSettings.js`
 - [x] Update `src/ui/settings/modal.js` copy so single precision is the recommended default and double is framed as the higher-cost fallback when needed
 - [x] Change `server/solver/directivity_correct.py` function signature defaults from `"double"` to `"single"` for consistency
-- [ ] Verify both single and double still work end-to-end
-- [ ] Update/add tests where UI defaults or copy are asserted
+- [x] Verify both single and double still work end-to-end
+- [x] Update/add tests where UI defaults or copy are asserted
 
 ### P2. Enrich Simulation Results Metadata and Add Fast Directivity Re-render (March 19, 2026)
 
