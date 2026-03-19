@@ -22,6 +22,8 @@ Notes:
 - The root setup scripts (`SETUP-*`) automatically attempt gmsh+bempp installation with fallback handling.
 - `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
+- Dependency audit (March 19, 2026): `trimesh` was removed from backend requirements after proving it unused in active runtime/tests.
+- `uvicorn[standard]` remains intentional because backend startup still runs through `uvicorn` in `server/app.py`; plain-vs-standard extras policy is handled in the runtime-doctor/preflight backlog slices.
 - For snapshot Gmsh wheels, use:
   - `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt`
   - Headless Linux: `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt`
