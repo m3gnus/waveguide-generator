@@ -35,7 +35,7 @@
   - Staged facades for design prep, geometry, export, simulation, and UI coordination
   - `DesignModule` is the app-facing boundary for state/type -> prepared parameter normalization
   - `DesignModule` also owns OCC request normalization helpers used by `ExportModule` and `SimulationModule`
-  - `GeometryModule` prepares geometry-shape definitions only (no tessellation or payload assembly)
+  - `GeometryModule` prepares geometry-shape definitions only (no tessellation or payload assembly) and consumes already-prepared design params so geometry scale is applied exactly once
 - `src/export/`
   - Active STL/profile/config export helpers plus OCC mesh-build orchestration support
 - `src/solver/`
@@ -161,6 +161,8 @@ Important behavior:
 - Source triangles are explicit geometry and required; payload build throws if none are tagged.
 - JS canonical payload currently emits only tags `1` and `2`; tag counters for `3`/`4` remain zero in runtime tests.
 - Simulation payload topology is full-domain and does not trim by `quadrants`.
+- Raw geometry helpers prepare params at the API boundary, while module pipelines use prepared-only entrypoints to avoid double-scaling.
+- `scale` affects horn geometry dimensions only; enclosure fields (`encDepth`, `encEdge`, `encSpaceL/T/R/B`) remain absolute millimeter values in the JS geometry pipeline.
 - Imported ATH `Mesh.Quadrants` values remain import metadata only; the active `/api/solve` runtime does not apply half/quarter-domain symmetry reduction.
 - `/api/solve` rejects mesh payloads that do not already contain source tag `2`, instead of waiting for solver-side mesh preparation to fail.
 - The OCC runner passes canonical mesh `surfaceTags` through unchanged; later stages validate contracts rather than collapsing non-source tags into `1`.
