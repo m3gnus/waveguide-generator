@@ -79,6 +79,37 @@ Preflight always runs under the interpreter selected by the shared startup contr
 - `bempp-cl` (`/api/solve`)
 - OpenCL runtime availability (`/api/solve`)
 
+### 1.0.2 Backend dependency doctor
+
+Run from repository root:
+
+```bash
+npm run doctor:backend
+```
+
+Machine-readable payload:
+
+```bash
+npm run doctor:backend:json
+```
+
+Strict mode exits non-zero when any **required** component is not ready:
+
+```bash
+npm run doctor:backend:strict
+```
+
+Doctor report contract:
+- Stable schema (`schemaVersion`) with per-component entries under `components`
+- Component status classification: `installed`, `missing`, `unsupported`
+- Explicit component category: `required` vs `optional`
+- Feature impact and OS-specific install guidance for:
+  - `fastapi`
+  - `gmsh` Python API
+  - `bempp-cl`
+  - OpenCL runtime
+  - `matplotlib` (optional; chart render endpoints)
+
 Cross-platform notes:
 - Windows/Linux GPU OpenCL relies on vendor driver packages (NVIDIA/AMD/Intel).
 - This repository does not currently provide a fully automatic cross-vendor GPU driver installer.

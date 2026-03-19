@@ -2,8 +2,11 @@ import unittest
 from unittest.mock import patch
 
 from services.runtime_preflight import (
+    collect_runtime_doctor_report,
     collect_runtime_preflight,
     evaluate_required_checks,
+    evaluate_runtime_doctor,
+    render_runtime_doctor_text,
     render_runtime_preflight_text,
 )
 
@@ -79,6 +82,99 @@ class RuntimePreflightTest(unittest.TestCase):
         text_summary = render_runtime_preflight_text(report)
         self.assertIn("Overall required runtime status: NOT READY", text_summary)
         self.assertIn("- fastapi: MISSING", text_summary)
+
+    def test_collect_runtime_doctor_report_classifies_required_and_optional_components(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
+            },
+            "supportedMatrix": {},
+        }
+        device_metadata = {
+            "opencl_available": True,
+            "selected_mode": "opencl_gpu",
+            "device_name": "GPU-1",
+            "fallback_reason": None,
+            "warning": None,
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_matplotlib_runtime",
+            return_value={"available": True, "version": "3.9.2"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value=device_metadata,
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"):
+            report = collect_runtime_doctor_report()
+
+        self.assertEqual(report["schemaVersion"], 1)
+        self.assertTrue(report["summary"]["requiredReady"])
+        self.assertEqual(report["summary"]["counts"]["installed"], 5)
+        self.assertEqual(report["summary"]["counts"]["optional"], 1)
+
+        components_by_id = {item["id"]: item for item in report["components"]}
+        self.assertEqual(components_by_id["fastapi"]["status"], "installed")
+        self.assertEqual(components_by_id["gmsh_python"]["status"], "installed")
+        self.assertEqual(components_by_id["bempp_cl"]["status"], "installed")
+        self.assertEqual(components_by_id["opencl_runtime"]["status"], "installed")
+        self.assertEqual(components_by_id["matplotlib"]["category"], "optional")
+        self.assertEqual(components_by_id["matplotlib"]["status"], "installed")
+
+    def test_collect_runtime_doctor_report_surfaces_guidance_for_missing_and_unsupported(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "5.1.0", "supported": False, "ready": False},
+                "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
+            },
+            "supportedMatrix": {},
+        }
+        device_metadata = {
+            "opencl_available": False,
+            "fallback_reason": "no OpenCL platforms found.",
+            "warning": "no OpenCL platforms found.",
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": False, "version": None},
+        ), patch(
+            "services.runtime_preflight.read_matplotlib_runtime",
+            return_value={"available": False, "version": None},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value=device_metadata,
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"):
+            report = collect_runtime_doctor_report()
+
+        ok, failing = evaluate_runtime_doctor(report)
+        self.assertFalse(ok)
+        self.assertEqual(len(failing), 4)
+        self.assertFalse(report["summary"]["requiredReady"])
+        self.assertIn("fastapi", report["summary"]["requiredIssues"])
+        self.assertIn("gmsh_python", report["summary"]["requiredIssues"])
+        self.assertIn("bempp_cl", report["summary"]["requiredIssues"])
+        self.assertIn("opencl_runtime", report["summary"]["requiredIssues"])
+        self.assertIn("matplotlib", report["summary"]["optionalIssues"])
+
+        components_by_id = {item["id"]: item for item in report["components"]}
+        self.assertEqual(components_by_id["gmsh_python"]["status"], "unsupported")
+        self.assertEqual(components_by_id["bempp_cl"]["status"], "missing")
+        self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
+        self.assertEqual(components_by_id["matplotlib"]["status"], "missing")
+        self.assertGreater(len(components_by_id["opencl_runtime"]["guidance"]), 0)
+        self.assertTrue(
+            any("pocl" in line.lower() for line in components_by_id["opencl_runtime"]["guidance"])
+        )
+
+        text_summary = render_runtime_doctor_text(report)
+        self.assertIn("Waveguide backend dependency doctor", text_summary)
+        self.assertIn("Required dependency status: NOT READY", text_summary)
 
 
 if __name__ == "__main__":

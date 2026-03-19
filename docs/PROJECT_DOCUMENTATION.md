@@ -571,6 +571,9 @@ High-signal test suites:
 - Combined startup script: `npm start` (`scripts/start-all.js`)
 - Backend preflight command (selected interpreter): `npm run preflight:backend`
 - Strict backend preflight command: `npm run preflight:backend:strict`
+- Backend dependency doctor command (selected interpreter): `npm run doctor:backend`
+- Backend dependency doctor JSON payload: `npm run doctor:backend:json`
+- Strict backend dependency doctor command: `npm run doctor:backend:strict`
 - Backend interpreter selection contract for `npm start` and `server/start.sh`:
   1. `PYTHON_BIN`
   2. `WG_BACKEND_PYTHON`

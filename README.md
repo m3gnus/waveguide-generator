@@ -178,6 +178,11 @@ gmsh -version
 npm run preflight:backend
 # strict exit code (non-zero if required runtime checks fail):
 npm run preflight:backend:strict
+# backend doctor (text + machine-readable JSON):
+npm run doctor:backend
+npm run doctor:backend:json
+# strict exit code for required doctor failures:
+npm run doctor:backend:strict
 curl http://localhost:8000/health
 ```
 
