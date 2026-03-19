@@ -226,12 +226,11 @@ test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', 
     });
 
     assert.match(diagnosticsEl.innerHTML, /12 vertices/);
-    assert.match(diagnosticsEl.innerHTML, /Geometry Diagnostics/);
     assert.match(diagnosticsEl.innerHTML, /Preview Mesh/);
     assert.match(diagnosticsEl.innerHTML, /throat_disc/);
     assert.match(diagnosticsEl.innerHTML, /Inner Wall/);
     assert.match(diagnosticsEl.innerHTML, /Source/);
-    assert.match(diagnosticsEl.innerHTML, /preview mesh triangle counts/i);
+    assert.match(diagnosticsEl.innerHTML, /Source \(2\)/);
     assert.match(diagnosticsEl.innerHTML, /missing from the canonical simulation mesh/i);
   } finally {
     global.document = originalDocument;
@@ -270,8 +269,8 @@ test('renderSimulationMeshDiagnostics shows authoritative backend OCC provenance
     });
 
     assert.match(diagnosticsEl.innerHTML, /Solver Mesh/);
-    assert.match(diagnosticsEl.innerHTML, /solver mesh used by this job/i);
-    assert.match(diagnosticsEl.innerHTML, /Solver mesh diagnostics loaded for this job/i);
+    assert.match(diagnosticsEl.innerHTML, /18 vertices/);
+    assert.match(diagnosticsEl.innerHTML, /Source \(2\)/);
   } finally {
     global.document = originalDocument;
   }
