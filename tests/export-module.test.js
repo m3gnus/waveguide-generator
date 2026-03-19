@@ -197,3 +197,61 @@ test("ExportModule OCC mesh build uses design-layer OCC export normalization for
     globalThis.fetch = originalFetch;
   }
 });
+
+test("ExportModule OCC mesh task surfaces dependency doctor guidance before mesh build when OCC runtime is blocked", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+
+    if (url.endsWith("/health")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return {
+            status: "ok",
+            occBuilderReady: false,
+            dependencyDoctor: {
+              components: [
+                {
+                  id: "gmsh_python",
+                  name: "Gmsh Python API",
+                  category: "required",
+                  status: "missing",
+                  featureImpact:
+                    "/api/mesh/build and adaptive OCC meshing are unavailable.",
+                  guidance: [
+                    "Install gmsh package: pip install -r server/requirements-gmsh.txt",
+                  ],
+                },
+              ],
+            },
+          };
+        },
+      };
+    }
+
+    throw new Error(`Unexpected request URL: ${url}`);
+  };
+
+  try {
+    const prepared = makePreparedParams({ encDepth: 180 });
+
+    await assert.rejects(
+      () =>
+        ExportModule.task(
+          ExportModule.importOccMeshBuild(prepared, {
+            backendUrl: "http://localhost:8000",
+          }),
+        ),
+      /Install gmsh package/,
+    );
+
+    assert.deepEqual(requests, ["http://localhost:8000/health"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -1,22 +1,18 @@
-// @ts-check
-
 import {
   createSimulationClient,
-  prepareOccAdaptiveSolveRequest
-} from '../../modules/simulation/domain.js';
-import {
-  readSimulationState
-} from '../../modules/simulation/state.js';
+  prepareOccAdaptiveSolveRequest,
+} from "../../modules/simulation/domain.js";
+import { readSimulationState } from "../../modules/simulation/state.js";
 import {
   readSimulationWorkspaceJobs,
-  syncSimulationWorkspaceJobManifest
-} from './workspaceTasks.js';
-import { UiModule } from '../../modules/ui/index.js';
+  syncSimulationWorkspaceJobManifest,
+} from "./workspaceTasks.js";
+import { UiModule } from "../../modules/ui/index.js";
 import {
   buildCancellationRequestedSimulationJob,
   buildCancelledSimulationJob,
-  buildQueuedSimulationJob
-} from '../../modules/simulation/jobs.js';
+  buildQueuedSimulationJob,
+} from "../../modules/simulation/jobs.js";
 import {
   allJobs,
   createJobTracker,
@@ -26,48 +22,52 @@ import {
   setJobsFromEntries,
   persistPanelJobs,
   toUiJob,
-  upsertJob
-} from './jobTracker.js';
-import { setActiveJob } from './jobOrchestration.js';
+  upsertJob,
+} from "./jobTracker.js";
+import { setActiveJob } from "./jobOrchestration.js";
+import { getCachedRuntimeHealth } from "../runtimeCapabilities.js";
+import { getFeatureBlockedReason } from "../dependencyStatus.js";
 
-const ACTIVE_STATUSES = new Set(['queued', 'running']);
+const ACTIVE_STATUSES = new Set(["queued", "running"]);
 const JOB_SOURCE_MODES = Object.freeze({
-  BACKEND: 'backend',
-  FOLDER: 'folder'
+  BACKEND: "backend",
+  FOLDER: "folder",
 });
 
 const DEFAULT_SIMULATION_PARAM_BINDINGS = Object.freeze([
-  { id: 'freq-start', key: 'freqStart', parse: (value) => parseFloat(value) },
-  { id: 'freq-end', key: 'freqEnd', parse: (value) => parseFloat(value) },
-  { id: 'freq-steps', key: 'numFreqs', parse: (value) => parseInt(value, 10) }
+  { id: "freq-start", key: "freqStart", parse: (value) => parseFloat(value) },
+  { id: "freq-end", key: "freqEnd", parse: (value) => parseFloat(value) },
+  { id: "freq-steps", key: "numFreqs", parse: (value) => parseInt(value, 10) },
 ]);
 
 export const SIMULATION_CONTROLLER_FIELDS = Object.freeze([
-  'solver',
-  'currentJobId',
-  'pollInterval',
-  'connectionPollTimer',
-  'lastResults',
-  'jobs',
-  'resultCache',
-  'activeJobId',
-  'pollTimer',
-  'pollDelayMs',
-  'pollBackoffMs',
-  'consecutivePollFailures',
-  'isPolling',
-  'stageStatusActive',
-  'completedStatusMessage',
-  'simulationStartedAtMs',
-  'lastSimulationDurationMs',
-  'currentSmoothing',
-  'simulationParamBindings',
-  'jobSourceMode',
-  'jobSourceLabel'
+  "solver",
+  "currentJobId",
+  "pollInterval",
+  "connectionPollTimer",
+  "lastResults",
+  "jobs",
+  "resultCache",
+  "activeJobId",
+  "pollTimer",
+  "pollDelayMs",
+  "pollBackoffMs",
+  "consecutivePollFailures",
+  "isPolling",
+  "stageStatusActive",
+  "completedStatusMessage",
+  "simulationStartedAtMs",
+  "lastSimulationDurationMs",
+  "currentSmoothing",
+  "simulationParamBindings",
+  "jobSourceMode",
+  "jobSourceLabel",
 ]);
 
 function hasActiveJobs(controller) {
-  return Array.from(controller.jobs.values()).some((job) => ACTIVE_STATUSES.has(job.status));
+  return Array.from(controller.jobs.values()).some((job) =>
+    ACTIVE_STATUSES.has(job.status),
+  );
 }
 
 function syncCurrentJobId(controller) {
@@ -75,9 +75,13 @@ function syncCurrentJobId(controller) {
 }
 
 function setJobSourceMode(controller, mode) {
-  const nextMode = mode === JOB_SOURCE_MODES.FOLDER ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND;
+  const nextMode =
+    mode === JOB_SOURCE_MODES.FOLDER
+      ? JOB_SOURCE_MODES.FOLDER
+      : JOB_SOURCE_MODES.BACKEND;
   controller.jobSourceMode = nextMode;
-  controller.jobSourceLabel = nextMode === JOB_SOURCE_MODES.FOLDER ? 'Folder Tasks' : 'Backend Jobs';
+  controller.jobSourceLabel =
+    nextMode === JOB_SOURCE_MODES.FOLDER ? "Folder Tasks" : "Backend Jobs";
 }
 
 function persistControllerJobs(controller) {
@@ -93,48 +97,52 @@ function cloneSimulationParamBindings() {
 
 function normalizeExportPatch(exportPatch) {
   const normalizeArtifactFileName = (value) => {
-    const text = String(value ?? '').trim();
+    const text = String(value ?? "").trim();
     return text || null;
   };
 
-  if (typeof exportPatch === 'string') {
+  if (typeof exportPatch === "string") {
     return {
       exportedFiles: [exportPatch],
       autoExportCompletedAt: null,
       justCompleted: false,
       rawResultsFile: null,
-      meshArtifactFile: null
+      meshArtifactFile: null,
     };
   }
 
   if (Array.isArray(exportPatch)) {
     return {
-      exportedFiles: exportPatch.map((item) => String(item || '').trim()).filter(Boolean),
+      exportedFiles: exportPatch
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
       autoExportCompletedAt: null,
       justCompleted: false,
       rawResultsFile: null,
-      meshArtifactFile: null
+      meshArtifactFile: null,
     };
   }
 
-  if (!exportPatch || typeof exportPatch !== 'object') {
+  if (!exportPatch || typeof exportPatch !== "object") {
     return {
       exportedFiles: [],
       autoExportCompletedAt: null,
       justCompleted: false,
       rawResultsFile: null,
-      meshArtifactFile: null
+      meshArtifactFile: null,
     };
   }
 
   return {
     exportedFiles: Array.isArray(exportPatch.exportedFiles)
-      ? exportPatch.exportedFiles.map((item) => String(item || '').trim()).filter(Boolean)
+      ? exportPatch.exportedFiles
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
       : [],
     autoExportCompletedAt: exportPatch.autoExportCompletedAt ?? null,
     justCompleted: exportPatch.justCompleted ?? false,
     rawResultsFile: normalizeArtifactFileName(exportPatch.rawResultsFile),
-    meshArtifactFile: normalizeArtifactFileName(exportPatch.meshArtifactFile)
+    meshArtifactFile: normalizeArtifactFileName(exportPatch.meshArtifactFile),
   };
 }
 
@@ -143,7 +151,7 @@ function mergeUniqueStrings(...lists) {
   const merged = [];
   for (const list of lists) {
     for (const item of list || []) {
-      const value = String(item || '').trim();
+      const value = String(item || "").trim();
       if (!value || seen.has(value)) {
         continue;
       }
@@ -156,11 +164,13 @@ function mergeUniqueStrings(...lists) {
 
 function createSimulationPanelUiCoordinator(panelAdapter) {
   return UiModule.output.simulationPanel(
-    UiModule.task(UiModule.importSimulationPanel(panelAdapter))
+    UiModule.task(UiModule.importSimulationPanel(panelAdapter)),
   );
 }
 
-export function createSimulationControllerStore({ solver = createSimulationClient() } = {}) {
+export function createSimulationControllerStore({
+  solver = createSimulationClient(),
+} = {}) {
   return {
     solver,
     currentJobId: null,
@@ -179,10 +189,10 @@ export function createSimulationControllerStore({ solver = createSimulationClien
     completedStatusMessage: null,
     simulationStartedAtMs: null,
     lastSimulationDurationMs: null,
-    currentSmoothing: 'none',
+    currentSmoothing: "none",
     simulationParamBindings: cloneSimulationParamBindings(),
     jobSourceMode: JOB_SOURCE_MODES.BACKEND,
-    jobSourceLabel: 'Backend Jobs'
+    jobSourceLabel: "Backend Jobs",
   };
 }
 
@@ -190,17 +200,18 @@ export function createSimulationPanelRuntime(
   panelAdapter,
   {
     solver = createSimulationClient(),
-    createUiCoordinator = createSimulationPanelUiCoordinator
-  } = {}
+    createUiCoordinator = createSimulationPanelUiCoordinator,
+  } = {},
 ) {
   const controller = createSimulationControllerStore({ solver });
   bindSimulationControllerState(panelAdapter, controller);
 
   return {
     controller,
-    uiCoordinator: typeof createUiCoordinator === 'function'
-      ? createUiCoordinator(panelAdapter)
-      : null
+    uiCoordinator:
+      typeof createUiCoordinator === "function"
+        ? createUiCoordinator(panelAdapter)
+        : null,
   };
 }
 
@@ -214,15 +225,12 @@ export function bindSimulationControllerState(panelAdapter, controller) {
       },
       set(nextValue) {
         controller[key] = nextValue;
-      }
+      },
     });
   }
 }
 
-export async function restoreSimulationPanelRuntime(
-  runtime,
-  callbacks = {}
-) {
+export async function restoreSimulationPanelRuntime(runtime, callbacks = {}) {
   return restoreSimulationControllerJobs(runtime?.controller, callbacks);
 }
 
@@ -248,11 +256,11 @@ export function disposeSimulationPanelRuntime(runtime) {
 export async function ensureSimulationControllerJobResults(
   controller,
   jobId,
-  { display = true, displayResults = null } = {}
+  { display = true, displayResults = null } = {},
 ) {
   const job = controller?.jobs?.get(jobId);
   if (!job) {
-    return { ok: false, reason: 'missing_job', results: null, job: null };
+    return { ok: false, reason: "missing_job", results: null, job: null };
   }
 
   setActiveJob(controller, jobId);
@@ -260,29 +268,34 @@ export async function ensureSimulationControllerJobResults(
   if (controller.resultCache?.has(jobId)) {
     const cached = controller.resultCache.get(jobId);
     controller.lastResults = cached;
-    if (display && typeof displayResults === 'function') {
+    if (display && typeof displayResults === "function") {
       displayResults(cached);
     }
-    return { ok: true, reason: 'cached', results: cached, job };
+    return { ok: true, reason: "cached", results: cached, job };
   }
 
-  if (job.status !== 'complete') {
-    return { ok: false, reason: 'not_complete', results: null, job };
+  if (job.status !== "complete") {
+    return { ok: false, reason: "not_complete", results: null, job };
   }
 
   const results = await controller.solver.getResults(jobId);
   controller.resultCache.set(jobId, results);
   controller.lastResults = results;
-  if (display && typeof displayResults === 'function') {
+  if (display && typeof displayResults === "function") {
     displayResults(results);
   }
-  return { ok: true, reason: 'fetched', results, job: controller.jobs.get(jobId) || job };
+  return {
+    ok: true,
+    reason: "fetched",
+    results,
+    job: controller.jobs.get(jobId) || job,
+  };
 }
 
 export async function recordSimulationControllerExport(
   controller,
   jobId,
-  exportPatch
+  exportPatch,
 ) {
   const current = controller?.jobs?.get(jobId);
   if (!current) {
@@ -293,11 +306,19 @@ export async function recordSimulationControllerExport(
   const next = upsertJob(controller, {
     ...current,
     id: current.id,
-    exportedFiles: mergeUniqueStrings(current.exportedFiles, normalizedPatch.exportedFiles),
-    autoExportCompletedAt: normalizedPatch.autoExportCompletedAt ?? current.autoExportCompletedAt ?? null,
+    exportedFiles: mergeUniqueStrings(
+      current.exportedFiles,
+      normalizedPatch.exportedFiles,
+    ),
+    autoExportCompletedAt:
+      normalizedPatch.autoExportCompletedAt ??
+      current.autoExportCompletedAt ??
+      null,
     justCompleted: normalizedPatch.justCompleted,
-    rawResultsFile: normalizedPatch.rawResultsFile ?? current.rawResultsFile ?? null,
-    meshArtifactFile: normalizedPatch.meshArtifactFile ?? current.meshArtifactFile ?? null
+    rawResultsFile:
+      normalizedPatch.rawResultsFile ?? current.rawResultsFile ?? null,
+    meshArtifactFile:
+      normalizedPatch.meshArtifactFile ?? current.meshArtifactFile ?? null,
   });
   persistControllerJobs(controller);
   if (next) {
@@ -305,7 +326,7 @@ export async function recordSimulationControllerExport(
       exportedFiles: next.exportedFiles,
       autoExportCompletedAt: next.autoExportCompletedAt,
       rawResultsFile: next.rawResultsFile ?? null,
-      meshArtifactFile: next.meshArtifactFile ?? null
+      meshArtifactFile: next.meshArtifactFile ?? null,
     });
   }
   return next;
@@ -314,7 +335,7 @@ export async function recordSimulationControllerExport(
 export async function recordSimulationControllerRating(
   controller,
   jobId,
-  rating
+  rating,
 ) {
   const current = controller?.jobs?.get(jobId);
   if (!current) {
@@ -329,7 +350,7 @@ export async function recordSimulationControllerRating(
   const next = upsertJob(controller, {
     ...current,
     id: current.id,
-    rating: normalizedRating
+    rating: normalizedRating,
   });
   persistControllerJobs(controller);
   if (next) {
@@ -338,12 +359,10 @@ export async function recordSimulationControllerRating(
   return next;
 }
 
-export function prepareSimulationControllerSubmission(
-  options = {}
-) {
+export function prepareSimulationControllerSubmission(options = {}) {
   return prepareOccAdaptiveSolveRequest(readSimulationState(), {
-    mshVersion: options.mshVersion || '2.2',
-    simType: options.simType ?? 2
+    mshVersion: options.mshVersion || "2.2",
+    simType: options.simType ?? 2,
   });
 }
 
@@ -354,22 +373,28 @@ export async function submitSimulationControllerJob(
     meshData,
     outputName,
     counter,
-    submission = prepareSimulationControllerSubmission()
-  } = {}
+    submission = prepareSimulationControllerSubmission(),
+  } = {},
 ) {
   const health = await controller.solver.getHealthStatus();
+
   if (!health?.solverReady || !health?.occBuilderReady) {
-    throw new Error('Backend solver and OCC mesher must be ready to run adaptive BEM simulation.');
+    const cachedHealth = getCachedRuntimeHealth() || health;
+    const blockedReason = getFeatureBlockedReason(cachedHealth, "bem-solve");
+    throw new Error(
+      blockedReason ||
+        "Backend solver and OCC mesher must be ready to run adaptive BEM simulation.",
+    );
   }
 
-  const {
-    waveguidePayload,
-    submitOptions,
-    preparedParams,
-    stateSnapshot
-  } = submission;
+  const { waveguidePayload, submitOptions, preparedParams, stateSnapshot } =
+    submission;
   const startedIso = new Date().toISOString();
-  const jobId = await controller.solver.submitSimulation(config, meshData, submitOptions);
+  const jobId = await controller.solver.submitSimulation(
+    config,
+    meshData,
+    submitOptions,
+  );
   const createdJob = await queueSimulationControllerJob(controller, {
     jobId,
     startedIso,
@@ -378,13 +403,13 @@ export async function submitSimulationControllerJob(
     config,
     waveguidePayload,
     preparedParams,
-    stateSnapshot
+    stateSnapshot,
   });
 
   return {
     health,
     jobId,
-    createdJob
+    createdJob,
   };
 }
 
@@ -424,7 +449,7 @@ export async function stopSimulationControllerJob(controller, jobId) {
   return {
     cancelledJob,
     stopError,
-    stopResult
+    stopResult,
   };
 }
 
@@ -456,16 +481,21 @@ export function cancelSimulationControllerJob(controller, jobId) {
 export function requestSimulationControllerJobCancellation(
   controller,
   jobId,
-  { message = 'Cancellation requested. Waiting for backend worker to stop.' } = {}
+  {
+    message = "Cancellation requested. Waiting for backend worker to stop.",
+  } = {},
 ) {
   if (!jobId || !controller?.jobs?.has(jobId)) {
     persistControllerJobs(controller);
     return null;
   }
 
-  const pendingJob = buildCancellationRequestedSimulationJob(controller.jobs.get(jobId), {
-    message
-  });
+  const pendingJob = buildCancellationRequestedSimulationJob(
+    controller.jobs.get(jobId),
+    {
+      message,
+    },
+  );
   if (pendingJob) {
     upsertJob(controller, pendingJob);
   }
@@ -473,23 +503,27 @@ export function requestSimulationControllerJobCancellation(
   return pendingJob;
 }
 
-export function applyStoppedSimulationControllerJob(controller, jobId, stopResult = {}) {
-  const responseStatus = String(stopResult?.status || '').trim().toLowerCase();
-  if (responseStatus === 'cancelled') {
+export function applyStoppedSimulationControllerJob(
+  controller,
+  jobId,
+  stopResult = {},
+) {
+  const responseStatus = String(stopResult?.status || "")
+    .trim()
+    .toLowerCase();
+  if (responseStatus === "cancelled") {
     return cancelSimulationControllerJob(controller, jobId);
   }
   return requestSimulationControllerJobCancellation(controller, jobId, {
-    message: String(stopResult?.message || '').trim()
-      || 'Cancellation requested. Waiting for backend worker to stop.'
+    message:
+      String(stopResult?.message || "").trim() ||
+      "Cancellation requested. Waiting for backend worker to stop.",
   });
 }
 
 export async function reconcileSimulationControllerRemoteJobs(
   controller,
-  {
-    listQuery = { limit: 200, offset: 0 },
-    onManifestSyncError = null
-  } = {}
+  { listQuery = { limit: 200, offset: 0 }, onManifestSyncError = null } = {},
 ) {
   const payload = await controller.solver.listJobs(listQuery);
   const remoteItems = Array.isArray(payload?.items)
@@ -502,17 +536,19 @@ export async function reconcileSimulationControllerRemoteJobs(
 
   for (const item of remoteItems) {
     syncSimulationWorkspaceJobManifest(item).catch((error) => {
-      if (typeof onManifestSyncError === 'function') {
+      if (typeof onManifestSyncError === "function") {
         onManifestSyncError(error, item);
       }
     });
   }
 
-  const activeJob = controller.activeJobId ? (controller.jobs.get(controller.activeJobId) || null) : null;
+  const activeJob = controller.activeJobId
+    ? controller.jobs.get(controller.activeJobId) || null
+    : null;
   return {
     remoteItems,
     activeJob,
-    anyActive: hasActiveJobs(controller)
+    anyActive: hasActiveJobs(controller),
   };
 }
 
@@ -521,8 +557,8 @@ export async function restoreSimulationControllerJobs(
   {
     onJobsUpdated = () => {},
     onStartPolling = () => {},
-    onRecoverFromManifests = () => {}
-  } = {}
+    onRecoverFromManifests = () => {},
+  } = {},
 ) {
   if (controller.pollTimer) {
     clearTimeout(controller.pollTimer);
@@ -535,7 +571,8 @@ export async function restoreSimulationControllerJobs(
   controller.pollTimer = tracker.pollTimer;
   controller.pollDelayMs = tracker.pollDelayMs;
   controller.pollBackoffMs = tracker.pollBackoffMs;
-  controller.consecutivePollFailures = Number(tracker.consecutivePollFailures) || 0;
+  controller.consecutivePollFailures =
+    Number(tracker.consecutivePollFailures) || 0;
   controller.isPolling = tracker.isPolling;
   syncCurrentJobId(controller);
 
@@ -544,7 +581,10 @@ export async function restoreSimulationControllerJobs(
   const workspace = await readSimulationWorkspaceJobs();
   const useFolderSource = workspace.available;
 
-  setJobSourceMode(controller, useFolderSource ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND);
+  setJobSourceMode(
+    controller,
+    useFolderSource ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND,
+  );
   if (useFolderSource) {
     seedItems = workspace.items;
   }

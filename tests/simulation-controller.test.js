@@ -547,7 +547,22 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
   const controller = createSimulationControllerStore({
     solver: {
       async getHealthStatus() {
-        return { solverReady: false, occBuilderReady: true };
+        return {
+          solverReady: false,
+          occBuilderReady: true,
+          dependencyDoctor: {
+            components: [
+              {
+                id: 'bempp_cl',
+                name: 'bempp-cl',
+                category: 'required',
+                status: 'missing',
+                featureImpact: '/api/solve BEM simulation is unavailable.',
+                guidance: ['Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git']
+              }
+            ]
+          }
+        };
       }
     }
   });
@@ -569,7 +584,7 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
         stateSnapshot: { params: {} }
       }
     }),
-    /backend solver and OCC mesher must be ready/i
+    /Install bempp-cl/i
   );
 });
 

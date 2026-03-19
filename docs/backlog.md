@@ -65,6 +65,7 @@ Status as of March 19, 2026:
 - [x] Update docs and add regression tests for workspace/export routing and deterministic folder naming
 
 Progress note (March 19, 2026):
+
 - Backend workspace export contract now writes via `/api/export-file` with optional `workspace_subdir`; Firefox/non-File-System-Access path now routes manual and bundle export writes through backend workspace root before browser fallback.
 - Regression coverage added for backend workspace path/open/export routes and frontend workspace-subdirectory export routing.
 - Folder task manifests/index now persist to the same generation folder naming contract used by bundle exports (legacy `job.id` folders remain readable and rebuild deduplicates by stable job id).
@@ -95,7 +96,7 @@ Progress note (March 19, 2026):
 
 ### P2. Audit Dependencies and Add Cross-Platform Runtime Doctor (March 19, 2026)
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Execution lane:** Reserved — Codex `high`; Opus `high`
 
 **Description:** Dependency installation pain is coming from two different sources that currently blur together: some dependencies are genuinely hard to provision across operating systems (`bempp-cl`, OpenCL runtimes, and some `gmsh` wheel combinations), while the repo also has fixable install-flow and messaging defects. Right now dependency truth is fragmented, launcher/runtime selection can drift away from the interpreter the installer populated, startup scripts still contain stale mock-solver messaging, and there is no single cross-platform preflight/doctor flow that tells users exactly what is missing, which features are blocked, and how to fix the current machine.
@@ -121,10 +122,11 @@ Progress note (March 19, 2026):
 - [x] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
 - [x] Add a post-install verification/preflight step that proves `fastapi`, `gmsh`, `bempp-cl`, and OpenCL detection status for the exact interpreter that will be launched
 - [x] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
-- [ ] Surface dependency status in the UI before backend start/export/solve actions fail, including feature impact and guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
-- [ ] Add regression tests for dependency doctor output and dependency-status rendering
+- [x] Surface dependency status in the UI before backend start/export/solve actions fail, including feature impact and guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
+- [x] Add regression tests for dependency doctor output and dependency-status rendering
 
 Progress note (March 19, 2026):
+
 - Removed dead dependencies proved unused across active runtime/tests: frontend `jszip` (plus stale `index.html` script include) and backend `trimesh`.
 - Replaced single-purpose `express` usage with a built-in Node frontend dev server (`scripts/dev-server.js`) and removed `express` from package dependencies.
 - Kept `uvicorn[standard]` because backend startup still runs through `uvicorn` in `server/app.py`; extras policy (plain vs standard) is deferred to the doctor/preflight/interpreter-contract slices.
@@ -132,7 +134,11 @@ Progress note (March 19, 2026):
 - Startup/entrypoint messaging now states backend-dependent features are blocked (not mocked) when backend or `bempp-cl` is unavailable, with explicit install/recovery guidance in `scripts/start-all.js`, `server/start.sh`, and `server/app.py`.
 - Added backend preflight CLI (`npm run preflight:backend[:strict]`) that runs under the exact interpreter selected by the startup contract and reports required runtime readiness for `fastapi`, `gmsh`, `bempp-cl`, and OpenCL. Install/setup scripts now run this preflight after writing the interpreter marker.
 - Added backend dependency doctor CLI (`npm run doctor:backend[[:strict]|:json]`) with stable structured payload + text rendering, component status classification (`installed`/`missing`/`unsupported`), feature impact, and OS-specific guidance for `fastapi`, `gmsh`, `bempp-cl`, OpenCL runtime, and optional `matplotlib`.
-- Added regression coverage for backend doctor payload/rendering and CLI wrapper invocation; UI dependency-status rendering remains pending.
+- Added regression coverage for backend doctor payload/rendering and CLI wrapper invocation.
+- `/health` now includes a `dependencyDoctor` payload with doctor summary + per-component guidance so the frontend can surface blocked features before users hit failing export/solve/chart actions.
+- Added frontend dependency-status surface in `src/ui/dependencyStatus.js`, backed by shared doctor parsing in `src/solver/runtimeHealth.js`, and rendered from the main actions status area via `src/ui/simulation/connection.js`.
+- Added preflight dependency gating to OCC mesh export (`src/modules/export/index.js`), adaptive BEM submission (`src/ui/simulation/controller.js`), and matplotlib chart rendering (`src/ui/simulation/exports.js`) so blocked paths report actionable guidance instead of failing generically.
+- Added regression coverage for `/health` doctor payload exposure plus dependency-status rendering/gating in `server/tests/test_dependency_runtime.py`, `tests/ui-behavior.test.js`, `tests/export-module.test.js`, and `tests/simulation-controller.test.js`.
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)
 
