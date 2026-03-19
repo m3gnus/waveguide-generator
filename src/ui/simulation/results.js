@@ -39,6 +39,26 @@ function formatCount(count) {
   return n.toLocaleString();
 }
 
+function formatDegrees(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  const display = Math.abs(n - rounded) < 1e-9 ? String(rounded) : n.toFixed(1);
+  return `${display}\u00b0`;
+}
+
+function formatAxesSummary(axes) {
+  if (!Array.isArray(axes) || axes.length === 0) return null;
+  const labels = axes
+    .map((axis) => String(axis || "").trim().toLowerCase())
+    .filter((axis, index, values) =>
+      ["horizontal", "vertical", "diagonal"].includes(axis) &&
+      values.indexOf(axis) === index
+    )
+    .map((axis) => axis.charAt(0).toUpperCase() + axis.slice(1));
+  return labels.length > 0 ? labels.join(", ") : null;
+}
+
 function formatLocalDateTime(isoString) {
   const parsed = Date.parse(String(isoString || ""));
   if (!Number.isFinite(parsed)) {
@@ -83,6 +103,9 @@ export function renderSolveStatsSummary(results = null, job = null) {
   const observation = isObject(metadata.observation)
     ? metadata.observation
     : null;
+  const directivity = isObject(metadata.directivity)
+    ? metadata.directivity
+    : null;
   const frequencies = Array.isArray(results?.frequencies)
     ? results.frequencies
     : [];
@@ -96,9 +119,16 @@ export function renderSolveStatsSummary(results = null, job = null) {
   const vertexCount = meshStats?.vertex_count ?? meshStats?.vertexCount;
   const triangleCount = meshStats?.triangle_count ?? meshStats?.triangleCount;
 
-  const obsDistM = observation ? Number(observation.effective_distance_m) : NaN;
+  const obsDistM = Number(
+    directivity?.effective_distance_m ?? observation?.effective_distance_m,
+  );
+  const requestedObsDistM = Number(
+    directivity?.requested_distance_m ?? observation?.requested_distance_m,
+  );
   const configSummary = isObject(job?.configSummary) ? job.configSummary : {};
-  const obsOrigin = configSummary.observation_origin || "mouth";
+  const obsOrigin = String(
+    directivity?.observation_origin ?? configSummary.observation_origin ?? "mouth",
+  ).trim().toLowerCase();
 
   const items = [];
   const timestampSummary = resolveJobTimestampSummary(job);
@@ -129,10 +159,59 @@ export function renderSolveStatsSummary(results = null, job = null) {
 
   if (Number.isFinite(obsDistM)) {
     const originLabel = obsOrigin === "throat" ? "throat" : "mouth";
+    const requestedSuffix =
+      Number.isFinite(requestedObsDistM) &&
+      Math.abs(requestedObsDistM - obsDistM) > 1e-9
+        ? ` (requested ${requestedObsDistM.toFixed(2)} m)`
+        : "";
     items.push({
       label: "Observation",
-      value: `${obsDistM.toFixed(2)} m from ${originLabel}`,
+      value: `${obsDistM.toFixed(2)} m from ${originLabel}${requestedSuffix}`,
     });
+  }
+
+  if (directivity) {
+    const angleRange = Array.isArray(directivity.angle_range_degrees)
+      ? directivity.angle_range_degrees
+      : [];
+    const angleStart = formatDegrees(angleRange[0]);
+    const angleEnd = formatDegrees(angleRange[1]);
+    const sampleCount = Number(directivity.sample_count);
+    const angularStep = formatDegrees(directivity.angular_step_degrees);
+    const enabledAxes = formatAxesSummary(directivity.enabled_axes);
+    const normalization = formatDegrees(directivity.normalization_angle_degrees);
+    const diagonalAngle = formatDegrees(directivity.diagonal_angle_degrees);
+
+    if (angleStart && angleEnd) {
+      items.push({
+        label: "Polar sweep",
+        value: `${angleStart} – ${angleEnd}`,
+      });
+    }
+    if (angularStep && Number.isFinite(sampleCount)) {
+      items.push({
+        label: "Angular sampling",
+        value: `${angularStep} step, ${formatCount(sampleCount)} samples`,
+      });
+    } else if (Number.isFinite(sampleCount)) {
+      items.push({
+        label: "Angular sampling",
+        value: `${formatCount(sampleCount)} samples`,
+      });
+    }
+    if (enabledAxes) {
+      items.push({ label: "Axes", value: enabledAxes });
+    }
+    if (normalization) {
+      items.push({ label: "Normalization", value: normalization });
+    }
+    if (
+      diagonalAngle &&
+      Array.isArray(directivity.enabled_axes) &&
+      directivity.enabled_axes.includes("diagonal")
+    ) {
+      items.push({ label: "Diagonal plane", value: diagonalAngle });
+    }
   }
 
   if (items.length === 0) return "";
