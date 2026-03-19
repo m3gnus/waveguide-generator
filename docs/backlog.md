@@ -39,6 +39,28 @@ Status as of March 17, 2026:
 
 ## Active Backlog
 
+### P1. Rebuild Output Workspace Contract and Fix Firefox Server-Folder Regression (March 19, 2026)
+
+**Status:** NOT STARTED
+
+**Description:** The current output-folder flow is misleading and fragmented. Firefox shows a "default server output folder", but the export write path never actually binds that folder into the save flow, so files fall through to browser download/save behavior instead of landing in the shown directory. At the same time, workspace metadata and exported artifacts are split across different folder-naming schemes (`job.id` vs `outputName_counter`), so there is no single understandable project/generation folder for users.
+
+**Implementation notes:**
+
+- Current contract mismatch spans `src/ui/workspace/folderWorkspace.js`, `src/ui/fileOps.js`, and `server/api/routes_misc.py`: the UI displays an absolute backend path, while `/api/export-file` only accepts repo-relative folder paths.
+- Completed-task bundle exports currently route through `src/ui/simulation/exports.js` using `job.label` / base name as the bundle folder, while task manifests in `src/ui/workspace/taskManifest.js` persist under `job.id`.
+- `docs/modules/export.md`, `docs/modules/simulation.md`, and Settings copy still describe `<workspace>/<jobId>/`, which does not match the current runtime behavior.
+- No tests currently cover `/api/export-file`, `/api/workspace/path`, `/api/workspace/open`, or Firefox/non-File-System-Access export routing.
+
+**Action plan:**
+
+- [ ] Define one cross-browser workspace model: backend-managed workspace root plus optional direct-write File System Access optimization on supporting browsers
+- [ ] Replace the current absolute-path display + relative-path export mismatch with explicit backend workspace configuration/read/write APIs
+- [ ] Fix Firefox/non-`showDirectoryPicker` behavior so exports either land in the shown workspace or clearly announce that the browser download path is being used
+- [ ] Unify manifests, raw simulation data, mesh artifacts, and selected exports under one human-readable generation folder named from `<outputName>_<counter>`
+- [ ] Add a user-facing project manifest/file format plus deterministic naming rules for ATH/MWG script snapshots, raw results, mesh artifacts, and optional exported files
+- [ ] Update docs and add regression tests for workspace/export routing and deterministic folder naming
+
 ### P1. Restrict Scale to Waveguide Geometry Only (March 19, 2026)
 
 **Status:** NOT STARTED
@@ -80,6 +102,32 @@ Status as of March 17, 2026:
 - [ ] Extend result/job metadata plumbing so the View Results modal can read those details without reconstructing them heuristically
 - [ ] Add a lightweight post-solve directivity-map re-render path for display-only options that do not require a new BEM solve
 - [ ] Add/update frontend and backend tests covering results summary content and metadata persistence
+
+### P2. Audit Dependencies and Add Cross-Platform Runtime Doctor (March 19, 2026)
+
+**Status:** NOT STARTED
+
+**Description:** Dependency installation and status reporting are inconsistent. The repo already has installer scripts and backend dependency gating, but startup scripts and UI still contain stale fallback messaging, there is no single cross-platform "doctor" flow that reports what is missing and how to install it, and at least some declared dependencies appear unused or replaceable with simpler local code.
+
+**Implementation notes:**
+
+- Current dependency truth is split across `package.json`, `server/requirements.txt`, `server/requirements-gmsh.txt`, `install/install.sh`, `install/install.bat`, `scripts/start-all.js`, `server/start.sh`, and `server/solver/deps.py`.
+- Initial code audit candidates:
+  - `jszip` appears unused beyond a static script include in `index.html`
+  - `trimesh` appears unused across active runtime and tests
+  - `express` is only used by `scripts/dev-server.js`
+  - `uvicorn[standard]` should be re-validated against actual runtime needs versus plain `uvicorn`
+- Backend runtime gating already exists for Python/gmsh/bempp-cl, but the frontend only surfaces partial dependency issues after the user hits a failing path.
+- Startup messaging in `scripts/start-all.js` and `server/start.sh` still mentions a mock-solver path that the maintained runtime no longer supports.
+
+**Action plan:**
+
+- [ ] Audit every declared dependency against actual runtime/build/test usage and remove dead packages or document why they remain
+- [ ] Replace simple single-purpose dependencies with local code where that meaningfully reduces install burden
+- [ ] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
+- [ ] Add a cross-platform dependency doctor command/endpoint that reports installed, missing, unsupported, and optional components with OS-specific install guidance
+- [ ] Surface dependency status in the UI before export/solve actions fail, including guidance for gmsh, bempp-cl, OpenCL runtime, and matplotlib
+- [ ] Add regression tests for dependency doctor output and dependency-status rendering
 
 ### P3. Document Symmetry Solver Investigation (March 18, 2026)
 
