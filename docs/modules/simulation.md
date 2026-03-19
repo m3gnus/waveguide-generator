@@ -42,7 +42,10 @@
 - Ratings: stored locally and in folder task manifests when workspace active
 - Exports: tracked via `exportedFiles` list and `autoExportCompletedAt` timestamp
 - Script snapshots: stored with task manifest and mirrored to deterministic generation artifact `script.snapshot.mwg`
-- User-facing project manifest: `waveguide.project.v1.json` in each generation folder records selected exports and script-snapshot artifact metadata
+- Completion artifacts: first completion pass persists deterministic runtime snapshots in generation folder:
+  - raw results: `<jobLabel>_raw.results.json` (from `/api/results/{jobId}`)
+  - mesh artifact mirror: `<jobLabel>_solver.mesh.msh` (from `/api/mesh-artifact/{jobId}` when available)
+- User-facing project manifest: `waveguide.project.v1.json` in each generation folder records script snapshots, selected exports, raw-results snapshot, and mesh-artifact metadata
 - Manifest/index folders use generation naming (`<workspace>/<jobLabel>/`) when available, but manifest/index `id` remains the stable backend job identity
 
 **Settings** (persisted):

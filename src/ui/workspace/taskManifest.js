@@ -39,6 +39,11 @@ function normalizeDirectoryName(value) {
   return text || null;
 }
 
+function normalizeArtifactFileName(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
 function combineWarnings(...values) {
   const warnings = values.map((value) => String(value || '').trim()).filter(Boolean);
   return warnings.length > 0 ? warnings.join(' | ') : null;
@@ -131,6 +136,8 @@ async function writeGenerationProjectManifest(taskDirectoryHandle, {
       job: manifest,
       exportedFiles: manifest?.exportedFiles || [],
       scriptSnapshotFileName,
+      rawResultsFileName: manifest?.rawResultsFile ?? null,
+      meshArtifactFileName: manifest?.meshArtifactFile ?? null,
       updatedAt: manifest?.updatedAt
     });
     await writeWorkspaceTextFile(
@@ -176,6 +183,16 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
     ?? fallback.scriptSnapshot
     ?? fallback.script
     ?? null;
+  const rawResultsFile = normalizeArtifactFileName(
+    raw.rawResultsFile
+    ?? raw.raw_results_file
+    ?? fallback.rawResultsFile
+  );
+  const meshArtifactFile = normalizeArtifactFileName(
+    raw.meshArtifactFile
+    ?? raw.mesh_artifact_file
+    ?? fallback.meshArtifactFile
+  );
 
   return {
     version: TASK_MANIFEST_VERSION,
@@ -196,6 +213,8 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
       ? Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion)
       : TASK_SCRIPT_SCHEMA_VERSION,
     scriptSnapshot,
+    rawResultsFile,
+    meshArtifactFile,
     updatedAt: raw.updatedAt ?? raw.updated_at ?? nowIso()
   };
 }
@@ -214,7 +233,9 @@ export function createTaskManifestFromJob(job = {}) {
     rating: job.rating,
     exportedFiles: job.exportedFiles,
     scriptSchemaVersion: job.scriptSchemaVersion,
-    scriptSnapshot: job.scriptSnapshot ?? job.script
+    scriptSnapshot: job.scriptSnapshot ?? job.script,
+    rawResultsFile: job.rawResultsFile,
+    meshArtifactFile: job.meshArtifactFile
   });
 }
 
@@ -302,6 +323,14 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
       scriptSnapshot: updates.scriptSnapshot
         ?? base.scriptSnapshot
         ?? existing.manifest?.scriptSnapshot
+        ?? null,
+      rawResultsFile: updates.rawResultsFile
+        ?? base.rawResultsFile
+        ?? existing.manifest?.rawResultsFile
+        ?? null,
+      meshArtifactFile: updates.meshArtifactFile
+        ?? base.meshArtifactFile
+        ?? existing.manifest?.meshArtifactFile
         ?? null,
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });

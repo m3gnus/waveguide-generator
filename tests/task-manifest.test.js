@@ -87,6 +87,8 @@ test('createTaskManifestFromJob maps script and metadata fields', () => {
     rating: 4,
     autoExportCompletedAt: '2026-03-11T10:00:00.000Z',
     exportedFiles: ['file-a.csv'],
+    rawResultsFile: 'horn_42_raw.results.json',
+    meshArtifactFile: 'horn_42_solver.mesh.msh',
     script: { outputName: 'horn' }
   });
 
@@ -95,6 +97,8 @@ test('createTaskManifestFromJob maps script and metadata fields', () => {
   assert.equal(manifest.rating, 4);
   assert.equal(manifest.autoExportCompletedAt, '2026-03-11T10:00:00.000Z');
   assert.deepEqual(manifest.exportedFiles, ['file-a.csv']);
+  assert.equal(manifest.rawResultsFile, 'horn_42_raw.results.json');
+  assert.equal(manifest.meshArtifactFile, 'horn_42_solver.mesh.msh');
   assert.deepEqual(manifest.scriptSnapshot, { outputName: 'horn' });
 });
 
@@ -198,6 +202,8 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
     label: 'horn_8',
     status: 'complete',
     exportedFiles: ['csv:horn_8_results.csv', 'json:horn_8_results.json'],
+    rawResultsFile: 'horn_8_raw.results.json',
+    meshArtifactFile: 'horn_8_solver.mesh.msh',
     scriptSnapshot: {
       outputName: 'horn',
       counter: 8,
@@ -235,6 +241,8 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
   const projectPayload = JSON.parse(await (await projectHandle.getFile()).text());
   assert.equal(projectPayload.generation.folder, 'horn_8');
   assert.equal(projectPayload.artifacts.scriptSnapshot.fileName, GENERATION_SCRIPT_SNAPSHOT_FILE_NAME);
+  assert.equal(projectPayload.artifacts.rawResults.fileName, 'horn_8_raw.results.json');
+  assert.equal(projectPayload.artifacts.meshArtifact.fileName, 'horn_8_solver.mesh.msh');
   assert.deepEqual(projectPayload.artifacts.selectedExports, [
     { formatId: 'csv', fileName: 'horn_8_results.csv' },
     { formatId: 'json', fileName: 'horn_8_results.json' }

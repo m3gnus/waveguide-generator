@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { exportResults } from '../src/ui/simulation/exports.js';
-import { writeSimulationTaskBundleFile } from '../src/ui/simulation/workspaceTasks.js';
+import {
+  persistSimulationGenerationArtifacts,
+  writeSimulationTaskBundleFile
+} from '../src/ui/simulation/workspaceTasks.js';
 import {
   getSelectedFolderHandle,
   resetSelectedFolder,
@@ -182,6 +185,74 @@ test('exportResults routes fallback bundle writes through backend workspace subd
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     const body = fetchCalls[0].options.body;
     assert.equal(body.get('workspace_subdir'), 'horn_34');
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});
+
+test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts into generation folder', async () => {
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
+
+  try {
+    const persisted = await persistSimulationGenerationArtifacts(
+      {
+        id: 'job-4',
+        label: 'horn_56'
+      },
+      {
+        results: { spl_on_axis: { frequencies: [100], spl: [90] }, metadata: { solveMs: 123 } },
+        meshArtifactText: '$MeshFormat\n2.2 0 8\n$EndMeshFormat'
+      }
+    );
+
+    assert.equal(persisted.warnings.length, 0);
+    assert.equal(persisted.rawResultsFile, 'horn_56_raw.results.json');
+    assert.equal(persisted.meshArtifactFile, 'horn_56_solver.mesh.msh');
+
+    const taskDir = await root.getDirectoryHandle('horn_56');
+    assert.equal(taskDir.files.has('horn_56_raw.results.json'), true);
+    assert.equal(taskDir.files.has('horn_56_solver.mesh.msh'), true);
+    assert.match(taskDir.files.get('horn_56_raw.results.json'), /"spl_on_axis"/);
+    assert.match(taskDir.files.get('horn_56_solver.mesh.msh'), /\$MeshFormat/);
+  } finally {
+    resetSelectedFolder();
+  }
+});
+
+test('persistSimulationGenerationArtifacts falls back to backend workspace subdirectory', async () => {
+  const originalFetch = global.fetch;
+  const fetchCalls = [];
+
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
+
+  try {
+    const persisted = await persistSimulationGenerationArtifacts(
+      {
+        id: 'job-5',
+        label: 'horn_57'
+      },
+      {
+        results: { ok: true },
+        meshArtifactText: '$MeshFormat'
+      }
+    );
+
+    assert.equal(persisted.warnings.length, 0);
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_57');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_57');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();

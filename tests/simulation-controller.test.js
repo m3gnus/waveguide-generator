@@ -463,10 +463,14 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
   const updated = await recordSimulationControllerExport(controller, 'job-queued-1', {
     exportedFiles: ['csv:simulation_results.csv', 'json:simulation_results.json'],
     autoExportCompletedAt: '2026-03-11T10:01:00.000Z',
+    rawResultsFile: 'simulation_2_raw.results.json',
+    meshArtifactFile: 'simulation_2_solver.mesh.msh',
     justCompleted: false
   });
   assert.deepEqual(updated.exportedFiles, ['csv:simulation_results.csv', 'json:simulation_results.json']);
   assert.equal(updated.autoExportCompletedAt, '2026-03-11T10:01:00.000Z');
+  assert.equal(updated.rawResultsFile, 'simulation_2_raw.results.json');
+  assert.equal(updated.meshArtifactFile, 'simulation_2_solver.mesh.msh');
   assert.equal(updated.justCompleted, false);
 });
 

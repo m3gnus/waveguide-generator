@@ -83,6 +83,8 @@ export function normalizeTaskIndexEntry(raw = {}) {
     autoExportCompletedAt: fromManifest.autoExportCompletedAt ?? null,
     rating: fromManifest.rating ?? null,
     exportedFiles: normalizeExportedFiles(fromManifest.exportedFiles),
+    rawResultsFile: fromManifest.rawResultsFile ?? null,
+    meshArtifactFile: fromManifest.meshArtifactFile ?? null,
     updatedAt: fromManifest.updatedAt ?? null,
     scriptSchemaVersion: Number.isFinite(Number(fromManifest.scriptSchemaVersion))
       ? Number(fromManifest.scriptSchemaVersion)
