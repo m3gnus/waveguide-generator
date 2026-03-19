@@ -79,7 +79,8 @@ PY
 if [ $? -eq 0 ]; then
     echo "✅ bempp-cl is installed"
 else
-    echo "⚠️  Warning: bempp-cl not found. Server will run with mock solver."
+    echo "⚠️  Warning: bempp-cl not found."
+    echo "   The server can start, but /api/solve will stay unavailable until bempp-cl is installed."
     echo "   To install bempp-cl, run:"
     echo "   $PYTHON_BIN -m pip install git+https://github.com/bempp/bempp-cl.git"
 fi

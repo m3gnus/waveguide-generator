@@ -60,6 +60,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/simulation-module.test.js`
 - `tests/simulation-reconciliation.test.js`
 - `tests/simulation-settings.test.js`
+- `tests/startup-messaging.test.js`
 - `tests/task-index-rebuild.test.js`
 - `tests/task-manifest.test.js`
 - `tests/ui-behavior.test.js`
