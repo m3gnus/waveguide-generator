@@ -5,7 +5,7 @@ const SCHEMA_VERSION = 2;
 
 export const RECOMMENDED_DEFAULTS = {
   enableWarmup: true,
-  bemPrecision: "double",
+  bemPrecision: "single",
   useBurtonMiller: true,
 };
 
