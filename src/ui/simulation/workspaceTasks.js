@@ -9,7 +9,10 @@ import {
   rebuildIndexFromManifests,
   writeTaskIndex
 } from '../workspace/taskIndex.js';
-import { updateTaskManifestForJob } from '../workspace/taskManifest.js';
+import {
+  resolveTaskWorkspaceDirectoryName,
+  updateTaskManifestForJob
+} from '../workspace/taskManifest.js';
 
 let pendingSimulationWorkspaceIndexSync = Promise.resolve({
   synced: false,
@@ -115,7 +118,7 @@ export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite =
         throw new Error('Write permission for selected folder was denied.');
       }
 
-      const subDirName = dirName || String(job.id);
+      const subDirName = dirName || resolveTaskWorkspaceDirectoryName(job);
       const taskDir = await folderHandle.getDirectoryHandle(subDirName, { create: true });
       const fileHandle = await taskDir.getFileHandle(file.fileName, { create: true });
       const writable = await fileHandle.createWritable();

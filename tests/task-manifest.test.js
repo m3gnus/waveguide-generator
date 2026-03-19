@@ -7,6 +7,7 @@ import {
   createTaskManifestFromJob,
   normalizeTaskManifest,
   readTaskManifest,
+  resolveTaskWorkspaceDirectoryName,
   updateTaskManifestForJob
 } from '../src/ui/workspace/taskManifest.js';
 
@@ -93,12 +94,30 @@ test('createTaskManifestFromJob maps script and metadata fields', () => {
   assert.deepEqual(manifest.scriptSnapshot, { outputName: 'horn' });
 });
 
+test('resolveTaskWorkspaceDirectoryName prefers label, then script, then id', () => {
+  assert.equal(
+    resolveTaskWorkspaceDirectoryName({ id: 'job-1', label: 'horn_1' }),
+    'horn_1'
+  );
+  assert.equal(
+    resolveTaskWorkspaceDirectoryName({
+      id: 'job-2',
+      scriptSnapshot: { outputName: 'waveguide', counter: 7 }
+    }),
+    'waveguide_7'
+  );
+  assert.equal(
+    resolveTaskWorkspaceDirectoryName({ id: 'job-3' }),
+    'job-3'
+  );
+});
+
 test('updateTaskManifestForJob writes and reads task.manifest.json with defaults', async () => {
   const root = createMemoryDirectory();
 
   const updated = await updateTaskManifestForJob(root, {
     id: 'job-5',
-    label: 'job_5',
+    label: 'horn_5',
     status: 'queued',
     exportedFiles: []
   });
@@ -106,7 +125,7 @@ test('updateTaskManifestForJob writes and reads task.manifest.json with defaults
   assert.equal(updated.warning, null);
   assert.equal(updated.manifest.id, 'job-5');
 
-  const taskDir = await root.getDirectoryHandle('job-5');
+  const taskDir = await root.getDirectoryHandle('horn_5');
   const fileHandle = await taskDir.getFileHandle(TASK_MANIFEST_FILE_NAME);
   const rawFile = await fileHandle.getFile();
   const text = await rawFile.text();
@@ -116,4 +135,45 @@ test('updateTaskManifestForJob writes and reads task.manifest.json with defaults
   assert.equal(reread.warning, null);
   assert.equal(reread.manifest.id, 'job-5');
   assert.deepEqual(reread.manifest.exportedFiles, []);
+});
+
+test('updateTaskManifestForJob falls back to job id directory when no generation name is available', async () => {
+  const root = createMemoryDirectory();
+
+  await updateTaskManifestForJob(root, {
+    id: 'job-6',
+    status: 'queued',
+    exportedFiles: []
+  });
+
+  const taskDir = await root.getDirectoryHandle('job-6');
+  const fileHandle = await taskDir.getFileHandle(TASK_MANIFEST_FILE_NAME);
+  const rawFile = await fileHandle.getFile();
+  const text = await rawFile.text();
+  assert.match(text, /"id": "job-6"/);
+});
+
+test('updateTaskManifestForJob reuses legacy job-id manifest data when migrating to generation folder name', async () => {
+  const root = createMemoryDirectory();
+
+  await updateTaskManifestForJob(root, {
+    id: 'job-7',
+    status: 'queued',
+    exportedFiles: ['first.csv']
+  });
+
+  const migrated = await updateTaskManifestForJob(root, {
+    id: 'job-7',
+    label: 'horn_7',
+    status: 'complete'
+  });
+
+  assert.equal(migrated.manifest.id, 'job-7');
+  assert.equal(migrated.manifest.label, 'horn_7');
+  assert.deepEqual(migrated.manifest.exportedFiles, ['first.csv']);
+
+  const migratedDir = await root.getDirectoryHandle('horn_7');
+  const reread = await readTaskManifest(migratedDir);
+  assert.equal(reread.manifest.id, 'job-7');
+  assert.equal(root.directories.has('job-7'), true);
 });

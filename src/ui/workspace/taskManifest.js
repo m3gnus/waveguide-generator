@@ -23,6 +23,42 @@ function normalizeExportedFiles(value) {
     .filter(Boolean);
 }
 
+function normalizeDirectoryName(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function deriveGenerationFolderNameFromScript(scriptSnapshot) {
+  if (!scriptSnapshot || typeof scriptSnapshot !== 'object') {
+    return null;
+  }
+
+  const outputName = normalizeDirectoryName(scriptSnapshot.outputName);
+  if (!outputName) {
+    return null;
+  }
+
+  const counter = Number(scriptSnapshot.counter);
+  if (Number.isFinite(counter) && counter >= 1) {
+    return `${outputName}_${Math.floor(counter)}`;
+  }
+  return outputName;
+}
+
+export function resolveTaskWorkspaceDirectoryName(job = {}, { fallbackId = null } = {}) {
+  const label = normalizeDirectoryName(job?.label);
+  if (label) {
+    return label;
+  }
+
+  const scriptName = deriveGenerationFolderNameFromScript(job?.scriptSnapshot ?? job?.script);
+  if (scriptName) {
+    return scriptName;
+  }
+
+  return normalizeDirectoryName(fallbackId ?? job?.id) || '';
+}
+
 export function normalizeTaskManifest(raw = {}, fallback = {}) {
   const id = String(raw.id || fallback.id || '').trim();
   const createdAt = raw.createdAt ?? raw.created_at ?? fallback.createdAt ?? null;
@@ -114,6 +150,18 @@ export async function writeTaskManifest(taskDirectoryHandle, manifestInput) {
   return manifest;
 }
 
+async function getDirectoryHandleIfExists(rootDirectoryHandle, directoryName) {
+  if (!directoryName) return null;
+  try {
+    return await rootDirectoryHandle.getDirectoryHandle(directoryName);
+  } catch (error) {
+    if (error?.name === 'NotFoundError') {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates = {}) {
   if (!rootDirectoryHandle || typeof rootDirectoryHandle.getDirectoryHandle !== 'function') {
     return { manifest: null, warning: 'Workspace folder is unavailable.' };
@@ -125,9 +173,24 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
   }
 
   try {
-    const taskDir = await rootDirectoryHandle.getDirectoryHandle(jobId, { create: true });
-    const existing = await readTaskManifest(taskDir);
+    const preferredDirectoryName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: jobId });
+    const legacyDirectoryName = jobId;
+
+    let existing = { manifest: null, warning: null };
+    const preferredExistingDir = await getDirectoryHandleIfExists(rootDirectoryHandle, preferredDirectoryName);
+    if (preferredExistingDir) {
+      existing = await readTaskManifest(preferredExistingDir);
+    }
+
+    if (!existing.manifest && preferredDirectoryName !== legacyDirectoryName) {
+      const legacyDir = await getDirectoryHandleIfExists(rootDirectoryHandle, legacyDirectoryName);
+      if (legacyDir) {
+        existing = await readTaskManifest(legacyDir);
+      }
+    }
+
     const base = createTaskManifestFromJob(job);
+    const hasJobExportedFiles = Array.isArray(job?.exportedFiles);
     const next = normalizeTaskManifest({
       ...(existing.manifest || {}),
       ...base,
@@ -135,10 +198,12 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
       autoExportCompletedAt: updates.autoExportCompletedAt
         ?? base.autoExportCompletedAt
         ?? existing.manifest?.autoExportCompletedAt,
-      exportedFiles: updates.exportedFiles ?? base.exportedFiles ?? existing.manifest?.exportedFiles,
+      exportedFiles: updates.exportedFiles
+        ?? (hasJobExportedFiles ? base.exportedFiles : existing.manifest?.exportedFiles ?? base.exportedFiles),
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });
 
+    const taskDir = await rootDirectoryHandle.getDirectoryHandle(preferredDirectoryName, { create: true });
     return { manifest: await writeTaskManifest(taskDir, next), warning: existing.warning };
   } catch (error) {
     return { manifest: null, warning: `Task manifest update failed: ${error?.message || 'unknown error'}` };

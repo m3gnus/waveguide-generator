@@ -41,6 +41,7 @@
 - Backend workspace root is the canonical export target (`/api/export-file` + optional `workspace_subdir`)
 - On supporting browsers, a selected folder handle is an in-browser direct-write optimization
 - Bundle exports use job label/base name as subdirectory (`<workspace>/<jobLabel>/`) for both direct-write and backend-write paths
+- Folder task manifests/index entries now persist against the same generation folder naming contract (job identity stays in manifest/index `id`)
 - If direct-write or backend-write fails: app falls back to browser save/download
 - Workspace contract covers manual + auto-bundles ONLY (not unrelated generated artifacts)
 

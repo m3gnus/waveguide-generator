@@ -22,6 +22,51 @@ function normalizeExportedFiles(value) {
   return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
+function resolveEntryTimestamp(entry) {
+  return Date.parse(
+    entry?.updatedAt
+    || entry?.completedAt
+    || entry?.startedAt
+    || entry?.createdAt
+    || entry?.queuedAt
+    || ''
+  ) || 0;
+}
+
+function prefersHumanReadableLabel(entry) {
+  const label = String(entry?.label || '').trim();
+  const id = String(entry?.id || '').trim();
+  return Boolean(label && id && label !== id);
+}
+
+function dedupeTaskIndexItems(items = []) {
+  const byId = new Map();
+
+  for (const item of items) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, item);
+      continue;
+    }
+
+    const currentTs = resolveEntryTimestamp(item);
+    const existingTs = resolveEntryTimestamp(existing);
+    if (currentTs > existingTs) {
+      byId.set(id, item);
+      continue;
+    }
+
+    if (currentTs === existingTs && prefersHumanReadableLabel(item) && !prefersHumanReadableLabel(existing)) {
+      byId.set(id, item);
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 export function normalizeTaskIndexEntry(raw = {}) {
   const fromManifest = normalizeTaskManifest(raw, { id: raw.id, label: raw.label });
   return {
@@ -38,6 +83,7 @@ export function normalizeTaskIndexEntry(raw = {}) {
     autoExportCompletedAt: fromManifest.autoExportCompletedAt ?? null,
     rating: fromManifest.rating ?? null,
     exportedFiles: normalizeExportedFiles(fromManifest.exportedFiles),
+    updatedAt: fromManifest.updatedAt ?? null,
     scriptSchemaVersion: Number.isFinite(Number(fromManifest.scriptSchemaVersion))
       ? Number(fromManifest.scriptSchemaVersion)
       : 1,
@@ -47,9 +93,10 @@ export function normalizeTaskIndexEntry(raw = {}) {
 }
 
 function normalizeTaskIndexPayload(raw = {}) {
-  const items = Array.isArray(raw.items)
+  const normalizedItems = Array.isArray(raw.items)
     ? raw.items.map((item) => normalizeTaskIndexEntry(item)).filter((item) => item.id)
     : [];
+  const items = dedupeTaskIndexItems(normalizedItems);
 
   return {
     version: TASK_INDEX_VERSION,
@@ -144,14 +191,15 @@ export async function rebuildIndexFromManifests(rootDirectoryHandle) {
     }
   }
 
-  items.sort((a, b) => {
+  const dedupedItems = dedupeTaskIndexItems(items);
+  dedupedItems.sort((a, b) => {
     const left = Date.parse(a.createdAt || a.queuedAt || '') || 0;
     const right = Date.parse(b.createdAt || b.queuedAt || '') || 0;
     return right - left;
   });
 
   return {
-    items,
+    items: dedupedItems,
     repaired: true,
     warnings
   };

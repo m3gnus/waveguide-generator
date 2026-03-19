@@ -110,6 +110,29 @@ test('rebuildIndexFromManifests scans task folders and returns repair payload', 
   assert.deepEqual(rebuilt.items[0].exportedFiles, ['results.csv']);
 });
 
+test('rebuildIndexFromManifests deduplicates legacy job-id and generation folders for the same job id', async () => {
+  const root = createMemoryDirectory();
+
+  await updateTaskManifestForJob(root, {
+    id: 'job-legacy-1',
+    status: 'queued',
+    exportedFiles: ['before.csv']
+  });
+  await updateTaskManifestForJob(root, {
+    id: 'job-legacy-1',
+    label: 'horn_legacy_1',
+    status: 'complete',
+    exportedFiles: ['after.csv']
+  });
+
+  const rebuilt = await rebuildIndexFromManifests(root);
+  assert.equal(rebuilt.repaired, true);
+  assert.equal(rebuilt.items.length, 1);
+  assert.equal(rebuilt.items[0].id, 'job-legacy-1');
+  assert.equal(rebuilt.items[0].label, 'horn_legacy_1');
+  assert.deepEqual(rebuilt.items[0].exportedFiles, ['after.csv']);
+});
+
 test('buildTaskIndexEntriesFromJobs preserves manifest metadata fields', () => {
   const entries = buildTaskIndexEntriesFromJobs([
     {
