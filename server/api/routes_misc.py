@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from contracts import ChartsRenderRequest, DirectivityRenderRequest
+from services.runtime_preflight import collect_runtime_doctor_report
 from services.solver_runtime import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,
@@ -52,6 +53,7 @@ async def health_check() -> Dict[str, Any]:
     logger.info("Health check requested")
     dependency_status = get_dependency_status()
     device_info = selected_device_metadata("auto")
+    doctor_report = collect_runtime_doctor_report("auto")
 
     return {
         "status": "ok",
@@ -59,6 +61,13 @@ async def health_check() -> Dict[str, Any]:
         "solverReady": BEMPP_RUNTIME_READY,
         "occBuilderReady": WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY,
         "dependencies": dependency_status,
+        "dependencyDoctor": {
+            "schemaVersion": doctor_report.get("schemaVersion"),
+            "generatedAt": doctor_report.get("generatedAt"),
+            "platform": doctor_report.get("platform"),
+            "summary": doctor_report.get("summary"),
+            "components": doctor_report.get("components"),
+        },
         "capabilities": get_settings_capabilities(),
         "deviceInterface": device_info,
         "timestamp": datetime.now().isoformat(),

@@ -25,8 +25,26 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
             },
         }
+        dependency_doctor = {
+            "schemaVersion": "waveguide-runtime-doctor.v1",
+            "generatedAt": "2026-03-19T10:00:00Z",
+            "platform": {"system": "Linux"},
+            "summary": {"requiredReady": False, "requiredIssues": ["bempp_cl"]},
+            "components": [
+                {
+                    "id": "bempp_cl",
+                    "name": "bempp-cl",
+                    "category": "required",
+                    "status": "missing",
+                    "featureImpact": "/api/solve BEM simulation is unavailable.",
+                    "guidance": ["Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git"],
+                }
+            ],
+        }
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
+        ), patch(
             "api.routes_misc.SOLVER_AVAILABLE", False
         ), patch("api.routes_misc.BEMPP_RUNTIME_READY", False), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
             "api.routes_misc.GMSH_OCC_RUNTIME_READY", True
@@ -35,6 +53,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["dependencies"], dependency_status)
+        self.assertEqual(response["dependencyDoctor"], dependency_doctor)
         self.assertFalse(response["solverReady"])
         self.assertTrue(response["occBuilderReady"])
         self.assertEqual(
@@ -110,6 +129,9 @@ class DependencyRuntimeTest(unittest.TestCase):
         }
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.collect_runtime_doctor_report",
+            return_value={"components": [], "summary": {"requiredReady": True}},
+        ), patch(
             "api.routes_misc.SOLVER_AVAILABLE", True
         ), patch("api.routes_misc.BEMPP_RUNTIME_READY", True), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
             "api.routes_misc.GMSH_OCC_RUNTIME_READY", True
@@ -190,6 +212,9 @@ class DependencyRuntimeTest(unittest.TestCase):
         job_uuid = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.collect_runtime_doctor_report",
+            return_value={"components": [], "summary": {"requiredReady": False, "requiredIssues": ["gmsh_python"]}},
+        ), patch(
             "api.routes_misc.SOLVER_AVAILABLE", True
         ), patch("api.routes_misc.BEMPP_RUNTIME_READY", True), patch(
             "api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True
