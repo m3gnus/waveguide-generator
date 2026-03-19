@@ -35,7 +35,6 @@
     "url": "https://github.com/m3gnus/waveguide-generator.git"
   },
   "dependencies": {
-    "express": "^5.2.1",
     "three": "^0.160.0"
   },
   "devDependencies": {

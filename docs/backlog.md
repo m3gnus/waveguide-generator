@@ -106,7 +106,7 @@ Progress note (March 19, 2026):
 - Initial audit candidates from current code:
   - `jszip` appears unused beyond a static script include in `index.html`
   - `trimesh` appears unused across active runtime and tests
-  - `express` is only used by `scripts/dev-server.js`
+  - `express` was only used by `scripts/dev-server.js` before the built-in Node replacement
   - `uvicorn[standard]` should be re-validated against actual runtime needs versus plain `uvicorn`
 - `scripts/start-all.js` and `server/start.sh` still say the app/server can continue with mock-data or mock-solver behavior, which conflicts with the maintained no-mock runtime contract.
 - Launchers (`launch/*.bat|*.sh|*.command`) still delegate to `npm start`, so successful startup depends on `scripts/start-all.js` selecting the same interpreter/environment that `install/install.*` populated.
@@ -116,7 +116,7 @@ Progress note (March 19, 2026):
 **Action plan:**
 
 - [x] Audit every declared dependency against actual runtime/build/test usage and remove dead packages or document why they remain
-- [ ] Replace simple single-purpose dependencies with local code where that meaningfully reduces install burden
+- [x] Replace simple single-purpose dependencies with local code where that meaningfully reduces install burden
 - [ ] Define and enforce one interpreter-selection contract across installer, launchers, `npm start`, and backend startup so the app always prefers the environment it installed and verifies
 - [ ] Normalize installer, launcher, backend, and UI messaging around the maintained no-mock-solver contract
 - [ ] Add a post-install verification/preflight step that proves `fastapi`, `gmsh`, `bempp-cl`, and OpenCL detection status for the exact interpreter that will be launched
@@ -126,7 +126,7 @@ Progress note (March 19, 2026):
 
 Progress note (March 19, 2026):
 - Removed dead dependencies proved unused across active runtime/tests: frontend `jszip` (plus stale `index.html` script include) and backend `trimesh`.
-- Kept `express` because it is the current frontend dev server runtime (`scripts/dev-server.js`, `npm start:frontend`, `npm run dev`).
+- Replaced single-purpose `express` usage with a built-in Node frontend dev server (`scripts/dev-server.js`) and removed `express` from package dependencies.
 - Kept `uvicorn[standard]` because backend startup still runs through `uvicorn` in `server/app.py`; extras policy (plain vs standard) is deferred to the doctor/preflight/interpreter-contract slices.
 
 ### P2. Finish Single-Precision Default Alignment Across UI and Directivity Helpers (March 19, 2026)
