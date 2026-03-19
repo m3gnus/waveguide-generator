@@ -950,76 +950,90 @@ button.secondary:hover:not(:disabled),
 .simulation-mesh-diagnostics-header {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  flex-wrap: wrap;
+  gap: var(--sp-1);
   font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--text-muted);
+  color: var(--text);
 }
 
-.simulation-mesh-diagnostics-tag-summary {
+.simulation-mesh-diagnostics-header-title {
+  font-weight: 700;
+}
+
+.simulation-mesh-diagnostics-header-meta {
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+}
+
+.simulation-mesh-diagnostics-tags {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-1);
 }
 
-.simulation-mesh-diagnostics-tag-summary-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.simulation-mesh-diagnostics-body {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.simulation-mesh-diagnostics-section-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.simulation-mesh-diagnostics-region {
+  display: grid;
+  grid-template-columns: 1fr auto;
   gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.simulation-mesh-diagnostics-tag-count {
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.simulation-mesh-diagnostics-tag-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.simulation-mesh-diagnostics-tag-label,
+.simulation-mesh-diagnostics-placeholder,
+.simulation-mesh-diagnostics-empty {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.simulation-mesh-diagnostics-empty {
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--border);
+  background: var(--input-bg);
+}
+
+.simulation-mesh-diagnostics-warning {
+  font-size: var(--text-xs);
+  color: var(--warning);
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-sm);
   background: var(--input-bg);
   border: 1px solid var(--border);
 }
 
-.simulation-mesh-diagnostics-tag-summary-label,
-.simulation-mesh-diagnostics-tag-summary-value {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-
-.simulation-mesh-diagnostics-tag-summary-value {
-  font-weight: 700;
-  color: var(--text);
-}
-
-.simulation-mesh-diagnostics-tags {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--sp-1);
-}
-
-.simulation-mesh-diagnostics-tag {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--sp-1);
-  align-items: center;
-  padding: var(--sp-1) var(--sp-2);
-  border-radius: var(--r-sm);
-  background: var(--panel);
-  border: 1px solid var(--border);
-}
-
-.simulation-mesh-diagnostics-tag-id,
-.simulation-mesh-diagnostics-tag-count {
-  font-size: var(--text-xs);
-  font-weight: 700;
-}
-
-.simulation-mesh-diagnostics-tag-label,
-.simulation-mesh-diagnostics-placeholder {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-
-.simulation-mesh-diagnostics-warning {
-  font-size: var(--text-xs);
-  color: var(--warning);
-}
-
 @media (max-width: 640px) {
-  .simulation-mesh-diagnostics-tag-summary,
   .simulation-mesh-diagnostics-tags {
     grid-template-columns: 1fr;
   }
