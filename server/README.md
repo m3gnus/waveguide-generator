@@ -38,7 +38,22 @@ From repository root:
 ./scripts/setup-opencl-backend.sh
 ```
 
-After that, `npm start` and `server/start.sh` will automatically prefer:
+After that, the helper writes this repo marker:
+
+```bash
+.waveguide/backend-python.path
+```
+
+`npm start` and `server/start.sh` resolve backend Python with one shared order:
+
+1. `PYTHON_BIN`
+2. `WG_BACKEND_PYTHON`
+3. `.waveguide/backend-python.path`
+4. project `.venv`
+5. OpenCL CPU env fallback
+6. `python3`
+
+For OpenCL CPU setup, the marker value is:
 
 ```bash
 $HOME/.waveguide-generator/opencl-cpu-env/bin/python

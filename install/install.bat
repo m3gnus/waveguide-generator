@@ -224,6 +224,14 @@ echo     3. On a VM: enable GPU passthrough or use a physical machine.
 :opencl_done
 echo.
 
+echo Recording backend interpreter contract...
+if not exist ".waveguide" mkdir ".waveguide"
+set "PREFERRED_PYTHON_FILE=%CD%\.waveguide\backend-python.path"
+> "%PREFERRED_PYTHON_FILE%" echo %CD%\.venv\Scripts\python.exe
+echo   Preferred backend interpreter: %CD%\.venv\Scripts\python.exe
+echo   Marker file: %PREFERRED_PYTHON_FILE%
+echo.
+
 echo ===============================================================
 echo Setup complete.
 echo ===============================================================
