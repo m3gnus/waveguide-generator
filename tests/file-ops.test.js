@@ -186,3 +186,44 @@ test('saveFile sends workspace_subdir for backend workspace writes', async () =>
     global.fetch = originalFetch;
   }
 });
+
+test('saveFile uses backend workspace root when browser folder selection exists but no folder is selected', async () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const originalFetch = global.fetch;
+
+  const fetchCalls = [];
+  global.document = {
+    getElementById() {
+      return null;
+    }
+  };
+  global.window = {
+    async showDirectoryPicker() {
+      return { name: 'exports' };
+    }
+  };
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
+
+  try {
+    await saveFile('manual-export', 'horn_design.txt', {
+      contentType: 'text/plain'
+    });
+
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), null);
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+    global.fetch = originalFetch;
+  }
+});
