@@ -239,40 +239,33 @@ export async function saveFile(content, fileName, options = {}) {
         }
     }
 
-    const shouldTryWorkspaceWrite =
-        options.forceWorkspaceWrite === true
-        || Boolean(options.workspaceSubdir)
-        || !supportsFolderSelection(globalThis?.window);
+    try {
+        await writeWorkspaceFile(finalName, content, {
+            contentType: options.contentType,
+            workspaceSubdir: options.workspaceSubdir,
+            timeoutMs: 30000
+        });
+        finalizeExportCounter(options);
+        return;
+    } catch (err) {
+        console.warn('Backend workspace export failed:', err);
 
-    if (shouldTryWorkspaceWrite) {
-        try {
-            await writeWorkspaceFile(finalName, content, {
-                contentType: options.contentType,
-                workspaceSubdir: options.workspaceSubdir,
-                timeoutMs: 30000
-            });
-            finalizeExportCounter(options);
-            return;
-        } catch (err) {
-            console.warn('Backend workspace export failed:', err);
-
-            // Distinguish between network and other errors
-            if (err.name === 'AbortError') {
-                showError('Workspace export timed out. Falling back to browser download path.');
-            } else if (err instanceof TypeError) {
-                showError('Cannot reach backend workspace. Falling back to browser download path.');
-            } else {
-                const statusCode = Number(err.statusCode || 0);
-                let prefix = 'Workspace export failed';
-                if (statusCode === 401 || statusCode === 403) {
-                    prefix = 'Workspace permission denied';
-                } else if (statusCode === 413) {
-                    prefix = 'Workspace export too large';
-                } else if (statusCode >= 500) {
-                    prefix = 'Workspace server error';
-                }
-                showError(`${prefix}. Falling back to browser download path.`);
+        // Distinguish between network and other errors
+        if (err.name === 'AbortError') {
+            showError('Workspace export timed out. Falling back to browser download path.');
+        } else if (err instanceof TypeError) {
+            showError('Cannot reach backend workspace. Falling back to browser download path.');
+        } else {
+            const statusCode = Number(err.statusCode || 0);
+            let prefix = 'Workspace export failed';
+            if (statusCode === 401 || statusCode === 403) {
+                prefix = 'Workspace permission denied';
+            } else if (statusCode === 413) {
+                prefix = 'Workspace export too large';
+            } else if (statusCode >= 500) {
+                prefix = 'Workspace server error';
             }
+            showError(`${prefix}. Falling back to browser download path.`);
         }
     }
 
