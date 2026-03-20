@@ -328,6 +328,7 @@ Base URL: `http://localhost:8000`
 
 - `GET /api/status/{job_id}`
   - Returns status/progress
+  - Running-stage contract is intentionally collapsed to core phases: `initializing` → `mesh_prepare` → `bem_solve` → `finalizing` (plus terminal/cancellation stages)
   - Stage metadata carries cancellation progress (`cancelling`) while a running stop request is still being acknowledged
 
 - `GET /api/results/{job_id}`

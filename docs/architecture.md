@@ -58,6 +58,7 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 **Simulation**:
 - Backend `/api/solve` is required; no mock/fallback solver supported
 - Stable `/api/solve` numerics are fixed to single precision with no warm-up or GMRES strong-form auto-enable path
+- Live job-stage reporting is collapsed to `initializing`, `mesh_prepare`, `bem_solve`, and `finalizing` (plus terminal/cancellation states)
 - History uses one source mode: folder workspace (manifests only) OR backend jobs + cache (never mixed)
 - Job metadata: `rating`, `exportedFiles`, `autoExportCompletedAt`
 
