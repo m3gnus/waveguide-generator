@@ -19,7 +19,7 @@
     "diag:geometry": "node scripts/diagnostics/check-tritonia-geometry-artifacts.js",
     "diag:occ:tritonia": "python3 scripts/diagnostics/build-occ-mesh-tritonia.py",
     "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py",
-    "benchmark:tritonia": "cd server && python3 scripts/benchmark_solver.py --preset tritonia --json",
+    "benchmark:tritonia": "cd server && python3 scripts/benchmark_tritonia.py",
     "preflight:backend": "node scripts/preflight-backend-runtime.js",
     "preflight:backend:strict": "node scripts/preflight-backend-runtime.js --strict",
     "doctor:backend": "node scripts/doctor-backend-runtime.js",

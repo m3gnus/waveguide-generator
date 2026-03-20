@@ -19,6 +19,7 @@ python3 -m venv .venv
 ```
 
 Notes:
+
 - The root setup scripts (`SETUP-*`) automatically attempt gmsh+bempp installation with fallback handling.
 - `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
@@ -74,6 +75,7 @@ npm run preflight:backend:strict
 ```
 
 Preflight always runs under the interpreter selected by the shared startup contract and reports required readiness for:
+
 - `fastapi` (backend startup)
 - `gmsh` (`/api/mesh/build`)
 - `bempp-cl` (`/api/solve`)
@@ -100,6 +102,7 @@ npm run doctor:backend:strict
 ```
 
 Doctor report contract:
+
 - Stable schema (`schemaVersion`) with per-component entries under `components`
 - Component status classification: `installed`, `missing`, `unsupported`
 - Explicit component category: `required` vs `optional`
@@ -111,6 +114,7 @@ Doctor report contract:
   - `matplotlib` (optional; chart render endpoints)
 
 Cross-platform notes:
+
 - Windows/Linux GPU OpenCL relies on vendor driver packages (NVIDIA/AMD/Intel).
 - This repository does not currently provide a fully automatic cross-vendor GPU driver installer.
 - Linux CPU fallback is typically `pocl-opencl-icd` from your distro packages.
@@ -124,6 +128,7 @@ The solver now supports explicit device mode selection:
 - `opencl_gpu`
 
 Notes:
+
 - `auto` is deterministic and fast: `opencl_gpu` if available, else `opencl_cpu`.
 - OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
 - With current bempp-cl `0.4.x`, the singular assembler still asks for a CPU OpenCL context. On GPU-only runtimes that expose no CPU OpenCL device, Waveguide Generator now aliases those CPU-context lookups to the active GPU context for `opencl_gpu` mode so Apple/other GPU-only systems can still solve.
@@ -134,13 +139,14 @@ Notes:
 
 The backend now enforces a version matrix at runtime:
 
-| Component | Supported range | Required for |
-|---|---|---|
-| Python | `>=3.10,<3.15` | backend runtime |
-| gmsh Python package | `>=4.11,<5.0` | `/api/mesh/build` |
-| bempp-cl | `>=0.4,<0.5` | `/api/solve` |
+| Component           | Supported range | Required for      |
+| ------------------- | --------------- | ----------------- |
+| Python              | `>=3.10,<3.15`  | backend runtime   |
+| gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
+| bempp-cl            | `>=0.4,<0.5`    | `/api/solve`      |
 
 Notes:
+
 - `GET /health` returns the live dependency status and matrix under `dependencies`.
 
 ## 2. Run Backend
@@ -180,6 +186,7 @@ Optional for `/api/solve`:
 ```
 
 Notes:
+
 - `/api/mesh/build` requires the Python `gmsh` package.
 - `/api/solve` additionally requires `bempp-cl`.
 - Plot rendering uses the non-interactive Matplotlib `Agg` backend, so chart/directivity endpoints do not require a display server.
@@ -201,6 +208,7 @@ python3 scripts/benchmark_symmetry.py --iterations 25
 ```
 
 This uses deterministic synthetic fixtures for:
+
 - full-domain reference
 - half-domain symmetry reduction
 - quarter-domain symmetry reduction
@@ -208,23 +216,43 @@ This uses deterministic synthetic fixtures for:
 
 ### 2.3 Tritonia-M bounded runtime repro harness
 
-For a bounded Tritonia-M repro (OCC mesh build + 1-frequency solve + precision support matrix), run:
+For a bounded Tritonia-M repro (OCC mesh build + optional 1-frequency solve + precision support matrix), run:
 
 ```bash
 cd server
-python3 scripts/benchmark_solver.py --preset tritonia --json
+python3 scripts/benchmark_tritonia.py [options]
 ```
 
-What this reports:
-- mesh-prep success/failure for the Tritonia OCC preset
-- selected runtime/device metadata for the requested mode
-- per-precision (`single`, `double`) support status on the active host
-- solver stage timings from `metadata.performance` (`warmup`, frequency solve, directivity, total)
+Or from repository root:
 
-Notes:
-- The preset defaults to `1000 Hz`, `1` frequency point, and linear spacing.
-- You can still override device mode and frequency settings for reduced-sweep follow-up runs.
-- Unsupported precision modes are surfaced explicitly as `unsupported` in the report; they are not silently downgraded.
+```bash
+npm run benchmark:tritonia
+```
+
+Options:
+
+- `--freq FLOAT` — Single frequency to solve (Hz, default: 1000)
+- `--sweep` — Run a 3-frequency sweep (0.8×, 1×, 1.2×) instead of single frequency
+- `--device MODE` — Device mode: `auto|opencl_gpu|opencl_cpu` (default: `auto`)
+- `--precision MODE` — BEM precision: `single|double|both` (default: `single`; `both` tests single then double)
+- `--json` — Output results as JSON
+- `--no-solve` — Skip solve step, only test mesh preparation
+- `--timeout SECONDS` — Max time per solve attempt (default: 120)
+
+What this reports:
+
+- mesh-prep success/failure for the Tritonia OCC preset (vertices, triangles, tag counts)
+- selected runtime/device metadata for the requested mode
+- per-precision (`single`, `double`) solve outcomes on the active host
+- solver stage timings (elapsed, GMRES iterations, SPL value)
+- unsupported precision modes surfaced explicitly
+
+Exit codes:
+
+- `0` — All requested operations succeeded
+- `1` — Mesh preparation failed
+- `2` — All solve attempts failed (but mesh prep succeeded)
+- `3` — Runtime unavailable (bempp/OpenCL not installed)
 
 ## 3. API Endpoints
 
@@ -233,6 +261,7 @@ Notes:
 Health check and solver status.
 
 Includes:
+
 - dependency matrix/runtime payload under `dependencies`
 - settings capability metadata under `capabilities`, including:
   - `simulationBasic.controls`
@@ -442,6 +471,8 @@ curl http://localhost:8000/health
 3. Reproduce with a minimal request (for `422`/contract debugging use the payload-validation curl above).
 4. For `503`, inspect `detail` from response and install/fix missing runtime.
 5. For job-state issues, inspect:
-  - `GET /api/jobs?limit=200&offset=0`
-  - `GET /api/status/{job_id}`
+
+- `GET /api/jobs?limit=200&offset=0`
+- `GET /api/status/{job_id}`
+
 6. Increase logging signal with `MWG_LOG_LEVEL=DEBUG` and retry.
