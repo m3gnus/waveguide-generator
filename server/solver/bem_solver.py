@@ -8,8 +8,8 @@ from .deps import BEMPP_AVAILABLE, bempp_api
 logger = logging.getLogger(__name__)
 from .device_interface import selected_device_metadata
 from .mesh import refine_mesh_with_gmsh, prepare_mesh
-from .solve import solve, solve_frequency
-from .solve_optimized import solve_optimized  # NEW: Optimized solver
+from .solve import solve_frequency
+from .solve_optimized import solve_optimized
 from .directivity import (
     calculate_directivity_index_from_pressure,
     calculate_directivity_patterns,
@@ -80,7 +80,7 @@ class BEMSolver:
         cancellation_callback: Optional[callable] = None,
     ) -> Dict:
         """
-        Run BEM simulation with optional optimizations.
+        Run BEM simulation through the stable solver runtime.
 
         Args:
             mesh: Mesh dictionary from prepare_mesh
@@ -89,10 +89,10 @@ class BEMSolver:
             sim_type: Simulation type
             polar_config: Polar directivity configuration
             progress_callback: Progress callback function
-            use_optimized: Use optimized solver with caching, correct polars (default: True)
+            use_optimized: Compatibility-only legacy flag. Ignored by runtime.
             verbose: Print detailed progress and validation reports (default: False)
-            advanced_settings: Optional optimized-solver-only overrides exposed by
-                the public contract.
+            advanced_settings: Optional stable-runtime overrides exposed by the
+                public contract.
 
         Returns:
             Results dictionary with simulation data and metadata
@@ -111,28 +111,23 @@ class BEMSolver:
                 selected, device_mode, device_info.get("selected_mode"),
             )
 
-        if use_optimized:
-            runtime_advanced_settings = dict(advanced_settings or {})
-            return solve_optimized(
-                mesh, frequency_range, num_frequencies, sim_type,
-                polar_config, progress_callback, stage_callback,
-                verbose=verbose,
-                mesh_validation_mode=mesh_validation_mode,
-                frequency_spacing=frequency_spacing,
-                device_mode=device_mode,
-                **runtime_advanced_settings,
-                cancellation_callback=cancellation_callback,
+        if not use_optimized:
+            logger.info(
+                "[BEM] Ignoring compatibility flag use_optimized=%s; stable solver path is always active.",
+                use_optimized,
             )
-        else:
-            # Legacy solver (analytical piston directivity)
-            return solve(
-                mesh, frequency_range, num_frequencies, sim_type,
-                polar_config, progress_callback, stage_callback,
-                mesh_validation_mode=mesh_validation_mode,
-                frequency_spacing=frequency_spacing,
-                device_mode=device_mode,
-                cancellation_callback=cancellation_callback,
-            )
+
+        runtime_advanced_settings = dict(advanced_settings or {})
+        return solve_optimized(
+            mesh, frequency_range, num_frequencies, sim_type,
+            polar_config, progress_callback, stage_callback,
+            verbose=verbose,
+            mesh_validation_mode=mesh_validation_mode,
+            frequency_spacing=frequency_spacing,
+            device_mode=device_mode,
+            **runtime_advanced_settings,
+            cancellation_callback=cancellation_callback,
+        )
 
     def _solve_frequency(
         self,

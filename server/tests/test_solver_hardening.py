@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from solver.bem_solver import BEMSolver
 from solver.solve import solve as solve_legacy
 from solver.solve_optimized import solve_optimized, _numpy_dtype_for_precision, _normalize_bem_precision
 
@@ -539,6 +540,41 @@ class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
         for di in results["di"]["di"]:
             self.assertIsNotNone(di)
             self.assertFalse(np.isnan(di))
+
+
+class StableEntrypointCompatibilityTest(unittest.TestCase):
+    def test_use_optimized_false_is_accepted_but_ignored(self):
+        with patch("solver.bem_solver.BEMPP_AVAILABLE", True), patch(
+            "solver.bem_solver.selected_device_metadata",
+            return_value={
+                "selected": "opencl",
+                "selected_mode": "opencl_cpu",
+                "fallback_reason": None,
+            },
+        ), patch(
+            "solver.bem_solver.solve_optimized",
+            return_value={"status": "ok"},
+        ) as solve_mock, patch("solver.bem_solver.logger.info") as logger_info:
+            solver = BEMSolver()
+            results = solver.solve(
+                mesh={"grid": object()},
+                frequency_range=[200.0, 400.0],
+                num_frequencies=2,
+                sim_type="2",
+                use_optimized=False,
+                advanced_settings={"use_burton_miller": False},
+            )
+
+        self.assertEqual(results, {"status": "ok"})
+        solve_mock.assert_called_once()
+        self.assertEqual(solve_mock.call_args.kwargs["use_burton_miller"], False)
+        self.assertTrue(
+            any(
+                "Ignoring compatibility flag use_optimized" in str(call.args[0])
+                for call in logger_info.call_args_list
+                if call.args
+            )
+        )
 
 
 if __name__ == "__main__":
