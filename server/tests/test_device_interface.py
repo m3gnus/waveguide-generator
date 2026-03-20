@@ -16,7 +16,7 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         ), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": False, "reason": "no suitable OpenCL CPU driver."},
                 "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
@@ -30,7 +30,7 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu"]), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": True, "reason": None},
                 "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
@@ -39,7 +39,7 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         ):
             self.assertEqual(di.selected_device_interface("opencl_cpu"), "opencl")
 
-    def test_auto_prefers_opencl_gpu_then_cpu(self):
+    def test_auto_prefers_opencl_cpu_then_gpu(self):
         di.clear_device_selection_caches()
         with patch(
             "solver.device_interface._available_concrete_modes",
@@ -47,19 +47,19 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         ), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": True, "reason": None},
                 "opencl_gpu": {"available": True, "reason": None},
             },
         ):
             profile = di._selected_device_profile("auto")
-        self.assertEqual(profile["selected_mode"], "opencl_gpu")
+        self.assertEqual(profile["selected_mode"], "opencl_cpu")
 
         di.clear_device_selection_caches()
         with patch("solver.device_interface._available_concrete_modes", return_value=["opencl_cpu"]), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": True, "reason": None},
                 "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
@@ -67,7 +67,7 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             profile = di._selected_device_profile("auto")
         self.assertEqual(profile["selected_mode"], "opencl_cpu")
 
-    def test_gpu_mode_remains_available_when_only_gpu_driver_exists(self):
+    def test_gpu_mode_requires_cpu_context_for_singular_assembly(self):
         di.clear_device_selection_caches()
         with patch(
             "solver.device_interface._opencl_inventory",
@@ -86,14 +86,17 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
                 di._mode_unavailable_reason("opencl_cpu"),
                 "no suitable OpenCL CPU driver.",
             )
-            self.assertIsNone(di._mode_unavailable_reason("opencl_gpu"))
+            self.assertIn(
+                "requires a usable OpenCL CPU context",
+                str(di._mode_unavailable_reason("opencl_gpu")),
+            )
 
     def test_auto_with_no_opencl_modes_marks_unavailable(self):
         di.clear_device_selection_caches()
         with patch("solver.device_interface._available_concrete_modes", return_value=[]), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": False, "reason": "no suitable OpenCL CPU driver."},
                 "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
@@ -113,12 +116,12 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             "concrete_modes": ["opencl_cpu"],
             "available_modes": ["auto", "opencl_cpu"],
             "mode_availability": {
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": True, "reason": None},
                 "opencl_gpu": {"available": False, "reason": "no suitable OpenCL GPU driver."},
             },
             "opencl_diagnostics": {"base_ready": True, "gpu_available": False, "gpu_reason": "no gpu driver"},
-            "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "deterministic_priority"},
+            "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "supported_opencl_modes"},
         }
         with patch("solver.device_interface._selected_device_profile", return_value=mocked_profile), patch(
             "solver.device_interface._ensure_selected_mode_applied", return_value=("opencl", "cpu", "Fake CPU")
@@ -131,6 +134,8 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         self.assertEqual(info["runtime_retry_attempted"], False)
         self.assertEqual(info["runtime_retry_outcome"], "not_needed")
         self.assertEqual(info["runtime_profile"], "default")
+        self.assertEqual(info["selection_policy"], "supported_opencl_modes")
+        self.assertEqual(info["supported_modes"], ["opencl_cpu"])
         self.assertIn("mode_availability", info)
         self.assertIn("opencl_diagnostics", info)
 
@@ -144,12 +149,12 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             "concrete_modes": [],
             "available_modes": ["auto"],
             "mode_availability": {
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": False, "reason": "no cpu driver"},
                 "opencl_gpu": {"available": False, "reason": "no gpu driver"},
             },
             "opencl_diagnostics": {"base_ready": False, "base_reason": "no OpenCL platforms found."},
-            "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "deterministic_priority"},
+            "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "supported_opencl_modes"},
         }
         with patch("solver.device_interface._selected_device_profile", return_value=mocked_profile), patch(
             "solver.device_interface._ensure_selected_mode_applied",
@@ -211,7 +216,7 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         self.assertEqual(fake_bempp_api.BOUNDARY_OPERATOR_DEVICE_TYPE, "cpu")
         self.assertEqual(fake_bempp_api.POTENTIAL_OPERATOR_DEVICE_TYPE, "cpu")
 
-    def test_apply_opencl_gpu_aliases_cpu_context_when_only_gpu_exists(self):
+    def test_apply_opencl_gpu_requires_cpu_context(self):
         fake_bempp_api = SimpleNamespace(
             BOUNDARY_OPERATOR_DEVICE_TYPE="cpu",
             POTENTIAL_OPERATOR_DEVICE_TYPE="cpu",
@@ -247,19 +252,8 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             "bempp_cl.core.opencl_kernels.default_context",
             side_effect=RuntimeError("cpu unavailable"),
         ):
-            applied, interface, device_type, device_name = di._apply_opencl_mode("opencl_gpu")
-            import bempp_cl.core.opencl_kernels as opencl_kernels
-
-            self.assertIs(opencl_kernels.default_cpu_device(), fake_gpu_device)
-            self.assertIs(opencl_kernels.default_cpu_context(), fake_gpu_context)
-            self.assertIs(opencl_kernels.default_context(), fake_gpu_context)
-
-        self.assertTrue(applied)
-        self.assertEqual(interface, "opencl")
-        self.assertEqual(device_type, "gpu")
-        self.assertEqual(device_name, "Fake GPU")
-        self.assertEqual(fake_bempp_api.BOUNDARY_OPERATOR_DEVICE_TYPE, "gpu")
-        self.assertEqual(fake_bempp_api.POTENTIAL_OPERATOR_DEVICE_TYPE, "gpu")
+            with self.assertRaises(RuntimeError):
+                di._apply_opencl_mode("opencl_gpu")
 
     def test_pocl_detection_identifies_pocl_devices(self):
         self.assertTrue(di._is_pocl_device(SimpleNamespace(name="pocl CPU", vendor="pocl")))
@@ -298,7 +292,7 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
         ), patch(
             "solver.device_interface._mode_availability",
             return_value={
-                "auto": {"available": True, "reason": None, "priority": ["opencl_gpu", "opencl_cpu"]},
+                "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
                 "opencl_cpu": {"available": True, "reason": None},
                 "opencl_gpu": {
                     "available": False,

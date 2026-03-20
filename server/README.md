@@ -129,9 +129,9 @@ The solver now supports explicit device mode selection:
 
 Notes:
 
-- `auto` is deterministic and fast: `opencl_gpu` if available, else `opencl_cpu`.
+- `auto` follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
 - OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
-- With current bempp-cl `0.4.x`, the singular assembler still asks for a CPU OpenCL context. On GPU-only runtimes that expose no CPU OpenCL device, Waveguide Generator now aliases those CPU-context lookups to the active GPU context for `opencl_gpu` mode so Apple/other GPU-only systems can still solve.
+- With current bempp-cl `0.4.x`, singular assembly still requires a CPU OpenCL context. GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu` instead of using context aliasing fallbacks.
 - The solver now clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
 - Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
 
@@ -276,8 +276,10 @@ Includes:
   - `device_type` (`cpu` or `gpu`)
   - `device_name`
   - `fallback_reason`
+  - `selection_policy` (`supported_opencl_modes`)
+  - `supported_modes` (validated concrete modes for the current runtime)
   - `available_modes`
-  - `mode_availability` (per-mode availability/reason for `auto|opencl_cpu|opencl_gpu`)
+  - `mode_availability` (per-mode `available` / `supported` / `reason` for `auto|opencl_cpu|opencl_gpu`)
   - `opencl_diagnostics` (base/runtime/cpu/gpu detection details)
 
 ### `GET /api/updates/check`
