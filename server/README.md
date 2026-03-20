@@ -318,7 +318,7 @@ Optional:
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `advanced_settings`:
   - `use_burton_miller` (bool, stable solver runtime override)
-- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, and `advanced_settings.bem_precision` are ignored; `/api/solve` always runs the stable solver entrypoint with the reduced public override surface.
+- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, and `advanced_settings.bem_precision` are ignored; `/api/solve` always runs the stable solver entrypoint with the reduced public override surface and fixed numerics (single precision, no warm-up).
 
 Validation behavior:
 
@@ -340,7 +340,7 @@ Runtime metadata behavior:
   - `metadata.mesh_validation`
   - `metadata.unit_detection`
   - `metadata.device_interface` (selected interface/device information and fallback details)
-  - `metadata.performance.bem_precision` (`single` or `double` for optimized solves)
+  - `metadata.performance.bem_precision` (`single` for the stable optimized solve path)
 
 ### `GET /api/status/{job_id}`
 
