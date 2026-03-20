@@ -3,24 +3,35 @@ import {
   describeSelectedDevice,
   summarizeRuntimeCapabilities,
 } from "../runtimeCapabilities.js";
+import { showAlertDialog } from "../feedback.js";
 import {
-  createDependencyStatusPanel,
-  updateDependencyStatusPanel,
-} from "../dependencyStatus.js";
-import { summarizeRuntimeDoctor } from "../../modules/runtime/health.js";
+  formatDependencyBlockMessage,
+  summarizeRuntimeDoctor,
+} from "../../modules/runtime/health.js";
 
-let dependencyPanel = null;
+let lastDependencyWarningSignature = null;
+let activeDependencyWarning = null;
 
-function ensureDependencyPanel(statusHelp) {
-  if (!dependencyPanel && statusHelp?.parentElement) {
-    const actionsSection = statusHelp.closest(".actions-section");
-    if (actionsSection) {
-      dependencyPanel = createDependencyStatusPanel(null);
-      dependencyPanel.id = "dependency-status-panel";
-      actionsSection.insertBefore(dependencyPanel, statusHelp.nextSibling);
-    }
+export function buildRequiredDependencyWarning(health) {
+  const doctor = summarizeRuntimeDoctor(health);
+  if (doctor.requiredIssues.length === 0) {
+    return null;
   }
-  return dependencyPanel;
+
+  const signature = doctor.requiredIssues
+    .map((component) => `${component.id}:${component.status}`)
+    .sort()
+    .join("|");
+
+  return {
+    signature,
+    title: "Backend Dependencies Missing",
+    message: formatDependencyBlockMessage(health, {
+      includeOptional: false,
+      fallback:
+        "Required backend dependencies are missing. Simulation and OCC meshing stay blocked until these are installed.",
+    }),
+  };
 }
 
 export async function checkSolverConnection(panel) {
@@ -52,6 +63,7 @@ export async function checkSolverConnection(panel) {
     const runtime = summarizeRuntimeCapabilities(health);
     const doctor = summarizeRuntimeDoctor(health);
     const isConnected = runtime.fullyReady;
+    const dependencyWarning = buildRequiredDependencyWarning(health);
 
     statusDot.className = isConnected
       ? "status-dot connected"
@@ -76,16 +88,29 @@ export async function checkSolverConnection(panel) {
         runButton.disabled = true;
         if (statusHelp) {
           statusHelp.textContent = doctor.requiredIssues.length > 0
-            ? "Required backend dependencies are missing. See details below."
+            ? "Required backend dependencies are missing. See install guidance."
             : defaultHelpText;
           statusHelp.classList.remove("is-hidden");
         }
       }
     }
 
-    const depPanel = ensureDependencyPanel(statusHelp);
-    if (depPanel) {
-      updateDependencyStatusPanel(depPanel, health);
+    if (
+      dependencyWarning &&
+      dependencyWarning.signature !== lastDependencyWarningSignature &&
+      !activeDependencyWarning
+    ) {
+      lastDependencyWarningSignature = dependencyWarning.signature;
+      activeDependencyWarning = showAlertDialog({
+        title: dependencyWarning.title,
+        message: dependencyWarning.message,
+        tone: "warning",
+        closeLabel: "Dismiss",
+      }).finally(() => {
+        activeDependencyWarning = null;
+      });
+    } else if (!dependencyWarning) {
+      lastDependencyWarningSignature = null;
     }
   } catch (error) {
     statusDot.className = "status-dot disconnected";
@@ -98,10 +123,7 @@ export async function checkSolverConnection(panel) {
         statusHelp.classList.remove("is-hidden");
       }
     }
-    const depPanel = ensureDependencyPanel(statusHelp);
-    if (depPanel) {
-      updateDependencyStatusPanel(depPanel, null);
-    }
+    lastDependencyWarningSignature = null;
   }
 
   scheduleNextCheck();

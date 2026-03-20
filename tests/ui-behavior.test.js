@@ -29,6 +29,7 @@ import {
 } from "../src/ui/runtimeCapabilities.js";
 import { createDependencyStatusPanel } from "../src/ui/dependencyStatus.js";
 import { formatDependencyBlockMessage } from "../src/modules/runtime/health.js";
+import { buildRequiredDependencyWarning } from "../src/ui/simulation/connection.js";
 import {
   RECOMMENDED_DEFAULTS,
   resetAllViewerSettings,
@@ -1221,4 +1222,65 @@ test("createDependencyStatusPanel renders required and optional dependency issue
   } finally {
     global.document = originalDocument;
   }
+});
+
+test("buildRequiredDependencyWarning returns null when required runtime is ready", () => {
+  const warning = buildRequiredDependencyWarning({
+    dependencyDoctor: {
+      summary: { requiredReady: true },
+      components: [
+        {
+          id: "gmsh_python",
+          name: "Gmsh Python API",
+          category: "required",
+          status: "installed",
+          guidance: [],
+        },
+        {
+          id: "matplotlib",
+          name: "Matplotlib",
+          category: "optional",
+          status: "missing",
+          guidance: ["Install matplotlib: pip install matplotlib"],
+        },
+      ],
+    },
+  });
+
+  assert.equal(warning, null);
+});
+
+test("buildRequiredDependencyWarning only includes required dependency guidance", () => {
+  const warning = buildRequiredDependencyWarning({
+    dependencyDoctor: {
+      components: [
+        {
+          id: "gmsh_python",
+          name: "Gmsh Python API",
+          category: "required",
+          status: "missing",
+          featureImpact: "/api/mesh/build and adaptive OCC meshing are unavailable.",
+          guidance: [
+            "Install gmsh package: pip install -r server/requirements-gmsh.txt",
+          ],
+        },
+        {
+          id: "matplotlib",
+          name: "Matplotlib",
+          category: "optional",
+          status: "missing",
+          featureImpact:
+            "Chart/directivity image render endpoints are unavailable; solver core paths still work.",
+          guidance: ["Install matplotlib: pip install matplotlib"],
+        },
+      ],
+    },
+  });
+
+  assert.ok(warning);
+  assert.match(warning.title, /Backend Dependencies Missing/);
+  assert.match(warning.message, /Simulation and OCC meshing stay blocked/i);
+  assert.match(warning.message, /Gmsh Python API/);
+  assert.match(warning.message, /Install gmsh package/);
+  assert.doesNotMatch(warning.message, /Install matplotlib/);
 });
