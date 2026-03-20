@@ -56,7 +56,7 @@ Implementation notes:
 
 Action plan:
 
-- [ ] Reproduce the Apple Silicon failure in code-level regression coverage by asserting the current `opencl_cpu` Tritonia solve fails with the traced `KeyError(2)` / all-frequencies-failed signature when the live reference harness is enabled.
+- [x] Reproduce the Apple Silicon failure in code-level regression coverage by asserting the current `opencl_cpu` Tritonia solve fails with the surfaced `All 1 frequencies failed to solve. First failure(s): 2` signature under `RUN_BEM_REFERENCE=1`, which preserves the traced `KeyError(2)` boundary from the live `opencl-cpu-env` repro. (2026-03-20: added live-gated regression coverage in `server/tests/test_tritonia_benchmark.py` against the dedicated `opencl-cpu-env` interpreter path.)
 - [ ] Decide the supported runtime contract for hosts where OpenCL probes pass but operator assembly fails: either validate and ship a `numba` fallback for frequency solve + directivity, or mark `opencl_cpu` unsupported until a real solve passes.
 - [ ] Implement the chosen runtime selection/recovery path in `solve_optimized.py` and `directivity_correct.py`, and make `/health` / runtime doctor report actual validated solver readiness instead of raw OpenCL availability.
 - [ ] Update benchmark/preflight tooling so "ready" means a bounded solve path passes, not just dependency import + device enumeration.
