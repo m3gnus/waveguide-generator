@@ -116,8 +116,8 @@ flowchart LR
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
 - Simulation settings forward `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
 - Runtime device availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
-- Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
-- On GPU-only OpenCL runtimes without a CPU device, `opencl_gpu` now installs a bempp-cl CPU-context surrogate that reuses the active GPU context for singular assembly.
+- Auto device selection follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
+- GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu`; CPU-context surrogate aliasing is not used.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state.
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
@@ -284,8 +284,10 @@ Base URL: `http://localhost:8000`
     - `device_type` (`cpu` or `gpu`)
     - `device_name`
     - `fallback_reason`
+    - `selection_policy` (`supported_opencl_modes`)
+    - `supported_modes` (validated concrete OpenCL modes)
     - `available_modes`
-    - `mode_availability` (per-mode `available` + `reason`)
+    - `mode_availability` (per-mode `available` + `supported` + `reason`)
     - `opencl_diagnostics` (base/platform/cpu/gpu OpenCL detection details)
 
 - `GET /api/updates/check`
@@ -343,7 +345,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 Notes:
 - Backend runtime still accepts `use_optimized` for compatibility, but it is ignored; the active runtime always executes the stable `solve_optimized` entrypoint.
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
-- Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
+- Device policy defaults to `auto` with conservative supported-mode ordering: `opencl_cpu`, then `opencl_gpu` only when both contexts are validated.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - `server/scripts/benchmark_solver.py --preset tritonia` is the bounded repro harness for Tritonia-M (OCC mesh-prep + 1-frequency/reduced sweep solve + precision support matrix and stage timings).
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
@@ -594,7 +596,7 @@ High-signal test suites:
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
-If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. On GPU-only runtimes, `opencl_gpu` can still run by reusing the GPU context for bempp-cl's CPU-context singular-assembly hooks.
+If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`.
 
 ## 11. Key File Map
 

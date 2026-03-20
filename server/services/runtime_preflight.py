@@ -86,6 +86,12 @@ def _build_required_checks(
 
     gmsh_runtime = runtime.get("gmsh_python") if isinstance(runtime.get("gmsh_python"), dict) else {}
     bempp_runtime = runtime.get("bempp") if isinstance(runtime.get("bempp"), dict) else {}
+    supported_modes = (
+        list(device_metadata.get("supported_modes"))
+        if isinstance(device_metadata.get("supported_modes"), list)
+        else []
+    )
+    selection_policy = str(device_metadata.get("selection_policy") or "unknown")
 
     fastapi_ok = bool(fastapi_runtime.get("available"))
     gmsh_ok = bool(gmsh_runtime.get("ready"))
@@ -129,7 +135,9 @@ def _build_required_checks(
             "detail": (
                 "selected_mode="
                 f"{device_metadata.get('selected_mode') or 'none'} "
-                f"device={device_metadata.get('device_name') or 'unknown'}"
+                f"device={device_metadata.get('device_name') or 'unknown'} "
+                f"supported_modes={','.join(supported_modes) or 'none'} "
+                f"policy={selection_policy}"
                 if opencl_ok
                 else str(
                     device_metadata.get("fallback_reason")
@@ -216,6 +224,12 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     fastapi_runtime = snapshot.get("fastapi") if isinstance(snapshot.get("fastapi"), dict) else {}
     matplotlib_runtime = snapshot.get("matplotlib") if isinstance(snapshot.get("matplotlib"), dict) else {}
     device_metadata = snapshot.get("deviceInterface") if isinstance(snapshot.get("deviceInterface"), dict) else {}
+    supported_modes = (
+        list(device_metadata.get("supported_modes"))
+        if isinstance(device_metadata.get("supported_modes"), list)
+        else []
+    )
+    selection_policy = str(device_metadata.get("selection_policy") or "unknown")
 
     gmsh_runtime = runtime.get("gmsh_python") if isinstance(runtime.get("gmsh_python"), dict) else {}
     bempp_runtime = runtime.get("bempp") if isinstance(runtime.get("bempp"), dict) else {}
@@ -338,7 +352,9 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
             "detail": (
                 "selected_mode="
                 f"{device_metadata.get('selected_mode') or 'none'} "
-                f"device={device_metadata.get('device_name') or 'unknown'}"
+                f"device={device_metadata.get('device_name') or 'unknown'} "
+                f"supported_modes={','.join(supported_modes) or 'none'} "
+                f"policy={selection_policy}"
                 if opencl_available
                 else str(
                     device_metadata.get("fallback_reason")

@@ -116,12 +116,14 @@ class DependencyRuntimeTest(unittest.TestCase):
         }
         device_info = {
             "requested_mode": "auto",
-            "selected_mode": "opencl_gpu",
+            "selected_mode": "opencl_cpu",
             "interface": "opencl",
-            "device_type": "gpu",
-            "device_name": "Fake GPU",
+            "device_type": "cpu",
+            "device_name": "Fake CPU",
             "fallback_reason": None,
             "available_modes": ["auto", "opencl_cpu", "opencl_gpu"],
+            "selection_policy": "supported_opencl_modes",
+            "supported_modes": ["opencl_cpu", "opencl_gpu"],
         }
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(

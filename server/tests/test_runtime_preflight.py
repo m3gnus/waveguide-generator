@@ -23,8 +23,10 @@ class RuntimePreflightTest(unittest.TestCase):
         }
         device_metadata = {
             "opencl_available": True,
-            "selected_mode": "opencl_gpu",
-            "device_name": "GPU-1",
+            "selected_mode": "opencl_cpu",
+            "device_name": "CPU-1",
+            "supported_modes": ["opencl_cpu", "opencl_gpu"],
+            "selection_policy": "supported_opencl_modes",
             "fallback_reason": None,
             "warning": None,
         }
@@ -43,7 +45,9 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertTrue(report["requiredChecks"]["gmsh_python"]["ok"])
         self.assertTrue(report["requiredChecks"]["bempp_cl"]["ok"])
         self.assertTrue(report["requiredChecks"]["opencl_runtime"]["ok"])
-        self.assertIn("selected_mode=opencl_gpu", report["requiredChecks"]["opencl_runtime"]["detail"])
+        self.assertIn("selected_mode=opencl_cpu", report["requiredChecks"]["opencl_runtime"]["detail"])
+        self.assertIn("supported_modes=opencl_cpu,opencl_gpu", report["requiredChecks"]["opencl_runtime"]["detail"])
+        self.assertIn("policy=supported_opencl_modes", report["requiredChecks"]["opencl_runtime"]["detail"])
 
     def test_collect_runtime_preflight_reports_missing_required_checks(self):
         dependency_status = {
@@ -94,8 +98,10 @@ class RuntimePreflightTest(unittest.TestCase):
         }
         device_metadata = {
             "opencl_available": True,
-            "selected_mode": "opencl_gpu",
-            "device_name": "GPU-1",
+            "selected_mode": "opencl_cpu",
+            "device_name": "CPU-1",
+            "supported_modes": ["opencl_cpu", "opencl_gpu"],
+            "selection_policy": "supported_opencl_modes",
             "fallback_reason": None,
             "warning": None,
         }
