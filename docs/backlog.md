@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 20, 2026 (added active P1 slice to retire `quadrants` as a partial-mesh runtime control and keep it compatibility-only)
+Last updated: March 20, 2026 (verified false-green `opencl_cpu` solver readiness on Apple Silicon and queued the runtime gating/fallback follow-up)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -39,6 +39,28 @@ Status as of March 19, 2026:
 - Latest documented full-suite baseline before current working changes was green for `npm test` and `npm run test:server`.
 
 ## Active Backlog
+
+### P1 — Fix false-green `/api/solve` readiness on OpenCL CPU hosts
+
+**Status:** OPEN
+**Execution lane:** Reserved — Codex `high`
+
+- On the current macOS/arm64 `opencl-cpu-env`, runtime preflight and `/health` report `requiredReady=true` / `selected_mode=opencl_cpu`, and Tritonia mesh prep succeeds, but a real 1 kHz solve still fails immediately: `python server/scripts/benchmark_tritonia.py --json --freq 1000 --device auto --precision single --timeout 30` exits `2` with `All 1 frequencies failed to solve`.
+- The traced failure boundary is inside `bempp_cl` OpenCL dense assembly, not the app contract layer: `KeyError(2)` from `bempp_cl/core/opencl_kernels.py:get_vec_string` while assembling the single-layer operator. For the same prepared mesh, forcing BEMPP boundary/potential operators to `numba` completes a 1-frequency solve and directivity pass, which means the active runtime is currently marking an unvalidated OpenCL path as supported while hiding a viable fallback.
+
+Implementation notes:
+
+- Runtime selection / readiness reporting: `server/solver/device_interface.py`, `server/services/runtime_preflight.py`, `server/api/routes_misc.py`, `server/scripts/runtime_preflight.py`
+- Solver recovery path: `server/solver/solve_optimized.py`, `server/solver/directivity_correct.py`, `server/solver/bem_solver.py`
+- Repro / coverage / docs: `server/scripts/benchmark_tritonia.py`, `server/tests/test_solver_hardening.py`, `server/tests/test_runtime_preflight.py`, `server/tests/test_device_interface.py`, `server/tests/test_tritonia_benchmark.py`, `server/tests/test_dependency_runtime.py`, `server/README.md`, `docs/PROJECT_DOCUMENTATION.md`
+
+Action plan:
+
+- [ ] Reproduce the Apple Silicon failure in code-level regression coverage by asserting the current `opencl_cpu` Tritonia solve fails with the traced `KeyError(2)` / all-frequencies-failed signature when the live reference harness is enabled.
+- [ ] Decide the supported runtime contract for hosts where OpenCL probes pass but operator assembly fails: either validate and ship a `numba` fallback for frequency solve + directivity, or mark `opencl_cpu` unsupported until a real solve passes.
+- [ ] Implement the chosen runtime selection/recovery path in `solve_optimized.py` and `directivity_correct.py`, and make `/health` / runtime doctor report actual validated solver readiness instead of raw OpenCL availability.
+- [ ] Update benchmark/preflight tooling so "ready" means a bounded solve path passes, not just dependency import + device enumeration.
+- [ ] Refresh docs and rerun the Tritonia repro plus `npm run test:server` and `npm test`.
 
 ### P1 — Retire active `quadrants` partial-mesh behavior from OCC solve/export
 
