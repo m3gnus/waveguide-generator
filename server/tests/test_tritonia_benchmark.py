@@ -271,6 +271,30 @@ class RunBenchmarkLiveReferenceTest(unittest.TestCase):
             precision_result.error,
         )
 
+    def test_live_numba_reference_path_succeeds_when_forced(self):
+        args = MagicMock()
+        args.device = "auto"
+        args.freq = 1000.0
+        args.sweep = False
+        args.precision = "single"
+        args.no_solve = False
+        args.timeout = 120.0
+
+        with patch("solver.solve_optimized.boundary_device_interface", return_value="numba"), patch(
+            "solver.solve_optimized.potential_device_interface", return_value="numba"
+        ):
+            result = bt.run_benchmark(args)
+
+        self.assertTrue(result.runtime_available)
+        self.assertTrue(result.mesh_prep.success, result.mesh_prep.error)
+        self.assertEqual(len(result.precision_results), 1)
+
+        precision_result = result.precision_results[0]
+        self.assertTrue(precision_result.attempted)
+        self.assertTrue(precision_result.success, precision_result.error)
+        self.assertGreater(precision_result.spl_value, 0.0)
+        self.assertEqual(result.unsupported_precision_modes, [])
+
 
 class CLITest(unittest.TestCase):
     def test_cli_json_output(self):
