@@ -1,8 +1,13 @@
 import math
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 VALID_MESH_VALIDATION_MODES = {"strict", "warn", "off"}
+_DEFAULT_DIRECTIVITY_PLANES = (
+    ("horizontal", 0.0),
+    ("vertical", 90.0),
+    ("diagonal", 35.0),
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,36 @@ def _coerce_finite_float(value: Any, default: float) -> float:
     return parsed
 
 
+def normalize_directivity_planes(polar_config: Any) -> List[Dict[str, float | str]]:
+    config = polar_config if isinstance(polar_config, dict) else {}
+    raw_axes = config.get("enabled_axes")
+    default_axes = [plane_id for plane_id, _phi in _DEFAULT_DIRECTIVITY_PLANES]
+    if not isinstance(raw_axes, (list, tuple)):
+        raw_axes = default_axes
+
+    enabled_axes = []
+    seen = set()
+    for axis in raw_axes:
+        value = str(axis or "").strip().lower()
+        if value not in default_axes or value in seen:
+            continue
+        seen.add(value)
+        enabled_axes.append(value)
+    if not enabled_axes:
+        enabled_axes = default_axes
+
+    diagonal_angle = _coerce_finite_float(config.get("inclination", 35.0), 35.0)
+    phi_by_axis = {
+        "horizontal": 0.0,
+        "vertical": 90.0,
+        "diagonal": diagonal_angle,
+    }
+    return [
+        {"id": axis, "phi_degrees": phi_by_axis[axis]}
+        for axis in enabled_axes
+    ]
+
+
 def build_directivity_metadata(
     polar_config: Any,
     observation_info: Any,
@@ -69,17 +104,8 @@ def build_directivity_metadata(
     if sample_count > 1:
         angular_step = (angle_end - angle_start) / float(sample_count - 1)
 
-    raw_axes = config.get("enabled_axes", ["horizontal", "vertical", "diagonal"])
-    if not isinstance(raw_axes, (list, tuple)):
-        raw_axes = ["horizontal", "vertical", "diagonal"]
-
-    enabled_axes = []
-    for axis in raw_axes:
-        value = str(axis or "").strip().lower()
-        if value in {"horizontal", "vertical", "diagonal"} and value not in enabled_axes:
-            enabled_axes.append(value)
-    if not enabled_axes:
-        enabled_axes = ["horizontal", "vertical", "diagonal"]
+    planes = normalize_directivity_planes(config)
+    enabled_axes = [str(plane["id"]) for plane in planes]
 
     observation_origin = str(config.get("observation_origin", "mouth")).strip().lower()
     if observation_origin not in {"mouth", "throat"}:
@@ -90,6 +116,7 @@ def build_directivity_metadata(
         "sample_count": sample_count,
         "angular_step_degrees": angular_step,
         "enabled_axes": enabled_axes,
+        "planes": planes,
         "normalization_angle_degrees": _coerce_finite_float(config.get("norm_angle", 5.0), 5.0),
         "diagonal_angle_degrees": _coerce_finite_float(config.get("inclination", 35.0), 35.0),
         "observation_origin": observation_origin,

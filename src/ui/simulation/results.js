@@ -51,12 +51,44 @@ function formatAxesSummary(axes) {
   if (!Array.isArray(axes) || axes.length === 0) return null;
   const labels = axes
     .map((axis) => String(axis || "").trim().toLowerCase())
-    .filter((axis, index, values) =>
-      ["horizontal", "vertical", "diagonal"].includes(axis) &&
-      values.indexOf(axis) === index
-    )
-    .map((axis) => axis.charAt(0).toUpperCase() + axis.slice(1));
+    .filter((axis, index, values) => axis && values.indexOf(axis) === index)
+    .map((axis) =>
+      axis
+        .split(/[^a-z0-9]+/i)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ")
+    );
   return labels.length > 0 ? labels.join(", ") : null;
+}
+
+function resolveEnabledDirectivityAxes(metadataDirectivity, resultDirectivity) {
+  const fromMetadata = Array.isArray(metadataDirectivity?.enabled_axes)
+    ? metadataDirectivity.enabled_axes
+    : null;
+  if (fromMetadata && fromMetadata.length > 0) {
+    return fromMetadata
+      .map((axis) => String(axis || "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  const fromPlaneDescriptors = Array.isArray(metadataDirectivity?.planes)
+    ? metadataDirectivity.planes
+        .map((plane) => String(plane?.id || "").trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+  if (fromPlaneDescriptors.length > 0) {
+    return fromPlaneDescriptors;
+  }
+
+  if (isObject(resultDirectivity)) {
+    return Object.entries(resultDirectivity)
+      .filter(([, patterns]) => Array.isArray(patterns))
+      .map(([axis]) => String(axis || "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function formatLocalDateTime(isoString) {
@@ -105,6 +137,9 @@ export function renderSolveStatsSummary(results = null, job = null) {
     : null;
   const directivity = isObject(metadata.directivity)
     ? metadata.directivity
+    : null;
+  const directivityResults = isObject(results?.directivity)
+    ? results.directivity
     : null;
   const frequencies = Array.isArray(results?.frequencies)
     ? results.frequencies
@@ -178,7 +213,11 @@ export function renderSolveStatsSummary(results = null, job = null) {
     const angleEnd = formatDegrees(angleRange[1]);
     const sampleCount = Number(directivity.sample_count);
     const angularStep = formatDegrees(directivity.angular_step_degrees);
-    const enabledAxes = formatAxesSummary(directivity.enabled_axes);
+    const enabledAxesList = resolveEnabledDirectivityAxes(
+      directivity,
+      directivityResults,
+    );
+    const enabledAxes = formatAxesSummary(enabledAxesList);
     const normalization = formatDegrees(directivity.normalization_angle_degrees);
     const diagonalAngle = formatDegrees(directivity.diagonal_angle_degrees);
 
@@ -207,8 +246,7 @@ export function renderSolveStatsSummary(results = null, job = null) {
     }
     if (
       diagonalAngle &&
-      Array.isArray(directivity.enabled_axes) &&
-      directivity.enabled_axes.includes("diagonal")
+      enabledAxesList.includes("diagonal")
     ) {
       items.push({ label: "Diagonal plane", value: diagonalAngle });
     }

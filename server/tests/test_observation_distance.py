@@ -123,6 +123,13 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
         self.assertEqual(metadata["sample_count"], 9)
         self.assertEqual(metadata["angular_step_degrees"], 10.0)
         self.assertEqual(metadata["enabled_axes"], ["vertical", "horizontal"])
+        self.assertEqual(
+            metadata["planes"],
+            [
+                {"id": "vertical", "phi_degrees": 90.0},
+                {"id": "horizontal", "phi_degrees": 0.0},
+            ],
+        )
         self.assertEqual(metadata["normalization_angle_degrees"], 12.5)
         self.assertEqual(metadata["diagonal_angle_degrees"], 42.0)
         self.assertEqual(metadata["observation_origin"], "throat")
@@ -257,6 +264,13 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
         self.assertEqual(metadata["sample_count"], 10)
         self.assertEqual(metadata["angular_step_degrees"], 10.0)
         self.assertEqual(metadata["enabled_axes"], ["diagonal", "horizontal"])
+        self.assertEqual(
+            metadata["planes"],
+            [
+                {"id": "diagonal", "phi_degrees": 22.0},
+                {"id": "horizontal", "phi_degrees": 0.0},
+            ],
+        )
         self.assertEqual(metadata["normalization_angle_degrees"], 7.5)
         self.assertEqual(metadata["diagonal_angle_degrees"], 22.0)
         self.assertEqual(metadata["observation_origin"], "throat")
