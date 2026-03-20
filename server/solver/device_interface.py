@@ -29,7 +29,8 @@ _MODE_ALIASES = {
 }
 DEFAULT_DEVICE_MODE = str(os.environ.get("WG_DEVICE_MODE", "auto") or "auto").strip().lower()
 _LOGGED_FALLBACK_REASONS: set[str] = set()
-_AUTO_MODE_PRIORITY: Tuple[str, ...] = ("opencl_gpu", "opencl_cpu")
+_AUTO_MODE_SUPPORTED_ORDER: Tuple[str, ...] = ("opencl_cpu", "opencl_gpu")
+_AUTO_SELECTION_POLICY = "supported_opencl_modes"
 
 
 def _path_contains_whitespace(path: Path) -> bool:
@@ -157,9 +158,15 @@ def _mode_unavailable_reason(mode: str) -> Optional[str]:
         return str(info.get("cpu_reason") or "no suitable OpenCL CPU driver.")
 
     if normalized == "opencl_gpu":
-        if bool(info.get("gpu_available")):
-            return None
-        return str(info.get("gpu_reason") or "no suitable OpenCL GPU driver.")
+        if not bool(info.get("gpu_available")):
+            return str(info.get("gpu_reason") or "no suitable OpenCL GPU driver.")
+        if not bool(info.get("cpu_available")):
+            cpu_reason = str(info.get("cpu_reason") or "no suitable OpenCL CPU driver.")
+            return (
+                "opencl_gpu requires a usable OpenCL CPU context for bempp-cl singular assembly. "
+                f"OpenCL CPU unavailable: {cpu_reason}"
+            )
+        return None
 
     return f"unsupported mode '{normalized}'."
 
@@ -197,16 +204,19 @@ def _mode_availability() -> Dict[str, Dict[str, object]]:
     return {
         "auto": {
             "available": True,
+            "supported": True,
             "reason": None,
-            "priority": list(_AUTO_MODE_PRIORITY),
+            "selection_policy": _AUTO_SELECTION_POLICY,
         },
         "opencl_cpu": {
             "available": cpu_reason is None,
+            "supported": cpu_reason is None,
             "reason": cpu_reason,
             "device_name": inventory.get("cpu_device_name"),
         },
         "opencl_gpu": {
             "available": gpu_reason is None,
+            "supported": gpu_reason is None,
             "reason": gpu_reason,
             "device_name": inventory.get("gpu_device_name"),
             "gpu_reclassified_as_cpu": inventory.get("gpu_reclassified_as_cpu", False),
@@ -240,34 +250,18 @@ def _apply_opencl_mode(mode: str) -> Tuple[bool, Optional[str], Optional[str], O
         opencl_kernels.default_cpu_context()
         return True, "opencl", "cpu", str(getattr(device, "name", None) or "OpenCL CPU")
 
-    # For GPU mode, keep boundary/potential on GPU while ensuring CPU context can
-    # still be initialized for singular kernels in bempp-cl 0.4.x. On some
-    # Apple/OpenCL setups only a GPU context is exposed, so alias the singular
-    # assembler's CPU context calls to the active GPU context.
+    # bempp-cl singular assembly still requires a CPU OpenCL context.
     setattr(bempp_api, "BOUNDARY_OPERATOR_DEVICE_TYPE", "gpu")
     setattr(bempp_api, "POTENTIAL_OPERATOR_DEVICE_TYPE", "gpu")
     device = opencl_kernels.default_gpu_device()
-    default_gpu_context = opencl_kernels.default_gpu_context
-    default_gpu_context()
-
-    info = _opencl_inventory()
-    if not bool(info.get("cpu_available")):
-        gpu_context = default_gpu_context()
-        gpu_device = device
-        setattr(opencl_kernels, "_wg_original_default_cpu_device", getattr(opencl_kernels, "default_cpu_device", None))
-        setattr(opencl_kernels, "_wg_original_default_cpu_context", getattr(opencl_kernels, "default_cpu_context", None))
-        setattr(opencl_kernels, "_wg_original_default_context", getattr(opencl_kernels, "default_context", None))
-        opencl_kernels.default_cpu_device = lambda *args, **kwargs: gpu_device
-        opencl_kernels.default_cpu_context = lambda *args, **kwargs: gpu_context
-        opencl_kernels.default_context = lambda *args, **kwargs: gpu_context
-    else:
-        opencl_kernels.default_cpu_device()
-        opencl_kernels.default_cpu_context()
+    opencl_kernels.default_gpu_context()
+    opencl_kernels.default_cpu_device()
+    opencl_kernels.default_cpu_context()
     return True, "opencl", "gpu", str(getattr(device, "name", None) or "OpenCL GPU")
 
 
 def _auto_mode_choice(concrete_modes: List[str]) -> str:
-    for candidate in _AUTO_MODE_PRIORITY:
+    for candidate in _AUTO_MODE_SUPPORTED_ORDER:
         if candidate in concrete_modes:
             return candidate
     return concrete_modes[0] if concrete_modes else "opencl_cpu"
@@ -323,6 +317,7 @@ def _selected_device_profile(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
         "selected_mode": selected_mode,
         "selected_interface": selected_interface,
         "selected_device_type": selected_device_type,
+        "selection_policy": _AUTO_SELECTION_POLICY,
         "fallback_reason": fallback_reason,
         "concrete_modes": concrete_modes,
         "available_modes": available_mode_options(),
@@ -332,8 +327,8 @@ def _selected_device_profile(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
             "ran": False,
             "winner_mode": None,
             "samples": {},
-            "policy": "deterministic_priority",
-            "priority": list(_AUTO_MODE_PRIORITY),
+            "policy": "supported_opencl_modes",
+            "supported_order": list(_AUTO_MODE_SUPPORTED_ORDER),
         },
     }
 
@@ -444,6 +439,8 @@ def selected_device_metadata(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
     requested_mode = profile.get("requested_mode")
     concrete_modes = list(profile.get("concrete_modes") or [])
     available_modes = list(profile.get("available_modes") or [])
+    selection_policy = str(profile.get("selection_policy") or _AUTO_SELECTION_POLICY)
+    supported_modes = list(profile.get("concrete_modes") or [])
     benchmark = profile.get("benchmark") or {"ran": False, "winner_mode": None, "samples": {}}
     mode_availability = profile.get("mode_availability") if isinstance(profile.get("mode_availability"), dict) else {}
     opencl_diagnostics = profile.get("opencl_diagnostics") if isinstance(profile.get("opencl_diagnostics"), dict) else {}
@@ -458,11 +455,13 @@ def selected_device_metadata(preferred: str = DEFAULT_DEVICE_MODE) -> Dict[str, 
         "fallback_reason": fallback_reason,
         "concrete_modes": concrete_modes,
         "available_modes": available_modes,
+        "selection_policy": selection_policy,
+        "supported_modes": supported_modes,
         "mode_availability": mode_availability,
         "opencl_diagnostics": opencl_diagnostics,
         "benchmark": benchmark,
         "warning": warning_text,
-        "opencl_available": any(mode.startswith("opencl_") for mode in concrete_modes),
+        "opencl_available": len(supported_modes) > 0,
         # Backward-compatible fields.
         "requested": requested_mode,
         "selected": interface if interface != "unavailable" else "opencl_unavailable",

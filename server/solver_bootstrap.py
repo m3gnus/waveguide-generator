@@ -8,7 +8,10 @@ from solver.deps import BEMPP_RUNTIME_READY, GMSH_OCC_RUNTIME_READY, get_depende
 
 SOLVER_AVAILABLE: bool = BEMPP_RUNTIME_READY
 if SOLVER_AVAILABLE:
-    logger.info("[BEM] Device auto policy: opencl_gpu -> opencl_cpu")
+    logger.info(
+        "[BEM] Device auto policy: conservative supported ordering "
+        "(opencl_cpu, then opencl_gpu when CPU and GPU contexts are both validated)"
+    )
 else:
     logger.warning("BEM solver not available. Install bempp-cl to enable simulations.")
 
