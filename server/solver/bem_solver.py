@@ -3,18 +3,12 @@ import logging
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
-from .deps import BEMPP_AVAILABLE, bempp_api
+from .deps import BEMPP_AVAILABLE
 
 logger = logging.getLogger(__name__)
 from .device_interface import selected_device_metadata
 from .mesh import refine_mesh_with_gmsh, prepare_mesh
-from .solve import solve_frequency
 from .solve_optimized import solve_optimized
-from .directivity import (
-    calculate_directivity_index_from_pressure,
-    calculate_directivity_patterns,
-    piston_directivity
-)
 
 
 class BEMSolver:
@@ -128,45 +122,3 @@ class BEMSolver:
             **runtime_advanced_settings,
             cancellation_callback=cancellation_callback,
         )
-
-    def _solve_frequency(
-        self,
-        grid,
-        k: float,
-        c: float,
-        rho: float,
-        sim_type: str,
-        throat_elements: np.ndarray = None
-    ) -> Tuple[float, complex, float]:
-        return solve_frequency(grid, k, c, rho, sim_type, throat_elements)
-
-    def _calculate_directivity_index_from_pressure(
-        self,
-        grid,
-        k: float,
-        c: float,
-        rho: float,
-        p_total,
-        u_total,
-        space_p,
-        space_u,
-        omega: float,
-        spl_on_axis: float
-    ) -> float:
-        return calculate_directivity_index_from_pressure(
-            grid, k, c, rho, p_total, u_total, space_p, space_u, omega, spl_on_axis
-        )
-
-    def _piston_directivity(self, ka: float, sin_theta: float) -> float:
-        return piston_directivity(ka, sin_theta)
-
-    def _calculate_directivity_patterns(
-        self,
-        grid,
-        frequencies: np.ndarray,
-        c: float,
-        rho: float,
-        sim_type: str,
-        polar_config: Optional[Dict] = None
-    ) -> Dict[str, List[List[float]]]:
-        return calculate_directivity_patterns(grid, frequencies, c, rho, sim_type, polar_config)

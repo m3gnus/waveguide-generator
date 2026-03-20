@@ -6,7 +6,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 
 - Backend mesh conversion, validation, and optional refinement (`mesh.py`).
 - OCC mesh builder support (`waveguide_builder.py`).
-- BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve*.py`).
+- BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve_optimized.py`).
 - Runtime dependency gating and reporting (`deps.py`).
 - Unit handling and normalization behavior used by solver paths (`units.py`).
 
@@ -14,7 +14,8 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 
 - Canonical tag mapping is fixed:
   - `1 = SD1G0 (wall)`, `2 = SD1D1001 (source)`, `3 = SD2G0`, `4 = I1-2`.
-- Source boundary space selection must remain `segments=[2]` in solver paths.
+- Source excitation contract must remain tag-2 driven (`tag_throat=2` with
+  `driver_dofs` selected from tag-2 elements in `solve_optimized.py`).
 - `prepare_mesh` must reject index out-of-range and no-source-tag payloads.
 - `/api/mesh/build` supports only:
   - `formula_type in {"R-OSSE","OSSE"}`
@@ -30,7 +31,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 - For `mesh.py` changes:
   - `server/tests/test_mesh_validation.py`
   - `server/tests/test_solver_tag_contract.py`
-- For `solve.py` / `solve_optimized.py` changes:
+- For `bem_solver.py` / `solve_optimized.py` changes:
   - `server/tests/test_solver_tag_contract.py`
   - `server/tests/test_solver_hardening.py`
 - For `device_interface.py` changes:

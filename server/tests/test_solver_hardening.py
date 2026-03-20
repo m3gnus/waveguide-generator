@@ -4,7 +4,6 @@ from unittest.mock import patch
 import numpy as np
 
 from solver.bem_solver import BEMSolver
-from solver.solve import solve as solve_legacy
 from solver.solve_optimized import solve_optimized, _numpy_dtype_for_precision, _normalize_bem_precision
 
 
@@ -285,33 +284,6 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
                 )
 
         solve_freq_mock.assert_not_called()
-
-    def test_cancellation_callback_stops_legacy_solver_before_frequency_loop(self):
-        mesh = _mesh_stub()
-
-        class CancelSolve(RuntimeError):
-            pass
-
-        with patch("solver.solve.boundary_device_interface", return_value="opencl"), patch(
-            "solver.solve.potential_device_interface", return_value="opencl"
-        ), patch(
-            "solver.solve.selected_device_metadata",
-            return_value={"selected": "opencl", "selected_mode": "opencl_cpu"},
-        ), patch("solver.solve.solve_frequency") as solve_frequency, patch(
-            "solver.solve.calculate_directivity_patterns",
-            return_value=_directivity_stub(),
-        ):
-            with self.assertRaises(CancelSolve):
-                solve_legacy(
-                    mesh=mesh,
-                    frequency_range=[200.0, 300.0],
-                    num_frequencies=2,
-                    sim_type="2",
-                    mesh_validation_mode="off",
-                    cancellation_callback=lambda: (_ for _ in ()).throw(CancelSolve("cancelled")),
-                )
-
-        solve_frequency.assert_not_called()
 
     def test_opencl_invalid_buffer_size_no_numba_fallback_records_failure(self):
         mesh = _mesh_stub()
