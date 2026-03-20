@@ -278,6 +278,79 @@ export function showCopyConfirmation(text = "Copied!") {
   setTimeout(hide, 1200);
 }
 
+export function showAlertDialog({
+  title = "Notice",
+  message = "",
+  tone = "info",
+  closeLabel = "Close",
+} = {}) {
+  if (!hasDom()) return Promise.resolve(false);
+
+  const bodyText = String(message || "").trim();
+  if (!bodyText) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "ui-choice-backdrop";
+
+    const dialog = document.createElement("div");
+    dialog.className = "ui-choice-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", String(title || "Notice"));
+
+    const titleEl = document.createElement("h4");
+    titleEl.className = "ui-choice-title";
+    titleEl.textContent = String(title || "Notice");
+    dialog.appendChild(titleEl);
+
+    const messageEl = document.createElement("div");
+    messageEl.className = `ui-choice-message ui-choice-message-${String(tone || "info").trim() || "info"}`;
+    messageEl.textContent = bodyText;
+    dialog.appendChild(messageEl);
+
+    const actions = document.createElement("div");
+    actions.className = "ui-choice-actions";
+    dialog.appendChild(actions);
+
+    let releaseFocus;
+    let settled = false;
+    const finalize = (acknowledged) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("keydown", onKeyDown);
+      if (releaseFocus) releaseFocus();
+      backdrop.remove();
+      resolve(Boolean(acknowledged));
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finalize(false);
+      }
+    };
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "ui-choice-btn";
+    closeBtn.textContent = String(closeLabel || "Close");
+    closeBtn.addEventListener("click", () => finalize(true));
+    actions.appendChild(closeBtn);
+
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        finalize(false);
+      }
+    });
+
+    window.addEventListener("keydown", onKeyDown);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    releaseFocus = trapFocus(dialog, { initialFocus: closeBtn });
+  });
+}
+
 export function showCommandSuggestion({
   title = "Command Suggestion",
   subtitle = "",
