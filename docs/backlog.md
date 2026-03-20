@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 20, 2026 (verified false-green `opencl_cpu` solver readiness on Apple Silicon and queued the runtime gating/fallback follow-up)
+Last updated: March 20, 2026 (aligned Apple Silicon OpenCL backlog direction with bounded-solve readiness and explicit GPU viability validation)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -46,7 +46,8 @@ Status as of March 19, 2026:
 **Execution lane:** Reserved — Codex `high`
 
 - On the current macOS/arm64 `opencl-cpu-env`, runtime preflight and `/health` report `requiredReady=true` / `selected_mode=opencl_cpu`, and Tritonia mesh prep succeeds, but a real 1 kHz solve still fails immediately: `python server/scripts/benchmark_tritonia.py --json --freq 1000 --device auto --precision single --timeout 30` exits `2` with `All 1 frequencies failed to solve`.
-- The traced failure boundary is inside `bempp_cl` OpenCL dense assembly, not the app contract layer: `KeyError(2)` from `bempp_cl/core/opencl_kernels.py:get_vec_string` while assembling the single-layer operator. For the same prepared mesh, forcing BEMPP boundary/potential operators to `numba` completes a 1-frequency solve and directivity pass, which means the active runtime is currently marking an unvalidated OpenCL path as supported while hiding a viable fallback.
+- The traced failure boundary is inside `bempp_cl` OpenCL dense assembly, not the app contract layer: `KeyError(2)` from `bempp_cl/core/opencl_kernels.py:get_vec_string` while assembling the single-layer operator. A forced `numba` operator path completes the same prepared problem, but that path is currently benchmark/test-only evidence and must not become the implicit supported runtime contract unless explicitly chosen.
+- The current macOS setup path provisions a CPU OpenCL environment (`opencl-cpu-env` with `pocl`) and validates CPU OpenCL only; it does not establish Apple Silicon GPU-backed OpenCL as a working solver target. The backlog must treat “real GPU acceleration on Apple Silicon” as an unverified host/runtime question, not an assumed capability.
 
 Implementation notes:
 
@@ -57,9 +58,11 @@ Implementation notes:
 Action plan:
 
 - [x] Reproduce the Apple Silicon failure in code-level regression coverage by asserting the current `opencl_cpu` Tritonia solve fails with the surfaced `All 1 frequencies failed to solve. First failure(s): 2` signature under `RUN_BEM_REFERENCE=1`, which preserves the traced `KeyError(2)` boundary from the live `opencl-cpu-env` repro. (2026-03-20: added live-gated regression coverage in `server/tests/test_tritonia_benchmark.py` against the dedicated `opencl-cpu-env` interpreter path.)
-- [x] Decide the supported runtime contract for hosts where OpenCL probes pass but operator assembly fails: ship a validated `numba` fallback for frequency solve + directivity instead of reporting `opencl_cpu` as unsupported. (2026-03-20: the live Tritonia repro still fails under `opencl_cpu`, but the same prepared mesh succeeds when `solve_optimized` is forced to `numba` boundary/potential operators; coverage added in `server/tests/test_tritonia_benchmark.py`.)
-- [ ] Implement the chosen runtime selection/recovery path in `solve_optimized.py` and `directivity_correct.py`, and make `/health` / runtime doctor report actual validated solver readiness instead of raw OpenCL availability.
-- [ ] Update benchmark/preflight tooling so "ready" means a bounded solve path passes, not just dependency import + device enumeration.
+- [x] Record the current bounded-solve evidence correctly: the live Tritonia repro still fails under `opencl_cpu`, while the same prepared mesh succeeds when `solve_optimized` is forced to `numba` boundary/potential operators. Keep that evidence in regression coverage, but do not treat it as the accepted runtime direction. (2026-03-20: live coverage added in `server/tests/test_tritonia_benchmark.py`.)
+- [ ] Decide the supported Apple Silicon runtime contract explicitly: either validate a real accelerated OpenCL path end-to-end and support only that, or mark Apple Silicon OpenCL solve as unsupported/unready for now. Do not silently convert the production runtime to `numba` fallback unless that choice is made deliberately.
+- [ ] Implement readiness gating so `/health` / runtime doctor report actual validated solver readiness from a bounded solve path, not raw OpenCL import + device enumeration.
+- [ ] Add a host-level validation slice for Apple Silicon GPU viability: prove whether the current `bempp-cl` + OpenCL stack can run on a real GPU-backed path on Apple Silicon, or document that the maintained runtime is CPU OpenCL only / GPU unsupported.
+- [ ] Update benchmark/preflight tooling so "ready" means a bounded solve path passes on the intended supported backend, not just dependency import + device enumeration.
 - [ ] Refresh docs and rerun the Tritonia repro plus `npm run test:server` and `npm test`.
 
 ### P1 — Retire active `quadrants` partial-mesh behavior from OCC solve/export
