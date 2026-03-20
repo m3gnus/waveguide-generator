@@ -47,7 +47,6 @@ function createAbortController(timeoutMs) {
  * @property {Record<string, unknown>|null} [polarConfig]
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
- * @property {'auto'|'opencl_cpu'|'opencl_gpu'} [deviceMode]
  * @property {boolean} [verbose]
  * @property {{
  *   useBurtonMiller?: boolean,
@@ -188,7 +187,6 @@ async function fetchOrApiError(
 
 const VALID_MESH_VALIDATION_MODES = new Set(["strict", "warn", "off"]);
 const VALID_FREQUENCY_SPACING = new Set(["linear", "log"]);
-const VALID_DEVICE_MODES = new Set(["auto", "opencl_cpu", "opencl_gpu"]);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
   if (typeof value !== "string") {
@@ -288,12 +286,6 @@ export class BemSolver {
       "frequency_spacing",
       config.frequencySpacing,
       VALID_FREQUENCY_SPACING,
-    );
-    assignEnumSetting(
-      payload,
-      "device_mode",
-      config.deviceMode,
-      VALID_DEVICE_MODES,
     );
     assignBooleanSetting(payload, "verbose", config.verbose);
     const advancedSettingsPayload = buildAdvancedSettingsPayload(

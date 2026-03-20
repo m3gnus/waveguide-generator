@@ -77,7 +77,6 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         simulationType: "2",
         meshValidationMode: "strict",
         frequencySpacing: "linear",
-        deviceMode: "opencl_cpu",
         verbose: false,
         polarConfig: {
           angle_range: [0, 180, 37],
@@ -116,7 +115,7 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.sim_type, "2");
     assert.equal(payload.mesh_validation_mode, "strict");
     assert.equal(payload.frequency_spacing, "linear");
-    assert.equal(payload.device_mode, "opencl_cpu");
+    assert.equal("device_mode" in payload, false);
     assert.equal(payload.verbose, false);
     assert.deepEqual(payload.advanced_settings, {
       use_burton_miller: false,
@@ -150,7 +149,6 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
         simulationType: "2",
         meshValidationMode: "invalid",
         frequencySpacing: "bogus",
-        deviceMode: "",
         verbose: undefined,
         advancedSettings: {
           useBurtonMiller: null,
@@ -211,7 +209,6 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
         numFrequencies: 4,
         meshValidationMode: "invalid",
         frequencySpacing: "bogus",
-        deviceMode: "",
         verbose: undefined,
         advancedSettings: {
           useBurtonMiller: null,

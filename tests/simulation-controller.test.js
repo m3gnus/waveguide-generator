@@ -448,7 +448,6 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
       frequencyEnd: 1000,
       numFrequencies: 5,
       frequencySpacing: 'log',
-      deviceMode: 'auto',
       polarConfig: {}
     },
     waveguidePayload: { formula_type: 'OSSE' },
@@ -508,7 +507,6 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     numFrequencies: 6,
     meshValidationMode: 'strict',
     frequencySpacing: 'log',
-    deviceMode: 'auto',
     verbose: false,
     polarConfig: {}
   };

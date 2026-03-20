@@ -12,7 +12,6 @@ const SCHEMA_VERSION = 1;
  * Exported for use by modal UI to show "Default" indicators.
  */
 export const RECOMMENDED_DEFAULTS = {
-  deviceMode: 'auto',
   meshValidationMode: 'warn',
   frequencySpacing: 'log',
   verbose: false,
@@ -100,16 +99,6 @@ export function getCurrentSimBasicSettings() {
 }
 
 /**
- * DOM-first getter for device mode.
- * Returns the live DOM value when the modal is open, falls back to cached/default.
- */
-export function getDeviceMode() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simbasic-deviceMode') : null;
-  if (el) return el.value;
-  return _current?.deviceMode ?? RECOMMENDED_DEFAULTS.deviceMode;
-}
-
-/**
  * DOM-first getter for mesh validation mode.
  */
 export function getMeshValidationMode() {
@@ -145,14 +134,4 @@ export function resetSimBasicSettings() {
   const newSettings = { ...RECOMMENDED_DEFAULTS };
   saveSimBasicSettings(newSettings);
   return newSettings;
-}
-
-/**
- * Update the device mode in the persisted state.
- * Used to persist runtime-resolved device mode selections.
- */
-export function updateDeviceModeSelection(mode) {
-  const current = getCurrentSimBasicSettings();
-  current.deviceMode = mode;
-  saveSimBasicSettings(current);
 }
