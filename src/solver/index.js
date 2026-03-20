@@ -48,11 +48,8 @@ function createAbortController(timeoutMs) {
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
  * @property {'auto'|'opencl_cpu'|'opencl_gpu'} [deviceMode]
- * @property {boolean} [useOptimized]
  * @property {boolean} [verbose]
  * @property {{
- *   enableWarmup?: boolean,
- *   bemPrecision?: 'single'|'double',
  *   useBurtonMiller?: boolean,
  * }} [advancedSettings]
  */
@@ -192,7 +189,6 @@ async function fetchOrApiError(
 const VALID_MESH_VALIDATION_MODES = new Set(["strict", "warn", "off"]);
 const VALID_FREQUENCY_SPACING = new Set(["linear", "log"]);
 const VALID_DEVICE_MODES = new Set(["auto", "opencl_cpu", "opencl_gpu"]);
-const VALID_BEM_PRECISIONS = new Set(["single", "double"]);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
   if (typeof value !== "string") {
@@ -217,13 +213,6 @@ function buildAdvancedSettingsPayload(settings) {
   }
 
   const payload = {};
-  assignBooleanSetting(payload, "enable_warmup", settings.enableWarmup);
-  assignEnumSetting(
-    payload,
-    "bem_precision",
-    settings.bemPrecision,
-    VALID_BEM_PRECISIONS,
-  );
   assignBooleanSetting(payload, "use_burton_miller", settings.useBurtonMiller);
 
   return Object.keys(payload).length > 0 ? payload : null;
@@ -306,7 +295,6 @@ export class BemSolver {
       config.deviceMode,
       VALID_DEVICE_MODES,
     );
-    assignBooleanSetting(payload, "use_optimized", config.useOptimized);
     assignBooleanSetting(payload, "verbose", config.verbose);
     const advancedSettingsPayload = buildAdvancedSettingsPayload(
       config.advancedSettings,

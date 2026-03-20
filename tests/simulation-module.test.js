@@ -367,11 +367,8 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       meshValidationMode: 'strict',
       frequencySpacing: 'log',
       deviceMode: 'auto',
-      useOptimized: false,
       verbose: true,
       advancedSettings: {
-        enableWarmup: false,
-        bemPrecision: 'single',
         useBurtonMiller: false
       },
       polarConfig: {
@@ -397,12 +394,9 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.script.meshValidationMode, 'strict');
   assert.equal(job.script.frequencySpacing, 'log');
   assert.equal(job.script.deviceMode, 'auto');
-  assert.equal(job.script.useOptimized, false);
   assert.equal('enableSymmetry' in job.script, false);
   assert.equal(job.script.verbose, true);
   assert.deepEqual(job.script.advancedSettings, {
-    enableWarmup: false,
-    bemPrecision: 'single',
     useBurtonMiller: false
   });
 });

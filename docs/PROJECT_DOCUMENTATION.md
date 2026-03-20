@@ -114,7 +114,7 @@ flowchart LR
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
-- Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, `use_optimized`, and `verbose` when the saved values are valid
+- Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
 - Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
 - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 - On GPU-only OpenCL runtimes without a CPU device, `opencl_gpu` now installs a bempp-cl CPU-context surrogate that reuses the active GPU context for singular assembly.
@@ -305,10 +305,7 @@ Base URL: `http://localhost:8000`
     and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`)
-  - Supports optimized-solver `advanced_settings`:
-    - `enable_warmup`
-    - `bem_precision` (`single` or `double`)
-    - `use_burton_miller`
+  - Supports public `advanced_settings.use_burton_miller`
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
 
@@ -344,12 +341,12 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | bempp-cl | `>=0.4,<0.5` | `/api/solve` |
 
 Notes:
-- Backend solve path defaults to optimized solve mode (`use_optimized=True` in request model).
+- Backend runtime still accepts `use_optimized` for compatibility, but the active frontend contract no longer exposes it.
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
-- Public advanced solver overrides currently expose warm-up, BEM precision, and Burton-Miller coupling. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
+- Public advanced solver overrides currently expose Burton-Miller coupling only. Warm-up and BEM precision remain backend-internal compatibility controls. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata

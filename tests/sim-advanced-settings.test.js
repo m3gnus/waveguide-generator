@@ -24,61 +24,51 @@ global.localStorage = {
   },
 };
 
-test("RECOMMENDED_DEFAULTS.bemPrecision is single", () => {
-  assert.equal(RECOMMENDED_DEFAULTS.bemPrecision, "single");
+test("RECOMMENDED_DEFAULTS no longer exposes bemPrecision", () => {
+  assert.equal("bemPrecision" in RECOMMENDED_DEFAULTS, false);
 });
 
 test("RECOMMENDED_DEFAULTS has expected keys", () => {
-  assert.equal(RECOMMENDED_DEFAULTS.enableWarmup, true);
-  assert.equal(RECOMMENDED_DEFAULTS.bemPrecision, "single");
   assert.equal(RECOMMENDED_DEFAULTS.useBurtonMiller, true);
+  assert.equal("enableWarmup" in RECOMMENDED_DEFAULTS, false);
+  assert.equal("bemPrecision" in RECOMMENDED_DEFAULTS, false);
 });
 
 test("loadSimAdvancedSettings returns RECOMMENDED_DEFAULTS when localStorage is empty", () => {
   global.localStorage.clear();
   const settings = loadSimAdvancedSettings();
-  assert.equal(settings.bemPrecision, "single");
-  assert.equal(settings.enableWarmup, true);
   assert.equal(settings.useBurtonMiller, true);
 });
 
-test("saveSimAdvancedSettings persists bemPrecision single", () => {
+test("saveSimAdvancedSettings persists useBurtonMiller true", () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
-    bemPrecision: "single",
-    enableWarmup: true,
     useBurtonMiller: true,
   });
   const loaded = loadSimAdvancedSettings();
-  assert.equal(loaded.bemPrecision, "single");
+  assert.equal(loaded.useBurtonMiller, true);
 });
 
-test("saveSimAdvancedSettings persists bemPrecision double", () => {
+test("saveSimAdvancedSettings persists useBurtonMiller false", () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
-    bemPrecision: "double",
-    enableWarmup: false,
     useBurtonMiller: false,
   });
   const loaded = loadSimAdvancedSettings();
-  assert.equal(loaded.bemPrecision, "double");
-  assert.equal(loaded.enableWarmup, false);
   assert.equal(loaded.useBurtonMiller, false);
 });
 
-test("resetSimAdvancedSettings returns single precision", () => {
+test("resetSimAdvancedSettings restores defaults", () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
-    bemPrecision: "double",
-    enableWarmup: false,
     useBurtonMiller: false,
   });
   const reset = resetSimAdvancedSettings();
-  assert.equal(reset.bemPrecision, "single");
+  assert.equal(reset.useBurtonMiller, true);
 });
 
-test("getCurrentSimAdvancedSettings returns single precision default", () => {
+test("getCurrentSimAdvancedSettings returns default advanced settings", () => {
   global.localStorage.clear();
   const current = getCurrentSimAdvancedSettings();
-  assert.equal(current.bemPrecision, "single");
+  assert.equal(current.useBurtonMiller, true);
 });

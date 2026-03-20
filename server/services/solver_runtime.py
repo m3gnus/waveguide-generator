@@ -32,7 +32,6 @@ def get_settings_capabilities() -> Dict[str, Any]:
                 "device_mode",
                 "mesh_validation_mode",
                 "frequency_spacing",
-                "use_optimized",
                 "verbose",
             ],
             "notes": "Current backend support is limited to the existing /api/solve runtime overrides.",
@@ -40,13 +39,11 @@ def get_settings_capabilities() -> Dict[str, Any]:
         "simulationAdvanced": {
             "available": True,
             "controls": [
-                "enable_warmup",
-                "bem_precision",
                 "use_burton_miller",
             ],
             "reason": (
-                "The public solve contract exposes warm-up, BEM precision, "
-                "and Burton-Miller coupling overrides."
+                "The public solve contract exposes Burton-Miller coupling "
+                "as the stable advanced override."
             ),
         },
     }

@@ -15,7 +15,6 @@ export const RECOMMENDED_DEFAULTS = {
   deviceMode: 'auto',
   meshValidationMode: 'warn',
   frequencySpacing: 'log',
-  useOptimized: true,
   verbose: false,
 };
 
@@ -126,16 +125,6 @@ export function getFrequencySpacing() {
   const el = typeof document !== 'undefined' ? document.getElementById('simbasic-frequencySpacing') : null;
   if (el) return el.value;
   return _current?.frequencySpacing ?? RECOMMENDED_DEFAULTS.frequencySpacing;
-}
-
-/**
- * DOM-first getter for use_optimized.
- * Uses ?? (nullish coalescing) — false is a valid setting value.
- */
-export function getUseOptimized() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simbasic-useOptimized') : null;
-  if (el) return el.checked;
-  return _current?.useOptimized ?? RECOMMENDED_DEFAULTS.useOptimized;
 }
 
 /**

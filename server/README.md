@@ -263,13 +263,12 @@ Optional:
     - `horizontal`: 0° plane
     - `vertical`: 90° plane
     - `diagonal`: `inclination` plane
-- optimization flags (`use_optimized`, `verbose`)
+- `verbose`
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `device_mode` (`auto` | `opencl_cpu` | `opencl_gpu`, default `auto`)
 - `advanced_settings`:
-  - `enable_warmup` (bool, optimized solver only)
-  - `bem_precision` (`single` | `double`, optimized solver only)
   - `use_burton_miller` (bool, optimized solver only)
+- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`
 
 Validation behavior:
 
@@ -278,7 +277,7 @@ Validation behavior:
 - `surfaceTags.length` must equal triangle count (`indices.length / 3`)
 - `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
 - malformed payloads return `422`
-- `advanced_settings.bem_precision` must be `single` or `double` when provided
+- compatibility-only `advanced_settings.bem_precision` must still be `single` or `double` when provided
 
 Runtime metadata behavior:
 
