@@ -4,7 +4,6 @@ from unittest.mock import patch
 import numpy as np
 
 from solver.observation import infer_observation_frame
-from solver.solve import solve
 from solver.solve_optimized import solve_optimized
 
 
@@ -62,30 +61,10 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self._patchers = [
-            patch("solver.solve.boundary_device_interface", return_value="opencl"),
-            patch("solver.solve.potential_device_interface", return_value="opencl"),
             patch("solver.solve_optimized.boundary_device_interface", return_value="opencl"),
             patch("solver.solve_optimized.potential_device_interface", return_value="opencl"),
             patch(
                 "solver.solve_optimized.selected_device_metadata",
-                return_value={
-                    "requested_mode": "auto",
-                    "selected_mode": "opencl_cpu",
-                    "interface": "opencl",
-                    "device_type": "cpu",
-                    "device_name": "Fake CPU",
-                    "fallback_reason": None,
-                    "available_modes": ["auto", "opencl_cpu", "opencl_gpu"],
-                    "requested": "auto",
-                    "selected": "opencl",
-                    "runtime_selected": "opencl",
-                    "runtime_retry_attempted": False,
-                    "runtime_retry_outcome": "not_needed",
-                    "runtime_profile": "default",
-                },
-            ),
-            patch(
-                "solver.solve.selected_device_metadata",
                 return_value={
                     "requested_mode": "auto",
                     "selected_mode": "opencl_cpu",
@@ -112,37 +91,17 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             patcher.stop()
         super().tearDown()
 
-    def test_legacy_solver_forwards_polar_distance_to_on_axis_observer(self):
-        mesh = _mesh_stub()
-        seen_distances = []
-
-        def _solve_frequency_stub(*_args, **kwargs):
-            seen_distances.append(kwargs.get("observation_distance_m"))
-            return (90.0, complex(1.0, 0.0), 6.0)
-
-        with patch("solver.solve.solve_frequency", side_effect=_solve_frequency_stub), patch(
-            "solver.solve.calculate_directivity_patterns",
-            return_value={"horizontal": [], "vertical": [], "diagonal": []},
-        ):
-            solve(
-                mesh=mesh,
-                frequency_range=[200.0, 400.0],
-                num_frequencies=2,
-                sim_type="2",
-                polar_config={"distance": 2.5},
-                mesh_validation_mode="off",
-            )
-
-        self.assertEqual(seen_distances, [2.5, 2.5])
-
-    def test_legacy_solver_persists_effective_directivity_metadata(self):
+    def test_optimized_solver_persists_effective_directivity_metadata(self):
         mesh = _mesh_stub()
 
-        with patch("solver.solve.solve_frequency", return_value=(90.0, complex(1.0, 0.0), 6.0)), patch(
-            "solver.solve.calculate_directivity_patterns",
+        with patch(
+            _SOLVE_FREQ_TARGET,
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value={"horizontal": [], "vertical": [], "diagonal": []},
         ):
-            results = solve(
+            results = solve_optimized(
                 mesh=mesh,
                 frequency_range=[200.0, 200.0],
                 num_frequencies=1,
@@ -155,6 +114,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
                     "inclination": 42,
                     "observation_origin": "throat",
                 },
+                verbose=False,
                 mesh_validation_mode="off",
             )
 
@@ -165,7 +125,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
         self.assertEqual(metadata["enabled_axes"], ["vertical", "horizontal"])
         self.assertEqual(metadata["normalization_angle_degrees"], 12.5)
         self.assertEqual(metadata["diagonal_angle_degrees"], 42.0)
-        self.assertEqual(metadata["observation_origin"], "mouth")
+        self.assertEqual(metadata["observation_origin"], "throat")
         self.assertEqual(metadata["requested_distance_m"], 2.5)
         self.assertEqual(metadata["effective_distance_m"], 2.5)
 
@@ -195,45 +155,6 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             )
 
         self.assertEqual(seen_distances, [2.5, 2.5])
-
-    def test_legacy_solver_reuses_observation_frame_across_frequencies(self):
-        mesh = _mesh_stub()
-        sentinel_frame = {
-            "axis": np.array([0.0, 0.0, 1.0]),
-            "mouth_center": np.zeros(3),
-            "u": np.array([1.0, 0.0, 0.0]),
-            "v": np.array([0.0, 1.0, 0.0]),
-        }
-        seen_frames = []
-        directivity_frames = []
-
-        def _solve_frequency_stub(*_args, **kwargs):
-            seen_frames.append(kwargs.get("observation_frame"))
-            return (90.0, complex(1.0, 0.0), 6.0)
-
-        def _directivity_stub(*_args, **kwargs):
-            directivity_frames.append(kwargs.get("observation_frame"))
-            return {"horizontal": [], "vertical": [], "diagonal": []}
-
-        with patch("solver.solve.infer_observation_frame", return_value=sentinel_frame) as infer_mock, patch(
-            "solver.solve.solve_frequency",
-            side_effect=_solve_frequency_stub,
-        ), patch(
-            "solver.solve.calculate_directivity_patterns",
-            side_effect=_directivity_stub,
-        ):
-            solve(
-                mesh=mesh,
-                frequency_range=[200.0, 400.0],
-                num_frequencies=2,
-                sim_type="2",
-                polar_config={"distance": 2.5},
-                mesh_validation_mode="off",
-            )
-
-        self.assertEqual(infer_mock.call_count, 1)
-        self.assertEqual(seen_frames, [sentinel_frame, sentinel_frame])
-        self.assertEqual(directivity_frames, [sentinel_frame])
 
     def test_optimized_solver_reuses_observation_frame_across_frequencies(self):
         mesh = _mesh_stub()
