@@ -306,7 +306,7 @@ Base URL: `http://localhost:8000`
   - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
     and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
-  - Accepts compatibility `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`) for older/non-frontend callers
+  - Accepts compatibility `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`) for older/non-frontend callers, but ignores it in the active `/api/solve` runtime path
   - Supports public `advanced_settings.use_burton_miller`
   - Accepts compatibility `advanced_settings.enable_warmup` and `advanced_settings.bem_precision` for older callers, but ignores them in the active `/api/solve` runtime path
   - Creates async job and returns `{ job_id }`

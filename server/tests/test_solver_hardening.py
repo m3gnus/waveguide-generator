@@ -588,6 +588,41 @@ class StableEntrypointCompatibilityTest(unittest.TestCase):
             )
         )
 
+    def test_legacy_device_mode_is_accepted_but_ignored(self):
+        with patch("solver.bem_solver.BEMPP_AVAILABLE", True), patch(
+            "solver.bem_solver.selected_device_metadata",
+            return_value={
+                "selected": "opencl",
+                "selected_mode": "opencl_cpu",
+                "fallback_reason": None,
+            },
+        ) as device_metadata_mock, patch(
+            "solver.bem_solver.solve_optimized",
+            return_value={"status": "ok"},
+        ) as solve_mock, patch("solver.bem_solver.logger.info") as logger_info:
+            solver = BEMSolver()
+            results = solver.solve(
+                mesh={"grid": object()},
+                frequency_range=[200.0, 400.0],
+                num_frequencies=2,
+                sim_type="2",
+                device_mode="opencl_gpu",
+            )
+
+        self.assertEqual(results, {"status": "ok"})
+        device_metadata_mock.assert_called_once_with("auto")
+        solve_mock.assert_called_once()
+        self.assertEqual(solve_mock.call_args.kwargs["device_mode"], "auto")
+        self.assertTrue(
+            any(
+                len(call.args) >= 2
+                and "Ignoring compatibility device_mode=%s" in str(call.args[0])
+                and str(call.args[1]) == "opencl_gpu"
+                for call in logger_info.call_args_list
+                if call.args
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
