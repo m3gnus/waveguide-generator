@@ -3,6 +3,7 @@ node_modules/
 *.log
 .vscode/
 dist/
+output/
 coverage/
 .env
 .waveguide/
