@@ -159,7 +159,7 @@ def _resolve_doctor_status(*, available: bool, supported: bool, ready: bool) -> 
     return DOCTOR_STATUS_MISSING
 
 
-def _guidance_for_component(component_id: str, status: str, system_name: str) -> List[str]:
+def _guidance_for_component(component_id: str, status: str, system_name: str, machine_name: str) -> List[str]:
     if status == DOCTOR_STATUS_INSTALLED:
         return []
 
@@ -190,6 +190,11 @@ def _guidance_for_component(component_id: str, status: str, system_name: str) ->
         return guidance
     if component_id == "opencl_runtime":
         if os_name == "darwin":
+            if (machine_name or "").lower() in {"arm64", "aarch64"}:
+                return [
+                    "Apple Silicon OpenCL solve is currently unsupported for /api/solve.",
+                    "Do not treat ./scripts/setup-opencl-backend.sh or a pocl CPU runtime as a production-readiness fix on Apple Silicon.",
+                ]
             return [
                 "Apple Silicon CPU fallback: ./scripts/setup-opencl-backend.sh",
                 "Or install OpenCL runtime manually (for example: brew install pocl).",
@@ -217,9 +222,11 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     runtime = dependency_status.get("runtime") if isinstance(dependency_status.get("runtime"), dict) else {}
 
     system_name = ""
+    machine_name = ""
     platform_payload = snapshot.get("platform")
     if isinstance(platform_payload, dict):
         system_name = str(platform_payload.get("system") or "")
+        machine_name = str(platform_payload.get("machine") or "")
 
     fastapi_runtime = snapshot.get("fastapi") if isinstance(snapshot.get("fastapi"), dict) else {}
     matplotlib_runtime = snapshot.get("matplotlib") if isinstance(snapshot.get("matplotlib"), dict) else {}
@@ -391,6 +398,7 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
             component_id=str(component.get("id") or ""),
             status=str(component.get("status") or DOCTOR_STATUS_MISSING),
             system_name=system_name,
+            machine_name=machine_name,
         )
     return components
 
