@@ -308,6 +308,7 @@ Base URL: `http://localhost:8000`
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Accepts compatibility `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`) for older/non-frontend callers
   - Supports public `advanced_settings.use_burton_miller`
+  - Accepts compatibility `advanced_settings.enable_warmup` and `advanced_settings.bem_precision` for older callers, but ignores them in the active `/api/solve` runtime path
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
 

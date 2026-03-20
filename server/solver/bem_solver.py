@@ -10,6 +10,9 @@ from .device_interface import selected_device_metadata
 from .mesh import refine_mesh_with_gmsh, prepare_mesh
 from .solve_optimized import solve_optimized
 
+_STABLE_ADVANCED_SETTINGS = {"use_burton_miller"}
+_IGNORED_COMPAT_ADVANCED_SETTINGS = {"enable_warmup", "bem_precision"}
+
 
 class BEMSolver:
     """
@@ -111,7 +114,23 @@ class BEMSolver:
                 use_optimized,
             )
 
-        runtime_advanced_settings = dict(advanced_settings or {})
+        provided_advanced_settings = dict(advanced_settings or {})
+        runtime_advanced_settings = {
+            key: value
+            for key, value in provided_advanced_settings.items()
+            if key in _STABLE_ADVANCED_SETTINGS
+        }
+        ignored_advanced_settings = sorted(
+            key
+            for key, value in provided_advanced_settings.items()
+            if key in _IGNORED_COMPAT_ADVANCED_SETTINGS and value is not None
+        )
+        if ignored_advanced_settings:
+            logger.info(
+                "[BEM] Ignoring compatibility advanced_settings override(s): %s. "
+                "Active /api/solve runtime exposes use_burton_miller only.",
+                ", ".join(ignored_advanced_settings),
+            )
         return solve_optimized(
             mesh, frequency_range, num_frequencies, sim_type,
             polar_config, progress_callback, stage_callback,
