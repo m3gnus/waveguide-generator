@@ -318,7 +318,7 @@ Optional:
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `advanced_settings`:
   - `use_burton_miller` (bool, stable solver runtime override)
-- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `use_optimized`, `advanced_settings.enable_warmup`, and `advanced_settings.bem_precision` are ignored; `/api/solve` always runs the stable solver entrypoint with the reduced public override surface.
+- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, and `advanced_settings.bem_precision` are ignored; `/api/solve` always runs the stable solver entrypoint with the reduced public override surface.
 
 Validation behavior:
 

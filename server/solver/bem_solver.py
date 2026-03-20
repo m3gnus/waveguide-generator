@@ -94,18 +94,33 @@ class BEMSolver:
         Returns:
             Results dictionary with simulation data and metadata
         """
-        device_info = selected_device_metadata(device_mode)
+        requested_device_mode = str(device_mode or "auto")
+        effective_device_mode = "auto"
+        if requested_device_mode != effective_device_mode:
+            logger.info(
+                "[BEM] Ignoring compatibility device_mode=%s; active /api/solve runtime uses auto selection.",
+                requested_device_mode,
+            )
+
+        device_info = selected_device_metadata(effective_device_mode)
         selected = device_info.get("selected", "unknown")
         fallback_reason = device_info.get("fallback_reason")
         if fallback_reason:
             logger.info(
-                "[BEM] Device interface: %s (requested=%s, selected_mode=%s, reason: %s)",
-                selected, device_mode, device_info.get("selected_mode"), fallback_reason,
+                "[BEM] Device interface: %s (requested=%s, effective=%s, selected_mode=%s, reason: %s)",
+                selected,
+                requested_device_mode,
+                effective_device_mode,
+                device_info.get("selected_mode"),
+                fallback_reason,
             )
         else:
             logger.info(
-                "[BEM] Device interface: %s (requested=%s, selected_mode=%s)",
-                selected, device_mode, device_info.get("selected_mode"),
+                "[BEM] Device interface: %s (requested=%s, effective=%s, selected_mode=%s)",
+                selected,
+                requested_device_mode,
+                effective_device_mode,
+                device_info.get("selected_mode"),
             )
 
         if not use_optimized:
@@ -137,7 +152,7 @@ class BEMSolver:
             verbose=verbose,
             mesh_validation_mode=mesh_validation_mode,
             frequency_spacing=frequency_spacing,
-            device_mode=device_mode,
+            device_mode=effective_device_mode,
             **runtime_advanced_settings,
             cancellation_callback=cancellation_callback,
         )
