@@ -548,6 +548,46 @@ class StableEntrypointCompatibilityTest(unittest.TestCase):
             )
         )
 
+    def test_legacy_advanced_settings_are_accepted_but_ignored(self):
+        with patch("solver.bem_solver.BEMPP_AVAILABLE", True), patch(
+            "solver.bem_solver.selected_device_metadata",
+            return_value={
+                "selected": "opencl",
+                "selected_mode": "opencl_cpu",
+                "fallback_reason": None,
+            },
+        ), patch(
+            "solver.bem_solver.solve_optimized",
+            return_value={"status": "ok"},
+        ) as solve_mock, patch("solver.bem_solver.logger.info") as logger_info:
+            solver = BEMSolver()
+            results = solver.solve(
+                mesh={"grid": object()},
+                frequency_range=[200.0, 400.0],
+                num_frequencies=2,
+                sim_type="2",
+                advanced_settings={
+                    "use_burton_miller": False,
+                    "enable_warmup": False,
+                    "bem_precision": "double",
+                },
+            )
+
+        self.assertEqual(results, {"status": "ok"})
+        solve_mock.assert_called_once()
+        self.assertEqual(solve_mock.call_args.kwargs["use_burton_miller"], False)
+        self.assertNotIn("enable_warmup", solve_mock.call_args.kwargs)
+        self.assertNotIn("bem_precision", solve_mock.call_args.kwargs)
+        self.assertTrue(
+            any(
+                len(call.args) >= 2
+                and "Ignoring compatibility advanced_settings override(s): %s." in str(call.args[0])
+                and str(call.args[1]) == "bem_precision, enable_warmup"
+                for call in logger_info.call_args_list
+                if call.args
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

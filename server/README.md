@@ -318,7 +318,7 @@ Optional:
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `advanced_settings`:
   - `use_burton_miller` (bool, stable solver runtime override)
-- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `use_optimized` is ignored; `/api/solve` always runs the stable solver entrypoint.
+- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `use_optimized`, `advanced_settings.enable_warmup`, and `advanced_settings.bem_precision` are ignored; `/api/solve` always runs the stable solver entrypoint with the reduced public override surface.
 
 Validation behavior:
 
@@ -327,7 +327,7 @@ Validation behavior:
 - `surfaceTags.length` must equal triangle count (`indices.length / 3`)
 - `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
 - malformed payloads return `422`
-- compatibility-only `advanced_settings.bem_precision` must still be `single` or `double` when provided
+- compatibility-only `advanced_settings.bem_precision` must still be `single` or `double` when provided, even though the active `/api/solve` runtime ignores it
 
 Runtime metadata behavior:
 
