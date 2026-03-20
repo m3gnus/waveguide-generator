@@ -1335,6 +1335,23 @@ button.secondary:hover:not(:disabled),
   color: var(--text-muted);
 }
 
+.ui-choice-message {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.ui-choice-message-warning {
+  border-color: color-mix(in oklab, var(--warning) 35%, var(--border));
+  background: color-mix(in oklab, var(--warning-bg) 70%, var(--panel));
+}
+
 .ui-choice-actions {
   display: flex;
   flex-direction: column;
@@ -2472,7 +2489,8 @@ textarea {
 
 .ui-choice-subtitle,
 .status-help,
-.section-note {
+.section-note,
+.ui-choice-message {
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
