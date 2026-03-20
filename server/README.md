@@ -133,7 +133,8 @@ Notes:
 - OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
 - With current bempp-cl `0.4.x`, singular assembly still requires a CPU OpenCL context. GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu` instead of using context aliasing fallbacks.
 - The solver now clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
-- Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
+- Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalized plane descriptors, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
+- `results.directivity` is a plane-keyed map containing only the requested planes; callers must not assume all of `horizontal`, `vertical`, and `diagonal` are always present.
 
 ## 1.2 Supported dependency matrix
 
@@ -314,6 +315,7 @@ Optional:
     - `horizontal`: 0° plane
     - `vertical`: 90° plane
     - `diagonal`: `inclination` plane
+  - solve results package directivity per requested plane only; use `results.metadata.directivity.enabled_axes` or `results.metadata.directivity.planes` to inspect which cuts were computed
 - `verbose`
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
 - `advanced_settings`:

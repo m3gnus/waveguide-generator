@@ -36,6 +36,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/config-roundtrip.test.js`
 - `tests/csv-export.test.js`
 - `tests/design-module.test.js`
+- `tests/directivity-plane-contract.test.js`
 - `tests/docs-parity.test.js`
 - `tests/enclosure-regression.test.js`
 - `tests/error-hardening.test.js`

@@ -27,6 +27,7 @@ const EXPORT_FORMAT_LABELS = Object.freeze({
   stl: "Waveguide STL",
   fusion_csv: "Fusion 360 CSV Curves",
 });
+const DIRECTIVITY_PLANE_ORDER = ["horizontal", "vertical", "diagonal"];
 
 function resolveApp(panel) {
   return panel?.app || null;
@@ -98,6 +99,68 @@ function createGenerationDownloadFile(
     originalFileName: options.originalFileName,
   });
   return createDownloadFile(fileName, content, saveOptions);
+}
+
+function normalizeDirectivityByPlane(directivity) {
+  if (!directivity || typeof directivity !== "object" || Array.isArray(directivity)) {
+    return {};
+  }
+  const entries = Object.entries(directivity).filter(
+    ([, patterns]) => Array.isArray(patterns),
+  );
+  entries.sort(([a], [b]) => {
+    const aKey = String(a || "").trim().toLowerCase();
+    const bKey = String(b || "").trim().toLowerCase();
+    const aIndex = DIRECTIVITY_PLANE_ORDER.indexOf(aKey);
+    const bIndex = DIRECTIVITY_PLANE_ORDER.indexOf(bKey);
+    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+    if (aIndex !== -1) return -1;
+    if (bIndex !== -1) return 1;
+    return aKey.localeCompare(bKey);
+  });
+  return Object.fromEntries(entries);
+}
+
+function formatPolarDbCsvValue(value) {
+  if (value == null) {
+    return "";
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : "";
+}
+
+function resolveVacPlaneLabel(plane) {
+  const normalized = String(plane || "").trim().toLowerCase();
+  if (normalized === "horizontal") return "Horizontal";
+  if (normalized === "vertical") return "Vertical";
+  if (normalized === "diagonal") return "Diagonal";
+  return normalized
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function resolveVacPlaneSuffix(plane) {
+  const normalized = String(plane || "").trim().toLowerCase();
+  if (normalized === "horizontal") return "H";
+  if (normalized === "vertical") return "V";
+  if (normalized === "diagonal") return "D";
+  const compact = normalized.replaceAll(/[^a-z0-9]/gi, "").toUpperCase();
+  return compact || "P";
+}
+
+function resolveVacReferencePlane(directivityByPlane) {
+  if (Array.isArray(directivityByPlane.horizontal) && directivityByPlane.horizontal.length > 0) {
+    return "horizontal";
+  }
+  for (const plane of Object.keys(directivityByPlane)) {
+    const patterns = directivityByPlane[plane];
+    if (Array.isArray(patterns) && patterns.length > 0) {
+      return plane;
+    }
+  }
+  return null;
 }
 
 function normalizeGenerationExportFiles(files = [], formatId, baseName) {
@@ -381,15 +444,30 @@ function buildPolarCsvFile(panel, { baseName } = {}) {
   }
 
   const frequencies = results.spl_on_axis?.frequencies || [];
-  const directivity = results.directivity || {};
+  const directivity = normalizeDirectivityByPlane(results.directivity);
   let csv = "Frequency_Hz,Plane,Theta_deg,SPL_norm_dB\n";
 
-  for (const plane of ["horizontal", "vertical", "diagonal"]) {
-    const patterns = directivity[plane] || [];
+  for (const plane of Object.keys(directivity)) {
+    const patterns = directivity[plane];
     for (let fi = 0; fi < patterns.length; fi += 1) {
-      const freq = frequencies[Math.min(fi, frequencies.length - 1)];
-      for (const [angle, db] of patterns[fi]) {
-        csv += `${freq},${plane},${angle},${db.toFixed(2)}\n`;
+      const freq =
+        frequencies.length > 0
+          ? frequencies[Math.min(fi, frequencies.length - 1)]
+          : "";
+      const pattern = patterns[fi];
+      if (!Array.isArray(pattern)) {
+        continue;
+      }
+      for (const sample of pattern) {
+        if (!Array.isArray(sample) || sample.length < 2) {
+          continue;
+        }
+        const angle = Number(sample[0]);
+        if (!Number.isFinite(angle)) {
+          continue;
+        }
+        const db = sample[1];
+        csv += `${freq},${plane},${angle},${formatPolarDbCsvValue(db)}\n`;
       }
     }
   }
@@ -413,7 +491,11 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
   const impFreqs = impedanceData.frequencies || frequencies;
   const impReal = impedanceData.real || [];
   const impImag = impedanceData.imaginary || [];
-  const hPatterns = results.directivity?.horizontal || [];
+  const directivityByPlane = normalizeDirectivityByPlane(results.directivity);
+  const vacPlane = resolveVacReferencePlane(directivityByPlane);
+  const vacPatterns = vacPlane ? directivityByPlane[vacPlane] : [];
+  const vacPlaneLabel = resolveVacPlaneLabel(vacPlane);
+  const vacPlaneSuffix = resolveVacPlaneSuffix(vacPlane);
 
   let out = "";
   out += "// ************************************************************\n";
@@ -470,9 +552,9 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
     out += " \n";
   }
 
-  if (hPatterns.length > 0) {
+  if (vacPatterns.length > 0) {
     let angles = null;
-    for (const pat of hPatterns) {
+    for (const pat of vacPatterns) {
       if (pat && Array.isArray(pat) && pat.length > 0 && pat[0][1] != null) {
         angles = pat.map((entry) => entry[0]);
         break;
@@ -490,7 +572,7 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
       out += "Data_AbscUnit=Hz\n";
       out += "Data_BaseUnit=\n";
       out += "Data_IsContPhase=false\n";
-      out += 'Data_Legend="Polar, Pressure, Horizontal (far-field)"\n';
+      out += `Data_Legend="Polar, Pressure, ${vacPlaneLabel} (far-field)"\n`;
       out += "Param_Coord_Type=Spherical\n";
       out += "Param_Coord_x1=1\n";
       out += `Param_Coord_x2=${angles.join(",")}\n`;
@@ -503,17 +585,17 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
       out += 'Graph_zAxis_Range="-45, 5"\n';
       out += "Graph_zAxis_Units=\n";
       out += "Graph_Param_AsYAxis=x2\n";
-      out += 'Param_Identifier="WG_Polar_H"\n';
+      out += `Param_Identifier="WG_Polar_${vacPlaneSuffix}"\n`;
       out += 'Graph_Group="Waveguide Generator"\n';
       out += "Data\n";
 
-      for (let fi = 0; fi < hPatterns.length; fi += 1) {
+      for (let fi = 0; fi < vacPatterns.length; fi += 1) {
         const freq = frequencies[Math.min(fi, frequencies.length - 1)];
         if (freq == null || !Number.isFinite(freq)) {
           continue;
         }
 
-        const pattern = hPatterns[fi];
+        const pattern = vacPatterns[fi];
         if (!pattern || !Array.isArray(pattern)) {
           continue;
         }
