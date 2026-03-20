@@ -957,18 +957,13 @@ def solve_optimized(
     results["metadata"]["partial_success"] = (
         success_count > 0 and results["metadata"]["failure_count"] > 0
     )
-    valid_iterations = [n for n in gmres_iterations if n is not None]
-    avg_gmres = sum(valid_iterations) / len(valid_iterations) if valid_iterations else 0.0
     results["metadata"]["performance"] = {
         "total_time_seconds": total_time,
-        "frequency_solve_time": freq_solve_time,
-        "directivity_compute_time": directivity_time,
-        "time_per_frequency": freq_solve_time / len(frequencies) if len(frequencies) > 0 else 0,
-        "gmres_iterations_per_frequency": gmres_iterations,
-        "avg_gmres_iterations": round(avg_gmres, 1),
         "bem_precision": effective_bem_precision,
     }
 
+    valid_iterations = [n for n in gmres_iterations if n is not None]
+    avg_gmres = sum(valid_iterations) / len(valid_iterations) if valid_iterations else 0.0
     if verbose:
         logger.info("=" * 70)
         logger.info("SIMULATION COMPLETE")
