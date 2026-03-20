@@ -7,10 +7,7 @@ export const STAGE_LABELS = {
   initializing: "Initializing solver",
   mesh_prepare: "Preparing mesh",
   mesh_ready: "Mesh ready",
-  solver_setup: "Setting up solver",
   bem_solve: "Solving",
-  frequency_solve: "Solving",
-  directivity: "Computing directivity",
   finalizing: "Finalizing results",
   cancelling: "Stopping",
   complete: "Complete",
@@ -18,8 +15,16 @@ export const STAGE_LABELS = {
   error: "Error",
 };
 
+const STAGE_ALIASES = {
+  solver_setup: "bem_solve",
+  frequency_solve: "bem_solve",
+  directivity: "finalizing",
+};
+
 function normalizeStage(stage) {
-  return typeof stage === "string" && stage.trim() ? stage.trim() : "bem_solve";
+  if (typeof stage !== "string" || !stage.trim()) return "bem_solve";
+  const key = stage.trim();
+  return STAGE_ALIASES[key] || key;
 }
 
 function stageStep(stage) {
@@ -28,21 +33,19 @@ function stageStep(stage) {
     key === "mesh_generation" ||
     key === "mesh_prepare" ||
     key === "mesh_ready" ||
-    key === "solver_setup" ||
     key === "initializing"
   ) {
     return 1;
   }
   if (key === "queued") return 1;
-  if (key === "directivity") return 3;
-  if (key === "cancelling") return 4;
+  if (key === "cancelling") return 3;
   if (
     key === "finalizing" ||
     key === "complete" ||
     key === "cancelled" ||
     key === "error"
   )
-    return 4;
+    return 3;
   return 2;
 }
 
@@ -92,20 +95,9 @@ export function resolveStageDetail(stage, message, pct) {
   const key = normalizeStage(stage);
   const raw = typeof message === "string" ? message.trim() : "";
 
-  if (key === "directivity") {
-    if (!raw || /computing spectra\/directivity/i.test(raw)) {
-      return `Generating directivity maps and computing DI (${pct}%).`;
-    }
-    return raw;
-  }
-
   if (key === "frequency_solve" || key === "bem_solve") {
     if (raw) return raw;
     return `Solving across frequency range (${pct}%).`;
-  }
-
-  if (key === "solver_setup") {
-    return raw || "Configuring solver parameters.";
   }
 
   if (key === "mesh_generation" || key === "mesh_prepare") {
@@ -225,7 +217,7 @@ export function updateConnectionStageUi(
     }
   }
   if (statusTextEl) {
-    statusTextEl.textContent = `Stage ${step}/4: ${label} (${pct}%)`;
+    statusTextEl.textContent = `Stage ${step}/3: ${label} (${pct}%)`;
   }
   if (statusHelp) {
     if (detail) {

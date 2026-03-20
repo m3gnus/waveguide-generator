@@ -658,7 +658,7 @@ export async function runSimulation(panel) {
 
     updateStageUi(panel, {
       progress: 0.3,
-      stage: "solver_setup",
+      stage: "initializing",
       message: "Job accepted by backend",
     });
 
