@@ -366,7 +366,6 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       numFrequencies: 5,
       meshValidationMode: 'strict',
       frequencySpacing: 'log',
-      deviceMode: 'auto',
       verbose: true,
       advancedSettings: {
         useBurtonMiller: false
@@ -393,7 +392,6 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.deepEqual(job.script.params, { L: 120, a: 45 });
   assert.equal(job.script.meshValidationMode, 'strict');
   assert.equal(job.script.frequencySpacing, 'log');
-  assert.equal(job.script.deviceMode, 'auto');
   assert.equal('enableSymmetry' in job.script, false);
   assert.equal(job.script.verbose, true);
   assert.deepEqual(job.script.advancedSettings, {

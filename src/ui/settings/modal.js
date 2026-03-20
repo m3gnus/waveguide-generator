@@ -36,12 +36,6 @@ import {
   resetSimulationManagementSettings,
   saveSimulationManagementSettings,
 } from "./simulationManagementSettings.js";
-import {
-  describeSimBasicDeviceAvailability,
-  fetchRuntimeHealth,
-  getCachedRuntimeHealth,
-  getOpenCLSetupHelp,
-} from "../runtimeCapabilities.js";
 
 import {
   getSelectedFolderLabel,
@@ -51,11 +45,6 @@ import {
   fetchWorkspacePath,
   openWorkspaceInFinder,
 } from "../workspace/folderWorkspace.js";
-
-export {
-  describeSimBasicDeviceAvailability,
-  getOpenCLSetupHelp,
-} from "../runtimeCapabilities.js";
 
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
@@ -104,8 +93,6 @@ const VIEWER_HELP = Object.freeze({
     "Enables arrow-key style camera panning shortcuts while the viewport is focused.",
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
-  deviceMode:
-    "Selects the compute device for BEM operator assembly. Auto uses the best available OpenCL device. opencl_cpu forces CPU-only OpenCL; opencl_gpu forces GPU OpenCL (requires a compatible GPU driver). Recommended default: Auto.",
   meshValidationMode:
     "Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.",
   frequencySpacing:
@@ -156,10 +143,6 @@ export function getDownloadSimMeshEnabled() {
   const el = document.getElementById("download-sim-mesh");
   if (el) return el.checked;
   return _state.downloadSimMesh;
-}
-
-function _getDocument() {
-  return typeof document !== "undefined" ? document : null;
 }
 
 /**
@@ -259,9 +242,6 @@ function _buildModal(viewerRuntime) {
     // Sim Basic settings: save on any simbasic-* control change
     if (t.id && t.id.startsWith("simbasic-")) {
       const settings = getCurrentSimBasicSettings();
-      settings.deviceMode =
-        document.getElementById("simbasic-deviceMode")?.value ??
-        settings.deviceMode;
       settings.meshValidationMode =
         document.getElementById("simbasic-meshValidationMode")?.value ??
         settings.meshValidationMode;
@@ -272,14 +252,6 @@ function _buildModal(viewerRuntime) {
         document.getElementById("simbasic-verbose")?.checked ??
         settings.verbose;
       saveSimBasicSettings(settings);
-
-      // Re-evaluate Setup Help visibility when device mode changes
-      if (t.id === "simbasic-deviceMode") {
-        const cachedHealth = getCachedRuntimeHealth();
-        if (cachedHealth) {
-          _applySimBasicDeviceAvailability(cachedHealth);
-        }
-      }
     }
 
     if (t.id && t.id.startsWith("simadvanced-")) {
@@ -378,8 +350,6 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
   content.appendChild(_buildTaskExportsSection());
   content.appendChild(_buildWorkspaceSection(cleanupFns));
   content.appendChild(_buildSystemSection(viewerRuntime));
-
-  void _refreshSimulationCapabilityState();
 
   return content;
 }
@@ -869,67 +839,17 @@ function _buildSimulationSection() {
   const currentSimBasic = getCurrentSimBasicSettings();
   const solverHeader = _buildSubSectionHeader("Solve Defaults", () => {
     resetSimBasicSettings();
-    const dm = document.getElementById("simbasic-deviceMode");
-    if (dm) dm.value = SIM_BASIC_DEFAULTS.deviceMode;
     const mvm = document.getElementById("simbasic-meshValidationMode");
     if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
     const fs = document.getElementById("simbasic-frequencySpacing");
     if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
     const vb = document.getElementById("simbasic-verbose");
     if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
-    if (dmBadge) dmBadge.hidden = true;
     if (mvmBadge) mvmBadge.hidden = true;
     if (fsBadge) fsBadge.hidden = true;
     if (vbBadge) vbBadge.hidden = true;
   });
   sec.appendChild(solverHeader);
-
-  const dmResult = _buildSimBasicSelectRow(
-    "Compute Device",
-    "simbasic-deviceMode",
-    [
-      { value: "auto", label: "Auto" },
-      { value: "opencl_gpu", label: "OpenCL GPU" },
-      { value: "opencl_cpu", label: "OpenCL CPU" },
-    ],
-    currentSimBasic.deviceMode,
-    SIM_BASIC_DEFAULTS.deviceMode,
-    SIMULATION_BASIC_HELP.deviceMode,
-  );
-  sec.appendChild(dmResult.row);
-  let dmBadge = dmResult.badge;
-
-  const dmStatusSpan = document.createElement("span");
-  dmStatusSpan.id = "simbasic-deviceMode-status";
-  dmStatusSpan.setAttribute(
-    "style",
-    "font-size:0.7rem;opacity:0.6;display:block;margin-top:2px;",
-  );
-  dmResult.row.appendChild(dmStatusSpan);
-
-  // Setup Help expandable section — shown when selected device mode is unavailable
-  const setupHelpDetails = document.createElement("details");
-  setupHelpDetails.id = "simbasic-opencl-setup-help";
-  setupHelpDetails.setAttribute("style", "margin-top:6px;font-size:0.78rem;");
-  setupHelpDetails.hidden = true;
-
-  const setupHelpSummary = document.createElement("summary");
-  setupHelpSummary.setAttribute(
-    "style",
-    "cursor:pointer;color:var(--accent,#7bb3f0);user-select:none;",
-  );
-  setupHelpSummary.textContent = "Setup Help";
-  setupHelpDetails.appendChild(setupHelpSummary);
-
-  const setupHelpText = document.createElement("p");
-  setupHelpText.id = "simbasic-opencl-setup-help-text";
-  setupHelpText.setAttribute(
-    "style",
-    "margin:6px 0 0 0;line-height:1.5;opacity:0.85;white-space:pre-wrap;",
-  );
-  setupHelpDetails.appendChild(setupHelpText);
-
-  sec.appendChild(setupHelpDetails);
 
   const mvmResult = _buildSimBasicSelectRow(
     "Mesh Validation Policy",
@@ -1000,12 +920,6 @@ function _buildSimulationSection() {
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
-
-  const cachedHealth = getCachedRuntimeHealth();
-  if (cachedHealth) {
-    _applySimBasicDeviceAvailability(cachedHealth);
-    _applySimAdvancedCapabilityState(cachedHealth);
-  }
 
   return sec;
 }
@@ -1504,93 +1418,8 @@ function _buildSystemSection(viewerRuntime) {
 // Runtime capability refresh
 // ---------------------------------------------------------------------------
 
-function _getSelectOptions(select) {
-  if (!select) return [];
-  if (select.options && typeof select.options[Symbol.iterator] === "function") {
-    return Array.from(select.options);
-  }
-  return Array.isArray(select._children) ? select._children : [];
-}
-
-function _setOptionLabel(option, label) {
-  if (!option) return;
-  if ("textContent" in option) {
-    option.textContent = label;
-    return;
-  }
-  option.text = label;
-}
-
-function _applySimBasicDeviceAvailability(health) {
-  const doc = _getDocument();
-  if (!doc) return;
-
-  const statusEl = doc.getElementById("simbasic-deviceMode-status");
-  const select = doc.getElementById("simbasic-deviceMode");
-  if (!statusEl || !select) return;
-
-  const availability = describeSimBasicDeviceAvailability(health, select.value);
-  for (const opt of _getSelectOptions(select)) {
-    const isUnavailable = availability.unavailableModes.includes(opt.value);
-    opt.disabled = isUnavailable;
-    const baseLabel = String(opt.textContent || opt.text || "").replace(
-      " (unavailable)",
-      "",
-    );
-    _setOptionLabel(
-      opt,
-      isUnavailable && opt.value !== "auto"
-        ? `${baseLabel} (unavailable)`
-        : baseLabel,
-    );
-  }
-  statusEl.textContent = availability.statusText;
-
-  // Setup Help: show when selected device mode is unavailable
-  const setupHelpEl = doc.getElementById("simbasic-opencl-setup-help");
-  const setupHelpTextEl = doc.getElementById("simbasic-opencl-setup-help-text");
-  if (setupHelpEl && setupHelpTextEl) {
-    const selectedMode = String(select.value || "auto")
-      .trim()
-      .toLowerCase();
-    const isSelectedUnavailable =
-      selectedMode !== "auto" &&
-      availability.unavailableModes.includes(selectedMode);
-    const allOpenCLUnavailable =
-      selectedMode === "auto" && availability.unavailableModes.length >= 2;
-    const shouldShow = isSelectedUnavailable || allOpenCLUnavailable;
-
-    setupHelpEl.hidden = !shouldShow;
-    if (shouldShow) {
-      const helpText = getOpenCLSetupHelp(health);
-      setupHelpTextEl.textContent =
-        helpText || "Check your OpenCL driver installation.";
-      if (shouldShow && !setupHelpEl.open) {
-        setupHelpEl.open = true;
-      }
-    }
-  }
-}
-
-function _applySimAdvancedCapabilityState(_health) {
-  // No-op: planned controls section removed. Stable advanced controls are
-  // always shown unconditionally.
-}
-
-async function _refreshSimulationCapabilityState() {
-  try {
-    const health = await fetchRuntimeHealth();
-    _applySimBasicDeviceAvailability(health);
-    _applySimAdvancedCapabilityState(health);
-  } catch {
-    const doc = _getDocument();
-    const statusEl = doc?.getElementById("simbasic-deviceMode-status");
-    if (statusEl) {
-      statusEl.textContent = "";
-    }
-    _applySimAdvancedCapabilityState(null);
-  }
-}
+// The simulation settings UI currently renders only stable controls and no
+// longer needs runtime capability refresh logic.
 
 // ---------------------------------------------------------------------------
 // Helpers
