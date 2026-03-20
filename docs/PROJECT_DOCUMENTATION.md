@@ -349,8 +349,8 @@ Notes:
 - Device policy defaults to `auto` with conservative supported-mode ordering: `opencl_cpu`, then `opencl_gpu` only when both contexts are validated.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
 - `server/scripts/benchmark_solver.py --preset tritonia` is the bounded repro harness for Tritonia-M (OCC mesh-prep + 1-frequency/reduced sweep solve + precision support matrix and stage timings).
-- Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
-- Public advanced solver overrides currently expose Burton-Miller coupling only. Warm-up and BEM precision remain backend-internal compatibility controls. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
+- GMRES strong-form auto-enable is disabled in the active solver path; solves use explicit tolerance-only GMRES call parameters, with iteration counts recorded when available in the installed bempp runtime.
+- Public advanced solver overrides currently expose Burton-Miller coupling only. Warm-up and BEM precision remain compatibility-only controls and do not alter active `/api/solve` numerics (single precision, no warm-up).
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata
@@ -363,11 +363,9 @@ Every `/api/solve` result includes `metadata.performance`:
 | `frequency_solve_time` | float | Time spent in frequency loop |
 | `directivity_compute_time` | float | Time for directivity post-processing |
 | `time_per_frequency` | float | Average per-frequency solve time |
-| `warmup_time_seconds` | float | Warm-up pass duration (0 if skipped) |
 | `gmres_iterations_per_frequency` | list[int\|null] | GMRES iteration count per frequency; `null` for failed frequencies |
 | `avg_gmres_iterations` | float | Mean iteration count across successful frequencies |
-| `gmres_strong_form_supported` | bool | Whether strong-form preconditioner was active for this run |
-| `bem_precision` | string | Active BEMPP operator precision for the optimized solve path (`single` or `double`) |
+| `bem_precision` | string | Active BEMPP operator precision (`single` in the stable runtime path) |
 | `reduction_speedup` | float | Symmetry reduction factor applied (1.0 = no reduction) |
 
 ## 8. Canonical Contract

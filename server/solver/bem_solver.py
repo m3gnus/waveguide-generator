@@ -143,7 +143,8 @@ class BEMSolver:
         if ignored_advanced_settings:
             logger.info(
                 "[BEM] Ignoring compatibility advanced_settings override(s): %s. "
-                "Active /api/solve runtime exposes use_burton_miller only.",
+                "Active /api/solve runtime exposes use_burton_miller only and keeps solver numerics fixed "
+                "(single precision, no warm-up).",
                 ", ".join(ignored_advanced_settings),
             )
         return solve_optimized(

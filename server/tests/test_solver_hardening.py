@@ -56,7 +56,7 @@ def _stub_horn_init(self, grid, physical_tags, **kwargs):
     self.tag_throat = kwargs.get("tag_throat", 2)
     self.boundary_interface = kwargs.get("boundary_interface", "opencl")
     self.potential_interface = kwargs.get("potential_interface", "opencl")
-    self.bem_precision = kwargs.get("bem_precision", "double")
+    self.bem_precision = kwargs.get("bem_precision", "single")
     self.use_burton_miller = kwargs.get("use_burton_miller", True)
     # Skip bempp space/operator construction (requires real bempp Grid)
     self.p1_space = None
@@ -203,23 +203,23 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         validate_freq.assert_not_called()
         self.assertFalse(results["metadata"]["mesh_validation"]["enabled"])
 
-    def test_advanced_settings_control_precision_warmup_and_burton_miller(self):
+    def test_compat_precision_and_warmup_are_ignored_while_burton_miller_applies(self):
         mesh = _mesh_stub()
 
         with patch(
             _SOLVE_FREQ_TARGET,
             return_value=_SOLVE_FREQ_RETURN,
-        ) as solve_freq_mock, patch(
+        ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
-        ):
+        ), patch("solver.solve_optimized.logger.info") as logger_info:
             results = solve_optimized(
                 mesh=mesh,
                 frequency_range=[100.0, 1000.0],
                 num_frequencies=2,
                 sim_type="2",
-                enable_warmup=False,
-                bem_precision="single",
+                enable_warmup=True,
+                bem_precision="double",
                 use_burton_miller=False,
                 verbose=False,
                 mesh_validation_mode="off",
@@ -227,6 +227,22 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
 
         self.assertEqual(results["metadata"]["performance"]["bem_precision"], "single")
         self.assertEqual(results["metadata"]["failure_count"], 0)
+        self.assertTrue(
+            any(
+                len(call.args) >= 1
+                and "Ignoring compatibility bem_precision=%s" in str(call.args[0])
+                for call in logger_info.call_args_list
+                if call.args
+            )
+        )
+        self.assertTrue(
+            any(
+                len(call.args) >= 1
+                and "Ignoring compatibility enable_warmup=%s" in str(call.args[0])
+                for call in logger_info.call_args_list
+                if call.args
+            )
+        )
 
     def test_frequency_failures_do_not_use_placeholder_metrics(self):
         mesh = _mesh_stub()
@@ -398,7 +414,6 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
         perf = results["metadata"]["performance"]
         self.assertIn("gmres_iterations_per_frequency", perf)
         self.assertIn("avg_gmres_iterations", perf)
-        self.assertIn("warmup_time_seconds", perf)
         self.assertEqual(perf["gmres_iterations_per_frequency"], [18, 18])
         self.assertEqual(perf["avg_gmres_iterations"], 18.0)
 
@@ -433,8 +448,7 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
         self.assertEqual(iters[1], 20)
         self.assertEqual(results["metadata"]["performance"]["avg_gmres_iterations"], 20.0)
 
-    def test_warmup_failure_does_not_abort_solve(self):
-        """Warm-up failing (e.g. bad grid in tests) must not prevent frequency solve."""
+    def test_performance_metadata_omits_legacy_warmup_and_strong_form_fields(self):
         mesh = _mesh_stub()
         with patch(
             _SOLVE_FREQ_TARGET,
@@ -452,10 +466,9 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
                 mesh_validation_mode="off",
             )
 
-        # Solve succeeded despite warm-up failing on the dummy grid
-        self.assertEqual(results["metadata"]["failure_count"], 0)
-        self.assertEqual(len(results["spl_on_axis"]["spl"]), 1)
-        self.assertIsNotNone(results["spl_on_axis"]["spl"][0])
+        performance = results["metadata"]["performance"]
+        self.assertNotIn("warmup_time_seconds", performance)
+        self.assertNotIn("gmres_strong_form_supported", performance)
 
 
 class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):

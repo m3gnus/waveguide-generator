@@ -53,21 +53,18 @@ from .observation import infer_observation_frame, resolve_safe_observation_dista
 # GMRES kwargs detection
 # ---------------------------------------------------------------------------
 
-def _detect_gmres_kwargs() -> Dict[str, bool]:
+def _detect_gmres_return_iteration_count() -> bool:
     """Probe bempp_api.linalg.gmres signature once at import time."""
     if bempp_api is None:
-        return {"use_strong_form": False, "return_iteration_count": False}
+        return False
     try:
         params = inspect.signature(bempp_api.linalg.gmres).parameters
-        return {
-            "use_strong_form": "use_strong_form" in params,
-            "return_iteration_count": "return_iteration_count" in params,
-        }
+        return "return_iteration_count" in params
     except (AttributeError, ValueError, TypeError):
-        return {"use_strong_form": False, "return_iteration_count": False}
+        return False
 
 
-_GMRES_KWARGS = _detect_gmres_kwargs()
+_GMRES_RETURN_ITERATION_COUNT = _detect_gmres_return_iteration_count()
 _VALID_BEM_PRECISIONS = {"single", "double"}
 
 
@@ -150,7 +147,7 @@ class HornBEMSolver:
         tag_throat: Physical tag value for the driven disc (default 2).
         boundary_interface: BEMPP device interface for boundary operators.
         potential_interface: BEMPP device interface for potential operators.
-        bem_precision: 'single' or 'double' (default 'double').
+        bem_precision: 'single' or 'double' (default 'single').
         use_burton_miller: Use Burton-Miller BIE formulation (default True).
     """
 
@@ -337,13 +334,11 @@ class HornBEMSolver:
             rhs = slp * neumann_fun
 
         gmres_call_kwargs: Dict = {"tol": 1e-5}
-        if _GMRES_KWARGS["use_strong_form"]:
-            gmres_call_kwargs["use_strong_form"] = True
-        if _GMRES_KWARGS["return_iteration_count"]:
+        if _GMRES_RETURN_ITERATION_COUNT:
             gmres_call_kwargs["return_iteration_count"] = True
 
         gmres_result = bempp_api.linalg.gmres(lhs, rhs, **gmres_call_kwargs)
-        if _GMRES_KWARGS["return_iteration_count"]:
+        if _GMRES_RETURN_ITERATION_COUNT:
             p_total, info, iter_count = gmres_result
         else:
             p_total, info = gmres_result
@@ -539,7 +534,7 @@ def solve_optimized(
     bem_precision: str = "single",
     frequency_spacing: str = "linear",
     device_mode: str = "auto",
-    enable_warmup: bool = True,
+    enable_warmup: bool = False,
     cancellation_callback: Optional[Callable[[], None]] = None,
     workers: int = 1,
 ) -> Dict:
@@ -551,8 +546,20 @@ def solve_optimized(
     """
     start_time = time.time()
     mesh_validation_mode = normalize_mesh_validation_mode(mesh_validation_mode)
-    bem_precision = _normalize_bem_precision(bem_precision)
-    _configure_bempp_precision(bem_precision)
+    requested_bem_precision = _normalize_bem_precision(bem_precision)
+    effective_bem_precision = "single"
+    if requested_bem_precision != effective_bem_precision:
+        logger.info(
+            "[HornBEM] Ignoring compatibility bem_precision=%s; active runtime uses %s precision.",
+            requested_bem_precision,
+            effective_bem_precision,
+        )
+    if bool(enable_warmup):
+        logger.info(
+            "[HornBEM] Ignoring compatibility enable_warmup=%s; active runtime does not run warm-up.",
+            bool(enable_warmup),
+        )
+    _configure_bempp_precision(effective_bem_precision)
 
     if isinstance(mesh, dict):
         grid = mesh["grid"]
@@ -712,40 +719,9 @@ def solve_optimized(
         tag_throat=2,
         boundary_interface=boundary_interface,
         potential_interface=potential_interface,
-        bem_precision=bem_precision,
+        bem_precision=effective_bem_precision,
         use_burton_miller=use_burton_miller,
     )
-
-    # ------------------------------------------------------------------
-    # Optional warm-up
-    # ------------------------------------------------------------------
-    warmup_time_seconds = 0.0
-    if enable_warmup and len(frequencies) > 0:
-        if cancellation_callback:
-            cancellation_callback()
-        _warmup_start = time.time()
-        try:
-            _k_w = 2 * np.pi * frequencies[len(frequencies) // 2] / c
-            op_kw = _operator_kwargs(boundary_interface, bem_precision)
-            _dlp = bempp_api.operators.boundary.helmholtz.double_layer(
-                solver.p1_space, solver.p1_space, solver.p1_space, _k_w, **op_kw
-            )
-            if use_burton_miller:
-                _hyp = bempp_api.operators.boundary.helmholtz.hypersingular(
-                    solver.p1_space, solver.p1_space, solver.p1_space, _k_w, **op_kw
-                )
-                _coupling = 1j / _k_w
-                _lhs = 0.5 * solver.lhs_identity - _dlp - _coupling * (-_hyp)
-            else:
-                _lhs = _dlp - 0.5 * solver.lhs_identity
-            _ = _lhs.strong_form()
-            warmup_time_seconds = time.time() - _warmup_start
-            if verbose:
-                logger.info("[HornBEM] Warm-up complete (%.2fs)", warmup_time_seconds)
-        except Exception as _warmup_exc:
-            warmup_time_seconds = time.time() - _warmup_start
-            if verbose:
-                logger.info("[HornBEM] Warm-up skipped (%s)", _warmup_exc)
 
     # ------------------------------------------------------------------
     # Frequency sweep (single-process or parallel)
@@ -911,7 +887,7 @@ def solve_optimized(
             filtered_directivity = calculate_directivity_patterns_correct(
                 grid, filtered_freqs, c, rho, list(filtered_solutions), effective_polar_config,
                 device_interface=potential_interface,
-                precision=bem_precision,
+                precision=effective_bem_precision,
                 observation_frame=observation_frame,
             )
 
@@ -988,11 +964,9 @@ def solve_optimized(
         "frequency_solve_time": freq_solve_time,
         "directivity_compute_time": directivity_time,
         "time_per_frequency": freq_solve_time / len(frequencies) if len(frequencies) > 0 else 0,
-        "warmup_time_seconds": warmup_time_seconds,
         "gmres_iterations_per_frequency": gmres_iterations,
         "avg_gmres_iterations": round(avg_gmres, 1),
-        "gmres_strong_form_supported": _GMRES_KWARGS["use_strong_form"],
-        "bem_precision": bem_precision,
+        "bem_precision": effective_bem_precision,
     }
 
     if verbose:
@@ -1000,8 +974,6 @@ def solve_optimized(
         logger.info("SIMULATION COMPLETE")
         logger.info("=" * 70)
         logger.info("Total time: %.1fs", total_time)
-        if warmup_time_seconds > 0:
-            logger.info("Warm-up: %.2fs", warmup_time_seconds)
         if len(frequencies) > 0:
             logger.info(
                 "Frequency solve: %.1fs (%.2fs per frequency)",
