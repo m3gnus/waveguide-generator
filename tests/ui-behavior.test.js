@@ -257,9 +257,9 @@ test("summarizeRuntimeCapabilities reports advanced controls unavailable until b
     capabilities: {
       simulationAdvanced: {
         available: true,
-        controls: ["enable_warmup", "bem_precision", "use_burton_miller"],
+        controls: ["use_burton_miller"],
         reason:
-          "The public solve contract now exposes warm-up, BEM precision, and Burton-Miller overrides.",
+          "The public solve contract now exposes Burton-Miller coupling as the stable advanced override.",
         plannedControls: ["method"],
       },
     },
@@ -269,13 +269,9 @@ test("summarizeRuntimeCapabilities reports advanced controls unavailable until b
   assert.equal(summary.simulationAdvanced.available, true);
   assert.equal(
     summary.simulationAdvanced.reason,
-    "The public solve contract now exposes warm-up, BEM precision, and Burton-Miller overrides.",
+    "The public solve contract now exposes Burton-Miller coupling as the stable advanced override.",
   );
-  assert.deepEqual(summary.simulationAdvanced.controls, [
-    "enable_warmup",
-    "bem_precision",
-    "use_burton_miller",
-  ]);
+  assert.deepEqual(summary.simulationAdvanced.controls, ["use_burton_miller"]);
   assert.deepEqual(summary.simulationAdvanced.plannedControls, ["method"]);
 });
 
@@ -718,20 +714,22 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
       createdElements.some((el) => el.id === "settings-choose-folder-btn"),
       "Workspace section should expose a folder selection action",
     );
-    assert.ok(
+    assert.equal(
       createdElements.some((el) => el.id === "simadvanced-enableWarmup"),
-      "Simulation section should expose the warm-up advanced control",
+      false,
+      "Simulation section should not expose the warm-up advanced control",
     );
-    assert.ok(
+    assert.equal(
       createdElements.some((el) => el.id === "simadvanced-bemPrecision"),
-      "Simulation section should expose the BEM precision advanced control",
+      false,
+      "Simulation section should not expose the BEM precision advanced control",
     );
     assert.ok(
       createdElements.some((el) => el.id === "simadvanced-useBurtonMiller"),
       "Simulation section should expose the Burton-Miller advanced control",
     );
-    // No additional advanced controls should be rendered beyond the supported warm-up,
-    // precision, and Burton-Miller settings.
+    // No additional advanced controls should be rendered beyond the supported
+    // Burton-Miller override.
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;

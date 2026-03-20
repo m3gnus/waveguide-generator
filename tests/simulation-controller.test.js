@@ -509,7 +509,6 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     meshValidationMode: 'strict',
     frequencySpacing: 'log',
     deviceMode: 'auto',
-    useOptimized: true,
     verbose: false,
     polarConfig: {}
   };
