@@ -118,6 +118,7 @@ flowchart LR
 - Runtime device availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
 - Auto device selection follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
 - GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu`; CPU-context surrogate aliasing is not used.
+- Apple Silicon hosts currently report OpenCL solve unsupported/unready for `/api/solve`; the maintained `pocl` CPU environment remains a bounded-repro setup, not a validated production runtime.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
@@ -590,11 +591,11 @@ High-signal test suites:
 
 `pyopencl` is required for `bempp-cl` GPU/CPU-OpenCL acceleration. Fully automatic cross-platform driver install is not supported (vendor/admin/reboot constraints). Install manually:
 
-- **macOS (Apple Silicon)**: `./scripts/setup-opencl-backend.sh` — installs `pocl` CPU runtime.
+- **macOS (Apple Silicon)**: `./scripts/setup-opencl-backend.sh` — installs the `pocl` CPU runtime used for current bounded repro/investigation only; `/api/solve` still reports Apple Silicon OpenCL unready until an end-to-end bounded solve is validated.
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
-If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`.
+If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`, and Apple Silicon hosts currently surface OpenCL solve as unsupported/unready until the runtime is validated with a bounded solve.
 
 ## 11. Key File Map
 

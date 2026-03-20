@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 20, 2026 (aligned Apple Silicon OpenCL backlog direction with bounded-solve readiness and explicit GPU viability validation)
+Last updated: March 20, 2026 (marked Apple Silicon OpenCL solve unsupported/unready in runtime metadata while keeping bounded-solve readiness and GPU viability follow-up active)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -59,7 +59,7 @@ Action plan:
 
 - [x] Reproduce the Apple Silicon failure in code-level regression coverage by asserting the current `opencl_cpu` Tritonia solve fails with the surfaced `All 1 frequencies failed to solve. First failure(s): 2` signature under `RUN_BEM_REFERENCE=1`, which preserves the traced `KeyError(2)` boundary from the live `opencl-cpu-env` repro. (2026-03-20: added live-gated regression coverage in `server/tests/test_tritonia_benchmark.py` against the dedicated `opencl-cpu-env` interpreter path.)
 - [x] Record the current bounded-solve evidence correctly: the live Tritonia repro still fails under `opencl_cpu`, while the same prepared mesh succeeds when `solve_optimized` is forced to `numba` boundary/potential operators. Keep that evidence in regression coverage, but do not treat it as the accepted runtime direction. (2026-03-20: live coverage added in `server/tests/test_tritonia_benchmark.py`.)
-- [ ] Decide the supported Apple Silicon runtime contract explicitly: either validate a real accelerated OpenCL path end-to-end and support only that, or mark Apple Silicon OpenCL solve as unsupported/unready for now. Do not silently convert the production runtime to `numba` fallback unless that choice is made deliberately.
+- [x] Decide the supported Apple Silicon runtime contract explicitly: mark Apple Silicon OpenCL solve unsupported/unready for now, and do not silently convert the production runtime to `numba` fallback unless that choice is made deliberately. (2026-03-20: `server/solver/device_interface.py` now treats Apple Silicon OpenCL modes as unsupported for `/api/solve`, `/health` and runtime doctor inherit the unready contract, and docs now describe `./scripts/setup-opencl-backend.sh` as investigation-only rather than a validated readiness path.)
 - [ ] Implement readiness gating so `/health` / runtime doctor report actual validated solver readiness from a bounded solve path, not raw OpenCL import + device enumeration.
 - [ ] Add a host-level validation slice for Apple Silicon GPU viability: prove whether the current `bempp-cl` + OpenCL stack can run on a real GPU-backed path on Apple Silicon, or document that the maintained runtime is CPU OpenCL only / GPU unsupported.
 - [ ] Update benchmark/preflight tooling so "ready" means a bounded solve path passes on the intended supported backend, not just dependency import + device enumeration.
