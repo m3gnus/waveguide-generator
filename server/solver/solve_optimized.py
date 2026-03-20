@@ -866,7 +866,7 @@ def solve_optimized(
         stage_callback(
             "directivity",
             0.0,
-            "Generating polar maps (horizontal/vertical/diagonal) and deriving DI from solved frequencies",
+            "Generating polar maps (horizontal/vertical/diagonal) for solved frequencies",
         )
 
     directivity_start = time.time()
@@ -910,38 +910,6 @@ def solve_optimized(
                     if full_patterns[fi] is None:
                         full_patterns[fi] = placeholder
                 results["directivity"][plane] = full_patterns
-
-            # Refine DI from polar patterns
-            for vi, global_i in enumerate(indices):
-                spl_on_axis_val = results["spl_on_axis"]["spl"][global_i]
-                if spl_on_axis_val is None:
-                    continue
-                h_pattern = results["directivity"]["horizontal"][global_i]
-                if not h_pattern:
-                    continue
-                if any(pt[1] is None for pt in h_pattern):
-                    continue
-                try:
-                    angles_deg = np.array([pt[0] for pt in h_pattern])
-                    spl_norm = np.array([pt[1] for pt in h_pattern])
-                    on_axis_idx = np.argmin(np.abs(angles_deg))
-                    spl_abs = spl_norm - spl_norm[on_axis_idx] + spl_on_axis_val
-
-                    theta_rad = np.deg2rad(angles_deg)
-                    p_ref = 20e-6
-                    p_vals = p_ref * 10 ** (spl_abs / 20)
-                    intensities = p_vals ** 2
-                    sin_theta = np.maximum(np.sin(theta_rad), 0.01)
-
-                    avg_intensity = np.trapz(intensities * sin_theta, theta_rad)
-                    total_weight = np.trapz(sin_theta, theta_rad)
-                    if total_weight > 0 and avg_intensity > 0:
-                        avg_i = avg_intensity / total_weight
-                        p_on_axis = p_ref * 10 ** (spl_on_axis_val / 20)
-                        di = 10 * np.log10(p_on_axis ** 2 / avg_i)
-                        results["di"]["di"][global_i] = float(max(0.0, min(30.0, di)))
-                except Exception:
-                    pass
 
         except Exception as exc:
             results["metadata"]["failures"].append(
