@@ -239,6 +239,39 @@ class RunBenchmarkTest(unittest.TestCase):
         self.assertNotIn("single", result.unsupported_precision_modes)
 
 
+@unittest.skipUnless(
+    os.getenv("RUN_BEM_REFERENCE") == "1",
+    "Set RUN_BEM_REFERENCE=1 to run live Tritonia solve regression tests.",
+)
+class RunBenchmarkLiveReferenceTest(unittest.TestCase):
+    def test_live_opencl_cpu_reference_repro_surfaces_false_green_failure(self):
+        args = MagicMock()
+        args.device = "auto"
+        args.freq = 1000.0
+        args.sweep = False
+        args.precision = "single"
+        args.no_solve = False
+        args.timeout = 30.0
+
+        result = bt.run_benchmark(args)
+
+        self.assertTrue(result.runtime_available)
+        self.assertTrue(result.mesh_prep.success, result.mesh_prep.error)
+        self.assertEqual(result.device_metadata.get("selected_mode"), "opencl_cpu")
+        self.assertEqual(len(result.precision_results), 1)
+
+        precision_result = result.precision_results[0]
+        self.assertTrue(precision_result.attempted)
+        self.assertFalse(precision_result.success)
+        self.assertIn("All 1 frequencies failed to solve", precision_result.error)
+        self.assertTrue(
+            "First failure(s): 2" in precision_result.error
+            or "KeyError(2)" in precision_result.error
+            or "KeyError: 2" in precision_result.error,
+            precision_result.error,
+        )
+
+
 class CLITest(unittest.TestCase):
     def test_cli_json_output(self):
         with patch(
