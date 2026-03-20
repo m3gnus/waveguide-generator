@@ -446,6 +446,30 @@ class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
         self.assertNotIn("avg_gmres_iterations", performance)
         self.assertNotIn("reduction_speedup", performance)
 
+    def test_directivity_post_processing_preserves_frequency_solve_di(self):
+        mesh = _mesh_stub()
+        with patch(
+            _SOLVE_FREQ_TARGET,
+            return_value=(90.0, complex(1.0, 0.0), 6.5, ("p", "u", "sp", "su"), 15),
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value={
+                "horizontal": [[[0.0, 0.0], [90.0, -12.0], [180.0, -24.0]]],
+                "vertical": [[[0.0, 0.0], [90.0, -9.0], [180.0, -18.0]]],
+                "diagonal": [[[0.0, 0.0], [90.0, -6.0], [180.0, -12.0]]],
+            },
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 200.0],
+                num_frequencies=1,
+                sim_type="2",
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        self.assertEqual(results["di"]["di"], [6.5])
+
 
 class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
     def test_numpy_dtype_for_precision_returns_correct_dtype(self):
