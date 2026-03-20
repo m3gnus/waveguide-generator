@@ -46,22 +46,22 @@ Status as of March 19, 2026:
 **Execution lane:** Reserved — Codex `high`; Opus `high`
 
 - Tritonia-M shows the current optimized solver is not a trustworthy default. The ATH import and canonical mesh preparation succeed, but a 1 kHz / 1-frequency `single` solve still times out after 90 seconds even when forced to `tol=1e-3` and `use_strong_form=False`, while `double` fails immediately on Apple M1 Max OpenCL with a kernel creation error.
-- The current stack exposes too much unstable behavior across API/UI/runtime boundaries: duplicate `solve.py` vs `solve_optimized.py` paths, public advanced settings for unsupported precision/device combinations, `workers` accepted but unused by the public sweep, OpenCL auto-selection and retry heuristics, optional warm-up, and heavier-than-needed directivity post-processing.
+- The current stack exposes too much unstable behavior across API/UI/runtime boundaries: duplicate `solve.py` vs `solve_optimized.py` paths, public `useOptimized` branching, advanced settings for unsupported precision/device combinations, `workers` accepted but unused by the public sweep, OpenCL auto-selection and retry heuristics, optional warm-up, runtime-capability reporting that describes unstable knobs instead of support, and heavier-than-needed directivity post-processing.
 
 Implementation notes:
 
-- Backend solver/runtime: `server/solver/solve_optimized.py`, `server/solver/solve.py`, `server/solver/device_interface.py`, `server/contracts/__init__.py`, `server/README.md`
-- Frontend/API surface: `src/solver/index.js`, `src/ui/settings/modal.js`, `src/ui/settings/simAdvancedSettings.js`, `src/ui/runtimeCapabilities.js`
-- Coverage/docs to update: `server/tests/test_solver_hardening.py`, `server/tests/test_api_validation.py`, `tests/sim-advanced-settings.test.js`, `tests/simulation-module.test.js`, `docs/PROJECT_DOCUMENTATION.md`
+- Backend solver/runtime: `server/solver/solve_optimized.py`, `server/solver/solve.py`, `server/solver/device_interface.py`, `server/services/solver_runtime.py`, `server/services/simulation_runner.py`, `server/contracts/__init__.py`, `server/README.md`
+- Frontend/API surface: `src/solver/index.js`, `src/ui/settings/modal.js`, `src/ui/settings/simAdvancedSettings.js`, `src/ui/runtimeCapabilities.js`, `src/ui/simulation/jobActions.js`, `src/ui/simulation/results.js`
+- Coverage/docs to update: `server/tests/test_solver_hardening.py`, `server/tests/test_api_validation.py`, `tests/sim-advanced-settings.test.js`, `tests/simulation-module.test.js`, `docs/PROJECT_DOCUMENTATION.md`, `docs/architecture.md`
 
 Action plan:
 
 - [ ] Add a bounded Tritonia-M benchmark/repro path (1-frequency and reduced sweep) that reports mesh-prep success, selected runtime/device, solver stage timings, and supported vs unsupported precision modes on the active host.
-- [ ] Collapse the public BEM entrypoint to one stable solver path; remove or internalize the legacy-vs-optimized duplication unless a retained second path has a clear, tested user-facing contract.
-- [ ] Remove or hide unsupported public knobs first: disable `double` on unsupported OpenCL GPU runtimes, stop advertising `workers` until the public sweep actually uses them, and drop warm-up/auto-optimization controls that are not benchmark-backed.
-- [ ] Replace the current auto OpenCL heuristics with a conservative supported-runtime policy; keep runtime fallback only when there is a real validated fallback, not speculative GPU/CPU aliasing behavior.
+- [ ] Collapse the public BEM entrypoint to one stable solver path; remove `useOptimized` from the public contract and UI, and internalize any remaining legacy-vs-optimized differences unless a retained second path has a clear, tested user-facing contract.
+- [ ] Remove or hide unsupported public knobs first: disable `double` on unsupported OpenCL GPU runtimes, stop advertising `workers` until the public sweep actually uses them, and remove or hard-disable `enableWarmup`, `bemPrecision`, and likely `deviceMode` if they remain solver-internal implementation choices rather than supported user-facing controls.
+- [ ] Replace the current auto OpenCL heuristics with a conservative supported-runtime policy; keep runtime fallback only when there is a real validated fallback, not speculative GPU/CPU aliasing behavior, and update runtime-capability reporting so it reports supported vs unsupported configurations instead of exposing unstable runtime strategy.
 - [ ] Simplify solver numerics to explicit, minimal defaults: no automatic strong-form enablement, no platform-specific "smart" behavior without proof, and no mixed-precision operator assembly.
-- [ ] Trim post-processing to the required outputs for a stable solve first; defer extra DI refinement and any non-essential directivity work into follow-up slices if they remain valuable after the solver path is stable.
+- [ ] Reduce simulation runner orchestration and stage reporting to the core phases required for a stable solve, then trim result packaging and post-processing to the minimum contract the current UI actually needs; defer extra DI refinement, diagonal-plane packaging, and metadata-heavy summaries into follow-up slices if they remain valuable after the solver path is stable.
 - [ ] Update the backend/frontend contract, runtime guidance, and tests to match the reduced solver surface, then rerun `npm test` and `npm run test:server`.
 
 Add new execution slices here when a deferred watchpoint is activated or a new verified issue is opened.
