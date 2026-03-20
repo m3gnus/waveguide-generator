@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 20, 2026 (closed sparse directivity-plane packaging so diagonal stays supported without remaining hard-coded three-plane coupling)
+Last updated: March 20, 2026 (added active P1 slice to retire `quadrants` as a partial-mesh runtime control and keep it compatibility-only)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -39,6 +39,27 @@ Status as of March 19, 2026:
 - Latest documented full-suite baseline before current working changes was green for `npm test` and `npm run test:server`.
 
 ## Active Backlog
+
+### P1 — Retire active `quadrants` partial-mesh behavior from OCC solve/export
+
+**Status:** OPEN
+**Execution lane:** Reserved — Codex `medium`
+
+- Symmetry-reduced solving is no longer part of the active runtime, but `quadrants` is still exposed as a solve/export control and still reaches the OCC builder, where it generates half- and quarter-domain meshes. That leaves the runtime contract internally inconsistent: frontend canonical mesh is full-domain-only, docs say imported quadrants are metadata only, while `/api/solve` and `/api/mesh/build` still accept and apply partial-domain values.
+
+Implementation notes:
+
+- Frontend/UI/config: `src/config/schema.js`, `src/ui/parameterInventory.js`, `src/modules/design/index.js`, `src/solver/waveguidePayload.js`, `src/config/index.js`, `src/export/mwgConfig.js`
+- Backend OCC/runtime: `server/contracts/__init__.py`, `server/api/routes_mesh.py`, `server/services/simulation_runner.py`, `server/solver/waveguide_builder.py`
+- Coverage/docs: `server/tests/test_api_validation.py`, `tests/export-module.test.js`, `tests/waveguide-payload.test.js`, `docs/modules/simulation.md`, `docs/modules/geometry.md`, `docs/PROJECT_DOCUMENTATION.md`, `server/README.md`
+
+Action plan:
+
+- [ ] Define the contract explicitly: active OCC solve/export paths always build full-domain meshes (`quadrants=1234`), while legacy `Mesh.Quadrants` values remain import-compatible metadata only.
+- [ ] Remove or hide `quadrants` from the active solve/export UI and stop describing half/quarter BEM analysis as a supported runtime behavior.
+- [ ] Canonicalize OCC request construction so `/api/solve` and `/api/mesh/build` no longer generate partial meshes from user-facing `quadrants` values.
+- [ ] Decide legacy config handling: tolerate import of non-`1234` values, but export either `1234` or omit the field unless a dedicated compatibility mode is introduced.
+- [ ] Replace tests and docs that currently assert non-full-domain OCC acceptance with full-domain-only contract coverage.
 
 ### P1 — Collapse the unstable BEM "optimized" path into one supported solver runtime
 
