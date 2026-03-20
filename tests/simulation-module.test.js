@@ -508,7 +508,7 @@ test('simulation workspace service writes normalized folder index entries', asyn
 
 test('simulation use case builds cancelled job state and resolves failed cleanup IDs', () => {
   const pending = buildCancellationRequestedSimulationJob(
-    { id: 'job-1', status: 'running', stage: 'solver_setup' },
+    { id: 'job-1', status: 'running', stage: 'bem_solve' },
     { message: 'Cancellation requested by user' }
   );
   assert.equal(pending.status, 'running');
@@ -517,7 +517,7 @@ test('simulation use case builds cancelled job state and resolves failed cleanup
   assert.equal(pending.cancellationRequested, true);
 
   const cancelled = buildCancelledSimulationJob(
-    { id: 'job-1', status: 'running', stage: 'solver_setup' },
+    { id: 'job-1', status: 'running', stage: 'bem_solve' },
     { completedAt: '2026-03-11T10:01:00.000Z' }
   );
   assert.equal(cancelled.status, 'cancelled');

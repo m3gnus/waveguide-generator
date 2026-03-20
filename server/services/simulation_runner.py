@@ -289,9 +289,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
 
         # Run simulation
         update_job_stage(
-            job_id, "solver_setup", progress=0.30, stage_message="Configuring BEM solve"
+            job_id, "bem_solve", progress=0.30, stage_message="Configuring BEM solve"
         )
-        _cancellation_callback("Cancellation requested before BEM solve setup")
+        _cancellation_callback("Cancellation requested before BEM solve start")
 
         def _solver_stage_callback(
             stage: str, progress: Optional[float] = None, message: Optional[str] = None
@@ -303,7 +303,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             if stage in {"setup", "solver_setup"}:
                 update_job_stage(
                     job_id,
-                    "solver_setup",
+                    "bem_solve",
                     progress=0.30 + (normalized_progress * 0.05),
                     stage_message=message or "Configuring BEM solve",
                 )
@@ -321,7 +321,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             if stage == "directivity":
                 update_job_stage(
                     job_id,
-                    "directivity",
+                    "finalizing",
                     progress=0.85 + (normalized_progress * 0.13),
                     stage_message=message or (
                         "Generating polar maps (horizontal/vertical/diagonal) "

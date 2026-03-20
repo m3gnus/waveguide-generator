@@ -828,6 +828,45 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
         finally:
             _jrt.jobs.pop(job_id, None)
 
+    def test_run_simulation_maps_internal_substages_to_core_job_stages(self):
+        job_id = "test-runner-core-stage-contract"
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
+
+        class MockSolver:
+            def prepare_mesh(self, *_args, **_kwargs):
+                return object()
+
+            def solve(self, *_args, **kwargs):
+                stage_callback = kwargs["stage_callback"]
+                progress_callback = kwargs["progress_callback"]
+                stage_callback("setup", 0.4, "Configuring internals")
+                progress_callback(0.2)
+                stage_callback("frequency_solve", 0.6, "Solving frequencies")
+                stage_callback("directivity", 0.5, "Computing directivity")
+                stage_callback("finalizing", 0.5, "Packaging results")
+                return {"frequencies": [100.0], "directivity": {}}
+
+        try:
+            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+                "services.simulation_runner.update_job_stage"
+            ) as update_stage_mock:
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
+
+            stages = [
+                call.args[1]
+                for call in update_stage_mock.call_args_list
+                if len(call.args) >= 2
+            ]
+            self.assertIn("initializing", stages)
+            self.assertIn("mesh_prepare", stages)
+            self.assertIn("bem_solve", stages)
+            self.assertIn("finalizing", stages)
+            self.assertNotIn("solver_setup", stages)
+            self.assertNotIn("directivity", stages)
+            self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
 
 class JobPersistenceFailureSafetyTest(unittest.TestCase):
     """Verify that persistence failures do not leave jobs in false-complete state."""
