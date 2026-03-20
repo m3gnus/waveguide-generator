@@ -341,7 +341,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | bempp-cl | `>=0.4,<0.5` | `/api/solve` |
 
 Notes:
-- Backend runtime still accepts `use_optimized` for compatibility, but the active frontend contract no longer exposes it.
+- Backend runtime still accepts `use_optimized` for compatibility, but it is ignored; the active runtime always executes the stable `solve_optimized` entrypoint.
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.

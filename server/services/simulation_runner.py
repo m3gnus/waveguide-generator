@@ -352,6 +352,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             ),
             progress_callback=lambda p: _solver_stage_callback("frequency_solve", progress=p),
             stage_callback=_solver_stage_callback,
+            # Legacy field kept in request contract for compatibility only.
             use_optimized=request.use_optimized,
             verbose=request.verbose,
             mesh_validation_mode=request.mesh_validation_mode,
