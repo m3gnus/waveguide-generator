@@ -356,18 +356,14 @@ Notes:
 
 ### 7.1 Solver performance metadata
 
-Every `/api/solve` result includes `metadata.performance`:
+Every `/api/solve` result includes `metadata.performance` with the minimum fields required by the active UI:
 
 | Field | Type | Description |
 |---|---|---|
-| `total_time_seconds` | float | Wall time for full solve |
-| `frequency_solve_time` | float | Time spent in frequency loop |
-| `directivity_compute_time` | float | Time for directivity post-processing |
-| `time_per_frequency` | float | Average per-frequency solve time |
-| `gmres_iterations_per_frequency` | list[int\|null] | GMRES iteration count per frequency; `null` for failed frequencies |
-| `avg_gmres_iterations` | float | Mean iteration count across successful frequencies |
+| `total_time_seconds` | float | Wall time for the full solve |
 | `bem_precision` | string | Active BEMPP operator precision (`single` in the stable runtime path) |
-| `reduction_speedup` | float | Symmetry reduction factor applied (1.0 = no reduction) |
+
+Note: Internal benchmark scripts may log additional timing details during solve, but only `total_time_seconds` and `bem_precision` are part of the public result contract.
 
 ## 8. Canonical Contract
 
