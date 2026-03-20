@@ -114,8 +114,8 @@ flowchart LR
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
-- Simulation settings forward `device_mode`, `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
-- Settings runtime capability checks reuse the last `/health` snapshot from startup polling and refresh again when the Settings modal opens
+- Simulation settings forward `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
+- Runtime device availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
 - Auto policy priority is deterministic: `opencl_gpu -> opencl_cpu`
 - On GPU-only OpenCL runtimes without a CPU device, `opencl_gpu` now installs a bempp-cl CPU-context surrogate that reuses the active GPU context for singular assembly.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
@@ -304,7 +304,7 @@ Base URL: `http://localhost:8000`
   - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
     and `polar_config.inclination` (diagonal plane angle)
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
-  - Supports `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`)
+  - Accepts compatibility `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`) for older/non-frontend callers
   - Supports public `advanced_settings.use_burton_miller`
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
@@ -531,7 +531,7 @@ Optional directivity payload for `/api/solve`:
 }
 ```
 
-Optional device selection payload for `/api/solve`:
+Compatibility-only device selection payload for `/api/solve` (older/non-frontend callers):
 
 ```json
 {

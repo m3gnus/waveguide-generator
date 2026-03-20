@@ -29,7 +29,6 @@ def get_settings_capabilities() -> Dict[str, Any]:
         "simulationBasic": {
             "available": True,
             "controls": [
-                "device_mode",
                 "mesh_validation_mode",
                 "frequency_spacing",
                 "verbose",

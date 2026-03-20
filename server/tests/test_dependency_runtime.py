@@ -59,7 +59,6 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertEqual(
             response["capabilities"]["simulationBasic"]["controls"],
             [
-                "device_mode",
                 "mesh_validation_mode",
                 "frequency_spacing",
                 "verbose",

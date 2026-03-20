@@ -1,6 +1,5 @@
 import { showError, showMessage } from "../feedback.js";
 import {
-  getDeviceMode,
   getFrequencySpacing,
   getMeshValidationMode,
   getVerbose,
@@ -590,7 +589,6 @@ export async function runSimulation(panel) {
     numFrequencies: Number(document.getElementById("freq-steps").value),
     meshValidationMode: getMeshValidationMode(),
     frequencySpacing: getFrequencySpacing(),
-    deviceMode: getDeviceMode(),
     verbose: getVerbose(),
     advancedSettings: {
       useBurtonMiller: getUseBurtonMiller(),

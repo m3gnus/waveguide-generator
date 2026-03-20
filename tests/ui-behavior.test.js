@@ -17,13 +17,13 @@ import {
 } from "../src/ui/fileOps.js";
 import {
   SETTINGS_CONTROL_IDS,
-  describeSimBasicDeviceAvailability,
   getLiveUpdateEnabled,
   getDisplayMode,
   getDownloadSimMeshEnabled,
   openSettingsModal,
 } from "../src/ui/settings/modal.js";
 import {
+  describeSimBasicDeviceAvailability,
   describeSelectedDevice,
   summarizeRuntimeCapabilities,
 } from "../src/ui/runtimeCapabilities.js";
@@ -723,6 +723,11 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
       createdElements.some((el) => el.id === "simadvanced-bemPrecision"),
       false,
       "Simulation section should not expose the BEM precision advanced control",
+    );
+    assert.equal(
+      createdElements.some((el) => el.id === "simbasic-deviceMode"),
+      false,
+      "Simulation section should not expose the compute-device selector",
     );
     assert.ok(
       createdElements.some((el) => el.id === "simadvanced-useBurtonMiller"),
