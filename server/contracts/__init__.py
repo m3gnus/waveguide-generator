@@ -113,7 +113,7 @@ class SimulationRequest(BaseModel):
     options: Optional[Dict[str, Any]] = {}
     polar_config: Optional[PolarConfig] = None
     advanced_settings: Optional[AdvancedSimulationSettings] = None
-    use_optimized: bool = True
+    use_optimized: bool = True  # compatibility-only legacy field; ignored by active runtime path
     verbose: bool = True
     mesh_validation_mode: str = "warn"
     frequency_spacing: str = "log"
