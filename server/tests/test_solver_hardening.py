@@ -393,6 +393,41 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
 
 
 class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
+    def test_requested_directivity_planes_are_the_only_packaged_planes(self):
+        mesh = _mesh_stub()
+        with patch(
+            _SOLVE_FREQ_TARGET,
+            return_value=(90.0, complex(1.0, 0.0), 6.5, ("p", "u", "sp", "su"), 15),
+        ), patch(
+            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            return_value={
+                "horizontal": [[[0.0, 0.0], [90.0, -12.0], [180.0, -24.0]]],
+                "vertical": [[[0.0, 0.0], [90.0, -9.0], [180.0, -18.0]]],
+                "diagonal": [[[0.0, 0.0], [90.0, -6.0], [180.0, -12.0]]],
+            },
+        ):
+            results = solve_optimized(
+                mesh=mesh,
+                frequency_range=[200.0, 200.0],
+                num_frequencies=1,
+                sim_type="2",
+                polar_config={
+                    "enabled_axes": ["horizontal", "diagonal"],
+                    "inclination": 28.0,
+                },
+                verbose=False,
+                mesh_validation_mode="off",
+            )
+
+        self.assertEqual(set(results["directivity"].keys()), {"horizontal", "diagonal"})
+        self.assertEqual(
+            results["metadata"]["directivity"]["planes"],
+            [
+                {"id": "horizontal", "phi_degrees": 0.0},
+                {"id": "diagonal", "phi_degrees": 28.0},
+            ],
+        )
+
     def test_performance_metadata_contains_only_ui_contract_fields(self):
         mesh = _mesh_stub()
         with patch(

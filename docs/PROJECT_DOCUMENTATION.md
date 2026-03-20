@@ -119,7 +119,7 @@ flowchart LR
 - Auto device selection follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
 - GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu`; CPU-context surrogate aliasing is not used.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
-- Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state.
+- Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
@@ -305,6 +305,7 @@ Base URL: `http://localhost:8000`
     with required `options.mesh.waveguide_params`
   - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
     and `polar_config.inclination` (diagonal plane angle)
+  - Returns `results.directivity` as a plane-keyed map that includes only the requested enabled axes; frontend/export consumers must not assume all three plane keys are always present
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
   - Accepts compatibility `device_mode` (`auto`, `opencl_cpu`, `opencl_gpu`) for older/non-frontend callers, but ignores it in the active `/api/solve` runtime path
   - Supports public `advanced_settings.use_burton_miller`

@@ -31,6 +31,7 @@ from .contract import (
     build_directivity_metadata,
     frequency_failure,
     normalize_mesh_validation_mode,
+    normalize_directivity_planes,
 )
 from .deps import bempp_api
 from .device_interface import (
@@ -664,9 +665,12 @@ def solve_optimized(
     effective_polar_config["observation_origin"] = observation_origin
     effective_polar_config["distance"] = observation_distance_m
 
+    requested_plane_specs = normalize_directivity_planes(effective_polar_config)
+    requested_plane_ids = [str(spec["id"]) for spec in requested_plane_specs]
+
     results = {
         "frequencies": frequencies.tolist(),
-        "directivity": {"horizontal": [], "vertical": [], "diagonal": []},
+        "directivity": {plane_id: [] for plane_id in requested_plane_ids},
         "spl_on_axis": {"frequencies": frequencies.tolist(), "spl": []},
         "impedance": {"frequencies": frequencies.tolist(), "real": [], "imaginary": []},
         "di": {"frequencies": frequencies.tolist(), "di": []},
@@ -866,7 +870,7 @@ def solve_optimized(
         stage_callback(
             "directivity",
             0.0,
-            "Generating polar maps (horizontal/vertical/diagonal) for solved frequencies",
+            "Generating requested polar maps for solved frequencies",
         )
 
     directivity_start = time.time()
@@ -898,7 +902,7 @@ def solve_optimized(
                 ar = effective_polar_config.get("angle_range", [0, 180, 37])
                 _angle_start, _angle_end, _angle_count = float(ar[0]), float(ar[1]), int(ar[2])
 
-            for plane in ("horizontal", "vertical", "diagonal"):
+            for plane in requested_plane_ids:
                 filtered_patterns = filtered_directivity.get(plane, [])
                 full_patterns = [None] * len(frequencies)
                 for vi, global_i in enumerate(indices):
@@ -956,7 +960,7 @@ def solve_optimized(
     if progress_callback:
         progress_callback(1.0)
     if stage_callback:
-        stage_callback("directivity", 1.0, "Polar map and DI aggregation complete")
+        stage_callback("directivity", 1.0, "Requested polar map and DI aggregation complete")
         stage_callback("finalizing", 1.0, "Packaging HornBEM solver results")
 
     return results

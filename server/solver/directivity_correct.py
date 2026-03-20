@@ -14,6 +14,7 @@ import logging
 
 import numpy as np
 from typing import Dict, List, Optional, Tuple
+from .contract import normalize_directivity_planes
 from .deps import bempp_api
 
 logger = logging.getLogger(__name__)
@@ -196,29 +197,18 @@ def calculate_directivity_patterns_correct(
         Each contains list of [[angle, dB], ...] per frequency
     """
     # Parse config
-    enabled_axes = {"horizontal", "vertical", "diagonal"}
+    plane_specs = normalize_directivity_planes(polar_config)
     if polar_config:
         angle_start, angle_end, angle_points = polar_config.get('angle_range', [0, 180, 37])
         angle_points = int(angle_points)  # Ensure integer for np.linspace
         norm_angle = polar_config.get('norm_angle', 5.0)
         distance_m = polar_config.get('distance', 2.0)
-        inclination = polar_config.get('inclination', 35.0)
-        raw_enabled_axes = polar_config.get('enabled_axes', ["horizontal", "vertical", "diagonal"])
-        parsed_axes = {
-            str(axis).strip().lower() for axis in (raw_enabled_axes or []) if str(axis).strip()
-        }
-        enabled_axes = parsed_axes.intersection({"horizontal", "vertical", "diagonal"}) or enabled_axes
     else:
         angle_start, angle_end, angle_points = 0, 180, 37
         norm_angle = 5.0
         distance_m = 2.0
-        inclination = 35.0
 
-    patterns = {
-        "horizontal": [],
-        "vertical": [],
-        "diagonal": []
-    }
+    patterns = {str(spec["id"]): [] for spec in plane_specs}
 
     if len(p_solutions) == 0:
         logger.warning("[Directivity] No solutions provided, returning empty patterns")
@@ -231,12 +221,7 @@ def calculate_directivity_patterns_correct(
         )
         return patterns
 
-    axis_phi = {
-        "horizontal": 0.0,
-        "vertical": 90.0,
-        "diagonal": inclination
-    }
-    active_axes = [axis for axis in ("horizontal", "vertical", "diagonal") if axis in enabled_axes]
+    active_axes = [str(spec["id"]) for spec in plane_specs]
     frame = observation_frame if isinstance(observation_frame, dict) else infer_observation_frame(grid)
 
     # Process each frequency — all requested phi cuts batched into one call
@@ -254,7 +239,7 @@ def calculate_directivity_patterns_correct(
                 k, omega, rho,
                 radius_m=distance_m,
                 theta_range=(angle_start, angle_end, angle_points),
-                phi_angles=[axis_phi[axis] for axis in active_axes],
+                phi_angles=[float(spec["phi_degrees"]) for spec in plane_specs],
                 device_interface=device_interface,
                 precision=precision,
                 observation_frame=frame,

@@ -10,6 +10,34 @@ const DIRECTIVITY_REFERENCE_OPTIONS = [
   [-9, "-9 dB"],
   [-12, "-12 dB"],
 ];
+const DIRECTIVITY_PLANE_ORDER = ["horizontal", "vertical", "diagonal"];
+
+function normalizeDirectivityPayload(directivity) {
+  if (!directivity || typeof directivity !== "object" || Array.isArray(directivity)) {
+    return {};
+  }
+
+  const entries = Object.entries(directivity).filter(
+    ([, patterns]) => Array.isArray(patterns),
+  );
+  entries.sort(([a], [b]) => {
+    const aKey = String(a || "").trim().toLowerCase();
+    const bKey = String(b || "").trim().toLowerCase();
+    const aIndex = DIRECTIVITY_PLANE_ORDER.indexOf(aKey);
+    const bIndex = DIRECTIVITY_PLANE_ORDER.indexOf(bKey);
+    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+    if (aIndex !== -1) return -1;
+    if (bIndex !== -1) return 1;
+    return aKey.localeCompare(bKey);
+  });
+  return Object.fromEntries(entries);
+}
+
+function hasDirectivityPatterns(directivity) {
+  return Object.values(directivity).some(
+    (patterns) => Array.isArray(patterns) && patterns.length > 0,
+  );
+}
 
 /**
  * Open a modal dialog displaying all result charts rendered server-side
@@ -220,11 +248,11 @@ export async function openViewResultsModal(panel) {
 
     setChartLoading(chart.key);
 
-    const directivity = results.directivity || {};
+    const directivity = normalizeDirectivityPayload(results.directivity);
     const splData = results.spl_on_axis || {};
     const frequencies = splData.frequencies || [];
 
-    if (!frequencies.length || !Object.keys(directivity).length) {
+    if (!frequencies.length || !hasDirectivityPatterns(directivity)) {
       setChartImage(chart.key, chart.label, null);
       return;
     }
@@ -270,7 +298,7 @@ export async function openViewResultsModal(panel) {
     const impedanceFrequencies = impedanceData.frequencies || frequencies;
     let impedanceReal = impedanceData.real || [];
     let impedanceImag = impedanceData.imaginary || [];
-    const directivity = results.directivity || {};
+    const directivity = normalizeDirectivityPayload(results.directivity);
 
     if (panel.currentSmoothing !== "none") {
       spl = applySmoothing(frequencies, spl, panel.currentSmoothing);

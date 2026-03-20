@@ -324,8 +324,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                     "finalizing",
                     progress=0.85 + (normalized_progress * 0.13),
                     stage_message=message or (
-                        "Generating polar maps (horizontal/vertical/diagonal) "
-                        "and deriving DI from solved frequencies"
+                        "Generating requested polar maps and deriving DI from solved frequencies"
                     ),
                 )
                 return
