@@ -345,6 +345,7 @@ Notes:
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
 - Device policy defaults to `auto` with deterministic priority: `opencl_gpu`, then `opencl_cpu`.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
+- `server/scripts/benchmark_solver.py --preset tritonia` is the bounded repro harness for Tritonia-M (OCC mesh-prep + 1-frequency/reduced sweep solve + precision support matrix and stage timings).
 - Strong-form GMRES (`use_strong_form=True`) is enabled by default when the installed bempp runtime supports it (bempp-cl ≥ 0.4). Support is feature-detected once at import time.
 - Public advanced solver overrides currently expose Burton-Miller coupling only. Warm-up and BEM precision remain backend-internal compatibility controls. GMRES method/restart/tolerance/max-iteration and explicit strong-form policy controls remain outside the contract.
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
