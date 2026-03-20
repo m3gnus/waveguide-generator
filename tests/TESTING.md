@@ -12,10 +12,12 @@ npm run test:server   # Run all Python tests
 ```
 
 **Behavior**:
+
 - `npm test` discovers and runs Node.js tests in `tests/*.test.js` using node:test
 - `npm run test:server` discovers and runs Python unittest cases in `server/tests/*.py`
 
 **Single-file execution**:
+
 ```bash
 node --test tests/<name>.test.js                    # One JS test file
 cd server && python3 -m unittest tests.<module_name> # One Python test module
@@ -73,6 +75,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/waveguide-payload.test.js`
 
 Supporting fixtures:
+
 - `tests/fixtures/abec/`
 
 ## Python backend suites (`server/tests/`)
@@ -97,6 +100,7 @@ Supporting fixtures:
 - `server/tests/test_solver_tag_contract.py`
 - `server/tests/test_symmetry_benchmark.py`
 - `server/tests/test_symmetry_regression.py`
+- `server/tests/test_tritonia_benchmark.py`
 - `server/tests/test_units.py`
 - `server/tests/test_updates_endpoint.py`
 
@@ -105,9 +109,11 @@ Supporting fixtures:
 These are ad-hoc debugging helpers and are not part of the automated suites.
 
 Backend research helpers:
+
 - `cd server && python3 scripts/benchmark_solver.py <mesh.msh> [options]`
 - `cd server && python3 scripts/benchmark_solver.py --preset tritonia [--json] [--device auto|opencl_cpu|opencl_gpu] [--precision-modes single,double]`
 - `cd server && python3 scripts/benchmark_symmetry.py [--case NAME] [--iterations N] [--json]`
+- `cd server && python3 scripts/benchmark_tritonia.py [options]` — bounded Tritonia-M repro path (mesh prep + optional 1-frequency solve with precision mode testing)
 
 Run from repository root:
 
@@ -116,6 +122,7 @@ npm run diag:payload
 npm run diag:geometry
 npm run diag:occ:tritonia
 npm run diag:occ:closed
+npm run benchmark:tritonia
 ```
 
 Generated diagnostic outputs are written to `scripts/diagnostics/out/`.
