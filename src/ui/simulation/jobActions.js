@@ -3,12 +3,9 @@ import {
   getDeviceMode,
   getFrequencySpacing,
   getMeshValidationMode,
-  getUseOptimized,
   getVerbose,
 } from "../settings/simBasicSettings.js";
 import {
-  getBemPrecision,
-  getEnableWarmup,
   getUseBurtonMiller,
 } from "../settings/simAdvancedSettings.js";
 import {
@@ -594,11 +591,8 @@ export async function runSimulation(panel) {
     meshValidationMode: getMeshValidationMode(),
     frequencySpacing: getFrequencySpacing(),
     deviceMode: getDeviceMode(),
-    useOptimized: getUseOptimized(),
     verbose: getVerbose(),
     advancedSettings: {
-      enableWarmup: getEnableWarmup(),
-      bemPrecision: getBemPrecision(),
       useBurtonMiller: getUseBurtonMiller(),
     },
   };

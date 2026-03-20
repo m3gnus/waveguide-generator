@@ -62,7 +62,6 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "device_mode",
                 "mesh_validation_mode",
                 "frequency_spacing",
-                "use_optimized",
                 "verbose",
             ],
         )
@@ -70,13 +69,11 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertEqual(
             response["capabilities"]["simulationAdvanced"]["controls"],
             [
-                "enable_warmup",
-                "bem_precision",
                 "use_burton_miller",
             ],
         )
         self.assertIn(
-            "BEM precision",
+            "Burton-Miller",
             response["capabilities"]["simulationAdvanced"]["reason"],
         )
 

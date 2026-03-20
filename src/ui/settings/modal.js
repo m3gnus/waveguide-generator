@@ -25,9 +25,7 @@ import {
 } from "./simBasicSettings.js";
 import {
   RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
-  getBemPrecision,
   getCurrentSimAdvancedSettings,
-  getEnableWarmup,
   getUseBurtonMiller,
   resetSimAdvancedSettings,
   saveSimAdvancedSettings,
@@ -112,26 +110,14 @@ const SIMULATION_BASIC_HELP = Object.freeze({
     "Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.",
   frequencySpacing:
     "Determines how the N frequency points are placed between the start and end frequency. Log spaces them evenly on a logarithmic scale (equal ratios between steps — perceptually uniform for audio). Linear spaces them evenly in Hz. Recommended default: Log.",
-  useOptimized:
-    "Enables the optimized HornBEMSolver code path, which pre-computes function spaces once and reuses them across all frequencies. Turning this off falls back to a simpler per-frequency solver. Leave enabled unless debugging. Recommended default: On.",
   verbose:
     "Emits per-frequency solver progress and diagnostic messages to the server log and job status stream. Useful for monitoring long sweeps or diagnosing convergence issues; adds minor overhead. Recommended default: Off.",
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
-  enableWarmup:
-    "Optimized solver only. Before the main frequency loop, assembles and pre-caches one BEM operator at the median frequency to warm up OpenCL JIT and operator assembly pipelines. Costs one extra solve but makes timing for subsequent frequencies more consistent. Recommended default: On.",
-  bemPrecision:
-    "Optimized solver only. Single (float32) is 2–4× faster, uses half the GPU memory, and is accurate for typical simulations. Double (float64) is available as a fallback for numerical stability in edge cases (e.g., very high frequencies or ill-conditioned meshes). Recommended default: Single.",
   useBurtonMiller:
-    "Optimized solver only. Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation — without it, the solver can produce large errors at certain frequencies even when GMRES converges. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.",
+    "Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.",
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
-  enable_warmup: {
-    label: "Warm-up Pass",
-  },
-  bem_precision: {
-    label: "BEM Precision",
-  },
   use_burton_miller: {
     label: "Burton-Miller Coupling",
   },
@@ -282,9 +268,6 @@ function _buildModal(viewerRuntime) {
       settings.frequencySpacing =
         document.getElementById("simbasic-frequencySpacing")?.value ??
         settings.frequencySpacing;
-      settings.useOptimized =
-        document.getElementById("simbasic-useOptimized")?.checked ??
-        settings.useOptimized;
       settings.verbose =
         document.getElementById("simbasic-verbose")?.checked ??
         settings.verbose;
@@ -301,8 +284,6 @@ function _buildModal(viewerRuntime) {
 
     if (t.id && t.id.startsWith("simadvanced-")) {
       const settings = getCurrentSimAdvancedSettings();
-      settings.enableWarmup = getEnableWarmup();
-      settings.bemPrecision = getBemPrecision();
       settings.useBurtonMiller = getUseBurtonMiller();
       saveSimAdvancedSettings(settings);
     }
@@ -882,7 +863,7 @@ function _buildSimulationSection() {
   _appendSectionHeading(
     sec,
     "Simulation",
-    "Persistent solve defaults live here. Advanced controls apply to the optimized solver path only.",
+    "Persistent solve defaults live here. Advanced controls expose only stable public runtime overrides.",
   );
 
   const currentSimBasic = getCurrentSimBasicSettings();
@@ -894,14 +875,11 @@ function _buildSimulationSection() {
     if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
     const fs = document.getElementById("simbasic-frequencySpacing");
     if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
-    const uo = document.getElementById("simbasic-useOptimized");
-    if (uo) uo.checked = SIM_BASIC_DEFAULTS.useOptimized;
     const vb = document.getElementById("simbasic-verbose");
     if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
     if (dmBadge) dmBadge.hidden = true;
     if (mvmBadge) mvmBadge.hidden = true;
     if (fsBadge) fsBadge.hidden = true;
-    if (uoBadge) uoBadge.hidden = true;
     if (vbBadge) vbBadge.hidden = true;
   });
   sec.appendChild(solverHeader);
@@ -982,16 +960,6 @@ function _buildSimulationSection() {
   sec.appendChild(fsResult.row);
   let fsBadge = fsResult.badge;
 
-  const uoResult = _buildSimBasicCheckboxRow(
-    "Use Optimized Solver Path",
-    "simbasic-useOptimized",
-    currentSimBasic.useOptimized,
-    SIM_BASIC_DEFAULTS.useOptimized,
-    SIMULATION_BASIC_HELP.useOptimized,
-  );
-  sec.appendChild(uoResult.row);
-  let uoBadge = uoResult.badge;
-
   const vbResult = _buildSimBasicCheckboxRow(
     "Verbose Backend Logging",
     "simbasic-verbose",
@@ -1009,49 +977,19 @@ function _buildSimulationSection() {
   const advancedIntro = document.createElement("p");
   advancedIntro.className = "settings-section-help";
   advancedIntro.textContent =
-    "These settings apply to the optimized solver path only. All three controls are active and sent through the public solve contract.";
+    "This setting is sent through the public solve contract as a stable runtime override.";
   sec.appendChild(advancedIntro);
 
   const advancedActiveHeader = _buildSubSectionHeader(
     "Active Contract Overrides",
     () => {
       const resetSettings = resetSimAdvancedSettings();
-      const ew = document.getElementById("simadvanced-enableWarmup");
-      if (ew) ew.checked = resetSettings.enableWarmup;
-      const bp = document.getElementById("simadvanced-bemPrecision");
-      if (bp) bp.value = resetSettings.bemPrecision;
       const ubm = document.getElementById("simadvanced-useBurtonMiller");
       if (ubm) ubm.checked = resetSettings.useBurtonMiller;
-      if (ewBadge) ewBadge.hidden = false;
-      if (bpBadge) bpBadge.hidden = false;
       if (ubmBadge) ubmBadge.hidden = false;
     },
   );
   sec.appendChild(advancedActiveHeader);
-
-  const ewResult = _buildSimBasicCheckboxRow(
-    ADVANCED_CONTROL_COPY.enable_warmup.label,
-    "simadvanced-enableWarmup",
-    currentSimAdvanced.enableWarmup,
-    SIM_ADVANCED_DEFAULTS.enableWarmup,
-    SIMULATION_ADVANCED_HELP.enableWarmup,
-  );
-  sec.appendChild(ewResult.row);
-  let ewBadge = ewResult.badge;
-
-  const bpResult = _buildSimBasicSelectRow(
-    ADVANCED_CONTROL_COPY.bem_precision.label,
-    "simadvanced-bemPrecision",
-    [
-      { value: "double", label: "Double" },
-      { value: "single", label: "Single" },
-    ],
-    currentSimAdvanced.bemPrecision,
-    SIM_ADVANCED_DEFAULTS.bemPrecision,
-    SIMULATION_ADVANCED_HELP.bemPrecision,
-  );
-  sec.appendChild(bpResult.row);
-  let bpBadge = bpResult.badge;
 
   const ubmResult = _buildSimBasicCheckboxRow(
     ADVANCED_CONTROL_COPY.use_burton_miller.label,
@@ -1635,8 +1573,8 @@ function _applySimBasicDeviceAvailability(health) {
 }
 
 function _applySimAdvancedCapabilityState(_health) {
-  // No-op: planned controls section removed. The three active advanced controls
-  // (enable_warmup, bem_precision, use_burton_miller) are always shown unconditionally.
+  // No-op: planned controls section removed. Stable advanced controls are
+  // always shown unconditionally.
 }
 
 async function _refreshSimulationCapabilityState() {
