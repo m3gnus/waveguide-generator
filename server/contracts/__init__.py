@@ -82,6 +82,7 @@ class PolarConfig(BaseModel):
 
 
 class AdvancedSimulationSettings(BaseModel):
+    """Advanced solve settings; only use_burton_miller is active in the current runtime."""
     enable_warmup: Optional[bool] = None
     bem_precision: Optional[str] = None
     use_burton_miller: Optional[bool] = None
