@@ -340,6 +340,7 @@ Runtime metadata behavior:
   - `metadata.mesh_validation`
   - `metadata.unit_detection`
   - `metadata.device_interface` (selected interface/device information and fallback details)
+  - `metadata.performance.total_time_seconds`
   - `metadata.performance.bem_precision` (`single` for the stable optimized solve path)
 
 ### `GET /api/status/{job_id}`

@@ -392,63 +392,33 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         self.assertEqual(device_meta["runtime_selected"], "opencl")
 
 
-class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
-    def test_gmres_iteration_count_in_metadata(self):
+class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
+    def test_performance_metadata_contains_only_ui_contract_fields(self):
         mesh = _mesh_stub()
         with patch(
             _SOLVE_FREQ_TARGET,
-            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 18),
+            return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
             "solver.solve_optimized.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
                 mesh=mesh,
-                frequency_range=[200.0, 400.0],
-                num_frequencies=2,
+                frequency_range=[200.0, 200.0],
+                num_frequencies=1,
                 sim_type="2",
                 verbose=False,
                 mesh_validation_mode="off",
             )
 
-        perf = results["metadata"]["performance"]
-        self.assertIn("gmres_iterations_per_frequency", perf)
-        self.assertIn("avg_gmres_iterations", perf)
-        self.assertEqual(perf["gmres_iterations_per_frequency"], [18, 18])
-        self.assertEqual(perf["avg_gmres_iterations"], 18.0)
+        performance = results["metadata"]["performance"]
+        self.assertIn("total_time_seconds", performance)
+        self.assertIn("bem_precision", performance)
+        self.assertEqual(performance["bem_precision"], "single")
+        self.assertIsInstance(performance["total_time_seconds"], float)
+        self.assertGreater(performance["total_time_seconds"], 0)
 
-    def test_failed_frequency_has_none_in_iteration_list(self):
-        mesh = _mesh_stub()
-        calls = {"count": 0}
-
-        def _solve_side_effect(*_args, **_kwargs):
-            if calls["count"] == 0:
-                calls["count"] += 1
-                raise RuntimeError("forced failure")
-            return (91.5, complex(2.0, 0.5), 7.0, ("p", "u", "sp", "su"), 20)
-
-        with patch(
-            _SOLVE_FREQ_TARGET,
-            side_effect=_solve_side_effect,
-        ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
-            return_value=_directivity_stub(),
-        ):
-            results = solve_optimized(
-                mesh=mesh,
-                frequency_range=[200.0, 300.0],
-                num_frequencies=2,
-                sim_type="2",
-                verbose=False,
-                mesh_validation_mode="off",
-            )
-
-        iters = results["metadata"]["performance"]["gmres_iterations_per_frequency"]
-        self.assertIsNone(iters[0])
-        self.assertEqual(iters[1], 20)
-        self.assertEqual(results["metadata"]["performance"]["avg_gmres_iterations"], 20.0)
-
-    def test_performance_metadata_omits_legacy_warmup_and_strong_form_fields(self):
+    def test_performance_metadata_omits_removed_fields(self):
         mesh = _mesh_stub()
         with patch(
             _SOLVE_FREQ_TARGET,
@@ -469,6 +439,12 @@ class StrongFormGmresTest(_OpenCLRuntimePatchedTestCase):
         performance = results["metadata"]["performance"]
         self.assertNotIn("warmup_time_seconds", performance)
         self.assertNotIn("gmres_strong_form_supported", performance)
+        self.assertNotIn("frequency_solve_time", performance)
+        self.assertNotIn("directivity_compute_time", performance)
+        self.assertNotIn("time_per_frequency", performance)
+        self.assertNotIn("gmres_iterations_per_frequency", performance)
+        self.assertNotIn("avg_gmres_iterations", performance)
+        self.assertNotIn("reduction_speedup", performance)
 
 
 class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
