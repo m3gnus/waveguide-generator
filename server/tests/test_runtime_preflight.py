@@ -182,6 +182,49 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertIn("Waveguide backend dependency doctor", text_summary)
         self.assertIn("Required dependency status: NOT READY", text_summary)
 
+    def test_collect_runtime_doctor_report_marks_apple_silicon_opencl_unsupported(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
+            },
+            "supportedMatrix": {},
+        }
+        device_metadata = {
+            "opencl_available": False,
+            "selected_mode": None,
+            "device_name": None,
+            "supported_modes": [],
+            "selection_policy": "supported_opencl_modes",
+            "fallback_reason": (
+                "Apple Silicon OpenCL solve is currently unsupported for /api/solve: "
+                "the maintained bounded Tritonia repro still fails on the pocl CPU runtime."
+            ),
+            "warning": None,
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_matplotlib_runtime",
+            return_value={"available": True, "version": "3.9.2"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value=device_metadata,
+        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"), patch(
+            "services.runtime_preflight.platform.machine", return_value="arm64"
+        ):
+            report = collect_runtime_doctor_report()
+
+        components_by_id = {item["id"]: item for item in report["components"]}
+        self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
+        self.assertIn("Apple Silicon", components_by_id["opencl_runtime"]["detail"])
+        self.assertTrue(
+            any("unsupported" in line.lower() for line in components_by_id["opencl_runtime"]["guidance"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

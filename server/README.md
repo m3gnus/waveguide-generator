@@ -29,9 +29,9 @@ Notes:
   - `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt`
   - Headless Linux: `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt`
 
-### 1.0 macOS OpenCL CPU setup (recommended for bempp-cl OpenCL)
+### 1.0 macOS OpenCL CPU setup (investigation-only on Apple Silicon)
 
-On Apple Silicon, bempp-cl `0.4.x` OpenCL requires a CPU OpenCL device. The helper below creates a no-space conda environment with `pocl` (Portable OpenCL CPU runtime):
+On Apple Silicon, the helper below creates a no-space conda environment with `pocl` (Portable OpenCL CPU runtime). This environment is still useful for reproducing the current `bempp-cl` OpenCL failure boundary, but it is not a validated `/api/solve` runtime contract today.
 
 From repository root:
 
@@ -80,6 +80,11 @@ Preflight always runs under the interpreter selected by the shared startup contr
 - `gmsh` (`/api/mesh/build`)
 - `bempp-cl` (`/api/solve`)
 - OpenCL runtime availability (`/api/solve`)
+
+Current Apple Silicon contract:
+
+- Apple Silicon OpenCL solve is currently reported unsupported/unready for `/api/solve`.
+- `./scripts/setup-opencl-backend.sh` provisions an investigation/runtime-repro environment, not a production-readiness fix for bounded solves.
 
 ### 1.0.2 Backend dependency doctor
 
@@ -132,6 +137,7 @@ Notes:
 - `auto` follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
 - OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
 - With current bempp-cl `0.4.x`, singular assembly still requires a CPU OpenCL context. GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu` instead of using context aliasing fallbacks.
+- On Apple Silicon, the current OpenCL solve path is intentionally reported unsupported/unready until a bounded solve is validated end-to-end; the existing `pocl` CPU setup is investigation-only.
 - The solver now clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
 - Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalized plane descriptors, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
 - `results.directivity` is a plane-keyed map containing only the requested planes; callers must not assume all of `horizontal`, `vertical`, and `diagonal` are always present.

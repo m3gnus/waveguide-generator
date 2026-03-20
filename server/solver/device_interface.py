@@ -31,6 +31,11 @@ DEFAULT_DEVICE_MODE = str(os.environ.get("WG_DEVICE_MODE", "auto") or "auto").st
 _LOGGED_FALLBACK_REASONS: set[str] = set()
 _AUTO_MODE_SUPPORTED_ORDER: Tuple[str, ...] = ("opencl_cpu", "opencl_gpu")
 _AUTO_SELECTION_POLICY = "supported_opencl_modes"
+_APPLE_SILICON_OPENCL_UNSUPPORTED_REASON = (
+    "Apple Silicon OpenCL solve is currently unsupported for /api/solve: "
+    "the maintained bounded Tritonia repro still fails on the pocl CPU runtime, "
+    "and no validated GPU-backed OpenCL solve path has been established."
+)
 
 
 def _path_contains_whitespace(path: Path) -> bool:
@@ -43,6 +48,10 @@ def normalize_device_mode(mode: Optional[str]) -> str:
     if normalized not in VALID_DEVICE_MODES:
         return "auto"
     return normalized
+
+
+def _is_apple_silicon_host() -> bool:
+    return platform.system().lower() == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
 
 
 def _opencl_prerequisite_reason() -> Optional[str]:
@@ -147,6 +156,9 @@ def _opencl_inventory() -> Dict[str, object]:
 
 def _mode_unavailable_reason(mode: str) -> Optional[str]:
     normalized = normalize_device_mode(mode)
+    if normalized in {"opencl_cpu", "opencl_gpu"} and _is_apple_silicon_host():
+        return _APPLE_SILICON_OPENCL_UNSUPPORTED_REASON
+
     info = _opencl_inventory()
     base_reason = info.get("base_reason")
     if base_reason:
