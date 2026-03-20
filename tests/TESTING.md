@@ -78,6 +78,7 @@ Supporting fixtures:
 ## Python backend suites (`server/tests/`)
 
 - `server/tests/test_api_validation.py`
+- `server/tests/test_benchmark_solver_script.py`
 - `server/tests/test_dependency_runtime.py`
 - `server/tests/test_device_interface.py`
 - `server/tests/test_directivity_plot.py`
@@ -105,6 +106,7 @@ These are ad-hoc debugging helpers and are not part of the automated suites.
 
 Backend research helpers:
 - `cd server && python3 scripts/benchmark_solver.py <mesh.msh> [options]`
+- `cd server && python3 scripts/benchmark_solver.py --preset tritonia [--json] [--device auto|opencl_cpu|opencl_gpu] [--precision-modes single,double]`
 - `cd server && python3 scripts/benchmark_symmetry.py [--case NAME] [--iterations N] [--json]`
 
 Run from repository root:

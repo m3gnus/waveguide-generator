@@ -206,6 +206,26 @@ This uses deterministic synthetic fixtures for:
 - quarter-domain symmetry reduction
 - rejected reduction when the source tag is off-center
 
+### 2.3 Tritonia-M bounded runtime repro harness
+
+For a bounded Tritonia-M repro (OCC mesh build + 1-frequency solve + precision support matrix), run:
+
+```bash
+cd server
+python3 scripts/benchmark_solver.py --preset tritonia --json
+```
+
+What this reports:
+- mesh-prep success/failure for the Tritonia OCC preset
+- selected runtime/device metadata for the requested mode
+- per-precision (`single`, `double`) support status on the active host
+- solver stage timings from `metadata.performance` (`warmup`, frequency solve, directivity, total)
+
+Notes:
+- The preset defaults to `1000 Hz`, `1` frequency point, and linear spacing.
+- You can still override device mode and frequency settings for reduced-sweep follow-up runs.
+- Unsupported precision modes are surfaced explicitly as `unsupported` in the report; they are not silently downgraded.
+
 ## 3. API Endpoints
 
 ### `GET /health`
