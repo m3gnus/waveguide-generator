@@ -178,6 +178,46 @@ echo ""
 echo "Installing bempp-cl (needed for acoustic simulations)..."
 if .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git; then
     echo "  bempp-cl installed."
+
+    # Patch bempp-cl's get_vector_width for non-standard native vector widths.
+    # pocl on Apple Silicon reports native_vector_width_float=2 which triggers
+    # a KeyError in unpatched bempp-cl (only {1,4,8,16} accepted).
+    .venv/bin/python - <<'VECPATCH'
+import importlib, pathlib, sys
+
+spec = importlib.util.find_spec("bempp_cl.core.opencl_kernels")
+if spec is None or spec.origin is None:
+    sys.exit(0)
+target = pathlib.Path(spec.origin)
+src = target.read_text()
+if "_SUPPORTED_VECTOR_WIDTHS" in src:
+    print("  Vector-width patch: already applied.")
+    sys.exit(0)
+
+old = (
+    '    if bempp_cl.api.VECTORIZATION_MODE == "auto":\n'
+    '        return get_native_vector_width(default_device(device_type), precision)\n'
+    '    else:'
+)
+new = (
+    '    if bempp_cl.api.VECTORIZATION_MODE == "auto":\n'
+    '        native = get_native_vector_width(default_device(device_type), precision)\n'
+    '        if native not in _SUPPORTED_VECTOR_WIDTHS:\n'
+    '            return max((w for w in _SUPPORTED_VECTOR_WIDTHS if w <= native), default=1)\n'
+    '        return native\n'
+    '    else:'
+)
+if old not in src:
+    print("  Vector-width patch: could not locate target — skipping.")
+    sys.exit(0)
+# Also insert the constant before get_vector_width
+marker = 'def get_vector_width(precision, device_type="cpu"):'
+src = src.replace(marker, '_SUPPORTED_VECTOR_WIDTHS = {1, 4, 8, 16}\n\n\n' + marker, 1)
+src = src.replace(old, new)
+target.write_text(src)
+print("  Vector-width patch: applied to", target)
+VECPATCH
+
 else
     echo "  WARNING: bempp-cl automatic install failed."
     echo "           You can retry later with:"
@@ -242,7 +282,12 @@ else
                 echo "           To fix: install Homebrew (https://brew.sh/), then: brew install pocl"
             fi
             if [[ "$_ARCH" == "arm64" ]]; then
-                echo "           Apple Silicon alternative: bash scripts/setup-opencl-backend.sh"
+                echo ""
+                echo "           Apple Silicon recommended path:"
+                echo "             bash scripts/setup-opencl-backend.sh"
+                echo "           This creates a conda environment with pocl (CPU OpenCL)."
+                echo "           pip's pyopencl on macOS cannot discover pocl — the conda"
+                echo "           build is required for BEM solves on Apple Silicon."
             fi
         fi
     fi
@@ -251,8 +296,21 @@ echo ""
 
 echo "Recording backend interpreter contract..."
 mkdir -p "$ROOT/.waveguide"
-printf '%s\n' "$ROOT/.venv/bin/python" > "$PREFERRED_PYTHON_FILE"
-echo "  Preferred backend interpreter: $ROOT/.venv/bin/python"
+
+# Determine the best backend interpreter.
+# On macOS/arm64 pip's pyopencl links to Apple's OpenCL.framework which cannot
+# discover pocl, so the conda-based opencl-cpu-env (created by
+# scripts/setup-opencl-backend.sh) is the only path to working BEM solves.
+# Prefer opencl-cpu-env when it exists and .venv lacks a working OpenCL CPU
+# runtime.
+_BACKEND_PYTHON="$ROOT/.venv/bin/python"
+_OPENCL_CPU_ENV="$HOME/.waveguide-generator/opencl-cpu-env/bin/python"
+if [[ "$_OPENCL_OK" -eq 0 ]] && [ -x "$_OPENCL_CPU_ENV" ]; then
+    _BACKEND_PYTHON="$_OPENCL_CPU_ENV"
+fi
+
+printf '%s\n' "$_BACKEND_PYTHON" > "$PREFERRED_PYTHON_FILE"
+echo "  Preferred backend interpreter: $_BACKEND_PYTHON"
 echo "  Marker file: $PREFERRED_PYTHON_FILE"
 echo ""
 
