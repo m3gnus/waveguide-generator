@@ -5,6 +5,8 @@ BEM simulation runner — executes a single simulation job asynchronously.
 import asyncio
 import json
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
@@ -193,22 +195,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 ),
             )
             _cancellation_callback("Cancellation requested after adaptive mesh build completed")
-            vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
-            canonical_metadata = (
-                occ_result.get("canonical_mesh", {}).get("metadata")
-                if isinstance(occ_result.get("canonical_mesh"), dict)
-                else None
-            )
-            _set_job_fields(
-                job_id,
-                mesh_stats=_build_mesh_stats(
-                    vertices,
-                    indices,
-                    source="occ_adaptive_canonical",
-                    surface_tags=surface_tags,
-                    metadata=canonical_metadata,
-                ),
-            )
 
             # Store mesh artifact for optional download.
             msh_artifact = occ_result.get("msh_text")
@@ -227,27 +213,52 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                     )
                     _set_job_fields(job_id, has_mesh_artifact=False)
 
-            mesh_metadata = dict(request.mesh.metadata or {})
-            mesh_metadata.update(
-                {
-                    "units": "mm",
-                    "unitScaleToMeter": 0.001,
-                    "meshStrategy": "occ_adaptive",
-                    "generatedBy": "gmsh-occ",
-                    "requestedQuadrants": queued_quadrants,
-                    "effectiveQuadrants": 1234,
-                    "occStats": occ_result.get("stats") or {},
-                    "verticalOffset": float(validated_payload.get("vertical_offset", 0) or 0),
-                }
-            )
+            # Load mesh for BEM directly from the .msh file via meshio.
+            # This bypasses the canonical mesh extraction + normal reorientation
+            # pipeline, which can produce wrong normal directions for enclosure
+            # meshes.  Loading via meshio matches the approach used in the
+            # 260321-BEM reference solver that produces correct directivity.
+            if not msh_artifact:
+                raise RuntimeError(
+                    "Adaptive OCC mesh generation did not produce .msh output."
+                )
+            from solver.mesh import load_msh_for_bem
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".msh", delete=False, encoding="utf-8"
+            ) as tmp_msh:
+                tmp_msh.write(msh_artifact)
+                tmp_msh_path = tmp_msh.name
+            try:
+                mesh = load_msh_for_bem(tmp_msh_path, scale_factor=0.001)
+            finally:
+                try:
+                    Path(tmp_msh_path).unlink()
+                except OSError:
+                    pass
 
-            mesh = solver.prepare_mesh(
-                vertices,
-                indices,
-                surface_tags=surface_tags,
-                boundary_conditions=request.mesh.boundaryConditions,
-                mesh_metadata=mesh_metadata,
-            )
+            # Extract canonical mesh stats for the job record (informational only).
+            try:
+                vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
+                canonical_metadata = (
+                    occ_result.get("canonical_mesh", {}).get("metadata")
+                    if isinstance(occ_result.get("canonical_mesh"), dict)
+                    else None
+                )
+                _set_job_fields(
+                    job_id,
+                    mesh_stats=_build_mesh_stats(
+                        vertices,
+                        indices,
+                        source="occ_adaptive_msh",
+                        surface_tags=surface_tags,
+                        metadata=canonical_metadata,
+                    ),
+                )
+            except Exception as _stats_exc:
+                logger.warning(
+                    "Canonical mesh stats extraction failed for job %s: %s",
+                    job_id, _stats_exc,
+                )
         else:
             # Legacy canonical path
             update_job_stage(
