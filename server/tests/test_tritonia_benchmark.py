@@ -326,6 +326,45 @@ class CLITest(unittest.TestCase):
             self.assertIn("runtime_available", parsed)
             self.assertIn("mesh_prep", parsed)
 
+    def test_cli_persists_bounded_solve_validation_when_solve_runs(self):
+        with patch(
+            "sys.argv",
+            ["benchmark_tritonia.py", "--json"],
+        ), patch(
+            "benchmark_tritonia.run_benchmark"
+        ) as mock_run, patch(
+            "benchmark_tritonia.write_bounded_solve_readiness_record"
+        ) as write_record, patch(
+            "sys.stdout", new_callable=StringIO
+        ):
+            mock_run.return_value = bt.BenchmarkResult(
+                runtime_available=True,
+                mesh_prep=bt.MeshPrepResult(success=True),
+                device_metadata={"selected_mode": "opencl_cpu", "device_name": "Fake CPU"},
+                precision_results=[
+                    bt.PrecisionTestResult(
+                        precision="single",
+                        attempted=True,
+                        success=True,
+                        elapsed_seconds=1.0,
+                    )
+                ],
+                host_info={"python_version": "3.11.0", "machine": "arm64"},
+                unsupported_precision_modes=[],
+                total_elapsed_seconds=1.0,
+            )
+
+            try:
+                bt.main()
+            except SystemExit:
+                pass
+
+            write_record.assert_called_once()
+            record_payload = write_record.call_args.args[0]
+            self.assertTrue(record_payload["attempted"])
+            self.assertTrue(record_payload["success"])
+            self.assertEqual(record_payload["selected_mode"], "opencl_cpu")
+
 
 if __name__ == "__main__":
     unittest.main()

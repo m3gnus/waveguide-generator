@@ -1,6 +1,6 @@
 const FEATURE_COMPONENTS = Object.freeze({
   meshBuild: ['gmsh_python'],
-  solve: ['bempp_cl', 'opencl_runtime'],
+  solve: ['bempp_cl', 'opencl_runtime', 'bounded_solve_validation'],
   charts: ['matplotlib']
 });
 
