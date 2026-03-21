@@ -120,13 +120,20 @@ def infer_observation_frame(
 
     source_center = np.mean(vertices, axis=1)
     axis_candidate = None
+    source_axis_from_tags = False
+    tag2_count = 0
+    total_elements = 0
 
     try:
         elements = np.asarray(grid.elements, dtype=np.int64)
         domain_indices = np.asarray(grid.domain_indices, dtype=np.int64).reshape(-1)
+        total_elements = int(elements.shape[1]) if elements.ndim == 2 else 0
+        tag2_count = int(np.count_nonzero(domain_indices == 2))
         axis_candidate, source_center = _source_axis_and_center(
             vertices, elements, domain_indices, source_center
         )
+        if axis_candidate is not None:
+            source_axis_from_tags = True
     except Exception:
         axis_candidate = None
 
@@ -140,10 +147,38 @@ def infer_observation_frame(
     max_proj = float(np.max(projections))
     min_proj = float(np.min(projections))
 
-    if max_proj < -min_proj:
-        axis_candidate = -axis_candidate
-        projections = -projections
-        max_proj, min_proj = -min_proj, -max_proj
+    # Determine whether to flip the axis direction.
+    #
+    # The extent-based heuristic (flip when max_proj < -min_proj) works when
+    # the source elements are at one extreme of the mesh — e.g. a horn where
+    # the throat disc is at the very end and the horn body extends forward.
+    #
+    # However, for enclosures where enc_depth > 2 * horn_length, the source
+    # (throat disc) sits in the MIDDLE of the mesh — the horn mouth is at one
+    # end and the enclosure back wall extends further in the other direction.
+    # The extent heuristic then wrongly flips the axis, making 0° point
+    # backward and producing omnidirectional-looking directivity.
+    #
+    # Fix: detect whether the source is at an extreme or in the middle.
+    # - Source at an extreme → apply the extent heuristic (reliable)
+    # - Source in the middle → trust the source normal direction (it points
+    #   outward from the canonical-oriented mesh, toward the horn mouth)
+    extent = max(max_proj - min_proj, 1e-12)
+    # Source center is at projection 0 (by construction). Check if it's
+    # near max_proj or min_proj (within 25% of total extent).
+    source_near_max = abs(max_proj) < 0.25 * extent
+    source_near_min = abs(min_proj) < 0.25 * extent
+    source_at_extreme = source_near_max or source_near_min
+
+    if source_at_extreme or not source_axis_from_tags:
+        # Source is at one end of the mesh, or we have no source normal.
+        # The extent heuristic reliably determines the correct direction.
+        if max_proj < -min_proj:
+            axis_candidate = -axis_candidate
+            projections = -projections
+            max_proj, min_proj = -min_proj, -max_proj
+    # else: source is in the middle (enclosure geometry) — trust the source
+    # normal direction from canonically-oriented tag-2 elements.
 
     tol = max(1e-6, 0.02 * max(abs(max_proj - min_proj), 1e-6))
     mouth_mask = projections >= (max_proj - tol)
@@ -185,9 +220,13 @@ def infer_observation_frame(
         "origin=[%.4f, %.4f, %.4f], "
         "source_center=[%.4f, %.4f, %.4f], "
         "mouth_center=[%.4f, %.4f, %.4f], "
-        "observation_origin=%s",
+        "observation_origin=%s, "
+        "max_proj=%.4f, min_proj=%.4f, "
+        "source_from_tags=%s, tag2=%d, total=%d",
         *axis_candidate, *origin_center, *source_center, *mouth_center,
         observation_origin,
+        max_proj, min_proj,
+        source_axis_from_tags, tag2_count, total_elements,
     )
     return {
         "axis": axis_candidate,

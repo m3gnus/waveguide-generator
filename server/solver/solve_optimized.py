@@ -661,6 +661,17 @@ def solve_optimized(
         grid, observation_request_m, observation_frame
     )
     observation_distance_m = float(observation_info["effective_distance_m"])
+    logger.info(
+        "[HornBEM] observation: distance=%.3f m (requested=%.3f m, adjusted=%s), "
+        "origin=%s, tag_distribution={1: %d, 2: %d, other: %d}",
+        observation_distance_m,
+        observation_request_m,
+        observation_info.get("adjusted", False),
+        observation_origin,
+        int(np.count_nonzero(physical_tags == 1)) if physical_tags is not None else -1,
+        int(np.count_nonzero(physical_tags == 2)) if physical_tags is not None else -1,
+        int(np.count_nonzero((physical_tags != 1) & (physical_tags != 2))) if physical_tags is not None else -1,
+    )
     effective_polar_config = dict(polar_config) if isinstance(polar_config, dict) else {}
     effective_polar_config["observation_origin"] = observation_origin
     effective_polar_config["distance"] = observation_distance_m
