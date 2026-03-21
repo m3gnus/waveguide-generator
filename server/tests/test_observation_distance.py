@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 
 from solver.observation import infer_observation_frame
-from solver.solve_optimized import solve_optimized
+from solver.solve import solve_optimized
 
 
 class _GridStub:

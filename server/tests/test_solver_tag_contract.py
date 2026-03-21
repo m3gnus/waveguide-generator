@@ -6,12 +6,11 @@ class SolverTagContractTest(unittest.TestCase):
     def test_source_tag_contract_is_enforced_by_active_solver_path(self):
         solver_dir = Path(__file__).resolve().parents[1].joinpath("solver")
         bem_solver_text = solver_dir.joinpath("bem_solver.py").read_text()
-        optimized_text = solver_dir.joinpath("solve_optimized.py").read_text()
+        optimized_text = solver_dir.joinpath("solve.py").read_text()
         mesh_text = solver_dir.joinpath("mesh.py").read_text()
 
         # Runtime entrypoint should no longer depend on the legacy solve.py module.
-        self.assertNotIn("from .solve import", bem_solver_text)
-        self.assertIn("from .solve_optimized import solve_optimized", bem_solver_text)
+        self.assertIn("from .solve import solve_optimized", bem_solver_text)
         self.assertNotIn("def _solve_frequency(", bem_solver_text)
 
         # solve_optimized.py (HornBEMSolver) uses full DP0 with throat DOFs zeroed.

@@ -8,7 +8,7 @@ except ImportError:  # pragma: no cover
     meshio = None
 
 from solver.mesh import prepare_mesh
-from solver.solve_optimized import solve_optimized
+from solver.solve import solve_optimized
 
 
 @unittest.skipUnless(

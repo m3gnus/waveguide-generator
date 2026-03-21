@@ -77,7 +77,7 @@
   - OCC-based mesh construction from ATH parameters (`/api/mesh/build`)
 - `server/solver/mesh.py`
   - Canonical payload integrity checks and optional gmsh refinement
-- `server/solver/bem_solver.py`, `server/solver/solve_optimized.py`
+- `server/solver/bem_solver.py`, `server/solver/solve.py`
   - BEM solve pipeline (single stable runtime entrypoint)
 - `server/solver/deps.py`
   - Runtime dependency/version gating

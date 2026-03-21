@@ -191,7 +191,7 @@ def build_tritonia_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
 
 def run_benchmark(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
-    from solver.solve_optimized import solve_optimized
+    from solver.solve import solve_optimized
     from solver.device_interface import selected_device_metadata
 
     freq_plan = resolve_frequency_plan(args)
