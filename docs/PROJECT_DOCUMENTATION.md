@@ -3,6 +3,7 @@
 **This is the canonical implementation reference.** If code and docs disagree, update this file to match the code.
 
 **Companion references**:
+
 - `docs/architecture.md` — durable architecture, layer boundaries, design decisions
 - `docs/modules/` — per-module contracts and responsibilities
 - `tests/TESTING.md` — test inventory and run commands
@@ -13,6 +14,7 @@
 ## 1. Scope
 
 **What it does**:
+
 - Parametric horn geometry (OSSE / R-OSSE) with real-time Three.js viewport
 - BEM simulation via backend solver (frequency-domain acoustic FEM/BEM coupling)
 - OCC-based mesh generation (gmsh server-side)
@@ -20,6 +22,7 @@
 - Task history with folder-workspace persistence and auto-export automation
 
 **Entry points**:
+
 - Frontend: `src/main.js` → `src/app/App.js`
 - Backend: `server/app.py` (FastAPI on port 8000)
 
@@ -113,6 +116,7 @@ flowchart LR
    - The same pre-submit payload also carries `metadata.identityTriangleCounts`, which the UI uses to show geometry-face triangle counts without changing the downstream numeric `surfaceTags` solver contract.
 3. `BemSolver.submitSimulation(...)` posts payload to `POST /api/solve` with adaptive mesh strategy:
    - `options.mesh.strategy = "occ_adaptive"`
+
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
 - Simulation settings forward `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
 - Runtime device availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
@@ -121,6 +125,7 @@ flowchart LR
 - Apple Silicon hosts currently report OpenCL solve unsupported/unready for `/api/solve`; the maintained `pocl` CPU environment remains a bounded-repro setup, not a validated production runtime.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
+
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
@@ -143,23 +148,27 @@ flowchart LR
 ### 4.1 JS canonical geometry/payload pipeline
 
 Primary files:
+
 - `src/geometry/engine/*`
 - `src/geometry/pipeline.js`
 - `src/geometry/tags.js`
 
 `buildGeometryArtifacts(...)` returns:
+
 - `geometry` shape definition used as tessellation input
 - `mesh` for render/export helpers
 - `simulation` canonical payload with tags/BC metadata
 - `export` helpers (ATH coordinate transform)
 
 Canonical surface tags:
+
 - `1` = wall
 - `2` = source
 - `3` = secondary domain (reserved in JS canonical runtime)
 - `4` = interface (reserved in JS canonical runtime)
 
 Important behavior:
+
 - Source triangles are explicit geometry and required; payload build throws if none are tagged.
 - JS canonical payload currently emits only tags `1` and `2`; tag counters for `3`/`4` remain zero in runtime tests.
 - Simulation payload topology is full-domain and does not trim by `quadrants`.
@@ -174,19 +183,23 @@ Important behavior:
 ### 4.2 OCC parameter-to-`.msh` pipeline (`/api/mesh/build`)
 
 Frontend call path:
+
 - `src/modules/export/useCases.js` -> `prepareExportArtifacts(...)`
 
 Backend implementation:
+
 - `server/api/routes_mesh.py` route `POST /api/mesh/build`
 - `server/solver/waveguide_builder.py` function `build_waveguide_mesh(...)`
 
 Frontend request normalization:
+
 - OCC request normalization is owned by `DesignModule`:
   - `DesignModule.output.occSimulationParams(...)` normalizes simulation OCC inputs (min/rounded segment counts, canonical quadrants, mesh-resolution defaults).
   - `DesignModule.output.occExportParams(...)` adds export-specific OCC normalization (angular snapping to multiples of 4 and scaled/coarse export resolutions).
   - `buildWaveguidePayload(...)` maps already-normalized OCC fields to request schema and enforces payload shape for required OCC fields.
 
 Response shape:
+
 ```json
 {
   "msh": "...",
@@ -197,11 +210,13 @@ Response shape:
 ```
 
 Validation/gating:
+
 - `formula_type` must be `"R-OSSE"` or `"OSSE"` (`422` otherwise)
 - `msh_version` must be `"2.2"` or `"4.1"` (`422` otherwise)
 - Returns `503` when Python/gmsh runtime matrix is unsupported or OCC builder unavailable
 
 OCC geometry logic:
+
 - `enc_depth > 0`: enclosure geometry generated
 - `enc_depth == 0` and `wall_thickness > 0`: freestanding wall shell generated
 - both zero: bare horn
@@ -209,6 +224,7 @@ OCC geometry logic:
 - `subdomain_slices` / `interface_*` fields are accepted in request payload but are not currently used to create OCC interface geometry
 
 OCC mesh-resolution semantics:
+
 - `throat_res`: nominal element size at throat plane.
 - `mouth_res`: nominal element size at mouth plane.
 - Horn surfaces use smooth axial interpolation `throat_res -> mouth_res`.
@@ -218,11 +234,13 @@ OCC mesh-resolution semantics:
   Quadrant mapping: `Q1(+x,+y)`, `Q2(-x,+y)`, `Q3(-x,-y)`, `Q4(+x,-y)`.
 
 UI control mapping:
+
 - `Preview Angular/Length/Corner/Throat Segments` and `Preview Slice Bias` affect only Three.js preview tessellation.
 - `Throat/Mouth/Rear Mesh Resolution`, `Front/Rear Baffle Mesh Resolution`, and `Export Vertical Offset` affect backend OCC solve/export mesh density or coordinates.
 - `Auto-download solve mesh artifact (.msh)` affects only whether the persisted backend `.msh` artifact is downloaded.
 
 Physical groups written by OCC builder:
+
 - tag 1: `SD1G0`
 - tag 2: `SD1D1001`
 - tag 3: `SD2G0` (when exterior surfaces exist)
@@ -232,11 +250,13 @@ Physical groups written by OCC builder:
 ### 5.1 UI-exposed exports
 
 Active runtime export surfaces:
+
 - App-level exports: STL (`exportSTL`), MWG config text (`exportMWGConfig`), and profile/slice CSV (`exportProfileCSV`)
 - Simulation-result exports: bundle-coordinated PNG / CSV / JSON / text / polar CSV / impedance CSV / VACS / STL / Fusion CSV task exports in `src/ui/simulation/exports.js`
 - Completed-job mesh download: `.msh` artifact fetch via `src/ui/simulation/meshDownload.js` when backend jobs persist mesh artifacts
 
 Task-history controls:
+
 - `src/ui/simulation/jobActions.js` renders inline 1-5 star rating controls and applies persisted sort/filter preferences.
 - `src/ui/settings/simulationManagementSettings.js` stores task export settings plus task-list preferences (`defaultSort`, `minRatingFilter`) used by the `Task Exports` settings section and Simulation Jobs toolbar.
 - `src/ui/simulation/controller.js` persists rating updates through the same job/task-manifest contract used for export bookkeeping.
@@ -258,7 +278,7 @@ Regression coverage: `tests/csv-export.test.js`
 
 ### 5.3 Internal/library export utilities
 
-Additional export utilities in `src/export/*` are limited to active STL / CSV / config helpers plus legacy `.geo` tooling; the old direct frontend `.msh` helper is now quarantined under `tests/helpers/legacyMsh.js` for regression-only use. The OCC runtime export flow remains backend-meshed and Gmsh-authored.
+Additional export utilities in `src/export/*` are limited to active STL / CSV / config helpers; the old direct frontend `.msh` helper is now quarantined under `tests/helpers/legacyMsh.js` for regression-only use. The OCC runtime export flow remains backend-meshed and Gmsh-authored.
 
 ## 6. Backend API Contract
 
@@ -341,13 +361,14 @@ Base URL: `http://localhost:8000`
 
 Runtime-gated matrix in `server/solver/deps.py`:
 
-| Component | Supported range | Required for |
-|---|---|---|
-| Python | `>=3.10,<3.15` | backend runtime |
-| gmsh Python package | `>=4.11,<5.0` | `/api/mesh/build` |
-| bempp-cl | `>=0.4,<0.5` | `/api/solve` |
+| Component           | Supported range | Required for      |
+| ------------------- | --------------- | ----------------- |
+| Python              | `>=3.10,<3.15`  | backend runtime   |
+| gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
+| bempp-cl            | `>=0.4,<0.5`    | `/api/solve`      |
 
 Notes:
+
 - Backend runtime still accepts `use_optimized` for compatibility, but it is ignored; the active runtime always executes the stable `solve_optimized` entrypoint.
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
 - Device policy defaults to `auto` with conservative supported-mode ordering: `opencl_cpu`, then `opencl_gpu` only when both contexts are validated.
@@ -361,10 +382,10 @@ Notes:
 
 Every `/api/solve` result includes `metadata.performance` with the minimum fields required by the active UI:
 
-| Field | Type | Description |
-|---|---|---|
-| `total_time_seconds` | float | Wall time for the full solve |
-| `bem_precision` | string | Active BEMPP operator precision (`single` in the stable runtime path) |
+| Field                | Type   | Description                                                           |
+| -------------------- | ------ | --------------------------------------------------------------------- |
+| `total_time_seconds` | float  | Wall time for the full solve                                          |
+| `bem_precision`      | string | Active BEMPP operator precision (`single` in the stable runtime path) |
 
 Note: Internal benchmark scripts may log additional timing details during solve, but only `total_time_seconds` and `bem_precision` are part of the public result contract.
 
@@ -394,6 +415,7 @@ Canonical identity vocabulary preserved by the cleanup:
   - `enc_edge`
 
 Runtime status:
+
 - The JS geometry engine emits explicit subsets for `inner_wall`, `outer_wall`, `mouth_rim`, `throat_return`, `rear_cap`, `horn_wall`, `throat_disc`, `enc_front`, `enc_side`, `enc_rear`, and `enc_edge`.
 - `src/geometry/tags.js` maps those identities deterministically to mesh sizing classes and solver boundary classes.
 - JS geometry outer-build selection is exclusive: enclosure (`encDepth > 0`) or freestanding shell (`encDepth == 0 && wallThickness > 0`) or bare horn.
@@ -415,6 +437,7 @@ Mesh sizing classes are meshing semantics only, not solver boundary-condition se
 - `enclosure_edge`
 
 Runtime status:
+
 - JS runtime maps geometry identities to logical `MESH_SIZING_CLASS` constants via `src/geometry/tags.js`.
 - OCC meshing uses numeric resolution fields directly (`throat_res`, `mouth_res`, `rear_res`, `enc_front_resolution`, `enc_back_resolution`).
 
@@ -426,6 +449,7 @@ Runtime status:
 - `SYMMETRY` (reserved)
 
 Runtime status:
+
 - Active frontend/runtime submission classes are `RIGID_WALL` and `ACOUSTIC_SOURCE`.
 - `throat_disc` maps to `ACOUSTIC_SOURCE`.
 - All non-source triangles map to `RIGID_WALL`.
@@ -440,12 +464,14 @@ Shared numeric tag vocabulary:
 - `4` = interface (`I1-2`)
 
 Runtime behavior by pipeline:
+
 - JS canonical simulation payload (`src/geometry/pipeline.js`, `src/geometry/tags.js`) emits only tags `1` and `2`.
 - OCC mesh build output (`/api/mesh/build`) emits tags `1`, `2`, and optional `3` when exterior surfaces exist.
 - Neither active JS runtime nor active OCC mesh build emits tag `4`.
 - OCC-adaptive `/api/solve` requires full-domain queued OCC requests (`quadrants=1234`) and passes canonical OCC `surfaceTags` through to solver mesh preparation unchanged.
 
 Required invariants:
+
 - `surfaceTags.length === indices.length / 3`
 - At least one source-tagged triangle (`2`) must exist before solve submission.
 
@@ -541,6 +567,7 @@ Compatibility-only device selection payload for `/api/solve` (older/non-frontend
 ```
 
 Validation points:
+
 - Frontend: `src/solver/index.js` (`validateCanonicalMeshPayload`)
 - Backend request validation: `server/api/routes_simulation.py`
 - Backend mesh integrity checks: `server/solver/mesh.py`
@@ -549,6 +576,7 @@ Validation points:
 ### 8.6 Contract lock tests
 
 Primary tests that lock this contract:
+
 - `tests/mesh-payload.test.js`
 - `tests/geometry-artifacts.test.js`
 - `tests/waveguide-payload.test.js`
@@ -559,11 +587,13 @@ Primary tests that lock this contract:
 Canonical inventory and test-location map: `tests/TESTING.md`.
 
 Primary commands:
+
 - `npm test`
 - `npm run test:server`
 - `npm run build`
 
 High-signal test suites:
+
 - Geometry/tagging: `tests/mesh-payload.test.js`, `tests/geometry-artifacts.test.js`, `tests/enclosure-regression.test.js`, `tests/geometry-quality.test.js`, `tests/morph-implicit-target.test.js`
 - Export/OCC pipeline: `tests/export-gmsh-pipeline.test.js`, `tests/polar-settings.test.js`
 - Backend contracts: `server/tests/test_dependency_runtime.py`, `server/tests/test_api_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_directivity_plot.py`
@@ -621,18 +651,22 @@ If OpenCL is unavailable the backend returns explicit runtime unavailability; th
 ## 12. Recent Major Refactors (Feb-Mar 2026)
 
 ### 12.1 OCC Meshing Consolidation
+
 - Removed legacy frontend `.geo` mesh-build fallbacks from active runtime flows.
 - `POST /api/mesh/build` is the only supported runtime path for OCC-authored `.msh` export artifacts.
 
 ### 12.2 Frontend Boundary Cleanup
+
 - App assembly now routes render, export, simulation, and panel setup through module entry points.
 - Deprecated solver/export/geometry alias entry points were removed during Phase 8 cleanup.
 
 ### 12.3 Export Surface Simplification
+
 - Active runtime exports are STL, MWG config text, profile/slice CSV, simulation-result text exports, and persisted simulation mesh downloads.
 - ABEC bundle export is no longer part of the shipped runtime.
 
 ### 12.4 Backend Router/Service Decomposition
+
 - `server/app.py` was reduced to app assembly, CORS setup, router registration, and lifecycle startup.
 - Route handlers now live in `server/api/routes_*.py`.
 - Runtime orchestration/state, solver-runtime adapters, and request validation now live in `server/services/*`.

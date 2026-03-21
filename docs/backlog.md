@@ -135,7 +135,7 @@ Action plan:
 - [x] Remove `use_gmsh` mention from validation message in `mesh_validation.py`.
 - [x] Delete `test_use_gmsh_requires_gmsh_runtime` from `test_mesh_validation.py`.
 - [x] In `tests/export-gmsh-pipeline.test.js`: remove `generate-msh` assertion lines from the OCC endpoint test; delete the entire 503-fallback-to-`generate-msh` test.
-- [ ] Update `waveguide_builder.py` docstring (lines 12–13) and `docs/PROJECT_DOCUMENTATION.md` (line 261) to remove references to deleted legacy paths.
+- [x] Update `waveguide_builder.py` docstring (lines 12–13) and `docs/PROJECT_DOCUMENTATION.md` (line 261) to remove references to deleted legacy paths.
 - [ ] Verify: `npm test`, `npm run test:server`, and grep for `refine_mesh_with_gmsh`, `use_gmsh`, `generate-msh` returns zero active hits.
 
 ## Deferred Watchpoints
