@@ -202,14 +202,9 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
         return guidance
     if component_id == "opencl_runtime":
         if os_name == "darwin":
-            if (machine_name or "").lower() in {"arm64", "aarch64"}:
-                return [
-                    "Apple Silicon OpenCL solve is currently unsupported for /api/solve.",
-                    "Do not treat ./scripts/setup-opencl-backend.sh or a pocl CPU runtime as a production-readiness fix on Apple Silicon.",
-                ]
             return [
-                "Apple Silicon CPU fallback: ./scripts/setup-opencl-backend.sh",
-                "Or install OpenCL runtime manually (for example: brew install pocl).",
+                "Install OpenCL CPU runtime: ./scripts/setup-opencl-backend.sh",
+                "Or install pocl via Homebrew: brew install pocl ocl-icd",
             ]
         if os_name == "windows":
             return [
