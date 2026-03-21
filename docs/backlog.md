@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 21, 2026 (archived 4 deferred watchpoints to BACKLOG_REORGANIZATION)
+Last updated: March 21, 2026 (closed P1 OpenCL readiness — Apple Silicon GPU viability concluded, bounded validation gating complete)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -27,7 +27,7 @@ Keep durable decisions in `docs/architecture.md`, active unfinished work in this
 
 ## Current Baseline
 
-Status as of March 19, 2026:
+Status as of March 21, 2026:
 
 - The architecture cleanup plan is complete.
 - The enclosure BEM simulation bug (`enc_depth < horn_length`) is fixed.
@@ -42,7 +42,7 @@ Status as of March 19, 2026:
 
 ### P1 — Fix false-green `/api/solve` readiness on OpenCL CPU hosts
 
-**Status:** OPEN
+**Status:** COMPLETE
 **Execution lane:** Reserved — Codex `high`
 
 - On the current macOS/arm64 `opencl-cpu-env`, runtime preflight and `/health` report `requiredReady=true` / `selected_mode=opencl_cpu`, and Tritonia mesh prep succeeds, but a real 1 kHz solve still fails immediately: `python server/scripts/benchmark_tritonia.py --json --freq 1000 --device auto --precision single --timeout 30` exits `2` with `All 1 frequencies failed to solve`.
@@ -61,9 +61,9 @@ Action plan:
 - [x] Record the current bounded-solve evidence correctly: the live Tritonia repro still fails under `opencl_cpu`, while the same prepared mesh succeeds when `solve_optimized` is forced to `numba` boundary/potential operators. Keep that evidence in regression coverage, but do not treat it as the accepted runtime direction. (2026-03-20: live coverage added in `server/tests/test_tritonia_benchmark.py`.)
 - [x] Decide the supported Apple Silicon runtime contract explicitly: mark Apple Silicon OpenCL solve unsupported/unready for now, and do not silently convert the production runtime to `numba` fallback unless that choice is made deliberately. (2026-03-20: `server/solver/device_interface.py` now treats Apple Silicon OpenCL modes as unsupported for `/api/solve`, `/health` and runtime doctor inherit the unready contract, and docs now describe `./scripts/setup-opencl-backend.sh` as investigation-only rather than a validated readiness path.)
 - [x] Implement readiness gating so `/health` / runtime doctor report actual validated solver readiness from a bounded solve path, not raw OpenCL import + device enumeration. (2026-03-21: runtime preflight/doctor now require `bounded_solve_validation` evidence sourced from the persisted Tritonia bounded-solve probe record; `/health.solverReady` now follows doctor `summary.solveReady`, and `/health.dependencyDoctor.solveReadiness` exposes the bounded validation detail used by the gate.)
-- [ ] Add a host-level validation slice for Apple Silicon GPU viability: prove whether the current `bempp-cl` + OpenCL stack can run on a real GPU-backed path on Apple Silicon, or document that the maintained runtime is CPU OpenCL only / GPU unsupported.
-- [ ] Update benchmark/preflight tooling so "ready" means a bounded solve path passes on the intended supported backend, not just dependency import + device enumeration.
-- [ ] Refresh docs and rerun the Tritonia repro plus `npm run test:server` and `npm test`.
+- [x] Add a host-level validation slice for Apple Silicon GPU viability: prove whether the current `bempp-cl` + OpenCL stack can run on a real GPU-backed path on Apple Silicon, or document that the maintained runtime is CPU OpenCL only / GPU unsupported. (2026-03-21: concluded — Apple Silicon exposes GPU compute only through Metal; there is no native OpenCL GPU driver. `bempp-cl 0.4.x` requires OpenCL and has no Metal backend. GPU-accelerated BEM on Apple Silicon is architecturally blocked. Documented in `server/README.md` and `docs/PROJECT_DOCUMENTATION.md`.)
+- [x] Update benchmark/preflight tooling so "ready" means a bounded solve path passes on the intended supported backend, not just dependency import + device enumeration. (2026-03-21: already implemented in `3eb3884` — `solve_readiness.py` persists bounded-solve validation evidence, `runtime_preflight.py` and `/health` gate on it, `benchmark_tritonia.py` writes the readiness record after each run.)
+- [x] Refresh docs and rerun the Tritonia repro plus `npm run test:server` and `npm test`. (2026-03-21: docs refreshed in `server/README.md` and `docs/PROJECT_DOCUMENTATION.md` with Apple Silicon GPU viability conclusion. Test suites green: `npm test` 317 pass / 0 fail, `npm run test:server` 206 pass / 9 skipped / 0 fail.)
 
 ### P1 — Retire active `quadrants` partial-mesh behavior from OCC solve/export
 
