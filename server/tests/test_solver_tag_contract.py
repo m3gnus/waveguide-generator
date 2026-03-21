@@ -20,7 +20,7 @@ class SolverTagContractTest(unittest.TestCase):
         self.assertIn("driver_dofs", optimized_text)
 
         # mesh.py must enforce tag-2 source presence during prepare_mesh.
-        self.assertIn("surface_tags[i] == 2", mesh_text)
+        self.assertIn("np.count_nonzero(domain_indices == 2)", mesh_text)
 
 
 if __name__ == "__main__":
