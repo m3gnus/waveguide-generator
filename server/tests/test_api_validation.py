@@ -274,10 +274,11 @@ class ApiValidationTest(unittest.TestCase):
             result = asyncio.run(submit_simulation(request))
 
         self.assertEqual(result["job_id"], job_id)
+        # Original request object must not be mutated.
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
-        # Submission preserves the requested quadrants in the queued payload.
-        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
+        # Queued payload must always use full-domain quadrants=1234, regardless of input.
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
 
     def test_occ_adaptive_accepts_rosse_b_expression(self):
         request = SimulationRequest(

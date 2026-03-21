@@ -67,7 +67,7 @@ Action plan:
 
 ### P1 — Retire active `quadrants` partial-mesh behavior from OCC solve/export
 
-**Status:** OPEN
+**Status:** COMPLETE
 **Execution lane:** Reserved — Codex `medium`
 
 - Symmetry-reduced solving is no longer part of the active runtime, but `quadrants` is still exposed as a solve/export control and still reaches the OCC builder, where it generates half- and quarter-domain meshes. That leaves the runtime contract internally inconsistent: frontend canonical mesh is full-domain-only, docs say imported quadrants are metadata only, while `/api/solve` and `/api/mesh/build` still accept and apply partial-domain values.
@@ -83,8 +83,8 @@ Action plan:
 - [x] Define the contract explicitly: active OCC solve/export paths always build full-domain meshes (`quadrants=1234`), while legacy `Mesh.Quadrants` values remain import-compatible metadata only. (2026-03-21: `server/contracts/__init__.py` `quadrants` field now documents this; `server/services/simulation_runner.py` and `server/api/routes_mesh.py` force `quadrants=1234` before the OCC builder; `src/modules/design/index.js` `prepareOccSimulationParams` and `prepareOccExportParams` always emit `quadrants: 1234`.)
 - [x] Remove or hide `quadrants` from the active solve/export UI and stop describing half/quarter BEM analysis as a supported runtime behavior. (2026-03-21: `quadrants` removed from `src/ui/parameterInventory.js` `solve-export-mesh` keys; `src/config/schema.js` entry marked `hidden: true` with updated tooltip describing import-compatibility-only status.)
 - [x] Canonicalize OCC request construction so `/api/solve` and `/api/mesh/build` no longer generate partial meshes from user-facing `quadrants` values. (2026-03-21: done — see first item above.)
-- [ ] Decide legacy config handling: tolerate import of non-`1234` values, but export either `1234` or omit the field unless a dedicated compatibility mode is introduced.
-- [ ] Replace tests and docs that currently assert non-full-domain OCC acceptance with full-domain-only contract coverage.
+- [x] Decide legacy config handling: tolerate import of non-`1234` values, but export either `1234` or omit the field unless a dedicated compatibility mode is introduced. (2026-03-21: `src/export/mwgConfig.js` now always writes `Mesh.Quadrants = 1234` regardless of params value; import side in `src/config/index.js` unchanged and continues to accept any valid value.)
+- [x] Replace tests and docs that currently assert non-full-domain OCC acceptance with full-domain-only contract coverage. (2026-03-21: `server/services/simulation_validation.py` now forces `quadrants=1234` in the queued submission payload; `server/tests/test_api_validation.py` updated to assert queued payload always carries 1234 and original request object is not mutated.)
 
 ### P1 — Collapse the unstable BEM "optimized" path into one supported solver runtime
 

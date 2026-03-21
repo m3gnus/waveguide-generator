@@ -144,7 +144,9 @@ export function generateMWGConfigContent(params) {
     if (isNonZero(params.throatResolution)) content += `Mesh.ThroatResolution = ${formatValue(params.throatResolution)}\n`;
     if (isNonZero(params.mouthResolution)) content += `Mesh.MouthResolution = ${formatValue(params.mouthResolution)}\n`;
     if (isNonZero(params.verticalOffset)) content += `Mesh.VerticalOffset = ${formatValue(params.verticalOffset)}\n`;
-    if (params.quadrants !== undefined) content += `Mesh.Quadrants = ${params.quadrants}\n`;
+    // Always export full-domain. Non-1234 values are tolerated on import for
+    // backward compatibility but the active export contract is always 1234.
+    if (params.quadrants !== undefined) content += `Mesh.Quadrants = 1234\n`;
     if (params.wallThickness > 0) content += `Mesh.WallThickness = ${params.wallThickness}\n`;
     if (isNonZero(params.rearResolution)) content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;
 
