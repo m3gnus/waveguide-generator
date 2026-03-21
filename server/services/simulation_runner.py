@@ -164,20 +164,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         )
         mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
 
-        # Check if options are flat or nested
-        if "use_gmsh" in options:
-            use_gmsh = options.get("use_gmsh", False)
-            target_freq = options.get(
-                "target_frequency",
-                max(request.frequency_range) if request.frequency_range else 1000.0,
-            )
-        else:
-            use_gmsh = mesh_opts.get("use_gmsh", False)
-            target_freq = mesh_opts.get(
-                "target_frequency",
-                max(request.frequency_range) if request.frequency_range else 1000.0,
-            )
-
         if mesh_strategy == "occ_adaptive":
             waveguide_params = mesh_opts.get("waveguide_params")
             if not isinstance(waveguide_params, dict):
@@ -258,8 +244,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 surface_tags=surface_tags,
                 boundary_conditions=request.mesh.boundaryConditions,
                 mesh_metadata=mesh_metadata,
-                use_gmsh=False,
-                target_frequency=target_freq,
             )
         else:
             # Legacy canonical path
@@ -283,8 +267,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 surface_tags=request.mesh.surfaceTags,
                 boundary_conditions=request.mesh.boundaryConditions,
                 mesh_metadata=request.mesh.metadata,
-                use_gmsh=use_gmsh,
-                target_frequency=target_freq,
             )
 
         # Run simulation
