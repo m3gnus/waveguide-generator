@@ -33,6 +33,8 @@ Notes:
 
 On Apple Silicon, the helper below creates a no-space conda environment with `pocl` (Portable OpenCL CPU runtime). This environment is still useful for reproducing the current `bempp-cl` OpenCL failure boundary, but it is not a validated `/api/solve` runtime contract today.
 
+**Apple Silicon GPU viability (concluded 2026-03-21):** Apple Silicon exposes GPU compute only through Metal; there is no native OpenCL GPU driver. `pocl` provides a CPU-only OpenCL runtime — it cannot target the Apple GPU. `bempp-cl 0.4.x` requires an OpenCL context and has no Metal backend, so GPU-accelerated BEM solving on Apple Silicon is architecturally blocked under the current stack. The maintained runtime contract treats Apple Silicon OpenCL (both CPU and GPU modes) as unsupported for `/api/solve`.
+
 From repository root:
 
 ```bash
