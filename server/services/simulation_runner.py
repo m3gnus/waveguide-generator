@@ -182,6 +182,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
             validated_payload = validated.model_dump()
             queued_quadrants = int(validated_payload.get("quadrants", 1234))
+            # Active OCC solve path always builds full-domain meshes. Non-1234
+            # values are tolerated on import for compatibility but are not applied.
+            validated_payload["quadrants"] = 1234
             occ_result = build_waveguide_mesh(
                 validated_payload,
                 include_canonical=True,
@@ -232,7 +235,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                     "meshStrategy": "occ_adaptive",
                     "generatedBy": "gmsh-occ",
                     "requestedQuadrants": queued_quadrants,
-                    "effectiveQuadrants": queued_quadrants,
+                    "effectiveQuadrants": 1234,
                     "occStats": occ_result.get("stats") or {},
                     "verticalOffset": float(validated_payload.get("vertical_offset", 0) or 0),
                 }

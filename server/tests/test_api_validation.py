@@ -467,7 +467,7 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         )
 
     def test_occ_adaptive_accepts_non_full_domain_quadrants(self):
-        """Non-1234 quadrants are accepted and forwarded unchanged to OCC meshing."""
+        """Non-1234 quadrants are accepted for import compatibility but are overridden to 1234 before OCC meshing."""
         request = self._make_occ_adaptive_request({"quadrants": 14})
 
         fake_occ_result = {
@@ -507,8 +507,12 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
 
             build_mesh.assert_called_once()
             forwarded_params = build_mesh.call_args.args[0]
-            self.assertEqual(forwarded_params.get("quadrants"), 14)
-            # The job should not be in error state — non-1234 quadrants are allowed now.
+            # Active OCC solve path always forces full-domain meshes.
+            # The requested value (14) is preserved in requestedQuadrants metadata,
+            # but the payload forwarded to the builder must always be 1234.
+            self.assertEqual(forwarded_params.get("quadrants"), 1234,
+                "Active OCC solve path must override non-1234 quadrants to 1234 before meshing")
+            # The job should not be in error state — non-1234 imports are tolerated.
             self.assertNotEqual(_jrt.jobs[job_id].get("status"), "error",
                 "Non-1234 quadrants should be accepted for occ_adaptive path")
         finally:
