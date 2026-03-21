@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 20, 2026 (marked Apple Silicon OpenCL solve unsupported/unready in runtime metadata while keeping bounded-solve readiness and GPU viability follow-up active)
+Last updated: March 21, 2026 (added P2 legacy mesh path cleanup item)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -111,6 +111,32 @@ Action plan:
 - [x] Update the backend/frontend contract, runtime guidance, and tests to match the reduced solver surface, then rerun `npm test` and `npm run test:server`. (2026-03-20: contract/runtime docs in `server/README.md`, `docs/PROJECT_DOCUMENTATION.md`, and `docs/architecture.md` now reflect the fixed numerics policy and collapsed live stage contract; regression coverage was updated in `server/tests/test_solver_hardening.py`, `server/tests/test_api_validation.py`, `tests/simulation-module.test.js`, and related frontend flow coverage. Verified locally after the accepted slices with `npm run test:server` (195 tests, 7 skipped) and `npm test` (312 tests).)
 
 Add new execution slices here when a deferred watchpoint is activated or a new verified issue is opened.
+
+### P2 — Remove legacy mesh paths and `refine_mesh_with_gmsh` dead code
+
+**Status:** OPEN
+**Execution lane:** GLM-5 suitable
+
+- The legacy JS `.geo` export path (`gmshGeoBuilder.js` → `POST /api/mesh/generate-msh` → `gmsh_geo_mesher.py`) and the optional `refine_mesh_with_gmsh()` BEM refinement path are both dead code. Production files were already deleted, but `use_gmsh` plumbing, test assertions against the deleted `/api/mesh/generate-msh` endpoint, and stale doc references remain. Gmsh itself stays — it is the core meshing engine (~140 calls in `waveguide_builder.py` for BSpline geometry, mesh generation, physical groups, `.msh` export). `tests/helpers/legacyMsh.js` and `server/solver/gmsh_utils.py` also stay — both are actively used.
+
+Implementation notes:
+
+- Delete `refine_mesh_with_gmsh()` and remove `use_gmsh`/`target_frequency` params: `server/solver/mesh.py`, `server/solver/bem_solver.py`, `server/services/simulation_runner.py`, `server/solver/mesh_validation.py`
+- Delete `test_use_gmsh_requires_gmsh_runtime`: `server/tests/test_mesh_validation.py`
+- Remove legacy `/api/mesh/generate-msh` test references: `tests/export-gmsh-pipeline.test.js` (remove `generate-msh` assertions from OCC test; delete entire 503-fallback test)
+- Update stale docstring referencing deleted `gmshGeoBuilder.js`: `server/solver/waveguide_builder.py` lines 12–13
+- Update stale doc reference to "legacy `.geo` tooling": `docs/PROJECT_DOCUMENTATION.md` line 261
+
+Action plan:
+
+- [ ] Delete `refine_mesh_with_gmsh()` (mesh.py lines 55–207) and remove the `use_gmsh`/`target_frequency` parameters and `if use_gmsh:` block from `prepare_mesh()`.
+- [ ] Remove `refine_mesh_with_gmsh` import/wrapper and `use_gmsh` param from `bem_solver.py`.
+- [ ] Remove `use_gmsh` extraction logic, `target_freq` variable, and `use_gmsh=` kwargs from `simulation_runner.py`.
+- [ ] Remove `use_gmsh` mention from validation message in `mesh_validation.py`.
+- [ ] Delete `test_use_gmsh_requires_gmsh_runtime` from `test_mesh_validation.py`.
+- [ ] In `tests/export-gmsh-pipeline.test.js`: remove `generate-msh` assertion lines from the OCC endpoint test; delete the entire 503-fallback-to-`generate-msh` test.
+- [ ] Update `waveguide_builder.py` docstring (lines 12–13) and `docs/PROJECT_DOCUMENTATION.md` (line 261) to remove references to deleted legacy paths.
+- [ ] Verify: `npm test`, `npm run test:server`, and grep for `refine_mesh_with_gmsh`, `use_gmsh`, `generate-msh` returns zero active hits.
 
 ## Deferred Watchpoints
 
