@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 
 from solver.bem_solver import BEMSolver
-from solver.solve_optimized import solve_optimized, _numpy_dtype_for_precision, _normalize_bem_precision
+from solver.solve import solve_optimized, _numpy_dtype_for_precision, _normalize_bem_precision
 
 
 class DummyGrid:

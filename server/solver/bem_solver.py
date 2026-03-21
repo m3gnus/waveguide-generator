@@ -8,7 +8,7 @@ from .deps import BEMPP_AVAILABLE
 logger = logging.getLogger(__name__)
 from .device_interface import selected_device_metadata
 from .mesh import prepare_mesh
-from .solve_optimized import solve_optimized
+from .solve import solve_optimized
 
 _STABLE_ADVANCED_SETTINGS = {"use_burton_miller"}
 _IGNORED_COMPAT_ADVANCED_SETTINGS = {"enable_warmup", "bem_precision"}

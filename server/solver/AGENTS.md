@@ -6,7 +6,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 
 - Backend mesh conversion, validation, and optional refinement (`mesh.py`).
 - OCC mesh builder support (`waveguide_builder.py`).
-- BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve_optimized.py`).
+- BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve.py`).
 - Runtime dependency gating and reporting (`deps.py`).
 - Unit handling and normalization behavior used by solver paths (`units.py`).
 
@@ -15,7 +15,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 - Canonical tag mapping is fixed:
   - `1 = SD1G0 (wall)`, `2 = SD1D1001 (source)`, `3 = SD2G0`, `4 = I1-2`.
 - Source excitation contract must remain tag-2 driven (`tag_throat=2` with
-  `driver_dofs` selected from tag-2 elements in `solve_optimized.py`).
+  `driver_dofs` selected from tag-2 elements in `solve.py`).
 - `prepare_mesh` must reject index out-of-range and no-source-tag payloads.
 - `/api/mesh/build` supports only:
   - `formula_type in {"R-OSSE","OSSE"}`
