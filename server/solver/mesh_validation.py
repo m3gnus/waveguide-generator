@@ -159,7 +159,7 @@ def validate_frequency_range(
 
         recommendations.append(
             f"RECOMMENDED: Refine mesh to ~{target_edge:.5f} m max element size "
-            f"(use use_gmsh=True with target_frequency={max_freq:.0f})"
+            f"for target_frequency={max_freq:.0f}"
         )
         recommendations.append(
             f"ALTERNATIVE: Reduce max frequency to {recommended_max:.0f} Hz "
