@@ -9,9 +9,6 @@ This is the architecturally correct approach per ATH section 3.3.1:
    points), surface stripes between each adjacent pair of slices are created,
    each stripe is meshed independently."
 
-Contrast with the legacy path (gmshGeoBuilder.js) which passes flat
-triangulated surfaces to Gmsh — those have no curvature information.
-
 Supported formula types:
   R-OSSE  — Radius-parameterized OSSE (mouth radius R drives axial length)
   OSSE    — Classic OSSE with explicit Length, Term.s/n/q
