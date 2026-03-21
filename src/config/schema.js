@@ -490,8 +490,12 @@ export const PARAM_SCHEMA = {
       type: "select",
       label: "Quadrants",
       default: "1234",
+      // hidden: active OCC solve/export always builds full-domain meshes (1234).
+      // This field is kept for import/export round-trip compatibility only and
+      // must not be shown in the active parameter panel.
+      hidden: true,
       tooltip:
-        "Portion of the 3D mesh used for BEM analysis. 1 = Q1 only (x≥0, y≥0); 12 = Q1+Q2 (y≥0); 14 = Q1+Q4 (x≥0); 1234 = full mesh.",
+        "Import-compatibility only. Active OCC solve/export always uses full-domain (1234). Legacy values are accepted but not applied.",
       options: [
         { value: "1234", label: "Full (1234)" },
         { value: "12", label: "Half Y≥0 (12)" },

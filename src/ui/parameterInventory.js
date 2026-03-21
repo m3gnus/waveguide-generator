@@ -161,7 +161,9 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             groups: Object.freeze([
                 Object.freeze({
                     group: 'MESH',
-                    keys: Object.freeze(['throatResolution', 'mouthResolution', 'rearResolution', 'verticalOffset', 'quadrants'])
+                    // quadrants is intentionally excluded: active OCC solve/export always uses full-domain (1234).
+                    // The field remains in schema/config for import compatibility only.
+                    keys: Object.freeze(['throatResolution', 'mouthResolution', 'rearResolution', 'verticalOffset'])
                 }),
                 Object.freeze({
                     group: 'ENCLOSURE',
