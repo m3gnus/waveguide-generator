@@ -29,7 +29,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             "schemaVersion": "waveguide-runtime-doctor.v1",
             "generatedAt": "2026-03-19T10:00:00Z",
             "platform": {"system": "Linux"},
-            "summary": {"requiredReady": False, "requiredIssues": ["bempp_cl"]},
+            "summary": {"requiredReady": False, "requiredIssues": ["bempp_cl"], "solveReady": False},
             "components": [
                 {
                     "id": "bempp_cl",
@@ -40,6 +40,7 @@ class DependencyRuntimeTest(unittest.TestCase):
                     "guidance": ["Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git"],
                 }
             ],
+            "solveReadiness": {"ready": False, "status": "missing"},
         }
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
@@ -128,7 +129,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
             "api.routes_misc.collect_runtime_doctor_report",
-            return_value={"components": [], "summary": {"requiredReady": True}},
+            return_value={"components": [], "summary": {"requiredReady": True, "solveReady": True}},
         ), patch(
             "api.routes_misc.SOLVER_AVAILABLE", True
         ), patch("api.routes_misc.BEMPP_RUNTIME_READY", True), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
@@ -140,7 +141,27 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["deviceInterface"], device_info)
+        self.assertTrue(response["solverReady"])
         self.assertIn("capabilities", response)
+
+    def test_health_solver_ready_uses_doctor_solve_ready_gate(self):
+        dependency_status = {"supportedMatrix": {}, "runtime": {}}
+        dependency_doctor = {
+            "components": [],
+            "summary": {"requiredReady": False, "requiredIssues": ["bounded_solve_validation"], "solveReady": False},
+            "solveReadiness": {"ready": False, "status": "missing"},
+        }
+
+        with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
+            "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
+        ), patch("api.routes_misc.SOLVER_AVAILABLE", True), patch(
+            "api.routes_misc.BEMPP_RUNTIME_READY", True
+        ), patch("api.routes_misc.WAVEGUIDE_BUILDER_AVAILABLE", True), patch(
+            "api.routes_misc.GMSH_OCC_RUNTIME_READY", True
+        ):
+            response = asyncio.run(health_check())
+
+        self.assertFalse(response["solverReady"])
 
     def test_solve_dependency_gate_returns_matrix_details(self):
         dependency_status = {
@@ -211,7 +232,15 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
             "api.routes_misc.collect_runtime_doctor_report",
-            return_value={"components": [], "summary": {"requiredReady": False, "requiredIssues": ["gmsh_python"]}},
+            return_value={
+                "components": [],
+                "summary": {
+                    "requiredReady": False,
+                    "requiredIssues": ["gmsh_python"],
+                    "solveReady": True,
+                    "solveIssues": [],
+                },
+            },
         ), patch(
             "api.routes_misc.SOLVER_AVAILABLE", True
         ), patch("api.routes_misc.BEMPP_RUNTIME_READY", True), patch(
