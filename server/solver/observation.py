@@ -1,5 +1,8 @@
+import logging
 import numpy as np
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize(vec: np.ndarray) -> np.ndarray:
@@ -177,6 +180,15 @@ def infer_observation_frame(
         elif plane == "xy":
             origin_center[2] = 0.0
 
+    logger.info(
+        "[observation] frame: axis=[%.4f, %.4f, %.4f], "
+        "origin=[%.4f, %.4f, %.4f], "
+        "source_center=[%.4f, %.4f, %.4f], "
+        "mouth_center=[%.4f, %.4f, %.4f], "
+        "observation_origin=%s",
+        *axis_candidate, *origin_center, *source_center, *mouth_center,
+        observation_origin,
+    )
     return {
         "axis": axis_candidate,
         "origin_center": origin_center,
