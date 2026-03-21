@@ -62,8 +62,12 @@ async def build_mesh_from_params(request: WaveguideParamsRequest) -> Dict[str, A
         )
 
     try:
+        # Active OCC export path always builds full-domain meshes. Non-1234
+        # quadrants values are tolerated on import for compatibility but are not applied.
+        payload = request.model_dump()
+        payload["quadrants"] = 1234
         # Run directly on the request thread — gmsh Python API fails in worker threads.
-        result = build_waveguide_mesh(request.model_dump())
+        result = build_waveguide_mesh(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:

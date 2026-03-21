@@ -192,7 +192,11 @@ export function prepareOccSimulationParams(preparedParams = {}) {
         toFiniteNumber(base.lengthSegments, OCC_DEFAULTS.lengthSegments),
       ),
     ),
-    quadrants: normalizeQuadrants(base.quadrants),
+    // Active OCC solve/export paths always build full-domain meshes.
+    // Non-1234 values are accepted from import for compatibility but are not
+    // forwarded to OCC payloads. normalizeQuadrants() stays available for
+    // import-side parsing (e.g. config.js, mwgConfig.js).
+    quadrants: 1234,
     throatResolution:
       toPositiveNumber(base.throatResolution, OCC_DEFAULTS.throatResolution) *
       scale,

@@ -94,20 +94,24 @@ test('buildWaveguidePayload receives rounded OCC segments from DesignModule norm
   assert.equal(payload.n_length, 10);
 });
 
-test('buildWaveguidePayload uses canonical quadrants from DesignModule normalization', () => {
+test('buildWaveguidePayload always emits quadrants=1234 regardless of input (active OCC paths are full-domain only)', () => {
+  // Active OCC solve/export paths always build full-domain meshes.
+  // prepareOccSimulationParams canonicalizes quadrants to 1234 regardless of
+  // what the user config or import contained. Legacy non-1234 values are
+  // accepted for import compatibility but are not forwarded to OCC payloads.
   assert.equal(
     buildWaveguidePayload(
       prepareOccSimulationParams({ type: 'OSSE', quadrants: '14' }),
       '2.2'
     ).quadrants,
-    14
+    1234
   );
   assert.equal(
     buildWaveguidePayload(
       prepareOccSimulationParams({ type: 'OSSE', quadrants: '12' }),
       '2.2'
     ).quadrants,
-    12
+    1234
   );
   assert.equal(
     buildWaveguidePayload(

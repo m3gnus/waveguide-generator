@@ -203,6 +203,10 @@ class WaveguideParamsRequest(BaseModel):
 
     n_angular: int = 100
     n_length: int = 20
+    # quadrants: import-compatibility only. Active OCC solve (/api/solve) and export
+    # (/api/mesh/build) paths always build full-domain meshes (quadrants=1234). Any
+    # non-1234 value supplied by legacy callers is accepted here for schema
+    # compatibility but is overridden to 1234 before reaching the OCC builder.
     quadrants: int = 1234
 
     throat_res: float = 6.0
