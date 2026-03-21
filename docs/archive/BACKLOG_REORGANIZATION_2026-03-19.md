@@ -126,6 +126,43 @@ Detailed execution history for those March 11-15 slices remains in `docs/archive
 - Investigation complete.
 - Runtime path first became disabled due to the bempp-cl limitation and was later fully removed from the active codebase.
 
+## Deferred Watchpoints Archived on March 21, 2026
+
+The following 4 watchpoint items were moved to archive as they remain valid future work but are not in the current critical path:
+
+### Replace Gmsh-Centric Export Coupling
+
+**Status:** DEFERRED — wait for solve-mesh and export-artifact parity work
+**Execution lane:** Reserved — Codex `high`; Opus `high`
+
+The Gmsh export stack remains part of the active runtime until solve-mesh and export-artifact parity exists without it.
+
+### Internationalization (i18n) Infrastructure
+
+**Status:** DEFERRED — large scope, not blocking current release
+**Execution lane:** Reserved — Codex `high`; Opus `high`
+
+Entire frontend still uses hard-coded English strings. Activate this only when localization becomes a release requirement.
+
+Action plan when activated:
+- [ ] Decide on i18n approach (library vs. message-file extraction)
+- [ ] Extract UI strings into a message catalog
+- [ ] Implement formatting/pluralization support and regression coverage
+
+### Decompose `server/solver/solve_optimized.py` and `server/solver/waveguide_builder.py`
+
+**Status:** DEFERRED — only activate when feature work makes file size a delivery bottleneck
+**Execution lane:** Reserved — Codex `medium-high`; Opus `medium-high`
+
+Keep this deferred unless new work is slowed down by those files' size and coupling.
+
+### Decompose `server/services/job_runtime.py`
+
+**Status:** DEFERRED — only activate when queueing/persistence lifecycle requirements expand
+**Execution lane:** GLM-5 suitable for bounded prep slices; reserve Codex/Opus for the full refactor
+
+Keep this deferred unless queueing, persistence, or multi-worker lifecycle requirements materially expand.
+
 ## Deferred Notes Removed from the Active File
 
 These notes were trimmed or folded into newer backlog items during the cleanup:

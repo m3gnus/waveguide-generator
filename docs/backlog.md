@@ -1,6 +1,6 @@
 # Backlog
 
-Last updated: March 21, 2026 (added P2 legacy mesh path cleanup item)
+Last updated: March 21, 2026 (archived 4 deferred watchpoints to BACKLOG_REORGANIZATION)
 
 This file is the active source of truth for unfinished product and engineering work.
 Resolved history and superseded backlog sections moved to `docs/archive/BACKLOG_REORGANIZATION_2026-03-19.md`.
@@ -137,40 +137,3 @@ Action plan:
 - [x] In `tests/export-gmsh-pipeline.test.js`: remove `generate-msh` assertion lines from the OCC endpoint test; delete the entire 503-fallback-to-`generate-msh` test.
 - [x] Update `waveguide_builder.py` docstring (lines 12–13) and `docs/PROJECT_DOCUMENTATION.md` (line 261) to remove references to deleted legacy paths.
 - [x] Verify: `npm test`, `npm run test:server`, and grep for `refine_mesh_with_gmsh`, `use_gmsh`, `generate-msh` returns zero active hits.
-
-## Deferred Watchpoints
-
-### Replace Gmsh-Centric Export Coupling
-
-**Status:** DEFERRED — wait for solve-mesh and export-artifact parity work
-**Execution lane:** Reserved — Codex `high`; Opus `high`
-
-- The Gmsh export stack remains part of the active runtime until solve-mesh and export-artifact parity exists without it.
-
-### Internationalization (i18n) Infrastructure
-
-**Status:** DEFERRED — large scope, not blocking current release
-**Execution lane:** Reserved — Codex `high`; Opus `high`
-
-- Entire frontend still uses hard-coded English strings.
-- Activate this only when localization becomes a release requirement.
-
-Action plan when activated:
-
-- [ ] Decide on i18n approach (library vs. message-file extraction)
-- [ ] Extract UI strings into a message catalog
-- [ ] Implement formatting/pluralization support and regression coverage
-
-### Decompose `server/solver/solve_optimized.py` and `server/solver/waveguide_builder.py`
-
-**Status:** DEFERRED — only activate when feature work makes file size a delivery bottleneck
-**Execution lane:** Reserved — Codex `medium-high`; Opus `medium-high`
-
-- Keep this deferred unless new work is slowed down by those files' size and coupling.
-
-### Decompose `server/services/job_runtime.py`
-
-**Status:** DEFERRED — only activate when queueing/persistence lifecycle requirements expand
-**Execution lane:** GLM-5 suitable for bounded prep slices; reserve Codex/Opus for the full refactor
-
-- Keep this deferred unless queueing, persistence, or multi-worker lifecycle requirements materially expand.
