@@ -7,7 +7,7 @@ from .deps import BEMPP_AVAILABLE
 
 logger = logging.getLogger(__name__)
 from .device_interface import selected_device_metadata
-from .mesh import refine_mesh_with_gmsh, prepare_mesh
+from .mesh import prepare_mesh
 from .solve_optimized import solve_optimized
 
 _STABLE_ADVANCED_SETTINGS = {"use_burton_miller"}
@@ -30,15 +30,6 @@ class BEMSolver:
         # Custom BEMPP parameters removed to use standard configuration
         pass
 
-    def refine_mesh_with_gmsh(
-        self,
-        vertices: np.ndarray,
-        indices: np.ndarray,
-        surface_tags: np.ndarray = None,
-        target_frequency: float = 1000.0
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return refine_mesh_with_gmsh(vertices, indices, surface_tags, target_frequency)
-
     def prepare_mesh(
         self,
         vertices: List[float],
@@ -46,7 +37,6 @@ class BEMSolver:
         surface_tags: List[int] = None,
         boundary_conditions: Dict = None,
         mesh_metadata: Dict = None,
-        use_gmsh: bool = False,
         target_frequency: float = 1000.0
     ) -> Dict:
         return prepare_mesh(
@@ -55,7 +45,6 @@ class BEMSolver:
             surface_tags,
             boundary_conditions,
             mesh_metadata,
-            use_gmsh,
             target_frequency,
         )
 
