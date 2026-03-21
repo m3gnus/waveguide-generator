@@ -292,7 +292,10 @@ Base URL: `http://localhost:8000`
   - Includes `dependencyDoctor` summary + component guidance for frontend runtime-warning dialogs and blocked-feature messaging:
     - `summary.requiredReady`
     - `summary.requiredIssues`
+    - `summary.solveReady`
+    - `summary.solveIssues`
     - `components[].id|name|category|status|requiredFor|featureImpact|guidance`
+    - `solveReadiness` (bounded solve validation evidence used by `/api/solve` readiness gate)
   - Frontend solver UI only surfaces dependency guidance when required components are missing; healthy dependency state is not rendered as a persistent status panel.
   - Includes `capabilities` metadata for frontend settings gating:
     - `simulationBasic.controls`
@@ -625,7 +628,7 @@ High-signal test suites:
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
-If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`, and Apple Silicon hosts currently surface OpenCL solve as unsupported/unready until the runtime is validated with a bounded solve.
+If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`, and Apple Silicon hosts currently surface OpenCL solve as unsupported/unready until the runtime is validated with a bounded solve. The runtime doctor/preflight now require persisted bounded-solve evidence (`bounded_solve_validation`) from `server/scripts/benchmark_tritonia.py` (default record path: `output/runtime/bounded_solve_validation.json`) before reporting `/api/solve` as ready.
 
 ## 11. Key File Map
 

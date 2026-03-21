@@ -11,6 +11,7 @@ from importlib import metadata
 from importlib.util import find_spec
 from typing import Any, Dict, List, Tuple
 
+from services.solve_readiness import read_bounded_solve_readiness
 from services.solver_runtime import get_dependency_status
 from solver.device_interface import selected_device_metadata
 
@@ -73,6 +74,7 @@ def _collect_runtime_snapshot(preferred_mode: str = "auto") -> Dict[str, Any]:
         "fastapi": read_fastapi_runtime(),
         "matplotlib": read_matplotlib_runtime(),
         "deviceInterface": read_opencl_device_metadata(preferred_mode),
+        "solveReadiness": read_bounded_solve_readiness(preferred_mode=preferred_mode),
     }
 
 
@@ -80,6 +82,7 @@ def _build_required_checks(
     dependency_status: Dict[str, Any],
     fastapi_runtime: Dict[str, Any],
     device_metadata: Dict[str, Any],
+    solve_readiness: Dict[str, Any],
 ) -> Dict[str, Dict[str, Any]]:
     runtime = dependency_status.get("runtime") if isinstance(dependency_status, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -97,6 +100,7 @@ def _build_required_checks(
     gmsh_ok = bool(gmsh_runtime.get("ready"))
     bempp_ok = bool(bempp_runtime.get("ready"))
     opencl_ok = bool(device_metadata.get("opencl_available"))
+    solve_validation_ok = bool(solve_readiness.get("ready"))
 
     return {
         "fastapi": {
@@ -144,6 +148,14 @@ def _build_required_checks(
                     or device_metadata.get("warning")
                     or "No OpenCL runtime available."
                 )
+            ),
+        },
+        "bounded_solve_validation": {
+            "ok": solve_validation_ok,
+            "requiredFor": "/api/solve",
+            "detail": str(
+                solve_readiness.get("detail")
+                or "No bounded solve validation evidence available.",
             ),
         },
     }
@@ -208,6 +220,11 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
             "Install Linux OpenCL ICD runtime (CPU fallback): pocl-opencl-icd/pocl.",
             "Or install vendor GPU OpenCL drivers (NVIDIA/AMD/Intel).",
         ]
+    if component_id == "bounded_solve_validation":
+        return [
+            "Run bounded solve validation: cd server && python3 scripts/benchmark_tritonia.py --freq 1000 --device auto --precision single --timeout 30",
+            "Validation evidence is only recorded when solve runs (do not use --no-solve).",
+        ]
     if component_id == "matplotlib":
         return [
             "Install matplotlib: pip install matplotlib",
@@ -231,6 +248,7 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     fastapi_runtime = snapshot.get("fastapi") if isinstance(snapshot.get("fastapi"), dict) else {}
     matplotlib_runtime = snapshot.get("matplotlib") if isinstance(snapshot.get("matplotlib"), dict) else {}
     device_metadata = snapshot.get("deviceInterface") if isinstance(snapshot.get("deviceInterface"), dict) else {}
+    solve_readiness = snapshot.get("solveReadiness") if isinstance(snapshot.get("solveReadiness"), dict) else {}
     supported_modes = (
         list(device_metadata.get("supported_modes"))
         if isinstance(device_metadata.get("supported_modes"), list)
@@ -272,6 +290,11 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         available=matplotlib_available,
         supported=matplotlib_available,
         ready=matplotlib_available,
+    )
+
+    solve_readiness_ready = bool(solve_readiness.get("ready"))
+    solve_readiness_status = (
+        DOCTOR_STATUS_INSTALLED if solve_readiness_ready else DOCTOR_STATUS_MISSING
     )
 
     components = [
@@ -371,6 +394,26 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
             ),
         },
         {
+            "id": "bounded_solve_validation",
+            "name": "Bounded solve validation",
+            "category": DOCTOR_CATEGORY_REQUIRED,
+            "requiredFor": "/api/solve",
+            "featureImpact": (
+                "/api/solve readiness is unvalidated on this host/runtime."
+                if solve_readiness_status != DOCTOR_STATUS_INSTALLED
+                else "Bounded /api/solve runtime validation passed."
+            ),
+            "status": solve_readiness_status,
+            "available": bool(solve_readiness.get("status") not in {"missing", "invalid"}),
+            "supported": bool(solve_readiness.get("status") not in {"invalid", "stale_host", "mode_mismatch"}),
+            "ready": solve_readiness_ready,
+            "version": None,
+            "detail": str(
+                solve_readiness.get("detail")
+                or "No bounded solve validation evidence available."
+            ),
+        },
+        {
             "id": "matplotlib",
             "name": "Matplotlib",
             "category": DOCTOR_CATEGORY_OPTIONAL,
@@ -412,11 +455,14 @@ def _build_doctor_summary(components: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
     required_issues: List[str] = []
     optional_issues: List[str] = []
+    solve_issues: List[str] = []
+    mesh_build_issues: List[str] = []
 
     for component in components:
         status = str(component.get("status") or DOCTOR_STATUS_MISSING)
         category = str(component.get("category") or DOCTOR_CATEGORY_REQUIRED)
         component_id = str(component.get("id") or "unknown")
+        required_for = str(component.get("requiredFor") or "")
 
         if status in counts:
             counts[status] += 1
@@ -425,6 +471,10 @@ def _build_doctor_summary(components: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         if category == DOCTOR_CATEGORY_REQUIRED and status != DOCTOR_STATUS_INSTALLED:
             required_issues.append(component_id)
+            if required_for == "/api/solve":
+                solve_issues.append(component_id)
+            if required_for == "/api/mesh/build":
+                mesh_build_issues.append(component_id)
         if category == DOCTOR_CATEGORY_OPTIONAL and status != DOCTOR_STATUS_INSTALLED:
             optional_issues.append(component_id)
 
@@ -432,6 +482,10 @@ def _build_doctor_summary(components: List[Dict[str, Any]]) -> Dict[str, Any]:
         "requiredReady": len(required_issues) == 0,
         "requiredIssues": required_issues,
         "optionalIssues": optional_issues,
+        "solveReady": len(solve_issues) == 0,
+        "solveIssues": solve_issues,
+        "meshBuildReady": len(mesh_build_issues) == 0,
+        "meshBuildIssues": mesh_build_issues,
         "counts": counts,
     }
 
@@ -442,6 +496,7 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
         dependency_status=snapshot.get("dependencies", {}),
         fastapi_runtime=snapshot.get("fastapi", {}),
         device_metadata=snapshot.get("deviceInterface", {}),
+        solve_readiness=snapshot.get("solveReadiness", {}),
     )
     all_required_ok = all(bool(check.get("ok")) for check in required_checks.values())
 
@@ -451,6 +506,7 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
         "dependencies": snapshot.get("dependencies"),
         "fastapi": snapshot.get("fastapi"),
         "deviceInterface": snapshot.get("deviceInterface"),
+        "solveReadiness": snapshot.get("solveReadiness"),
         "requiredChecks": required_checks,
         "allRequiredReady": all_required_ok,
     }
@@ -469,6 +525,7 @@ def collect_runtime_doctor_report(preferred_mode: str = "auto") -> Dict[str, Any
         "summary": summary,
         "dependencies": snapshot.get("dependencies"),
         "deviceInterface": snapshot.get("deviceInterface"),
+        "solveReadiness": snapshot.get("solveReadiness"),
     }
 
 
@@ -515,7 +572,7 @@ def render_runtime_preflight_text(report: Dict[str, Any]) -> str:
         "",
     ]
 
-    for check_id in ("fastapi", "gmsh_python", "bempp_cl", "opencl_runtime"):
+    for check_id in ("fastapi", "gmsh_python", "bempp_cl", "opencl_runtime", "bounded_solve_validation"):
         payload = required.get(check_id) if isinstance(required.get(check_id), dict) else {}
         ok = bool(payload.get("ok"))
         status = "OK" if ok else "MISSING"

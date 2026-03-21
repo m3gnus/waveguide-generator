@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Report backend dependency/runtime status for the selected Python interpreter "
-            "(fastapi, gmsh, bempp-cl, OpenCL)."
+            "(fastapi, gmsh, bempp-cl, OpenCL, bounded solve validation evidence)."
         )
     )
     parser.add_argument(

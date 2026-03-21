@@ -34,11 +34,17 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from services.solve_readiness import (
+    READINESS_PROBE_ID,
+    READINESS_SCHEMA_VERSION,
+    write_bounded_solve_readiness_record,
+)
 from solver.deps import (
     BEMPP_AVAILABLE,
     BEMPP_RUNTIME_READY,
@@ -114,6 +120,58 @@ class BenchmarkResult:
             "total_elapsed_seconds": self.total_elapsed_seconds,
         }
         return result
+
+
+def _first_precision_failure(results: List[PrecisionTestResult]) -> Optional[str]:
+    for result in results:
+        if result.attempted and not result.success and result.error:
+            return result.error
+    for result in results:
+        if result.error:
+            return result.error
+    return None
+
+
+def _persist_bounded_solve_validation(result: BenchmarkResult, args: argparse.Namespace) -> None:
+    import platform
+
+    attempted = any(item.attempted for item in result.precision_results)
+    success = any(item.success for item in result.precision_results)
+    failure = _first_precision_failure(result.precision_results)
+    if not failure and not result.mesh_prep.success:
+        failure = result.mesh_prep.error or "mesh preparation failed"
+    if not failure and not result.runtime_available:
+        failure = "BEM runtime unavailable"
+
+    record = {
+        "schemaVersion": READINESS_SCHEMA_VERSION,
+        "probe": READINESS_PROBE_ID,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "host": {
+            "system": platform.system(),
+            "machine": platform.machine(),
+            "python_executable": sys.executable,
+        },
+        "requested_mode": str(args.device or "auto"),
+        "selected_mode": result.device_metadata.get("selected_mode"),
+        "device_name": result.device_metadata.get("device_name"),
+        "frequency_hz": float(args.freq),
+        "sweep": bool(args.sweep),
+        "precision": str(args.precision or "single"),
+        "attempted": attempted,
+        "success": success,
+        "runtime_available": bool(result.runtime_available),
+        "mesh_prep_success": bool(result.mesh_prep.success),
+        "failure": failure,
+    }
+
+    try:
+        write_bounded_solve_readiness_record(record)
+    except Exception as exc:  # pragma: no cover - best effort persistence
+        print(
+            f"[benchmark_tritonia] warning: failed to persist bounded solve readiness record: {exc}",
+            file=sys.stderr,
+        )
 
 
 TRITONIA_PARAMS = {
@@ -490,6 +548,8 @@ def main():
     )
     args = parser.parse_args()
     result = run_benchmark(args)
+    if not args.no_solve:
+        _persist_bounded_solve_validation(result, args)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
     else:

@@ -1173,6 +1173,34 @@ test("formatDependencyBlockMessage includes feature impact and guidance for miss
   assert.match(message, /Install gmsh package/);
 });
 
+test("formatDependencyBlockMessage includes bounded solve validation issue for solve feature", () => {
+  const health = {
+    dependencyDoctor: {
+      components: [
+        {
+          id: "bounded_solve_validation",
+          name: "Bounded solve validation",
+          category: "required",
+          status: "missing",
+          featureImpact: "/api/solve readiness is unvalidated on this host/runtime.",
+          guidance: [
+            "Run bounded solve validation: cd server && python3 scripts/benchmark_tritonia.py --freq 1000 --device auto --precision single --timeout 30",
+          ],
+        },
+      ],
+    },
+  };
+
+  const message = formatDependencyBlockMessage(health, {
+    features: ["solve"],
+    fallback: "Simulation is unavailable.",
+  });
+
+  assert.match(message, /Simulation is unavailable/);
+  assert.match(message, /Bounded solve validation/);
+  assert.match(message, /unvalidated on this host\/runtime/);
+});
+
 test("createDependencyStatusPanel renders required and optional dependency issues", () => {
   const originalDocument = global.document;
   global.document = {

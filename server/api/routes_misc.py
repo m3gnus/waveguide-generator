@@ -54,11 +54,15 @@ async def health_check() -> Dict[str, Any]:
     dependency_status = get_dependency_status()
     device_info = selected_device_metadata("auto")
     doctor_report = collect_runtime_doctor_report("auto")
+    doctor_summary = doctor_report.get("summary") if isinstance(doctor_report.get("summary"), dict) else {}
+    solve_ready = doctor_summary.get("solveReady")
+    if not isinstance(solve_ready, bool):
+        solve_ready = bool(BEMPP_RUNTIME_READY)
 
     return {
         "status": "ok",
         "solver": "bempp-cl" if SOLVER_AVAILABLE else "unavailable",
-        "solverReady": BEMPP_RUNTIME_READY,
+        "solverReady": solve_ready,
         "occBuilderReady": WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY,
         "dependencies": dependency_status,
         "dependencyDoctor": {
@@ -67,6 +71,7 @@ async def health_check() -> Dict[str, Any]:
             "platform": doctor_report.get("platform"),
             "summary": doctor_report.get("summary"),
             "components": doctor_report.get("components"),
+            "solveReadiness": doctor_report.get("solveReadiness"),
         },
         "capabilities": get_settings_capabilities(),
         "deviceInterface": device_info,

@@ -80,6 +80,13 @@ Preflight always runs under the interpreter selected by the shared startup contr
 - `gmsh` (`/api/mesh/build`)
 - `bempp-cl` (`/api/solve`)
 - OpenCL runtime availability (`/api/solve`)
+- bounded solve validation evidence (`bounded_solve_validation`, `/api/solve`)
+
+`bounded_solve_validation` is sourced from the persisted Tritonia probe record:
+
+- default path: `output/runtime/bounded_solve_validation.json`
+- override path: `WG_BOUNDED_SOLVE_RECORD_PATH=/abs/path.json`
+- refresh command (must run with solve enabled): `cd server && python3 scripts/benchmark_tritonia.py --freq 1000 --device auto --precision single --timeout 30`
 
 Current Apple Silicon contract:
 
@@ -116,7 +123,11 @@ Doctor report contract:
   - `gmsh` Python API
   - `bempp-cl`
   - OpenCL runtime
+  - bounded solve validation (`bounded_solve_validation`)
   - `matplotlib` (optional; chart render endpoints)
+- Summary includes endpoint-scoped readiness:
+  - `summary.solveReady` / `summary.solveIssues` (`/api/solve`)
+  - `summary.meshBuildReady` / `summary.meshBuildIssues` (`/api/mesh/build`)
 
 Cross-platform notes:
 
@@ -253,6 +264,7 @@ What this reports:
 - per-precision (`single`, `double`) solve outcomes on the active host
 - solver stage timings (elapsed, GMRES iterations, SPL value)
 - unsupported precision modes surfaced explicitly
+- persisted bounded-solve readiness evidence for preflight/doctor (`output/runtime/bounded_solve_validation.json`) when solve is enabled (not `--no-solve`)
 
 Exit codes:
 
@@ -270,6 +282,7 @@ Health check and solver status.
 Includes:
 
 - dependency matrix/runtime payload under `dependencies`
+- solver readiness gate (`solverReady`) derived from doctor `summary.solveReady` (includes bounded solve validation evidence)
 - settings capability metadata under `capabilities`, including:
   - `simulationBasic.controls`
   - `simulationAdvanced.available`
@@ -288,6 +301,11 @@ Includes:
   - `available_modes`
   - `mode_availability` (per-mode `available` / `supported` / `reason` for `auto|opencl_cpu|opencl_gpu`)
   - `opencl_diagnostics` (base/runtime/cpu/gpu detection details)
+- dependency doctor payload under `dependencyDoctor`, including:
+  - `summary.requiredReady|requiredIssues`
+  - `summary.solveReady|solveIssues`
+  - `components`
+  - `solveReadiness` (bounded solve validation status/detail/path)
 
 ### `GET /api/updates/check`
 
