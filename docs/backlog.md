@@ -114,7 +114,7 @@ Add new execution slices here when a deferred watchpoint is activated or a new v
 
 ### P2 — Remove legacy mesh paths and `refine_mesh_with_gmsh` dead code
 
-**Status:** OPEN
+**Status:** COMPLETE
 **Execution lane:** GLM-5 suitable
 
 - The legacy JS `.geo` export path (`gmshGeoBuilder.js` → `POST /api/mesh/generate-msh` → `gmsh_geo_mesher.py`) and the optional `refine_mesh_with_gmsh()` BEM refinement path are both dead code. Production files were already deleted, but `use_gmsh` plumbing, test assertions against the deleted `/api/mesh/generate-msh` endpoint, and stale doc references remain. Gmsh itself stays — it is the core meshing engine (~140 calls in `waveguide_builder.py` for BSpline geometry, mesh generation, physical groups, `.msh` export). `tests/helpers/legacyMsh.js` and `server/solver/gmsh_utils.py` also stay — both are actively used.
@@ -136,7 +136,7 @@ Action plan:
 - [x] Delete `test_use_gmsh_requires_gmsh_runtime` from `test_mesh_validation.py`.
 - [x] In `tests/export-gmsh-pipeline.test.js`: remove `generate-msh` assertion lines from the OCC endpoint test; delete the entire 503-fallback-to-`generate-msh` test.
 - [x] Update `waveguide_builder.py` docstring (lines 12–13) and `docs/PROJECT_DOCUMENTATION.md` (line 261) to remove references to deleted legacy paths.
-- [ ] Verify: `npm test`, `npm run test:server`, and grep for `refine_mesh_with_gmsh`, `use_gmsh`, `generate-msh` returns zero active hits.
+- [x] Verify: `npm test`, `npm run test:server`, and grep for `refine_mesh_with_gmsh`, `use_gmsh`, `generate-msh` returns zero active hits.
 
 ## Deferred Watchpoints
 
