@@ -132,17 +132,10 @@ export function getOpenCLSetupHelp(health) {
   const osPlatform = String(diagnostics.os_platform || "").toLowerCase();
   const osArch = String(diagnostics.os_arch || "").toLowerCase();
 
-  if (
-    osPlatform === "darwin" &&
-    (osArch === "arm64" || osArch.startsWith("aarch"))
-  ) {
-    return (
-      "GPU is Metal-only on Apple Silicon. For CPU-based OpenCL, install pocl via Homebrew: " +
-      "`brew install pocl ocl-icd`"
-    );
-  }
-
   if (osPlatform === "darwin") {
+    if (osArch === "arm64" || osArch.startsWith("aarch")) {
+      return "Install CPU-based OpenCL via pocl: `brew install pocl ocl-icd`";
+    }
     return "Check Apple OpenCL driver status. Note: OpenCL is deprecated on macOS 13+.";
   }
 
