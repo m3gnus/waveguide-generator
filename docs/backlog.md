@@ -129,11 +129,11 @@ Implementation notes:
 
 Action plan:
 
-- [ ] Delete `refine_mesh_with_gmsh()` (mesh.py lines 55–207) and remove the `use_gmsh`/`target_frequency` parameters and `if use_gmsh:` block from `prepare_mesh()`.
+- [x] Delete `refine_mesh_with_gmsh()` (mesh.py lines 55–207) and remove the `use_gmsh`/`target_frequency` parameters and `if use_gmsh:` block from `prepare_mesh()`.
 - [ ] Remove `refine_mesh_with_gmsh` import/wrapper and `use_gmsh` param from `bem_solver.py`.
 - [ ] Remove `use_gmsh` extraction logic, `target_freq` variable, and `use_gmsh=` kwargs from `simulation_runner.py`.
 - [ ] Remove `use_gmsh` mention from validation message in `mesh_validation.py`.
-- [ ] Delete `test_use_gmsh_requires_gmsh_runtime` from `test_mesh_validation.py`.
+- [x] Delete `test_use_gmsh_requires_gmsh_runtime` from `test_mesh_validation.py`.
 - [ ] In `tests/export-gmsh-pipeline.test.js`: remove `generate-msh` assertion lines from the OCC endpoint test; delete the entire 503-fallback-to-`generate-msh` test.
 - [ ] Update `waveguide_builder.py` docstring (lines 12–13) and `docs/PROJECT_DOCUMENTATION.md` (line 261) to remove references to deleted legacy paths.
 - [ ] Verify: `npm test`, `npm run test:server`, and grep for `refine_mesh_with_gmsh`, `use_gmsh`, `generate-msh` returns zero active hits.
