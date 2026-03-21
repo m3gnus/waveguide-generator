@@ -80,6 +80,9 @@ def validate_submit_simulation_request(
     )
 
     normalized_waveguide_params = validated_waveguide.model_dump()
+    # Active OCC solve path always builds full-domain meshes. Force quadrants=1234
+    # at the submission boundary so the queued payload reflects the active contract.
+    normalized_waveguide_params["quadrants"] = 1234
 
     return SimulationRequestValidation(
         mesh_strategy=mesh_strategy,
