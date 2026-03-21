@@ -306,40 +306,30 @@ class DeviceInterfaceSelectionTest(unittest.TestCase):
             profile = di._selected_device_profile("auto")
         self.assertEqual(profile["selected_mode"], "opencl_cpu")
 
-    def test_apple_silicon_opencl_modes_are_marked_unsupported(self):
-        di.clear_device_selection_caches()
-        with patch("solver.device_interface.platform.system", return_value="Darwin"), patch(
-            "solver.device_interface.platform.machine", return_value="arm64"
-        ):
-            self.assertIn("unsupported", str(di._mode_unavailable_reason("opencl_cpu")).lower())
-            self.assertIn("unsupported", str(di._mode_unavailable_reason("opencl_gpu")).lower())
-            self.assertEqual(di._available_concrete_modes(), [])
-
-    def test_apple_silicon_metadata_surfaces_unready_contract_reason(self):
+    def test_metadata_opencl_unavailable_when_no_concrete_modes(self):
         mocked_profile = {
             "requested_mode": "auto",
             "selected_mode": None,
             "selected_interface": "unavailable",
             "selected_device_type": None,
-            "fallback_reason": di._APPLE_SILICON_OPENCL_UNSUPPORTED_REASON,
+            "fallback_reason": "No OpenCL runtime available.",
             "concrete_modes": [],
             "available_modes": ["auto"],
             "mode_availability": {
                 "auto": {"available": True, "supported": True, "reason": None, "selection_policy": "supported_opencl_modes"},
-                "opencl_cpu": {"available": False, "supported": False, "reason": di._APPLE_SILICON_OPENCL_UNSUPPORTED_REASON},
-                "opencl_gpu": {"available": False, "supported": False, "reason": di._APPLE_SILICON_OPENCL_UNSUPPORTED_REASON},
+                "opencl_cpu": {"available": False, "supported": False, "reason": "No OpenCL runtime available."},
+                "opencl_gpu": {"available": False, "supported": False, "reason": "No OpenCL runtime available."},
             },
-            "opencl_diagnostics": {"base_ready": True, "cpu_available": True, "gpu_available": False},
+            "opencl_diagnostics": {"base_ready": False, "cpu_available": False, "gpu_available": False},
             "benchmark": {"ran": False, "winner_mode": None, "samples": {}, "policy": "supported_opencl_modes"},
         }
         with patch("solver.device_interface._selected_device_profile", return_value=mocked_profile), patch(
             "solver.device_interface._ensure_selected_mode_applied",
-            side_effect=RuntimeError(di._APPLE_SILICON_OPENCL_UNSUPPORTED_REASON),
+            side_effect=RuntimeError("No OpenCL runtime available."),
         ):
             info = di.selected_device_metadata("auto")
         self.assertFalse(info["opencl_available"])
         self.assertEqual(info["supported_modes"], [])
-        self.assertIn("Apple Silicon", str(info["fallback_reason"]))
 
 
 if __name__ == "__main__":

@@ -262,7 +262,7 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertIn("Waveguide backend dependency doctor", text_summary)
         self.assertIn("Required dependency status: NOT READY", text_summary)
 
-    def test_collect_runtime_doctor_report_marks_apple_silicon_opencl_unsupported(self):
+    def test_collect_runtime_doctor_report_opencl_missing_when_unavailable(self):
         dependency_status = {
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
@@ -277,10 +277,7 @@ class RuntimePreflightTest(unittest.TestCase):
             "device_name": None,
             "supported_modes": [],
             "selection_policy": "supported_opencl_modes",
-            "fallback_reason": (
-                "Apple Silicon OpenCL solve is currently unsupported for /api/solve: "
-                "the maintained bounded Tritonia repro still fails on the pocl CPU runtime."
-            ),
+            "fallback_reason": "No OpenCL runtime available.",
             "warning": None,
         }
 
@@ -300,18 +297,15 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "missing",
                 "detail": "No bounded solve validation record found.",
             },
-        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"), patch(
-            "services.runtime_preflight.platform.machine", return_value="arm64"
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"), patch(
+            "services.runtime_preflight.platform.machine", return_value="x86_64"
         ):
             report = collect_runtime_doctor_report()
 
         components_by_id = {item["id"]: item for item in report["components"]}
         self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
         self.assertEqual(components_by_id["bounded_solve_validation"]["status"], "missing")
-        self.assertIn("Apple Silicon", components_by_id["opencl_runtime"]["detail"])
-        self.assertTrue(
-            any("unsupported" in line.lower() for line in components_by_id["opencl_runtime"]["guidance"])
-        )
+        self.assertTrue(len(components_by_id["opencl_runtime"]["guidance"]) > 0)
 
 
 if __name__ == "__main__":
