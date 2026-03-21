@@ -37,7 +37,6 @@ class BEMSolver:
         surface_tags: List[int] = None,
         boundary_conditions: Dict = None,
         mesh_metadata: Dict = None,
-        target_frequency: float = 1000.0
     ) -> Dict:
         return prepare_mesh(
             vertices,
@@ -45,7 +44,6 @@ class BEMSolver:
             surface_tags,
             boundary_conditions,
             mesh_metadata,
-            target_frequency,
         )
 
     def solve(
