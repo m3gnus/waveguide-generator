@@ -122,7 +122,7 @@ flowchart LR
 - Runtime device availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
 - Auto device selection follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
 - GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu`; CPU-context surrogate aliasing is not used.
-- Apple Silicon hosts currently report OpenCL solve unsupported/unready for `/api/solve`; the maintained `pocl` CPU environment remains a bounded-repro setup, not a validated production runtime.
+- Apple Silicon hosts report OpenCL solve unsupported for `/api/solve`. Apple Silicon exposes GPU compute only through Metal — there is no native OpenCL GPU driver — and `bempp-cl 0.4.x` has no Metal backend, so GPU-accelerated BEM is architecturally blocked. The `pocl` CPU runtime is investigation-only; the bounded Tritonia solve still fails on it.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
 
@@ -624,7 +624,7 @@ High-signal test suites:
 
 `pyopencl` is required for `bempp-cl` GPU/CPU-OpenCL acceleration. Fully automatic cross-platform driver install is not supported (vendor/admin/reboot constraints). Install manually:
 
-- **macOS (Apple Silicon)**: `./scripts/setup-opencl-backend.sh` — installs the `pocl` CPU runtime used for current bounded repro/investigation only; `/api/solve` still reports Apple Silicon OpenCL unready until an end-to-end bounded solve is validated.
+- **macOS (Apple Silicon)**: `./scripts/setup-opencl-backend.sh` — installs the `pocl` CPU runtime for investigation/repro only. Apple Silicon has no native OpenCL GPU driver (Metal-only) and `bempp-cl` has no Metal backend, so GPU-accelerated BEM is architecturally blocked. `/api/solve` reports Apple Silicon OpenCL unsupported.
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
