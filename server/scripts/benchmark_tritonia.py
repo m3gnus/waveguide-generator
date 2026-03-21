@@ -265,7 +265,7 @@ def test_single_solve(
     precision: str,
     timeout_seconds: float,
 ) -> PrecisionTestResult:
-    from solver.solve_optimized import solve_optimized
+    from solver.solve import solve_optimized
     clear_device_selection_caches()
     start = time.time()
     try:

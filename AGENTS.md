@@ -102,7 +102,7 @@ npm run test:server                    # all Python tests
 - Tests: `server/tests/test_dependency_runtime.py`, `server/tests/test_occ_resolution_semantics.py`, `server/tests/test_updates_endpoint.py`
 
 **Solver & mesh validation**:
-- Files: `server/solver/mesh.py`, `server/solver/bem_solver.py`, `server/solver/solve_optimized.py`
+- Files: `server/solver/mesh.py`, `server/solver/bem_solver.py`, `server/solver/solve.py`
 - Tests: `server/tests/test_mesh_validation.py`, `server/tests/test_solver_tag_contract.py`, `server/tests/test_solver_hardening.py`, `server/tests/test_api_validation.py`
 
 ## Definition of Done
