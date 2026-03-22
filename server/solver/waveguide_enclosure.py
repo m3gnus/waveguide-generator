@@ -502,81 +502,78 @@ def _interpolate_ring_plan(
     return plan
 
 
-def _make_rect_wire(
+def _sample_rounded_rect(
     *, bx0: float, bx1: float, by0: float, by1: float,
     corner_radius: float, edge_type: int, z: float,
-) -> Tuple[int, List[int], Tuple[int, int]]:
-    """Build a closed rectangular wire from line/arc primitives.
+    n_per_edge: int = 3, n_per_corner: int = 4,
+) -> np.ndarray:
+    """Sample points on a rounded rectangle for BSpline wire construction.
 
-    Unlike BSpline wires, primitive wires let Gmsh mesh edges based purely
-    on the size field, without BSpline parametric density constraints that
-    force excessive triangles on roundover/ruled surfaces.
+    Returns an (N, 3) array of CCW-ordered points.  Uses few points — enough
+    to define the shape accurately but without the excessive BSpline parametric
+    density that forces Gmsh to ignore the size field on roundover surfaces.
     """
     half_w = 0.5 * (bx1 - bx0)
     half_h = 0.5 * (by1 - by0)
     R = max(0.0, min(float(corner_radius), half_w - 0.1, half_h - 0.1))
     has_corners = R > 1e-3
 
-    curves: List[int] = []
-    if has_corners:
-        # 8 transition points (CCW from right-edge bottom)
-        p = [
-            gmsh.model.occ.addPoint(bx1, by0 + R, z),      # 0: right edge, bottom
-            gmsh.model.occ.addPoint(bx1, by1 - R, z),      # 1: right edge, top
-            gmsh.model.occ.addPoint(bx1 - R, by1, z),      # 2: top edge, right
-            gmsh.model.occ.addPoint(bx0 + R, by1, z),      # 3: top edge, left
-            gmsh.model.occ.addPoint(bx0, by1 - R, z),      # 4: left edge, top
-            gmsh.model.occ.addPoint(bx0, by0 + R, z),      # 5: left edge, bottom
-            gmsh.model.occ.addPoint(bx0 + R, by0, z),      # 6: bottom edge, left
-            gmsh.model.occ.addPoint(bx1 - R, by0, z),      # 7: bottom edge, right
-        ]
-        # Arc centers
-        c = [
-            gmsh.model.occ.addPoint(bx1 - R, by1 - R, z),  # Q1: top-right
-            gmsh.model.occ.addPoint(bx0 + R, by1 - R, z),  # Q2: top-left
-            gmsh.model.occ.addPoint(bx0 + R, by0 + R, z),  # Q3: bottom-left
-            gmsh.model.occ.addPoint(bx1 - R, by0 + R, z),  # Q4: bottom-right
-        ]
-        # CCW: right edge -> Q1 corner -> top edge -> Q2 -> left -> Q3 -> bottom -> Q4
-        curves.append(gmsh.model.occ.addLine(p[0], p[1]))
-        curves.append(
-            gmsh.model.occ.addLine(p[1], p[2]) if edge_type == 2
-            else gmsh.model.occ.addCircleArc(p[1], c[0], p[2])
-        )
-        curves.append(gmsh.model.occ.addLine(p[2], p[3]))
-        curves.append(
-            gmsh.model.occ.addLine(p[3], p[4]) if edge_type == 2
-            else gmsh.model.occ.addCircleArc(p[3], c[1], p[4])
-        )
-        curves.append(gmsh.model.occ.addLine(p[4], p[5]))
-        curves.append(
-            gmsh.model.occ.addLine(p[5], p[6]) if edge_type == 2
-            else gmsh.model.occ.addCircleArc(p[5], c[2], p[6])
-        )
-        curves.append(gmsh.model.occ.addLine(p[6], p[7]))
-        curves.append(
-            gmsh.model.occ.addLine(p[7], p[0]) if edge_type == 2
-            else gmsh.model.occ.addCircleArc(p[7], c[3], p[0])
-        )
-        first_pt, last_pt = p[0], p[7]
-    else:
-        # Simple rectangle: 4 corners, 4 lines
-        p = [
-            gmsh.model.occ.addPoint(bx1, by0, z),
-            gmsh.model.occ.addPoint(bx1, by1, z),
-            gmsh.model.occ.addPoint(bx0, by1, z),
-            gmsh.model.occ.addPoint(bx0, by0, z),
-        ]
-        curves = [
-            gmsh.model.occ.addLine(p[0], p[1]),
-            gmsh.model.occ.addLine(p[1], p[2]),
-            gmsh.model.occ.addLine(p[2], p[3]),
-            gmsh.model.occ.addLine(p[3], p[0]),
-        ]
-        first_pt, last_pt = p[0], p[3]
+    pts: List[Tuple[float, float]] = []
 
-    wire = gmsh.model.occ.addWire(curves)
-    return wire, curves, (first_pt, last_pt)
+    def add_edge(x0: float, y0: float, x1: float, y1: float) -> None:
+        """Add interior points along a straight edge (endpoints added by corners)."""
+        for i in range(1, n_per_edge + 1):
+            t = i / (n_per_edge + 1)
+            pts.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
+
+    def add_corner(acx: float, acy: float, start_a: float, end_a: float) -> None:
+        """Add points along a corner arc (or chamfer line)."""
+        for i in range(n_per_corner):
+            t = i / n_per_corner
+            a = start_a + t * (end_a - start_a)
+            if edge_type == 2:
+                # Chamfer: straight line between arc start and end.
+                sx = acx + R * math.cos(start_a)
+                sy = acy + R * math.sin(start_a)
+                ex = acx + R * math.cos(end_a)
+                ey = acy + R * math.sin(end_a)
+                pts.append((sx + t * (ex - sx), sy + t * (ey - sy)))
+            else:
+                pts.append((acx + R * math.cos(a), acy + R * math.sin(a)))
+
+    if has_corners:
+        # CCW from bottom-right corner, starting at angle -π/2
+        # Q4 corner (bottom-right)
+        add_corner(bx1 - R, by0 + R, -math.pi / 2, 0.0)
+        # Right edge
+        add_edge(bx1, by0 + R, bx1, by1 - R)
+        # Q1 corner (top-right)
+        add_corner(bx1 - R, by1 - R, 0.0, math.pi / 2)
+        # Top edge
+        add_edge(bx1 - R, by1, bx0 + R, by1)
+        # Q2 corner (top-left)
+        add_corner(bx0 + R, by1 - R, math.pi / 2, math.pi)
+        # Left edge
+        add_edge(bx0, by1 - R, bx0, by0 + R)
+        # Q3 corner (bottom-left)
+        add_corner(bx0 + R, by0 + R, math.pi, 1.5 * math.pi)
+        # Bottom edge
+        add_edge(bx0 + R, by0, bx1 - R, by0)
+    else:
+        # Simple rectangle: corners only
+        corners = [(bx1, by0), (bx1, by1), (bx0, by1), (bx0, by0)]
+        for i in range(4):
+            x0, y0 = corners[i]
+            x1, y1 = corners[(i + 1) % 4]
+            pts.append((x0, y0))
+            add_edge(x0, y0, x1, y1)
+
+    out = np.empty((len(pts), 3), dtype=float)
+    for i, (x, y) in enumerate(pts):
+        out[i, 0] = x
+        out[i, 1] = y
+        out[i, 2] = z
+    return out
 
 
 def _build_roundover_surface(
@@ -790,12 +787,14 @@ def _build_enclosure_box(
 
     # --- Build ring0 (inset ring at z_front) and front baffle ---
     if closed:
-        # Primitive wire: lines + arcs, fully decoupled from n_angular.
-        ring0_wire, ring0_curves, ring0_eps = _make_rect_wire(
+        # Sample rounded rectangle geometry at few points → BSpline wire.
+        # Fully decoupled from n_angular; keeps single-curve wire topology.
+        ring0_pts = _sample_rounded_rect(
             bx0=bx0 + clamped_edge, bx1=bx1 - clamped_edge,
             by0=by0 + clamped_edge, by1=by1 - clamped_edge,
             corner_radius=0.0, edge_type=enc_edge_type, z=z_front,
         )
+        ring0_wire, ring0_curves, ring0_eps = _make_wire(ring0_pts, closed=True)
     else:
         ring0_pts = _ring_points_from_xy_plan(inset_pts, z=z_front)
         ring0_wire, ring0_curves, ring0_eps = _make_wire(ring0_pts, closed=closed)
@@ -813,11 +812,12 @@ def _build_enclosure_box(
         def _make_ring(z: float, radial_t: float):
             d = clamped_edge * (1.0 - radial_t)
             r = clamped_edge * radial_t
-            return _make_rect_wire(
+            pts = _sample_rounded_rect(
                 bx0=bx0 + d, bx1=bx1 - d,
                 by0=by0 + d, by1=by1 - d,
                 corner_radius=r, edge_type=enc_edge_type, z=z,
             )
+            return _make_wire(pts, closed=True)
     else:
         def _make_ring(z: float, radial_t: float):
             ring_plan = _interpolate_ring_plan(outer_pts, inset_pts, radial_t)
@@ -837,10 +837,11 @@ def _build_enclosure_box(
     # --- Side walls (straight ruled surface from front outer to back outer) ---
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
     if closed:
-        back_outer_wire, back_outer_curves, back_outer_eps = _make_rect_wire(
+        back_outer_pts = _sample_rounded_rect(
             bx0=bx0, bx1=bx1, by0=by0, by1=by1,
             corner_radius=clamped_edge, edge_type=enc_edge_type, z=z_outer_back,
         )
+        back_outer_wire, back_outer_curves, back_outer_eps = _make_wire(back_outer_pts, closed=True)
     else:
         back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
         back_outer_wire, back_outer_curves, back_outer_eps = _make_wire(back_outer_pts, closed=closed)
