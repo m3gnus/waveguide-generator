@@ -99,7 +99,8 @@ class JobPersistenceTest(unittest.TestCase):
         self._create_db_job("job-running", "running")
         self._create_db_job("job-queued", "queued")
 
-        with patch("services.job_runtime.asyncio.create_task") as create_task:
+        with patch("services.job_runtime._keep_task", lambda _task: None), \
+             patch("services.job_runtime.asyncio.create_task") as create_task:
             create_task.side_effect = lambda coro: (coro.close(), None)[1]
             asyncio.run(_jrt.startup_jobs_runtime())
 
@@ -115,9 +116,9 @@ class JobPersistenceTest(unittest.TestCase):
         request = SimulationRequest(**self._request_dump())
         job_id = "11111111-1111-1111-1111-111111111111"
 
-        with patch("services.job_runtime.uuid.uuid4", return_value=uuid.UUID(job_id)), patch(
-            "services.job_runtime.asyncio.create_task"
-        ) as create_task:
+        with patch("services.job_runtime.uuid.uuid4", return_value=uuid.UUID(job_id)), \
+             patch("services.job_runtime._keep_task", lambda _task: None), \
+             patch("services.job_runtime.asyncio.create_task") as create_task:
             create_task.side_effect = lambda coro: (coro.close(), None)[1]
             created_job_id = _jrt.create_simulation_job(request)
 

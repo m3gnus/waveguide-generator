@@ -482,11 +482,10 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             },
         }
 
-        class MockSolver:
-            def prepare_mesh(self, *args, **kwargs):
-                return {"grid": None, "surface_tags": None}
-            def solve(self, *args, **kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+        fake_mesh = {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
+
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         job_id = "test-occ-quadrants-accepted"
         _jrt.jobs[job_id] = {
@@ -494,7 +493,7 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "stage_message": "", "results": None, "error": None,
         }
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+            with patch("services.simulation_runner.BEMSolver"), patch(
                 "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
             ), patch(
                 "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
@@ -502,6 +501,12 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                 "services.simulation_runner.build_waveguide_mesh",
                 return_value=fake_occ_result,
             ) as build_mesh, patch(
+                "solver.mesh.load_msh_for_bem",
+                return_value=fake_mesh,
+            ), patch(
+                "services.simulation_runner._run_solve_in_subprocess",
+                side_effect=fake_subprocess_solve,
+            ), patch(
                 "services.simulation_runner.db"
             ):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
@@ -521,7 +526,6 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
 
     def test_occ_adaptive_preserves_canonical_surface_tags_for_solver_mesh(self):
         request = self._make_occ_adaptive_request()
-        captured_surface_tags = []
 
         fake_occ_result = {
             "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
@@ -559,13 +563,10 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             },
         }
 
-        class MockSolver:
-            def prepare_mesh(self, vertices, indices, surface_tags=None, **kwargs):
-                captured_surface_tags.append(list(surface_tags or []))
-                return object()
+        fake_mesh = {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
 
-            def solve(self, *args, **kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         job_id = "test-occ-canonical-tags"
         _jrt.jobs[job_id] = {
@@ -573,16 +574,23 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "stage_message": "", "results": None, "error": None,
         }
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+            with patch("services.simulation_runner.BEMSolver"), patch(
                 "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
             ), patch(
                 "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
             ), patch(
                 "services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result
+            ), patch(
+                "solver.mesh.load_msh_for_bem", return_value=fake_mesh
+            ), patch(
+                "services.simulation_runner._run_solve_in_subprocess",
+                side_effect=fake_subprocess_solve,
             ):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
 
-            self.assertEqual(captured_surface_tags, [[1, 2, 3, 4]])
+            # Canonical surface tags are now captured in mesh_stats (not passed to prepare_mesh).
+            mesh_stats = _jrt.jobs[job_id].get("mesh_stats", {})
+            self.assertEqual(mesh_stats.get("tag_counts"), {1: 1, 2: 1, 3: 1, 4: 1})
             self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
         finally:
             _jrt.jobs.pop(job_id, None)
@@ -626,12 +634,10 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             },
         }
 
-        class MockSolver:
-            def prepare_mesh(self, *_args, **_kwargs):
-                return object()
+        fake_mesh = {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
 
-            def solve(self, *_args, **_kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         job_id = "test-occ-mesh-stats"
         _jrt.jobs[job_id] = {
@@ -639,12 +645,17 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "stage_message": "", "results": None, "error": None,
         }
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
+            with patch("services.simulation_runner.BEMSolver"), patch(
                 "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
             ), patch(
                 "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
             ), patch(
                 "services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result
+            ), patch(
+                "solver.mesh.load_msh_for_bem", return_value=fake_mesh
+            ), patch(
+                "services.simulation_runner._run_solve_in_subprocess",
+                side_effect=fake_subprocess_solve,
             ):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
 
@@ -653,7 +664,7 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                 {
                     "vertex_count": 5,
                     "triangle_count": 4,
-                    "source": "occ_adaptive_canonical",
+                    "source": "occ_adaptive_msh",
                     "tag_counts": {1: 1, 2: 1, 3: 1, 4: 1},
                     "identity_triangle_counts": {
                         "inner_wall": 1,
@@ -813,15 +824,15 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
 
         class MockSolver:
             def prepare_mesh(self, *_args, **_kwargs):
-                return object()
+                return {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
 
-            def solve(self, *_args, **kwargs):
-                _jrt.jobs[job_id]["cancellation_requested"] = True
-                kwargs["cancellation_callback"]()
-                raise AssertionError("cancellation_callback should have interrupted solve")
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            _jrt.jobs[job_id]["cancellation_requested"] = True
+            raise _sim_runner.SimulationCancelled("Simulation cancelled by user")
 
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver):
+            with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
             self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
@@ -839,22 +850,15 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
 
         class MockSolver:
             def prepare_mesh(self, *_args, **_kwargs):
-                return object()
+                return {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
 
-            def solve(self, *_args, **kwargs):
-                stage_callback = kwargs["stage_callback"]
-                progress_callback = kwargs["progress_callback"]
-                stage_callback("setup", 0.4, "Configuring internals")
-                progress_callback(0.2)
-                stage_callback("frequency_solve", 0.6, "Solving frequencies")
-                stage_callback("directivity", 0.5, "Computing directivity")
-                stage_callback("finalizing", 0.5, "Packaging results")
-                return {"frequencies": [100.0], "directivity": {}}
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
-                "services.simulation_runner.update_job_stage"
-            ) as update_stage_mock:
+            with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
+                 patch("services.simulation_runner.update_job_stage") as update_stage_mock:
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
             stages = [
@@ -865,9 +869,6 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
             self.assertIn("initializing", stages)
             self.assertIn("mesh_prepare", stages)
             self.assertIn("bem_solve", stages)
-            self.assertIn("finalizing", stages)
-            self.assertNotIn("solver_setup", stages)
-            self.assertNotIn("directivity", stages)
             self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
         finally:
             _jrt.jobs.pop(job_id, None)
@@ -914,12 +915,14 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         class MockSolver:
             def prepare_mesh(self, *args, **kwargs):
-                return object()
-            def solve(self, *args, **kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+                return {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
+
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch.object(_sim_runner.db, "store_results", side_effect=OSError("disk full")):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
@@ -942,12 +945,14 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         class MockSolver:
             def prepare_mesh(self, *args, **kwargs):
-                return object()
-            def solve(self, *args, **kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+                return {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
+
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch.object(_sim_runner.db, "store_results", side_effect=OSError("disk full")):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
@@ -974,11 +979,10 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
             },
         }
 
-        class MockSolver:
-            def prepare_mesh(self, *args, **kwargs):
-                return object()
-            def solve(self, *args, **kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+        fake_mesh = {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
+
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         request = SimulationRequest(
             mesh=MeshData(
@@ -1000,10 +1004,12 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
         )
 
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver), \
+            with patch("services.simulation_runner.BEMSolver"), \
                  patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), \
                  patch("services.simulation_runner.GMSH_OCC_RUNTIME_READY", True), \
                  patch("services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result), \
+                 patch("solver.mesh.load_msh_for_bem", return_value=fake_mesh), \
+                 patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch.object(_sim_runner.db, "store_mesh_artifact", side_effect=OSError("disk full")):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
 
