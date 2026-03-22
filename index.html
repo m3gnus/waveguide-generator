@@ -162,63 +162,7 @@
         <span id="stats">Vertices: 0 | Triangles: 0</span>
       </div>
 
-      <!-- Model & Output Section -->
-      <details class="section" open>
-        <summary>Model</summary>
-        <button id="render-btn" class="is-hidden">Update Model</button>
-        <div class="button-row">
-          <button id="load-config-btn" class="secondary">Load Config</button>
-          <button id="export-config-btn" class="secondary">Export Config</button>
-        </div>
-        <input
-          type="file"
-          id="config-upload"
-          class="is-hidden"
-          accept=".txt,.cfg"
-        />
-        <input type="file" id="mesh-upload" class="is-hidden" accept=".msh" />
-        <div id="imported-mesh-banner" class="imported-mesh-banner is-hidden">
-          <span id="imported-mesh-filename"></span>
-          <button id="return-parametric-btn" class="secondary">
-            Return to Parametric
-          </button>
-        </div>
-        <div class="button-row">
-          <button id="import-mesh-btn" class="secondary">Import Mesh</button>
-          <button id="settings-btn" class="secondary">Settings</button>
-        </div>
-        <hr />
-        <div class="button-row button-row--name-counter">
-          <div class="input-row">
-            <label for="export-prefix">Output Name</label>
-            <input
-              type="text"
-              id="export-prefix"
-              value="horn_design"
-              maxlength="128"
-              pattern="[a-zA-Z0-9_\-]+"
-              title="Only letters, numbers, underscore, and hyphen allowed"
-              aria-required="true"
-              required
-            />
-          </div>
-          <div class="input-row">
-            <label for="export-counter">Counter</label>
-            <input
-              type="number"
-              id="export-counter"
-              value="1"
-              min="1"
-              max="999999"
-              step="1"
-              aria-required="true"
-              required
-            />
-          </div>
-        </div>
-      </details>
-
-      <!-- Simulation Section -->
+      <!-- Simulation Section (primary action — shown first) -->
       <details class="section" open>
         <summary>Simulation</summary>
         <div
@@ -304,6 +248,62 @@
             </div>
           </div>
           <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
+        </div>
+      </details>
+
+      <!-- Model & Output Section (secondary — file I/O, settings) -->
+      <details class="section" open>
+        <summary>Model</summary>
+        <button id="render-btn" class="is-hidden">Update Model</button>
+        <div class="button-row">
+          <button id="load-config-btn" class="secondary">Load Config</button>
+          <button id="export-config-btn" class="secondary">Export Config</button>
+        </div>
+        <input
+          type="file"
+          id="config-upload"
+          class="is-hidden"
+          accept=".txt,.cfg"
+        />
+        <input type="file" id="mesh-upload" class="is-hidden" accept=".msh" />
+        <div id="imported-mesh-banner" class="imported-mesh-banner is-hidden">
+          <span id="imported-mesh-filename"></span>
+          <button id="return-parametric-btn" class="secondary">
+            Return to Parametric
+          </button>
+        </div>
+        <div class="button-row">
+          <button id="import-mesh-btn" class="secondary">Import Mesh</button>
+          <button id="settings-btn" class="secondary">Settings</button>
+        </div>
+        <hr />
+        <div class="button-row button-row--name-counter">
+          <div class="input-row">
+            <label for="export-prefix">Output Name</label>
+            <input
+              type="text"
+              id="export-prefix"
+              value="horn_design"
+              maxlength="128"
+              pattern="[a-zA-Z0-9_\-]+"
+              title="Only letters, numbers, underscore, and hyphen allowed"
+              aria-required="true"
+              required
+            />
+          </div>
+          <div class="input-row">
+            <label for="export-counter">Counter</label>
+            <input
+              type="number"
+              id="export-counter"
+              value="1"
+              min="1"
+              max="999999"
+              step="1"
+              aria-required="true"
+              required
+            />
+          </div>
         </div>
       </details>
     </div>
