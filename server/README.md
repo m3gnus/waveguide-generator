@@ -84,11 +84,11 @@ Preflight always runs under the interpreter selected by the shared startup contr
 - OpenCL runtime availability (`/api/solve`)
 - bounded solve validation evidence (`bounded_solve_validation`, `/api/solve`)
 
-`bounded_solve_validation` is sourced from the persisted Tritonia probe record:
+`bounded_solve_validation` is sourced from the persisted reference-horn probe record:
 
 - default path: `output/runtime/bounded_solve_validation.json`
 - override path: `WG_BOUNDED_SOLVE_RECORD_PATH=/abs/path.json`
-- refresh command (must run with solve enabled): `cd server && python3 scripts/benchmark_tritonia.py --freq 1000 --device auto --precision single --timeout 30`
+- refresh command (must run with solve enabled): `cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30`
 
 Current Apple Silicon contract:
 
@@ -234,19 +234,19 @@ This uses deterministic synthetic fixtures for:
 - quarter-domain symmetry reduction
 - rejected reduction when the source tag is off-center
 
-### 2.3 Tritonia-M bounded runtime repro harness
+### 2.3 Reference-horn bounded runtime repro harness
 
-For a bounded Tritonia-M repro (OCC mesh build + optional 1-frequency solve + precision support matrix), run:
+For a bounded reference-horn repro (OCC mesh build + optional 1-frequency solve + precision support matrix), run:
 
 ```bash
 cd server
-python3 scripts/benchmark_tritonia.py [options]
+python3 scripts/benchmark_reference_horn.py [options]
 ```
 
 Or from repository root:
 
 ```bash
-npm run benchmark:tritonia
+npm run benchmark:reference-horn
 ```
 
 Options:
@@ -261,7 +261,7 @@ Options:
 
 What this reports:
 
-- mesh-prep success/failure for the Tritonia OCC preset (vertices, triangles, tag counts)
+- mesh-prep success/failure for the reference-horn OCC preset (vertices, triangles, tag counts)
 - selected runtime/device metadata for the requested mode
 - per-precision (`single`, `double`) solve outcomes on the active host
 - solver stage timings (elapsed, GMRES iterations, SPL value)

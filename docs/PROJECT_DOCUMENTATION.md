@@ -122,7 +122,7 @@ flowchart LR
 - Runtime device availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
 - Auto device selection follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
 - GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu`; CPU-context surrogate aliasing is not used.
-- Apple Silicon hosts report OpenCL solve unsupported for `/api/solve`. Apple Silicon exposes GPU compute only through Metal — there is no native OpenCL GPU driver — and `bempp-cl 0.4.x` has no Metal backend, so GPU-accelerated BEM is architecturally blocked. The `pocl` CPU runtime is investigation-only; the bounded Tritonia solve still fails on it.
+- Apple Silicon hosts report OpenCL solve unsupported for `/api/solve`. Apple Silicon exposes GPU compute only through Metal — there is no native OpenCL GPU driver — and `bempp-cl 0.4.x` has no Metal backend, so GPU-accelerated BEM is architecturally blocked. The `pocl` CPU runtime is investigation-only; the bounded reference-horn solve still fails on it.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
 
@@ -376,7 +376,7 @@ Notes:
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
 - Device policy defaults to `auto` with conservative supported-mode ordering: `opencl_cpu`, then `opencl_gpu` only when both contexts are validated.
 - Startup auto benchmarking is disabled; mode resolution is based on runtime availability checks.
-- `server/scripts/benchmark_solver.py --preset tritonia` is the bounded repro harness for Tritonia-M (OCC mesh-prep + 1-frequency/reduced sweep solve + precision support matrix and stage timings).
+- `server/scripts/benchmark_solver.py --preset reference-horn` is the bounded repro harness for the reference horn (OCC mesh-prep + 1-frequency/reduced sweep solve + precision support matrix and stage timings).
 - GMRES strong-form auto-enable is disabled in the active solver path; solves use explicit tolerance-only GMRES call parameters, with iteration counts recorded when available in the installed bempp runtime.
 - Public advanced solver overrides currently expose Burton-Miller coupling only. Warm-up and BEM precision remain compatibility-only controls and do not alter active `/api/solve` numerics (single precision, no warm-up).
 - The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
@@ -628,7 +628,7 @@ High-signal test suites:
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.
 - **Linux**: `apt install pocl-opencl-icd` (CPU) or vendor-specific ICDs.
 
-If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`, and Apple Silicon hosts currently surface OpenCL solve as unsupported/unready until the runtime is validated with a bounded solve. The runtime doctor/preflight now require persisted bounded-solve evidence (`bounded_solve_validation`) from `server/scripts/benchmark_tritonia.py` (default record path: `output/runtime/bounded_solve_validation.json`) before reporting `/api/solve` as ready.
+If OpenCL is unavailable the backend returns explicit runtime unavailability; the reason is surfaced in `/health` under `deviceInterface.fallback_reason`. `/health` also reports `deviceInterface.selection_policy` and `deviceInterface.supported_modes` so callers can distinguish validated modes from unsupported configurations. GPU-only runtimes are surfaced as unsupported for `opencl_gpu`, and Apple Silicon hosts currently surface OpenCL solve as unsupported/unready until the runtime is validated with a bounded solve. The runtime doctor/preflight now require persisted bounded-solve evidence (`bounded_solve_validation`) from `server/scripts/benchmark_reference_horn.py` (default record path: `output/runtime/bounded_solve_validation.json`) before reporting `/api/solve` as ready.
 
 ## 11. Key File Map
 

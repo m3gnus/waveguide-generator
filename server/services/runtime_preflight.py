@@ -217,7 +217,7 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
         ]
     if component_id == "bounded_solve_validation":
         return [
-            "Run bounded solve validation: cd server && python3 scripts/benchmark_tritonia.py --freq 1000 --device auto --precision single --timeout 30",
+            "Run bounded solve validation: cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30",
             "Validation evidence is only recorded when solve runs (do not use --no-solve).",
         ]
     if component_id == "matplotlib":

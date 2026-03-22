@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 READINESS_SCHEMA_VERSION = 1
-READINESS_PROBE_ID = "tritonia_bounded_solve.v1"
+READINESS_PROBE_ID = "reference_horn_bounded_solve.v1"
 
 
 def _default_readiness_record_path() -> Path:
@@ -49,7 +49,7 @@ def write_bounded_solve_readiness_record(record: Dict[str, Any]) -> Path:
 def read_bounded_solve_readiness(*, preferred_mode: str = "auto") -> Dict[str, Any]:
     target = resolve_readiness_record_path()
     guidance = (
-        "Run `cd server && python3 scripts/benchmark_tritonia.py --freq 1000 --device auto "
+        "Run `cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto "
         "--precision single --timeout 30` (without --no-solve) to record bounded solve evidence."
     )
 

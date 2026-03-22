@@ -30,9 +30,9 @@ class BenchmarkSolverScriptTest(unittest.TestCase):
         self.assertEqual(modes, ["single"])
         self.assertEqual(invalid, [])
 
-    def test_resolve_frequency_plan_uses_tritonia_defaults(self):
+    def test_resolve_frequency_plan_uses_reference_horn_defaults(self):
         args = argparse.Namespace(
-            preset="tritonia",
+            preset="reference-horn",
             freq_min=None,
             freq_max=None,
             num_freq=None,
@@ -46,7 +46,7 @@ class BenchmarkSolverScriptTest(unittest.TestCase):
 
     def test_resolve_frequency_plan_applies_explicit_overrides(self):
         args = argparse.Namespace(
-            preset="tritonia",
+            preset="reference-horn",
             freq_min=1200.0,
             freq_max=1800.0,
             num_freq=4,
@@ -101,16 +101,16 @@ class BenchmarkSolverScriptTest(unittest.TestCase):
 
     def test_validate_args_rejects_preset_and_mesh_together(self):
         args = argparse.Namespace(
-            preset="tritonia",
+            preset="reference-horn",
             mesh="mesh.msh",
             precision_modes=None,
         )
         with self.assertRaises(ValueError):
             benchmark_solver.validate_args(args)
 
-    def test_validate_args_applies_default_precision_matrix_for_tritonia(self):
+    def test_validate_args_applies_default_precision_matrix_for_reference_horn(self):
         args = argparse.Namespace(
-            preset="tritonia",
+            preset="reference-horn",
             mesh=None,
             precision_modes=None,
         )

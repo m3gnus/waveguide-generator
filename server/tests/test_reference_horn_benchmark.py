@@ -1,5 +1,5 @@
 """
-Tests for the Tritonia-M benchmark/repro script.
+Tests for the reference-horn benchmark/repro script.
 
 These tests verify the mesh preparation, reporting, and CLI logic without
 requiring an actual BEM solve (unless RUN_BEM_REFERENCE=1 is set).
@@ -17,41 +17,44 @@ scripts_dir = str(Path(__file__).parent.parent / "scripts")
 if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
-import benchmark_tritonia as bt
+import benchmark_reference_horn as bt
 
 
-class TritoniaParamsTest(unittest.TestCase):
-    def test_tritonia_params_has_required_fields(self):
+class ReferenceHornParamsTest(unittest.TestCase):
+    def test_reference_horn_params_has_required_fields(self):
         required_fields = [
             "formula_type",
-            "L",
+            "R",
             "a",
             "r0",
             "a0",
             "k",
             "q",
-            "n",
-            "s",
+            "r",
+            "b",
+            "m",
+            "tmax",
             "quadrants",
             "enc_depth",
-            "enc_edge",
+            "wall_thickness",
             "n_angular",
             "n_length",
             "throat_res",
             "mouth_res",
+            "rear_res",
         ]
         for field in required_fields:
-            self.assertIn(field, bt.TRITONIA_PARAMS, f"Missing required field: {field}")
+            self.assertIn(field, bt.REFERENCE_HORN_PARAMS, f"Missing required field: {field}")
 
-    def test_tritonia_params_formula_type_is_osse(self):
-        self.assertEqual(bt.TRITONIA_PARAMS["formula_type"], "OSSE")
+    def test_reference_horn_params_formula_type_is_rosse(self):
+        self.assertEqual(bt.REFERENCE_HORN_PARAMS["formula_type"], "R-OSSE")
 
-    def test_tritonia_params_has_enclosure(self):
-        self.assertGreater(bt.TRITONIA_PARAMS["enc_depth"], 0)
-        self.assertGreater(bt.TRITONIA_PARAMS["enc_edge"], 0)
+    def test_reference_horn_params_is_freestanding(self):
+        self.assertEqual(bt.REFERENCE_HORN_PARAMS["enc_depth"], 0)
+        self.assertEqual(bt.REFERENCE_HORN_PARAMS["wall_thickness"], 6.0)
 
-    def test_tritonia_params_full_domain(self):
-        self.assertEqual(bt.TRITONIA_PARAMS["quadrants"], 1234)
+    def test_reference_horn_params_full_domain(self):
+        self.assertEqual(bt.REFERENCE_HORN_PARAMS["quadrants"], 1234)
 
 
 class MeshPrepResultTest(unittest.TestCase):
@@ -143,13 +146,13 @@ class GetHostInfoTest(unittest.TestCase):
         self.assertIn("bempp_ready", info)
 
 
-class BuildTritoniaMeshTest(unittest.TestCase):
+class BuildReferenceHornMeshTest(unittest.TestCase):
     @unittest.skipUnless(
         os.getenv("RUN_BEM_REFERENCE") == "1",
         "Set RUN_BEM_REFERENCE=1 to run mesh build tests.",
     )
     def test_build_mesh_succeeds_with_runtime(self):
-        result = bt.build_tritonia_mesh()
+        result = bt.build_reference_horn_mesh()
         self.assertTrue(result.success, f"Mesh build failed: {result.error}")
         self.assertGreater(result.vertex_count, 0)
         self.assertGreater(result.triangle_count, 0)
@@ -158,8 +161,8 @@ class BuildTritoniaMeshTest(unittest.TestCase):
         self.assertGreater(result.tag_counts[2], 0, "No source-tagged triangles")
 
     def test_build_mesh_reports_unavailable_runtime(self):
-        with patch("benchmark_tritonia.GMSH_OCC_RUNTIME_READY", False):
-            result = bt.build_tritonia_mesh()
+        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", False):
+            result = bt.build_reference_horn_mesh()
             self.assertFalse(result.success)
             self.assertIn("unavailable", result.error.lower())
 
@@ -174,10 +177,10 @@ class RunBenchmarkTest(unittest.TestCase):
         args.no_solve = True
         args.timeout = 120.0
 
-        with patch("benchmark_tritonia.GMSH_OCC_RUNTIME_READY", True), patch(
-            "benchmark_tritonia.BEMPP_RUNTIME_READY", False
+        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", True), patch(
+            "benchmark_reference_horn.BEMPP_RUNTIME_READY", False
         ), patch(
-            "benchmark_tritonia.build_tritonia_mesh",
+            "benchmark_reference_horn.build_reference_horn_mesh",
             return_value=bt.MeshPrepResult(
                 success=True, vertex_count=100, triangle_count=200, tag_counts={1: 190, 2: 10}
             ),
@@ -197,10 +200,10 @@ class RunBenchmarkTest(unittest.TestCase):
         args.no_solve = True
         args.timeout = 120.0
 
-        with patch("benchmark_tritonia.GMSH_OCC_RUNTIME_READY", True), patch(
-            "benchmark_tritonia.BEMPP_RUNTIME_READY", True
+        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", True), patch(
+            "benchmark_reference_horn.BEMPP_RUNTIME_READY", True
         ), patch(
-            "benchmark_tritonia.build_tritonia_mesh",
+            "benchmark_reference_horn.build_reference_horn_mesh",
             return_value=bt.MeshPrepResult(success=True, vertex_count=100, triangle_count=200),
         ):
             result = bt.run_benchmark(args)
@@ -216,16 +219,16 @@ class RunBenchmarkTest(unittest.TestCase):
         args.no_solve = False
         args.timeout = 120.0
 
-        with patch("benchmark_tritonia.GMSH_OCC_RUNTIME_READY", True), patch(
-            "benchmark_tritonia.BEMPP_RUNTIME_READY", True
+        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", True), patch(
+            "benchmark_reference_horn.BEMPP_RUNTIME_READY", True
         ), patch(
-            "benchmark_tritonia.build_tritonia_mesh",
+            "benchmark_reference_horn.build_reference_horn_mesh",
             return_value=bt.MeshPrepResult(success=True, vertex_count=100, triangle_count=200),
         ), patch(
-            "benchmark_tritonia.prepare_solver_mesh",
+            "benchmark_reference_horn.prepare_solver_mesh",
             return_value={"grid": MagicMock(), "throat_elements": [0]},
         ), patch(
-            "benchmark_tritonia.test_single_solve",
+            "benchmark_reference_horn.test_single_solve",
             side_effect=[
                 bt.PrecisionTestResult(precision="single", attempted=True, success=True),
                 bt.PrecisionTestResult(
@@ -241,7 +244,7 @@ class RunBenchmarkTest(unittest.TestCase):
 
 @unittest.skipUnless(
     os.getenv("RUN_BEM_REFERENCE") == "1",
-    "Set RUN_BEM_REFERENCE=1 to run live Tritonia solve regression tests.",
+    "Set RUN_BEM_REFERENCE=1 to run live reference-horn solve regression tests.",
 )
 class RunBenchmarkLiveReferenceTest(unittest.TestCase):
     def test_live_opencl_cpu_reference_repro_surfaces_false_green_failure(self):
@@ -300,9 +303,9 @@ class CLITest(unittest.TestCase):
     def test_cli_json_output(self):
         with patch(
             "sys.argv",
-            ["benchmark_tritonia.py", "--json", "--no-solve"],
+            ["benchmark_reference_horn.py", "--json", "--no-solve"],
         ), patch(
-            "benchmark_tritonia.run_benchmark"
+            "benchmark_reference_horn.run_benchmark"
         ) as mock_run, patch(
             "sys.stdout", new_callable=StringIO
         ) as mock_stdout:
@@ -329,11 +332,11 @@ class CLITest(unittest.TestCase):
     def test_cli_persists_bounded_solve_validation_when_solve_runs(self):
         with patch(
             "sys.argv",
-            ["benchmark_tritonia.py", "--json"],
+            ["benchmark_reference_horn.py", "--json"],
         ), patch(
-            "benchmark_tritonia.run_benchmark"
+            "benchmark_reference_horn.run_benchmark"
         ) as mock_run, patch(
-            "benchmark_tritonia.write_bounded_solve_readiness_record"
+            "benchmark_reference_horn.write_bounded_solve_readiness_record"
         ) as write_record, patch(
             "sys.stdout", new_callable=StringIO
         ):

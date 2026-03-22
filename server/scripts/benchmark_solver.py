@@ -3,10 +3,10 @@ Repeatable BEM solver benchmark tool.
 
 Usage (run from server/ directory):
     python scripts/benchmark_solver.py <mesh.msh> [options]
-    python scripts/benchmark_solver.py --preset tritonia [options]
+    python scripts/benchmark_solver.py --preset reference-horn [options]
 
 Options:
-    --preset NAME       Repro preset (currently: tritonia)
+    --preset NAME       Repro preset (currently: reference-horn)
     --freq-min FLOAT    Minimum frequency in Hz (preset defaults to 1000)
     --freq-max FLOAT    Maximum frequency in Hz (preset defaults to 1000)
     --num-freq INT      Number of frequencies (preset defaults to 1)
@@ -38,30 +38,33 @@ DEFAULT_BENCHMARK_PLAN = {
     "num_freq": 10,
     "spacing": "log",
 }
-TRITONIA_PLAN = {
+REFERENCE_HORN_PLAN = {
     "freq_min": 1000.0,
     "freq_max": 1000.0,
     "num_freq": 1,
     "spacing": "linear",
 }
 VALID_PRECISION_MODES = ("single", "double")
-TRITONIA_OCC_PAYLOAD = {
-    "formula_type": "OSSE",
-    "L": "135",
-    "a": "45.0",
-    "r0": 18.0,
-    "a0": 10.0,
-    "k": 2.1,
-    "q": 0.992,
-    "n": 3.7,
-    "s": "0.7",
-    "quadrants": 14,
-    "enc_depth": 100.0,
-    "enc_edge": 20.0,
-    "n_angular": 80,
+REFERENCE_HORN_OCC_PAYLOAD = {
+    "formula_type": "R-OSSE",
+    "R": "140",
+    "a": "25",
+    "a0": 15.5,
+    "r0": 12.7,
+    "k": 2.0,
+    "q": 3.4,
+    "r": 0.4,
+    "b": 0.2,
+    "m": 0.85,
+    "tmax": 1.0,
+    "quadrants": 1234,
+    "enc_depth": 0,
+    "wall_thickness": 6.0,
+    "n_angular": 100,
     "n_length": 20,
-    "throat_res": 5.0,
-    "mouth_res": 10.0,
+    "throat_res": 6.0,
+    "mouth_res": 15.0,
+    "rear_res": 40.0,
 }
 
 
@@ -118,8 +121,8 @@ def parse_precision_modes(raw: str) -> Tuple[List[str], List[str]]:
 
 
 def resolve_frequency_plan(args: argparse.Namespace) -> Dict[str, Any]:
-    if args.preset == "tritonia":
-        plan = dict(TRITONIA_PLAN)
+    if args.preset == "reference-horn":
+        plan = dict(REFERENCE_HORN_PLAN)
     else:
         plan = dict(DEFAULT_BENCHMARK_PLAN)
 
@@ -150,11 +153,11 @@ def classify_precision_outcome(run_error: Optional[str], results: Optional[Dict[
     return "supported"
 
 
-def build_tritonia_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def build_reference_horn_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     from contracts import WaveguideParamsRequest
     from solver.waveguide_builder import build_waveguide_mesh
 
-    request = WaveguideParamsRequest(**TRITONIA_OCC_PAYLOAD)
+    request = WaveguideParamsRequest(**REFERENCE_HORN_OCC_PAYLOAD)
     started = time.time()
     result = build_waveguide_mesh(request.model_dump(), include_canonical=True)
     prep_time = time.time() - started
@@ -162,7 +165,7 @@ def build_tritonia_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     stats = result.get("stats", {}) if isinstance(result, dict) else {}
     msh_text = result.get("msh_text")
     if not isinstance(msh_text, str) or not msh_text.strip():
-        raise RuntimeError("Tritonia OCC build returned empty msh_text.")
+        raise RuntimeError("Reference horn OCC build returned empty msh_text.")
 
     tmp_path = None
     try:
@@ -177,7 +180,7 @@ def build_tritonia_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
             os.unlink(tmp_path)
 
     mesh_report = {
-        "source": "occ_tritonia_preset",
+        "source": "occ_reference_horn_preset",
         "prep_success": True,
         "prep_time_seconds": prep_time,
         "stats": stats if isinstance(stats, dict) else {},
@@ -212,8 +215,8 @@ def run_benchmark(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
 
     prep_started = time.time()
     try:
-        if args.preset == "tritonia":
-            mesh, mesh_report = build_tritonia_occ_mesh()
+        if args.preset == "reference-horn":
+            mesh, mesh_report = build_reference_horn_occ_mesh()
             report["mesh"] = mesh_report
         else:
             mesh = load_mesh(args.mesh)
@@ -224,7 +227,7 @@ def run_benchmark(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
             }
     except Exception as exc:
         report["mesh"] = {
-            "source": "occ_tritonia_preset" if args.preset == "tritonia" else str(args.mesh),
+            "source": "occ_reference_horn_preset" if args.preset == "reference-horn" else str(args.mesh),
             "prep_success": False,
             "prep_time_seconds": time.time() - prep_started,
             "error": str(exc),
@@ -343,7 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("mesh", nargs="?", help="Path to .msh mesh file")
     parser.add_argument(
         "--preset",
-        choices=["tritonia"],
+        choices=["reference-horn"],
         default=None,
         help="Use a bounded, reproducible benchmark preset",
     )
@@ -384,11 +387,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def validate_args(args: argparse.Namespace) -> None:
     if args.preset is None and not args.mesh:
-        raise ValueError("Provide <mesh.msh> or use --preset tritonia.")
+        raise ValueError("Provide <mesh.msh> or use --preset reference-horn.")
     if args.preset is not None and args.mesh:
         raise ValueError("Do not pass <mesh.msh> together with --preset.")
     if args.precision_modes is None:
-        args.precision_modes = "single,double" if args.preset == "tritonia" else "single"
+        args.precision_modes = "single,double" if args.preset == "reference-horn" else "single"
 
 
 def main() -> int:
