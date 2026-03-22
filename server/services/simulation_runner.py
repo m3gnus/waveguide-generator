@@ -203,8 +203,8 @@ async def _run_solve_in_subprocess(
         "device_mode": request.device_mode,
     }
     if advanced:
-        # Unpack stable runtime settings (currently only use_burton_miller).
-        _STABLE = {"use_burton_miller"}
+        # Unpack stable runtime settings.
+        _STABLE = {"use_burton_miller", "quadrature_regular", "workgroup_size_multiple", "assembly_backend"}
         for key in list(advanced.keys()):
             if key in _STABLE:
                 solve_kwargs[key] = advanced[key]

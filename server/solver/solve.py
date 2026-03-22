@@ -538,6 +538,9 @@ def solve_optimized(
     enable_warmup: bool = False,
     cancellation_callback: Optional[Callable[[], None]] = None,
     workers: int = 1,
+    quadrature_regular: Optional[int] = None,
+    workgroup_size_multiple: Optional[int] = None,
+    assembly_backend: Optional[str] = None,
 ) -> Dict:
     """
     Run HornBEMSolver frequency sweep and return the standard API result dict.
@@ -562,6 +565,21 @@ def solve_optimized(
         )
     _configure_bempp_precision(effective_bem_precision)
 
+    # Apply bempp global parameter overrides (these run inside the subprocess).
+    if quadrature_regular is not None:
+        qr = max(1, min(10, int(quadrature_regular)))
+        bempp_api.GLOBAL_PARAMETERS.quadrature.regular = qr
+        logger.info("[HornBEM] quadrature.regular = %d (default: 4)", qr)
+    if workgroup_size_multiple is not None:
+        wg = max(1, min(8, int(workgroup_size_multiple)))
+        bempp_api.GLOBAL_PARAMETERS.assembly.dense.workgroup_size_multiple = wg
+        logger.info("[HornBEM] workgroup_size_multiple = %d (default: 2)", wg)
+    if assembly_backend is not None:
+        ab = str(assembly_backend).strip().lower()
+        if ab in ("opencl", "numba"):
+            bempp_api.DEFAULT_DEVICE_INTERFACE = ab
+            logger.info("[HornBEM] DEFAULT_DEVICE_INTERFACE = '%s'", ab)
+
     if isinstance(mesh, dict):
         grid = mesh["grid"]
         original_tags = mesh.get("original_surface_tags")
@@ -578,8 +596,13 @@ def solve_optimized(
 
     c = 343.0
     rho = 1.21
-    boundary_interface = boundary_device_interface(device_mode)
-    potential_interface = potential_device_interface(device_mode)
+    effective_backend = str(assembly_backend or "").strip().lower()
+    if effective_backend == "numba":
+        boundary_interface = "numba"
+        potential_interface = "numba"
+    else:
+        boundary_interface = boundary_device_interface(device_mode)
+        potential_interface = potential_device_interface(device_mode)
     observation_request_m = _resolve_observation_distance_m(polar_config, default=2.0)
 
     num_frequencies = int(num_frequencies)

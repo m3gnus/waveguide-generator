@@ -50,6 +50,9 @@ function createAbortController(timeoutMs) {
  * @property {boolean} [verbose]
  * @property {{
  *   useBurtonMiller?: boolean,
+ *   quadratureRegular?: number,
+ *   workgroupSizeMultiple?: number,
+ *   assemblyBackend?: 'opencl'|'numba',
  * }} [advancedSettings]
  */
 
@@ -212,6 +215,15 @@ function buildAdvancedSettingsPayload(settings) {
 
   const payload = {};
   assignBooleanSetting(payload, "use_burton_miller", settings.useBurtonMiller);
+  if (typeof settings.quadratureRegular === "number" && Number.isFinite(settings.quadratureRegular)) {
+    payload.quadrature_regular = settings.quadratureRegular;
+  }
+  if (typeof settings.workgroupSizeMultiple === "number" && Number.isFinite(settings.workgroupSizeMultiple)) {
+    payload.workgroup_size_multiple = settings.workgroupSizeMultiple;
+  }
+  if (typeof settings.assemblyBackend === "string" && settings.assemblyBackend) {
+    payload.assembly_backend = settings.assemblyBackend;
+  }
 
   return Object.keys(payload).length > 0 ? payload : null;
 }
