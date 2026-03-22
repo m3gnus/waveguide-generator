@@ -19,6 +19,7 @@ import {
   SETTINGS_CONTROL_IDS,
   getLiveUpdateEnabled,
   getDisplayMode,
+  setDisplayMode,
   getDownloadSimMeshEnabled,
   openSettingsModal,
 } from "../src/ui/settings/modal.js";
@@ -510,7 +511,6 @@ test("SETTINGS_CONTROL_IDS maps all migrated controls to their element IDs", () 
   // Verifies the canonical ID map exists so consumers can reference controls
   // that now live inside the dynamically-created settings modal.
   assert.equal(SETTINGS_CONTROL_IDS.liveUpdate, "live-update");
-  assert.equal(SETTINGS_CONTROL_IDS.displayMode, "display-mode");
   assert.equal(SETTINGS_CONTROL_IDS.downloadSimMesh, "download-sim-mesh");
   assert.equal(SETTINGS_CONTROL_IDS.checkUpdates, "check-updates-btn");
 });
@@ -524,8 +524,8 @@ test("settings getters return in-memory defaults when modal is not open", () => 
   try {
     // Default: live-update = true
     assert.equal(getLiveUpdateEnabled(), true);
-    // Default: display-mode = standard
-    assert.equal(getDisplayMode(), "standard");
+    // Default: display-mode = clay
+    assert.equal(getDisplayMode(), "clay");
     // Default: download-sim-mesh = false
     assert.equal(getDownloadSimMeshEnabled(), false);
   } finally {
@@ -537,13 +537,11 @@ test("settings getters read DOM values when elements are present", () => {
   const originalDocument = global.document;
 
   const liveUpdateEl = { checked: false };
-  const displayModeEl = { value: "zebra" };
   const downloadMeshEl = { checked: true };
 
   global.document = {
     getElementById(id) {
       if (id === "live-update") return liveUpdateEl;
-      if (id === "display-mode") return displayModeEl;
       if (id === "download-sim-mesh") return downloadMeshEl;
       return null;
     },
@@ -551,7 +549,10 @@ test("settings getters read DOM values when elements are present", () => {
 
   try {
     assert.equal(getLiveUpdateEnabled(), false);
+    // display mode is now managed via setDisplayMode, not DOM
+    setDisplayMode("zebra");
     assert.equal(getDisplayMode(), "zebra");
+    setDisplayMode("clay"); // restore default
     assert.equal(getDownloadSimMeshEnabled(), true);
   } finally {
     global.document = originalDocument;

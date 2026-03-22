@@ -49,7 +49,7 @@ import {
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
   liveUpdate: "live-update",
-  displayMode: "display-mode",
+
   downloadSimMesh: "download-sim-mesh",
   checkUpdates: "check-updates-btn",
 };
@@ -57,7 +57,7 @@ export const SETTINGS_CONTROL_IDS = {
 // In-memory settings state so preferences survive modal close/reopen
 const _state = {
   liveUpdate: true,
-  displayMode: "standard",
+  displayMode: "clay",
   downloadSimMesh: false,
 };
 const SIMULATION_MANAGEMENT_HELP = Object.freeze({
@@ -74,8 +74,6 @@ const SIMULATION_MANAGEMENT_HELP = Object.freeze({
 const VIEWER_HELP = Object.freeze({
   liveUpdate:
     "Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.",
-  displayMode:
-    "Switches the viewport shading mode used to inspect the current waveguide surface.",
   rotateSpeed:
     "Controls how quickly the camera orbits the model while dragging.",
   zoomSpeed:
@@ -131,9 +129,14 @@ export function getLiveUpdateEnabled() {
  * Get the current display-mode value.
  */
 export function getDisplayMode() {
-  const el = document.getElementById("display-mode");
-  if (el) return el.value;
   return _state.displayMode;
+}
+
+/**
+ * Set the current display-mode value.
+ */
+export function setDisplayMode(mode) {
+  _state.displayMode = mode;
 }
 
 /**
@@ -236,7 +239,6 @@ function _buildModal(viewerRuntime) {
     const t = event.target;
     if (!t) return;
     if (t.id === "live-update") _state.liveUpdate = t.checked;
-    if (t.id === "display-mode") _state.displayMode = t.value;
     if (t.id === "download-sim-mesh") _state.downloadSimMesh = t.checked;
 
     // Sim Basic settings: save on any simbasic-* control change
@@ -376,26 +378,6 @@ function _buildViewerSection(viewerRuntime) {
     labelFor: "live-update",
     helpText: VIEWER_HELP.liveUpdate,
     controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? " checked" : ""}>`,
-  });
-
-  // Display Mode control
-  const modeOptions = [
-    { value: "standard", label: "Standard (Metal)" },
-    { value: "zebra", label: "Zebra Stripes" },
-    { value: "grid", label: "Grid / Wireframe" },
-    { value: "curvature", label: "Curvature Map" },
-  ];
-  const modeOptionsHtml = modeOptions
-    .map(
-      (o) =>
-        `<option value="${o.value}"${_state.displayMode === o.value ? " selected" : ""}>${o.label}</option>`,
-    )
-    .join("");
-  _appendInlineRow(sec, {
-    labelText: "Display Mode",
-    labelFor: "display-mode",
-    helpText: VIEWER_HELP.displayMode,
-    controlHtml: `<select id="display-mode">${modeOptionsHtml}</select>`,
   });
 
   // --- Viewer sub-sections (Orbit Controls, Camera, Input) ---
