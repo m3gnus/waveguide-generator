@@ -649,10 +649,23 @@ def _build_enclosure_box(
 
     cx = float(np.mean(mouth_pts[:, 0]))
     cy = float(np.mean(mouth_pts[:, 1]))
-    angles = [
-        float(math.atan2(float(mouth_pts[i, 1]) - cy, float(mouth_pts[i, 0]) - cx))
-        for i in range(mouth_pts.shape[0])
-    ]
+
+    # Generate enclosure ring angles from the geometry — NOT from the horn mouth
+    # angular sampling (n_angular).  The enclosure is a simple rounded rectangle
+    # and needs far fewer BSpline control points than the horn profile.  Using
+    # horn mouth angles made n_angular leak into the mesh output; with roundovers
+    # this produced excessive triangles that ignored the resolution settings.
+    if closed:
+        n_enc = 48
+        angles = [2.0 * math.pi * i / n_enc for i in range(n_enc)]
+    else:
+        # Determine angular range from mouth points, sample at fixed density.
+        mouth_angles = sorted([
+            float(math.atan2(float(mouth_pts[i, 1]) - cy, float(mouth_pts[i, 0]) - cx))
+            for i in range(mouth_pts.shape[0])
+        ])
+        n_enc = min(28, len(mouth_angles))
+        angles = np.linspace(mouth_angles[0], mouth_angles[-1], n_enc).tolist()
 
     outer_pts, inset_pts, clamped_edge = _generate_enclosure_points_from_angles(
         angles=angles,
@@ -693,23 +706,9 @@ def _build_enclosure_box(
 
     current_profile, mouth_curves_list, profile_pts = _make_wire(mouth_pts, closed=closed)
 
-    merge_eps = 1e-6
-    reuse_mouth_as_ring0 = True
-    for i in range(mouth_pts.shape[0]):
-        if math.hypot(
-            inset_pts[i][0] - float(mouth_pts[i, 0]),
-            inset_pts[i][1] - float(mouth_pts[i, 1]),
-        ) > merge_eps:
-            reuse_mouth_as_ring0 = False
-            break
-
-    # Refine XY-plane corners by inserting midpoint samples into corner arcs.
-    # Done after the reuse check (which only needs original point indices).
-    outer_pts, inset_pts = _refine_enclosure_corners(
-        outer_pts, inset_pts,
-        cx=cx, cy=cy, bx0=bx0, bx1=bx1, by0=by0, by1=by1,
-        clamped_edge=clamped_edge, edge_type=enc_edge_type,
-    )
+    # Enclosure ring points are generated independently of the horn mouth
+    # (different count/angles), so pointwise reuse is never valid.
+    reuse_mouth_as_ring0 = False
 
     ring0_wire: Optional[int] = None
     ring0_loop: Optional[int] = None
