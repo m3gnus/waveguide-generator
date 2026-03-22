@@ -107,7 +107,8 @@ export function setupEventListeners(panel) {
       }
 
       if (action === 'open-folder') {
-        await openWorkspaceInFinder();
+        const job = panel.jobs?.get(jobId);
+        await openWorkspaceInFinder({ job });
       }
     });
   }

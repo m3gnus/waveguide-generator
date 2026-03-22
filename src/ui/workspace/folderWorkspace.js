@@ -98,10 +98,20 @@ export async function fetchWorkspacePath() {
   }
 }
 
-export async function openWorkspaceInFinder() {
+export async function openWorkspaceInFinder({ job } = {}) {
   try {
+    const body = {};
+    if (job) {
+      const { resolveTaskWorkspaceDirectoryName } = await import('./taskManifest.js');
+      const subdir = resolveTaskWorkspaceDirectoryName(job, { fallbackId: job.id });
+      if (subdir) {
+        body.subdir = subdir;
+      }
+    }
     const res = await fetch(`${DEFAULT_BACKEND_URL}/api/workspace/open`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(8000)
     });
     return res.ok;
