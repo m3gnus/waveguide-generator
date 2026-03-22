@@ -1103,8 +1103,7 @@ button.secondary:hover:not(:disabled),
   gap: var(--sp-1);
 }
 
-.simulation-jobs-source-label,
-.simulation-job-source-badge {
+.simulation-jobs-source-label {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border);
@@ -1115,6 +1114,29 @@ button.secondary:hover:not(:disabled),
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.simulation-job-open-folder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 2px;
+  margin-left: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  transition: color 0.15s ease;
+  vertical-align: middle;
+}
+
+.simulation-job-open-folder:hover {
+  color: var(--text-primary);
+}
+
+.simulation-job-open-folder svg {
+  display: block;
 }
 
 .simulation-jobs-toolbar {
