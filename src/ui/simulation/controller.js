@@ -592,4 +592,8 @@ export async function restoreSimulationControllerJobs(
   setJobsFromEntries(controller, workspace.items);
   syncCurrentJobId(controller);
   onJobsUpdated();
+
+  if (controller.activeJobId || hasActiveJobs(controller)) {
+    onStartPolling();
+  }
 }

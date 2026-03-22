@@ -21,6 +21,7 @@ from services.job_runtime import (
     _merge_job_cache_from_db,
     _set_job_fields,
     _now_iso,
+    _keep_task,
     update_job_stage,
     running_jobs,
     jobs_lock,
@@ -418,4 +419,4 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         with jobs_lock:
             running_jobs.discard(job_id)
         db.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1000)
-        asyncio.create_task(_drain_scheduler_queue())
+        _keep_task(asyncio.create_task(_drain_scheduler_queue()))

@@ -23,6 +23,9 @@ const ACTIVE_POLL_MS = 1000;
 const IDLE_POLL_MS = 15000;
 const MAX_POLL_BACKOFF_MS = 30000;
 
+/** Track jobs whose mesh artifact has already been persisted early (before completion). */
+const _earlyMeshPersisted = new Set();
+
 /**
  * @typedef {Object} SolverPollingApi
  * @property {(query?: {limit?: number, offset?: number}) => Promise<{items?: unknown[]}>} listJobs
@@ -85,6 +88,36 @@ export function pollSimulationStatus(panel) {
           panel.app.setSimulationMeshStats(activeJob.meshStats);
           renderBackendSimulationMeshDiagnostics(activeJob.meshStats);
         }
+
+        // Persist mesh artifact to workspace folder as soon as the backend has it,
+        // so the output folder and .msh file appear immediately (not after completion).
+        if (
+          activeJob.hasMeshArtifact &&
+          activeJob.status === 'running' &&
+          !_earlyMeshPersisted.has(activeJob.id) &&
+          typeof panel.solver?.getMeshArtifact === 'function'
+        ) {
+          _earlyMeshPersisted.add(activeJob.id);
+          persistSimulationGenerationArtifacts(activeJob, {
+            meshArtifactText: await panel.solver.getMeshArtifact(activeJob.id).catch((err) => {
+              console.warn('Early mesh artifact fetch failed:', err);
+              _earlyMeshPersisted.delete(activeJob.id);
+              return null;
+            })
+          }).then((result) => {
+            if (result.meshArtifactFile) {
+              recordSimulationControllerExport(panel, activeJob.id, {
+                meshArtifactFile: result.meshArtifactFile
+              });
+            }
+            if (result.warnings.length > 0) {
+              console.warn('Early mesh artifact persistence warnings:', result.warnings);
+            }
+          }).catch((err) => {
+            console.warn('Early mesh artifact persistence failed:', err);
+          });
+        }
+
         updateStageUi(panel, {
           progress: activeJob.progress ?? 0,
           stage: activeJob.stage || activeJob.status || 'queued',
@@ -114,13 +147,15 @@ export function pollSimulationStatus(panel) {
 
             if (activeJob.justCompleted) {
               let meshArtifactText = null;
-              if (activeJob.hasMeshArtifact && typeof panel.solver?.getMeshArtifact === 'function') {
+              const meshAlreadyPersisted = _earlyMeshPersisted.has(activeJob.id);
+              if (!meshAlreadyPersisted && activeJob.hasMeshArtifact && typeof panel.solver?.getMeshArtifact === 'function') {
                 try {
                   meshArtifactText = await panel.solver.getMeshArtifact(activeJob.id);
                 } catch (error) {
                   console.warn('Mesh artifact fetch failed during completion persistence:', error);
                 }
               }
+              _earlyMeshPersisted.delete(activeJob.id);
 
               const persistedArtifacts = await persistSimulationGenerationArtifacts(activeJob, {
                 results: result.results,

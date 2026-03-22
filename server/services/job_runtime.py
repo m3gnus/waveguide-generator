@@ -27,9 +27,18 @@ running_jobs: set[str] = set()
 jobs_lock = threading.RLock()
 scheduler_loop_running: bool = False
 max_concurrent_jobs: int = 1
+# Python 3.12+ only keeps weak references to asyncio tasks; prevent GC of
+# fire-and-forget tasks by holding strong references here.
+_background_tasks: set = set()
 
 db = SimulationDB(Path(__file__).resolve().parents[1] / "data" / "simulations.db")
 db_initialized: bool = False
+
+
+def _keep_task(task: "asyncio.Task[Any]") -> None:
+    """Hold a strong reference to *task* so the GC cannot collect it (Python 3.12+)."""
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 class JobRuntimeNotFoundError(LookupError):
@@ -137,7 +146,7 @@ def create_simulation_job(request: SimulationRequest) -> str:
         jobs[job_id] = job_record
         job_queue.append(job_id)
 
-    asyncio.create_task(_drain_scheduler_queue())
+    _keep_task(asyncio.create_task(_drain_scheduler_queue()))
     return job_id
 
 
@@ -187,7 +196,7 @@ def request_stop_job(job_id: str) -> Dict[str, str]:
             "status": "cancelling",
         }
 
-    asyncio.create_task(_drain_scheduler_queue())
+    _keep_task(asyncio.create_task(_drain_scheduler_queue()))
     return response
 
 
@@ -467,7 +476,7 @@ async def _drain_scheduler_queue() -> None:
             # Lazy import avoids the circular dependency:
             # simulation_runner → job_runtime → simulation_runner
             from services.simulation_runner import run_simulation  # noqa: PLC0415
-            asyncio.create_task(run_simulation(job_id, request_obj))
+            _keep_task(asyncio.create_task(run_simulation(job_id, request_obj)))
     finally:
         with jobs_lock:
             scheduler_loop_running = False
@@ -568,4 +577,4 @@ async def startup_jobs_runtime() -> None:
                 should_schedule = True
 
     if should_schedule:
-        asyncio.create_task(_drain_scheduler_queue())
+        _keep_task(asyncio.create_task(_drain_scheduler_queue()))
