@@ -20,8 +20,7 @@ export function createLabelRow(
     label.htmlFor = htmlFor;
   }
   if (helpText) {
-    setAttribute(label, "data-help-text", helpText);
-    setAttribute(label, "title", helpText);
+    setAttribute(label, "data-tooltip", helpText);
   }
   row.appendChild(label);
 
@@ -33,16 +32,16 @@ export function appendSectionNote(section, doc, text) {
     return null;
   }
 
-  // Set the description as a tooltip on the section's summary element
+  // Set the description as a CSS tooltip on the section's summary element
   const summary = typeof section.querySelector === "function"
     ? section.querySelector("summary")
     : null;
   if (summary) {
-    setAttribute(summary, "title", text);
+    setAttribute(summary, "data-tooltip", text);
     return summary;
   }
 
-  // Fallback for non-details sections or fake DOMs: set title on the section itself
-  setAttribute(section, "title", text);
+  // Fallback for non-details sections or fake DOMs
+  setAttribute(section, "data-tooltip", text);
   return section;
 }
