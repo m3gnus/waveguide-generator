@@ -44,6 +44,7 @@ from .device_interface import (
 from .impedance import calculate_throat_impedance
 from .directivity_correct import (
     calculate_directivity_patterns_correct,
+    calculate_di_from_polar_patterns,
     estimate_di_from_ka,
 )
 from .mesh_validation import calculate_mesh_statistics, validate_frequency_range
@@ -955,6 +956,28 @@ def solve_optimized(
                     float(filtered_freqs[0]), "directivity", "directivity_failed", str(exc)
                 )
             )
+
+    # ------------------------------------------------------------------
+    # Compute DI from actual polar directivity patterns (per-plane)
+    # ------------------------------------------------------------------
+    if any(results["directivity"].get(p) for p in requested_plane_ids):
+        try:
+            di_per_plane = calculate_di_from_polar_patterns(results["directivity"])
+            results["di"] = {
+                "frequencies": results["frequencies"],
+                **di_per_plane,
+            }
+            if verbose:
+                for plane_id, di_vals in di_per_plane.items():
+                    valid = [v for v in di_vals if v is not None]
+                    if valid:
+                        logger.info(
+                            "[HornBEM] DI (%s): %.1f – %.1f dB",
+                            plane_id, min(valid), max(valid),
+                        )
+        except Exception as exc:
+            logger.warning("[HornBEM] DI from polar patterns failed: %s", exc)
+            # Keep the ka-estimate DI as fallback (already populated)
 
     directivity_time = time.time() - directivity_start
     total_time = time.time() - start_time
