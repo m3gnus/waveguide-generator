@@ -210,7 +210,6 @@ function describeJobFeedSource(panel) {
   return {
     mode,
     label: mode === "folder" ? "Folder Tasks" : "Backend Jobs",
-    badge: mode === "folder" ? "Folder" : "",
   };
 }
 
