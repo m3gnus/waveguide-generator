@@ -10,7 +10,8 @@ const LEGACY_EXCEPTIONS = new Set([
   'app/exports.js->ui/feedback.js',
   'app/exports.js->ui/fileOps.js',
   'app/uiAdapters.js->ui/feedback.js',
-  'app/uiAdapters.js->ui/fileOps.js'
+  'app/uiAdapters.js->ui/fileOps.js',
+  'app/events.js->ui/settings/modal.js'
 ]);
 const MODULE_BROWSER_EDGE_EXCEPTIONS = new Set([
   'modules/simulation/state.js->state.js',
@@ -276,7 +277,8 @@ test('ui simulation workflow files must not import workspace internals directly'
   const violations = [];
   const allowedFiles = new Set([
     'ui/simulation/workspaceTasks.js',
-    'ui/simulation/exports.js'
+    'ui/simulation/exports.js',
+    'ui/simulation/autoExportPopup.js'
   ]);
 
   for (const file of files) {

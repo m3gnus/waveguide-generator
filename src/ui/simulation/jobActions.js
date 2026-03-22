@@ -367,7 +367,7 @@ export function renderJobList(panel) {
       <div class="simulation-job-header">
         <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
           <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
-          ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ""}
+          ${source.mode === "folder" ? `<button type="button" class="simulation-job-open-folder" data-job-action="open-folder" data-job-id="${job.id}" aria-label="Open in Finder" title="Open results folder in Finder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>` : ""}
         </div>
         <button type="button" class="simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
       </div>
