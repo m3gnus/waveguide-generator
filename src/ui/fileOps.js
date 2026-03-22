@@ -1,15 +1,12 @@
 import { showError } from './feedback.js';
 import { validateOutputName, validateCounter, sanitizeFileName } from './inputValidation.js';
 import {
-    ensureFolderWritePermission,
-    getSelectedFolderHandle,
-    requestFolderSelection,
-    resetSelectedFolder,
     subscribeFolderWorkspace,
-    supportsFolderSelection,
-    showOutputFolderPanel,
-    writeWorkspaceFile
+    writeWorkspaceFile,
+    getSelectedFolderLabel
 } from './workspace/folderWorkspace.js';
+
+export { selectOutputFolder } from './workspace/folderWorkspace.js';
 
 let hasPendingParameterChanges = false;
 let skipNextParameterChange = false;
@@ -175,26 +172,6 @@ function finalizeExportCounter(options = {}) {
 
 bindFolderWorkspaceLabel();
 
-export async function selectOutputFolder() {
-    bindFolderWorkspaceLabel();
-
-    // Try native File System Access API first (Chrome/Edge/Firefox with flag)
-    if (supportsFolderSelection(window)) {
-        try {
-            await requestFolderSelection(window);
-        } catch (err) {
-            if (err.name !== 'AbortError') {
-                showError('Failed to select folder. Your browser may not support this feature.');
-            }
-        }
-        return;
-    }
-
-    // Fallback for browsers without showDirectoryPicker (e.g. Firefox):
-    // Show a proper panel with the current output path and an "Open in Finder" button.
-    await showOutputFolderPanel();
-}
-
 export async function saveFile(content, fileName, options = {}) {
     bindFolderWorkspaceLabel();
 
@@ -203,29 +180,6 @@ export async function saveFile(content, fileName, options = {}) {
     if (!finalName) {
         showError('Invalid filename. Please set a valid output name.');
         return;
-    }
-
-    // Prefer direct-write optimization when an explicit folder handle is available.
-    const outputDirHandle = getSelectedFolderHandle();
-    if (outputDirHandle) {
-        try {
-            const permissionGranted = await ensureFolderWritePermission(outputDirHandle);
-            if (!permissionGranted) {
-                throw new Error('Write permission for selected folder was denied.');
-            }
-            const fileHandle = await outputDirHandle.getFileHandle(finalName, { create: true });
-            const writable = await fileHandle.createWritable();
-            const blob = content instanceof Blob
-                ? content
-                : new Blob([content], { type: options.contentType || 'text/plain' });
-            await writable.write(blob);
-            await writable.close();
-            finalizeExportCounter(options);
-            return;
-        } catch (err) {
-            console.warn('Direct folder write failed, falling back to file picker:', err);
-            resetSelectedFolder();
-        }
     }
 
     try {

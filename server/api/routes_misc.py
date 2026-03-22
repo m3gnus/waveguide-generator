@@ -191,8 +191,21 @@ _custom_workspace_path: Optional[Path] = None
 def _get_default_output_path() -> Path:
     """Return the absolute path of the current output folder."""
     if _custom_workspace_path is not None:
-        return _custom_workspace_path
-    return _REPO_OUTPUT_PATH
+        output_path = _custom_workspace_path
+    else:
+        output_path = _REPO_OUTPUT_PATH
+    output_path.mkdir(parents=True, exist_ok=True)
+    return output_path
+
+
+@router.post("/api/workspace/reset")
+async def workspace_reset() -> Dict[str, Any]:
+    """Reset the workspace path back to the default."""
+    global _custom_workspace_path
+    _custom_workspace_path = None
+    default_path = _get_default_output_path()
+    logger.info("Workspace path reset to default: %s", default_path)
+    return {"path": str(default_path), "custom": False}
 
 
 @router.get("/api/workspace/path")
@@ -230,15 +243,34 @@ async def workspace_select() -> Dict[str, Any]:
 
     try:
         if system == "Darwin":
-            result = subprocess.run(
-                [
-                    "osascript", "-e",
-                    'set theFolder to POSIX path of (choose folder with prompt "Select output folder")',
-                ],
-                capture_output=True, text=True, timeout=120,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                selected = result.stdout.strip().rstrip("/")
+            try:
+                result = subprocess.run(
+                    [
+                        "osascript", "-e",
+                        'set theFolder to POSIX path of (choose folder with prompt "Select output folder")',
+                    ],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    selected = result.stdout.strip().rstrip("/")
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                logger.warning("macOS folder picker failed: %s", exc)
+
+        elif system == "Windows":
+            try:
+                result = subprocess.run(
+                    ["powershell", "-Command",
+                     "Add-Type -AssemblyName System.Windows.Forms; "
+                     "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                     "$f.Description = 'Select output folder'; "
+                     "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    selected = result.stdout.strip()
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                logger.warning("Windows folder picker failed: %s", exc)
+
         else:
             # Linux / other: try zenity, then kdialog, then tkinter
             for cmd in [
@@ -250,27 +282,26 @@ async def workspace_select() -> Dict[str, Any]:
                     if result.returncode == 0 and result.stdout.strip():
                         selected = result.stdout.strip()
                         break
-                except FileNotFoundError:
+                except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                     continue
 
-            if selected is None:
-                # Fallback to tkinter
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    chosen = filedialog.askdirectory(title="Select output folder")
-                    root.destroy()
-                    if chosen:
-                        selected = chosen
-                except Exception:
-                    pass
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Folder picker timed out")
+        # Fallback to tkinter on any platform if nothing selected yet
+        if selected is None:
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                chosen = filedialog.askdirectory(title="Select output folder")
+                root.destroy()
+                if chosen:
+                    selected = chosen
+            except Exception:
+                pass
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Folder picker failed: {exc}") from exc
+        logger.warning("Folder picker failed unexpectedly: %s", exc)
+        return {"selected": False, "path": str(_get_default_output_path())}
 
     if not selected:
         return {"selected": False, "path": str(_get_default_output_path())}

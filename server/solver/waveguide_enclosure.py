@@ -521,8 +521,12 @@ def _sample_rounded_rect(
     pts: List[Tuple[float, float]] = []
 
     def add_edge(x0: float, y0: float, x1: float, y1: float) -> None:
-        """Add interior points along a straight edge (endpoints added by corners)."""
-        for i in range(1, n_per_edge + 1):
+        """Add start point + interior points along a straight edge.
+
+        The start point (t=0) is the corner-to-edge transition and must be
+        present explicitly so the BSpline tracks the junction accurately.
+        """
+        for i in range(n_per_edge + 1):
             t = i / (n_per_edge + 1)
             pts.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
 
@@ -560,12 +564,11 @@ def _sample_rounded_rect(
         # Bottom edge
         add_edge(bx0 + R, by0, bx1 - R, by0)
     else:
-        # Simple rectangle: corners only
+        # Simple rectangle: add_edge includes start point at each corner.
         corners = [(bx1, by0), (bx1, by1), (bx0, by1), (bx0, by0)]
         for i in range(4):
             x0, y0 = corners[i]
             x1, y1 = corners[(i + 1) % 4]
-            pts.append((x0, y0))
             add_edge(x0, y0, x1, y1)
 
     out = np.empty((len(pts), 3), dtype=float)
@@ -786,13 +789,18 @@ def _build_enclosure_box(
         return int(gmsh.model.occ.addCurveLoop([int(c) for c in orig_curves] + [int(line_tag)]))
 
     # --- Build ring0 (inset ring at z_front) and front baffle ---
+    # Minimum BSpline corner radius: an interpolating BSpline through a true
+    # rectangle (corner_radius=0) rounds corners by several mm.  Using a tiny
+    # radius keeps has_corners=True so the arc-sampling path produces points
+    # that the BSpline can track accurately.
+    _min_bspline_r = 0.1  # mm
     if closed:
         # Sample rounded rectangle geometry at few points → BSpline wire.
         # Fully decoupled from n_angular; keeps single-curve wire topology.
         ring0_pts = _sample_rounded_rect(
             bx0=bx0 + clamped_edge, bx1=bx1 - clamped_edge,
             by0=by0 + clamped_edge, by1=by1 - clamped_edge,
-            corner_radius=0.0, edge_type=enc_edge_type, z=z_front,
+            corner_radius=_min_bspline_r, edge_type=enc_edge_type, z=z_front,
         )
         ring0_wire, ring0_curves, ring0_eps = _make_wire(ring0_pts, closed=True)
     else:
@@ -811,7 +819,7 @@ def _build_enclosure_box(
     if closed:
         def _make_ring(z: float, radial_t: float):
             d = clamped_edge * (1.0 - radial_t)
-            r = clamped_edge * radial_t
+            r = max(_min_bspline_r, clamped_edge * radial_t)
             pts = _sample_rounded_rect(
                 bx0=bx0 + d, bx1=bx1 - d,
                 by0=by0 + d, by1=by1 - d,
