@@ -39,6 +39,7 @@ import {
   updateSimulationStateParams,
 } from "../../modules/simulation/state.js";
 import { resolveClearedFailedJobIds } from "../../modules/simulation/jobs.js";
+import { deleteTaskWorkspaceDirectory } from "./workspaceTasks.js";
 import {
   clearSimulationControllerJobs,
   ensureSimulationControllerJobResults,
@@ -478,6 +479,9 @@ export async function removeJobFromFeed(panel, jobId) {
     showError(`Failed to remove simulation from database: ${error.message}`);
     return;
   }
+
+  // Delete the task folder from the output directory
+  await deleteTaskWorkspaceDirectory(job);
 
   if (!removeSimulationControllerJob(panel, jobId)) {
     return;
