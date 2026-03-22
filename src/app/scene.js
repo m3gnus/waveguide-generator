@@ -118,6 +118,7 @@ export function renderModel(app) {
       app.hornMesh.geometry.dispose();
       app.hornMesh.material.dispose();
     }
+    removeOverlays(app);
     applyMeshToScene(
       app,
       ImportedMeshState.vertices,
@@ -152,6 +153,7 @@ export function renderModel(app) {
     app.hornMesh.geometry.dispose();
     app.hornMesh.material.dispose();
   }
+  removeOverlays(app);
 
   const viewportMesh = prepareViewportMesh(app.currentState);
   const renderMesh = detachThroatDiscVertices(viewportMesh);
@@ -173,6 +175,9 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
     app.hornMesh.geometry.dispose();
     app.hornMesh.material.dispose();
   }
+  removeOverlays(app);
+
+  app.lastPreparedParams = preparedParams || {};
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
@@ -191,37 +196,11 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
   }
 
   const displayMode = app.uiCoordinator.readDisplayModeSetting();
-  let material;
-
-  if (displayMode === "zebra") {
-    material = new THREE.ShaderMaterial({
-      ...ZebraShader,
-      side: THREE.DoubleSide,
-    });
-  } else if (displayMode === "curvature") {
-    const ang = preparedParams.angularSegments || 80;
-    const len = preparedParams.lengthSegments || 20;
-    const colors = calculateCurvatureColors(geometry, ang, len);
-    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-    material = new THREE.MeshPhongMaterial({
-      vertexColors: true,
-      side: THREE.DoubleSide,
-    });
-  } else {
-    material = new THREE.MeshPhysicalMaterial({
-      color: 0xcccccc,
-      metalness: 0.5,
-      roughness: 0.3,
-      transmission: 0,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-      wireframe: displayMode === "grid",
-    });
-  }
+  const material = createMaterialForMode(displayMode, geometry, preparedParams);
 
   app.hornMesh = new THREE.Mesh(geometry, material);
   app.scene.add(app.hornMesh);
+  addOverlaysForMode(app, displayMode);
 
   const viewportStats = {
     vertexCount: vertices.length / 3,
@@ -305,6 +284,119 @@ export function buildPhysicalGroupColors(vertices, indices, physicalTags) {
     }
   }
   return colors;
+}
+
+function removeOverlays(app) {
+  if (app.hornWireOverlay) {
+    app.scene.remove(app.hornWireOverlay);
+    app.hornWireOverlay.material.dispose();
+    app.hornWireOverlay = null;
+  }
+  if (app.hornEdgeLines) {
+    app.scene.remove(app.hornEdgeLines);
+    app.hornEdgeLines.geometry.dispose();
+    app.hornEdgeLines.material.dispose();
+    app.hornEdgeLines = null;
+  }
+}
+
+function createClayMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0xb8b0a8,
+    roughness: 0.85,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+}
+
+function createMaterialForMode(mode, geometry, preparedParams) {
+  switch (mode) {
+    case "clay":
+    case "solidwire":
+    case "edges":
+      return createClayMaterial();
+    case "wireframe":
+      return new THREE.MeshBasicMaterial({
+        color: 0xb8b0a8,
+        wireframe: true,
+        side: THREE.DoubleSide,
+      });
+    case "xray":
+      return new THREE.MeshPhysicalMaterial({
+        color: 0xb8b0a8,
+        roughness: 0.6,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.25,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+    case "zebra":
+      return new THREE.ShaderMaterial({
+        ...ZebraShader,
+        side: THREE.DoubleSide,
+      });
+    case "curvature": {
+      const ang = (preparedParams && preparedParams.angularSegments) || 80;
+      const len = (preparedParams && preparedParams.lengthSegments) || 20;
+      const colors = calculateCurvatureColors(geometry, ang, len);
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      return new THREE.MeshPhongMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide,
+      });
+    }
+    default:
+      return createClayMaterial();
+  }
+}
+
+function addOverlaysForMode(app, mode) {
+  if (!app.hornMesh) return;
+  const geom = app.hornMesh.geometry;
+
+  if (mode === "solidwire") {
+    app.hornWireOverlay = new THREE.Mesh(
+      geom,
+      new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.3,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnit: -1,
+        side: THREE.DoubleSide,
+      }),
+    );
+    app.scene.add(app.hornWireOverlay);
+  } else if (mode === "edges") {
+    const edgesGeom = new THREE.EdgesGeometry(geom, 15);
+    app.hornEdgeLines = new THREE.LineSegments(
+      edgesGeom,
+      new THREE.LineBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.4,
+      }),
+    );
+    app.scene.add(app.hornEdgeLines);
+  }
+}
+
+export function applyDisplayMode(app, mode) {
+  if (!app.hornMesh) return;
+
+  removeOverlays(app);
+  app.hornMesh.material.dispose();
+  app.hornMesh.material = createMaterialForMode(
+    mode,
+    app.hornMesh.geometry,
+    app.lastPreparedParams,
+  );
+  addOverlaysForMode(app, mode);
+  app.needsRender = true;
 }
 
 export function focusOnModel(app) {

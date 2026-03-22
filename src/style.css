@@ -224,8 +224,6 @@ body {
   #canvas-container {
     box-shadow: inset 0 0 80px var(--canvas-vignette, rgba(0, 0, 0, 0.25));
   }
-
-
 }
 
 .webgl-fallback {
@@ -444,7 +442,11 @@ details.section > *:not(summary) {
   margin-right: var(--sp-3);
 }
 
-details.section > *:nth-child(2) {
+details.section[open] > summary + * {
+  margin-top: var(--sp-2);
+}
+
+details.section[open] > summary + .is-hidden + * {
   margin-top: var(--sp-2);
 }
 
@@ -465,12 +467,10 @@ details.section[open] > summary {
 }
 
 /* Simulation section fills remaining panel height when open */
-#actions-panel > details.section:last-child[open] {
-  flex: 1 1 0;
+#actions-panel > details.section:last-child {
+  flex: 1 1 auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .section-header {
@@ -1079,11 +1079,6 @@ button.secondary:hover:not(:disabled),
   margin-top: var(--sp-2);
   border-top: 1px solid var(--border);
   padding-top: var(--sp-2);
-  flex: 1 1 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .simulation-jobs-header {
@@ -1144,8 +1139,7 @@ button.secondary:hover:not(:disabled),
   display: grid;
   gap: var(--sp-2);
   overflow-y: auto;
-  flex: 1 1 0;
-  min-height: 0;
+  max-height: calc(100vh - 460px);
 }
 
 /* Job card */
@@ -1344,6 +1338,12 @@ button.secondary:hover:not(:disabled),
 .viewer-controls button:hover:not(:disabled) {
   background: var(--accent);
   color: var(--accent-text);
+}
+
+.viewer-controls-sep {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2px 4px;
 }
 
 @media (prefers-color-scheme: dark) {

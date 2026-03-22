@@ -2,22 +2,22 @@ import { GlobalState, ImportedMeshState } from "../state.js";
 import { AppEvents } from "../events.js";
 import { parseMSH } from "../import/mshParser.js";
 import { appUiFileOps } from "./uiAdapters.js";
+import { DISPLAY_MODES } from "../viewer/index.js";
+import { applyDisplayMode } from "./scene.js";
+import { getDisplayMode, setDisplayMode } from "../ui/settings/modal.js";
 
 export function setupEventListeners(app) {
   bindButtonEvents(app);
   setupMobilePanelToggle();
 
-  // live-update and display-mode are now inside the settings modal (created on demand).
-  // Use document-level event delegation so the handlers fire regardless of when the
-  // elements are inserted into the DOM.
+  // live-update is inside the settings modal (created on demand).
+  // Use document-level event delegation so the handler fires regardless of when the
+  // element is inserted into the DOM.
   const renderBtn = document.getElementById("render-btn");
 
   document.addEventListener("change", (e) => {
     if (e.target && e.target.id === "live-update") {
       if (renderBtn) renderBtn.classList.toggle("is-hidden", e.target.checked);
-    }
-    if (e.target && e.target.id === "display-mode") {
-      app.requestRender();
     }
   });
 
@@ -32,6 +32,19 @@ export function setupEventListeners(app) {
       }
     }
   });
+}
+
+function cycleDisplayMode(app) {
+  const current = getDisplayMode();
+  const idx = DISPLAY_MODES.findIndex((m) => m.key === current);
+  const next = DISPLAY_MODES[(idx + 1) % DISPLAY_MODES.length];
+  setDisplayMode(next.key);
+  applyDisplayMode(app, next.key);
+  const btn = document.getElementById("display-mode-toggle");
+  if (btn) {
+    btn.textContent = next.icon;
+    btn.title = "Display: " + next.label;
+  }
 }
 
 export function bindButtonEvents(app) {
@@ -58,6 +71,11 @@ export function bindButtonEvents(app) {
       type: "click",
     },
     { id: "focus-horn", handler: () => app.focusOnModel(), type: "click" },
+    {
+      id: "display-mode-toggle",
+      handler: () => cycleDisplayMode(app),
+      type: "click",
+    },
     {
       id: "settings-btn",
       handler: () =>
