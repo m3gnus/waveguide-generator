@@ -4,6 +4,13 @@ const STORAGE_KEY = 'ath_simulation_jobs:v1';
 const STORAGE_VERSION = 1;
 const MAX_LOCAL_ITEMS = 50;
 
+// One-time cleanup: remove stale localStorage job data (output folder is now the single source).
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+} catch { /* ignore */ }
+
 const TERMINAL = new Set(['complete', 'error', 'cancelled']);
 const ACTIVE = new Set(['queued', 'running']);
 
@@ -296,7 +303,6 @@ export function allJobs(panel, options = {}) {
 
 export function persistPanelJobs(panel) {
   const jobs = allJobs(panel);
-  saveLocalIndex(jobs);
   void syncSimulationWorkspaceIndex(jobs);
 }
 

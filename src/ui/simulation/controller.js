@@ -16,8 +16,6 @@ import {
 import {
   allJobs,
   createJobTracker,
-  loadLocalIndex,
-  mergeJobs,
   removeJob,
   setJobsFromEntries,
   persistPanelJobs,
@@ -86,9 +84,6 @@ function setJobSourceMode(controller, mode) {
 }
 
 function persistControllerJobs(controller) {
-  if (controller?.jobSourceMode === JOB_SOURCE_MODES.FOLDER) {
-    return;
-  }
   persistPanelJobs(controller);
 }
 
@@ -525,30 +520,38 @@ export function applyStoppedSimulationControllerJob(
 
 export async function reconcileSimulationControllerRemoteJobs(
   controller,
-  { listQuery = { limit: 200, offset: 0 }, onManifestSyncError = null } = {},
+  { onManifestSyncError = null } = {},
 ) {
-  const payload = await controller.solver.listJobs(listQuery);
-  const remoteItems = Array.isArray(payload?.items)
-    ? payload.items.map((item) => toUiJob(item)).filter((item) => item?.id)
-    : [];
-  const merged = mergeJobs(allJobs(controller), remoteItems);
-  setJobsFromEntries(controller, merged);
+  // Only check status for jobs already tracked locally (queued/running).
+  const ACTIVE_STATUSES = new Set(["queued", "running"]);
+  const activeEntries = Array.from(controller.jobs.values()).filter((job) =>
+    ACTIVE_STATUSES.has(job.status),
+  );
+
+  for (const localJob of activeEntries) {
+    try {
+      const remote = await controller.solver.getJobStatus(localJob.id);
+      const updated = toUiJob(remote);
+      if (updated?.id) {
+        upsertJob(controller, updated);
+        syncSimulationWorkspaceJobManifest(updated).catch((error) => {
+          if (typeof onManifestSyncError === "function") {
+            onManifestSyncError(error, updated);
+          }
+        });
+      }
+    } catch (error) {
+      console.warn(`Status check failed for job ${localJob.id}:`, error);
+    }
+  }
+
   setActiveJob(controller, controller.activeJobId || null);
   persistControllerJobs(controller);
-
-  for (const item of remoteItems) {
-    syncSimulationWorkspaceJobManifest(item).catch((error) => {
-      if (typeof onManifestSyncError === "function") {
-        onManifestSyncError(error, item);
-      }
-    });
-  }
 
   const activeJob = controller.activeJobId
     ? controller.jobs.get(controller.activeJobId) || null
     : null;
   return {
-    remoteItems,
     activeJob,
     anyActive: hasActiveJobs(controller),
   };
@@ -578,43 +581,15 @@ export async function restoreSimulationControllerJobs(
   controller.isPolling = tracker.isPolling;
   syncCurrentJobId(controller);
 
-  const local = loadLocalIndex();
-  let seedItems = local;
+  // Always use folder as the single source of truth for job history.
   const workspace = await readSimulationWorkspaceJobs();
-  const useFolderSource = workspace.available;
+  setJobSourceMode(controller, JOB_SOURCE_MODES.FOLDER);
 
-  setJobSourceMode(
-    controller,
-    useFolderSource ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND,
-  );
-  if (useFolderSource) {
-    seedItems = workspace.items;
-  }
   if (workspace.repaired || workspace.warnings.length > 0) {
     onRecoverFromManifests();
   }
 
-  setJobsFromEntries(controller, seedItems);
+  setJobsFromEntries(controller, workspace.items);
   syncCurrentJobId(controller);
   onJobsUpdated();
-
-  if (useFolderSource) {
-    return;
-  }
-
-  try {
-    const remote = await controller.solver.listJobs({ limit: 200, offset: 0 });
-    const merged = mergeJobs(seedItems, remote.items || []);
-    setJobsFromEntries(controller, merged);
-    syncCurrentJobId(controller);
-    persistControllerJobs(controller);
-
-    onJobsUpdated();
-    if (controller.activeJobId || hasActiveJobs(controller)) {
-      onStartPolling();
-    }
-  } catch (_error) {
-    persistControllerJobs(controller);
-    onJobsUpdated();
-  }
 }
