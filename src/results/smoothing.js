@@ -30,26 +30,32 @@ export function fractionalOctaveSmoothing(frequencies, values, fractionOctave) {
 
     const smoothed = new Array(n);
 
-    // For each frequency point, apply Gaussian weighting within bandwidth
-    for (let i = 0; i < n; i++) {
-        const fc = frequencies[i]; // Center frequency
+    // Half-bandwidth in log2 space for the fractional octave
+    const halfBW = 1 / (2 * fractionOctave);
+    // Sigma in log2 space: ~1/4 of total bandwidth gives good Gaussian rolloff
+    const logSigma = halfBW / 2;
+    const twoSigmaSq = 2 * logSigma * logSigma;
 
-        // Calculate fractional octave bandwidth
-        const f1 = fc / Math.pow(2, 1 / (2 * fractionOctave));
-        const f2 = fc * Math.pow(2, 1 / (2 * fractionOctave));
+    // Pre-compute log2 frequencies for efficient distance calculation
+    const logFreqs = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        logFreqs[i] = Math.log2(frequencies[i]);
+    }
+
+    for (let i = 0; i < n; i++) {
+        const logFc = logFreqs[i];
+        const logF1 = logFc - halfBW;
+        const logF2 = logFc + halfBW;
 
         let weightedSum = 0;
         let weightSum = 0;
 
-        // Apply Gaussian weighting to nearby points
         for (let j = 0; j < n; j++) {
-            const f = frequencies[j];
+            const logF = logFreqs[j];
 
-            if (f >= f1 && f <= f2) {
-                // Gaussian weight based on distance from center
-                const sigma = (f2 - f1) / 4; // Standard deviation
-                const distance = Math.log(f / fc);
-                const weight = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+            if (logF >= logF1 && logF <= logF2) {
+                const distance = logF - logFc;
+                const weight = Math.exp(-(distance * distance) / twoSigmaSq);
 
                 weightedSum += values[j] * weight;
                 weightSum += weight;
@@ -81,8 +87,18 @@ export function variableSmoothing(frequencies, values) {
     const n = frequencies.length;
     const smoothed = new Array(n);
 
+    // Pre-compute log2 frequencies
+    const logFreqs = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        logFreqs[i] = Math.log2(frequencies[i]);
+    }
+
+    const logF1Ref = Math.log10(100);
+    const logF2Ref = Math.log10(10000);
+
     for (let i = 0; i < n; i++) {
         const fc = frequencies[i];
+        const logFc = logFreqs[i];
 
         // Determine fractional octave based on frequency
         let fractionOctave;
@@ -92,30 +108,25 @@ export function variableSmoothing(frequencies, values) {
             fractionOctave = 3; // 1/3 octave
         } else {
             // Logarithmic interpolation between 100 Hz and 10 kHz
-            const logF = Math.log10(fc);
-            const logF1 = Math.log10(100);
-            const logF2 = Math.log10(10000);
-            const t = (logF - logF1) / (logF2 - logF1);
-
-            // Interpolate from 1/48 at 100Hz to 1/3 at 10kHz
-            // At 1kHz (t=0.5), should be 1/6
-            fractionOctave = 48 * Math.pow(3/48, t);
+            const t = (Math.log10(fc) - logF1Ref) / (logF2Ref - logF1Ref);
+            fractionOctave = 48 * Math.pow(3 / 48, t);
         }
 
-        // Apply fractional octave smoothing with variable bandwidth
-        const f1 = fc / Math.pow(2, 1 / (2 * fractionOctave));
-        const f2 = fc * Math.pow(2, 1 / (2 * fractionOctave));
+        const halfBW = 1 / (2 * fractionOctave);
+        const logSigma = halfBW / 2;
+        const twoSigmaSq = 2 * logSigma * logSigma;
+        const logLow = logFc - halfBW;
+        const logHigh = logFc + halfBW;
 
         let weightedSum = 0;
         let weightSum = 0;
 
         for (let j = 0; j < n; j++) {
-            const f = frequencies[j];
+            const logF = logFreqs[j];
 
-            if (f >= f1 && f <= f2) {
-                const sigma = (f2 - f1) / 4;
-                const distance = Math.log(f / fc);
-                const weight = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+            if (logF >= logLow && logF <= logHigh) {
+                const distance = logF - logFc;
+                const weight = Math.exp(-(distance * distance) / twoSigmaSq);
 
                 weightedSum += values[j] * weight;
                 weightSum += weight;
@@ -148,8 +159,18 @@ export function psychoacousticSmoothing(frequencies, values) {
     const n = frequencies.length;
     const smoothed = new Array(n);
 
+    // Pre-compute log2 frequencies
+    const logFreqs = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        logFreqs[i] = Math.log2(frequencies[i]);
+    }
+
+    const logF1Ref = Math.log10(100);
+    const logF2Ref = Math.log10(1000);
+
     for (let i = 0; i < n; i++) {
         const fc = frequencies[i];
+        const logFc = logFreqs[i];
 
         // Determine fractional octave based on frequency
         let fractionOctave;
@@ -158,31 +179,27 @@ export function psychoacousticSmoothing(frequencies, values) {
         } else if (fc > 1000) {
             fractionOctave = 6; // 1/6 octave
         } else {
-            // Linear interpolation between 100 Hz and 1 kHz
-            const logF = Math.log10(fc);
-            const logF1 = Math.log10(100);
-            const logF2 = Math.log10(1000);
-            const t = (logF - logF1) / (logF2 - logF1);
-
+            const t = (Math.log10(fc) - logF1Ref) / (logF2Ref - logF1Ref);
             fractionOctave = 3 + t * 3; // Interpolate from 1/3 to 1/6
         }
 
-        const f1 = fc / Math.pow(2, 1 / (2 * fractionOctave));
-        const f2 = fc * Math.pow(2, 1 / (2 * fractionOctave));
+        const halfBW = 1 / (2 * fractionOctave);
+        const logSigma = halfBW / 2;
+        const twoSigmaSq = 2 * logSigma * logSigma;
+        const logLow = logFc - halfBW;
+        const logHigh = logFc + halfBW;
 
         let weightedSum = 0;
         let weightSum = 0;
 
-        // Use cubic mean for peak emphasis
+        // Use cubic mean for peak emphasis (perceptual weighting)
         for (let j = 0; j < n; j++) {
-            const f = frequencies[j];
+            const logF = logFreqs[j];
 
-            if (f >= f1 && f <= f2) {
-                const sigma = (f2 - f1) / 4;
-                const distance = Math.log(f / fc);
-                const weight = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+            if (logF >= logLow && logF <= logHigh) {
+                const distance = logF - logFc;
+                const weight = Math.exp(-(distance * distance) / twoSigmaSq);
 
-                // Cubic mean: cube the values
                 const cubedValue = Math.pow(Math.abs(values[j]), 3) * Math.sign(values[j]);
                 weightedSum += cubedValue * weight;
                 weightSum += weight;
@@ -190,7 +207,6 @@ export function psychoacousticSmoothing(frequencies, values) {
         }
 
         if (weightSum > 0) {
-            // Cube root of the average
             const avgCubed = weightedSum / weightSum;
             smoothed[i] = Math.pow(Math.abs(avgCubed), 1/3) * Math.sign(avgCubed);
         } else {
@@ -221,27 +237,35 @@ export function erbSmoothing(frequencies, values) {
     const n = frequencies.length;
     const smoothed = new Array(n);
 
+    // Pre-compute log2 frequencies
+    const logFreqs = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        logFreqs[i] = Math.log2(frequencies[i]);
+    }
+
     for (let i = 0; i < n; i++) {
         const fc = frequencies[i];
+        const logFc = logFreqs[i];
 
-        // Calculate ERB bandwidth in Hz
-        const fKhz = fc / 1000;
-        const erbHz = 107.77 * fKhz + 24.673;
+        // ERB bandwidth: 107.77 * f_kHz + 24.673 Hz
+        const erbHz = 107.77 * (fc / 1000) + 24.673;
 
-        // Convert to frequency range
-        const f1 = fc - erbHz / 2;
-        const f2 = fc + erbHz / 2;
+        // Convert ERB bandwidth to log2 space
+        const logF1 = Math.log2(fc - erbHz / 2);
+        const logF2 = Math.log2(fc + erbHz / 2);
+        const logHalfBW = (logF2 - logF1) / 2;
+        const logSigma = logHalfBW / 2;
+        const twoSigmaSq = 2 * logSigma * logSigma;
 
         let weightedSum = 0;
         let weightSum = 0;
 
         for (let j = 0; j < n; j++) {
-            const f = frequencies[j];
+            const logF = logFreqs[j];
 
-            if (f >= f1 && f <= f2) {
-                const sigma = erbHz / 4;
-                const distance = f - fc;
-                const weight = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+            if (logF >= logFc - logHalfBW && logF <= logFc + logHalfBW) {
+                const distance = logF - logFc;
+                const weight = Math.exp(-(distance * distance) / twoSigmaSq);
 
                 weightedSum += values[j] * weight;
                 weightSum += weight;
