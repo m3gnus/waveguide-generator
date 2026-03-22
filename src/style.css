@@ -480,8 +480,6 @@ details.section[open] > summary {
   bottom: 0;
   z-index: 2;
   background: var(--panel);
-  margin-top: auto;
-  border-top: 1px solid var(--border);
 }
 
 .section-header {
