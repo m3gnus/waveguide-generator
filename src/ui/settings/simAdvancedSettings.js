@@ -4,8 +4,8 @@ const SETTINGS_KEY = "waveguide-sim-advanced-settings";
 const SCHEMA_VERSION = 4;
 
 export const RECOMMENDED_DEFAULTS = {
-  useBurtonMiller: true,
-  quadratureRegular: 4,
+  useBurtonMiller: false,
+  quadratureRegular: 3,
   workgroupSizeMultiple: 1,
   assemblyBackend: "opencl",
 };

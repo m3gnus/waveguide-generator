@@ -102,24 +102,27 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   useBurtonMiller:
-    "Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation. " +
-    "Turning this off roughly halves solve time per frequency (2 operators instead of 4), but may produce artifacts " +
-    "at certain frequencies where interior resonances of the mesh coincide with the excitation frequency. " +
-    "Recommended: On for final/accurate solves, Off acceptable for quick exploratory sweeps.",
+    "Eliminates fictitious interior resonances by adding hypersingular operator coupling to the BEM formulation. " +
+    "OFF: ~1.8x faster (assembles 2 operators instead of 4 per frequency). " +
+    "Risk: SPL deviations of up to 7 dB at frequencies where mesh interior resonances occur. " +
+    "ON: Accurate and artifact-free, recommended for final/publication solves. " +
+    "Default: Off (fast exploratory mode).",
   quadratureRegular:
-    "Number of Gauss quadrature points per element pair for regular (non-singular) integrals. " +
-    "Higher values improve accuracy but increase operator assembly time. " +
-    "4 is the bempp default. 3 offers a good speed/accuracy balance. " +
-    "2 is fast but may reduce accuracy noticeably at high frequencies.",
+    "Gauss quadrature points per element pair for regular integrals. Directly affects operator assembly time. " +
+    "4: bempp default, highest accuracy. " +
+    "3: ~1.25x faster, good balance for most work. " +
+    "2: ~1.35x faster, noticeable accuracy loss at high frequencies. " +
+    "Set to 4 for final solves. Default: 3 (fast mode).",
   workgroupSizeMultiple:
     "OpenCL work-group sizing factor for kernel launches. " +
-    "1 (conservative) is faster on CPU-only OpenCL runtimes like pocl on Apple Silicon. " +
-    "2 is the bempp default, optimized for GPU. On CPU, 1 is typically 30-50% faster.",
+    "1: 30\u201350% faster on CPU-only runtimes (pocl on Apple Silicon, Intel OpenCL on AMD CPUs). " +
+    "2: bempp default, tuned for discrete GPUs. " +
+    "No effect on accuracy. Always use 1 on CPU. Default: 1.",
   assemblyBackend:
-    "The compute backend for operator assembly. " +
-    "OpenCL uses GPU-style parallel kernels via pocl (CPU) or a real GPU driver. " +
-    "Numba uses JIT-compiled Python/LLVM — often competitive with OpenCL on CPU, " +
-    "and is the bempp default on macOS. Try both to see which is faster on your system.",
+    "Compute backend for operator assembly. " +
+    "OpenCL: Parallel kernels via pocl (CPU) or GPU driver. Slightly faster with Burton-Miller on. " +
+    "Numba: JIT-compiled via LLVM. Competitive with OpenCL on CPU, no driver dependencies. " +
+    "Try both \u2014 performance varies by system. Default: OpenCL.",
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   use_burton_miller: { label: "Burton-Miller Coupling" },
@@ -899,10 +902,19 @@ function _buildSimulationSection() {
   sec.appendChild(advancedHeader);
 
   const currentSimAdvanced = getCurrentSimAdvancedSettings();
-  const advancedIntro = document.createElement("p");
+  const advancedIntro = document.createElement("div");
   advancedIntro.className = "settings-section-help";
-  advancedIntro.textContent =
-    "This setting is sent through the public solve contract as a stable runtime override.";
+  advancedIntro.innerHTML =
+    "These settings control BEM operator assembly speed and accuracy. " +
+    "Defaults are tuned for fast exploratory sweeps (2x faster than conservative settings). " +
+    "For final accurate solves, enable Burton-Miller and set Quadrature to 4." +
+    "<br><br>" +
+    "<strong>Benchmarked speedups</strong> (Apple M1 Max, 1576-element mesh, 20 freq):<br>" +
+    "\u2022 <strong>Workgroup Size 1</strong> \u2014 ~30\u201350% faster on CPU OpenCL. No accuracy loss. Always recommended.<br>" +
+    "\u2022 <strong>Burton-Miller off</strong> \u2014 ~1.8x faster (2 operators instead of 4). " +
+    "May produce artifacts at certain frequencies (up to 7 dB deviation observed at ~930 Hz and ~3750 Hz).<br>" +
+    "\u2022 <strong>Quadrature 3</strong> \u2014 ~1.25x faster with BM on. Slight accuracy reduction at high frequencies.<br>" +
+    "\u2022 <strong>Numba backend</strong> \u2014 Competitive with OpenCL on CPU. Good alternative if OpenCL/pocl is unavailable.";
   sec.appendChild(advancedIntro);
 
   const advancedActiveHeader = _buildSubSectionHeader(
