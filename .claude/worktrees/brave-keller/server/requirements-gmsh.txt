@@ -1,0 +1,2 @@
+# Gmsh Python API — required for /api/mesh/build (Python OCC builder)
+gmsh>=4.11,<5.0

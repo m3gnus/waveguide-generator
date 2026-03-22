@@ -1,0 +1,54 @@
+{
+  "name": "waveguide-generator",
+  "version": "1.0.0-alpha-7.5",
+  "description": "Waveguide Generator: Interactive 3D visualization and optimization platform for acoustic waveguide design.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/start-all.js",
+    "start:frontend": "node scripts/dev-server.js",
+    "start:backend": "cd server && python3 app.py",
+    "dev": "node scripts/dev-server.js",
+    "build": "webpack --mode production",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "test:server": "cd server && python3 -m unittest discover -s tests",
+    "lint": "eslint --config config/eslint.config.js src/",
+    "format:check": "prettier --config config/prettier.config.json --ignore-path config/prettier.ignore --check src/",
+    "bundle:check": "node scripts/check-bundle-size.js",
+    "diag:payload": "node scripts/diagnostics/build-canonical-payload-from-reference.js",
+    "diag:geometry": "node scripts/diagnostics/check-tritonia-geometry-artifacts.js",
+    "diag:occ:tritonia": "python3 scripts/diagnostics/build-occ-mesh-tritonia.py",
+    "diag:occ:closed": "python3 scripts/diagnostics/check-occ-closed-mesh.py",
+    "benchmark:tritonia": "cd server && python3 scripts/benchmark_tritonia.py",
+    "preflight:backend": "node scripts/preflight-backend-runtime.js",
+    "preflight:backend:strict": "node scripts/preflight-backend-runtime.js --strict",
+    "doctor:backend": "node scripts/doctor-backend-runtime.js",
+    "doctor:backend:json": "node scripts/doctor-backend-runtime.js --json",
+    "doctor:backend:strict": "node scripts/doctor-backend-runtime.js --strict",
+    "backlog:next": "node ./.codex/skills/backlog-next/scripts/next-backlog-status.mjs"
+  },
+  "keywords": [
+    "3d",
+    "visualization",
+    "horn-design",
+    "acoustics",
+    "bem-solver"
+  ],
+  "author": "Magnus Andersen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m3gnus/waveguide-generator.git"
+  },
+  "dependencies": {
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.4"
+  }
+}
