@@ -722,8 +722,6 @@ button.secondary:hover:not(:disabled),
   background: var(--accent);
   color: var(--accent-text);
   font-weight: 700;
-  padding: var(--sp-3) var(--sp-4);
-  font-size: var(--text-base);
   box-shadow: 0 2px 8px oklch(45% 0.22 262 / 0.25);
 }
 
