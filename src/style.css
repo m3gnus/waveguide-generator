@@ -2529,8 +2529,30 @@ button.secondary:hover:not(:disabled),
     right: var(--sp-3);
   }
 
-  #actions-panel,
   #actions-panel-resizer {
+    display: none;
+  }
+
+  /* Hide actions panel in its original position on mobile — content is
+     cloned into the ui-panel as a tab instead. */
+  #actions-panel {
+    display: none;
+  }
+
+  /* Mobile actions tab content inside the slide-out panel */
+  #actions-tab {
+    display: none;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 0;
+  }
+
+  #actions-tab.active {
+    display: flex;
+  }
+
+  /* Hide the actions panel header inside the mobile tab (redundant with tab label) */
+  #actions-tab > .panel-header {
     display: none;
   }
 

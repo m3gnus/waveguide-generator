@@ -72,6 +72,18 @@
         >
           Simulation
         </button>
+        <button
+          class="tab-btn"
+          id="actions-tab-btn"
+          data-tab="actions"
+          role="tab"
+          aria-controls="actions-tab"
+          aria-selected="false"
+          tabindex="-1"
+          style="display: none"
+        >
+          Actions
+        </button>
       </div>
 
       <!-- Geometry Tab Content -->
@@ -96,6 +108,15 @@
         <div id="polar-settings-container"></div>
         <div id="simulation-param-container"></div>
       </div>
+
+      <!-- Actions Tab Content (mobile only — populated via JS) -->
+      <div
+        id="actions-tab"
+        class="tab-content"
+        role="tabpanel"
+        aria-labelledby="actions-tab-btn"
+        hidden
+      ></div>
     </div>
     <div id="ui-panel-resizer" aria-hidden="true"></div>
 
