@@ -381,6 +381,77 @@ def _generate_enclosure_points_from_angles(
         )
     return outer_pts, inset_pts, clamped_edge
 
+
+def _refine_enclosure_corners(
+    outer_pts: List[Tuple[float, float, float, float]],
+    inset_pts: List[Tuple[float, float, float, float]],
+    *,
+    cx: float,
+    cy: float,
+    bx0: float,
+    bx1: float,
+    by0: float,
+    by1: float,
+    clamped_edge: float,
+    edge_type: int,
+) -> Tuple[List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]:
+    """Insert midpoint samples into XY-plane corner arcs for better definition.
+
+    Each 90-degree corner arc gets a midpoint sample (at 45 degrees into the arc),
+    matching the front/back roundover approach which uses a mid-arc profile.
+    """
+    if clamped_edge <= 1e-3 or len(outer_pts) < 3:
+        return outer_pts, inset_pts
+
+    # Corner midpoint angles: center of each 90-degree arc
+    mid_angles = [
+        -math.pi / 4.0,       # Q4 corner (bottom-right)
+        math.pi / 4.0,        # Q1 corner (top-right)
+        3.0 * math.pi / 4.0,  # Q2 corner (top-left)
+        -3.0 * math.pi / 4.0, # Q3 corner (bottom-left)
+    ]
+
+    existing_angles = [math.atan2(p[1] - cy, p[0] - cx) for p in outer_pts]
+
+    new_points: List[Tuple[float, Tuple[float, float, float, float], Tuple[float, float, float, float]]] = []
+    for mid_a in mid_angles:
+        min_gap = min(
+            abs(((a - mid_a + math.pi) % (2.0 * math.pi)) - math.pi)
+            for a in existing_angles
+        )
+        if min_gap < math.radians(5.0):
+            continue
+
+        hx, hy, nx, ny = _intersect_ray_with_rounded_box(
+            angle=mid_a, cx=cx, cy=cy,
+            bx0=bx0, bx1=bx1, by0=by0, by1=by1,
+            corner_radius=clamped_edge, edge_type=edge_type,
+        )
+        new_points.append((
+            mid_a,
+            (hx, hy, nx, ny),
+            (hx - nx * clamped_edge, hy - ny * clamped_edge, nx, ny),
+        ))
+
+    if not new_points:
+        return outer_pts, inset_pts
+
+    # Merge existing and new points, sorted by angle.
+    # Use the first existing point as reference to handle wrap-around.
+    combined: List[Tuple[float, Tuple[float, float, float, float], Tuple[float, float, float, float]]] = []
+    for i, (op, ip) in enumerate(zip(outer_pts, inset_pts)):
+        combined.append((existing_angles[i], op, ip))
+    combined.extend(new_points)
+
+    ref_angle = existing_angles[0]
+    combined.sort(key=lambda item: (item[0] - ref_angle) % (2.0 * math.pi))
+
+    return (
+        [c[1] for c in combined],
+        [c[2] for c in combined],
+    )
+
+
 # This is a part of the front baffle build process for closed (full-circle) horns.  The "enclosure box" is a viewport-aligned rectangular box that fully contains the horn mouth and extends back along the z-axis by enc_depth.
 def _ring_points_from_xy_plan(
     plan_pts: List[Tuple[float, float, float, float]],
@@ -631,6 +702,14 @@ def _build_enclosure_box(
         ) > merge_eps:
             reuse_mouth_as_ring0 = False
             break
+
+    # Refine XY-plane corners by inserting midpoint samples into corner arcs.
+    # Done after the reuse check (which only needs original point indices).
+    outer_pts, inset_pts = _refine_enclosure_corners(
+        outer_pts, inset_pts,
+        cx=cx, cy=cy, bx0=bx0, bx1=bx1, by0=by0, by1=by1,
+        clamped_edge=clamped_edge, edge_type=enc_edge_type,
+    )
 
     ring0_wire: Optional[int] = None
     ring0_loop: Optional[int] = None
