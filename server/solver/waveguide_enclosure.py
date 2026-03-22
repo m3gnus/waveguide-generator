@@ -779,70 +779,71 @@ def _build_enclosure_box(
 
     current_profile, mouth_curves_list, profile_pts = _make_wire(mouth_pts, closed=closed)
 
-    # Enclosure ring points are generated independently of the horn mouth
-    # (different count/angles), so pointwise reuse is never valid.
-    reuse_mouth_as_ring0 = False
-
     ring0_wire: Optional[int] = None
     ring0_loop: Optional[int] = None
 
     def _close_wire_for_surface(orig_curves: List[int], first_pt: int, last_pt: int) -> int:
         if closed:
             return int(gmsh.model.occ.addCurveLoop([int(c) for c in orig_curves]))
-        # Explicitly connect the last point back to the first point with a straight line
-        # using the existing topological points used by the bspline
         line_tag = gmsh.model.occ.addLine(last_pt, first_pt)
         return int(gmsh.model.occ.addCurveLoop([int(c) for c in orig_curves] + [int(line_tag)]))
 
-    if not reuse_mouth_as_ring0:
-        # Build front baffle with inset ring (when enc_edge > 0)
+    # --- Build ring0 (inset ring at z_front) and front baffle ---
+    if closed:
+        # Primitive wire: lines + arcs, fully decoupled from n_angular.
+        ring0_wire, ring0_curves, ring0_eps = _make_rect_wire(
+            bx0=bx0 + clamped_edge, bx1=bx1 - clamped_edge,
+            by0=by0 + clamped_edge, by1=by1 - clamped_edge,
+            corner_radius=0.0, edge_type=enc_edge_type, z=z_front,
+        )
+    else:
         ring0_pts = _ring_points_from_xy_plan(inset_pts, z=z_front)
         ring0_wire, ring0_curves, ring0_eps = _make_wire(ring0_pts, closed=closed)
-        ring0_loop = _close_wire_for_surface(ring0_curves, ring0_eps[0], ring0_eps[1])
-        try:
-            front_tag = int(gmsh.model.occ.addPlaneSurface([int(ring0_loop), int(mouth_loop)]))
-            generated_dimtags.append((2, front_tag))
-        except Exception:
-            # Fallback for non-planar tolerance issues: ruled patch.
-            generated_dimtags.extend(_add_ruled_section(current_profile, ring0_wire))
-        current_profile = ring0_wire
+
+    ring0_loop = _close_wire_for_surface(ring0_curves, ring0_eps[0], ring0_eps[1])
+    try:
+        front_tag = int(gmsh.model.occ.addPlaneSurface([int(ring0_loop), int(mouth_loop)]))
+        generated_dimtags.append((2, front_tag))
+    except Exception:
+        generated_dimtags.extend(_add_ruled_section(current_profile, ring0_wire))
+    current_profile = ring0_wire
+
+    # --- Wire builder for roundover intermediate rings ---
+    if closed:
+        def _make_ring(z: float, radial_t: float):
+            d = clamped_edge * (1.0 - radial_t)
+            r = clamped_edge * radial_t
+            return _make_rect_wire(
+                bx0=bx0 + d, bx1=bx1 - d,
+                by0=by0 + d, by1=by1 - d,
+                corner_radius=r, edge_type=enc_edge_type, z=z,
+            )
     else:
-        # Build front baffle without inset ring (when enc_edge == 0, mouth coincides with inset).
-        # The front panel must be annular: outer enclosure boundary MINUS the horn mouth opening.
-        # Using addPlaneSurface([outer_loop, mouth_loop]) cuts the mouth hole out of the front
-        # panel, matching the enc_edge>0 path and ensuring the horn opening is not sealed.
-        front_pts = _ring_points_from_xy_plan(outer_pts, z=z_front)
-        front_wire, front_curves, front_eps = _make_wire(front_pts, closed=closed)
-        front_loop = _close_wire_for_surface(front_curves, front_eps[0], front_eps[1])
-        try:
-            front_tag = int(gmsh.model.occ.addPlaneSurface([int(front_loop), int(mouth_loop)]))
-            generated_dimtags.append((2, front_tag))
-        except Exception:
-            # Fallback: ruled surface from mouth to front
-            generated_dimtags.extend(_add_ruled_section(current_profile, front_wire))
-        # CRITICAL: advance current_profile to the outer front boundary so that the
-        # side walls are built from the outer enclosure perimeter at z_front to the
-        # outer enclosure perimeter at z_back — NOT from the horn mouth to the back.
-        # Without this, the side wall was a cone from the small horn mouth to the
-        # large outer back, leaving the true enclosure sides open and causing
-        # incorrect BEM radiation results.
-        current_profile = front_wire
+        def _make_ring(z: float, radial_t: float):
+            ring_plan = _interpolate_ring_plan(outer_pts, inset_pts, radial_t)
+            ring_pts = _ring_points_from_xy_plan(ring_plan, z=z)
+            return _make_wire(ring_pts, closed=closed)
 
     # --- Front roundover ---
     if edge_depth > 0.0:
         front_dt, current_profile, _, _ = _build_roundover_surface(
-            current_profile, outer_pts, inset_pts,
+            current_profile, _make_ring,
             edge_depth, z_front, direction=1,
             enc_edge_type=enc_edge_type, closed=closed,
-            _make_wire=_make_wire,
         )
         generated_dimtags.extend(front_dt)
         front_edge_dimtags_all.extend(front_dt)
 
     # --- Side walls (straight ruled surface from front outer to back outer) ---
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
-    back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
-    back_outer_wire, back_outer_curves, back_outer_eps = _make_wire(back_outer_pts, closed=closed)
+    if closed:
+        back_outer_wire, back_outer_curves, back_outer_eps = _make_rect_wire(
+            bx0=bx0, bx1=bx1, by0=by0, by1=by1,
+            corner_radius=clamped_edge, edge_type=enc_edge_type, z=z_outer_back,
+        )
+    else:
+        back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
+        back_outer_wire, back_outer_curves, back_outer_eps = _make_wire(back_outer_pts, closed=closed)
     generated_dimtags.extend(_add_ruled_section(current_profile, back_outer_wire))
     current_profile = back_outer_wire
     current_curves = back_outer_curves
@@ -851,10 +852,9 @@ def _build_enclosure_box(
     # --- Back roundover ---
     if edge_depth > 0.0:
         back_dt, current_profile, current_curves, profile_pts = _build_roundover_surface(
-            current_profile, outer_pts, inset_pts,
+            current_profile, _make_ring,
             edge_depth, z_back, direction=-1,
             enc_edge_type=enc_edge_type, closed=closed,
-            _make_wire=_make_wire,
         )
         generated_dimtags.extend(back_dt)
         back_edge_dimtags_all.extend(back_dt)
@@ -865,6 +865,32 @@ def _build_enclosure_box(
     except Exception:
         back_cap = gmsh.model.occ.addSurfaceFilling(current_profile)
     generated_dimtags.append((2, int(back_cap)))
+
+    # For primitive (line+arc) wires, adjacent ruled surfaces don't share edge
+    # topology automatically.  OCC fragment merges coincident edges so the
+    # mesh is watertight.  Only needed for the closed/primitive path.
+    if closed and len(generated_dimtags) > 1:
+        pre_tags = {int(tag) for _, tag in generated_dimtags}
+        pre_front_edge = {int(tag) for _, tag in front_edge_dimtags_all}
+        pre_back_edge = {int(tag) for _, tag in back_edge_dimtags_all}
+        try:
+            out, out_map = gmsh.model.occ.fragment(
+                [(d, t) for d, t in generated_dimtags], [],
+            )
+            # Rebuild dimtags and edge tag sets from fragment output.
+            generated_dimtags = [(d, t) for d, t in out if d == 2]
+            # Map old edge tags to new (post-fragment) tags.
+            new_front_edge: Set[int] = set()
+            new_back_edge: Set[int] = set()
+            for i, (_, old_tag) in enumerate([(d, t) for d, t in zip(
+                [d for d, _ in [(2, t) for t in pre_tags]], list(pre_tags)
+            )]):
+                pass  # fallback below
+            # Use position-based reclassification instead of tracking through fragment.
+            front_edge_dimtags_all = []
+            back_edge_dimtags_all = []
+        except Exception:
+            pass  # Fall through to synchronize + position-based classification.
 
     gmsh.model.occ.synchronize()
     dimtags = [(2, int(tag)) for dim, tag in generated_dimtags if int(dim) == 2]
