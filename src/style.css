@@ -411,6 +411,29 @@ details.section > summary {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+  position: relative;
+}
+
+/* CSS tooltip for section descriptions */
+details.section > summary[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  left: var(--sp-3);
+  top: 100%;
+  z-index: 10;
+  max-width: 260px;
+  padding: 6px 10px;
+  background: var(--text);
+  color: var(--panel);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  line-height: 1.4;
+  border-radius: var(--r-sm);
+  pointer-events: none;
+  white-space: normal;
+  box-shadow: var(--shadow-md);
 }
 
 details.section > summary::-webkit-details-marker {
