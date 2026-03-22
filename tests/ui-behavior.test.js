@@ -862,11 +862,11 @@ test("openSettingsModal keeps folder-workspace fallback copy visible when picker
       (el) => el.id === "settings-choose-folder-btn",
     );
 
-    // When showDirectoryPicker is unavailable (Firefox), explanation moves to routingNote
-    // and the choose button row is hidden (disabled).
+    // When showDirectoryPicker is unavailable (Firefox), the choose button uses the
+    // backend folder picker and is enabled.
     assert.ok(routingNote, "Workspace routing note should be rendered");
-    assert.match(routingNote.textContent, /firefox/i);
-    assert.equal(chooseBtn?.disabled, true);
+    assert.match(routingNote.textContent, /backend/i);
+    assert.equal(chooseBtn?.disabled, false);
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;
