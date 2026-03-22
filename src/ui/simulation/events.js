@@ -12,12 +12,6 @@ import { renderJobList } from './jobActions.js';
 import { updateTaskListPreferences } from '../settings/simulationManagementSettings.js';
 
 export function setupEventListeners(panel) {
-  // Stop simulation button
-  const stopBtn = document.getElementById('stop-simulation-btn');
-  if (stopBtn) {
-    stopBtn.addEventListener('click', () => stopSimulation(panel));
-  }
-
   // Tab switching
   const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
   tabButtons.forEach((btn) => {
