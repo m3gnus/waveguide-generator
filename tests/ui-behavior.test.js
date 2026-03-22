@@ -46,8 +46,9 @@ test("index.html places the output-folder action in the simulation jobs header",
 
   assert.match(
     html,
-    /<div class="simulation-jobs-header-actions">[\s\S]*id="choose-folder-btn"[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"/,
+    /<div class="simulation-jobs-header-actions">[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"/,
   );
+  assert.doesNotMatch(html, /id="choose-folder-btn"/);
   assert.doesNotMatch(html, /id="simulation-jobs-source-label"/);
   assert.doesNotMatch(html, /id="output-folder-row"/);
 });
@@ -332,7 +333,7 @@ test("renderSimulationMeshDiagnostics shows canonical tag counts and warnings", 
       provenance: "preview",
     });
 
-    assert.match(diagnosticsEl.innerHTML, /12 vertices/);
+    assert.match(diagnosticsEl.innerHTML, /12 verts/);
     assert.match(diagnosticsEl.innerHTML, /Preview Geometry/);
     assert.match(diagnosticsEl.innerHTML, /Geometry Regions/);
     assert.match(diagnosticsEl.innerHTML, /Throat Disc/);
@@ -380,7 +381,7 @@ test("renderSimulationMeshDiagnostics shows authoritative backend OCC provenance
     });
 
     assert.match(diagnosticsEl.innerHTML, /Solver Geometry/);
-    assert.match(diagnosticsEl.innerHTML, /18 vertices/);
+    assert.match(diagnosticsEl.innerHTML, /18 verts/);
     assert.match(diagnosticsEl.innerHTML, /Rear Cap/);
     assert.doesNotMatch(diagnosticsEl.innerHTML, /Source \(2\)/);
   } finally {
