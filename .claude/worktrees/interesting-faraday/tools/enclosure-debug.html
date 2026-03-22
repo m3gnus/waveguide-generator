@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Enclosure Mesh Debug Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: system-ui, -apple-system, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #controls { width: 340px; min-width: 340px; background: #16213e; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #333; }
+  #viewport { flex: 1; position: relative; }
+  canvas { display: block; }
+  h2 { font-size: 14px; color: #8899aa; text-transform: uppercase; letter-spacing: 1px; margin-top: 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  label { font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+  label span { color: #66bbff; font-family: monospace; min-width: 50px; text-align: right; }
+  input[type="range"] { width: 100%; accent-color: #4488cc; }
+  .group { display: flex; flex-direction: column; gap: 4px; }
+  select { background: #0f3460; color: #e0e0e0; border: 1px solid #444; padding: 4px 8px; border-radius: 4px; font-size: 12px; width: 100%; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .checkbox-row input { accent-color: #4488cc; }
+  #info { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 10px 14px; border-radius: 6px; font-size: 11px; font-family: monospace; pointer-events: none; line-height: 1.7; max-width: 450px; }
+  .info-highlight { color: #ffcc44; }
+  .info-good { color: #44ff88; }
+  .info-dim { color: #888; }
+  .preset-btn { background: #0f3460; color: #aaccee; border: 1px solid #335; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .preset-btn:hover { background: #1a4a80; }
+  .preset-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mode-info { font-size: 11px; padding: 8px; background: #0f3460; border-radius: 4px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <h2>Presets</h2>
+  <div class="preset-row">
+    <button class="preset-btn" onclick="applyPreset('osse-wide')">OSSE Wide</button>
+    <button class="preset-btn" onclick="applyPreset('osse-square')">OSSE Square</button>
+    <button class="preset-btn" onclick="applyPreset('rosse-tall')">R-OSSE Tall</button>
+    <button class="preset-btn" onclick="applyPreset('big-radius')">Big Radius</button>
+  </div>
+
+  <h2>Waveguide Mouth</h2>
+  <div class="group">
+    <label>Half Width <span id="v-halfW">100</span></label>
+    <input type="range" id="halfW" min="20" max="200" value="100" step="1">
+    <label>Half Height <span id="v-halfH">45</span></label>
+    <input type="range" id="halfH" min="20" max="200" value="45" step="1">
+    <label>Morph Corner R <span id="v-morphCorner">15</span></label>
+    <input type="range" id="morphCorner" min="0" max="80" value="15" step="1">
+  </div>
+
+  <h2>Enclosure Box</h2>
+  <div class="group">
+    <label>Depth <span id="v-encDepth">120</span></label>
+    <input type="range" id="encDepth" min="10" max="400" value="120" step="1">
+    <label>Edge Radius <span id="v-encEdge">10</span></label>
+    <input type="range" id="encEdge" min="0" max="60" value="10" step="0.5">
+    <label>Edge Type <span id="v-encEdgeType"></span></label>
+    <select id="encEdgeType">
+      <option value="1" selected>Roundover</option>
+      <option value="2">Chamfer</option>
+    </select>
+    <label>Spacing L <span id="v-spL">25</span></label>
+    <input type="range" id="spL" min="5" max="80" value="25" step="1">
+    <label>Spacing R <span id="v-spR">25</span></label>
+    <input type="range" id="spR" min="5" max="80" value="25" step="1">
+    <label>Spacing T <span id="v-spT">25</span></label>
+    <input type="range" id="spT" min="5" max="80" value="25" step="1">
+    <label>Spacing B <span id="v-spB">25</span></label>
+    <input type="range" id="spB" min="5" max="80" value="25" step="1">
+  </div>
+
+  <h2>Tessellation</h2>
+  <div class="group">
+    <label>Angular Segments <span id="v-angSeg">80</span></label>
+    <input type="range" id="angSeg" min="8" max="160" value="80" step="4">
+    <label>Corner Segments <span id="v-cornerSeg">4</span></label>
+    <input type="range" id="cornerSeg" min="1" max="16" value="4" step="1">
+    <label>Length Segments <span id="v-lenSeg">20</span></label>
+    <input type="range" id="lenSeg" min="4" max="60" value="20" step="1">
+  </div>
+
+  <h2>Angle Mode</h2>
+  <div class="group">
+    <select id="angleMode">
+      <option value="mouth">Mouth angles (original)</option>
+      <option value="auto" selected>Auto-refined (match roundover)</option>
+    </select>
+    <div class="mode-info">
+      <b>Auto-refined:</b> Flat edges keep mouth-angle spacing. Corner arcs are subdivided to match the Y-axis roundover resolution (edgeSlices). No extra parameter needed.
+    </div>
+  </div>
+
+  <h2>Display</h2>
+  <div class="group">
+    <div class="checkbox-row"><input type="checkbox" id="showWireframe" checked><label for="showWireframe">Wireframe</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showSolid" checked><label for="showSolid">Solid</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showMouth" checked><label for="showMouth">Mouth stitch ring (yellow)</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showEncRing0"><label for="showEncRing0">Enclosure ring 0 (cyan)</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showRefinedRing" checked><label for="showRefinedRing">Refined ring (magenta)</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showOuterPts" checked><label for="showOuterPts">Outer pts (red dots)</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showInsetPts"><label for="showInsetPts">Inset pts (green dots)</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showAngles"><label for="showAngles">Angle rays</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="showHorn"><label for="showHorn">Horn wireframe</label></div>
+  </div>
+</div>
+
+<div id="viewport">
+  <div id="info"></div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ============================================================================
+// RAY-CAST AGAINST ROUNDED BOX
+// ============================================================================
+function intersectRayWithRoundedBox(angle, cx, cz, boxLeft, boxRight, boxBot, boxTop, cr, edgeType) {
+    const cosA = Math.cos(angle), sinA = Math.sin(angle), EPS = 1e-12;
+    let bestT = Infinity, hitX = cx+cosA, hitZ = cz+sinA, hitNx = cosA, hitNz = sinA;
+    const trySeg = (x1,z1,x2,z2,nx,nz) => {
+        const ex=x2-x1,ez=z2-z1,det=cosA*(-ez)-sinA*(-ex);
+        if(Math.abs(det)<=EPS)return;
+        const rx=x1-cx,rz=z1-cz,t=(rx*(-ez)-rz*(-ex))/det,u=(cosA*rz-sinA*rx)/det;
+        if(t>EPS&&u>=-EPS&&u<=1+EPS&&t<bestT){bestT=t;hitX=cx+cosA*t;hitZ=cz+sinA*t;hitNx=nx;hitNz=nz;}
+    };
+    const tryArc = (acx,acz,r,sa,ea) => {
+        const ox=cx-acx,oz=cz-acz,B=2*(ox*cosA+oz*sinA),C=ox*ox+oz*oz-r*r,disc=B*B-4*C;
+        if(disc<0)return; const sq=Math.sqrt(disc);
+        for(const t of [(-B-sq)/2,(-B+sq)/2]){
+            if(t<=EPS||t>=bestT)continue;
+            const px=cx+cosA*t,pz=cz+sinA*t;
+            let rel=Math.atan2(pz-acz,px-acx)-sa;
+            while(rel<-EPS)rel+=Math.PI*2;while(rel>Math.PI*2+EPS)rel-=Math.PI*2;
+            if(rel<=(ea-sa)+EPS){bestT=t;hitX=px;hitZ=pz;const dx=px-acx,dz=pz-acz,len=Math.hypot(dx,dz);hitNx=len>0?dx/len:0;hitNz=len>0?dz/len:0;}
+        }
+    };
+    const tryCham = (acx,acz,r,sa,ea) => {
+        trySeg(acx+r*Math.cos(sa),acz+r*Math.sin(sa),acx+r*Math.cos(ea),acz+r*Math.sin(ea),Math.cos((sa+ea)/2),Math.sin((sa+ea)/2));
+    };
+    const hW=(boxRight-boxLeft)/2,hH=(boxTop-boxBot)/2,bx=(boxRight+boxLeft)/2,bz=(boxTop+boxBot)/2;
+    const r=Math.min(cr,hW-0.1,hH-0.1),uc=r>0.001;
+    trySeg(boxRight,bz-hH+(uc?r:0),boxRight,bz+hH-(uc?r:0),1,0);
+    trySeg(bx+hW-(uc?r:0),boxTop,bx-hW+(uc?r:0),boxTop,0,1);
+    trySeg(boxLeft,bz+hH-(uc?r:0),boxLeft,bz-hH+(uc?r:0),-1,0);
+    trySeg(bx-hW+(uc?r:0),boxBot,bx+hW-(uc?r:0),boxBot,0,-1);
+    if(uc){for(const c of[{cx:bx+hW-r,cz:bz-hH+r,s:-Math.PI/2,e:0},{cx:bx+hW-r,cz:bz+hH-r,s:0,e:Math.PI/2},{cx:bx-hW+r,cz:bz+hH-r,s:Math.PI/2,e:Math.PI},{cx:bx-hW+r,cz:bz-hH+r,s:Math.PI,e:Math.PI*1.5}]){if(edgeType===2)tryCham(c.cx,c.cz,r,c.s,c.e);else tryArc(c.cx,c.cz,r,c.s,c.e);}}
+    return {x:hitX,z:hitZ,nx:hitNx,nz:hitNz};
+}
+
+function genEncPts(angles, cx, cz, bL, bR, bB, bT, edgeR, eType) {
+    const outer=[], inset=[], hW=(bR-bL)/2, hH=(bT-bB)/2, cr=Math.min(parseFloat(edgeR)||0,hW-0.1,hH-0.1);
+    for(const a of angles){const h=intersectRayWithRoundedBox(a,cx,cz,bL,bR,bB,bT,cr,eType);outer.push({x:h.x,z:h.z,nx:h.nx,nz:h.nz});inset.push({x:h.x-h.nx*cr,z:h.z-h.nz*cr,nx:h.nx,nz:h.nz});}
+    return {outer,inset,cr};
+}
+
+// ============================================================================
+// MOUTH ANGLE BUILDER (from angles.js)
+// ============================================================================
+function buildQuadrantAngles(ppq,hW,hH,cR,cSeg){
+    if(hW<=0||hH<=0)return null;const mx=Math.min(hW,hH)-1e-6,cr=Math.min(cR,mx);
+    if(cr<=0||cSeg<=0)return Array.from({length:ppq+1},(_,i)=>(Math.PI/2)*(i/ppq));
+    const t1=Math.atan2(hH-cr,hW),t2=Math.atan2(hH,hW-cr),rem=Math.max(1,ppq-cSeg);
+    const s1=Math.max(1,Math.min(rem-1,Math.round(rem*t1/(t1+Math.max(0,Math.PI/2-t2))))),s2=Math.max(1,rem-s1);
+    const a=[];for(let i=0;i<=s1;i++)a.push(t1*(i/s1));
+    const cx=hW-cr,cy=hH-cr;for(let i=1;i<=cSeg;i++){const phi=(i/(cSeg+1))*Math.PI/2;a.push(Math.atan2(cy+cr*Math.sin(phi),cx+cr*Math.cos(phi)));}
+    for(let i=1;i<=s2;i++)a.push(t2+(Math.PI/2-t2)*(i/s2));return a;
+}
+function mirrorQ(qa){const f=[...qa];for(let i=qa.length-2;i>=0;i--)f.push(Math.PI-qa[i]);for(let i=1;i<qa.length;i++)f.push(Math.PI+qa[i]);for(let i=qa.length-2;i>0;i--)f.push(2*Math.PI-qa[i]);return f;}
+function buildMouthAngles(angSeg,hW,hH,morphC,cSeg){
+    const n=Math.max(8,Math.ceil(angSeg/8)*8),ppq=n/4,cs=Math.max(0,Math.round(cSeg)-1);
+    const qa=buildQuadrantAngles(ppq,hW,hH,morphC,cs);
+    if(!qa||qa.length!==ppq+1)return Array.from({length:n},(_,i)=>(i/n)*2*Math.PI);return mirrorQ(qa);
+}
+
+// ============================================================================
+// AUTO-REFINEMENT: subdivide corner arcs to match Y-axis roundover resolution
+// ============================================================================
+function refineAnglesAuto(mouthAngles, outerPts, edgeSlices, edgeDepth) {
+    const n = mouthAngles.length;
+    // The Y-axis roundover arc step: edgeDepth * π/2 / edgeSlices
+    // We want each XZ corner arc segment to have at most this step length.
+    const roundoverArcStep = edgeSlices > 0 && edgeDepth > 0
+        ? (edgeDepth * Math.PI / 2) / edgeSlices
+        : Infinity;
+
+    const refined = [];
+    const mapping = [0];
+
+    for (let i = 0; i < n; i++) {
+        refined.push(mouthAngles[i]);
+        const j = (i + 1) % n;
+
+        // Detect corner vs flat by checking normal change
+        const ndx = Math.abs(outerPts[i].nx - outerPts[j].nx);
+        const ndz = Math.abs(outerPts[i].nz - outerPts[j].nz);
+        const isCorner = (ndx + ndz) > 0.01;
+
+        if (isCorner && roundoverArcStep < Infinity) {
+            const dist = Math.hypot(outerPts[j].x - outerPts[i].x, outerPts[j].z - outerPts[i].z);
+            const subdivs = Math.max(0, Math.ceil(dist / roundoverArcStep) - 1);
+            for (let k = 1; k <= subdivs; k++) {
+                const t = k / (subdivs + 1);
+                let a0 = mouthAngles[i], a1 = mouthAngles[j];
+                if (a1-a0 > Math.PI) a1 -= 2*Math.PI;
+                if (a0-a1 > Math.PI) a1 += 2*Math.PI;
+                let a = a0 + (a1-a0)*t;
+                if (a < -Math.PI) a += 2*Math.PI;
+                if (a > Math.PI) a -= 2*Math.PI;
+                refined.push(a);
+            }
+        }
+        // Flat edges: no subdivision — keep mouth-angle spacing
+        if (i < n - 1) mapping.push(refined.length);
+    }
+    return { refined, mapping };
+}
+
+// Fan stitch between small ring (N pts) and large ring (M pts, M >= N)
+function fanStitch(indices, sStart, sSize, lStart, lSize, mapping) {
+    for (let i = 0; i < sSize; i++) {
+        const i2 = (i+1) % sSize;
+        const lS = mapping[i];
+        const lE = i2 === 0 ? lSize : mapping[i2];
+        const sA = sStart + i, sB = sStart + i2;
+        if (lE <= lS) {
+            // Wrap-around
+            const all = [];
+            for (let k = lS; k < lSize; k++) all.push(k);
+            for (let k = 0; k <= lE; k++) all.push(k);
+            for (let k = 0; k < all.length-1; k++) indices.push(sA, lStart+all[k], lStart+all[k+1]);
+            indices.push(sA, lStart+all[all.length-1], sB);
+        } else {
+            for (let k = lS; k < lE; k++) indices.push(sA, lStart+k, lStart+k+1);
+            if (lE < lSize || i2 !== 0) indices.push(sA, lStart+lE, sB);
+        }
+    }
+}
+
+// Stitch two rings of same size
+function stitchEqual(indices, r1, r2, size) {
+    for (let k = 0; k < size; k++) {
+        const k2 = (k+1)%size;
+        indices.push(r2+k, r1+k, r1+k2);
+        indices.push(r2+k, r1+k2, r2+k2);
+    }
+}
+
+// ============================================================================
+// MESH BUILDER
+// ============================================================================
+function buildFullMesh(state) {
+    const { halfW, halfH, morphCorner, encDepth, encEdge, encEdgeType,
+            spL, spR, spT, spB, angSeg, cornerSeg, lenSeg, angleMode } = state;
+
+    const count = Math.max(8, Math.ceil(angSeg/8)*8);
+    const mouthAngles = buildMouthAngles(count, halfW, halfH, morphCorner, cornerSeg);
+    const ringSize = mouthAngles.length;
+    const vertices = [], indices = [];
+    const throatR = 12.7;
+
+    // Build horn
+    for (let row = 0; row <= lenSeg; row++) {
+        const t = row/lenSeg, y = -t*80;
+        for (let i = 0; i < ringSize; i++) {
+            const a = mouthAngles[i];
+            const mh = intersectRayWithRoundedBox(a, 0, 0, -halfW, halfW, -halfH, halfH,
+                Math.min(morphCorner, Math.min(halfW,halfH)-0.01), 1);
+            const tx=throatR*Math.cos(a), tz=throatR*Math.sin(a);
+            vertices.push(tx+(mh.x-tx)*t, y, tz+(mh.z-tz)*t);
+        }
+    }
+    for (let row = 0; row < lenSeg; row++)
+        for (let i = 0; i < ringSize; i++) {
+            const i2=(i+1)%ringSize, a=row*ringSize+i, b=row*ringSize+i2, c=(row+1)*ringSize+i, d=(row+1)*ringSize+i2;
+            indices.push(a,b,c); indices.push(b,d,c);
+        }
+
+    const mouthRingStart = lenSeg * ringSize;
+    const mouthY = vertices[mouthRingStart*3+1];
+
+    // Enclosure box
+    let maxX=-Infinity,minX=Infinity,maxZ=-Infinity,minZ=Infinity;
+    for (let i=0;i<ringSize;i++){const vi=mouthRingStart+i;maxX=Math.max(maxX,vertices[vi*3]);minX=Math.min(minX,vertices[vi*3]);maxZ=Math.max(maxZ,vertices[vi*3+2]);minZ=Math.min(minZ,vertices[vi*3+2]);}
+    const boxR=maxX+spR, boxL=minX-spL, boxT=maxZ+spT, boxB=minZ-spB;
+    let cx=0,cz=0;
+    for(let i=0;i<ringSize;i++){cx+=vertices[(mouthRingStart+i)*3];cz+=vertices[(mouthRingStart+i)*3+2];}
+    cx/=ringSize; cz/=ringSize;
+
+    // Compute enclosure geometry parameters
+    const mouthEnc = genEncPts(mouthAngles, cx, cz, boxL, boxR, boxB, boxT, encEdge, encEdgeType);
+    const clampedCR = mouthEnc.cr;
+    const edgeDepth = Math.min(clampedCR || 0, Math.max(0, encDepth * 0.49));
+    const backY = mouthY - encDepth;
+    const axialSegs = encEdge > 0 ? Math.max(4, cornerSeg) : 1;
+    const edgeSlices = edgeDepth > 0 ? Math.max(1, axialSegs) : 0;
+
+    const useAuto = (angleMode === 'auto') && edgeSlices > 0 && edgeDepth > 0;
+
+    let encAngles, encSize, mouthToEncMap;
+    let cornerStep = Infinity;
+    let addedPts = 0;
+
+    if (useAuto) {
+        const { refined, mapping } = refineAnglesAuto(mouthAngles, mouthEnc.outer, edgeSlices, edgeDepth);
+        encAngles = refined;
+        encSize = refined.length;
+        mouthToEncMap = mapping;
+        addedPts = encSize - ringSize;
+        cornerStep = (edgeDepth * Math.PI / 2) / edgeSlices;
+    } else {
+        encAngles = mouthAngles;
+        encSize = ringSize;
+        mouthToEncMap = null;
+    }
+
+    // Generate enclosure points for the (possibly refined) angle set
+    const { outer: outerPts, inset: insetPts } = genEncPts(encAngles, cx, cz, boxL, boxR, boxB, boxT, encEdge, encEdgeType);
+
+    const encStartTri = indices.length / 3;
+
+    // ---- Ring 0: mouth-aligned inset ring (for baffle stitch) ----
+    const ring0Start = vertices.length / 3;
+    const nudge = 1e-4;
+    for (let i = 0; i < ringSize; i++) {
+        const ip = mouthEnc.inset[i];
+        vertices.push(ip.x-(ip.nx||0)*nudge, mouthY, ip.z-(ip.nz||0)*nudge);
+    }
+    // 1:1 stitch mouth to ring 0 (same size, smooth baffle)
+    stitchEqual(indices, mouthRingStart, ring0Start, ringSize);
+
+    // ---- Transition to refined ring (or continue with same size) ----
+    let ring1Start, bodySize;
+
+    if (useAuto && addedPts > 0) {
+        // Ring 1: refined ring — first roundover position
+        ring1Start = vertices.length / 3;
+        bodySize = encSize;
+        const t1 = edgeSlices > 0 ? 1/edgeSlices : 0;
+        let axT = t1, raT = t1;
+        if (encEdgeType === 1 && edgeSlices > 0) { const ang=t1*Math.PI/2; axT=1-Math.cos(ang); raT=Math.sin(ang); }
+        const y1 = edgeSlices > 0 ? mouthY - axT*edgeDepth : mouthY;
+        for (let i = 0; i < encSize; i++) {
+            const ip=insetPts[i], op=outerPts[i];
+            vertices.push(ip.x+(op.x-ip.x)*raT, y1, ip.z+(op.z-ip.z)*raT);
+        }
+        // Fan stitch from ring0 (ringSize) to ring1 (encSize)
+        fanStitch(indices, ring0Start, ringSize, ring1Start, encSize, mouthToEncMap);
+    } else {
+        // No refinement: ring1 = first roundover ring at same size
+        ring1Start = vertices.length / 3;
+        bodySize = ringSize;
+        if (edgeSlices > 0) {
+            const t1=1/edgeSlices; let axT=t1,raT=t1;
+            if(encEdgeType===1){const ang=t1*Math.PI/2;axT=1-Math.cos(ang);raT=Math.sin(ang);}
+            for(let i=0;i<ringSize;i++){const ip=mouthEnc.inset[i],op=mouthEnc.outer[i];vertices.push(ip.x+(op.x-ip.x)*raT,mouthY-axT*edgeDepth,ip.z+(op.z-ip.z)*raT);}
+            stitchEqual(indices, ring0Start, ring1Start, ringSize);
+        } else {
+            ring1Start = -1;
+        }
+    }
+
+    // ---- Remaining front roundover rings ----
+    let prevRing = ring1Start >= 0 ? ring1Start : ring0Start;
+    for (let j = 2; j <= edgeSlices; j++) {
+        const t=j/edgeSlices; let axT=t,raT=t;
+        if(encEdgeType===1){const ang=t*Math.PI/2;axT=1-Math.cos(ang);raT=Math.sin(ang);}
+        const y=mouthY-axT*edgeDepth, rs=vertices.length/3;
+        for(let i=0;i<bodySize;i++){const ip=insetPts[i],op=outerPts[i];vertices.push(ip.x+(op.x-ip.x)*raT,y,ip.z+(op.z-ip.z)*raT);}
+        stitchEqual(indices, prevRing, rs, bodySize);
+        prevRing = rs;
+    }
+
+    // ---- Side wall ----
+    const outerBackY = edgeDepth > 0 ? backY + edgeDepth : backY;
+    const backRS = vertices.length/3;
+    for(let i=0;i<bodySize;i++) vertices.push(outerPts[i].x, outerBackY, outerPts[i].z);
+    stitchEqual(indices, prevRing, backRS, bodySize);
+
+    // ---- Back roundover ----
+    let curRing = backRS;
+    for (let j=1;j<=edgeSlices;j++){
+        const t=j/edgeSlices; let axT=t,raT=1-t;
+        if(encEdgeType===1){const ang=t*Math.PI/2;axT=Math.sin(ang);raT=Math.cos(ang);}
+        if(j===edgeSlices)raT=Math.max(raT,1e-3);
+        const y=backY+(1-axT)*edgeDepth, rs=vertices.length/3;
+        for(let i=0;i<bodySize;i++){const ip=insetPts[i],op=outerPts[i];vertices.push(ip.x+(op.x-ip.x)*raT,y,ip.z+(op.z-ip.z)*raT);}
+        stitchEqual(indices, curRing, rs, bodySize);
+        curRing = rs;
+    }
+
+    // ---- Back cap ----
+    let ax=0,az=0;
+    for(let i=0;i<bodySize;i++){ax+=vertices[(curRing+i)*3];az+=vertices[(curRing+i)*3+2];}
+    ax/=bodySize; az/=bodySize;
+    const capS=vertices.length/3; vertices.push(ax,backY,az);
+    for(let i=0;i<bodySize;i++){const i2=(i+1)%bodySize;indices.push(curRing+i,curRing+i2,capS);}
+
+    return {
+        vertices: new Float32Array(vertices), indices: new Uint32Array(indices),
+        ringSize, encSize: bodySize, mouthRingStart, ring0Start, ring1Start,
+        encStartTri, outerPts, insetPts, encAngles, mouthToEncMap,
+        cx, cz, boxL, boxR, boxB, boxT, mouthY, edgeDepth,
+        addedPts, cornerStep, edgeSlices
+    };
+}
+
+// ============================================================================
+// THREE.JS SCENE
+// ============================================================================
+const viewport = document.getElementById('viewport');
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1a2e);
+const camera = new THREE.PerspectiveCamera(50, viewport.clientWidth/viewport.clientHeight, 0.1, 5000);
+camera.position.set(200, -150, 200); camera.up.set(0, -1, 0);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(viewport.clientWidth,viewport.clientHeight); renderer.setPixelRatio(window.devicePixelRatio);
+viewport.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0x404060,1.5));
+const dl1=new THREE.DirectionalLight(0xffffff,1.2);dl1.position.set(100,-200,150);scene.add(dl1);
+const dl2=new THREE.DirectionalLight(0x6688aa,0.6);dl2.position.set(-100,100,-100);scene.add(dl2);
+scene.add(new THREE.AxesHelper(50));
+
+let solidMesh,wireMesh,mouthLine,encR0Line,refinedLine,outerDots,insetDots,angleLines,hornWire;
+function clearScene(){[solidMesh,wireMesh,mouthLine,encR0Line,refinedLine,outerDots,insetDots,angleLines,hornWire].forEach(o=>{if(o){scene.remove(o);o.geometry?.dispose();o.material?.dispose();}});solidMesh=wireMesh=mouthLine=encR0Line=refinedLine=outerDots=insetDots=angleLines=hornWire=null;}
+
+function rebuildScene() {
+    clearScene();
+    const state = readState();
+    const d = buildFullMesh(state);
+    const {vertices:verts, indices:idx, ringSize, encSize, mouthRingStart, ring0Start, ring1Start,
+           encStartTri, outerPts, insetPts, encAngles, cx, cz, boxL, boxR, boxB, boxT, mouthY,
+           edgeDepth, addedPts, cornerStep, edgeSlices} = d;
+
+    const encIdx = idx.slice(encStartTri*3);
+    const encGeo = new THREE.BufferGeometry();
+    encGeo.setAttribute('position', new THREE.BufferAttribute(verts,3));
+    encGeo.setIndex(new THREE.BufferAttribute(encIdx,1));
+    encGeo.computeVertexNormals();
+    solidMesh = new THREE.Mesh(encGeo, new THREE.MeshPhongMaterial({color:0x3366aa,side:THREE.DoubleSide,transparent:true,opacity:0.6}));
+    solidMesh.visible = state.showSolid; scene.add(solidMesh);
+    wireMesh = new THREE.LineSegments(new THREE.WireframeGeometry(encGeo), new THREE.LineBasicMaterial({color:0x88aadd,opacity:0.5,transparent:true}));
+    wireMesh.visible = state.showWireframe; scene.add(wireMesh);
+
+    const hIdx = idx.slice(0, encStartTri*3);
+    const hGeo = new THREE.BufferGeometry(); hGeo.setAttribute('position',new THREE.BufferAttribute(verts,3)); hGeo.setIndex(new THREE.BufferAttribute(hIdx,1));
+    hornWire = new THREE.LineSegments(new THREE.WireframeGeometry(hGeo), new THREE.LineBasicMaterial({color:0x446644,opacity:0.3,transparent:true}));
+    hornWire.visible = state.showHorn; scene.add(hornWire);
+
+    const mkRing = (start,size,color) => {
+        const pts=[];for(let i=0;i<=size;i++){const vi=start+(i%size);pts.push(new THREE.Vector3(verts[vi*3],verts[vi*3+1],verts[vi*3+2]));}
+        return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color,linewidth:2}));
+    };
+    mouthLine = mkRing(mouthRingStart, ringSize, 0xffff00); mouthLine.visible = state.showMouth; scene.add(mouthLine);
+    encR0Line = mkRing(ring0Start, ringSize, 0x00ffff); encR0Line.visible = state.showEncRing0; scene.add(encR0Line);
+    if (ring1Start >= 0) {
+        refinedLine = mkRing(ring1Start, encSize, 0xff44ff);
+        refinedLine.visible = state.showRefinedRing; scene.add(refinedLine);
+    }
+
+    const mkDots = (pts,y,color) => {
+        const pos=new Float32Array(pts.length*3);for(let i=0;i<pts.length;i++){pos[i*3]=pts[i].x;pos[i*3+1]=y;pos[i*3+2]=pts[i].z;}
+        const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+        return new THREE.Points(g, new THREE.PointsMaterial({color,size:3,sizeAttenuation:false}));
+    };
+    outerDots = mkDots(outerPts,mouthY,0xff4444); outerDots.visible = state.showOuterPts; scene.add(outerDots);
+    insetDots = mkDots(insetPts,mouthY,0x44ff44); insetDots.visible = state.showInsetPts; scene.add(insetDots);
+
+    const rayPts=[];
+    for(let i=0;i<encAngles.length;i++){rayPts.push(new THREE.Vector3(cx,mouthY,cz));rayPts.push(new THREE.Vector3(outerPts[i].x,mouthY,outerPts[i].z));}
+    angleLines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(rayPts), new THREE.LineBasicMaterial({color:0x886600,opacity:0.3,transparent:true}));
+    angleLines.visible = state.showAngles; scene.add(angleLines);
+
+    // Compute spacing stats
+    let maxSp=0,minSp=Infinity;
+    for(let i=0;i<encSize;i++){const j=(i+1)%encSize;const sp=Math.hypot(outerPts[j].x-outerPts[i].x,outerPts[j].z-outerPts[i].z);maxSp=Math.max(maxSp,sp);minSp=Math.min(minSp,sp);}
+
+    document.getElementById('info').innerHTML = [
+        `<span class="info-highlight">Mode: ${state.angleMode === 'auto' ? 'Auto-refined (match roundover)' : 'Mouth angles (original)'}</span>`,
+        `Mouth ring: ${ringSize} pts | Body ring: ${encSize} pts` + (addedPts > 0 ? ` <span class="info-good">(+${addedPts} at corners)</span>` : ''),
+        `Edge slices: ${edgeSlices} | Edge depth: ${edgeDepth.toFixed(1)}mm`,
+        cornerStep < Infinity ? `Roundover arc step: ${cornerStep.toFixed(1)}mm → corner target` : '',
+        `Spacing: min ${minSp.toFixed(1)} / max ${maxSp.toFixed(1)}mm`,
+        `Box: ${(boxR-boxL).toFixed(0)} × ${(boxT-boxB).toFixed(0)}mm`,
+    ].filter(Boolean).join('<br>');
+}
+
+// ============================================================================
+// CONTROLS
+// ============================================================================
+function $(id){return document.getElementById(id);}
+function readState(){return{
+    halfW:+$('halfW').value,halfH:+$('halfH').value,morphCorner:+$('morphCorner').value,
+    encDepth:+$('encDepth').value,encEdge:+$('encEdge').value,encEdgeType:+$('encEdgeType').value,
+    spL:+$('spL').value,spR:+$('spR').value,spT:+$('spT').value,spB:+$('spB').value,
+    angSeg:+$('angSeg').value,cornerSeg:+$('cornerSeg').value,lenSeg:+$('lenSeg').value,
+    angleMode:$('angleMode').value,
+    showWireframe:$('showWireframe').checked,showSolid:$('showSolid').checked,
+    showMouth:$('showMouth').checked,showEncRing0:$('showEncRing0').checked,
+    showRefinedRing:$('showRefinedRing').checked,
+    showOuterPts:$('showOuterPts').checked,showInsetPts:$('showInsetPts').checked,
+    showAngles:$('showAngles').checked,showHorn:$('showHorn').checked,
+};}
+function updateDisplays(){['halfW','halfH','morphCorner','encDepth','encEdge','spL','spR','spT','spB','angSeg','cornerSeg','lenSeg'].forEach(id=>{const el=$('v-'+id);if(el)el.textContent=$(id).value;});}
+document.querySelectorAll('#controls input[type="range"], #controls select').forEach(el=>{el.addEventListener('input',()=>{updateDisplays();rebuildScene();});});
+const dtogs=['showWireframe','showSolid','showMouth','showEncRing0','showRefinedRing','showOuterPts','showInsetPts','showAngles','showHorn'];
+dtogs.forEach(id=>{$(id).addEventListener('change',()=>{const s=readState();if(wireMesh)wireMesh.visible=s.showWireframe;if(solidMesh)solidMesh.visible=s.showSolid;if(mouthLine)mouthLine.visible=s.showMouth;if(encR0Line)encR0Line.visible=s.showEncRing0;if(refinedLine)refinedLine.visible=s.showRefinedRing;if(outerDots)outerDots.visible=s.showOuterPts;if(insetDots)insetDots.visible=s.showInsetPts;if(angleLines)angleLines.visible=s.showAngles;if(hornWire)hornWire.visible=s.showHorn;});});
+
+const PRESETS = {
+    'osse-wide':{halfW:130,halfH:45,morphCorner:15,encDepth:120,encEdge:10,encEdgeType:1,spL:25,spR:25,spT:25,spB:25,angSeg:80,cornerSeg:4,lenSeg:20},
+    'osse-square':{halfW:80,halfH:80,morphCorner:20,encDepth:120,encEdge:12,encEdgeType:1,spL:25,spR:25,spT:25,spB:25,angSeg:80,cornerSeg:4,lenSeg:20},
+    'rosse-tall':{halfW:45,halfH:100,morphCorner:10,encDepth:150,encEdge:15,encEdgeType:1,spL:30,spR:30,spT:30,spB:30,angSeg:80,cornerSeg:4,lenSeg:20},
+    'big-radius':{halfW:100,halfH:60,morphCorner:25,encDepth:130,encEdge:30,encEdgeType:1,spL:30,spR:30,spT:30,spB:30,angSeg:80,cornerSeg:6,lenSeg:20},
+};
+window.applyPreset = function(name){const p=PRESETS[name];if(!p)return;Object.keys(p).forEach(k=>{const el=$(k);if(el)el.value=p[k];});updateDisplays();rebuildScene();};
+
+window.addEventListener('resize',()=>{camera.aspect=viewport.clientWidth/viewport.clientHeight;camera.updateProjectionMatrix();renderer.setSize(viewport.clientWidth,viewport.clientHeight);});
+(function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera);})();
+updateDisplays(); rebuildScene();
+</script>
+</body>
+</html>

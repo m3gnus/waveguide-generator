@@ -1,0 +1,3 @@
+display_name: Hybrid Backlog Runner
+short_description: Continue the active backlog one slice at a time with GLM for routine work and Codex for complex seams.
+default_prompt: $backlog-next

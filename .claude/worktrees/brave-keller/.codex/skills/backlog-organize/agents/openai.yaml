@@ -1,0 +1,3 @@
+display_name: Backlog Organize
+short_description: Audit docs/backlog.md, verify what is still relevant, and reorder it for execution.
+default_prompt: $backlog-organize
