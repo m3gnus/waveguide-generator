@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { saveFile, selectOutputFolder } from '../src/ui/fileOps.js';
+import { saveFile } from '../src/ui/fileOps.js';
+import { selectOutputFolder } from '../src/ui/workspace/folderWorkspace.js';
 import {
   getSelectedFolderHandle,
-  resetSelectedFolder,
-  setSelectedFolderHandle
+  getSelectedFolderLabel,
+  resetSelectedFolder
 } from '../src/ui/workspace/folderWorkspace.js';
 
-test('saveFile clears the selected workspace and falls back to the picker when a folder write fails', async () => {
+test('saveFile falls back to showSaveFilePicker when backend write fails', async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalFetch = global.fetch;
@@ -41,16 +42,6 @@ test('saveFile clears the selected workspace and falls back to the picker when a
     throw new TypeError('network unavailable');
   };
 
-  setSelectedFolderHandle({
-    name: 'workspace',
-    async queryPermission() {
-      return 'granted';
-    },
-    async getFileHandle() {
-      throw new Error('disk full');
-    }
-  });
-
   try {
     await saveFile('manual-export', 'horn_design.txt', {
       contentType: 'text/plain'
@@ -71,32 +62,30 @@ test('saveFile clears the selected workspace and falls back to the picker when a
   }
 });
 
-test('selectOutputFolder updates the workspace label via subscribeFolderWorkspace', async () => {
-  const originalDocument = global.document;
-  const originalWindow = global.window;
+test('selectOutputFolder calls backend and updates workspace label', async () => {
+  const originalFetch = global.fetch;
 
-  const folderNameEl = { textContent: '' };
-
-  global.document = {
-    getElementById(id) {
-      return id === 'output-folder-name' ? folderNameEl : null;
+  global.fetch = async (url, options) => {
+    if (url.includes('/api/workspace/select') && options?.method === 'POST') {
+      return {
+        ok: true,
+        async json() {
+          return { selected: true, path: '/Users/test/exports' };
+        }
+      };
     }
-  };
-  global.window = {
-    async showDirectoryPicker() {
-      return { name: 'exports' };
-    }
+    throw new Error('unexpected fetch');
   };
 
   try {
-    await selectOutputFolder();
+    const result = await selectOutputFolder();
 
-    assert.equal(getSelectedFolderHandle()?.name, 'exports');
-    assert.equal(folderNameEl.textContent, 'exports');
+    assert.equal(result, '/Users/test/exports');
+    assert.equal(getSelectedFolderHandle(), null);
+    assert.equal(getSelectedFolderLabel(), 'exports');
   } finally {
     resetSelectedFolder();
-    global.document = originalDocument;
-    global.window = originalWindow;
+    global.fetch = originalFetch;
   }
 });
 
@@ -178,7 +167,7 @@ test('saveFile sends workspace_subdir for backend workspace writes', async () =>
   }
 });
 
-test('saveFile uses backend workspace root when browser folder selection exists but no folder is selected', async () => {
+test('saveFile uses backend workspace when no folder is selected', async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalFetch = global.fetch;
@@ -189,11 +178,7 @@ test('saveFile uses backend workspace root when browser folder selection exists 
       return null;
     }
   };
-  global.window = {
-    async showDirectoryPicker() {
-      return { name: 'exports' };
-    }
-  };
+  global.window = {};
   global.fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
     return {
