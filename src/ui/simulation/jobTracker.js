@@ -269,6 +269,9 @@ export function upsertJob(panel, rawEntry) {
   panel.jobs.set(next.id, {
     ...(existing || {}),
     ...next,
+    createdAt: next.createdAt ?? existing?.createdAt ?? null,
+    queuedAt: next.queuedAt ?? existing?.queuedAt ?? null,
+    startedAt: next.startedAt ?? existing?.startedAt ?? null,
     label: next.label ?? existing?.label ?? null,
     script: next.script ?? existing?.script ?? null,
     meshStats: next.meshStats ?? existing?.meshStats ?? null,
