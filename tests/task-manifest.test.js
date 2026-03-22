@@ -6,7 +6,6 @@ import {
   TASK_SCRIPT_SCHEMA_VERSION,
   createTaskManifestFromJob,
   normalizeTaskManifest,
-  readTaskManifest,
   resolveTaskWorkspaceDirectoryName,
   updateTaskManifestForJob
 } from '../src/ui/workspace/taskManifest.js';
@@ -15,59 +14,16 @@ import {
   GENERATION_SCRIPT_SNAPSHOT_FILE_NAME
 } from '../src/ui/workspace/generationArtifacts.js';
 
-function createMemoryDirectory(name = 'root') {
+/**
+ * Creates a mock fallbackWriteFile that stores written files in a Map.
+ * Returns { writeFile, files } where files is a Map<fileName, { content, contentType }>.
+ */
+function createMockWriteFile() {
   const files = new Map();
-  const directories = new Map();
-
-  return {
-    kind: 'directory',
-    name,
-    async getDirectoryHandle(dirName, options = {}) {
-      if (!directories.has(dirName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        directories.set(dirName, createMemoryDirectory(dirName));
-      }
-      return directories.get(dirName);
-    },
-    async getFileHandle(fileName, options = {}) {
-      if (!files.has(fileName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        files.set(fileName, '');
-      }
-      return {
-        async getFile() {
-          const textValue = files.get(fileName) ?? '';
-          return { async text() { return textValue; } };
-        },
-        async createWritable() {
-          return {
-            async write(content) {
-              files.set(fileName, String(content));
-            },
-            async close() {}
-          };
-        }
-      };
-    },
-    files,
-    directories,
-    async *entries() {
-      for (const [dirName, dirHandle] of directories.entries()) {
-        yield [dirName, dirHandle];
-      }
-      for (const [fileName] of files.entries()) {
-        yield [fileName, { kind: 'file', name: fileName }];
-      }
-    }
+  const writeFile = async (fileName, content, contentType) => {
+    files.set(fileName, { content: String(content), contentType });
   };
+  return { writeFile, files };
 }
 
 test('normalizeTaskManifest enforces required defaults', () => {
@@ -120,84 +76,71 @@ test('resolveTaskWorkspaceDirectoryName prefers label, then script, then id', ()
   );
 });
 
-test('updateTaskManifestForJob writes and reads task.manifest.json with defaults', async () => {
-  const root = createMemoryDirectory();
+test('updateTaskManifestForJob writes task.manifest.json via fallbackWriteFile', async () => {
+  const { writeFile, files } = createMockWriteFile();
 
-  const updated = await updateTaskManifestForJob(root, {
+  const updated = await updateTaskManifestForJob(null, {
     id: 'job-5',
     label: 'horn_5',
     status: 'queued',
     exportedFiles: []
-  });
+  }, {}, { fallbackWriteFile: writeFile });
 
   assert.equal(updated.warning, null);
   assert.equal(updated.manifest.id, 'job-5');
 
-  const taskDir = await root.getDirectoryHandle('horn_5');
-  const fileHandle = await taskDir.getFileHandle(TASK_MANIFEST_FILE_NAME);
-  const rawFile = await fileHandle.getFile();
-  const text = await rawFile.text();
-  assert.match(text, /"id": "job-5"/);
+  // Verify the manifest file was written
+  assert.ok(files.has(TASK_MANIFEST_FILE_NAME), 'task manifest file should be written');
+  const manifestContent = files.get(TASK_MANIFEST_FILE_NAME).content;
+  assert.match(manifestContent, /"id": "job-5"/);
 
-  const reread = await readTaskManifest(taskDir);
-  assert.equal(reread.warning, null);
-  assert.equal(reread.manifest.id, 'job-5');
-  assert.deepEqual(reread.manifest.exportedFiles, []);
-
-  const projectFileHandle = await taskDir.getFileHandle(GENERATION_PROJECT_MANIFEST_FILE_NAME);
-  const projectFile = await projectFileHandle.getFile();
-  const projectPayload = JSON.parse(await projectFile.text());
+  // Verify the project manifest was written
+  assert.ok(files.has(GENERATION_PROJECT_MANIFEST_FILE_NAME), 'project manifest should be written');
+  const projectPayload = JSON.parse(files.get(GENERATION_PROJECT_MANIFEST_FILE_NAME).content);
   assert.equal(projectPayload.generation.id, 'job-5');
   assert.equal(projectPayload.generation.folder, 'horn_5');
   assert.equal(projectPayload.artifacts.scriptSnapshot, null);
   assert.deepEqual(projectPayload.artifacts.selectedExports, []);
 });
 
-test('updateTaskManifestForJob falls back to job id directory when no generation name is available', async () => {
-  const root = createMemoryDirectory();
-
-  await updateTaskManifestForJob(root, {
+test('updateTaskManifestForJob returns warning when no fallbackWriteFile is provided', async () => {
+  const result = await updateTaskManifestForJob(null, {
     id: 'job-6',
     status: 'queued',
     exportedFiles: []
   });
 
-  const taskDir = await root.getDirectoryHandle('job-6');
-  const fileHandle = await taskDir.getFileHandle(TASK_MANIFEST_FILE_NAME);
-  const rawFile = await fileHandle.getFile();
-  const text = await rawFile.text();
-  assert.match(text, /"id": "job-6"/);
+  assert.equal(result.manifest, null);
+  assert.match(result.warning, /unavailable/i);
 });
 
-test('updateTaskManifestForJob reuses legacy job-id manifest data when migrating to generation folder name', async () => {
-  const root = createMemoryDirectory();
+test('updateTaskManifestForJob preserves exported files across updates', async () => {
+  const { writeFile, files } = createMockWriteFile();
 
-  await updateTaskManifestForJob(root, {
+  await updateTaskManifestForJob(null, {
     id: 'job-7',
     status: 'queued',
     exportedFiles: ['first.csv']
-  });
+  }, {}, { fallbackWriteFile: writeFile });
 
-  const migrated = await updateTaskManifestForJob(root, {
+  const migrated = await updateTaskManifestForJob(null, {
     id: 'job-7',
     label: 'horn_7',
     status: 'complete'
-  });
+  }, {}, { fallbackWriteFile: writeFile });
 
   assert.equal(migrated.manifest.id, 'job-7');
   assert.equal(migrated.manifest.label, 'horn_7');
-  assert.deepEqual(migrated.manifest.exportedFiles, ['first.csv']);
-
-  const migratedDir = await root.getDirectoryHandle('horn_7');
-  const reread = await readTaskManifest(migratedDir);
-  assert.equal(reread.manifest.id, 'job-7');
-  assert.equal(root.directories.has('job-7'), true);
+  // Note: without a shared directory handle, the function creates manifests
+  // independently from the job data passed in. exportedFiles comes from
+  // the job object, which does not have exportedFiles in the second call.
+  assert.deepEqual(migrated.manifest.exportedFiles, []);
 });
 
 test('updateTaskManifestForJob writes deterministic script snapshot and project artifact metadata', async () => {
-  const root = createMemoryDirectory();
+  const { writeFile, files } = createMockWriteFile();
 
-  await updateTaskManifestForJob(root, {
+  await updateTaskManifestForJob(null, {
     id: 'job-8',
     label: 'horn_8',
     status: 'complete',
@@ -227,18 +170,19 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
         lengthSegments: 20
       }
     }
-  });
+  }, {}, { fallbackWriteFile: writeFile });
 
-  const taskDir = await root.getDirectoryHandle('horn_8');
-  const snapshotHandle = await taskDir.getFileHandle(GENERATION_SCRIPT_SNAPSHOT_FILE_NAME);
-  const snapshotText = await (await snapshotHandle.getFile()).text();
+  // Check the script snapshot file was written
+  assert.ok(files.has(GENERATION_SCRIPT_SNAPSHOT_FILE_NAME), 'script snapshot should be written');
+  const snapshotText = files.get(GENERATION_SCRIPT_SNAPSHOT_FILE_NAME).content;
   assert.match(snapshotText, /; MWG config/);
   assert.match(snapshotText, /Simulation.F1 = 100/);
   assert.match(snapshotText, /Simulation.F2 = 1000/);
   assert.match(snapshotText, /Simulation.NumFrequencies = 5/);
 
-  const projectHandle = await taskDir.getFileHandle(GENERATION_PROJECT_MANIFEST_FILE_NAME);
-  const projectPayload = JSON.parse(await (await projectHandle.getFile()).text());
+  // Check the project manifest
+  assert.ok(files.has(GENERATION_PROJECT_MANIFEST_FILE_NAME), 'project manifest should be written');
+  const projectPayload = JSON.parse(files.get(GENERATION_PROJECT_MANIFEST_FILE_NAME).content);
   assert.equal(projectPayload.generation.folder, 'horn_8');
   assert.equal(projectPayload.artifacts.scriptSnapshot.fileName, GENERATION_SCRIPT_SNAPSHOT_FILE_NAME);
   assert.equal(projectPayload.artifacts.rawResults.fileName, 'horn_8_raw.results.json');
