@@ -867,32 +867,6 @@ def _build_enclosure_box(
         back_cap = gmsh.model.occ.addSurfaceFilling(current_profile)
     generated_dimtags.append((2, int(back_cap)))
 
-    # For primitive (line+arc) wires, adjacent ruled surfaces don't share edge
-    # topology automatically.  OCC fragment merges coincident edges so the
-    # mesh is watertight.  Only needed for the closed/primitive path.
-    if closed and len(generated_dimtags) > 1:
-        pre_tags = {int(tag) for _, tag in generated_dimtags}
-        pre_front_edge = {int(tag) for _, tag in front_edge_dimtags_all}
-        pre_back_edge = {int(tag) for _, tag in back_edge_dimtags_all}
-        try:
-            out, out_map = gmsh.model.occ.fragment(
-                [(d, t) for d, t in generated_dimtags], [],
-            )
-            # Rebuild dimtags and edge tag sets from fragment output.
-            generated_dimtags = [(d, t) for d, t in out if d == 2]
-            # Map old edge tags to new (post-fragment) tags.
-            new_front_edge: Set[int] = set()
-            new_back_edge: Set[int] = set()
-            for i, (_, old_tag) in enumerate([(d, t) for d, t in zip(
-                [d for d, _ in [(2, t) for t in pre_tags]], list(pre_tags)
-            )]):
-                pass  # fallback below
-            # Use position-based reclassification instead of tracking through fragment.
-            front_edge_dimtags_all = []
-            back_edge_dimtags_all = []
-        except Exception:
-            pass  # Fall through to synchronize + position-based classification.
-
     gmsh.model.occ.synchronize()
     dimtags = [(2, int(tag)) for dim, tag in generated_dimtags if int(dim) == 2]
     front_edge_tags = {int(tag) for dim, tag in front_edge_dimtags_all if int(dim) == 2}
