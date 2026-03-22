@@ -356,6 +356,10 @@ def _set_job_fields(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
         db_fields["mesh_stats_json"] = (
             json.dumps(mapped["mesh_stats"]) if mapped["mesh_stats"] is not None else None
         )
+    if "script_snapshot" in mapped:
+        db_fields["script_snapshot_json"] = (
+            json.dumps(mapped["script_snapshot"]) if mapped["script_snapshot"] is not None else None
+        )
     if db_fields:
         db.update_job(job_id, **db_fields)
 
@@ -367,6 +371,14 @@ def _set_job_fields(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
                 job["error"] = mapped["error_message"]
             return job
     return _merge_job_cache_from_db(job_id)
+
+
+def update_job_script_snapshot(job_id: str, script_snapshot: Any) -> None:
+    """Persist a script snapshot (UI parameters) for a job."""
+    job = _merge_job_cache_from_db(job_id)
+    if not job:
+        raise JobRuntimeNotFoundError(job_id)
+    _set_job_fields(job_id, script_snapshot=script_snapshot)
 
 
 def update_progress(job_id: str, progress: float) -> None:
@@ -538,6 +550,7 @@ def _serialize_job_item(job: Dict[str, Any]) -> Dict[str, Any]:
         "error_message": job.get("error_message"),
         "cancellation_requested": bool(job.get("cancellation_requested")),
         "mesh_stats": job.get("mesh_stats"),
+        "script_snapshot": job.get("script_snapshot"),
     }
 
 

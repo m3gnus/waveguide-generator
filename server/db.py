@@ -73,7 +73,9 @@ class SimulationDB:
             }
             if "mesh_stats_json" not in columns:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN mesh_stats_json TEXT")
-            conn.execute("PRAGMA user_version = 2")
+            if "script_snapshot_json" not in columns:
+                conn.execute("ALTER TABLE simulation_jobs ADD COLUMN script_snapshot_json TEXT")
+            conn.execute("PRAGMA user_version = 3")
 
     def create_job(self, job: Dict[str, Any]) -> None:
         with self._lock, self._managed_connection() as conn:
@@ -83,8 +85,9 @@ class SimulationDB:
                   id, status, created_at, updated_at, queued_at,
                   started_at, completed_at, progress, stage, stage_message,
                   error_message, cancellation_requested, config_json,
-                  config_summary_json, has_results, has_mesh_artifact, mesh_stats_json, label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  config_summary_json, has_results, has_mesh_artifact, mesh_stats_json, label,
+                  script_snapshot_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job["id"],
@@ -105,6 +108,7 @@ class SimulationDB:
                     1 if job.get("has_mesh_artifact") else 0,
                     json.dumps(job["mesh_stats"]) if job.get("mesh_stats") is not None else None,
                     job.get("label"),
+                    json.dumps(job["script_snapshot"]) if job.get("script_snapshot") is not None else None,
                 ),
             )
 
@@ -334,7 +338,8 @@ class SimulationDB:
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> Dict[str, Any]:
-        return {
+        cols = set(row.keys())
+        result: Dict[str, Any] = {
             "id": row["id"],
             "status": row["status"],
             "created_at": row["created_at"],
@@ -354,3 +359,7 @@ class SimulationDB:
             "mesh_stats": json.loads(row["mesh_stats_json"]) if row["mesh_stats_json"] else None,
             "label": row["label"],
         }
+        if "script_snapshot_json" in cols:
+            raw = row["script_snapshot_json"]
+            result["script_snapshot"] = json.loads(raw) if raw else None
+        return result

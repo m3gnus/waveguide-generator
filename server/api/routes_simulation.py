@@ -37,6 +37,7 @@ from services.job_runtime import (
     get_job_results,
     list_job_items,
     request_stop_job,
+    update_job_script_snapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,16 @@ async def list_jobs(
 ) -> Dict[str, Any]:
     items, total = list_job_items(status=status, limit=limit, offset=offset)
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.patch("/api/jobs/{job_id}/script")
+async def patch_job_script(job_id: str, body: Dict[str, Any]) -> Dict[str, str]:
+    """Store a script snapshot (UI parameters) for a job so it survives page reloads."""
+    try:
+        update_job_script_snapshot(job_id, body.get("script_snapshot"))
+    except JobRuntimeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    return {"status": "ok"}
 
 
 @router.delete("/api/jobs/clear-failed")
