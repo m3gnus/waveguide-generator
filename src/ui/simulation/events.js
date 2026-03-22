@@ -10,8 +10,15 @@ import {
 } from './jobActions.js';
 import { renderJobList } from './jobActions.js';
 import { updateTaskListPreferences } from '../settings/simulationManagementSettings.js';
+import { openAutoExportPopup } from './autoExportPopup.js';
 
 export function setupEventListeners(panel) {
+  // Auto Export button
+  const autoExportBtn = document.getElementById('auto-export-btn');
+  if (autoExportBtn) {
+    autoExportBtn.addEventListener('click', () => openAutoExportPopup());
+  }
+
   // Tab switching
   const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
   tabButtons.forEach((btn) => {

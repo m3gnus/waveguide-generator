@@ -55,11 +55,6 @@ export function bindButtonEvents(app) {
       handler: () => app.exportMWGConfig(),
       type: "click",
     },
-    {
-      id: "choose-folder-btn",
-      handler: () => app.uiCoordinator.chooseOutputFolder(),
-      type: "click",
-    },
     { id: "zoom-in", handler: () => app.zoom(0.8), type: "click" },
     { id: "zoom-out", handler: () => app.zoom(1.2), type: "click" },
     { id: "camera-toggle", handler: () => app.toggleCamera(), type: "click" },

@@ -30,17 +30,6 @@ function bindFolderWorkspaceLabel() {
         if (nameEl) {
             nameEl.textContent = label;
         }
-        const chooseBtn = document.getElementById('choose-folder-btn');
-        if (chooseBtn) {
-            const hasSelection = label && label !== 'No folder selected';
-            chooseBtn.textContent = OUTPUT_FOLDER_BUTTON_LABEL;
-            chooseBtn.title = hasSelection
-                ? `Selected output folder: ${label}`
-                : 'Choose output folder workspace';
-            if (typeof chooseBtn.setAttribute === 'function') {
-                chooseBtn.setAttribute('aria-label', chooseBtn.title);
-            }
-        }
     });
 }
 
