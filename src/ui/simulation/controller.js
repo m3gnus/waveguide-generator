@@ -531,7 +531,7 @@ export async function reconcileSimulationControllerRemoteJobs(
   for (const localJob of activeEntries) {
     try {
       const remote = await controller.solver.getJobStatus(localJob.id);
-      const updated = toUiJob(remote);
+      const updated = toUiJob({ ...remote, id: localJob.id });
       if (updated?.id) {
         upsertJob(controller, updated);
         syncSimulationWorkspaceJobManifest(updated).catch((error) => {
