@@ -980,6 +980,22 @@ button.secondary:hover:not(:disabled),
 
 .simulation-mesh-diagnostics-window {
   margin-top: var(--sp-2);
+  position: relative;
+}
+
+.simulation-mesh-diagnostics-window[open] > .simulation-mesh-diagnostics {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  box-shadow: var(--shadow-md);
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .simulation-mesh-diagnostics-window > summary {
