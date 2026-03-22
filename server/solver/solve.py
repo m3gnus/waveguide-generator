@@ -981,6 +981,109 @@ def solve_optimized(
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Subprocess worker for hard-kill cancellation support
+# ---------------------------------------------------------------------------
+
+def _serialize_mesh_for_subprocess(mesh) -> dict:
+    """
+    Extract picklable numpy arrays from a mesh dict (which contains a non-picklable bempp Grid).
+
+    Returns a plain dict that can be sent to a child process and reconstructed
+    via ``_reconstruct_mesh_in_subprocess``.
+    """
+    if isinstance(mesh, dict):
+        grid = mesh["grid"]
+        return {
+            "vertices": np.asarray(grid.vertices),        # (3, N) float
+            "elements": np.asarray(grid.elements),         # (3, M) int32
+            "surface_tags": np.asarray(mesh.get("surface_tags", grid.domain_indices), dtype=np.int32),
+            "unit_detection": mesh.get("unit_detection", {}),
+            "mesh_metadata": mesh.get("mesh_metadata", {}),
+        }
+    # Bare grid object (legacy path)
+    return {
+        "vertices": np.asarray(mesh.vertices),
+        "elements": np.asarray(mesh.elements),
+        "surface_tags": np.asarray(getattr(mesh, "domain_indices", None) or np.array([], dtype=np.int32)),
+        "unit_detection": {},
+        "mesh_metadata": {},
+    }
+
+
+def _reconstruct_mesh_in_subprocess(serialized: dict) -> dict:
+    """
+    Rebuild the mesh dict expected by ``solve_optimized`` from serialized arrays.
+
+    Must run inside the child process where bempp_api is available.
+    """
+    vertices = np.asarray(serialized["vertices"])
+    elements = np.asarray(serialized["elements"], dtype=np.int32)
+    surface_tags = np.asarray(serialized["surface_tags"], dtype=np.int32)
+    grid = bempp_api.Grid(vertices, elements, surface_tags)
+    return {
+        "grid": grid,
+        "surface_tags": surface_tags,
+        "original_surface_tags": surface_tags,
+        "unit_detection": serialized.get("unit_detection", {}),
+        "mesh_metadata": serialized.get("mesh_metadata", {}),
+    }
+
+
+def _solve_subprocess_worker(
+    serialized_mesh: dict,
+    solve_kwargs: dict,
+    progress_queue: "mp.Queue",
+    cancel_event: "mp.Event",
+):
+    """
+    Top-level entry point for the BEM solve child process.
+
+    Reconstructs the mesh, runs ``solve_optimized`` with IPC-based callbacks,
+    and puts the result (or error) on ``progress_queue``.
+
+    This function must be module-level and picklable (no closures over
+    non-serializable objects).
+    """
+    import traceback as _tb
+
+    def _stage_cb(stage, progress=None, message=None):
+        try:
+            progress_queue.put_nowait({
+                "type": "stage",
+                "stage": str(stage),
+                "progress": float(progress) if progress is not None else None,
+                "message": str(message) if message is not None else None,
+            })
+        except Exception:
+            pass
+
+    def _progress_cb(p):
+        try:
+            progress_queue.put_nowait({"type": "progress", "progress": float(p)})
+        except Exception:
+            pass
+
+    def _cancel_cb():
+        if cancel_event.is_set():
+            raise RuntimeError("__subprocess_cancelled__")
+
+    try:
+        mesh = _reconstruct_mesh_in_subprocess(serialized_mesh)
+        solve_kwargs["progress_callback"] = _progress_cb
+        solve_kwargs["stage_callback"] = _stage_cb
+        solve_kwargs["cancellation_callback"] = _cancel_cb
+        results = solve_optimized(mesh, **solve_kwargs)
+        progress_queue.put({"type": "result", "data": results})
+    except RuntimeError as exc:
+        if "__subprocess_cancelled__" in str(exc):
+            progress_queue.put({"type": "cancelled"})
+        else:
+            progress_queue.put({"type": "error", "message": str(exc), "traceback": _tb.format_exc()})
+    except Exception as exc:
+        progress_queue.put({"type": "error", "message": str(exc), "traceback": _tb.format_exc()})
+
+
 def _resolve_observation_distance_m(polar_config: Optional[Dict], default: float = 2.0) -> float:
     if not isinstance(polar_config, dict):
         return float(default)

@@ -8,6 +8,7 @@ queue one job at a time (max_concurrent_jobs=1).
 import asyncio
 import json
 import logging
+import multiprocessing
 import threading
 import uuid
 from collections import deque
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 jobs: Dict[str, Dict[str, Any]] = {}
 job_queue: deque[str] = deque()
 running_jobs: set[str] = set()
+# Subprocess references for hard-kill cancellation.  Maps job_id → Process.
+running_processes: Dict[str, multiprocessing.Process] = {}
 jobs_lock = threading.RLock()
 scheduler_loop_running: bool = False
 max_concurrent_jobs: int = 1
@@ -185,6 +188,8 @@ def request_stop_job(job_id: str) -> Dict[str, str]:
             "status": "cancelled",
         }
     else:
+        # Hard-kill the solver subprocess if one is running.
+        _terminate_solver_process(job_id)
         _set_job_fields(
             job_id,
             stage="cancelling",
@@ -392,6 +397,34 @@ def update_job_stage(
     if progress is not None:
         payload["progress"] = progress
     _set_job_fields(job_id, **payload)
+
+
+def register_solver_process(job_id: str, process: multiprocessing.Process) -> None:
+    """Store a reference to the solver subprocess for hard-kill support."""
+    with jobs_lock:
+        running_processes[job_id] = process
+
+
+def unregister_solver_process(job_id: str) -> None:
+    """Remove the solver subprocess reference after it finishes."""
+    with jobs_lock:
+        running_processes.pop(job_id, None)
+
+
+def _terminate_solver_process(job_id: str) -> None:
+    """Send SIGTERM to the solver subprocess, then SIGKILL if it doesn't exit."""
+    with jobs_lock:
+        proc = running_processes.get(job_id)
+    if proc is None or not proc.is_alive():
+        return
+    logger.info("Hard-killing solver subprocess for job %s (pid=%s)", job_id, proc.pid)
+    proc.terminate()
+    proc.join(timeout=5)
+    if proc.is_alive():
+        logger.warning("Subprocess for job %s did not exit after SIGTERM; sending SIGKILL", job_id)
+        proc.kill()
+        proc.join(timeout=3)
+    unregister_solver_process(job_id)
 
 
 def _remove_from_queue(job_id: str) -> None:

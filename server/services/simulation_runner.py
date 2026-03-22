@@ -5,8 +5,10 @@ BEM simulation runner — executes a single simulation job asynchronously.
 import asyncio
 import json
 import logging
+import multiprocessing as mp
 import tempfile
 from pathlib import Path
+from queue import Empty as QueueEmpty
 from typing import Any, Callable, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
@@ -23,6 +25,8 @@ from services.job_runtime import (
     _now_iso,
     _keep_task,
     update_job_stage,
+    register_solver_process,
+    unregister_solver_process,
     running_jobs,
     jobs_lock,
     db,
@@ -132,6 +136,180 @@ def _build_mesh_stats(
             json.dumps(metadata_identity_counts)
         )
     return mesh_stats
+
+
+def _apply_solver_stage_to_job(
+    job_id: str, stage: str, progress: Optional[float], message: Optional[str]
+) -> None:
+    """Map solver stage names to job stage/progress ranges (same logic as the old callback)."""
+    normalized_progress = 0.0 if progress is None else max(0.0, min(1.0, float(progress)))
+
+    if stage in {"setup", "solver_setup"}:
+        update_job_stage(
+            job_id, "bem_solve",
+            progress=0.30 + (normalized_progress * 0.05),
+            stage_message=message or "Configuring BEM solve",
+        )
+    elif stage == "frequency_solve":
+        update_job_stage(
+            job_id, "bem_solve",
+            progress=0.35 + (normalized_progress * 0.50),
+            stage_message=message or "Solving BEM frequencies",
+        )
+    elif stage == "directivity":
+        update_job_stage(
+            job_id, "finalizing",
+            progress=0.85 + (normalized_progress * 0.13),
+            stage_message=message or "Generating requested polar maps and deriving DI from solved frequencies",
+        )
+    elif stage == "finalizing":
+        update_job_stage(
+            job_id, "finalizing",
+            progress=0.98 + (normalized_progress * 0.01),
+            stage_message=message or "Finalizing results",
+        )
+    else:
+        update_job_stage(job_id, str(stage), stage_message=message)
+
+
+_SUBPROCESS_QUEUE_POLL_SECONDS = 0.5
+
+
+async def _run_solve_in_subprocess(
+    job_id: str, mesh: Any, request: "SimulationRequest"
+) -> dict:
+    """
+    Spawn a child process to run the BEM solve, monitor its IPC queue for
+    progress/stage updates, and hard-kill it on cancellation.
+    """
+    from solver.solve import _serialize_mesh_for_subprocess, _solve_subprocess_worker
+
+    serialized_mesh = _serialize_mesh_for_subprocess(mesh)
+
+    # Build the kwargs dict that will be forwarded to solve_optimized() inside the child.
+    # Callbacks are set inside the worker; we only pass serializable scalars here.
+    advanced = (
+        request.advanced_settings.model_dump(exclude_none=True)
+        if request.advanced_settings else None
+    )
+    solve_kwargs: dict = {
+        "frequency_range": list(request.frequency_range),
+        "num_frequencies": request.num_frequencies,
+        "sim_type": request.sim_type,
+        "polar_config": request.polar_config.model_dump() if request.polar_config else None,
+        "verbose": request.verbose,
+        "mesh_validation_mode": request.mesh_validation_mode,
+        "frequency_spacing": request.frequency_spacing,
+        "device_mode": request.device_mode,
+    }
+    if advanced:
+        # Unpack stable runtime settings (currently only use_burton_miller).
+        _STABLE = {"use_burton_miller"}
+        for key in list(advanced.keys()):
+            if key in _STABLE:
+                solve_kwargs[key] = advanced[key]
+
+    ctx = mp.get_context("spawn")
+    progress_queue = ctx.Queue()
+    cancel_event = ctx.Event()
+
+    proc = ctx.Process(
+        target=_solve_subprocess_worker,
+        args=(serialized_mesh, solve_kwargs, progress_queue, cancel_event),
+        daemon=True,
+    )
+    proc.start()
+    register_solver_process(job_id, proc)
+    logger.info("Solver subprocess started for job %s (pid=%s)", job_id, proc.pid)
+
+    try:
+        return await _monitor_solver_subprocess(job_id, proc, progress_queue, cancel_event)
+    finally:
+        unregister_solver_process(job_id)
+        # Ensure the child process is cleaned up.
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=3)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=2)
+
+
+async def _monitor_solver_subprocess(
+    job_id: str,
+    proc: "mp.Process",
+    progress_queue: "mp.Queue",
+    cancel_event: "mp.Event",
+) -> dict:
+    """
+    Drain IPC messages from the solver subprocess and update job state.
+
+    Returns the results dict on success, raises on error/cancellation.
+    """
+    loop = asyncio.get_running_loop()
+
+    while True:
+        # Check for cancellation from the job runtime (user pressed Stop).
+        latest = _merge_job_cache_from_db(job_id)
+        if latest and latest.get("cancellation_requested"):
+            cancel_event.set()
+            # Give the subprocess a moment to notice, then hard-kill.
+            proc.terminate()
+            proc.join(timeout=5)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=3)
+            raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
+
+        # Check if the process died unexpectedly (no message on queue).
+        if not proc.is_alive():
+            # Drain any remaining messages.
+            _drain_remaining = _drain_queue_sync(progress_queue)
+            for msg in _drain_remaining:
+                if msg.get("type") == "result":
+                    return msg["data"]
+                if msg.get("type") == "error":
+                    raise RuntimeError(msg.get("message", "Solver subprocess failed"))
+                if msg.get("type") == "cancelled":
+                    raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
+            raise RuntimeError(
+                f"Solver subprocess exited unexpectedly (exit code {proc.exitcode})"
+            )
+
+        # Poll the queue in a thread to avoid blocking the event loop.
+        try:
+            msg = await loop.run_in_executor(
+                None, lambda: progress_queue.get(timeout=_SUBPROCESS_QUEUE_POLL_SECONDS)
+            )
+        except QueueEmpty:
+            continue
+
+        msg_type = msg.get("type")
+        if msg_type == "result":
+            return msg["data"]
+        if msg_type == "error":
+            raise RuntimeError(msg.get("message", "Solver subprocess failed"))
+        if msg_type == "cancelled":
+            raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
+        if msg_type == "stage":
+            _apply_solver_stage_to_job(
+                job_id, msg.get("stage", ""), msg.get("progress"), msg.get("message")
+            )
+        elif msg_type == "progress":
+            _apply_solver_stage_to_job(
+                job_id, "frequency_solve", msg.get("progress"), None
+            )
+
+
+def _drain_queue_sync(q: "mp.Queue") -> list:
+    """Read all immediately available messages from a multiprocessing.Queue."""
+    messages = []
+    while True:
+        try:
+            messages.append(q.get_nowait())
+        except QueueEmpty:
+            break
+    return messages
 
 
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
@@ -284,85 +462,13 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 mesh_metadata=request.mesh.metadata,
             )
 
-        # Run simulation
+        # Run simulation in a subprocess for hard-kill cancellation support.
         update_job_stage(
             job_id, "bem_solve", progress=0.30, stage_message="Configuring BEM solve"
         )
         _cancellation_callback("Cancellation requested before BEM solve start")
 
-        def _solver_stage_callback(
-            stage: str, progress: Optional[float] = None, message: Optional[str] = None
-        ) -> None:
-            normalized_progress = (
-                0.0 if progress is None else max(0.0, min(1.0, float(progress)))
-            )
-
-            if stage in {"setup", "solver_setup"}:
-                update_job_stage(
-                    job_id,
-                    "bem_solve",
-                    progress=0.30 + (normalized_progress * 0.05),
-                    stage_message=message or "Configuring BEM solve",
-                )
-                return
-
-            if stage == "frequency_solve":
-                update_job_stage(
-                    job_id,
-                    "bem_solve",
-                    progress=0.35 + (normalized_progress * 0.50),
-                    stage_message=message or "Solving BEM frequencies",
-                )
-                return
-
-            if stage == "directivity":
-                update_job_stage(
-                    job_id,
-                    "finalizing",
-                    progress=0.85 + (normalized_progress * 0.13),
-                    stage_message=message or (
-                        "Generating requested polar maps and deriving DI from solved frequencies"
-                    ),
-                )
-                return
-
-            if stage == "finalizing":
-                update_job_stage(
-                    job_id,
-                    "finalizing",
-                    progress=0.98 + (normalized_progress * 0.01),
-                    stage_message=message or "Finalizing results",
-                )
-                return
-
-            update_job_stage(job_id, str(stage), stage_message=message)
-
-        results = await asyncio.to_thread(
-            solver.solve,
-            mesh=mesh,
-            frequency_range=request.frequency_range,
-            num_frequencies=request.num_frequencies,
-            sim_type=request.sim_type,
-            polar_config=(
-                request.polar_config.model_dump() if request.polar_config else None
-            ),
-            progress_callback=lambda p: _solver_stage_callback("frequency_solve", progress=p),
-            stage_callback=_solver_stage_callback,
-            # Legacy field kept in request contract for compatibility only.
-            use_optimized=request.use_optimized,
-            verbose=request.verbose,
-            mesh_validation_mode=request.mesh_validation_mode,
-            frequency_spacing=request.frequency_spacing,
-            device_mode=request.device_mode,
-            advanced_settings=(
-                request.advanced_settings.model_dump(exclude_none=True)
-                if request.advanced_settings
-                else None
-            ),
-            cancellation_callback=lambda: _cancellation_callback(
-                "Cancellation requested during BEM solve"
-            ),
-        )
+        results = await _run_solve_in_subprocess(job_id, mesh, request)
         _cancellation_callback("Cancellation requested before result persistence")
 
         # Check for cancellation before storing results.
