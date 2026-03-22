@@ -414,7 +414,7 @@ export const PARAM_SCHEMA = {
     angularSegments: {
       type: "number",
       label: "Preview Angular Segments",
-      default: 80,
+      default: 40,
       tooltip:
         "Three.js viewport tessellation around the horn circumference. Does not change backend OCC solve/export mesh element sizes.",
     },
@@ -451,7 +451,7 @@ export const PARAM_SCHEMA = {
       type: "number",
       label: "Mouth Mesh Resolution",
       unit: "mm",
-      default: 15.0,
+      default: 20.0,
       tooltip:
         "Backend OCC solve/export mesh element size near the mouth. Also influences viewport slice spacing unless Throat Slice Density overrides it.",
     },
@@ -605,7 +605,7 @@ export const PARAM_SCHEMA = {
     numFreqs: {
       type: "number",
       label: "Frequency Samples",
-      default: 40,
+      default: 20,
       min: 10,
       max: 200,
       step: 1,
