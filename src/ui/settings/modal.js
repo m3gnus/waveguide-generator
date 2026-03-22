@@ -959,16 +959,6 @@ function _buildTaskExportsSection() {
 
   const exportHeader = _buildSubSectionHeader("Completed Task Bundles", () => {
     const resetSettings = resetSimulationManagementSettings();
-    const autoExport = document.getElementById("simmanage-auto-export");
-    if (autoExport) {
-      autoExport.checked = resetSettings.autoExportOnComplete;
-    }
-    Array.from(
-      sec.querySelectorAll("input[data-sim-management-format]"),
-    ).forEach((input) => {
-      const formatId = input.getAttribute("data-sim-management-format");
-      input.checked = resetSettings.selectedFormats.includes(formatId);
-    });
     const defaultSort = document.getElementById("simmanage-default-sort");
     if (defaultSort) {
       defaultSort.value = resetSettings.defaultSort;
@@ -987,15 +977,6 @@ function _buildTaskExportsSection() {
     helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
     controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? " checked" : ""}>`,
   });
-
-  _appendInlineRow(sec, {
-    labelText: "Auto-export completed task bundle",
-    labelFor: "simmanage-auto-export",
-    helpText: SIMULATION_MANAGEMENT_HELP.autoExportOnComplete,
-    controlHtml: `<input type="checkbox" id="simmanage-auto-export"${managementSettings.autoExportOnComplete ? " checked" : ""}>`,
-  });
-
-  sec.appendChild(_buildSimulationExportFormatsRow(managementSettings));
 
   return sec;
 }

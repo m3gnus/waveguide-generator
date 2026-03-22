@@ -1477,6 +1477,93 @@ button.secondary:hover:not(:disabled),
   color: var(--text-muted);
 }
 
+/* ── Auto Export Popup ─────────────────────────────────── */
+
+.auto-export-dialog {
+  width: min(420px, 100%);
+  max-height: min(80vh, 600px);
+  display: flex;
+  flex-direction: column;
+}
+
+.auto-export-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-3);
+}
+
+.auto-export-close {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.auto-export-close:hover {
+  color: var(--error);
+  transform: none;
+  box-shadow: none;
+}
+
+.auto-export-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.auto-export-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.auto-export-section-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--sp-2);
+}
+
+.auto-export-formats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px 12px;
+  margin-bottom: var(--sp-3);
+}
+
+.auto-export-format-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.auto-export-folder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.auto-export-folder-name {
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ui-command-box {
   margin: 0 0 var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
