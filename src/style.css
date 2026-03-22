@@ -474,6 +474,16 @@ details.section[open] > summary {
   overflow: visible;
 }
 
+/* Model section — sticky at bottom of right panel */
+.actions-panel-model {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--panel);
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+}
+
 .section-header {
   display: flex;
   align-items: center;
