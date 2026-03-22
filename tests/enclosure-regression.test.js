@@ -349,6 +349,53 @@ test('R-OSSE enclosure requests are rejected clearly', () => {
   );
 });
 
+// Exercise the fan-stitch path (low angular segments force corner refinement to
+// add extra points) and asymmetric spacing to verify no degenerate triangles,
+// non-manifold edges, or broken connectivity.
+for (const encEdgeType of [1, 2]) {
+  test(`low-segment enclosure with corner refinement and asymmetric spacing (edgeType=${encEdgeType})`, () => {
+    const params = prepare('OSSE', {
+      angularSegments: 16,
+      lengthSegments: 8,
+      encDepth: 220,
+      encEdge: 30,
+      cornerSegments: 6,
+      encEdgeType,
+      encSpaceL: 10,
+      encSpaceT: 15,
+      encSpaceR: 50,
+      encSpaceB: 80
+    });
+    const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
+    const analysis = analyzeEnclosure(artifacts.mesh);
+    const seam = analyzeHornEnclosureSeam(artifacts.mesh.indices, artifacts.mesh.groups);
+    const componentCount = countConnectedComponents(artifacts.mesh.indices);
+
+    assert.equal(
+      analysis.rearBoundaryEdges, 0,
+      'Rear closure should not leave any boundary edges'
+    );
+    assert.equal(
+      analysis.nonManifoldSharedEdges, 0,
+      'Enclosure should not contain non-manifold shared edges'
+    );
+    assert.equal(
+      analysis.tinyTriangles, 0,
+      'Enclosure should not contain zero-area triangles'
+    );
+    assert.equal(
+      seam.sameDirection, 0,
+      'Horn/enclosure seam shared edges should have opposite orientation'
+    );
+    assert.ok(seam.sharedEdges > 0, 'Should share edges at seam');
+    assert.equal(componentCount, 1, 'Mesh should be a single connected component');
+    assert.ok(
+      analysis.rearUniqueCoords > 8,
+      'Rounded case should retain multiple distinct rear-loop points'
+    );
+  });
+}
+
 test('enclosure edge treatment supports rounded and chamfered corners with clean radius clamping', () => {
   for (const encEdgeType of [1, 2]) {
     const params = prepare('OSSE', {

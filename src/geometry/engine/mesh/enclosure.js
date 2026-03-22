@@ -474,22 +474,18 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     const frontRoundoverEndTri = indices.length / 3;
     const frontRoundoverEnd = prevRing;
 
-    // --- Step 6: Sidewall with fan stitch for ring-size transition ---
-    // Fan stitch from the front roundover end (ringSize) directly to the
-    // back sidewall ring (bodySize) at a different Y. This avoids degenerate
-    // triangles that would arise from two rings at the same position, and
-    // keeps the fan stitch on the flat sidewall where it's invisible.
+    // --- Step 6: Sidewall (1:1 stitch, uniform ring size) ---
+    // Both the front roundover end and back ring now use bodySize points,
+    // so a simple 1:1 stitch replaces the previous fan-stitch.  The fan-stitch
+    // (when needed) has been moved to the coplanar front baffle where it is
+    // invisible, eliminating corner artifacts on the curved sidewall surface.
     const outerBackY = edgeDepth > 0 ? backY + edgeDepth : backY;
     const backRingStart = vertices.length / 3;
     for (let i = 0; i < bodySize; i++) {
         const opt = outerPts[i];
         vertices.push(opt.x, outerBackY, opt.z);
     }
-    if (addedPts > 0) {
-        fanStitchRings(indices, pushTri, frontRoundoverEnd, ringSize, backRingStart, bodySize, mouthToRefinedMap);
-    } else {
-        stitchRing(frontRoundoverEnd, backRingStart, ringSize);
-    }
+    stitchRing(frontRoundoverEnd, backRingStart, bodySize);
     const sideWallEndTri = indices.length / 3;
 
     // --- Step 7: Back roundover rings (refined ring size) ---
