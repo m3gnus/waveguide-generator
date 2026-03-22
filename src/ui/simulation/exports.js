@@ -738,11 +738,10 @@ function createTaskExportWriter(job, baseName) {
   return async (file) => {
     const result = await writeSimulationTaskBundleFile(job, file, {
       dirName: baseName,
-      subDir: 'results',
       fallbackWrite: async (nextFile) => {
         await saveFile(nextFile.content, nextFile.fileName, {
           ...nextFile.saveOptions,
-          workspaceSubdir: `${baseName}/results`,
+          workspaceSubdir: baseName,
           incrementCounter: false,
         });
       },
