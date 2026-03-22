@@ -23,6 +23,18 @@ venv/
 .agents/
 .claude/
 .cline/
+.codex/
+.opencode/
+
+# AI development configs (not for end users)
+CLAUDE.md
+AGENTS.md
+
+# Runtime artifacts
+payload.json
+
+# Benchmark result artifacts
+server/scripts/*_results.json
 
 # Reference materials (large files, not part of program)
 _references/
