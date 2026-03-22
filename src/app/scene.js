@@ -8,7 +8,7 @@ import {
   getSceneThemeColors,
 } from "../viewer/index.js";
 import { prepareViewportMesh } from "../modules/geometry/useCases.js";
-import { detachThroatDiscVertices } from "./viewportMesh.js";
+import { detachThroatDiscVertices, detachEnclosureSeamVertices } from "./viewportMesh.js";
 import { ImportedMeshState } from "../state.js";
 import { AppEvents } from "../events.js";
 
@@ -156,7 +156,7 @@ export function renderModel(app) {
   removeOverlays(app);
 
   const viewportMesh = prepareViewportMesh(app.currentState);
-  const renderMesh = detachThroatDiscVertices(viewportMesh);
+  const renderMesh = detachEnclosureSeamVertices(detachThroatDiscVertices(viewportMesh));
   applyMeshToScene(
     app,
     renderMesh.vertices,
@@ -218,23 +218,29 @@ export function calculateCurvatureColors(geometry, radialSteps, lengthSteps) {
   const count = normals.length / 3;
   const colors = new Float32Array(count * 3);
 
+  // Default all vertices to zero-curvature (covers enclosure / non-grid geometry)
+  for (let v = 0; v < count; v++) {
+    colors[v * 3 + 1] = 1;
+    colors[v * 3 + 2] = 0.5;
+  }
+
   for (let j = 0; j <= lengthSteps; j++) {
-    for (let i = 0; i <= radialSteps; i++) {
-      const idx = (j * (radialSteps + 1) + i) * 3;
-      let curvature = 0;
-      const neighbors = [
-        [j - 1, i],
-        [j + 1, i],
-        [j, i - 1],
-        [j, i + 1],
-      ];
+    for (let i = 0; i < radialSteps; i++) {
+      const idx = (j * radialSteps + i) * 3;
       const nx = normals[idx];
       const ny = normals[idx + 1];
       const nz = normals[idx + 2];
+      let curvature = 0;
       let sampleCount = 0;
+      const neighbors = [
+        [j - 1, i],
+        [j + 1, i],
+        [j, (i - 1 + radialSteps) % radialSteps],
+        [j, (i + 1) % radialSteps],
+      ];
       neighbors.forEach(([nj, ni]) => {
-        if (nj >= 0 && nj <= lengthSteps && ni >= 0 && ni <= radialSteps) {
-          const nIdx = (nj * (radialSteps + 1) + ni) * 3;
+        if (nj >= 0 && nj <= lengthSteps) {
+          const nIdx = (nj * radialSteps + ni) * 3;
           const d =
             1.0 -
             (nx * normals[nIdx] +
