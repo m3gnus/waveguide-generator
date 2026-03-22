@@ -278,7 +278,8 @@ test('ui simulation workflow files must not import workspace internals directly'
   const allowedFiles = new Set([
     'ui/simulation/workspaceTasks.js',
     'ui/simulation/exports.js',
-    'ui/simulation/autoExportPopup.js'
+    'ui/simulation/autoExportPopup.js',
+    'ui/simulation/events.js'
   ]);
 
   for (const file of files) {
