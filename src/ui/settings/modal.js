@@ -40,9 +40,7 @@ import {
 import {
   getSelectedFolderLabel,
   requestBackendFolderSelection,
-  requestFolderSelection,
   subscribeFolderWorkspace,
-  supportsFolderSelection,
   fetchWorkspacePath,
   openWorkspaceInFinder,
 } from "../workspace/folderWorkspace.js";
@@ -1001,7 +999,7 @@ function _buildWorkspaceSection(cleanupFns = []) {
     _buildSettingsLabelCopy(
       "Selected Folder",
       "",
-      "The backend workspace is the default export root. On supporting browsers, choosing a folder enables direct writes as an optimization.",
+      "The backend workspace folder used for all exports.",
     ),
   );
   const statusValue = document.createElement("div");
@@ -1012,10 +1010,9 @@ function _buildWorkspaceSection(cleanupFns = []) {
   statusRow.appendChild(statusValue);
   sec.appendChild(statusRow);
 
-  // Firefox-fallback: path display row (shown when showDirectoryPicker is unavailable)
+  // Path display row
   const pathRow = document.createElement("div");
   pathRow.className = "settings-control-row";
-  pathRow.hidden = true;
   const pathLabel = document.createElement("div");
   pathLabel.className = "settings-control-label";
   pathLabel.textContent = "Output Folder Path";
@@ -1029,10 +1026,9 @@ function _buildWorkspaceSection(cleanupFns = []) {
   pathRow.appendChild(pathValueWrap);
   sec.appendChild(pathRow);
 
-  // Firefox-fallback: "Open in Finder" button row
+  // "Open in Finder" button row
   const finderRow = document.createElement("div");
   finderRow.className = "settings-action-row";
-  finderRow.hidden = true;
   const finderBtn = document.createElement("button");
   finderBtn.type = "button";
   finderBtn.className = "secondary";
@@ -1045,7 +1041,6 @@ function _buildWorkspaceSection(cleanupFns = []) {
   finderRow.appendChild(finderHelp);
   sec.appendChild(finderRow);
 
-  // Chrome/Edge: folder picker row (hidden when showDirectoryPicker is unavailable)
   const chooseRow = document.createElement("div");
   chooseRow.className = "settings-action-row";
 
@@ -1077,48 +1072,32 @@ function _buildWorkspaceSection(cleanupFns = []) {
   });
 
   const refreshWorkspaceCopy = () => {
-    const canPickFolder = supportsFolderSelection(globalThis?.window);
     const selectedLabel = getSelectedFolderLabel();
     statusText.textContent = selectedLabel;
     chooseBtn.textContent =
       selectedLabel === "No folder selected"
         ? "Choose Folder"
         : "Change Folder";
-    // Always enable — on Firefox we use the backend picker
     chooseBtn.disabled = false;
 
-    // Show path + finder rows on Firefox (still useful)
-    pathRow.hidden = canPickFolder;
-    finderRow.hidden = canPickFolder;
-    chooseRow.hidden = false;
+    chooseHelp.textContent =
+      "Opens a native folder picker via the backend server.";
+    routingNote.textContent =
+      "Exports are saved to the folder shown above. Use Choose Folder to change it.";
 
-    chooseHelp.textContent = canPickFolder
-      ? "Choose a folder workspace here to use browser direct-write optimization. Without a selected folder, exports use the backend workspace root."
-      : "Opens a native folder picker via the backend server.";
-    routingNote.textContent = canPickFolder
-      ? "Routing: exports always target a workspace root. With a selected folder and permission, files write directly there in-browser. Otherwise, the app writes through the backend workspace root and uses browser download/save only as fallback."
-      : "Exports write to the selected backend workspace folder. Use the button above to change it.";
-
-    // Fetch path from backend when showing the Firefox panel
-    if (!canPickFolder) {
-      fetchWorkspacePath().then((path) => {
-        pathValueBox.textContent =
-          path || "Backend unavailable — path unknown.";
-      });
-    }
+    fetchWorkspacePath().then((path) => {
+      pathValueBox.textContent =
+        path || "Backend unavailable — path unknown.";
+    });
   };
 
   chooseBtn.addEventListener("click", async () => {
-    if (supportsFolderSelection(globalThis?.window)) {
-      await requestFolderSelection(globalThis?.window);
-    } else {
-      chooseBtn.disabled = true;
-      chooseHelp.textContent = "Waiting for folder selection…";
-      const selectedPath = await requestBackendFolderSelection();
-      chooseBtn.disabled = false;
-      if (selectedPath) {
-        pathValueBox.textContent = selectedPath;
-      }
+    chooseBtn.disabled = true;
+    chooseHelp.textContent = "Waiting for folder selection…";
+    const selectedPath = await requestBackendFolderSelection();
+    chooseBtn.disabled = false;
+    if (selectedPath) {
+      pathValueBox.textContent = selectedPath;
     }
     refreshWorkspaceCopy();
   });
