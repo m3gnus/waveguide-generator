@@ -185,7 +185,7 @@ test("ParamPanel renders row-level formula buttons and removes the section-heade
       simulationSettingsContainer,
       (node) =>
         node.tagName === "LABEL" &&
-        /backend BEM sweep/i.test(node.attributes["data-help-text"] || ""),
+        /backend BEM sweep/i.test(node.attributes["data-tooltip"] || ""),
     );
     assert.equal(simulationHelpLabels.length, 2);
 

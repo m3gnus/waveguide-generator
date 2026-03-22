@@ -85,7 +85,7 @@ test('restoreSimulationControllerJobs returns empty jobs with no stale localStor
   assert.equal(controller.jobSourceMode, 'folder');
 });
 
-test('restoreSimulationControllerJobs sets folder source mode without calling solver listJobs', async () => {
+test('restoreSimulationControllerJobs sets folder source mode and calls solver listJobs when available', async () => {
   let listJobsCalls = 0;
   const controller = createSimulationControllerStore({
     solver: {
@@ -98,11 +98,11 @@ test('restoreSimulationControllerJobs sets folder source mode without calling so
 
   await restoreSimulationControllerJobs(controller);
 
-  // Restore does not call solver.listJobs; uses workspace which returns empty
-  assert.equal(listJobsCalls, 0);
+  // Restore now calls solver.listJobs to restore jobs from the backend database
+  assert.equal(listJobsCalls, 1);
   assert.equal(controller.jobSourceMode, 'folder');
   assert.equal(controller.jobSourceLabel, 'Folder Tasks');
-  assert.deepEqual(Array.from(controller.jobs.keys()), []);
+  assert.deepEqual(Array.from(controller.jobs.keys()), ['job-backend-1']);
 });
 
 test('createSimulationPanelRuntime binds a controller store and injected ui coordinator', () => {
