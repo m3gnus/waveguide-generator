@@ -66,8 +66,6 @@ export function parseExpression(expr) {
         for (const name of funcNames) {
             const before = clean;
             clean = clean.replace(new RegExp(`\\b${name}\\b`, 'g'), funcMap[name]);
-            // Debug: uncomment to trace replacements
-            // if (before !== clean && expr.includes('log1p')) console.log(`${name}: ${before} -> ${clean}`);
         }
 
         // 4. Handle constants (after functions, so 'exp' is already replaced)

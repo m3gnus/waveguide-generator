@@ -1,7 +1,7 @@
 import { AppEvents } from '../../events.js';
+import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
-const BACKEND_URL = 'http://localhost:8000';
 
 let selectedFolderLabel = DEFAULT_FOLDER_LABEL;
 
@@ -87,7 +87,7 @@ export async function requestFolderSelection() {
 
 export async function fetchWorkspacePath() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/workspace/path`, {
+    const res = await fetch(`${DEFAULT_BACKEND_URL}/api/workspace/path`, {
       signal: AbortSignal.timeout(5000)
     });
     if (!res.ok) return null;
@@ -100,7 +100,7 @@ export async function fetchWorkspacePath() {
 
 export async function openWorkspaceInFinder() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/workspace/open`, {
+    const res = await fetch(`${DEFAULT_BACKEND_URL}/api/workspace/open`, {
       method: 'POST',
       signal: AbortSignal.timeout(8000)
     });
@@ -112,7 +112,7 @@ export async function openWorkspaceInFinder() {
 
 export async function requestBackendFolderSelection() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/workspace/select`, {
+    const res = await fetch(`${DEFAULT_BACKEND_URL}/api/workspace/select`, {
       method: 'POST',
       signal: AbortSignal.timeout(130000)
     });
@@ -156,7 +156,7 @@ export async function writeWorkspaceFile(fileName, content, options = {}) {
     formData.append('workspace_subdir', workspaceSubdir);
   }
 
-  const response = await fetch(`${BACKEND_URL}/api/export-file`, {
+  const response = await fetch(`${DEFAULT_BACKEND_URL}/api/export-file`, {
     method: 'POST',
     body: formData,
     signal: AbortSignal.timeout(options.timeoutMs || 30000)
