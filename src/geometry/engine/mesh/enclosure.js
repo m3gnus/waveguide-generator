@@ -335,7 +335,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
     // --- Step 3b: Refine angles at corners to match Y-axis roundover ---
     const { refined: refinedAngles, mapping: mouthToRefinedMap } =
-        refineAnglesForEnclosure(mouthAngles, mouthResult.outerPts, edgeSlices, edgeDepth);
+        refineAnglesForEnclosure(mouthAngles, mouthResult.outerPts, edgeSlices, edgeDepth, cx, cz);
     const refinedSize = refinedAngles.length;
     const addedPts = refinedSize - ringSize;
 
@@ -405,12 +405,17 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     } else {
         const seamNudge = 1e-4;
         ring0Start = vertices.length / 3;
-        for (let i = 0; i < ringSize; i++) {
-            const ipt = mouthInsetPts[i];
-            const mouthVY = vertices[(lastRowStart + i) * 3 + 1];
+        // When corner refinement adds extra points (addedPts > 0), ring0 uses
+        // the refined bodySize inset set so all subsequent rings share the same
+        // point count.  The fan-stitch between mouth (ringSize) and ring0
+        // (bodySize) is placed on the coplanar front baffle where it is invisible.
+        const ring0Size = addedPts > 0 ? bodySize : ringSize;
+        const ring0Pts = addedPts > 0 ? insetPts : mouthInsetPts;
+        for (let i = 0; i < ring0Size; i++) {
+            const ipt = ring0Pts[i];
             vertices.push(
                 ipt.x - (ipt.nx || 0) * seamNudge,
-                mouthVY,
+                mouthY,
                 ipt.z - (ipt.nz || 0) * seamNudge
             );
         }
@@ -418,21 +423,32 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
 
     const enclosureStartTri = indices.length / 3;
 
-    // Mouth to ring 0 stitch (1:1 direct)
+    // Mouth to ring 0 stitch
     if (!reuseMouthAsRing0) {
-        const limit = fullCircle ? ringSize : ringSize - 1;
-        for (let i = 0; i < limit; i++) {
-            const i2 = (i + 1) % ringSize;
-            pushTri(lastRowStart + i, lastRowStart + i2, ring0Start + i);
-            pushTri(lastRowStart + i2, ring0Start + i2, ring0Start + i);
+        if (addedPts > 0) {
+            // Fan-stitch from mouth (ringSize) to ring0 (bodySize) on the
+            // coplanar front baffle plane where fan triangles are invisible.
+            fanStitchRings(indices, pushTri, lastRowStart, ringSize, ring0Start, bodySize, mouthToRefinedMap, fullCircle);
+        } else {
+            const limit = fullCircle ? ringSize : ringSize - 1;
+            for (let i = 0; i < limit; i++) {
+                const i2 = (i + 1) % ringSize;
+                pushTri(lastRowStart + i, lastRowStart + i2, ring0Start + i);
+                pushTri(lastRowStart + i2, ring0Start + i2, ring0Start + i);
+            }
         }
     }
     const flatFrontEndTri = indices.length / 3;
 
-    // --- Step 5: Front roundover rings (mouth-angle spacing, ringSize pts) ---
-    // Use mouth-angle points so front roundover is identical to "mouth angles
-    // original" — smooth baffle transition with no fan-stitch artifacts.
+    // --- Step 5: Front roundover rings ---
+    // When corner refinement is active (addedPts > 0), use the refined bodySize
+    // point set so the front roundover has the same density as the sidewalls and
+    // back roundover, eliminating the fan-stitch corner artifacts that occurred
+    // when bridging between differently-sized rings on the sidewall.
     let prevRing = ring0Start;
+    const frontRingSize = addedPts > 0 ? bodySize : ringSize;
+    const frontInsetPts = addedPts > 0 ? insetPts : mouthInsetPts;
+    const frontOuterPts = addedPts > 0 ? outerPts : mouthOuterPts;
     for (let j = 1; j <= edgeSlices; j++) {
         const ringIdx = vertices.length / 3;
         const t = j / edgeSlices;
@@ -443,16 +459,16 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
             radialT = Math.sin(angle);
         }
         const y = mouthY - (axialT * edgeDepth);
-        for (let i = 0; i < ringSize; i++) {
-            const ipt = mouthInsetPts[i];
-            const opt = mouthOuterPts[i];
+        for (let i = 0; i < frontRingSize; i++) {
+            const ipt = frontInsetPts[i];
+            const opt = frontOuterPts[i];
             vertices.push(
                 ipt.x + (opt.x - ipt.x) * radialT,
                 y,
                 ipt.z + (opt.z - ipt.z) * radialT
             );
         }
-        stitchRing(prevRing, ringIdx, ringSize);
+        stitchRing(prevRing, ringIdx, frontRingSize);
         prevRing = ringIdx;
     }
     const frontRoundoverEndTri = indices.length / 3;
