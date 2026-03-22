@@ -100,7 +100,7 @@ async function writeWorkspaceTextFile(taskDirectoryHandle, fileName, content) {
   await writable.close();
 }
 
-async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest) {
+async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest, { fallbackWriteFile = null } = {}) {
   const exportState = buildScriptSnapshotExportState(manifest?.scriptSnapshot);
   if (!exportState) {
     return { fileName: null, warning: null };
@@ -115,7 +115,13 @@ async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest) {
     if (!content) {
       return { fileName: null, warning: 'Script snapshot build failed: config content missing.' };
     }
-    await writeWorkspaceTextFile(taskDirectoryHandle, fileName, content);
+    if (taskDirectoryHandle) {
+      await writeWorkspaceTextFile(taskDirectoryHandle, fileName, content);
+    } else if (typeof fallbackWriteFile === 'function') {
+      await fallbackWriteFile(fileName, content, 'text/plain');
+    } else {
+      return { fileName: null, warning: 'Script snapshot write skipped: no write target available.' };
+    }
     return { fileName, warning: null };
   } catch (error) {
     return {
@@ -128,7 +134,8 @@ async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest) {
 async function writeGenerationProjectManifest(taskDirectoryHandle, {
   directoryName,
   manifest,
-  scriptSnapshotFileName
+  scriptSnapshotFileName,
+  fallbackWriteFile = null
 } = {}) {
   try {
     const payload = buildGenerationProjectManifest({
@@ -140,11 +147,18 @@ async function writeGenerationProjectManifest(taskDirectoryHandle, {
       meshArtifactFileName: manifest?.meshArtifactFile ?? null,
       updatedAt: manifest?.updatedAt
     });
-    await writeWorkspaceTextFile(
-      taskDirectoryHandle,
-      GENERATION_PROJECT_MANIFEST_FILE_NAME,
-      `${JSON.stringify(payload, null, 2)}\n`
-    );
+    const content = `${JSON.stringify(payload, null, 2)}\n`;
+    if (taskDirectoryHandle) {
+      await writeWorkspaceTextFile(
+        taskDirectoryHandle,
+        GENERATION_PROJECT_MANIFEST_FILE_NAME,
+        content
+      );
+    } else if (typeof fallbackWriteFile === 'function') {
+      await fallbackWriteFile(GENERATION_PROJECT_MANIFEST_FILE_NAME, content, 'application/json');
+    } else {
+      return 'Project manifest write skipped: no write target available.';
+    }
     return null;
   } catch (error) {
     return `Project manifest write failed: ${error?.message || 'unknown error'}`;
@@ -282,8 +296,9 @@ async function getDirectoryHandleIfExists(rootDirectoryHandle, directoryName) {
   }
 }
 
-export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates = {}) {
-  if (!rootDirectoryHandle || typeof rootDirectoryHandle.getDirectoryHandle !== 'function') {
+export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates = {}, { fallbackWriteFile = null } = {}) {
+  const hasFolderHandle = rootDirectoryHandle && typeof rootDirectoryHandle.getDirectoryHandle === 'function';
+  if (!hasFolderHandle && typeof fallbackWriteFile !== 'function') {
     return { manifest: null, warning: 'Workspace folder is unavailable.' };
   }
 
@@ -297,15 +312,17 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
     const legacyDirectoryName = jobId;
 
     let existing = { manifest: null, warning: null };
-    const preferredExistingDir = await getDirectoryHandleIfExists(rootDirectoryHandle, preferredDirectoryName);
-    if (preferredExistingDir) {
-      existing = await readTaskManifest(preferredExistingDir);
-    }
+    if (hasFolderHandle) {
+      const preferredExistingDir = await getDirectoryHandleIfExists(rootDirectoryHandle, preferredDirectoryName);
+      if (preferredExistingDir) {
+        existing = await readTaskManifest(preferredExistingDir);
+      }
 
-    if (!existing.manifest && preferredDirectoryName !== legacyDirectoryName) {
-      const legacyDir = await getDirectoryHandleIfExists(rootDirectoryHandle, legacyDirectoryName);
-      if (legacyDir) {
-        existing = await readTaskManifest(legacyDir);
+      if (!existing.manifest && preferredDirectoryName !== legacyDirectoryName) {
+        const legacyDir = await getDirectoryHandleIfExists(rootDirectoryHandle, legacyDirectoryName);
+        if (legacyDir) {
+          existing = await readTaskManifest(legacyDir);
+        }
       }
     }
 
@@ -335,13 +352,34 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });
 
-    const taskDir = await rootDirectoryHandle.getDirectoryHandle(preferredDirectoryName, { create: true });
-    const manifest = await writeTaskManifest(taskDir, next);
-    const snapshotResult = await writeScriptSnapshotArtifact(taskDir, manifest);
-    const projectWarning = await writeGenerationProjectManifest(taskDir, {
+    let taskDir = null;
+    if (hasFolderHandle) {
+      taskDir = await rootDirectoryHandle.getDirectoryHandle(preferredDirectoryName, { create: true });
+      const manifest = await writeTaskManifest(taskDir, next);
+      const snapshotResult = await writeScriptSnapshotArtifact(taskDir, manifest);
+      const projectWarning = await writeGenerationProjectManifest(taskDir, {
+        directoryName: preferredDirectoryName,
+        manifest,
+        scriptSnapshotFileName: snapshotResult.fileName
+      });
+
+      return {
+        manifest,
+        warning: combineWarnings(existing.warning, snapshotResult.warning, projectWarning)
+      };
+    }
+
+    // Backend fallback: write manifest files via the fallback writer
+    const manifest = next;
+    const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
+    await fallbackWriteFile(TASK_MANIFEST_FILE_NAME, manifestContent, 'application/json');
+
+    const snapshotResult = await writeScriptSnapshotArtifact(null, manifest, { fallbackWriteFile });
+    const projectWarning = await writeGenerationProjectManifest(null, {
       directoryName: preferredDirectoryName,
       manifest,
-      scriptSnapshotFileName: snapshotResult.fileName
+      scriptSnapshotFileName: snapshotResult.fileName,
+      fallbackWriteFile
     });
 
     return {

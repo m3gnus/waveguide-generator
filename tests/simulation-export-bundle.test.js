@@ -100,13 +100,12 @@ test('exportResults writes selected bundle files into the task folder workspace'
     ]);
     assert.deepEqual(bundle.failures, []);
 
-    // exportResults uses baseName (job.label) as the subdirectory with a 'results' subfolder
+    // exportResults uses baseName (job.label) as the subdirectory
     const taskDir = await root.getDirectoryHandle('horn_12');
-    const resultsDir = await taskDir.getDirectoryHandle('results');
-    assert.equal(resultsDir.files.has('horn_12_results.csv'), true);
-    assert.equal(resultsDir.files.has('horn_12_results.json'), true);
-    assert.match(resultsDir.files.get('horn_12_results.csv'), /Frequency \(Hz\),SPL \(dB\)/);
-    assert.match(resultsDir.files.get('horn_12_results.json'), /"smoothing": "none"/);
+    assert.equal(taskDir.files.has('horn_12_results.csv'), true);
+    assert.equal(taskDir.files.has('horn_12_results.json'), true);
+    assert.match(taskDir.files.get('horn_12_results.csv'), /Frequency \(Hz\),SPL \(dB\)/);
+    assert.match(taskDir.files.get('horn_12_results.json'), /"smoothing": "none"/);
   } finally {
     resetSelectedFolder();
   }
@@ -185,7 +184,7 @@ test('exportResults routes fallback bundle writes through backend workspace subd
     assert.equal(fetchCalls.length, 1);
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     const body = fetchCalls[0].options.body;
-    assert.equal(body.get('workspace_subdir'), 'horn_34/results');
+    assert.equal(body.get('workspace_subdir'), 'horn_34');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();

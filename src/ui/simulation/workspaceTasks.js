@@ -120,13 +120,31 @@ export function syncSimulationWorkspaceIndex(jobEntries = []) {
 }
 
 export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
-  const folderHandle = getSelectedFolderHandle();
-  if (!folderHandle || !job?.id) {
+  if (!job?.id) {
     return null;
   }
 
+  const folderHandle = getSelectedFolderHandle();
   const nextUpdates = isObject(updates) ? updates : {};
-  const result = await updateTaskManifestForJob(folderHandle, job, nextUpdates);
+
+  const jobId = String(job.id).trim();
+  const subDirName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: jobId });
+
+  const fallbackWriteFile = !folderHandle
+    ? async (fileName, content, contentType) => {
+      await writeWorkspaceFile(fileName, content, {
+        contentType,
+        workspaceSubdir: subDirName
+      });
+    }
+    : null;
+
+  const result = await updateTaskManifestForJob(
+    folderHandle,
+    job,
+    nextUpdates,
+    { fallbackWriteFile }
+  );
   if (result.warning) {
     console.warn(result.warning);
   }
