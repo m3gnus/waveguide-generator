@@ -82,10 +82,13 @@ class PolarConfig(BaseModel):
 
 
 class AdvancedSimulationSettings(BaseModel):
-    """Advanced solve settings; only use_burton_miller is active in the current runtime."""
+    """Advanced solve settings forwarded to the BEM solver runtime."""
     enable_warmup: Optional[bool] = None
     bem_precision: Optional[str] = None
     use_burton_miller: Optional[bool] = None
+    quadrature_regular: Optional[int] = None
+    workgroup_size_multiple: Optional[int] = None
+    assembly_backend: Optional[str] = None
 
     @field_validator("bem_precision")
     @classmethod
@@ -95,6 +98,36 @@ class AdvancedSimulationSettings(BaseModel):
         normalized = str(value).strip().lower()
         if normalized not in VALID_BEM_PRECISIONS:
             raise ValueError("advanced_settings.bem_precision must be one of: single, double.")
+        return normalized
+
+    @field_validator("quadrature_regular")
+    @classmethod
+    def validate_quadrature_regular(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        v = int(value)
+        if v < 1 or v > 10:
+            raise ValueError("advanced_settings.quadrature_regular must be between 1 and 10.")
+        return v
+
+    @field_validator("workgroup_size_multiple")
+    @classmethod
+    def validate_workgroup_size_multiple(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        v = int(value)
+        if v < 1 or v > 8:
+            raise ValueError("advanced_settings.workgroup_size_multiple must be between 1 and 8.")
+        return v
+
+    @field_validator("assembly_backend")
+    @classmethod
+    def validate_assembly_backend(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = str(value).strip().lower()
+        if normalized not in ("opencl", "numba"):
+            raise ValueError("advanced_settings.assembly_backend must be one of: opencl, numba.")
         return normalized
 
 
