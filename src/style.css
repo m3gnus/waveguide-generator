@@ -28,6 +28,8 @@
   --warning-bg: oklch(58% 0.13 54 / 0.1);
   --error: oklch(50% 0.15 27);
   --error-bg: oklch(50% 0.15 27 / 0.08);
+  --info: oklch(48% 0.16 230);
+  --info-bg: oklch(48% 0.16 230 / 0.1);
 
   /* 3D Scene */
   --scene-bg: #f2ede4;
@@ -51,6 +53,7 @@
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
+  --sp-6: 32px;
 
   /* Radii */
   --r-sm: 4px;
@@ -95,6 +98,8 @@
     --warning-bg: oklch(75% 0.12 62 / 0.1);
     --error: oklch(65% 0.15 27);
     --error-bg: oklch(65% 0.15 27 / 0.08);
+    --info: oklch(72% 0.16 230);
+    --info-bg: oklch(72% 0.16 230 / 0.12);
 
     --scene-bg: #0a1018;
     --scene-grid-a: #192538;
@@ -122,7 +127,8 @@ body {
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
-  height: 100vh;
+  height: 100vh; /* fallback */
+  height: 100dvh;
   display: flex;
   -webkit-font-smoothing: antialiased;
 }
@@ -140,7 +146,8 @@ body {
   width: var(--panel-width);
   min-width: var(--panel-min);
   max-width: var(--panel-max);
-  height: 100vh;
+  height: 100vh; /* fallback */
+  height: 100dvh;
   background: var(--panel);
   display: flex;
   flex-direction: column;
@@ -213,6 +220,12 @@ body {
   background: var(--accent);
 }
 
+@media (pointer: coarse) {
+  #ui-panel-resizer {
+    width: 20px;
+  }
+}
+
 #canvas-container {
   flex-grow: 1;
   position: relative;
@@ -249,7 +262,8 @@ body {
   width: var(--panel-width);
   min-width: var(--panel-min);
   max-width: var(--panel-max);
-  height: 100vh;
+  height: 100vh; /* fallback */
+  height: 100dvh;
   background: var(--panel);
   display: flex;
   flex-direction: column;
@@ -278,6 +292,12 @@ body {
   background: var(--accent);
 }
 
+@media (pointer: coarse) {
+  #actions-panel-resizer {
+    width: 20px;
+  }
+}
+
 /* ── 4. Typography ────────────────────────────────────────── */
 
 h1 {
@@ -287,7 +307,7 @@ h1 {
   margin-bottom: var(--sp-3);
 }
 
-h3 {
+h2 {
   font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
@@ -418,7 +438,8 @@ details.section > summary {
 [data-tooltip] {
   position: relative;
 }
-[data-tooltip]:hover::after {
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
   content: attr(data-tooltip);
   position: absolute;
   left: 0;
@@ -507,7 +528,7 @@ details.section[open] > summary {
   margin-bottom: var(--sp-2);
 }
 
-.section-header h3 {
+.section-header h2 {
   margin-bottom: 0;
 }
 
@@ -555,7 +576,7 @@ details.section[open] > summary {
 
 .input-row-4 {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(48px, 1fr));
   gap: var(--sp-2);
   margin-bottom: var(--sp-2);
 }
@@ -683,7 +704,8 @@ input[type="checkbox"] {
   z-index: 30;
 }
 
-[data-help-text]:hover::after {
+[data-help-text]:hover::after,
+[data-help-text]:focus-visible::after {
   opacity: 1;
 }
 
@@ -870,6 +892,7 @@ button.secondary:hover:not(:disabled),
     0 0 8px oklch(60% 0.18 52 / 0.6),
     0 0 15px oklch(60% 0.18 52 / 0.3);
   animation: status-pulse 1.5s ease-in-out infinite;
+  will-change: transform, box-shadow;
 }
 .status-dot.simulating::after {
   content: "◌";
@@ -907,6 +930,7 @@ button.secondary:hover:not(:disabled),
     box-shadow:
       0 0 9px oklch(75% 0.15 62 / 0.7),
       0 0 18px oklch(75% 0.15 62 / 0.35);
+    will-change: transform, box-shadow;
   }
   @keyframes status-pulse {
     0%,
@@ -1124,7 +1148,7 @@ details.section > details.simulation-mesh-diagnostics-window {
 }
 
 .simulation-job-open-folder:hover {
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .simulation-job-open-folder svg {
@@ -1155,7 +1179,7 @@ details.section > details.simulation-mesh-diagnostics-window {
   display: grid;
   gap: var(--sp-2);
   overflow-y: auto;
-  max-height: calc(100vh - 460px);
+  max-height: clamp(120px, calc(100dvh - 460px), 600px);
 }
 
 /* Job card */
@@ -1364,8 +1388,7 @@ details.section > details.simulation-mesh-diagnostics-window {
 
 @media (prefers-color-scheme: dark) {
   .viewer-controls {
-    background: oklch(18% 0.02 258 / 0.85);
-    backdrop-filter: blur(8px);
+    background: oklch(18% 0.02 258 / 0.92);
   }
 }
 
@@ -1454,7 +1477,7 @@ details.section > details.simulation-mesh-diagnostics-window {
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
-  background: var(--panel-2);
+  background: var(--surface);
   color: var(--text);
   font-size: var(--text-sm);
   line-height: 1.5;
@@ -2777,7 +2800,7 @@ textarea {
   background: var(--accent);
   color: var(--accent-text);
   text-decoration: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   font-size: var(--text-sm);
   font-weight: 500;
   transition: top 0.15s ease;
