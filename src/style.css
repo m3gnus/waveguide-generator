@@ -414,23 +414,27 @@ details.section > summary {
   position: relative;
 }
 
-/* CSS tooltip for section descriptions */
-details.section > summary[title]:hover::after {
-  content: attr(title);
+/* CSS tooltip — unified white style for summaries and labels */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
   position: absolute;
-  left: var(--sp-3);
+  left: 0;
   top: 100%;
-  z-index: 10;
+  z-index: 100;
   max-width: 260px;
   padding: 6px 10px;
-  background: var(--text);
-  color: var(--panel);
+  background: var(--panel);
+  color: var(--text);
   font-size: var(--text-xs);
   font-weight: 400;
   text-transform: none;
   letter-spacing: normal;
   line-height: 1.4;
   border-radius: var(--r-sm);
+  border: 1px solid var(--border);
   pointer-events: none;
   white-space: normal;
   box-shadow: var(--shadow-md);
