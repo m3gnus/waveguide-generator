@@ -10,7 +10,6 @@ When committing:
 1. Stage all modified files and new files (except `.claude/` and other ephemeral dirs)
 2. Create a descriptive commit message following the existing convention
 3. One commit per session preferred
-4. Include a "Co-Authored-By" trailer if using auto-commit via tools
 
 ## Development Preferences
 - No automatic code formatting or refactoring unless explicitly requested
