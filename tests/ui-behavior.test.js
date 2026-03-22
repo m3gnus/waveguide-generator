@@ -584,6 +584,7 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
         hidden: false,
         type: "",
         title: "",
+        style: {},
         dataset: {},
         setAttribute(k, v) {
           this._attrs[k] = v;
@@ -771,6 +772,7 @@ test("openSettingsModal places check-updates-btn inside the modal, not in the ac
         hidden: false,
         type: "",
         title: "",
+        style: {},
         dataset: {},
         setAttribute(k, v) {
           this._attrs[k] = v;
@@ -892,6 +894,7 @@ function createSettingsModalDocument(createdElements, appendedChildren) {
         name: "",
         value: "",
         checked: false,
+        style: {},
         dataset: {},
         min: "",
         max: "",

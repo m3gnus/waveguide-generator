@@ -286,8 +286,8 @@ test('renderPolarSettingsSection builds the directivity block from polar metadat
   assert.ok(doc.getElementById('polar-observation-origin'));
   const section = container.children[0];
   assert.equal(section.children[0].textContent, 'Directivity Map');
-  // Description is now a tooltip on the summary/section, not a visible child element
-  const tooltipText = section.children[0].title || section.children[0].attributes?.title || section.title || section.attributes?.title || '';
+  // Description is now a data-tooltip on the summary/section, not a visible child element
+  const tooltipText = section.children[0].attributes?.["data-tooltip"] || section.attributes?.["data-tooltip"] || '';
   assert.match(tooltipText, /Polar planes and angular sampling/i);
   assert.equal(container.children.length, 1);
 });

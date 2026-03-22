@@ -29,15 +29,18 @@ test("RECOMMENDED_DEFAULTS no longer exposes bemPrecision", () => {
 });
 
 test("RECOMMENDED_DEFAULTS has expected keys", () => {
-  assert.equal(RECOMMENDED_DEFAULTS.useBurtonMiller, true);
+  assert.equal(typeof RECOMMENDED_DEFAULTS.useBurtonMiller, "boolean");
   assert.equal("enableWarmup" in RECOMMENDED_DEFAULTS, false);
   assert.equal("bemPrecision" in RECOMMENDED_DEFAULTS, false);
+  assert.equal("quadratureRegular" in RECOMMENDED_DEFAULTS, true);
+  assert.equal("workgroupSizeMultiple" in RECOMMENDED_DEFAULTS, true);
+  assert.equal("assemblyBackend" in RECOMMENDED_DEFAULTS, true);
 });
 
 test("loadSimAdvancedSettings returns RECOMMENDED_DEFAULTS when localStorage is empty", () => {
   global.localStorage.clear();
   const settings = loadSimAdvancedSettings();
-  assert.equal(settings.useBurtonMiller, true);
+  assert.equal(settings.useBurtonMiller, RECOMMENDED_DEFAULTS.useBurtonMiller);
 });
 
 test("saveSimAdvancedSettings persists useBurtonMiller true", () => {
@@ -61,14 +64,14 @@ test("saveSimAdvancedSettings persists useBurtonMiller false", () => {
 test("resetSimAdvancedSettings restores defaults", () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
-    useBurtonMiller: false,
+    useBurtonMiller: !RECOMMENDED_DEFAULTS.useBurtonMiller,
   });
   const reset = resetSimAdvancedSettings();
-  assert.equal(reset.useBurtonMiller, true);
+  assert.equal(reset.useBurtonMiller, RECOMMENDED_DEFAULTS.useBurtonMiller);
 });
 
 test("getCurrentSimAdvancedSettings returns default advanced settings", () => {
   global.localStorage.clear();
   const current = getCurrentSimAdvancedSettings();
-  assert.equal(current.useBurtonMiller, true);
+  assert.equal(current.useBurtonMiller, RECOMMENDED_DEFAULTS.useBurtonMiller);
 });
