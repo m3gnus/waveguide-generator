@@ -230,8 +230,9 @@ function refineAnglesForEnclosure(mouthAngles, outerPts, edgeSlices, edgeDepth) 
  * small-ring point i.  Between mapping[i] and mapping[i+1] there may be
  * extra large-ring vertices that fan out from small-ring vertex i.
  */
-function fanStitchRings(indices, pushTri, sStart, sSize, lStart, lSize, mapping) {
-    for (let i = 0; i < sSize; i++) {
+function fanStitchRings(indices, pushTri, sStart, sSize, lStart, lSize, mapping, wrap = true) {
+    const limit = wrap ? sSize : sSize - 1;
+    for (let i = 0; i < limit; i++) {
         const i2 = (i + 1) % sSize;
         const lS = mapping[i];
         const lE = mapping[i2]; // Use mapping for wrap-around (mapping[0]=0 triggers wrap path)
@@ -241,20 +242,20 @@ function fanStitchRings(indices, pushTri, sStart, sSize, lStart, lSize, mapping)
         if (lE <= lS) {
             // Wrap-around: lS → end of ring, then 0 → lE
             for (let k = lS; k < lSize - 1; k++) {
-                pushTri(sA, lStart + k, lStart + k + 1);
+                pushTri(sA, lStart + k + 1, lStart + k);
             }
             // Bridge from last large-ring vertex to first
-            pushTri(sA, lStart + lSize - 1, lStart + 0);
+            pushTri(sA, lStart + 0, lStart + lSize - 1);
             // Continue from 0 to lE
             for (let k = 0; k < lE; k++) {
-                pushTri(sA, lStart + k, lStart + k + 1);
+                pushTri(sA, lStart + k + 1, lStart + k);
             }
-            pushTri(sA, lStart + lE, sB);
+            pushTri(sA, sB, lStart + lE);
         } else {
             for (let k = lS; k < lE; k++) {
-                pushTri(sA, lStart + k, lStart + k + 1);
+                pushTri(sA, lStart + k + 1, lStart + k);
             }
-            pushTri(sA, lStart + lE, sB);
+            pushTri(sA, sB, lStart + lE);
         }
     }
 }
