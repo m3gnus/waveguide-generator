@@ -1,6 +1,6 @@
 // @ts-check
 
-import { updateStageUi, setProgressVisible, restoreConnectionStatus, getSimulationDom } from './progressUi.js';
+import { updateStageUi, setProgressVisible, restoreConnectionStatus } from './progressUi.js';
 import { showError } from '../feedback.js';
 import { getAutoExportOnComplete } from '../settings/simulationManagementSettings.js';
 import { persistSimulationGenerationArtifacts } from './workspaceTasks.js';
@@ -74,7 +74,6 @@ export function pollSimulationStatus(panel) {
 
   const pollOnce = async () => {
     try {
-      const { runBtn } = getSimulationDom();
       const { activeJob, anyActive } = await reconcileSimulationControllerRemoteJobs(panel, {
         onManifestSyncError: (error) => {
           console.warn('Task manifest sync failed during polling:', error);
@@ -166,7 +165,6 @@ export function pollSimulationStatus(panel) {
       panel.pollDelayMs = anyActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
 
       if (!anyActive) {
-        if (runBtn) runBtn.disabled = false;
         setTimeout(() => {
           setProgressVisible(false);
           restoreConnectionStatus(panel);
@@ -187,8 +185,6 @@ export function pollSimulationStatus(panel) {
         message: 'Error checking status'
       });
       showError('Error checking simulation status.');
-      const { runBtn } = getSimulationDom();
-      if (runBtn) runBtn.disabled = false;
       restoreConnectionStatus(panel);
     } finally {
       // Internal reschedule: clear previous timer ref and set new one without
