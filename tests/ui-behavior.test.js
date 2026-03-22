@@ -334,7 +334,7 @@ test("renderSimulationMeshDiagnostics shows canonical tag counts and warnings", 
     });
 
     assert.match(diagnosticsEl.innerHTML, /12 verts/);
-    assert.match(diagnosticsEl.innerHTML, /Preview Geometry/);
+    assert.match(diagnosticsEl.innerHTML, /Simulation Geometry/);
     assert.match(diagnosticsEl.innerHTML, /Geometry Regions/);
     assert.match(diagnosticsEl.innerHTML, /Throat Disc/);
     assert.match(diagnosticsEl.innerHTML, /Inner Wall/);
