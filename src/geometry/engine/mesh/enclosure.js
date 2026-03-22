@@ -172,7 +172,7 @@ function generateEnclosurePointsFromAngles(
  * Returns { refined, mapping } where `refined` is the new angle array and
  * `mapping[i]` gives the index in `refined` that corresponds to mouth angle i.
  */
-function refineAnglesForEnclosure(mouthAngles, outerPts, edgeSlices, edgeDepth) {
+function refineAnglesForEnclosure(mouthAngles, outerPts, edgeSlices, edgeDepth, cx, cz) {
     const n = mouthAngles.length;
     const roundoverArcStep = edgeSlices > 0 && edgeDepth > 0
         ? (edgeDepth * Math.PI / 2) / edgeSlices
@@ -209,13 +209,13 @@ function refineAnglesForEnclosure(mouthAngles, outerPts, edgeSlices, edgeDepth) 
                 : 0;
             for (let k = 1; k <= subdivs; k++) {
                 const t = k / (subdivs + 1);
-                let a0 = mouthAngles[i], a1 = mouthAngles[j];
-                if (a1 - a0 > Math.PI) a1 -= 2 * Math.PI;
-                if (a0 - a1 > Math.PI) a1 += 2 * Math.PI;
-                let a = a0 + (a1 - a0) * t;
-                if (a < -Math.PI) a += 2 * Math.PI;
-                if (a > Math.PI) a -= 2 * Math.PI;
-                refined.push(a);
+                // Interpolate position along the boundary segment, then compute
+                // angle from centroid.  This produces evenly-spaced boundary
+                // points regardless of how far the segment is from the centroid,
+                // fixing non-uniform density with asymmetric enclosure spacing.
+                const px = outerPts[i].x + (outerPts[j].x - outerPts[i].x) * t;
+                const pz = outerPts[i].z + (outerPts[j].z - outerPts[i].z) * t;
+                refined.push(Math.atan2(pz - cz, px - cx));
             }
         }
         // Preserve direct index mapping from mouth-angle index -> refined index.
