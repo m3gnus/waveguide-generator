@@ -200,7 +200,7 @@ export function setupMobilePanelToggle() {
     panel.classList.add("is-open");
     backdrop.classList.add("is-visible");
     toggle.setAttribute("aria-expanded", "true");
-    toggle.innerHTML = "✕";
+    toggle.style.display = "none";
     document.body.style.overflow = "hidden";
   };
 
@@ -208,7 +208,7 @@ export function setupMobilePanelToggle() {
     panel.classList.remove("is-open");
     backdrop.classList.remove("is-visible");
     toggle.setAttribute("aria-expanded", "false");
-    toggle.innerHTML = "☰";
+    toggle.style.display = "";
     document.body.style.overflow = "";
   };
 

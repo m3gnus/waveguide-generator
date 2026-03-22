@@ -2533,10 +2533,8 @@ button.secondary:hover:not(:disabled),
     display: none;
   }
 
-  /* Hide the in-panel close button — the mobile toggle serves as close */
-  #panel-close-btn {
-    display: none;
-  }
+  /* The fixed toggle is hidden via JS when panel is open;
+     the in-panel close button (shown by default at 768px) handles closing. */
 
   /* Hide actions panel in its original position on mobile — content is
      cloned into the ui-panel as a tab instead. */
