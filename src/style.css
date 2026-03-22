@@ -2544,7 +2544,7 @@ button.secondary:hover:not(:disabled),
     display: none;
     flex-direction: column;
     overflow-y: auto;
-    padding: 0;
+    padding: var(--sp-3);
   }
 
   #actions-tab.active {
