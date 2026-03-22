@@ -216,48 +216,85 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
   }
 }
 
-export function calculateCurvatureColors(geometry, radialSteps, lengthSteps) {
+function curvatureJetColor(t) {
+  // Multi-stop jet colormap: dark blue → blue → cyan → green → yellow → red → dark red
+  const stops = [
+    [0.000, [0.0, 0.0, 0.5]],
+    [0.125, [0.0, 0.0, 1.0]],
+    [0.375, [0.0, 1.0, 1.0]],
+    [0.625, [1.0, 1.0, 0.0]],
+    [0.875, [1.0, 0.0, 0.0]],
+    [1.000, [0.5, 0.0, 0.0]],
+  ];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [t0, c0] = stops[i];
+    const [t1, c1] = stops[i + 1];
+    if (t >= t0 && t <= t1) {
+      const f = (t - t0) / (t1 - t0);
+      return [
+        c0[0] + f * (c1[0] - c0[0]),
+        c0[1] + f * (c1[1] - c0[1]),
+        c0[2] + f * (c1[2] - c0[2]),
+      ];
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+export function calculateCurvatureColors(geometry) {
   const normals = geometry.attributes.normal.array;
   const count = normals.length / 3;
-  const colors = new Float32Array(count * 3);
+  const rawCurvature = new Float32Array(count);
+  const neighborCount = new Int32Array(count);
 
-  // Default all vertices to zero-curvature (covers enclosure / non-grid geometry)
-  for (let v = 0; v < count; v++) {
-    colors[v * 3 + 1] = 1;
-    colors[v * 3 + 2] = 0.5;
+  // Build adjacency from index buffer — covers horn grid AND enclosure vertices
+  const indexAttr = geometry.index;
+  if (indexAttr) {
+    const idx = indexAttr.array;
+    const triCount = idx.length / 3;
+    for (let t = 0; t < triCount; t++) {
+      const a = idx[t * 3];
+      const b = idx[t * 3 + 1];
+      const c = idx[t * 3 + 2];
+      const pairs = [[a, b], [b, c], [a, c]];
+      for (const [vi, vj] of pairs) {
+        const ni = vi * 3, nj = vj * 3;
+        const dot = Math.max(-1, Math.min(1,
+          normals[ni]     * normals[nj] +
+          normals[ni + 1] * normals[nj + 1] +
+          normals[ni + 2] * normals[nj + 2]
+        ));
+        const d = 1.0 - dot;
+        rawCurvature[vi] += d;
+        neighborCount[vi]++;
+        rawCurvature[vj] += d;
+        neighborCount[vj]++;
+      }
+    }
   }
 
-  for (let j = 0; j <= lengthSteps; j++) {
-    for (let i = 0; i < radialSteps; i++) {
-      const idx = (j * radialSteps + i) * 3;
-      const nx = normals[idx];
-      const ny = normals[idx + 1];
-      const nz = normals[idx + 2];
-      let curvature = 0;
-      let sampleCount = 0;
-      const neighbors = [
-        [j - 1, i],
-        [j + 1, i],
-        [j, (i - 1 + radialSteps) % radialSteps],
-        [j, (i + 1) % radialSteps],
-      ];
-      neighbors.forEach(([nj, ni]) => {
-        if (nj >= 0 && nj <= lengthSteps) {
-          const nIdx = (nj * radialSteps + ni) * 3;
-          const d =
-            1.0 -
-            (nx * normals[nIdx] +
-              ny * normals[nIdx + 1] +
-              nz * normals[nIdx + 2]);
-          curvature += d;
-          sampleCount++;
-        }
-      });
-      const c = Math.min(1.0, (curvature / sampleCount) * 50.0);
-      colors[idx] = c;
-      colors[idx + 1] = 1 - c;
-      colors[idx + 2] = 0.5;
+  // Average per-vertex curvature
+  let maxC = 0;
+  for (let v = 0; v < count; v++) {
+    if (neighborCount[v] > 0) {
+      rawCurvature[v] /= neighborCount[v];
+      if (rawCurvature[v] > maxC) maxC = rawCurvature[v];
     }
+  }
+
+  // Auto-scale: normalize so the 95th-percentile maps to 1.0 (prevents outliers washing out the range)
+  const sorted = rawCurvature.slice().sort();
+  const p95 = sorted[Math.floor(count * 0.95)] || maxC || 1;
+  const scale = p95 > 0 ? 1.0 / p95 : 1.0;
+
+  const colors = new Float32Array(count * 3);
+  for (let v = 0; v < count; v++) {
+    // Mild power curve to spread mid-range values
+    const c = Math.min(1.0, Math.pow(rawCurvature[v] * scale, 0.6));
+    const rgb = curvatureJetColor(c);
+    colors[v * 3]     = rgb[0];
+    colors[v * 3 + 1] = rgb[1];
+    colors[v * 3 + 2] = rgb[2];
   }
   return colors;
 }
@@ -346,9 +383,7 @@ function createMaterialForMode(mode, geometry, preparedParams) {
         side: THREE.DoubleSide,
       });
     case "curvature": {
-      const ang = (preparedParams && preparedParams.angularSegments) || 80;
-      const len = (preparedParams && preparedParams.lengthSegments) || 20;
-      const colors = calculateCurvatureColors(geometry, ang, len);
+      const colors = calculateCurvatureColors(geometry);
       geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
       return new THREE.MeshPhongMaterial({
         vertexColors: true,
