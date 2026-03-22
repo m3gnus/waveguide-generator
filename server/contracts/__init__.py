@@ -40,9 +40,9 @@ class PolarConfig(BaseModel):
     """
 
     angle_range: List[float] = [0, 180, 37]
-    norm_angle: float = 5.0
+    norm_angle: float = 10.0
     distance: float = 2.0
-    inclination: float = 35.0
+    inclination: float = 45.0
     enabled_axes: List[str] = ["horizontal", "vertical", "diagonal"]
     observation_origin: str = "mouth"
 
