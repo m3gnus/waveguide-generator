@@ -369,7 +369,6 @@ export function renderJobList(panel) {
       <div class="simulation-job-header">
         <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
           <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
-          ${source.mode === "folder" ? `<button type="button" class="simulation-job-open-folder" data-job-action="open-folder" data-job-id="${job.id}" aria-label="Open in Finder" title="Open results folder in Finder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>` : ""}
         </div>
         <button type="button" class="simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
       </div>
@@ -380,6 +379,7 @@ export function renderJobList(panel) {
       <div class="simulation-job-actions">
         ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
         ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export results">Export</button>` : ""}
+        ${job.status === "complete" && source.mode === "folder" ? `<button type="button" class="btn-secondary button-compact" data-job-action="open-folder" data-job-id="${job.id}" title="Open output folder">View Output</button>` : ""}
         ${job.script ? `<button type="button" class="btn-secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters">Load</button>` : ""}
         ${canRerun ? `<button type="button" class="btn-secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Rerun">Rerun</button>` : ""}
         ${canStop ? `<button type="button" class="btn-tertiary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop">Stop</button>` : ""}
