@@ -174,9 +174,15 @@ def interpolate_ath_to_freqs(ath_data, target_freqs):
 
 
 def compare_results(label, sim_results, ath_spl_interp, sim_freqs):
-    """Compare simulation SPL with ATH reference."""
+    """Compare simulation SPL with ATH reference, normalized to match at 1 kHz."""
     sim_spl = np.array(sim_results["spl_on_axis"]["spl"])
-    diffs = sim_spl - ath_spl_interp
+
+    # Normalize both curves: align at closest frequency to 1 kHz
+    ref_idx = np.argmin(np.abs(sim_freqs - 1000.0))
+    offset = sim_spl[ref_idx] - ath_spl_interp[ref_idx]
+    sim_spl_norm = sim_spl - offset  # shift BEM to match ATH level at 1 kHz
+
+    diffs = sim_spl_norm - ath_spl_interp
     abs_diffs = np.abs(diffs)
 
     return {
@@ -184,8 +190,12 @@ def compare_results(label, sim_results, ath_spl_interp, sim_freqs):
         "mean_abs_diff": float(np.mean(abs_diffs)),
         "max_abs_diff": float(np.max(abs_diffs)),
         "rms_diff": float(np.sqrt(np.mean(diffs**2))),
+        "offset_applied": float(offset),
+        "ref_freq": float(sim_freqs[ref_idx]),
         "diffs": diffs.tolist(),
         "sim_spl": sim_spl.tolist(),
+        "sim_spl_norm": sim_spl_norm.tolist(),
+        "ath_spl_interp": ath_spl_interp.tolist(),
         "frequencies": sim_freqs.tolist(),
     }
 
@@ -238,13 +248,13 @@ def main():
     # Detailed per-frequency comparison for best config
     best = min(all_results, key=lambda x: x["mean_abs_diff"])
     print(f"\nBest match: {best['label']}")
-    print(f"\n{'Freq (Hz)':>10} {'ATH':>10} {'BEM':>10} {'Diff':>10}")
+    print(f"  Level offset applied: {best['offset_applied']:+.1f} dB (aligned at {best['ref_freq']:.0f} Hz)")
+    print(f"\n{'Freq (Hz)':>10} {'ATH (dB)':>10} {'BEM (dB)':>10} {'Diff':>10}")
     print("-" * 42)
 
-    ath_interp = interpolate_ath_to_freqs(ath["spl_on_axis"], np.array(best["frequencies"]))
     for i, freq in enumerate(best["frequencies"]):
-        flag = " ***" if abs(best["diffs"][i]) > 3 else ""
-        print(f"{freq:>10.0f} {ath_interp[i]:>10.1f} {best['sim_spl'][i]:>10.1f} {best['diffs'][i]:>+10.1f}{flag}")
+        flag = " ***" if abs(best["diffs"][i]) > 3 else " *" if abs(best["diffs"][i]) > 1.5 else ""
+        print(f"{freq:>10.0f} {best['ath_spl_interp'][i]:>10.1f} {best['sim_spl_norm'][i]:>10.1f} {best['diffs'][i]:>+10.1f}{flag}")
 
     # Save
     out = Path(__file__).parent / "compare_ath_results.json"
