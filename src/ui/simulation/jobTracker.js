@@ -99,7 +99,7 @@ function toStorageItem(item) {
 }
 
 function resolveSortTimestamp(item) {
-  return Date.parse(item.completedAt || item.createdAt || item.queuedAt || item.startedAt || '') || 0;
+  return Date.parse(item.createdAt || item.queuedAt || item.startedAt || item.completedAt || '') || 0;
 }
 
 export function sortJobs(items, { sortBy = 'completed_desc' } = {}) {
