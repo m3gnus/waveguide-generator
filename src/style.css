@@ -468,19 +468,15 @@ details.section[open] > summary {
 }
 
 /* Simulation section fills remaining panel height when open */
-#actions-panel > details.section:last-child {
+#actions-panel > details.section:first-of-type {
   flex: 1 1 auto;
   min-height: 0;
   overflow: visible;
 }
 
-/* Model section — sticky at bottom of right panel */
+/* Model section — pinned at bottom of right panel */
 .actions-panel-model {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  background: var(--panel);
-  margin-top: auto;
+  flex-shrink: 0;
 }
 
 .section-header {
