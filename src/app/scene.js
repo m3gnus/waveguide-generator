@@ -6,6 +6,7 @@ import {
   createOrthoCamera,
   ZebraShader,
   getSceneThemeColors,
+  attachCameraLights,
 } from "../viewer/index.js";
 import { prepareViewportMesh } from "../modules/geometry/useCases.js";
 import { detachThroatDiscVertices, detachEnclosureSeamVertices } from "./viewportMesh.js";
@@ -28,6 +29,8 @@ export function setupScene(app) {
   } else {
     app.camera = createPerspectiveCamera(aspect);
   }
+  app.scene.add(app.camera);
+  attachCameraLights(app.camera, getSceneThemeColors());
 
   try {
     app.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -456,6 +459,7 @@ export function toggleCamera(app) {
 
   app.camera.position.copy(pos);
   app.scene.add(app.camera);
+  attachCameraLights(app.camera, getSceneThemeColors());
 
   const oldControls = app.controls;
   app.controls = new OrbitControls(app.camera, app.renderer.domElement);

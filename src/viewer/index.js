@@ -66,17 +66,10 @@ export function createScene() {
   const colors = getSceneThemeColors();
   scene.background = colors.bg;
 
-  // Lights
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+  // Lights — only ambient in scene; directional lights live on the camera
+  // so shading shifts as the user orbits (making curvature visible from any angle).
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
   scene.add(ambientLight);
-
-  const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-  dirLight.position.set(100, 200, 100);
-  scene.add(dirLight);
-
-  const topLight = new THREE.DirectionalLight(colors.topLight, 0.45);
-  topLight.position.set(-100, 500, -100);
-  scene.add(topLight);
 
   // Grid
   const grid = new THREE.GridHelper(1000, 20, colors.gridA, colors.gridB);
@@ -87,6 +80,21 @@ export function createScene() {
   scene.add(axes);
 
   return scene;
+}
+
+// --- CAMERA LIGHTS ---
+// Call after creating a camera; lights are added as children so they stay
+// fixed relative to the screen while the model rotates beneath them.
+export function attachCameraLights(camera, colors) {
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
+  dirLight.position.set(-1, 2, 2); // upper-left in camera space
+  camera.add(dirLight);
+
+  const fillLight = new THREE.DirectionalLight(colors.topLight, 0.5);
+  fillLight.position.set(2, -1, 1); // lower-right fill
+  camera.add(fillLight);
+
+  return { dirLight, fillLight };
 }
 
 // --- CAMERAS ---
