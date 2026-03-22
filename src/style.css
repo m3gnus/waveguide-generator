@@ -759,6 +759,10 @@ button.secondary:hover:not(:disabled),
   margin-bottom: 0;
 }
 
+.button-row--name-counter {
+  grid-template-columns: 2fr 1fr;
+}
+
 .button-compact {
   font-size: var(--text-xs) !important;
   padding: 4px var(--sp-2) !important;
