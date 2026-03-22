@@ -480,6 +480,7 @@ export function toggleCamera(app) {
   const aspect = width / height;
   const pos = app.camera.position.clone();
   const target = app.controls.target.clone();
+  const prevCamera = app.camera;
 
   if (app.cameraMode === "perspective") {
     const size = getOrthoSize();
@@ -492,6 +493,7 @@ export function toggleCamera(app) {
     document.getElementById("camera-toggle").innerText = "⬚";
   }
 
+  app.scene.remove(prevCamera);
   app.camera.position.copy(pos);
   app.scene.add(app.camera);
   attachCameraLights(app.camera, getSceneThemeColors());
