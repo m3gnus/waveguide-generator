@@ -133,7 +133,7 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   return result.manifest;
 }
 
-export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null, dirName = null } = {}) {
+export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null, dirName = null, subDir = null } = {}) {
   const folderHandle = getSelectedFolderHandle();
   if (folderHandle && job?.id) {
     try {
@@ -144,7 +144,10 @@ export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite =
 
       const subDirName = dirName || resolveTaskWorkspaceDirectoryName(job);
       const taskDir = await folderHandle.getDirectoryHandle(subDirName, { create: true });
-      const fileHandle = await taskDir.getFileHandle(file.fileName, { create: true });
+      const writeDir = subDir
+        ? await taskDir.getDirectoryHandle(subDir, { create: true })
+        : taskDir;
+      const fileHandle = await writeDir.getFileHandle(file.fileName, { create: true });
       const writable = await fileHandle.createWritable();
       const blob = file.content instanceof Blob
         ? file.content
