@@ -11,7 +11,7 @@ import {
   renderBackendSimulationMeshDiagnostics,
   renderJobList
 } from './jobActions.js';
-import { setPollTimer } from './jobOrchestration.js';
+import { setPollTimer, clearPollTimer } from './jobOrchestration.js';
 import {
   ensureSimulationControllerJobResults,
   recordSimulationControllerExport,
@@ -162,22 +162,24 @@ export function pollSimulationStatus(panel) {
 
       panel.pollBackoffMs = ACTIVE_POLL_MS;
       panel.consecutivePollFailures = 0;
-      panel.pollDelayMs = anyActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+      panel.pollDelayMs = ACTIVE_POLL_MS;
 
       if (!anyActive) {
+        renderJobList(panel);
+        // Show the final stage briefly, then restore connection status and stop polling.
         setTimeout(() => {
           setProgressVisible(false);
           restoreConnectionStatus(panel);
-        }, 1000);
+        }, 3000);
+        clearPollTimer(panel);
+        return;
       }
 
       renderJobList(panel);
     } catch (error) {
       panel.consecutivePollFailures = (Number(panel.consecutivePollFailures) || 0) + 1;
       panel.pollBackoffMs = nextBackoffMs(panel.pollBackoffMs);
-      panel.pollDelayMs = hasActiveJobs(panel)
-        ? panel.pollBackoffMs
-        : Math.max(IDLE_POLL_MS, panel.pollBackoffMs);
+      panel.pollDelayMs = panel.pollBackoffMs;
       console.error('Status polling error:', error);
       updateStageUi(panel, {
         progress: 1,
@@ -186,13 +188,15 @@ export function pollSimulationStatus(panel) {
       });
       showError('Error checking simulation status.');
       restoreConnectionStatus(panel);
+      clearPollTimer(panel);
+      return;
     } finally {
-      // Internal reschedule: clear previous timer ref and set new one without
-      // resetting isPolling (clearPollTimer resets isPolling; use inline here
-      // so the loop guard remains active while the next tick is pending).
-      if (panel.pollTimer) clearTimeout(panel.pollTimer);
-      const nextTimer = setTimeout(() => { pollOnce().catch(() => {}); }, panel.pollDelayMs);
-      setPollTimer(panel, nextTimer);
+      // Only reschedule if the loop hasn't been stopped (clearPollTimer resets isPolling).
+      if (panel.isPolling) {
+        if (panel.pollTimer) clearTimeout(panel.pollTimer);
+        const nextTimer = setTimeout(() => { pollOnce().catch(() => {}); }, panel.pollDelayMs);
+        setPollTimer(panel, nextTimer);
+      }
     }
   };
 
