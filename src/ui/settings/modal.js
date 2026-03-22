@@ -27,6 +27,9 @@ import {
   RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
   getCurrentSimAdvancedSettings,
   getUseBurtonMiller,
+  getQuadratureRegular,
+  getWorkgroupSizeMultiple,
+  getAssemblyBackend,
   resetSimAdvancedSettings,
   saveSimAdvancedSettings,
 } from "./simAdvancedSettings.js";
@@ -99,12 +102,30 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   useBurtonMiller:
-    "Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation. Keep this on unless you are specifically investigating the standard BIE. Recommended default: On.",
+    "Adds the hypersingular operator coupling that eliminates fictitious interior resonances in the BEM formulation. " +
+    "Turning this off roughly halves solve time per frequency (2 operators instead of 4), but may produce artifacts " +
+    "at certain frequencies where interior resonances of the mesh coincide with the excitation frequency. " +
+    "Recommended: On for final/accurate solves, Off acceptable for quick exploratory sweeps.",
+  quadratureRegular:
+    "Number of Gauss quadrature points per element pair for regular (non-singular) integrals. " +
+    "Higher values improve accuracy but increase operator assembly time. " +
+    "4 is the bempp default. 3 offers a good speed/accuracy balance. " +
+    "2 is fast but may reduce accuracy noticeably at high frequencies.",
+  workgroupSizeMultiple:
+    "OpenCL work-group sizing factor for kernel launches. " +
+    "1 (conservative) is faster on CPU-only OpenCL runtimes like pocl on Apple Silicon. " +
+    "2 is the bempp default, optimized for GPU. On CPU, 1 is typically 30-50% faster.",
+  assemblyBackend:
+    "The compute backend for operator assembly. " +
+    "OpenCL uses GPU-style parallel kernels via pocl (CPU) or a real GPU driver. " +
+    "Numba uses JIT-compiled Python/LLVM — often competitive with OpenCL on CPU, " +
+    "and is the bempp default on macOS. Try both to see which is faster on your system.",
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
-  use_burton_miller: {
-    label: "Burton-Miller Coupling",
-  },
+  use_burton_miller: { label: "Burton-Miller Coupling" },
+  quadrature_regular: { label: "Quadrature Order (Regular)" },
+  workgroup_size_multiple: { label: "OpenCL Workgroup Size" },
+  assembly_backend: { label: "Assembly Backend" },
 });
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: "viewer", label: "Viewer" },
@@ -258,6 +279,9 @@ function _buildModal(viewerRuntime) {
     if (t.id && t.id.startsWith("simadvanced-")) {
       const settings = getCurrentSimAdvancedSettings();
       settings.useBurtonMiller = getUseBurtonMiller();
+      settings.quadratureRegular = getQuadratureRegular();
+      settings.workgroupSizeMultiple = getWorkgroupSizeMultiple();
+      settings.assemblyBackend = getAssemblyBackend();
       saveSimAdvancedSettings(settings);
     }
 
@@ -887,7 +911,16 @@ function _buildSimulationSection() {
       const resetSettings = resetSimAdvancedSettings();
       const ubm = document.getElementById("simadvanced-useBurtonMiller");
       if (ubm) ubm.checked = resetSettings.useBurtonMiller;
-      if (ubmBadge) ubmBadge.hidden = false;
+      if (ubmBadge) ubmBadge.hidden = true;
+      const qr = document.getElementById("simadvanced-quadratureRegular");
+      if (qr) qr.value = resetSettings.quadratureRegular;
+      if (qrBadge) qrBadge.hidden = true;
+      const wg = document.getElementById("simadvanced-workgroupSizeMultiple");
+      if (wg) wg.value = resetSettings.workgroupSizeMultiple;
+      if (wgBadge) wgBadge.hidden = true;
+      const ab = document.getElementById("simadvanced-assemblyBackend");
+      if (ab) ab.value = resetSettings.assemblyBackend;
+      if (abBadge) abBadge.hidden = true;
     },
   );
   sec.appendChild(advancedActiveHeader);
@@ -901,6 +934,42 @@ function _buildSimulationSection() {
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
+
+  const qrResult = _buildSimAdvancedNumberRow(
+    ADVANCED_CONTROL_COPY.quadrature_regular.label,
+    "simadvanced-quadratureRegular",
+    currentSimAdvanced.quadratureRegular,
+    SIM_ADVANCED_DEFAULTS.quadratureRegular,
+    { min: "1", max: "10", step: "1" },
+    SIMULATION_ADVANCED_HELP.quadratureRegular,
+  );
+  sec.appendChild(qrResult.row);
+  let qrBadge = qrResult.badge;
+
+  const wgResult = _buildSimAdvancedNumberRow(
+    ADVANCED_CONTROL_COPY.workgroup_size_multiple.label,
+    "simadvanced-workgroupSizeMultiple",
+    currentSimAdvanced.workgroupSizeMultiple,
+    SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple,
+    { min: "1", max: "8", step: "1" },
+    SIMULATION_ADVANCED_HELP.workgroupSizeMultiple,
+  );
+  sec.appendChild(wgResult.row);
+  let wgBadge = wgResult.badge;
+
+  const abResult = _buildSimBasicSelectRow(
+    ADVANCED_CONTROL_COPY.assembly_backend.label,
+    "simadvanced-assemblyBackend",
+    [
+      { value: "opencl", label: "OpenCL (pocl/CPU)" },
+      { value: "numba", label: "Numba (JIT/CPU)" },
+    ],
+    currentSimAdvanced.assemblyBackend,
+    SIM_ADVANCED_DEFAULTS.assemblyBackend,
+    SIMULATION_ADVANCED_HELP.assemblyBackend,
+  );
+  sec.appendChild(abResult.row);
+  let abBadge = abResult.badge;
 
   return sec;
 }

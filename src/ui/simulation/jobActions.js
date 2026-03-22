@@ -6,6 +6,9 @@ import {
 } from "../settings/simBasicSettings.js";
 import {
   getUseBurtonMiller,
+  getQuadratureRegular,
+  getWorkgroupSizeMultiple,
+  getAssemblyBackend,
 } from "../settings/simAdvancedSettings.js";
 import {
   getCurrentSimulationManagementSettings,
@@ -582,6 +585,9 @@ export async function runSimulation(panel) {
     verbose: getVerbose(),
     advancedSettings: {
       useBurtonMiller: getUseBurtonMiller(),
+      quadratureRegular: getQuadratureRegular(),
+      workgroupSizeMultiple: getWorkgroupSizeMultiple(),
+      assemblyBackend: getAssemblyBackend(),
     },
   };
 
