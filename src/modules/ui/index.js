@@ -185,10 +185,6 @@ function buildAppCoordinator(input) {
       return openSettingsModal(options);
     },
 
-    isFolderSelectionSupported(targetWindow) {
-      return typeof targetWindow?.showDirectoryPicker === 'function';
-    },
-
     loadViewerSettings() {
       return loadViewerSettings();
     },
