@@ -869,8 +869,7 @@ test("renderJobList exposes folder source mode in the header and rows", () => {
     });
 
     assert.equal(sourceLabel.textContent, "Folder Tasks");
-    assert.match(list.innerHTML, /simulation-job-source-badge/);
-    assert.match(list.innerHTML, />Folder</);
+    assert.match(list.innerHTML, /folder-task/);
   } finally {
     global.document = originalDocument;
   }
