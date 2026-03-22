@@ -158,9 +158,9 @@ export class ParamPanel {
   createSection(title) {
     const div = document.createElement("div");
     div.className = "section";
-    const h3 = document.createElement("h3");
-    h3.textContent = title;
-    div.appendChild(h3);
+    const h2 = document.createElement("h2");
+    h2.textContent = title;
+    div.appendChild(h2);
     return div;
   }
 
@@ -368,6 +368,7 @@ export class ParamPanel {
     if (infoPanel) {
       this.updateFormulaInfoContext(infoPanel, fieldLabel);
       infoPanel.classList.add("visible");
+      infoPanel.setAttribute("aria-hidden", "false");
       this._formulaInfoReleaseFocus = trapFocus(infoPanel, {
         initialFocus: infoPanel.querySelector(".formula-info-close"),
       });
@@ -380,6 +381,7 @@ export class ParamPanel {
     infoPanel.setAttribute("role", "dialog");
     infoPanel.setAttribute("aria-modal", "true");
     infoPanel.setAttribute("aria-labelledby", "formula-info-title");
+    infoPanel.setAttribute("aria-hidden", "false");
 
     const header = document.createElement("div");
     header.className = "formula-info-header";
@@ -437,6 +439,7 @@ export class ParamPanel {
     const closeBtn = header.querySelector(".formula-info-close");
     const closePanel = () => {
       infoPanel.classList.remove("visible");
+      infoPanel.setAttribute("aria-hidden", "true");
       if (this._formulaInfoReleaseFocus) {
         this._formulaInfoReleaseFocus();
         this._formulaInfoReleaseFocus = null;
