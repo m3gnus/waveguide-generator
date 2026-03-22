@@ -29,13 +29,20 @@ export function createLabelRow(
 }
 
 export function appendSectionNote(section, doc, text) {
-  if (!section || !doc || typeof doc.createElement !== "function" || !text) {
+  if (!section || !text) {
     return null;
   }
 
-  const note = doc.createElement("div");
-  note.className = "section-note";
-  note.textContent = text;
-  section.appendChild(note);
-  return note;
+  // Set the description as a tooltip on the section's summary element
+  const summary = typeof section.querySelector === "function"
+    ? section.querySelector("summary")
+    : null;
+  if (summary) {
+    setAttribute(summary, "title", text);
+    return summary;
+  }
+
+  // Fallback for non-details sections or fake DOMs: set title on the section itself
+  setAttribute(section, "title", text);
+  return section;
 }
