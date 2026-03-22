@@ -280,8 +280,8 @@ class RunBenchmarkLiveReferenceTest(unittest.TestCase):
         args.no_solve = False
         args.timeout = 120.0
 
-        with patch("solver.solve_optimized.boundary_device_interface", return_value="numba"), patch(
-            "solver.solve_optimized.potential_device_interface", return_value="numba"
+        with patch("solver.solve.boundary_device_interface", return_value="numba"), patch(
+            "solver.solve.potential_device_interface", return_value="numba"
         ):
             result = bt.run_benchmark(args)
 

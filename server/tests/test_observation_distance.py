@@ -31,8 +31,8 @@ def _mesh_stub():
     }
 
 
-_SOLVE_FREQ_TARGET = "solver.solve_optimized.HornBEMSolver._solve_single_frequency"
-_HORN_INIT_TARGET = "solver.solve_optimized.HornBEMSolver.__init__"
+_SOLVE_FREQ_TARGET = "solver.solve.HornBEMSolver._solve_single_frequency"
+_HORN_INIT_TARGET = "solver.solve.HornBEMSolver.__init__"
 
 
 def _stub_horn_init(self, grid, physical_tags, **kwargs):
@@ -61,10 +61,10 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self._patchers = [
-            patch("solver.solve_optimized.boundary_device_interface", return_value="opencl"),
-            patch("solver.solve_optimized.potential_device_interface", return_value="opencl"),
+            patch("solver.solve.boundary_device_interface", return_value="opencl"),
+            patch("solver.solve.potential_device_interface", return_value="opencl"),
             patch(
-                "solver.solve_optimized.selected_device_metadata",
+                "solver.solve.selected_device_metadata",
                 return_value={
                     "requested_mode": "auto",
                     "selected_mode": "opencl_cpu",
@@ -98,7 +98,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value={"horizontal": [], "vertical": [], "diagonal": []},
         ):
             results = solve_optimized(
@@ -148,7 +148,7 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             _SOLVE_FREQ_TARGET,
             side_effect=_solve_frequency_cached_stub,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value={"horizontal": [], "vertical": [], "diagonal": []},
         ):
             solve_optimized(
@@ -183,11 +183,11 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             directivity_frames.append(kwargs.get("observation_frame"))
             return {"horizontal": [], "vertical": [], "diagonal": []}
 
-        with patch("solver.solve_optimized.infer_observation_frame", return_value=sentinel_frame) as infer_mock, patch(
+        with patch("solver.solve.infer_observation_frame", return_value=sentinel_frame) as infer_mock, patch(
             _SOLVE_FREQ_TARGET,
             side_effect=_solve_frequency_cached_stub,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             side_effect=_directivity_stub,
         ):
             solve_optimized(
@@ -232,10 +232,10 @@ class ObservationDistanceForwardingTest(unittest.TestCase):
             _SOLVE_FREQ_TARGET,
             side_effect=_solve_frequency_cached_stub,
         ), patch(
-            "solver.solve_optimized.infer_observation_frame",
+            "solver.solve.infer_observation_frame",
             return_value=sentinel_frame,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             side_effect=_directivity_stub,
         ):
             results = solve_optimized(

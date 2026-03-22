@@ -5,12 +5,9 @@ export const ZebraShader = {
   uniforms: { time: { value: 0 } },
   vertexShader: `
         varying vec3 vNormal;
-        varying vec3 vWorldPosition;
         varying vec3 vViewPosition;
         void main() {
             vNormal = normalize(normalMatrix * normal);
-            vec4 worldPos = modelMatrix * vec4(position, 1.0);
-            vWorldPosition = worldPos.xyz;
             vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
             vViewPosition = -mvPosition.xyz;
             gl_Position = projectionMatrix * mvPosition;
@@ -18,46 +15,28 @@ export const ZebraShader = {
     `,
   fragmentShader: `
         varying vec3 vNormal;
-        varying vec3 vWorldPosition;
         varying vec3 vViewPosition;
         void main() {
             vec3 viewDir = normalize(vViewPosition);
             vec3 normal = normalize(vNormal);
-            // Use reflection vector for better "zebra" look on surfaces
             vec3 reflectDir = reflect(-viewDir, normal);
-            float pattern = sin(reflectDir.y * 20.0 + reflectDir.x * 10.0) * 0.5 + 0.5;
-            float stripe = step(0.5, pattern);
+            float pattern = sin(reflectDir.y * 20.0) * 0.5 + 0.5;
+            float fw = fwidth(pattern);
+            float stripe = smoothstep(0.5 - fw, 0.5 + fw, pattern);
             gl_FragColor = vec4(vec3(stripe * 0.9 + 0.05), 1.0);
         }
     `,
 };
 
-export const Materials = {
-  zebra: new THREE.ShaderMaterial({
-    ...ZebraShader,
-    side: THREE.DoubleSide,
-  }),
-  standard: new THREE.MeshPhysicalMaterial({
-    color: 0xcccccc,
-    metalness: 0.5,
-    roughness: 0.3,
-    transmission: 0,
-    transparent: true,
-    opacity: 0.9,
-    side: THREE.DoubleSide,
-  }),
-  wireframe: new THREE.MeshPhysicalMaterial({
-    color: 0xcccccc,
-    metalness: 0.5,
-    roughness: 0.3,
-    side: THREE.DoubleSide,
-    wireframe: true,
-  }),
-  curvature: new THREE.MeshPhongMaterial({
-    vertexColors: true,
-    side: THREE.DoubleSide,
-  }),
-};
+export const DISPLAY_MODES = [
+  { key: "clay",      icon: "\u25FC", label: "Clay" },
+  { key: "solidwire", icon: "\u229E", label: "Solid + Wire" },
+  { key: "edges",     icon: "\u2B21", label: "Shaded + Edges" },
+  { key: "wireframe", icon: "\u25B3", label: "Wireframe" },
+  { key: "xray",      icon: "\u25C7", label: "X-Ray" },
+  { key: "zebra",     icon: "\u2248", label: "Zebra" },
+  { key: "curvature", icon: "\u25D0", label: "Curvature" },
+];
 
 // --- THEME HELPERS ---
 function getCssVar(name, fallback) {
