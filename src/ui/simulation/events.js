@@ -32,11 +32,12 @@ export function setupEventListeners(panel) {
     });
   });
 
-  // Run simulation button
+  // Run simulation button (right panel)
   const runBtn = document.getElementById('run-simulation-btn');
   if (runBtn) {
     runBtn.addEventListener('click', () => panel.runSimulation());
   }
+
 
   const refreshBtn = document.getElementById('refresh-jobs-btn');
   if (refreshBtn) {
