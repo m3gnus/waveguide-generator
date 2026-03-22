@@ -98,170 +98,6 @@
       </div>
     </div>
     <div id="ui-panel-resizer" aria-hidden="true"></div>
-    <div id="actions-panel">
-      <details id="actions-panel-details" open>
-        <summary>
-          Actions <span id="stats">Vertices: 0 | Triangles: 0</span>
-        </summary>
-        <div class="actions-section">
-          <div
-            class="status-indicator status-prominent"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            <span id="solver-status" class="status-dot"></span>
-            <span id="solver-status-text">Checking connection...</span>
-          </div>
-          <div
-            id="solver-status-help"
-            class="status-help"
-            role="status"
-            aria-live="polite"
-          ></div>
-        </div>
-        <div class="section actions-section">
-          <button id="render-btn" class="is-hidden">Update Model</button>
-
-          <div class="button-row">
-            <button id="load-config-btn" class="secondary">Load Config</button>
-            <button id="export-config-btn" class="secondary">
-              Export Config
-            </button>
-          </div>
-          <input
-            type="file"
-            id="config-upload"
-            class="is-hidden"
-            accept=".txt,.cfg"
-          />
-          <input type="file" id="mesh-upload" class="is-hidden" accept=".msh" />
-          <div id="imported-mesh-banner" class="imported-mesh-banner is-hidden">
-            <span id="imported-mesh-filename"></span>
-            <button id="return-parametric-btn" class="secondary">
-              Return to Parametric
-            </button>
-          </div>
-          <div class="button-row">
-            <button id="import-mesh-btn" class="secondary">Import Mesh</button>
-            <button id="settings-btn" class="secondary">Settings</button>
-          </div>
-
-          <hr />
-          <div class="button-row">
-            <div class="input-row">
-              <label for="export-prefix">Output Name</label>
-              <input
-                type="text"
-                id="export-prefix"
-                value="horn_design"
-                maxlength="128"
-                pattern="[a-zA-Z0-9_\-]+"
-                title="Only letters, numbers, underscore, and hyphen allowed"
-                aria-required="true"
-                required
-              />
-            </div>
-            <div class="input-row">
-              <label for="export-counter">Counter</label>
-              <input
-                type="number"
-                id="export-counter"
-                value="1"
-                min="1"
-                max="999999"
-                step="1"
-                aria-required="true"
-                required
-              />
-            </div>
-          </div>
-          <hr />
-          <h4 class="actions-group-title">Simulation</h4>
-          <div id="simulation-progress" class="is-hidden">
-            <div
-              id="simulation-progressbar"
-              class="progress-bar"
-              role="progressbar"
-              aria-label="Simulation progress"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow="0"
-              aria-valuetext="Not started"
-            >
-              <div id="progress-fill" class="progress-fill"></div>
-            </div>
-            <p
-              id="progress-text"
-              class="progress-text"
-              role="status"
-              aria-live="polite"
-            ></p>
-          </div>
-          <div class="button-row">
-            <button id="run-simulation-btn" class="btn-primary">
-              Start BEM Simulation
-            </button>
-            <button
-              id="stop-simulation-btn"
-              class="btn-tertiary button-compact"
-              disabled
-            >
-              Stop
-            </button>
-          </div>
-          <details
-            id="simulation-mesh-diagnostics-window"
-            class="section simulation-mesh-diagnostics-window"
-            open
-          >
-            <summary>Geometry Diagnostics</summary>
-            <div
-              id="simulation-mesh-diagnostics"
-              class="simulation-mesh-diagnostics"
-              role="status"
-              aria-live="polite"
-            >
-              <div class="simulation-mesh-diagnostics-placeholder">
-                Mesh stats appear here before you submit.
-              </div>
-            </div>
-          </details>
-          <div id="simulation-jobs" class="simulation-jobs">
-            <div class="simulation-jobs-header">
-              <span>Simulations</span>
-              <div class="simulation-jobs-header-actions">
-                <button
-                  id="choose-folder-btn"
-                  class="btn-tertiary button-compact"
-                  type="button"
-                  title="Choose output folder"
-                >
-                  Folder
-                </button>
-                <button
-                  id="clear-failed-jobs-btn"
-                  class="btn-tertiary button-compact"
-                  type="button"
-                >
-                  Clear Failed
-                </button>
-                <button
-                  id="refresh-jobs-btn"
-                  class="btn-tertiary button-compact button-icon-only"
-                  type="button"
-                  title="Refresh"
-                  aria-label="Refresh job list"
-                >
-                  ↻
-                </button>
-              </div>
-            </div>
-            <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
-          </div>
-        </div>
-      </details>
-    </div>
 
     <div id="canvas-container">
       <div id="webgl-fallback" class="webgl-fallback" style="display: none">
@@ -287,6 +123,171 @@
           ⬚
         </button>
       </div>
+    </div>
+
+    <div id="actions-panel-resizer" aria-hidden="true"></div>
+    <div id="actions-panel">
+      <div class="panel-header">
+        <h1>Actions</h1>
+        <span id="stats">Vertices: 0 | Triangles: 0</span>
+      </div>
+
+      <!-- Model & Output Section -->
+      <details class="section" open>
+        <summary>Model</summary>
+        <button id="render-btn" class="is-hidden">Update Model</button>
+        <div class="button-row">
+          <button id="load-config-btn" class="secondary">Load Config</button>
+          <button id="export-config-btn" class="secondary">Export Config</button>
+        </div>
+        <input
+          type="file"
+          id="config-upload"
+          class="is-hidden"
+          accept=".txt,.cfg"
+        />
+        <input type="file" id="mesh-upload" class="is-hidden" accept=".msh" />
+        <div id="imported-mesh-banner" class="imported-mesh-banner is-hidden">
+          <span id="imported-mesh-filename"></span>
+          <button id="return-parametric-btn" class="secondary">
+            Return to Parametric
+          </button>
+        </div>
+        <div class="button-row">
+          <button id="import-mesh-btn" class="secondary">Import Mesh</button>
+          <button id="settings-btn" class="secondary">Settings</button>
+        </div>
+        <hr />
+        <div class="button-row">
+          <div class="input-row">
+            <label for="export-prefix">Output Name</label>
+            <input
+              type="text"
+              id="export-prefix"
+              value="horn_design"
+              maxlength="128"
+              pattern="[a-zA-Z0-9_\-]+"
+              title="Only letters, numbers, underscore, and hyphen allowed"
+              aria-required="true"
+              required
+            />
+          </div>
+          <div class="input-row">
+            <label for="export-counter">Counter</label>
+            <input
+              type="number"
+              id="export-counter"
+              value="1"
+              min="1"
+              max="999999"
+              step="1"
+              aria-required="true"
+              required
+            />
+          </div>
+        </div>
+      </details>
+
+      <!-- Simulation Section -->
+      <details class="section" open>
+        <summary>Simulation</summary>
+        <div
+          class="status-indicator"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span id="solver-status" class="status-dot"></span>
+          <span id="solver-status-text">Checking connection...</span>
+        </div>
+        <div
+          id="solver-status-help"
+          class="status-help is-hidden"
+          role="status"
+          aria-live="polite"
+        ></div>
+        <div id="simulation-progress" class="is-hidden">
+          <div
+            id="simulation-progressbar"
+            class="progress-bar"
+            role="progressbar"
+            aria-label="Simulation progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+            aria-valuetext="Not started"
+          >
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <p
+            id="progress-text"
+            class="progress-text"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </div>
+        <div class="button-row">
+          <button id="run-simulation-btn" class="btn-primary">
+            Start BEM Simulation
+          </button>
+          <button
+            id="stop-simulation-btn"
+            class="btn-tertiary button-compact"
+            disabled
+          >
+            Stop
+          </button>
+        </div>
+        <details
+          id="simulation-mesh-diagnostics-window"
+          class="section simulation-mesh-diagnostics-window"
+          open
+        >
+          <summary>Geometry Diagnostics</summary>
+          <div
+            id="simulation-mesh-diagnostics"
+            class="simulation-mesh-diagnostics"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="simulation-mesh-diagnostics-placeholder">
+              Mesh stats appear here before you submit.
+            </div>
+          </div>
+        </details>
+        <div id="simulation-jobs" class="simulation-jobs">
+          <div class="simulation-jobs-header">
+            <span>Simulations</span>
+            <div class="simulation-jobs-header-actions">
+              <button
+                id="choose-folder-btn"
+                class="btn-tertiary button-compact"
+                type="button"
+                title="Choose output folder"
+              >
+                Folder
+              </button>
+              <button
+                id="clear-failed-jobs-btn"
+                class="btn-tertiary button-compact"
+                type="button"
+              >
+                Clear Failed
+              </button>
+              <button
+                id="refresh-jobs-btn"
+                class="btn-tertiary button-compact button-icon-only"
+                type="button"
+                title="Refresh"
+                aria-label="Refresh job list"
+              >
+                ↻
+              </button>
+            </div>
+          </div>
+          <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
+        </div>
+      </details>
     </div>
 
     <script type="module" src="src/main.js"></script>

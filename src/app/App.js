@@ -5,7 +5,7 @@ import { appUiFeedback, appUiFileOps } from './uiAdapters.js';
 import { initializeLogging } from './logging.js';
 import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } from './scene.js';
 import { setupEventListeners } from './events.js';
-import { setupPanelSizing, schedulePanelAutoSize } from './panelSizing.js';
+import { setupPanelSizing, schedulePanelAutoSize, setupRightPanelSizing } from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
@@ -49,6 +49,7 @@ export class App {
     this.setupScene();
     this.setupEventListeners();
     this.setupPanelSizing();
+    this.setupRightPanelSizing();
 
     // Initial render — viewport always uses formula-based mesh
     this.onStateUpdate(GlobalState.get());
@@ -76,6 +77,10 @@ export class App {
 
   setupPanelSizing() {
     return setupPanelSizing(this);
+  }
+
+  setupRightPanelSizing() {
+    return setupRightPanelSizing(this);
   }
 
   schedulePanelAutoSize() {
