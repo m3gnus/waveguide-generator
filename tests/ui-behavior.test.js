@@ -839,7 +839,7 @@ test("openSettingsModal places check-updates-btn inside the modal, not in the ac
   }
 });
 
-test("openSettingsModal keeps folder-workspace fallback copy visible when picker support is unavailable", () => {
+test("openSettingsModal shows workspace section with backend routing and enabled choose button", () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
 
@@ -862,10 +862,10 @@ test("openSettingsModal keeps folder-workspace fallback copy visible when picker
       (el) => el.id === "settings-choose-folder-btn",
     );
 
-    // When showDirectoryPicker is unavailable (Firefox), the choose button uses the
-    // backend folder picker and is enabled.
+    // All folder operations now go through the backend; the choose button
+    // is always enabled and the routing note describes backend-based exports.
     assert.ok(routingNote, "Workspace routing note should be rendered");
-    assert.match(routingNote.textContent, /backend/i);
+    assert.match(routingNote.textContent, /folder/i);
     assert.equal(chooseBtn?.disabled, false);
   } finally {
     global.document = originalDocument;
