@@ -207,14 +207,14 @@ class OccResolutionSemanticsTest(unittest.TestCase):
             enc_edge_type=2,
         )
         self.assertNotEqual(
-            rounded_counts["enclosure_back"],
-            base_counts["enclosure_back"],
-            "Back enclosure geometry should change when edge radius is enabled.",
+            rounded_counts["enclosure_edges_back"],
+            base_counts["enclosure_edges_back"],
+            "Back edge strip geometry should change when edge radius is enabled.",
         )
         self.assertNotEqual(
-            rounded_counts["enclosure_back"],
-            chamfered_counts["enclosure_back"],
-            "Back enclosure geometry should differ between rounded and chamfered edge modes.",
+            rounded_counts["enclosure_edges_back"],
+            chamfered_counts["enclosure_edges_back"],
+            "Back edge strip geometry should differ between rounded and chamfered edge modes.",
         )
 
     @unittest.skipUnless(

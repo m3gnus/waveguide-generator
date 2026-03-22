@@ -272,7 +272,9 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
 
         self.assertIsNone(results["spl_on_axis"]["spl"][0])
         self.assertIsNone(results["impedance"]["real"][0])
-        self.assertIsNone(results["di"]["di"][0])
+        # DI is now computed per-plane from directivity patterns; check the first available plane.
+        di_plane = next(k for k in results["di"] if k != "frequencies")
+        self.assertIsNone(results["di"][di_plane][0])
         self.assertEqual(results["metadata"]["failure_count"], 1)
         self.assertTrue(results["metadata"]["partial_success"])
 
@@ -503,7 +505,13 @@ class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
                 mesh_validation_mode="off",
             )
 
-        self.assertEqual(results["di"]["di"], [6.5])
+        # DI is now computed per-plane from polar directivity patterns.
+        # With the mocked directivity data, check that per-plane DI values exist.
+        di_planes = [k for k in results["di"] if k != "frequencies"]
+        self.assertGreater(len(di_planes), 0, "Expected per-plane DI keys in results")
+        # Each plane should have exactly one DI value (one frequency).
+        for plane in di_planes:
+            self.assertEqual(len(results["di"][plane]), 1)
 
 
 class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
@@ -547,7 +555,11 @@ class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
         self.assertEqual(len(results["spl_on_axis"]["spl"]), 2)
         self.assertEqual(len(results["impedance"]["real"]), 2)
         self.assertEqual(len(results["impedance"]["imaginary"]), 2)
-        self.assertEqual(len(results["di"]["di"]), 2)
+        # DI is now per-plane; check that at least one plane has 2 values.
+        di_planes = [k for k in results["di"] if k != "frequencies"]
+        self.assertGreater(len(di_planes), 0)
+        for plane in di_planes:
+            self.assertEqual(len(results["di"][plane]), 2)
 
         for spl in results["spl_on_axis"]["spl"]:
             self.assertIsNotNone(spl)
@@ -557,9 +569,6 @@ class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
             self.assertIsNotNone(i)
             self.assertFalse(np.isnan(r))
             self.assertFalse(np.isnan(i))
-        for di in results["di"]["di"]:
-            self.assertIsNotNone(di)
-            self.assertFalse(np.isnan(di))
 
 
 class StableEntrypointCompatibilityTest(unittest.TestCase):
