@@ -20,82 +20,7 @@ import {
   stopSimulationControllerJob,
   submitSimulationControllerJob
 } from '../src/ui/simulation/controller.js';
-import {
-  resetSelectedFolder,
-  setSelectedFolderHandle
-} from '../src/ui/workspace/folderWorkspace.js';
 import { JOB_TRACKER_CONSTANTS } from '../src/ui/simulation/jobTracker.js';
-
-function installLocalStorageMock() {
-  const store = new Map();
-  global.localStorage = {
-    getItem(key) {
-      return store.has(key) ? store.get(key) : null;
-    },
-    setItem(key, value) {
-      store.set(key, String(value));
-    },
-    removeItem(key) {
-      store.delete(key);
-    }
-  };
-  return store;
-}
-
-function createMemoryDirectory(name = 'root') {
-  const files = new Map();
-  const directories = new Map();
-
-  return {
-    kind: 'directory',
-    name,
-    async getDirectoryHandle(dirName, options = {}) {
-      if (!directories.has(dirName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        directories.set(dirName, createMemoryDirectory(dirName));
-      }
-      return directories.get(dirName);
-    },
-    async getFileHandle(fileName, options = {}) {
-      if (!files.has(fileName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        files.set(fileName, '');
-      }
-      return {
-        async getFile() {
-          const textValue = files.get(fileName) ?? '';
-          return { async text() { return textValue; } };
-        },
-        async createWritable() {
-          return {
-            async write(content) {
-              files.set(fileName, String(content));
-            },
-            async close() {}
-          };
-        }
-      };
-    },
-    files,
-    directories,
-    async *entries() {
-      for (const [dirName, dirHandle] of directories.entries()) {
-        yield [dirName, dirHandle];
-      }
-      for (const [fileName] of files.entries()) {
-        yield [fileName, { kind: 'file', name: fileName }];
-      }
-    }
-  };
-}
 
 test('createSimulationControllerStore initializes expected controller state', () => {
   const solver = {};
@@ -132,105 +57,52 @@ test('bindSimulationControllerState creates live field proxies on panel adapter'
   assert.equal(panelAdapter.pollDelayMs, 2500);
 });
 
-test('restoreSimulationControllerJobs hydrates job state from workspace folder', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+test('restoreSimulationControllerJobs initializes with empty workspace and folder source mode', async () => {
+  const controller = createSimulationControllerStore({ solver: {} });
 
-  try {
-    const taskDir = await root.getDirectoryHandle('job-live-1', { create: true });
-    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
-    const writable = await manifestHandle.createWritable();
-    await writable.write(JSON.stringify({
-      id: 'job-live-1',
-      label: 'job-live-1',
-      status: 'complete',
-      createdAt: '2026-03-11T09:00:00.000Z'
-    }));
-    await writable.close();
+  let jobsUpdatedCalls = 0;
 
-    const controller = createSimulationControllerStore({ solver: {} });
+  await restoreSimulationControllerJobs(controller, {
+    onJobsUpdated: () => {
+      jobsUpdatedCalls += 1;
+    }
+  });
 
-    let jobsUpdatedCalls = 0;
-
-    await restoreSimulationControllerJobs(controller, {
-      onJobsUpdated: () => {
-        jobsUpdatedCalls += 1;
-      }
-    });
-
-    assert.ok(controller.jobs.has('job-live-1'));
-    assert.equal(controller.jobSourceMode, 'folder');
-    assert.equal(jobsUpdatedCalls >= 1, true);
-  } finally {
-    resetSelectedFolder();
-  }
+  // readSimulationWorkspaceJobs always returns empty items (backend-only mode)
+  assert.equal(controller.jobs.size, 0);
+  assert.equal(controller.jobSourceMode, 'folder');
+  assert.equal(jobsUpdatedCalls >= 1, true);
 });
 
-test('restoreSimulationControllerJobs only loads jobs from workspace manifests', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+test('restoreSimulationControllerJobs returns empty jobs with no stale localStorage items', async () => {
+  const controller = createSimulationControllerStore({ solver: {} });
 
-  try {
-    // Only add one task to the workspace - the controller should only have this one
-    const taskDir = await root.getDirectoryHandle('job-real-running', { create: true });
-    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
-    const writable = await manifestHandle.createWritable();
-    await writable.write(JSON.stringify({
-      id: 'job-real-running',
-      label: 'job-real-running',
-      status: 'complete',
-      createdAt: '2026-03-12T08:30:00.000Z'
-    }));
-    await writable.close();
+  await restoreSimulationControllerJobs(controller);
 
-    const controller = createSimulationControllerStore({ solver: {} });
-
-    await restoreSimulationControllerJobs(controller);
-
-    // Only the workspace task should be present, no stale localStorage items
-    assert.equal(controller.jobs.has('job-stale-complete'), false);
-    assert.equal(controller.jobs.has('job-real-running'), true);
-    assert.equal(controller.jobSourceMode, 'folder');
-  } finally {
-    resetSelectedFolder();
-  }
+  // Workspace always returns empty (backend-only); no stale localStorage items loaded
+  assert.equal(controller.jobs.has('job-stale-complete'), false);
+  assert.equal(controller.jobs.size, 0);
+  assert.equal(controller.jobSourceMode, 'folder');
 });
 
-test('restoreSimulationControllerJobs uses folder tasks only when a workspace is active', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
-
-  try {
-    const taskDir = await root.getDirectoryHandle('job-folder-1', { create: true });
-    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
-    const writable = await manifestHandle.createWritable();
-    await writable.write(JSON.stringify({
-      id: 'job-folder-1',
-      label: 'folder-task',
-      status: 'complete',
-      createdAt: '2026-03-11T09:00:00.000Z'
-    }));
-    await writable.close();
-
-    let listJobsCalls = 0;
-    const controller = createSimulationControllerStore({
-      solver: {
-        async listJobs() {
-          listJobsCalls += 1;
-          return { items: [{ id: 'job-backend-1', status: 'complete' }] };
-        }
+test('restoreSimulationControllerJobs sets folder source mode without calling solver listJobs', async () => {
+  let listJobsCalls = 0;
+  const controller = createSimulationControllerStore({
+    solver: {
+      async listJobs() {
+        listJobsCalls += 1;
+        return { items: [{ id: 'job-backend-1', status: 'complete' }] };
       }
-    });
+    }
+  });
 
-    await restoreSimulationControllerJobs(controller);
+  await restoreSimulationControllerJobs(controller);
 
-    assert.equal(listJobsCalls, 0);
-    assert.equal(controller.jobSourceMode, 'folder');
-    assert.equal(controller.jobSourceLabel, 'Folder Tasks');
-    assert.deepEqual(Array.from(controller.jobs.keys()), ['job-folder-1']);
-  } finally {
-    resetSelectedFolder();
-  }
+  // Restore does not call solver.listJobs; uses workspace which returns empty
+  assert.equal(listJobsCalls, 0);
+  assert.equal(controller.jobSourceMode, 'folder');
+  assert.equal(controller.jobSourceLabel, 'Folder Tasks');
+  assert.deepEqual(Array.from(controller.jobs.keys()), []);
 });
 
 test('createSimulationPanelRuntime binds a controller store and injected ui coordinator', () => {
@@ -254,36 +126,19 @@ test('createSimulationPanelRuntime binds a controller store and injected ui coor
 });
 
 test('restoreSimulationPanelRuntime delegates to controller restore using runtime controller', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+  const panelAdapter = {};
+  const runtime = createSimulationPanelRuntime(panelAdapter, {
+    solver: {},
+    createUiCoordinator() {
+      return { bind() {}, dispose() {} };
+    }
+  });
 
-  try {
-    const taskDir = await root.getDirectoryHandle('job-runtime-live', { create: true });
-    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
-    const writable = await manifestHandle.createWritable();
-    await writable.write(JSON.stringify({
-      id: 'job-runtime-live',
-      label: 'job-runtime-live',
-      status: 'complete',
-      createdAt: '2026-03-11T09:00:00.000Z'
-    }));
-    await writable.close();
+  await restoreSimulationPanelRuntime(runtime);
 
-    const panelAdapter = {};
-    const runtime = createSimulationPanelRuntime(panelAdapter, {
-      solver: {},
-      createUiCoordinator() {
-        return { bind() {}, dispose() {} };
-      }
-    });
-
-    await restoreSimulationPanelRuntime(runtime);
-
-    assert.ok(runtime.controller.jobs.has('job-runtime-live'));
-    assert.equal(runtime.controller.jobSourceMode, 'folder');
-  } finally {
-    resetSelectedFolder();
-  }
+  // Workspace returns empty items; controller initializes with folder source mode
+  assert.equal(runtime.controller.jobs.size, 0);
+  assert.equal(runtime.controller.jobSourceMode, 'folder');
 });
 
 test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', () => {

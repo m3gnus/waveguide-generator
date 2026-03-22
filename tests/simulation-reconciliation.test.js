@@ -8,65 +8,6 @@ import {
   allJobs,
   JOB_TRACKER_CONSTANTS
 } from '../src/ui/simulation/jobTracker.js';
-import {
-  setSelectedFolderHandle,
-  resetSelectedFolder
-} from '../src/ui/workspace/folderWorkspace.js';
-
-function createMemoryDirectory(name = 'root') {
-  const files = new Map();
-  const directories = new Map();
-
-  return {
-    kind: 'directory',
-    name,
-    async getDirectoryHandle(dirName, options = {}) {
-      if (!directories.has(dirName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        directories.set(dirName, createMemoryDirectory(dirName));
-      }
-      return directories.get(dirName);
-    },
-    async getFileHandle(fileName, options = {}) {
-      if (!files.has(fileName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        files.set(fileName, '');
-      }
-      return {
-        async getFile() {
-          const textValue = files.get(fileName) ?? '';
-          return { async text() { return textValue; } };
-        },
-        async createWritable() {
-          return {
-            async write(content) {
-              files.set(fileName, String(content));
-            },
-            async close() {}
-          };
-        }
-      };
-    },
-    files,
-    directories,
-    async *entries() {
-      for (const [dirName, dirHandle] of directories.entries()) {
-        yield [dirName, dirHandle];
-      }
-      for (const [fileName] of files.entries()) {
-        yield [fileName, { kind: 'file', name: fileName }];
-      }
-    }
-  };
-}
 
 test('mergeJobs prefers backend status updates for same job id', () => {
   const merged = mergeJobs(
@@ -92,38 +33,29 @@ test('hasActiveJobs checks queued/running states', () => {
   assert.equal(hasActiveJobs(panel), false);
 });
 
-test('persistPanelJobs syncs workspace index without error', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+test('persistPanelJobs completes without error when workspace sync is unavailable', async () => {
+  const panel = {
+    jobs: new Map()
+  };
 
-  try {
-    const panel = {
-      jobs: new Map()
-    };
-
-    for (let i = 0; i < 60; i += 1) {
-      panel.jobs.set(`job-${i}`, {
-        id: `job-${i}`,
-        status: 'complete',
-        progress: 1,
-        createdAt: new Date(2026, 1, 1, 0, i, 0).toISOString()
-      });
-    }
-
-    // persistPanelJobs delegates to syncSimulationWorkspaceIndex (fire-and-forget)
-    persistPanelJobs(panel);
-
-    // Allow the async workspace sync to complete
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    // Verify the task index was written to the workspace
-    assert.equal(root.files.has('.waveguide-tasks.index.v1.json'), true);
-    const indexData = JSON.parse(root.files.get('.waveguide-tasks.index.v1.json'));
-    assert.ok(Array.isArray(indexData.items));
-    assert.equal(allJobs(panel).length, 60);
-  } finally {
-    resetSelectedFolder();
+  for (let i = 0; i < 60; i += 1) {
+    panel.jobs.set(`job-${i}`, {
+      id: `job-${i}`,
+      status: 'complete',
+      progress: 1,
+      createdAt: new Date(2026, 1, 1, 0, i, 0).toISOString()
+    });
   }
+
+  // persistPanelJobs delegates to syncSimulationWorkspaceIndex (fire-and-forget)
+  // syncSimulationWorkspaceIndex now always returns { synced: false, available: false }
+  persistPanelJobs(panel);
+
+  // Allow the async workspace sync to complete
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  // Jobs are still accessible via allJobs even though workspace sync is unavailable
+  assert.equal(allJobs(panel).length, 60);
 });
 
 test('mergeJobs preserves manifest metadata when backend omits fields', () => {
