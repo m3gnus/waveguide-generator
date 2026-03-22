@@ -132,96 +132,67 @@ test('bindSimulationControllerState creates live field proxies on panel adapter'
   assert.equal(panelAdapter.pollDelayMs, 2500);
 });
 
-test('restoreSimulationControllerJobs hydrates job state and signals polling for active remote jobs', async () => {
-  const controller = createSimulationControllerStore({
-    solver: {
-      async listJobs() {
-        return {
-          items: [
-            {
-              id: 'job-live-1',
-              status: 'running',
-              progress: 0.6,
-              stage: 'solving',
-              stage_message: 'Simulation running',
-              created_at: '2026-03-11T09:00:00.000Z',
-              started_at: '2026-03-11T09:00:02.000Z'
-            }
-          ]
-        };
-      }
-    }
-  });
-
-  let jobsUpdatedCalls = 0;
-  let startPollingCalls = 0;
-
-  await restoreSimulationControllerJobs(controller, {
-    onJobsUpdated: () => {
-      jobsUpdatedCalls += 1;
-    },
-    onStartPolling: () => {
-      startPollingCalls += 1;
-    }
-  });
-
-  assert.ok(controller.jobs.has('job-live-1'));
-  assert.equal(controller.activeJobId, 'job-live-1');
-  assert.equal(controller.currentJobId, 'job-live-1');
-  assert.equal(startPollingCalls, 1);
-  assert.equal(jobsUpdatedCalls >= 2, true);
-});
-
-test('restoreSimulationControllerJobs purges stale terminal local-only backend rows after remote restore', async () => {
-  const originalLocalStorage = global.localStorage;
-  const store = installLocalStorageMock();
-  store.set(
-    JOB_TRACKER_CONSTANTS.STORAGE_KEY,
-    JSON.stringify({
-      version: 1,
-      saved_at: '2026-03-12T09:00:00.000Z',
-      items: [
-        { id: 'job-stale-complete', status: 'complete', completed_at: '2026-03-12T08:00:00.000Z' },
-        { id: 'job-real-running', status: 'queued', created_at: '2026-03-12T08:30:00.000Z' }
-      ]
-    })
-  );
+test('restoreSimulationControllerJobs hydrates job state from workspace folder', async () => {
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
 
   try {
-    const controller = createSimulationControllerStore({
-      solver: {
-        async listJobs() {
-          return {
-            items: [
-              {
-                id: 'job-real-running',
-                status: 'running',
-                progress: 0.6,
-                created_at: '2026-03-12T08:30:00.000Z',
-                started_at: '2026-03-12T08:31:00.000Z'
-              }
-            ]
-          };
-        }
+    const taskDir = await root.getDirectoryHandle('job-live-1', { create: true });
+    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
+    const writable = await manifestHandle.createWritable();
+    await writable.write(JSON.stringify({
+      id: 'job-live-1',
+      label: 'job-live-1',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z'
+    }));
+    await writable.close();
+
+    const controller = createSimulationControllerStore({ solver: {} });
+
+    let jobsUpdatedCalls = 0;
+
+    await restoreSimulationControllerJobs(controller, {
+      onJobsUpdated: () => {
+        jobsUpdatedCalls += 1;
       }
     });
 
+    assert.ok(controller.jobs.has('job-live-1'));
+    assert.equal(controller.jobSourceMode, 'folder');
+    assert.equal(jobsUpdatedCalls >= 1, true);
+  } finally {
+    resetSelectedFolder();
+  }
+});
+
+test('restoreSimulationControllerJobs only loads jobs from workspace manifests', async () => {
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
+
+  try {
+    // Only add one task to the workspace - the controller should only have this one
+    const taskDir = await root.getDirectoryHandle('job-real-running', { create: true });
+    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
+    const writable = await manifestHandle.createWritable();
+    await writable.write(JSON.stringify({
+      id: 'job-real-running',
+      label: 'job-real-running',
+      status: 'complete',
+      createdAt: '2026-03-12T08:30:00.000Z'
+    }));
+    await writable.close();
+
+    const controller = createSimulationControllerStore({ solver: {} });
+
     await restoreSimulationControllerJobs(controller);
 
+    // Only the workspace task should be present, no stale localStorage items
     assert.equal(controller.jobs.has('job-stale-complete'), false);
-    assert.equal(controller.jobs.get('job-real-running')?.status, 'running');
-
-    const saved = JSON.parse(store.get(JOB_TRACKER_CONSTANTS.STORAGE_KEY));
-    assert.deepEqual(
-      saved.items.map((item) => item.id),
-      ['job-real-running']
-    );
+    assert.equal(controller.jobs.has('job-real-running'), true);
+    assert.equal(controller.jobSourceMode, 'folder');
   } finally {
-    if (originalLocalStorage === undefined) {
-      delete global.localStorage;
-    } else {
-      global.localStorage = originalLocalStorage;
-    }
+    resetSelectedFolder();
   }
 });
 
@@ -283,36 +254,36 @@ test('createSimulationPanelRuntime binds a controller store and injected ui coor
 });
 
 test('restoreSimulationPanelRuntime delegates to controller restore using runtime controller', async () => {
-  const panelAdapter = {};
-  const runtime = createSimulationPanelRuntime(panelAdapter, {
-    solver: {
-      async listJobs() {
-        return {
-          items: [
-            {
-              id: 'job-runtime-live',
-              status: 'running',
-              progress: 0.2,
-              created_at: '2026-03-11T09:00:00.000Z'
-            }
-          ]
-        };
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
+
+  try {
+    const taskDir = await root.getDirectoryHandle('job-runtime-live', { create: true });
+    const manifestHandle = await taskDir.getFileHandle('task.manifest.json', { create: true });
+    const writable = await manifestHandle.createWritable();
+    await writable.write(JSON.stringify({
+      id: 'job-runtime-live',
+      label: 'job-runtime-live',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z'
+    }));
+    await writable.close();
+
+    const panelAdapter = {};
+    const runtime = createSimulationPanelRuntime(panelAdapter, {
+      solver: {},
+      createUiCoordinator() {
+        return { bind() {}, dispose() {} };
       }
-    },
-    createUiCoordinator() {
-      return { bind() {}, dispose() {} };
-    }
-  });
+    });
 
-  let startPollingCalls = 0;
-  await restoreSimulationPanelRuntime(runtime, {
-    onStartPolling: () => {
-      startPollingCalls += 1;
-    }
-  });
+    await restoreSimulationPanelRuntime(runtime);
 
-  assert.equal(runtime.controller.activeJobId, 'job-runtime-live');
-  assert.equal(startPollingCalls, 1);
+    assert.ok(runtime.controller.jobs.has('job-runtime-live'));
+    assert.equal(runtime.controller.jobSourceMode, 'folder');
+  } finally {
+    resetSelectedFolder();
+  }
 });
 
 test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', () => {
@@ -395,44 +366,39 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   assert.equal(controller.resultCache.has('job-complete'), true);
 });
 
-test('reconcileSimulationControllerRemoteJobs merges remote data and marks missing active jobs as lost', async () => {
+test('reconcileSimulationControllerRemoteJobs updates active jobs via per-job status check', async () => {
   const controller = createSimulationControllerStore({
     solver: {
-      async listJobs() {
-        return {
-          items: [
-            {
-              id: 'job-remote-running',
-              status: 'running',
-              progress: 0.4,
-              stage: 'solving',
-              stage_message: 'Solving on backend',
-              created_at: '2026-03-11T10:00:00.000Z'
-            }
-          ]
-        };
+      async getJobStatus(id) {
+        if (id === 'job-active') {
+          return {
+            id: 'job-active',
+            status: 'running',
+            progress: 0.7,
+            stage: 'solving',
+            stage_message: 'Almost done',
+            created_at: '2026-03-11T10:00:00.000Z'
+          };
+        }
+        throw new Error('not found');
       }
     }
   });
 
-  controller.jobs.set('job-lost-running', {
-    id: 'job-lost-running',
+  controller.jobs.set('job-active', {
+    id: 'job-active',
     status: 'running',
     progress: 0.2,
-    createdAt: '2026-03-11T09:59:00.000Z'
+    createdAt: '2026-03-11T10:00:00.000Z'
   });
-  controller.activeJobId = 'job-lost-running';
-  controller.currentJobId = 'job-lost-running';
+  controller.activeJobId = 'job-active';
+  controller.currentJobId = 'job-active';
 
   const result = await reconcileSimulationControllerRemoteJobs(controller);
 
   assert.equal(result.anyActive, true);
-  assert.equal(result.activeJob?.id, 'job-lost-running');
-  assert.equal(controller.activeJobId, 'job-lost-running');
-  assert.equal(controller.currentJobId, 'job-lost-running');
-  assert.equal(controller.jobs.get('job-remote-running')?.status, 'running');
-  assert.equal(controller.jobs.get('job-lost-running')?.status, 'error');
-  assert.match(controller.jobs.get('job-lost-running')?.errorMessage || '', /lost/i);
+  assert.equal(result.activeJob?.id, 'job-active');
+  assert.equal(controller.jobs.get('job-active')?.progress, 0.7);
 });
 
 test('queueSimulationControllerJob and recordSimulationControllerExport update controller job metadata', async () => {

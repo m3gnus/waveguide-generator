@@ -71,22 +71,15 @@ test('saveFile clears the selected workspace and falls back to the picker when a
   }
 });
 
-test('selectOutputFolder keeps the simulation header button title in sync with the selected workspace', async () => {
+test('selectOutputFolder updates the workspace label via subscribeFolderWorkspace', async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
 
-  const chooseBtn = {
-    textContent: '',
-    title: '',
-    attributes: {},
-    setAttribute(name, value) {
-      this.attributes[name] = value;
-    }
-  };
+  const folderNameEl = { textContent: '' };
 
   global.document = {
     getElementById(id) {
-      return id === 'choose-folder-btn' ? chooseBtn : null;
+      return id === 'output-folder-name' ? folderNameEl : null;
     }
   };
   global.window = {
@@ -98,10 +91,8 @@ test('selectOutputFolder keeps the simulation header button title in sync with t
   try {
     await selectOutputFolder();
 
-    assert.equal(chooseBtn.textContent, 'Output Folder');
-    assert.equal(chooseBtn.title, 'Selected output folder: exports');
-    assert.equal(chooseBtn.attributes['aria-label'], 'Selected output folder: exports');
     assert.equal(getSelectedFolderHandle()?.name, 'exports');
+    assert.equal(folderNameEl.textContent, 'exports');
   } finally {
     resetSelectedFolder();
     global.document = originalDocument;

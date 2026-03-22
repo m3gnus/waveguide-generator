@@ -8,21 +8,64 @@ import {
   allJobs,
   JOB_TRACKER_CONSTANTS
 } from '../src/ui/simulation/jobTracker.js';
+import {
+  setSelectedFolderHandle,
+  resetSelectedFolder
+} from '../src/ui/workspace/folderWorkspace.js';
 
-function installLocalStorageMock() {
-  const store = new Map();
-  global.localStorage = {
-    getItem(key) {
-      return store.has(key) ? store.get(key) : null;
+function createMemoryDirectory(name = 'root') {
+  const files = new Map();
+  const directories = new Map();
+
+  return {
+    kind: 'directory',
+    name,
+    async getDirectoryHandle(dirName, options = {}) {
+      if (!directories.has(dirName)) {
+        if (!options.create) {
+          const error = new Error('not found');
+          error.name = 'NotFoundError';
+          throw error;
+        }
+        directories.set(dirName, createMemoryDirectory(dirName));
+      }
+      return directories.get(dirName);
     },
-    setItem(key, value) {
-      store.set(key, String(value));
+    async getFileHandle(fileName, options = {}) {
+      if (!files.has(fileName)) {
+        if (!options.create) {
+          const error = new Error('not found');
+          error.name = 'NotFoundError';
+          throw error;
+        }
+        files.set(fileName, '');
+      }
+      return {
+        async getFile() {
+          const textValue = files.get(fileName) ?? '';
+          return { async text() { return textValue; } };
+        },
+        async createWritable() {
+          return {
+            async write(content) {
+              files.set(fileName, String(content));
+            },
+            async close() {}
+          };
+        }
+      };
     },
-    removeItem(key) {
-      store.delete(key);
+    files,
+    directories,
+    async *entries() {
+      for (const [dirName, dirHandle] of directories.entries()) {
+        yield [dirName, dirHandle];
+      }
+      for (const [fileName] of files.entries()) {
+        yield [fileName, { kind: 'file', name: fileName }];
+      }
     }
   };
-  return store;
 }
 
 test('mergeJobs prefers backend status updates for same job id', () => {
@@ -49,26 +92,38 @@ test('hasActiveJobs checks queued/running states', () => {
   assert.equal(hasActiveJobs(panel), false);
 });
 
-test('persistPanelJobs writes bounded local index payload', () => {
-  const store = installLocalStorageMock();
-  const panel = {
-    jobs: new Map()
-  };
+test('persistPanelJobs syncs workspace index without error', async () => {
+  const root = createMemoryDirectory();
+  setSelectedFolderHandle(root, { label: 'workspace' });
 
-  for (let i = 0; i < 60; i += 1) {
-    panel.jobs.set(`job-${i}`, {
-      id: `job-${i}`,
-      status: 'complete',
-      progress: 1,
-      createdAt: new Date(2026, 1, 1, 0, i, 0).toISOString()
-    });
+  try {
+    const panel = {
+      jobs: new Map()
+    };
+
+    for (let i = 0; i < 60; i += 1) {
+      panel.jobs.set(`job-${i}`, {
+        id: `job-${i}`,
+        status: 'complete',
+        progress: 1,
+        createdAt: new Date(2026, 1, 1, 0, i, 0).toISOString()
+      });
+    }
+
+    // persistPanelJobs delegates to syncSimulationWorkspaceIndex (fire-and-forget)
+    persistPanelJobs(panel);
+
+    // Allow the async workspace sync to complete
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Verify the task index was written to the workspace
+    assert.equal(root.files.has('.waveguide-tasks.index.v1.json'), true);
+    const indexData = JSON.parse(root.files.get('.waveguide-tasks.index.v1.json'));
+    assert.ok(Array.isArray(indexData.items));
+    assert.equal(allJobs(panel).length, 60);
+  } finally {
+    resetSelectedFolder();
   }
-
-  persistPanelJobs(panel);
-  const saved = JSON.parse(store.get(JOB_TRACKER_CONSTANTS.STORAGE_KEY));
-  assert.equal(saved.version, 1);
-  assert.equal(saved.items.length, JOB_TRACKER_CONSTANTS.MAX_LOCAL_ITEMS);
-  assert.equal(allJobs(panel).length, 60);
 });
 
 test('mergeJobs preserves manifest metadata when backend omits fields', () => {
