@@ -158,6 +158,39 @@ function generateEnclosurePointsFromAngles(
             nz: hit.nz
         });
     }
+
+    // For chamfered corners, snap inset points to the arc center so the
+    // chamfer surface forms a proper triangle instead of a small rectangle.
+    // Rounded corners already converge naturally (radial normals → arc center),
+    // but chamfer normals are fixed (the midpoint angle of the corner), so
+    // the normal-based offset produces a parallel line instead of a point.
+    if (edgeType === 2 && clampedBoxCR > 1e-6) {
+        const bCx = (boxRight + boxLeft) / 2;
+        const bCz = (boxTop + boxBot) / 2;
+        const r = clampedBoxCR;
+        const arcCenters = [
+            { x: bCx + halfW - r, z: bCz - halfH + r },
+            { x: bCx + halfW - r, z: bCz + halfH - r },
+            { x: bCx - halfW + r, z: bCz + halfH - r },
+            { x: bCx - halfW + r, z: bCz - halfH + r },
+        ];
+        for (let i = 0; i < ringSize; i++) {
+            const nx = outerPts[i].nx;
+            const nz = outerPts[i].nz;
+            // Chamfer hits have non-axis-aligned normals (both components > 0)
+            if (Math.abs(nx) > 0.01 && Math.abs(nz) > 0.01) {
+                let bestDist = Infinity;
+                let best = arcCenters[0];
+                for (const c of arcCenters) {
+                    const d = Math.hypot(outerPts[i].x - c.x, outerPts[i].z - c.z);
+                    if (d < bestDist) { bestDist = d; best = c; }
+                }
+                insetPts[i].x = best.x;
+                insetPts[i].z = best.z;
+            }
+        }
+    }
+
     return { outerPts, insetPts, clampedBoxCR };
 }
 
