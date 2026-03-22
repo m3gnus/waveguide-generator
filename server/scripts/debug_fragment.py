@@ -80,7 +80,7 @@ for dim, tag in gmsh.model.getEntities(2):
         com = gmsh.model.occ.getCenterOfMass(dim, tag)
         if com[0] < -1e-8:
             to_remove.append((dim, tag))
-    except: pass
+    except Exception: pass
 if to_remove:
     gmsh.model.occ.remove(to_remove, recursive=True)
     gmsh.model.occ.synchronize()
@@ -227,7 +227,7 @@ try:
             com = gmsh.model.occ.getCenterOfMass(dim, tag)
             if com[0] < -1e-8:
                 to_remove.append((dim, tag))
-        except: pass
+        except Exception: pass
     # Also remove box volume
     gmsh.model.occ.remove([(3, box)], recursive=False)
     if to_remove:
