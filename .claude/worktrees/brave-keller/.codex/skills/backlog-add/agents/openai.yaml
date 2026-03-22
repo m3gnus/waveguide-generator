@@ -1,0 +1,3 @@
+display_name: Backlog Add
+short_description: Research a request, draft a backlog entry, confirm it, and add it to docs/backlog.md.
+default_prompt: $backlog-add

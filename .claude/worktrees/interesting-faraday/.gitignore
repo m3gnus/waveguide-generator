@@ -1,0 +1,29 @@
+node_modules/
+.DS_Store
+*.log
+.vscode/
+dist/
+output/
+coverage/
+.env
+.waveguide/
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# IDE/Tool specific configs
+.agent/
+.agents/
+.cline/
+
+# Reference materials (large files, not part of program)
+_references/
+ATHequivalent/
+architecture/

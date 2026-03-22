@@ -150,14 +150,6 @@ def _build_required_checks(
                 )
             ),
         },
-        "bounded_solve_validation": {
-            "ok": solve_validation_ok,
-            "requiredFor": "/api/solve",
-            "detail": str(
-                solve_readiness.get("detail")
-                or "No bounded solve validation evidence available.",
-            ),
-        },
     }
 
 
@@ -391,7 +383,7 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         {
             "id": "bounded_solve_validation",
             "name": "Bounded solve validation",
-            "category": DOCTOR_CATEGORY_REQUIRED,
+            "category": DOCTOR_CATEGORY_OPTIONAL,
             "requiredFor": "/api/solve",
             "featureImpact": (
                 "/api/solve readiness is unvalidated on this host/runtime."
@@ -567,7 +559,7 @@ def render_runtime_preflight_text(report: Dict[str, Any]) -> str:
         "",
     ]
 
-    for check_id in ("fastapi", "gmsh_python", "bempp_cl", "opencl_runtime", "bounded_solve_validation"):
+    for check_id in ("fastapi", "gmsh_python", "bempp_cl", "opencl_runtime"):
         payload = required.get(check_id) if isinstance(required.get(check_id), dict) else {}
         ok = bool(payload.get("ok"))
         status = "OK" if ok else "MISSING"

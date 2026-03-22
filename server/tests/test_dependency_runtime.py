@@ -148,7 +148,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         dependency_status = {"supportedMatrix": {}, "runtime": {}}
         dependency_doctor = {
             "components": [],
-            "summary": {"requiredReady": False, "requiredIssues": ["bounded_solve_validation"], "solveReady": False},
+            "summary": {"requiredReady": True, "requiredIssues": [], "optionalIssues": ["bounded_solve_validation"], "solveReady": False},
             "solveReadiness": {"ready": False, "status": "missing"},
         }
 
