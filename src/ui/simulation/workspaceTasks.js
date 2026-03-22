@@ -133,6 +133,32 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   return result.manifest;
 }
 
+export async function deleteTaskWorkspaceDirectory(job) {
+  const folderHandle = getSelectedFolderHandle();
+  if (!folderHandle || !job?.id) {
+    return false;
+  }
+
+  try {
+    const permissionGranted = await ensureFolderWritePermission(folderHandle);
+    if (!permissionGranted) {
+      return false;
+    }
+    const dirName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: job.id });
+    if (!dirName) {
+      return false;
+    }
+    await folderHandle.removeEntry(dirName, { recursive: true });
+    return true;
+  } catch (error) {
+    if (error?.name === 'NotFoundError') {
+      return true;
+    }
+    console.warn('Failed to delete task workspace directory:', error);
+    return false;
+  }
+}
+
 export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null, dirName = null, subDir = null } = {}) {
   const folderHandle = getSelectedFolderHandle();
   if (folderHandle && job?.id) {
