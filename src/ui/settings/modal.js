@@ -919,22 +919,56 @@ function _buildSimulationSection() {
     "\u2022 <strong>Numba backend</strong> \u2014 Competitive with OpenCL on CPU. Good alternative if OpenCL/pocl is unavailable.";
   sec.appendChild(advancedIntro);
 
+  // ── Preset buttons ──
+  const PRESETS = {
+    fast: { useBurtonMiller: false, quadratureRegular: 4, workgroupSizeMultiple: 1, assemblyBackend: "opencl" },
+    accurate: { useBurtonMiller: true, quadratureRegular: 4, workgroupSizeMultiple: 1, assemblyBackend: "opencl" },
+  };
+
+  function _applyPreset(preset) {
+    saveSimAdvancedSettings(preset);
+    const ubm = document.getElementById("simadvanced-useBurtonMiller");
+    if (ubm) ubm.checked = preset.useBurtonMiller;
+    const qr = document.getElementById("simadvanced-quadratureRegular");
+    if (qr) qr.value = preset.quadratureRegular;
+    const wg = document.getElementById("simadvanced-workgroupSizeMultiple");
+    if (wg) wg.value = preset.workgroupSizeMultiple;
+    const ab = document.getElementById("simadvanced-assemblyBackend");
+    if (ab) ab.value = preset.assemblyBackend;
+    // Update badges
+    if (typeof ubmBadge !== "undefined" && ubmBadge) ubmBadge.hidden = preset.useBurtonMiller === SIM_ADVANCED_DEFAULTS.useBurtonMiller;
+    if (typeof qrBadge !== "undefined" && qrBadge) qrBadge.hidden = preset.quadratureRegular === SIM_ADVANCED_DEFAULTS.quadratureRegular;
+    if (typeof wgBadge !== "undefined" && wgBadge) wgBadge.hidden = preset.workgroupSizeMultiple === SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple;
+    if (typeof abBadge !== "undefined" && abBadge) abBadge.hidden = preset.assemblyBackend === SIM_ADVANCED_DEFAULTS.assemblyBackend;
+  }
+
+  const presetRow = document.createElement("div");
+  presetRow.style.cssText = "display:flex;gap:8px;margin:8px 0 4px;";
+
+  const fastBtn = document.createElement("button");
+  fastBtn.type = "button";
+  fastBtn.className = "settings-reset-btn";
+  fastBtn.style.cssText = "flex:1;padding:6px 12px;font-size:13px;font-weight:600;";
+  fastBtn.textContent = "Fast";
+  fastBtn.title = "BM off, quad 4, wg 1 — ~1.5x faster, max 5 dB deviation";
+  fastBtn.addEventListener("click", () => _applyPreset(PRESETS.fast));
+
+  const accurateBtn = document.createElement("button");
+  accurateBtn.type = "button";
+  accurateBtn.className = "settings-reset-btn";
+  accurateBtn.style.cssText = "flex:1;padding:6px 12px;font-size:13px;font-weight:600;";
+  accurateBtn.textContent = "Accurate";
+  accurateBtn.title = "BM on, quad 4, wg 1 — artifact-free, recommended for final solves";
+  accurateBtn.addEventListener("click", () => _applyPreset(PRESETS.accurate));
+
+  presetRow.appendChild(fastBtn);
+  presetRow.appendChild(accurateBtn);
+  sec.appendChild(presetRow);
+
   const advancedActiveHeader = _buildSubSectionHeader(
     "Active Contract Overrides",
     () => {
-      const resetSettings = resetSimAdvancedSettings();
-      const ubm = document.getElementById("simadvanced-useBurtonMiller");
-      if (ubm) ubm.checked = resetSettings.useBurtonMiller;
-      if (ubmBadge) ubmBadge.hidden = true;
-      const qr = document.getElementById("simadvanced-quadratureRegular");
-      if (qr) qr.value = resetSettings.quadratureRegular;
-      if (qrBadge) qrBadge.hidden = true;
-      const wg = document.getElementById("simadvanced-workgroupSizeMultiple");
-      if (wg) wg.value = resetSettings.workgroupSizeMultiple;
-      if (wgBadge) wgBadge.hidden = true;
-      const ab = document.getElementById("simadvanced-assemblyBackend");
-      if (ab) ab.value = resetSettings.assemblyBackend;
-      if (abBadge) abBadge.hidden = true;
+      _applyPreset({ ...SIM_ADVANCED_DEFAULTS });
     },
   );
   sec.appendChild(advancedActiveHeader);
