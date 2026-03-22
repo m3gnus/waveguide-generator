@@ -250,8 +250,8 @@ export function erbSmoothing(frequencies, values) {
         // ERB bandwidth: 107.77 * f_kHz + 24.673 Hz
         const erbHz = 107.77 * (fc / 1000) + 24.673;
 
-        // Convert ERB bandwidth to log2 space
-        const logF1 = Math.log2(fc - erbHz / 2);
+        // Convert ERB bandwidth to log2 space (clamp lower bound above 0)
+        const logF1 = Math.log2(Math.max(1, fc - erbHz / 2));
         const logF2 = Math.log2(fc + erbHz / 2);
         const logHalfBW = (logF2 - logF1) / 2;
         const logSigma = logHalfBW / 2;
