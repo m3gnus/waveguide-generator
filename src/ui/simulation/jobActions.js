@@ -22,7 +22,6 @@ import {
   updateStageUi,
   setProgressVisible,
   restoreConnectionStatus,
-  getSimulationDom,
   formatElapsedDuration,
   resolveJobDurationMs,
   resetProgressAnnouncement,
@@ -521,7 +520,6 @@ export async function clearFailedSimulations(panel) {
 }
 
 export async function stopSimulation(panel) {
-  const dom = getSimulationDom();
   const targetJobId = panel.activeJobId || panel.currentJobId;
   const { stopError, cancelledJob } = await stopSimulationControllerJob(
     panel,
@@ -544,9 +542,6 @@ export async function stopSimulation(panel) {
       message: cancelledJob.stageMessage || "Simulation cancelled by user",
     });
     showMessage("Simulation cancelled.", { type: "info", duration: 2000 });
-    if (dom.runBtn) {
-      dom.runBtn.disabled = false;
-    }
   } else if (cancelledJob) {
     setProgressVisible(true);
     updateStageUi(panel, {
@@ -561,10 +556,6 @@ export async function stopSimulation(panel) {
       duration: 2400,
     });
   }
-  if (dom.stopBtn) {
-    dom.stopBtn.disabled = true;
-  }
-
   if (!hasActiveJobs(panel)) {
     setTimeout(() => {
       setProgressVisible(false);
@@ -576,7 +567,6 @@ export async function stopSimulation(panel) {
 }
 
 export async function runSimulation(panel) {
-  const dom = getSimulationDom();
   panel.completedStatusMessage = null;
 
   // Get simulation settings
@@ -615,7 +605,6 @@ export async function runSimulation(panel) {
   // Show progress
   panel.simulationStartedAtMs = Date.now();
   panel.lastSimulationDurationMs = null;
-  if (dom.runBtn) dom.runBtn.disabled = true;
   resetProgressAnnouncement();
   setProgressVisible(true);
   updateStageUi(panel, {
@@ -638,11 +627,6 @@ export async function runSimulation(panel) {
       message: "Mesh ready, submitting to BEM solver",
     });
 
-    // Disable stop button at start, enable it when simulation begins
-    if (dom.stopBtn) {
-      dom.stopBtn.disabled = true;
-    }
-
     const { name: outputName, counter } = readOutputNameAndCounter();
     await submitSimulationControllerJob(panel, {
       config,
@@ -658,10 +642,6 @@ export async function runSimulation(panel) {
       stage: "initializing",
       message: "Job accepted by backend",
     });
-
-    if (dom.stopBtn) {
-      dom.stopBtn.disabled = false;
-    }
 
     panel.pollSimulationStatus();
 
@@ -687,7 +667,6 @@ export async function runSimulation(panel) {
       message: error.message,
     });
     showError(`Simulation failed: ${error.message}`);
-    if (dom.runBtn) dom.runBtn.disabled = false;
 
     setTimeout(() => {
       setProgressVisible(false);

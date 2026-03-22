@@ -131,7 +131,6 @@ export function getSimulationDom() {
       progressBar: document.getElementById("simulation-progressbar"),
       progressDiv: document.getElementById("simulation-progress"),
       runBtn: document.getElementById("run-simulation-btn"),
-      stopBtn: document.getElementById("stop-simulation-btn"),
       statusDot: document.getElementById("solver-status"),
       statusText: document.getElementById("solver-status-text"),
       statusHelp: document.getElementById("solver-status-help"),
