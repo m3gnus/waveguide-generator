@@ -159,9 +159,9 @@
     <div id="actions-panel">
       <span id="stats" class="is-hidden">Vertices: 0 | Triangles: 0</span>
 
-      <!-- Simulation Section (primary action — shown first) -->
+      <!-- Controls Section (combined simulation + model) -->
       <details class="section" open>
-        <summary>Simulation</summary>
+        <summary>Controls</summary>
         <div
           class="status-indicator"
           role="status"
@@ -221,35 +221,7 @@
             </div>
           </div>
         </details>
-        <div id="simulation-jobs" class="simulation-jobs">
-          <div class="simulation-jobs-header">
-            <span>Simulations</span>
-            <div class="simulation-jobs-header-actions">
-              <button
-                id="clear-failed-jobs-btn"
-                class="btn-tertiary button-compact"
-                type="button"
-              >
-                Clear Failed
-              </button>
-              <button
-                id="refresh-jobs-btn"
-                class="btn-tertiary button-compact button-icon-only"
-                type="button"
-                title="Refresh"
-                aria-label="Refresh job list"
-              >
-                ↻
-              </button>
-            </div>
-          </div>
-          <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
-        </div>
-      </details>
-
-      <!-- Model & Output Section — sticky at bottom of panel -->
-      <details class="section actions-panel-model" open>
-        <summary>Model</summary>
+        <hr />
         <button id="render-btn" class="is-hidden">Update Model</button>
         <div class="button-row">
           <button id="load-config-btn" class="secondary">Load Config</button>
@@ -300,6 +272,34 @@
               required
             />
           </div>
+        </div>
+      </details>
+
+      <!-- Simulation History -->
+      <details class="section" open>
+        <summary>Simulations</summary>
+        <div id="simulation-jobs" class="simulation-jobs">
+          <div class="simulation-jobs-header">
+            <div class="simulation-jobs-header-actions">
+              <button
+                id="clear-failed-jobs-btn"
+                class="btn-tertiary button-compact"
+                type="button"
+              >
+                Clear Failed
+              </button>
+              <button
+                id="refresh-jobs-btn"
+                class="btn-tertiary button-compact button-icon-only"
+                type="button"
+                title="Refresh"
+                aria-label="Refresh job list"
+              >
+                ↻
+              </button>
+            </div>
+          </div>
+          <div id="simulation-jobs-list" class="simulation-jobs-list"></div>
         </div>
       </details>
     </div>
