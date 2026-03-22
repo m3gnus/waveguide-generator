@@ -3,6 +3,7 @@ import {
   prepareOccAdaptiveSolveRequest,
 } from "../../modules/simulation/domain.js";
 import { readSimulationState } from "../../modules/simulation/state.js";
+import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
 import {
   readSimulationWorkspaceJobs,
   syncSimulationWorkspaceJobManifest,
@@ -410,12 +411,27 @@ export async function submitSimulationControllerJob(
   };
 }
 
+function persistScriptSnapshotToBackend(jobId, script) {
+  fetch(`${DEFAULT_BACKEND_URL}/api/jobs/${encodeURIComponent(jobId)}/script`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ script_snapshot: script }),
+    signal: AbortSignal.timeout(5000),
+  }).catch((err) => {
+    console.warn("Failed to persist script snapshot to backend:", err);
+  });
+}
+
 export async function queueSimulationControllerJob(controller, jobInput) {
   const createdJob = upsertJob(controller, buildQueuedSimulationJob(jobInput));
   setActiveJob(controller, jobInput?.jobId);
   persistControllerJobs(controller);
   if (createdJob) {
     await syncSimulationWorkspaceJobManifest(createdJob);
+    // Persist script snapshot to backend so it survives page reloads.
+    if (createdJob.script && createdJob.id) {
+      persistScriptSnapshotToBackend(createdJob.id, createdJob.script);
+    }
   }
   return createdJob;
 }
