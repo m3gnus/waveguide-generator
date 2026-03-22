@@ -71,17 +71,11 @@ export async function checkSolverConnection(panel) {
 
     if (!panel.stageStatusActive) {
       if (isConnected) {
-        statusText.textContent = panel.completedStatusMessage || "Solver ready";
-        runButton.disabled = false;
+        const baseMsg = panel.completedStatusMessage || "Solver ready";
         const deviceText = describeSelectedDevice(health);
-        if (statusHelp) {
-          if (deviceText) {
-            statusHelp.textContent = deviceText;
-            statusHelp.classList.remove("is-hidden");
-          } else {
-            statusHelp.classList.add("is-hidden");
-          }
-        }
+        statusText.textContent = deviceText ? `${baseMsg} · ${deviceText}` : baseMsg;
+        runButton.disabled = false;
+        if (statusHelp) statusHelp.classList.add("is-hidden");
       } else {
         panel.completedStatusMessage = null;
         statusText.textContent = "Backend connected — dependency issues detected";
