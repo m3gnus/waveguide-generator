@@ -495,10 +495,6 @@ details.section[open] > summary + * {
   margin-top: var(--sp-2);
 }
 
-details.section[open] > summary + .is-hidden + * {
-  margin-top: var(--sp-2);
-}
-
 details.section > .status-indicator {
   margin-top: var(--sp-2);
 }
@@ -674,6 +670,13 @@ input[type="checkbox"] {
   accent-color: var(--accent);
   cursor: pointer;
   margin: 0;
+}
+
+@media (pointer: coarse) {
+  input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
 }
 
 /* ── 8. Help Trigger ──────────────────────────────────────── */
@@ -976,8 +979,11 @@ button.secondary:hover:not(:disabled),
 .progress-fill {
   height: 100%;
   background: var(--accent);
-  width: 0%;
-  transition: width 0.3s ease;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.3s ease;
+  will-change: transform;
 }
 
 .progress-text {
@@ -1286,6 +1292,13 @@ details.section > details.simulation-mesh-diagnostics-window {
   color: var(--accent-warm);
 }
 
+@media (pointer: coarse) {
+  .simulation-job-rating-star {
+    padding: 8px 4px;
+    font-size: var(--text-lg);
+  }
+}
+
 /* Remove (×) — ghost icon button */
 
 .simulation-job-remove {
@@ -1312,6 +1325,13 @@ details.section > details.simulation-mesh-diagnostics-window {
   opacity: 1;
   color: var(--error);
   background: var(--error-bg);
+}
+
+@media (pointer: coarse) {
+  .simulation-job-remove {
+    width: 36px;
+    height: 36px;
+  }
 }
 
 /* Row 3: action buttons */
@@ -1548,6 +1568,13 @@ details.section > details.simulation-mesh-diagnostics-window {
   box-shadow: none;
 }
 
+@media (pointer: coarse) {
+  .auto-export-close {
+    width: 36px;
+    height: 36px;
+  }
+}
+
 .auto-export-body {
   flex: 1;
   overflow-y: auto;
@@ -1683,6 +1710,14 @@ details.section > details.simulation-mesh-diagnostics-window {
   border-color: var(--accent);
 }
 
+@media (pointer: coarse) {
+  .formula-info-btn {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+  }
+}
+
 .formula-info-panel {
   position: fixed;
   top: 50%;
@@ -1742,6 +1777,13 @@ details.section > details.simulation-mesh-diagnostics-window {
 
 .formula-info-close:hover:not(:disabled) {
   color: var(--error);
+}
+
+@media (pointer: coarse) {
+  .formula-info-close {
+    width: 36px;
+    height: 36px;
+  }
 }
 
 .formula-info-section {
