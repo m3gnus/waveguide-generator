@@ -971,16 +971,9 @@ button.secondary:hover:not(:disabled),
   gap: var(--sp-3);
 }
 
-/* Nested section inside Controls — cancel parent's horizontal margins */
+/* Nested section inside Controls */
 details.section > details.simulation-mesh-diagnostics-window {
-  margin-left: calc(-1 * var(--sp-3));
-  margin-right: calc(-1 * var(--sp-3));
   margin-top: var(--sp-2);
-  margin-bottom: calc(-1 * var(--sp-4));
-  border-radius: 0 0 var(--r-md) var(--r-md);
-  border-left: none;
-  border-right: none;
-  border-bottom: none;
 }
 
 .simulation-mesh-diagnostics-header {
