@@ -39,6 +39,7 @@ import {
 
 import {
   getSelectedFolderLabel,
+  requestBackendFolderSelection,
   requestFolderSelection,
   subscribeFolderWorkspace,
   supportsFolderSelection,
@@ -1083,19 +1084,20 @@ function _buildWorkspaceSection(cleanupFns = []) {
       selectedLabel === "No folder selected"
         ? "Choose Folder"
         : "Change Folder";
-    chooseBtn.disabled = !canPickFolder;
+    // Always enable — on Firefox we use the backend picker
+    chooseBtn.disabled = false;
 
-    // Show/hide the Firefox-specific path + finder rows
+    // Show path + finder rows on Firefox (still useful)
     pathRow.hidden = canPickFolder;
     finderRow.hidden = canPickFolder;
-    chooseRow.hidden = !canPickFolder;
+    chooseRow.hidden = false;
 
     chooseHelp.textContent = canPickFolder
       ? "Choose a folder workspace here to use browser direct-write optimization. Without a selected folder, exports use the backend workspace root."
-      : "";
+      : "Opens a native folder picker via the backend server.";
     routingNote.textContent = canPickFolder
       ? "Routing: exports always target a workspace root. With a selected folder and permission, files write directly there in-browser. Otherwise, the app writes through the backend workspace root and uses browser download/save only as fallback."
-      : 'Firefox does not support selecting a custom output folder via the browser (the File System Access API is not implemented in Firefox). Exports write to the backend workspace folder shown above. Use "Open in Finder" to browse the folder directly.';
+      : "Exports write to the selected backend workspace folder. Use the button above to change it.";
 
     // Fetch path from backend when showing the Firefox panel
     if (!canPickFolder) {
@@ -1107,11 +1109,17 @@ function _buildWorkspaceSection(cleanupFns = []) {
   };
 
   chooseBtn.addEventListener("click", async () => {
-    if (!supportsFolderSelection(globalThis?.window)) {
-      refreshWorkspaceCopy();
-      return;
+    if (supportsFolderSelection(globalThis?.window)) {
+      await requestFolderSelection(globalThis?.window);
+    } else {
+      chooseBtn.disabled = true;
+      chooseHelp.textContent = "Waiting for folder selection…";
+      const selectedPath = await requestBackendFolderSelection();
+      chooseBtn.disabled = false;
+      if (selectedPath) {
+        pathValueBox.textContent = selectedPath;
+      }
     }
-    await requestFolderSelection(globalThis?.window);
     refreshWorkspaceCopy();
   });
 
