@@ -364,12 +364,7 @@ export function addEnclosureGeometry(vertices, indices, params, verticalOffset =
     );
     const clampedEdgeR = mouthResult.clampedBoxCR;
     const edgeDepth = Math.min(clampedEdgeR || 0, Math.max(0, depth * 0.49));
-    // Roundovers need multiple slices to approximate the arc curvature.
-    // Chamfers are flat — a single slice is the correct geometry and avoids
-    // smooth-shading interpolation that would visually round the edge.
-    const edgeSlices = edgeDepth > 0
-        ? (edgeType === 2 ? 1 : Math.max(1, axialSegs))
-        : 0;
+    const edgeSlices = edgeDepth > 0 ? Math.max(1, axialSegs) : 0;
 
     // --- Step 3b: Refine angles at corners to match Y-axis roundover ---
     const { refined: refinedAngles, mapping: mouthToRefinedMap } =
