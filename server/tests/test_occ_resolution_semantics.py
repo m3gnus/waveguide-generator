@@ -342,7 +342,7 @@ class OccResolutionSemanticsTest(unittest.TestCase):
         self.assertEqual(_collect_boundary_curves([]), [])
 
     def test_collect_boundary_curves_deduplicates_curves_across_surfaces(self):
-        with patch("solver.waveguide_builder.gmsh") as gmsh_mock:
+        with patch("solver.waveguide_enclosure.gmsh") as gmsh_mock:
             gmsh_mock.model.getBoundary.side_effect = [
                 [(1, 11), (1, 12)],
                 [(1, 12), (1, 13), (2, 99)],

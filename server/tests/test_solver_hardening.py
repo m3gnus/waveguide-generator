@@ -38,11 +38,11 @@ def _mesh_stub():
     }
 
 
-# Patch target: HornBEMSolver._solve_single_frequency inside solve_optimized module
-_SOLVE_FREQ_TARGET = "solver.solve_optimized.HornBEMSolver._solve_single_frequency"
+# Patch target: HornBEMSolver._solve_single_frequency inside solve module
+_SOLVE_FREQ_TARGET = "solver.solve.HornBEMSolver._solve_single_frequency"
 # HornBEMSolver.__init__ needs to be stubbed when using DummyGrid in unit tests
 # (DummyGrid doesn't have number_of_elements, which bempp_api.function_space requires)
-_HORN_INIT_TARGET = "solver.solve_optimized.HornBEMSolver.__init__"
+_HORN_INIT_TARGET = "solver.solve.HornBEMSolver.__init__"
 # Return value expected by the new solver: (spl, impedance_complex, di, solution_tuple, iter_count)
 _SOLVE_FREQ_RETURN = (90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15)
 
@@ -75,13 +75,13 @@ class _OpenCLRuntimePatchedTestCase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self._boundary_patcher = patch(
-            "solver.solve_optimized.boundary_device_interface", return_value="opencl"
+            "solver.solve.boundary_device_interface", return_value="opencl"
         )
         self._potential_patcher = patch(
-            "solver.solve_optimized.potential_device_interface", return_value="opencl"
+            "solver.solve.potential_device_interface", return_value="opencl"
         )
         self._metadata_patcher = patch(
-            "solver.solve_optimized.selected_device_metadata",
+            "solver.solve.selected_device_metadata",
             return_value={
                 "requested_mode": "auto",
                 "selected_mode": "opencl_cpu",
@@ -116,10 +116,10 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
     def test_mesh_validation_strict_blocks_invalid_setup(self):
         mesh = _mesh_stub()
         with patch(
-            "solver.solve_optimized.calculate_mesh_statistics",
+            "solver.solve.calculate_mesh_statistics",
             return_value={"max_edge_length": 1.0, "num_elements": 1},
         ), patch(
-            "solver.solve_optimized.validate_frequency_range",
+            "solver.solve.validate_frequency_range",
             return_value={
                 "is_valid": False,
                 "warnings": ["Requested max frequency exceeds mesh capability."],
@@ -132,7 +132,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=_SOLVE_FREQ_RETURN,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             with self.assertRaises(ValueError):
@@ -148,10 +148,10 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
     def test_mesh_validation_warn_allows_run_and_surfaces_warning(self):
         mesh = _mesh_stub()
         with patch(
-            "solver.solve_optimized.calculate_mesh_statistics",
+            "solver.solve.calculate_mesh_statistics",
             return_value={"max_edge_length": 1.0, "num_elements": 1},
         ), patch(
-            "solver.solve_optimized.validate_frequency_range",
+            "solver.solve.validate_frequency_range",
             return_value={
                 "is_valid": False,
                 "warnings": ["Requested max frequency exceeds mesh capability."],
@@ -164,7 +164,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=_SOLVE_FREQ_RETURN,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
@@ -182,13 +182,13 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
 
     def test_mesh_validation_off_skips_validation_calls(self):
         mesh = _mesh_stub()
-        with patch("solver.solve_optimized.calculate_mesh_statistics") as calc_stats, patch(
-            "solver.solve_optimized.validate_frequency_range"
+        with patch("solver.solve.calculate_mesh_statistics") as calc_stats, patch(
+            "solver.solve.validate_frequency_range"
         ) as validate_freq, patch(
             _SOLVE_FREQ_TARGET,
             return_value=_SOLVE_FREQ_RETURN,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
@@ -210,9 +210,9 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=_SOLVE_FREQ_RETURN,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
-        ), patch("solver.solve_optimized.logger.info") as logger_info:
+        ), patch("solver.solve.logger.info") as logger_info:
             results = solve_optimized(
                 mesh=mesh,
                 frequency_range=[100.0, 1000.0],
@@ -258,7 +258,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
@@ -285,7 +285,7 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
         with patch(
             _SOLVE_FREQ_TARGET
         ) as solve_freq_mock, patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             with self.assertRaises(CancelSolve):
@@ -315,16 +315,16 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
-            "solver.solve_optimized.boundary_device_interface",
+            "solver.solve.boundary_device_interface",
             return_value="opencl",
         ), patch(
-            "solver.solve_optimized.potential_device_interface",
+            "solver.solve.potential_device_interface",
             return_value="opencl",
         ), patch(
-            "solver.solve_optimized.configure_opencl_safe_profile",
+            "solver.solve.configure_opencl_safe_profile",
             return_value={"profile": "safe_cpu", "applied": True, "detail": None},
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value={"horizontal": [], "vertical": [], "diagonal": []},
         ):
             results = solve_optimized(
@@ -362,16 +362,16 @@ class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             side_effect=_solve_side_effect,
         ), patch(
-            "solver.solve_optimized.boundary_device_interface",
+            "solver.solve.boundary_device_interface",
             return_value="opencl",
         ), patch(
-            "solver.solve_optimized.potential_device_interface",
+            "solver.solve.potential_device_interface",
             return_value="opencl",
         ), patch(
-            "solver.solve_optimized.configure_opencl_safe_profile",
+            "solver.solve.configure_opencl_safe_profile",
             return_value={"profile": "safe_cpu", "applied": True, "detail": None},
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value={"horizontal": [], "vertical": [], "diagonal": []},
         ):
             results = solve_optimized(
@@ -399,7 +399,7 @@ class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.5, ("p", "u", "sp", "su"), 15),
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value={
                 "horizontal": [[[0.0, 0.0], [90.0, -12.0], [180.0, -24.0]]],
                 "vertical": [[[0.0, 0.0], [90.0, -9.0], [180.0, -18.0]]],
@@ -434,7 +434,7 @@ class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
@@ -459,7 +459,7 @@ class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
@@ -487,7 +487,7 @@ class PerformanceMetadataTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.0), 6.5, ("p", "u", "sp", "su"), 15),
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value={
                 "horizontal": [[[0.0, 0.0], [90.0, -12.0], [180.0, -24.0]]],
                 "vertical": [[[0.0, 0.0], [90.0, -9.0], [180.0, -18.0]]],
@@ -530,7 +530,7 @@ class SinglePrecisionTest(_OpenCLRuntimePatchedTestCase):
             _SOLVE_FREQ_TARGET,
             return_value=(90.0, complex(1.0, 0.5), 6.0, ("p", "u", "sp", "su"), 15),
         ), patch(
-            "solver.solve_optimized.calculate_directivity_patterns_correct",
+            "solver.solve.calculate_directivity_patterns_correct",
             return_value=_directivity_stub(),
         ):
             results = solve_optimized(
