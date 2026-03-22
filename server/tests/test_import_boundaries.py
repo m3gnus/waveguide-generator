@@ -93,6 +93,8 @@ class ImportBoundaryTest(unittest.TestCase):
             'get_job_results',
             'list_job_items',
             'request_stop_job',
+            'update_job_label',
+            'update_job_script_snapshot',
         }
 
         tree = ast.parse(route_file.read_text(encoding='utf-8'), filename=str(route_file))
