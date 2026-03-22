@@ -533,12 +533,20 @@ export async function reconcileSimulationControllerRemoteJobs(
       const remote = await controller.solver.getJobStatus(localJob.id);
       const updated = toUiJob({ ...remote, id: localJob.id });
       if (updated?.id) {
+        // Only sync workspace manifest when job state materially changes
+        // (status transition or completion), not on every poll tick.
+        const statusChanged = localJob.status !== updated.status;
+        const justCompleted = updated.status === "complete" && localJob.status !== "complete";
+
         upsertJob(controller, updated);
-        syncSimulationWorkspaceJobManifest(updated).catch((error) => {
-          if (typeof onManifestSyncError === "function") {
-            onManifestSyncError(error, updated);
-          }
-        });
+
+        if (statusChanged || justCompleted) {
+          syncSimulationWorkspaceJobManifest(updated).catch((error) => {
+            if (typeof onManifestSyncError === "function") {
+              onManifestSyncError(error, updated);
+            }
+          });
+        }
       }
     } catch (error) {
       console.warn(`Status check failed for job ${localJob.id}:`, error);

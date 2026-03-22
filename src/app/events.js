@@ -233,10 +233,40 @@ export function setupMobilePanelToggle() {
   });
 
   const mediaQuery = window.matchMedia("(min-width: 769px)");
+
+  const actionsPanel = document.getElementById("actions-panel");
+  const actionsTab = document.getElementById("actions-tab");
+  const actionsTabBtn = document.getElementById("actions-tab-btn");
+
+  const moveActionsForMobile = () => {
+    if (!actionsPanel || !actionsTab) return;
+    if (!mediaQuery.matches) {
+      // Mobile: move actions panel children into the actions tab
+      if (actionsTab.childElementCount === 0) {
+        while (actionsPanel.firstChild) {
+          actionsTab.appendChild(actionsPanel.firstChild);
+        }
+      }
+      if (actionsTabBtn) actionsTabBtn.style.display = "";
+    } else {
+      // Desktop: restore children to the original actions panel
+      if (actionsPanel.childElementCount === 0 && actionsTab.childElementCount > 0) {
+        while (actionsTab.firstChild) {
+          actionsPanel.appendChild(actionsTab.firstChild);
+        }
+      }
+      if (actionsTabBtn) actionsTabBtn.style.display = "none";
+    }
+  };
+
   const handleMediaChange = (e) => {
     if (e.matches) {
       closePanel();
     }
+    moveActionsForMobile();
   };
   mediaQuery.addEventListener("change", handleMediaChange);
+
+  // Initial placement
+  moveActionsForMobile();
 }
