@@ -101,7 +101,7 @@ Supporting fixtures:
 - `server/tests/test_solver_tag_contract.py`
 - `server/tests/test_symmetry_benchmark.py`
 - `server/tests/test_symmetry_regression.py`
-- `server/tests/test_tritonia_benchmark.py`
+- `server/tests/test_reference_horn_benchmark.py`
 - `server/tests/test_units.py`
 - `server/tests/test_updates_endpoint.py`
 
@@ -112,18 +112,18 @@ These are ad-hoc debugging helpers and are not part of the automated suites.
 Backend research helpers:
 
 - `cd server && python3 scripts/benchmark_solver.py <mesh.msh> [options]`
-- `cd server && python3 scripts/benchmark_solver.py --preset tritonia [--json] [--device auto|opencl_cpu|opencl_gpu] [--precision-modes single,double]`
+- `cd server && python3 scripts/benchmark_solver.py --preset reference-horn [--json] [--device auto|opencl_cpu|opencl_gpu] [--precision-modes single,double]`
 - `cd server && python3 scripts/benchmark_symmetry.py [--case NAME] [--iterations N] [--json]`
-- `cd server && python3 scripts/benchmark_tritonia.py [options]` — bounded Tritonia-M repro path (mesh prep + optional 1-frequency solve with precision mode testing)
+- `cd server && python3 scripts/benchmark_reference_horn.py [options]` — bounded reference-horn repro path (mesh prep + optional 1-frequency solve with precision mode testing)
 
 Run from repository root:
 
 ```bash
 npm run diag:payload
 npm run diag:geometry
-npm run diag:occ:tritonia
+npm run diag:occ:reference-horn
 npm run diag:occ:closed
-npm run benchmark:tritonia
+npm run benchmark:reference-horn
 ```
 
 Generated diagnostic outputs are written to `scripts/diagnostics/out/`.

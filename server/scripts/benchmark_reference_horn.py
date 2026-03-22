@@ -132,7 +132,7 @@ def _first_precision_failure(results: List[PrecisionTestResult]) -> Optional[str
     return None
 
 
-def _persist_bounded_solve_validation(result: BenchmarkResult, args: argparse.Namespace) -> None:
+def _persist_bounded_solve_record(result: BenchmarkResult, args: argparse.Namespace) -> None:
     import platform
 
     attempted = any(item.attempted for item in result.precision_results)
@@ -169,7 +169,7 @@ def _persist_bounded_solve_validation(result: BenchmarkResult, args: argparse.Na
         write_bounded_solve_readiness_record(record)
     except Exception as exc:  # pragma: no cover - best effort persistence
         print(
-            f"[benchmark_tritonia] warning: failed to persist bounded solve readiness record: {exc}",
+            f"[benchmark_reference_horn] warning: failed to persist bounded solve readiness record: {exc}",
             file=sys.stderr,
         )
 
@@ -208,7 +208,7 @@ def build_reference_horn_mesh() -> MeshPrepResult:
 
     start = time.time()
     try:
-        result = build_waveguide_mesh(TRITONIA_PARAMS, include_canonical=True)
+        result = build_waveguide_mesh(REFERENCE_HORN_PARAMS, include_canonical=True)
         elapsed = time.time() - start
 
         canonical = result.get("canonical_mesh", {})
@@ -242,7 +242,7 @@ def prepare_solver_mesh(mesh_prep_result: MeshPrepResult) -> Optional[Dict[str, 
     from solver.waveguide_builder import build_waveguide_mesh
 
     try:
-        result = build_waveguide_mesh(TRITONIA_PARAMS, include_canonical=True)
+        result = build_waveguide_mesh(REFERENCE_HORN_PARAMS, include_canonical=True)
         canonical = result.get("canonical_mesh", {})
     except Exception:
         return None
@@ -375,7 +375,7 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
     runtime_available = BEMPP_RUNTIME_READY
     clear_device_selection_caches()
     device_meta = selected_device_metadata(args.device)
-    mesh_prep = build_tritonia_mesh()
+    mesh_prep = build_reference_horn_mesh()
     precision_results: List[PrecisionTestResult] = []
     unsupported_modes: List[str] = []
     if not args.no_solve and mesh_prep.success and runtime_available:
@@ -429,7 +429,7 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
     )
 def print_human_readable(result: BenchmarkResult) -> None:
     print("=" * 60)
-    print("TRITONIA-M BENCHMARK REPORT")
+    print("REFERENCE HORN BENCHMARK REPORT")
     print("=" * 60)
     print()
     print("HOST INFO")
@@ -505,7 +505,7 @@ def print_human_readable(result: BenchmarkResult) -> None:
     print("=" * 60)
 def main():
     parser = argparse.ArgumentParser(
-        description="Bounded Tritonia-M benchmark/repro path",
+        description="Bounded reference-horn benchmark/repro path",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -550,7 +550,7 @@ def main():
     args = parser.parse_args()
     result = run_benchmark(args)
     if not args.no_solve:
-        _persist_bounded_solve_validation(result, args)
+        _persist_bounded_solve_record(result, args)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
     else:

@@ -8,7 +8,7 @@ Run from repository root:
 
 ```bash
 node scripts/diagnostics/build-canonical-payload-from-reference.js
-node scripts/diagnostics/check-tritonia-geometry-artifacts.js
+node scripts/diagnostics/check-reference-horn-geometry-artifacts.js
 ```
 
 ## Python diagnostics
@@ -16,7 +16,7 @@ node scripts/diagnostics/check-tritonia-geometry-artifacts.js
 Run from repository root:
 
 ```bash
-python3 scripts/diagnostics/build-occ-mesh-tritonia.py
+python3 scripts/diagnostics/build-occ-mesh-reference-horn.py
 python3 scripts/diagnostics/check-occ-closed-mesh.py
 ```
 
