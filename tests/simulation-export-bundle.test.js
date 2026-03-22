@@ -12,68 +12,19 @@ import {
   setSelectedFolderHandle
 } from '../src/ui/workspace/folderWorkspace.js';
 
-function createMemoryDirectory(name = 'root') {
-  const files = new Map();
-  const directories = new Map();
-
-  return {
-    kind: 'directory',
-    name,
-    async getDirectoryHandle(dirName, options = {}) {
-      if (!directories.has(dirName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        directories.set(dirName, createMemoryDirectory(dirName));
-      }
-      return directories.get(dirName);
-    },
-    async getFileHandle(fileName, options = {}) {
-      if (!files.has(fileName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        files.set(fileName, '');
-      }
-      return {
-        async getFile() {
-          const textValue = files.get(fileName) ?? '';
-          return { async text() { return textValue; } };
-        },
-        async createWritable() {
-          return {
-            async write(content) {
-              if (content && typeof content.text === 'function') {
-                files.set(fileName, await content.text());
-                return;
-              }
-              files.set(fileName, String(content));
-            },
-            async close() {}
-          };
-        }
-      };
-    },
-    files,
-    directories,
-    async *entries() {
-      for (const [dirName, dirHandle] of directories.entries()) {
-        yield [dirName, dirHandle];
-      }
-      for (const [fileName] of files.entries()) {
-        yield [fileName, { kind: 'file', name: fileName }];
-      }
-    }
-  };
-}
-
 test('exportResults writes selected bundle files into the task folder workspace', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+  const originalFetch = global.fetch;
+
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
 
   const panel = {
     currentSmoothing: 'none',
@@ -100,13 +51,14 @@ test('exportResults writes selected bundle files into the task folder workspace'
     ]);
     assert.deepEqual(bundle.failures, []);
 
-    // exportResults uses baseName (job.label) as the subdirectory
-    const taskDir = await root.getDirectoryHandle('horn_12');
-    assert.equal(taskDir.files.has('horn_12_results.csv'), true);
-    assert.equal(taskDir.files.has('horn_12_results.json'), true);
-    assert.match(taskDir.files.get('horn_12_results.csv'), /Frequency \(Hz\),SPL \(dB\)/);
-    assert.match(taskDir.files.get('horn_12_results.json'), /"smoothing": "none"/);
+    // Both files should be written via fetch to the backend export endpoint
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_12');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_12');
   } finally {
+    global.fetch = originalFetch;
     resetSelectedFolder();
   }
 });
@@ -191,9 +143,19 @@ test('exportResults routes fallback bundle writes through backend workspace subd
   }
 });
 
-test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts into generation folder', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts via backend', async () => {
+  const originalFetch = global.fetch;
+  const fetchCalls = [];
+
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
 
   try {
     const persisted = await persistSimulationGenerationArtifacts(
@@ -211,12 +173,14 @@ test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts
     assert.equal(persisted.rawResultsFile, 'horn_56_raw.results.json');
     assert.equal(persisted.meshArtifactFile, 'horn_56_solver.mesh.msh');
 
-    const taskDir = await root.getDirectoryHandle('horn_56');
-    assert.equal(taskDir.files.has('horn_56_raw.results.json'), true);
-    assert.equal(taskDir.files.has('horn_56_solver.mesh.msh'), true);
-    assert.match(taskDir.files.get('horn_56_raw.results.json'), /"spl_on_axis"/);
-    assert.match(taskDir.files.get('horn_56_solver.mesh.msh'), /\$MeshFormat/);
+    // Both artifacts should be written via fetch to the backend export endpoint
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_56');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_56');
   } finally {
+    global.fetch = originalFetch;
     resetSelectedFolder();
   }
 });

@@ -34,11 +34,6 @@ import {
   syncSimulationWorkspaceIndex,
   syncSimulationWorkspaceJobManifest
 } from '../src/ui/simulation/workspaceTasks.js';
-import {
-  resetSelectedFolder,
-  setSelectedFolderHandle
-} from '../src/ui/workspace/folderWorkspace.js';
-
 function makeRawParams(overrides = {}) {
   return {
     ...getDefaults('OSSE'),
@@ -50,61 +45,6 @@ function makeRawParams(overrides = {}) {
     angularSegments: 24,
     lengthSegments: 10,
     ...overrides
-  };
-}
-
-function createMemoryDirectory(name = 'root') {
-  const files = new Map();
-  const directories = new Map();
-
-  return {
-    kind: 'directory',
-    name,
-    async getDirectoryHandle(dirName, options = {}) {
-      if (!directories.has(dirName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        directories.set(dirName, createMemoryDirectory(dirName));
-      }
-      return directories.get(dirName);
-    },
-    async getFileHandle(fileName, options = {}) {
-      if (!files.has(fileName)) {
-        if (!options.create) {
-          const error = new Error('not found');
-          error.name = 'NotFoundError';
-          throw error;
-        }
-        files.set(fileName, '');
-      }
-      return {
-        async getFile() {
-          const textValue = files.get(fileName) ?? '';
-          return { async text() { return textValue; } };
-        },
-        async createWritable() {
-          return {
-            async write(content) {
-              files.set(fileName, String(content));
-            },
-            async close() {}
-          };
-        }
-      };
-    },
-    files,
-    directories,
-    async *entries() {
-      for (const [dirName, dirHandle] of directories.entries()) {
-        yield [dirName, dirHandle];
-      }
-      for (const [fileName] of files.entries()) {
-        yield [fileName, { kind: 'file', name: fileName }];
-      }
-    }
   };
 }
 
@@ -453,9 +393,19 @@ test('simulation use case normalizes persisted backend mesh diagnostics', () => 
   assert.equal(summary.ok, true);
 });
 
-test('simulation workspace service rebuilds folder index from task manifests', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+test('simulation workspace service writes job manifest via backend', async () => {
+  const originalFetch = global.fetch;
+  const fetchCalls = [];
+
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
 
   try {
     const manifest = await syncSimulationWorkspaceJobManifest({
@@ -467,43 +417,38 @@ test('simulation workspace service rebuilds folder index from task manifests', a
 
     assert.equal(manifest.id, 'job-folder-1');
 
+    // Manifest write goes through backend via writeWorkspaceFile
+    assert.ok(fetchCalls.length >= 1);
+    assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
+
+    // readSimulationWorkspaceJobs always returns empty in backend-only mode
     const restored = await readSimulationWorkspaceJobs();
-    assert.equal(restored.available, true);
-    assert.equal(restored.repaired, true);
-    assert.equal(restored.items.length, 1);
-    assert.equal(restored.items[0].id, 'job-folder-1');
-    assert.equal(root.files.has('.waveguide-tasks.index.v1.json'), true);
+    assert.equal(restored.available, false);
+    assert.equal(restored.items.length, 0);
   } finally {
-    resetSelectedFolder();
+    global.fetch = originalFetch;
   }
 });
 
-test('simulation workspace service writes normalized folder index entries', async () => {
-  const root = createMemoryDirectory();
-  setSelectedFolderHandle(root, { label: 'workspace' });
+test('simulation workspace service index sync is unavailable in backend-only mode', async () => {
+  const result = await syncSimulationWorkspaceIndex([
+    {
+      id: 'job-folder-2',
+      status: 'complete',
+      exportedFiles: ['result.csv'],
+      scriptSnapshot: { outputName: 'horn' }
+    }
+  ]);
 
-  try {
-    const result = await syncSimulationWorkspaceIndex([
-      {
-        id: 'job-folder-2',
-        status: 'complete',
-        exportedFiles: ['result.csv'],
-        scriptSnapshot: { outputName: 'horn' }
-      }
-    ]);
+  // syncSimulationWorkspaceIndex always returns not-synced in backend-only mode
+  assert.equal(result.synced, false);
+  assert.equal(result.available, false);
+  assert.deepEqual(result.items, []);
 
-    assert.equal(result.synced, true);
-    assert.equal(result.items.length, 1);
-
-    const restored = await readSimulationWorkspaceJobs();
-    assert.equal(restored.repaired, false);
-    assert.equal(restored.items.length, 1);
-    assert.equal(restored.items[0].id, 'job-folder-2');
-    assert.deepEqual(restored.items[0].exportedFiles, ['result.csv']);
-    assert.deepEqual(restored.items[0].scriptSnapshot, { outputName: 'horn' });
-  } finally {
-    resetSelectedFolder();
-  }
+  // readSimulationWorkspaceJobs always returns empty
+  const restored = await readSimulationWorkspaceJobs();
+  assert.equal(restored.available, false);
+  assert.equal(restored.items.length, 0);
 });
 
 test('simulation use case builds cancelled job state and resolves failed cleanup IDs', () => {
