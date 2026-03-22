@@ -502,21 +502,100 @@ def _interpolate_ring_plan(
     return plan
 
 
+def _make_rect_wire(
+    *, bx0: float, bx1: float, by0: float, by1: float,
+    corner_radius: float, edge_type: int, z: float,
+) -> Tuple[int, List[int], Tuple[int, int]]:
+    """Build a closed rectangular wire from line/arc primitives.
+
+    Unlike BSpline wires, primitive wires let Gmsh mesh edges based purely
+    on the size field, without BSpline parametric density constraints that
+    force excessive triangles on roundover/ruled surfaces.
+    """
+    half_w = 0.5 * (bx1 - bx0)
+    half_h = 0.5 * (by1 - by0)
+    R = max(0.0, min(float(corner_radius), half_w - 0.1, half_h - 0.1))
+    has_corners = R > 1e-3
+
+    curves: List[int] = []
+    if has_corners:
+        # 8 transition points (CCW from right-edge bottom)
+        p = [
+            gmsh.model.occ.addPoint(bx1, by0 + R, z),      # 0: right edge, bottom
+            gmsh.model.occ.addPoint(bx1, by1 - R, z),      # 1: right edge, top
+            gmsh.model.occ.addPoint(bx1 - R, by1, z),      # 2: top edge, right
+            gmsh.model.occ.addPoint(bx0 + R, by1, z),      # 3: top edge, left
+            gmsh.model.occ.addPoint(bx0, by1 - R, z),      # 4: left edge, top
+            gmsh.model.occ.addPoint(bx0, by0 + R, z),      # 5: left edge, bottom
+            gmsh.model.occ.addPoint(bx0 + R, by0, z),      # 6: bottom edge, left
+            gmsh.model.occ.addPoint(bx1 - R, by0, z),      # 7: bottom edge, right
+        ]
+        # Arc centers
+        c = [
+            gmsh.model.occ.addPoint(bx1 - R, by1 - R, z),  # Q1: top-right
+            gmsh.model.occ.addPoint(bx0 + R, by1 - R, z),  # Q2: top-left
+            gmsh.model.occ.addPoint(bx0 + R, by0 + R, z),  # Q3: bottom-left
+            gmsh.model.occ.addPoint(bx1 - R, by0 + R, z),  # Q4: bottom-right
+        ]
+        # CCW: right edge -> Q1 corner -> top edge -> Q2 -> left -> Q3 -> bottom -> Q4
+        curves.append(gmsh.model.occ.addLine(p[0], p[1]))
+        curves.append(
+            gmsh.model.occ.addLine(p[1], p[2]) if edge_type == 2
+            else gmsh.model.occ.addCircleArc(p[1], c[0], p[2])
+        )
+        curves.append(gmsh.model.occ.addLine(p[2], p[3]))
+        curves.append(
+            gmsh.model.occ.addLine(p[3], p[4]) if edge_type == 2
+            else gmsh.model.occ.addCircleArc(p[3], c[1], p[4])
+        )
+        curves.append(gmsh.model.occ.addLine(p[4], p[5]))
+        curves.append(
+            gmsh.model.occ.addLine(p[5], p[6]) if edge_type == 2
+            else gmsh.model.occ.addCircleArc(p[5], c[2], p[6])
+        )
+        curves.append(gmsh.model.occ.addLine(p[6], p[7]))
+        curves.append(
+            gmsh.model.occ.addLine(p[7], p[0]) if edge_type == 2
+            else gmsh.model.occ.addCircleArc(p[7], c[3], p[0])
+        )
+        first_pt, last_pt = p[0], p[7]
+    else:
+        # Simple rectangle: 4 corners, 4 lines
+        p = [
+            gmsh.model.occ.addPoint(bx1, by0, z),
+            gmsh.model.occ.addPoint(bx1, by1, z),
+            gmsh.model.occ.addPoint(bx0, by1, z),
+            gmsh.model.occ.addPoint(bx0, by0, z),
+        ]
+        curves = [
+            gmsh.model.occ.addLine(p[0], p[1]),
+            gmsh.model.occ.addLine(p[1], p[2]),
+            gmsh.model.occ.addLine(p[2], p[3]),
+            gmsh.model.occ.addLine(p[3], p[0]),
+        ]
+        first_pt, last_pt = p[0], p[3]
+
+    wire = gmsh.model.occ.addWire(curves)
+    return wire, curves, (first_pt, last_pt)
+
+
 def _build_roundover_surface(
     current_wire: int,
-    outer_pts: List[Tuple[float, float, float, float]],
-    inset_pts: List[Tuple[float, float, float, float]],
+    ring_wire_builder,
     edge_depth: float,
     z_start: float,
     direction: int,
     enc_edge_type: int,
     closed: bool,
-    _make_wire,
 ) -> Tuple[List[Tuple[int, int]], int, List[int], Tuple[int, int]]:
     """Build a single roundover surface between the current wire and the fillet end.
 
-    For rounded mode (enc_edge_type=1): smooth B-spline thru-section with 3 profiles.
+    For rounded mode (enc_edge_type=1): ruled thru-sections with 3 profiles.
     For chamfer mode (enc_edge_type=2): single ruled surface with 2 profiles.
+
+    ring_wire_builder: callable(z, radial_t) -> (wire, curves, endpoints)
+        Builds a ring wire at the given z and radial blend position
+        (0 = inset, 1 = outer).
 
     direction: +1 for front (inset->outer, z decreasing), -1 for back (outer->inset, z decreasing).
     Returns (dimtags, last_wire, last_curves, last_eps).
@@ -526,9 +605,7 @@ def _build_roundover_surface(
 
     if enc_edge_type == 1:
         # Rounded fillet: 3 profiles (start, mid-arc at t=0.5, end) with ruled
-        # sections between consecutive pairs. This gives 2 ruled surfaces that
-        # preserve shared-edge topology while approximating the arc curvature.
-        # Mesh density is controlled by resolution fields, not by geometric slicing.
+        # sections between consecutive pairs.
         prev_wire = current_wire
         dimtags = []
         for t in (0.5, 1.0):
@@ -541,20 +618,16 @@ def _build_roundover_surface(
                 radial_t = math.cos(angle)
 
             z_ring = z_start - axial_t * edge_depth if direction == 1 else z_start + (1.0 - axial_t) * edge_depth
-            ring_plan = _interpolate_ring_plan(outer_pts, inset_pts, radial_t)
-            ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
-            ring_wire, last_curves, last_eps = _make_wire(ring_pts, closed=closed)
+            ring_wire, last_curves, last_eps = ring_wire_builder(z_ring, radial_t)
             dimtags.extend(_add_ruled_section(prev_wire, ring_wire))
             prev_wire = ring_wire
 
         last_wire = prev_wire
     else:
-        # Chamfer: linear interpolation, single ruled surface between start and end.
+        # Chamfer: single ruled surface between start and end.
         z_end = z_start - edge_depth if direction == 1 else z_start
-        ring_plan = _interpolate_ring_plan(outer_pts, inset_pts, 0.0 if direction == -1 else 1.0)
-        z_ring = z_end
-        ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
-        ring_wire, last_curves, last_eps = _make_wire(ring_pts, closed=closed)
+        radial_t = 1.0 if direction == 1 else 0.0
+        ring_wire, last_curves, last_eps = ring_wire_builder(z_end, radial_t)
         dimtags = _add_ruled_section(current_wire, ring_wire)
         last_wire = ring_wire
 
@@ -650,36 +723,36 @@ def _build_enclosure_box(
     cx = float(np.mean(mouth_pts[:, 0]))
     cy = float(np.mean(mouth_pts[:, 1]))
 
-    # Generate enclosure ring angles from the geometry — NOT from the horn mouth
-    # angular sampling (n_angular).  The enclosure is a simple rounded rectangle
-    # and needs far fewer BSpline control points than the horn profile.  Using
-    # horn mouth angles made n_angular leak into the mesh output; with roundovers
-    # this produced excessive triangles that ignored the resolution settings.
-    if closed:
-        n_enc = 48
-        angles = [2.0 * math.pi * i / n_enc for i in range(n_enc)]
-    else:
-        # Determine angular range from mouth points, sample at fixed density.
+    half_w = 0.5 * (bx1 - bx0)
+    half_h = 0.5 * (by1 - by0)
+    clamped_edge = max(0.0, min(float(enc_edge), half_w - 0.1, half_h - 0.1))
+
+    # For non-closed (partial-domain) geometries, we still need point arrays
+    # for BSpline wire construction.  For closed geometries, enclosure wires
+    # are built from line/arc primitives (_make_rect_wire) — no point arrays
+    # needed, fully decoupled from n_angular.
+    outer_pts: List[Tuple[float, float, float, float]] = []
+    inset_pts: List[Tuple[float, float, float, float]] = []
+    if not closed:
         mouth_angles = sorted([
             float(math.atan2(float(mouth_pts[i, 1]) - cy, float(mouth_pts[i, 0]) - cx))
             for i in range(mouth_pts.shape[0])
         ])
         n_enc = min(28, len(mouth_angles))
         angles = np.linspace(mouth_angles[0], mouth_angles[-1], n_enc).tolist()
-
-    outer_pts, inset_pts, clamped_edge = _generate_enclosure_points_from_angles(
-        angles=angles,
-        cx=cx,
-        cy=cy,
-        bx0=bx0,
-        bx1=bx1,
-        by0=by0,
-        by1=by1,
-        edge_radius=enc_edge,
-        edge_type=enc_edge_type,
-    )
-    if not outer_pts or not inset_pts:
-        return empty
+        outer_pts, inset_pts, clamped_edge = _generate_enclosure_points_from_angles(
+            angles=angles,
+            cx=cx,
+            cy=cy,
+            bx0=bx0,
+            bx1=bx1,
+            by0=by0,
+            by1=by1,
+            edge_radius=enc_edge,
+            edge_type=enc_edge_type,
+        )
+        if not outer_pts or not inset_pts:
+            return empty
 
     generated_dimtags: List[Tuple[int, int]] = []
     front_edge_dimtags_all: List[Tuple[int, int]] = []
