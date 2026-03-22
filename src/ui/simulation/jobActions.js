@@ -232,6 +232,7 @@ function renderRatingStars(job) {
             data-job-rating="${ratingValue}"
             data-job-id="${escapeHtml(job.id)}"
             aria-label="Rate ${escapeHtml(job.label || job.id)} ${ratingValue} out of 5"
+            aria-pressed="${isActive ? "true" : "false"}"
             title="Rate ${ratingValue} out of 5"
           >${isActive ? "&#9733;" : "&#9734;"}</button>
         `;
