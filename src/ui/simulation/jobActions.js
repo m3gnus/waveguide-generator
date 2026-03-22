@@ -106,8 +106,8 @@ export function renderSimulationMeshDiagnostics(summary = null) {
   container.innerHTML = `
     <div class="simulation-mesh-diagnostics-header">
       <span class="simulation-mesh-diagnostics-header-title">${escapeHtml(sourceLabel)}</span>
-      <span class="simulation-mesh-diagnostics-header-meta">${summary.vertexCount} vertices</span>
-      <span class="simulation-mesh-diagnostics-header-meta">${summary.triangleCount} triangles</span>
+      <span class="simulation-mesh-diagnostics-header-meta">${summary.vertexCount.toLocaleString()} verts</span>
+      <span class="simulation-mesh-diagnostics-header-meta">${summary.triangleCount.toLocaleString()} tris</span>
     </div>
     <div class="simulation-mesh-diagnostics-body">
       <div class="simulation-mesh-diagnostics-section-label">Geometry Regions</div>
@@ -365,25 +365,22 @@ export function renderJobList(panel) {
       return `
     <div class="simulation-job-item ${panel.activeJobId === job.id ? "is-active" : ""} ${statusClass}" data-job-id="${job.id}">
       <div class="simulation-job-header">
-        <div class="simulation-job-info">
-          <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
-            <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
-            ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ""}
-          </div>
-          <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
+        <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
+          <span>${escapeHtml(job.label || job.id.slice(0, 8))}</span>
+          ${source.badge ? `<span class="simulation-job-source-badge">${source.badge}</span>` : ""}
         </div>
-        <div class="simulation-job-actions">
-          ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
-          ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export results">Export</button>` : ""}
-          ${job.script ? `<button type="button" class="btn-secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters">Load</button>` : ""}
-          ${canRerun ? `<button type="button" class="btn-secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Rerun">Rerun</button>` : ""}
-          ${canStop ? `<button type="button" class="btn-tertiary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop">Stop</button>` : ""}
-          <button type="button" class="btn-tertiary button-compact simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
-        </div>
+        <button type="button" class="simulation-job-remove" data-job-action="remove" data-job-id="${job.id}" aria-label="Remove" title="Remove">&#x2715;</button>
       </div>
-      <div class="simulation-job-footer">
-        <span class="simulation-job-footer-label">Rating</span>
-        ${renderRatingStars(job)}
+      <div class="simulation-job-status-row">
+        <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
+        ${job.status === "complete" ? renderRatingStars(job) : ""}
+      </div>
+      <div class="simulation-job-actions">
+        ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="view" data-job-id="${job.id}" title="View results">View</button>` : ""}
+        ${job.status === "complete" ? `<button type="button" class="btn-secondary button-compact" data-job-action="export" data-job-id="${job.id}" title="Export results">Export</button>` : ""}
+        ${job.script ? `<button type="button" class="btn-secondary button-compact" data-job-action="load-script" data-job-id="${job.id}" title="Load parameters">Load</button>` : ""}
+        ${canRerun ? `<button type="button" class="btn-secondary button-compact" data-job-action="redo" data-job-id="${job.id}" title="Rerun">Rerun</button>` : ""}
+        ${canStop ? `<button type="button" class="btn-tertiary button-compact" data-job-action="stop" data-job-id="${job.id}" title="Stop">Stop</button>` : ""}
       </div>
     </div>
   `;

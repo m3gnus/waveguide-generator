@@ -142,7 +142,6 @@ body {
   max-width: var(--panel-max);
   height: 100vh;
   background: var(--panel);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: var(--sp-3);
@@ -225,6 +224,8 @@ body {
   #canvas-container {
     box-shadow: inset 0 0 80px var(--canvas-vignette, rgba(0, 0, 0, 0.25));
   }
+
+
 }
 
 .webgl-fallback {
@@ -251,7 +252,6 @@ body {
   max-width: var(--panel-max);
   height: 100vh;
   background: var(--panel);
-  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: var(--sp-3);
@@ -444,6 +444,10 @@ details.section > *:not(summary) {
   margin-right: var(--sp-3);
 }
 
+details.section > *:nth-child(2) {
+  margin-top: var(--sp-2);
+}
+
 details.section > .status-indicator {
   margin-top: var(--sp-2);
 }
@@ -451,11 +455,22 @@ details.section > .status-indicator {
 details.section > .section-note:first-of-type {
   margin-top: var(--sp-1);
 }
+
 details.section[open] {
   padding-bottom: var(--sp-2);
 }
+
 details.section[open] > summary {
   border-bottom: 1px solid var(--border);
+}
+
+/* Simulation section fills remaining panel height when open */
+#actions-panel > details.section:last-child[open] {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .section-header {
@@ -925,38 +940,69 @@ button.secondary:hover:not(:disabled),
 .simulation-mesh-diagnostics {
   padding: var(--sp-2) 0 0;
   display: grid;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
 }
 
 .simulation-mesh-diagnostics-window {
   margin-top: var(--sp-2);
 }
 
-.simulation-mesh-diagnostics-header {
+.simulation-mesh-diagnostics-window > summary {
+  list-style: none;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.simulation-mesh-diagnostics-window > summary::-webkit-details-marker {
+  display: none;
+}
+
+.simulation-mesh-diagnostics-window > summary::before {
+  content: "▸";
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.simulation-mesh-diagnostics-window[open] > summary::before {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+.simulation-mesh-diagnostics-window > summary:hover {
   color: var(--text);
 }
 
+.simulation-mesh-diagnostics-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  font-size: var(--text-xs);
+}
+
 .simulation-mesh-diagnostics-header-title {
-  font-weight: 700;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .simulation-mesh-diagnostics-header-meta {
   color: var(--text-muted);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--input-bg);
-  border: 1px solid var(--border);
 }
 
-.simulation-mesh-diagnostics-tags {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-1);
+.simulation-mesh-diagnostics-header-meta + .simulation-mesh-diagnostics-header-meta::before {
+  content: "·";
+  margin-right: var(--sp-1);
+  opacity: 0.45;
 }
 
 .simulation-mesh-diagnostics-body {
@@ -965,11 +1011,13 @@ button.secondary:hover:not(:disabled),
 }
 
 .simulation-mesh-diagnostics-section-label {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  display: none;
+}
+
+.simulation-mesh-diagnostics-tags {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
 }
 
 .simulation-mesh-diagnostics-region {
@@ -977,45 +1025,46 @@ button.secondary:hover:not(:disabled),
   grid-template-columns: 1fr auto;
   gap: var(--sp-2);
   align-items: center;
-  padding: var(--sp-2);
+  padding: 4px var(--sp-2);
   border-radius: var(--r-sm);
-  background: var(--panel);
-  border: 1px solid var(--border);
-}
-
-.simulation-mesh-diagnostics-tag-count {
-  font-size: var(--text-xs);
-  font-weight: 700;
-}
-
-.simulation-mesh-diagnostics-tag-count {
-  padding: 2px 8px;
-  border-radius: 999px;
   background: var(--input-bg);
+}
+
+.simulation-mesh-diagnostics-tag-label {
+  font-size: var(--text-xs);
   color: var(--text);
 }
 
-.simulation-mesh-diagnostics-tag-label,
-.simulation-mesh-diagnostics-placeholder,
-.simulation-mesh-diagnostics-empty {
+.simulation-mesh-diagnostics-tag-count {
   font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--text-muted);
 }
 
+.simulation-mesh-diagnostics-placeholder {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: var(--sp-1) 0;
+}
+
 .simulation-mesh-diagnostics-empty {
-  padding: var(--sp-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-sm);
   border: 1px dashed var(--border);
   background: var(--input-bg);
+  text-align: center;
 }
 
 .simulation-mesh-diagnostics-warning {
   font-size: var(--text-xs);
   color: var(--warning);
-  padding: var(--sp-1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-sm);
-  background: var(--input-bg);
-  border: 1px solid var(--border);
+  background: var(--warning-bg);
+  border-left: 2px solid var(--warning);
+  line-height: 1.5;
 }
 
 @media (max-width: 640px) {
@@ -1028,10 +1077,13 @@ button.secondary:hover:not(:disabled),
 
 .simulation-jobs {
   margin-top: var(--sp-2);
-  padding: var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--input-bg);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-2);
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .simulation-jobs-header {
@@ -1086,24 +1138,58 @@ button.secondary:hover:not(:disabled),
   min-width: 110px;
 }
 
+/* Job list */
+
 .simulation-jobs-list {
   display: grid;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   overflow-y: auto;
-  max-height: 320px;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
+/* Job card */
+
 .simulation-job-item {
-  padding: var(--sp-2);
+  padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-left: 3px solid transparent;
+  border-radius: var(--r-md);
   background: var(--panel);
   display: grid;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
+  transition: box-shadow var(--t-fast);
+}
+
+.simulation-job-item:hover {
+  box-shadow: var(--shadow-sm);
 }
 
 .simulation-job-item.is-active {
   border-color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+.simulation-job-item.is-running {
+  border-left-color: var(--accent);
+}
+
+.simulation-job-item.is-failed {
+  border-left-color: var(--error);
+}
+
+.simulation-job-item.is-completed {
+  border-left-color: var(--success);
+}
+
+/* Row 1: name + X */
+
+.simulation-job-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
 }
 
 .simulation-job-title {
@@ -1112,44 +1198,52 @@ button.secondary:hover:not(:disabled),
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.simulation-job-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Row 2: status + rating */
+
+.simulation-job-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 18px;
 }
 
 .simulation-job-meta {
   font-size: var(--text-xs);
   color: var(--text-muted);
+  line-height: 1.4;
 }
 
-.simulation-job-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2);
-}
-
-.simulation-job-footer-label {
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
+/* Star rating */
 
 .simulation-job-rating {
   display: inline-flex;
-  gap: 1px;
+  gap: 0;
+  flex-shrink: 0;
 }
 
 .simulation-job-rating-star {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  opacity: 0.4;
+  opacity: 0.3;
   cursor: pointer;
-  padding: 0 2px;
-  font-size: var(--text-base);
+  padding: 0 1px;
+  font-size: var(--text-sm);
   line-height: 1;
   margin: 0;
   width: auto;
+  transition: opacity var(--t-fast), color var(--t-fast);
 }
 
 .simulation-job-rating-star.is-active,
@@ -1158,24 +1252,41 @@ button.secondary:hover:not(:disabled),
   color: var(--accent-warm);
 }
 
-.simulation-job-header {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-2);
-  align-items: start;
+/* Remove (×) — ghost icon button */
+
+.simulation-job-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity var(--t-fast), color var(--t-fast), background var(--t-fast);
 }
 
-.simulation-job-info {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
+.simulation-job-remove:hover {
+  opacity: 1;
+  color: var(--error);
+  background: var(--error-bg);
 }
+
+/* Row 3: action buttons */
 
 .simulation-job-actions {
   display: flex;
   flex-wrap: nowrap;
   gap: var(--sp-1);
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
 }
 
@@ -1187,10 +1298,10 @@ button.secondary:hover:not(:disabled),
   line-height: 1.3;
 }
 
-.simulation-job-remove {
-  min-width: unset;
-  font-weight: 700;
-}
+/* Legacy — no longer rendered */
+.simulation-job-footer { display: none; }
+.simulation-job-footer-label { display: none; }
+.simulation-job-info { min-width: 0; }
 
 @media (max-width: 720px) {
   .simulation-job-header {

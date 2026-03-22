@@ -412,6 +412,84 @@ def _add_ruled_section(loop_a: int, loop_b: int) -> List[Tuple[int, int]]:
     )
 
 
+def _interpolate_ring_plan(
+    outer_pts: List[Tuple[float, float, float, float]],
+    inset_pts: List[Tuple[float, float, float, float]],
+    radial_t: float,
+) -> List[Tuple[float, float, float, float]]:
+    """Blend inset/outer xy-coordinates by radial_t (0=inset, 1=outer)."""
+    plan: List[Tuple[float, float, float, float]] = []
+    for i in range(len(outer_pts)):
+        ix, iy, nx, ny = inset_pts[i]
+        ox, oy, _, _ = outer_pts[i]
+        plan.append((
+            ix + (ox - ix) * radial_t,
+            iy + (oy - iy) * radial_t,
+            nx,
+            ny,
+        ))
+    return plan
+
+
+def _build_roundover_surface(
+    current_wire: int,
+    outer_pts: List[Tuple[float, float, float, float]],
+    inset_pts: List[Tuple[float, float, float, float]],
+    edge_depth: float,
+    z_start: float,
+    direction: int,
+    enc_edge_type: int,
+    closed: bool,
+    _make_wire,
+) -> Tuple[List[Tuple[int, int]], int, List[int], Tuple[int, int]]:
+    """Build a single roundover surface between the current wire and the fillet end.
+
+    For rounded mode (enc_edge_type=1): smooth B-spline thru-section with 3 profiles.
+    For chamfer mode (enc_edge_type=2): single ruled surface with 2 profiles.
+
+    direction: +1 for front (inset->outer, z decreasing), -1 for back (outer->inset, z decreasing).
+    Returns (dimtags, last_wire, last_curves, last_eps).
+    """
+    last_curves: List[int] = []
+    last_eps: Tuple[int, int] = (0, 0)
+
+    if enc_edge_type == 1:
+        # Rounded fillet: 3 profiles (start, mid-arc at t=0.5, end) with ruled
+        # sections between consecutive pairs. This gives 2 ruled surfaces that
+        # preserve shared-edge topology while approximating the arc curvature.
+        # Mesh density is controlled by resolution fields, not by geometric slicing.
+        prev_wire = current_wire
+        dimtags = []
+        for t in (0.5, 1.0):
+            angle = t * (math.pi / 2.0)
+            if direction == 1:
+                axial_t = 1.0 - math.cos(angle)
+                radial_t = math.sin(angle)
+            else:
+                axial_t = math.sin(angle)
+                radial_t = math.cos(angle)
+
+            z_ring = z_start - axial_t * edge_depth if direction == 1 else z_start + (1.0 - axial_t) * edge_depth
+            ring_plan = _interpolate_ring_plan(outer_pts, inset_pts, radial_t)
+            ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
+            ring_wire, last_curves, last_eps = _make_wire(ring_pts, closed=closed)
+            dimtags.extend(_add_ruled_section(prev_wire, ring_wire))
+            prev_wire = ring_wire
+
+        last_wire = prev_wire
+    else:
+        # Chamfer: linear interpolation, single ruled surface between start and end.
+        z_end = z_start - edge_depth if direction == 1 else z_start
+        ring_plan = _interpolate_ring_plan(outer_pts, inset_pts, 0.0 if direction == -1 else 1.0)
+        z_ring = z_end
+        ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
+        ring_wire, last_curves, last_eps = _make_wire(ring_pts, closed=closed)
+        dimtags = _add_ruled_section(current_wire, ring_wire)
+        last_wire = ring_wire
+
+    return dimtags, last_wire, last_curves, last_eps
+
+
 # ---------------------------------------------------------------------------
 # Main enclosure builder
 # ---------------------------------------------------------------------------
@@ -494,9 +572,6 @@ def _build_enclosure_box(
 
     enc_edge = float(params.get("enc_edge", 0) or 0)
     enc_edge_type = int(params.get("enc_edge_type", 1) or 1)
-    corner_segments = int(params.get("corner_segments", 4) or 4)
-    axial_segs = max(4, corner_segments) if enc_edge > 0 else 1
-
     mouth_curves = _boundary_curves_at_z_extreme(inner_dimtags, want_min_z=False)
     if not mouth_curves:
         return empty
@@ -523,10 +598,10 @@ def _build_enclosure_box(
         return empty
 
     generated_dimtags: List[Tuple[int, int]] = []
-    edge_dimtags: List[Tuple[int, int]] = []
     front_edge_dimtags_all: List[Tuple[int, int]] = []
     back_edge_dimtags_all: List[Tuple[int, int]] = []
-    edge_depth = min(clamped_edge, max(0.0, enc_depth * 0.49))
+    # Limit edge_depth to half of enc_depth so front + back fillets don't overlap.
+    edge_depth = min(clamped_edge, max(0.0, enc_depth * 0.5))
 
     if closed:
         mouth_loop = _add_curve_loop_from_curves(mouth_curves)
@@ -602,37 +677,18 @@ def _build_enclosure_box(
         # incorrect BEM radiation results.
         current_profile = front_wire
 
-    edge_slices = max(1, axial_segs) if edge_depth > 0.0 else 0
-    for j in range(1, edge_slices + 1):
-        t = float(j) / float(edge_slices)
-        if enc_edge_type == 1:
-            angle = t * (math.pi / 2.0)
-            axial_t = 1.0 - math.cos(angle)
-            radial_t = math.sin(angle)
-        else:
-            axial_t = t
-            radial_t = t
-        z_ring = z_front - axial_t * edge_depth
-        ring_plan: List[Tuple[float, float, float, float]] = []
-        for i in range(len(outer_pts)):
-            ix, iy, nx, ny = inset_pts[i]
-            ox, oy, _, _ = outer_pts[i]
-            ring_plan.append(
-                (
-                    ix + (ox - ix) * radial_t,
-                    iy + (oy - iy) * radial_t,
-                    nx,
-                    ny,
-                )
-            )
-        ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
-        ring_wire, _, _ = _make_wire(ring_pts, closed=closed)
-        front_edge_step_dimtags = _add_ruled_section(current_profile, ring_wire)
-        generated_dimtags.extend(front_edge_step_dimtags)
-        edge_dimtags.extend(front_edge_step_dimtags)
-        front_edge_dimtags_all.extend(front_edge_step_dimtags)
-        current_profile = ring_wire
+    # --- Front roundover ---
+    if edge_depth > 0.0:
+        front_dt, current_profile, _, _ = _build_roundover_surface(
+            current_profile, outer_pts, inset_pts,
+            edge_depth, z_front, direction=1,
+            enc_edge_type=enc_edge_type, closed=closed,
+            _make_wire=_make_wire,
+        )
+        generated_dimtags.extend(front_dt)
+        front_edge_dimtags_all.extend(front_dt)
 
+    # --- Side walls (straight ruled surface from front outer to back outer) ---
     z_outer_back = z_back + edge_depth if edge_depth > 0.0 else z_back
     back_outer_pts = _ring_points_from_xy_plan(outer_pts, z=z_outer_back)
     back_outer_wire, back_outer_curves, back_outer_eps = _make_wire(back_outer_pts, closed=closed)
@@ -641,38 +697,16 @@ def _build_enclosure_box(
     current_curves = back_outer_curves
     profile_pts = back_outer_eps
 
-    for j in range(1, edge_slices + 1):
-        t = float(j) / float(edge_slices)
-        if enc_edge_type == 1:
-            angle = t * (math.pi / 2.0)
-            # Rear fillet: convex roll from side wall tangent to back panel tangent.
-            axial_t = math.sin(angle)
-            radial_t = math.cos(angle)
-        else:
-            axial_t = t
-            radial_t = 1.0 - t
-        z_ring = z_back + (1.0 - axial_t) * edge_depth
-        ring_plan: List[Tuple[float, float, float, float]] = []
-        for i in range(len(outer_pts)):
-            ix, iy, nx, ny = inset_pts[i]
-            ox, oy, _, _ = outer_pts[i]
-            ring_plan.append(
-                (
-                    ix + (ox - ix) * radial_t,
-                    iy + (oy - iy) * radial_t,
-                    nx,
-                    ny,
-                )
-            )
-        ring_pts = _ring_points_from_xy_plan(ring_plan, z=z_ring)
-        ring_wire, ring_curves, ring_eps = _make_wire(ring_pts, closed=closed)
-        back_edge_step_dimtags = _add_ruled_section(current_profile, ring_wire)
-        generated_dimtags.extend(back_edge_step_dimtags)
-        edge_dimtags.extend(back_edge_step_dimtags)
-        back_edge_dimtags_all.extend(back_edge_step_dimtags)
-        current_profile = ring_wire
-        current_curves = ring_curves
-        profile_pts = ring_eps
+    # --- Back roundover ---
+    if edge_depth > 0.0:
+        back_dt, current_profile, current_curves, profile_pts = _build_roundover_surface(
+            current_profile, outer_pts, inset_pts,
+            edge_depth, z_back, direction=-1,
+            enc_edge_type=enc_edge_type, closed=closed,
+            _make_wire=_make_wire,
+        )
+        generated_dimtags.extend(back_dt)
+        back_edge_dimtags_all.extend(back_dt)
 
     back_cap_loop = _close_wire_for_surface(current_curves, profile_pts[0], profile_pts[1])
     try:
@@ -683,21 +717,20 @@ def _build_enclosure_box(
 
     gmsh.model.occ.synchronize()
     dimtags = [(2, int(tag)) for dim, tag in generated_dimtags if int(dim) == 2]
-    edge_tags = {int(tag) for dim, tag in edge_dimtags if int(dim) == 2}
     front_edge_tags = {int(tag) for dim, tag in front_edge_dimtags_all if int(dim) == 2}
     back_edge_tags = {int(tag) for dim, tag in back_edge_dimtags_all if int(dim) == 2}
+    all_edge_tags = front_edge_tags | back_edge_tags
 
     split = _classify_enclosure_surfaces(dimtags, z_front, z_back)
-    edge_surfaces = [tag for tag in split["sides"] if int(tag) in edge_tags]
     front_edge_surfaces = [tag for tag in split["sides"] if int(tag) in front_edge_tags]
     back_edge_surfaces = [tag for tag in split["sides"] if int(tag) in back_edge_tags]
-    side_surfaces = [tag for tag in split["sides"] if int(tag) not in edge_tags]
+    side_surfaces = [tag for tag in split["sides"] if int(tag) not in all_edge_tags]
     return {
         "dimtags": dimtags,
         "front": split["front"],
         "back": split["back"],
         "sides": side_surfaces,
-        "edges": edge_surfaces,
+        "edges": list(all_edge_tags),
         "front_edges": front_edge_surfaces,
         "back_edges": back_edge_surfaces,
         "bounds": bounds,
