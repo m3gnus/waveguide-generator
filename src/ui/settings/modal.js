@@ -906,14 +906,16 @@ function _buildSimulationSection() {
   advancedIntro.className = "settings-section-help";
   advancedIntro.innerHTML =
     "These settings control BEM operator assembly speed and accuracy. " +
-    "Defaults are tuned for fast exploratory sweeps (2x faster than conservative settings). " +
-    "For final accurate solves, enable Burton-Miller and set Quadrature to 4." +
+    "Defaults are tuned for fast exploratory sweeps (~1.8x faster). " +
+    "For final accurate solves, enable Burton-Miller." +
     "<br><br>" +
-    "<strong>Benchmarked speedups</strong> (Apple M1 Max, 1576-element mesh, 20 freq):<br>" +
+    "<strong>Benchmarked speedups</strong> (Apple M1 Max, 7732-element mesh, 20 freq):<br>" +
     "\u2022 <strong>Workgroup Size 1</strong> \u2014 ~30\u201350% faster on CPU OpenCL. No accuracy loss. Always recommended.<br>" +
     "\u2022 <strong>Burton-Miller off</strong> \u2014 ~1.8x faster (2 operators instead of 4). " +
-    "May produce artifacts at certain frequencies (up to 7 dB deviation observed at ~930 Hz and ~3750 Hz).<br>" +
-    "\u2022 <strong>Quadrature 3</strong> \u2014 ~1.25x faster with BM on. Slight accuracy reduction at high frequencies.<br>" +
+    "May produce SPL deviations of up to 7 dB at certain frequencies where mesh interior resonances occur. " +
+    "Good for quick exploratory sweeps, not recommended for final results.<br>" +
+    "\u2022 <strong>Quadrature 3</strong> \u2014 ~1.25x faster. Amplifies Burton-Miller artifacts significantly " +
+    "(up to 28 dB deviation). Only use with Burton-Miller on.<br>" +
     "\u2022 <strong>Numba backend</strong> \u2014 Competitive with OpenCL on CPU. Good alternative if OpenCL/pocl is unavailable.";
   sec.appendChild(advancedIntro);
 
