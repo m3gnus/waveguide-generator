@@ -166,7 +166,7 @@ export function updateProgressUi({
   const detail = resolveStageDetail(key, message, pct);
 
   if (progressFill) {
-    progressFill.style.width = `${pct}%`;
+    progressFill.style.transform = `scaleX(${clamped})`;
   }
   if (progressBar) {
     progressBar.setAttribute("aria-valuenow", String(pct));
