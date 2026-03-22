@@ -1,4 +1,5 @@
 import { applySmoothing } from "../../results/smoothing.js";
+import { extractPerPlaneDI } from "./diHelpers.js";
 import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
 import { renderSolveStatsSummary } from "./results.js";
 import { trapFocus } from "../focusTrap.js";
@@ -292,8 +293,8 @@ export async function openViewResultsModal(panel) {
     const frequencies = splData.frequencies || [];
     let spl = splData.spl || [];
     const diData = results.di || {};
-    let di = diData.di || [];
     const diFrequencies = diData.frequencies || frequencies;
+    let di = extractPerPlaneDI(diData);
     const impedanceData = results.impedance || {};
     const impedanceFrequencies = impedanceData.frequencies || frequencies;
     let impedanceReal = impedanceData.real || [];
@@ -302,7 +303,15 @@ export async function openViewResultsModal(panel) {
 
     if (panel.currentSmoothing !== "none") {
       spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
-      di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
+      if (Array.isArray(di)) {
+        di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
+      } else if (di && typeof di === "object") {
+        const smoothedDi = {};
+        for (const [plane, vals] of Object.entries(di)) {
+          smoothedDi[plane] = applySmoothing(diFrequencies, vals, panel.currentSmoothing);
+        }
+        di = smoothedDi;
+      }
       impedanceReal = applySmoothing(
         impedanceFrequencies,
         impedanceReal,

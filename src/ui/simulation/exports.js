@@ -1,4 +1,5 @@
 import { applySmoothing } from "../../results/smoothing.js";
+import { extractFlatDI } from "./diHelpers.js";
 import { DEFAULT_BACKEND_URL } from "../../config/backendUrl.js";
 import {
   buildProfileCsvExportFiles,
@@ -200,7 +201,7 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
   const frequencies = splData.frequencies || [];
   let spl = splData.spl || [];
   const diData = results.di || {};
-  let di = diData.di || [];
+  let di = extractFlatDI(diData);
   const diFrequencies = diData.frequencies || frequencies;
   const impedanceData = results.impedance || {};
   const impedanceFrequencies = impedanceData.frequencies || frequencies;
@@ -296,7 +297,7 @@ function buildCsvFile(panel, { baseName } = {}) {
   const impedanceData = results.impedance || {};
 
   let smoothedSPL = splValues;
-  let smoothedDI = diData.di || [];
+  let smoothedDI = extractFlatDI(diData);
   let smoothedImpReal = impedanceData.real || [];
   let smoothedImpImag = impedanceData.imaginary || [];
 
@@ -396,15 +397,19 @@ function buildTextFile(panel, { baseName } = {}) {
     report += `Variation: ${(maxSPL - minSPL).toFixed(2)} dB\n\n`;
   }
 
-  if (diData.di && diData.di.length > 0) {
-    const avgDI = diData.di.reduce((a, b) => a + b, 0) / diData.di.length;
-    const minDI = Math.min(...diData.di);
-    const maxDI = Math.max(...diData.di);
+  const flatDI = extractFlatDI(diData);
+  if (flatDI.length > 0) {
+    const validDI = flatDI.filter((v) => v != null);
+    if (validDI.length > 0) {
+      const avgDI = validDI.reduce((a, b) => a + b, 0) / validDI.length;
+      const minDI = Math.min(...validDI);
+      const maxDI = Math.max(...validDI);
 
-    report += "DIRECTIVITY INDEX SUMMARY\n";
-    report += "-------------------------\n";
-    report += `Average DI: ${avgDI.toFixed(2)} dB\n`;
-    report += `DI Range: ${minDI.toFixed(2)} to ${maxDI.toFixed(2)} dB\n\n`;
+      report += "DIRECTIVITY INDEX SUMMARY\n";
+      report += "-------------------------\n";
+      report += `Average DI: ${avgDI.toFixed(2)} dB\n`;
+      report += `DI Range: ${minDI.toFixed(2)} to ${maxDI.toFixed(2)} dB\n\n`;
+    }
   }
 
   if (impedanceData.real && impedanceData.real.length > 0) {
@@ -423,7 +428,7 @@ function buildTextFile(panel, { baseName } = {}) {
   for (let i = 0; i < frequencies.length; i += 1) {
     report += `${frequencies[i].toString().padEnd(8)}  `;
     report += `${(splValues[i] || 0).toFixed(2).padEnd(7)}  `;
-    report += `${((diData.di && diData.di[i]) || 0).toFixed(2).padEnd(6)}  `;
+    report += `${(flatDI[i] != null ? flatDI[i] : 0).toFixed(2).padEnd(6)}  `;
     report += `${((impedanceData.real && impedanceData.real[i]) || 0).toFixed(2).padEnd(9)}  `;
     report += `${((impedanceData.imaginary && impedanceData.imaginary[i]) || 0).toFixed(2)}\n`;
   }

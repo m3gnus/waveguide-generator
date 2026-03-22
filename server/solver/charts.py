@@ -99,32 +99,78 @@ def render_frequency_response(frequencies, spl, dpi=150):
 
 def render_directivity_index(frequencies, di, dpi=150):
     """
-    Render directivity index chart.
+    Render directivity index chart with per-plane traces.
 
     Args:
         frequencies: List of frequencies in Hz
-        di: List of DI values in dB
+        di: Either a flat list of DI values (legacy single-plane) or a dict
+            mapping plane IDs to DI value lists, e.g.
+            {"horizontal": [...], "vertical": [...], "diagonal": [...]}.
         dpi: Image resolution
 
     Returns:
         Base64-encoded PNG string
     """
     freqs = np.array(frequencies, dtype=float)
-    di_vals = np.array(di, dtype=float)
+    if len(freqs) == 0:
+        return None
 
-    if len(freqs) == 0 or len(di_vals) == 0:
+    # Normalize input: accept both legacy flat list and per-plane dict
+    plane_colors = {
+        "horizontal": "#81c784",  # green
+        "vertical":   "#64b5f6",  # blue
+        "diagonal":   "#ffb74d",  # orange
+    }
+    plane_labels = {
+        "horizontal": "H",
+        "vertical":   "V",
+        "diagonal":   "D",
+    }
+
+    if isinstance(di, dict):
+        planes = {}
+        for plane_id in ("horizontal", "vertical", "diagonal"):
+            vals = di.get(plane_id)
+            if vals and any(v is not None for v in vals):
+                arr = np.array([v if v is not None else np.nan for v in vals], dtype=float)
+                planes[plane_id] = arr
+    elif isinstance(di, list) and len(di) > 0:
+        arr = np.array([v if v is not None else np.nan for v in di], dtype=float)
+        if not np.all(np.isnan(arr)):
+            planes = {"horizontal": arr}
+        else:
+            return None
+    else:
+        return None
+
+    if not planes:
         return None
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 4))
     fig.patch.set_facecolor('#1a1a1a')
 
-    ax.semilogx(freqs, di_vals, color='#81c784', linewidth=1.5)
+    all_vals = []
+    for plane_id, di_vals in planes.items():
+        color = plane_colors.get(plane_id, "#81c784")
+        label = plane_labels.get(plane_id, plane_id.capitalize())
+        ax.semilogx(freqs, di_vals, color=color, linewidth=1.5, label=label)
+        valid = di_vals[~np.isnan(di_vals)]
+        if len(valid) > 0:
+            all_vals.extend(valid.tolist())
+
+    if not all_vals:
+        plt.close(fig)
+        return None
+
+    if len(planes) > 1:
+        ax.legend(loc='upper left', fontsize=9, facecolor='#2a2a2a',
+                  edgecolor='#555', labelcolor='white')
 
     _setup_dark_axes(ax, 'Frequency [Hz]', 'DI [dB]', 'Directivity Index')
     ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
 
     ax.set_xlim(freqs[0], freqs[-1])
-    di_min, di_max = np.nanmin(di_vals), np.nanmax(di_vals)
+    di_min, di_max = np.nanmin(all_vals), np.nanmax(all_vals)
     margin = max(2, (di_max - di_min) * 0.1)
     ax.set_ylim(min(0, di_min - margin), di_max + margin)
 
@@ -201,7 +247,6 @@ def render_all_charts(payload, dpi=150):
 
     freqs = payload.get('frequencies', [])
     spl = payload.get('spl', [])
-    di = payload.get('di', [])
     di_freqs = payload.get('di_frequencies', []) or freqs
     imp_freqs = payload.get('impedance_frequencies', []) or freqs
     imp_real = payload.get('impedance_real', [])
@@ -211,7 +256,9 @@ def render_all_charts(payload, dpi=150):
     charts = {}
 
     charts['frequency_response'] = render_frequency_response(freqs, spl, dpi) if spl else None
-    charts['directivity_index'] = render_directivity_index(di_freqs, di, dpi) if di else None
+    # DI can be a flat list (legacy) or per-plane dict
+    di_input = payload.get('di', [])
+    charts['directivity_index'] = render_directivity_index(di_freqs, di_input, dpi) if di_input else None
     charts['impedance'] = render_impedance(imp_freqs, imp_real, imp_imag, dpi) if imp_real else None
 
     dir_b64 = None
