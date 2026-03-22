@@ -980,57 +980,6 @@ button.secondary:hover:not(:disabled),
 
 .simulation-mesh-diagnostics-window {
   margin-top: var(--sp-2);
-  position: relative;
-}
-
-.simulation-mesh-diagnostics-window[open] > .simulation-mesh-diagnostics {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 var(--r-md) var(--r-md);
-  padding: var(--sp-2) var(--sp-3);
-  box-shadow: var(--shadow-md);
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-.simulation-mesh-diagnostics-window > summary {
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-  padding: var(--sp-2) 0;
-  border-top: 1px solid var(--border);
-}
-
-.simulation-mesh-diagnostics-window > summary::-webkit-details-marker {
-  display: none;
-}
-
-.simulation-mesh-diagnostics-window > summary::before {
-  content: "▸";
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.simulation-mesh-diagnostics-window[open] > summary::before {
-  transform: rotate(90deg);
-  color: var(--accent);
-}
-
-.simulation-mesh-diagnostics-window > summary:hover {
-  color: var(--text);
 }
 
 .simulation-mesh-diagnostics-header {
