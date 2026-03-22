@@ -182,12 +182,17 @@ async def export_file(
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
 
-# ── Workspace path / open ──────────────────────────────────────────────────────
+# ── Workspace path / open / select ─────────────────────────────────────────────
+
+_REPO_OUTPUT_PATH: Path = (Path(__file__).parent.parent.parent / "output").resolve()
+_custom_workspace_path: Optional[Path] = None
+
 
 def _get_default_output_path() -> Path:
-    """Return the absolute path of the default output folder (repo_root/output)."""
-    # routes_misc.py lives at server/api/routes_misc.py → repo_root is three levels up
-    return (Path(__file__).parent.parent.parent / "output").resolve()
+    """Return the absolute path of the current output folder."""
+    if _custom_workspace_path is not None:
+        return _custom_workspace_path
+    return _REPO_OUTPUT_PATH
 
 
 @router.get("/api/workspace/path")
@@ -195,6 +200,88 @@ async def workspace_path() -> Dict[str, str]:
     """Return the absolute path of the current output folder."""
     output_path = _get_default_output_path()
     return {"path": str(output_path)}
+
+
+@router.post("/api/workspace/path")
+async def set_workspace_path(path: str = Form(...)) -> Dict[str, str]:
+    """Set a custom output folder path."""
+    global _custom_workspace_path
+    raw = path.strip()
+    if not raw:
+        _custom_workspace_path = None
+        logger.info("Workspace path reset to default: %s", _REPO_OUTPUT_PATH)
+        return {"path": str(_REPO_OUTPUT_PATH), "custom": False}
+
+    resolved = Path(raw).expanduser().resolve()
+    if not resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Directory does not exist: {resolved}")
+
+    _custom_workspace_path = resolved
+    logger.info("Workspace path set to: %s", resolved)
+    return {"path": str(resolved), "custom": True}
+
+
+@router.post("/api/workspace/select")
+async def workspace_select() -> Dict[str, Any]:
+    """Open a native OS folder picker and set the result as the workspace path."""
+    global _custom_workspace_path
+    system = platform.system()
+    selected: Optional[str] = None
+
+    try:
+        if system == "Darwin":
+            result = subprocess.run(
+                [
+                    "osascript", "-e",
+                    'set theFolder to POSIX path of (choose folder with prompt "Select output folder")',
+                ],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                selected = result.stdout.strip().rstrip("/")
+        else:
+            # Linux / other: try zenity, then kdialog, then tkinter
+            for cmd in [
+                ["zenity", "--file-selection", "--directory", "--title=Select output folder"],
+                ["kdialog", "--getexistingdirectory", "."],
+            ]:
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                    if result.returncode == 0 and result.stdout.strip():
+                        selected = result.stdout.strip()
+                        break
+                except FileNotFoundError:
+                    continue
+
+            if selected is None:
+                # Fallback to tkinter
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    chosen = filedialog.askdirectory(title="Select output folder")
+                    root.destroy()
+                    if chosen:
+                        selected = chosen
+                except Exception:
+                    pass
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="Folder picker timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Folder picker failed: {exc}") from exc
+
+    if not selected:
+        return {"selected": False, "path": str(_get_default_output_path())}
+
+    resolved = Path(selected).resolve()
+    if not resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Selected path is not a directory: {resolved}")
+
+    _custom_workspace_path = resolved
+    logger.info("Workspace folder selected via OS picker: %s", resolved)
+    return {"selected": True, "path": str(resolved)}
 
 
 @router.post("/api/workspace/open")

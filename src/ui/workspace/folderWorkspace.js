@@ -168,6 +168,36 @@ export async function openWorkspaceInFinder() {
   }
 }
 
+/**
+ * Ask the backend to open a native OS folder picker dialog and set the
+ * selected folder as the workspace path.  Works on any browser (including
+ * Firefox) because the native dialog runs in the backend process.
+ *
+ * Returns the selected path string, or null if the user cancelled.
+ */
+export async function requestBackendFolderSelection() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/workspace/select`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(130000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.selected && data.path) {
+      // No folder handle available — clear it but update the label so
+      // the UI shows the selected path.  All writes go through the
+      // backend /api/export-file endpoint.
+      selectedFolderHandle = null;
+      selectedFolderLabel = data.path.split('/').pop() || data.path;
+      emitChange();
+      return data.path;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeWorkspaceSubdir(subdir) {
   const raw = String(subdir ?? '').trim();
   if (!raw) return '';
@@ -219,8 +249,8 @@ export async function writeWorkspaceFile(fileName, content, options = {}) {
 
 /**
  * Show a proper panel dialog for browsers that do not support showDirectoryPicker
- * (e.g. Firefox). Displays the current output folder path and an "Open in Finder"
- * button wired to the backend endpoint.
+ * (e.g. Firefox). Provides a "Choose Folder" button that opens a native OS folder
+ * picker via the backend, plus an "Open in Finder" button and current path display.
  *
  * Returns a Promise that resolves when the user closes the dialog.
  */
@@ -245,9 +275,8 @@ export function showOutputFolderPanel() {
     const subtitle = document.createElement('p');
     subtitle.className = 'ui-choice-subtitle';
     subtitle.textContent =
-      'Firefox does not support selecting a custom output folder via the browser ' +
-      '(the File System Access API is not implemented in Firefox). Files are saved ' +
-      'to the backend workspace folder shown below.';
+      'Select a folder to save exported files. The folder picker runs via the ' +
+      'backend server so it works in any browser.';
     dialog.appendChild(subtitle);
 
     // Path display
@@ -274,9 +303,39 @@ export function showOutputFolderPanel() {
       }
     };
 
+    // Choose Folder button (native OS picker via backend)
+    const chooseBtn = document.createElement('button');
+    chooseBtn.type = 'button';
+    chooseBtn.className = 'ui-choice-btn';
+
+    const chooseBtnLabel = document.createElement('span');
+    chooseBtnLabel.className = 'ui-choice-btn-label';
+    chooseBtnLabel.textContent = 'Choose Folder';
+    chooseBtn.appendChild(chooseBtnLabel);
+
+    const chooseBtnHelp = document.createElement('span');
+    chooseBtnHelp.className = 'ui-choice-btn-help';
+    chooseBtnHelp.textContent = 'Opens a native folder picker dialog.';
+    chooseBtn.appendChild(chooseBtnHelp);
+
+    chooseBtn.addEventListener('click', async () => {
+      chooseBtn.disabled = true;
+      chooseBtnHelp.textContent = 'Waiting for folder selection…';
+      const selectedPath = await requestBackendFolderSelection();
+      chooseBtn.disabled = false;
+      if (selectedPath) {
+        pathBox.textContent = selectedPath;
+        chooseBtnHelp.textContent = 'Folder selected.';
+      } else {
+        chooseBtnHelp.textContent = 'No folder selected. Try again or close.';
+      }
+    });
+    actions.appendChild(chooseBtn);
+
+    // Open in Finder button
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
-    openBtn.className = 'ui-choice-btn';
+    openBtn.className = 'ui-choice-btn secondary';
     openBtn.disabled = true;
 
     const openBtnLabel = document.createElement('span');
