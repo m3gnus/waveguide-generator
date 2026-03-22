@@ -411,14 +411,19 @@ export async function submitSimulationControllerJob(
   };
 }
 
-function persistScriptSnapshotToBackend(jobId, script) {
-  fetch(`${DEFAULT_BACKEND_URL}/api/jobs/${encodeURIComponent(jobId)}/script`, {
+function persistJobMetadataToBackend(job) {
+  const metadata = {};
+  if (job.label) metadata.label = job.label;
+  if (job.script) metadata.script_snapshot = job.script;
+  if (Object.keys(metadata).length === 0) return;
+
+  fetch(`${DEFAULT_BACKEND_URL}/api/jobs/${encodeURIComponent(job.id)}/metadata`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ script_snapshot: script }),
+    body: JSON.stringify(metadata),
     signal: AbortSignal.timeout(5000),
   }).catch((err) => {
-    console.warn("Failed to persist script snapshot to backend:", err);
+    console.warn("Failed to persist job metadata to backend:", err);
   });
 }
 
@@ -428,9 +433,9 @@ export async function queueSimulationControllerJob(controller, jobInput) {
   persistControllerJobs(controller);
   if (createdJob) {
     await syncSimulationWorkspaceJobManifest(createdJob);
-    // Persist script snapshot to backend so it survives page reloads.
-    if (createdJob.script && createdJob.id) {
-      persistScriptSnapshotToBackend(createdJob.id, createdJob.script);
+    // Persist label and script snapshot to backend so they survive page reloads.
+    if (createdJob.id) {
+      persistJobMetadataToBackend(createdJob);
     }
   }
   return createdJob;

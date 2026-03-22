@@ -37,6 +37,7 @@ from services.job_runtime import (
     get_job_results,
     list_job_items,
     request_stop_job,
+    update_job_label,
     update_job_script_snapshot,
 )
 
@@ -168,11 +169,14 @@ async def list_jobs(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-@router.patch("/api/jobs/{job_id}/script")
-async def patch_job_script(job_id: str, body: Dict[str, Any]) -> Dict[str, str]:
-    """Store a script snapshot (UI parameters) for a job so it survives page reloads."""
+@router.patch("/api/jobs/{job_id}/metadata")
+async def patch_job_metadata(job_id: str, body: Dict[str, Any]) -> Dict[str, str]:
+    """Persist frontend-only metadata (label, script snapshot) so it survives page reloads."""
     try:
-        update_job_script_snapshot(job_id, body.get("script_snapshot"))
+        if "label" in body:
+            update_job_label(job_id, body["label"])
+        if "script_snapshot" in body:
+            update_job_script_snapshot(job_id, body["script_snapshot"])
     except JobRuntimeNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
     return {"status": "ok"}

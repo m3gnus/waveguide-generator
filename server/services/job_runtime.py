@@ -373,6 +373,14 @@ def _set_job_fields(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
     return _merge_job_cache_from_db(job_id)
 
 
+def update_job_label(job_id: str, label: Any) -> None:
+    """Persist a display label for a job."""
+    job = _merge_job_cache_from_db(job_id)
+    if not job:
+        raise JobRuntimeNotFoundError(job_id)
+    _set_job_fields(job_id, label=str(label) if label else None)
+
+
 def update_job_script_snapshot(job_id: str, script_snapshot: Any) -> None:
     """Persist a script snapshot (UI parameters) for a job."""
     job = _merge_job_cache_from_db(job_id)
