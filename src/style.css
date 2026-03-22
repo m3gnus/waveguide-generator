@@ -459,7 +459,7 @@ details.section > .section-note:first-of-type {
 }
 
 details.section[open] {
-  padding-bottom: var(--sp-2);
+  padding-bottom: var(--sp-4);
 }
 
 details.section[open] > summary {
