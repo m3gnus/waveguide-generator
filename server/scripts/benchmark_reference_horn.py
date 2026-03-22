@@ -1,14 +1,14 @@
 """
-Bounded Tritonia-M benchmark/repro path.
+Bounded reference-horn benchmark/repro path.
 
 Provides a repeatable diagnostic flow that:
-1. Builds Tritonia-M mesh via OCC
+1. Builds reference horn mesh via OCC (freestanding R-OSSE with default parameters)
 2. Runs a bounded solve (1-frequency or small sweep)
 3. Reports mesh-prep success, selected runtime/device, solver stage timings,
    and supported vs unsupported precision modes on the active host.
 
 Usage (run from server/ directory):
-    python scripts/benchmark_tritonia.py [options]
+    python scripts/benchmark_reference_horn.py [options]
 
 Options:
     --freq FLOAT        Single frequency to solve (Hz, default: 1000)
@@ -174,29 +174,30 @@ def _persist_bounded_solve_validation(result: BenchmarkResult, args: argparse.Na
         )
 
 
-TRITONIA_PARAMS = {
-    "formula_type": "OSSE",
-    "L": 135.0,
-    "a": 45.0,
-    "r0": 18.0,
-    "a0": 10.0,
-    "k": 2.1,
-    "q": 0.992,
-    "n": 3.7,
-    "s": 0.7,
+REFERENCE_HORN_PARAMS = {
+    "formula_type": "R-OSSE",
+    "R": "140",
+    "a": "25",
+    "a0": 15.5,
+    "r0": 12.7,
+    "k": 2.0,
+    "q": 3.4,
+    "r": 0.4,
+    "b": 0.2,
+    "m": 0.85,
+    "tmax": 1.0,
     "quadrants": 1234,
-    "enc_depth": 100.0,
-    "enc_edge": 20.0,
-    "n_angular": 40,
-    "n_length": 12,
-    "throat_res": 8.0,
+    "enc_depth": 0,
+    "wall_thickness": 6.0,
+    "n_angular": 100,
+    "n_length": 20,
+    "throat_res": 6.0,
     "mouth_res": 15.0,
-    "enc_front_resolution": "30,30,30,30",
-    "enc_back_resolution": "40,40,40,40",
+    "rear_res": 40.0,
 }
 
 
-def build_tritonia_mesh() -> MeshPrepResult:
+def build_reference_horn_mesh() -> MeshPrepResult:
     if not GMSH_OCC_RUNTIME_READY:
         return MeshPrepResult(
             success=False,
