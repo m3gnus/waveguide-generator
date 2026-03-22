@@ -21,6 +21,7 @@ venv/
 # IDE/Tool specific configs
 .agent/
 .agents/
+.claude/
 .cline/
 
 # Reference materials (large files, not part of program)
