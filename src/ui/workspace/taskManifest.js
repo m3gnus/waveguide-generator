@@ -13,14 +13,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function safeJsonParse(raw) {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
 function isObject(value) {
   return value !== null && typeof value === 'object';
 }
@@ -66,7 +58,7 @@ function deriveGenerationFolderNameFromScript(scriptSnapshot) {
   return outputName;
 }
 
-function buildScriptSnapshotExportState(scriptSnapshot) {
+export function buildScriptSnapshotExportState(scriptSnapshot) {
   if (!isObject(scriptSnapshot)) {
     return null;
   }
@@ -93,14 +85,7 @@ function buildScriptSnapshotExportState(scriptSnapshot) {
   };
 }
 
-async function writeWorkspaceTextFile(taskDirectoryHandle, fileName, content) {
-  const fileHandle = await taskDirectoryHandle.getFileHandle(fileName, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(content);
-  await writable.close();
-}
-
-async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest, { fallbackWriteFile = null } = {}) {
+async function writeScriptSnapshotArtifact(manifest, { fallbackWriteFile = null } = {}) {
   const exportState = buildScriptSnapshotExportState(manifest?.scriptSnapshot);
   if (!exportState) {
     return { fileName: null, warning: null };
@@ -115,9 +100,7 @@ async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest, { fall
     if (!content) {
       return { fileName: null, warning: 'Script snapshot build failed: config content missing.' };
     }
-    if (taskDirectoryHandle) {
-      await writeWorkspaceTextFile(taskDirectoryHandle, fileName, content);
-    } else if (typeof fallbackWriteFile === 'function') {
+    if (typeof fallbackWriteFile === 'function') {
       await fallbackWriteFile(fileName, content, 'text/plain');
     } else {
       return { fileName: null, warning: 'Script snapshot write skipped: no write target available.' };
@@ -131,7 +114,7 @@ async function writeScriptSnapshotArtifact(taskDirectoryHandle, manifest, { fall
   }
 }
 
-async function writeGenerationProjectManifest(taskDirectoryHandle, {
+async function writeGenerationProjectManifest({
   directoryName,
   manifest,
   scriptSnapshotFileName,
@@ -148,13 +131,7 @@ async function writeGenerationProjectManifest(taskDirectoryHandle, {
       updatedAt: manifest?.updatedAt
     });
     const content = `${JSON.stringify(payload, null, 2)}\n`;
-    if (taskDirectoryHandle) {
-      await writeWorkspaceTextFile(
-        taskDirectoryHandle,
-        GENERATION_PROJECT_MANIFEST_FILE_NAME,
-        content
-      );
-    } else if (typeof fallbackWriteFile === 'function') {
+    if (typeof fallbackWriteFile === 'function') {
       await fallbackWriteFile(GENERATION_PROJECT_MANIFEST_FILE_NAME, content, 'application/json');
     } else {
       return 'Project manifest write skipped: no write target available.';
@@ -253,52 +230,16 @@ export function createTaskManifestFromJob(job = {}) {
   });
 }
 
-export async function readTaskManifest(taskDirectoryHandle) {
-  if (!taskDirectoryHandle || typeof taskDirectoryHandle.getFileHandle !== 'function') {
-    return { manifest: null, warning: 'Task directory handle unavailable.' };
-  }
-
-  try {
-    const fileHandle = await taskDirectoryHandle.getFileHandle(TASK_MANIFEST_FILE_NAME);
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    const parsed = safeJsonParse(text);
-    if (!parsed || typeof parsed !== 'object') {
-      return { manifest: null, warning: 'Task manifest JSON is invalid.' };
-    }
-    return { manifest: normalizeTaskManifest(parsed), warning: null };
-  } catch (error) {
-    if (error?.name === 'NotFoundError') {
-      return { manifest: null, warning: null };
-    }
-    return { manifest: null, warning: `Task manifest read failed: ${error?.message || 'unknown error'}` };
-  }
+export async function readTaskManifest() {
+  return { manifest: null, warning: null };
 }
 
 export async function writeTaskManifest(taskDirectoryHandle, manifestInput) {
-  const manifest = normalizeTaskManifest(manifestInput);
-  const fileHandle = await taskDirectoryHandle.getFileHandle(TASK_MANIFEST_FILE_NAME, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(`${JSON.stringify(manifest, null, 2)}\n`);
-  await writable.close();
-  return manifest;
-}
-
-async function getDirectoryHandleIfExists(rootDirectoryHandle, directoryName) {
-  if (!directoryName) return null;
-  try {
-    return await rootDirectoryHandle.getDirectoryHandle(directoryName);
-  } catch (error) {
-    if (error?.name === 'NotFoundError') {
-      return null;
-    }
-    throw error;
-  }
+  return normalizeTaskManifest(manifestInput);
 }
 
 export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates = {}, { fallbackWriteFile = null } = {}) {
-  const hasFolderHandle = rootDirectoryHandle && typeof rootDirectoryHandle.getDirectoryHandle === 'function';
-  if (!hasFolderHandle && typeof fallbackWriteFile !== 'function') {
+  if (typeof fallbackWriteFile !== 'function') {
     return { manifest: null, warning: 'Workspace folder is unavailable.' };
   }
 
@@ -309,73 +250,34 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
 
   try {
     const preferredDirectoryName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: jobId });
-    const legacyDirectoryName = jobId;
-
-    let existing = { manifest: null, warning: null };
-    if (hasFolderHandle) {
-      const preferredExistingDir = await getDirectoryHandleIfExists(rootDirectoryHandle, preferredDirectoryName);
-      if (preferredExistingDir) {
-        existing = await readTaskManifest(preferredExistingDir);
-      }
-
-      if (!existing.manifest && preferredDirectoryName !== legacyDirectoryName) {
-        const legacyDir = await getDirectoryHandleIfExists(rootDirectoryHandle, legacyDirectoryName);
-        if (legacyDir) {
-          existing = await readTaskManifest(legacyDir);
-        }
-      }
-    }
 
     const base = createTaskManifestFromJob(job);
     const hasJobExportedFiles = Array.isArray(job?.exportedFiles);
     const next = normalizeTaskManifest({
-      ...(existing.manifest || {}),
       ...base,
       ...updates,
       autoExportCompletedAt: updates.autoExportCompletedAt
-        ?? base.autoExportCompletedAt
-        ?? existing.manifest?.autoExportCompletedAt,
+        ?? base.autoExportCompletedAt,
       exportedFiles: updates.exportedFiles
-        ?? (hasJobExportedFiles ? base.exportedFiles : existing.manifest?.exportedFiles ?? base.exportedFiles),
+        ?? (hasJobExportedFiles ? base.exportedFiles : base.exportedFiles),
       scriptSnapshot: updates.scriptSnapshot
         ?? base.scriptSnapshot
-        ?? existing.manifest?.scriptSnapshot
         ?? null,
       rawResultsFile: updates.rawResultsFile
         ?? base.rawResultsFile
-        ?? existing.manifest?.rawResultsFile
         ?? null,
       meshArtifactFile: updates.meshArtifactFile
         ?? base.meshArtifactFile
-        ?? existing.manifest?.meshArtifactFile
         ?? null,
       updatedAt: nowIso()
     }, { id: jobId, label: job?.label });
 
-    let taskDir = null;
-    if (hasFolderHandle) {
-      taskDir = await rootDirectoryHandle.getDirectoryHandle(preferredDirectoryName, { create: true });
-      const manifest = await writeTaskManifest(taskDir, next);
-      const snapshotResult = await writeScriptSnapshotArtifact(taskDir, manifest);
-      const projectWarning = await writeGenerationProjectManifest(taskDir, {
-        directoryName: preferredDirectoryName,
-        manifest,
-        scriptSnapshotFileName: snapshotResult.fileName
-      });
-
-      return {
-        manifest,
-        warning: combineWarnings(existing.warning, snapshotResult.warning, projectWarning)
-      };
-    }
-
-    // Backend fallback: write manifest files via the fallback writer
     const manifest = next;
     const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
     await fallbackWriteFile(TASK_MANIFEST_FILE_NAME, manifestContent, 'application/json');
 
-    const snapshotResult = await writeScriptSnapshotArtifact(null, manifest, { fallbackWriteFile });
-    const projectWarning = await writeGenerationProjectManifest(null, {
+    const snapshotResult = await writeScriptSnapshotArtifact(manifest, { fallbackWriteFile });
+    const projectWarning = await writeGenerationProjectManifest({
       directoryName: preferredDirectoryName,
       manifest,
       scriptSnapshotFileName: snapshotResult.fileName,
@@ -384,7 +286,7 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
 
     return {
       manifest,
-      warning: combineWarnings(existing.warning, snapshotResult.warning, projectWarning)
+      warning: combineWarnings(snapshotResult.warning, projectWarning)
     };
   } catch (error) {
     return { manifest: null, warning: `Task manifest update failed: ${error?.message || 'unknown error'}` };

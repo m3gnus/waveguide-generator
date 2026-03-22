@@ -79,7 +79,7 @@ export function renderSimulationMeshDiagnostics(summary = null) {
   }
 
   const provenance = summary.provenance === "backend" ? "backend" : "preview";
-  const sourceLabel = provenance === "backend" ? "Solver Geometry" : "Preview Geometry";
+  const sourceLabel = provenance === "backend" ? "Solver Geometry" : "Simulation Geometry";
   const activeGeometryRows = GEOMETRY_DIAGNOSTIC_ROWS.filter(
     ([identity]) => Number(summary.identityTriangleCounts?.[identity] ?? 0) > 0,
   );
