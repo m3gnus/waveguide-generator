@@ -5,7 +5,7 @@ const SCHEMA_VERSION = 4;
 
 export const RECOMMENDED_DEFAULTS = {
   useBurtonMiller: false,
-  quadratureRegular: 3,
+  quadratureRegular: 4,
   workgroupSizeMultiple: 1,
   assemblyBackend: "opencl",
 };
