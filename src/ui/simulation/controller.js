@@ -589,15 +589,32 @@ export async function restoreSimulationControllerJobs(
   controller.isPolling = tracker.isPolling;
   syncCurrentJobId(controller);
 
-  // Always use folder as the single source of truth for job history.
-  const workspace = await readSimulationWorkspaceJobs();
+  // Restore jobs from the backend database (survives page reloads).
   setJobSourceMode(controller, JOB_SOURCE_MODES.FOLDER);
+  let restoredFromBackend = false;
 
-  if (workspace.repaired || workspace.warnings.length > 0) {
-    onRecoverFromManifests();
+  if (controller.solver) {
+    try {
+      const response = await controller.solver.listJobs({ limit: 50 });
+      const items = Array.isArray(response?.items) ? response.items : [];
+      if (items.length > 0) {
+        setJobsFromEntries(controller, items);
+        restoredFromBackend = true;
+      }
+    } catch (error) {
+      console.warn("[SimController] Failed to restore jobs from backend:", error);
+    }
   }
 
-  setJobsFromEntries(controller, workspace.items);
+  // Fall back to workspace folder if backend returned nothing.
+  if (!restoredFromBackend) {
+    const workspace = await readSimulationWorkspaceJobs();
+    if (workspace.repaired || workspace.warnings.length > 0) {
+      onRecoverFromManifests();
+    }
+    setJobsFromEntries(controller, workspace.items);
+  }
+
   syncCurrentJobId(controller);
   onJobsUpdated();
 
