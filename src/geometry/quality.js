@@ -37,11 +37,15 @@ function buildEdgeStats(indices, startTri = 0, endTri = null) {
   for (let t = start; t < end; t += 1) {
     const off = t * 3;
     const tri = [indices[off], indices[off + 1], indices[off + 2]];
-    for (const [u, v] of [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]]) {
+    for (const [u, v] of [
+      [tri[0], tri[1]],
+      [tri[1], tri[2]],
+      [tri[2], tri[0]],
+    ]) {
       const key = edgeKey(u, v);
       edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
       const [a, b] = key.split(',').map(Number);
-      const orientation = (u === a && v === b) ? 1 : -1;
+      const orientation = u === a && v === b ? 1 : -1;
       if (!orientedEdges.has(key)) orientedEdges.set(key, []);
       orientedEdges.get(key).push(orientation);
     }
@@ -57,7 +61,11 @@ function countConnectedComponents(indices) {
   for (let t = 0; t < triCount; t += 1) {
     const off = t * 3;
     const tri = [indices[off], indices[off + 1], indices[off + 2]];
-    for (const [u, v] of [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]]) {
+    for (const [u, v] of [
+      [tri[0], tri[1]],
+      [tri[1], tri[2]],
+      [tri[2], tri[0]],
+    ]) {
       const key = edgeKey(u, v);
       if (!edgeToTriangles.has(key)) edgeToTriangles.set(key, []);
       edgeToTriangles.get(key).push(t);
@@ -160,6 +168,6 @@ export function validateMeshQuality(vertices, indices, groups = null) {
     sameDirectionSharedEdges,
     components,
     seam: seamStats,
-    sourceConnectivity: sourceConnectivity.shared
+    sourceConnectivity: sourceConnectivity.shared,
   };
 }

@@ -38,8 +38,8 @@
   --scene-top-light: #e8a83a;
 
   /* Typography — 5 sizes */
-  --font-ui: "Space Grotesk", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Consolas", monospace;
+  --font-ui: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
 
   --text-xs: 0.7rem;
   --text-sm: 0.8rem;
@@ -163,7 +163,6 @@ body {
   justify-content: space-between;
   margin-bottom: var(--sp-3);
 }
-
 
 .panel-header h1 {
   margin-bottom: 0;
@@ -466,7 +465,7 @@ details.section > summary::-webkit-details-marker {
 }
 
 details.section > summary::before {
-  content: "▸";
+  content: '▸';
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
@@ -588,8 +587,34 @@ details.section[open] > summary {
   flex: 1;
 }
 
-.input-row input[type="number"],
-.input-row input[type="text"] {
+.param-select-action-wrapper {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.param-auto-btn {
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-bg);
+  color: var(--text);
+  font: 600 var(--text-sm) var(--font-ui);
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+
+.param-auto-btn:hover {
+  border-color: var(--text-muted);
+  background: var(--input-bg);
+}
+
+.input-row input[type='number'],
+.input-row input[type='text'] {
   width: 100%;
   background: var(--input-bg);
   border: 1px solid var(--border);
@@ -604,18 +629,18 @@ details.section[open] > summary {
     box-shadow var(--t-fast);
 }
 
-.input-row input[type="number"]:focus,
-.input-row input[type="text"]:focus {
+.input-row input[type='number']:focus,
+.input-row input[type='text']:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px oklch(45% 0.22 262 / 0.15);
 }
 
-.input-row input[type="number"]:hover:not(:focus),
-.input-row input[type="text"]:hover:not(:focus) {
+.input-row input[type='number']:hover:not(:focus),
+.input-row input[type='text']:hover:not(:focus) {
   border-color: var(--text-muted);
 }
 
-.input-row input[type="range"] {
+.input-row input[type='range'] {
   flex: 2;
   accent-color: var(--accent);
   height: 4px;
@@ -664,7 +689,7 @@ select:hover:not(:focus) {
   font-size: var(--text-base);
 }
 
-input[type="checkbox"] {
+input[type='checkbox'] {
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
@@ -673,7 +698,7 @@ input[type="checkbox"] {
 }
 
 @media (pointer: coarse) {
-  input[type="checkbox"] {
+  input[type='checkbox'] {
     width: 20px;
     height: 20px;
   }
@@ -868,7 +893,7 @@ button.secondary:hover:not(:disabled),
 }
 
 .status-dot::after {
-  content: "?";
+  content: '?';
 }
 
 .status-dot.connected {
@@ -878,7 +903,7 @@ button.secondary:hover:not(:disabled),
     0 0 12px oklch(55% 0.18 148 / 0.25);
 }
 .status-dot.connected::after {
-  content: "✓";
+  content: '✓';
 }
 
 .status-dot.disconnected {
@@ -886,7 +911,7 @@ button.secondary:hover:not(:disabled),
   box-shadow: 0 0 4px oklch(55% 0.2 27 / 0.4);
 }
 .status-dot.disconnected::after {
-  content: "✗";
+  content: '✗';
 }
 
 .status-dot.simulating {
@@ -898,7 +923,7 @@ button.secondary:hover:not(:disabled),
   will-change: transform, box-shadow;
 }
 .status-dot.simulating::after {
-  content: "◌";
+  content: '◌';
 }
 
 @keyframes status-pulse {
@@ -1024,7 +1049,7 @@ details.section > details.simulation-mesh-diagnostics-window {
 }
 
 .simulation-mesh-diagnostics-header-meta + .simulation-mesh-diagnostics-header-meta::before {
-  content: "·";
+  content: '·';
   margin-right: var(--sp-1);
   opacity: 0.45;
 }
@@ -1283,7 +1308,9 @@ details.section > details.simulation-mesh-diagnostics-window {
   line-height: 1;
   margin: 0;
   width: auto;
-  transition: opacity var(--t-fast), color var(--t-fast);
+  transition:
+    opacity var(--t-fast),
+    color var(--t-fast);
 }
 
 .simulation-job-rating-star.is-active,
@@ -1318,7 +1345,10 @@ details.section > details.simulation-mesh-diagnostics-window {
   font-weight: 700;
   cursor: pointer;
   opacity: 0.4;
-  transition: opacity var(--t-fast), color var(--t-fast), background var(--t-fast);
+  transition:
+    opacity var(--t-fast),
+    color var(--t-fast),
+    background var(--t-fast);
 }
 
 .simulation-job-remove:hover {
@@ -1353,9 +1383,15 @@ details.section > details.simulation-mesh-diagnostics-window {
 }
 
 /* Legacy — no longer rendered */
-.simulation-job-footer { display: none; }
-.simulation-job-footer-label { display: none; }
-.simulation-job-info { min-width: 0; }
+.simulation-job-footer {
+  display: none;
+}
+.simulation-job-footer-label {
+  display: none;
+}
+.simulation-job-info {
+  min-width: 0;
+}
 
 @media (max-width: 720px) {
   .simulation-job-header {
@@ -2308,7 +2344,7 @@ details.section > details.simulation-mesh-diagnostics-window {
   margin: 0;
 }
 
-.settings-control-value input[type="checkbox"] {
+.settings-control-value input[type='checkbox'] {
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
@@ -2391,7 +2427,7 @@ details.section > details.simulation-mesh-diagnostics-window {
   gap: var(--sp-2);
 }
 
-.settings-slider-group input[type="range"] {
+.settings-slider-group input[type='range'] {
   width: 80px;
   accent-color: var(--accent);
   cursor: pointer;
@@ -2756,8 +2792,8 @@ textarea {
   overflow-wrap: break-word;
 }
 
-input[type="text"],
-input[type="number"],
+input[type='text'],
+input[type='number'],
 select,
 textarea {
   max-width: 100%;
@@ -2799,8 +2835,8 @@ textarea {
     align-items: stretch;
   }
 
-  .input-row input[type="text"],
-  .input-row input[type="number"],
+  .input-row input[type='text'],
+  .input-row input[type='number'],
   .input-row select {
     width: 100%;
   }
@@ -2821,7 +2857,7 @@ textarea {
   }
 
   .loading-spinner::after {
-    content: "Loading...";
+    content: 'Loading...';
     font-size: var(--text-sm);
     color: var(--text-muted);
   }
@@ -3028,12 +3064,7 @@ select:focus {
 /* ── 25. Skeleton Loading States ───────────────────────────── */
 
 .skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--input-bg) 25%,
-    var(--surface) 50%,
-    var(--input-bg) 75%
-  );
+  background: linear-gradient(90deg, var(--input-bg) 25%, var(--surface) 50%, var(--input-bg) 75%);
   background-size: 200% 100%;
   animation: skeleton-pulse 1.5s ease-in-out infinite;
   border-radius: var(--r-sm);

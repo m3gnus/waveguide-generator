@@ -17,5 +17,5 @@ test('startup scripts and backend entrypoint avoid mock-runtime messaging', () =
 
   assert.match(startAll, /backend-dependent features are blocked/i);
   assert.match(serverStart, /\/api\/solve will stay unavailable/i);
-  assert.match(appPy, /\/api\/solve is unavailable/i);
+  assert.match(appPy, /no solver backend is ready/i);
 });

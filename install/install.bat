@@ -4,6 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0\.."
 
 set "NODEJS_HINT=C:\Program Files\nodejs"
+set "BEMPP_CL_URL=git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 echo ===============================================================
 echo WG - Waveguide Generator Setup
@@ -85,7 +86,7 @@ for %%p in (py python3 python) do (
                 set "FIRST_PYTHON_VERSION=!CANDIDATE_VERSION!"
             )
 
-            %%p -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3,10) else 1)" >nul 2>&1
+            %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
             if not errorlevel 1 (
                 set "PYTHON_BIN=%%p"
                 set "PYTHON_PATH=!CANDIDATE_PATH!"
@@ -96,7 +97,7 @@ for %%p in (py python3 python) do (
 )
 
 if not defined PYTHON_BIN (
-    echo ERROR: Python 3.10 or newer is required.
+    echo ERROR: Python 3.10 through 3.14 is required.
     if defined FIRST_PYTHON_CMD (
         echo        Detected command: !FIRST_PYTHON_CMD!
         if defined FIRST_PYTHON_PATH echo        Detected path: !FIRST_PYTHON_PATH!
@@ -169,11 +170,11 @@ for /f "tokens=*" %%v in ('.venv\Scripts\python.exe -c "import gmsh; print(gmsh.
 echo.
 
 echo Installing bempp-cl ^(needed for simulations^)...
-.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+.venv\Scripts\python.exe -m pip install %BEMPP_CL_URL%
 if errorlevel 1 (
     echo   WARNING: bempp-cl automatic install failed.
     echo            You can retry later with:
-    echo              .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+    echo              .venv\Scripts\python.exe -m pip install %BEMPP_CL_URL%
 ) else (
     echo   bempp-cl installed.
 )

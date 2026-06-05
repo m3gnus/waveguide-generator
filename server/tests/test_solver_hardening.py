@@ -4,7 +4,12 @@ from unittest.mock import patch
 import numpy as np
 
 from solver.bem_solver import BEMSolver
-from solver.solve import solve_optimized, _numpy_dtype_for_precision, _normalize_bem_precision
+from solver.solve import (
+    HornBEMSolver,
+    solve_optimized,
+    _numpy_dtype_for_precision,
+    _normalize_bem_precision,
+)
 
 
 class DummyGrid:
@@ -110,6 +115,44 @@ class _OpenCLRuntimePatchedTestCase(unittest.TestCase):
         self._boundary_patcher.stop()
         self._horn_init_patcher.stop()
         super().tearDown()
+
+
+class HornBEMGeometrySetupTest(unittest.TestCase):
+    def _solver_stub(self, physical_tags, element_count):
+        solver = object.__new__(HornBEMSolver)
+        solver.physical_tags = np.asarray(physical_tags, dtype=np.int32)
+        solver.tag_throat = 2
+        solver.dp0_space = type("Space", (), {"global_dof_count": element_count})()
+        solver.p1_space = type(
+            "P1Space",
+            (),
+            {
+                "local2global": np.arange(
+                    element_count * 3,
+                    dtype=np.int32,
+                ).reshape(element_count, 3)
+            },
+        )()
+        solver.grid = type("Grid", (), {"volumes": np.ones(element_count, dtype=float)})()
+        return solver
+
+    def test_driver_geometry_rejects_physical_tag_count_mismatch(self):
+        solver = self._solver_stub([2], element_count=2)
+
+        with self.assertRaises(ValueError) as ctx:
+            solver._setup_driver_geometry()
+
+        self.assertIn("physical_tags length", str(ctx.exception))
+        self.assertIn("BEM element count", str(ctx.exception))
+
+    def test_driver_geometry_splits_source_and_enclosure_tags(self):
+        solver = self._solver_stub([1, 2, 1], element_count=3)
+
+        solver._setup_driver_geometry()
+
+        np.testing.assert_array_equal(solver.driver_dofs, np.array([1], dtype=np.int64))
+        np.testing.assert_array_equal(solver.enclosure_dofs, np.array([0, 2], dtype=np.int64))
+        np.testing.assert_array_equal(solver.throat_element_areas, np.array([1.0]))
 
 
 class SolverHardeningTest(_OpenCLRuntimePatchedTestCase):

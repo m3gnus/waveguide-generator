@@ -27,7 +27,17 @@ export async function exportStlFromApp() {
   return exportSTL({
     state: readExportState(),
     baseName: getExportBaseName(),
-    writeFile: writeBrowserExportFile
+    writeFile: writeBrowserExportFile,
+  });
+}
+
+export async function exportStepFromApp() {
+  const { exportSTEP } = await loadExportUseCases();
+  return exportSTEP({
+    state: readExportState(),
+    baseName: getExportBaseName(),
+    backendUrl: DEFAULT_BACKEND_URL,
+    writeFile: writeBrowserExportFile,
   });
 }
 
@@ -36,7 +46,7 @@ export async function exportMwgConfigFromApp() {
   return exportMWGConfig({
     state: readExportState(),
     baseName: getExportBaseName(),
-    writeFile: writeBrowserExportFile
+    writeFile: writeBrowserExportFile,
   });
 }
 
@@ -46,7 +56,7 @@ export async function exportProfileCsvFromApp(vertices) {
     state: readExportState(),
     baseName: getExportBaseName(),
     writeFile: writeBrowserExportFile,
-    onMissingMesh: showError
+    onMissingMesh: showError,
   });
 }
 
@@ -86,27 +96,37 @@ export function registerBackendDiagnosticTool(targetWindow = window) {
     }
 
     console.log('');
-    console.log('Test 3: Gmsh meshing endpoint (OCC builder)');
+    console.log('Test 3: HornLab meshing endpoint');
     console.log('  URL:', `${backendUrl}/api/mesh/build`);
     try {
       const testPayload = {
-        params: {
-          type: 'R-OSSE',
-          L: 50,
-          throat: 25.4,
-          mouth: 150,
-          depth: 100,
-          quadrants: '12',
-          angularSegments: 40,
-          lengthSegments: 20
-        },
-        mshVersion: '2.2'
+        formula_type: 'OSSE',
+        L: '120',
+        s: '0.58',
+        n: 4.158,
+        h: 0,
+        a: '25',
+        a0: 15.5,
+        r0: 12.7,
+        k: 2,
+        q: 3.4,
+        gcurve_type: 0,
+        gcurve_dist: 0.5,
+        source_shape: 2,
+        enc_depth: 0,
+        wall_thickness: 6,
+        n_angular: 24,
+        n_length: 10,
+        throat_res: 12,
+        mouth_res: 20,
+        rear_res: 40,
+        msh_version: '2.2',
       };
       const start = performance.now();
       const res = await fetch(`${backendUrl}/api/mesh/build`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(testPayload)
+        body: JSON.stringify(testPayload),
       });
       const elapsed = (performance.now() - start).toFixed(0);
       console.log(`  Response: HTTP ${res.status} (${elapsed}ms)`);
@@ -117,7 +137,7 @@ export function registerBackendDiagnosticTool(targetWindow = window) {
       }
 
       const data = await res.json();
-      console.log('  Success: Python OCC builder works.');
+      console.log('  Success: HornLab mesher works.');
       console.log('  Stats:', data.stats);
     } catch (error) {
       console.error('  Failed:', error.name, '-', error.message);

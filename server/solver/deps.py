@@ -36,7 +36,15 @@ SUPPORTED_BEMPP_CL_MAX_EXCLUSIVE = (0, 5, 0)
 
 SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     "python": {"range": ">=3.10,<3.15"},
-    "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "/api/mesh/build"},
+    "hornlab_waveguide_mesher": {
+        "range": "pinned git commit 334e51f",
+        "required_for": "/api/mesh/build",
+    },
+    "hornlab_metal_bem": {
+        "range": "pinned git commit 0cc9c74",
+        "required_for": "/api/solve solver_backend=metal",
+    },
+    "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
     "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
 }
 
@@ -106,10 +114,29 @@ GMSH_SUPPORTED = GMSH_AVAILABLE and PYTHON_SUPPORTED and _in_supported_range(
     SUPPORTED_GMSH_MAX_EXCLUSIVE,
 )
 
+HORNLAB_MESHER_VERSION = None
+try:
+    from hornlab_mesher.config_builder import build_from_config as _hornlab_mesher_build_from_config  # type: ignore  # noqa: F401
+    HORNLAB_MESHER_AVAILABLE = True
+    HORNLAB_MESHER_VERSION = _distribution_version("hornlab-waveguide-mesher")
+except ImportError:
+    HORNLAB_MESHER_AVAILABLE = False
+
+HORNLAB_MESHER_RUNTIME_READY = HORNLAB_MESHER_AVAILABLE and GMSH_SUPPORTED
+
+HORNLAB_METAL_BEM_VERSION = None
+try:
+    import hornlab_metal_bem  # type: ignore  # noqa: F401
+    HORNLAB_METAL_BEM_AVAILABLE = True
+    HORNLAB_METAL_BEM_VERSION = _distribution_version("hornlab-metal-bem")
+except ImportError:
+    HORNLAB_METAL_BEM_AVAILABLE = False
+
 
 BEMPP_VARIANT = None
 BEMPP_VERSION = None
 BEMPP_VERSION_TUPLE = None
+BEMPP_IMPORT_ERROR = None
 
 try:
     # Preferred package for this project.
@@ -123,6 +150,13 @@ try:
 except ImportError:
     BEMPP_AVAILABLE = False
     bempp_api = None
+except Exception as exc:
+    # bempp-cl can fail during module initialization even when installed
+    # (for example numba cache/runtime errors). Treat that as unavailable so
+    # backend startup and Metal solver discovery can continue.
+    BEMPP_AVAILABLE = False
+    BEMPP_IMPORT_ERROR = str(exc)
+    bempp_api = None
 
 if BEMPP_AVAILABLE:
     BEMPP_VERSION_TUPLE = _parse_version_tuple(BEMPP_VERSION)
@@ -134,7 +168,6 @@ BEMPP_SUPPORTED = BEMPP_AVAILABLE and PYTHON_SUPPORTED and _in_supported_range(
 )
 
 BEMPP_RUNTIME_READY = BEMPP_AVAILABLE and BEMPP_SUPPORTED
-GMSH_OCC_RUNTIME_READY = GMSH_AVAILABLE and GMSH_SUPPORTED
 
 if not PYTHON_SUPPORTED:
     logger.warning(
@@ -153,7 +186,14 @@ if BEMPP_AVAILABLE and not BEMPP_SUPPORTED:
         ">=0.4,<0.5",
     )
 if not BEMPP_AVAILABLE:
-    logger.warning("bempp runtime not available (install bempp-cl >=0.4,<0.5).")
+    if BEMPP_IMPORT_ERROR:
+        logger.warning("bempp runtime import failed: %s", BEMPP_IMPORT_ERROR)
+    else:
+        logger.warning("bempp runtime not available (install bempp-cl >=0.4,<0.5).")
+if not HORNLAB_MESHER_AVAILABLE:
+    logger.warning("hornlab-waveguide-mesher runtime not available.")
+if not HORNLAB_METAL_BEM_AVAILABLE:
+    logger.warning("hornlab-metal-bem runtime not available.")
 
 
 def get_dependency_status() -> Dict[str, Dict[str, object]]:
@@ -168,7 +208,19 @@ def get_dependency_status() -> Dict[str, Dict[str, object]]:
                 "available": GMSH_AVAILABLE,
                 "version": GMSH_VERSION,
                 "supported": GMSH_SUPPORTED,
-                "ready": GMSH_OCC_RUNTIME_READY,
+                "ready": GMSH_SUPPORTED,
+            },
+            "hornlab_waveguide_mesher": {
+                "available": HORNLAB_MESHER_AVAILABLE,
+                "version": HORNLAB_MESHER_VERSION,
+                "supported": HORNLAB_MESHER_AVAILABLE,
+                "ready": HORNLAB_MESHER_RUNTIME_READY,
+            },
+            "hornlab_metal_bem": {
+                "available": HORNLAB_METAL_BEM_AVAILABLE,
+                "version": HORNLAB_METAL_BEM_VERSION,
+                "supported": HORNLAB_METAL_BEM_AVAILABLE,
+                "ready": HORNLAB_METAL_BEM_AVAILABLE,
             },
             "bempp": {
                 "available": BEMPP_AVAILABLE,
@@ -176,6 +228,7 @@ def get_dependency_status() -> Dict[str, Dict[str, object]]:
                 "version": BEMPP_VERSION,
                 "supported": BEMPP_SUPPORTED,
                 "ready": BEMPP_RUNTIME_READY,
+                "import_error": BEMPP_IMPORT_ERROR,
             },
         },
     }

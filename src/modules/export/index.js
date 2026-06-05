@@ -1,35 +1,30 @@
-import { exportProfilesCSV, exportSlicesCSV } from "../../export/profiles.js";
-import { generateMWGConfigContent } from "../../export/mwgConfig.js";
-import { exportSTLBinary } from "../../export/stl.browser.js";
-import { buildWaveguidePayload } from "../../solver/waveguidePayload.js";
+import { exportProfilesCSV, exportSlicesCSV } from '../../export/profiles.js';
+import { generateMWGConfigContent } from '../../export/mwgConfig.js';
+import { exportSTLBinary } from '../../export/stl.browser.js';
+import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import {
   buildCanonicalMeshPayloadFromShape,
   buildGeometryMeshFromShape,
-} from "../../geometry/pipeline.js";
-import {
-  mapVertexToAth,
-  transformVerticesToAth,
-} from "../../geometry/transforms.js";
-import { GeometryModule } from "../geometry/index.js";
-import {
-  prepareOccExportParams,
-  prepareProfileCsvParams,
-} from "../design/index.js";
-import { formatDependencyBlockMessage } from "../runtime/health.js";
+} from '../../geometry/pipeline.js';
+import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
+import { GeometryModule } from '../geometry/index.js';
+import { prepareBackendMeshExportParams, prepareProfileCsvParams } from '../design/index.js';
+import { formatDependencyBlockMessage } from '../runtime/health.js';
 
-const EXPORT_MODULE_ID = "export";
-const EXPORT_IMPORT_STAGE = "import";
-const EXPORT_TASK_STAGE = "task";
+const EXPORT_MODULE_ID = 'export';
+const EXPORT_IMPORT_STAGE = 'import';
+const EXPORT_TASK_STAGE = 'task';
 
 const EXPORT_KINDS = Object.freeze({
-  OCC_MESH: "occ-mesh",
-  STL: "stl",
-  PROFILE_CSV: "profile-csv",
-  CONFIG: "config",
+  HORNLAB_MESHER_MESH: 'hornlab-mesher-mesh',
+  STEP: 'step',
+  STL: 'stl',
+  PROFILE_CSV: 'profile-csv',
+  CONFIG: 'config',
 });
 
 function isObject(value) {
-  return value !== null && typeof value === "object";
+  return value !== null && typeof value === 'object';
 }
 
 function createExportImportEnvelope(kind, payload) {
@@ -47,13 +42,11 @@ function assertExportImportEnvelope(input, expectedKind = null) {
     input.module !== EXPORT_MODULE_ID ||
     input.stage !== EXPORT_IMPORT_STAGE
   ) {
-    throw new Error(
-      "Export module task requires input created by ExportModule import helpers.",
-    );
+    throw new Error('Export module task requires input created by ExportModule import helpers.');
   }
   if (expectedKind && input.kind !== expectedKind) {
     throw new Error(
-      `Export module task expected "${expectedKind}" input but received "${input.kind}".`,
+      `Export module task expected "${expectedKind}" input but received "${input.kind}".`
     );
   }
 }
@@ -64,37 +57,68 @@ function assertExportTaskEnvelope(result, expectedKind = null) {
     result.module !== EXPORT_MODULE_ID ||
     result.stage !== EXPORT_TASK_STAGE
   ) {
-    throw new Error(
-      "Export module output requires a result from ExportModule.task().",
-    );
+    throw new Error('Export module output requires a result from ExportModule.task().');
   }
   if (expectedKind && result.kind !== expectedKind) {
     throw new Error(
-      `Export module output expected "${expectedKind}" result but received "${result.kind}".`,
+      `Export module output expected "${expectedKind}" result but received "${result.kind}".`
     );
   }
 }
 
-async function fetchBackendHealth(backendUrl) {
+function requireBackendUrl(backendUrl) {
+  const normalized = String(backendUrl || '').trim();
+  if (!normalized) {
+    throw new Error('Export module HornLab mesher task requires a backendUrl.');
+  }
+  return normalized;
+}
+
+async function fetchBackendJson(url, init = {}, { timeoutMs = 10000 } = {}) {
   const controller = new AbortController();
-  const timeoutMs = 10000;
   const timer = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
 
   try {
-    const res = await fetch(`${backendUrl}/health`, {
+    const response = await fetch(url, {
+      ...init,
       signal: controller.signal,
     });
+    const body = await response.json().catch(() => null);
+    return { response, body };
+  } finally {
     clearTimeout(timer);
-    if (!res.ok) {
+  }
+}
+
+async function fetchBackendHealth(backendUrl, options = {}) {
+  try {
+    const { response, body } = await fetchBackendJson(`${backendUrl}/health`, {}, options);
+    if (!response.ok) {
       return null;
     }
-    return await res.json();
-  } catch (_error) {
-    clearTimeout(timer);
+    return body;
+  } catch {
     return null;
   }
+}
+
+function buildMeshBuildError(response, body) {
+  const detail = body?.detail || response.statusText || `HTTP ${response.status}`;
+  return `/api/mesh/build failed: ${detail}`;
+}
+
+function buildStepBuildError(response, body) {
+  const detail = body?.detail || response.statusText || `HTTP ${response.status}`;
+  return `/api/mesh/step failed: ${detail}`;
+}
+
+async function sleep(ms) {
+  if (ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function rotateVerticesForStl(vertices) {
@@ -126,89 +150,85 @@ function buildExportArtifacts(mesh, payload) {
   };
 }
 
-async function runOccMeshExportTask(input, options = {}) {
-  assertExportImportEnvelope(input, EXPORT_KINDS.OCC_MESH);
+async function runHornlabMesherMeshExportTask(input, options = {}) {
+  assertExportImportEnvelope(input, EXPORT_KINDS.HORNLAB_MESHER_MESH);
+  const backendUrl = requireBackendUrl(input.backendUrl);
 
-  input.onStatus?.("Connecting to backend...");
+  input.onStatus?.('Connecting to backend...');
 
-  let health = await fetchBackendHealth(input.backendUrl);
+  const healthTimeoutMs = options.healthTimeoutMs || 10000;
+  let health = await fetchBackendHealth(backendUrl, { timeoutMs: healthTimeoutMs });
   if (!health) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    health = await fetchBackendHealth(input.backendUrl);
+    await sleep(options.healthRetryDelayMs ?? 500);
+    health = await fetchBackendHealth(backendUrl, { timeoutMs: healthTimeoutMs });
   }
   if (!health) {
-    throw new Error(
-      `Backend health check failed at ${input.backendUrl}.\nStart with: npm start`,
-    );
+    throw new Error(`Backend health check failed at ${backendUrl}.\nStart with: npm start`);
   }
 
-  if (health?.occBuilderReady === false) {
+  if (health?.mesherReady === false) {
     throw new Error(
       formatDependencyBlockMessage(health, {
-        features: ["meshBuild"],
-        fallback: "OCC mesh export is unavailable.",
-      }),
+        features: ['meshBuild'],
+        fallback: 'HornLab mesher export is unavailable.',
+      })
     );
   }
 
-  input.onStatus?.("Building mesh (Python OCC)...");
+  input.onStatus?.('Building mesh (HornLab mesher)...');
 
-  const mshVersion = options.mshVersion || "2.2";
-  const occParams = prepareOccExportParams(input.params);
-  const requestPayload = buildWaveguidePayload(occParams, mshVersion);
+  const mshVersion = options.mshVersion || '2.2';
+  const meshParams = prepareBackendMeshExportParams(input.params);
+  const requestPayload = buildWaveguidePayload(meshParams, mshVersion);
 
   let response;
   try {
-    const res = await fetch(`${input.backendUrl}/api/mesh/build`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestPayload),
-    });
+    const { response: res, body } = await fetchBackendJson(
+      `${backendUrl}/api/mesh/build`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPayload),
+      },
+      { timeoutMs: options.meshBuildTimeoutMs || 10000 }
+    );
 
     if (!res.ok) {
-      const err = await res
-        .json()
-        .catch(() => ({ detail: `HTTP ${res.status}` }));
-      throw new Error(
-        `/api/mesh/build failed: ${err.detail || res.statusText}`,
-      );
+      throw new Error(buildMeshBuildError(res, body));
     }
 
-    response = await res.json();
+    response = body;
   } catch (err) {
-    if (err.message?.includes("/api/mesh/build failed")) throw err;
-    throw new Error(`/api/mesh/build request failed: ${err.message}`);
+    if (err.message?.includes('/api/mesh/build failed')) throw err;
+    throw new Error(`/api/mesh/build request failed: ${err.message}`, {
+      cause: err,
+    });
   }
 
   if (
     !response ||
-    response.generatedBy !== "gmsh-occ" ||
-    typeof response.msh !== "string"
+    response.generatedBy !== 'hornlab-waveguide-mesher' ||
+    typeof response.msh !== 'string'
   ) {
-    throw new Error(
-      "Invalid response from /api/mesh/build: expected gmsh-occ mesh data.",
-    );
+    throw new Error('Invalid response from /api/mesh/build: expected HornLab mesher mesh data.');
   }
 
-  const geometryTask = GeometryModule.task(
-    GeometryModule.importPrepared(occParams),
-    {
-      includeEnclosure: Number(occParams.encDepth || 0) > 0,
-    },
-  );
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(meshParams), {
+    includeEnclosure: Number(meshParams.encDepth || 0) > 0,
+  });
   const geometryShape = GeometryModule.output.shape(geometryTask);
   const payload = buildCanonicalMeshPayloadFromShape(geometryShape, {
-    includeEnclosure: Number(occParams.encDepth || 0) > 0,
+    includeEnclosure: Number(meshParams.encDepth || 0) > 0,
     validateIntegrity: false,
   });
   const mesh = buildGeometryMeshFromShape(geometryShape, {
-    includeEnclosure: Number(occParams.encDepth || 0) > 0,
+    includeEnclosure: Number(meshParams.encDepth || 0) > 0,
   });
 
   return Object.freeze({
     module: EXPORT_MODULE_ID,
     stage: EXPORT_TASK_STAGE,
-    kind: EXPORT_KINDS.OCC_MESH,
+    kind: EXPORT_KINDS.HORNLAB_MESHER_MESH,
     input,
     result: {
       artifacts: buildExportArtifacts(mesh, payload),
@@ -219,16 +239,99 @@ async function runOccMeshExportTask(input, options = {}) {
   });
 }
 
+async function runStepExportTask(input, options = {}) {
+  assertExportImportEnvelope(input, EXPORT_KINDS.STEP);
+  const backendUrl = requireBackendUrl(input.backendUrl);
+
+  input.onStatus?.('Connecting to backend...');
+
+  const healthTimeoutMs = options.healthTimeoutMs || 10000;
+  let health = await fetchBackendHealth(backendUrl, { timeoutMs: healthTimeoutMs });
+  if (!health) {
+    await sleep(options.healthRetryDelayMs ?? 500);
+    health = await fetchBackendHealth(backendUrl, { timeoutMs: healthTimeoutMs });
+  }
+  if (!health) {
+    throw new Error(`Backend health check failed at ${backendUrl}.\nStart with: npm start`);
+  }
+
+  if (!health?.mesherReady) {
+    throw new Error(
+      formatDependencyBlockMessage(health, {
+        features: ['meshBuild'],
+        fallback: 'HornLab STEP export is unavailable.',
+      })
+    );
+  }
+
+  input.onStatus?.('Building inner-surface STEP...');
+
+  const meshParams = prepareBackendMeshExportParams(input.params);
+  const requestPayload = buildWaveguidePayload(meshParams, '2.2');
+  requestPayload.enc_depth = 0;
+  requestPayload.wall_thickness = 0;
+
+  let response;
+  try {
+    const { response: res, body } = await fetchBackendJson(
+      `${backendUrl}/api/mesh/step`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPayload),
+      },
+      { timeoutMs: options.stepBuildTimeoutMs || 10000 }
+    );
+
+    if (!res.ok) {
+      throw new Error(buildStepBuildError(res, body));
+    }
+
+    response = body;
+  } catch (err) {
+    if (err.message?.includes('/api/mesh/step failed')) throw err;
+    throw new Error(`/api/mesh/step request failed: ${err.message}`, {
+      cause: err,
+    });
+  }
+
+  if (
+    !response ||
+    response.generatedBy !== 'hornlab-waveguide-mesher' ||
+    typeof response.step !== 'string'
+  ) {
+    throw new Error('Invalid response from /api/mesh/step: expected HornLab mesher STEP data.');
+  }
+
+  return Object.freeze({
+    module: EXPORT_MODULE_ID,
+    stage: EXPORT_TASK_STAGE,
+    kind: EXPORT_KINDS.STEP,
+    input,
+    files: [
+      {
+        content: response.step,
+        fileName: `${input.baseName}.step`,
+        saveOptions: {
+          contentType: 'model/step',
+          typeInfo: {
+            description: 'STEP Surface',
+            accept: { 'model/step': ['.step', '.stp'] },
+          },
+        },
+        stats: response.stats || null,
+      },
+    ],
+  });
+}
+
 function runStlExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.STL);
 
-  const geometryTask = GeometryModule.task(
-    GeometryModule.importPrepared(input.params),
-    {
-      includeEnclosure: false,
-      adaptivePhi: true,
-    },
-  );
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(input.params), {
+    includeEnclosure: false,
+    adaptivePhi: true,
+  });
   const geometryShape = GeometryModule.output.shape(geometryTask);
   const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
     includeEnclosure: false,
@@ -237,7 +340,7 @@ function runStlExportTask(input) {
   const stlBinary = exportSTLBinary(
     rotateVerticesForStl(Float32Array.from(vertices)),
     Uint32Array.from(indices),
-    input.modelName,
+    input.modelName
   );
 
   return Object.freeze({
@@ -250,10 +353,10 @@ function runStlExportTask(input) {
         content: stlBinary,
         fileName: `${input.baseName}.stl`,
         saveOptions: {
-          contentType: "application/sla",
+          contentType: 'application/sla',
           typeInfo: {
-            description: "STL Model",
-            accept: { "model/stl": [".stl"] },
+            description: 'STL Model',
+            accept: { 'model/stl': ['.stl'] },
           },
         },
       },
@@ -280,10 +383,10 @@ function runProfileCsvExportTask(input) {
         content: exportProfilesCSV(input.vertices, meshParams),
         fileName: `${input.baseName}_profiles.csv`,
         saveOptions: {
-          contentType: "text/csv",
+          contentType: 'text/csv',
           typeInfo: {
-            description: "Angular Profiles",
-            accept: { "text/csv": [".csv"] },
+            description: 'Angular Profiles',
+            accept: { 'text/csv': ['.csv'] },
           },
         },
       },
@@ -291,10 +394,10 @@ function runProfileCsvExportTask(input) {
         content: exportSlicesCSV(input.vertices, meshParams),
         fileName: `${input.baseName}_slices.csv`,
         saveOptions: {
-          contentType: "text/csv",
+          contentType: 'text/csv',
           typeInfo: {
-            description: "Length Slices",
-            accept: { "text/csv": [".csv"] },
+            description: 'Length Slices',
+            accept: { 'text/csv': ['.csv'] },
           },
         },
       },
@@ -315,10 +418,10 @@ function runConfigExportTask(input) {
         content: generateMWGConfigContent(input.params),
         fileName: `${input.baseName}.txt`,
         saveOptions: {
-          contentType: "text/plain",
+          contentType: 'text/plain',
           typeInfo: {
-            description: "MWG Config",
-            accept: { "text/plain": [".txt"] },
+            description: 'MWG Config',
+            accept: { 'text/plain': ['.txt'] },
           },
         },
       },
@@ -326,20 +429,29 @@ function runConfigExportTask(input) {
   });
 }
 
-export function importOccMeshBuild(
-  preparedParams,
-  { backendUrl, onStatus } = {},
-) {
-  return createExportImportEnvelope(EXPORT_KINDS.OCC_MESH, {
+export function importHornlabMesherMeshBuild(preparedParams, { backendUrl, onStatus } = {}) {
+  return createExportImportEnvelope(EXPORT_KINDS.HORNLAB_MESHER_MESH, {
     params: preparedParams,
     backendUrl,
     onStatus,
   });
 }
 
+export function importStepExport(
+  preparedParams,
+  { backendUrl, baseName = 'waveguide', onStatus } = {}
+) {
+  return createExportImportEnvelope(EXPORT_KINDS.STEP, {
+    params: preparedParams,
+    backendUrl,
+    baseName,
+    onStatus,
+  });
+}
+
 export function importStlExport(
   preparedParams,
-  { baseName = "waveguide", modelName = "MWG Horn" } = {},
+  { baseName = 'waveguide', modelName = 'MWG Horn' } = {}
 ) {
   return createExportImportEnvelope(EXPORT_KINDS.STL, {
     params: preparedParams,
@@ -348,10 +460,7 @@ export function importStlExport(
   });
 }
 
-export function importProfileCsvExport(
-  preparedParams,
-  { vertices, baseName = "waveguide" } = {},
-) {
+export function importProfileCsvExport(preparedParams, { vertices, baseName = 'waveguide' } = {}) {
   return createExportImportEnvelope(EXPORT_KINDS.PROFILE_CSV, {
     params: preparedParams,
     vertices,
@@ -359,7 +468,7 @@ export function importProfileCsvExport(
   });
 }
 
-export function importConfigExport({ params, baseName = "waveguide" }) {
+export function importConfigExport({ params, baseName = 'waveguide' }) {
   return createExportImportEnvelope(EXPORT_KINDS.CONFIG, {
     params,
     baseName,
@@ -370,8 +479,10 @@ export function runExportTask(input, options = {}) {
   assertExportImportEnvelope(input);
 
   switch (input.kind) {
-    case EXPORT_KINDS.OCC_MESH:
-      return runOccMeshExportTask(input, options);
+    case EXPORT_KINDS.HORNLAB_MESHER_MESH:
+      return runHornlabMesherMeshExportTask(input, options);
+    case EXPORT_KINDS.STEP:
+      return runStepExportTask(input, options);
     case EXPORT_KINDS.STL:
       return runStlExportTask(input);
     case EXPORT_KINDS.PROFILE_CSV:
@@ -388,20 +499,21 @@ export function getExportFiles(result) {
   return Array.isArray(result.files) ? result.files : [];
 }
 
-export function getOccMeshBuildResult(result) {
-  assertExportTaskEnvelope(result, EXPORT_KINDS.OCC_MESH);
+export function getHornlabMesherMeshBuildResult(result) {
+  assertExportTaskEnvelope(result, EXPORT_KINDS.HORNLAB_MESHER_MESH);
   return result.result;
 }
 
 export const ExportModule = Object.freeze({
   id: EXPORT_MODULE_ID,
-  importOccMeshBuild,
+  importHornlabMesherMeshBuild,
+  importStep: importStepExport,
   importStl: importStlExport,
   importProfileCsv: importProfileCsvExport,
   importConfig: importConfigExport,
   task: runExportTask,
   output: Object.freeze({
     files: getExportFiles,
-    occMesh: getOccMeshBuildResult,
+    hornlabMesherMesh: getHornlabMesherMeshBuildResult,
   }),
 });

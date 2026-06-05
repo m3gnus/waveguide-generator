@@ -1,14 +1,10 @@
-import { DesignModule, prepareOccSimulationParams } from '../design/index.js';
-import {
-  buildCanonicalMeshPayloadFromShape
-} from '../../geometry/pipeline.js';
+import { DesignModule, prepareBackendMeshSimulationParams } from '../design/index.js';
 import { BemSolver } from '../../solver/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
-import { GeometryModule } from '../geometry/index.js';
+import { applySolverBackendQuadrantCompatibility } from './domain.js';
 
 const SIMULATION_MODULE_ID = 'simulation';
 const SIMULATION_IMPORT_STAGE = 'import';
-const SIMULATION_TASK_STAGE = 'task';
 
 function isObject(value) {
   return value !== null && typeof value === 'object';
@@ -18,16 +14,12 @@ function createSimulationImportEnvelope(params) {
   return Object.freeze({
     module: SIMULATION_MODULE_ID,
     stage: SIMULATION_IMPORT_STAGE,
-    params
+    params,
   });
 }
 
 function assertDesignTaskEnvelope(input) {
-  if (
-    !isObject(input) ||
-    input.module !== DesignModule.id ||
-    input.stage !== 'task'
-  ) {
+  if (!isObject(input) || input.module !== DesignModule.id || input.stage !== 'task') {
     throw new Error('Simulation module design import requires a result from DesignModule.task().');
   }
 }
@@ -39,25 +31,14 @@ function assertSimulationImportEnvelope(input) {
     input.stage !== SIMULATION_IMPORT_STAGE ||
     !isObject(input.params)
   ) {
-    throw new Error('Simulation module task requires input from SimulationModule.import(), SimulationModule.importPrepared(), or SimulationModule.importDesign().');
-  }
-}
-
-function assertSimulationTaskEnvelope(result) {
-  if (
-    !isObject(result) ||
-    result.module !== SIMULATION_MODULE_ID ||
-    result.stage !== SIMULATION_TASK_STAGE ||
-    !isObject(result.mesh)
-  ) {
-    throw new Error('Simulation module output requires a result from SimulationModule.task().');
+    throw new Error(
+      'Simulation module task requires input from SimulationModule.import(), SimulationModule.importPrepared(), or SimulationModule.importDesign().'
+    );
   }
 }
 
 export function importSimulationInput(rawParams = {}, options = {}) {
-  return importDesignSimulationInput(
-    DesignModule.task(DesignModule.import(rawParams, options))
-  );
+  return importDesignSimulationInput(DesignModule.task(DesignModule.import(rawParams, options)));
 }
 
 export function importPreparedSimulationInput(preparedParams = {}) {
@@ -69,50 +50,24 @@ export function importDesignSimulationInput(designTask) {
   return createSimulationImportEnvelope(DesignModule.output.simulationParams(designTask));
 }
 
-export function runSimulationTask(input, options = {}) {
-  assertSimulationImportEnvelope(input);
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(input.params), {
-    includeEnclosure: options.includeEnclosure ?? Number(input.params.encDepth || 0) > 0,
-    adaptivePhi: options.adaptivePhi ?? false
-  });
-  const geometryShape = GeometryModule.output.shape(geometryTask);
-
-  const mesh = buildCanonicalMeshPayloadFromShape(geometryShape, {
-    includeEnclosure: options.includeEnclosure ?? Number(input.params.encDepth || 0) > 0,
-    adaptivePhi: options.adaptivePhi ?? false,
-    validateIntegrity: options.validateIntegrity === true
-  });
-
-  return Object.freeze({
-    module: SIMULATION_MODULE_ID,
-    stage: SIMULATION_TASK_STAGE,
-    input,
-    mesh
-  });
-}
-
-export function getSimulationMeshOutput(result) {
-  assertSimulationTaskEnvelope(result);
-  return result.mesh;
-}
-
-export function buildOccAdaptiveSimulationOutput(input, options = {}) {
+export function buildHornlabMesherSimulationOutput(input, options = {}) {
   assertSimulationImportEnvelope(input);
 
   const mshVersion = options.mshVersion || '2.2';
   const simType = options.simType ?? 2;
-  const occParams = prepareOccSimulationParams(input.params);
-  const waveguidePayload = buildWaveguidePayload(occParams, mshVersion);
+  const meshParams = prepareBackendMeshSimulationParams(input.params);
+  const waveguidePayload = buildWaveguidePayload(meshParams, mshVersion);
+  applySolverBackendQuadrantCompatibility(waveguidePayload, options.solverBackend);
   waveguidePayload.sim_type = simType;
 
   return Object.freeze({
     waveguidePayload,
     submitOptions: {
       mesh: {
-        strategy: 'occ_adaptive',
-        waveguide_params: waveguidePayload
-      }
-    }
+        strategy: 'hornlab_mesher',
+        waveguide_params: waveguidePayload,
+      },
+    },
   });
 }
 
@@ -125,10 +80,8 @@ export const SimulationModule = Object.freeze({
   import: importSimulationInput,
   importPrepared: importPreparedSimulationInput,
   importDesign: importDesignSimulationInput,
-  task: runSimulationTask,
   output: Object.freeze({
     client: createSimulationClient,
-    mesh: getSimulationMeshOutput,
-    occAdaptive: buildOccAdaptiveSimulationOutput
-  })
+    hornlabMesher: buildHornlabMesherSimulationOutput,
+  }),
 });

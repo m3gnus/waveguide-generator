@@ -9,21 +9,27 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts import (
+    JobMetadataPatch,
     JobStatus,
     MeshData,
     SimulationRequest,
 )
 from services.simulation_validation import (
+    apply_solver_backend_quadrant_compatibility,
     build_submit_simulation_request,
+    is_hornlab_mesher_strategy,
     validate_submit_simulation_request,
 )
 from services.solver_runtime import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,
-    WAVEGUIDE_BUILDER_AVAILABLE,
-    GMSH_OCC_RUNTIME_READY,
+    METAL_SOLVER_READY,
+    HORNLAB_MESHER_AVAILABLE,
+    HORNLAB_MESHER_RUNTIME_READY,
     build_waveguide_mesh,
     get_dependency_status,
+    metal_backend_status,
+    resolve_solver_backend,
 )
 from services.job_runtime import (
     JobRuntimeConflictError,
@@ -54,18 +60,27 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     request_to_submit = build_submit_simulation_request(request, validation)
+    solver_backend = resolve_solver_backend(
+        request_to_submit.solver_backend,
+        mesh_strategy=validation.mesh_strategy,
+    )
+    request_to_submit.solver_backend = solver_backend
+    request_to_submit = apply_solver_backend_quadrant_compatibility(
+        request_to_submit,
+        solver_backend,
+    )
 
-    if validation.mesh_strategy == "occ_adaptive":
-        if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None:
+    if is_hornlab_mesher_strategy(validation.mesh_strategy):
+        if not HORNLAB_MESHER_AVAILABLE or build_waveguide_mesh is None:
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "Python OCC mesh builder unavailable. "
-                    "Install gmsh Python API: pip install 'gmsh>=4.11,<5.0'"
+                    "hornlab-waveguide-mesher is unavailable. "
+                    "Install server requirements to enable backend mesh generation."
                 ),
             )
 
-        if not GMSH_OCC_RUNTIME_READY:
+        if not HORNLAB_MESHER_RUNTIME_READY:
             dep = get_dependency_status()
             gmsh_info = dep["runtime"]["gmsh_python"]
             py_info = dep["runtime"]["python"]
@@ -74,14 +89,14 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "Adaptive OCC mesh builder dependency check failed. "
+                    "hornlab-waveguide-mesher dependency check failed. "
                     f"python={py_info.get('version')} supported={py_info.get('supported')}; "
                     f"gmsh={gmsh_info.get('version')} supported={gmsh_info.get('supported')}. "
                     f"Supported matrix: python {py_range}, gmsh {gmsh_range}."
                 ),
             )
 
-    if not SOLVER_AVAILABLE:
+    if solver_backend == "bempp" and not SOLVER_AVAILABLE:
         dep = get_dependency_status()
         bempp_info = dep["runtime"]["bempp"]
         py_info = dep["runtime"]["python"]
@@ -94,6 +109,17 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
                 f"bempp variant={bempp_info.get('variant')} version={bempp_info.get('version')} "
                 f"supported={bempp_info.get('supported')}. "
                 f"Supported matrix: bempp-cl {bempp_cl_range}."
+            ),
+        )
+    if solver_backend == "metal" and not METAL_SOLVER_READY:
+        status = metal_backend_status()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Metal BEM solver not available. "
+                f"reason={status.get('reason') or 'unavailable'}; "
+                f"supported_platform={status.get('supportedPlatform')} "
+                f"native_helper_available={status.get('nativeHelperAvailable')}."
             ),
         )
 
@@ -170,13 +196,14 @@ async def list_jobs(
 
 
 @router.patch("/api/jobs/{job_id}/metadata")
-async def patch_job_metadata(job_id: str, body: Dict[str, Any]) -> Dict[str, str]:
+async def patch_job_metadata(job_id: str, body: JobMetadataPatch) -> Dict[str, str]:
     """Persist frontend-only metadata (label, script snapshot) so it survives page reloads."""
     try:
-        if "label" in body:
-            update_job_label(job_id, body["label"])
-        if "script_snapshot" in body:
-            update_job_script_snapshot(job_id, body["script_snapshot"])
+        changed_fields = body.model_fields_set
+        if "label" in changed_fields:
+            update_job_label(job_id, body.label)
+        if "script_snapshot" in changed_fields:
+            update_job_script_snapshot(job_id, body.script_snapshot)
     except JobRuntimeNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
     return {"status": "ok"}

@@ -12,8 +12,6 @@ A browser-based tool for designing acoustic horns — live 3D preview, parameter
 | [Module Contracts](docs/modules/README.md)             | Stable module boundaries and invariants |
 | [Project Documentation](docs/PROJECT_DOCUMENTATION.md) | Runtime reference and API details       |
 | [Testing Guide](tests/TESTING.md)                      | Test map, commands, and diagnostics     |
-| [Backlog](docs/backlog.md)                             | Active unfinished work                  |
-| [Archive](docs/archive/README.md)                      | Historical plans and reports            |
 
 ## Get the project files
 
@@ -52,9 +50,10 @@ Run this **once** from the project folder to install all dependencies:
   ```
 
 These setup scripts validate that you are in the full project folder before installing dependencies.
-The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It now automatically attempts to install both `gmsh` and `bempp-cl`, with fallback handling if platform wheels are missing.
+The installer checks your environment, installs all dependencies, and sets up a Python virtual environment. It installs the HornLab mesher/Metal BEM packages, `gmsh`, and `bempp-cl` with fallback handling where platform wheels are missing.
 Installer contract: setup writes the preferred backend interpreter to `.waveguide/backend-python.path` (default: project `.venv`), and `npm start` / launchers / `server/start.sh` consume that same marker unless you explicitly override with `PYTHON_BIN` or `WG_BACKEND_PYTHON`. If there is no explicit override or marker, startup probes the fallback interpreters and prefers the first runtime-ready option before falling back to raw existence order.
-Installer verification: setup now runs backend preflight immediately after writing the interpreter marker and prints required-runtime readiness for `fastapi`, `gmsh`, `bempp-cl`, and OpenCL.
+Installer verification: setup now runs backend preflight immediately after writing the interpreter marker and prints required-runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used.
+Network note: backend setup installs `hornlab-waveguide-mesher`, `hornlab-metal-bem`, and `bempp-cl` from GitHub using pinned commit SHAs for reproducible installs.
 
 ## Run the app
 
@@ -66,24 +65,26 @@ The app opens automatically in your browser at `http://localhost:3000`. Close th
 
 ## BEM Solver (Optional)
 
-The setup script attempts to install `bempp-cl` automatically. If it fails, the app still works for 3D preview and local STL/config/profile exports — only the **Start BEM Simulation** feature requires it.
+The setup script attempts to install both available solver backends. If no solver backend is ready, the app still works for 3D preview and local STL/config/profile exports, but **Start BEM Simulation** requires a ready solver backend plus the HornLab mesher.
 
 **Dependency matrix:**
 
 - Python: `>=3.10,<3.15`
-- gmsh: `>=4.11,<5.0` (required for `/api/mesh/build`)
-- bempp-cl: `>=0.4,<0.5` (required for `/api/solve`)
+- hornlab-waveguide-mesher: pinned git commit `334e51f8455def6c60e0683fbc29ae46ae6d6230` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-metal-bem: pinned git commit `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` (optional Metal solver backend)
+- gmsh: `>=4.11,<5.0` (required by the HornLab mesher)
+- bempp-cl: pinned git commit `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` / version `0.4.2` (optional BEMPP solver backend)
 
-The maintained runtime only supports `bempp-cl` for `/api/solve`; there is no legacy `bempp_api` fallback path.
+The maintained runtime supports the HornLab Metal BEM backend when available, otherwise the BEMPP path needs `bempp-cl` and OpenCL. There is no legacy `bempp_api` fallback path.
 
 Manual install:
 
 ```bash
 # macOS / Linux
-.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
+.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 
 # Windows
-.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git
+.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 ## Gmsh Install Fallback
@@ -125,19 +126,20 @@ The helper updates `.waveguide/backend-python.path` so launcher and backend star
 - **3D Rendering**: Real-time viewport with standard, zebra, wireframe, and curvature modes
 - **Simulation**: BEM workflow with backend job submission, progress tracking, and result plotting
 - **Polar Directivity**: Horizontal, vertical, and diagonal axes with ATH-compatible inclination mapping
-- **Exports**: STL, CSV profiles, MWG config text, simulation mesh (.msh), and VACS-style results
+- **Exports**: STL, single-layer STEP surface, CSV profiles, MWG config text, simulation mesh (.msh), and VACS-style results
 - **Task Management**: Folder workspace routing, task-history ratings, auto-export on completion, and simulation diagnostics
 
 ## Mesh Control Guide
 
 | Control                                      | Affects                                   | Does not affect                           |
 | -------------------------------------------- | ----------------------------------------- | ----------------------------------------- |
-| `Viewport * Segs` + `Throat Slice Density`   | Three.js preview tessellation             | Backend OCC mesh, `.msh` artifact quality |
-| `Solve * Resolution` + enclosure resolutions | Backend OCC mesh and `.msh` artifacts     | Three.js triangle count                   |
+| Surface sample controls                      | Live JS viewport/local export tessellation and mesher sampling input | Mesh element-size fields |
+| `Solve * Resolution` + enclosure resolutions | HornLab mesher solve/export `.msh` artifacts | Live JS viewport triangle count |
+| `Quadrants` + `Auto`                        | HornLab solve/export mesh symmetry domain | STEP and viewport preview full-domain contracts |
 | `Auto-download solve mesh`                   | Whether `.msh` is downloaded after solve  | Mesh generation itself                    |
 | `Task Exports` settings                      | Export bundle formats for completed tasks | Solver execution                          |
 
-**Note:** Imported ATH `Mesh.Quadrants` values do not trim the canonical simulation payload. The frontend and active backend solve path both run full-domain geometry for BEM; imported quadrant metadata remains informational unless a future solver path is added.
+**Note:** JS canonical/viewport geometry remains full-domain. HornLab solve/export mesh generation honors `Mesh.Quadrants`; the UI Auto action chooses the smallest supported symmetry domain it can detect conservatively.
 
 ## Project layout
 
@@ -173,8 +175,7 @@ curl http://localhost:8000/health
 **Backend meshing/runtime checks**:
 
 ```bash
-python3 -c "import gmsh; print(gmsh.__version__)"
-gmsh -version
+node scripts/run-backend-python.js -c "import gmsh; print(gmsh.__version__)"
 npm run preflight:backend
 # strict exit code (non-zero if required runtime checks fail):
 npm run preflight:backend:strict

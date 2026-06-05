@@ -1,14 +1,10 @@
 import { MWGConfigParser } from '../../config/index.js';
-import {
-  coerceConfigParams,
-  applyAthImportDefaults,
-  isMWGConfig
-} from '../../geometry/params.js';
+import { coerceConfigParams, applyAthImportDefaults, isMWGConfig } from '../../geometry/params.js';
 
 /**
  * Process a configuration file content and update GlobalState.
  * Establish appropriate export fields based on the file name.
- * 
+ *
  * @param {string} content Config file text content
  * @param {string} fileName Original file name for deriving export fields
  * @returns {Object} Result { success: boolean, error?: string, type?: string }
@@ -36,7 +32,7 @@ export function importMWGConfig(content, fileName) {
       success: true,
       params: typedParams,
       type: parsed.type,
-      fileName
+      fileName,
     };
   } catch (error) {
     return { success: false, error: error.message };

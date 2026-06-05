@@ -2,27 +2,27 @@
 // DOM refs are lazily cached on first use to reduce repeated getElementById calls in hot paths.
 
 export const STAGE_LABELS = {
-  mesh_generation: "Building mesh",
-  queued: "Queued",
-  initializing: "Initializing solver",
-  mesh_prepare: "Preparing mesh",
-  mesh_ready: "Mesh ready",
-  bem_solve: "Solving",
-  finalizing: "Finalizing results",
-  cancelling: "Stopping",
-  complete: "Complete",
-  cancelled: "Cancelled",
-  error: "Error",
+  mesh_generation: 'Building mesh',
+  queued: 'Queued',
+  initializing: 'Initializing solver',
+  mesh_prepare: 'Preparing mesh',
+  mesh_ready: 'Mesh ready',
+  bem_solve: 'Solving',
+  finalizing: 'Finalizing results',
+  cancelling: 'Stopping',
+  complete: 'Complete',
+  cancelled: 'Cancelled',
+  error: 'Error',
 };
 
 const STAGE_ALIASES = {
-  solver_setup: "bem_solve",
-  frequency_solve: "bem_solve",
-  directivity: "finalizing",
+  solver_setup: 'bem_solve',
+  frequency_solve: 'bem_solve',
+  directivity: 'finalizing',
 };
 
 function normalizeStage(stage) {
-  if (typeof stage !== "string" || !stage.trim()) return "bem_solve";
+  if (typeof stage !== 'string' || !stage.trim()) return 'bem_solve';
   const key = stage.trim();
   return STAGE_ALIASES[key] || key;
 }
@@ -30,27 +30,22 @@ function normalizeStage(stage) {
 function stageStep(stage) {
   const key = normalizeStage(stage);
   if (
-    key === "mesh_generation" ||
-    key === "mesh_prepare" ||
-    key === "mesh_ready" ||
-    key === "initializing"
+    key === 'mesh_generation' ||
+    key === 'mesh_prepare' ||
+    key === 'mesh_ready' ||
+    key === 'initializing'
   ) {
     return 1;
   }
-  if (key === "queued") return 1;
-  if (key === "cancelling") return 3;
-  if (
-    key === "finalizing" ||
-    key === "complete" ||
-    key === "cancelled" ||
-    key === "error"
-  )
+  if (key === 'queued') return 1;
+  if (key === 'cancelling') return 3;
+  if (key === 'finalizing' || key === 'complete' || key === 'cancelled' || key === 'error')
     return 3;
   return 2;
 }
 
 export function formatElapsedDuration(durationMs) {
-  if (durationMs === null || durationMs === undefined || durationMs === "") {
+  if (durationMs === null || durationMs === undefined || durationMs === '') {
     return null;
   }
   const numericDuration = Number(durationMs);
@@ -64,9 +59,9 @@ export function formatElapsedDuration(durationMs) {
   const seconds = roundedSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 export function parseTimestampMs(raw) {
@@ -77,9 +72,7 @@ export function parseTimestampMs(raw) {
 }
 
 export function resolveJobDurationMs(job) {
-  const startedAtMs = parseTimestampMs(
-    job.startedAt || job.queuedAt || job.createdAt,
-  );
+  const startedAtMs = parseTimestampMs(job.startedAt || job.queuedAt || job.createdAt);
   const completedAtMs = parseTimestampMs(job.completedAt);
   if (startedAtMs === null || completedAtMs === null) {
     return null;
@@ -93,23 +86,23 @@ export function resolveJobDurationMs(job) {
 
 export function resolveStageDetail(stage, message, pct) {
   const key = normalizeStage(stage);
-  const raw = typeof message === "string" ? message.trim() : "";
+  const raw = typeof message === 'string' ? message.trim() : '';
 
-  if (key === "frequency_solve" || key === "bem_solve") {
+  if (key === 'frequency_solve' || key === 'bem_solve') {
     if (raw) return raw;
     return `Solving across frequency range (${pct}%).`;
   }
 
-  if (key === "mesh_generation" || key === "mesh_prepare") {
-    return raw || "Building solve mesh.";
+  if (key === 'mesh_generation' || key === 'mesh_prepare') {
+    return raw || 'Building solve mesh.';
   }
 
-  if (key === "finalizing") {
-    return raw || "Packaging results.";
+  if (key === 'finalizing') {
+    return raw || 'Packaging results.';
   }
 
-  if (key === "cancelling") {
-    return raw || "Stop requested. Waiting for the solver to finish.";
+  if (key === 'cancelling') {
+    return raw || 'Stop requested. Waiting for the solver to finish.';
   }
 
   return raw;
@@ -126,14 +119,14 @@ let _lastAnnouncedMilestone = -1;
 export function getSimulationDom() {
   if (!_dom) {
     _dom = {
-      progressFill: document.getElementById("progress-fill"),
-      progressText: document.getElementById("progress-text"),
-      progressBar: document.getElementById("simulation-progressbar"),
-      progressDiv: document.getElementById("simulation-progress"),
-      runBtn: document.getElementById("run-simulation-btn"),
-      statusDot: document.getElementById("solver-status"),
-      statusText: document.getElementById("solver-status-text"),
-      statusHelp: document.getElementById("solver-status-help"),
+      progressFill: document.getElementById('progress-fill'),
+      progressText: document.getElementById('progress-text'),
+      progressBar: document.getElementById('simulation-progressbar'),
+      progressDiv: document.getElementById('simulation-progress'),
+      runBtn: document.getElementById('run-simulation-btn'),
+      statusDot: document.getElementById('solver-status'),
+      statusText: document.getElementById('solver-status-text'),
+      statusHelp: document.getElementById('solver-status-help'),
     };
   }
   return _dom;
@@ -143,9 +136,9 @@ export function setProgressVisible(visible) {
   const { progressDiv } = getSimulationDom();
   if (!progressDiv) return;
   if (visible) {
-    progressDiv.classList.remove("is-hidden");
+    progressDiv.classList.remove('is-hidden');
   } else {
-    progressDiv.classList.add("is-hidden");
+    progressDiv.classList.add('is-hidden');
   }
 }
 
@@ -153,11 +146,7 @@ export function resetProgressAnnouncement() {
   _lastAnnouncedMilestone = -1;
 }
 
-export function updateProgressUi({
-  progress = 0,
-  stage = "bem_solve",
-  message = "",
-} = {}) {
+export function updateProgressUi({ progress = 0, stage = 'bem_solve', message = '' } = {}) {
   const { progressFill, progressText, progressBar } = getSimulationDom();
   const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
   const pct = Math.round(clamped * 100);
@@ -169,33 +158,22 @@ export function updateProgressUi({
     progressFill.style.transform = `scaleX(${clamped})`;
   }
   if (progressBar) {
-    progressBar.setAttribute("aria-valuenow", String(pct));
-    progressBar.setAttribute(
-      "aria-valuetext",
-      `Stage: ${label}. ${pct}% complete.`,
-    );
+    progressBar.setAttribute('aria-valuenow', String(pct));
+    progressBar.setAttribute('aria-valuetext', `Stage: ${label}. ${pct}% complete.`);
   }
   const milestone = Math.floor(pct / 10) * 10;
-  const isTerminalStage =
-    key === "complete" || key === "cancelled" || key === "error";
-  if (
-    progressText &&
-    (milestone !== _lastAnnouncedMilestone || isTerminalStage)
-  ) {
+  const isTerminalStage = key === 'complete' || key === 'cancelled' || key === 'error';
+  if (progressText && (milestone !== _lastAnnouncedMilestone || isTerminalStage)) {
     _lastAnnouncedMilestone = milestone;
-    progressText.textContent = detail || "";
+    progressText.textContent = detail || '';
   }
 }
 
 export function updateConnectionStageUi(
   panel,
-  { progress = 0, stage = "bem_solve", message = "" } = {},
+  { progress = 0, stage = 'bem_solve', message = '' } = {}
 ) {
-  const {
-    statusDot,
-    statusText: statusTextEl,
-    statusHelp,
-  } = getSimulationDom();
+  const { statusDot, statusText: statusTextEl, statusHelp } = getSimulationDom();
   const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
   const pct = Math.round(clamped * 100);
   const key = normalizeStage(stage);
@@ -204,15 +182,12 @@ export function updateConnectionStageUi(
   const detail = resolveStageDetail(key, message, pct);
 
   if (statusDot) {
-    const isTerminal =
-      key === "complete" || key === "cancelled" || key === "error";
+    const isTerminal = key === 'complete' || key === 'cancelled' || key === 'error';
     if (isTerminal) {
       statusDot.className =
-        key === "error" || key === "cancelled"
-          ? "status-dot disconnected"
-          : "status-dot connected";
+        key === 'error' || key === 'cancelled' ? 'status-dot disconnected' : 'status-dot connected';
     } else {
-      statusDot.className = "status-dot simulating";
+      statusDot.className = 'status-dot simulating';
     }
   }
   if (statusTextEl) {
@@ -221,9 +196,9 @@ export function updateConnectionStageUi(
   if (statusHelp) {
     if (detail) {
       statusHelp.textContent = detail;
-      statusHelp.classList.remove("is-hidden");
+      statusHelp.classList.remove('is-hidden');
     } else {
-      statusHelp.classList.add("is-hidden");
+      statusHelp.classList.add('is-hidden');
     }
   }
   if (panel) {

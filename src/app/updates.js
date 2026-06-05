@@ -51,11 +51,12 @@ export async function checkForUpdates(buttonEl, ui = {}) {
 
     if (behind > 0) {
       const pullCommand = `git pull --ff-only origin ${branch}`;
-      const copied = await ui.showCommandSuggestion?.({
-        title: 'Update Available',
-        subtitle: `${behind} commit(s) behind origin/${branch} (${localSha} -> ${remoteSha}).`,
-        command: pullCommand
-      }) ?? false;
+      const copied =
+        (await ui.showCommandSuggestion?.({
+          title: 'Update Available',
+          subtitle: `${behind} commit(s) behind origin/${branch} (${localSha} -> ${remoteSha}).`,
+          command: pullCommand,
+        })) ?? false;
 
       if (!copied) {
         ui.showMessage?.(`Run in terminal: ${pullCommand}`, { type: 'info', duration: 7000 });

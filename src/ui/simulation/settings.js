@@ -1,13 +1,13 @@
 import {
   readSimulationState,
-  updateSimulationStateParams
+  updateSimulationStateParams,
 } from '../../modules/simulation/state.js';
 import {
   buildPolarStatePatchForControl,
   ensurePolarControlsRendered,
   getPolarStateSignature,
   isPolarControlId,
-  syncPolarControlsFromState
+  syncPolarControlsFromState,
 } from './polarSettings.js';
 
 function statePatchMatches(currentParams, nextPatch) {
@@ -61,7 +61,10 @@ export function setupSimulationParamBindings(panel) {
 }
 
 export function teardownSimulationParamBindings(panel) {
-  if (!panel?._simulationParamBindingsAttached || typeof panel._simulationParamChangeHandler !== 'function') {
+  if (
+    !panel?._simulationParamBindingsAttached ||
+    typeof panel._simulationParamChangeHandler !== 'function'
+  ) {
     return;
   }
 

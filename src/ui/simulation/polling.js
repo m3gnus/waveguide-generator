@@ -4,23 +4,16 @@ import { updateStageUi, setProgressVisible, restoreConnectionStatus } from './pr
 import { showError } from '../feedback.js';
 import { getAutoExportOnComplete } from '../settings/simulationManagementSettings.js';
 import { persistSimulationGenerationArtifacts } from './workspaceTasks.js';
-import {
-  hasActiveJobs
-} from './jobTracker.js';
-import {
-  renderBackendSimulationMeshDiagnostics,
-  renderJobList
-} from './jobActions.js';
+import { renderBackendSimulationMeshDiagnostics, renderJobList } from './jobActions.js';
 import { setPollTimer, clearPollTimer } from './jobOrchestration.js';
 import {
   ensureSimulationControllerJobResults,
   recordSimulationControllerExport,
-  reconcileSimulationControllerRemoteJobs
+  reconcileSimulationControllerRemoteJobs,
 } from './controller.js';
 export { setPollTimer, clearPollTimer, setActiveJob } from './jobOrchestration.js';
 
 const ACTIVE_POLL_MS = 1000;
-const IDLE_POLL_MS = 15000;
 const MAX_POLL_BACKOFF_MS = 30000;
 
 /** Track jobs whose mesh artifact has already been persisted early (before completion). */
@@ -80,7 +73,7 @@ export function pollSimulationStatus(panel) {
       const { activeJob, anyActive } = await reconcileSimulationControllerRemoteJobs(panel, {
         onManifestSyncError: (error) => {
           console.warn('Task manifest sync failed during polling:', error);
-        }
+        },
       });
 
       if (activeJob) {
@@ -98,30 +91,32 @@ export function pollSimulationStatus(panel) {
           typeof panel.solver?.getMeshArtifact === 'function'
         ) {
           _earlyMeshPersisted.add(activeJob.id);
-          persistSimulationGenerationArtifacts(activeJob, {
-            meshArtifactText: await panel.solver.getMeshArtifact(activeJob.id).catch((err) => {
-              console.warn('Early mesh artifact fetch failed:', err);
-              _earlyMeshPersisted.delete(activeJob.id);
-              return null;
-            })
-          }).then((result) => {
-            if (result.meshArtifactFile) {
-              recordSimulationControllerExport(panel, activeJob.id, {
-                meshArtifactFile: result.meshArtifactFile
+          const meshArtifactText = await panel.solver.getMeshArtifact(activeJob.id).catch((err) => {
+            console.warn('Early mesh artifact fetch failed:', err);
+            _earlyMeshPersisted.delete(activeJob.id);
+            return null;
+          });
+          try {
+            const persistedArtifact = await persistSimulationGenerationArtifacts(activeJob, {
+              meshArtifactText,
+            });
+            if (persistedArtifact.meshArtifactFile) {
+              await recordSimulationControllerExport(panel, activeJob.id, {
+                meshArtifactFile: persistedArtifact.meshArtifactFile,
               });
             }
-            if (result.warnings.length > 0) {
-              console.warn('Early mesh artifact persistence warnings:', result.warnings);
+            if (persistedArtifact.warnings.length > 0) {
+              console.warn('Early mesh artifact persistence warnings:', persistedArtifact.warnings);
             }
-          }).catch((err) => {
+          } catch (err) {
             console.warn('Early mesh artifact persistence failed:', err);
-          });
+          }
         }
 
         updateStageUi(panel, {
           progress: activeJob.progress ?? 0,
           stage: activeJob.stage || activeJob.status || 'queued',
-          message: activeJob.stageMessage || activeJob.errorMessage || ''
+          message: activeJob.stageMessage || activeJob.errorMessage || '',
         });
 
         if (activeJob.status === 'complete') {
@@ -129,26 +124,30 @@ export function pollSimulationStatus(panel) {
             updateStageUi(panel, {
               progress: 1,
               stage: 'finalizing',
-              message: 'Fetching and rendering results'
+              message: 'Fetching and rendering results',
             });
           }
           const result = await ensureSimulationControllerJobResults(panel, activeJob.id, {
             display: true,
             displayResults: (results) => {
               panel.displayResults(results);
-            }
+            },
           });
           if (result.ok) {
             updateStageUi(panel, {
               progress: 1,
               stage: 'complete',
-              message: 'Results ready'
+              message: 'Results ready',
             });
 
             if (activeJob.justCompleted) {
               let meshArtifactText = null;
               const meshAlreadyPersisted = _earlyMeshPersisted.has(activeJob.id);
-              if (!meshAlreadyPersisted && activeJob.hasMeshArtifact && typeof panel.solver?.getMeshArtifact === 'function') {
+              if (
+                !meshAlreadyPersisted &&
+                activeJob.hasMeshArtifact &&
+                typeof panel.solver?.getMeshArtifact === 'function'
+              ) {
                 try {
                   meshArtifactText = await panel.solver.getMeshArtifact(activeJob.id);
                 } catch (error) {
@@ -159,38 +158,44 @@ export function pollSimulationStatus(panel) {
 
               const persistedArtifacts = await persistSimulationGenerationArtifacts(activeJob, {
                 results: result.results,
-                meshArtifactText
+                meshArtifactText,
               });
               if (persistedArtifacts.warnings.length > 0) {
-                console.warn('Generation artifact persistence warnings:', persistedArtifacts.warnings);
+                console.warn(
+                  'Generation artifact persistence warnings:',
+                  persistedArtifacts.warnings
+                );
               }
 
               const exportPatch = {
                 rawResultsFile: persistedArtifacts.rawResultsFile,
                 meshArtifactFile: persistedArtifacts.meshArtifactFile,
-                justCompleted: false
+                justCompleted: false,
               };
 
               if (getAutoExportOnComplete()) {
                 const bundle = await panel.exportResults({
                   job: activeJob,
-                  auto: true
+                  auto: true,
                 });
                 exportPatch.exportedFiles = bundle?.exportedFiles ?? [];
-                exportPatch.autoExportCompletedAt = activeJob.completedAt ?? new Date().toISOString();
+                exportPatch.autoExportCompletedAt =
+                  activeJob.completedAt ?? new Date().toISOString();
               }
 
               await recordSimulationControllerExport(panel, activeJob.id, exportPatch);
             }
           }
         } else if (activeJob.status === 'error' || activeJob.status === 'cancelled') {
+          _earlyMeshPersisted.delete(activeJob.id);
           panel.completedStatusMessage = null;
           panel.simulationStartedAtMs = null;
           panel.lastSimulationDurationMs = null;
           updateStageUi(panel, {
             progress: activeJob.status === 'cancelled' ? 0 : 1,
             stage: activeJob.status,
-            message: activeJob.errorMessage || activeJob.stageMessage || `Simulation ${activeJob.status}`
+            message:
+              activeJob.errorMessage || activeJob.stageMessage || `Simulation ${activeJob.status}`,
           });
         }
       }
@@ -219,7 +224,7 @@ export function pollSimulationStatus(panel) {
       updateStageUi(panel, {
         progress: 1,
         stage: 'error',
-        message: 'Error checking status'
+        message: 'Error checking status',
       });
       showError('Error checking simulation status.');
       restoreConnectionStatus(panel);
@@ -229,7 +234,9 @@ export function pollSimulationStatus(panel) {
       // Only reschedule if the loop hasn't been stopped (clearPollTimer resets isPolling).
       if (panel.isPolling) {
         if (panel.pollTimer) clearTimeout(panel.pollTimer);
-        const nextTimer = setTimeout(() => { pollOnce().catch(() => {}); }, panel.pollDelayMs);
+        const nextTimer = setTimeout(() => {
+          pollOnce().catch(() => {});
+        }, panel.pollDelayMs);
         setPollTimer(panel, nextTimer);
       }
     }

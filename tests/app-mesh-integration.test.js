@@ -2,30 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { provideMeshForSimulation } from '../src/app/mesh.js';
-import { GlobalState } from '../src/state.js';
 import { validateCanonicalMeshPayload } from '../src/solver/index.js';
-import { getDefaults } from '../src/config/defaults.js';
-import { prepareGeometryParams, buildGeometryArtifacts } from '../src/geometry/index.js';
 
-function makePreparedParams(overrides = {}) {
-  return {
-    ...getDefaults('OSSE'),
-    type: 'OSSE',
-    L: '120',
-    a: '45',
-    a0: '15.5',
-    r0: '12.7',
-    angularSegments: 24,
-    lengthSegments: 10,
-    ...overrides
-  };
-}
-
-test('app mesh provider emits canonical payload from shared geometry artifacts pipeline', () => {
+test('app mesh provider emits HornLab solve contract placeholder, not a JS geometry mesh', () => {
   let publishedPayload = null;
-  const originalGet = GlobalState.get;
+  const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
+  const originalConsoleLog = console.log;
+  const logMessages = [];
 
-  const preparedInput = makePreparedParams({ encDepth: 200, quadrants: '1' });
   const app = {
     publishSimulationMesh(payload) {
       publishedPayload = payload;
@@ -36,41 +20,37 @@ test('app mesh provider emits canonical payload from shared geometry artifacts p
     }
   };
 
-  GlobalState.get = () => ({
-    type: 'OSSE',
-    params: preparedInput
-  });
+  globalThis.__WAVEGUIDE_DEBUG__ = false;
+  console.log = (...args) => {
+    logMessages.push(args.join(' '));
+  };
 
   try {
     provideMeshForSimulation(app);
   } finally {
-    GlobalState.get = originalGet;
+    console.log = originalConsoleLog;
+    if (typeof originalDebug === 'undefined') {
+      delete globalThis.__WAVEGUIDE_DEBUG__;
+    } else {
+      globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
+    }
   }
 
+  assert.deepEqual(logMessages, []);
   assert.ok(publishedPayload);
   validateCanonicalMeshPayload(publishedPayload);
-
-  const expectedPrepared = prepareGeometryParams(preparedInput, {
-    type: 'OSSE',
-    applyVerticalOffset: true
-  });
-  const expected = buildGeometryArtifacts(expectedPrepared, {
-    includeEnclosure: Number(expectedPrepared.encDepth || 0) > 0
-  }).simulation;
-
-  assert.equal(publishedPayload.metadata.fullCircle, true);
-  assert.deepEqual(publishedPayload.surfaceTags, expected.surfaceTags);
-  assert.equal(publishedPayload.indices.length, expected.indices.length);
-  assert.equal(publishedPayload.vertices.length, expected.vertices.length);
+  assert.equal(publishedPayload.metadata.source, 'hornlab_mesher_contract_placeholder');
+  assert.deepEqual(publishedPayload.vertices, [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  assert.deepEqual(publishedPayload.indices, [0, 1, 2]);
+  assert.deepEqual(publishedPayload.surfaceTags, [2]);
 });
 
-test('app mesh provider emits explicit simulation:mesh-error on generation failure', () => {
+test('app mesh provider emits explicit simulation:mesh-error on contract publish failure', () => {
   let errorMessage = null;
-  const originalGet = GlobalState.get;
 
   const app = {
     publishSimulationMesh() {
-      throw new Error('unexpected mesh success');
+      throw new Error('intentional mesh publish failure');
     },
     publishSimulationMeshError(message) {
       errorMessage = message;
@@ -78,15 +58,7 @@ test('app mesh provider emits explicit simulation:mesh-error on generation failu
     }
   };
 
-  GlobalState.get = () => {
-    throw new Error('intentional mesh setup failure');
-  };
+  provideMeshForSimulation(app);
 
-  try {
-    provideMeshForSimulation(app);
-  } finally {
-    GlobalState.get = originalGet;
-  }
-
-  assert.match(errorMessage, /intentional mesh setup failure/);
+  assert.match(errorMessage, /intentional mesh publish failure/);
 });

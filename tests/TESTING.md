@@ -20,7 +20,7 @@ npm run test:server   # Run all Python tests
 
 ```bash
 node --test tests/<name>.test.js                    # One JS test file
-cd server && python3 -m unittest tests.<module_name> # One Python test module
+node scripts/run-backend-python.js --cwd server -m unittest tests.<module_name> # One Python test module
 ```
 
 ## JS test suites (`tests/`)
@@ -57,6 +57,7 @@ cd server && python3 -m unittest tests.<module_name> # One Python test module
 - `tests/polar-settings.test.js`
 - `tests/references-guard.test.js`
 - `tests/scale-regression.test.js`
+- `tests/sim-advanced-settings.test.js`
 - `tests/simulation-controller.test.js`
 - `tests/simulation-export-bundle.test.js`
 - `tests/simulation-flow.test.js`
@@ -86,7 +87,6 @@ Supporting fixtures:
 - `server/tests/test_dependency_runtime.py`
 - `server/tests/test_device_interface.py`
 - `server/tests/test_directivity_plot.py`
-- `server/tests/test_geometry_parity.py`
 - `server/tests/test_impedance.py`
 - `server/tests/test_import_boundaries.py`
 - `server/tests/test_job_persistence.py`
@@ -94,16 +94,17 @@ Supporting fixtures:
 - `server/tests/test_mesh_validation.py`
 - `server/tests/test_observation.py`
 - `server/tests/test_observation_distance.py`
-- `server/tests/test_occ_resolution_semantics.py`
+- `server/tests/test_reference_horn_benchmark.py`
 - `server/tests/test_reference_smoke.py`
 - `server/tests/test_runtime_preflight.py`
+- `server/tests/test_solve_readiness.py`
+- `server/tests/test_solver_backend_selection.py`
 - `server/tests/test_solver_hardening.py`
 - `server/tests/test_solver_tag_contract.py`
-- `server/tests/test_symmetry_benchmark.py`
-- `server/tests/test_symmetry_regression.py`
-- `server/tests/test_reference_horn_benchmark.py`
+- `server/tests/test_step_export.py`
 - `server/tests/test_units.py`
 - `server/tests/test_updates_endpoint.py`
+- `server/tests/test_workspace_routes.py`
 
 ## Manual diagnostics (`scripts/diagnostics/`)
 
@@ -114,15 +115,15 @@ Backend research helpers:
 - `cd server && python3 scripts/benchmark_solver.py <mesh.msh> [options]`
 - `cd server && python3 scripts/benchmark_solver.py --preset reference-horn [--json] [--device auto|opencl_cpu|opencl_gpu] [--precision-modes single,double]`
 - `cd server && python3 scripts/benchmark_symmetry.py [--case NAME] [--iterations N] [--json]`
-- `cd server && python3 scripts/benchmark_reference_horn.py [options]` — bounded reference-horn repro path (mesh prep + optional 1-frequency solve with precision mode testing)
+- `node scripts/run-backend-python.js --cwd server scripts/benchmark_reference_horn.py [options]` — bounded reference-horn repro path (mesh prep + optional 1-frequency solve with precision mode testing)
 
 Run from repository root:
 
 ```bash
 npm run diag:payload
 npm run diag:geometry
-npm run diag:occ:reference-horn
-npm run diag:occ:closed
+npm run diag:mesher:reference-horn
+npm run diag:mesher:closed
 npm run benchmark:reference-horn
 ```
 
@@ -139,5 +140,5 @@ node --test tests/<name>.test.js
 Run one backend test module:
 
 ```bash
-cd server && python3 -m unittest tests.<module_name>
+node scripts/run-backend-python.js --cwd server -m unittest tests.<module_name>
 ```

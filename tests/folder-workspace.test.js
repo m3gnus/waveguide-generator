@@ -50,6 +50,40 @@ test('requestFolderSelection delegates to backend folder selection', async () =>
   }
 });
 
+test('folder workspace listener failures do not write normal-runtime console warnings', () => {
+  const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
+  const originalWarn = console.warn;
+  const warnings = [];
+  let armed = false;
+  const unsubscribe = subscribeFolderWorkspace(() => {
+    if (!armed) {
+      return;
+    }
+    throw new Error('listener failure');
+  });
+
+  globalThis.__WAVEGUIDE_DEBUG__ = false;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    armed = true;
+    resetSelectedFolder({ label: 'Exports' });
+  } finally {
+    unsubscribe();
+    resetSelectedFolder();
+    console.warn = originalWarn;
+    if (typeof originalDebug === 'undefined') {
+      delete globalThis.__WAVEGUIDE_DEBUG__;
+    } else {
+      globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
+    }
+  }
+
+  assert.deepEqual(warnings, []);
+});
+
 test('requestFolderSelection returns null when backend selection is cancelled', async () => {
   const originalFetch = global.fetch;
 

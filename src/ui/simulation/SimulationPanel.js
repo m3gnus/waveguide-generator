@@ -9,37 +9,33 @@
  * - Progress tracking
  * - Results display coordination
  */
-import { showMessage } from "../feedback.js";
-import { setupEventListeners } from "./events.js";
-import { setupMeshListener, prepareMeshForSimulation } from "./mesh.js";
-import { setupSmoothingListener, setupKeyboardShortcuts } from "./smoothing.js";
+import { showMessage } from '../feedback.js';
+import { setupEventListeners } from './events.js';
+import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
+import { setupSmoothingListener, setupKeyboardShortcuts } from './smoothing.js';
 import {
   setupSimulationParamBindings,
   syncSimulationSettings,
   teardownSimulationParamBindings,
-} from "./settings.js";
-import { checkSolverConnection } from "./connection.js";
-import { pollSimulationStatus } from "./polling.js";
-import {
-  runSimulation,
-  runMockSimulation,
-  renderJobList,
-} from "./jobActions.js";
-import { renderJobListSkeleton } from "../emptyStates.js";
+} from './settings.js';
+import { checkSolverConnection } from './connection.js';
+import { pollSimulationStatus } from './polling.js';
+import { runSimulation, renderJobList } from './jobActions.js';
+import { renderJobListSkeleton } from '../emptyStates.js';
 import {
   createSimulationPanelRuntime,
   restoreSimulationPanelRuntime,
   disposeSimulationPanelRuntime,
-} from "./controller.js";
-import { displayResults } from "./results.js";
+} from './controller.js';
+import { displayResults } from './results.js';
 import {
   exportResults,
   exportAsMatplotlibPNG,
   exportAsCSV,
   exportAsJSON,
   exportAsText,
-} from "./exports.js";
-import { openViewResultsModal } from "./viewResults.js";
+} from './exports.js';
+import { openViewResultsModal } from './viewResults.js';
 
 /**
  * @typedef {Object} SimulationBinding
@@ -65,7 +61,7 @@ export class SimulationPanel {
   }
 
   async restoreJobs() {
-    const listEl = document.getElementById("simulation-jobs-list");
+    const listEl = document.getElementById('simulation-jobs-list');
     renderJobListSkeleton(listEl, 3);
     return restoreSimulationPanelRuntime(this.runtime, {
       onJobsUpdated: () => {
@@ -75,8 +71,8 @@ export class SimulationPanel {
         this.pollSimulationStatus();
       },
       onRecoverFromManifests: () => {
-        showMessage("Recovered folder task history from manifests.", {
-          type: "warning",
+        showMessage('Recovered folder task history from manifests.', {
+          type: 'warning',
           duration: 2800,
         });
       },
@@ -123,10 +119,6 @@ export class SimulationPanel {
 
   runSimulation() {
     return runSimulation(this);
-  }
-
-  runMockSimulation(config) {
-    return runMockSimulation(config);
   }
 
   pollSimulationStatus() {

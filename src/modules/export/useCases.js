@@ -33,7 +33,7 @@ async function writeExportFiles(files, writeFile) {
 }
 
 /**
- * Prepare OCC export artifacts using the Python mesher (`POST /api/mesh/build`).
+ * Prepare backend mesh export artifacts using the Python mesher (`POST /api/mesh/build`).
  * Returns `{ artifacts, payload, msh, meshStats }`.
  */
 export async function prepareExportArtifacts(
@@ -41,35 +41,71 @@ export async function prepareExportArtifacts(
   { backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}
 ) {
   const exportTask = await ExportModule.task(
-    ExportModule.importOccMeshBuild(preparedParams, {
+    ExportModule.importHornlabMesherMeshBuild(preparedParams, {
       backendUrl,
-      onStatus
+      onStatus,
     }),
     options
   );
 
-  return ExportModule.output.occMesh(exportTask);
+  return ExportModule.output.hornlabMesherMesh(exportTask);
 }
 
 export function buildStlExportFiles(state, { baseName } = {}) {
   const exportState = requireExportState(state);
   const designTask = DesignModule.task(
     DesignModule.importState(exportState, {
-      applyVerticalOffset: false
+      applyVerticalOffset: false,
     })
   );
   const preparedParams = DesignModule.output.exportParams(designTask);
   const exportTask = ExportModule.task(
     ExportModule.importStl(preparedParams, {
-      baseName: normalizeBaseName(baseName)
+      baseName: normalizeBaseName(baseName),
     })
   );
   return ExportModule.output.files(exportTask);
 }
 
 export async function exportSTL({ state, baseName, writeFile } = {}) {
+  return writeExportFiles(buildStlExportFiles(state, { baseName }), writeFile);
+}
+
+export async function buildStepExportFiles(
+  state,
+  { baseName, backendUrl = DEFAULT_BACKEND_URL, onStatus, ...options } = {}
+) {
+  const exportState = requireExportState(state);
+  const designTask = DesignModule.task(
+    DesignModule.importState(exportState, {
+      applyVerticalOffset: false,
+    })
+  );
+  const preparedParams = DesignModule.output.exportParams(designTask);
+  const exportTask = await ExportModule.task(
+    ExportModule.importStep(preparedParams, {
+      backendUrl,
+      baseName: normalizeBaseName(baseName),
+      onStatus,
+    }),
+    options
+  );
+  return ExportModule.output.files(exportTask);
+}
+
+export async function exportSTEP({
+  state,
+  baseName,
+  backendUrl = DEFAULT_BACKEND_URL,
+  writeFile,
+  onStatus,
+} = {}) {
   return writeExportFiles(
-    buildStlExportFiles(state, { baseName }),
+    await buildStepExportFiles(state, {
+      baseName,
+      backendUrl,
+      onStatus,
+    }),
     writeFile
   );
 }
@@ -79,17 +115,14 @@ export function buildMwgConfigExportFiles(state, { baseName } = {}) {
   const exportTask = ExportModule.task(
     ExportModule.importConfig({
       params: { type: exportState.type, ...exportState.params },
-      baseName: normalizeBaseName(baseName)
+      baseName: normalizeBaseName(baseName),
     })
   );
   return ExportModule.output.files(exportTask);
 }
 
 export async function exportMWGConfig({ state, baseName, writeFile } = {}) {
-  return writeExportFiles(
-    buildMwgConfigExportFiles(state, { baseName }),
-    writeFile
-  );
+  return writeExportFiles(buildMwgConfigExportFiles(state, { baseName }), writeFile);
 }
 
 export function buildProfileCsvExportFiles(vertices, { state, baseName } = {}) {
@@ -100,7 +133,7 @@ export function buildProfileCsvExportFiles(vertices, { state, baseName } = {}) {
   const exportState = requireExportState(state);
   const designTask = DesignModule.task(
     DesignModule.importState(exportState, {
-      applyVerticalOffset: false
+      applyVerticalOffset: false,
     })
   );
   const preparedParams = DesignModule.output.preparedParams(designTask);
@@ -108,13 +141,16 @@ export function buildProfileCsvExportFiles(vertices, { state, baseName } = {}) {
   const exportTask = ExportModule.task(
     ExportModule.importProfileCsv(preparedParams, {
       vertices,
-      baseName: normalizeBaseName(baseName)
+      baseName: normalizeBaseName(baseName),
     })
   );
   return ExportModule.output.files(exportTask);
 }
 
-export async function exportProfileCSV(vertices, { state, baseName, writeFile, onMissingMesh } = {}) {
+export async function exportProfileCSV(
+  vertices,
+  { state, baseName, writeFile, onMissingMesh } = {}
+) {
   const files = buildProfileCsvExportFiles(vertices, { state, baseName });
   if (!files) {
     if (typeof onMissingMesh === 'function') {

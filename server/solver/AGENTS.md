@@ -4,9 +4,9 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 
 ## Responsibilities
 
-- Backend mesh conversion, validation, and optional refinement (`mesh.py`).
-- OCC mesh builder support (`waveguide_builder.py`).
-- BEM solve orchestration and optimized solve path (`bem_solver.py`, `solve.py`).
+- Backend mesh conversion and validation (`mesh.py`).
+- HornLab mesher integration (`mesher_adapter.py`, `gmsh_utils.py`).
+- BEM solve orchestration and the stable solve entry point (`bem_solver.py`, `solve.py`).
 - Runtime dependency gating and reporting (`deps.py`).
 - Unit handling and normalization behavior used by solver paths (`units.py`).
 
@@ -25,13 +25,13 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 
 ## Required Tests Before Merge
 
-- For `waveguide_builder.py` and OCC meshing changes:
+- For HornLab mesher adapter and Gmsh mesh-export changes:
   - `server/tests/test_dependency_runtime.py`
-  - `server/tests/test_occ_resolution_semantics.py`
+  - `server/tests/test_api_validation.py`
 - For `mesh.py` changes:
   - `server/tests/test_mesh_validation.py`
   - `server/tests/test_solver_tag_contract.py`
-- For `bem_solver.py` / `solve_optimized.py` changes:
+- For `bem_solver.py` / `solve.py` changes:
   - `server/tests/test_solver_tag_contract.py`
   - `server/tests/test_solver_hardening.py`
 - For `device_interface.py` changes:
@@ -47,7 +47,7 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
 ## Known Pitfalls
 
 - Dependency support ranges in docs must match `SUPPORTED_DEPENDENCY_MATRIX`.
-- OCC builder and gmsh mesher have different availability rules (Python API vs CLI fallback).
+- HornLab mesher package and Gmsh runtime have different availability rules (Python package vs Gmsh executable/API).
 - Job state is in-memory; restarts clear job history.
 - Overly broad exception wrapping can hide actionable HTTP status details; preserve 422 vs 503 boundaries.
-- If a new server contract test is added, update both this file and root `AGENTS.md` mapping in the same change.
+- If a new server contract test is added, update this file in the same change.

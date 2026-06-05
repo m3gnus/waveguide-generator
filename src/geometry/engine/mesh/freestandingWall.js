@@ -82,11 +82,8 @@ function computeInnerVertexNormals(vertices, indices, innerVertexCount) {
 
 function fillMissingNormals(normals, vertices, ringCount, lengthSteps) {
   const innerVertexCount = (lengthSteps + 1) * ringCount;
-  const hasNormal = (idx) => Math.hypot(
-    normals[idx * 3],
-    normals[idx * 3 + 1],
-    normals[idx * 3 + 2]
-  ) > 1e-12;
+  const hasNormal = (idx) =>
+    Math.hypot(normals[idx * 3], normals[idx * 3 + 1], normals[idx * 3 + 2]) > 1e-12;
 
   for (let idx = 0; idx < innerVertexCount; idx += 1) {
     if (hasNormal(idx)) continue;
@@ -253,11 +250,7 @@ function extrapolateRearRimVertex(vertices, outerStart, ringCount, lengthSteps, 
   }
 
   const t = (rearDiscY - y0) / dy;
-  return [
-    x0 + (x1 - x0) * t,
-    rearDiscY,
-    z0 + (z1 - z0) * t
-  ];
+  return [x0 + (x1 - x0) * t, rearDiscY, z0 + (z1 - z0) * t];
 }
 
 function addRearTransitionAndCap(
@@ -307,7 +300,7 @@ function addRearTransitionAndCap(
   return {
     throatReturnStartTri,
     throatReturnEndTri,
-    rearCapEndTri
+    rearCapEndTri,
   };
 }
 
@@ -315,12 +308,7 @@ export function addFreestandingWallGeometry(
   vertices,
   indices,
   params,
-  {
-    ringCount,
-    lengthSteps,
-    fullCircle,
-    groupInfo
-  }
+  { ringCount, lengthSteps, fullCircle, groupInfo }
 ) {
   const thickness = Number(params.wallThickness || 0);
   if (!Number.isFinite(thickness) || thickness <= 0) return;
@@ -350,11 +338,7 @@ export function addFreestandingWallGeometry(
   stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart);
   const mouthRimEndTri = indices.length / 3;
 
-  const {
-    throatReturnStartTri,
-    throatReturnEndTri,
-    rearCapEndTri
-  } = addRearTransitionAndCap(
+  const { throatReturnStartTri, throatReturnEndTri, rearCapEndTri } = addRearTransitionAndCap(
     vertices,
     indices,
     ringCount,

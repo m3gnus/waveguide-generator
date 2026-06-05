@@ -5,7 +5,7 @@
  * Interaction style mirrors the View Results popup: backdrop click or ESC closes.
  */
 
-import { trapFocus } from "../focusTrap.js";
+import { trapFocus } from '../focusTrap.js';
 
 import {
   RECOMMENDED_DEFAULTS,
@@ -15,30 +15,30 @@ import {
   setInvertWheelZoom,
   resetViewerSection,
   resetAllViewerSettings,
-} from "./viewerSettings.js";
+} from './viewerSettings.js';
 
 import {
   RECOMMENDED_DEFAULTS as SIM_BASIC_DEFAULTS,
   getCurrentSimBasicSettings,
   saveSimBasicSettings,
   resetSimBasicSettings,
-} from "./simBasicSettings.js";
+} from './simBasicSettings.js';
 import {
   RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
   getCurrentSimAdvancedSettings,
+  getSolverBackend,
   getUseBurtonMiller,
   getQuadratureRegular,
   getWorkgroupSizeMultiple,
   getAssemblyBackend,
-  resetSimAdvancedSettings,
   saveSimAdvancedSettings,
-} from "./simAdvancedSettings.js";
+} from './simAdvancedSettings.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getCurrentSimulationManagementSettings,
   resetSimulationManagementSettings,
   saveSimulationManagementSettings,
-} from "./simulationManagementSettings.js";
+} from './simulationManagementSettings.js';
 
 import {
   getSelectedFolderLabel,
@@ -46,96 +46,90 @@ import {
   subscribeFolderWorkspace,
   fetchWorkspacePath,
   openWorkspaceInFinder,
-} from "../workspace/folderWorkspace.js";
+} from '../workspace/folderWorkspace.js';
 
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
-  liveUpdate: "live-update",
+  liveUpdate: 'live-update',
 
-  downloadSimMesh: "download-sim-mesh",
-  checkUpdates: "check-updates-btn",
+  downloadSimMesh: 'download-sim-mesh',
+  checkUpdates: 'check-updates-btn',
 };
 
 // In-memory settings state so preferences survive modal close/reopen
 const _state = {
   liveUpdate: true,
-  displayMode: "clay",
+  displayMode: 'clay',
   downloadSimMesh: false,
 };
 const SIMULATION_MANAGEMENT_HELP = Object.freeze({
-  downloadMesh:
-    "Automatically downloads the solver mesh file (.msh) when a job starts.",
-  defaultSort: "Sets the default order used in the Simulation Jobs list.",
-  minRatingFilter:
-    "Hides completed jobs rated below this threshold in the Simulation Jobs list.",
+  downloadMesh: 'Automatically downloads the solver mesh file (.msh) when a job starts.',
+  defaultSort: 'Sets the default order used in the Simulation Jobs list.',
+  minRatingFilter: 'Hides completed jobs rated below this threshold in the Simulation Jobs list.',
   autoExportOnComplete:
-    "Automatically exports results in the selected formats when a simulation completes.",
-  selectedFormats:
-    "Selects which file formats are included when exporting results.",
+    'Automatically exports results in the selected formats when a simulation completes.',
+  selectedFormats: 'Selects which file formats are included when exporting results.',
 });
 const VIEWER_HELP = Object.freeze({
   liveUpdate:
-    "Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.",
-  rotateSpeed:
-    "Controls how quickly the camera orbits the model while dragging.",
-  zoomSpeed:
-    "Controls how quickly scroll and pinch gestures move the camera toward the model.",
-  panSpeed: "Controls how quickly the viewport shifts when you pan the camera.",
-  dampingEnabled:
-    "Keeps orbit movement eased instead of stopping abruptly after drag input ends.",
-  dampingFactor:
-    "Adjusts how quickly the eased orbit motion settles after input stops.",
-  startupCameraMode:
-    "Sets which camera projection opens by default the next time the app starts.",
-  invertWheelZoom:
-    "Reverses the mouse-wheel zoom direction for viewport navigation.",
+    'Applies geometry and viewport updates as soon as parameters change. Turn this off if you prefer to review changes manually before re-rendering.',
+  rotateSpeed: 'Controls how quickly the camera orbits the model while dragging.',
+  zoomSpeed: 'Controls how quickly scroll and pinch gestures move the camera toward the model.',
+  panSpeed: 'Controls how quickly the viewport shifts when you pan the camera.',
+  dampingEnabled: 'Keeps orbit movement eased instead of stopping abruptly after drag input ends.',
+  dampingFactor: 'Adjusts how quickly the eased orbit motion settles after input stops.',
+  startupCameraMode: 'Sets which camera projection opens by default the next time the app starts.',
+  invertWheelZoom: 'Reverses the mouse-wheel zoom direction for viewport navigation.',
   keyboardPanEnabled:
-    "Enables arrow-key style camera panning shortcuts while the viewport is focused.",
+    'Enables arrow-key style camera panning shortcuts while the viewport is focused.',
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
   meshValidationMode:
-    "Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.",
+    'Controls what happens when the mesh may be too coarse for the requested frequency range. Warn (default) flags issues but lets the solve proceed. Strict aborts the solve on a mesh warning. Off skips validation entirely. Recommended default: Warn.',
   frequencySpacing:
-    "Determines how the N frequency points are placed between the start and end frequency. Log spaces them evenly on a logarithmic scale (equal ratios between steps — perceptually uniform for audio). Linear spaces them evenly in Hz. Recommended default: Log.",
+    'Determines how the N frequency points are placed between the start and end frequency. Log spaces them evenly on a logarithmic scale (equal ratios between steps — perceptually uniform for audio). Linear spaces them evenly in Hz. Recommended default: Log.',
   verbose:
-    "Emits per-frequency solver progress and diagnostic messages to the server log and job status stream. Useful for monitoring long sweeps or diagnosing convergence issues; adds minor overhead. Recommended default: Off.",
+    'Emits per-frequency solver progress and diagnostic messages to the server log and job status stream. Useful for monitoring long sweeps or diagnosing convergence issues; adds minor overhead. Recommended default: Off.',
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
+  solverBackend:
+    'Selects the acoustic solver used by submitted jobs. Auto uses Metal BEM on supported Apple Silicon systems, otherwise BEMPP.',
   useBurtonMiller:
-    "Eliminates fictitious interior resonances by adding hypersingular operator coupling to the BEM formulation. " +
-    "OFF: ~1.8x faster (assembles 2 operators instead of 4 per frequency). " +
-    "Risk: SPL deviations of up to 7 dB at frequencies where mesh interior resonances occur. " +
-    "ON: Accurate and artifact-free, recommended for final/publication solves. " +
-    "Default: Off (fast exploratory mode).",
+    'Eliminates fictitious interior resonances by adding hypersingular operator coupling to the BEM formulation. ' +
+    'OFF: ~1.8x faster (assembles 2 operators instead of 4 per frequency). ' +
+    'Risk: SPL deviations of up to 7 dB at frequencies where mesh interior resonances occur. ' +
+    'ON: Accurate and artifact-free, recommended for final/publication solves. ' +
+    'Default: Off (fast exploratory mode).',
   quadratureRegular:
-    "Gauss quadrature points per element pair for regular integrals. Directly affects operator assembly time. " +
-    "4: bempp default, highest accuracy. " +
-    "3: ~1.25x faster, good balance for most work. " +
-    "2: ~1.35x faster, noticeable accuracy loss at high frequencies. " +
-    "Set to 4 for final solves. Default: 3 (fast mode).",
+    'Gauss quadrature points per element pair for regular integrals. Directly affects operator assembly time. ' +
+    '4: bempp default, highest accuracy. ' +
+    '3: ~1.25x faster, good balance for most work. ' +
+    '2: ~1.35x faster, noticeable accuracy loss at high frequencies. ' +
+    'Set to 4 for final solves. Default: 3 (fast mode).',
   workgroupSizeMultiple:
-    "OpenCL work-group sizing factor for kernel launches. " +
-    "1: 30\u201350% faster on CPU-only runtimes (pocl on Apple Silicon, Intel OpenCL on AMD CPUs). " +
-    "2: bempp default, tuned for discrete GPUs. " +
-    "No effect on accuracy. Always use 1 on CPU. Default: 1.",
+    'OpenCL work-group sizing factor for kernel launches. ' +
+    '1: 30\u201350% faster on CPU-only runtimes (pocl on Apple Silicon, Intel OpenCL on AMD CPUs). ' +
+    '2: bempp default, tuned for discrete GPUs. ' +
+    'No effect on accuracy. Always use 1 on CPU. Default: 1.',
   assemblyBackend:
-    "Compute backend for operator assembly. " +
-    "OpenCL: Parallel kernels via pocl (CPU) or GPU driver. Slightly faster with Burton-Miller on. " +
-    "Numba: JIT-compiled via LLVM. Competitive with OpenCL on CPU, no driver dependencies. " +
-    "Try both \u2014 performance varies by system. Default: OpenCL.",
+    'Compute backend for operator assembly. ' +
+    'OpenCL: Parallel kernels via pocl (CPU) or GPU driver. Slightly faster with Burton-Miller on. ' +
+    'Numba: JIT-compiled via LLVM. Competitive with OpenCL on CPU, no driver dependencies. ' +
+    'Try both \u2014 performance varies by system. Default: OpenCL.',
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
-  use_burton_miller: { label: "Burton-Miller Coupling" },
-  quadrature_regular: { label: "Quadrature Order (Regular)" },
-  workgroup_size_multiple: { label: "OpenCL Workgroup Size" },
-  assembly_backend: { label: "Assembly Backend" },
+  solver_backend: { label: 'Solver Backend' },
+  use_burton_miller: { label: 'Burton-Miller Coupling' },
+  quadrature_regular: { label: 'Quadrature Order (Regular)' },
+  workgroup_size_multiple: { label: 'OpenCL Workgroup Size' },
+  assembly_backend: { label: 'Assembly Backend' },
 });
 const SETTINGS_SECTION_ITEMS = Object.freeze([
-  { key: "viewer", label: "Viewer" },
-  { key: "simulation", label: "Simulation" },
-  { key: "task-exports", label: "Task Exports" },
-  { key: "workspace", label: "Workspace" },
-  { key: "system", label: "System" },
+  { key: 'viewer', label: 'Viewer' },
+  { key: 'simulation', label: 'Simulation' },
+  { key: 'task-exports', label: 'Task Exports' },
+  { key: 'workspace', label: 'Workspace' },
+  { key: 'system', label: 'System' },
 ]);
 
 /**
@@ -143,7 +137,7 @@ const SETTINGS_SECTION_ITEMS = Object.freeze([
  * Returns the DOM value when modal is open, otherwise the stored value.
  */
 export function getLiveUpdateEnabled() {
-  const el = document.getElementById("live-update");
+  const el = document.getElementById('live-update');
   if (el) return el.checked;
   return _state.liveUpdate;
 }
@@ -166,7 +160,7 @@ export function setDisplayMode(mode) {
  * Get the current download-sim-mesh preference.
  */
 export function getDownloadSimMeshEnabled() {
-  const el = document.getElementById("download-sim-mesh");
+  const el = document.getElementById('download-sim-mesh');
   if (el) return el.checked;
   return _state.downloadSimMesh;
 }
@@ -178,7 +172,7 @@ export function getDownloadSimMeshEnabled() {
 export function openSettingsModal(options = {}) {
   const viewerRuntime = _resolveViewerRuntime(options.viewerRuntime);
   // Prevent duplicate modals
-  const existing = document.getElementById("settings-modal-backdrop");
+  const existing = document.getElementById('settings-modal-backdrop');
   if (existing) {
     const dialog = existing.querySelector('[role="dialog"]');
     if (dialog) dialog.focus();
@@ -189,7 +183,7 @@ export function openSettingsModal(options = {}) {
   document.body.appendChild(backdrop);
 
   const dialog = backdrop.querySelector('[role="dialog"]');
-  const closeBtn = backdrop.querySelector(".settings-modal-close");
+  const closeBtn = backdrop.querySelector('.settings-modal-close');
   const releaseFocus = trapFocus(dialog, { initialFocus: closeBtn });
   cleanup.push(releaseFocus);
 
@@ -202,52 +196,47 @@ export function openSettingsModal(options = {}) {
 
 function _resolveViewerRuntime(runtime = {}) {
   return {
-    getControls:
-      typeof runtime?.getControls === "function"
-        ? runtime.getControls
-        : () => null,
+    getControls: typeof runtime?.getControls === 'function' ? runtime.getControls : () => null,
     getDomElement:
-      typeof runtime?.getDomElement === "function"
-        ? runtime.getDomElement
-        : () => null,
+      typeof runtime?.getDomElement === 'function' ? runtime.getDomElement : () => null,
   };
 }
 
 function _buildModal(viewerRuntime) {
-  const backdrop = document.createElement("div");
-  backdrop.id = "settings-modal-backdrop";
-  backdrop.className = "settings-modal-backdrop";
+  const backdrop = document.createElement('div');
+  backdrop.id = 'settings-modal-backdrop';
+  backdrop.className = 'settings-modal-backdrop';
   const cleanupFns = [];
 
-  const dialog = document.createElement("div");
-  dialog.className = "settings-modal-dialog";
-  dialog.setAttribute("role", "dialog");
-  dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-label", "Settings");
-  dialog.setAttribute("tabindex", "-1");
+  const dialog = document.createElement('div');
+  dialog.className = 'settings-modal-dialog';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-label', 'Settings');
+  dialog.setAttribute('tabindex', '-1');
 
   // Header
-  const header = document.createElement("div");
-  header.className = "settings-modal-header";
+  const header = document.createElement('div');
+  header.className = 'settings-modal-header';
 
-  const title = document.createElement("h2");
-  title.className = "settings-modal-title";
-  title.textContent = "Settings";
+  const title = document.createElement('h2');
+  title.className = 'settings-modal-title';
+  title.textContent = 'Settings';
   header.appendChild(title);
 
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "settings-modal-close";
-  closeBtn.textContent = "\u00d7";
-  closeBtn.title = "Close (Escape)";
-  closeBtn.setAttribute("aria-label", "Close settings");
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'settings-modal-close';
+  closeBtn.textContent = '\u00d7';
+  closeBtn.title = 'Close (Escape)';
+  closeBtn.setAttribute('aria-label', 'Close settings');
   header.appendChild(closeBtn);
 
   dialog.appendChild(header);
 
   // Body: sidebar nav + content area
-  const body = document.createElement("div");
-  body.className = "settings-modal-body";
+  const body = document.createElement('div');
+  body.className = 'settings-modal-body';
 
   const nav = _buildNav(SETTINGS_SECTION_ITEMS);
   const content = _buildContent(viewerRuntime, cleanupFns);
@@ -258,42 +247,26 @@ function _buildModal(viewerRuntime) {
   backdrop.appendChild(dialog);
 
   // --- Persist state changes from within the modal ---
-  backdrop.addEventListener("change", (event) => {
+  backdrop.addEventListener('change', (event) => {
     const t = event.target;
     if (!t) return;
-    if (t.id === "live-update") _state.liveUpdate = t.checked;
-    if (t.id === "download-sim-mesh") _state.downloadSimMesh = t.checked;
+    if (t.id === 'live-update') _state.liveUpdate = t.checked;
+    if (t.id === 'download-sim-mesh') _state.downloadSimMesh = t.checked;
 
     // Sim Basic settings: save on any simbasic-* control change
-    if (t.id && t.id.startsWith("simbasic-")) {
-      const settings = getCurrentSimBasicSettings();
-      settings.meshValidationMode =
-        document.getElementById("simbasic-meshValidationMode")?.value ??
-        settings.meshValidationMode;
-      settings.frequencySpacing =
-        document.getElementById("simbasic-frequencySpacing")?.value ??
-        settings.frequencySpacing;
-      settings.verbose =
-        document.getElementById("simbasic-verbose")?.checked ??
-        settings.verbose;
-      saveSimBasicSettings(settings);
+    if (t.id && t.id.startsWith('simbasic-')) {
+      _saveSimBasicSettingsFromModal(backdrop);
     }
 
-    if (t.id && t.id.startsWith("simadvanced-")) {
-      const settings = getCurrentSimAdvancedSettings();
-      settings.useBurtonMiller = getUseBurtonMiller();
-      settings.quadratureRegular = getQuadratureRegular();
-      settings.workgroupSizeMultiple = getWorkgroupSizeMultiple();
-      settings.assemblyBackend = getAssemblyBackend();
-      saveSimAdvancedSettings(settings);
+    if (t.id && t.id.startsWith('simadvanced-')) {
+      _saveSimAdvancedSettingsFromModal(backdrop);
     }
 
     if (_isSimulationManagementControl(t)) {
       const settings = _readSimulationManagementSettings(backdrop);
       saveSimulationManagementSettings(settings);
       _syncTaskListPreferenceControls(settings, {
-        dispatchToolbarChange:
-          t.id === "simmanage-default-sort" || t.id === "simmanage-min-rating",
+        dispatchToolbarChange: t.id === 'simmanage-default-sort' || t.id === 'simmanage-min-rating',
       });
     }
   });
@@ -303,43 +276,40 @@ function _buildModal(viewerRuntime) {
   const close = () => {
     if (closed) return;
     closed = true;
-    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener('keydown', onKeyDown);
     cleanupFns.splice(0).forEach((cleanup) => {
       try {
         cleanup();
       } catch (error) {
-        console.warn("settings modal cleanup failed:", error);
+        console.warn('settings modal cleanup failed:', error);
       }
     });
     backdrop.remove();
   };
 
   const onKeyDown = (event) => {
-    if (event.key === "Escape") {
+    if (event.key === 'Escape') {
       event.preventDefault();
       close();
     }
   };
 
-  closeBtn.addEventListener("click", close);
-  backdrop.addEventListener("click", (event) => {
+  closeBtn.addEventListener('click', close);
+  backdrop.addEventListener('click', (event) => {
     if (event.target === backdrop) close();
   });
-  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener('keydown', onKeyDown);
 
   // --- Section nav tab switching ---
-  const sectionBtns = nav.querySelectorAll(".settings-nav-btn");
-  const sections = content.querySelectorAll(".settings-section");
+  const sectionBtns = nav.querySelectorAll('.settings-nav-btn');
+  const sections = content.querySelectorAll('.settings-section');
 
   sectionBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener('click', () => {
       const target = btn.dataset.section;
       sectionBtns.forEach((b) => {
-        b.classList.toggle("active", b.dataset.section === target);
-        b.setAttribute(
-          "aria-selected",
-          b.dataset.section === target ? "true" : "false",
-        );
+        b.classList.toggle('active', b.dataset.section === target);
+        b.setAttribute('aria-selected', b.dataset.section === target ? 'true' : 'false');
       });
       sections.forEach((sec) => {
         sec.hidden = sec.id !== `settings-section-${target}`;
@@ -351,18 +321,18 @@ function _buildModal(viewerRuntime) {
 }
 
 function _buildNav(items = SETTINGS_SECTION_ITEMS) {
-  const nav = document.createElement("nav");
-  nav.className = "settings-modal-nav";
-  nav.setAttribute("aria-label", "Settings sections");
+  const nav = document.createElement('nav');
+  nav.className = 'settings-modal-nav';
+  nav.setAttribute('aria-label', 'Settings sections');
 
   items.forEach((item, i) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "settings-nav-btn" + (i === 0 ? " active" : "");
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'settings-nav-btn' + (i === 0 ? ' active' : '');
     btn.dataset.section = item.key;
     btn.textContent = item.label;
-    btn.setAttribute("role", "tab");
-    btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
     nav.appendChild(btn);
   });
 
@@ -370,8 +340,8 @@ function _buildNav(items = SETTINGS_SECTION_ITEMS) {
 }
 
 function _buildContent(viewerRuntime, cleanupFns = []) {
-  const content = document.createElement("div");
-  content.className = "settings-modal-content";
+  const content = document.createElement('div');
+  content.className = 'settings-modal-content';
 
   content.appendChild(_buildViewerSection(viewerRuntime));
   content.appendChild(_buildSimulationSection());
@@ -387,23 +357,19 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
 // ---------------------------------------------------------------------------
 
 function _buildViewerSection(viewerRuntime) {
-  const sec = document.createElement("div");
-  sec.id = "settings-section-viewer";
-  sec.className = "settings-section";
-  sec.setAttribute("role", "tabpanel");
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-viewer';
+  sec.className = 'settings-section';
+  sec.setAttribute('role', 'tabpanel');
 
-  _appendSectionHeading(
-    sec,
-    "Viewer",
-    "Viewport display and rendering preferences.",
-  );
+  _appendSectionHeading(sec, 'Viewer', 'Viewport display and rendering preferences.');
 
   // Real-time Updates control
   _appendInlineRow(sec, {
-    labelText: "Real-time Updates",
-    labelFor: "live-update",
+    labelText: 'Real-time Updates',
+    labelFor: 'live-update',
     helpText: VIEWER_HELP.liveUpdate,
-    controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? " checked" : ""}>`,
+    controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? ' checked' : ''}>`,
   });
 
   // --- Viewer sub-sections (Orbit Controls, Camera, Input) ---
@@ -426,150 +392,132 @@ function _buildViewerSection(viewerRuntime) {
   }
 
   // ---------- SUB-SECTION: Orbit Controls ----------
-  const orbitHeader = _buildSubSectionHeader("Orbit Controls", onResetOrbit);
+  const orbitHeader = _buildSubSectionHeader('Orbit Controls', onResetOrbit);
   sec.appendChild(orbitHeader);
 
   const rotateResult = _buildSliderRow(
-    "Rotate Speed",
-    "rotateSpeed",
+    'Rotate Speed',
+    'rotateSpeed',
     0.1,
     5.0,
     0.1,
     _viewerState,
-    VIEWER_HELP.rotateSpeed,
+    VIEWER_HELP.rotateSpeed
   );
   sec.appendChild(rotateResult.row);
 
   const zoomResult = _buildSliderRow(
-    "Zoom Speed",
-    "zoomSpeed",
+    'Zoom Speed',
+    'zoomSpeed',
     0.1,
     5.0,
     0.1,
     _viewerState,
-    VIEWER_HELP.zoomSpeed,
+    VIEWER_HELP.zoomSpeed
   );
   sec.appendChild(zoomResult.row);
 
   const panResult = _buildSliderRow(
-    "Pan Speed",
-    "panSpeed",
+    'Pan Speed',
+    'panSpeed',
     0.1,
     5.0,
     0.1,
     _viewerState,
-    VIEWER_HELP.panSpeed,
+    VIEWER_HELP.panSpeed
   );
   sec.appendChild(panResult.row);
 
   // Damping enabled toggle
   const dampingEnabledResult = _buildToggleRow(
-    "Enable Damping",
-    "dampingEnabled",
+    'Enable Damping',
+    'dampingEnabled',
     _viewerState,
     VIEWER_HELP.dampingEnabled,
+    {
+      onChange: (checked, badge) => {
+        _viewerState.dampingEnabled = checked;
+        dampingFactorResult.row.hidden = !checked;
+        _updateBadge(badge, checked, RECOMMENDED_DEFAULTS.dampingEnabled);
+        debouncedSaveViewerSettings(_viewerState);
+        _applyLive();
+      },
+    }
   );
-  const dampingEnabledBadge = dampingEnabledResult.badge;
   const dampingToggle = dampingEnabledResult.checkbox;
   sec.appendChild(dampingEnabledResult.row);
 
   // Damping factor slider (hidden when damping disabled)
   const dampingFactorResult = _buildSliderRow(
-    "Damping Factor",
-    "dampingFactor",
+    'Damping Factor',
+    'dampingFactor',
     0.01,
     0.5,
     0.01,
     _viewerState,
-    VIEWER_HELP.dampingFactor,
+    VIEWER_HELP.dampingFactor
   );
   dampingFactorResult.row.hidden = !_viewerState.dampingEnabled;
   sec.appendChild(dampingFactorResult.row);
 
-  // Override the default dampingEnabled change handler (need to show/hide dampingFactor row)
-  // Remove default handler by replacing the element (simpler: add the special handler here)
-  dampingToggle.addEventListener("change", (e) => {
-    _viewerState.dampingEnabled = e.target.checked;
-    dampingFactorResult.row.hidden = !e.target.checked;
-    _updateBadge(
-      dampingEnabledBadge,
-      e.target.checked,
-      RECOMMENDED_DEFAULTS.dampingEnabled,
-    );
-    debouncedSaveViewerSettings(_viewerState);
-    _applyLive();
-  });
-
   // ---------- SUB-SECTION: Camera ----------
-  const cameraHeader = _buildSubSectionHeader("Camera", onResetCamera);
+  const cameraHeader = _buildSubSectionHeader('Camera', onResetCamera);
   sec.appendChild(cameraHeader);
 
   // Startup Camera Mode radio row
-  const cameraRow = document.createElement("div");
-  cameraRow.className = "settings-control-row";
+  const cameraRow = document.createElement('div');
+  cameraRow.className = 'settings-control-row';
 
   cameraRow.appendChild(
-    _buildSettingsLabelCopy(
-      "Startup Camera Mode",
-      "",
-      VIEWER_HELP.startupCameraMode,
-    ),
+    _buildSettingsLabelCopy('Startup Camera Mode', '', VIEWER_HELP.startupCameraMode)
   );
 
-  const cameraValueWrapper = document.createElement("div");
-  cameraValueWrapper.className = "settings-control-value";
+  const cameraValueWrapper = document.createElement('div');
+  cameraValueWrapper.className = 'settings-control-value';
 
-  const cameraBadge = document.createElement("span");
-  cameraBadge.className = "settings-recommended-badge";
-  cameraBadge.textContent = "Recommended";
-  cameraBadge.hidden =
-    _viewerState.startupCameraMode !== RECOMMENDED_DEFAULTS.startupCameraMode;
+  const cameraBadge = document.createElement('span');
+  cameraBadge.className = 'settings-recommended-badge';
+  cameraBadge.textContent = 'Recommended';
+  cameraBadge.hidden = _viewerState.startupCameraMode !== RECOMMENDED_DEFAULTS.startupCameraMode;
 
-  const radioGroup = document.createElement("div");
-  radioGroup.setAttribute("style", "display:flex;gap:12px;align-items:center;");
+  const radioGroup = document.createElement('div');
+  radioGroup.setAttribute('style', 'display:flex;gap:12px;align-items:center;');
 
   const radioOptions = [
-    { value: "perspective", label: "Perspective" },
-    { value: "orthographic", label: "Orthographic" },
+    { value: 'perspective', label: 'Perspective' },
+    { value: 'orthographic', label: 'Orthographic' },
   ];
 
   let perspectiveRadio;
   let orthographicRadio;
   radioOptions.forEach((opt) => {
     const radioId = `viewer-startupCameraMode-${opt.value}`;
-    const radioLabel = document.createElement("label");
-    radioLabel.setAttribute(
-      "style",
-      "display:flex;align-items:center;gap:4px;cursor:pointer;",
-    );
+    const radioLabel = document.createElement('label');
+    radioLabel.setAttribute('style', 'display:flex;align-items:center;gap:4px;cursor:pointer;');
 
-    const radio = document.createElement("input");
-    radio.type = "radio";
+    const radio = document.createElement('input');
+    radio.type = 'radio';
     radio.id = radioId;
-    radio.name = "viewer-startupCameraMode";
+    radio.name = 'viewer-startupCameraMode';
     radio.value = opt.value;
     radio.checked = _viewerState.startupCameraMode === opt.value;
-    radio.setAttribute("style", "margin:0;");
+    radio.setAttribute('style', 'margin:0;');
 
-    if (opt.value === "perspective") perspectiveRadio = radio;
-    if (opt.value === "orthographic") orthographicRadio = radio;
+    if (opt.value === 'perspective') perspectiveRadio = radio;
+    if (opt.value === 'orthographic') orthographicRadio = radio;
 
-    radio.addEventListener("change", (e) => {
+    radio.addEventListener('change', (e) => {
       if (e.target.checked) {
         _viewerState.startupCameraMode = opt.value;
-        _updateBadge(
-          cameraBadge,
-          opt.value,
-          RECOMMENDED_DEFAULTS.startupCameraMode,
-        );
+        _updateBadge(cameraBadge, opt.value, RECOMMENDED_DEFAULTS.startupCameraMode);
         debouncedSaveViewerSettings(_viewerState);
         // NOTE: does NOT call _applyLive() — startup camera mode takes effect on next launch
       }
     });
 
-    const radioText = document.createElement("span");
+    const radioText = document.createElement('span');
     radioText.textContent = opt.label;
-    radioText.setAttribute("style", "font-size:0.85rem;");
+    radioText.setAttribute('style', 'font-size:0.85rem;');
 
     radioLabel.appendChild(radio);
     radioLabel.appendChild(radioText);
@@ -581,61 +529,49 @@ function _buildViewerSection(viewerRuntime) {
   cameraRow.appendChild(cameraValueWrapper);
   sec.appendChild(cameraRow);
 
-  const cameraHelp = document.createElement("p");
-  cameraHelp.className = "settings-section-help";
-  cameraHelp.setAttribute("style", "margin-top:4px;font-style:italic;");
-  cameraHelp.textContent = "Takes effect on next launch.";
+  const cameraHelp = document.createElement('p');
+  cameraHelp.className = 'settings-section-help';
+  cameraHelp.setAttribute('style', 'margin-top:4px;font-style:italic;');
+  cameraHelp.textContent = 'Takes effect on next launch.';
   sec.appendChild(cameraHelp);
 
   // ---------- SUB-SECTION: Input ----------
-  const inputHeader = _buildSubSectionHeader("Input", onResetInput);
+  const inputHeader = _buildSubSectionHeader('Input', onResetInput);
   sec.appendChild(inputHeader);
 
   const invertWheelResult = _buildToggleRow(
-    "Invert Scroll Zoom",
-    "invertWheelZoom",
+    'Invert Scroll Zoom',
+    'invertWheelZoom',
     _viewerState,
-    VIEWER_HELP.invertWheelZoom,
+    VIEWER_HELP.invertWheelZoom
   );
   sec.appendChild(invertWheelResult.row);
 
   const keyboardPanResult = _buildToggleRow(
-    "Keyboard Pan Shortcuts",
-    "keyboardPanEnabled",
+    'Keyboard Pan Shortcuts',
+    'keyboardPanEnabled',
     _viewerState,
-    VIEWER_HELP.keyboardPanEnabled,
+    VIEWER_HELP.keyboardPanEnabled
   );
   sec.appendChild(keyboardPanResult.row);
 
   // ---------- Per-section reset handlers ----------
 
   function onResetOrbit() {
-    const newSettings = resetViewerSection("orbit");
+    const newSettings = resetViewerSection('orbit');
     _viewerState = { ..._viewerState, ...newSettings };
 
     // Update orbit slider DOMs
-    _syncSliderRow(
-      rotateResult,
-      _viewerState.rotateSpeed,
-      RECOMMENDED_DEFAULTS.rotateSpeed,
-    );
-    _syncSliderRow(
-      zoomResult,
-      _viewerState.zoomSpeed,
-      RECOMMENDED_DEFAULTS.zoomSpeed,
-    );
-    _syncSliderRow(
-      panResult,
-      _viewerState.panSpeed,
-      RECOMMENDED_DEFAULTS.panSpeed,
-    );
+    _syncSliderRow(rotateResult, _viewerState.rotateSpeed, RECOMMENDED_DEFAULTS.rotateSpeed);
+    _syncSliderRow(zoomResult, _viewerState.zoomSpeed, RECOMMENDED_DEFAULTS.zoomSpeed);
+    _syncSliderRow(panResult, _viewerState.panSpeed, RECOMMENDED_DEFAULTS.panSpeed);
 
     // Update dampingEnabled toggle
     dampingToggle.checked = _viewerState.dampingEnabled;
     _updateBadge(
-      dampingEnabledBadge,
+      dampingEnabledResult.badge,
       _viewerState.dampingEnabled,
-      RECOMMENDED_DEFAULTS.dampingEnabled,
+      RECOMMENDED_DEFAULTS.dampingEnabled
     );
     dampingFactorResult.row.hidden = !_viewerState.dampingEnabled;
 
@@ -643,33 +579,31 @@ function _buildViewerSection(viewerRuntime) {
     _syncSliderRow(
       dampingFactorResult,
       _viewerState.dampingFactor,
-      RECOMMENDED_DEFAULTS.dampingFactor,
+      RECOMMENDED_DEFAULTS.dampingFactor
     );
 
     _applyLive();
   }
 
   function onResetCamera() {
-    const newSettings = resetViewerSection("camera");
+    const newSettings = resetViewerSection('camera');
     _viewerState = { ..._viewerState, ...newSettings };
 
     // Update radio buttons
     if (perspectiveRadio)
-      perspectiveRadio.checked =
-        _viewerState.startupCameraMode === "perspective";
+      perspectiveRadio.checked = _viewerState.startupCameraMode === 'perspective';
     if (orthographicRadio)
-      orthographicRadio.checked =
-        _viewerState.startupCameraMode === "orthographic";
+      orthographicRadio.checked = _viewerState.startupCameraMode === 'orthographic';
     _updateBadge(
       cameraBadge,
       _viewerState.startupCameraMode,
-      RECOMMENDED_DEFAULTS.startupCameraMode,
+      RECOMMENDED_DEFAULTS.startupCameraMode
     );
     // NOTE: does NOT call _applyLive() — startup camera mode takes effect on next launch
   }
 
   function onResetInput() {
-    const newSettings = resetViewerSection("input");
+    const newSettings = resetViewerSection('input');
     _viewerState = { ..._viewerState, ...newSettings };
 
     // Update invertWheelZoom toggle
@@ -677,7 +611,7 @@ function _buildViewerSection(viewerRuntime) {
     _updateBadge(
       invertWheelResult.badge,
       _viewerState.invertWheelZoom,
-      RECOMMENDED_DEFAULTS.invertWheelZoom,
+      RECOMMENDED_DEFAULTS.invertWheelZoom
     );
 
     // Update keyboardPanEnabled toggle
@@ -685,32 +619,13 @@ function _buildViewerSection(viewerRuntime) {
     _updateBadge(
       keyboardPanResult.badge,
       _viewerState.keyboardPanEnabled,
-      RECOMMENDED_DEFAULTS.keyboardPanEnabled,
+      RECOMMENDED_DEFAULTS.keyboardPanEnabled
     );
 
     _applyLive();
   }
 
   // ---------- Private helpers (closures over _viewerState) ----------
-
-  function _buildSubSectionHeader(titleText, onReset) {
-    const hdr = document.createElement("div");
-    hdr.className = "settings-subsection-header";
-
-    const h4 = document.createElement("h4");
-    h4.className = "settings-subsection-title";
-    h4.textContent = titleText;
-    hdr.appendChild(h4);
-
-    const resetBtn = document.createElement("button");
-    resetBtn.type = "button";
-    resetBtn.className = "settings-reset-btn";
-    resetBtn.textContent = "Reset";
-    resetBtn.addEventListener("click", onReset);
-    hdr.appendChild(resetBtn);
-
-    return hdr;
-  }
 
   function _buildSliderRow(
     labelText,
@@ -719,43 +634,39 @@ function _buildViewerSection(viewerRuntime) {
     max,
     step,
     currentSettingsSnapshot,
-    helpText = "",
+    helpText = ''
   ) {
-    const row = document.createElement("div");
-    row.className = "settings-control-row";
+    const row = document.createElement('div');
+    row.className = 'settings-control-row';
 
     const inputId = `viewer-${settingKey}`;
 
     row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
-    const valueWrapper = document.createElement("div");
-    valueWrapper.className = "settings-control-value";
+    const valueWrapper = document.createElement('div');
+    valueWrapper.className = 'settings-control-value';
 
-    const sliderGroup = document.createElement("div");
-    sliderGroup.className = "settings-slider-group";
+    const sliderGroup = document.createElement('div');
+    sliderGroup.className = 'settings-slider-group';
 
-    const slider = document.createElement("input");
-    slider.type = "range";
+    const slider = document.createElement('input');
+    slider.type = 'range';
     slider.id = inputId;
     slider.min = String(min);
     slider.max = String(max);
     slider.step = String(step);
     slider.value = String(currentSettingsSnapshot[settingKey]);
 
-    const readout = document.createElement("span");
-    readout.className = "settings-slider-readout";
-    readout.textContent = _formatSliderValue(
-      currentSettingsSnapshot[settingKey],
-      step,
-    );
+    const readout = document.createElement('span');
+    readout.className = 'settings-slider-readout';
+    readout.textContent = _formatSliderValue(currentSettingsSnapshot[settingKey], step);
 
-    const badge = document.createElement("span");
-    badge.className = "settings-recommended-badge";
-    badge.textContent = "Recommended";
-    badge.hidden =
-      currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
+    const badge = document.createElement('span');
+    badge.className = 'settings-recommended-badge';
+    badge.textContent = 'Recommended';
+    badge.hidden = currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
 
-    slider.addEventListener("input", () => {
+    slider.addEventListener('input', () => {
       const val = parseFloat(slider.value);
       readout.textContent = _formatSliderValue(val, step);
       _updateBadge(badge, val, RECOMMENDED_DEFAULTS[settingKey]);
@@ -777,32 +688,37 @@ function _buildViewerSection(viewerRuntime) {
     labelText,
     settingKey,
     currentSettingsSnapshot,
-    helpText = "",
+    helpText = '',
+    { onChange = null } = {}
   ) {
-    const row = document.createElement("div");
-    row.className = "settings-control-row";
+    const row = document.createElement('div');
+    row.className = 'settings-control-row';
 
     const inputId = `viewer-${settingKey}`;
 
     row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
-    const valueWrapper = document.createElement("div");
-    valueWrapper.className = "settings-control-value";
+    const valueWrapper = document.createElement('div');
+    valueWrapper.className = 'settings-control-value';
 
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
     checkbox.id = inputId;
     checkbox.checked = currentSettingsSnapshot[settingKey];
 
-    const badge = document.createElement("span");
-    badge.className = "settings-recommended-badge";
-    badge.textContent = "Recommended";
-    badge.hidden =
-      currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
+    const badge = document.createElement('span');
+    badge.className = 'settings-recommended-badge';
+    badge.textContent = 'Recommended';
+    badge.hidden = currentSettingsSnapshot[settingKey] !== RECOMMENDED_DEFAULTS[settingKey];
 
-    checkbox.addEventListener("change", (e) => {
-      _viewerState[settingKey] = e.target.checked;
-      _updateBadge(badge, e.target.checked, RECOMMENDED_DEFAULTS[settingKey]);
+    checkbox.addEventListener('change', (event) => {
+      const checked = event.target.checked;
+      if (typeof onChange === 'function') {
+        onChange(checked, badge);
+        return;
+      }
+      _viewerState[settingKey] = checked;
+      _updateBadge(badge, checked, RECOMMENDED_DEFAULTS[settingKey]);
       debouncedSaveViewerSettings(_viewerState);
       _applyLive();
     });
@@ -832,26 +748,26 @@ function _buildViewerSection(viewerRuntime) {
 }
 
 function _buildSimulationSection() {
-  const sec = document.createElement("div");
-  sec.id = "settings-section-simulation";
-  sec.className = "settings-section";
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-simulation';
+  sec.className = 'settings-section';
   sec.hidden = true;
-  sec.setAttribute("role", "tabpanel");
+  sec.setAttribute('role', 'tabpanel');
 
   _appendSectionHeading(
     sec,
-    "Simulation",
-    "Persistent solve defaults live here. Advanced controls expose only stable public runtime overrides.",
+    'Simulation',
+    'Persistent solve defaults live here. Advanced controls expose only stable public runtime overrides.'
   );
 
   const currentSimBasic = getCurrentSimBasicSettings();
-  const solverHeader = _buildSubSectionHeader("Solve Defaults", () => {
+  const solverHeader = _buildSubSectionHeader('Solve Defaults', () => {
     resetSimBasicSettings();
-    const mvm = document.getElementById("simbasic-meshValidationMode");
+    const mvm = document.getElementById('simbasic-meshValidationMode');
     if (mvm) mvm.value = SIM_BASIC_DEFAULTS.meshValidationMode;
-    const fs = document.getElementById("simbasic-frequencySpacing");
+    const fs = document.getElementById('simbasic-frequencySpacing');
     if (fs) fs.value = SIM_BASIC_DEFAULTS.frequencySpacing;
-    const vb = document.getElementById("simbasic-verbose");
+    const vb = document.getElementById('simbasic-verbose');
     if (vb) vb.checked = SIM_BASIC_DEFAULTS.verbose;
     if (mvmBadge) mvmBadge.hidden = true;
     if (fsBadge) fsBadge.hidden = true;
@@ -860,161 +776,193 @@ function _buildSimulationSection() {
   sec.appendChild(solverHeader);
 
   const mvmResult = _buildSimBasicSelectRow(
-    "Mesh Validation Policy",
-    "simbasic-meshValidationMode",
+    'Mesh Validation Policy',
+    'simbasic-meshValidationMode',
     [
-      { value: "warn", label: "Warn" },
-      { value: "strict", label: "Strict" },
-      { value: "off", label: "Off" },
+      { value: 'warn', label: 'Warn' },
+      { value: 'strict', label: 'Strict' },
+      { value: 'off', label: 'Off' },
     ],
     currentSimBasic.meshValidationMode,
     SIM_BASIC_DEFAULTS.meshValidationMode,
-    SIMULATION_BASIC_HELP.meshValidationMode,
+    SIMULATION_BASIC_HELP.meshValidationMode
   );
   sec.appendChild(mvmResult.row);
   let mvmBadge = mvmResult.badge;
 
   const fsResult = _buildSimBasicSelectRow(
-    "Sweep Spacing",
-    "simbasic-frequencySpacing",
+    'Sweep Spacing',
+    'simbasic-frequencySpacing',
     [
-      { value: "log", label: "Logarithmic" },
-      { value: "linear", label: "Linear" },
+      { value: 'log', label: 'Logarithmic' },
+      { value: 'linear', label: 'Linear' },
     ],
     currentSimBasic.frequencySpacing,
     SIM_BASIC_DEFAULTS.frequencySpacing,
-    SIMULATION_BASIC_HELP.frequencySpacing,
+    SIMULATION_BASIC_HELP.frequencySpacing
   );
   sec.appendChild(fsResult.row);
   let fsBadge = fsResult.badge;
 
   const vbResult = _buildSimBasicCheckboxRow(
-    "Verbose Backend Logging",
-    "simbasic-verbose",
+    'Verbose Backend Logging',
+    'simbasic-verbose',
     currentSimBasic.verbose,
     SIM_BASIC_DEFAULTS.verbose,
-    SIMULATION_BASIC_HELP.verbose,
+    SIMULATION_BASIC_HELP.verbose
   );
   sec.appendChild(vbResult.row);
   let vbBadge = vbResult.badge;
 
-  const advancedHeader = _buildSubSectionHeader("Advanced Solver Controls");
+  const advancedHeader = _buildSubSectionHeader('Advanced Solver Controls');
   sec.appendChild(advancedHeader);
 
   const currentSimAdvanced = getCurrentSimAdvancedSettings();
-  const advancedIntro = document.createElement("div");
-  advancedIntro.className = "settings-section-help";
+  const advancedIntro = document.createElement('div');
+  advancedIntro.className = 'settings-section-help';
   advancedIntro.innerHTML =
-    "These settings control BEM operator assembly speed and accuracy. " +
-    "Defaults are tuned for fast exploratory sweeps (~1.8x faster). " +
-    "For final accurate solves, enable Burton-Miller." +
-    "<br><br>" +
-    "<strong>Benchmarked speedups</strong> (Apple M1 Max, 7732-element mesh, 20 freq):<br>" +
-    "\u2022 <strong>Workgroup Size 1</strong> \u2014 ~30\u201350% faster on CPU OpenCL. No accuracy loss. Always recommended.<br>" +
-    "\u2022 <strong>Burton-Miller off</strong> \u2014 ~1.8x faster (2 operators instead of 4). " +
-    "May produce SPL deviations of up to 7 dB at certain frequencies where mesh interior resonances occur. " +
-    "Good for quick exploratory sweeps, not recommended for final results.<br>" +
-    "\u2022 <strong>Quadrature 3</strong> \u2014 ~1.25x faster. Amplifies Burton-Miller artifacts significantly " +
-    "(up to 28 dB deviation). Only use with Burton-Miller on.<br>" +
-    "\u2022 <strong>Numba backend</strong> \u2014 Competitive with OpenCL on CPU. Good alternative if OpenCL/pocl is unavailable.";
+    'These settings control BEM operator assembly speed and accuracy. ' +
+    'Defaults are tuned for fast exploratory sweeps (~1.8x faster). ' +
+    'For final accurate solves, enable Burton-Miller.' +
+    '<br><br>' +
+    '<strong>Benchmarked speedups</strong> (Apple M1 Max, 7732-element mesh, 20 freq):<br>' +
+    '\u2022 <strong>Workgroup Size 1</strong> \u2014 ~30\u201350% faster on CPU OpenCL. No accuracy loss. Always recommended.<br>' +
+    '\u2022 <strong>Burton-Miller off</strong> \u2014 ~1.8x faster (2 operators instead of 4). ' +
+    'May produce SPL deviations of up to 7 dB at certain frequencies where mesh interior resonances occur. ' +
+    'Good for quick exploratory sweeps, not recommended for final results.<br>' +
+    '\u2022 <strong>Quadrature 3</strong> \u2014 ~1.25x faster. Amplifies Burton-Miller artifacts significantly ' +
+    '(up to 28 dB deviation). Only use with Burton-Miller on.<br>' +
+    '\u2022 <strong>Numba backend</strong> \u2014 Competitive with OpenCL on CPU. Good alternative if OpenCL/pocl is unavailable.';
   sec.appendChild(advancedIntro);
 
   // ── Preset buttons ──
   const PRESETS = {
-    fast: { useBurtonMiller: false, quadratureRegular: 4, workgroupSizeMultiple: 1, assemblyBackend: "opencl" },
-    accurate: { useBurtonMiller: true, quadratureRegular: 4, workgroupSizeMultiple: 1, assemblyBackend: "opencl" },
+    fast: {
+      ...currentSimAdvanced,
+      useBurtonMiller: false,
+      quadratureRegular: 4,
+      workgroupSizeMultiple: 1,
+      assemblyBackend: 'opencl',
+    },
+    accurate: {
+      ...currentSimAdvanced,
+      useBurtonMiller: true,
+      quadratureRegular: 4,
+      workgroupSizeMultiple: 1,
+      assemblyBackend: 'opencl',
+    },
   };
 
   function _applyPreset(preset) {
     saveSimAdvancedSettings(preset);
-    const ubm = document.getElementById("simadvanced-useBurtonMiller");
+    const sb = document.getElementById('simadvanced-solverBackend');
+    if (sb) sb.value = preset.solverBackend;
+    const ubm = document.getElementById('simadvanced-useBurtonMiller');
     if (ubm) ubm.checked = preset.useBurtonMiller;
-    const qr = document.getElementById("simadvanced-quadratureRegular");
+    const qr = document.getElementById('simadvanced-quadratureRegular');
     if (qr) qr.value = preset.quadratureRegular;
-    const wg = document.getElementById("simadvanced-workgroupSizeMultiple");
+    const wg = document.getElementById('simadvanced-workgroupSizeMultiple');
     if (wg) wg.value = preset.workgroupSizeMultiple;
-    const ab = document.getElementById("simadvanced-assemblyBackend");
+    const ab = document.getElementById('simadvanced-assemblyBackend');
     if (ab) ab.value = preset.assemblyBackend;
     // Update badges
-    if (typeof ubmBadge !== "undefined" && ubmBadge) ubmBadge.hidden = preset.useBurtonMiller === SIM_ADVANCED_DEFAULTS.useBurtonMiller;
-    if (typeof qrBadge !== "undefined" && qrBadge) qrBadge.hidden = preset.quadratureRegular === SIM_ADVANCED_DEFAULTS.quadratureRegular;
-    if (typeof wgBadge !== "undefined" && wgBadge) wgBadge.hidden = preset.workgroupSizeMultiple === SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple;
-    if (typeof abBadge !== "undefined" && abBadge) abBadge.hidden = preset.assemblyBackend === SIM_ADVANCED_DEFAULTS.assemblyBackend;
+    if (typeof ubmBadge !== 'undefined' && ubmBadge)
+      ubmBadge.hidden = preset.useBurtonMiller === SIM_ADVANCED_DEFAULTS.useBurtonMiller;
+    if (typeof sbBadge !== 'undefined' && sbBadge)
+      sbBadge.hidden = preset.solverBackend === SIM_ADVANCED_DEFAULTS.solverBackend;
+    if (typeof qrBadge !== 'undefined' && qrBadge)
+      qrBadge.hidden = preset.quadratureRegular === SIM_ADVANCED_DEFAULTS.quadratureRegular;
+    if (typeof wgBadge !== 'undefined' && wgBadge)
+      wgBadge.hidden = preset.workgroupSizeMultiple === SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple;
+    if (typeof abBadge !== 'undefined' && abBadge)
+      abBadge.hidden = preset.assemblyBackend === SIM_ADVANCED_DEFAULTS.assemblyBackend;
   }
 
-  const presetRow = document.createElement("div");
-  presetRow.style.cssText = "display:flex;gap:8px;margin:8px 0 4px;";
+  const presetRow = document.createElement('div');
+  presetRow.style.cssText = 'display:flex;gap:8px;margin:8px 0 4px;';
 
-  const fastBtn = document.createElement("button");
-  fastBtn.type = "button";
-  fastBtn.className = "settings-reset-btn";
-  fastBtn.style.cssText = "flex:1;padding:6px 12px;font-size:13px;font-weight:600;";
-  fastBtn.textContent = "Fast";
-  fastBtn.title = "BM off, quad 4, wg 1 — ~1.5x faster, max 5 dB deviation";
-  fastBtn.addEventListener("click", () => _applyPreset(PRESETS.fast));
+  const fastBtn = document.createElement('button');
+  fastBtn.type = 'button';
+  fastBtn.className = 'settings-reset-btn';
+  fastBtn.style.cssText = 'flex:1;padding:6px 12px;font-size:13px;font-weight:600;';
+  fastBtn.textContent = 'Fast';
+  fastBtn.title = 'BM off, quad 4, wg 1 — ~1.5x faster, max 5 dB deviation';
+  fastBtn.addEventListener('click', () => _applyPreset(PRESETS.fast));
 
-  const accurateBtn = document.createElement("button");
-  accurateBtn.type = "button";
-  accurateBtn.className = "settings-reset-btn";
-  accurateBtn.style.cssText = "flex:1;padding:6px 12px;font-size:13px;font-weight:600;";
-  accurateBtn.textContent = "Accurate";
-  accurateBtn.title = "BM on, quad 4, wg 1 — artifact-free, recommended for final solves";
-  accurateBtn.addEventListener("click", () => _applyPreset(PRESETS.accurate));
+  const accurateBtn = document.createElement('button');
+  accurateBtn.type = 'button';
+  accurateBtn.className = 'settings-reset-btn';
+  accurateBtn.style.cssText = 'flex:1;padding:6px 12px;font-size:13px;font-weight:600;';
+  accurateBtn.textContent = 'Accurate';
+  accurateBtn.title = 'BM on, quad 4, wg 1 — artifact-free, recommended for final solves';
+  accurateBtn.addEventListener('click', () => _applyPreset(PRESETS.accurate));
 
   presetRow.appendChild(fastBtn);
   presetRow.appendChild(accurateBtn);
   sec.appendChild(presetRow);
 
-  const advancedActiveHeader = _buildSubSectionHeader(
-    "Active Contract Overrides",
-    () => {
-      _applyPreset({ ...SIM_ADVANCED_DEFAULTS });
-    },
-  );
+  const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
+    _applyPreset({ ...SIM_ADVANCED_DEFAULTS });
+  });
   sec.appendChild(advancedActiveHeader);
+
+  const sbResult = _buildSimBasicSelectRow(
+    ADVANCED_CONTROL_COPY.solver_backend.label,
+    'simadvanced-solverBackend',
+    [
+      { value: 'auto', label: 'Auto' },
+      { value: 'bempp', label: 'BEMPP (previous)' },
+      { value: 'metal', label: 'Metal BEM' },
+    ],
+    currentSimAdvanced.solverBackend,
+    SIM_ADVANCED_DEFAULTS.solverBackend,
+    SIMULATION_ADVANCED_HELP.solverBackend
+  );
+  sec.appendChild(sbResult.row);
+  let sbBadge = sbResult.badge;
 
   const ubmResult = _buildSimBasicCheckboxRow(
     ADVANCED_CONTROL_COPY.use_burton_miller.label,
-    "simadvanced-useBurtonMiller",
+    'simadvanced-useBurtonMiller',
     currentSimAdvanced.useBurtonMiller,
     SIM_ADVANCED_DEFAULTS.useBurtonMiller,
-    SIMULATION_ADVANCED_HELP.useBurtonMiller,
+    SIMULATION_ADVANCED_HELP.useBurtonMiller
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
 
   const qrResult = _buildSimAdvancedNumberRow(
     ADVANCED_CONTROL_COPY.quadrature_regular.label,
-    "simadvanced-quadratureRegular",
+    'simadvanced-quadratureRegular',
     currentSimAdvanced.quadratureRegular,
     SIM_ADVANCED_DEFAULTS.quadratureRegular,
-    { min: "1", max: "10", step: "1" },
-    SIMULATION_ADVANCED_HELP.quadratureRegular,
+    { min: '1', max: '10', step: '1' },
+    SIMULATION_ADVANCED_HELP.quadratureRegular
   );
   sec.appendChild(qrResult.row);
   let qrBadge = qrResult.badge;
 
   const wgResult = _buildSimAdvancedNumberRow(
     ADVANCED_CONTROL_COPY.workgroup_size_multiple.label,
-    "simadvanced-workgroupSizeMultiple",
+    'simadvanced-workgroupSizeMultiple',
     currentSimAdvanced.workgroupSizeMultiple,
     SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple,
-    { min: "1", max: "8", step: "1" },
-    SIMULATION_ADVANCED_HELP.workgroupSizeMultiple,
+    { min: '1', max: '8', step: '1' },
+    SIMULATION_ADVANCED_HELP.workgroupSizeMultiple
   );
   sec.appendChild(wgResult.row);
   let wgBadge = wgResult.badge;
 
   const abResult = _buildSimBasicSelectRow(
     ADVANCED_CONTROL_COPY.assembly_backend.label,
-    "simadvanced-assemblyBackend",
+    'simadvanced-assemblyBackend',
     [
-      { value: "opencl", label: "OpenCL (pocl/CPU)" },
-      { value: "numba", label: "Numba (JIT/CPU)" },
+      { value: 'opencl', label: 'OpenCL (pocl/CPU)' },
+      { value: 'numba', label: 'Numba (JIT/CPU)' },
     ],
     currentSimAdvanced.assemblyBackend,
     SIM_ADVANCED_DEFAULTS.assemblyBackend,
-    SIMULATION_ADVANCED_HELP.assemblyBackend,
+    SIMULATION_ADVANCED_HELP.assemblyBackend
   );
   sec.appendChild(abResult.row);
   let abBadge = abResult.badge;
@@ -1023,63 +971,59 @@ function _buildSimulationSection() {
 }
 
 function _buildTaskExportsSection() {
-  const sec = document.createElement("div");
-  sec.id = "settings-section-task-exports";
-  sec.className = "settings-section";
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-task-exports';
+  sec.className = 'settings-section';
   sec.hidden = true;
-  sec.setAttribute("role", "tabpanel");
+  sec.setAttribute('role', 'tabpanel');
 
   _appendSectionHeading(
     sec,
-    "Task Exports",
-    "Job-list preferences, automatic result bundles, and optional mesh artifact downloads all live together here.",
+    'Task Exports',
+    'Job-list preferences, automatic result bundles, and optional mesh artifact downloads all live together here.'
   );
 
   const managementSettings = getCurrentSimulationManagementSettings();
 
-  const taskListHeader = _buildSubSectionHeader("Simulation Jobs Toolbar");
+  const taskListHeader = _buildSubSectionHeader('Simulation Jobs Toolbar');
   sec.appendChild(taskListHeader);
 
   _appendInlineRow(sec, {
-    labelText: "Default Task Sort",
-    labelFor: "simmanage-default-sort",
+    labelText: 'Default Task Sort',
+    labelFor: 'simmanage-default-sort',
     helpText: SIMULATION_MANAGEMENT_HELP.defaultSort,
-    controlNode: _buildSelectElement(
-      "simmanage-default-sort",
-      managementSettings.defaultSort,
-      [
-        { value: "completed_desc", label: "Newest First" },
-        { value: "rating_desc", label: "Highest Rated" },
-        { value: "label_asc", label: "Label A-Z" },
-      ],
-    ),
+    controlNode: _buildSelectElement('simmanage-default-sort', managementSettings.defaultSort, [
+      { value: 'completed_desc', label: 'Newest First' },
+      { value: 'rating_desc', label: 'Highest Rated' },
+      { value: 'label_asc', label: 'Label A-Z' },
+    ]),
   });
 
   _appendInlineRow(sec, {
-    labelText: "Minimum Rating Filter",
-    labelFor: "simmanage-min-rating",
+    labelText: 'Minimum Rating Filter',
+    labelFor: 'simmanage-min-rating',
     helpText: SIMULATION_MANAGEMENT_HELP.minRatingFilter,
     controlNode: _buildSelectElement(
-      "simmanage-min-rating",
+      'simmanage-min-rating',
       String(managementSettings.minRatingFilter),
       [
-        { value: "0", label: "All Ratings" },
-        { value: "1", label: "1 star or higher" },
-        { value: "2", label: "2 stars or higher" },
-        { value: "3", label: "3 stars or higher" },
-        { value: "4", label: "4 stars or higher" },
-        { value: "5", label: "5 stars only" },
-      ],
+        { value: '0', label: 'All Ratings' },
+        { value: '1', label: '1 star or higher' },
+        { value: '2', label: '2 stars or higher' },
+        { value: '3', label: '3 stars or higher' },
+        { value: '4', label: '4 stars or higher' },
+        { value: '5', label: '5 stars only' },
+      ]
     ),
   });
 
-  const exportHeader = _buildSubSectionHeader("Completed Task Bundles", () => {
+  const exportHeader = _buildSubSectionHeader('Completed Task Bundles', () => {
     const resetSettings = resetSimulationManagementSettings();
-    const defaultSort = document.getElementById("simmanage-default-sort");
+    const defaultSort = document.getElementById('simmanage-default-sort');
     if (defaultSort) {
       defaultSort.value = resetSettings.defaultSort;
     }
-    const minRating = document.getElementById("simmanage-min-rating");
+    const minRating = document.getElementById('simmanage-min-rating');
     if (minRating) {
       minRating.value = String(resetSettings.minRatingFilter);
     }
@@ -1088,103 +1032,101 @@ function _buildTaskExportsSection() {
   sec.appendChild(exportHeader);
 
   _appendInlineRow(sec, {
-    labelText: "Auto-download solve mesh (.msh)",
-    labelFor: "download-sim-mesh",
+    labelText: 'Auto-download solve mesh (.msh)',
+    labelFor: 'download-sim-mesh',
     helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
-    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? " checked" : ""}>`,
+    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
   });
 
   return sec;
 }
 
 function _buildWorkspaceSection(cleanupFns = []) {
-  const sec = document.createElement("div");
-  sec.id = "settings-section-workspace";
-  sec.className = "settings-section";
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-workspace';
+  sec.className = 'settings-section';
   sec.hidden = true;
-  sec.setAttribute("role", "tabpanel");
+  sec.setAttribute('role', 'tabpanel');
 
   _appendSectionHeading(
     sec,
-    "Workspace",
-    "Manage the folder workspace used for manual exports and completed simulation-task bundles.",
+    'Workspace',
+    'Manage the folder workspace used for manual exports and completed simulation-task bundles.'
   );
 
-  const statusRow = document.createElement("div");
-  statusRow.className = "settings-control-row";
+  const statusRow = document.createElement('div');
+  statusRow.className = 'settings-control-row';
   statusRow.appendChild(
     _buildSettingsLabelCopy(
-      "Selected Folder",
-      "",
-      "The backend workspace folder used for all exports.",
-    ),
+      'Selected Folder',
+      '',
+      'The backend workspace folder used for all exports.'
+    )
   );
-  const statusValue = document.createElement("div");
-  statusValue.className = "settings-control-value";
-  const statusText = document.createElement("span");
-  statusText.id = "settings-workspace-folder-label";
+  const statusValue = document.createElement('div');
+  statusValue.className = 'settings-control-value';
+  const statusText = document.createElement('span');
+  statusText.id = 'settings-workspace-folder-label';
   statusValue.appendChild(statusText);
   statusRow.appendChild(statusValue);
   sec.appendChild(statusRow);
 
   // Path display row
-  const pathRow = document.createElement("div");
-  pathRow.className = "settings-control-row";
-  const pathLabel = document.createElement("div");
-  pathLabel.className = "settings-control-label";
-  pathLabel.textContent = "Output Folder Path";
+  const pathRow = document.createElement('div');
+  pathRow.className = 'settings-control-row';
+  const pathLabel = document.createElement('div');
+  pathLabel.className = 'settings-control-label';
+  pathLabel.textContent = 'Output Folder Path';
   pathRow.appendChild(pathLabel);
-  const pathValueBox = document.createElement("pre");
-  pathValueBox.className = "ui-command-box settings-workspace-path-box";
-  pathValueBox.textContent = "Loading…";
-  const pathValueWrap = document.createElement("div");
-  pathValueWrap.className = "settings-control-value";
+  const pathValueBox = document.createElement('pre');
+  pathValueBox.className = 'ui-command-box settings-workspace-path-box';
+  pathValueBox.textContent = 'Loading…';
+  const pathValueWrap = document.createElement('div');
+  pathValueWrap.className = 'settings-control-value';
   pathValueWrap.appendChild(pathValueBox);
   pathRow.appendChild(pathValueWrap);
   sec.appendChild(pathRow);
 
   // "Open in Finder" button row
-  const finderRow = document.createElement("div");
-  finderRow.className = "settings-action-row";
-  const finderBtn = document.createElement("button");
-  finderBtn.type = "button";
-  finderBtn.className = "secondary";
-  finderBtn.textContent = "Open in Finder";
-  const finderHelp = document.createElement("p");
-  finderHelp.className = "settings-action-help";
-  finderHelp.textContent =
-    "Opens the output folder in the OS file manager (Finder / Explorer).";
+  const finderRow = document.createElement('div');
+  finderRow.className = 'settings-action-row';
+  const finderBtn = document.createElement('button');
+  finderBtn.type = 'button';
+  finderBtn.className = 'secondary';
+  finderBtn.textContent = 'Open in Finder';
+  const finderHelp = document.createElement('p');
+  finderHelp.className = 'settings-action-help';
+  finderHelp.textContent = 'Opens the output folder in the OS file manager (Finder / Explorer).';
   finderRow.appendChild(finderBtn);
   finderRow.appendChild(finderHelp);
   sec.appendChild(finderRow);
 
-  const chooseRow = document.createElement("div");
-  chooseRow.className = "settings-action-row";
+  const chooseRow = document.createElement('div');
+  chooseRow.className = 'settings-action-row';
 
-  const chooseBtn = document.createElement("button");
-  chooseBtn.type = "button";
-  chooseBtn.id = "settings-choose-folder-btn";
-  chooseBtn.className = "secondary";
+  const chooseBtn = document.createElement('button');
+  chooseBtn.type = 'button';
+  chooseBtn.id = 'settings-choose-folder-btn';
+  chooseBtn.className = 'secondary';
   chooseRow.appendChild(chooseBtn);
 
-  const chooseHelp = document.createElement("p");
-  chooseHelp.id = "settings-workspace-support";
-  chooseHelp.className = "settings-action-help";
+  const chooseHelp = document.createElement('p');
+  chooseHelp.id = 'settings-workspace-support';
+  chooseHelp.className = 'settings-action-help';
   chooseRow.appendChild(chooseHelp);
   sec.appendChild(chooseRow);
 
-  const routingNote = document.createElement("p");
-  routingNote.id = "settings-workspace-routing";
-  routingNote.className = "settings-section-help";
+  const routingNote = document.createElement('p');
+  routingNote.id = 'settings-workspace-routing';
+  routingNote.className = 'settings-section-help';
   sec.appendChild(routingNote);
 
-  finderBtn.addEventListener("click", async () => {
+  finderBtn.addEventListener('click', async () => {
     finderBtn.disabled = true;
     const ok = await openWorkspaceInFinder();
     finderBtn.disabled = false;
     if (!ok) {
-      finderHelp.textContent =
-        "Could not open folder — is the backend running?";
+      finderHelp.textContent = 'Could not open folder — is the backend running?';
     }
   });
 
@@ -1192,25 +1134,21 @@ function _buildWorkspaceSection(cleanupFns = []) {
     const selectedLabel = getSelectedFolderLabel();
     statusText.textContent = selectedLabel;
     chooseBtn.textContent =
-      selectedLabel === "No folder selected"
-        ? "Choose Folder"
-        : "Change Folder";
+      selectedLabel === 'No folder selected' ? 'Choose Folder' : 'Change Folder';
     chooseBtn.disabled = false;
 
-    chooseHelp.textContent =
-      "Opens a native folder picker via the backend server.";
+    chooseHelp.textContent = 'Opens a native folder picker via the backend server.';
     routingNote.textContent =
-      "Exports are saved to the folder shown above. Use Choose Folder to change it.";
+      'Exports are saved to the folder shown above. Use Choose Folder to change it.';
 
     fetchWorkspacePath().then((path) => {
-      pathValueBox.textContent =
-        path || "Backend unavailable — path unknown.";
+      pathValueBox.textContent = path || 'Backend unavailable — path unknown.';
     });
   };
 
-  chooseBtn.addEventListener("click", async () => {
+  chooseBtn.addEventListener('click', async () => {
     chooseBtn.disabled = true;
-    chooseHelp.textContent = "Waiting for folder selection…";
+    chooseHelp.textContent = 'Waiting for folder selection…';
     const selectedPath = await requestBackendFolderSelection();
     chooseBtn.disabled = false;
     if (selectedPath) {
@@ -1229,20 +1167,20 @@ function _buildWorkspaceSection(cleanupFns = []) {
 }
 
 function _buildSubSectionHeader(titleText, onReset = null) {
-  const hdr = document.createElement("div");
-  hdr.className = "settings-subsection-header";
+  const hdr = document.createElement('div');
+  hdr.className = 'settings-subsection-header';
 
-  const h4 = document.createElement("h4");
-  h4.className = "settings-subsection-title";
+  const h4 = document.createElement('h4');
+  h4.className = 'settings-subsection-title';
   h4.textContent = titleText;
   hdr.appendChild(h4);
 
-  if (typeof onReset === "function") {
-    const resetBtn = document.createElement("button");
-    resetBtn.type = "button";
-    resetBtn.className = "settings-reset-btn";
-    resetBtn.textContent = "Reset";
-    resetBtn.addEventListener("click", onReset);
+  if (typeof onReset === 'function') {
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'settings-reset-btn';
+    resetBtn.textContent = 'Reset';
+    resetBtn.addEventListener('click', onReset);
     hdr.appendChild(resetBtn);
   }
 
@@ -1250,9 +1188,9 @@ function _buildSubSectionHeader(titleText, onReset = null) {
 }
 
 function _makeDefaultBadge(currentValue, defaultValue) {
-  const badge = document.createElement("span");
-  badge.setAttribute("style", "font-size:0.7rem;opacity:0.6;margin-left:6px;");
-  badge.textContent = "Default";
+  const badge = document.createElement('span');
+  badge.setAttribute('style', 'font-size:0.7rem;opacity:0.6;margin-left:6px;');
+  badge.textContent = 'Default';
   badge.hidden = currentValue === defaultValue;
   return badge;
 }
@@ -1263,20 +1201,20 @@ function _buildSimBasicSelectRow(
   options,
   currentValue,
   defaultValue,
-  helpText = "",
+  helpText = ''
 ) {
-  const row = document.createElement("div");
-  row.className = "settings-control-row";
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
   row.appendChild(_buildSettingsLabelCopy(labelText, selectId, helpText));
 
-  const valueWrapper = document.createElement("div");
-  valueWrapper.className = "settings-control-value";
+  const valueWrapper = document.createElement('div');
+  valueWrapper.className = 'settings-control-value';
 
-  const select = document.createElement("select");
+  const select = document.createElement('select');
   select.id = selectId;
 
   for (const { value, label: optLabel } of options) {
-    const opt = document.createElement("option");
+    const opt = document.createElement('option');
     opt.value = value;
     opt.textContent = optLabel;
     if (value === currentValue) opt.selected = true;
@@ -1285,7 +1223,7 @@ function _buildSimBasicSelectRow(
 
   const badge = _makeDefaultBadge(currentValue, defaultValue);
 
-  select.addEventListener("change", () => {
+  select.addEventListener('change', () => {
     badge.hidden = select.value === defaultValue;
   });
 
@@ -1301,23 +1239,23 @@ function _buildSimBasicCheckboxRow(
   checkboxId,
   currentValue,
   defaultValue,
-  helpText = "",
+  helpText = ''
 ) {
-  const row = document.createElement("div");
-  row.className = "settings-control-row";
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
   row.appendChild(_buildSettingsLabelCopy(labelText, checkboxId, helpText));
 
-  const valueWrapper = document.createElement("div");
-  valueWrapper.className = "settings-control-value";
+  const valueWrapper = document.createElement('div');
+  valueWrapper.className = 'settings-control-value';
 
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
   checkbox.id = checkboxId;
   checkbox.checked = currentValue;
 
   const badge = _makeDefaultBadge(currentValue, defaultValue);
 
-  checkbox.addEventListener("change", () => {
+  checkbox.addEventListener('change', () => {
     badge.hidden = checkbox.checked === defaultValue;
   });
 
@@ -1333,18 +1271,18 @@ function _buildSimAdvancedNumberRow(
   inputId,
   currentValue,
   defaultValue,
-  { min = "", max = "", step = "0.0001" } = {},
-  helpText = "",
+  { min = '', max = '', step = '0.0001' } = {},
+  helpText = ''
 ) {
-  const row = document.createElement("div");
-  row.className = "settings-control-row";
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
   row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
 
-  const valueWrapper = document.createElement("div");
-  valueWrapper.className = "settings-control-value";
+  const valueWrapper = document.createElement('div');
+  valueWrapper.className = 'settings-control-value';
 
-  const input = document.createElement("input");
-  input.type = "number";
+  const input = document.createElement('input');
+  input.type = 'number';
   input.id = inputId;
   input.value = String(currentValue);
   if (min) input.min = min;
@@ -1352,7 +1290,7 @@ function _buildSimAdvancedNumberRow(
   input.step = step;
 
   const badge = _makeDefaultBadge(currentValue, defaultValue);
-  input.addEventListener("change", () => {
+  input.addEventListener('change', () => {
     const numeric = Number(input.value);
     if (!Number.isFinite(numeric) || numeric <= 0) {
       input.value = String(defaultValue);
@@ -1370,45 +1308,41 @@ function _buildSimAdvancedNumberRow(
 }
 
 function _buildSimulationExportFormatsRow(managementSettings) {
-  const exportFormatsRow = document.createElement("div");
-  exportFormatsRow.className = "settings-control-row";
+  const exportFormatsRow = document.createElement('div');
+  exportFormatsRow.className = 'settings-control-row';
   exportFormatsRow.appendChild(
-    _buildSettingsLabelCopy(
-      "Bundle Formats",
-      "",
-      SIMULATION_MANAGEMENT_HELP.selectedFormats,
-    ),
+    _buildSettingsLabelCopy('Bundle Formats', '', SIMULATION_MANAGEMENT_HELP.selectedFormats)
   );
 
-  const exportFormatsValue = document.createElement("div");
-  exportFormatsValue.className = "settings-control-value";
+  const exportFormatsValue = document.createElement('div');
+  exportFormatsValue.className = 'settings-control-value';
   exportFormatsValue.setAttribute(
-    "style",
-    "display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px 12px;align-items:start;",
+    'style',
+    'display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px 12px;align-items:start;'
   );
 
   const exportFormatLabels = new Map([
-    ["png", "Chart Images (PNG)"],
-    ["csv", "Frequency Data CSV"],
-    ["json", "Full Results JSON"],
-    ["txt", "Summary Text Report"],
-    ["polar_csv", "Polar Directivity CSV"],
-    ["impedance_csv", "Impedance CSV"],
-    ["vacs", "ABEC Spectrum (VACS)"],
-    ["stl", "Waveguide STL"],
-    ["fusion_csv", "Fusion 360 CSV Curves"],
+    ['png', 'Chart Images (PNG)'],
+    ['csv', 'Frequency Data CSV'],
+    ['json', 'Full Results JSON'],
+    ['txt', 'Summary Text Report'],
+    ['polar_csv', 'Polar Directivity CSV'],
+    ['impedance_csv', 'Impedance CSV'],
+    ['vacs', 'ABEC Spectrum (VACS)'],
+    ['stl', 'Waveguide STL'],
+    ['fusion_csv', 'Fusion 360 CSV Curves'],
   ]);
 
   SIMULATION_EXPORT_FORMAT_IDS.forEach((formatId) => {
-    const option = document.createElement("label");
-    option.setAttribute("style", "display:flex;align-items:center;gap:8px;");
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
+    const option = document.createElement('label');
+    option.setAttribute('style', 'display:flex;align-items:center;gap:8px;');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
     checkbox.id = `simmanage-format-${formatId}`;
-    checkbox.setAttribute("data-sim-management-format", formatId);
+    checkbox.setAttribute('data-sim-management-format', formatId);
     checkbox.checked = managementSettings.selectedFormats.includes(formatId);
     option.appendChild(checkbox);
-    const text = document.createElement("span");
+    const text = document.createElement('span');
     text.textContent = exportFormatLabels.get(formatId) || formatId;
     option.appendChild(text);
     exportFormatsValue.appendChild(option);
@@ -1419,59 +1353,52 @@ function _buildSimulationExportFormatsRow(managementSettings) {
 }
 
 function _buildSystemSection(viewerRuntime) {
-  const sec = document.createElement("div");
-  sec.id = "settings-section-system";
-  sec.className = "settings-section";
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-system';
+  sec.className = 'settings-section';
   sec.hidden = true;
-  sec.setAttribute("role", "tabpanel");
+  sec.setAttribute('role', 'tabpanel');
 
-  _appendSectionHeading(
-    sec,
-    "System",
-    "Application updates and system information.",
-  );
+  _appendSectionHeading(sec, 'System', 'Application updates and system information.');
 
-  const updateRow = document.createElement("div");
-  updateRow.className = "settings-action-row";
+  const updateRow = document.createElement('div');
+  updateRow.className = 'settings-action-row';
 
-  const updateBtn = document.createElement("button");
-  updateBtn.type = "button";
-  updateBtn.id = "check-updates-btn";
-  updateBtn.className = "secondary";
-  updateBtn.textContent = "Check for App Updates";
+  const updateBtn = document.createElement('button');
+  updateBtn.type = 'button';
+  updateBtn.id = 'check-updates-btn';
+  updateBtn.className = 'secondary';
+  updateBtn.textContent = 'Check for App Updates';
   updateRow.appendChild(updateBtn);
 
-  const updateHelp = document.createElement("p");
-  updateHelp.className = "settings-action-help";
+  const updateHelp = document.createElement('p');
+  updateHelp.className = 'settings-action-help';
   updateHelp.textContent =
-    "Queries the backend for the latest commit on the default remote branch and reports whether the local copy is behind, ahead, or up to date.";
+    'Queries the backend for the latest commit on the default remote branch and reports whether the local copy is behind, ahead, or up to date.';
   updateRow.appendChild(updateHelp);
 
   sec.appendChild(updateRow);
 
   // Reset All Settings action row
-  const resetAllRow = document.createElement("div");
-  resetAllRow.className = "settings-action-row";
+  const resetAllRow = document.createElement('div');
+  resetAllRow.className = 'settings-action-row';
 
-  const resetAllBtn = document.createElement("button");
-  resetAllBtn.type = "button";
-  resetAllBtn.id = "reset-all-settings-btn";
-  resetAllBtn.className = "secondary";
-  resetAllBtn.textContent = "Reset Viewer Settings to Defaults";
+  const resetAllBtn = document.createElement('button');
+  resetAllBtn.type = 'button';
+  resetAllBtn.id = 'reset-all-settings-btn';
+  resetAllBtn.className = 'secondary';
+  resetAllBtn.textContent = 'Reset Viewer Settings to Defaults';
   resetAllRow.appendChild(resetAllBtn);
 
-  const resetAllHelp = document.createElement("p");
-  resetAllHelp.className = "settings-action-help";
+  const resetAllHelp = document.createElement('p');
+  resetAllHelp.className = 'settings-action-help';
   resetAllHelp.textContent =
-    "Restores viewer controls to their recommended default values. Simulation, export, and workspace preferences stay unchanged.";
+    'Restores viewer controls to their recommended default values. Simulation, export, and workspace preferences stay unchanged.';
   resetAllRow.appendChild(resetAllHelp);
 
-  resetAllBtn.addEventListener("click", () => {
+  resetAllBtn.addEventListener('click', () => {
     resetAllViewerSettings();
-    applyViewerSettingsToControls(
-      viewerRuntime.getControls(),
-      RECOMMENDED_DEFAULTS,
-    );
+    applyViewerSettingsToControls(viewerRuntime.getControls(), RECOMMENDED_DEFAULTS);
     const domEl = viewerRuntime.getDomElement();
     if (domEl) setInvertWheelZoom(domEl, RECOMMENDED_DEFAULTS.invertWheelZoom);
   });
@@ -1493,14 +1420,14 @@ function _buildSystemSection(viewerRuntime) {
 // ---------------------------------------------------------------------------
 
 function _appendSectionHeading(parent, title, helpText) {
-  const h = document.createElement("h3");
-  h.className = "settings-section-title";
+  const h = document.createElement('h3');
+  h.className = 'settings-section-title';
   h.textContent = title;
   parent.appendChild(h);
 
   if (helpText) {
-    const p = document.createElement("p");
-    p.className = "settings-section-help";
+    const p = document.createElement('p');
+    p.className = 'settings-section-help';
     p.textContent = helpText;
     parent.appendChild(p);
   }
@@ -1508,14 +1435,14 @@ function _appendSectionHeading(parent, title, helpText) {
 
 function _appendInlineRow(
   parent,
-  { labelText, labelFor, controlHtml = "", controlNode = null, helpText = "" },
+  { labelText, labelFor, controlHtml = '', controlNode = null, helpText = '' }
 ) {
-  const row = document.createElement("div");
-  row.className = "settings-control-row";
+  const row = document.createElement('div');
+  row.className = 'settings-control-row';
   row.appendChild(_buildSettingsLabelCopy(labelText, labelFor, helpText));
 
-  const wrapper = document.createElement("div");
-  wrapper.className = "settings-control-value";
+  const wrapper = document.createElement('div');
+  wrapper.className = 'settings-control-value';
   if (controlNode) {
     wrapper.appendChild(controlNode);
   } else {
@@ -1526,17 +1453,17 @@ function _appendInlineRow(
   parent.appendChild(row);
 }
 
-function _buildSettingsLabelCopy(labelText, labelFor, helpText = "") {
-  const copy = document.createElement("div");
-  copy.className = "settings-control-copy";
+function _buildSettingsLabelCopy(labelText, labelFor, helpText = '') {
+  const copy = document.createElement('div');
+  copy.className = 'settings-control-copy';
 
-  const label = document.createElement("label");
+  const label = document.createElement('label');
   if (labelFor) {
-    label.setAttribute("for", labelFor);
+    label.setAttribute('for', labelFor);
   }
   label.textContent = labelText;
   if (helpText) {
-    label.setAttribute("data-help-text", helpText);
+    label.setAttribute('data-help-text', helpText);
   }
   copy.appendChild(label);
 
@@ -1544,11 +1471,11 @@ function _buildSettingsLabelCopy(labelText, labelFor, helpText = "") {
 }
 
 function _buildSelectElement(id, currentValue, options) {
-  const select = document.createElement("select");
+  const select = document.createElement('select');
   select.id = id;
 
   options.forEach(({ value, label }) => {
-    const option = document.createElement("option");
+    const option = document.createElement('option');
     option.value = value;
     option.textContent = label;
     if (String(value) === String(currentValue)) {
@@ -1562,44 +1489,66 @@ function _buildSelectElement(id, currentValue, options) {
 
 function _isSimulationManagementControl(target) {
   return Boolean(
-    target?.id === "simmanage-auto-export" ||
-    target?.id === "simmanage-default-sort" ||
-    target?.id === "simmanage-min-rating" ||
-    target?.getAttribute?.("data-sim-management-format"),
+    target?.id === 'simmanage-auto-export' ||
+    target?.id === 'simmanage-default-sort' ||
+    target?.id === 'simmanage-min-rating' ||
+    target?.getAttribute?.('data-sim-management-format')
   );
+}
+
+function _getControl(root, id) {
+  return root?.querySelector?.(`#${id}`) || null;
+}
+
+function _saveSimBasicSettingsFromModal(root) {
+  const current = getCurrentSimBasicSettings();
+  saveSimBasicSettings({
+    ...current,
+    meshValidationMode:
+      _getControl(root, 'simbasic-meshValidationMode')?.value ?? current.meshValidationMode,
+    frequencySpacing:
+      _getControl(root, 'simbasic-frequencySpacing')?.value ?? current.frequencySpacing,
+    verbose: _getControl(root, 'simbasic-verbose')?.checked ?? current.verbose,
+  });
+}
+
+function _saveSimAdvancedSettingsFromModal(root) {
+  const current = getCurrentSimAdvancedSettings();
+  saveSimAdvancedSettings({
+    ...current,
+    solverBackend: _getControl(root, 'simadvanced-solverBackend')?.value ?? getSolverBackend(),
+    useBurtonMiller:
+      _getControl(root, 'simadvanced-useBurtonMiller')?.checked ?? getUseBurtonMiller(),
+    quadratureRegular:
+      _getControl(root, 'simadvanced-quadratureRegular')?.value ?? getQuadratureRegular(),
+    workgroupSizeMultiple:
+      _getControl(root, 'simadvanced-workgroupSizeMultiple')?.value ?? getWorkgroupSizeMultiple(),
+    assemblyBackend:
+      _getControl(root, 'simadvanced-assemblyBackend')?.value ?? getAssemblyBackend(),
+  });
 }
 
 function _readSimulationManagementSettings(root) {
   const current = getCurrentSimulationManagementSettings();
-  const selectedFormats = Array.from(
-    root.querySelectorAll("input[data-sim-management-format]"),
-  )
+  const selectedFormats = Array.from(root.querySelectorAll('input[data-sim-management-format]'))
     .filter((input) => input.checked)
-    .map((input) => input.getAttribute("data-sim-management-format"))
+    .map((input) => input.getAttribute('data-sim-management-format'))
     .filter(Boolean);
-  const minRating = Number(
-    document.getElementById("simmanage-min-rating")?.value,
-  );
+  const minRating = Number(_getControl(root, 'simmanage-min-rating')?.value);
 
   return {
     ...current,
     autoExportOnComplete:
-      document.getElementById("simmanage-auto-export")?.checked ??
-      current.autoExportOnComplete,
+      _getControl(root, 'simmanage-auto-export')?.checked ?? current.autoExportOnComplete,
     selectedFormats,
-    defaultSort:
-      document.getElementById("simmanage-default-sort")?.value ||
-      current.defaultSort,
+    defaultSort: _getControl(root, 'simmanage-default-sort')?.value || current.defaultSort,
     minRatingFilter: Number.isFinite(minRating)
       ? Math.max(0, Math.min(5, minRating))
       : current.minRatingFilter,
   };
 }
 
-function _syncTaskListPreferenceControls(
-  settings,
-  { dispatchToolbarChange = false } = {},
-) {
+function _syncTaskListPreferenceControls(settings, { dispatchToolbarChange = false } = {}) {
   const desiredSort = settings?.defaultSort;
   const desiredMinRating = String(settings?.minRatingFilter ?? 0);
   const syncValue = (id, nextValue, shouldDispatch) => {
@@ -1610,21 +1559,17 @@ function _syncTaskListPreferenceControls(
     element.value = nextValue;
     if (
       shouldDispatch &&
-      typeof Event === "function" &&
-      typeof element.dispatchEvent === "function"
+      typeof Event === 'function' &&
+      typeof element.dispatchEvent === 'function'
     ) {
-      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
     }
   };
 
   if (desiredSort) {
-    syncValue("simmanage-default-sort", desiredSort, false);
-    syncValue("simulation-jobs-sort", desiredSort, dispatchToolbarChange);
+    syncValue('simmanage-default-sort', desiredSort, false);
+    syncValue('simulation-jobs-sort', desiredSort, dispatchToolbarChange);
   }
-  syncValue("simmanage-min-rating", desiredMinRating, false);
-  syncValue(
-    "simulation-jobs-min-rating",
-    desiredMinRating,
-    dispatchToolbarChange,
-  );
+  syncValue('simmanage-min-rating', desiredMinRating, false);
+  syncValue('simulation-jobs-min-rating', desiredMinRating, dispatchToolbarChange);
 }

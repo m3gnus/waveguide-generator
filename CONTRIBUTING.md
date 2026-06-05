@@ -14,7 +14,13 @@
    Or manually:
    ```bash
    npm ci
-   python3 -m venv .venv && .venv/bin/pip install -r server/requirements.txt
+   python3 -m venv .venv
+   .venv/bin/pip install --upgrade pip
+   .venv/bin/pip install -r server/requirements.txt
+   .venv/bin/pip install -r server/requirements-gmsh.txt
+   .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
+   mkdir -p .waveguide
+   printf '%s\n' "$PWD/.venv/bin/python" > .waveguide/backend-python.path
    ```
 
 2. Start the app:
@@ -37,6 +43,8 @@ npm test
 npm run test:server
 npm run build
 ```
+
+Backend npm scripts use `.waveguide/backend-python.path` when present, so they run against the interpreter prepared by the installer/manual setup.
 
 ## Pull Requests
 

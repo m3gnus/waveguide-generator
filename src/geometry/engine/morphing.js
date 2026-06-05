@@ -46,13 +46,21 @@ export function applyMorphing(currentR, t, p, params, morphTargetInfo = null) {
   const rate = Number(params.morphRate || 3);
   const morphFactor = Math.pow((t - morphStart) / Math.max(1e-9, 1 - morphStart), rate);
 
-  const hasExplicit = (params.morphWidth > 0) || (params.morphHeight > 0);
-  const halfWidth = params.morphWidth > 0 ? params.morphWidth / 2 : (morphTargetInfo?.halfW ?? currentR);
-  const halfHeight = params.morphHeight > 0 ? params.morphHeight / 2 : (morphTargetInfo?.halfH ?? currentR);
+  const hasExplicit = params.morphWidth > 0 || params.morphHeight > 0;
+  const halfWidth =
+    params.morphWidth > 0 ? params.morphWidth / 2 : (morphTargetInfo?.halfW ?? currentR);
+  const halfHeight =
+    params.morphHeight > 0 ? params.morphHeight / 2 : (morphTargetInfo?.halfH ?? currentR);
 
   if (!hasExplicit && !morphTargetInfo) return currentR;
 
-  const targetR = getMorphTargetRadius(p, targetShape, halfWidth, halfHeight, params.morphCorner || 0);
+  const targetR = getMorphTargetRadius(
+    p,
+    targetShape,
+    halfWidth,
+    halfHeight,
+    params.morphCorner || 0
+  );
   const allowShrinkage = params.morphAllowShrinkage === 1 || params.morphAllowShrinkage === true;
   const safeTarget = allowShrinkage ? targetR : Math.max(currentR, targetR);
 

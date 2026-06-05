@@ -157,9 +157,7 @@ export function openAutoExportPopup() {
 function persistState() {
   const current = getCurrentSimulationManagementSettings();
   const autoExportEl = document.getElementById('simmanage-auto-export');
-  const formatEls = Array.from(
-    document.querySelectorAll('input[data-sim-management-format]'),
-  );
+  const formatEls = Array.from(document.querySelectorAll('input[data-sim-management-format]'));
 
   const selectedFormats = formatEls
     .filter((el) => el.checked)

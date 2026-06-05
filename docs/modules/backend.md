@@ -13,17 +13,20 @@
 - `server/services/simulation_validation.py` — request validation, mesh checks
 
 **Solver & meshing**:
-- `server/solver/waveguide_builder.py` — OCC geometry + Gmsh mesh generation
+- `server/solver/mesher_adapter.py` — Waveguide Generator payload adapter for `hornlab-waveguide-mesher`
+- `server/solver/metal_solver.py` — optional `hornlab-metal-bem` solver adapter
 - `server/solver/mesh.py` — mesh validation, tag contract checks
 - `server/solver/solve*.py` — BEM assembly and solve execution
-- `server/solver/deps.py` — dependency matrix (Python, gmsh, bempp versions)
+- `server/solver/deps.py` — dependency matrix (Python, HornLab mesher, Metal BEM, gmsh, bempp versions)
 
 ## Core Responsibilities
 
-- **HTTP routes**: Expose `/api/solve`, `/api/mesh/build`, `/api/status/{job_id}`, `/api/jobs`, `/api/results/{job_id}`, health/update checks
+- **HTTP routes**: Expose `/api/solve`, `/api/mesh/build`, `/api/mesh/step`, `/api/mesh/viewport`, `/api/status/{job_id}`, `/api/jobs`, `/api/results/{job_id}`, health/update checks
 - **Request validation**: Enforce mesh array lengths, source tag presence, dependency availability
-- **OCC meshing**: Build horn/enclosure geometry and generate Gmsh `.msh` files
-- **BEM solve**: Assemble BEM operators and solve the linear system (standard or optimized path)
+- **Backend meshing**: Build horn/enclosure `.msh` files through `hornlab-waveguide-mesher`
+- **STEP surface export**: Build full-domain single-layer inner horn STEP surfaces through `hornlab-waveguide-mesher`
+- **Viewport mesher geometry**: Expose HornLab mesher/Gmsh display triangles via `/api/mesh/viewport`
+- **BEM solve**: Select `auto`, `bempp`, or `metal` backend, then assemble/solve through the selected runtime
 - **Job orchestration**: Queue jobs FIFO, track state, persist results
 - **Device management**: Auto-detect OpenCL device availability, apply user device selection
 

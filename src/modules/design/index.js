@@ -1,24 +1,25 @@
-import { prepareGeometryParams } from "../../geometry/params.js";
+import { prepareGeometryParams } from '../../geometry/params.js';
+import { normalizeQuadrants, resolveAutoQuadrants } from './symmetry.js';
 
-const DESIGN_MODULE_ID = "design";
-const DESIGN_IMPORT_STAGE = "import";
-const DESIGN_TASK_STAGE = "task";
-const OCC_MIN_ANGULAR_SEGMENTS = 20;
-const OCC_MIN_LENGTH_SEGMENTS = 10;
+const DESIGN_MODULE_ID = 'design';
+const DESIGN_IMPORT_STAGE = 'import';
+const DESIGN_TASK_STAGE = 'task';
+const BACKEND_MESH_MIN_ANGULAR_SEGMENTS = 20;
+const BACKEND_MESH_MIN_LENGTH_SEGMENTS = 10;
 
 const DESIGN_INPUT_KINDS = Object.freeze({
-  RAW: "raw",
-  PREPARED: "prepared",
+  RAW: 'raw',
+  PREPARED: 'prepared',
 });
 
-const OCC_DEFAULTS = Object.freeze({
+const BACKEND_MESH_DEFAULTS = Object.freeze({
   angularSegments: 100,
   lengthSegments: 20,
   throatResolution: 6,
   mouthResolution: 15,
   rearResolution: 40,
-  encFrontResolution: "25,25,25,25",
-  encBackResolution: "40,40,40,40",
+  encFrontResolution: '25,25,25,25',
+  encBackResolution: '40,40,40,40',
   wallThickness: 6,
   scale: 1,
 });
@@ -27,11 +28,12 @@ const OCC_DEFAULTS = Object.freeze({
 // encFrontResolution, encBackResolution) represent mesh ELEMENT SIZE in mm,
 // not element count. As element sizes, they MUST scale with geometry to
 // maintain consistent mesh density (same element count per geometric feature).
-// Scaling is handled in prepareOccSimulationParams (called by prepareOccExportParams)
+// Scaling is handled in prepareBackendMeshSimulationParams (called by
+// prepareBackendMeshExportParams)
 // to ensure single-scaling for both simulation and export pipelines.
 
 function isObject(value) {
-  return value !== null && typeof value === "object";
+  return value !== null && typeof value === 'object';
 }
 
 function toFiniteNumber(value, fallback) {
@@ -44,26 +46,17 @@ function toPositiveNumber(value, fallback) {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
 }
 
-function normalizeQuadrants(value) {
-  const text = String(value ?? "1234").trim();
-  if (text === "1" || text === "12" || text === "14" || text === "1234") {
-    return Number(text);
-  }
-  const numeric = Number(text);
-  return Number.isFinite(numeric) ? numeric : 1234;
-}
-
 function scaleResolutionValue(value, scale) {
-  if (value === undefined || value === null || value === "") return value;
+  if (value === undefined || value === null || value === '') return value;
 
-  if (typeof value === "number") {
+  if (typeof value === 'number') {
     return value > 0 ? value * scale : value;
   }
 
   const text = String(value).trim();
   if (!text) return value;
   const parts = text
-    .split(",")
+    .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
   if (parts.length === 0) return value;
@@ -71,7 +64,7 @@ function scaleResolutionValue(value, scale) {
   const nums = parts.map((part) => Number(part));
   if (nums.some((n) => !Number.isFinite(n))) return value;
 
-  return nums.map((n) => (n > 0 ? n * scale : n)).join(",");
+  return nums.map((n) => (n > 0 ? n * scale : n)).join(',');
 }
 
 function normalizeProfileCsvAngularSegments(value) {
@@ -81,7 +74,7 @@ function normalizeProfileCsvAngularSegments(value) {
 }
 
 function normalizeExportAngularSegments(value) {
-  const rounded = Math.max(OCC_MIN_ANGULAR_SEGMENTS, Math.round(value));
+  const rounded = Math.max(BACKEND_MESH_MIN_ANGULAR_SEGMENTS, Math.round(value));
   const snapped = Math.round(rounded / 4) * 4;
   return Math.max(4, snapped);
 }
@@ -103,7 +96,7 @@ function assertDesignImportEnvelope(input) {
     !isObject(input.params)
   ) {
     throw new Error(
-      "Design module task requires input from DesignModule.import(), DesignModule.importState(), or DesignModule.importPrepared().",
+      'Design module task requires input from DesignModule.import(), DesignModule.importState(), or DesignModule.importPrepared().'
     );
   }
 }
@@ -115,9 +108,7 @@ function assertDesignTaskEnvelope(result) {
     result.stage !== DESIGN_TASK_STAGE ||
     !isObject(result.params)
   ) {
-    throw new Error(
-      "Design module output requires a result from DesignModule.task().",
-    );
+    throw new Error('Design module output requires a result from DesignModule.task().');
   }
 }
 
@@ -174,69 +165,59 @@ export function getSimulationDesignOutput(result) {
   return getPreparedDesignOutput(result);
 }
 
-export function prepareOccSimulationParams(preparedParams = {}) {
+export function prepareBackendMeshSimulationParams(preparedParams = {}) {
   const base = isObject(preparedParams) ? preparedParams : {};
-  const scale = toPositiveNumber(base.scale, OCC_DEFAULTS.scale);
+  const scale = toPositiveNumber(base.scale, BACKEND_MESH_DEFAULTS.scale);
+  const quadrants =
+    String(base.quadrants ?? '')
+      .trim()
+      .toLowerCase() === 'auto'
+      ? resolveAutoQuadrants(base)
+      : normalizeQuadrants(base.quadrants);
 
   return Object.freeze({
     ...base,
     angularSegments: Math.max(
-      OCC_MIN_ANGULAR_SEGMENTS,
-      Math.round(
-        toFiniteNumber(base.angularSegments, OCC_DEFAULTS.angularSegments),
-      ),
+      BACKEND_MESH_MIN_ANGULAR_SEGMENTS,
+      Math.round(toFiniteNumber(base.angularSegments, BACKEND_MESH_DEFAULTS.angularSegments))
     ),
     lengthSegments: Math.max(
-      OCC_MIN_LENGTH_SEGMENTS,
-      Math.round(
-        toFiniteNumber(base.lengthSegments, OCC_DEFAULTS.lengthSegments),
-      ),
+      BACKEND_MESH_MIN_LENGTH_SEGMENTS,
+      Math.round(toFiniteNumber(base.lengthSegments, BACKEND_MESH_DEFAULTS.lengthSegments))
     ),
-    // Active OCC solve/export paths always build full-domain meshes.
-    // Non-1234 values are accepted from import for compatibility but are not
-    // forwarded to OCC payloads. normalizeQuadrants() stays available for
-    // import-side parsing (e.g. config.js, mwgConfig.js).
-    quadrants: 1234,
+    quadrants,
     throatResolution:
-      toPositiveNumber(base.throatResolution, OCC_DEFAULTS.throatResolution) *
-      scale,
+      toPositiveNumber(base.throatResolution, BACKEND_MESH_DEFAULTS.throatResolution) * scale,
     mouthResolution:
-      toPositiveNumber(base.mouthResolution, OCC_DEFAULTS.mouthResolution) *
-      scale,
+      toPositiveNumber(base.mouthResolution, BACKEND_MESH_DEFAULTS.mouthResolution) * scale,
     rearResolution:
-      toPositiveNumber(base.rearResolution, OCC_DEFAULTS.rearResolution) *
-      scale,
-    wallThickness: toFiniteNumber(
-      base.wallThickness,
-      OCC_DEFAULTS.wallThickness,
-    ),
+      toPositiveNumber(base.rearResolution, BACKEND_MESH_DEFAULTS.rearResolution) * scale,
+    wallThickness: toFiniteNumber(base.wallThickness, BACKEND_MESH_DEFAULTS.wallThickness),
     encFrontResolution: scaleResolutionValue(
       base.encFrontResolution != null
         ? String(base.encFrontResolution)
-        : OCC_DEFAULTS.encFrontResolution,
-      scale,
+        : BACKEND_MESH_DEFAULTS.encFrontResolution,
+      scale
     ),
     encBackResolution: scaleResolutionValue(
       base.encBackResolution != null
         ? String(base.encBackResolution)
-        : OCC_DEFAULTS.encBackResolution,
-      scale,
+        : BACKEND_MESH_DEFAULTS.encBackResolution,
+      scale
     ),
   });
 }
 
-export function prepareOccExportParams(preparedParams = {}) {
-  const simParams = prepareOccSimulationParams(preparedParams);
+export function prepareBackendMeshExportParams(preparedParams = {}) {
+  const simParams = prepareBackendMeshSimulationParams(preparedParams);
   const hasEnclosure = Number(simParams.encDepth || 0) > 0;
 
   return Object.freeze({
     ...simParams,
     angularSegments: normalizeExportAngularSegments(simParams.angularSegments),
     lengthSegments: Math.max(
-      OCC_MIN_LENGTH_SEGMENTS,
-      Math.round(
-        toPositiveNumber(simParams.lengthSegments, OCC_DEFAULTS.lengthSegments),
-      ),
+      BACKEND_MESH_MIN_LENGTH_SEGMENTS,
+      Math.round(toPositiveNumber(simParams.lengthSegments, BACKEND_MESH_DEFAULTS.lengthSegments))
     ),
     wallThickness: hasEnclosure
       ? simParams.wallThickness
@@ -244,12 +225,12 @@ export function prepareOccExportParams(preparedParams = {}) {
   });
 }
 
-export function getOccSimulationDesignOutput(result) {
-  return prepareOccSimulationParams(getPreparedDesignOutput(result));
+export function getBackendMeshSimulationDesignOutput(result) {
+  return prepareBackendMeshSimulationParams(getPreparedDesignOutput(result));
 }
 
-export function getOccExportDesignOutput(result) {
-  return prepareOccExportParams(getPreparedDesignOutput(result));
+export function getBackendMeshExportDesignOutput(result) {
+  return prepareBackendMeshExportParams(getPreparedDesignOutput(result));
 }
 
 export function prepareProfileCsvParams(preparedParams = {}) {
@@ -265,6 +246,15 @@ export function getProfileCsvDesignOutput(result) {
   return prepareProfileCsvParams(getPreparedDesignOutput(result));
 }
 
+export function resolveAutoQuadrantsForState(state = {}) {
+  const designTask = runDesignTask(
+    importDesignState(state, {
+      applyVerticalOffset: true,
+    })
+  );
+  return resolveAutoQuadrants(getPreparedDesignOutput(designTask));
+}
+
 export const DesignModule = Object.freeze({
   id: DESIGN_MODULE_ID,
   import: importDesignInput,
@@ -275,8 +265,9 @@ export const DesignModule = Object.freeze({
     preparedParams: getPreparedDesignOutput,
     exportParams: getExportDesignOutput,
     simulationParams: getSimulationDesignOutput,
-    occSimulationParams: getOccSimulationDesignOutput,
-    occExportParams: getOccExportDesignOutput,
+    backendMeshSimulationParams: getBackendMeshSimulationDesignOutput,
+    backendMeshExportParams: getBackendMeshExportDesignOutput,
     profileCsvParams: getProfileCsvDesignOutput,
   }),
+  resolveAutoQuadrantsForState,
 });
