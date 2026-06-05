@@ -42,6 +42,19 @@ function hasDirectivityPatterns(directivity) {
   );
 }
 
+function resolvePhaseReferenceDistance(results) {
+  const metadata = results?.metadata || {};
+  const directivityDistance = Number(metadata?.directivity?.effective_distance_m);
+  if (Number.isFinite(directivityDistance) && directivityDistance > 0) {
+    return directivityDistance;
+  }
+  const observationDistance = Number(metadata?.observation?.effective_distance_m);
+  if (Number.isFinite(observationDistance) && observationDistance > 0) {
+    return observationDistance;
+  }
+  return null;
+}
+
 /**
  * Open a modal dialog displaying all result charts rendered server-side
  * by Matplotlib as high-quality PNG images.
@@ -324,6 +337,7 @@ export async function openViewResultsModal(panel) {
       frequencies,
       spl,
       phase_degrees: phaseDegrees,
+      phase_reference_distance_m: resolvePhaseReferenceDistance(results),
       di,
       di_frequencies: diFrequencies,
       impedance_frequencies: impedanceFrequencies,

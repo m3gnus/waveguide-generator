@@ -89,15 +89,48 @@ def _finite_xy(frequencies, values):
     return freqs[finite], vals[finite]
 
 
-def _unwrap_degrees(values):
-    """Unwrap phase degrees for a continuous response trace."""
+def _wrap_radians(values):
+    """Wrap radians to [-pi, pi)."""
+    return (np.asarray(values, dtype=float) + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _response_phase_degrees(frequencies, values, reference_distance_m=None, sound_speed=343.0):
+    """Return relative excess phase, compensating observer propagation when possible."""
+    freqs = np.asarray(frequencies, dtype=float)
     vals = np.asarray(values, dtype=float)
     if vals.size == 0:
         return vals
-    return np.rad2deg(np.unwrap(np.deg2rad(vals)))
+    radians = np.deg2rad(vals)
+    distance = float(reference_distance_m) if reference_distance_m is not None else np.nan
+    speed = float(sound_speed) if sound_speed is not None else np.nan
+    if np.isfinite(distance) and distance > 0.0 and np.isfinite(speed) and speed > 0.0:
+        radians = _wrap_radians(radians + (2.0 * np.pi * freqs * distance / speed))
+    unwrapped = np.unwrap(radians)
+    unwrapped = unwrapped - unwrapped[0]
+    return np.rad2deg(unwrapped)
 
 
-def render_frequency_response(frequencies, spl, phase_degrees=None, dpi=150):
+def _normalize_impedance_for_plot(real_values, imaginary_values, rho_c=1.21 * 343.0):
+    """Return normalized impedance values, accepting old Pa.s/m cached payloads."""
+    arrays = [arr for arr in (real_values, imaginary_values) if len(arr) > 0]
+    if not arrays:
+        return real_values, imaginary_values
+    finite = np.concatenate([arr[np.isfinite(arr)] for arr in arrays])
+    if finite.size == 0:
+        return real_values, imaginary_values
+    if np.nanmax(np.abs(finite)) > 20.0:
+        return real_values / rho_c, imaginary_values / rho_c
+    return real_values, imaginary_values
+
+
+def render_frequency_response(
+    frequencies,
+    spl,
+    phase_degrees=None,
+    dpi=150,
+    phase_reference_distance_m=None,
+    sound_speed_m_per_s=343.0,
+):
     """
     Render frequency response (SPL on-axis) chart.
 
@@ -105,6 +138,8 @@ def render_frequency_response(frequencies, spl, phase_degrees=None, dpi=150):
         frequencies: List of frequencies in Hz
         spl: List of SPL values in dB
         phase_degrees: Optional list of on-axis pressure phase values in degrees
+        phase_reference_distance_m: Optional observation distance for propagation compensation
+        sound_speed_m_per_s: Sound speed used for propagation compensation
         dpi: Image resolution
 
     Returns:
@@ -138,13 +173,18 @@ def render_frequency_response(frequencies, spl, phase_degrees=None, dpi=150):
     if len(phase_freqs) > 0:
         phase_ax = ax.twinx()
         phase_ax.set_facecolor('none')
-        phase_ax.set_ylabel('Phase [deg]', color='#ffb74d', fontsize=11)
+        phase_ax.set_ylabel('Excess phase [deg]', color='#ffb74d', fontsize=11)
         phase_ax.tick_params(axis='y', colors='#ffb74d', labelsize=9)
         phase_ax.spines['right'].set_color('#ffb74d')
         phase_ax.spines['top'].set_color('#333333')
         phase_ax.semilogx(
             phase_freqs,
-            _unwrap_degrees(phase_vals),
+            _response_phase_degrees(
+                phase_freqs,
+                phase_vals,
+                reference_distance_m=phase_reference_distance_m,
+                sound_speed=sound_speed_m_per_s,
+            ),
             color='#ffb74d',
             linewidth=1.25,
             linestyle='--',
@@ -275,6 +315,7 @@ def render_impedance(frequencies, real, imaginary, dpi=150):
     """
     re_freqs, re_vals = _finite_xy(frequencies, real)
     im_freqs, im_vals = _finite_xy(frequencies, imaginary)
+    re_vals, im_vals = _normalize_impedance_for_plot(re_vals, im_vals)
 
     if len(re_freqs) == 0 and len(im_freqs) == 0:
         return None
@@ -287,7 +328,7 @@ def render_impedance(frequencies, real, imaginary, dpi=150):
     if len(im_vals) > 0:
         ax.semilogx(im_freqs, im_vals, color='#ffb74d', linewidth=1.5, label='Im(Z)')
 
-    _setup_dark_axes(ax, 'Frequency [Hz]', 'Z [Pa.s/m]', 'Acoustic Impedance')
+    _setup_dark_axes(ax, 'Frequency [Hz]', 'Z / rho c', 'Acoustic Impedance')
     ax.xaxis.set_major_formatter(FuncFormatter(_freq_formatter))
 
     all_freqs = np.concatenate([arr for arr in (re_freqs, im_freqs) if len(arr) > 0])
@@ -296,7 +337,7 @@ def render_impedance(frequencies, real, imaginary, dpi=150):
 
     all_vals = np.concatenate([arr for arr in (re_vals, im_vals) if len(arr) > 0])
     z_min, z_max = np.nanmin(all_vals), np.nanmax(all_vals)
-    margin = max(50, (z_max - z_min) * 0.1)
+    margin = max(0.05, (z_max - z_min) * 0.1)
     ax.set_ylim(z_min - margin, z_max + margin)
 
     _add_log_grid(ax, freq_min, freq_max)
@@ -329,6 +370,8 @@ def render_all_charts(payload, dpi=150):
     freqs = payload.get('frequencies', [])
     spl = payload.get('spl', [])
     phase_degrees = payload.get('phase_degrees', [])
+    phase_reference_distance_m = payload.get('phase_reference_distance_m')
+    sound_speed_m_per_s = payload.get('sound_speed_m_per_s', 343.0)
     di_freqs = payload.get('di_frequencies', []) or freqs
     imp_freqs = payload.get('impedance_frequencies', []) or freqs
     imp_real = payload.get('impedance_real', [])
@@ -338,7 +381,14 @@ def render_all_charts(payload, dpi=150):
     charts = {}
 
     charts['frequency_response'] = (
-        render_frequency_response(freqs, spl, phase_degrees, dpi)
+        render_frequency_response(
+            freqs,
+            spl,
+            phase_degrees,
+            dpi,
+            phase_reference_distance_m=phase_reference_distance_m,
+            sound_speed_m_per_s=sound_speed_m_per_s,
+        )
         if spl or phase_degrees
         else None
     )

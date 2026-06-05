@@ -379,11 +379,13 @@ class HornBEMSolver:
         spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
         phase_degrees = float(np.angle(p_complex, deg=True)) if p_amplitude > 0 else None
 
-        # Impedance
+        # Normalized throat impedance. calculate_throat_impedance_horn returns
+        # specific acoustic impedance [Pa.s/m]; the public solve contract follows
+        # HornLab solver and VACS convention: Z / (rho*c).
         impedance = calculate_throat_impedance_horn(
             self.grid, p_total, self.driver_dofs,
             self.throat_p1_dofs, self.throat_element_areas
-        )
+        ) / (self.rho * self.c)
 
         # Quick ka-based DI estimate; refined later from polar patterns
         di = estimate_di_from_ka(self.grid, k, observation_frame=frame)
