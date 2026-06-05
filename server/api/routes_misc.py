@@ -44,7 +44,7 @@ async def root() -> Dict[str, Any]:
     """Root endpoint."""
     return {
         "name": "MWG Horn BEM Solver",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "status": "running",
         "solver_available": SOLVER_AVAILABLE,
     }

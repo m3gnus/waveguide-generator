@@ -496,7 +496,7 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
   out += '// ************************************************************\n';
   out += ' \n';
   out += 'SourceDesc=VACS_Data_Text\n';
-  out += 'Version=1.0.0\n';
+  out += 'Version=1.1.0\n';
   out += 'Author="Waveguide Generator"\n';
   out += 'SourceDesc="BEM Solver"\n';
   out += 'IsInterface=true\n';

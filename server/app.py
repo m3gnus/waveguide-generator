@@ -32,7 +32,7 @@ async def app_lifespan(_app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="MWG Horn BEM Solver", version="1.0.0", lifespan=app_lifespan)
+    app = FastAPI(title="MWG Horn BEM Solver", version="1.1.0", lifespan=app_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
