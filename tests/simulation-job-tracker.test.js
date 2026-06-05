@@ -5,6 +5,7 @@ import {
   clearFailedJobs,
   createJobTracker,
   JOB_TRACKER_CONSTANTS,
+  allJobs,
   loadLocalIndex,
   mergeJobs,
   removeJob,
@@ -146,6 +147,41 @@ test('sortJobs orders newest lifecycle timestamp first', () => {
   assert.deepEqual(
     sorted.map((job) => job.id),
     ['completed-later', 'created-later']
+  );
+});
+
+test('upsertJob preserves lifecycle timestamps from sparse polling updates', () => {
+  const panel = {
+    jobs: new Map([
+      [
+        'job-complete',
+        {
+          id: 'job-complete',
+          status: 'complete',
+          createdAt: '2026-03-11T09:00:00.000Z',
+          completedAt: '2026-03-11T09:20:00.000Z',
+        },
+      ],
+      [
+        'job-running',
+        {
+          id: 'job-running',
+          status: 'queued',
+          createdAt: '2026-03-11T09:30:00.000Z',
+          queuedAt: '2026-03-11T09:30:00.000Z',
+          startedAt: '2026-03-11T09:30:00.000Z',
+        },
+      ],
+    ]),
+    activeJobId: 'job-running',
+  };
+
+  upsertJob(panel, { id: 'job-running', status: 'running', progress: 0.4 });
+
+  assert.equal(panel.jobs.get('job-running').createdAt, '2026-03-11T09:30:00.000Z');
+  assert.deepEqual(
+    allJobs(panel).map((job) => job.id),
+    ['job-running', 'job-complete']
   );
 });
 
