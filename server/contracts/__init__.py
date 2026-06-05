@@ -313,12 +313,13 @@ class WaveguideParamsRequest(BaseModel):
 
 class ChartsRenderRequest(BaseModel):
     frequencies: List[float] = []
-    spl: List[float] = []
+    spl: List[Optional[float]] = []
+    phase_degrees: List[Optional[float]] = []
     di: Union[List[Optional[float]], Dict[str, Any]] = []
     di_frequencies: List[float] = []
     impedance_frequencies: List[float] = []
-    impedance_real: List[float] = []
-    impedance_imaginary: List[float] = []
+    impedance_real: List[Optional[float]] = []
+    impedance_imaginary: List[Optional[float]] = []
     directivity: Dict[str, Any] = {}
 
 

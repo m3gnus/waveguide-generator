@@ -289,6 +289,7 @@ export async function openViewResultsModal(panel) {
     const splData = results.spl_on_axis || {};
     const frequencies = splData.frequencies || [];
     let spl = splData.spl || [];
+    const phaseDegrees = splData.phase_degrees || [];
     const diData = results.di || {};
     const diFrequencies = diData.frequencies || frequencies;
     let di = extractPerPlaneDI(diData);
@@ -322,6 +323,7 @@ export async function openViewResultsModal(panel) {
     const payload = {
       frequencies,
       spl,
+      phase_degrees: phaseDegrees,
       di,
       di_frequencies: diFrequencies,
       impedance_frequencies: impedanceFrequencies,

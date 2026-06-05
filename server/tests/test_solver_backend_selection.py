@@ -19,9 +19,9 @@ class SolverBackendSelectionTest(unittest.TestCase):
                 "metal",
             )
 
-    def test_auto_uses_bempp_for_canonical_mesh_even_when_metal_available(self):
+    def test_auto_prefers_metal_when_available_without_mesh_strategy(self):
         with patch("solver.metal_solver.is_metal_solver_available", return_value=True):
-            self.assertEqual(resolve_solver_backend("auto"), "bempp")
+            self.assertEqual(resolve_solver_backend("auto"), "metal")
 
     def test_auto_falls_back_to_bempp_without_metal(self):
         with patch("solver.metal_solver.is_metal_solver_available", return_value=False):

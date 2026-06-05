@@ -29,6 +29,10 @@ def solver_backend_requires_full_domain_quadrants(solver_backend: Any) -> bool:
     return normalize_contract_solver_backend(solver_backend) == "bempp"
 
 
+def solver_backend_requires_closed_shell(solver_backend: Any) -> bool:
+    return normalize_contract_solver_backend(solver_backend) == "bempp"
+
+
 def apply_solver_backend_quadrant_compatibility(
     request: SimulationRequest,
     solver_backend: Any,
@@ -59,9 +63,23 @@ def validate_hornlab_mesher_bem_shell(enc_depth: float, wall_thickness: float) -
     """HornLab mesher BEM requests require either enclosure volume or wall shell thickness."""
     if float(enc_depth) <= 0.0 and float(wall_thickness) <= 0.0:
         raise ValueError(
-            "HornLab mesher BEM simulation requires a closed shell. "
+            "BEMPP simulation requires a closed shell. "
             "Increase enclosure depth or wall thickness."
         )
+
+
+def validate_solver_backend_waveguide_compatibility(
+    waveguide_params: Optional[Dict[str, Any]],
+    solver_backend: Any,
+) -> None:
+    if not solver_backend_requires_closed_shell(solver_backend):
+        return
+    if not isinstance(waveguide_params, dict):
+        return
+    validate_hornlab_mesher_bem_shell(
+        waveguide_params.get("enc_depth", 0.0),
+        waveguide_params.get("wall_thickness", 0.0),
+    )
 
 
 def validate_submit_simulation_request(
@@ -114,11 +132,6 @@ def validate_submit_simulation_request(
         raise ValueError(
             f"Invalid options.mesh.waveguide_params: {exc.errors()}"
         ) from exc
-
-    validate_hornlab_mesher_bem_shell(
-        validated_waveguide.enc_depth,
-        validated_waveguide.wall_thickness,
-    )
 
     normalized_waveguide_params = validated_waveguide.model_dump()
 

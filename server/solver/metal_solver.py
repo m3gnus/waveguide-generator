@@ -22,7 +22,6 @@ except ImportError:  # pragma: no cover - exercised through runtime status
 
 
 VALID_SOLVER_BACKENDS = {"auto", "bempp", "metal"}
-METAL_COMPATIBLE_MESH_STRATEGIES = {"hornlab_mesher"}
 REFERENCE_PRESSURE_PA = 20e-6
 
 
@@ -53,11 +52,7 @@ def resolve_solver_backend(value: Any, *, mesh_strategy: Any = None) -> str:
 
     backend = normalize_solver_backend(value)
     if backend == "auto":
-        normalized_strategy = str(mesh_strategy or "").strip().lower()
-        if (
-            normalized_strategy in METAL_COMPATIBLE_MESH_STRATEGIES
-            and is_metal_solver_available()
-        ):
+        if is_metal_solver_available():
             return "metal"
         return "bempp"
     return backend
@@ -91,6 +86,20 @@ def metal_backend_status() -> dict[str, Any]:
 
 def is_metal_solver_available() -> bool:
     return bool(metal_backend_status().get("available"))
+
+
+def _json_safe_native_value(value: Any) -> Any:
+    if isinstance(value, complex):
+        return {"real": float(value.real), "imaginary": float(value.imag)}
+    if isinstance(value, np.generic):
+        return _json_safe_native_value(value.item())
+    if isinstance(value, np.ndarray):
+        return _json_safe_native_value(value.tolist())
+    if isinstance(value, dict):
+        return {str(key): _json_safe_native_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_native_value(item) for item in value]
+    return value
 
 
 def _polar_config(request) -> dict[str, Any]:
@@ -173,6 +182,24 @@ def _spl_on_axis(result) -> list[float | None]:
     return spl_values
 
 
+def _phase_on_axis(result) -> list[float | None]:
+    angles = np.asarray(result.observation_angles_deg, dtype=float)
+    pressure = np.asarray(result.pressure_complex, dtype=np.complex128)
+    if angles.ndim != 1 or angles.size == 0 or pressure.ndim != 3:
+        return [None for _ in np.asarray(result.frequencies_hz).tolist()]
+
+    on_axis_index = int(np.argmin(np.abs(angles)))
+    values = pressure[:, 0, on_axis_index]
+    phase_values: list[float | None] = []
+    for value in values:
+        amplitude = float(np.abs(value))
+        if amplitude > 0.0 and np.isfinite(amplitude):
+            phase_values.append(float(np.angle(value, deg=True)))
+        else:
+            phase_values.append(None)
+    return phase_values
+
+
 def solve_metal_from_msh(
     msh_path: str | Path,
     request,
@@ -251,15 +278,19 @@ def solve_metal_from_msh(
         ),
         "metal": {
             "native_symmetry_plane": config.native_symmetry_plane,
-            "solver_log": list(result.solver_log or []),
-            "native_diagnostics": list(result.native_diagnostics or []),
+            "solver_log": _json_safe_native_value(list(result.solver_log or [])),
+            "native_diagnostics": _json_safe_native_value(list(result.native_diagnostics or [])),
         },
     }
 
     return {
         "frequencies": frequencies,
         "directivity": directivity,
-        "spl_on_axis": {"frequencies": frequencies, "spl": _spl_on_axis(result)},
+        "spl_on_axis": {
+            "frequencies": frequencies,
+            "spl": _spl_on_axis(result),
+            "phase_degrees": _phase_on_axis(result),
+        },
         "impedance": {
             "frequencies": frequencies,
             "real": [float(value.real) for value in impedance],

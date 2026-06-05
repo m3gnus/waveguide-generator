@@ -15,7 +15,7 @@ from contracts import SimulationRequest, WaveguideParamsRequest
 from services.simulation_validation import (
     apply_solver_backend_quadrant_compatibility,
     is_hornlab_mesher_strategy,
-    validate_hornlab_mesher_bem_shell,
+    validate_solver_backend_waveguide_compatibility,
 )
 from services.solver_runtime import (
     BEMSolver,
@@ -381,8 +381,8 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         )
         _cancellation_callback("Cancellation requested before mesh build started")
         validated = WaveguideParamsRequest(**waveguide_params)
-        validate_hornlab_mesher_bem_shell(validated.enc_depth, validated.wall_thickness)
         validated_payload = validated.model_dump()
+        validate_solver_backend_waveguide_compatibility(validated_payload, solver_backend)
         mesher_result = build_waveguide_mesh(
             validated_payload,
             include_canonical=True,

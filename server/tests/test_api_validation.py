@@ -167,7 +167,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn("waveguide_params", str(ctx.exception.detail))
 
-    def test_hornlab_mesher_requires_enclosure_or_wall_shell(self):
+    def test_bempp_hornlab_mesher_requires_enclosure_or_wall_shell(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -180,6 +180,7 @@ class ApiValidationTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=10,
             sim_type='2',
+            solver_backend="bempp",
             options={
                 "mesh": {
                     "strategy": "hornlab_mesher",
@@ -196,6 +197,7 @@ class ApiValidationTest(unittest.TestCase):
             asyncio.run(submit_simulation(request))
 
         self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn("BEMPP simulation requires a closed shell", str(ctx.exception.detail))
         self.assertIn("Increase enclosure depth or wall thickness", str(ctx.exception.detail))
 
     def test_hornlab_mesher_runtime_gate_returns_503(self):
@@ -282,6 +284,92 @@ class ApiValidationTest(unittest.TestCase):
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
         # Queued payload preserves the validated symmetry-reduction domain.
         self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
+
+    def test_auto_metal_submission_allows_bare_horn_without_closed_shell(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            solver_backend="auto",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {
+                        "formula_type": "OSSE",
+                        "quadrants": 1,
+                        "wall_thickness": 0.0,
+                        "enc_depth": 0.0,
+                    }
+                }
+            }
+        )
+
+        job_id = "11111111-1111-1111-1111-111111111113"
+
+        with patch("api.routes_simulation.resolve_solver_backend", return_value="metal"), patch(
+            "api.routes_simulation.METAL_SOLVER_READY", True
+        ), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
+            "api.routes_simulation.create_simulation_job", return_value=job_id
+        ) as create_simulation_job:
+            result = asyncio.run(submit_simulation(request))
+
+        self.assertEqual(result["job_id"], job_id)
+        submitted_request = create_simulation_job.call_args.args[0].model_dump()
+        self.assertEqual(submitted_request["solver_backend"], "metal")
+        self.assertEqual(
+            submitted_request["options"]["mesh"]["waveguide_params"]["wall_thickness"],
+            0.0,
+        )
+        self.assertEqual(
+            submitted_request["options"]["mesh"]["waveguide_params"]["enc_depth"],
+            0.0,
+        )
+
+    def test_bempp_submission_rejects_bare_horn_without_closed_shell(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            solver_backend="bempp",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {
+                        "formula_type": "OSSE",
+                        "quadrants": 1,
+                        "wall_thickness": 0.0,
+                        "enc_depth": 0.0,
+                    }
+                }
+            }
+        )
+
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(submit_simulation(request))
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn("BEMPP simulation requires a closed shell", str(ctx.exception.detail))
 
     def test_hornlab_mesher_submission_forces_full_domain_for_bempp_without_mutating_input(self):
         request = SimulationRequest(

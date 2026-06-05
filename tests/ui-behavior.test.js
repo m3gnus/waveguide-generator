@@ -322,6 +322,17 @@ test("legacy dependency summary blocks mesh builds when HornLab mesher package i
 test("describeSelectedDevice includes device name only when it adds signal", () => {
   assert.equal(
     describeSelectedDevice({
+      solver: "metal-bem",
+      deviceInterface: {
+        selected_mode: "opencl_cpu",
+        device_name: "CPU",
+      },
+    }),
+    "Using: Metal BEM",
+  );
+
+  assert.equal(
+    describeSelectedDevice({
       deviceInterface: {
         selected_mode: "opencl_gpu",
         device_name: "Fake GPU",
