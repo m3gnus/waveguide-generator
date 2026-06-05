@@ -25,6 +25,15 @@ export function extractFlatDI(diData) {
     return diData.di;
   }
 
+  // Metal backend compatibility: { frequencies: [...], di: { horizontal: [...] } }
+  if (diData.di && typeof diData.di === 'object' && !Array.isArray(diData.di)) {
+    for (const plane of PLANE_PRIORITY) {
+      if (Array.isArray(diData.di[plane]) && diData.di[plane].length > 0) {
+        return diData.di[plane];
+      }
+    }
+  }
+
   // Per-plane format: pick first available plane
   for (const plane of PLANE_PRIORITY) {
     if (Array.isArray(diData[plane]) && diData[plane].length > 0) {
@@ -50,6 +59,18 @@ export function extractPerPlaneDI(diData) {
     if (Array.isArray(diData[plane]) && diData[plane].length > 0) {
       result[plane] = diData[plane];
       hasPerPlane = true;
+    }
+  }
+
+  if (hasPerPlane) return result;
+
+  // Metal backend compatibility: { frequencies: [...], di: { horizontal: [...] } }
+  if (diData.di && typeof diData.di === 'object' && !Array.isArray(diData.di)) {
+    for (const plane of PLANE_PRIORITY) {
+      if (Array.isArray(diData.di[plane]) && diData.di[plane].length > 0) {
+        result[plane] = diData.di[plane];
+        hasPerPlane = true;
+      }
     }
   }
 

@@ -18,6 +18,7 @@ from services.simulation_validation import (
     apply_solver_backend_quadrant_compatibility,
     build_submit_simulation_request,
     is_hornlab_mesher_strategy,
+    validate_solver_backend_waveguide_compatibility,
     validate_submit_simulation_request,
 )
 from services.solver_runtime import (
@@ -69,6 +70,13 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
         request_to_submit,
         solver_backend,
     )
+    try:
+        validate_solver_backend_waveguide_compatibility(
+            validation.waveguide_params,
+            solver_backend,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if is_hornlab_mesher_strategy(validation.mesh_strategy):
         if not HORNLAB_MESHER_AVAILABLE or build_waveguide_mesh is None:

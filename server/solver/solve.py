@@ -103,6 +103,15 @@ def _operator_kwargs(device_interface: str, precision: str) -> Dict[str, str]:
     }
 
 
+def _unpack_single_frequency_result(result):
+    """Accept both old five-field test stubs and the current phase-aware result."""
+    if len(result) == 5:
+        spl, impedance, di, solution, iter_count = result
+        return spl, impedance, di, solution, iter_count, None
+    spl, impedance, di, solution, iter_count, phase_degrees = result[:6]
+    return spl, impedance, di, solution, iter_count, phase_degrees
+
+
 # ---------------------------------------------------------------------------
 # Parallel frequency chunk helper (module-level, picklable)
 # ---------------------------------------------------------------------------
@@ -300,7 +309,7 @@ class HornBEMSolver:
                 If None, only the on-axis SPL point is evaluated.
 
         Returns:
-            (spl_on_axis, impedance_complex, di_estimate, solution_tuple, iter_count)
+            (spl_on_axis, impedance_complex, di_estimate, solution_tuple, iter_count, phase_degrees)
             where solution_tuple = (p_total, u_total, p1_space, dp0_space)
         """
         omega = 2.0 * np.pi * freq
@@ -365,8 +374,10 @@ class HornBEMSolver:
         pressure_on_axis = dlp_pot * p_total - slp_pot * neumann_fun
 
         p_ref = 20e-6
-        p_amplitude = np.abs(pressure_on_axis[0, 0])
+        p_complex = pressure_on_axis[0, 0]
+        p_amplitude = np.abs(p_complex)
         spl = 20 * np.log10(p_amplitude / p_ref) if p_amplitude > 0 else 0.0
+        phase_degrees = float(np.angle(p_complex, deg=True)) if p_amplitude > 0 else None
 
         # Impedance
         impedance = calculate_throat_impedance_horn(
@@ -378,7 +389,7 @@ class HornBEMSolver:
         di = estimate_di_from_ka(self.grid, k, observation_frame=frame)
 
         solution = (p_total, velocity_fun, self.p1_space, self.dp0_space)
-        return float(spl), impedance, float(di), solution, iter_count
+        return float(spl), impedance, float(di), solution, iter_count, phase_degrees
 
     # ------------------------------------------------------------------
     # Frequency sweep helpers
@@ -396,7 +407,7 @@ class HornBEMSolver:
 
         Returns:
             (results_list, iteration_counts)
-            results_list items: (freq, spl, impedance, di, solution_tuple) or None on failure
+            results_list items: (freq, spl, impedance, di, solution_tuple, phase_degrees) or None on failure
             iteration_counts: GMRES iteration count per frequency (or None on failure)
         """
         frequencies = np.asarray(frequencies, dtype=float)
@@ -409,12 +420,16 @@ class HornBEMSolver:
             if show_progress:
                 logger.info("[HornBEM] [%d/%d] %.1f Hz", i + 1, len(frequencies), freq)
             try:
-                spl, impedance, di, solution, iters = self._solve_single_frequency(
-                    freq,
-                    observation_frame=observation_frame,
-                    observation_distance_m=observation_distance_m,
+                spl, impedance, di, solution, iters, phase_degrees = (
+                    _unpack_single_frequency_result(
+                        self._solve_single_frequency(
+                            freq,
+                            observation_frame=observation_frame,
+                            observation_distance_m=observation_distance_m,
+                        )
+                    )
                 )
-                results.append((freq, spl, impedance, di, solution))
+                results.append((freq, spl, impedance, di, solution, phase_degrees))
                 iter_counts.append(iters)
             except Exception as exc:
                 logger.error("[HornBEM] Error at %.1f Hz: %s", freq, exc)
@@ -703,7 +718,7 @@ def solve_optimized(
     results = {
         "frequencies": frequencies.tolist(),
         "directivity": {plane_id: [] for plane_id in requested_plane_ids},
-        "spl_on_axis": {"frequencies": frequencies.tolist(), "spl": []},
+        "spl_on_axis": {"frequencies": frequencies.tolist(), "spl": [], "phase_degrees": []},
         "impedance": {"frequencies": frequencies.tolist(), "real": [], "imaginary": []},
         "di": {"frequencies": frequencies.tolist(), "di": []},
         "metadata": {
@@ -789,10 +804,14 @@ def solve_optimized(
 
         try:
             iter_start = time.time()
-            spl, impedance, di, solution, iter_count = solver._solve_single_frequency(
-                freq,
-                observation_frame=observation_frame,
-                observation_distance_m=observation_distance_m,
+            spl, impedance, di, solution, iter_count, phase_degrees = (
+                _unpack_single_frequency_result(
+                    solver._solve_single_frequency(
+                        freq,
+                        observation_frame=observation_frame,
+                        observation_distance_m=observation_distance_m,
+                    )
+                )
             )
             iter_time = time.time() - iter_start
             success_count += 1
@@ -801,6 +820,9 @@ def solve_optimized(
                 logger.info(" -> %.1f dB, DI=%.1f dB, iters=%s (%.2fs)", spl, di, iter_count, iter_time)
 
             results["spl_on_axis"]["spl"].append(float(spl))
+            results["spl_on_axis"]["phase_degrees"].append(
+                float(phase_degrees) if phase_degrees is not None else None
+            )
             results["impedance"]["real"].append(float(impedance.real))
             results["impedance"]["imaginary"].append(float(impedance.imag))
             results["di"]["di"].append(float(di))
@@ -823,10 +845,14 @@ def solve_optimized(
                     )
                     try:
                         iter_start = time.time()
-                        spl, impedance, di, solution, iter_count = solver._solve_single_frequency(
-                            freq,
-                            observation_frame=observation_frame,
-                            observation_distance_m=observation_distance_m,
+                        spl, impedance, di, solution, iter_count, phase_degrees = (
+                            _unpack_single_frequency_result(
+                                solver._solve_single_frequency(
+                                    freq,
+                                    observation_frame=observation_frame,
+                                    observation_distance_m=observation_distance_m,
+                                )
+                            )
                         )
                         iter_time = time.time() - iter_start
                         success_count += 1
@@ -847,6 +873,9 @@ def solve_optimized(
                                 spl, di, iter_count, iter_time,
                             )
                         results["spl_on_axis"]["spl"].append(float(spl))
+                        results["spl_on_axis"]["phase_degrees"].append(
+                            float(phase_degrees) if phase_degrees is not None else None
+                        )
                         results["impedance"]["real"].append(float(impedance.real))
                         results["impedance"]["imaginary"].append(float(impedance.imag))
                         results["di"]["di"].append(float(di))
@@ -882,6 +911,7 @@ def solve_optimized(
                 frequency_failure(freq, "frequency_solve", "frequency_solve_failed", str(exc))
             )
             results["spl_on_axis"]["spl"].append(None)
+            results["spl_on_axis"]["phase_degrees"].append(None)
             results["impedance"]["real"].append(None)
             results["impedance"]["imaginary"].append(None)
             results["di"]["di"].append(None)

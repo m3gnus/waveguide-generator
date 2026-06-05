@@ -1,3 +1,4 @@
+import json
 import math
 import tempfile
 import unittest
@@ -85,7 +86,9 @@ class MetalSolverAdapterTest(unittest.TestCase):
             ),
             impedance=np.array([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex128),
             timings={"total_s": 0.1},
-            solver_log=[],
+            solver_log=[
+                {"frequency_hz": np.float64(1000.0), "impedance": 1.0 + 2.0j},
+            ],
             native_diagnostics=[],
         )
 
@@ -130,9 +133,15 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertAlmostEqual(spl[0], 0.0, places=6)
         self.assertAlmostEqual(spl[1], 20.0, places=6)
         self.assertNotEqual(spl, [0.0, 0.0])
+        self.assertEqual(result["spl_on_axis"]["phase_degrees"], [0.0, 0.0])
         self.assertIn("horizontal", result["di"]["di"])
         self.assertEqual(len(result["di"]["di"]["horizontal"]), 2)
         self.assertTrue(all(math.isfinite(value) for value in result["di"]["di"]["horizontal"]))
+        json.dumps(result)
+        self.assertEqual(
+            result["metadata"]["metal"]["solver_log"][0]["impedance"],
+            {"real": 1.0, "imaginary": 2.0},
+        )
 
 
 if __name__ == "__main__":

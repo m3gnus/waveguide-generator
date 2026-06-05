@@ -5,7 +5,24 @@ import {
   exportAsPolarCSV,
   exportAsVACSSpectrum,
 } from "../src/ui/simulation/exports.js";
+import { extractFlatDI, extractPerPlaneDI } from "../src/ui/simulation/diHelpers.js";
 import { renderSolveStatsSummary } from "../src/ui/simulation/results.js";
+
+test("DI helpers accept nested per-plane backend payloads", () => {
+  const payload = {
+    frequencies: [100, 200],
+    di: {
+      horizontal: [6, 7],
+      vertical: [5, 6],
+    },
+  };
+
+  assert.deepEqual(extractFlatDI(payload), [6, 7]);
+  assert.deepEqual(extractPerPlaneDI(payload), {
+    horizontal: [6, 7],
+    vertical: [5, 6],
+  });
+});
 
 test("renderSolveStatsSummary derives axes from directivity result keys when metadata omits enabled_axes", () => {
   const markup = renderSolveStatsSummary({

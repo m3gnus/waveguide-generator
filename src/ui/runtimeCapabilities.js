@@ -45,6 +45,10 @@ export function modeLabel(mode) {
 }
 
 export function describeSelectedDevice(health) {
+  if (String(health?.solver || '').trim().toLowerCase() === 'metal-bem') {
+    return 'Using: Metal BEM';
+  }
+
   const deviceInfo = health?.deviceInterface;
   if (!deviceInfo || typeof deviceInfo !== 'object') {
     return '';
