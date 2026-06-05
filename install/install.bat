@@ -257,6 +257,18 @@ echo   Preferred backend interpreter: %CD%\.venv\Scripts\python.exe
 echo   Marker file: %PREFERRED_PYTHON_FILE%
 echo.
 
+echo Building Metal native release helper when available...
+node scripts\run-backend-python.js server\scripts\build_metal_native_release.py
+if errorlevel 1 (
+    echo ERROR: Metal native release helper build failed.
+    echo        Apple Silicon installs require this for the fast Metal BEM solve path.
+    echo        Re-run after fixing the issue above, or run: npm run build:metal-helper
+    exit /b 1
+) else (
+    echo   Metal native helper check complete.
+)
+echo.
+
 echo Running backend dependency preflight...
 node scripts\preflight-backend-runtime.js --strict
 if errorlevel 1 (

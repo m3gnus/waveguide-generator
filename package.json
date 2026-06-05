@@ -20,6 +20,7 @@
     "diag:mesher:reference-horn": "node scripts/run-backend-python.js scripts/diagnostics/build-occ-mesh-reference-horn.py",
     "diag:mesher:closed": "node scripts/run-backend-python.js scripts/diagnostics/check-occ-closed-mesh.py",
     "benchmark:reference-horn": "node scripts/run-backend-python.js --cwd server scripts/benchmark_reference_horn.py",
+    "build:metal-helper": "node scripts/run-backend-python.js server/scripts/build_metal_native_release.py",
     "preflight:backend": "node scripts/preflight-backend-runtime.js",
     "preflight:backend:strict": "node scripts/preflight-backend-runtime.js --strict",
     "doctor:backend": "node scripts/doctor-backend-runtime.js",

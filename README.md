@@ -48,7 +48,7 @@ Run once from the project folder, the folder containing `package.json`:
 
 The setup scripts validate that you are in the full project folder, install JavaScript and Python dependencies, and write the preferred backend interpreter to `.waveguide/backend-python.path`.
 
-Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used.
+Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used. On Apple Silicon, install also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper.
 
 Network note: backend setup installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs. If Metal BEM is not ready on the host, setup also installs the pinned `bempp-cl` fallback.
 
@@ -72,7 +72,7 @@ If no solver backend is ready, the app still works for 3D preview and local STL/
 - gmsh: `>=4.11,<5.0` (required by the HornLab mesher)
 - bempp-cl: pinned git commit `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` / version `0.4.2` (optional BEMPP solver backend)
 
-The maintained runtime uses the HornLab Metal BEM backend when available. Otherwise, the BEMPP fallback path needs `bempp-cl`, `pyopencl`, and OpenCL. There is no legacy `bempp_api` fallback path.
+The maintained runtime uses the HornLab Metal BEM backend when available. On Apple Silicon, `npm run build:metal-helper` builds/verifies the required release native helper. Otherwise, the BEMPP fallback path needs `bempp-cl`, `pyopencl`, and OpenCL. There is no legacy `bempp_api` fallback path.
 
 Manual install examples:
 
@@ -148,6 +148,7 @@ Backend runtime checks:
 node scripts/run-backend-python.js -c "import gmsh; print(gmsh.__version__)"
 npm run preflight:backend
 npm run preflight:backend:strict
+npm run build:metal-helper
 npm run doctor:backend
 npm run doctor:backend:json
 npm run doctor:backend:strict

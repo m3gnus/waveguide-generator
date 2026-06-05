@@ -95,8 +95,10 @@ The dependency doctor also reports optional bounded solve validation evidence (`
 
 Current Apple Silicon contract:
 
-- Apple Silicon OpenCL solve is currently reported unsupported/unready for `/api/solve`.
-- `./scripts/setup-opencl-backend.sh` provisions an investigation/runtime-repro environment, not a production-readiness fix for bounded solves.
+- HornLab Metal BEM is the preferred `/api/solve` path when available.
+- The Swift native helper must be selected from `.build/release`; strict preflight and doctor report `metal_release_helper` as required on Apple Silicon.
+- Build or repair the helper with `npm run build:metal-helper`.
+- The BEMPP/OpenCL path remains a fallback path when Metal BEM is unavailable on supported hosts.
 
 ### 1.0.2 Backend dependency doctor
 
@@ -129,6 +131,7 @@ Doctor report contract:
   - `hornlab-waveguide-mesher`
   - `bempp-cl`
   - OpenCL runtime
+  - Metal native release helper (`metal_release_helper`, required on Apple Silicon)
   - bounded solve validation (`bounded_solve_validation`)
   - `matplotlib` (optional; chart render endpoints)
 - Summary includes endpoint-scoped readiness:

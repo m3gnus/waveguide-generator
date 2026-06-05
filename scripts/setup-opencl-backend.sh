@@ -135,6 +135,17 @@ printf '%s\n' "$ENV_PREFIX/bin/python" > "$PREFERRED_PYTHON_FILE"
 echo "  Marker file: $PREFERRED_PYTHON_FILE"
 
 echo
+echo "Building Metal native release helper when available..."
+if node "$ROOT_DIR/scripts/run-backend-python.js" "$ROOT_DIR/server/scripts/build_metal_native_release.py"; then
+    echo "  Metal native helper check complete."
+else
+    echo "ERROR: Metal native release helper build failed."
+    echo "       Apple Silicon installs require this for the fast Metal BEM solve path."
+    echo "       Re-run after fixing the issue above, or run: npm run build:metal-helper"
+    exit 1
+fi
+
+echo
 echo "Running backend dependency preflight..."
 if node "$ROOT_DIR/scripts/preflight-backend-runtime.js" --strict; then
     echo "  Backend preflight: required checks ready."
