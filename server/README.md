@@ -15,12 +15,15 @@ python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r server/requirements.txt
 ./.venv/bin/pip install -r server/requirements-gmsh.txt
+
+# BEMPP fallback only, when Metal BEM is not ready on this host
+./.venv/bin/pip install pyopencl
 ./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 Notes:
 
-- The root setup scripts (`install/install.sh` and `install/install.bat`) automatically attempt HornLab mesher, Metal BEM, gmsh, and bempp installation with fallback handling.
+- The root setup scripts (`install/install.sh` and `install/install.bat`) automatically install HornLab mesher, Metal BEM, and gmsh, then install `bempp-cl`/OpenCL fallback dependencies only when Metal BEM is not ready.
 - `server/requirements.txt` installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs.
 - `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
@@ -164,9 +167,9 @@ The backend now enforces a version matrix at runtime:
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
 | HornLab mesher      | `334e51f8455def6c60e0683fbc29ae46ae6d6230` | `/api/mesh/build` |
-| HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | `/api/solve`      |
+| HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | default `/api/solve` backend when ready |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
-| bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | `/api/solve`      |
+| bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | BEMPP fallback `/api/solve` backend |
 
 Notes:
 
@@ -205,13 +208,14 @@ python3 -m venv .venv
 Optional for `/api/solve`:
 
 ```bash
+./.venv/bin/pip install pyopencl
 ./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 Notes:
 
 - `/api/mesh/build` requires the Python `gmsh` package.
-- `/api/solve` additionally requires `bempp-cl`.
+- `/api/solve` requires one ready solver backend: Metal BEM when available, otherwise `bempp-cl` plus OpenCL.
 - Plot rendering uses the non-interactive Matplotlib `Agg` backend, so chart/directivity endpoints do not require a display server.
 - On headless Linux, prefer the Gmsh `-nox` wheel index documented above if the default wheel is unavailable.
 

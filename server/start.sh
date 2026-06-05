@@ -119,22 +119,28 @@ PY
 
 echo ""
 
-# Check if bempp is installed
-echo "Checking for bempp-cl..."
+# Check solver backend availability
+echo "Checking solver backend availability..."
 $PYTHON_BIN - <<'PY'
-import importlib.util
+from solver.deps import BEMPP_RUNTIME_READY
+from solver.metal_solver import metal_backend_status
 import sys
-has_new = importlib.util.find_spec("bempp_cl")
-sys.exit(0 if has_new else 1)
+
+metal_status = metal_backend_status()
+if metal_status.get("available"):
+    print("✅ Metal BEM backend is ready")
+    sys.exit(0)
+if BEMPP_RUNTIME_READY:
+    print("✅ bempp-cl fallback backend is ready")
+    sys.exit(0)
+print("⚠️  Warning: no solver backend is ready.")
+print("   The server can start, but /api/solve will stay unavailable until Metal BEM or bempp-cl is ready.")
+print("   To install the BEMPP fallback, run:")
+print("   python -m pip install pyopencl")
+print("   python -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33")
+sys.exit(1)
 PY
-if [ $? -eq 0 ]; then
-    echo "✅ bempp-cl is installed"
-else
-    echo "⚠️  Warning: bempp-cl not found."
-    echo "   The server can start, but /api/solve will stay unavailable until bempp-cl is installed."
-    echo "   To install bempp-cl, run:"
-    echo "   $PYTHON_BIN -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
-fi
+true
 
 echo ""
 echo "Starting server on http://localhost:8000..."

@@ -6,11 +6,10 @@ fastapi>=0.104.1
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 
-# Scientific computing (also prerequisites for bempp-cl if installed separately)
+# Scientific computing
 numpy
 scipy
 meshio>=4.0.16
-pyopencl
 
 # Pinned VCS dependencies for reproducible public installs.
 git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@334e51f8455def6c60e0683fbc29ae46ae6d6230

@@ -169,12 +169,36 @@ if errorlevel 1 (
 for /f "tokens=*" %%v in ('.venv\Scripts\python.exe -c "import gmsh; print(gmsh.__version__)"') do echo   gmsh Python version: %%v
 echo.
 
-echo Installing bempp-cl ^(needed for simulations^)...
+echo Checking Metal BEM backend...
+set "METAL_BEM_READY=0"
+set "PYTHONPATH=%CD%\server;%PYTHONPATH%"
+.venv\Scripts\python.exe -c "import sys; from solver.metal_solver import metal_backend_status; status = metal_backend_status(); print(status.get('reason') or ('Metal BEM backend is ready.' if status.get('available') else 'Metal BEM backend is not available on this host.')); sys.exit(0 if status.get('available') else 1)"
+if errorlevel 1 (
+    echo   Metal BEM is not ready.
+    echo   Installing BEMPP/OpenCL fallback dependencies.
+) else (
+    set "METAL_BEM_READY=1"
+    echo   Metal BEM is ready.
+    echo   Skipping bempp-cl and OpenCL fallback setup.
+)
+echo.
+
+if "%METAL_BEM_READY%"=="1" goto :opencl_done
+
+echo Installing bempp-cl fallback ^(needed when Metal BEM is unavailable^)...
+.venv\Scripts\python.exe -m pip install --quiet pyopencl
+if errorlevel 1 (
+    echo   WARNING: pyopencl automatic install failed.
+    echo            You can retry later with:
+    echo              .venv\Scripts\python.exe -m pip install pyopencl
+    goto :opencl_done
+)
 .venv\Scripts\python.exe -m pip install %BEMPP_CL_URL%
 if errorlevel 1 (
     echo   WARNING: bempp-cl automatic install failed.
     echo            You can retry later with:
     echo              .venv\Scripts\python.exe -m pip install %BEMPP_CL_URL%
+    goto :opencl_done
 ) else (
     echo   bempp-cl installed.
 )
