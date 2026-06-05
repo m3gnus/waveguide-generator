@@ -86,3 +86,29 @@ test('viewport throat-disc detachment is a no-op when the mesh lacks a throat-di
   assert.deepEqual(detached.indices, mesh.indices);
   assert.equal(detached.detachedVertexCount, 0);
 });
+
+test('viewport source surface shows spherical cap differently from flat disc', () => {
+  const flat = buildViewportMesh('R-OSSE', {
+    sourceShape: 2,
+    sourceRadius: -1,
+    sourceCurv: 0
+  });
+  const spherical = buildViewportMesh('R-OSSE', {
+    sourceShape: 1,
+    sourceRadius: -1,
+    sourceCurv: 0
+  });
+
+  const flatCenterIndex = Math.max(
+    ...collectGroupVertices(flat.indices, flat.groups.throat_disc)
+  );
+  const sphericalCenterIndex = Math.max(
+    ...collectGroupVertices(spherical.indices, spherical.groups.throat_disc)
+  );
+
+  assert.equal(flat.vertices[flatCenterIndex * 3 + 1], 0);
+  assert.ok(
+    spherical.vertices[sphericalCenterIndex * 3 + 1] > flat.vertices[flatCenterIndex * 3 + 1],
+    'spherical source cap should protrude axially from the flat throat plane'
+  );
+});

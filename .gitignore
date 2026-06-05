@@ -9,6 +9,7 @@ coverage/
 .waveguide/
 
 # Test artifacts
+.pytest_cache/
 playwright-report/
 test-results/
 
@@ -32,6 +33,9 @@ AGENTS.md
 
 # Runtime artifacts
 payload.json
+*.sqlite
+*.sqlite3
+server/data/*.db
 
 # Benchmark result artifacts
 server/scripts/*_results.json

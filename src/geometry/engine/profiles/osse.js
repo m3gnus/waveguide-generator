@@ -1,4 +1,5 @@
 import { clamp, evalParam, toRad } from '../../common.js';
+import { debugError } from '../../../logging/debug.js';
 import { DEFAULTS, HORN_PROFILES } from '../constants.js';
 import { getGuidingCurveRadius } from './guidingCurve.js';
 import { validateParameters } from './validation.js';
@@ -6,17 +7,17 @@ import { validateParameters } from './validation.js';
 function computeOsseBaseRadius(z, r0, k, a0, a) {
   const term1 = (k * r0) ** 2;
   const term2 = 2 * k * r0 * z * Math.tan(a0);
-  const term3 = (z ** 2) * (Math.tan(a) ** 2);
+  const term3 = z ** 2 * Math.tan(a) ** 2;
   return Math.sqrt(term1 + term2 + term3) + r0 * (1 - k);
 }
 
 function computeOsseTermRadius(z, L, s, n, q) {
   if (z <= 0 || n <= 0 || q <= 0 || L <= 0) return 0;
 
-  const zNorm = q * z / L;
-  if (zNorm > 1.0) return (s * L / q);
+  const zNorm = (q * z) / L;
+  if (zNorm > 1.0) return (s * L) / q;
 
-  return (s * L / q) * (1 - Math.pow(1 - Math.pow(zNorm, n), 1 / n));
+  return ((s * L) / q) * (1 - Math.pow(1 - Math.pow(zNorm, n), 1 / n));
 }
 
 export function computeOsseRadius(z, p, params, overrides = {}) {
@@ -50,7 +51,7 @@ function calculateArcCenterFromRadius(p1, p2, arcRadius, preferUpper = true) {
   const c1 = { x: midX + nx * h, y: midY + ny * h };
   const c2 = { x: midX - nx * h, y: midY - ny * h };
 
-  return preferUpper ? (c1.y >= c2.y ? c1 : c2) : (c1.y < c2.y ? c1 : c2);
+  return preferUpper ? (c1.y >= c2.y ? c1 : c2) : c1.y < c2.y ? c1 : c2;
 }
 
 function calculateArcCenterFromTangent(p1, p2, tangentAngle) {
@@ -67,7 +68,7 @@ function calculateArcCenterFromTangent(p1, p2, tangentAngle) {
   return {
     x: p2.x + n.x * arcRadius,
     y: p2.y + n.y * arcRadius,
-    radius: arcRadius
+    radius: arcRadius,
   };
 }
 
@@ -114,15 +115,7 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
     return computed;
   }
 
-  const {
-    totalLength,
-    extLen,
-    slotLen,
-    r0Base,
-    extAngleRad,
-    a0Deg,
-    L
-  } = config;
+  const { totalLength, extLen, slotLen, r0Base, extAngleRad, a0Deg, L } = config;
 
   const targetR = getGuidingCurveRadius(p, params);
   if (!Number.isFinite(targetR)) return evalParam(params.a, p);
@@ -143,7 +136,7 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
       L,
       aDeg: mid,
       a0Deg,
-      r0: r0Main
+      r0: r0Main,
     });
     if (!Number.isFinite(rMid)) break;
     if (rMid < targetR) {
@@ -159,7 +152,7 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
 export function calculateOSSE(z, p, params, options = {}) {
   const validation = validateParameters(params, 'OSSE');
   if (!validation.valid) {
-    console.error('Validation failed:', validation.errors);
+    debugError('Validation failed:', validation.errors);
     return { x: NaN, y: NaN };
   }
 
@@ -177,8 +170,9 @@ export function calculateOSSE(z, p, params, options = {}) {
 
   const throatProfile = Number(params.throatProfile || HORN_PROFILES.STANDARD);
   const gcurveType = Number(params.gcurveType || 0);
-  const coverageAngle = options.coverageAngle
-    ?? (gcurveType === 0
+  const coverageAngle =
+    options.coverageAngle ??
+    (gcurveType === 0
       ? evalParam(params.a, p)
       : computeCoverageAngleFromGuidingCurve(p, params, config, options.gcurveCache));
 
@@ -199,7 +193,7 @@ export function calculateOSSE(z, p, params, options = {}) {
         L,
         aDeg: coverageAngle,
         a0Deg,
-        r0: r0Main
+        r0: r0Main,
       });
     }
   }

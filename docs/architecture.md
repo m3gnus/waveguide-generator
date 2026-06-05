@@ -8,7 +8,7 @@ If this file and runtime code disagree, update the docs to match the code.
 Waveguide Generator is a browser-based horn design tool with a FastAPI backend. Three stable runtime layers:
 
 1. **Frontend** (vanilla JS + Three.js): Geometry rendering, UI, export orchestration in `src/`
-2. **Backend** (FastAPI + Python): OCC meshing, BEM solve, job scheduling in `server/`
+2. **Backend** (FastAPI + Python): HornLab meshing, BEM solve, job scheduling in `server/`
 3. **Shared contracts**: Canonical mesh payloads, API request/response shapes
 
 **Entry points**:
@@ -27,25 +27,27 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 **Backend**:
 - `server/api/routes_*.py` — HTTP handlers (routes only, no business logic)
 - `server/services/*.py` — validation, job orchestration, state management, runtime checks
-- `server/solver/` — OCC mesh generation, BEM assembly/solve, mesh validation
+- `server/solver/` — HornLab mesher adapters, BEM assembly/solve, mesh validation
 
 ## Core Workflows
 
 **Render pipeline** (viewport update):
 1. UI parameter changes → `GlobalState`
 2. `App.requestRender()` → `DesignModule` (parameter normalization)
-3. `GeometryModule` builds shape definition
-4. Three.js tessellates + renders in WebGL
+3. `GeometryModule` builds a JS geometry shape and `buildGeometryMeshFromShape(...)` tessellates it
+4. Three.js renders the viewport mesh in WebGL
+5. `/api/mesh/viewport` exists as a HornLab mesher/Gmsh display-mesh route for parity and backend-generated viewport checks, but it is not the active scene render path
 
 **Simulation pipeline** (async job):
-1. UI submission → `SimulationModule` (payload + OCC adaptive params)
+1. UI submission → `SimulationModule` (payload + HornLab mesher params)
 2. `POST /api/solve` → backend job queue
 3. Frontend polls `GET /api/status/{job_id}` + `GET /api/results/{job_id}`
 4. Results cached in `GlobalState` + folder manifests (if workspace active)
 
 **Export pipeline**:
 - **Local exports**: STL/CSV/config via `ExportModule.useCases.js`
-- **OCC mesh export**: `POST /api/mesh/build` → `.msh` file
+- **Backend mesh export**: `POST /api/mesh/build` → `hornlab-waveguide-mesher` `.msh` file
+- **STEP surface export**: `POST /api/mesh/step` → single-layer inner horn surface STEP
 - **Result bundles**: Auto/manual via `src/ui/simulation/exports.js` (multi-format, workspace-aware)
 
 ## Durable Contracts
@@ -57,6 +59,7 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 
 **Simulation**:
 - Backend `/api/solve` is required; no mock/fallback solver supported
+- `/api/solve` accepts `solver_backend` values `auto`, `bempp`, and `metal`; the BEMPP path forces full-domain quadrants while Metal can consume the reduced HornLab mesher domain
 - Stable `/api/solve` numerics are fixed to single precision with no warm-up or GMRES strong-form auto-enable path
 - Live job-stage reporting is collapsed to `initializing`, `mesh_prepare`, `bem_solve`, and `finalizing` (plus terminal/cancellation states)
 - History uses one source mode: folder workspace (manifests only) OR backend jobs + cache (never mixed)
@@ -64,6 +67,7 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 
 **Export**:
 - `/api/mesh/build` returns `.msh` files only (not `.geo`)
+- `/api/mesh/step` returns a full-domain single-layer inner surface STEP, excluding wall thickness, caps, and enclosure geometry
 - Result bundles: multi-format export coordinated via settings IDs
 - Auto-export: runs once per completion, records timestamp marker
 
@@ -72,4 +76,3 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 **For architecture & design decisions**: `docs/architecture.md` (this file)
 **For current implementation**: `docs/PROJECT_DOCUMENTATION.md`
 **For module contracts**: `docs/modules/`
-**For active work**: `docs/backlog.md`

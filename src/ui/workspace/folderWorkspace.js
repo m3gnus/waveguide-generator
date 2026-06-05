@@ -1,34 +1,24 @@
 import { AppEvents } from '../../events.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
+import { debugWarn } from '../../logging/debug.js';
 
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
 
 let selectedFolderLabel = DEFAULT_FOLDER_LABEL;
 
 const changeListeners = new Set();
-const warningListeners = new Set();
 
 function emitChange() {
   const snapshot = {
     handle: null,
-    label: selectedFolderLabel
+    label: selectedFolderLabel,
   };
   AppEvents.emit('ui:folder-workspace-changed', snapshot);
   for (const listener of changeListeners) {
     try {
       listener(snapshot);
     } catch (error) {
-      console.warn('folderWorkspace change listener failed:', error);
-    }
-  }
-}
-
-function emitWarning(message, context = null) {
-  for (const listener of warningListeners) {
-    try {
-      listener({ message, context });
-    } catch (error) {
-      console.warn('folderWorkspace warning listener failed:', error);
+      debugWarn('folderWorkspace change listener failed:', error);
     }
   }
 }
@@ -67,16 +57,6 @@ export function subscribeFolderWorkspace(listener) {
   };
 }
 
-export function subscribeFolderWorkspaceWarnings(listener) {
-  if (typeof listener !== 'function') {
-    return () => {};
-  }
-  warningListeners.add(listener);
-  return () => {
-    warningListeners.delete(listener);
-  };
-}
-
 export async function ensureFolderWritePermission() {
   return false;
 }
@@ -88,7 +68,7 @@ export async function requestFolderSelection() {
 export async function fetchWorkspacePath() {
   try {
     const res = await fetch(`${DEFAULT_BACKEND_URL}/api/workspace/path`, {
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -112,7 +92,7 @@ export async function openWorkspaceInFinder({ job } = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(8000)
+      signal: AbortSignal.timeout(8000),
     });
     return res.ok;
   } catch {
@@ -124,7 +104,7 @@ export async function requestBackendFolderSelection() {
   try {
     const res = await fetch(`${DEFAULT_BACKEND_URL}/api/workspace/select`, {
       method: 'POST',
-      signal: AbortSignal.timeout(130000)
+      signal: AbortSignal.timeout(130000),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -147,18 +127,42 @@ export function normalizeWorkspaceSubdir(subdir) {
   const raw = String(subdir ?? '').trim();
   if (!raw) return '';
 
-  const normalized = raw.replace(/\\/g, '/').split('/').map((part) => part.trim()).filter(Boolean);
+  const normalized = raw
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean);
   if (normalized.some((part) => part === '.' || part === '..')) {
     throw new Error('Invalid workspace subdirectory');
   }
   return normalized.join('/');
 }
 
+async function readWorkspaceErrorDetail(response) {
+  const jsonPayload = await response.json().catch(() => null);
+  const detailValue = jsonPayload?.detail;
+  if (typeof detailValue === 'string' && detailValue.trim()) {
+    return detailValue.trim();
+  }
+  if (detailValue) {
+    return JSON.stringify(detailValue);
+  }
+
+  const textPayload = await response.text?.().catch(() => '');
+  const text = String(textPayload || '').trim();
+  if (text) {
+    return text;
+  }
+
+  return response.statusText || 'Unknown error';
+}
+
 export async function writeWorkspaceFile(fileName, content, options = {}) {
   const formData = new FormData();
-  const blob = content instanceof Blob
-    ? content
-    : new Blob([content], { type: options.contentType || 'text/plain' });
+  const blob =
+    content instanceof Blob
+      ? content
+      : new Blob([content], { type: options.contentType || 'text/plain' });
   formData.append('file', blob, fileName);
 
   const workspaceSubdir = normalizeWorkspaceSubdir(options.workspaceSubdir);
@@ -169,17 +173,11 @@ export async function writeWorkspaceFile(fileName, content, options = {}) {
   const response = await fetch(`${DEFAULT_BACKEND_URL}/api/export-file`, {
     method: 'POST',
     body: formData,
-    signal: AbortSignal.timeout(options.timeoutMs || 30000)
+    signal: AbortSignal.timeout(options.timeoutMs || 30000),
   });
 
   if (!response.ok) {
-    const errorPayload = await response.json().catch(() => ({}));
-    const detailValue = errorPayload?.detail;
-    const detail = typeof detailValue === 'string'
-      ? detailValue
-      : detailValue
-        ? JSON.stringify(detailValue)
-        : (response.statusText || 'Unknown error');
+    const detail = await readWorkspaceErrorDetail(response);
     const error = new Error(detail);
     error.statusCode = response.status;
     throw error;

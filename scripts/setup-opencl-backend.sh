@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PREFERRED_PYTHON_FILE="$ROOT_DIR/.waveguide/backend-python.path"
+BEMPP_CL_URL="git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 if [ "$(uname -s)" != "Darwin" ]; then
     echo "This helper currently targets macOS (Darwin) only."
@@ -29,7 +30,7 @@ echo "Creating/updating OpenCL CPU environment at: $ENV_PREFIX"
 echo "Installing backend Python dependencies..."
 "$ENV_PREFIX/bin/python" -m pip install --upgrade pip setuptools wheel
 "$ENV_PREFIX/bin/python" -m pip install -r "$ROOT_DIR/server/requirements.txt"
-"$ENV_PREFIX/bin/python" -m pip install git+https://github.com/bempp/bempp-cl.git
+"$ENV_PREFIX/bin/python" -m pip install "$BEMPP_CL_URL"
 
 # Patch bempp-cl's get_vector_width to handle non-standard native widths.
 # pocl on Apple Silicon reports native_vector_width_float=2, which is not in

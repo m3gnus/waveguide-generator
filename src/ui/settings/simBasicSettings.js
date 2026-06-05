@@ -102,7 +102,8 @@ export function getCurrentSimBasicSettings() {
  * DOM-first getter for mesh validation mode.
  */
 export function getMeshValidationMode() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simbasic-meshValidationMode') : null;
+  const el =
+    typeof document !== 'undefined' ? document.getElementById('simbasic-meshValidationMode') : null;
   if (el) return el.value;
   return _current?.meshValidationMode ?? RECOMMENDED_DEFAULTS.meshValidationMode;
 }
@@ -111,7 +112,8 @@ export function getMeshValidationMode() {
  * DOM-first getter for frequency spacing.
  */
 export function getFrequencySpacing() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simbasic-frequencySpacing') : null;
+  const el =
+    typeof document !== 'undefined' ? document.getElementById('simbasic-frequencySpacing') : null;
   if (el) return el.value;
   return _current?.frequencySpacing ?? RECOMMENDED_DEFAULTS.frequencySpacing;
 }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { getDefaults } from "../src/config/defaults.js";
 import {
+  parseExpression,
   prepareGeometryParams,
   coerceConfigParams,
   applyAthImportDefaults,
@@ -49,6 +50,31 @@ test("prepareGeometryParams parses arithmetic-only formulas for range and number
   assert.ok(Math.abs(prepared.k(0) - 6.27) < 1e-12);
   assert.equal(prepared.n(0), 4);
   assert.equal(prepared.morphRate(0), 3);
+});
+
+test("parseExpression falls back without normal-runtime console warnings", () => {
+  const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
+  const originalWarn = console.warn;
+  const warnings = [];
+
+  globalThis.__WAVEGUIDE_DEBUG__ = false;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const fn = parseExpression("1 + * 2");
+    assert.equal(fn(0), 0);
+  } finally {
+    console.warn = originalWarn;
+    if (typeof originalDebug === "undefined") {
+      delete globalThis.__WAVEGUIDE_DEBUG__;
+    } else {
+      globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
+    }
+  }
+
+  assert.deepEqual(warnings, []);
 });
 
 test("coerceConfigParams and applyAthImportDefaults preserve ATH compatibility defaults", () => {

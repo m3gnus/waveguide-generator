@@ -17,6 +17,7 @@ class RuntimePreflightTest(unittest.TestCase):
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
                 "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
                 "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
             },
             "supportedMatrix": {},
@@ -38,6 +39,9 @@ class RuntimePreflightTest(unittest.TestCase):
             "services.runtime_preflight.read_opencl_device_metadata",
             return_value=device_metadata,
         ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value={"available": False, "reason": "not installed"},
+        ), patch(
             "services.runtime_preflight.read_bounded_solve_readiness",
             return_value={
                 "ready": True,
@@ -50,6 +54,7 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertTrue(report["allRequiredReady"])
         self.assertTrue(report["requiredChecks"]["fastapi"]["ok"])
         self.assertTrue(report["requiredChecks"]["gmsh_python"]["ok"])
+        self.assertTrue(report["requiredChecks"]["hornlab_waveguide_mesher"]["ok"])
         self.assertTrue(report["requiredChecks"]["bempp_cl"]["ok"])
         self.assertTrue(report["requiredChecks"]["opencl_runtime"]["ok"])
         self.assertNotIn("bounded_solve_validation", report["requiredChecks"])
@@ -62,6 +67,7 @@ class RuntimePreflightTest(unittest.TestCase):
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
                 "gmsh_python": {"available": False, "version": None, "supported": False, "ready": False},
+                "hornlab_waveguide_mesher": {"available": False, "version": None, "supported": False, "ready": False},
                 "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
             },
             "supportedMatrix": {},
@@ -79,6 +85,9 @@ class RuntimePreflightTest(unittest.TestCase):
             "services.runtime_preflight.read_opencl_device_metadata",
             return_value=device_metadata,
         ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value={"available": False, "reason": "not installed"},
+        ), patch(
             "services.runtime_preflight.read_bounded_solve_readiness",
             return_value={
                 "ready": False,
@@ -90,7 +99,7 @@ class RuntimePreflightTest(unittest.TestCase):
 
         ok, failing = evaluate_required_checks(report)
         self.assertFalse(ok)
-        self.assertEqual(len(failing), 4)
+        self.assertEqual(len(failing), 5)
         self.assertFalse(report["allRequiredReady"])
         self.assertNotIn("bounded_solve_validation", report["requiredChecks"])
         self.assertIsInstance(report["requiredChecks"]["opencl_runtime"]["detail"], str)
@@ -103,11 +112,108 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertIn("Overall required runtime status: NOT READY", text_summary)
         self.assertIn("- fastapi: MISSING", text_summary)
 
+    def test_collect_runtime_preflight_requires_hornlab_mesher_package(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": False, "version": None, "supported": False, "ready": False},
+                "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
+            },
+            "supportedMatrix": {},
+        }
+        device_metadata = {
+            "opencl_available": True,
+            "selected_mode": "opencl_cpu",
+            "device_name": "CPU-1",
+            "supported_modes": ["opencl_cpu"],
+            "selection_policy": "supported_opencl_modes",
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value=device_metadata,
+        ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value={"available": False, "reason": "not installed"},
+        ), patch(
+            "services.runtime_preflight.read_bounded_solve_readiness",
+            return_value={
+                "ready": True,
+                "status": "validated",
+                "detail": "Bounded solve validation passed.",
+            },
+        ):
+            report = collect_runtime_preflight()
+
+        ok, failing = evaluate_required_checks(report)
+        self.assertFalse(ok)
+        self.assertFalse(report["allRequiredReady"])
+        self.assertFalse(report["requiredChecks"]["hornlab_waveguide_mesher"]["ok"])
+        self.assertTrue(
+            any("hornlab_waveguide_mesher" in item for item in failing),
+            failing,
+        )
+
+    def test_collect_runtime_preflight_accepts_metal_as_solve_backend(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
+                "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
+            },
+            "supportedMatrix": {},
+        }
+        device_metadata = {
+            "opencl_available": False,
+            "fallback_reason": "No OpenCL runtime available.",
+            "warning": None,
+        }
+        metal_backend = {
+            "available": True,
+            "supportedPlatform": True,
+            "nativeHelperAvailable": True,
+            "reason": None,
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value=device_metadata,
+        ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value=metal_backend,
+        ), patch(
+            "services.runtime_preflight.read_bounded_solve_readiness",
+            return_value={
+                "ready": False,
+                "status": "missing",
+                "detail": "No bounded solve validation record found.",
+            },
+        ):
+            report = collect_runtime_preflight()
+
+        ok, failing = evaluate_required_checks(report)
+        self.assertTrue(ok)
+        self.assertEqual(failing, [])
+        self.assertTrue(report["allRequiredReady"])
+        self.assertTrue(report["requiredChecks"]["bempp_cl"]["ok"])
+        self.assertTrue(report["requiredChecks"]["opencl_runtime"]["ok"])
+        self.assertIn("Metal BEM is available", report["requiredChecks"]["bempp_cl"]["detail"])
+        self.assertIn("Metal BEM is available", report["requiredChecks"]["opencl_runtime"]["detail"])
+
     def test_collect_runtime_doctor_report_classifies_required_and_optional_components(self):
         dependency_status = {
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
                 "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
                 "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
             },
             "supportedMatrix": {},
@@ -144,12 +250,13 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(report["schemaVersion"], 1)
         self.assertTrue(report["summary"]["requiredReady"])
         self.assertTrue(report["summary"]["solveReady"])
-        self.assertEqual(report["summary"]["counts"]["installed"], 6)
+        self.assertEqual(report["summary"]["counts"]["installed"], 7)
         self.assertEqual(report["summary"]["counts"]["optional"], 2)
 
         components_by_id = {item["id"]: item for item in report["components"]}
         self.assertEqual(components_by_id["fastapi"]["status"], "installed")
         self.assertEqual(components_by_id["gmsh_python"]["status"], "installed")
+        self.assertEqual(components_by_id["hornlab_waveguide_mesher"]["status"], "installed")
         self.assertEqual(components_by_id["bempp_cl"]["status"], "installed")
         self.assertEqual(components_by_id["opencl_runtime"]["status"], "installed")
         self.assertEqual(components_by_id["bounded_solve_validation"]["category"], "optional")
@@ -162,6 +269,7 @@ class RuntimePreflightTest(unittest.TestCase):
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
                 "gmsh_python": {"available": True, "version": "5.1.0", "supported": False, "ready": False},
+                "hornlab_waveguide_mesher": {"available": False, "version": None, "supported": False, "ready": False},
                 "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
             },
             "supportedMatrix": {},
@@ -193,11 +301,12 @@ class RuntimePreflightTest(unittest.TestCase):
 
         ok, failing = evaluate_runtime_doctor(report)
         self.assertFalse(ok)
-        self.assertEqual(len(failing), 4)
+        self.assertEqual(len(failing), 5)
         self.assertFalse(report["summary"]["requiredReady"])
         self.assertFalse(report["summary"]["solveReady"])
         self.assertIn("fastapi", report["summary"]["requiredIssues"])
         self.assertIn("gmsh_python", report["summary"]["requiredIssues"])
+        self.assertIn("hornlab_waveguide_mesher", report["summary"]["requiredIssues"])
         self.assertIn("bempp_cl", report["summary"]["requiredIssues"])
         self.assertIn("opencl_runtime", report["summary"]["requiredIssues"])
         self.assertNotIn("bounded_solve_validation", report["summary"]["requiredIssues"])
@@ -207,6 +316,7 @@ class RuntimePreflightTest(unittest.TestCase):
 
         components_by_id = {item["id"]: item for item in report["components"]}
         self.assertEqual(components_by_id["gmsh_python"]["status"], "unsupported")
+        self.assertEqual(components_by_id["hornlab_waveguide_mesher"]["status"], "missing")
         self.assertEqual(components_by_id["bempp_cl"]["status"], "missing")
         self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
         self.assertEqual(components_by_id["bounded_solve_validation"]["status"], "missing")
@@ -225,6 +335,7 @@ class RuntimePreflightTest(unittest.TestCase):
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
                 "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
                 "bempp": {"available": True, "variant": "bempp_cl", "version": "0.4.2", "supported": True, "ready": True},
             },
             "supportedMatrix": {},
@@ -264,6 +375,65 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
         self.assertEqual(components_by_id["bounded_solve_validation"]["status"], "missing")
         self.assertTrue(len(components_by_id["opencl_runtime"]["guidance"]) > 0)
+
+    def test_collect_runtime_doctor_treats_bempp_opencl_as_optional_when_metal_is_ready(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
+                "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
+            },
+            "supportedMatrix": {},
+        }
+        device_metadata = {
+            "opencl_available": False,
+            "fallback_reason": "No OpenCL runtime available.",
+            "warning": None,
+        }
+        metal_backend = {
+            "available": True,
+            "supportedPlatform": True,
+            "nativeHelperAvailable": True,
+            "reason": None,
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_matplotlib_runtime",
+            return_value={"available": True, "version": "3.9.2"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value=device_metadata,
+        ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value=metal_backend,
+        ), patch(
+            "services.runtime_preflight.read_bounded_solve_readiness",
+            return_value={
+                "ready": False,
+                "status": "missing",
+                "detail": "No bounded solve validation record found.",
+            },
+        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"):
+            report = collect_runtime_doctor_report()
+
+        ok, failing = evaluate_runtime_doctor(report)
+        self.assertTrue(ok)
+        self.assertEqual(failing, [])
+        self.assertTrue(report["summary"]["requiredReady"])
+        self.assertTrue(report["summary"]["solveReady"])
+        self.assertNotIn("bempp_cl", report["summary"]["requiredIssues"])
+        self.assertNotIn("opencl_runtime", report["summary"]["requiredIssues"])
+        self.assertIn("bempp_cl", report["summary"]["optionalIssues"])
+        self.assertIn("opencl_runtime", report["summary"]["optionalIssues"])
+
+        components_by_id = {item["id"]: item for item in report["components"]}
+        self.assertEqual(components_by_id["bempp_cl"]["category"], "optional")
+        self.assertEqual(components_by_id["opencl_runtime"]["category"], "optional")
+        self.assertIn("Metal BEM", components_by_id["bempp_cl"]["featureImpact"])
 
 
 if __name__ == "__main__":

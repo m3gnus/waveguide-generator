@@ -45,7 +45,7 @@ REFERENCE_HORN_PLAN = {
     "spacing": "linear",
 }
 VALID_PRECISION_MODES = ("single", "double")
-REFERENCE_HORN_OCC_PAYLOAD = {
+REFERENCE_HORN_MESHER_PAYLOAD = {
     "formula_type": "R-OSSE",
     "R": "140",
     "a": "25",
@@ -153,11 +153,11 @@ def classify_precision_outcome(run_error: Optional[str], results: Optional[Dict[
     return "supported"
 
 
-def build_reference_horn_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def build_reference_horn_mesher_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     from contracts import WaveguideParamsRequest
-    from solver.waveguide_builder import build_waveguide_mesh
+    from solver.mesher_adapter import build_waveguide_mesh
 
-    request = WaveguideParamsRequest(**REFERENCE_HORN_OCC_PAYLOAD)
+    request = WaveguideParamsRequest(**REFERENCE_HORN_MESHER_PAYLOAD)
     started = time.time()
     result = build_waveguide_mesh(request.model_dump(), include_canonical=True)
     prep_time = time.time() - started
@@ -165,7 +165,7 @@ def build_reference_horn_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     stats = result.get("stats", {}) if isinstance(result, dict) else {}
     msh_text = result.get("msh_text")
     if not isinstance(msh_text, str) or not msh_text.strip():
-        raise RuntimeError("Reference horn OCC build returned empty msh_text.")
+        raise RuntimeError("Reference horn mesher build returned empty msh_text.")
 
     tmp_path = None
     try:
@@ -180,7 +180,7 @@ def build_reference_horn_occ_mesh() -> Tuple[Dict[str, Any], Dict[str, Any]]:
             os.unlink(tmp_path)
 
     mesh_report = {
-        "source": "occ_reference_horn_preset",
+        "source": "hornlab_mesher_reference_horn_preset",
         "prep_success": True,
         "prep_time_seconds": prep_time,
         "stats": stats if isinstance(stats, dict) else {},
@@ -216,7 +216,7 @@ def run_benchmark(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
     prep_started = time.time()
     try:
         if args.preset == "reference-horn":
-            mesh, mesh_report = build_reference_horn_occ_mesh()
+            mesh, mesh_report = build_reference_horn_mesher_mesh()
             report["mesh"] = mesh_report
         else:
             mesh = load_mesh(args.mesh)
@@ -227,7 +227,7 @@ def run_benchmark(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
             }
     except Exception as exc:
         report["mesh"] = {
-            "source": "occ_reference_horn_preset" if args.preset == "reference-horn" else str(args.mesh),
+            "source": "hornlab_mesher_reference_horn_preset" if args.preset == "reference-horn" else str(args.mesh),
             "prep_success": False,
             "prep_time_seconds": time.time() - prep_started,
             "error": str(exc),

@@ -3,20 +3,15 @@ import {
   markParametersChanged,
   resetParameterChangeTracking,
   selectOutputFolder,
-  setExportFields
+  setExportFields,
 } from '../ui/fileOps.js';
-import {
-  showCommandSuggestion,
-  showError,
-  showMessage,
-  showSuccess
-} from '../ui/feedback.js';
+import { showCommandSuggestion, showError, showMessage, showSuccess } from '../ui/feedback.js';
 
 export const appUiFeedback = Object.freeze({
   showCommandSuggestion,
   showError,
   showMessage,
-  showSuccess
+  showSuccess,
 });
 
 export const appUiFileOps = Object.freeze({
@@ -24,5 +19,5 @@ export const appUiFileOps = Object.freeze({
   markParametersChanged,
   resetParameterChangeTracking,
   selectOutputFolder,
-  setExportFields
+  setExportFields,
 });

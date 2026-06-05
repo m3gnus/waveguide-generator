@@ -15,7 +15,7 @@ import {
   clearLogs,
   exportLogs,
   formatLogEntry,
-  printLogs
+  printLogs,
 } from './queries.js';
 
 export {
@@ -32,7 +32,7 @@ export {
   clearLogs,
   exportLogs,
   formatLogEntry,
-  printLogs
+  printLogs,
 };
 
 export default {
@@ -49,5 +49,5 @@ export default {
   clearLogs,
   exportLogs,
   formatLogEntry,
-  printLogs
+  printLogs,
 };

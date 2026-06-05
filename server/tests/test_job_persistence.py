@@ -11,11 +11,12 @@ from api.routes_simulation import (
     get_mesh_artifact,
     get_results,
     list_jobs,
+    patch_job_metadata,
 )
-import services.job_runtime as _jrt
-from contracts import SimulationRequest
+from contracts import JobMetadataPatch, SimulationRequest
 from db import SimulationDB
 from fastapi import HTTPException
+import services.job_runtime as _jrt
 
 
 class JobPersistenceTest(unittest.TestCase):
@@ -199,7 +200,7 @@ class JobPersistenceTest(unittest.TestCase):
         _jrt.db.update_job(
             "job-complete",
             mesh_stats_json=(
-                '{"vertex_count": 42, "triangle_count": 20, "source": "occ_adaptive_canonical", '
+                '{"vertex_count": 42, "triangle_count": 20, "source": "hornlab_waveguide_mesher", '
                 '"identity_triangle_counts": {"inner_wall": 8, "throat_disc": 2}}'
             ),
         )
@@ -214,6 +215,99 @@ class JobPersistenceTest(unittest.TestCase):
             resp["items"][0]["mesh_stats"]["identity_triangle_counts"]["inner_wall"],
             8,
         )
+
+    def test_update_job_rejects_unsupported_column_names(self):
+        self._create_db_job("job-complete", "complete")
+
+        with self.assertRaises(ValueError) as ctx:
+            _jrt.db.update_job("job-complete", arbitrary_sql_column="bad")
+
+        self.assertIn("Unsupported job update field", str(ctx.exception))
+        row = _jrt.db.get_job_row("job-complete")
+        self.assertEqual(row["status"], "complete")
+
+    def test_update_job_without_fields_is_noop(self):
+        self._create_db_job("job-complete", "complete")
+
+        self.assertFalse(_jrt.db.update_job("job-complete"))
+
+    def test_patch_job_metadata_persists_normalized_label_and_script_snapshot(self):
+        self._create_db_job("job-complete", "complete")
+
+        resp = asyncio.run(
+            patch_job_metadata(
+                "job-complete",
+                JobMetadataPatch(
+                    label="  measurement pass  ",
+                    script_snapshot={"schemaVersion": 1, "params": {"formula_type": "OSSE"}},
+                ),
+            )
+        )
+        self.assertEqual(resp["status"], "ok")
+
+        _jrt.jobs.clear()
+        listed = asyncio.run(list_jobs(status="complete", limit=10, offset=0))
+        item = listed["items"][0]
+        self.assertEqual(item["label"], "measurement pass")
+        self.assertEqual(item["script_snapshot"]["schemaVersion"], 1)
+        self.assertEqual(item["script_snapshot"]["params"]["formula_type"], "OSSE")
+
+    def test_patch_job_metadata_can_clear_label_and_script_snapshot(self):
+        self._create_db_job("job-complete", "complete")
+        asyncio.run(
+            patch_job_metadata(
+                "job-complete",
+                JobMetadataPatch(label="measurement pass", script_snapshot={"params": {}}),
+            )
+        )
+
+        asyncio.run(
+            patch_job_metadata(
+                "job-complete",
+                JobMetadataPatch(label="", script_snapshot=None),
+            )
+        )
+
+        _jrt.jobs.clear()
+        listed = asyncio.run(list_jobs(status="complete", limit=10, offset=0))
+        self.assertIsNone(listed["items"][0]["label"])
+        self.assertIsNone(listed["items"][0]["script_snapshot"])
+
+    def test_prune_terminal_jobs_closes_database_connection(self):
+        class FakeCursor:
+            rowcount = 0
+
+            def fetchall(self):
+                return []
+
+        class FakeConnection:
+            def __init__(self):
+                self.closed = False
+                self.committed = False
+
+            def execute(self, *_args, **_kwargs):
+                return FakeCursor()
+
+            def commit(self):
+                self.committed = True
+
+            def close(self):
+                self.closed = True
+
+        class FakeDB(SimulationDB):
+            def __init__(self):
+                super().__init__(Path(":memory:"))
+                self.connection = FakeConnection()
+
+            def _connect(self):
+                return self.connection
+
+        db = FakeDB()
+        deleted = db.prune_terminal_jobs()
+
+        self.assertEqual(deleted, 0)
+        self.assertTrue(db.connection.committed)
+        self.assertTrue(db.connection.closed)
 
 
 if __name__ == "__main__":

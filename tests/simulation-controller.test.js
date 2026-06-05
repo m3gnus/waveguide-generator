@@ -18,7 +18,7 @@ import {
   restoreSimulationPanelRuntime,
   disposeSimulationPanelRuntime,
   stopSimulationControllerJob,
-  submitSimulationControllerJob
+  submitSimulationControllerJob,
 } from '../src/ui/simulation/controller.js';
 import { JOB_TRACKER_CONSTANTS } from '../src/ui/simulation/jobTracker.js';
 
@@ -65,7 +65,7 @@ test('restoreSimulationControllerJobs initializes with empty workspace and folde
   await restoreSimulationControllerJobs(controller, {
     onJobsUpdated: () => {
       jobsUpdatedCalls += 1;
-    }
+    },
   });
 
   // readSimulationWorkspaceJobs always returns empty items (backend-only mode)
@@ -92,8 +92,8 @@ test('restoreSimulationControllerJobs sets folder source mode and calls solver l
       async listJobs() {
         listJobsCalls += 1;
         return { items: [{ id: 'job-backend-1', status: 'complete' }] };
-      }
-    }
+      },
+    },
   });
 
   await restoreSimulationControllerJobs(controller);
@@ -114,7 +114,7 @@ test('createSimulationPanelRuntime binds a controller store and injected ui coor
     solver,
     createUiCoordinator() {
       return fakeUiCoordinator;
-    }
+    },
   });
 
   assert.equal(runtime.controller.solver, solver);
@@ -125,13 +125,24 @@ test('createSimulationPanelRuntime binds a controller store and injected ui coor
   assert.equal(runtime.controller.activeJobId, 'job-runtime-1');
 });
 
+test('createSimulationPanelRuntime creates a default backend solver client', () => {
+  const panelAdapter = {};
+  const runtime = createSimulationPanelRuntime(panelAdapter, {
+    createUiCoordinator: () => null,
+  });
+
+  assert.equal(typeof runtime.controller.solver.checkConnection, 'function');
+  assert.equal(runtime.controller.solver.backendUrl, 'http://localhost:8000');
+  assert.equal(panelAdapter.solver, runtime.controller.solver);
+});
+
 test('restoreSimulationPanelRuntime delegates to controller restore using runtime controller', async () => {
   const panelAdapter = {};
   const runtime = createSimulationPanelRuntime(panelAdapter, {
     solver: {},
     createUiCoordinator() {
       return { bind() {}, dispose() {} };
-    }
+    },
   });
 
   await restoreSimulationPanelRuntime(runtime);
@@ -154,14 +165,14 @@ test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', 
         pollTimer: { id: 'poll' },
         pollInterval: { id: 'interval' },
         isPolling: true,
-        connectionPollTimer: { id: 'connection' }
+        connectionPollTimer: { id: 'connection' },
       },
       uiCoordinator: {
         disposed: false,
         dispose() {
           this.disposed = true;
-        }
-      }
+        },
+      },
     };
 
     disposeSimulationPanelRuntime(runtime);
@@ -184,10 +195,10 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
         return {
           jobId,
           spl_on_axis: { frequencies: [100], spl: [90] },
-          metadata: {}
+          metadata: {},
         };
-      }
-    }
+      },
+    },
   });
   controller.jobs.set('job-complete', { id: 'job-complete', status: 'complete' });
   controller.jobs.set('job-running', { id: 'job-running', status: 'running' });
@@ -205,7 +216,7 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   const cached = await ensureSimulationControllerJobResults(controller, 'job-cached', {
     displayResults(results) {
       displayed.push(results);
-    }
+    },
   });
   assert.equal(cached.reason, 'cached');
   assert.deepEqual(displayed[0], { cached: true });
@@ -213,7 +224,7 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   const fetched = await ensureSimulationControllerJobResults(controller, 'job-complete', {
     displayResults(results) {
       displayed.push(results);
-    }
+    },
   });
   assert.equal(fetched.reason, 'fetched');
   assert.equal(controller.activeJobId, 'job-complete');
@@ -232,19 +243,19 @@ test('reconcileSimulationControllerRemoteJobs updates active jobs via per-job st
             progress: 0.7,
             stage: 'solving',
             stage_message: 'Almost done',
-            created_at: '2026-03-11T10:00:00.000Z'
+            created_at: '2026-03-11T10:00:00.000Z',
           };
         }
         throw new Error('not found');
-      }
-    }
+      },
+    },
   });
 
   controller.jobs.set('job-active', {
     id: 'job-active',
     status: 'running',
     progress: 0.2,
-    createdAt: '2026-03-11T10:00:00.000Z'
+    createdAt: '2026-03-11T10:00:00.000Z',
   });
   controller.activeJobId = 'job-active';
   controller.currentJobId = 'job-active';
@@ -254,6 +265,84 @@ test('reconcileSimulationControllerRemoteJobs updates active jobs via per-job st
   assert.equal(result.anyActive, true);
   assert.equal(result.activeJob?.id, 'job-active');
   assert.equal(controller.jobs.get('job-active')?.progress, 0.7);
+});
+
+test('reconcileSimulationControllerRemoteJobs selects an active job when activeJobId is missing', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getJobStatus(id) {
+        return {
+          id,
+          status: 'running',
+          progress: 0.45,
+          stage: 'solving',
+          created_at: '2026-03-11T10:00:00.000Z',
+        };
+      },
+    },
+  });
+
+  controller.jobs.set('job-running', {
+    id: 'job-running',
+    status: 'running',
+    progress: 0.1,
+    createdAt: '2026-03-11T10:00:00.000Z',
+  });
+  controller.activeJobId = null;
+  controller.currentJobId = null;
+
+  const result = await reconcileSimulationControllerRemoteJobs(controller);
+
+  assert.equal(result.anyActive, true);
+  assert.equal(result.activeJob?.id, 'job-running');
+  assert.equal(controller.activeJobId, 'job-running');
+  assert.equal(controller.currentJobId, 'job-running');
+});
+
+test('reconcileSimulationControllerRemoteJobs keeps just-completed active job for finalization before moving on', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getJobStatus(id) {
+        return {
+          id,
+          status: 'running',
+          progress: 0.25,
+          stage: 'solving',
+          created_at: '2026-03-11T10:01:00.000Z',
+        };
+      },
+    },
+  });
+
+  controller.jobs.set('job-complete', {
+    id: 'job-complete',
+    status: 'complete',
+    progress: 1,
+    justCompleted: true,
+    completedAt: '2026-03-11T10:00:30.000Z',
+  });
+  controller.jobs.set('job-running', {
+    id: 'job-running',
+    status: 'running',
+    progress: 0.1,
+    createdAt: '2026-03-11T10:01:00.000Z',
+  });
+  controller.activeJobId = 'job-complete';
+  controller.currentJobId = 'job-complete';
+
+  const first = await reconcileSimulationControllerRemoteJobs(controller);
+  assert.equal(first.activeJob?.id, 'job-complete');
+  assert.equal(controller.activeJobId, 'job-complete');
+
+  controller.jobs.set('job-complete', {
+    ...controller.jobs.get('job-complete'),
+    justCompleted: false,
+  });
+
+  const second = await reconcileSimulationControllerRemoteJobs(controller);
+  assert.equal(second.activeJob?.id, 'job-running');
+  assert.equal(controller.activeJobId, 'job-running');
+  assert.equal(controller.currentJobId, 'job-running');
 });
 
 test('queueSimulationControllerJob and recordSimulationControllerExport update controller job metadata', async () => {
@@ -269,11 +358,11 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
       frequencyEnd: 1000,
       numFrequencies: 5,
       frequencySpacing: 'log',
-      polarConfig: {}
+      polarConfig: {},
     },
     waveguidePayload: { formula_type: 'OSSE' },
     preparedParams: { L: 120 },
-    stateSnapshot: { type: 'OSSE', params: { L: 120 } }
+    stateSnapshot: { type: 'OSSE', params: { L: 120 } },
   });
 
   assert.equal(created.id, 'job-queued-1');
@@ -285,13 +374,63 @@ test('queueSimulationControllerJob and recordSimulationControllerExport update c
     autoExportCompletedAt: '2026-03-11T10:01:00.000Z',
     rawResultsFile: 'simulation_2_raw.results.json',
     meshArtifactFile: 'simulation_2_solver.mesh.msh',
-    justCompleted: false
+    justCompleted: false,
   });
-  assert.deepEqual(updated.exportedFiles, ['csv:simulation_results.csv', 'json:simulation_results.json']);
+  assert.deepEqual(updated.exportedFiles, [
+    'csv:simulation_results.csv',
+    'json:simulation_results.json',
+  ]);
   assert.equal(updated.autoExportCompletedAt, '2026-03-11T10:01:00.000Z');
   assert.equal(updated.rawResultsFile, 'simulation_2_raw.results.json');
   assert.equal(updated.meshArtifactFile, 'simulation_2_solver.mesh.msh');
   assert.equal(updated.justCompleted, false);
+});
+
+test('queueSimulationControllerJob persists backend metadata through solver backendUrl', async () => {
+  const originalFetch = global.fetch;
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  try {
+    const controller = createSimulationControllerStore({
+      solver: {
+        backendUrl: 'http://backend.example.test',
+      },
+    });
+
+    await queueSimulationControllerJob(controller, {
+      jobId: 'job-metadata-1',
+      startedIso: '2026-03-11T10:00:00.000Z',
+      outputName: 'metadata',
+      counter: 4,
+      config: {
+        frequencyStart: 100,
+        frequencyEnd: 1000,
+        numFrequencies: 5,
+        frequencySpacing: 'log',
+        polarConfig: {},
+      },
+      waveguidePayload: { formula_type: 'OSSE' },
+      preparedParams: { L: 120 },
+      stateSnapshot: { type: 'OSSE', params: { L: 120 } },
+    });
+
+    const metadataCall = fetchCalls.find(({ url }) =>
+      String(url).includes('/api/jobs/job-metadata-1/metadata')
+    );
+    assert.equal(metadataCall?.url, 'http://backend.example.test/api/jobs/job-metadata-1/metadata');
+    assert.equal(metadataCall?.options.method, 'PATCH');
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('recordSimulationControllerRating persists bounded rating values', async () => {
@@ -300,7 +439,7 @@ test('recordSimulationControllerRating persists bounded rating values', async ()
     id: 'job-rate-1',
     status: 'complete',
     rating: null,
-    exportedFiles: []
+    exportedFiles: [],
   });
 
   const updated = await recordSimulationControllerRating(controller, 'job-rate-1', 7);
@@ -313,13 +452,13 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     solver: {
       async getHealthStatus() {
         calls.push(['health']);
-        return { solverReady: true, occBuilderReady: true };
+        return { solverReady: true, mesherReady: true };
       },
       async submitSimulation(config, meshData, submitOptions) {
         calls.push(['submit', config, meshData, submitOptions]);
         return 'job-submit-1';
-      }
-    }
+      },
+    },
   });
 
   const config = {
@@ -329,18 +468,18 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     meshValidationMode: 'strict',
     frequencySpacing: 'log',
     verbose: false,
-    polarConfig: {}
+    polarConfig: {},
   };
   const meshData = {
     vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
     indices: [0, 1, 2],
-    surfaceTags: [2]
+    surfaceTags: [2],
   };
   const submission = {
     waveguidePayload: { formula_type: 'OSSE' },
-    submitOptions: { mesh: { strategy: 'occ_adaptive' } },
+    submitOptions: { mesh: { strategy: 'hornlab_mesher' } },
     preparedParams: { L: 120 },
-    stateSnapshot: { type: 'OSSE', params: { L: 120 } }
+    stateSnapshot: { type: 'OSSE', params: { L: 120 } },
   };
 
   const result = await submitSimulationControllerJob(controller, {
@@ -348,17 +487,20 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     meshData,
     outputName: 'simulation',
     counter: 3,
-    submission
+    submission,
   });
 
   assert.equal(result.jobId, 'job-submit-1');
   assert.equal(result.createdJob.id, 'job-submit-1');
   assert.equal(controller.activeJobId, 'job-submit-1');
   assert.equal(controller.currentJobId, 'job-submit-1');
-  assert.deepEqual(calls, [
-    ['health'],
-    ['submit', config, meshData, submission.submitOptions]
-  ]);
+  const expectedSubmitOptions = {
+    mesh: {
+      strategy: 'hornlab_mesher',
+      waveguide_params: { formula_type: 'OSSE', quadrants: 1234 },
+    },
+  };
+  assert.deepEqual(calls, [['health'], ['submit', config, meshData, expectedSubmitOptions]]);
 });
 
 test('submitSimulationControllerJob rejects when backend solver dependencies are unavailable', async () => {
@@ -367,7 +509,7 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
       async getHealthStatus() {
         return {
           solverReady: false,
-          occBuilderReady: true,
+          mesherReady: true,
           dependencyDoctor: {
             components: [
               {
@@ -376,32 +518,87 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
                 category: 'required',
                 status: 'missing',
                 featureImpact: '/api/solve BEM simulation is unavailable.',
-                guidance: ['Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git']
-              }
-            ]
-          }
+                guidance: [
+                  'Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33',
+                ],
+              },
+            ],
+          },
         };
-      }
-    }
+      },
+    },
   });
 
   await assert.rejects(
-    () => submitSimulationControllerJob(controller, {
-      config: {
-        frequencyStart: 100,
-        frequencyEnd: 1000,
-        numFrequencies: 3
+    () =>
+      submitSimulationControllerJob(controller, {
+        config: {
+          frequencyStart: 100,
+          frequencyEnd: 1000,
+          numFrequencies: 3,
+        },
+        meshData: { vertices: [], indices: [], surfaceTags: [] },
+        outputName: 'simulation',
+        counter: 1,
+        submission: {
+          waveguidePayload: { formula_type: 'OSSE' },
+          submitOptions: {},
+          preparedParams: {},
+          stateSnapshot: { params: {} },
+        },
+      }),
+    /Install bempp-cl/i
+  );
+});
+
+test('submitSimulationControllerJob does not treat Metal readiness as explicit BEMPP readiness', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getHealthStatus() {
+        return {
+          solverReady: true,
+          mesherReady: true,
+          solverBackends: {
+            bempp: { ready: false, available: false },
+            metal: { ready: true },
+          },
+          dependencyDoctor: {
+            components: [
+              {
+                id: 'bempp_cl',
+                name: 'bempp-cl',
+                category: 'optional',
+                status: 'missing',
+                featureImpact:
+                  'BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.',
+                guidance: ['Install bempp-cl'],
+              },
+            ],
+          },
+        };
       },
-      meshData: { vertices: [], indices: [], surfaceTags: [] },
-      outputName: 'simulation',
-      counter: 1,
-      submission: {
-        waveguidePayload: { formula_type: 'OSSE' },
-        submitOptions: {},
-        preparedParams: {},
-        stateSnapshot: { params: {} }
-      }
-    }),
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      submitSimulationControllerJob(controller, {
+        config: {
+          solverBackend: 'bempp',
+          frequencyStart: 100,
+          frequencyEnd: 1000,
+          numFrequencies: 3,
+        },
+        meshData: { vertices: [], indices: [], surfaceTags: [] },
+        outputName: 'simulation',
+        counter: 1,
+        submission: {
+          waveguidePayload: { formula_type: 'OSSE' },
+          submitOptions: {},
+          preparedParams: {},
+          stateSnapshot: { params: {} },
+        },
+      }),
     /Install bempp-cl/i
   );
 });
@@ -412,10 +609,10 @@ test('stopSimulationControllerJob keeps running job in cancelling state until ba
       async stopJob() {
         return {
           status: 'cancelling',
-          message: 'Cancellation requested for job job-running'
+          message: 'Cancellation requested for job job-running',
         };
-      }
-    }
+      },
+    },
   });
   controller.jobs.set('job-running', { id: 'job-running', status: 'running', progress: 0.4 });
   controller.activeJobId = 'job-running';
@@ -435,8 +632,8 @@ test('stopSimulationControllerJob does not fake a local cancel when stop API fai
     solver: {
       async stopJob() {
         throw new Error('network down');
-      }
-    }
+      },
+    },
   });
   controller.jobs.set('job-running', { id: 'job-running', status: 'running' });
   controller.activeJobId = 'job-running';

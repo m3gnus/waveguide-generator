@@ -1,8 +1,24 @@
 import { DesignModule } from '../design/index.js';
-import { SimulationModule } from './index.js';
+import { BemSolver } from '../../solver/index.js';
+import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { FACE_IDENTITY_ORDER, countFaceIdentityTriangles } from '../../geometry/tags.js';
 
 const CANONICAL_TAG_ORDER = Object.freeze([1, 2, 3, 4]);
+const HORNLAB_SOLVE_CONTRACT_MESH = Object.freeze({
+  vertices: Object.freeze([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+  indices: Object.freeze([0, 1, 2]),
+  surfaceTags: Object.freeze([2]),
+  format: 'msh',
+  boundaryConditions: Object.freeze({
+    throat: Object.freeze({ type: 'velocity', surfaceTag: 2, value: 1.0 }),
+    wall: Object.freeze({ type: 'neumann', surfaceTag: 1, value: 0.0 }),
+    mouth: Object.freeze({ type: 'robin', surfaceTag: 1, impedance: 'spherical' }),
+  }),
+  metadata: Object.freeze({
+    source: 'hornlab_mesher_contract_placeholder',
+    viewportOnly: false,
+  }),
+});
 
 function normalizeIdentityTriangleCounts(rawCounts = {}) {
   const counts = Object.fromEntries(FACE_IDENTITY_ORDER.map((identity) => [identity, 0]));
@@ -35,29 +51,24 @@ function normalizeTagCounts(rawCounts = {}) {
 function createSimulationDesignTask(state) {
   return DesignModule.task(
     DesignModule.importState(state, {
-      applyVerticalOffset: true
+      applyVerticalOffset: true,
     })
   );
 }
 
-export function prepareCanonicalSimulationMesh(state) {
-  const designTask = createSimulationDesignTask(state);
-  const preparedParams = DesignModule.output.simulationParams(designTask);
-  const simulationTask = SimulationModule.task(SimulationModule.importDesign(designTask), {
-    includeEnclosure: Number(preparedParams.encDepth || 0) > 0,
-    adaptivePhi: false
-  });
-  const payload = SimulationModule.output.mesh(simulationTask);
-
-  const vertexCount = payload.vertices.length / 3;
-  const maxIndex = Math.max(...payload.indices);
-  if (maxIndex >= vertexCount) {
-    throw new Error(
-      `Invalid mesh: max index ${maxIndex} >= vertex count ${vertexCount}. This indicates simulation mesh corruption.`
-    );
-  }
-
-  return payload;
+export function prepareHornlabSolveContractMesh() {
+  return {
+    vertices: Array.from(HORNLAB_SOLVE_CONTRACT_MESH.vertices),
+    indices: Array.from(HORNLAB_SOLVE_CONTRACT_MESH.indices),
+    surfaceTags: Array.from(HORNLAB_SOLVE_CONTRACT_MESH.surfaceTags),
+    format: HORNLAB_SOLVE_CONTRACT_MESH.format,
+    boundaryConditions: {
+      throat: { ...HORNLAB_SOLVE_CONTRACT_MESH.boundaryConditions.throat },
+      wall: { ...HORNLAB_SOLVE_CONTRACT_MESH.boundaryConditions.wall },
+      mouth: { ...HORNLAB_SOLVE_CONTRACT_MESH.boundaryConditions.mouth },
+    },
+    metadata: { ...HORNLAB_SOLVE_CONTRACT_MESH.metadata },
+  };
 }
 
 export function summarizeCanonicalSimulationMesh(meshData = {}) {
@@ -107,47 +118,11 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
     warnings.push('Source surface tag (2) missing from the canonical simulation mesh.');
   }
   if (unsupportedTags.size > 0) {
-    warnings.push(`Unsupported surface tags present: ${Array.from(unsupportedTags).sort((a, b) => a - b).join(', ')}.`);
-  }
-
-  return {
-    vertexCount,
-    triangleCount,
-    tagCounts,
-    identityTriangleCounts,
-    warnings,
-    ok: warnings.length === 0
-  };
-}
-
-export function summarizePersistedSimulationMeshStats(meshStats = {}) {
-  const warnings = [];
-  const rawVertexCount = Number(meshStats?.vertexCount ?? meshStats?.vertex_count);
-  const rawTriangleCount = Number(meshStats?.triangleCount ?? meshStats?.triangle_count);
-  const vertexCount = Number.isFinite(rawVertexCount) && rawVertexCount >= 0
-    ? Math.floor(rawVertexCount)
-    : 0;
-  const triangleCount = Number.isFinite(rawTriangleCount) && rawTriangleCount >= 0
-    ? Math.floor(rawTriangleCount)
-    : 0;
-
-  if (!Number.isFinite(rawVertexCount) || rawVertexCount < 0) {
-    warnings.push('Backend OCC mesh diagnostics reported an invalid vertex count.');
-  }
-  if (!Number.isFinite(rawTriangleCount) || rawTriangleCount < 0) {
-    warnings.push('Backend OCC mesh diagnostics reported an invalid triangle count.');
-  }
-
-  const tagCounts = normalizeTagCounts(meshStats?.tagCounts ?? meshStats?.tag_counts);
-  const identityTriangleCounts = normalizeIdentityTriangleCounts(
-    meshStats?.identityTriangleCounts ?? meshStats?.identity_triangle_counts
-  );
-
-  if (tagCounts[2] === 0) {
-    warnings.push('Backend OCC mesh diagnostics report no source surface tag (2).');
-  }
-  if (!Object.values(identityTriangleCounts).some((count) => count > 0)) {
-    warnings.push('Backend OCC face-identity diagnostics are unavailable for this job.');
+    warnings.push(
+      `Unsupported surface tags present: ${Array.from(unsupportedTags)
+        .sort((a, b) => a - b)
+        .join(', ')}.`
+    );
   }
 
   return {
@@ -157,30 +132,90 @@ export function summarizePersistedSimulationMeshStats(meshStats = {}) {
     identityTriangleCounts,
     warnings,
     ok: warnings.length === 0,
-    provenance: 'backend'
   };
 }
 
-export function prepareOccAdaptiveSolveRequest(state, options = {}) {
+export function summarizePersistedSimulationMeshStats(meshStats = {}) {
+  const warnings = [];
+  const rawVertexCount = Number(meshStats?.vertexCount ?? meshStats?.vertex_count);
+  const rawTriangleCount = Number(meshStats?.triangleCount ?? meshStats?.triangle_count);
+  const vertexCount =
+    Number.isFinite(rawVertexCount) && rawVertexCount >= 0 ? Math.floor(rawVertexCount) : 0;
+  const triangleCount =
+    Number.isFinite(rawTriangleCount) && rawTriangleCount >= 0 ? Math.floor(rawTriangleCount) : 0;
+
+  if (!Number.isFinite(rawVertexCount) || rawVertexCount < 0) {
+    warnings.push('Backend mesh diagnostics reported an invalid vertex count.');
+  }
+  if (!Number.isFinite(rawTriangleCount) || rawTriangleCount < 0) {
+    warnings.push('Backend mesh diagnostics reported an invalid triangle count.');
+  }
+
+  const tagCounts = normalizeTagCounts(meshStats?.tagCounts ?? meshStats?.tag_counts);
+  const identityTriangleCounts = normalizeIdentityTriangleCounts(
+    meshStats?.identityTriangleCounts ?? meshStats?.identity_triangle_counts
+  );
+
+  if (tagCounts[2] === 0) {
+    warnings.push('Backend mesh diagnostics report no source surface tag (2).');
+  }
+  if (!Object.values(identityTriangleCounts).some((count) => count > 0)) {
+    warnings.push('Backend mesh face-identity diagnostics are unavailable for this job.');
+  }
+
+  return {
+    vertexCount,
+    triangleCount,
+    tagCounts,
+    identityTriangleCounts,
+    warnings,
+    ok: warnings.length === 0,
+    provenance: 'backend',
+  };
+}
+
+export function prepareHornlabMesherSolveRequest(state, options = {}) {
   const designTask = createSimulationDesignTask(state);
   const preparedParams = DesignModule.output.simulationParams(designTask);
-  const simulationInput = SimulationModule.importDesign(designTask);
-
-  const { waveguidePayload, submitOptions } = SimulationModule.output.occAdaptive(simulationInput, {
-    mshVersion: options.mshVersion || '2.2',
-    simType: options.simType ?? 2
-  });
+  const meshParams = DesignModule.output.backendMeshSimulationParams(designTask);
+  const waveguidePayload = buildWaveguidePayload(meshParams, options.mshVersion || '2.2');
+  applySolverBackendQuadrantCompatibility(waveguidePayload, options.solverBackend);
+  waveguidePayload.sim_type = options.simType ?? 2;
 
   return {
     waveguidePayload,
-    submitOptions,
+    submitOptions: {
+      mesh: {
+        strategy: 'hornlab_mesher',
+        waveguide_params: waveguidePayload,
+      },
+    },
     preparedParams,
-    stateSnapshot: JSON.parse(JSON.stringify(state))
+    stateSnapshot: JSON.parse(JSON.stringify(state)),
   };
 }
 
+export function solverBackendRequiresFullDomainQuadrants(solverBackend) {
+  const normalized = String(solverBackend || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-');
+  return normalized === 'bempp' || normalized === 'bempp-cl';
+}
+
+export function applySolverBackendQuadrantCompatibility(waveguidePayload, solverBackend) {
+  if (
+    waveguidePayload &&
+    typeof waveguidePayload === 'object' &&
+    solverBackendRequiresFullDomainQuadrants(solverBackend)
+  ) {
+    waveguidePayload.quadrants = 1234;
+  }
+  return waveguidePayload;
+}
+
 export function createSimulationClient() {
-  return SimulationModule.output.client();
+  return new BemSolver();
 }
 
 export function validateSimulationConfig(config = {}) {

@@ -56,6 +56,45 @@ test('assertBemMeshIntegrity rejects duplicate/coincident triangles', () => {
   );
 });
 
+test('analyzeBemMeshIntegrity scale diagnostics stay behind debug logging', () => {
+  const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
+  const originalError = console.error;
+  const errors = [];
+
+  globalThis.__WAVEGUIDE_DEBUG__ = false;
+  console.error = (...args) => {
+    errors.push(args);
+  };
+
+  try {
+    const report = analyzeBemMeshIntegrity(
+      [
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0
+      ],
+      [
+        0, 1, 2
+      ],
+      {
+        requireClosed: false,
+        requireSingleComponent: false,
+        scale: 0.5
+      }
+    );
+    assert.equal(report.triCount, 1);
+  } finally {
+    console.error = originalError;
+    if (typeof originalDebug === 'undefined') {
+      delete globalThis.__WAVEGUIDE_DEBUG__;
+    } else {
+      globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
+    }
+  }
+
+  assert.deepEqual(errors, []);
+});
+
 test('orientMeshConsistently fixes flipped orientation islands in a closed mesh', () => {
   const vertices = [
     0, 0, 0,

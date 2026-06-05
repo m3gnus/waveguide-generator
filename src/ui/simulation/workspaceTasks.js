@@ -1,34 +1,12 @@
-import {
-  writeWorkspaceFile
-} from '../workspace/folderWorkspace.js';
+import { writeWorkspaceFile } from '../workspace/folderWorkspace.js';
 import { resolveGenerationRuntimeArtifactFileName } from '../workspace/generationArtifacts.js';
 import {
-  buildTaskIndexEntriesFromJobs,
-  loadTaskIndex,
-  rebuildIndexFromManifests,
-  writeTaskIndex
-} from '../workspace/taskIndex.js';
-import {
   resolveTaskWorkspaceDirectoryName,
-  updateTaskManifestForJob
+  updateTaskManifestForJob,
 } from '../workspace/taskManifest.js';
 
 function isObject(value) {
   return value !== null && typeof value === 'object';
-}
-
-function normalizeWarningList(...values) {
-  return values.flat().map((value) => String(value || '').trim()).filter(Boolean);
-}
-
-function buildArtifactWriteInput(fileName, content, contentType) {
-  return {
-    fileName,
-    content,
-    saveOptions: {
-      contentType
-    }
-  };
 }
 
 export async function readSimulationWorkspaceJobs() {
@@ -36,15 +14,15 @@ export async function readSimulationWorkspaceJobs() {
     items: [],
     available: false,
     repaired: false,
-    warnings: []
+    warnings: [],
   };
 }
 
-export function syncSimulationWorkspaceIndex(jobEntries = []) {
+export function syncSimulationWorkspaceIndex(_jobEntries = []) {
   return Promise.resolve({
     synced: false,
     available: false,
-    items: []
+    items: [],
   });
 }
 
@@ -61,50 +39,67 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   const fallbackWriteFile = async (fileName, content, contentType) => {
     await writeWorkspaceFile(fileName, content, {
       contentType,
-      workspaceSubdir: subDirName
+      workspaceSubdir: subDirName,
     });
   };
 
-  const result = await updateTaskManifestForJob(
-    null,
-    job,
-    nextUpdates,
-    { fallbackWriteFile }
-  );
+  const result = await updateTaskManifestForJob(null, job, nextUpdates, { fallbackWriteFile });
   if (result.warning) {
     console.warn(result.warning);
   }
   return result.manifest;
 }
 
-export async function deleteTaskWorkspaceDirectory(job) {
+export async function deleteTaskWorkspaceDirectory(_job) {
   return false;
 }
 
-export async function writeSimulationTaskBundleFile(job, file, { fallbackWrite = null, dirName = null, subDir = null } = {}) {
+export async function writeSimulationTaskBundleFile(
+  _job,
+  file,
+  { fallbackWrite = null, dirName: _dirName = null, subDir: _subDir = null } = {}
+) {
   if (typeof fallbackWrite === 'function') {
     await fallbackWrite(file);
   }
 
   return {
     fileName: file.fileName,
-    wroteToTaskFolder: false
+    wroteToTaskFolder: false,
   };
+}
+
+async function writeGenerationArtifact({
+  fileName,
+  content,
+  contentType,
+  workspaceSubdir,
+  warningLabel,
+}) {
+  try {
+    await writeWorkspaceFile(fileName, content, {
+      contentType,
+      workspaceSubdir,
+    });
+    return { fileName, warning: null };
+  } catch (error) {
+    return {
+      fileName: null,
+      warning: `${warningLabel} write failed: ${error?.message || 'unknown error'}`,
+    };
+  }
 }
 
 export async function persistSimulationGenerationArtifacts(
   job,
-  {
-    results = null,
-    meshArtifactText = null
-  } = {}
+  { results = null, meshArtifactText = null } = {}
 ) {
   const jobId = String(job?.id || '').trim();
   if (!jobId) {
     return {
       rawResultsFile: null,
       meshArtifactFile: null,
-      warnings: ['Cannot persist generation artifacts without a job id.']
+      warnings: ['Cannot persist generation artifacts without a job id.'],
     };
   }
 
@@ -114,38 +109,37 @@ export async function persistSimulationGenerationArtifacts(
   let meshArtifactFile = null;
 
   if (results && typeof results === 'object') {
-    rawResultsFile = resolveGenerationRuntimeArtifactFileName('raw_results', { baseName: subDirName });
-    const rawResultsContent = `${JSON.stringify(results, null, 2)}\n`;
-    try {
-      await writeWorkspaceFile(rawResultsFile, rawResultsContent, {
-        contentType: 'application/json',
-        workspaceSubdir: subDirName
-      });
-    } catch (error) {
-      rawResultsFile = null;
-      warnings.push(`Raw results artifact write failed: ${error?.message || 'unknown error'}`);
+    const result = await writeGenerationArtifact({
+      fileName: resolveGenerationRuntimeArtifactFileName('raw_results', { baseName: subDirName }),
+      content: `${JSON.stringify(results, null, 2)}\n`,
+      contentType: 'application/json',
+      workspaceSubdir: subDirName,
+      warningLabel: 'Raw results artifact',
+    });
+    rawResultsFile = result.fileName;
+    if (result.warning) {
+      warnings.push(result.warning);
     }
   }
 
-  const normalizedMeshText = typeof meshArtifactText === 'string'
-    ? meshArtifactText.trim()
-    : '';
+  const normalizedMeshText = typeof meshArtifactText === 'string' ? meshArtifactText.trim() : '';
   if (normalizedMeshText) {
-    meshArtifactFile = resolveGenerationRuntimeArtifactFileName('mesh_artifact', { baseName: subDirName });
-    try {
-      await writeWorkspaceFile(meshArtifactFile, `${normalizedMeshText}\n`, {
-        contentType: 'text/plain',
-        workspaceSubdir: subDirName
-      });
-    } catch (error) {
-      meshArtifactFile = null;
-      warnings.push(`Mesh artifact write failed: ${error?.message || 'unknown error'}`);
+    const result = await writeGenerationArtifact({
+      fileName: resolveGenerationRuntimeArtifactFileName('mesh_artifact', { baseName: subDirName }),
+      content: `${normalizedMeshText}\n`,
+      contentType: 'text/plain',
+      workspaceSubdir: subDirName,
+      warningLabel: 'Mesh artifact',
+    });
+    meshArtifactFile = result.fileName;
+    if (result.warning) {
+      warnings.push(result.warning);
     }
   }
 
   return {
     rawResultsFile,
     meshArtifactFile,
-    warnings
+    warnings,
   };
 }

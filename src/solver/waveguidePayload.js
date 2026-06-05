@@ -25,7 +25,7 @@ function requireFiniteNumber(name, value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     throw new Error(
-      `buildWaveguidePayload requires finite "${name}" from DesignModule OCC-normalized params.`
+      `buildWaveguidePayload requires finite "${name}" from DesignModule backend-mesh params.`
     );
   }
   return numeric;
@@ -35,7 +35,7 @@ function requireIntegerNumber(name, value) {
   const numeric = requireFiniteNumber(name, value);
   if (!Number.isInteger(numeric)) {
     throw new Error(
-      `buildWaveguidePayload requires integer "${name}" from DesignModule OCC-normalized params.`
+      `buildWaveguidePayload requires integer "${name}" from DesignModule backend-mesh params.`
     );
   }
   return numeric;
@@ -44,7 +44,7 @@ function requireIntegerNumber(name, value) {
 function requireStringValue(name, value) {
   if (value === undefined || value === null) {
     throw new Error(
-      `buildWaveguidePayload requires "${name}" from DesignModule OCC-normalized params.`
+      `buildWaveguidePayload requires "${name}" from DesignModule backend-mesh params.`
     );
   }
   return String(value);
@@ -131,7 +131,10 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     enc_edge: toFiniteNumber(preparedParams.encEdge, 18),
     enc_edge_type: toFiniteNumber(preparedParams.encEdgeType, 1),
     corner_segments: toFiniteNumber(preparedParams.cornerSegments, 4),
-    enc_front_resolution: requireStringValue('encFrontResolution', preparedParams.encFrontResolution),
+    enc_front_resolution: requireStringValue(
+      'encFrontResolution',
+      preparedParams.encFrontResolution
+    ),
     enc_back_resolution: requireStringValue('encBackResolution', preparedParams.encBackResolution),
 
     // Source definition
@@ -139,15 +142,16 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     source_radius: toFiniteNumber(preparedParams.sourceRadius, -1),
     source_curv: toFiniteNumber(preparedParams.sourceCurv, 0),
     source_velocity: toFiniteNumber(preparedParams.sourceVelocity, 1),
-    source_contours: preparedParams.sourceContours != null && String(preparedParams.sourceContours).trim()
-      ? String(preparedParams.sourceContours)
-      : undefined,
+    source_contours:
+      preparedParams.sourceContours != null && String(preparedParams.sourceContours).trim()
+        ? String(preparedParams.sourceContours)
+        : undefined,
 
     // Export coordinate offset
     vertical_offset: toFiniteNumber(preparedParams.verticalOffset, 0),
 
     // Simulation / output
     sim_type: 2,
-    msh_version: mshVersion
+    msh_version: mshVersion,
   };
 }

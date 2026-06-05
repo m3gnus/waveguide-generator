@@ -18,7 +18,7 @@ export const RECOMMENDED_DEFAULTS = {
   dampingFactor: 0.05,
   invertWheelZoom: false,
   startupCameraMode: 'perspective',
-  keyboardPanEnabled: false,   // matches current scene.js: listenToKeyEvents never called
+  keyboardPanEnabled: false, // matches current scene.js: listenToKeyEvents never called
 };
 
 /**
@@ -200,7 +200,7 @@ export function resetViewerSection(sectionKey) {
     return getCurrentViewerSettings();
   }
 
-  const updated = { ...(getCurrentViewerSettings()) };
+  const updated = { ...getCurrentViewerSettings() };
   for (const field of fields) {
     updated[field] = RECOMMENDED_DEFAULTS[field];
   }

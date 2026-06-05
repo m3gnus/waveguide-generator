@@ -6,10 +6,11 @@ REPO_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
 OUTPUT_DIR = os.path.join(THIS_DIR, 'out')
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, 'test_reference_horn.msh')
 
+sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, 'server'))
 
-from server.solver.waveguide_builder import build_waveguide_mesh
-from server.app import WaveguideParamsRequest
+from contracts import WaveguideParamsRequest
+from solver.mesher_adapter import build_waveguide_mesh
 
 # Reference horn: freestanding R-OSSE with default parameters and 6mm wall thickness
 payload_data = {

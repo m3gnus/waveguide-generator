@@ -16,8 +16,8 @@ node scripts/diagnostics/check-reference-horn-geometry-artifacts.js
 Run from repository root:
 
 ```bash
-python3 scripts/diagnostics/build-occ-mesh-reference-horn.py
-python3 scripts/diagnostics/check-occ-closed-mesh.py
+npm run diag:mesher:reference-horn
+npm run diag:mesher:closed
 ```
 
 Generated files are written to `scripts/diagnostics/out/`.

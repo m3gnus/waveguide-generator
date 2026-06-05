@@ -73,3 +73,31 @@ test('legacy Mesh.RearShape config input is tolerated but not exported', () => {
   assert.equal(regenerated.includes('Mesh.RearShape'), false);
   assert.equal(regenerated.includes('Mesh.WallThickness = 6'), true);
 });
+
+test('mixed OSSE flat and internal keys normalize independently', () => {
+  const source = [
+    'a = 51',
+    'Coverage.Angle = 45',
+    'Length = 120',
+    'Throat.Angle = 15.5',
+    'Throat.Diameter = 25.4',
+    'Term.n = 4',
+    'Term.q = 1',
+    'Term.s = 0.6',
+    'OS.k = 7',
+    'OS.h = 0.2'
+  ].join('\n');
+
+  const parsed = MWGConfigParser.parse(source);
+
+  assert.equal(parsed.type, 'OSSE');
+  assert.equal(parsed.params.a, '51');
+  assert.equal(parsed.params.L, '120');
+  assert.equal(parsed.params.a0, '15.5');
+  assert.equal(parsed.params.r0, '12.7');
+  assert.equal(parsed.params.n, '4');
+  assert.equal(parsed.params.q, '1');
+  assert.equal(parsed.params.s, '0.6');
+  assert.equal(parsed.params.k, '7');
+  assert.equal(parsed.params.h, '0.2');
+});

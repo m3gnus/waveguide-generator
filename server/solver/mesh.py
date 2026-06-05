@@ -9,6 +9,15 @@ from .mesh_cleaner import extract_physical_tags, load_and_clean_msh as _clean_lo
 logger = logging.getLogger(__name__)
 
 
+class _UnavailableBemppGrid:
+    """Minimal grid-shaped object for validation paths when bempp-cl cannot import."""
+
+    def __init__(self, vertices: np.ndarray, elements: np.ndarray, domain_indices: np.ndarray):
+        self.vertices = vertices
+        self.elements = elements
+        self.domain_indices = domain_indices
+
+
 def _resolve_unit_scale_to_meter(
     vertices_array: np.ndarray, mesh_metadata: Optional[Dict[str, Any]]
 ) -> Tuple[float, str, List[str], float]:
@@ -155,7 +164,10 @@ def prepare_mesh(
     if np.count_nonzero(domain_indices == 2) == 0:
         raise ValueError("Mesh has no source-tagged elements (tag 2).")
 
-    grid = bempp_api.Grid(vertices_array, indices_array, domain_indices)
+    if bempp_api is None:
+        grid = _UnavailableBemppGrid(vertices_array, indices_array, domain_indices)
+    else:
+        grid = bempp_api.Grid(vertices_array, indices_array, domain_indices)
 
     # Store boundary info with the grid
     # IMPORTANT: Include original mesh data for symmetry detection
@@ -195,8 +207,8 @@ def load_msh_for_bem(
     Load a Gmsh .msh surface file, clean it with mesh_cleaner, and prepare it
     for BEM simulation via HornBEMSolver.
 
-    This replaces the waveguide_builder-generated mesh path when working directly
-    with .msh files produced by Gmsh outside the OCC pipeline.
+    This loads .msh files produced by the HornLab mesher or compatible Gmsh
+    tooling.
 
     Args:
         msh_path: Path to .msh file (vertices assumed in mm unless scale_factor overrides).

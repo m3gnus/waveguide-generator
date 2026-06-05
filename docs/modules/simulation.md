@@ -16,7 +16,7 @@
 
 ## Core Responsibilities
 
-- **Payload preparation**: Build canonical simulation payloads and OCC adaptive submit options
+- **Payload preparation**: Build canonical simulation payloads and HornLab mesher submit options
 - **Job submission**: Route jobs to backend `/api/solve` with correct request shape
 - **Result handling**: Poll backend, fetch results, extract runtime metadata (performance, observation/directivity settings, failures)
 - **History management**: Track backend jobs and folder-workspace task manifests
@@ -26,8 +26,9 @@
 
 **Simulation execution**:
 - Real simulation requires backend `/api/solve` path; no mock/fallback solver supported
-- Payload submission includes canonical mesh + optional OCC adaptive parameters
-- Active BEM solves run the full-domain mesh; imported quadrants remain metadata only
+- Payload submission includes a minimal source-tagged contract mesh plus required HornLab mesher parameters
+- `solver_backend` supports `auto`, `bempp`, and `metal`; `auto` prefers a ready Metal backend when available, otherwise BEMPP
+- Active BEM solves use HornLab mesher parameters; `quadrants` may reduce the solve/export mesh domain when manually selected or auto-resolved, except the BEMPP backend forces full-domain quadrants for compatibility
 
 **Results handling**:
 - Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)

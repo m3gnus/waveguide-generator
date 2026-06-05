@@ -304,6 +304,7 @@ def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
         "has_mesh_artifact": row.get("has_mesh_artifact"),
         "mesh_stats": row.get("mesh_stats"),
         "label": row.get("label"),
+        "script_snapshot": row.get("script_snapshot"),
         "cancellation_requested": row.get("cancellation_requested"),
         "config_summary": row.get("config_summary_json"),
     }
@@ -624,6 +625,7 @@ async def startup_jobs_runtime() -> None:
                 "has_results": row.get("has_results", False),
                 "has_mesh_artifact": row.get("has_mesh_artifact", False),
                 "label": row.get("label"),
+                "script_snapshot": row.get("script_snapshot"),
             }
             if row["id"] not in queued_job_ids:
                 job_queue.append(row["id"])

@@ -3,13 +3,13 @@ import { ParamPanel } from '../../ui/paramPanel.js';
 import {
   getLiveUpdateEnabled,
   getDisplayMode,
-  openSettingsModal
+  openSettingsModal,
 } from '../../ui/settings/modal.js';
 import {
   loadViewerSettings,
   applyViewerSettingsToControls,
   setInvertWheelZoom,
-  getCurrentViewerSettings
+  getCurrentViewerSettings,
 } from '../../ui/settings/viewerSettings.js';
 
 const UI_MODULE_ID = 'ui';
@@ -18,7 +18,7 @@ const UI_TASK_STAGE = 'task';
 
 const UI_KINDS = Object.freeze({
   APP: 'app',
-  SIMULATION_PANEL: 'simulation-panel'
+  SIMULATION_PANEL: 'simulation-panel',
 });
 
 function isObject(value) {
@@ -30,20 +30,18 @@ function createUiImportEnvelope(kind, payload) {
     module: UI_MODULE_ID,
     stage: UI_IMPORT_STAGE,
     kind,
-    ...payload
+    ...payload,
   });
 }
 
 function assertUiImportEnvelope(input, expectedKind = null) {
-  if (
-    !isObject(input) ||
-    input.module !== UI_MODULE_ID ||
-    input.stage !== UI_IMPORT_STAGE
-  ) {
+  if (!isObject(input) || input.module !== UI_MODULE_ID || input.stage !== UI_IMPORT_STAGE) {
     throw new Error('UI module task requires input created by UiModule import helpers.');
   }
   if (expectedKind && input.kind !== expectedKind) {
-    throw new Error(`UI module task expected "${expectedKind}" input but received "${input.kind}".`);
+    throw new Error(
+      `UI module task expected "${expectedKind}" input but received "${input.kind}".`
+    );
   }
 }
 
@@ -57,7 +55,9 @@ function assertUiTaskEnvelope(result, expectedKind = null) {
     throw new Error('UI module output requires a result from UiModule.task().');
   }
   if (expectedKind && result.kind !== expectedKind) {
-    throw new Error(`UI module output expected "${expectedKind}" result but received "${result.kind}".`);
+    throw new Error(
+      `UI module output expected "${expectedKind}" result but received "${result.kind}".`
+    );
   }
 }
 
@@ -65,7 +65,10 @@ function validateSimulationMeshPayload(meshData) {
   if (!meshData || !Array.isArray(meshData.vertices) || meshData.vertices.length === 0) {
     throw new Error('No horn geometry available. Please generate a horn first.');
   }
-  if (!Array.isArray(meshData.surfaceTags) || meshData.surfaceTags.length !== meshData.indices.length / 3) {
+  if (
+    !Array.isArray(meshData.surfaceTags) ||
+    meshData.surfaceTags.length !== meshData.indices.length / 3
+  ) {
     throw new Error('Mesh payload is missing valid surface tags.');
   }
   if (typeof meshData.format !== 'string' || !meshData.format.trim()) {
@@ -79,7 +82,8 @@ function validateSimulationMeshPayload(meshData) {
 
 function buildAppCoordinator(input) {
   const app = input.app;
-  const loadSimulationPanel = input.loadSimulationPanel || (() => import('../../ui/simulation/SimulationPanel.js'));
+  const loadSimulationPanel =
+    input.loadSimulationPanel || (() => import('../../ui/simulation/SimulationPanel.js'));
   const feedback = input.feedback || {};
   const fileOps = input.fileOps || {};
   let simulationPanelInitPromise = null;
@@ -118,15 +122,17 @@ function buildAppCoordinator(input) {
         throw new Error('UI app coordinator requires a simulation panel loader.');
       }
 
-      simulationPanelInitPromise = Promise.resolve(loadSimulationPanel()).then(({ SimulationPanel }) => {
-        if (!app.simulationPanel) {
-          app.simulationPanel = new SimulationPanel({ app });
-          if (!app.simulationPanel.app) {
-            app.simulationPanel.app = app;
+      simulationPanelInitPromise = Promise.resolve(loadSimulationPanel()).then(
+        ({ SimulationPanel }) => {
+          if (!app.simulationPanel) {
+            app.simulationPanel = new SimulationPanel({ app });
+            if (!app.simulationPanel.app) {
+              app.simulationPanel.app = app;
+            }
           }
+          return app.simulationPanel;
         }
-        return app.simulationPanel;
-      });
+      );
 
       return simulationPanelInitPromise;
     },
@@ -213,7 +219,7 @@ function buildAppCoordinator(input) {
       AppEvents.off('simulation:mesh-requested', onMeshRequested);
       AppEvents.off('ui:tab-changed', onTabChanged);
       eventsBound = false;
-    }
+    },
   });
 }
 
@@ -288,7 +294,9 @@ function buildSimulationPanelCoordinator(input) {
     },
 
     prepareMesh(timeoutMs = 10000) {
-      rejectPendingMeshRequest(new Error('Simulation mesh request was interrupted by a newer request.'));
+      rejectPendingMeshRequest(
+        new Error('Simulation mesh request was interrupted by a newer request.')
+      );
 
       return new Promise((resolve, reject) => {
         pendingMeshResolve = resolve;
@@ -316,7 +324,7 @@ function buildSimulationPanelCoordinator(input) {
       AppEvents.off('simulation:mesh-error', onMeshError);
       AppEvents.off('ui:folder-workspace-changed', onFolderWorkspaceChanged);
       eventsBound = false;
-    }
+    },
   });
 }
 
@@ -325,7 +333,7 @@ export function importAppUi(app, options = {}) {
     app,
     loadSimulationPanel: options.loadSimulationPanel,
     feedback: options.feedback,
-    fileOps: options.fileOps
+    fileOps: options.fileOps,
   });
 }
 
@@ -341,7 +349,7 @@ export function runUiTask(input) {
       module: UI_MODULE_ID,
       stage: UI_TASK_STAGE,
       kind: UI_KINDS.APP,
-      coordinator: buildAppCoordinator(input)
+      coordinator: buildAppCoordinator(input),
     });
   }
 
@@ -350,7 +358,7 @@ export function runUiTask(input) {
       module: UI_MODULE_ID,
       stage: UI_TASK_STAGE,
       kind: UI_KINDS.SIMULATION_PANEL,
-      coordinator: buildSimulationPanelCoordinator(input)
+      coordinator: buildSimulationPanelCoordinator(input),
     });
   }
 
@@ -374,6 +382,6 @@ export const UiModule = Object.freeze({
   task: runUiTask,
   output: Object.freeze({
     app: getAppUiOutput,
-    simulationPanel: getSimulationPanelUiOutput
-  })
+    simulationPanel: getSimulationPanelUiOutput,
+  }),
 });

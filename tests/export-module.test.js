@@ -22,7 +22,7 @@ function makePreparedParams(overrides = {}) {
   );
 }
 
-test("ExportModule OCC mesh task requests backend mesh build and returns canonical payload", async () => {
+test("ExportModule HornLab mesh task requests backend mesh build and returns canonical payload", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   const statuses = [];
@@ -49,7 +49,7 @@ test("ExportModule OCC mesh task requests backend mesh build and returns canonic
         async json() {
           return {
             msh: "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
-            generatedBy: "gmsh-occ",
+            generatedBy: "hornlab-waveguide-mesher",
             stats: { nodeCount: 3, elementCount: 1 },
           };
         },
@@ -62,18 +62,18 @@ test("ExportModule OCC mesh task requests backend mesh build and returns canonic
   try {
     const prepared = makePreparedParams({ encDepth: 180 });
     const exportTask = await ExportModule.task(
-      ExportModule.importOccMeshBuild(prepared, {
+      ExportModule.importHornlabMesherMeshBuild(prepared, {
         backendUrl: "http://localhost:8000",
         onStatus(message) {
           statuses.push(message);
         },
       }),
     );
-    const result = ExportModule.output.occMesh(exportTask);
+    const result = ExportModule.output.hornlabMesherMesh(exportTask);
 
     assert.deepEqual(statuses, [
       "Connecting to backend...",
-      "Building mesh (Python OCC)...",
+      "Building mesh (HornLab mesher)...",
     ]);
     assert.equal(requests.length, 2);
     assert.equal(requests[0].url, "http://localhost:8000/health");
@@ -89,6 +89,13 @@ test("ExportModule OCC mesh task requests backend mesh build and returns canonic
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("ExportModule exposes only HornLab mesher mesh exports", () => {
+  assert.equal(ExportModule.importOccMeshBuild, undefined);
+  assert.equal(ExportModule.output.occMesh, undefined);
+  assert.equal(typeof ExportModule.importHornlabMesherMeshBuild, "function");
+  assert.equal(typeof ExportModule.output.hornlabMesherMesh, "function");
 });
 
 test("ExportModule file tasks return save descriptors for STL, CSV, and config", () => {
@@ -130,7 +137,7 @@ test("ExportModule file tasks return save descriptors for STL, CSV, and config",
   assert.equal(typeof configFiles[0].content, "string");
 });
 
-test("ExportModule OCC mesh build uses design-layer OCC export normalization for request payload", async () => {
+test("ExportModule HornLab mesh build uses design-layer export normalization for request payload", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
 
@@ -156,7 +163,7 @@ test("ExportModule OCC mesh build uses design-layer OCC export normalization for
         async json() {
           return {
             msh: "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
-            generatedBy: "gmsh-occ",
+            generatedBy: "hornlab-waveguide-mesher",
             stats: { nodeCount: 3, elementCount: 1 },
           };
         },
@@ -180,7 +187,7 @@ test("ExportModule OCC mesh build uses design-layer OCC export normalization for
     });
 
     await ExportModule.task(
-      ExportModule.importOccMeshBuild(prepared, {
+      ExportModule.importHornlabMesherMeshBuild(prepared, {
         backendUrl: "http://localhost:8000",
       }),
     );
@@ -198,7 +205,177 @@ test("ExportModule OCC mesh build uses design-layer OCC export normalization for
   }
 });
 
-test("ExportModule OCC mesh task surfaces dependency doctor guidance before mesh build when OCC runtime is blocked", async () => {
+test("ExportModule STEP task requests a single-layer inner-surface export", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const statuses = [];
+
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+
+    if (url.endsWith("/health")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return { status: "ok", mesherReady: true };
+        },
+      };
+    }
+
+    if (url.endsWith("/api/mesh/step")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return {
+            step: "ISO-10303-21;\nEND-ISO-10303-21;\n",
+            generatedBy: "hornlab-waveguide-mesher",
+            stats: {
+              singleLayer: true,
+              hasWallThickness: false,
+              hasEnclosure: false,
+              hasSourceCap: false,
+            },
+          };
+        },
+      };
+    }
+
+    throw new Error(`Unexpected request URL: ${url}`);
+  };
+
+  try {
+    const prepared = makePreparedParams({
+      encDepth: 180,
+      wallThickness: 8,
+    });
+
+    const exportTask = await ExportModule.task(
+      ExportModule.importStep(prepared, {
+        backendUrl: "http://localhost:8000",
+        baseName: "demo",
+        onStatus(message) {
+          statuses.push(message);
+        },
+      }),
+    );
+    const files = ExportModule.output.files(exportTask);
+
+    assert.deepEqual(statuses, [
+      "Connecting to backend...",
+      "Building inner-surface STEP...",
+    ]);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, "http://localhost:8000/health");
+    assert.equal(requests[1].url, "http://localhost:8000/api/mesh/step");
+
+    const payload = JSON.parse(requests[1].init.body);
+    assert.equal(payload.enc_depth, 0);
+    assert.equal(payload.wall_thickness, 0);
+    assert.equal(payload.quadrants, 1234);
+
+    assert.equal(files.length, 1);
+    assert.equal(files[0].fileName, "demo.step");
+    assert.equal(files[0].content.includes("ISO-10303-21"), true);
+    assert.equal(files[0].saveOptions.contentType, "model/step");
+    assert.deepEqual(files[0].stats, {
+      singleLayer: true,
+      hasWallThickness: false,
+      hasEnclosure: false,
+      hasSourceCap: false,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ExportModule HornLab mesh task requires an explicit backend URL", async () => {
+  const prepared = makePreparedParams({ encDepth: 180 });
+
+  await assert.rejects(
+    () =>
+      ExportModule.task(
+        ExportModule.importHornlabMesherMeshBuild(prepared),
+      ),
+    /requires a backendUrl/,
+  );
+});
+
+test("ExportModule HornLab mesh task retries a transient backend health failure once", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+
+    if (url.endsWith("/health") && requests.length === 1) {
+      return {
+        ok: false,
+        status: 503,
+        statusText: "Service Unavailable",
+        async json() {
+          return { status: "starting" };
+        },
+      };
+    }
+
+    if (url.endsWith("/health")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return { status: "ok" };
+        },
+      };
+    }
+
+    if (url.endsWith("/api/mesh/build")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return {
+            msh: "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            generatedBy: "hornlab-waveguide-mesher",
+            stats: { nodeCount: 3, elementCount: 1 },
+          };
+        },
+      };
+    }
+
+    throw new Error(`Unexpected request URL: ${url}`);
+  };
+
+  try {
+    const prepared = makePreparedParams({ encDepth: 180 });
+
+    await ExportModule.task(
+      ExportModule.importHornlabMesherMeshBuild(prepared, {
+        backendUrl: "http://localhost:8000",
+      }),
+      { healthRetryDelayMs: 0 },
+    );
+
+    assert.deepEqual(
+      requests.map((request) => request.url),
+      [
+        "http://localhost:8000/health",
+        "http://localhost:8000/health",
+        "http://localhost:8000/api/mesh/build",
+      ],
+    );
+    assert.equal(requests.every((request) => request.init?.signal instanceof AbortSignal), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ExportModule HornLab mesh task surfaces dependency doctor guidance before mesh build when mesh runtime is blocked", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
 
@@ -213,7 +390,7 @@ test("ExportModule OCC mesh task surfaces dependency doctor guidance before mesh
         async json() {
           return {
             status: "ok",
-            occBuilderReady: false,
+            mesherReady: false,
             dependencyDoctor: {
               components: [
                 {
@@ -222,7 +399,7 @@ test("ExportModule OCC mesh task surfaces dependency doctor guidance before mesh
                   category: "required",
                   status: "missing",
                   featureImpact:
-                    "/api/mesh/build and adaptive OCC meshing are unavailable.",
+                    "/api/mesh/build and backend meshing are unavailable.",
                   guidance: [
                     "Install gmsh package: pip install -r server/requirements-gmsh.txt",
                   ],
@@ -243,7 +420,7 @@ test("ExportModule OCC mesh task surfaces dependency doctor guidance before mesh
     await assert.rejects(
       () =>
         ExportModule.task(
-          ExportModule.importOccMeshBuild(prepared, {
+          ExportModule.importHornlabMesherMeshBuild(prepared, {
             backendUrl: "http://localhost:8000",
           }),
         ),

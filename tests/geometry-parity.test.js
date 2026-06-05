@@ -2,7 +2,7 @@
  * Cross-pipeline geometry parity tests.
  *
  * Verifies that the JS viewport profile functions produce identical results
- * to the Python OCC builder profile functions at the same (t, phi) points.
+ * to the hornlab-waveguide-mesher profile functions at the same (t, phi) points.
  *
  * Uses scripts/eval_profiles.py as a CLI bridge to evaluate the Python side.
  */
@@ -47,10 +47,11 @@ function callPython(payload) {
 
 function isPythonAvailable() {
   try {
-    execFileSync('python3', ['-c', 'import server.solver.waveguide_builder'], {
-      cwd: join(__dirname, '..'),
-      encoding: 'utf-8',
-      timeout: 10_000,
+    callPython({
+      mode: 'profiles',
+      config: OSSE_BASIC,
+      t_values: [0],
+      phi_values: [0],
     });
     return true;
   } catch {
@@ -88,6 +89,12 @@ const OSSE_WITH_EXT = {
   throat_ext_length: 10, throat_ext_angle: 5, slot_length: 5,
 };
 
+const ROSSE_WITH_EXT = {
+  ...ROSSE_BASIC,
+  throatExtLength: 12, throatExtAngle: 20, slotLength: 5,
+  throat_ext_length: 12, throat_ext_angle: 20, slot_length: 5,
+};
+
 const OSSE_WITH_ROT = {
   ...OSSE_BASIC,
   rot: 15,
@@ -96,6 +103,16 @@ const OSSE_WITH_ROT = {
 const OSSE_WITH_H = {
   ...OSSE_BASIC,
   h: 3,
+};
+
+const OSSE_CIRCULAR_ARC = {
+  ...OSSE_BASIC,
+  throatProfile: 3,
+  throat_profile: 3,
+  circArcRadius: 0,
+  circ_arc_radius: 0,
+  circArcTermAngle: 18,
+  circ_arc_term_angle: 18,
 };
 
 // -------------------------------------------------------------------------
@@ -148,6 +165,16 @@ test('OSSE with throat extension has correct radius at extension zone', () => {
   const z = 5; // midway through extension
   const { y } = calculateOSSE(z, 0, params);
   const expected = params.r0 + z * Math.tan(params.throatExtAngle * Math.PI / 180);
+  assert.ok(Math.abs(y - expected) < FUNC_TOL, `extension zone radius: got ${y}, expected ${expected}`);
+});
+
+test('R-OSSE with throat extension has correct radius at extension zone', () => {
+  const params = ROSSE_WITH_EXT;
+  const extensionT = 6 / 120;
+  const { x, y } = calculateROSSE(extensionT, 0, params);
+  const expected = params.r0 + x * Math.tan(params.throatExtAngle * Math.PI / 180);
+
+  assert.ok(x > 0 && x < params.throatExtLength, `x should be inside extension zone, got ${x}`);
   assert.ok(Math.abs(y - expected) < FUNC_TOL, `extension zone radius: got ${y}, expected ${expected}`);
 });
 
@@ -220,6 +247,33 @@ test('R-OSSE profiles match between JS and Python', { skip: !hasPython && 'Pytho
   }
 });
 
+test('R-OSSE with throat extension matches Python', { skip: !hasPython && 'Python not available' }, () => {
+  const pyResults = callPython({
+    mode: 'profiles',
+    config: ROSSE_WITH_EXT,
+    t_values: T_VALUES,
+    phi_values: PHI_VALUES,
+  });
+
+  let idx = 0;
+  for (const phi of PHI_VALUES) {
+    for (const t of T_VALUES) {
+      const js = calculateROSSE(t, phi, ROSSE_WITH_EXT);
+      const py = pyResults[idx];
+
+      assert.ok(
+        Math.abs(js.x - py.x) < PROFILE_TOL,
+        `R-OSSE+ext x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
+      );
+      assert.ok(
+        Math.abs(js.y - py.y) < PROFILE_TOL,
+        `R-OSSE+ext y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
+      );
+      idx++;
+    }
+  }
+});
+
 test('OSSE with throat extension matches Python', { skip: !hasPython && 'Python not available' }, () => {
   const pyResults = callPython({
     mode: 'profiles',
@@ -272,6 +326,34 @@ test('OSSE with rotation matches Python', { skip: !hasPython && 'Python not avai
       assert.ok(
         Math.abs(js.y - py.y) < PROFILE_TOL,
         `OSSE+rot y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
+      );
+      idx++;
+    }
+  }
+});
+
+test('OSSE circular-arc throat profile matches Python', { skip: !hasPython && 'Python not available' }, () => {
+  const pyResults = callPython({
+    mode: 'profiles',
+    config: OSSE_CIRCULAR_ARC,
+    t_values: T_VALUES,
+    phi_values: PHI_VALUES,
+  });
+
+  let idx = 0;
+  for (const phi of PHI_VALUES) {
+    for (const t of T_VALUES) {
+      const z = t * OSSE_CIRCULAR_ARC.L;
+      const js = calculateOSSE(z, phi, OSSE_CIRCULAR_ARC);
+      const py = pyResults[idx];
+
+      assert.ok(
+        Math.abs(js.x - py.x) < PROFILE_TOL,
+        `OSSE+arc x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
+      );
+      assert.ok(
+        Math.abs(js.y - py.y) < PROFILE_TOL,
+        `OSSE+arc y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
       );
       idx++;
     }

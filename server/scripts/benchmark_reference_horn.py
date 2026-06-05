@@ -2,7 +2,7 @@
 Bounded reference-horn benchmark/repro path.
 
 Provides a repeatable diagnostic flow that:
-1. Builds reference horn mesh via OCC (freestanding R-OSSE with default parameters)
+1. Builds reference horn mesh via HornLab mesher (freestanding R-OSSE with default parameters)
 2. Runs a bounded solve (1-frequency or small sweep)
 3. Reports mesh-prep success, selected runtime/device, solver stage timings,
    and supported vs unsupported precision modes on the active host.
@@ -48,7 +48,7 @@ from services.solve_readiness import (
 from solver.deps import (
     BEMPP_AVAILABLE,
     BEMPP_RUNTIME_READY,
-    GMSH_OCC_RUNTIME_READY,
+    HORNLAB_MESHER_RUNTIME_READY,
     PYTHON_SUPPORTED,
     PYTHON_VERSION,
     BEMPP_VERSION,
@@ -198,13 +198,13 @@ REFERENCE_HORN_PARAMS = {
 
 
 def build_reference_horn_mesh() -> MeshPrepResult:
-    if not GMSH_OCC_RUNTIME_READY:
+    if not HORNLAB_MESHER_RUNTIME_READY:
         return MeshPrepResult(
             success=False,
-            error=f"OCC mesh builder unavailable (gmsh: available={GMSH_VERSION is not None}, supported={GMSH_OCC_RUNTIME_READY})",
+            error=f"HornLab mesher unavailable (gmsh: available={GMSH_VERSION is not None}, supported={HORNLAB_MESHER_RUNTIME_READY})",
         )
 
-    from solver.waveguide_builder import build_waveguide_mesh
+    from solver.mesher_adapter import build_waveguide_mesh
 
     start = time.time()
     try:
@@ -239,7 +239,7 @@ def prepare_solver_mesh(mesh_prep_result: MeshPrepResult) -> Optional[Dict[str, 
     if not mesh_prep_result.success:
         return None
 
-    from solver.waveguide_builder import build_waveguide_mesh
+    from solver.mesher_adapter import build_waveguide_mesh
 
     try:
         result = build_waveguide_mesh(REFERENCE_HORN_PARAMS, include_canonical=True)
@@ -253,7 +253,7 @@ def prepare_solver_mesh(mesh_prep_result: MeshPrepResult) -> Optional[Dict[str, 
             vertices=canonical["vertices"],
             indices=canonical["indices"],
             surface_tags=canonical["surfaceTags"],
-            mesh_metadata={"units": "mm", "unitScaleToMeter": 0.001},
+            mesh_metadata={"units": "m", "unitScaleToMeter": 1.0},
         )
     except Exception:
         return None
@@ -365,7 +365,7 @@ def get_host_info() -> Dict[str, Any]:
         "platform": platform.platform(),
         "machine": platform.machine(),
         "gmsh_version": GMSH_VERSION,
-        "gmsh_ready": GMSH_OCC_RUNTIME_READY,
+        "gmsh_ready": HORNLAB_MESHER_RUNTIME_READY,
         "bempp_version": BEMPP_VERSION,
         "bempp_ready": BEMPP_RUNTIME_READY,
     }

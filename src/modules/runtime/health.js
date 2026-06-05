@@ -1,7 +1,7 @@
 const FEATURE_COMPONENTS = Object.freeze({
-  meshBuild: ['gmsh_python'],
+  meshBuild: ['gmsh_python', 'hornlab_waveguide_mesher'],
   solve: ['bempp_cl', 'opencl_runtime'],
-  charts: ['matplotlib']
+  charts: ['matplotlib'],
 });
 
 function normalizeComponent(component) {
@@ -12,16 +12,20 @@ function normalizeComponent(component) {
   return {
     id: String(component.id || '').trim(),
     name: String(component.name || '').trim() || 'Unknown dependency',
-    category: String(component.category || 'required').trim().toLowerCase() || 'required',
-    status: String(component.status || 'missing').trim().toLowerCase() || 'missing',
+    category:
+      String(component.category || 'required')
+        .trim()
+        .toLowerCase() || 'required',
+    status:
+      String(component.status || 'missing')
+        .trim()
+        .toLowerCase() || 'missing',
     featureImpact: String(component.featureImpact || '').trim(),
     detail: String(component.detail || '').trim(),
     requiredFor: String(component.requiredFor || '').trim(),
     guidance: Array.isArray(component.guidance)
-      ? component.guidance
-        .map((entry) => String(entry || '').trim())
-        .filter(Boolean)
-      : []
+      ? component.guidance.map((entry) => String(entry || '').trim()).filter(Boolean)
+      : [],
   };
 }
 
@@ -31,18 +35,12 @@ export function getRuntimeDoctorComponents(health) {
     return [];
   }
 
-  return components
-    .map(normalizeComponent)
-    .filter(Boolean);
+  return components.map(normalizeComponent).filter(Boolean);
 }
 
-export function getRuntimeDoctorIssues(
-  health,
-  { features = [], includeOptional = true } = {}
-) {
+export function getRuntimeDoctorIssues(health, { features = [], includeOptional = true } = {}) {
   const featureIds = new Set(
-    (features || [])
-      .flatMap((feature) => FEATURE_COMPONENTS[String(feature || '').trim()] || [])
+    (features || []).flatMap((feature) => FEATURE_COMPONENTS[String(feature || '').trim()] || [])
   );
 
   return getRuntimeDoctorComponents(health).filter((component) => {
@@ -68,7 +66,7 @@ export function summarizeRuntimeDoctor(health) {
   return {
     requiredReady: summary?.requiredReady !== false && requiredIssues.length === 0,
     requiredIssues,
-    optionalIssues
+    optionalIssues,
   };
 }
 
@@ -90,11 +88,7 @@ function formatIssueLine(component) {
 
 export function formatDependencyBlockMessage(
   health,
-  {
-    features = [],
-    fallback = 'Backend dependency check failed.',
-    includeOptional = true
-  } = {}
+  { features = [], fallback = 'Backend dependency check failed.', includeOptional = true } = {}
 ) {
   const issues = getRuntimeDoctorIssues(health, { features, includeOptional });
   if (issues.length === 0) {

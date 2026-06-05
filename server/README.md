@@ -15,16 +15,17 @@ python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r server/requirements.txt
 ./.venv/bin/pip install -r server/requirements-gmsh.txt
-./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
+./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 Notes:
 
-- The root setup scripts (`SETUP-*`) automatically attempt gmsh+bempp installation with fallback handling.
+- The root setup scripts (`install/install.sh` and `install/install.bat`) automatically attempt HornLab mesher, Metal BEM, gmsh, and bempp installation with fallback handling.
+- `server/requirements.txt` installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs.
 - `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
 - Dependency audit (March 19, 2026): `trimesh` was removed from backend requirements after proving it unused in active runtime/tests.
-- `uvicorn[standard]` remains intentional because backend startup still runs through `uvicorn` in `server/app.py`; plain-vs-standard extras policy is handled in the runtime-doctor/preflight backlog slices.
+- `uvicorn[standard]` remains intentional because backend startup still runs through `uvicorn` in `server/app.py`; plain-vs-standard extras policy is handled by runtime-doctor/preflight checks.
 - For snapshot Gmsh wheels, use:
   - `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt`
   - Headless Linux: `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt`
@@ -80,15 +81,14 @@ Preflight always runs under the interpreter selected by the shared startup contr
 
 - `fastapi` (backend startup)
 - `gmsh` (`/api/mesh/build`)
-- `bempp-cl` (`/api/solve`)
-- OpenCL runtime availability (`/api/solve`)
-- bounded solve validation evidence (`bounded_solve_validation`, `/api/solve`)
+- `hornlab-waveguide-mesher` (`/api/mesh/build`, viewport meshing, and HornLab mesher jobs)
+- `bempp-cl` and OpenCL runtime availability (`/api/solve`) unless the Metal BEM backend is ready
 
-`bounded_solve_validation` is sourced from the persisted reference-horn probe record:
+The dependency doctor also reports optional bounded solve validation evidence (`bounded_solve_validation`) sourced from the persisted reference-horn probe record:
 
 - default path: `output/runtime/bounded_solve_validation.json`
 - override path: `WG_BOUNDED_SOLVE_RECORD_PATH=/abs/path.json`
-- refresh command (must run with solve enabled): `cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30`
+- refresh command (must run with solve enabled): `node scripts/run-backend-python.js --cwd server scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30`
 
 Current Apple Silicon contract:
 
@@ -123,6 +123,7 @@ Doctor report contract:
 - Feature impact and OS-specific install guidance for:
   - `fastapi`
   - `gmsh` Python API
+  - `hornlab-waveguide-mesher`
   - `bempp-cl`
   - OpenCL runtime
   - bounded solve validation (`bounded_solve_validation`)
@@ -162,8 +163,10 @@ The backend now enforces a version matrix at runtime:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
+| HornLab mesher      | `334e51f8455def6c60e0683fbc29ae46ae6d6230` | `/api/mesh/build` |
+| HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | `/api/solve`      |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
-| bempp-cl            | `>=0.4,<0.5`    | `/api/solve`      |
+| bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | `/api/solve`      |
 
 Notes:
 
@@ -202,7 +205,7 @@ python3 -m venv .venv
 Optional for `/api/solve`:
 
 ```bash
-./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git
+./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 Notes:
@@ -236,7 +239,7 @@ This uses deterministic synthetic fixtures for:
 
 ### 2.3 Reference-horn bounded runtime repro harness
 
-For a bounded reference-horn repro (OCC mesh build + optional 1-frequency solve + precision support matrix), run:
+For a bounded reference-horn repro (HornLab mesh build + optional 1-frequency solve + precision support matrix), run:
 
 ```bash
 cd server
@@ -261,7 +264,7 @@ Options:
 
 What this reports:
 
-- mesh-prep success/failure for the reference-horn OCC preset (vertices, triangles, tag counts)
+- mesh-prep success/failure for the reference-horn HornLab mesher preset (vertices, triangles, tag counts)
 - selected runtime/device metadata for the requested mode
 - per-precision (`single`, `double`) solve outcomes on the active host
 - solver stage timings (elapsed, GMRES iterations, SPL value)
@@ -360,7 +363,7 @@ Validation behavior:
 Runtime metadata behavior:
 
 - If mesh unit metadata is missing, backend auto-detects scale with heuristic fallback.
-- Imported ATH `Mesh.Quadrants` does not directly reduce the canonical simulation payload or queued OCC solve request; `/api/solve` runs the full-domain mesh/OCC request in the active runtime.
+- Imported ATH `Mesh.Quadrants` populates the solve/export symmetry domain. `/api/solve` preserves validated `quadrants` in the queued HornLab mesher request; STEP and viewport preview routes may still force full-domain output.
 - `/api/results/{job_id}` includes:
   - `metadata.failures`
   - `metadata.failure_count`
@@ -392,7 +395,7 @@ Returns paginated persisted job rows.
 - `mesh_stats` persists the authoritative solve-mesh diagnostics for each job:
   - `vertex_count` / `triangle_count`
   - canonical `tag_counts`
-  - OCC-derived `identity_triangle_counts` sourced from the same canonical extraction the solver consumes
+  - mesher-derived `identity_triangle_counts` sourced from the same canonical extraction the solver consumes
 
 ### `POST /api/stop/{job_id}`
 
@@ -431,7 +434,7 @@ From repository root:
 cd server && ../.venv/bin/python -m unittest discover -s tests
 ```
 
-Or via npm script (uses system `python3`):
+Or via npm script, which uses the selected backend interpreter from `.waveguide/backend-python.path` when present:
 
 ```bash
 npm run test:server
@@ -470,10 +473,10 @@ MWG_LOG_LEVEL=DEBUG ./.venv/bin/python server/app.py
 - `GET /health` should return:
   - `status: "ok"`
   - `solverReady`: `true` when BEM runtime is available
-  - `occBuilderReady`: `true` when OCC gmsh runtime is available
+  - `mesherReady`: `true` when the HornLab mesher runtime is available
   - `dependencies`: supported matrix + runtime status payload
   - `capabilities`: frontend settings capability payload for Simulation Basic / Advanced gating
-- For production-like runs where simulation and OCC meshing must work, both `solverReady` and `occBuilderReady` should be `true`.
+- For production-like runs where simulation and HornLab meshing must work, both `solverReady` and `mesherReady` should be `true`.
 
 ### 7.3 Common failure classes
 
@@ -481,7 +484,7 @@ MWG_LOG_LEVEL=DEBUG ./.venv/bin/python server/app.py
   - malformed mesh arrays (`vertices/indices/surfaceTags`)
   - unsupported request values (`sim_type`, `msh_version`, etc.)
 - `503` dependency/runtime unavailable:
-  - missing or unsupported `gmsh` Python runtime for OCC mesh build
+  - missing or unsupported `gmsh` Python runtime for HornLab mesh build
   - missing/unsupported `bempp` runtime for solve
 - `404` missing resource:
   - unknown `job_id`

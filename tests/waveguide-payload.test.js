@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildWaveguidePayload } from '../src/solver/waveguidePayload.js';
-import { prepareOccSimulationParams } from '../src/modules/design/index.js';
+import { prepareBackendMeshSimulationParams } from '../src/modules/design/index.js';
 
 test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({
+    prepareBackendMeshSimulationParams({
       type: 'OSSE',
       throatResolution: 4,
       mouthResolution: 9,
@@ -32,9 +32,9 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   assert.equal(payload.msh_version, '2.2');
 });
 
-test('buildWaveguidePayload uses DesignModule OCC simulation defaults when fields are omitted', () => {
+test('buildWaveguidePayload uses DesignModule backend mesh defaults when fields are omitted', () => {
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({
+    prepareBackendMeshSimulationParams({
       type: 'OSSE'
     }),
     '2.2'
@@ -55,7 +55,7 @@ test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
   bExpr._rawExpr = '0.2+0.1*sin(p)';
 
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({
+    prepareBackendMeshSimulationParams({
       type: 'R-OSSE',
       R: '140',
       a: '45',
@@ -67,7 +67,7 @@ test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
   assert.equal(payload.b, '0.2+0.1*sin(p)');
 });
 
-test('buildWaveguidePayload rejects unprepared OCC payload fields', () => {
+test('buildWaveguidePayload rejects unprepared backend mesh payload fields', () => {
   assert.throws(
     () => buildWaveguidePayload(
       {
@@ -80,9 +80,9 @@ test('buildWaveguidePayload rejects unprepared OCC payload fields', () => {
   );
 });
 
-test('buildWaveguidePayload receives rounded OCC segments from DesignModule normalization', () => {
+test('buildWaveguidePayload receives rounded backend mesh segments from DesignModule normalization', () => {
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({
+    prepareBackendMeshSimulationParams({
       type: 'OSSE',
       angularSegments: 21.2,
       lengthSegments: 9.7
@@ -94,28 +94,31 @@ test('buildWaveguidePayload receives rounded OCC segments from DesignModule norm
   assert.equal(payload.n_length, 10);
 });
 
-test('buildWaveguidePayload always emits quadrants=1234 regardless of input (active OCC paths are full-domain only)', () => {
-  // Active OCC solve/export paths always build full-domain meshes.
-  // prepareOccSimulationParams canonicalizes quadrants to 1234 regardless of
-  // what the user config or import contained. Legacy non-1234 values are
-  // accepted for import compatibility but are not forwarded to OCC payloads.
+test('buildWaveguidePayload preserves valid reduced-domain quadrants from DesignModule normalization', () => {
   assert.equal(
     buildWaveguidePayload(
-      prepareOccSimulationParams({ type: 'OSSE', quadrants: '14' }),
+      prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: '14' }),
       '2.2'
     ).quadrants,
-    1234
+    14
   );
   assert.equal(
     buildWaveguidePayload(
-      prepareOccSimulationParams({ type: 'OSSE', quadrants: '12' }),
+      prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: '12' }),
       '2.2'
     ).quadrants,
-    1234
+    12
   );
   assert.equal(
     buildWaveguidePayload(
-      prepareOccSimulationParams({ type: 'OSSE', quadrants: 'not-a-quadrant' }),
+      prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: '1' }),
+      '2.2'
+    ).quadrants,
+    1
+  );
+  assert.equal(
+    buildWaveguidePayload(
+      prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: 'not-a-quadrant' }),
       '2.2'
     ).quadrants,
     1234
@@ -124,7 +127,7 @@ test('buildWaveguidePayload always emits quadrants=1234 regardless of input (act
 
 test('buildWaveguidePayload includes source definition fields', () => {
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({
+    prepareBackendMeshSimulationParams({
       type: 'R-OSSE',
       sourceShape: 1,
       sourceRadius: 14.5,
@@ -146,7 +149,7 @@ test('buildWaveguidePayload includes source definition fields', () => {
 
 test('buildWaveguidePayload uses defaults for source definition fields when omitted', () => {
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({ type: 'R-OSSE' }),
+    prepareBackendMeshSimulationParams({ type: 'R-OSSE' }),
     '2.2'
   );
 
@@ -160,7 +163,7 @@ test('buildWaveguidePayload uses defaults for source definition fields when omit
 
 test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
   const payload = buildWaveguidePayload(
-    prepareOccSimulationParams({
+    prepareBackendMeshSimulationParams({
       type: 'OSSE',
       encFrontResolution: [7, 8, 9, 10],
       encBackResolution: [11, 12, 13, 14]

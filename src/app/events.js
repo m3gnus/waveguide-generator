@@ -1,10 +1,11 @@
-import { GlobalState, ImportedMeshState } from "../state.js";
-import { AppEvents } from "../events.js";
-import { parseMSH } from "../import/mshParser.js";
-import { appUiFileOps } from "./uiAdapters.js";
-import { DISPLAY_MODES } from "../viewer/index.js";
-import { applyDisplayMode } from "./scene.js";
-import { getDisplayMode, setDisplayMode } from "../ui/settings/modal.js";
+import { GlobalState, ImportedMeshState } from '../state.js';
+import { AppEvents } from '../events.js';
+import { parseMSH } from '../import/mshParser.js';
+import { appUiFileOps } from './uiAdapters.js';
+import { DISPLAY_MODES } from '../viewer/index.js';
+import { applyDisplayMode } from './scene.js';
+import { getDisplayMode, setDisplayMode } from '../ui/settings/modal.js';
+import { debugLog, debugWarn } from '../logging/debug.js';
 
 export function setupEventListeners(app) {
   bindButtonEvents(app);
@@ -13,17 +14,17 @@ export function setupEventListeners(app) {
   // live-update is inside the settings modal (created on demand).
   // Use document-level event delegation so the handler fires regardless of when the
   // element is inserted into the DOM.
-  const renderBtn = document.getElementById("render-btn");
+  const renderBtn = document.getElementById('render-btn');
 
-  document.addEventListener("change", (e) => {
-    if (e.target && e.target.id === "live-update") {
-      if (renderBtn) renderBtn.classList.toggle("is-hidden", e.target.checked);
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'live-update') {
+      if (renderBtn) renderBtn.classList.toggle('is-hidden', e.target.checked);
     }
   });
 
   // Undo/Redo keys
-  document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
       e.preventDefault();
       if (e.shiftKey) {
         GlobalState.redo();
@@ -40,39 +41,44 @@ function cycleDisplayMode(app) {
   const next = DISPLAY_MODES[(idx + 1) % DISPLAY_MODES.length];
   setDisplayMode(next.key);
   applyDisplayMode(app, next.key);
-  const btn = document.getElementById("display-mode-toggle");
+  const btn = document.getElementById('display-mode-toggle');
   if (btn) {
     btn.textContent = next.icon;
-    btn.title = "Display: " + next.label;
+    btn.title = 'Display: ' + next.label;
   }
 }
 
 export function bindButtonEvents(app) {
   const buttonBindings = [
-    { id: "render-btn", handler: () => app.requestRender(), type: "click" },
+    { id: 'render-btn', handler: () => app.requestRender(), type: 'click' },
     {
-      id: "export-config-btn",
+      id: 'export-config-btn',
       handler: () => app.exportMWGConfig(),
-      type: "click",
+      type: 'click',
     },
-    { id: "zoom-in", handler: () => app.zoom(0.8), type: "click" },
-    { id: "zoom-out", handler: () => app.zoom(1.2), type: "click" },
-    { id: "camera-toggle", handler: () => app.toggleCamera(), type: "click" },
     {
-      id: "zoom-reset",
+      id: 'export-step-btn',
+      handler: () => app.exportSTEP(),
+      type: 'click',
+    },
+    { id: 'zoom-in', handler: () => app.zoom(0.8), type: 'click' },
+    { id: 'zoom-out', handler: () => app.zoom(1.2), type: 'click' },
+    { id: 'camera-toggle', handler: () => app.toggleCamera(), type: 'click' },
+    {
+      id: 'zoom-reset',
       handler: () => {
         if (app.controls) app.controls.reset();
       },
-      type: "click",
+      type: 'click',
     },
-    { id: "focus-horn", handler: () => app.focusOnModel(), type: "click" },
+    { id: 'focus-horn', handler: () => app.focusOnModel(), type: 'click' },
     {
-      id: "display-mode-toggle",
+      id: 'display-mode-toggle',
       handler: () => cycleDisplayMode(app),
-      type: "click",
+      type: 'click',
     },
     {
-      id: "settings-btn",
+      id: 'settings-btn',
       handler: () =>
         app.uiCoordinator.openSettings({
           viewerRuntime: {
@@ -80,7 +86,7 @@ export function bindButtonEvents(app) {
             getDomElement: () => app.renderer?.domElement || null,
           },
         }),
-      type: "click",
+      type: 'click',
     },
   ];
 
@@ -88,11 +94,9 @@ export function bindButtonEvents(app) {
     const element = document.getElementById(id);
     if (element) {
       element.addEventListener(type, handler);
-      console.log(`Bound ${type} listener to ${id}`);
+      debugLog(`Bound ${type} listener to ${id}`);
     } else {
-      console.warn(
-        `Element ${id} not found in DOM - ${type} listener not attached`,
-      );
+      debugWarn(`Element ${id} not found in DOM - ${type} listener not attached`);
     }
   });
 
@@ -100,49 +104,49 @@ export function bindButtonEvents(app) {
   // Use document-level delegation so it works regardless of when the modal is opened.
   // Pass the clicked element directly so checkForUpdates can disable it without a
   // secondary getElementById lookup.
-  document.addEventListener("click", (e) => {
-    if (e.target && e.target.id === "check-updates-btn") {
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'check-updates-btn') {
       app.checkForUpdates(e.target);
     }
   });
 
   // Special handling for file upload
-  const loadBtn = document.getElementById("load-config-btn");
-  const fileInput = document.getElementById("config-upload");
+  const loadBtn = document.getElementById('load-config-btn');
+  const fileInput = document.getElementById('config-upload');
   if (loadBtn && fileInput) {
-    loadBtn.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", (e) => app.handleFileUpload(e));
-    console.log("Bound file upload handlers");
+    loadBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => app.handleFileUpload(e));
+    debugLog('Bound file upload handlers');
   } else {
-    if (!loadBtn) console.warn("Element load-config-btn not found");
-    if (!fileInput) console.warn("Element config-upload not found");
+    if (!loadBtn) debugWarn('Element load-config-btn not found');
+    if (!fileInput) debugWarn('Element config-upload not found');
   }
 
   // Return to Parametric button
-  const returnBtn = document.getElementById("return-parametric-btn");
+  const returnBtn = document.getElementById('return-parametric-btn');
   if (returnBtn) {
-    returnBtn.addEventListener("click", () => {
+    returnBtn.addEventListener('click', () => {
       ImportedMeshState.active = false;
       ImportedMeshState.filename = null;
       ImportedMeshState.vertices = null;
       ImportedMeshState.indices = null;
       ImportedMeshState.physicalTags = null;
       ImportedMeshState.physicalNames = null;
-      const banner = document.getElementById("imported-mesh-banner");
-      if (banner) banner.classList.add("is-hidden");
-      AppEvents.emit("state:updated", GlobalState.get(), {
-        source: "return-to-parametric",
+      const banner = document.getElementById('imported-mesh-banner');
+      if (banner) banner.classList.add('is-hidden');
+      AppEvents.emit('state:updated', GlobalState.get(), {
+        source: 'return-to-parametric',
       });
     });
-    console.log("Bound return-to-parametric handler");
+    debugLog('Bound return-to-parametric handler');
   }
 
   // Mesh import handling
-  const importMeshBtn = document.getElementById("import-mesh-btn");
-  const meshInput = document.getElementById("mesh-upload");
+  const importMeshBtn = document.getElementById('import-mesh-btn');
+  const meshInput = document.getElementById('mesh-upload');
   if (importMeshBtn && meshInput) {
-    importMeshBtn.addEventListener("click", () => meshInput.click());
-    meshInput.addEventListener("change", (e) => {
+    importMeshBtn.addEventListener('click', () => meshInput.click());
+    meshInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
@@ -155,88 +159,83 @@ export function bindButtonEvents(app) {
           ImportedMeshState.indices = result.indices;
           ImportedMeshState.physicalTags = result.physicalTags;
           ImportedMeshState.physicalNames = result.physicalNames;
-          appUiFileOps.setExportFields(
-            appUiFileOps.deriveExportFieldsFromFileName(file.name),
-          );
-          const banner = document.getElementById("imported-mesh-banner");
-          const filenameSpan = document.getElementById(
-            "imported-mesh-filename",
-          );
+          appUiFileOps.setExportFields(appUiFileOps.deriveExportFieldsFromFileName(file.name));
+          const banner = document.getElementById('imported-mesh-banner');
+          const filenameSpan = document.getElementById('imported-mesh-filename');
           if (banner) {
-            banner.classList.remove("is-hidden");
-            if (filenameSpan)
-              filenameSpan.textContent = `Imported: ${file.name}`;
+            banner.classList.remove('is-hidden');
+            if (filenameSpan) filenameSpan.textContent = `Imported: ${file.name}`;
           }
-          AppEvents.emit("mesh:imported", ImportedMeshState);
+          AppEvents.emit('mesh:imported', ImportedMeshState);
         } catch (err) {
-          console.error("MSH import failed:", err);
-          const statsEl = document.getElementById("stats");
+          console.error('MSH import failed:', err);
+          const statsEl = document.getElementById('stats');
           if (statsEl) {
             statsEl.innerText = `Import failed: ${err.message}`;
           }
         }
       };
       reader.readAsText(file);
-      meshInput.value = ""; // reset for re-import
+      meshInput.value = ''; // reset for re-import
     });
-    console.log("Bound mesh import handlers");
+    debugLog('Bound mesh import handlers');
   } else {
-    if (!importMeshBtn) console.warn("Element import-mesh-btn not found");
-    if (!meshInput) console.warn("Element mesh-upload not found");
+    if (!importMeshBtn) debugWarn('Element import-mesh-btn not found');
+    if (!meshInput) debugWarn('Element mesh-upload not found');
   }
 }
 
 export function setupMobilePanelToggle() {
-  const toggle = document.getElementById("mobile-panel-toggle");
-  const panel = document.getElementById("ui-panel");
-  const backdrop = document.getElementById("mobile-panel-backdrop");
-  const closeBtn = document.getElementById("panel-close-btn");
+  const toggle = document.getElementById('mobile-panel-toggle');
+  const panel = document.getElementById('ui-panel');
+  const backdrop = document.getElementById('mobile-panel-backdrop');
+  const closeBtn = document.getElementById('panel-close-btn');
 
   if (!toggle || !panel || !backdrop) {
     return;
   }
 
   const openPanel = () => {
-    panel.classList.add("is-open");
-    backdrop.classList.add("is-visible");
-    toggle.setAttribute("aria-expanded", "true");
-    toggle.style.display = "none";
-    document.body.style.overflow = "hidden";
+    panel.classList.add('is-open');
+    backdrop.classList.add('is-visible');
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.style.display = 'none';
+    document.body.style.overflow = 'hidden';
   };
 
   const closePanel = () => {
-    panel.classList.remove("is-open");
-    backdrop.classList.remove("is-visible");
-    toggle.setAttribute("aria-expanded", "false");
-    toggle.style.display = "";
-    document.body.style.overflow = "";
+    panel.classList.remove('is-open');
+    backdrop.classList.remove('is-visible');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.style.display = '';
+    document.body.style.overflow = '';
   };
 
-  toggle.addEventListener("click", () => {
-    if (panel.classList.contains("is-open")) {
+  toggle.addEventListener('click', () => {
+    if (panel.classList.contains('is-open')) {
       closePanel();
     } else {
       openPanel();
     }
   });
 
-  backdrop.addEventListener("click", closePanel);
+  backdrop.addEventListener('click', closePanel);
 
   if (closeBtn) {
-    closeBtn.addEventListener("click", closePanel);
+    closeBtn.addEventListener('click', closePanel);
   }
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && panel.classList.contains("is-open")) {
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && panel.classList.contains('is-open')) {
       closePanel();
     }
   });
 
-  const mediaQuery = window.matchMedia("(min-width: 769px)");
+  const mediaQuery = window.matchMedia('(min-width: 769px)');
 
-  const actionsPanel = document.getElementById("actions-panel");
-  const actionsTab = document.getElementById("actions-tab");
-  const actionsTabBtn = document.getElementById("actions-tab-btn");
+  const actionsPanel = document.getElementById('actions-panel');
+  const actionsTab = document.getElementById('actions-tab');
+  const actionsTabBtn = document.getElementById('actions-tab-btn');
 
   const moveActionsForMobile = () => {
     if (!actionsPanel || !actionsTab) return;
@@ -247,7 +246,7 @@ export function setupMobilePanelToggle() {
           actionsTab.appendChild(actionsPanel.firstChild);
         }
       }
-      if (actionsTabBtn) actionsTabBtn.style.display = "";
+      if (actionsTabBtn) actionsTabBtn.style.display = '';
     } else {
       // Desktop: restore children to the original actions panel
       if (actionsPanel.childElementCount === 0 && actionsTab.childElementCount > 0) {
@@ -255,7 +254,7 @@ export function setupMobilePanelToggle() {
           actionsPanel.appendChild(actionsTab.firstChild);
         }
       }
-      if (actionsTabBtn) actionsTabBtn.style.display = "none";
+      if (actionsTabBtn) actionsTabBtn.style.display = 'none';
     }
   };
 
@@ -265,7 +264,7 @@ export function setupMobilePanelToggle() {
     }
     moveActionsForMobile();
   };
-  mediaQuery.addEventListener("change", handleMediaChange);
+  mediaQuery.addEventListener('change', handleMediaChange);
 
   // Initial placement
   moveActionsForMobile();

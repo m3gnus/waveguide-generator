@@ -1,3 +1,5 @@
+import { debugError } from '../logging/debug.js';
+
 const DEGENERATE_AREA_EPSILON = 1e-10;
 const GEOMETRIC_DUPLICATE_EPSILON = 1e-6;
 
@@ -39,7 +41,7 @@ function buildEdgeTopology(indices) {
     const edges = [
       [tri[0], tri[1]],
       [tri[1], tri[2]],
-      [tri[2], tri[0]]
+      [tri[2], tri[0]],
     ];
 
     for (const [u, v] of edges) {
@@ -117,10 +119,6 @@ function flipTriangle(indices, triIndex) {
   indices[off + 2] = b;
 }
 
-function quantize(value, epsilon) {
-  return Math.round(value / epsilon);
-}
-
 function indexTriangleKey(a, b, c) {
   const sorted = [a, b, c].sort((x, y) => x - y);
   return `${sorted[0]},${sorted[1]},${sorted[2]}`;
@@ -146,7 +144,7 @@ export function orientMeshConsistently(vertices, indices, { preferOutward = fals
       components: 0,
       orientationConflicts: 0,
       trianglesFlipped: 0,
-      globalFlipApplied: false
+      globalFlipApplied: false,
     };
   }
 
@@ -217,7 +215,7 @@ export function orientMeshConsistently(vertices, indices, { preferOutward = fals
     components,
     orientationConflicts,
     trianglesFlipped,
-    globalFlipApplied
+    globalFlipApplied,
   };
 }
 
@@ -228,12 +226,14 @@ export function analyzeBemMeshIntegrity(
     requireClosed = false,
     requireSingleComponent = true,
     scale = 1,
-    geometricEpsilon = GEOMETRIC_DUPLICATE_EPSILON
+    geometricEpsilon = GEOMETRIC_DUPLICATE_EPSILON,
   } = {}
 ) {
   const effectiveEpsilon = geometricEpsilon * scale;
   if (scale !== 1) {
-    console.error(`[Integrity Check] model scale: ${scale}, using adjusted epsilon: ${effectiveEpsilon}`);
+    debugError(
+      `[Integrity Check] model scale: ${scale}, using adjusted epsilon: ${effectiveEpsilon}`
+    );
   }
   const triCount = indices.length / 3;
   const edgeUses = buildEdgeTopology(indices);
@@ -287,13 +287,19 @@ export function analyzeBemMeshIntegrity(
   const errors = [];
 
   if (degenerateTriangles > 0) {
-    errors.push(`Degenerate triangle check failed: ${degenerateTriangles} triangle(s) have near-zero area.`);
+    errors.push(
+      `Degenerate triangle check failed: ${degenerateTriangles} triangle(s) have near-zero area.`
+    );
   }
   if (nonManifoldEdges > 0) {
-    errors.push(`Manifold check failed: ${nonManifoldEdges} edge(s) are shared by more than two triangles.`);
+    errors.push(
+      `Manifold check failed: ${nonManifoldEdges} edge(s) are shared by more than two triangles.`
+    );
   }
   if (sameDirectionSharedEdges > 0) {
-    errors.push(`Surface orientation consistency failed: ${sameDirectionSharedEdges} shared edge(s) have same-direction triangle winding.`);
+    errors.push(
+      `Surface orientation consistency failed: ${sameDirectionSharedEdges} shared edge(s) have same-direction triangle winding.`
+    );
   }
   if (requireClosed && boundaryEdges > 0) {
     errors.push(`Watertightness check failed: ${boundaryEdges} boundary edge(s) found.`);
@@ -304,7 +310,9 @@ export function analyzeBemMeshIntegrity(
     );
   }
   if (requireSingleComponent && components > 1) {
-    errors.push(`Connectivity check failed: mesh contains ${components} disconnected triangle components.`);
+    errors.push(
+      `Connectivity check failed: mesh contains ${components} disconnected triangle components.`
+    );
   }
 
   return {
@@ -316,7 +324,7 @@ export function analyzeBemMeshIntegrity(
     duplicateTrianglesByIndex,
     duplicateTrianglesByGeometry,
     components,
-    errors
+    errors,
   };
 }
 

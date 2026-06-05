@@ -161,7 +161,7 @@ class BuildReferenceHornMeshTest(unittest.TestCase):
         self.assertGreater(result.tag_counts[2], 0, "No source-tagged triangles")
 
     def test_build_mesh_reports_unavailable_runtime(self):
-        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", False):
+        with patch("benchmark_reference_horn.HORNLAB_MESHER_RUNTIME_READY", False):
             result = bt.build_reference_horn_mesh()
             self.assertFalse(result.success)
             self.assertIn("unavailable", result.error.lower())
@@ -177,7 +177,7 @@ class RunBenchmarkTest(unittest.TestCase):
         args.no_solve = True
         args.timeout = 120.0
 
-        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", True), patch(
+        with patch("benchmark_reference_horn.HORNLAB_MESHER_RUNTIME_READY", True), patch(
             "benchmark_reference_horn.BEMPP_RUNTIME_READY", False
         ), patch(
             "benchmark_reference_horn.build_reference_horn_mesh",
@@ -200,7 +200,7 @@ class RunBenchmarkTest(unittest.TestCase):
         args.no_solve = True
         args.timeout = 120.0
 
-        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", True), patch(
+        with patch("benchmark_reference_horn.HORNLAB_MESHER_RUNTIME_READY", True), patch(
             "benchmark_reference_horn.BEMPP_RUNTIME_READY", True
         ), patch(
             "benchmark_reference_horn.build_reference_horn_mesh",
@@ -219,7 +219,7 @@ class RunBenchmarkTest(unittest.TestCase):
         args.no_solve = False
         args.timeout = 120.0
 
-        with patch("benchmark_reference_horn.GMSH_OCC_RUNTIME_READY", True), patch(
+        with patch("benchmark_reference_horn.HORNLAB_MESHER_RUNTIME_READY", True), patch(
             "benchmark_reference_horn.BEMPP_RUNTIME_READY", True
         ), patch(
             "benchmark_reference_horn.build_reference_horn_mesh",

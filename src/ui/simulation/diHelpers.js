@@ -10,7 +10,7 @@
  * These helpers bridge both formats.
  */
 
-const PLANE_PRIORITY = ["horizontal", "vertical", "diagonal"];
+const PLANE_PRIORITY = ['horizontal', 'vertical', 'diagonal'];
 
 /**
  * Extract a flat DI array from the result's di object.

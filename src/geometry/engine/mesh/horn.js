@@ -16,7 +16,7 @@ export function computeOsseProfileAt(t, p, params, context) {
   const totalLength = L + extLen + slotLen;
 
   const profile = calculateOSSE(t * totalLength, p, params, {
-    gcurveCache: context?.coverageCache || null
+    gcurveCache: context?.coverageCache || null,
   });
 
   const h = params.h === undefined ? 0 : evalParam(params.h, p);
@@ -35,9 +35,13 @@ export function evaluateInnerProfileAt(t, p, params, context) {
 }
 
 export function computeMouthExtents(params, context) {
-  const sampleCount = Math.max(360, Math.round((params.angularSegments || DEFAULTS.ANGULAR_SEGMENTS) * 4));
-  const needsTarget = params.morphTarget !== undefined && Number(params.morphTarget) !== MORPH_TARGETS.NONE;
-  const hasExplicit = (params.morphWidth > 0) || (params.morphHeight > 0);
+  const sampleCount = Math.max(
+    360,
+    Math.round((params.angularSegments || DEFAULTS.ANGULAR_SEGMENTS) * 4)
+  );
+  const needsTarget =
+    params.morphTarget !== undefined && Number(params.morphTarget) !== MORPH_TARGETS.NONE;
+  const hasExplicit = params.morphWidth > 0 || params.morphHeight > 0;
 
   let rawMaxX = 0;
   let rawMaxZ = 0;
@@ -52,7 +56,7 @@ export function computeMouthExtents(params, context) {
     rawMaxZ = Math.max(rawMaxZ, Math.abs(r * Math.sin(p)));
   }
 
-  const morphTargetInfo = (needsTarget && !hasExplicit) ? { halfW: rawMaxX, halfH: rawMaxZ } : null;
+  const morphTargetInfo = needsTarget && !hasExplicit ? { halfW: rawMaxX, halfH: rawMaxZ } : null;
 
   if (!needsTarget) {
     return { halfW: rawMaxX, halfH: rawMaxZ, morphTargetInfo };
@@ -72,7 +76,8 @@ export function computeMouthExtents(params, context) {
 }
 
 export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, context) {
-  const safeAngles = Array.isArray(angleList) && angleList.length > 0 ? angleList : [0, Math.PI / 2];
+  const safeAngles =
+    Array.isArray(angleList) && angleList.length > 0 ? angleList : [0, Math.PI / 2];
 
   return Array.from({ length: lengthSteps + 1 }, (_, j) => {
     const t = sliceMap ? sliceMap[j] : j / lengthSteps;
@@ -90,7 +95,15 @@ export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, cont
   });
 }
 
-export function createRingVertices(params, sliceMap, angleList, morphTargets, ringCount, lengthSteps, context) {
+export function createRingVertices(
+  params,
+  sliceMap,
+  angleList,
+  morphTargets,
+  ringCount,
+  lengthSteps,
+  context
+) {
   const vertices = [];
 
   for (let j = 0; j <= lengthSteps; j += 1) {
@@ -103,11 +116,7 @@ export function createRingVertices(params, sliceMap, angleList, morphTargets, ri
       const morphTargetInfo = morphTargets?.[j] || null;
       const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);
 
-      vertices.push(
-        r * Math.cos(p),
-        profile.x,
-        r * Math.sin(p)
-      );
+      vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
     }
   }
 
@@ -217,7 +226,14 @@ export function computeAdaptivePhiCounts(params, lengthSteps, sliceMap, userMax,
  * Like createRingVertices but each ring uses its own phi count from phiCounts[].
  * Angles are uniformly distributed: phi_i = (i / N) * 2π.
  */
-export function createAdaptiveRingVertices(params, sliceMap, morphTargets, phiCounts, lengthSteps, context) {
+export function createAdaptiveRingVertices(
+  params,
+  sliceMap,
+  morphTargets,
+  phiCounts,
+  lengthSteps,
+  context
+) {
   const vertices = [];
 
   for (let j = 0; j <= lengthSteps; j += 1) {
@@ -231,11 +247,7 @@ export function createAdaptiveRingVertices(params, sliceMap, morphTargets, phiCo
       const morphTargetInfo = morphTargets?.[j] || null;
       const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);
 
-      vertices.push(
-        r * Math.cos(p),
-        profile.x,
-        r * Math.sin(p)
-      );
+      vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
     }
   }
 
@@ -269,7 +281,7 @@ export function createAdaptiveFanIndices(phiCounts, lengthSteps) {
 
     for (let i = 0; i < N1; i += 1) {
       const a = base1 + i;
-      const b = base1 + (i + 1) % N1;
+      const b = base1 + ((i + 1) % N1);
 
       // Find the ring-j+1 sector boundaries for this phi interval.
       const kLo = Math.round((i * N2) / N1);

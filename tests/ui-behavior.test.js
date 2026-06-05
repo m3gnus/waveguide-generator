@@ -26,9 +26,14 @@ import {
 import {
   describeSimBasicDeviceAvailability,
   describeSelectedDevice,
+  getDependencyStatusSummary,
+  getFeatureBlockedReason as getLegacyRuntimeFeatureBlockedReason,
   summarizeRuntimeCapabilities,
 } from "../src/ui/runtimeCapabilities.js";
-import { createDependencyStatusPanel } from "../src/ui/dependencyStatus.js";
+import {
+  createDependencyStatusPanel,
+  getFeatureBlockedReason,
+} from "../src/ui/dependencyStatus.js";
 import { formatDependencyBlockMessage } from "../src/modules/runtime/health.js";
 import { buildRequiredDependencyWarning } from "../src/ui/simulation/connection.js";
 import {
@@ -61,14 +66,14 @@ test("normalizeParamInput parses numeric literals consistently", () => {
   assert.equal(normalizeParamInput("2+3"), "2+3");
 });
 
-test("mesh control labels separate viewport tessellation from solve mesh sizing", () => {
+test("mesh control labels separate surface sampling from solve mesh sizing", () => {
   assert.equal(
     PARAM_SCHEMA.MESH.angularSegments.label,
-    "Preview Angular Segments",
+    "Surface Angular Samples",
   );
   assert.equal(
     PARAM_SCHEMA.MESH.lengthSegments.label,
-    "Preview Length Segments",
+    "Surface Length Samples",
   );
   assert.equal(
     PARAM_SCHEMA.MESH.throatResolution.label,
@@ -89,11 +94,11 @@ test("mesh control labels separate viewport tessellation from solve mesh sizing"
   );
   assert.match(
     PARAM_SCHEMA.MESH.angularSegments.tooltip,
-    /Three\.js viewport/i,
+    /HornLab mesher Gmsh tessellation/i,
   );
   assert.match(
     PARAM_SCHEMA.MESH.throatResolution.tooltip,
-    /backend OCC solve\/export mesh/i,
+    /HornLab mesher solve\/export/i,
   );
   assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.label, "Sweep Start");
   assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.label, "Sweep End");
@@ -256,7 +261,7 @@ test("describeSimBasicDeviceAvailability reports requested unavailable mode expl
 test("summarizeRuntimeCapabilities reports advanced controls unavailable until backend advertises support", () => {
   const summary = summarizeRuntimeCapabilities({
     solverReady: true,
-    occBuilderReady: true,
+    mesherReady: true,
     capabilities: {
       simulationAdvanced: {
         available: true,
@@ -269,6 +274,8 @@ test("summarizeRuntimeCapabilities reports advanced controls unavailable until b
   });
 
   assert.equal(summary.fullyReady, true);
+  assert.equal(summary.mesherReady, true);
+  assert.equal(summary.occBuilderReady, undefined);
   assert.equal(summary.simulationAdvanced.available, true);
   assert.equal(
     summary.simulationAdvanced.reason,
@@ -276,6 +283,40 @@ test("summarizeRuntimeCapabilities reports advanced controls unavailable until b
   );
   assert.deepEqual(summary.simulationAdvanced.controls, ["use_burton_miller"]);
   assert.deepEqual(summary.simulationAdvanced.plannedControls, ["method"]);
+});
+
+test("legacy dependency summary blocks mesh builds when HornLab mesher package is missing", () => {
+  const health = {
+    dependencies: {
+      runtime: {
+        python: { version: "3.13.1", supported: true },
+        gmsh_python: {
+          available: true,
+          version: "4.15.0",
+          supported: true,
+          ready: true,
+        },
+        hornlab_waveguide_mesher: {
+          available: false,
+          version: null,
+          supported: false,
+          ready: false,
+        },
+        bempp: { available: true, supported: true, ready: true },
+      },
+    },
+  };
+
+  const summary = getDependencyStatusSummary(health);
+  assert.equal(summary.gmsh.ready, true);
+  assert.equal(summary.hornlabMesher.ready, false);
+  assert.equal(summary.hornlabMesher.name, "HornLab waveguide mesher");
+
+  const reason = getLegacyRuntimeFeatureBlockedReason(
+    health,
+    "hornlab-mesher-mesh",
+  );
+  assert.match(reason, /Install backend requirements/);
 });
 
 test("describeSelectedDevice includes device name only when it adds signal", () => {
@@ -349,7 +390,7 @@ test("renderSimulationMeshDiagnostics shows canonical tag counts and warnings", 
   }
 });
 
-test("renderSimulationMeshDiagnostics shows authoritative backend OCC provenance when mesh stats are authoritative", () => {
+test("renderSimulationMeshDiagnostics shows authoritative backend mesh provenance when mesh stats are authoritative", () => {
   const originalDocument = global.document;
   const diagnosticsEl = { innerHTML: "" };
   global.document = {
@@ -1158,7 +1199,7 @@ test("formatDependencyBlockMessage includes feature impact and guidance for miss
           name: "Gmsh Python API",
           category: "required",
           status: "missing",
-          featureImpact: "/api/mesh/build and adaptive OCC meshing are unavailable.",
+          featureImpact: "/api/mesh/build and backend meshing are unavailable.",
           guidance: [
             "Install gmsh package: pip install -r server/requirements-gmsh.txt",
           ],
@@ -1169,12 +1210,12 @@ test("formatDependencyBlockMessage includes feature impact and guidance for miss
 
   const message = formatDependencyBlockMessage(health, {
     features: ["meshBuild"],
-    fallback: "OCC mesh export is unavailable.",
+    fallback: "HornLab mesher export is unavailable.",
   });
 
-  assert.match(message, /OCC mesh export is unavailable/);
+  assert.match(message, /HornLab mesher export is unavailable/);
   assert.match(message, /Gmsh Python API/);
-  assert.match(message, /adaptive OCC meshing are unavailable/);
+  assert.match(message, /backend meshing are unavailable/);
   assert.match(message, /Install gmsh package/);
 });
 
@@ -1205,6 +1246,117 @@ test("formatDependencyBlockMessage does not include optional bounded solve valid
   assert.strictEqual(message, "Simulation is unavailable.");
 });
 
+test("getFeatureBlockedReason ignores optional BEMPP path issues when solve has another ready backend", () => {
+  const reason = getFeatureBlockedReason(
+    {
+      dependencyDoctor: {
+        components: [
+          {
+            id: "bempp_cl",
+            name: "bempp-cl",
+            category: "optional",
+            status: "missing",
+            featureImpact:
+              "BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.",
+            guidance: ["Install bempp-cl"],
+          },
+          {
+            id: "opencl_runtime",
+            name: "OpenCL Runtime",
+            category: "optional",
+            status: "missing",
+            featureImpact:
+              "OpenCL runtime is unavailable; only the Metal BEM solve path is ready.",
+            guidance: ["Install OpenCL"],
+          },
+        ],
+      },
+    },
+    "bem-solve",
+  );
+
+  assert.equal(reason, null);
+});
+
+test("getFeatureBlockedReason supports HornLab mesher mesh feature aliases", () => {
+  const reason = getFeatureBlockedReason(
+    {
+      dependencyDoctor: {
+        components: [
+          {
+            id: "gmsh_python",
+            name: "Gmsh Python API",
+            category: "required",
+            status: "missing",
+            featureImpact: "/api/mesh/build and backend meshing are unavailable.",
+            guidance: ["Install gmsh package"],
+          },
+        ],
+      },
+    },
+    "hornlab-mesher-mesh",
+  );
+
+  assert.match(reason, /Install gmsh package/);
+});
+
+test("getFeatureBlockedReason reports missing HornLab mesher package for mesh builds", () => {
+  const reason = getFeatureBlockedReason(
+    {
+      dependencyDoctor: {
+        components: [
+          {
+            id: "gmsh_python",
+            name: "Gmsh Python API",
+            category: "required",
+            status: "installed",
+            featureImpact: "HornLab mesher build path is available.",
+            guidance: [],
+          },
+          {
+            id: "hornlab_waveguide_mesher",
+            name: "HornLab waveguide mesher",
+            category: "required",
+            status: "missing",
+            featureImpact:
+              "/api/mesh/build, viewport meshing, and HornLab mesher jobs are unavailable.",
+            guidance: ["Install backend requirements"],
+          },
+        ],
+      },
+    },
+    "hornlab-mesher-mesh",
+  );
+
+  assert.match(reason, /HornLab waveguide mesher/);
+  assert.match(reason, /Install backend requirements/);
+  assert.doesNotMatch(reason, /Gmsh Python API/);
+});
+
+test("getFeatureBlockedReason includes optional BEMPP path guidance for explicit BEMPP solve", () => {
+  const reason = getFeatureBlockedReason(
+    {
+      dependencyDoctor: {
+        components: [
+          {
+            id: "bempp_cl",
+            name: "bempp-cl",
+            category: "optional",
+            status: "missing",
+            featureImpact:
+              "BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.",
+            guidance: ["Install bempp-cl"],
+          },
+        ],
+      },
+    },
+    "bempp-solve",
+  );
+
+  assert.match(reason, /BEMPP solve backend path is unavailable/);
+  assert.match(reason, /Install bempp-cl/);
+});
+
 test("createDependencyStatusPanel renders required and optional dependency issues", () => {
   const originalDocument = global.document;
   global.document = {
@@ -1224,7 +1376,7 @@ test("createDependencyStatusPanel renders required and optional dependency issue
             status: "missing",
             version: null,
             requiredFor: "/api/mesh/build",
-            featureImpact: "/api/mesh/build and adaptive OCC meshing are unavailable.",
+            featureImpact: "/api/mesh/build and backend meshing are unavailable.",
             guidance: [
               "Install gmsh package: pip install -r server/requirements-gmsh.txt",
             ],
@@ -1291,7 +1443,7 @@ test("buildRequiredDependencyWarning only includes required dependency guidance"
           name: "Gmsh Python API",
           category: "required",
           status: "missing",
-          featureImpact: "/api/mesh/build and adaptive OCC meshing are unavailable.",
+          featureImpact: "/api/mesh/build and backend meshing are unavailable.",
           guidance: [
             "Install gmsh package: pip install -r server/requirements-gmsh.txt",
           ],
@@ -1311,7 +1463,7 @@ test("buildRequiredDependencyWarning only includes required dependency guidance"
 
   assert.ok(warning);
   assert.match(warning.title, /Backend Dependencies Missing/);
-  assert.match(warning.message, /Simulation and OCC meshing stay blocked/i);
+  assert.match(warning.message, /Simulation and backend meshing stay blocked/i);
   assert.match(warning.message, /Gmsh Python API/);
   assert.match(warning.message, /Install gmsh package/);
   assert.doesNotMatch(warning.message, /Install matplotlib/);
