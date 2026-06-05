@@ -182,11 +182,10 @@ import sys
 from solver.metal_solver import metal_backend_status
 
 status = metal_backend_status()
-reason = status.get("reason") or "Metal BEM backend is not available on this host."
 if status.get("available"):
-    print(reason or "Metal BEM backend is ready.")
+    print(status.get("reason") or "Metal BEM backend is ready.")
     sys.exit(0)
-print(reason)
+print(status.get("reason") or "Metal BEM backend is not available on this host.")
 sys.exit(1)
 METALCHECK
 )"; then

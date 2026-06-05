@@ -172,7 +172,7 @@ echo.
 echo Checking Metal BEM backend...
 set "METAL_BEM_READY=0"
 set "PYTHONPATH=%CD%\server;%PYTHONPATH%"
-.venv\Scripts\python.exe -c "import sys; from solver.metal_solver import metal_backend_status; status = metal_backend_status(); print(status.get('reason') or ('Metal BEM backend is ready.' if status.get('available') else 'Metal BEM backend is not available on this host.')); sys.exit(0 if status.get('available') else 1)"
+.venv\Scripts\python.exe -c "import sys; from solver.metal_solver import metal_backend_status; status = metal_backend_status(); print((status.get('reason') or 'Metal BEM backend is ready.') if status.get('available') else (status.get('reason') or 'Metal BEM backend is not available on this host.')); sys.exit(0 if status.get('available') else 1)"
 if errorlevel 1 (
     echo   Metal BEM is not ready.
     echo   Installing BEMPP/OpenCL fallback dependencies.
