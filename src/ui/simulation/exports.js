@@ -26,6 +26,8 @@ const EXPORT_FORMAT_LABELS = Object.freeze({
   fusion_csv: 'Fusion 360 CSV Curves',
 });
 const DIRECTIVITY_PLANE_ORDER = ['horizontal', 'vertical', 'diagonal'];
+const LEGACY_IMPEDANCE_RHO_C = 1.21 * 343.0;
+const LEGACY_IMPEDANCE_THRESHOLD = 20.0;
 
 function resolveApp(panel) {
   return panel?.app || null;
@@ -188,6 +190,52 @@ function requireSimulationResults(panel) {
   return results;
 }
 
+function finiteImpedanceNumber(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeLegacyImpedanceSeries(real = [], imaginary = []) {
+  const realSeries = Array.isArray(real) ? real : [];
+  const imaginarySeries = Array.isArray(imaginary) ? imaginary : [];
+  const finiteValues = [...realSeries, ...imaginarySeries]
+    .map(finiteImpedanceNumber)
+    .filter((value) => value !== null);
+
+  if (
+    finiteValues.length === 0 ||
+    Math.max(...finiteValues.map((value) => Math.abs(value))) <= LEGACY_IMPEDANCE_THRESHOLD
+  ) {
+    return { real: realSeries, imaginary: imaginarySeries };
+  }
+
+  const normalizeValue = (value) => {
+    const numeric = finiteImpedanceNumber(value);
+    return numeric === null ? value : Number((numeric / LEGACY_IMPEDANCE_RHO_C).toPrecision(12));
+  };
+
+  return {
+    real: realSeries.map(normalizeValue),
+    imaginary: imaginarySeries.map(normalizeValue),
+  };
+}
+
+function readNormalizedImpedanceSeries(results, fallbackFrequencies = []) {
+  const impedanceData = results?.impedance || {};
+  const normalized = normalizeLegacyImpedanceSeries(
+    impedanceData.real || [],
+    impedanceData.imaginary || []
+  );
+  return {
+    frequencies: impedanceData.frequencies || fallbackFrequencies,
+    real: normalized.real,
+    imaginary: normalized.imaginary,
+  };
+}
+
 function readResultSeries(panel) {
   const results = requireSimulationResults(panel);
   const smoothing = panel.currentSmoothing;
@@ -196,13 +244,13 @@ function readResultSeries(panel) {
   const phaseDegrees = splData.phase_degrees || [];
   const diData = results.di || {};
   const diFrequencies = diData.frequencies || frequencies;
-  const impedanceData = results.impedance || {};
-  const impedanceFrequencies = impedanceData.frequencies || frequencies;
+  const impedanceData = readNormalizedImpedanceSeries(results, frequencies);
+  const impedanceFrequencies = impedanceData.frequencies;
 
   let spl = splData.spl || [];
   let di = extractFlatDI(diData);
-  let impedanceReal = impedanceData.real || [];
-  let impedanceImaginary = impedanceData.imaginary || [];
+  let impedanceReal = impedanceData.real;
+  let impedanceImaginary = impedanceData.imaginary;
 
   if (smoothing !== 'none') {
     spl = applySmoothing(frequencies, spl, smoothing);
@@ -247,6 +295,28 @@ function resolvePhaseReferenceDistance(results) {
   return null;
 }
 
+function resolvePhaseTimeConvention(results) {
+  const metadata = results?.metadata || {};
+  const backend = String(metadata?.solver_backend || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('_', '-');
+  if (backend === 'metal' || backend === 'hornlab-metal' || backend === 'hornlab-metal-bem') {
+    return 'metal';
+  }
+  if (backend === 'bempp' || backend === 'bempp-cl' || backend === 'bemppcl') {
+    return 'bempp';
+  }
+  if (metadata?.metal && typeof metadata.metal === 'object') {
+    return 'metal';
+  }
+  const selected = String(metadata?.device_interface?.selected || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('_', '-');
+  return selected === 'metal' ? 'metal' : null;
+}
+
 function formatCsvCell(value) {
   return value ?? '';
 }
@@ -280,6 +350,7 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
     spl,
     phase_degrees: phaseDegrees,
     phase_reference_distance_m: resolvePhaseReferenceDistance(results),
+    phase_time_convention: resolvePhaseTimeConvention(results),
     di,
     di_frequencies: diFrequencies,
     impedance_frequencies: impedanceFrequencies,
@@ -340,7 +411,8 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
 function buildCsvFile(panel, { baseName } = {}) {
   const { frequencies, spl, di, impedanceReal, impedanceImaginary } = readResultSeries(panel);
 
-  let csv = 'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Ω),Impedance Imag (Ω)\n';
+  let csv =
+    'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))\n';
   for (let i = 0; i < frequencies.length; i += 1) {
     csv += [
       frequencies[i],
@@ -431,13 +503,13 @@ function buildTextFile(panel, { baseName } = {}) {
     const avgZ = validImpedanceReal.reduce((a, b) => a + b, 0) / validImpedanceReal.length;
     report += 'IMPEDANCE SUMMARY\n';
     report += '-----------------\n';
-    report += `Average Real Part: ${avgZ.toFixed(2)} Ω\n\n`;
+    report += `Average Real Part Z/(rho*c): ${avgZ.toFixed(2)}\n\n`;
   }
 
   report += '\n\nDETAILED DATA\n';
   report += '=============\n\n';
-  report += 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Real(Ω)  Z_Imag(Ω)\n';
-  report += '--------  -------  ------  ---------  ---------\n';
+  report += 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re/(rho*c)  Z_Im/(rho*c)\n';
+  report += '--------  -------  ------  ------------  ------------\n';
 
   for (let i = 0; i < frequencies.length; i += 1) {
     report += `${frequencies[i].toString().padEnd(8)}  `;
@@ -503,10 +575,10 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
   const now = new Date();
   const dateStr = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()} ${now.toLocaleTimeString('en-US')}`;
   const frequencies = results.spl_on_axis?.frequencies || [];
-  const impedanceData = results.impedance || {};
-  const impFreqs = impedanceData.frequencies || frequencies;
-  const impReal = impedanceData.real || [];
-  const impImag = impedanceData.imaginary || [];
+  const impedanceData = readNormalizedImpedanceSeries(results, frequencies);
+  const impFreqs = impedanceData.frequencies;
+  const impReal = impedanceData.real;
+  const impImag = impedanceData.imaginary;
   const directivityByPlane = normalizeDirectivityByPlane(results.directivity);
   const vacPlane = resolveVacReferencePlane(directivityByPlane);
   const vacPatterns = vacPlane ? directivityByPlane[vacPlane] : [];
@@ -541,7 +613,7 @@ function buildVacSpectrumFile(panel, { baseName } = {}) {
     out += 'Data_AbscUnit=Hz\n';
     out += 'Data_BaseUnit=\n';
     out += 'Data_IsContPhase=false\n';
-    out += 'Data_Legend="Radiation Impedance, Normalized"\n';
+    out += 'Data_Legend="Radiation Impedance Z/(rho*c)"\n';
     out += 'Param_Drv=1001\n';
     out += 'Param_Param=1001\n';
     out += 'Graph_Caption="RadImp"\n';
@@ -646,10 +718,11 @@ function buildImpedanceCsvFile(panel, { baseName } = {}) {
     throw new Error('No simulation results available.');
   }
 
-  const freqs = results.impedance?.frequencies || [];
-  const real = results.impedance?.real || [];
-  const imag = results.impedance?.imaginary || [];
-  let csv = 'Freq_Hz,Z_Real,Z_Imag\n';
+  const impedanceData = readNormalizedImpedanceSeries(results);
+  const freqs = impedanceData.frequencies;
+  const real = impedanceData.real;
+  const imag = impedanceData.imaginary;
+  let csv = 'Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c\n';
 
   for (let i = 0; i < freqs.length; i += 1) {
     csv += `${freqs[i]},${real[i] ?? ''},${imag[i] ?? ''}\n`;
