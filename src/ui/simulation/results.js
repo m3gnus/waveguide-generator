@@ -155,6 +155,202 @@ function resolveJobTimestampSummary(job = null) {
   return null;
 }
 
+const MAX_RESULT_DIAGNOSTICS = 3;
+
+function normalizeDiagnosticMessage(entry) {
+  if (entry == null) return null;
+  if (!isObject(entry)) {
+    const message = String(entry).trim();
+    return message || null;
+  }
+
+  const message = String(entry.detail ?? entry.message ?? entry.error ?? entry.code ?? '').trim();
+  return message || null;
+}
+
+function normalizeDiagnosticList(value) {
+  return Array.isArray(value) ? value.map(normalizeDiagnosticMessage).filter(Boolean) : [];
+}
+
+function formatFailureDiagnostic(failure) {
+  const message = normalizeDiagnosticMessage(failure);
+  if (!message) return null;
+
+  if (!isObject(failure)) {
+    return {
+      label: 'Failure',
+      value: message,
+    };
+  }
+
+  const frequency = Number(failure.frequency_hz ?? failure.frequencyHz ?? failure.frequency);
+  const stage = String(failure.stage ?? '').trim();
+  const code = String(failure.code ?? '').trim();
+  const label = Number.isFinite(frequency) ? formatFrequencyHz(frequency) : stage || 'Failure';
+  const prefix = code && !message.includes(code) ? `${code}: ` : '';
+
+  return {
+    label,
+    value: `${prefix}${message}`,
+  };
+}
+
+function formatDiagnosticCount(count, fallback = 0) {
+  const parsed = Number(count);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return fallback;
+}
+
+export function renderResultDiagnostics(results = null) {
+  const metadata = isObject(results?.metadata) ? results.metadata : null;
+  if (!metadata) return '';
+
+  const meshValidation = isObject(metadata.mesh_validation) ? metadata.mesh_validation : null;
+  const meshWarnings = normalizeDiagnosticList(meshValidation?.warnings);
+  const resultWarnings = normalizeDiagnosticList(metadata.warnings);
+  const failures = Array.isArray(metadata.failures)
+    ? metadata.failures.map(formatFailureDiagnostic).filter(Boolean)
+    : [];
+  const warningCount = formatDiagnosticCount(metadata.warning_count, resultWarnings.length);
+  const failureCount = formatDiagnosticCount(metadata.failure_count, failures.length);
+  const meshIsInvalid = meshValidation?.is_valid === false || meshValidation?.valid === false;
+  const partialSuccess = metadata.partial_success === true;
+
+  if (
+    !meshIsInvalid &&
+    meshWarnings.length === 0 &&
+    warningCount === 0 &&
+    failureCount === 0 &&
+    !partialSuccess
+  ) {
+    return '';
+  }
+
+  const items = [];
+  if (meshIsInvalid || meshWarnings.length > 0) {
+    const mode = String(meshValidation?.mode ?? '').trim();
+    const status = meshIsInvalid ? 'Invalid' : 'Warnings';
+    items.push({
+      label: 'Mesh validation',
+      value: mode ? `${status} (${mode} mode)` : status,
+    });
+  }
+  if (warningCount > 0) {
+    items.push({
+      label: 'Warnings',
+      value: `${formatCount(warningCount)} warning${warningCount === 1 ? '' : 's'}`,
+    });
+  }
+  if (failureCount > 0) {
+    items.push({
+      label: 'Frequency failures',
+      value: `${formatCount(failureCount)} failed`,
+    });
+  }
+  if (partialSuccess) {
+    items.push({
+      label: 'Solve status',
+      value: 'Partial success',
+    });
+  }
+
+  const itemsMarkup = items
+    .map(
+      (item) => `
+        <div class="view-results-summary-item">
+          <span class="view-results-summary-label">${escapeHtml(item.label)}</span>
+          <span class="view-results-summary-value">${escapeHtml(item.value)}</span>
+        </div>
+      `
+    )
+    .join('');
+
+  const renderMessageRows = (messages) =>
+    messages
+      .slice(0, MAX_RESULT_DIAGNOSTICS)
+      .map(
+        (message) => `
+          <div class="view-results-diagnostics-row">
+            <span class="view-results-diagnostics-label">Warning</span>
+            <span class="view-results-diagnostics-value">${escapeHtml(message)}</span>
+          </div>
+        `
+      )
+      .join('');
+
+  const renderFailureRows = () =>
+    failures
+      .slice(0, MAX_RESULT_DIAGNOSTICS)
+      .map(
+        (failure) => `
+          <div class="view-results-diagnostics-row">
+            <span class="view-results-diagnostics-label">${escapeHtml(failure.label)}</span>
+            <span class="view-results-diagnostics-value">${escapeHtml(failure.value)}</span>
+          </div>
+        `
+      )
+      .join('');
+
+  const hiddenMeshWarningCount = Math.max(0, meshWarnings.length - MAX_RESULT_DIAGNOSTICS);
+  const hiddenWarningCount = Math.max(0, resultWarnings.length - MAX_RESULT_DIAGNOSTICS);
+  const hiddenFailureCount = Math.max(0, failures.length - MAX_RESULT_DIAGNOSTICS);
+  const detailSections = [
+    meshWarnings.length > 0
+      ? `
+        <div class="view-results-diagnostics-section">
+          <div class="view-results-diagnostics-section-title">Mesh Validation Warnings</div>
+          ${renderMessageRows(meshWarnings)}
+          ${
+            hiddenMeshWarningCount > 0
+              ? `<div class="view-results-diagnostics-more">+${formatCount(hiddenMeshWarningCount)} more</div>`
+              : ''
+          }
+        </div>
+      `
+      : '',
+    resultWarnings.length > 0
+      ? `
+        <div class="view-results-diagnostics-section">
+          <div class="view-results-diagnostics-section-title">Run Warnings</div>
+          ${renderMessageRows(resultWarnings)}
+          ${
+            hiddenWarningCount > 0
+              ? `<div class="view-results-diagnostics-more">+${formatCount(hiddenWarningCount)} more</div>`
+              : ''
+          }
+        </div>
+      `
+      : '',
+    failures.length > 0
+      ? `
+        <div class="view-results-diagnostics-section">
+          <div class="view-results-diagnostics-section-title">Failed Frequencies</div>
+          ${renderFailureRows()}
+          ${
+            hiddenFailureCount > 0
+              ? `<div class="view-results-diagnostics-more">+${formatCount(hiddenFailureCount)} more</div>`
+              : ''
+          }
+        </div>
+      `
+      : '',
+  ].join('');
+
+  return `
+    <section class="view-results-summary view-results-diagnostics" aria-label="Result validation diagnostics">
+      <div class="view-results-summary-header">
+        <div class="view-results-summary-copy">
+          <div class="view-results-summary-title">Result Diagnostics</div>
+          <div class="view-results-summary-text">Review warnings before trusting plots.</div>
+        </div>
+        <span class="view-results-summary-badge view-results-summary-badge--warning">Review</span>
+      </div>
+      <div class="view-results-summary-grid">${itemsMarkup}</div>
+      ${detailSections ? `<div class="view-results-diagnostics-list">${detailSections}</div>` : ''}
+    </section>
+  `;
+}
+
 export function renderSolveStatsSummary(results = null, job = null) {
   const metadata = isObject(results?.metadata) ? results.metadata : null;
   if (!metadata) return '';

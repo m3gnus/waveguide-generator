@@ -317,6 +317,7 @@ class ChartsRenderRequest(BaseModel):
     spl: List[Optional[float]] = []
     phase_degrees: List[Optional[float]] = []
     phase_reference_distance_m: Optional[float] = None
+    phase_time_convention: Optional[str] = None
     sound_speed_m_per_s: Optional[float] = None
     di: Union[List[Optional[float]], Dict[str, Any]] = []
     di_frequencies: List[float] = []

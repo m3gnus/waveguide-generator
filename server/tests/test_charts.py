@@ -9,7 +9,7 @@ MATPLOTLIB_AVAILABLE = importlib.util.find_spec("matplotlib") is not None
 
 @unittest.skipUnless(MATPLOTLIB_AVAILABLE, "matplotlib is not installed")
 class ChartRenderingTest(unittest.TestCase):
-    def test_response_phase_compensates_observer_propagation(self):
+    def test_response_phase_compensates_bempp_legacy_exp_negative_ikr(self):
         from solver.charts import _response_phase_degrees
 
         freqs = np.array([100.0, 1000.0, 10000.0])
@@ -22,6 +22,25 @@ class ChartRenderingTest(unittest.TestCase):
             wrapped_phase,
             reference_distance_m=distance_m,
             sound_speed=343.0,
+            phase_time_convention="exp(-ikr)",
+        )
+
+        np.testing.assert_allclose(phase, np.zeros_like(freqs), atol=1e-9)
+
+    def test_response_phase_compensates_metal_exp_positive_ikr(self):
+        from solver.charts import _response_phase_degrees
+
+        freqs = np.array([100.0, 1000.0, 10000.0])
+        distance_m = 2.0
+        raw_phase = np.rad2deg(2.0 * np.pi * freqs * distance_m / 343.0)
+        wrapped_phase = (raw_phase + 180.0) % 360.0 - 180.0
+
+        phase = _response_phase_degrees(
+            freqs,
+            wrapped_phase,
+            reference_distance_m=distance_m,
+            sound_speed=343.0,
+            phase_time_convention="exp(+ikr)",
         )
 
         np.testing.assert_allclose(phase, np.zeros_like(freqs), atol=1e-9)
@@ -37,6 +56,42 @@ class ChartRenderingTest(unittest.TestCase):
 
         self.assertIsInstance(image, str)
         self.assertGreater(len(image), 100)
+
+    def test_render_all_charts_infers_metal_phase_convention_from_metadata(self):
+        import matplotlib.pyplot as plt
+        from solver.charts import render_all_charts
+
+        captured_phase = None
+        original_close = plt.close
+        freqs = np.array([100.0, 1000.0, 10000.0])
+        distance_m = 2.0
+        raw_phase = np.rad2deg(2.0 * np.pi * freqs * distance_m / 343.0)
+        wrapped_phase = (raw_phase + 180.0) % 360.0 - 180.0
+
+        def capture_close(fig):
+            nonlocal captured_phase
+            if len(fig.axes) > 1 and fig.axes[1].lines:
+                captured_phase = np.asarray(fig.axes[1].lines[0].get_ydata(), dtype=float)
+            original_close(fig)
+
+        try:
+            plt.close = capture_close
+            charts = render_all_charts(
+                {
+                    "frequencies": freqs.tolist(),
+                    "spl": [90.0, 94.0, 91.0],
+                    "phase_degrees": wrapped_phase.tolist(),
+                    "phase_reference_distance_m": distance_m,
+                    "sound_speed_m_per_s": None,
+                    "metadata": {"solver_backend": "metal"},
+                }
+            )
+        finally:
+            plt.close = original_close
+
+        self.assertIsInstance(charts["frequency_response"], str)
+        self.assertIsNotNone(captured_phase)
+        np.testing.assert_allclose(captured_phase, np.zeros_like(freqs), atol=1e-9)
 
     def test_impedance_axis_margin_is_scaled_for_normalized_values(self):
         import matplotlib.pyplot as plt

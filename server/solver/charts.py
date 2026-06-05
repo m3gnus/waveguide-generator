@@ -94,17 +94,91 @@ def _wrap_radians(values):
     return (np.asarray(values, dtype=float) + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def _response_phase_degrees(frequencies, values, reference_distance_m=None, sound_speed=343.0):
+_PHASE_TIME_CONVENTION_ALIASES = {
+    "": "exp(-ikr)",
+    "auto": "exp(-ikr)",
+    "default": "exp(-ikr)",
+    "legacy": "exp(-ikr)",
+    "bempp": "exp(-ikr)",
+    "bempp-cl": "exp(-ikr)",
+    "bemppcl": "exp(-ikr)",
+    "exp(-ikr)": "exp(-ikr)",
+    "e(-ikr)": "exp(-ikr)",
+    "-ikr": "exp(-ikr)",
+    "negative": "exp(-ikr)",
+    "negative-spatial": "exp(-ikr)",
+    "metal": "exp(+ikr)",
+    "hornlab-metal": "exp(+ikr)",
+    "metal-bem": "exp(+ikr)",
+    "hornlab-metal-bem": "exp(+ikr)",
+    "exp(+ikr)": "exp(+ikr)",
+    "e(+ikr)": "exp(+ikr)",
+    "+ikr": "exp(+ikr)",
+    "positive": "exp(+ikr)",
+    "positive-spatial": "exp(+ikr)",
+}
+
+
+def _normalize_phase_time_convention(value):
+    """Normalize chart phase propagation convention labels."""
+    raw = str(value or "").strip().lower().replace(" ", "").replace("_", "-")
+    normalized = _PHASE_TIME_CONVENTION_ALIASES.get(raw)
+    if normalized is None:
+        raise ValueError(
+            "phase_time_convention must be one of: exp(-ikr), exp(+ikr), bempp, metal."
+        )
+    return normalized
+
+
+def _phase_time_convention_from_payload(payload):
+    """Resolve explicit chart phase convention, falling back to identifiable solver metadata."""
+    explicit = payload.get('phase_time_convention')
+    if explicit is not None:
+        return _normalize_phase_time_convention(explicit)
+
+    solver_backend = str(payload.get('solver_backend') or "").strip().lower().replace("_", "-")
+    if solver_backend:
+        return _normalize_phase_time_convention(solver_backend)
+
+    metadata = payload.get('metadata')
+    if not isinstance(metadata, dict):
+        return _normalize_phase_time_convention(None)
+
+    metadata_backend = str(metadata.get('solver_backend') or "").strip().lower().replace("_", "-")
+    if metadata_backend:
+        return _normalize_phase_time_convention(metadata_backend)
+    if isinstance(metadata.get('metal'), dict):
+        return "exp(+ikr)"
+
+    device_interface = metadata.get('device_interface')
+    if isinstance(device_interface, dict):
+        selected = str(device_interface.get('selected') or "").strip().lower().replace("_", "-")
+        if selected == "metal":
+            return "exp(+ikr)"
+
+    return _normalize_phase_time_convention(None)
+
+
+def _response_phase_degrees(
+    frequencies,
+    values,
+    reference_distance_m=None,
+    sound_speed=343.0,
+    phase_time_convention=None,
+):
     """Return relative excess phase, compensating observer propagation when possible."""
     freqs = np.asarray(frequencies, dtype=float)
     vals = np.asarray(values, dtype=float)
     if vals.size == 0:
         return vals
+    convention = _normalize_phase_time_convention(phase_time_convention)
     radians = np.deg2rad(vals)
     distance = float(reference_distance_m) if reference_distance_m is not None else np.nan
     speed = float(sound_speed) if sound_speed is not None else np.nan
     if np.isfinite(distance) and distance > 0.0 and np.isfinite(speed) and speed > 0.0:
-        radians = _wrap_radians(radians + (2.0 * np.pi * freqs * distance / speed))
+        propagation_sign = -1.0 if convention == "exp(-ikr)" else 1.0
+        propagation_phase = propagation_sign * (2.0 * np.pi * freqs * distance / speed)
+        radians = _wrap_radians(radians - propagation_phase)
     unwrapped = np.unwrap(radians)
     unwrapped = unwrapped - unwrapped[0]
     return np.rad2deg(unwrapped)
@@ -130,6 +204,7 @@ def render_frequency_response(
     dpi=150,
     phase_reference_distance_m=None,
     sound_speed_m_per_s=343.0,
+    phase_time_convention=None,
 ):
     """
     Render frequency response (SPL on-axis) chart.
@@ -140,6 +215,7 @@ def render_frequency_response(
         phase_degrees: Optional list of on-axis pressure phase values in degrees
         phase_reference_distance_m: Optional observation distance for propagation compensation
         sound_speed_m_per_s: Sound speed used for propagation compensation
+        phase_time_convention: Optional propagation convention for raw phase values
         dpi: Image resolution
 
     Returns:
@@ -184,6 +260,7 @@ def render_frequency_response(
                 phase_vals,
                 reference_distance_m=phase_reference_distance_m,
                 sound_speed=sound_speed_m_per_s,
+                phase_time_convention=phase_time_convention,
             ),
             color='#ffb74d',
             linewidth=1.25,
@@ -367,11 +444,13 @@ def render_all_charts(payload, dpi=150):
     """
     from .directivity_plot import render_directivity_plot
 
-    freqs = payload.get('frequencies', [])
-    spl = payload.get('spl', [])
-    phase_degrees = payload.get('phase_degrees', [])
+    spl_on_axis = payload.get('spl_on_axis') if isinstance(payload.get('spl_on_axis'), dict) else {}
+    freqs = payload.get('frequencies', []) or spl_on_axis.get('frequencies', [])
+    spl = payload.get('spl', []) or spl_on_axis.get('spl', [])
+    phase_degrees = payload.get('phase_degrees', []) or spl_on_axis.get('phase_degrees', [])
     phase_reference_distance_m = payload.get('phase_reference_distance_m')
-    sound_speed_m_per_s = payload.get('sound_speed_m_per_s', 343.0)
+    sound_speed_m_per_s = payload.get('sound_speed_m_per_s') or 343.0
+    phase_time_convention = _phase_time_convention_from_payload(payload)
     di_freqs = payload.get('di_frequencies', []) or freqs
     imp_freqs = payload.get('impedance_frequencies', []) or freqs
     imp_real = payload.get('impedance_real', [])
@@ -388,6 +467,7 @@ def render_all_charts(payload, dpi=150):
             dpi,
             phase_reference_distance_m=phase_reference_distance_m,
             sound_speed_m_per_s=sound_speed_m_per_s,
+            phase_time_convention=phase_time_convention,
         )
         if spl or phase_degrees
         else None

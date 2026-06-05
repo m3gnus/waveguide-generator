@@ -1,7 +1,7 @@
 import { applySmoothing } from '../../results/smoothing.js';
 import { extractPerPlaneDI } from './diHelpers.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import { renderSolveStatsSummary } from './results.js';
+import { renderResultDiagnostics, renderSolveStatsSummary } from './results.js';
 import { trapFocus } from '../focusTrap.js';
 
 const DEFAULT_DIRECTIVITY_REFERENCE_LEVEL = -6;
@@ -53,6 +53,28 @@ function resolvePhaseReferenceDistance(results) {
     return observationDistance;
   }
   return null;
+}
+
+function resolvePhaseTimeConvention(results) {
+  const metadata = results?.metadata || {};
+  const backend = String(metadata?.solver_backend || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('_', '-');
+  if (backend === 'metal' || backend === 'hornlab-metal' || backend === 'hornlab-metal-bem') {
+    return 'metal';
+  }
+  if (backend === 'bempp' || backend === 'bempp-cl' || backend === 'bemppcl') {
+    return 'bempp';
+  }
+  if (metadata?.metal && typeof metadata.metal === 'object') {
+    return 'metal';
+  }
+  const selected = String(metadata?.device_interface?.selected || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('_', '-');
+  return selected === 'metal' ? 'metal' : null;
 }
 
 /**
@@ -158,10 +180,13 @@ export async function openViewResultsModal(panel) {
   const body = document.createElement('div');
   body.className = 'view-results-body';
 
-  const solveStatsMarkup = renderSolveStatsSummary(results, job);
-  if (solveStatsMarkup) {
+  for (const summaryMarkup of [
+    renderSolveStatsSummary(results, job),
+    renderResultDiagnostics(results),
+  ]) {
+    if (!summaryMarkup) continue;
     const summaryWrapper = document.createElement('div');
-    summaryWrapper.innerHTML = solveStatsMarkup.trim();
+    summaryWrapper.innerHTML = summaryMarkup.trim();
     const summarySection = summaryWrapper.firstElementChild;
     if (summarySection) {
       body.appendChild(summarySection);
@@ -341,6 +366,7 @@ export async function openViewResultsModal(panel) {
       spl,
       phase_degrees: phaseDegrees,
       phase_reference_distance_m: resolvePhaseReferenceDistance(results),
+      phase_time_convention: resolvePhaseTimeConvention(results),
       di,
       di_frequencies: diFrequencies,
       impedance_frequencies: impedanceFrequencies,

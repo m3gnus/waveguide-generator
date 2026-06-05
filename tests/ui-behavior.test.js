@@ -7,7 +7,7 @@ import {
   formatJobSummary,
   renderSimulationMeshDiagnostics,
 } from '../src/ui/simulation/jobActions.js';
-import { renderSolveStatsSummary } from '../src/ui/simulation/results.js';
+import { renderResultDiagnostics, renderSolveStatsSummary } from '../src/ui/simulation/results.js';
 import { validateSimulationConfig } from '../src/modules/simulation/domain.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
@@ -207,6 +207,67 @@ test('renderSolveStatsSummary uses persisted directivity metadata for solve sett
   assert.match(markup, /7\.5°/);
   assert.match(markup, /Diagonal plane/);
   assert.match(markup, /35°/);
+});
+
+test('renderResultDiagnostics shows mesh warnings and failed frequency details with escaping', () => {
+  const markup = renderResultDiagnostics({
+    metadata: {
+      mesh_validation: {
+        mode: 'warn',
+        is_valid: false,
+        warnings: ['Requested max frequency exceeds <mesh> capability.'],
+      },
+      warnings: [
+        {
+          stage: 'setup',
+          code: 'observation_distance_adjusted',
+          detail: 'Using safer distance & preserving solve.',
+        },
+      ],
+      warning_count: 1,
+      failures: [
+        {
+          frequency_hz: 2500,
+          stage: 'frequency_solve',
+          code: 'frequency_solve_failed',
+          detail: 'GMRES failed <badly>',
+        },
+      ],
+      failure_count: 1,
+      partial_success: true,
+    },
+  });
+
+  assert.match(markup, /Result Diagnostics/);
+  assert.match(markup, /Mesh validation/);
+  assert.match(markup, /Invalid \(warn mode\)/);
+  assert.match(markup, /Requested max frequency exceeds &lt;mesh&gt; capability\./);
+  assert.match(markup, /Run Warnings/);
+  assert.match(markup, /Using safer distance &amp; preserving solve\./);
+  assert.match(markup, /Failed Frequencies/);
+  assert.match(markup, /2\.5 kHz/);
+  assert.match(markup, /frequency_solve_failed: GMRES failed &lt;badly&gt;/);
+  assert.match(markup, /Partial success/);
+});
+
+test('renderResultDiagnostics omits clean result metadata', () => {
+  const markup = renderResultDiagnostics({
+    metadata: {
+      mesh_validation: {
+        mode: 'warn',
+        enabled: true,
+        is_valid: true,
+        warnings: [],
+      },
+      warnings: [],
+      warning_count: 0,
+      failures: [],
+      failure_count: 0,
+      partial_success: false,
+    },
+  });
+
+  assert.equal(markup, '');
 });
 
 test('describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes', () => {
