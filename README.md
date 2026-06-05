@@ -67,7 +67,7 @@ The app opens in your browser at `http://localhost:3000`. Close the terminal to 
 If no solver backend is ready, the app still works for 3D preview and local STL/config/profile exports, but **Start BEM Simulation** requires a ready solver backend plus the HornLab mesher.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `334e51f8455def6c60e0683fbc29ae46ae6d6230` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-waveguide-mesher: pinned git commit `2317b804976d54eb86240cae1b99bb5007659acf` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
 - hornlab-metal-bem: pinned git commit `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` (optional Metal solver backend)
 - gmsh: `>=4.11,<5.0` (required by the HornLab mesher)
 - bempp-cl: pinned git commit `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` / version `0.4.2` (optional BEMPP solver backend)
