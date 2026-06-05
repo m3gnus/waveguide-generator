@@ -232,3 +232,70 @@ test("ParamPanel renders row-level formula buttons and removes the section-heade
     global.document = originalDocument;
   }
 });
+
+test("ParamPanel hides inactive straight slot row but keeps active slot values visible", () => {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement("div");
+  paramContainer.id = "param-container";
+  fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement("div");
+  simulationSettingsContainer.id = "simulation-settings-container";
+  fakeDocument.body.appendChild(simulationSettingsContainer);
+  const simulationContainer = fakeDocument.createElement("div");
+  simulationContainer.id = "simulation-param-container";
+  fakeDocument.body.appendChild(simulationContainer);
+
+  global.document = fakeDocument;
+
+  try {
+    GlobalState.loadState(
+      {
+        type: "OSSE",
+        params: {
+          ...getDefaults("OSSE"),
+          throatExtAngle: "0",
+          throatExtLength: "0",
+          slotLength: "0",
+        },
+      },
+      "param-panel-slot-hidden-test",
+    );
+    const panel = new ParamPanel("param-container");
+    panel.createFullPanel();
+
+    let slotRows = collectNodes(
+      paramContainer,
+      (node) =>
+        node.attributes["data-param-key"] === "slotLength" &&
+        node.className === "input-row",
+    );
+    assert.equal(slotRows.length, 0);
+
+    GlobalState.loadState(
+      {
+        type: "OSSE",
+        params: {
+          ...getDefaults("OSSE"),
+          throatExtAngle: "0",
+          throatExtLength: "0",
+          slotLength: "6",
+        },
+      },
+      "param-panel-slot-visible-test",
+    );
+    panel.createFullPanel();
+
+    slotRows = collectNodes(
+      paramContainer,
+      (node) =>
+        node.attributes["data-param-key"] === "slotLength" &&
+        node.className === "input-row",
+    );
+    assert.equal(slotRows.length, 1);
+  } finally {
+    GlobalState.loadState(previousState, "param-panel-slot-test-restore");
+    global.document = originalDocument;
+  }
+});

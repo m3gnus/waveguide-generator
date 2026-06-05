@@ -5,8 +5,10 @@ import { saveFile } from '../src/ui/fileOps.js';
 import {
   getSelectedFolderHandle,
   getSelectedFolderLabel,
+  getSelectedFolderPath,
   resetSelectedFolder,
   selectOutputFolder,
+  fetchWorkspacePath,
   writeWorkspaceFile
 } from '../src/ui/workspace/folderWorkspace.js';
 
@@ -149,6 +151,34 @@ test('selectOutputFolder calls backend and updates workspace label', async () =>
     assert.equal(result, '/Users/test/exports');
     assert.equal(getSelectedFolderHandle(), null);
     assert.equal(getSelectedFolderLabel(), 'exports');
+    assert.equal(getSelectedFolderPath(), '/Users/test/exports');
+  } finally {
+    resetSelectedFolder();
+    global.fetch = originalFetch;
+  }
+});
+
+test('fetchWorkspacePath syncs backend workspace label and path', async () => {
+  const originalFetch = global.fetch;
+
+  global.fetch = async (url) => {
+    if (url.includes('/api/workspace/path')) {
+      return {
+        ok: true,
+        async json() {
+          return { path: '/Users/test/Waveguide Exports/output' };
+        }
+      };
+    }
+    throw new Error('unexpected fetch');
+  };
+
+  try {
+    const result = await fetchWorkspacePath();
+
+    assert.equal(result, '/Users/test/Waveguide Exports/output');
+    assert.equal(getSelectedFolderLabel(), 'output');
+    assert.equal(getSelectedFolderPath(), '/Users/test/Waveguide Exports/output');
   } finally {
     resetSelectedFolder();
     global.fetch = originalFetch;
@@ -172,7 +202,12 @@ test('saveFile writes to backend workspace when folder picker support is unavail
     return {
       ok: true,
       async json() {
-        return { status: 'success' };
+        return {
+          status: 'success',
+          path: '/Users/test/exports/horn_design.txt',
+          workspaceRoot: '/Users/test/exports',
+          workspaceSubdir: ''
+        };
       }
     };
   };
@@ -188,7 +223,10 @@ test('saveFile writes to backend workspace when folder picker support is unavail
     assert.equal(body.get('workspace_subdir'), null);
     const fileBlob = body.get('file');
     assert.equal(fileBlob?.name, 'horn_design.txt');
+    assert.equal(getSelectedFolderLabel(), 'exports');
+    assert.equal(getSelectedFolderPath(), '/Users/test/exports');
   } finally {
+    resetSelectedFolder();
     global.document = originalDocument;
     global.window = originalWindow;
     global.fetch = originalFetch;

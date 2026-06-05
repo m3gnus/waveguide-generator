@@ -5,13 +5,32 @@ import { debugWarn } from '../../logging/debug.js';
 const DEFAULT_FOLDER_LABEL = 'No folder selected';
 
 let selectedFolderLabel = DEFAULT_FOLDER_LABEL;
+let selectedFolderPath = null;
 
 const changeListeners = new Set();
+
+function labelFromPath(path) {
+  const normalized = String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normalized) return DEFAULT_FOLDER_LABEL;
+  return normalized.split('/').pop() || normalized;
+}
+
+function updateSelectedWorkspacePath(path) {
+  const normalizedPath = String(path || '').trim() || null;
+  const nextLabel = normalizedPath ? labelFromPath(normalizedPath) : DEFAULT_FOLDER_LABEL;
+  if (selectedFolderPath === normalizedPath && selectedFolderLabel === nextLabel) {
+    return;
+  }
+  selectedFolderPath = normalizedPath;
+  selectedFolderLabel = nextLabel;
+  emitChange();
+}
 
 function emitChange() {
   const snapshot = {
     handle: null,
     label: selectedFolderLabel,
+    path: selectedFolderPath,
   };
   AppEvents.emit('ui:folder-workspace-changed', snapshot);
   for (const listener of changeListeners) {
@@ -35,13 +54,19 @@ export function getSelectedFolderLabel() {
   return selectedFolderLabel;
 }
 
+export function getSelectedFolderPath() {
+  return selectedFolderPath;
+}
+
 export function setSelectedFolderHandle(handle, options = {}) {
+  selectedFolderPath = null;
   selectedFolderLabel = String(options.label || DEFAULT_FOLDER_LABEL);
   emitChange();
   return null;
 }
 
 export function resetSelectedFolder(options = {}) {
+  selectedFolderPath = null;
   selectedFolderLabel = String(options.label || DEFAULT_FOLDER_LABEL);
   emitChange();
 }
@@ -51,7 +76,7 @@ export function subscribeFolderWorkspace(listener) {
     return () => {};
   }
   changeListeners.add(listener);
-  listener({ handle: null, label: selectedFolderLabel });
+  listener({ handle: null, label: selectedFolderLabel, path: selectedFolderPath });
   return () => {
     changeListeners.delete(listener);
   };
@@ -72,6 +97,9 @@ export async function fetchWorkspacePath() {
     });
     if (!res.ok) return null;
     const data = await res.json();
+    if (data.path) {
+      updateSelectedWorkspacePath(data.path);
+    }
     return data.path || null;
   } catch {
     return null;
@@ -109,8 +137,7 @@ export async function requestBackendFolderSelection() {
     if (!res.ok) return null;
     const data = await res.json();
     if (data.selected && data.path) {
-      selectedFolderLabel = data.path.split('/').pop() || data.path;
-      emitChange();
+      updateSelectedWorkspacePath(data.path);
       return data.path;
     }
     return null;
@@ -183,5 +210,9 @@ export async function writeWorkspaceFile(fileName, content, options = {}) {
     throw error;
   }
 
-  return response.json();
+  const result = await response.json();
+  if (result?.workspaceRoot) {
+    updateSelectedWorkspacePath(result.workspaceRoot);
+  }
+  return result;
 }

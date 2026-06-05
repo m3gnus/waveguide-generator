@@ -118,8 +118,8 @@ test("DesignModule backend mesh normalization outputs centralize simulation/expo
   assert.equal(backendMeshSimulation.throatResolution, 6);
   assert.equal(backendMeshSimulation.mouthResolution, 10);
   assert.equal(backendMeshSimulation.rearResolution, 14);
-  assert.equal(backendMeshSimulation.encFrontResolution, "8,10,12,14");
-  assert.equal(backendMeshSimulation.encBackResolution, "16,18,20,22");
+  assert.equal(backendMeshSimulation.encFrontResolution, "4,5,6,7");
+  assert.equal(backendMeshSimulation.encBackResolution, "8,9,10,11");
 
   assert.equal(backendMeshExport.angularSegments, 20);
   assert.equal(backendMeshExport.lengthSegments, 10);
@@ -127,8 +127,8 @@ test("DesignModule backend mesh normalization outputs centralize simulation/expo
   assert.equal(backendMeshExport.throatResolution, 6);
   assert.equal(backendMeshExport.mouthResolution, 10);
   assert.equal(backendMeshExport.rearResolution, 14);
-  assert.equal(backendMeshExport.encFrontResolution, "8,10,12,14");
-  assert.equal(backendMeshExport.encBackResolution, "16,18,20,22");
+  assert.equal(backendMeshExport.encFrontResolution, "4,5,6,7");
+  assert.equal(backendMeshExport.encBackResolution, "8,9,10,11");
   assert.equal(backendMeshExport.wallThickness, 5);
 
   const directBackendMeshSimulation = prepareBackendMeshSimulationParams(prepared);

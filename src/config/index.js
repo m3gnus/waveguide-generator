@@ -360,6 +360,8 @@ export class MWGConfigParser {
       }
     }
 
+    normalizeStraightSlotExtension(result.params);
+
     // Parse Mesh.Enclosure block if present
     const encBlock = result.blocks['Mesh.Enclosure'];
     if (encBlock && encBlock._items) {
@@ -392,6 +394,29 @@ export class MWGConfigParser {
 
     return result;
   }
+}
+
+function finiteNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeStraightSlotExtension(params) {
+  if (!params || typeof params !== 'object') return;
+
+  const angle = finiteNumberOrNull(params.throatExtAngle ?? params['Throat.Ext.Angle'] ?? 0);
+  const slotLength = finiteNumberOrNull(params.slotLength ?? params['Slot.Length'] ?? 0);
+  if (angle === null || Math.abs(angle) > 1e-12 || slotLength === null || slotLength <= 0) {
+    return;
+  }
+
+  const extLength = finiteNumberOrNull(params.throatExtLength ?? params['Throat.Ext.Length'] ?? 0);
+  if (extLength === null) return;
+
+  params.throatExtAngle = '0';
+  params.throatExtLength = String(extLength + slotLength);
+  params.slotLength = '0';
 }
 
 // Default values for model parameters (from schema)

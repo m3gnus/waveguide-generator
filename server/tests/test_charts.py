@@ -9,15 +9,15 @@ MATPLOTLIB_AVAILABLE = importlib.util.find_spec("matplotlib") is not None
 
 @unittest.skipUnless(MATPLOTLIB_AVAILABLE, "matplotlib is not installed")
 class ChartRenderingTest(unittest.TestCase):
-    def test_response_phase_compensates_bempp_legacy_exp_negative_ikr(self):
-        from solver.charts import _response_phase_degrees
+    def test_time_referenced_phase_compensates_bempp_legacy_exp_negative_ikr(self):
+        from solver.charts import _time_referenced_phase_degrees
 
         freqs = np.array([100.0, 1000.0, 10000.0])
         distance_m = 2.0
         raw_phase = np.rad2deg(-2.0 * np.pi * freqs * distance_m / 343.0)
         wrapped_phase = (raw_phase + 180.0) % 360.0 - 180.0
 
-        phase = _response_phase_degrees(
+        phase = _time_referenced_phase_degrees(
             freqs,
             wrapped_phase,
             reference_distance_m=distance_m,
@@ -27,15 +27,15 @@ class ChartRenderingTest(unittest.TestCase):
 
         np.testing.assert_allclose(phase, np.zeros_like(freqs), atol=1e-9)
 
-    def test_response_phase_compensates_metal_exp_positive_ikr(self):
-        from solver.charts import _response_phase_degrees
+    def test_time_referenced_phase_compensates_metal_exp_positive_ikr(self):
+        from solver.charts import _time_referenced_phase_degrees
 
         freqs = np.array([100.0, 1000.0, 10000.0])
         distance_m = 2.0
         raw_phase = np.rad2deg(2.0 * np.pi * freqs * distance_m / 343.0)
         wrapped_phase = (raw_phase + 180.0) % 360.0 - 180.0
 
-        phase = _response_phase_degrees(
+        phase = _time_referenced_phase_degrees(
             freqs,
             wrapped_phase,
             reference_distance_m=distance_m,
@@ -44,6 +44,24 @@ class ChartRenderingTest(unittest.TestCase):
         )
 
         np.testing.assert_allclose(phase, np.zeros_like(freqs), atol=1e-9)
+
+    def test_time_referenced_phase_preserves_constant_phase_offset(self):
+        from solver.charts import _time_referenced_phase_degrees
+
+        freqs = np.array([100.0, 1000.0, 10000.0])
+        distance_m = 2.0
+        raw_phase = 45.0 + np.rad2deg(-2.0 * np.pi * freqs * distance_m / 343.0)
+        wrapped_phase = (raw_phase + 180.0) % 360.0 - 180.0
+
+        phase = _time_referenced_phase_degrees(
+            freqs,
+            wrapped_phase,
+            reference_distance_m=distance_m,
+            sound_speed=343.0,
+            phase_time_convention="exp(-ikr)",
+        )
+
+        np.testing.assert_allclose(phase, np.full_like(freqs, 45.0), atol=1e-9)
 
     def test_frequency_response_accepts_phase_trace(self):
         from solver.charts import render_frequency_response

@@ -159,14 +159,14 @@ def _phase_time_convention_from_payload(payload):
     return _normalize_phase_time_convention(None)
 
 
-def _response_phase_degrees(
+def _time_referenced_phase_degrees(
     frequencies,
     values,
     reference_distance_m=None,
     sound_speed=343.0,
     phase_time_convention=None,
 ):
-    """Return relative excess phase, compensating observer propagation when possible."""
+    """Return unwrapped phase after compensating the observer/impulse-response delay."""
     freqs = np.asarray(frequencies, dtype=float)
     vals = np.asarray(values, dtype=float)
     if vals.size == 0:
@@ -179,9 +179,12 @@ def _response_phase_degrees(
         propagation_sign = -1.0 if convention == "exp(-ikr)" else 1.0
         propagation_phase = propagation_sign * (2.0 * np.pi * freqs * distance / speed)
         radians = _wrap_radians(radians - propagation_phase)
-    unwrapped = np.unwrap(radians)
-    unwrapped = unwrapped - unwrapped[0]
-    return np.rad2deg(unwrapped)
+    return np.rad2deg(np.unwrap(radians))
+
+
+def _response_phase_degrees(*args, **kwargs):
+    """Compatibility wrapper for the old private helper name."""
+    return _time_referenced_phase_degrees(*args, **kwargs)
 
 
 def _normalize_impedance_for_plot(real_values, imaginary_values, rho_c=1.21 * 343.0):
@@ -249,13 +252,13 @@ def render_frequency_response(
     if len(phase_freqs) > 0:
         phase_ax = ax.twinx()
         phase_ax.set_facecolor('none')
-        phase_ax.set_ylabel('Excess phase [deg]', color='#ffb74d', fontsize=11)
+        phase_ax.set_ylabel('Phase [deg]', color='#ffb74d', fontsize=11)
         phase_ax.tick_params(axis='y', colors='#ffb74d', labelsize=9)
         phase_ax.spines['right'].set_color('#ffb74d')
         phase_ax.spines['top'].set_color('#333333')
         phase_ax.semilogx(
             phase_freqs,
-            _response_phase_degrees(
+            _time_referenced_phase_degrees(
                 phase_freqs,
                 phase_vals,
                 reference_distance_m=phase_reference_distance_m,

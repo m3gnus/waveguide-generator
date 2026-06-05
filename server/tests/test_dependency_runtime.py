@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+from importlib import metadata
 import sys
 import types
 import unittest
@@ -48,6 +49,33 @@ class DependencyRuntimeTest(unittest.TestCase):
             spec.loader.exec_module(module)
 
         self.assertFalse(module.HORNLAB_MESHER_AVAILABLE)
+
+    def test_solver_deps_rejects_same_module_from_wrong_distribution(self):
+        module_path = Path(__file__).resolve().parents[1] / "solver" / "deps.py"
+        fake_package = types.ModuleType("hornlab_mesher")
+        fake_config_builder = types.ModuleType("hornlab_mesher.config_builder")
+        fake_config_builder.build_from_config = lambda *_args, **_kwargs: None
+
+        def fake_version(name):
+            if name == "hornlab-waveguide-mesher":
+                raise metadata.PackageNotFoundError(name)
+            raise metadata.PackageNotFoundError(name)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "hornlab_mesher": fake_package,
+                "hornlab_mesher.config_builder": fake_config_builder,
+            },
+        ), patch("importlib.metadata.version", side_effect=fake_version):
+            spec = importlib.util.spec_from_file_location("_isolated_solver_deps", module_path)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+        self.assertFalse(module.HORNLAB_MESHER_AVAILABLE)
+        self.assertIsNone(module.HORNLAB_MESHER_VERSION)
 
     def test_health_reports_dependency_payload(self):
         dependency_status = {
