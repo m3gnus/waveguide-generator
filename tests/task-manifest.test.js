@@ -58,17 +58,30 @@ test('createTaskManifestFromJob maps script and metadata fields', () => {
   assert.deepEqual(manifest.scriptSnapshot, { outputName: 'horn' });
 });
 
-test('resolveTaskWorkspaceDirectoryName prefers label, then script, then id', () => {
+test('resolveTaskWorkspaceDirectoryName prefers dated label, then dated script, then id', () => {
   assert.equal(
-    resolveTaskWorkspaceDirectoryName({ id: 'job-1', label: 'horn_1' }),
-    'horn_1'
+    resolveTaskWorkspaceDirectoryName({
+      id: 'job-1',
+      label: 'horn_1',
+      createdAt: '2026-03-11T10:00:00.000Z'
+    }),
+    '260311_horn_1'
   );
   assert.equal(
     resolveTaskWorkspaceDirectoryName({
       id: 'job-2',
+      createdAt: '2026-03-12T10:00:00.000Z',
       scriptSnapshot: { outputName: 'waveguide', counter: 7 }
     }),
-    'waveguide_7'
+    '260312_waveguide_7'
+  );
+  assert.equal(
+    resolveTaskWorkspaceDirectoryName({
+      id: 'job-4',
+      label: '260313_horn_4',
+      createdAt: '2026-03-13T10:00:00.000Z'
+    }),
+    '260313_horn_4'
   );
   assert.equal(
     resolveTaskWorkspaceDirectoryName({ id: 'job-3' }),
@@ -83,6 +96,7 @@ test('updateTaskManifestForJob writes task.manifest.json via fallbackWriteFile',
     id: 'job-5',
     label: 'horn_5',
     status: 'queued',
+    createdAt: '2026-03-11T10:00:00.000Z',
     exportedFiles: []
   }, {}, { fallbackWriteFile: writeFile });
 
@@ -98,7 +112,7 @@ test('updateTaskManifestForJob writes task.manifest.json via fallbackWriteFile',
   assert.ok(files.has(GENERATION_PROJECT_MANIFEST_FILE_NAME), 'project manifest should be written');
   const projectPayload = JSON.parse(files.get(GENERATION_PROJECT_MANIFEST_FILE_NAME).content);
   assert.equal(projectPayload.generation.id, 'job-5');
-  assert.equal(projectPayload.generation.folder, 'horn_5');
+  assert.equal(projectPayload.generation.folder, '260311_horn_5');
   assert.equal(projectPayload.artifacts.scriptSnapshot, null);
   assert.deepEqual(projectPayload.artifacts.selectedExports, []);
 });
@@ -144,6 +158,7 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
     id: 'job-8',
     label: 'horn_8',
     status: 'complete',
+    createdAt: '2026-03-11T10:00:00.000Z',
     exportedFiles: ['csv:horn_8_results.csv', 'json:horn_8_results.json'],
     rawResultsFile: 'horn_8_raw.results.json',
     meshArtifactFile: 'horn_8_solver.mesh.msh',
@@ -183,7 +198,7 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
   // Check the project manifest
   assert.ok(files.has(GENERATION_PROJECT_MANIFEST_FILE_NAME), 'project manifest should be written');
   const projectPayload = JSON.parse(files.get(GENERATION_PROJECT_MANIFEST_FILE_NAME).content);
-  assert.equal(projectPayload.generation.folder, 'horn_8');
+  assert.equal(projectPayload.generation.folder, '260311_horn_8');
   assert.equal(projectPayload.artifacts.scriptSnapshot.fileName, GENERATION_SCRIPT_SNAPSHOT_FILE_NAME);
   assert.equal(projectPayload.artifacts.rawResults.fileName, 'horn_8_raw.results.json');
   assert.equal(projectPayload.artifacts.meshArtifact.fileName, 'horn_8_solver.mesh.msh');

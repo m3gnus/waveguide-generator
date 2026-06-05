@@ -34,7 +34,6 @@
     "bem-solver"
   ],
   "author": "Magnus Andersen",
-  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/m3gnus/waveguide-generator.git"

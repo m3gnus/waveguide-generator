@@ -304,7 +304,7 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
 
   assert.equal(job.id, 'job-abc');
   assert.equal(job.status, 'queued');
-  assert.equal(job.label, 'simulation_7');
+  assert.equal(job.label, '260311_simulation_7');
   assert.equal(job.configSummary.formula_type, 'OSSE');
   assert.deepEqual(job.configSummary.frequency_range, [100, 1000]);
   assert.equal('enable_symmetry' in job.configSummary, false);

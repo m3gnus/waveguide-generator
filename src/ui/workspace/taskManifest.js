@@ -1,4 +1,5 @@
 import { buildMwgConfigExportFiles } from '../../modules/export/useCases.js';
+import { ensureDatedSolveLabel, resolveDatedSolveLabel } from '../../modules/simulation/naming.js';
 import {
   GENERATION_PROJECT_MANIFEST_FILE_NAME,
   buildGenerationProjectManifest,
@@ -34,12 +35,26 @@ function normalizeArtifactFileName(value) {
   return text || null;
 }
 
+function resolveJobTimestamp(job = {}) {
+  return (
+    job.createdAt ??
+    job.created_at ??
+    job.queuedAt ??
+    job.queued_at ??
+    job.startedAt ??
+    job.started_at ??
+    job.completedAt ??
+    job.completed_at ??
+    null
+  );
+}
+
 function combineWarnings(...values) {
   const warnings = values.map((value) => String(value || '').trim()).filter(Boolean);
   return warnings.length > 0 ? warnings.join(' | ') : null;
 }
 
-function deriveGenerationFolderNameFromScript(scriptSnapshot) {
+function deriveGenerationFolderNameFromScript(scriptSnapshot, { timestamp = null } = {}) {
   if (!scriptSnapshot || typeof scriptSnapshot !== 'object') {
     return null;
   }
@@ -51,9 +66,9 @@ function deriveGenerationFolderNameFromScript(scriptSnapshot) {
 
   const counter = Number(scriptSnapshot.counter);
   if (Number.isFinite(counter) && counter >= 1) {
-    return `${outputName}_${Math.floor(counter)}`;
+    return resolveDatedSolveLabel({ outputName, counter, timestamp });
   }
-  return outputName;
+  return timestamp ? ensureDatedSolveLabel(outputName, timestamp) : outputName;
 }
 
 export function buildScriptSnapshotExportState(scriptSnapshot) {
@@ -142,12 +157,15 @@ async function writeGenerationProjectManifest({
 }
 
 export function resolveTaskWorkspaceDirectoryName(job = {}, { fallbackId = null } = {}) {
+  const timestamp = resolveJobTimestamp(job);
   const label = normalizeDirectoryName(job?.label);
   if (label) {
-    return label;
+    return timestamp ? ensureDatedSolveLabel(label, timestamp) : label;
   }
 
-  const scriptName = deriveGenerationFolderNameFromScript(job?.scriptSnapshot ?? job?.script);
+  const scriptName = deriveGenerationFolderNameFromScript(job?.scriptSnapshot ?? job?.script, {
+    timestamp,
+  });
   if (scriptName) {
     return scriptName;
   }
