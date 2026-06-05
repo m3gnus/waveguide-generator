@@ -193,6 +193,7 @@ function readResultSeries(panel) {
   const smoothing = panel.currentSmoothing;
   const splData = results.spl_on_axis || {};
   const frequencies = splData.frequencies || [];
+  const phaseDegrees = splData.phase_degrees || [];
   const diData = results.di || {};
   const diFrequencies = diData.frequencies || frequencies;
   const impedanceData = results.impedance || {};
@@ -214,6 +215,7 @@ function readResultSeries(panel) {
     results,
     frequencies,
     spl,
+    phaseDegrees,
     di,
     diFrequencies,
     impedanceFrequencies,
@@ -221,6 +223,19 @@ function readResultSeries(panel) {
     impedanceImaginary,
     directivity: results.directivity || {},
   };
+}
+
+function resolvePhaseReferenceDistance(results) {
+  const metadata = results?.metadata || {};
+  const directivityDistance = Number(metadata?.directivity?.effective_distance_m);
+  if (Number.isFinite(directivityDistance) && directivityDistance > 0) {
+    return directivityDistance;
+  }
+  const observationDistance = Number(metadata?.observation?.effective_distance_m);
+  if (Number.isFinite(observationDistance) && observationDistance > 0) {
+    return observationDistance;
+  }
+  return null;
 }
 
 function formatCsvCell(value) {
@@ -239,8 +254,10 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
   }
 
   const {
+    results,
     frequencies,
     spl,
+    phaseDegrees,
     di,
     diFrequencies,
     impedanceFrequencies,
@@ -252,6 +269,8 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
   const payload = {
     frequencies,
     spl,
+    phase_degrees: phaseDegrees,
+    phase_reference_distance_m: resolvePhaseReferenceDistance(results),
     di,
     di_frequencies: diFrequencies,
     impedance_frequencies: impedanceFrequencies,
