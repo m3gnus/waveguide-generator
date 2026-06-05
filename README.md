@@ -132,8 +132,6 @@ npm run test:server   # Backend tests
 npm run build         # Production bundle
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
 ## Troubleshooting
 
 Backend not connected: start the app via a launcher or `npm start`, then check:

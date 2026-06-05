@@ -1,3 +1,5 @@
+import { resolveDatedSolveLabel } from './naming.js';
+
 export function buildQueuedSimulationJob({
   jobId,
   startedIso,
@@ -25,7 +27,7 @@ export function buildQueuedSimulationJob({
     },
     hasResults: false,
     hasMeshArtifact: false,
-    label: `${outputName}_${counter}`,
+    label: resolveDatedSolveLabel({ outputName, counter, timestamp: startedIso }),
     errorMessage: null,
     rating: null,
     autoExportCompletedAt: null,

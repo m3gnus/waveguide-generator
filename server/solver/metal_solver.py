@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from .contract import build_directivity_metadata
+from .directivity_correct import calculate_di_from_polar_patterns
 
 try:
     from hornlab_metal_bem import ObservationConfig, native_config, solve
@@ -22,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised through runtime status
 
 VALID_SOLVER_BACKENDS = {"auto", "bempp", "metal"}
 METAL_COMPATIBLE_MESH_STRATEGIES = {"hornlab_mesher"}
+REFERENCE_PRESSURE_PA = 20e-6
 
 
 class MetalBemUnavailable(RuntimeError):
@@ -97,6 +99,31 @@ def _polar_config(request) -> dict[str, Any]:
     return request.polar_config.model_dump()
 
 
+def _waveguide_quadrants(request) -> int:
+    options = request.options if isinstance(getattr(request, "options", None), dict) else {}
+    mesh_opts = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
+    waveguide_params = (
+        mesh_opts.get("waveguide_params")
+        if isinstance(mesh_opts.get("waveguide_params"), dict)
+        else {}
+    )
+    try:
+        return int(waveguide_params.get("quadrants", 1234))
+    except (TypeError, ValueError):
+        return 1234
+
+
+def _native_symmetry_plane(request) -> str | None:
+    # HornLab/WG quadrants are in the transverse X/Y plane after mesher export.
+    # 14: X >= 0 -> mirror across YZ. 12: Y >= 0 -> mirror across XZ.
+    return {
+        1: "yz+xz",
+        12: "xz",
+        14: "yz",
+        1234: None,
+    }.get(_waveguide_quadrants(request))
+
+
 def _observation_config(request):
     if ObservationConfig is None:
         raise MetalBemUnavailable("hornlab-metal-bem is not installed.")
@@ -126,6 +153,24 @@ def _directivity(result) -> dict[str, list[list[list[float | None]]]]:
             plane_rows.append(row)
         out[str(plane_name)] = plane_rows
     return out
+
+
+def _spl_on_axis(result) -> list[float | None]:
+    angles = np.asarray(result.observation_angles_deg, dtype=float)
+    pressure = np.asarray(result.pressure_complex, dtype=np.complex128)
+    if angles.ndim != 1 or angles.size == 0 or pressure.ndim != 3:
+        return [None for _ in np.asarray(result.frequencies_hz).tolist()]
+
+    on_axis_index = int(np.argmin(np.abs(angles)))
+    amplitudes = np.abs(pressure[:, 0, on_axis_index])
+    spl_values: list[float | None] = []
+    for amplitude in amplitudes:
+        value = float(amplitude)
+        if value > 0.0 and np.isfinite(value):
+            spl_values.append(float(20.0 * np.log10(value / REFERENCE_PRESSURE_PA)))
+        else:
+            spl_values.append(None)
+    return spl_values
 
 
 def solve_metal_from_msh(
@@ -164,6 +209,7 @@ def solve_metal_from_msh(
         observation=_observation_config(request),
         progress_callback=_progress,
         mesh_scale=1.0,
+        native_symmetry_plane=_native_symmetry_plane(request),
     )
     result = solve(str(msh_path), config)
 
@@ -180,6 +226,7 @@ def solve_metal_from_msh(
         "observation_origin": config.observation.origin,
     }
     directivity = _directivity(result)
+    di_per_plane = calculate_di_from_polar_patterns(directivity)
     metadata = {
         "solver_backend": "metal",
         "device_interface": {"selected": "metal", "metal": status},
@@ -203,6 +250,7 @@ def solve_metal_from_msh(
             observation,
         ),
         "metal": {
+            "native_symmetry_plane": config.native_symmetry_plane,
             "solver_log": list(result.solver_log or []),
             "native_diagnostics": list(result.native_diagnostics or []),
         },
@@ -211,12 +259,12 @@ def solve_metal_from_msh(
     return {
         "frequencies": frequencies,
         "directivity": directivity,
-        "spl_on_axis": {"frequencies": frequencies, "spl": [0.0 for _ in frequencies]},
+        "spl_on_axis": {"frequencies": frequencies, "spl": _spl_on_axis(result)},
         "impedance": {
             "frequencies": frequencies,
             "real": [float(value.real) for value in impedance],
             "imaginary": [float(value.imag) for value in impedance],
         },
-        "di": {"frequencies": frequencies, "di": []},
+        "di": {"frequencies": frequencies, "di": di_per_plane},
         "metadata": metadata,
     }

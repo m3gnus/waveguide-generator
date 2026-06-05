@@ -82,6 +82,10 @@ test('buildGenerationProjectManifest includes script and selected export artifac
   assert.equal(payload.generation.folder, 'horn_12');
   assert.equal(payload.generation.id, 'job-12');
   assert.equal(payload.updatedAt, '2026-03-19T10:00:00.000Z');
+  assert.equal(
+    payload.naming.generationFolderContract,
+    '<YYMMDD>_<outputName>_<counter> (fallback: <jobId>)'
+  );
   assert.equal(payload.artifacts.scriptSnapshot.fileName, resolveGenerationScriptSnapshotFileName());
   assert.equal(payload.artifacts.rawResults.fileName, 'horn_12_raw.results.json');
   assert.equal(payload.artifacts.meshArtifact.fileName, 'horn_12_solver.mesh.msh');

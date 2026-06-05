@@ -166,7 +166,7 @@ export function buildGenerationProjectManifest({
       completedAt: job?.completedAt ?? null,
     },
     naming: {
-      generationFolderContract: '<outputName>_<counter> (fallback: <jobId>)',
+      generationFolderContract: '<YYMMDD>_<outputName>_<counter> (fallback: <jobId>)',
       scriptSnapshotFile: resolveGenerationScriptSnapshotFileName(),
       rawResultsFileSuffix: GENERATION_RAW_RESULTS_FILE_SUFFIX,
       meshArtifactFileSuffix: GENERATION_MESH_ARTIFACT_FILE_SUFFIX,
