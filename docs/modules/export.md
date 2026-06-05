@@ -13,15 +13,23 @@
 ## Core Responsibilities
 
 - **Local exports**: Generate STL (binary), profile/slice CSV, and MWG config text files
-- **OCC mesh export**: Orchestrate `POST /api/mesh/build` requests (parameter normalization, response handling)
+- **Backend mesh export**: Orchestrate `POST /api/mesh/build` requests (parameter normalization, response handling)
+- **STEP surface export**: Orchestrate `POST /api/mesh/step` requests for single-layer inner horn surface export
 - **Result bundles**: Coordinate multi-format exports for completed simulation jobs (PNG, CSV, JSON, STL, polar data, VACS, etc.)
 
 ## Runtime Contract
 
-**OCC mesh export**:
+**Backend mesh export**:
 - Uses `POST /api/mesh/build` exclusively (no `.geo` fallback)
 - Backend returns `.msh` file + optional STL text (never returns `.geo`)
-- Request normalized through `DesignModule.occExportParams()`
+- Request normalized through `DesignModule.backendMeshExportParams()`
+- Public module API uses `ExportModule.importHornlabMesherMeshBuild()` and `ExportModule.output.hornlabMesherMesh()`; legacy `occMesh` aliases are removed.
+
+**STEP export**:
+- Uses `POST /api/mesh/step`
+- Request is normalized through the same backend mesh export parameter path
+- Backend forces full-domain, bare inner-surface output and returns `{ step, generatedBy: "hornlab-waveguide-mesher", stats }`
+- Public module API uses `ExportModule.importStep(...)`; use-case helper is `exportSTEP(...)`
 
 **Result bundle formats** (settings-driven string IDs):
 - `png` — directivity plot image (Matplotlib server-side rendering)
@@ -59,7 +67,7 @@
 ## Test Coverage
 
 - `tests/export-module.test.js` — module interface
-- `tests/export-gmsh-pipeline.test.js` — OCC mesh orchestration
+- `tests/export-gmsh-pipeline.test.js` — HornLab mesher orchestration
 - `tests/csv-export.test.js` — CSV export correctness
 - `tests/simulation-export-bundle.test.js` — bundle coordination
 - `tests/generation-artifacts.test.js` — deterministic artifact naming rules

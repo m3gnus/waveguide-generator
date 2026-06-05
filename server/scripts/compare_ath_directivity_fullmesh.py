@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 ATH_FILE = "/Users/magnus/IM Dropbox/Magnus Andersen/DOCS/code/misc/250917asro68 ATH results/Spectrum_ABEC.txt"
 
 # FULL resolution mesh matching the ATH config exactly
-OCC_PARAMS_FULL = {
+MESHER_PARAMS_FULL = {
     "formula_type": "R-OSSE",
     "R": "160 * (abs(cos(p)/1.8)^3 + abs(sin(p)/1)^4)^(-1/7)",
     "a": "22 * (abs(cos(p)/1.2)^8 + abs(sin(p)/1)^4)^(-1/4)",
@@ -101,7 +101,7 @@ def parse_ath_polar_data(filepath):
 
 def build_mesh(params):
     from contracts import WaveguideParamsRequest
-    from solver.waveguide_builder import build_waveguide_mesh
+    from solver.mesher_adapter import build_waveguide_mesh
     from scripts.benchmark_solver import load_mesh
 
     print("Building mesh...")
@@ -193,7 +193,7 @@ def main():
         print("ERROR: Could not parse ATH polar data")
         return
 
-    mesh = build_mesh(OCC_PARAMS_FULL)
+    mesh = build_mesh(MESHER_PARAMS_FULL)
 
     # Only run Accurate (BM=on) for fair comparison
     sim = run_solve(mesh, "Accurate (BM=on, q=4, full mesh)", True, quad=4, num_freq=10)

@@ -18,10 +18,12 @@ from services.runtime_preflight import collect_runtime_doctor_report
 from services.solver_runtime import (
     SOLVER_AVAILABLE,
     BEMPP_RUNTIME_READY,
-    WAVEGUIDE_BUILDER_AVAILABLE,
-    GMSH_OCC_RUNTIME_READY,
+    METAL_SOLVER_READY,
+    HORNLAB_MESHER_AVAILABLE,
+    HORNLAB_MESHER_RUNTIME_READY,
     get_dependency_status,
     get_settings_capabilities,
+    metal_backend_status,
     render_all_charts,
     render_directivity_plot,
     selected_device_metadata,
@@ -56,15 +58,26 @@ async def health_check() -> Dict[str, Any]:
     device_info = selected_device_metadata("auto")
     doctor_report = collect_runtime_doctor_report("auto")
     doctor_summary = doctor_report.get("summary") if isinstance(doctor_report.get("summary"), dict) else {}
-    solve_ready = doctor_summary.get("solveReady")
-    if not isinstance(solve_ready, bool):
-        solve_ready = bool(BEMPP_RUNTIME_READY)
+    doctor_solve_ready = doctor_summary.get("solveReady")
+    if isinstance(doctor_solve_ready, bool):
+        bempp_ready = bool(BEMPP_RUNTIME_READY and doctor_solve_ready)
+    else:
+        bempp_ready = bool(BEMPP_RUNTIME_READY)
+    solve_ready = bool(bempp_ready or METAL_SOLVER_READY)
 
     return {
         "status": "ok",
-        "solver": "bempp-cl" if SOLVER_AVAILABLE else "unavailable",
-        "solverReady": solve_ready,
-        "occBuilderReady": WAVEGUIDE_BUILDER_AVAILABLE and GMSH_OCC_RUNTIME_READY,
+        "solver": (
+            "metal-bem"
+            if METAL_SOLVER_READY
+            else "bempp-cl" if SOLVER_AVAILABLE else "unavailable"
+        ),
+        "solverReady": bool(solve_ready),
+        "solverBackends": {
+            "bempp": {"ready": bool(bempp_ready), "available": bool(BEMPP_RUNTIME_READY)},
+            "metal": {"ready": bool(METAL_SOLVER_READY), "status": metal_backend_status()},
+        },
+        "mesherReady": HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_RUNTIME_READY,
         "dependencies": dependency_status,
         "dependencyDoctor": {
             "schemaVersion": doctor_report.get("schemaVersion"),

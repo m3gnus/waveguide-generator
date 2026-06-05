@@ -58,7 +58,7 @@ backend.on('error', (err) => {
   console.error('   - Or: python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt');
   console.error('');
   console.error('Frontend remains available, but backend-dependent features are blocked until the backend starts.');
-  console.error('Blocked features include simulation solve, OCC mesh build, and backend chart rendering.');
+  console.error('Blocked features include simulation solve, HornLab mesher builds, and backend chart rendering.');
 });
 
 frontend.on('exit', (code) => {

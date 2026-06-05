@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PREFERRED_PYTHON_FILE="$ROOT/.waveguide/backend-python.path"
+BEMPP_CL_URL="git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  WG - Waveguide Generator — Setup                           ║"
@@ -98,7 +99,7 @@ for cmd in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python
             FIRST_PYTHON_VERSION="$candidate_version"
         fi
 
-        if "$cmd" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3,10) else 1)" >/dev/null 2>&1; then
+        if "$cmd" -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >/dev/null 2>&1; then
             PYTHON_BIN="$cmd"
             PYTHON_PATH="$candidate_path"
             PYTHON_VERSION="$candidate_version"
@@ -108,7 +109,7 @@ for cmd in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python
 done
 
 if [[ -z "$PYTHON_BIN" ]]; then
-    echo "ERROR: Python 3.10 or newer is required."
+    echo "ERROR: Python 3.10 through 3.14 is required."
     if [[ -n "$FIRST_PYTHON_BIN" ]]; then
         echo "       Detected command: $FIRST_PYTHON_BIN"
         [[ -n "$FIRST_PYTHON_PATH" ]] && echo "       Detected path: $FIRST_PYTHON_PATH"
@@ -176,7 +177,7 @@ echo ""
 
 # ── Automatic: bempp-cl ────────────────────────────────────────────
 echo "Installing bempp-cl (needed for acoustic simulations)..."
-if .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git; then
+if .venv/bin/pip install "$BEMPP_CL_URL"; then
     echo "  bempp-cl installed."
 
     # Patch bempp-cl's get_vector_width for non-standard native vector widths.
@@ -221,7 +222,7 @@ VECPATCH
 else
     echo "  WARNING: bempp-cl automatic install failed."
     echo "           You can retry later with:"
-    echo "             .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git"
+            echo "             .venv/bin/pip install $BEMPP_CL_URL"
 fi
 echo ""
 

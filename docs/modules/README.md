@@ -8,8 +8,8 @@ Each module document specifies **what the module owns, its responsibilities, run
 
 - **`geometry.md`** — Geometry artifacts, canonical simulation payload, surface-tag rules, mesh topology invariants
 - **`simulation.md`** — Simulation job submission, result handling, symmetry decisions, task history and exports
-- **`export.md`** — STL/CSV/config file exports, OCC mesh orchestration, result bundle coordination
-- **`backend.md`** — FastAPI API, routes, services, OCC builder, BEM solver, dependency matrix
+- **`export.md`** — STL/CSV/config file exports, backend mesh orchestration, result bundle coordination
+- **`backend.md`** — FastAPI API, routes, services, HornLab mesher, BEM solver, dependency matrix
 
 ## Related Documentation
 

@@ -6,7 +6,7 @@ import {
   redoJob,
   removeJobFromFeed,
   stopSimulation,
-  viewJobResults
+  viewJobResults,
 } from './jobActions.js';
 import { renderJobList } from './jobActions.js';
 import { updateTaskListPreferences } from '../settings/simulationManagementSettings.js';
@@ -37,7 +37,6 @@ export function setupEventListeners(panel) {
   if (runBtn) {
     runBtn.addEventListener('click', () => panel.runSimulation());
   }
-
 
   const refreshBtn = document.getElementById('refresh-jobs-btn');
   if (refreshBtn) {

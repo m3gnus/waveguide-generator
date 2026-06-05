@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from 'three';
 
 // --- MATERIALS ---
 export const ZebraShader = {
@@ -29,29 +29,27 @@ export const ZebraShader = {
 };
 
 export const DISPLAY_MODES = [
-  { key: "clay",      icon: "\u25FC", label: "Clay" },
-  { key: "solidwire", icon: "\u229E", label: "Solid + Wire" },
-  { key: "edges",     icon: "\u2B21", label: "Shaded + Edges" },
-  { key: "wireframe", icon: "\u25B3", label: "Wireframe" },
-  { key: "xray",      icon: "\u25C7", label: "X-Ray" },
-  { key: "zebra",     icon: "\u2248", label: "Zebra" },
-  { key: "curvature", icon: "\u25D0", label: "Curvature" },
+  { key: 'clay', icon: '\u25FC', label: 'Clay' },
+  { key: 'solidwire', icon: '\u229E', label: 'Solid + Wire' },
+  { key: 'edges', icon: '\u2B21', label: 'Shaded + Edges' },
+  { key: 'wireframe', icon: '\u25B3', label: 'Wireframe' },
+  { key: 'xray', icon: '\u25C7', label: 'X-Ray' },
+  { key: 'zebra', icon: '\u2248', label: 'Zebra' },
+  { key: 'curvature', icon: '\u25D0', label: 'Curvature' },
 ];
 
 // --- THEME HELPERS ---
 function getCssVar(name, fallback) {
-  const val = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
+  const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return val || fallback;
 }
 
 export function getSceneThemeColors() {
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const bg = getCssVar("--scene-bg", dark ? "#0a1018" : "#f2ede4");
-  const gridA = getCssVar("--scene-grid-a", dark ? "#192538" : "#d8d2c4");
-  const gridB = getCssVar("--scene-grid-b", dark ? "#111b2d" : "#e6e1d8");
-  const topLight = getCssVar("--scene-top-light", dark ? "#5b8fe8" : "#e8a83a");
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const bg = getCssVar('--scene-bg', dark ? '#0a1018' : '#f2ede4');
+  const gridA = getCssVar('--scene-grid-a', dark ? '#192538' : '#d8d2c4');
+  const gridB = getCssVar('--scene-grid-b', dark ? '#111b2d' : '#e6e1d8');
+  const topLight = getCssVar('--scene-top-light', dark ? '#5b8fe8' : '#e8a83a');
   return {
     bg: new THREE.Color(bg),
     gridA: new THREE.Color(gridA),
@@ -105,12 +103,5 @@ export function createPerspectiveCamera(aspect) {
 }
 
 export function createOrthoCamera(aspect, size = 300) {
-  return new THREE.OrthographicCamera(
-    -size * aspect,
-    size * aspect,
-    size,
-    -size,
-    0.1,
-    10000,
-  );
+  return new THREE.OrthographicCamera(-size * aspect, size * aspect, size, -size, 0.1, 10000);
 }

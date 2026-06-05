@@ -132,9 +132,10 @@ class ImportBoundaryTest(unittest.TestCase):
         allowed_route_import = {'router'}
         allowed_job_runtime_import = {'startup_jobs_runtime'}
         allowed_solver_bootstrap_import = {
-            'GMSH_OCC_RUNTIME_READY',
+            'HORNLAB_MESHER_AVAILABLE',
+            'HORNLAB_MESHER_RUNTIME_READY',
+            'METAL_SOLVER_READY',
             'SOLVER_AVAILABLE',
-            'WAVEGUIDE_BUILDER_AVAILABLE',
         }
 
         for node in self._import_from_nodes(app_file):

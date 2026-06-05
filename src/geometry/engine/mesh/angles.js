@@ -21,7 +21,10 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSeg
   const clampedCorner = Math.min(cornerR, maxCorner);
 
   if (clampedCorner <= 0 || cornerSegments <= 0) {
-    return Array.from({ length: pointsPerQuadrant + 1 }, (_, i) => (Math.PI / 2) * (i / pointsPerQuadrant));
+    return Array.from(
+      { length: pointsPerQuadrant + 1 },
+      (_, i) => (Math.PI / 2) * (i / pointsPerQuadrant)
+    );
   }
 
   const theta1 = Math.atan2(halfH - clampedCorner, halfW);
@@ -31,10 +34,13 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSeg
   // We need pointsPerQuadrant + 1 total points in the array.
   const remainingSegments = Math.max(1, pointsPerQuadrant - cornerSegments);
 
-  const side1Seg = Math.max(1, Math.min(
-    remainingSegments - 1,
-    Math.round(remainingSegments * theta1 / (theta1 + Math.max(0, (Math.PI / 2) - theta2)))
-  ));
+  const side1Seg = Math.max(
+    1,
+    Math.min(
+      remainingSegments - 1,
+      Math.round((remainingSegments * theta1) / (theta1 + Math.max(0, Math.PI / 2 - theta2)))
+    )
+  );
   const side2Seg = Math.max(1, remainingSegments - side1Seg);
 
   const angles = [];
@@ -49,13 +55,15 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSeg
   if (cornerSegments > 0) {
     for (let i = 1; i <= cornerSegments; i += 1) {
       const phi = (i / (cornerSegments + 1)) * (Math.PI / 2);
-      angles.push(Math.atan2(cy + clampedCorner * Math.sin(phi), cx + clampedCorner * Math.cos(phi)));
+      angles.push(
+        Math.atan2(cy + clampedCorner * Math.sin(phi), cx + clampedCorner * Math.cos(phi))
+      );
     }
   }
 
   // Loop 3: Corner end to 90 degrees
   for (let i = 1; i <= side2Seg; i += 1) {
-    angles.push(theta2 + ((Math.PI / 2) - theta2) * (i / side2Seg));
+    angles.push(theta2 + (Math.PI / 2 - theta2) * (i / side2Seg));
   }
 
   // Final length should be (side1Seg + 1) + cornerSegments + side2Seg
@@ -75,7 +83,7 @@ function mirrorQuadrantAngles(quadrantAngles) {
   }
 
   for (let i = quadrantAngles.length - 2; i > 0; i -= 1) {
-    full.push((Math.PI * 2) - quadrantAngles[i]);
+    full.push(Math.PI * 2 - quadrantAngles[i]);
   }
 
   return full;
@@ -107,7 +115,7 @@ export function buildAngleList(params, mouthExtents) {
 
   return {
     fullAngles: mirrorQuadrantAngles(quadrantAngles),
-    pointsPerQuadrant
+    pointsPerQuadrant,
   };
 }
 
@@ -121,9 +129,7 @@ export function selectAnglesForQuadrants(fullAngles, quadrants) {
   if (q === '14') {
     // Keep angular order continuous from -pi/2..pi/2.
     // This prevents seam-bridging triangles across the x=0 split plane.
-    const negative = fullAngles
-      .filter((a) => a >= Math.PI * 1.5 - eps)
-      .map((a) => a - Math.PI * 2);
+    const negative = fullAngles.filter((a) => a >= Math.PI * 1.5 - eps).map((a) => a - Math.PI * 2);
     const positive = fullAngles.filter((a) => inRange(a, 0, Math.PI / 2));
     const merged = [...negative, ...positive];
     return merged.filter((a, i) => i === 0 || Math.abs(a - merged[i - 1]) > eps);

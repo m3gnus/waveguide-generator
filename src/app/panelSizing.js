@@ -1,35 +1,32 @@
 export function setupPanelSizing(app) {
-  app.uiPanel = document.getElementById("ui-panel");
-  app.uiPanelResizer = document.getElementById("ui-panel-resizer");
+  app.uiPanel = document.getElementById('ui-panel');
+  app.uiPanelResizer = document.getElementById('ui-panel-resizer');
   if (!app.uiPanel || !app.uiPanelResizer) return;
 
-  if (window.matchMedia("(max-width: 768px)").matches) {
+  if (window.matchMedia('(max-width: 768px)').matches) {
     return;
   }
 
   const rootStyles = getComputedStyle(document.documentElement);
-  app.panelDefaultWidth =
-    parseFloat(rootStyles.getPropertyValue("--panel-default-width")) || 350;
-  app.panelMinWidth =
-    parseFloat(rootStyles.getPropertyValue("--panel-min-width")) || 280;
-  app.panelMaxWidth =
-    parseFloat(rootStyles.getPropertyValue("--panel-max-width")) || 520;
+  app.panelDefaultWidth = parseFloat(rootStyles.getPropertyValue('--panel-default-width')) || 350;
+  app.panelMinWidth = parseFloat(rootStyles.getPropertyValue('--panel-min-width')) || 280;
+  app.panelMaxWidth = parseFloat(rootStyles.getPropertyValue('--panel-max-width')) || 520;
   app.userResizedPanel = false;
   app.panelAutoSizeFrame = null;
 
   app.uiPanel.style.width = `${app.panelDefaultWidth}px`;
 
-  app.uiPanelResizer.addEventListener("pointerdown", (event) => {
+  app.uiPanelResizer.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     app.isResizingPanel = true;
     app.userResizedPanel = true;
     app.panelResizeStartX = event.clientX;
     app.panelResizeStartWidth = app.uiPanel.getBoundingClientRect().width;
     app.uiPanelResizer.setPointerCapture(event.pointerId);
-    document.body.style.cursor = "col-resize";
+    document.body.style.cursor = 'col-resize';
   });
 
-  app.uiPanelResizer.addEventListener("pointermove", (event) => {
+  app.uiPanelResizer.addEventListener('pointermove', (event) => {
     if (!app.isResizingPanel) return;
     const delta = event.clientX - app.panelResizeStartX;
     setPanelWidth(app, app.panelResizeStartWidth + delta);
@@ -41,19 +38,15 @@ export function setupPanelSizing(app) {
     if (event?.pointerId !== undefined) {
       app.uiPanelResizer.releasePointerCapture(event.pointerId);
     }
-    document.body.style.cursor = "";
+    document.body.style.cursor = '';
   };
 
-  app.uiPanelResizer.addEventListener("pointerup", stopResize);
-  app.uiPanelResizer.addEventListener("pointercancel", stopResize);
+  app.uiPanelResizer.addEventListener('pointerup', stopResize);
+  app.uiPanelResizer.addEventListener('pointercancel', stopResize);
 
-  app.uiPanel.addEventListener("input", () => schedulePanelAutoSize(app));
-  app.uiPanel.addEventListener(
-    "toggle",
-    () => schedulePanelAutoSize(app),
-    true,
-  );
-  window.addEventListener("resize", () => schedulePanelAutoSize(app));
+  app.uiPanel.addEventListener('input', () => schedulePanelAutoSize(app));
+  app.uiPanel.addEventListener('toggle', () => schedulePanelAutoSize(app), true);
+  window.addEventListener('resize', () => schedulePanelAutoSize(app));
 
   schedulePanelAutoSize(app);
 }
@@ -80,11 +73,8 @@ export function schedulePanelAutoSize(app) {
 
 export function autoSizePanel(app) {
   if (app.userResizedPanel || !app.uiPanel) return;
-  const activeTab = app.uiPanel.querySelector(".tab-content.active");
-  const contentWidth = Math.max(
-    app.uiPanel.scrollWidth,
-    activeTab ? activeTab.scrollWidth : 0,
-  );
+  const activeTab = app.uiPanel.querySelector('.tab-content.active');
+  const contentWidth = Math.max(app.uiPanel.scrollWidth, activeTab ? activeTab.scrollWidth : 0);
   const target = clampPanelWidth(app, contentWidth);
   setPanelWidth(app, target);
 }
@@ -95,33 +85,30 @@ function clampPanelWidth(app, width) {
 }
 
 export function setupRightPanelSizing(app) {
-  app.actionsPanel = document.getElementById("actions-panel");
-  app.actionsPanelResizer = document.getElementById("actions-panel-resizer");
+  app.actionsPanel = document.getElementById('actions-panel');
+  app.actionsPanelResizer = document.getElementById('actions-panel-resizer');
   if (!app.actionsPanel || !app.actionsPanelResizer) return;
 
-  if (window.matchMedia("(max-width: 768px)").matches) {
+  if (window.matchMedia('(max-width: 768px)').matches) {
     return;
   }
 
   const rootStyles = getComputedStyle(document.documentElement);
   app.rightPanelDefaultWidth =
-    parseFloat(rootStyles.getPropertyValue("--panel-default-width")) || 340;
-  app.rightPanelMinWidth =
-    parseFloat(rootStyles.getPropertyValue("--panel-min-width")) || 280;
-  app.rightPanelMaxWidth =
-    parseFloat(rootStyles.getPropertyValue("--panel-max-width")) || 520;
+    parseFloat(rootStyles.getPropertyValue('--panel-default-width')) || 340;
+  app.rightPanelMinWidth = parseFloat(rootStyles.getPropertyValue('--panel-min-width')) || 280;
+  app.rightPanelMaxWidth = parseFloat(rootStyles.getPropertyValue('--panel-max-width')) || 520;
 
-  app.actionsPanelResizer.addEventListener("pointerdown", (event) => {
+  app.actionsPanelResizer.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     app.isResizingRightPanel = true;
     app.rightPanelResizeStartX = event.clientX;
-    app.rightPanelResizeStartWidth =
-      app.actionsPanel.getBoundingClientRect().width;
+    app.rightPanelResizeStartWidth = app.actionsPanel.getBoundingClientRect().width;
     app.actionsPanelResizer.setPointerCapture(event.pointerId);
-    document.body.style.cursor = "col-resize";
+    document.body.style.cursor = 'col-resize';
   });
 
-  app.actionsPanelResizer.addEventListener("pointermove", (event) => {
+  app.actionsPanelResizer.addEventListener('pointermove', (event) => {
     if (!app.isResizingRightPanel) return;
     // Dragging left (negative delta) = wider right panel
     const delta = event.clientX - app.rightPanelResizeStartX;
@@ -138,9 +125,9 @@ export function setupRightPanelSizing(app) {
     if (event?.pointerId !== undefined) {
       app.actionsPanelResizer.releasePointerCapture(event.pointerId);
     }
-    document.body.style.cursor = "";
+    document.body.style.cursor = '';
   };
 
-  app.actionsPanelResizer.addEventListener("pointerup", stopRightResize);
-  app.actionsPanelResizer.addEventListener("pointercancel", stopRightResize);
+  app.actionsPanelResizer.addEventListener('pointerup', stopRightResize);
+  app.actionsPanelResizer.addEventListener('pointercancel', stopRightResize);
 }

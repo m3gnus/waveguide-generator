@@ -13,16 +13,12 @@ function createGeometryImportEnvelope(params) {
   return Object.freeze({
     module: GEOMETRY_MODULE_ID,
     stage: GEOMETRY_IMPORT_STAGE,
-    params
+    params,
   });
 }
 
 function assertDesignTaskEnvelope(input) {
-  if (
-    !isObject(input) ||
-    input.module !== DesignModule.id ||
-    input.stage !== 'task'
-  ) {
+  if (!isObject(input) || input.module !== DesignModule.id || input.stage !== 'task') {
     throw new Error('Geometry module design import requires a result from DesignModule.task().');
   }
 }
@@ -34,7 +30,9 @@ function assertGeometryImportEnvelope(input) {
     input.stage !== GEOMETRY_IMPORT_STAGE ||
     !isObject(input.params)
   ) {
-    throw new Error('Geometry module task requires input from GeometryModule.import(), GeometryModule.importPrepared(), or GeometryModule.importDesign().');
+    throw new Error(
+      'Geometry module task requires input from GeometryModule.import(), GeometryModule.importPrepared(), or GeometryModule.importDesign().'
+    );
   }
 }
 
@@ -50,9 +48,7 @@ function assertGeometryTaskEnvelope(result) {
 }
 
 export function importGeometryInput(rawParams = {}, options = {}) {
-  return importDesignGeometryInput(
-    DesignModule.task(DesignModule.import(rawParams, options))
-  );
+  return importDesignGeometryInput(DesignModule.task(DesignModule.import(rawParams, options)));
 }
 
 export function importPreparedGeometryInput(preparedParams = {}) {
@@ -70,7 +66,7 @@ export function runGeometryTask(input, options = {}) {
     module: GEOMETRY_MODULE_ID,
     stage: GEOMETRY_TASK_STAGE,
     input,
-    geometryShape: buildPreparedGeometryShape(input.params, options)
+    geometryShape: buildPreparedGeometryShape(input.params, options),
   });
 }
 
@@ -91,6 +87,6 @@ export const GeometryModule = Object.freeze({
   task: runGeometryTask,
   output: Object.freeze({
     geometry: getGeometryOutput,
-    shape: getGeometryShapeOutput
-  })
+    shape: getGeometryShapeOutput,
+  }),
 });

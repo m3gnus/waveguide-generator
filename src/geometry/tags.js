@@ -2,7 +2,7 @@ export const SURFACE_TAGS = Object.freeze({
   WALL: 1,
   SOURCE: 2,
   SECONDARY: 3,
-  INTERFACE: 4
+  INTERFACE: 4,
 });
 
 export const FACE_IDENTITY = Object.freeze({
@@ -16,7 +16,7 @@ export const FACE_IDENTITY = Object.freeze({
   ENC_FRONT: 'enc_front',
   ENC_SIDE: 'enc_side',
   ENC_REAR: 'enc_rear',
-  ENC_EDGE: 'enc_edge'
+  ENC_EDGE: 'enc_edge',
 });
 
 export const FACE_IDENTITY_ORDER = Object.freeze([
@@ -30,7 +30,7 @@ export const FACE_IDENTITY_ORDER = Object.freeze([
   FACE_IDENTITY.ENC_FRONT,
   FACE_IDENTITY.ENC_SIDE,
   FACE_IDENTITY.ENC_REAR,
-  FACE_IDENTITY.ENC_EDGE
+  FACE_IDENTITY.ENC_EDGE,
 ]);
 
 export const MESH_SIZING_CLASS = Object.freeze({
@@ -39,14 +39,14 @@ export const MESH_SIZING_CLASS = Object.freeze({
   THROAT_SOURCE_REGION: 'throat_source_region',
   ENCLOSURE_FRONT: 'enclosure_front',
   ENCLOSURE_REAR: 'enclosure_rear',
-  ENCLOSURE_EDGE: 'enclosure_edge'
+  ENCLOSURE_EDGE: 'enclosure_edge',
 });
 
 export const SOLVER_BOUNDARY_CLASS = Object.freeze({
   RIGID_WALL: 'RIGID_WALL',
   ACOUSTIC_SOURCE: 'ACOUSTIC_SOURCE',
   IMPEDANCE_APERTURE: 'IMPEDANCE_APERTURE',
-  SYMMETRY: 'SYMMETRY'
+  SYMMETRY: 'SYMMETRY',
 });
 
 const IDENTITY_TO_SIZING = {
@@ -60,7 +60,7 @@ const IDENTITY_TO_SIZING = {
   [FACE_IDENTITY.ENC_FRONT]: MESH_SIZING_CLASS.ENCLOSURE_FRONT,
   [FACE_IDENTITY.ENC_SIDE]: MESH_SIZING_CLASS.ENCLOSURE_REAR,
   [FACE_IDENTITY.ENC_REAR]: MESH_SIZING_CLASS.ENCLOSURE_REAR,
-  [FACE_IDENTITY.ENC_EDGE]: MESH_SIZING_CLASS.ENCLOSURE_EDGE
+  [FACE_IDENTITY.ENC_EDGE]: MESH_SIZING_CLASS.ENCLOSURE_EDGE,
 };
 
 const IDENTITY_TO_BOUNDARY = {
@@ -74,25 +74,25 @@ const IDENTITY_TO_BOUNDARY = {
   [FACE_IDENTITY.ENC_SIDE]: SOLVER_BOUNDARY_CLASS.RIGID_WALL,
   [FACE_IDENTITY.ENC_REAR]: SOLVER_BOUNDARY_CLASS.RIGID_WALL,
   [FACE_IDENTITY.ENC_EDGE]: SOLVER_BOUNDARY_CLASS.RIGID_WALL,
-  [FACE_IDENTITY.THROAT_DISC]: SOLVER_BOUNDARY_CLASS.ACOUSTIC_SOURCE
+  [FACE_IDENTITY.THROAT_DISC]: SOLVER_BOUNDARY_CLASS.ACOUSTIC_SOURCE,
 };
 
 const BOUNDARY_TO_TAG = {
   [SOLVER_BOUNDARY_CLASS.RIGID_WALL]: SURFACE_TAGS.WALL,
   [SOLVER_BOUNDARY_CLASS.ACOUSTIC_SOURCE]: SURFACE_TAGS.SOURCE,
   [SOLVER_BOUNDARY_CLASS.IMPEDANCE_APERTURE]: SURFACE_TAGS.SECONDARY,
-  [SOLVER_BOUNDARY_CLASS.SYMMETRY]: SURFACE_TAGS.INTERFACE
+  [SOLVER_BOUNDARY_CLASS.SYMMETRY]: SURFACE_TAGS.INTERFACE,
 };
 
 export function getFaceIdentityClassifications(identity) {
   return {
     sizingClass: IDENTITY_TO_SIZING[identity],
     boundaryClass: IDENTITY_TO_BOUNDARY[identity],
-    surfaceTag: BOUNDARY_TO_TAG[IDENTITY_TO_BOUNDARY[identity]]
+    surfaceTag: BOUNDARY_TO_TAG[IDENTITY_TO_BOUNDARY[identity]],
   };
 }
 
-export function normalizeBuildParams(params, options = {}) {
+export function normalizeBuildParams(params) {
   return { ...params };
 }
 
@@ -140,7 +140,7 @@ export function countTags(surfaceTags) {
     [SURFACE_TAGS.WALL]: 0,
     [SURFACE_TAGS.SOURCE]: 0,
     [SURFACE_TAGS.SECONDARY]: 0,
-    [SURFACE_TAGS.INTERFACE]: 0
+    [SURFACE_TAGS.INTERFACE]: 0,
   };
   for (let i = 0; i < surfaceTags.length; i += 1) {
     const tag = Number(surfaceTags[i]);
@@ -156,7 +156,10 @@ function countTrianglesInRange(range, triangleCount) {
     return 0;
   }
   if (Array.isArray(range)) {
-    return range.reduce((sum, nextRange) => sum + countTrianglesInRange(nextRange, triangleCount), 0);
+    return range.reduce(
+      (sum, nextRange) => sum + countTrianglesInRange(nextRange, triangleCount),
+      0
+    );
   }
 
   const start = Math.max(0, Math.floor(Number(range.start || 0)));
@@ -176,6 +179,6 @@ export function buildBoundaryConditions() {
   return {
     throat: { type: 'velocity', surfaceTag: SURFACE_TAGS.SOURCE, value: 1.0 },
     wall: { type: 'neumann', surfaceTag: SURFACE_TAGS.WALL, value: 0.0 },
-    mouth: { type: 'robin', surfaceTag: SURFACE_TAGS.WALL, impedance: 'spherical' }
+    mouth: { type: 'robin', surfaceTag: SURFACE_TAGS.WALL, impedance: 'spherical' },
   };
 }

@@ -113,8 +113,8 @@ fi
 # Check minimum Python version
 $PYTHON_BIN - <<'PY'
 import sys
-if sys.version_info < (3, 10):
-    raise SystemExit(f"❌ Python 3.10+ is required, found {sys.version}")
+if not ((3, 10) <= sys.version_info[:2] < (3, 15)):
+    raise SystemExit(f"❌ Python 3.10 through 3.14 is required, found {sys.version}")
 PY
 
 echo ""
@@ -125,8 +125,7 @@ $PYTHON_BIN - <<'PY'
 import importlib.util
 import sys
 has_new = importlib.util.find_spec("bempp_cl")
-has_old = importlib.util.find_spec("bempp_api")
-sys.exit(0 if (has_new or has_old) else 1)
+sys.exit(0 if has_new else 1)
 PY
 if [ $? -eq 0 ]; then
     echo "✅ bempp-cl is installed"
@@ -134,7 +133,7 @@ else
     echo "⚠️  Warning: bempp-cl not found."
     echo "   The server can start, but /api/solve will stay unavailable until bempp-cl is installed."
     echo "   To install bempp-cl, run:"
-    echo "   $PYTHON_BIN -m pip install git+https://github.com/bempp/bempp-cl.git"
+    echo "   $PYTHON_BIN -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 fi
 
 echo ""

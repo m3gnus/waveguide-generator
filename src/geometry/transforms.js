@@ -4,11 +4,7 @@ const toFiniteNumber = (value, fallback = 0) => {
 };
 
 export function mapVertexToAth(x, y, z, { verticalOffset = 0, offsetSign = 1 } = {}) {
-  return [
-    x,
-    z + (verticalOffset * offsetSign),
-    y
-  ];
+  return [x, z + verticalOffset * offsetSign, y];
 }
 
 export function transformVerticesToAth(vertices, options = {}) {
@@ -20,7 +16,7 @@ export function transformVerticesToAth(vertices, options = {}) {
   for (let i = 0; i < source.length; i += 3) {
     const [athX, athY, athZ] = mapVertexToAth(source[i], source[i + 1], source[i + 2], {
       verticalOffset,
-      offsetSign
+      offsetSign,
     });
     out[i] = athX;
     out[i + 1] = athY;

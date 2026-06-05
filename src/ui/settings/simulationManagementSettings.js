@@ -1,7 +1,13 @@
 const SETTINGS_KEY = 'waveguide-simulation-management-settings';
 const SCHEMA_VERSION = 1;
-const TASK_LIST_SORT_CONTROL_IDS = Object.freeze(['simmanage-default-sort', 'simulation-jobs-sort']);
-const TASK_LIST_MIN_RATING_CONTROL_IDS = Object.freeze(['simmanage-min-rating', 'simulation-jobs-min-rating']);
+const TASK_LIST_SORT_CONTROL_IDS = Object.freeze([
+  'simmanage-default-sort',
+  'simulation-jobs-sort',
+]);
+const TASK_LIST_MIN_RATING_CONTROL_IDS = Object.freeze([
+  'simmanage-min-rating',
+  'simulation-jobs-min-rating',
+]);
 
 export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
   'png',
@@ -12,14 +18,14 @@ export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
   'impedance_csv',
   'vacs',
   'stl',
-  'fusion_csv'
+  'fusion_csv',
 ]);
 
 export const RECOMMENDED_DEFAULTS = Object.freeze({
   autoExportOnComplete: false,
   selectedFormats: [...SIMULATION_EXPORT_FORMAT_IDS],
   defaultSort: 'completed_desc',
-  minRatingFilter: 0
+  minRatingFilter: 0,
 });
 
 let currentSettings = null;
@@ -40,23 +46,23 @@ function normalizeSelectedFormats(value) {
     normalized.push(id);
   }
 
-  return normalized.length > 0
-    ? normalized
-    : [...RECOMMENDED_DEFAULTS.selectedFormats];
+  return normalized.length > 0 ? normalized : [...RECOMMENDED_DEFAULTS.selectedFormats];
 }
 
 function normalizeSettings(raw = {}) {
   return {
-    autoExportOnComplete: typeof raw.autoExportOnComplete === 'boolean'
-      ? raw.autoExportOnComplete
-      : RECOMMENDED_DEFAULTS.autoExportOnComplete,
+    autoExportOnComplete:
+      typeof raw.autoExportOnComplete === 'boolean'
+        ? raw.autoExportOnComplete
+        : RECOMMENDED_DEFAULTS.autoExportOnComplete,
     selectedFormats: normalizeSelectedFormats(raw.selectedFormats),
-    defaultSort: typeof raw.defaultSort === 'string' && raw.defaultSort.trim()
-      ? raw.defaultSort
-      : RECOMMENDED_DEFAULTS.defaultSort,
+    defaultSort:
+      typeof raw.defaultSort === 'string' && raw.defaultSort.trim()
+        ? raw.defaultSort
+        : RECOMMENDED_DEFAULTS.defaultSort,
     minRatingFilter: Number.isFinite(Number(raw.minRatingFilter))
       ? Math.max(0, Math.min(5, Number(raw.minRatingFilter)))
-      : RECOMMENDED_DEFAULTS.minRatingFilter
+      : RECOMMENDED_DEFAULTS.minRatingFilter,
   };
 }
 
@@ -74,7 +80,11 @@ export function loadSimulationManagementSettings() {
     }
 
     const parsed = JSON.parse(raw);
-    if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || typeof parsed.simulationManagement !== 'object') {
+    if (
+      !parsed ||
+      parsed.schemaVersion !== SCHEMA_VERSION ||
+      typeof parsed.simulationManagement !== 'object'
+    ) {
       currentSettings = normalizeSettings();
       return currentSettings;
     }
@@ -99,7 +109,7 @@ export function saveSimulationManagementSettings(settings) {
       SETTINGS_KEY,
       JSON.stringify({
         schemaVersion: SCHEMA_VERSION,
-        simulationManagement: currentSettings
+        simulationManagement: currentSettings,
       })
     );
   } catch {
@@ -114,7 +124,8 @@ export function getCurrentSimulationManagementSettings() {
 }
 
 export function getAutoExportOnComplete() {
-  const el = typeof document !== 'undefined' ? document.getElementById('simmanage-auto-export') : null;
+  const el =
+    typeof document !== 'undefined' ? document.getElementById('simmanage-auto-export') : null;
   if (el) {
     return el.checked;
   }
@@ -160,7 +171,7 @@ export function updateTaskListPreferences(updates = {}) {
   return saveSimulationManagementSettings({
     ...current,
     defaultSort: updates.defaultSort ?? current.defaultSort,
-    minRatingFilter: updates.minRatingFilter ?? current.minRatingFilter
+    minRatingFilter: updates.minRatingFilter ?? current.minRatingFilter,
   });
 }
 

@@ -13,7 +13,7 @@ from api.routes_simulation import (
     stop_simulation,
     submit_simulation,
 )
-from contracts import DirectivityRenderRequest, MeshData, SimulationRequest
+from contracts import DirectivityRenderRequest, JobMetadataPatch, MeshData, SimulationRequest
 import services.job_runtime as _jrt
 import services.simulation_runner as _sim_runner
 
@@ -145,7 +145,7 @@ class ApiValidationTest(unittest.TestCase):
                 advanced_settings={'bem_precision': 'fp16'}
             )
 
-    def test_occ_adaptive_requires_waveguide_params(self):
+    def test_hornlab_mesher_requires_waveguide_params(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -158,7 +158,7 @@ class ApiValidationTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=10,
             sim_type='2',
-            options={"mesh": {"strategy": "occ_adaptive"}}
+            options={"mesh": {"strategy": "hornlab_mesher"}}
         )
 
         with self.assertRaises(HTTPException) as ctx:
@@ -167,7 +167,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn("waveguide_params", str(ctx.exception.detail))
 
-    def test_occ_adaptive_requires_enclosure_or_wall_shell(self):
+    def test_hornlab_mesher_requires_enclosure_or_wall_shell(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -182,7 +182,7 @@ class ApiValidationTest(unittest.TestCase):
             sim_type='2',
             options={
                 "mesh": {
-                    "strategy": "occ_adaptive",
+                    "strategy": "hornlab_mesher",
                     "waveguide_params": {
                         "formula_type": "OSSE",
                         "enc_depth": 0.0,
@@ -198,7 +198,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn("Increase enclosure depth or wall thickness", str(ctx.exception.detail))
 
-    def test_occ_adaptive_runtime_gate_returns_503(self):
+    def test_hornlab_mesher_runtime_gate_returns_503(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -213,7 +213,7 @@ class ApiValidationTest(unittest.TestCase):
             sim_type='2',
             options={
                 "mesh": {
-                    "strategy": "occ_adaptive",
+                    "strategy": "hornlab_mesher",
                     "waveguide_params": {"formula_type": "OSSE"}
                 }
             }
@@ -233,17 +233,17 @@ class ApiValidationTest(unittest.TestCase):
         }
 
         with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch("api.routes_simulation.BEMPP_RUNTIME_READY", True), patch(
-            "api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True
-        ), patch("api.routes_simulation.GMSH_OCC_RUNTIME_READY", False), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", False), patch(
             "api.routes_simulation.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(submit_simulation(request))
 
         self.assertEqual(ctx.exception.status_code, 503)
-        self.assertIn("Adaptive OCC mesh builder dependency check failed", str(ctx.exception.detail))
+        self.assertIn("hornlab-waveguide-mesher dependency check failed", str(ctx.exception.detail))
 
-    def test_occ_adaptive_submission_request_uses_full_domain_without_mutating_input(self):
+    def test_hornlab_mesher_submission_preserves_reduced_domain_for_metal_without_mutating_input(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -256,9 +256,10 @@ class ApiValidationTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=10,
             sim_type='2',
+            solver_backend="metal",
             options={
                 "mesh": {
-                    "strategy": "occ_adaptive",
+                    "strategy": "hornlab_mesher",
                     "waveguide_params": {"formula_type": "OSSE", "quadrants": 1}
                 }
             }
@@ -267,8 +268,10 @@ class ApiValidationTest(unittest.TestCase):
         job_id = "11111111-1111-1111-1111-111111111111"
 
         with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch(
-            "api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True
-        ), patch("api.routes_simulation.GMSH_OCC_RUNTIME_READY", True), patch(
+            "api.routes_simulation.METAL_SOLVER_READY", True
+        ), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
             "api.routes_simulation.create_simulation_job", return_value=job_id
         ) as create_simulation_job:
             result = asyncio.run(submit_simulation(request))
@@ -277,10 +280,46 @@ class ApiValidationTest(unittest.TestCase):
         # Original request object must not be mutated.
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
-        # Queued payload must always use full-domain quadrants=1234, regardless of input.
+        # Queued payload preserves the validated symmetry-reduction domain.
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
+
+    def test_hornlab_mesher_submission_forces_full_domain_for_bempp_without_mutating_input(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            solver_backend="bempp",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "OSSE", "quadrants": 1}
+                }
+            }
+        )
+
+        job_id = "11111111-1111-1111-1111-111111111112"
+
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
+            "api.routes_simulation.create_simulation_job", return_value=job_id
+        ) as create_simulation_job:
+            result = asyncio.run(submit_simulation(request))
+
+        self.assertEqual(result["job_id"], job_id)
+        self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
+        submitted_request = create_simulation_job.call_args.args[0].model_dump()
         self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
 
-    def test_occ_adaptive_accepts_rosse_b_expression(self):
+    def test_occ_adaptive_strategy_is_rejected(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -296,6 +335,45 @@ class ApiValidationTest(unittest.TestCase):
             options={
                 "mesh": {
                     "strategy": "occ_adaptive",
+                    "waveguide_params": {
+                        "formula_type": "OSSE",
+                        "quadrants": 14,
+                        "wall_thickness": 6.0,
+                    }
+                }
+            }
+        )
+
+        job_id = "22222222-2222-2222-2222-222222222222"
+
+        with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
+            "api.routes_simulation.create_simulation_job", return_value=job_id
+        ) as create_simulation_job:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(submit_simulation(request))
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn("hornlab_mesher", str(ctx.exception.detail))
+        create_simulation_job.assert_not_called()
+
+    def test_hornlab_mesher_accepts_rosse_b_expression(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
                     "waveguide_params": {
                         "formula_type": "R-OSSE",
                         "R": "140",
@@ -320,15 +398,15 @@ class ApiValidationTest(unittest.TestCase):
         }
 
         with patch("api.routes_simulation.SOLVER_AVAILABLE", True), patch("api.routes_simulation.BEMPP_RUNTIME_READY", True), patch(
-            "api.routes_simulation.WAVEGUIDE_BUILDER_AVAILABLE", True
-        ), patch("api.routes_simulation.GMSH_OCC_RUNTIME_READY", False), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", False), patch(
             "api.routes_simulation.get_dependency_status", return_value=dependency_status
         ):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(submit_simulation(request))
 
         self.assertEqual(ctx.exception.status_code, 503)
-        self.assertIn("Adaptive OCC mesh builder dependency check failed", str(ctx.exception.detail))
+        self.assertIn("hornlab-waveguide-mesher dependency check failed", str(ctx.exception.detail))
 
 
 class PolarConfigValidationTest(unittest.TestCase):
@@ -365,15 +443,32 @@ class PolarConfigValidationTest(unittest.TestCase):
         self.assertEqual(request.polar_config.enabled_axes, ["vertical"])
 
 
-class OccAdaptiveBemMeshContractTest(unittest.TestCase):
-    """occ_adaptive BEM path must pass wall_thickness through to build_waveguide_mesh unchanged.
+class JobMetadataPatchValidationTest(unittest.TestCase):
+    def test_unknown_metadata_fields_are_rejected(self):
+        with self.assertRaises(ValidationError):
+            JobMetadataPatch.model_validate({"rating": 5})
+
+    def test_script_snapshot_must_be_object_or_null(self):
+        with self.assertRaises(ValidationError):
+            JobMetadataPatch.model_validate({"script_snapshot": ["not", "an", "object"]})
+
+    def test_label_is_trimmed_and_blank_label_clears_metadata(self):
+        labelled = JobMetadataPatch.model_validate({"label": "  run A  "})
+        cleared = JobMetadataPatch.model_validate({"label": "   "})
+
+        self.assertEqual(labelled.label, "run A")
+        self.assertIsNone(cleared.label)
+
+
+class HornLabMesherBemMeshContractTest(unittest.TestCase):
+    """HornLab mesher BEM path must pass wall_thickness through to build_waveguide_mesh unchanged.
 
     The outer wall shell is part of the BEM mesh (tag 1 in the ABEC/ATH convention).
-    The queued request must already be full-domain, and the canonical OCC mesh tags
-    must pass through to solver mesh preparation unchanged.
+    The queued request must preserve the selected symmetry-reduction domain, and
+    the canonical mesh tags must pass through to solver mesh preparation unchanged.
     """
 
-    def _make_occ_adaptive_request(self, extra_params=None):
+    def _make_hornlab_mesher_request(self, extra_params=None):
         wp = {
             "formula_type": "R-OSSE",
             "R": "140",
@@ -407,18 +502,19 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=1,
             sim_type="2",
-            options={"mesh": {"strategy": "occ_adaptive", "waveguide_params": wp}},
+            solver_backend="bempp",
+            options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": wp}},
         )
 
-    def test_occ_adaptive_preserves_wall_thickness_in_build_call(self):
-        """run_simulation must NOT zero wall_thickness for occ_adaptive BEM builds.
+    def test_hornlab_mesher_preserves_wall_thickness_in_build_call(self):
+        """run_simulation must NOT zero wall_thickness for HornLab mesher BEM builds.
 
         The outer wall shell (wall_thickness > 0) is part of the BEM mesh: it forms the
         topologically connected rigid-wall boundary that encloses the horn cavity.
-        The runner must forward the queued full-domain request to `build_waveguide_mesh`
+        The runner must forward the queued request to `build_waveguide_mesh`
         without repairing or zeroing wall shell geometry on the way through.
         """
-        request = self._make_occ_adaptive_request({"wall_thickness": 6.0, "enc_depth": 0.0})
+        request = self._make_hornlab_mesher_request({"wall_thickness": 6.0, "enc_depth": 0.0})
 
         captured_params = []
 
@@ -434,12 +530,17 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                 },
             }
 
-        class MockSolver:
-            def prepare_mesh(self, *args, **kwargs):
-                return object()
+        fake_mesh = {
+            "grid": type(
+                "G",
+                (),
+                {"vertices": [[0, 0, 0]], "elements": [[0]], "domain_indices": [2]},
+            )(),
+            "surface_tags": [2],
+        }
 
-            def solve(self, *args, **kwargs):
-                return {"frequencies": [100.0], "directivity": {}}
+        async def fake_subprocess_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
 
         job_id = "test-preserve-wall"
         _jrt.jobs[job_id] = {
@@ -447,31 +548,44 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
             "stage_message": "", "results": None, "error": None,
         }
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver), patch(
-                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+            with patch("services.simulation_runner.BEMSolver"), patch(
+                "services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True
             ), patch(
-                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
-            ), patch("services.simulation_runner.build_waveguide_mesh", side_effect=fake_build):
+                "services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True
+            ), patch(
+                "services.simulation_runner.build_waveguide_mesh",
+                side_effect=fake_build,
+            ), patch(
+                "solver.mesh.load_msh_for_bem",
+                return_value=fake_mesh,
+            ), patch(
+                "services.simulation_runner._run_solve_in_subprocess",
+                side_effect=fake_subprocess_solve,
+            ), patch(
+                "services.simulation_runner.db"
+            ):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
         finally:
             _jrt.jobs.pop(job_id, None)
 
         self.assertTrue(
             len(captured_params) > 0,
-            "build_waveguide_mesh must be called during occ_adaptive run_simulation.",
+            "build_waveguide_mesh must be called during hornlab_mesher run_simulation.",
         )
         call_params = captured_params[0]
         self.assertEqual(
             call_params.get("wall_thickness"),
             6.0,
-            "occ_adaptive BEM build must preserve wall_thickness (outer wall is part of BEM mesh).",
+            "HornLab mesher BEM build must preserve wall_thickness (outer wall is part of BEM mesh).",
         )
 
-    def test_occ_adaptive_accepts_non_full_domain_quadrants(self):
-        """Non-1234 quadrants are accepted for import compatibility but are overridden to 1234 before OCC meshing."""
-        request = self._make_occ_adaptive_request({"quadrants": 14})
+    def test_hornlab_mesher_forces_full_domain_quadrants_for_bempp(self):
+        """Non-1234 quadrants are accepted but BEMPP solves must use full-domain meshing."""
+        request = self._make_hornlab_mesher_request({"quadrants": 14})
 
-        fake_occ_result = {
+        fake_mesher_result = {
             "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
             "stats": {"nodeCount": 5, "elementCount": 4},
             "canonical_mesh": {
@@ -487,19 +601,19 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         async def fake_subprocess_solve(*_args, **_kwargs):
             return {"frequencies": [100.0], "directivity": {}}
 
-        job_id = "test-occ-quadrants-accepted"
+        job_id = "test-hornlab-quadrants-accepted"
         _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
         }
         try:
             with patch("services.simulation_runner.BEMSolver"), patch(
-                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+                "services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True
             ), patch(
-                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+                "services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True
             ), patch(
                 "services.simulation_runner.build_waveguide_mesh",
-                return_value=fake_occ_result,
+                return_value=fake_mesher_result,
             ) as build_mesh, patch(
                 "solver.mesh.load_msh_for_bem",
                 return_value=fake_mesh,
@@ -513,21 +627,18 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
 
             build_mesh.assert_called_once()
             forwarded_params = build_mesh.call_args.args[0]
-            # Active OCC solve path always forces full-domain meshes.
-            # The requested value (14) is preserved in requestedQuadrants metadata,
-            # but the payload forwarded to the builder must always be 1234.
             self.assertEqual(forwarded_params.get("quadrants"), 1234,
-                "Active OCC solve path must override non-1234 quadrants to 1234 before meshing")
+                "BEMPP solve path must force full-domain quadrants before meshing")
             # The job should not be in error state — non-1234 imports are tolerated.
             self.assertNotEqual(_jrt.jobs[job_id].get("status"), "error",
-                "Non-1234 quadrants should be accepted for occ_adaptive path")
+                "Non-1234 quadrants should be accepted for HornLab mesher path")
         finally:
             _jrt.jobs.pop(job_id, None)
 
-    def test_occ_adaptive_preserves_canonical_surface_tags_for_solver_mesh(self):
-        request = self._make_occ_adaptive_request()
+    def test_hornlab_mesher_preserves_canonical_surface_tags_for_solver_mesh(self):
+        request = self._make_hornlab_mesher_request()
 
-        fake_occ_result = {
+        fake_mesher_result = {
             "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
             "stats": {"nodeCount": 5, "elementCount": 4},
             "canonical_mesh": {
@@ -568,18 +679,18 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         async def fake_subprocess_solve(*_args, **_kwargs):
             return {"frequencies": [100.0], "directivity": {}}
 
-        job_id = "test-occ-canonical-tags"
+        job_id = "test-hornlab-canonical-tags"
         _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
         }
         try:
             with patch("services.simulation_runner.BEMSolver"), patch(
-                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+                "services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True
             ), patch(
-                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+                "services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True
             ), patch(
-                "services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result
+                "services.simulation_runner.build_waveguide_mesh", return_value=fake_mesher_result
             ), patch(
                 "solver.mesh.load_msh_for_bem", return_value=fake_mesh
             ), patch(
@@ -595,10 +706,10 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         finally:
             _jrt.jobs.pop(job_id, None)
 
-    def test_occ_adaptive_publishes_mesh_stats_after_canonical_mesh_build(self):
-        request = self._make_occ_adaptive_request()
+    def test_hornlab_mesher_publishes_mesh_stats_after_canonical_mesh_build(self):
+        request = self._make_hornlab_mesher_request()
 
-        fake_occ_result = {
+        fake_mesher_result = {
             "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
             "stats": {"nodeCount": 5, "elementCount": 4},
             "canonical_mesh": {
@@ -639,18 +750,18 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
         async def fake_subprocess_solve(*_args, **_kwargs):
             return {"frequencies": [100.0], "directivity": {}}
 
-        job_id = "test-occ-mesh-stats"
+        job_id = "test-hornlab-mesh-stats"
         _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
         }
         try:
             with patch("services.simulation_runner.BEMSolver"), patch(
-                "services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True
+                "services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True
             ), patch(
-                "services.simulation_runner.GMSH_OCC_RUNTIME_READY", True
+                "services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True
             ), patch(
-                "services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result
+                "services.simulation_runner.build_waveguide_mesh", return_value=fake_mesher_result
             ), patch(
                 "solver.mesh.load_msh_for_bem", return_value=fake_mesh
             ), patch(
@@ -664,7 +775,7 @@ class OccAdaptiveBemMeshContractTest(unittest.TestCase):
                 {
                     "vertex_count": 5,
                     "triangle_count": 4,
-                    "source": "occ_adaptive_msh",
+                    "source": "hornlab_waveguide_mesher",
                     "tag_counts": {1: 1, 2: 1, 3: 1, 4: 1},
                     "identity_triangle_counts": {
                         "inner_wall": 1,
@@ -766,6 +877,28 @@ class StopSimulationLifecycleTest(unittest.TestCase):
 
 
 class CooperativeCancellationRunnerTest(unittest.TestCase):
+    def _fake_mesher_result(self):
+        return {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 3, "elementCount": 1},
+            "canonical_mesh": {
+                "vertices": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                "indices": [0, 1, 2],
+                "surfaceTags": [2],
+                "metadata": {},
+            },
+        }
+
+    def _fake_solver_mesh(self):
+        return {
+            "grid": type(
+                "G",
+                (),
+                {"vertices": [[0, 0, 0]], "elements": [[0]], "domain_indices": [2]},
+            )(),
+            "surface_tags": [2],
+        }
+
     def _make_minimal_request(self):
         return SimulationRequest(
             mesh=MeshData(
@@ -779,7 +912,12 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=2,
             sim_type="2",
-            options={},
+            solver_backend="bempp",
+            options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": {
+                "formula_type": "OSSE",
+                "wall_thickness": 6.0,
+                "enc_depth": 0.0,
+            }}},
         )
 
     def _make_job_entry(self, job_id, *, cancellation_requested=False):
@@ -809,7 +947,9 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
                 raise AssertionError("prepare_mesh must not run once cancellation is requested")
 
         try:
-            with patch("services.simulation_runner.BEMSolver", MockSolver):
+            with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
             self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
@@ -832,6 +972,10 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=self._fake_mesher_result()), \
+                 patch("solver.mesh.load_msh_for_bem", return_value=self._fake_solver_mesh()), \
                  patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
 
@@ -857,6 +1001,10 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=self._fake_mesher_result()), \
+                 patch("solver.mesh.load_msh_for_bem", return_value=self._fake_solver_mesh()), \
                  patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch("services.simulation_runner.update_job_stage") as update_stage_mock:
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
@@ -877,6 +1025,21 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
 class JobPersistenceFailureSafetyTest(unittest.TestCase):
     """Verify that persistence failures do not leave jobs in false-complete state."""
 
+    def _fake_mesher_result(self):
+        return {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 3, "elementCount": 1},
+            "canonical_mesh": {
+                "vertices": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                "indices": [0, 1, 2],
+                "surfaceTags": [2],
+                "metadata": {},
+            },
+        }
+
+    def _fake_solver_mesh(self):
+        return {"grid": type("G", (), {"vertices": [[0,0,0]], "elements": [[0]], "domain_indices": [2]})(), "surface_tags": [2]}
+
     def _make_minimal_request(self):
         return SimulationRequest(
             mesh=MeshData(
@@ -890,7 +1053,12 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=1,
             sim_type="2",
-            options={},
+            solver_backend="bempp",
+            options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": {
+                "formula_type": "OSSE",
+                "wall_thickness": 6.0,
+                "enc_depth": 0.0,
+            }}},
         )
 
     def _make_job_entry(self, job_id):
@@ -922,6 +1090,10 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=self._fake_mesher_result()), \
+                 patch("solver.mesh.load_msh_for_bem", return_value=self._fake_solver_mesh()), \
                  patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch.object(_sim_runner.db, "store_results", side_effect=OSError("disk full")):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
@@ -952,6 +1124,10 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver", MockSolver), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=self._fake_mesher_result()), \
+                 patch("solver.mesh.load_msh_for_bem", return_value=self._fake_solver_mesh()), \
                  patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch.object(_sim_runner.db, "store_results", side_effect=OSError("disk full")):
                 asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
@@ -969,7 +1145,7 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
         _jrt.jobs[job_id] = self._make_job_entry(job_id)
 
         fake_msh = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
-        fake_occ_result = {
+        fake_mesher_result = {
             "msh_text": fake_msh,
             "stats": {"nodeCount": 3, "elementCount": 1},
             "canonical_mesh": {
@@ -996,7 +1172,8 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=1,
             sim_type="2",
-            options={"mesh": {"strategy": "occ_adaptive", "waveguide_params": {
+            solver_backend="bempp",
+            options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": {
                 "formula_type": "R-OSSE",
                 "wall_thickness": 6.0,
                 "enc_depth": 0.0,
@@ -1005,9 +1182,9 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
 
         try:
             with patch("services.simulation_runner.BEMSolver"), \
-                 patch("services.simulation_runner.WAVEGUIDE_BUILDER_AVAILABLE", True), \
-                 patch("services.simulation_runner.GMSH_OCC_RUNTIME_READY", True), \
-                 patch("services.simulation_runner.build_waveguide_mesh", return_value=fake_occ_result), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=fake_mesher_result), \
                  patch("solver.mesh.load_msh_for_bem", return_value=fake_mesh), \
                  patch("services.simulation_runner._run_solve_in_subprocess", side_effect=fake_subprocess_solve), \
                  patch.object(_sim_runner.db, "store_mesh_artifact", side_effect=OSError("disk full")):

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 ATH_FILE = "/Users/magnus/IM Dropbox/Magnus Andersen/DOCS/code/misc/250917asro68 ATH results/Spectrum_ABEC.txt"
 
-OCC_PARAMS = {
+MESHER_PARAMS = {
     "formula_type": "R-OSSE",
     "R": "160 * (abs(cos(p)/1.8)^3 + abs(sin(p)/1)^4)^(-1/7)",
     "a": "22 * (abs(cos(p)/1.2)^8 + abs(sin(p)/1)^4)^(-1/4)",
@@ -103,12 +103,12 @@ def parse_ath_polar_data(filepath):
 
 def build_mesh():
     from contracts import WaveguideParamsRequest
-    from solver.waveguide_builder import build_waveguide_mesh
+    from solver.mesher_adapter import build_waveguide_mesh
     from scripts.benchmark_solver import load_mesh
 
     print("Building mesh...")
     t0 = time.time()
-    request = WaveguideParamsRequest(**OCC_PARAMS)
+    request = WaveguideParamsRequest(**MESHER_PARAMS)
     result = build_waveguide_mesh(request.model_dump(), include_canonical=True)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".msh", delete=False) as f:
         f.write(result["msh_text"])

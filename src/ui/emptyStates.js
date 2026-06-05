@@ -5,64 +5,64 @@
 
 const EMPTY_STATE_MESSAGES = {
   noResults: {
-    title: "Simulation results will appear here",
+    title: 'Simulation results will appear here',
     description:
-      "After running a BEM solve, you'll see frequency response curves, polar directivity plots, and SPL measurements—essential data for validating your horn's acoustic performance. Click \"Start BEM Simulation\" to generate your first results.",
+      'After running a BEM solve, you\'ll see frequency response curves, polar directivity plots, and SPL measurements—essential data for validating your horn\'s acoustic performance. Click "Start BEM Simulation" to generate your first results.',
   },
   noJobs: {
-    title: "Your simulation history is empty",
+    title: 'Your simulation history is empty',
     description:
-      "Each BEM solve creates a job record with frequency response and directivity data for comparison across design iterations. Run your first simulation to begin building a history of acoustic analyses.",
+      'Each BEM solve creates a job record with frequency response and directivity data for comparison across design iterations. Run your first simulation to begin building a history of acoustic analyses.',
   },
   noData: {
-    title: "Unable to load data",
+    title: 'Unable to load data',
     description:
       "The requested data couldn't be retrieved. Refresh the page to restore state, or run a new simulation to generate fresh results.",
   },
   noSimulationRunning: {
-    title: "Ready for acoustic analysis",
+    title: 'Ready for acoustic analysis',
     description:
-      "Run a BEM simulation to compute how your waveguide performs across the frequency range. Results include on-axis response, beamwidth, and polar directivity—critical metrics for loudspeaker design.",
+      'Run a BEM simulation to compute how your waveguide performs across the frequency range. Results include on-axis response, beamwidth, and polar directivity—critical metrics for loudspeaker design.',
   },
   connectionError: {
-    title: "Solver backend not connected",
+    title: 'Solver backend not connected',
     description:
-      "The BEM solver runs locally and must be started before simulations. Open a terminal and run: python server/app.py. This enables mesh processing and acoustic field computation.",
+      'The BEM solver runs locally and must be started before simulations. Open a terminal and run: python server/app.py. This enables mesh processing and acoustic field computation.',
   },
   noExportFormats: {
-    title: "No export formats configured",
+    title: 'No export formats configured',
     description:
-      "Enable CSV for SPL data, JSON for complete results, or PNG for publication-ready plots. Configure formats in Settings to save your simulation data for analysis and documentation.",
+      'Enable CSV for SPL data, JSON for complete results, or PNG for publication-ready plots. Configure formats in Settings to save your simulation data for analysis and documentation.',
   },
   exportPending: {
-    title: "Preparing export",
+    title: 'Preparing export',
     description:
-      "Generating your simulation data files. Complex frequency sweeps with high resolution may take several seconds to process.",
+      'Generating your simulation data files. Complex frequency sweeps with high resolution may take several seconds to process.',
   },
   fileTooLarge: {
-    title: "Export exceeds size limit",
+    title: 'Export exceeds size limit',
     description:
-      "High-frequency resolution creates large datasets. Export one format at a time, or reduce frequency point count in simulation settings to create smaller, faster exports.",
+      'High-frequency resolution creates large datasets. Export one format at a time, or reduce frequency point count in simulation settings to create smaller, faster exports.',
   },
   networkTimeout: {
-    title: "Request timed out",
+    title: 'Request timed out',
     description:
       "The solver didn't respond in time. Large meshes and high frequency resolution increase solve time—try again or simplify the geometry for faster iteration.",
   },
   networkOffline: {
-    title: "Network connection lost",
+    title: 'Network connection lost',
     description:
-      "Simulation jobs require connection to the local solver. Restore your network connection and try again.",
+      'Simulation jobs require connection to the local solver. Restore your network connection and try again.',
   },
   serverError: {
-    title: "Solver error",
+    title: 'Solver error',
     description:
-      "The BEM solver encountered an unexpected condition. Check the server console for details—common causes include mesh topology issues or invalid boundary conditions.",
+      'The BEM solver encountered an unexpected condition. Check the server console for details—common causes include mesh topology issues or invalid boundary conditions.',
   },
   validationError: {
-    title: "Invalid parameters detected",
+    title: 'Invalid parameters detected',
     description:
-      "Some geometry or simulation values are outside valid ranges. Review the highlighted fields—correct parameters ensure accurate acoustic predictions and prevent solver failures.",
+      'Some geometry or simulation values are outside valid ranges. Review the highlighted fields—correct parameters ensure accurate acoustic predictions and prevent solver failures.',
   },
 };
 
@@ -72,33 +72,29 @@ const EMPTY_STATE_MESSAGES = {
  * @param {Object} options - Additional options
  * @returns {HTMLElement} Empty state container
  */
-export function createEmptyStateElement(type = "noData", options = {}) {
+export function createEmptyStateElement(type = 'noData', options = {}) {
   const config = EMPTY_STATE_MESSAGES[type] || EMPTY_STATE_MESSAGES.noData;
-  const {
-    title = config.title,
-    description = config.description,
-    icon = null,
-  } = options;
+  const { title = config.title, description = config.description, icon = null } = options;
 
-  const container = document.createElement("div");
-  container.className = "empty-state";
-  container.setAttribute("role", "status");
-  container.setAttribute("aria-live", "polite");
+  const container = document.createElement('div');
+  container.className = 'empty-state';
+  container.setAttribute('role', 'status');
+  container.setAttribute('aria-live', 'polite');
 
   if (icon) {
-    const iconEl = document.createElement("div");
-    iconEl.className = "empty-state-icon";
+    const iconEl = document.createElement('div');
+    iconEl.className = 'empty-state-icon';
     iconEl.textContent = icon;
     container.appendChild(iconEl);
   }
 
-  const titleEl = document.createElement("h3");
-  titleEl.className = "empty-state-title";
+  const titleEl = document.createElement('h3');
+  titleEl.className = 'empty-state-title';
   titleEl.textContent = title;
   container.appendChild(titleEl);
 
-  const descEl = document.createElement("p");
-  descEl.className = "empty-state-description";
+  const descEl = document.createElement('p');
+  descEl.className = 'empty-state-description';
   descEl.textContent = description;
   container.appendChild(descEl);
 
@@ -111,15 +107,15 @@ export function createEmptyStateElement(type = "noData", options = {}) {
 export function isEmpty(value) {
   if (value === null || value === undefined) return true;
   if (Array.isArray(value)) return value.length === 0;
-  if (typeof value === "object") return Object.keys(value).length === 0;
-  if (typeof value === "string") return value.trim().length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  if (typeof value === 'string') return value.trim().length === 0;
   return false;
 }
 
 /**
  * Get appropriate empty state message for a condition
  */
-export function getEmptyStateMessage(type = "noData") {
+export function getEmptyStateMessage(type = 'noData') {
   return EMPTY_STATE_MESSAGES[type] || EMPTY_STATE_MESSAGES.noData;
 }
 
@@ -132,31 +128,31 @@ export function getEmptyStateMessage(type = "noData") {
  */
 export function renderErrorState(
   container,
-  title = "Error",
-  message = "An error occurred",
-  onRetry = null,
+  title = 'Error',
+  message = 'An error occurred',
+  onRetry = null
 ) {
   if (!container) return;
 
-  container.innerHTML = "";
-  container.className = "error-state";
+  container.innerHTML = '';
+  container.className = 'error-state';
 
-  const titleEl = document.createElement("h3");
-  titleEl.className = "error-state-title";
+  const titleEl = document.createElement('h3');
+  titleEl.className = 'error-state-title';
   titleEl.textContent = title;
   container.appendChild(titleEl);
 
-  const msgEl = document.createElement("p");
-  msgEl.className = "error-state-message";
+  const msgEl = document.createElement('p');
+  msgEl.className = 'error-state-message';
   msgEl.textContent = message;
   container.appendChild(msgEl);
 
-  if (typeof onRetry === "function") {
-    const retryBtn = document.createElement("button");
-    retryBtn.className = "error-state-retry-btn";
-    retryBtn.type = "button";
-    retryBtn.textContent = "Try Again";
-    retryBtn.addEventListener("click", onRetry);
+  if (typeof onRetry === 'function') {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'error-state-retry-btn';
+    retryBtn.type = 'button';
+    retryBtn.textContent = 'Try Again';
+    retryBtn.addEventListener('click', onRetry);
     container.appendChild(retryBtn);
   }
 }
@@ -166,51 +162,51 @@ export function renderErrorState(
  * @param {HTMLElement} container - Target container
  * @param {string} message - Loading message
  */
-export function renderLoadingState(container, message = "Loading...") {
+export function renderLoadingState(container, message = 'Loading...') {
   if (!container) return;
 
-  container.innerHTML = "";
-  container.className = "loading-state";
+  container.innerHTML = '';
+  container.className = 'loading-state';
 
-  const spinner = document.createElement("div");
-  spinner.className = "loading-spinner";
+  const spinner = document.createElement('div');
+  spinner.className = 'loading-spinner';
   container.appendChild(spinner);
 
-  const msgEl = document.createElement("p");
-  msgEl.className = "loading-message";
+  const msgEl = document.createElement('p');
+  msgEl.className = 'loading-message';
   msgEl.textContent = message;
   container.appendChild(msgEl);
 }
 
 export function categorizeError(error) {
-  if (!error) return "noData";
+  if (!error) return 'noData';
 
   if (error.isApiError) {
-    if (error.category === "network") {
-      if (error.cause?.name === "AbortError") {
-        return "networkTimeout";
+    if (error.category === 'network') {
+      if (error.cause?.name === 'AbortError') {
+        return 'networkTimeout';
       }
       if (!navigator.onLine) {
-        return "networkOffline";
+        return 'networkOffline';
       }
-      return "connectionError";
+      return 'connectionError';
     }
-    if (error.category === "validation") {
-      return "validationError";
+    if (error.category === 'validation') {
+      return 'validationError';
     }
     if (error.status >= 500) {
-      return "serverError";
+      return 'serverError';
     }
     if (error.status === 404) {
-      return "noData";
+      return 'noData';
     }
   }
 
-  if (error.name === "TypeError" && error.message?.includes("fetch")) {
-    return "connectionError";
+  if (error.name === 'TypeError' && error.message?.includes('fetch')) {
+    return 'connectionError';
   }
 
-  return "noData";
+  return 'noData';
 }
 
 export function renderApiErrorState(container, error, onRetry = null) {
@@ -232,7 +228,7 @@ export function withRetry(fn, options = {}) {
       } catch (error) {
         lastError = error;
         if (attempt < maxRetries - 1) {
-          if (typeof onRetry === "function") {
+          if (typeof onRetry === 'function') {
             onRetry(attempt + 1, error);
           }
           await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -263,12 +259,12 @@ export function renderJobListSkeleton(container, count = 3) {
       <div class="skeleton-job-footer">
         <div class="skeleton skeleton-job-footer-label"></div>
         <div class="skeleton-job-stars">
-          ${Array.from({ length: 5 }, () => '<div class="skeleton skeleton-job-star"></div>').join("")}
+          ${Array.from({ length: 5 }, () => '<div class="skeleton skeleton-job-star"></div>').join('')}
         </div>
       </div>
     </div>
-  `,
-  ).join("");
+  `
+  ).join('');
 
   container.innerHTML = skeletons;
 }

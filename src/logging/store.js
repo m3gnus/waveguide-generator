@@ -1,4 +1,5 @@
 import { generateId } from './utils.js';
+import { debugWarn } from './debug.js';
 
 // Current agent context - can be set by agents when they start operations
 let currentAgent = 'user';
@@ -43,7 +44,7 @@ export function addLogEntry(entry) {
     timestamp: new Date(),
     agent: currentAgent,
     sessionId,
-    ...entry
+    ...entry,
   };
 
   logs.push(logEntry);
@@ -58,7 +59,7 @@ export function addLogEntry(entry) {
     try {
       cb(logEntry);
     } catch (e) {
-      console.warn('Log subscriber error:', e);
+      debugWarn('Log subscriber error:', e);
     }
   });
 

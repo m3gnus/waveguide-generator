@@ -6,7 +6,7 @@ import ChangeLog, {
   getSummary,
   subscribe as subscribeToLogs,
   exportLogs,
-  printLogs
+  printLogs,
 } from '../logging/index.js';
 import { isDevRuntime } from '../config/runtimeMode.js';
 
@@ -45,6 +45,9 @@ export function initializeLogging() {
 
     console.log('%c[ChangeLog] Logging system initialized', 'color: green; font-weight: bold');
     console.log('%c[ChangeLog] Use window.printLogs() to view recent changes', 'color: green');
-    console.log('%c[ChangeLog] Use window.setAgent("agent-name") to identify the current agent', 'color: green');
+    console.log(
+      '%c[ChangeLog] Use window.setAgent("agent-name") to identify the current agent',
+      'color: green'
+    );
   }
 }

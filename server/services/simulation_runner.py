@@ -12,12 +12,18 @@ from queue import Empty as QueueEmpty
 from typing import Any, Callable, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
-from services.simulation_validation import validate_occ_adaptive_bem_shell
+from services.simulation_validation import (
+    apply_solver_backend_quadrant_compatibility,
+    is_hornlab_mesher_strategy,
+    validate_hornlab_mesher_bem_shell,
+)
 from services.solver_runtime import (
     BEMSolver,
-    WAVEGUIDE_BUILDER_AVAILABLE,
-    GMSH_OCC_RUNTIME_READY,
+    HORNLAB_MESHER_AVAILABLE,
+    HORNLAB_MESHER_RUNTIME_READY,
     build_waveguide_mesh,
+    resolve_solver_backend,
+    solve_metal_from_msh,
 )
 from services.job_runtime import (
     _merge_job_cache_from_db,
@@ -75,10 +81,10 @@ def _finalize_cancelled_job(
     )
 
 
-def _extract_occ_adaptive_canonical_mesh(
-    occ_result: dict[str, Any],
+def _extract_mesher_canonical_mesh(
+    mesh_result: dict[str, Any],
 ) -> tuple[list[Any], list[Any], list[int]]:
-    canonical = occ_result.get("canonical_mesh") or {}
+    canonical = mesh_result.get("canonical_mesh") or {}
     vertices = canonical.get("vertices")
     indices = canonical.get("indices")
     surface_tags = canonical.get("surfaceTags")
@@ -88,21 +94,21 @@ def _extract_occ_adaptive_canonical_mesh(
         or not isinstance(surface_tags, list)
     ):
         raise RuntimeError(
-            "Adaptive OCC mesh generation did not return canonical mesh arrays."
+            "HornLab mesher did not return canonical mesh arrays."
         )
     if len(indices) % 3 != 0:
-        raise RuntimeError("Adaptive OCC mesh returned invalid triangle index data.")
+        raise RuntimeError("HornLab mesher returned invalid triangle index data.")
     if len(surface_tags) != len(indices) // 3:
-        raise RuntimeError("Adaptive OCC mesh returned mismatched surface tag count.")
+        raise RuntimeError("HornLab mesher returned mismatched surface tag count.")
 
     normalized_surface_tags = [int(tag) for tag in surface_tags]
     invalid_tags = sorted({tag for tag in normalized_surface_tags if tag not in CANONICAL_SURFACE_TAGS})
     if invalid_tags:
         raise RuntimeError(
-            f"Adaptive OCC mesh returned unsupported surface tags: {invalid_tags}."
+            f"HornLab mesher returned unsupported surface tags: {invalid_tags}."
         )
     if 2 not in normalized_surface_tags:
-        raise RuntimeError("Adaptive OCC mesh returned no source-tagged elements (tag 2).")
+        raise RuntimeError("HornLab mesher returned no source-tagged elements (tag 2).")
     return vertices, indices, normalized_surface_tags
 
 
@@ -314,6 +320,7 @@ def _drain_queue_sync(q: "mp.Queue") -> list:
 
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
     """Run BEM simulation in background."""
+    tmp_msh_path: str | None = None
     try:
         job = _merge_job_cache_from_db(job_id)
         if not job:
@@ -328,13 +335,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 progress=0.05,
             )
         update_job_stage(
-            job_id, "initializing", progress=0.05, stage_message="Initializing BEM solver"
+            job_id, "initializing", progress=0.05, stage_message="Initializing solver"
         )
         _raise_if_cancellation_requested(job_id)
-
-        # Initialize solver
-        solver = BEMSolver()
-
         def _cancellation_callback(stage_message: str = CANCELLATION_REQUESTED_MESSAGE) -> None:
             _raise_if_cancellation_requested(job_id, stage_message=stage_message)
 
@@ -344,131 +347,155 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
         )
         mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
+        solver_backend = resolve_solver_backend(
+            request.solver_backend,
+            mesh_strategy=mesh_strategy,
+        )
+        request.solver_backend = solver_backend
+        request = apply_solver_backend_quadrant_compatibility(
+            request,
+            solver_backend,
+        )
+        options = request.options if isinstance(request.options, dict) else {}
+        mesh_opts = (
+            options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
+        )
 
-        if mesh_strategy == "occ_adaptive":
-            waveguide_params = mesh_opts.get("waveguide_params")
-            if not isinstance(waveguide_params, dict):
-                raise ValueError(
-                    "options.mesh.waveguide_params must be provided for "
-                    "options.mesh.strategy='occ_adaptive'."
-                )
-            if not WAVEGUIDE_BUILDER_AVAILABLE or build_waveguide_mesh is None or not GMSH_OCC_RUNTIME_READY:
-                raise RuntimeError("Adaptive OCC mesh builder is unavailable.")
-
-            update_job_stage(
-                job_id, "mesh_prepare", progress=0.15, stage_message="Building adaptive OCC mesh"
+        if not is_hornlab_mesher_strategy(mesh_strategy):
+            raise RuntimeError(
+                "Simulation requires options.mesh.strategy='hornlab_mesher'. "
+                "Client-side JS meshes are viewport-only and are not accepted as a solve pipeline."
             )
-            _cancellation_callback("Cancellation requested before adaptive mesh build started")
-            validated = WaveguideParamsRequest(**waveguide_params)
-            validate_occ_adaptive_bem_shell(validated.enc_depth, validated.wall_thickness)
-            validated_payload = validated.model_dump()
-            queued_quadrants = int(validated_payload.get("quadrants", 1234))
-            # Active OCC solve path always builds full-domain meshes. Non-1234
-            # values are tolerated on import for compatibility but are not applied.
-            validated_payload["quadrants"] = 1234
-            occ_result = build_waveguide_mesh(
-                validated_payload,
-                include_canonical=True,
-                cancellation_callback=lambda: _cancellation_callback(
-                    "Cancellation requested while preparing adaptive mesh"
-                ),
-            )
-            _cancellation_callback("Cancellation requested after adaptive mesh build completed")
 
-            # Store mesh artifact for optional download.
-            msh_artifact = occ_result.get("msh_text")
-            _set_job_fields(
-                job_id, mesh_artifact=msh_artifact, has_mesh_artifact=bool(msh_artifact)
+        waveguide_params = mesh_opts.get("waveguide_params")
+        if not isinstance(waveguide_params, dict):
+            raise ValueError(
+                "options.mesh.waveguide_params must be provided for "
+                "options.mesh.strategy='hornlab_mesher'."
             )
-            if msh_artifact:
-                try:
-                    db.store_mesh_artifact(job_id, msh_artifact)
-                except Exception as _artifact_persist_exc:
-                    # Artifact is optional; do not abort the simulation.
-                    logger.warning(
-                        "Mesh artifact persistence failed for job %s: %s",
-                        job_id,
-                        _artifact_persist_exc,
-                    )
-                    _set_job_fields(job_id, has_mesh_artifact=False)
+        if not HORNLAB_MESHER_AVAILABLE or build_waveguide_mesh is None or not HORNLAB_MESHER_RUNTIME_READY:
+            raise RuntimeError("hornlab-waveguide-mesher is unavailable.")
 
-            # Load mesh for BEM directly from the .msh file via meshio.
-            # This bypasses the canonical mesh extraction + normal reorientation
-            # pipeline, which can produce wrong normal directions for enclosure
-            # meshes.  Loading via meshio matches the approach used in the
-            # 260321-BEM reference solver that produces correct directivity.
-            if not msh_artifact:
-                raise RuntimeError(
-                    "Adaptive OCC mesh generation did not produce .msh output."
-                )
-            from solver.mesh import load_msh_for_bem
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".msh", delete=False, encoding="utf-8"
-            ) as tmp_msh:
-                tmp_msh.write(msh_artifact)
-                tmp_msh_path = tmp_msh.name
+        update_job_stage(
+            job_id, "mesh_prepare", progress=0.15, stage_message="Building HornLab mesher mesh"
+        )
+        _cancellation_callback("Cancellation requested before mesh build started")
+        validated = WaveguideParamsRequest(**waveguide_params)
+        validate_hornlab_mesher_bem_shell(validated.enc_depth, validated.wall_thickness)
+        validated_payload = validated.model_dump()
+        mesher_result = build_waveguide_mesh(
+            validated_payload,
+            include_canonical=True,
+            cancellation_callback=lambda: _cancellation_callback(
+                "Cancellation requested while preparing solver mesh"
+            ),
+        )
+        _cancellation_callback("Cancellation requested after solver mesh build completed")
+
+        # Store mesh artifact for optional download.
+        msh_artifact = mesher_result.get("msh_text")
+        _set_job_fields(
+            job_id, mesh_artifact=msh_artifact, has_mesh_artifact=bool(msh_artifact)
+        )
+        if msh_artifact:
             try:
-                mesh = load_msh_for_bem(tmp_msh_path, scale_factor=0.001)
-            finally:
-                try:
-                    Path(tmp_msh_path).unlink()
-                except OSError:
-                    pass
-
-            # Extract canonical mesh stats for the job record (informational only).
-            try:
-                vertices, indices, surface_tags = _extract_occ_adaptive_canonical_mesh(occ_result)
-                canonical_metadata = (
-                    occ_result.get("canonical_mesh", {}).get("metadata")
-                    if isinstance(occ_result.get("canonical_mesh"), dict)
-                    else None
-                )
-                _set_job_fields(
-                    job_id,
-                    mesh_stats=_build_mesh_stats(
-                        vertices,
-                        indices,
-                        source="occ_adaptive_msh",
-                        surface_tags=surface_tags,
-                        metadata=canonical_metadata,
-                    ),
-                )
-            except Exception as _stats_exc:
+                db.store_mesh_artifact(job_id, msh_artifact)
+            except Exception as _artifact_persist_exc:
+                # Artifact is optional; do not abort the simulation.
                 logger.warning(
-                    "Canonical mesh stats extraction failed for job %s: %s",
-                    job_id, _stats_exc,
+                    "Mesh artifact persistence failed for job %s: %s",
+                    job_id,
+                    _artifact_persist_exc,
                 )
-        else:
-            # Legacy canonical path
-            update_job_stage(
-                job_id, "mesh_prepare", progress=0.15, stage_message="Preparing canonical mesh"
+                _set_job_fields(job_id, has_mesh_artifact=False)
+
+        # Load mesh for BEM directly from the .msh file via meshio.
+        # This avoids using the viewport/client tessellation as solver input.
+        if not msh_artifact:
+            raise RuntimeError(
+                "hornlab-waveguide-mesher did not produce .msh output."
             )
-            _cancellation_callback("Cancellation requested before canonical mesh preparation")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".msh", delete=False, encoding="utf-8"
+        ) as tmp_msh:
+            tmp_msh.write(msh_artifact)
+            tmp_msh_path = tmp_msh.name
+
+        if solver_backend == "bempp":
+            solver = BEMSolver()
+            from solver.mesh import load_msh_for_bem
+
+            try:
+                mesh = load_msh_for_bem(tmp_msh_path, scale_factor=1.0)
+            except Exception:
+                canonical = mesher_result.get("canonical_mesh") if isinstance(mesher_result, dict) else None
+                if not isinstance(canonical, dict):
+                    raise
+                vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
+                mesh = solver.prepare_mesh(
+                    vertices,
+                    indices,
+                    surface_tags=surface_tags,
+                    boundary_conditions=request.mesh.boundaryConditions,
+                    mesh_metadata={
+                        **(canonical.get("metadata") or {}),
+                        "unitScaleToMeter": 1.0,
+                    },
+                )
+
+        # Extract canonical mesh stats for the job record (informational only).
+        try:
+            vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
+            canonical_metadata = (
+                mesher_result.get("canonical_mesh", {}).get("metadata")
+                if isinstance(mesher_result.get("canonical_mesh"), dict)
+                else None
+            )
             _set_job_fields(
                 job_id,
                 mesh_stats=_build_mesh_stats(
-                    request.mesh.vertices,
-                    request.mesh.indices,
-                    source="canonical_payload",
-                    surface_tags=request.mesh.surfaceTags,
-                    metadata=request.mesh.metadata,
+                    vertices,
+                    indices,
+                    source="hornlab_waveguide_mesher",
+                    surface_tags=surface_tags,
+                    metadata=canonical_metadata,
                 ),
             )
-            mesh = solver.prepare_mesh(
-                request.mesh.vertices,
-                request.mesh.indices,
-                surface_tags=request.mesh.surfaceTags,
-                boundary_conditions=request.mesh.boundaryConditions,
-                mesh_metadata=request.mesh.metadata,
+        except Exception as _stats_exc:
+            logger.warning(
+                "Canonical mesh stats extraction failed for job %s: %s",
+                job_id, _stats_exc,
             )
 
         # Run simulation in a subprocess for hard-kill cancellation support.
         update_job_stage(
-            job_id, "bem_solve", progress=0.30, stage_message="Configuring BEM solve"
+            job_id,
+            "bem_solve",
+            progress=0.30,
+            stage_message=(
+                "Configuring Metal BEM solve"
+                if solver_backend == "metal"
+                else "Configuring BEMPP solve"
+            ),
         )
-        _cancellation_callback("Cancellation requested before BEM solve start")
+        _cancellation_callback("Cancellation requested before solve start")
 
-        results = await _run_solve_in_subprocess(job_id, mesh, request)
+        if solver_backend == "metal":
+            if not tmp_msh_path:
+                raise RuntimeError("Metal BEM solve requires a generated .msh artifact.")
+            results = await asyncio.to_thread(
+                solve_metal_from_msh,
+                tmp_msh_path,
+                request,
+                progress_callback=lambda progress: _apply_solver_stage_to_job(
+                    job_id, "frequency_solve", progress, None
+                ),
+                stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
+                    job_id, stage, progress, message
+                ),
+            )
+        else:
+            results = await _run_solve_in_subprocess(job_id, mesh, request)
         _cancellation_callback("Cancellation requested before result persistence")
 
         # Check for cancellation before storing results.
@@ -522,6 +549,11 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         )
         logger.error("Simulation error for job %s: %s", job_id, e, exc_info=True)
     finally:
+        if tmp_msh_path:
+            try:
+                Path(tmp_msh_path).unlink()
+            except OSError:
+                pass
         with jobs_lock:
             running_jobs.discard(job_id)
         db.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1000)

@@ -7,39 +7,39 @@ const CONSTRAINTS = {
   outputName: {
     maxLength: 128,
     minLength: 1,
-    pattern: /^[a-zA-Z0-9_\-]+$/,
+    pattern: /^[a-zA-Z0-9_-]+$/,
     description:
-      "Use only letters, numbers, underscores (_), and hyphens (-). Up to 128 characters.",
-    example: "Example: my_waveguide_v2",
+      'Use only letters, numbers, underscores (_), and hyphens (-). Up to 128 characters.',
+    example: 'Example: my_waveguide_v2',
   },
   counter: {
     min: 1,
     max: 999999,
-    description: "Enter a number from 1 to 999,999",
+    description: 'Enter a number from 1 to 999,999',
   },
   jobLabel: {
     maxLength: 200,
     minLength: 0,
-    description: "Optional label, up to 200 characters",
+    description: 'Optional label, up to 200 characters',
   },
   formula: {
     maxLength: 500,
-    description: "Mathematical formula, up to 500 characters",
+    description: 'Mathematical formula, up to 500 characters',
   },
   frequencyStart: {
     min: 10,
     max: 50000,
-    description: "Frequency must be between 10 Hz and 50 kHz",
+    description: 'Frequency must be between 10 Hz and 50 kHz',
   },
   frequencyEnd: {
     min: 10,
     max: 50000,
-    description: "Frequency must be between 10 Hz and 50 kHz",
+    description: 'Frequency must be between 10 Hz and 50 kHz',
   },
   frequencySteps: {
     min: 1,
     max: 1000,
-    description: "Steps must be between 1 and 1000",
+    description: 'Steps must be between 1 and 1000',
   },
 };
 
@@ -48,10 +48,10 @@ const CONSTRAINTS = {
  * Returns { valid, normalized, error }
  */
 export function validateOutputName(value) {
-  const raw = String(value ?? "").trim();
+  const raw = String(value ?? '').trim();
 
   if (!raw) {
-    return { valid: false, error: "Enter a name for your output files" };
+    return { valid: false, error: 'Enter a name for your output files' };
   }
 
   if (raw.length > CONSTRAINTS.outputName.maxLength) {
@@ -65,7 +65,7 @@ export function validateOutputName(value) {
     return {
       valid: false,
       error:
-        "Use only letters, numbers, underscores (_), and hyphens (-). Spaces and special characters are not allowed.",
+        'Use only letters, numbers, underscores (_), and hyphens (-). Spaces and special characters are not allowed.',
     };
   }
 
@@ -80,7 +80,7 @@ export function validateCounter(value) {
   const num = Number(value);
 
   if (!Number.isInteger(num)) {
-    return { valid: false, error: "Enter a whole number (e.g., 1, 2, 100)" };
+    return { valid: false, error: 'Enter a whole number (e.g., 1, 2, 100)' };
   }
 
   if (num < CONSTRAINTS.counter.min) {
@@ -105,7 +105,7 @@ export function validateCounter(value) {
  * Returns { valid, normalized, error }
  */
 export function validateJobLabel(value) {
-  const raw = String(value ?? "").trim();
+  const raw = String(value ?? '').trim();
 
   if (raw.length > CONSTRAINTS.jobLabel.maxLength) {
     return {
@@ -122,7 +122,7 @@ export function validateJobLabel(value) {
  * Returns { valid, normalized, error }
  */
 export function validateFormula(value) {
-  const raw = String(value ?? "").trim();
+  const raw = String(value ?? '').trim();
 
   if (raw.length > CONSTRAINTS.formula.maxLength) {
     return {
@@ -139,10 +139,10 @@ export function validateFrequencyRange(startValue, endValue) {
   const end = Number(endValue);
 
   if (!Number.isFinite(start)) {
-    return { valid: false, error: "Start frequency must be a valid number" };
+    return { valid: false, error: 'Start frequency must be a valid number' };
   }
   if (!Number.isFinite(end)) {
-    return { valid: false, error: "End frequency must be a valid number" };
+    return { valid: false, error: 'End frequency must be a valid number' };
   }
   if (start < CONSTRAINTS.frequencyStart.min) {
     return {
@@ -159,7 +159,7 @@ export function validateFrequencyRange(startValue, endValue) {
   if (start >= end) {
     return {
       valid: false,
-      error: "Start frequency must be less than end frequency",
+      error: 'Start frequency must be less than end frequency',
     };
   }
   if (start > CONSTRAINTS.frequencyStart.max) {
@@ -176,7 +176,7 @@ export function validateFrequencySteps(value) {
   const num = Number(value);
 
   if (!Number.isFinite(num) || !Number.isInteger(num)) {
-    return { valid: false, error: "Frequency steps must be a whole number" };
+    return { valid: false, error: 'Frequency steps must be a whole number' };
   }
   if (num < CONSTRAINTS.frequencySteps.min) {
     return {
@@ -199,11 +199,11 @@ export function validateFrequencySteps(value) {
  * Replaces invalid characters with underscores
  */
 export function sanitizeFileName(name) {
-  return String(name ?? "")
+  return String(name ?? '')
     .trim()
-    .replace(/[^a-zA-Z0-9_\-\.]/g, "_")
-    .replace(/_{2,}/g, "_")
-    .replace(/^_+|_+$/g, "");
+    .replace(/[^a-zA-Z0-9_.-]/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 /**
@@ -212,13 +212,9 @@ export function sanitizeFileName(name) {
  */
 export function formatNumber(value, options = {}) {
   const num = Number(value);
-  if (!Number.isFinite(num)) return String(value ?? "");
+  if (!Number.isFinite(num)) return String(value ?? '');
 
-  const {
-    minimumFractionDigits = 0,
-    maximumFractionDigits = 2,
-    locale = undefined,
-  } = options;
+  const { minimumFractionDigits = 0, maximumFractionDigits = 2, locale = undefined } = options;
 
   try {
     return new Intl.NumberFormat(locale, {
@@ -238,9 +234,9 @@ export function formatNumber(value, options = {}) {
  */
 export function formatFileSize(bytes) {
   const num = Number(bytes);
-  if (!Number.isFinite(num) || num < 0) return "Unknown";
+  if (!Number.isFinite(num) || num < 0) return 'Unknown';
 
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let size = num;
   let unitIndex = 0;
 
@@ -257,9 +253,9 @@ export function formatFileSize(bytes) {
  * Returns truncated version if needed
  */
 export function truncateTextIfNeeded(text, maxLength = 50) {
-  const str = String(text ?? "").trim();
+  const str = String(text ?? '').trim();
   if (str.length <= maxLength) return str;
-  return str.substring(0, maxLength - 3) + "…";
+  return str.substring(0, maxLength - 3) + '…';
 }
 
 /**
@@ -274,23 +270,21 @@ export function getFieldConstraints(fieldName) {
  */
 export function getValidationError(result) {
   if (!result || result.valid) return null;
-  return result.error || "Invalid input";
+  return result.error || 'Invalid input';
 }
 
 export function showInputError(inputElement, message) {
   if (!inputElement) return;
 
-  inputElement.classList.add("input-error");
-  inputElement.classList.remove("input-success");
-  inputElement.setAttribute("aria-invalid", "true");
+  inputElement.classList.add('input-error');
+  inputElement.classList.remove('input-success');
+  inputElement.setAttribute('aria-invalid', 'true');
 
-  let errorEl = inputElement.parentElement?.querySelector(
-    ".input-error-message",
-  );
+  let errorEl = inputElement.parentElement?.querySelector('.input-error-message');
   if (!errorEl) {
-    errorEl = document.createElement("span");
-    errorEl.className = "input-error-message";
-    errorEl.setAttribute("role", "alert");
+    errorEl = document.createElement('span');
+    errorEl.className = 'input-error-message';
+    errorEl.setAttribute('role', 'alert');
     if (inputElement.parentElement) {
       inputElement.parentElement.appendChild(errorEl);
     }
@@ -301,26 +295,24 @@ export function showInputError(inputElement, message) {
   if (inputId) {
     const errorId = `${inputId}-error`;
     errorEl.id = errorId;
-    inputElement.setAttribute("aria-describedby", errorId);
+    inputElement.setAttribute('aria-describedby', errorId);
   }
 }
 
 export function hideInputError(inputElement, showSuccess = false) {
   if (!inputElement) return;
 
-  inputElement.classList.remove("input-error");
-  inputElement.removeAttribute("aria-invalid");
-  inputElement.removeAttribute("aria-describedby");
+  inputElement.classList.remove('input-error');
+  inputElement.removeAttribute('aria-invalid');
+  inputElement.removeAttribute('aria-describedby');
 
   if (showSuccess) {
-    inputElement.classList.add("input-success");
+    inputElement.classList.add('input-success');
   } else {
-    inputElement.classList.remove("input-success");
+    inputElement.classList.remove('input-success');
   }
 
-  const errorEl = inputElement.parentElement?.querySelector(
-    ".input-error-message",
-  );
+  const errorEl = inputElement.parentElement?.querySelector('.input-error-message');
   if (errorEl) {
     errorEl.remove();
   }
@@ -359,11 +351,11 @@ export function clamp(value, min, max) {
 }
 
 export function safeParseInt(value, fallback = 0) {
-  const num = parseInt(String(value ?? ""), 10);
+  const num = parseInt(String(value ?? ''), 10);
   return Number.isFinite(num) ? num : fallback;
 }
 
 export function safeParseFloat(value, fallback = 0) {
-  const num = parseFloat(String(value ?? ""));
+  const num = parseFloat(String(value ?? ''));
   return Number.isFinite(num) ? num : fallback;
 }

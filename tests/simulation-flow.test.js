@@ -59,7 +59,7 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
 
     const options = {
       mesh: {
-        strategy: "occ_adaptive",
+        strategy: "hornlab_mesher",
         waveguide_params: {
           formula_type: "OSSE",
           throat_res: 4,
@@ -106,7 +106,7 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
       payload.mesh.surfaceTags.length,
       payload.mesh.indices.length / 3,
     );
-    assert.equal(payload.options.mesh.strategy, "occ_adaptive");
+    assert.equal(payload.options.mesh.strategy, "hornlab_mesher");
     assert.equal(payload.options.mesh.waveguide_params.formula_type, "OSSE");
     assert.deepEqual(payload.polar_config.enabled_axes, [
       "horizontal",
@@ -837,6 +837,23 @@ test("renderJobList is accessible from jobActions.js sub-module", () => {
   assert.strictEqual(typeof renderJobList, "function");
 });
 
+test("renderJobList no-ops when document has no getElementById", () => {
+  const originalDocument = global.document;
+  global.document = {};
+
+  try {
+    assert.doesNotThrow(() => {
+      renderJobList({
+        jobSourceMode: "backend",
+        activeJobId: null,
+        jobs: new Map(),
+      });
+    });
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
 test("renderJobList exposes folder source mode in the header and rows", () => {
   const originalDocument = global.document;
   const list = { innerHTML: "" };
@@ -909,6 +926,46 @@ test("renderJobList keeps backend-only feeds free of redundant row source badges
     assert.equal(sourceLabel.textContent, "Backend Jobs");
     assert.doesNotMatch(list.innerHTML, /simulation-job-source-badge/);
     assert.doesNotMatch(list.innerHTML, />Backend</);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
+test("renderJobList escapes job ids in action data attributes", () => {
+  const originalDocument = global.document;
+  const list = { innerHTML: "" };
+  const sourceLabel = { textContent: "" };
+  const jobId = 'job-"quoted"';
+
+  global.document = {
+    getElementById(id) {
+      if (id === "simulation-jobs-list") return list;
+      if (id === "simulation-jobs-source-label") return sourceLabel;
+      return null;
+    },
+  };
+
+  try {
+    renderJobList({
+      jobSourceMode: "backend",
+      activeJobId: jobId,
+      jobs: new Map([
+        [
+          jobId,
+          {
+            id: jobId,
+            label: "quoted-task",
+            status: "complete",
+            rating: 3,
+            createdAt: "2026-03-11T09:00:00.000Z",
+            completedAt: "2026-03-11T09:10:00.000Z",
+          },
+        ],
+      ]),
+    });
+
+    assert.match(list.innerHTML, /data-job-id="job-&quot;quoted&quot;"/);
+    assert.doesNotMatch(list.innerHTML, /data-job-id="job-"quoted""/);
   } finally {
     global.document = originalDocument;
   }
@@ -1041,7 +1098,7 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
   const meshStatsData = {
     vertex_count: 144,
     triangle_count: 72,
-    source: "occ_adaptive_canonical",
+    source: "hornlab_waveguide_mesher",
     tag_counts: { 1: 68, 2: 4, 3: 0, 4: 0 },
     identity_triangle_counts: {
       inner_wall: 28,
@@ -1080,7 +1137,7 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
             status: "running",
             progress: 0.35,
             stage: "mesh_prepare",
-            stage_message: "Building adaptive OCC mesh",
+            stage_message: "Building HornLab mesher mesh",
             mesh_stats: meshStatsData,
           };
         },
@@ -1160,6 +1217,114 @@ test("pollSimulationStatus schedules next poll after reconciliation with no acti
     global.document = originalDocument;
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("pollSimulationStatus clears early mesh persistence marker after terminal failure", async () => {
+  const originalDocument = global.document;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalFetch = global.fetch;
+
+  let timeoutId = 0;
+  let remoteStatus = "running";
+  let meshArtifactFetches = 0;
+
+  global.document = {
+    getElementById() {
+      return null;
+    },
+  };
+  global.setTimeout = () => {
+    timeoutId += 1;
+    return timeoutId;
+  };
+  global.clearTimeout = () => {};
+  global.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { status: "success" };
+    },
+  });
+
+  const panel = {
+    isPolling: false,
+    pollTimer: null,
+    pollInterval: null,
+    pollDelayMs: 1000,
+    pollBackoffMs: 1000,
+    consecutivePollFailures: 0,
+    activeJobId: "job-retry-mesh",
+    currentJobId: "job-retry-mesh",
+    jobSourceMode: "backend",
+    jobs: new Map([
+      [
+        "job-retry-mesh",
+        {
+          id: "job-retry-mesh",
+          status: "running",
+          progress: 0.2,
+          hasMeshArtifact: true,
+        },
+      ],
+    ]),
+    resultCache: new Map(),
+    solver: {
+      async getJobStatus(id) {
+        return {
+          id,
+          status: remoteStatus,
+          progress: remoteStatus === "running" ? 0.4 : 1,
+          stage: remoteStatus,
+          stage_message: remoteStatus,
+          has_mesh_artifact: true,
+          error_message: remoteStatus === "error" ? "solver failed" : null,
+        };
+      },
+      async getMeshArtifact() {
+        meshArtifactFetches += 1;
+        return "$MeshFormat\n2.2 0 8\n$EndMeshFormat";
+      },
+    },
+    displayResults() {},
+    checkSolverConnection() {},
+  };
+
+  async function flushPolling() {
+    for (let i = 0; i < 20; i += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  try {
+    pollSimulationStatus(panel);
+    await flushPolling();
+    assert.equal(meshArtifactFetches, 1);
+
+    clearPollTimer(panel);
+    remoteStatus = "error";
+    pollSimulationStatus(panel);
+    await flushPolling();
+    assert.equal(meshArtifactFetches, 1);
+
+    panel.jobs.set("job-retry-mesh", {
+      id: "job-retry-mesh",
+      status: "running",
+      progress: 0.1,
+      hasMeshArtifact: true,
+    });
+    panel.activeJobId = "job-retry-mesh";
+    panel.currentJobId = "job-retry-mesh";
+    remoteStatus = "running";
+    pollSimulationStatus(panel);
+    await flushPolling();
+    assert.equal(meshArtifactFetches, 2);
+  } finally {
+    clearPollTimer(panel);
+    global.document = originalDocument;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    global.fetch = originalFetch;
   }
 });
 

@@ -8,6 +8,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 ALLOWED_STATUSES = {"queued", "running", "complete", "error", "cancelled"}
+ALLOWED_JOB_UPDATE_FIELDS = {
+    "status",
+    "updated_at",
+    "started_at",
+    "completed_at",
+    "progress",
+    "stage",
+    "stage_message",
+    "error_message",
+    "cancellation_requested",
+    "has_results",
+    "has_mesh_artifact",
+    "mesh_stats_json",
+    "label",
+    "script_snapshot_json",
+}
 
 
 class SimulationDB:
@@ -115,6 +131,9 @@ class SimulationDB:
     def update_job(self, job_id: str, **fields: Any) -> bool:
         if not fields:
             return False
+        unsupported = sorted(set(fields) - ALLOWED_JOB_UPDATE_FIELDS)
+        if unsupported:
+            raise ValueError(f"Unsupported job update field(s): {', '.join(unsupported)}")
         if "status" in fields and fields["status"] not in ALLOWED_STATUSES:
             raise ValueError(f"Unsupported status: {fields['status']}")
 
@@ -292,7 +311,7 @@ class SimulationDB:
         deleted = 0
         cutoff = (datetime.now() - timedelta(days=int(retention_days))).isoformat()
 
-        with self._lock, self._connect() as conn:
+        with self._lock, self._managed_connection() as conn:
             cur = conn.execute(
                 """
                 DELETE FROM simulation_jobs

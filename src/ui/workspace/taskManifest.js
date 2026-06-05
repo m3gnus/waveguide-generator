@@ -2,7 +2,7 @@ import { buildMwgConfigExportFiles } from '../../modules/export/useCases.js';
 import {
   GENERATION_PROJECT_MANIFEST_FILE_NAME,
   buildGenerationProjectManifest,
-  resolveGenerationScriptSnapshotFileName
+  resolveGenerationScriptSnapshotFileName,
 } from './generationArtifacts.js';
 
 export const TASK_MANIFEST_FILE_NAME = 'task.manifest.json';
@@ -21,9 +21,7 @@ function normalizeExportedFiles(value) {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((item) => String(item || '').trim())
-    .filter(Boolean);
+  return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
 function normalizeDirectoryName(value) {
@@ -81,7 +79,7 @@ export function buildScriptSnapshotExportState(scriptSnapshot) {
 
   return {
     type: String(type),
-    params
+    params,
   };
 }
 
@@ -94,22 +92,23 @@ async function writeScriptSnapshotArtifact(manifest, { fallbackWriteFile = null 
   try {
     const fileName = resolveGenerationScriptSnapshotFileName();
     const files = buildMwgConfigExportFiles(exportState, { baseName: 'script.snapshot' });
-    const content = typeof files?.[0]?.content === 'string'
-      ? files[0].content
-      : null;
+    const content = typeof files?.[0]?.content === 'string' ? files[0].content : null;
     if (!content) {
       return { fileName: null, warning: 'Script snapshot build failed: config content missing.' };
     }
     if (typeof fallbackWriteFile === 'function') {
       await fallbackWriteFile(fileName, content, 'text/plain');
     } else {
-      return { fileName: null, warning: 'Script snapshot write skipped: no write target available.' };
+      return {
+        fileName: null,
+        warning: 'Script snapshot write skipped: no write target available.',
+      };
     }
     return { fileName, warning: null };
   } catch (error) {
     return {
       fileName: null,
-      warning: `Script snapshot write failed: ${error?.message || 'unknown error'}`
+      warning: `Script snapshot write failed: ${error?.message || 'unknown error'}`,
     };
   }
 }
@@ -118,7 +117,7 @@ async function writeGenerationProjectManifest({
   directoryName,
   manifest,
   scriptSnapshotFileName,
-  fallbackWriteFile = null
+  fallbackWriteFile = null,
 } = {}) {
   try {
     const payload = buildGenerationProjectManifest({
@@ -128,7 +127,7 @@ async function writeGenerationProjectManifest({
       scriptSnapshotFileName,
       rawResultsFileName: manifest?.rawResultsFile ?? null,
       meshArtifactFileName: manifest?.meshArtifactFile ?? null,
-      updatedAt: manifest?.updatedAt
+      updatedAt: manifest?.updatedAt,
     });
     const content = `${JSON.stringify(payload, null, 2)}\n`;
     if (typeof fallbackWriteFile === 'function') {
@@ -162,27 +161,25 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
   const queuedAt = raw.queuedAt ?? raw.queued_at ?? fallback.queuedAt ?? null;
   const startedAt = raw.startedAt ?? raw.started_at ?? fallback.startedAt ?? null;
   const completedAt = raw.completedAt ?? raw.completed_at ?? fallback.completedAt ?? null;
-  const autoExportCompletedAt = raw.autoExportCompletedAt
-    ?? raw.auto_export_completed_at
-    ?? fallback.autoExportCompletedAt
-    ?? null;
+  const autoExportCompletedAt =
+    raw.autoExportCompletedAt ??
+    raw.auto_export_completed_at ??
+    fallback.autoExportCompletedAt ??
+    null;
   const status = String(raw.status || fallback.status || 'queued');
 
-  const scriptSnapshot = raw.scriptSnapshot
-    ?? raw.script_snapshot
-    ?? raw.script
-    ?? fallback.scriptSnapshot
-    ?? fallback.script
-    ?? null;
+  const scriptSnapshot =
+    raw.scriptSnapshot ??
+    raw.script_snapshot ??
+    raw.script ??
+    fallback.scriptSnapshot ??
+    fallback.script ??
+    null;
   const rawResultsFile = normalizeArtifactFileName(
-    raw.rawResultsFile
-    ?? raw.raw_results_file
-    ?? fallback.rawResultsFile
+    raw.rawResultsFile ?? raw.raw_results_file ?? fallback.rawResultsFile
   );
   const meshArtifactFile = normalizeArtifactFileName(
-    raw.meshArtifactFile
-    ?? raw.mesh_artifact_file
-    ?? fallback.meshArtifactFile
+    raw.meshArtifactFile ?? raw.mesh_artifact_file ?? fallback.meshArtifactFile
   );
 
   return {
@@ -199,14 +196,18 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
     completedAt,
     autoExportCompletedAt,
     rating: raw.rating ?? fallback.rating ?? null,
-    exportedFiles: normalizeExportedFiles(raw.exportedFiles ?? raw.exported_files ?? fallback.exportedFiles),
-    scriptSchemaVersion: Number.isFinite(Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion))
+    exportedFiles: normalizeExportedFiles(
+      raw.exportedFiles ?? raw.exported_files ?? fallback.exportedFiles
+    ),
+    scriptSchemaVersion: Number.isFinite(
+      Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion)
+    )
       ? Number(raw.scriptSchemaVersion ?? raw.script_schema_version ?? fallback.scriptSchemaVersion)
       : TASK_SCRIPT_SCHEMA_VERSION,
     scriptSnapshot,
     rawResultsFile,
     meshArtifactFile,
-    updatedAt: raw.updatedAt ?? raw.updated_at ?? nowIso()
+    updatedAt: raw.updatedAt ?? raw.updated_at ?? nowIso(),
   };
 }
 
@@ -226,7 +227,7 @@ export function createTaskManifestFromJob(job = {}) {
     scriptSchemaVersion: job.scriptSchemaVersion,
     scriptSnapshot: job.scriptSnapshot ?? job.script,
     rawResultsFile: job.rawResultsFile,
-    meshArtifactFile: job.meshArtifactFile
+    meshArtifactFile: job.meshArtifactFile,
   });
 }
 
@@ -238,7 +239,12 @@ export async function writeTaskManifest(taskDirectoryHandle, manifestInput) {
   return normalizeTaskManifest(manifestInput);
 }
 
-export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates = {}, { fallbackWriteFile = null } = {}) {
+export async function updateTaskManifestForJob(
+  rootDirectoryHandle,
+  job,
+  updates = {},
+  { fallbackWriteFile = null } = {}
+) {
   if (typeof fallbackWriteFile !== 'function') {
     return { manifest: null, warning: 'Workspace folder is unavailable.' };
   }
@@ -253,24 +259,20 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
 
     const base = createTaskManifestFromJob(job);
     const hasJobExportedFiles = Array.isArray(job?.exportedFiles);
-    const next = normalizeTaskManifest({
-      ...base,
-      ...updates,
-      autoExportCompletedAt: updates.autoExportCompletedAt
-        ?? base.autoExportCompletedAt,
-      exportedFiles: updates.exportedFiles
-        ?? (hasJobExportedFiles ? base.exportedFiles : base.exportedFiles),
-      scriptSnapshot: updates.scriptSnapshot
-        ?? base.scriptSnapshot
-        ?? null,
-      rawResultsFile: updates.rawResultsFile
-        ?? base.rawResultsFile
-        ?? null,
-      meshArtifactFile: updates.meshArtifactFile
-        ?? base.meshArtifactFile
-        ?? null,
-      updatedAt: nowIso()
-    }, { id: jobId, label: job?.label });
+    const next = normalizeTaskManifest(
+      {
+        ...base,
+        ...updates,
+        autoExportCompletedAt: updates.autoExportCompletedAt ?? base.autoExportCompletedAt,
+        exportedFiles:
+          updates.exportedFiles ?? (hasJobExportedFiles ? base.exportedFiles : base.exportedFiles),
+        scriptSnapshot: updates.scriptSnapshot ?? base.scriptSnapshot ?? null,
+        rawResultsFile: updates.rawResultsFile ?? base.rawResultsFile ?? null,
+        meshArtifactFile: updates.meshArtifactFile ?? base.meshArtifactFile ?? null,
+        updatedAt: nowIso(),
+      },
+      { id: jobId, label: job?.label }
+    );
 
     const manifest = next;
     const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
@@ -281,14 +283,17 @@ export async function updateTaskManifestForJob(rootDirectoryHandle, job, updates
       directoryName: preferredDirectoryName,
       manifest,
       scriptSnapshotFileName: snapshotResult.fileName,
-      fallbackWriteFile
+      fallbackWriteFile,
     });
 
     return {
       manifest,
-      warning: combineWarnings(snapshotResult.warning, projectWarning)
+      warning: combineWarnings(snapshotResult.warning, projectWarning),
     };
   } catch (error) {
-    return { manifest: null, warning: `Task manifest update failed: ${error?.message || 'unknown error'}` };
+    return {
+      manifest: null,
+      warning: `Task manifest update failed: ${error?.message || 'unknown error'}`,
+    };
   }
 }
