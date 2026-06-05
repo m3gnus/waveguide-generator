@@ -1,20 +1,20 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import fs from "node:fs";
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
-import { normalizeParamInput } from "../src/ui/paramInput.js";
+import { normalizeParamInput } from '../src/ui/paramInput.js';
 import {
   formatJobSummary,
   renderSimulationMeshDiagnostics,
-} from "../src/ui/simulation/jobActions.js";
-import { renderSolveStatsSummary } from "../src/ui/simulation/results.js";
-import { validateSimulationConfig } from "../src/modules/simulation/domain.js";
-import { applyExportSelection } from "../src/ui/simulation/exports.js";
+} from '../src/ui/simulation/jobActions.js';
+import { renderSolveStatsSummary } from '../src/ui/simulation/results.js';
+import { validateSimulationConfig } from '../src/modules/simulation/domain.js';
+import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
   deriveExportFieldsFromFileName,
   markParametersChanged,
   resetParameterChangeTracking,
-} from "../src/ui/fileOps.js";
+} from '../src/ui/fileOps.js';
 import {
   SETTINGS_CONTROL_IDS,
   getLiveUpdateEnabled,
@@ -22,103 +22,73 @@ import {
   setDisplayMode,
   getDownloadSimMeshEnabled,
   openSettingsModal,
-} from "../src/ui/settings/modal.js";
+} from '../src/ui/settings/modal.js';
 import {
   describeSimBasicDeviceAvailability,
   describeSelectedDevice,
   getDependencyStatusSummary,
   getFeatureBlockedReason as getLegacyRuntimeFeatureBlockedReason,
   summarizeRuntimeCapabilities,
-} from "../src/ui/runtimeCapabilities.js";
+} from '../src/ui/runtimeCapabilities.js';
 import {
   createDependencyStatusPanel,
   getFeatureBlockedReason,
-} from "../src/ui/dependencyStatus.js";
-import { formatDependencyBlockMessage } from "../src/modules/runtime/health.js";
-import { buildRequiredDependencyWarning } from "../src/ui/simulation/connection.js";
+} from '../src/ui/dependencyStatus.js';
+import { formatDependencyBlockMessage } from '../src/modules/runtime/health.js';
+import { buildRequiredDependencyWarning } from '../src/ui/simulation/connection.js';
 import {
   RECOMMENDED_DEFAULTS,
   resetAllViewerSettings,
   saveViewerSettings,
-} from "../src/ui/settings/viewerSettings.js";
-import { PARAM_SCHEMA } from "../src/config/schema.js";
+} from '../src/ui/settings/viewerSettings.js';
+import { PARAM_SCHEMA } from '../src/config/schema.js';
 
-test("index.html places the output-folder action in the simulation jobs header", () => {
-  const html = fs.readFileSync(
-    new URL("../index.html", import.meta.url),
-    "utf8",
-  );
+test('index.html places the output-folder action in the simulation jobs header', () => {
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
   assert.match(
     html,
-    /<div class="simulation-jobs-header-actions">[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"/,
+    /<div class="simulation-jobs-header-actions">[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"/
   );
   assert.doesNotMatch(html, /id="choose-folder-btn"/);
   assert.doesNotMatch(html, /id="simulation-jobs-source-label"/);
   assert.doesNotMatch(html, /id="output-folder-row"/);
 });
 
-test("normalizeParamInput parses numeric literals consistently", () => {
-  assert.equal(normalizeParamInput("1.0"), 1);
-  assert.equal(normalizeParamInput(" 1e3 "), 1000);
-  assert.equal(normalizeParamInput("-0.25"), -0.25);
-  assert.equal(normalizeParamInput("45 + 10*cos(p)"), "45 + 10*cos(p)");
-  assert.equal(normalizeParamInput("2+3"), "2+3");
+test('normalizeParamInput parses numeric literals consistently', () => {
+  assert.equal(normalizeParamInput('1.0'), 1);
+  assert.equal(normalizeParamInput(' 1e3 '), 1000);
+  assert.equal(normalizeParamInput('-0.25'), -0.25);
+  assert.equal(normalizeParamInput('45 + 10*cos(p)'), '45 + 10*cos(p)');
+  assert.equal(normalizeParamInput('2+3'), '2+3');
 });
 
-test("mesh control labels separate surface sampling from solve mesh sizing", () => {
-  assert.equal(
-    PARAM_SCHEMA.MESH.angularSegments.label,
-    "Surface Angular Samples",
-  );
-  assert.equal(
-    PARAM_SCHEMA.MESH.lengthSegments.label,
-    "Surface Length Samples",
-  );
-  assert.equal(
-    PARAM_SCHEMA.MESH.throatResolution.label,
-    "Throat Mesh Resolution",
-  );
-  assert.equal(
-    PARAM_SCHEMA.MESH.mouthResolution.label,
-    "Mouth Mesh Resolution",
-  );
-  assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, "Rear Mesh Resolution");
-  assert.equal(
-    PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label,
-    "Front Baffle Mesh Resolution",
-  );
-  assert.equal(
-    PARAM_SCHEMA.ENCLOSURE.encBackResolution.label,
-    "Rear Baffle Mesh Resolution",
-  );
-  assert.match(
-    PARAM_SCHEMA.MESH.angularSegments.tooltip,
-    /HornLab mesher Gmsh tessellation/i,
-  );
-  assert.match(
-    PARAM_SCHEMA.MESH.throatResolution.tooltip,
-    /HornLab mesher solve\/export/i,
-  );
-  assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.label, "Sweep Start");
-  assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.label, "Sweep End");
-  assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.controlId, "freq-start");
-  assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.controlId, "freq-end");
-  assert.equal(PARAM_SCHEMA.SIMULATION.numFreqs.controlId, "freq-steps");
-  assert.match(
-    PARAM_SCHEMA.SIMULATION.numFreqs.tooltip,
-    /number of solved frequencies/i,
-  );
+test('mesh control labels separate surface sampling from solve mesh sizing', () => {
+  assert.equal(PARAM_SCHEMA.MESH.angularSegments.label, 'Surface Angular Samples');
+  assert.equal(PARAM_SCHEMA.MESH.lengthSegments.label, 'Surface Length Samples');
+  assert.equal(PARAM_SCHEMA.MESH.throatResolution.label, 'Throat Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.mouthResolution.label, 'Mouth Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, 'Rear Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label, 'Front Baffle Mesh Resolution');
+  assert.equal(PARAM_SCHEMA.ENCLOSURE.encBackResolution.label, 'Rear Baffle Mesh Resolution');
+  assert.match(PARAM_SCHEMA.MESH.angularSegments.tooltip, /HornLab mesher Gmsh tessellation/i);
+  assert.match(PARAM_SCHEMA.MESH.throatResolution.tooltip, /HornLab mesher solve\/export/i);
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.label, 'Sweep Start');
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.label, 'Sweep End');
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.controlId, 'freq-start');
+  assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.controlId, 'freq-end');
+  assert.equal(PARAM_SCHEMA.SIMULATION.numFreqs.controlId, 'freq-steps');
+  assert.match(PARAM_SCHEMA.SIMULATION.numFreqs.tooltip, /number of solved frequencies/i);
 });
 
-test("validateSimulationConfig catches invalid ranges and counts", () => {
+test('validateSimulationConfig catches invalid ranges and counts', () => {
   assert.match(
     validateSimulationConfig({
       frequencyStart: 1000,
       frequencyEnd: 100,
       numFrequencies: 50,
     }),
-    /Start frequency/,
+    /Start frequency/
   );
 
   assert.match(
@@ -127,7 +97,7 @@ test("validateSimulationConfig catches invalid ranges and counts", () => {
       frequencyEnd: 1000,
       numFrequencies: 0,
     }),
-    /Number of frequencies/,
+    /Number of frequencies/
   );
 
   assert.equal(
@@ -136,29 +106,29 @@ test("validateSimulationConfig catches invalid ranges and counts", () => {
       frequencyEnd: 1000,
       numFrequencies: 50,
     }),
-    null,
+    null
   );
 });
 
-test("formatJobSummary appends complete duration in m:ss", () => {
+test('formatJobSummary appends complete duration in m:ss', () => {
   const summary = formatJobSummary({
-    status: "complete",
-    startedAt: "2026-02-24T12:00:00.000Z",
-    completedAt: "2026-02-24T12:02:53.000Z",
+    status: 'complete',
+    startedAt: '2026-02-24T12:00:00.000Z',
+    completedAt: '2026-02-24T12:02:53.000Z',
   });
-  assert.equal(summary, "Complete (2:53)");
+  assert.equal(summary, 'Complete (2:53)');
 });
 
-test("formatJobSummary appends complete duration in h:mm:ss", () => {
+test('formatJobSummary appends complete duration in h:mm:ss', () => {
   const summary = formatJobSummary({
-    status: "complete",
-    startedAt: "2026-02-24T12:00:00.000Z",
-    completedAt: "2026-02-24T13:04:32.000Z",
+    status: 'complete',
+    startedAt: '2026-02-24T12:00:00.000Z',
+    completedAt: '2026-02-24T13:04:32.000Z',
   });
-  assert.equal(summary, "Complete (1:04:32)");
+  assert.equal(summary, 'Complete (1:04:32)');
 });
 
-test("renderSolveStatsSummary includes persisted job completion timestamp", () => {
+test('renderSolveStatsSummary includes persisted job completion timestamp', () => {
   const markup = renderSolveStatsSummary(
     {
       frequencies: [100, 1000],
@@ -167,8 +137,8 @@ test("renderSolveStatsSummary includes persisted job completion timestamp", () =
       },
     },
     {
-      completedAt: "2026-03-19T08:45:00.000Z",
-    },
+      completedAt: '2026-03-19T08:45:00.000Z',
+    }
   );
 
   assert.match(markup, /Completed/);
@@ -176,7 +146,25 @@ test("renderSolveStatsSummary includes persisted job completion timestamp", () =
   assert.match(markup, /2026-03-19 \d{2}:45/);
 });
 
-test("renderSolveStatsSummary uses persisted directivity metadata for solve settings", () => {
+test('renderSolveStatsSummary includes mesh counts from result metadata', () => {
+  const markup = renderSolveStatsSummary({
+    frequencies: [100, 1000],
+    metadata: {
+      performance: { total_time_seconds: 12.4 },
+      mesh_stats: {
+        vertex_count: 144,
+        triangle_count: 72,
+      },
+    },
+  });
+
+  assert.match(markup, /Vertices/);
+  assert.match(markup, /144/);
+  assert.match(markup, /Triangles/);
+  assert.match(markup, /72/);
+});
+
+test('renderSolveStatsSummary uses persisted directivity metadata for solve settings', () => {
   const markup = renderSolveStatsSummary(
     {
       frequencies: [100, 1000],
@@ -190,10 +178,10 @@ test("renderSolveStatsSummary uses persisted directivity metadata for solve sett
           angle_range_degrees: [0, 90],
           sample_count: 10,
           angular_step_degrees: 10,
-          enabled_axes: ["horizontal", "diagonal"],
+          enabled_axes: ['horizontal', 'diagonal'],
           normalization_angle_degrees: 7.5,
           diagonal_angle_degrees: 35,
-          observation_origin: "throat",
+          observation_origin: 'throat',
           requested_distance_m: 1.0,
           effective_distance_m: 1.75,
         },
@@ -201,9 +189,9 @@ test("renderSolveStatsSummary uses persisted directivity metadata for solve sett
     },
     {
       configSummary: {
-        observation_origin: "mouth",
+        observation_origin: 'mouth',
       },
-    },
+    }
   );
 
   assert.match(markup, /Observation/);
@@ -221,11 +209,11 @@ test("renderSolveStatsSummary uses persisted directivity metadata for solve sett
   assert.match(markup, /35°/);
 });
 
-test("describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes", () => {
+test('describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes', () => {
   const summary = describeSimBasicDeviceAvailability(
     {
       deviceInterface: {
-        selected_mode: "opencl_gpu",
+        selected_mode: 'opencl_gpu',
         mode_availability: {
           auto: { available: true },
           opencl_gpu: { available: true },
@@ -233,14 +221,14 @@ test("describeSimBasicDeviceAvailability reports selected auto mode and unavaila
         },
       },
     },
-    "auto",
+    'auto'
   );
 
-  assert.deepEqual(summary.unavailableModes, ["opencl_cpu"]);
-  assert.equal(summary.statusText, "Auto resolves to: OpenCL GPU");
+  assert.deepEqual(summary.unavailableModes, ['opencl_cpu']);
+  assert.equal(summary.statusText, 'Auto resolves to: OpenCL GPU');
 });
 
-test("describeSimBasicDeviceAvailability reports requested unavailable mode explicitly", () => {
+test('describeSimBasicDeviceAvailability reports requested unavailable mode explicitly', () => {
   const summary = describeSimBasicDeviceAvailability(
     {
       deviceInterface: {
@@ -251,24 +239,24 @@ test("describeSimBasicDeviceAvailability reports requested unavailable mode expl
         },
       },
     },
-    "opencl_gpu",
+    'opencl_gpu'
   );
 
-  assert.deepEqual(summary.unavailableModes, ["opencl_gpu"]);
-  assert.equal(summary.statusText, "OpenCL GPU unavailable on this machine.");
+  assert.deepEqual(summary.unavailableModes, ['opencl_gpu']);
+  assert.equal(summary.statusText, 'OpenCL GPU unavailable on this machine.');
 });
 
-test("summarizeRuntimeCapabilities reports advanced controls unavailable until backend advertises support", () => {
+test('summarizeRuntimeCapabilities reports advanced controls unavailable until backend advertises support', () => {
   const summary = summarizeRuntimeCapabilities({
     solverReady: true,
     mesherReady: true,
     capabilities: {
       simulationAdvanced: {
         available: true,
-        controls: ["use_burton_miller"],
+        controls: ['use_burton_miller'],
         reason:
-          "The public solve contract now exposes Burton-Miller coupling as the stable advanced override.",
-        plannedControls: ["method"],
+          'The public solve contract now exposes Burton-Miller coupling as the stable advanced override.',
+        plannedControls: ['method'],
       },
     },
   });
@@ -279,20 +267,20 @@ test("summarizeRuntimeCapabilities reports advanced controls unavailable until b
   assert.equal(summary.simulationAdvanced.available, true);
   assert.equal(
     summary.simulationAdvanced.reason,
-    "The public solve contract now exposes Burton-Miller coupling as the stable advanced override.",
+    'The public solve contract now exposes Burton-Miller coupling as the stable advanced override.'
   );
-  assert.deepEqual(summary.simulationAdvanced.controls, ["use_burton_miller"]);
-  assert.deepEqual(summary.simulationAdvanced.plannedControls, ["method"]);
+  assert.deepEqual(summary.simulationAdvanced.controls, ['use_burton_miller']);
+  assert.deepEqual(summary.simulationAdvanced.plannedControls, ['method']);
 });
 
-test("legacy dependency summary blocks mesh builds when HornLab mesher package is missing", () => {
+test('legacy dependency summary blocks mesh builds when HornLab mesher package is missing', () => {
   const health = {
     dependencies: {
       runtime: {
-        python: { version: "3.13.1", supported: true },
+        python: { version: '3.13.1', supported: true },
         gmsh_python: {
           available: true,
-          version: "4.15.0",
+          version: '4.15.0',
           supported: true,
           ready: true,
         },
@@ -310,54 +298,51 @@ test("legacy dependency summary blocks mesh builds when HornLab mesher package i
   const summary = getDependencyStatusSummary(health);
   assert.equal(summary.gmsh.ready, true);
   assert.equal(summary.hornlabMesher.ready, false);
-  assert.equal(summary.hornlabMesher.name, "HornLab waveguide mesher");
+  assert.equal(summary.hornlabMesher.name, 'HornLab waveguide mesher');
 
-  const reason = getLegacyRuntimeFeatureBlockedReason(
-    health,
-    "hornlab-mesher-mesh",
-  );
+  const reason = getLegacyRuntimeFeatureBlockedReason(health, 'hornlab-mesher-mesh');
   assert.match(reason, /Install backend requirements/);
 });
 
-test("describeSelectedDevice includes device name only when it adds signal", () => {
+test('describeSelectedDevice includes device name only when it adds signal', () => {
   assert.equal(
     describeSelectedDevice({
-      solver: "metal-bem",
+      solver: 'metal-bem',
       deviceInterface: {
-        selected_mode: "opencl_cpu",
-        device_name: "CPU",
+        selected_mode: 'opencl_cpu',
+        device_name: 'CPU',
       },
     }),
-    "Using: Metal BEM",
+    'Using: Metal BEM'
   );
 
   assert.equal(
     describeSelectedDevice({
       deviceInterface: {
-        selected_mode: "opencl_gpu",
-        device_name: "Fake GPU",
+        selected_mode: 'opencl_gpu',
+        device_name: 'Fake GPU',
       },
     }),
-    "Using: OpenCL GPU (Fake GPU)",
+    'Using: OpenCL GPU (Fake GPU)'
   );
 
   assert.equal(
     describeSelectedDevice({
       deviceInterface: {
-        selected_mode: "opencl_cpu",
-        device_name: "CPU",
+        selected_mode: 'opencl_cpu',
+        device_name: 'CPU',
       },
     }),
-    "Using: OpenCL CPU",
+    'Using: OpenCL CPU'
   );
 });
 
-test("renderSimulationMeshDiagnostics shows canonical tag counts and warnings", () => {
+test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', () => {
   const originalDocument = global.document;
-  const diagnosticsEl = { innerHTML: "" };
+  const diagnosticsEl = { innerHTML: '' };
   global.document = {
     getElementById(id) {
-      return id === "simulation-mesh-diagnostics" ? diagnosticsEl : null;
+      return id === 'simulation-mesh-diagnostics' ? diagnosticsEl : null;
     },
   };
 
@@ -379,10 +364,8 @@ test("renderSimulationMeshDiagnostics shows canonical tag counts and warnings", 
         enc_edge: 0,
       },
       tagCounts: { 1: 2, 2: 0, 3: 1, 4: 1 },
-      warnings: [
-        "Source surface tag (2) missing from the canonical simulation mesh.",
-      ],
-      provenance: "preview",
+      warnings: ['Source surface tag (2) missing from the canonical simulation mesh.'],
+      provenance: 'preview',
     });
 
     assert.match(diagnosticsEl.innerHTML, /12 verts/);
@@ -394,19 +377,19 @@ test("renderSimulationMeshDiagnostics shows canonical tag counts and warnings", 
     assert.doesNotMatch(diagnosticsEl.innerHTML, /Source \(2\)/);
     assert.match(
       diagnosticsEl.innerHTML,
-      /Throat Disc is present, but it is not classified as the source region/i,
+      /Throat Disc is present, but it is not classified as the source region/i
     );
   } finally {
     global.document = originalDocument;
   }
 });
 
-test("renderSimulationMeshDiagnostics shows authoritative backend mesh provenance when mesh stats are authoritative", () => {
+test('renderSimulationMeshDiagnostics shows authoritative backend mesh provenance when mesh stats are authoritative', () => {
   const originalDocument = global.document;
-  const diagnosticsEl = { innerHTML: "" };
+  const diagnosticsEl = { innerHTML: '' };
   global.document = {
     getElementById(id) {
-      return id === "simulation-mesh-diagnostics" ? diagnosticsEl : null;
+      return id === 'simulation-mesh-diagnostics' ? diagnosticsEl : null;
     },
   };
 
@@ -429,7 +412,7 @@ test("renderSimulationMeshDiagnostics shows authoritative backend mesh provenanc
       },
       tagCounts: { 1: 5, 2: 1, 3: 0, 4: 0 },
       warnings: [],
-      provenance: "backend",
+      provenance: 'backend',
     });
 
     assert.match(diagnosticsEl.innerHTML, /Solver Geometry/);
@@ -441,99 +424,99 @@ test("renderSimulationMeshDiagnostics shows authoritative backend mesh provenanc
   }
 });
 
-test("formatJobSummary falls back to Complete when duration is unavailable", () => {
+test('formatJobSummary falls back to Complete when duration is unavailable', () => {
   const summary = formatJobSummary({
-    status: "complete",
-    startedAt: "not-a-date",
+    status: 'complete',
+    startedAt: 'not-a-date',
     completedAt: null,
   });
-  assert.equal(summary, "Complete");
+  assert.equal(summary, 'Complete');
 });
 
-test("applyExportSelection routes to expected handler", () => {
+test('applyExportSelection routes to expected handler', () => {
   const calls = [];
   const originalError = console.error;
   console.error = () => {};
 
   const handlers = {
-    1: () => calls.push("image"),
-    2: () => calls.push("csv"),
-    3: () => calls.push("json"),
-    4: () => calls.push("text"),
+    1: () => calls.push('image'),
+    2: () => calls.push('csv'),
+    3: () => calls.push('json'),
+    4: () => calls.push('text'),
   };
 
   try {
-    assert.equal(applyExportSelection({}, "2", handlers), true);
-    assert.deepEqual(calls, ["csv"]);
+    assert.equal(applyExportSelection({}, '2', handlers), true);
+    assert.deepEqual(calls, ['csv']);
 
-    assert.equal(applyExportSelection({}, "9", handlers), false);
-    assert.deepEqual(calls, ["csv"]);
+    assert.equal(applyExportSelection({}, '9', handlers), false);
+    assert.deepEqual(calls, ['csv']);
   } finally {
     console.error = originalError;
   }
 });
 
-test("applyExportSelection includes VACS spectrum option 7", () => {
+test('applyExportSelection includes VACS spectrum option 7', () => {
   const calls = [];
   const handlers = {
-    1: () => calls.push("image"),
-    2: () => calls.push("csv"),
-    3: () => calls.push("json"),
-    4: () => calls.push("text"),
-    5: () => calls.push("polar"),
-    6: () => calls.push("impedance"),
-    7: () => calls.push("vacs"),
+    1: () => calls.push('image'),
+    2: () => calls.push('csv'),
+    3: () => calls.push('json'),
+    4: () => calls.push('text'),
+    5: () => calls.push('polar'),
+    6: () => calls.push('impedance'),
+    7: () => calls.push('vacs'),
   };
 
-  assert.equal(applyExportSelection({}, "7", handlers), true);
-  assert.deepEqual(calls, ["vacs"]);
+  assert.equal(applyExportSelection({}, '7', handlers), true);
+  assert.deepEqual(calls, ['vacs']);
 });
 
-test("applyExportSelection includes CAD exports options 8 and 9", () => {
+test('applyExportSelection includes CAD exports options 8 and 9', () => {
   const calls = [];
   const handlers = {
-    8: () => calls.push("stl"),
-    9: () => calls.push("fusion-csv"),
+    8: () => calls.push('stl'),
+    9: () => calls.push('fusion-csv'),
   };
 
-  assert.equal(applyExportSelection({}, "8", handlers), true);
-  assert.equal(applyExportSelection({}, "9", handlers), true);
-  assert.deepEqual(calls, ["stl", "fusion-csv"]);
+  assert.equal(applyExportSelection({}, '8', handlers), true);
+  assert.equal(applyExportSelection({}, '9', handlers), true);
+  assert.deepEqual(calls, ['stl', 'fusion-csv']);
 });
 
-test("deriveExportFieldsFromFileName parses output name and counter from file names", () => {
-  assert.deepEqual(deriveExportFieldsFromFileName("horn.cfg"), {
-    outputName: "horn",
+test('deriveExportFieldsFromFileName parses output name and counter from file names', () => {
+  assert.deepEqual(deriveExportFieldsFromFileName('horn.cfg'), {
+    outputName: 'horn',
     counter: 1,
   });
-  assert.deepEqual(deriveExportFieldsFromFileName("horn_design_12.cfg"), {
-    outputName: "horn_design",
+  assert.deepEqual(deriveExportFieldsFromFileName('horn_design_12.cfg'), {
+    outputName: 'horn_design',
     counter: 12,
   });
-  assert.deepEqual(deriveExportFieldsFromFileName("horn_design_0.cfg"), {
-    outputName: "horn_design_0",
+  assert.deepEqual(deriveExportFieldsFromFileName('horn_design_0.cfg'), {
+    outputName: 'horn_design_0',
     counter: 1,
   });
-  assert.deepEqual(deriveExportFieldsFromFileName("my file name_3.txt"), {
-    outputName: "my file name",
+  assert.deepEqual(deriveExportFieldsFromFileName('my file name_3.txt'), {
+    outputName: 'my file name',
     counter: 3,
   });
-  assert.deepEqual(deriveExportFieldsFromFileName("260219superhorn35.cfg"), {
-    outputName: "260219superhorn",
+  assert.deepEqual(deriveExportFieldsFromFileName('260219superhorn35.cfg'), {
+    outputName: '260219superhorn',
     counter: 35,
   });
-  assert.deepEqual(deriveExportFieldsFromFileName("   "), {
-    outputName: "horn_design",
+  assert.deepEqual(deriveExportFieldsFromFileName('   '), {
+    outputName: 'horn_design',
     counter: 1,
   });
 });
 
-test("markParametersChanged increments counter once per change cycle and skips import baseline update", () => {
+test('markParametersChanged increments counter once per change cycle and skips import baseline update', () => {
   const originalDocument = global.document;
-  const counterEl = { value: "35" };
+  const counterEl = { value: '35' };
   global.document = {
     getElementById(id) {
-      if (id === "export-counter") return counterEl;
+      if (id === 'export-counter') return counterEl;
       return null;
     },
   };
@@ -541,17 +524,17 @@ test("markParametersChanged increments counter once per change cycle and skips i
   try {
     resetParameterChangeTracking({ skipNext: true });
     markParametersChanged();
-    assert.equal(counterEl.value, "35");
+    assert.equal(counterEl.value, '35');
 
     markParametersChanged();
-    assert.equal(counterEl.value, "36");
+    assert.equal(counterEl.value, '36');
 
     markParametersChanged();
-    assert.equal(counterEl.value, "36");
+    assert.equal(counterEl.value, '36');
 
     resetParameterChangeTracking();
     markParametersChanged();
-    assert.equal(counterEl.value, "37");
+    assert.equal(counterEl.value, '37');
   } finally {
     global.document = originalDocument;
     resetParameterChangeTracking();
@@ -560,15 +543,15 @@ test("markParametersChanged increments counter once per change cycle and skips i
 
 // --- Phase 1 migration regression tests: Settings modal entry ---
 
-test("SETTINGS_CONTROL_IDS maps all migrated controls to their element IDs", () => {
+test('SETTINGS_CONTROL_IDS maps all migrated controls to their element IDs', () => {
   // Verifies the canonical ID map exists so consumers can reference controls
   // that now live inside the dynamically-created settings modal.
-  assert.equal(SETTINGS_CONTROL_IDS.liveUpdate, "live-update");
-  assert.equal(SETTINGS_CONTROL_IDS.downloadSimMesh, "download-sim-mesh");
-  assert.equal(SETTINGS_CONTROL_IDS.checkUpdates, "check-updates-btn");
+  assert.equal(SETTINGS_CONTROL_IDS.liveUpdate, 'live-update');
+  assert.equal(SETTINGS_CONTROL_IDS.downloadSimMesh, 'download-sim-mesh');
+  assert.equal(SETTINGS_CONTROL_IDS.checkUpdates, 'check-updates-btn');
 });
 
-test("settings getters return in-memory defaults when modal is not open", () => {
+test('settings getters return in-memory defaults when modal is not open', () => {
   // When the modal is closed there are no DOM elements for these controls.
   // Getters must return stored defaults rather than null/undefined.
   const originalDocument = global.document;
@@ -578,7 +561,7 @@ test("settings getters return in-memory defaults when modal is not open", () => 
     // Default: live-update = true
     assert.equal(getLiveUpdateEnabled(), true);
     // Default: display-mode = clay
-    assert.equal(getDisplayMode(), "clay");
+    assert.equal(getDisplayMode(), 'clay');
     // Default: download-sim-mesh = false
     assert.equal(getDownloadSimMeshEnabled(), false);
   } finally {
@@ -586,7 +569,7 @@ test("settings getters return in-memory defaults when modal is not open", () => 
   }
 });
 
-test("settings getters read DOM values when elements are present", () => {
+test('settings getters read DOM values when elements are present', () => {
   const originalDocument = global.document;
 
   const liveUpdateEl = { checked: false };
@@ -594,8 +577,8 @@ test("settings getters read DOM values when elements are present", () => {
 
   global.document = {
     getElementById(id) {
-      if (id === "live-update") return liveUpdateEl;
-      if (id === "download-sim-mesh") return downloadMeshEl;
+      if (id === 'live-update') return liveUpdateEl;
+      if (id === 'download-sim-mesh') return downloadMeshEl;
       return null;
     },
   };
@@ -603,16 +586,16 @@ test("settings getters read DOM values when elements are present", () => {
   try {
     assert.equal(getLiveUpdateEnabled(), false);
     // display mode is now managed via setDisplayMode, not DOM
-    setDisplayMode("zebra");
-    assert.equal(getDisplayMode(), "zebra");
-    setDisplayMode("clay"); // restore default
+    setDisplayMode('zebra');
+    assert.equal(getDisplayMode(), 'zebra');
+    setDisplayMode('clay'); // restore default
     assert.equal(getDownloadSimMeshEnabled(), true);
   } finally {
     global.document = originalDocument;
   }
 });
 
-test("openSettingsModal creates the grouped settings sections and workspace action", () => {
+test('openSettingsModal creates the grouped settings sections and workspace action', () => {
   // Minimal DOM environment for on-demand modal construction.
   const originalDocument = global.document;
   const originalWindow = global.window;
@@ -629,13 +612,13 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
         _children: [],
         _attrs: {},
         _eventListeners: {},
-        id: "",
-        className: "",
-        textContent: "",
-        innerHTML: "",
+        id: '',
+        className: '',
+        textContent: '',
+        innerHTML: '',
         hidden: false,
-        type: "",
-        title: "",
+        type: '',
+        title: '',
         style: {},
         dataset: {},
         setAttribute(k, v) {
@@ -659,16 +642,16 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
             if (!node || !node._children) return;
             for (const child of node._children) {
               if (
-                selector === ".settings-nav-btn" &&
+                selector === '.settings-nav-btn' &&
                 child.className &&
-                child.className.includes("settings-nav-btn")
+                child.className.includes('settings-nav-btn')
               ) {
                 results.push(child);
               }
               if (
-                selector === ".settings-section" &&
+                selector === '.settings-section' &&
                 child.className &&
-                child.className.includes("settings-section")
+                child.className.includes('settings-section')
               ) {
                 results.push(child);
               }
@@ -683,8 +666,7 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
             const walk = (node) => {
               if (!node || !node._children) return null;
               for (const child of node._children) {
-                if (child._attrs && child._attrs["role"] === "dialog")
-                  return child;
+                if (child._attrs && child._attrs['role'] === 'dialog') return child;
                 const found = walk(child);
                 if (found) return found;
               }
@@ -728,66 +710,62 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
     openSettingsModal();
 
     // The backdrop div should have been appended to body
-    assert.equal(
-      appendedChildren.length,
-      1,
-      "One element should be appended to body",
-    );
+    assert.equal(appendedChildren.length, 1, 'One element should be appended to body');
 
     // Collect all textContent values from created elements to find section headings
     const allText = createdElements.map((el) => el.textContent).filter(Boolean);
 
     // The grouped settings sections must be present in the modal nav/content.
     assert.ok(
-      allText.some((t) => t === "Viewer"),
-      "Viewer section must be present",
+      allText.some((t) => t === 'Viewer'),
+      'Viewer section must be present'
     );
     assert.ok(
-      allText.some((t) => t === "Simulation"),
-      "Simulation section must be present",
+      allText.some((t) => t === 'Simulation'),
+      'Simulation section must be present'
     );
     assert.ok(
-      allText.some((t) => t === "Task Exports"),
-      "Task Exports section must be present",
+      allText.some((t) => t === 'Task Exports'),
+      'Task Exports section must be present'
     );
     assert.ok(
-      allText.some((t) => t === "Workspace"),
-      "Workspace section must be present",
+      allText.some((t) => t === 'Workspace'),
+      'Workspace section must be present'
     );
     assert.ok(
-      allText.some((t) => t === "System"),
-      "System section must be present",
+      allText.some((t) => t === 'System'),
+      'System section must be present'
     );
     assert.ok(
-      createdElements.some((el) => el.id === "simmanage-default-sort"),
-      "Task Exports should expose a default task sort control",
+      createdElements.some((el) => el.id === 'simmanage-default-sort'),
+      'Task Exports should expose a default task sort control'
     );
     assert.ok(
-      createdElements.some((el) => el.id === "simmanage-min-rating"),
-      "Task Exports should expose a minimum rating filter control",
+      createdElements.some((el) => el.id === 'simmanage-min-rating'),
+      'Task Exports should expose a minimum rating filter control'
     );
     assert.ok(
-      createdElements.some((el) => el.id === "settings-choose-folder-btn"),
-      "Workspace section should expose a folder selection action",
+      createdElements.some((el) => el.id === 'settings-choose-folder-btn'),
+      'Workspace section should expose a folder selection action'
     );
     assert.equal(
-      createdElements.some((el) => el.id === "simadvanced-enableWarmup"),
+      createdElements.some((el) => el.id === 'simadvanced-enableWarmup'),
       false,
-      "Simulation section should not expose the warm-up advanced control",
+      'Simulation section should not expose the warm-up advanced control'
     );
     assert.equal(
-      createdElements.some((el) => el.id === "simadvanced-bemPrecision"),
+      createdElements.some((el) => el.id === 'simadvanced-bemPrecision'),
       false,
-      "Simulation section should not expose the BEM precision advanced control",
+      'Simulation section should not expose the BEM precision advanced control'
     );
     assert.equal(
-      createdElements.some((el) => el.id === "simbasic-deviceMode"),
+      createdElements.some((el) => el.id === 'simbasic-deviceMode'),
       false,
-      "Simulation section should not expose the compute-device selector",
+      'Simulation section should not expose the compute-device selector'
     );
     assert.ok(
-      createdElements.some((el) => el.id === "simadvanced-useBurtonMiller"),
-      "Simulation section should expose the Burton-Miller advanced control",
+      createdElements.some((el) => el.id === 'simadvanced-useBurtonMiller'),
+      'Simulation section should expose the Burton-Miller advanced control'
     );
     // No additional advanced controls should be rendered beyond the supported
     // Burton-Miller override.
@@ -797,7 +775,7 @@ test("openSettingsModal creates the grouped settings sections and workspace acti
   }
 });
 
-test("openSettingsModal places check-updates-btn inside the modal, not in the actions panel", () => {
+test('openSettingsModal places check-updates-btn inside the modal, not in the actions panel', () => {
   // Regression: check-updates-btn must only exist inside the dynamically-created
   // settings modal. If it were found in the static DOM at startup (via getElementById
   // before modal open), the binding in events.js would attach the old direct handler
@@ -817,13 +795,13 @@ test("openSettingsModal places check-updates-btn inside the modal, not in the ac
         _children: [],
         _attrs: {},
         _eventListeners: {},
-        id: "",
-        className: "",
-        textContent: "",
-        innerHTML: "",
+        id: '',
+        className: '',
+        textContent: '',
+        innerHTML: '',
         hidden: false,
-        type: "",
-        title: "",
+        type: '',
+        title: '',
         style: {},
         dataset: {},
         setAttribute(k, v) {
@@ -871,21 +849,15 @@ test("openSettingsModal places check-updates-btn inside the modal, not in the ac
     openSettingsModal();
 
     // check-updates-btn must be created inside the modal (within the appended backdrop)
-    const updateBtnElements = createdElements.filter(
-      (el) => el.id === "check-updates-btn",
-    );
-    assert.equal(
-      updateBtnElements.length,
-      1,
-      "Exactly one check-updates-btn should be created",
-    );
+    const updateBtnElements = createdElements.filter((el) => el.id === 'check-updates-btn');
+    assert.equal(updateBtnElements.length, 1, 'Exactly one check-updates-btn should be created');
 
     // Verify it is NOT directly in the static DOM (getElementById returns null before modal open)
-    const staticBtn = global.document.getElementById("check-updates-btn");
+    const staticBtn = global.document.getElementById('check-updates-btn');
     assert.equal(
       staticBtn,
       null,
-      "check-updates-btn should not exist in static DOM before modal is opened",
+      'check-updates-btn should not exist in static DOM before modal is opened'
     );
   } finally {
     global.document = originalDocument;
@@ -893,7 +865,7 @@ test("openSettingsModal places check-updates-btn inside the modal, not in the ac
   }
 });
 
-test("openSettingsModal shows workspace section with backend routing and enabled choose button", () => {
+test('openSettingsModal shows workspace section with backend routing and enabled choose button', () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
 
@@ -901,24 +873,17 @@ test("openSettingsModal shows workspace section with backend routing and enabled
   const createdElements = [];
 
   global.window = { addEventListener: () => {}, removeEventListener: () => {} };
-  global.document = createSettingsModalDocument(
-    createdElements,
-    appendedChildren,
-  );
+  global.document = createSettingsModalDocument(createdElements, appendedChildren);
 
   try {
     openSettingsModal();
 
-    const routingNote = createdElements.find(
-      (el) => el.id === "settings-workspace-routing",
-    );
-    const chooseBtn = createdElements.find(
-      (el) => el.id === "settings-choose-folder-btn",
-    );
+    const routingNote = createdElements.find((el) => el.id === 'settings-workspace-routing');
+    const chooseBtn = createdElements.find((el) => el.id === 'settings-choose-folder-btn');
 
     // All folder operations now go through the backend; the choose button
     // is always enabled and the routing note describes backend-based exports.
-    assert.ok(routingNote, "Workspace routing note should be rendered");
+    assert.ok(routingNote, 'Workspace routing note should be rendered');
     assert.match(routingNote.textContent, /folder/i);
     assert.equal(chooseBtn?.disabled, false);
   } finally {
@@ -936,21 +901,21 @@ function createSettingsModalDocument(createdElements, appendedChildren) {
         _children: [],
         _attrs: {},
         _eventListeners: {},
-        id: "",
-        className: "",
-        textContent: "",
-        innerHTML: "",
+        id: '',
+        className: '',
+        textContent: '',
+        innerHTML: '',
         hidden: false,
-        type: "",
-        title: "",
-        name: "",
-        value: "",
+        type: '',
+        title: '',
+        name: '',
+        value: '',
         checked: false,
         style: {},
         dataset: {},
-        min: "",
-        max: "",
-        step: "",
+        min: '',
+        max: '',
+        step: '',
         setAttribute(k, v) {
           this._attrs[k] = v;
         },
@@ -973,8 +938,7 @@ function createSettingsModalDocument(createdElements, appendedChildren) {
             const walk = (node) => {
               if (!node || !node._children) return null;
               for (const child of node._children) {
-                if (child._attrs && child._attrs.role === "dialog")
-                  return child;
+                if (child._attrs && child._attrs.role === 'dialog') return child;
                 const found = walk(child);
                 if (found) return found;
               }
@@ -1005,7 +969,7 @@ function createSettingsModalDocument(createdElements, appendedChildren) {
   };
 }
 
-test("recommended badges are visible when viewer values match defaults", () => {
+test('recommended badges are visible when viewer values match defaults', () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalLocalStorage = global.localStorage;
@@ -1026,20 +990,15 @@ test("recommended badges are visible when viewer values match defaults", () => {
     clear: () => Object.keys(store).forEach((key) => delete store[key]),
   };
   resetAllViewerSettings();
-  global.document = createSettingsModalDocument(
-    createdElements,
-    appendedChildren,
-  );
+  global.document = createSettingsModalDocument(createdElements, appendedChildren);
 
   try {
     openSettingsModal();
-    const badges = createdElements.filter(
-      (el) => el.className === "settings-recommended-badge",
-    );
-    assert.ok(badges.length > 0, "Expected recommended badges to be created");
+    const badges = createdElements.filter((el) => el.className === 'settings-recommended-badge');
+    assert.ok(badges.length > 0, 'Expected recommended badges to be created');
     assert.ok(
       badges.every((badge) => badge.hidden === false),
-      "All badges should be visible when values are recommended",
+      'All badges should be visible when values are recommended'
     );
   } finally {
     global.document = originalDocument;
@@ -1048,7 +1007,7 @@ test("recommended badges are visible when viewer values match defaults", () => {
   }
 });
 
-test("recommended badge hides when a viewer value differs from default", () => {
+test('recommended badge hides when a viewer value differs from default', () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalLocalStorage = global.localStorage;
@@ -1069,20 +1028,15 @@ test("recommended badge hides when a viewer value differs from default", () => {
     clear: () => Object.keys(store).forEach((key) => delete store[key]),
   };
   saveViewerSettings({ ...RECOMMENDED_DEFAULTS, rotateSpeed: 2.5 });
-  global.document = createSettingsModalDocument(
-    createdElements,
-    appendedChildren,
-  );
+  global.document = createSettingsModalDocument(createdElements, appendedChildren);
 
   try {
     openSettingsModal();
-    const badges = createdElements.filter(
-      (el) => el.className === "settings-recommended-badge",
-    );
-    assert.ok(badges.length > 0, "Expected recommended badges to be created");
+    const badges = createdElements.filter((el) => el.className === 'settings-recommended-badge');
+    assert.ok(badges.length > 0, 'Expected recommended badges to be created');
     assert.ok(
       badges.some((badge) => badge.hidden === true),
-      "At least one badge should hide for non-recommended values",
+      'At least one badge should hide for non-recommended values'
     );
   } finally {
     global.document = originalDocument;
@@ -1091,29 +1045,29 @@ test("recommended badge hides when a viewer value differs from default", () => {
   }
 });
 
-test("recommended badge rule remains stable for all default values", () => {
+test('recommended badge rule remains stable for all default values', () => {
   for (const key of Object.keys(RECOMMENDED_DEFAULTS)) {
     assert.equal(
       RECOMMENDED_DEFAULTS[key] !== RECOMMENDED_DEFAULTS[key],
       false,
-      `Expected default value for ${key} to match itself`,
+      `Expected default value for ${key} to match itself`
     );
   }
 });
 
-function createMockElement(tagName = "div") {
+function createMockElement(tagName = 'div') {
   const attributes = new Map();
   const listeners = new Map();
   const classes = new Set();
 
   const syncClassName = (element) => {
-    element.className = Array.from(classes).join(" ").trim();
+    element.className = Array.from(classes).join(' ').trim();
   };
 
   const element = {
     tagName: tagName.toUpperCase(),
-    className: "",
-    textContent: "",
+    className: '',
+    textContent: '',
     children: [],
     parentElement: null,
     appendChild(child) {
@@ -1138,17 +1092,17 @@ function createMockElement(tagName = "div") {
       listeners.set(type, handler);
     },
     click() {
-      listeners.get("click")?.({ currentTarget: this });
+      listeners.get('click')?.({ currentTarget: this });
     },
     querySelector(selector) {
-      if (!selector.startsWith(".")) {
+      if (!selector.startsWith('.')) {
         return null;
       }
       const className = selector.slice(1);
       const queue = [...this.children];
       while (queue.length > 0) {
         const next = queue.shift();
-        if ((next.className || "").split(/\s+/).includes(className)) {
+        if ((next.className || '').split(/\s+/).includes(className)) {
           return next;
         }
         queue.push(...(next.children || []));
@@ -1194,34 +1148,32 @@ function createMockElement(tagName = "div") {
 
 function collectNodeText(node) {
   return [
-    String(node?.textContent || ""),
+    String(node?.textContent || ''),
     ...(node?.children || []).map((child) => collectNodeText(child)),
   ]
-    .join(" ")
+    .join(' ')
     .trim();
 }
 
-test("formatDependencyBlockMessage includes feature impact and guidance for missing gmsh", () => {
+test('formatDependencyBlockMessage includes feature impact and guidance for missing gmsh', () => {
   const health = {
     dependencyDoctor: {
       components: [
         {
-          id: "gmsh_python",
-          name: "Gmsh Python API",
-          category: "required",
-          status: "missing",
-          featureImpact: "/api/mesh/build and backend meshing are unavailable.",
-          guidance: [
-            "Install gmsh package: pip install -r server/requirements-gmsh.txt",
-          ],
+          id: 'gmsh_python',
+          name: 'Gmsh Python API',
+          category: 'required',
+          status: 'missing',
+          featureImpact: '/api/mesh/build and backend meshing are unavailable.',
+          guidance: ['Install gmsh package: pip install -r server/requirements-gmsh.txt'],
         },
       ],
     },
   };
 
   const message = formatDependencyBlockMessage(health, {
-    features: ["meshBuild"],
-    fallback: "HornLab mesher export is unavailable.",
+    features: ['meshBuild'],
+    fallback: 'HornLab mesher export is unavailable.',
   });
 
   assert.match(message, /HornLab mesher export is unavailable/);
@@ -1230,18 +1182,18 @@ test("formatDependencyBlockMessage includes feature impact and guidance for miss
   assert.match(message, /Install gmsh package/);
 });
 
-test("formatDependencyBlockMessage does not include optional bounded solve validation in solve feature block", () => {
+test('formatDependencyBlockMessage does not include optional bounded solve validation in solve feature block', () => {
   const health = {
     dependencyDoctor: {
       components: [
         {
-          id: "bounded_solve_validation",
-          name: "Bounded solve validation",
-          category: "optional",
-          status: "missing",
-          featureImpact: "/api/solve readiness is unvalidated on this host/runtime.",
+          id: 'bounded_solve_validation',
+          name: 'Bounded solve validation',
+          category: 'optional',
+          status: 'missing',
+          featureImpact: '/api/solve readiness is unvalidated on this host/runtime.',
           guidance: [
-            "Run bounded solve validation: cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30",
+            'Run bounded solve validation: cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30',
           ],
         },
       ],
@@ -1249,94 +1201,93 @@ test("formatDependencyBlockMessage does not include optional bounded solve valid
   };
 
   const message = formatDependencyBlockMessage(health, {
-    features: ["solve"],
-    fallback: "Simulation is unavailable.",
+    features: ['solve'],
+    fallback: 'Simulation is unavailable.',
     includeOptional: false,
   });
 
-  assert.strictEqual(message, "Simulation is unavailable.");
+  assert.strictEqual(message, 'Simulation is unavailable.');
 });
 
-test("getFeatureBlockedReason ignores optional BEMPP path issues when solve has another ready backend", () => {
+test('getFeatureBlockedReason ignores optional BEMPP path issues when solve has another ready backend', () => {
   const reason = getFeatureBlockedReason(
     {
       dependencyDoctor: {
         components: [
           {
-            id: "bempp_cl",
-            name: "bempp-cl",
-            category: "optional",
-            status: "missing",
+            id: 'bempp_cl',
+            name: 'bempp-cl',
+            category: 'optional',
+            status: 'missing',
             featureImpact:
-              "BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.",
-            guidance: ["Install bempp-cl"],
+              'BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.',
+            guidance: ['Install bempp-cl'],
           },
           {
-            id: "opencl_runtime",
-            name: "OpenCL Runtime",
-            category: "optional",
-            status: "missing",
-            featureImpact:
-              "OpenCL runtime is unavailable; only the Metal BEM solve path is ready.",
-            guidance: ["Install OpenCL"],
+            id: 'opencl_runtime',
+            name: 'OpenCL Runtime',
+            category: 'optional',
+            status: 'missing',
+            featureImpact: 'OpenCL runtime is unavailable; only the Metal BEM solve path is ready.',
+            guidance: ['Install OpenCL'],
           },
         ],
       },
     },
-    "bem-solve",
+    'bem-solve'
   );
 
   assert.equal(reason, null);
 });
 
-test("getFeatureBlockedReason supports HornLab mesher mesh feature aliases", () => {
+test('getFeatureBlockedReason supports HornLab mesher mesh feature aliases', () => {
   const reason = getFeatureBlockedReason(
     {
       dependencyDoctor: {
         components: [
           {
-            id: "gmsh_python",
-            name: "Gmsh Python API",
-            category: "required",
-            status: "missing",
-            featureImpact: "/api/mesh/build and backend meshing are unavailable.",
-            guidance: ["Install gmsh package"],
+            id: 'gmsh_python',
+            name: 'Gmsh Python API',
+            category: 'required',
+            status: 'missing',
+            featureImpact: '/api/mesh/build and backend meshing are unavailable.',
+            guidance: ['Install gmsh package'],
           },
         ],
       },
     },
-    "hornlab-mesher-mesh",
+    'hornlab-mesher-mesh'
   );
 
   assert.match(reason, /Install gmsh package/);
 });
 
-test("getFeatureBlockedReason reports missing HornLab mesher package for mesh builds", () => {
+test('getFeatureBlockedReason reports missing HornLab mesher package for mesh builds', () => {
   const reason = getFeatureBlockedReason(
     {
       dependencyDoctor: {
         components: [
           {
-            id: "gmsh_python",
-            name: "Gmsh Python API",
-            category: "required",
-            status: "installed",
-            featureImpact: "HornLab mesher build path is available.",
+            id: 'gmsh_python',
+            name: 'Gmsh Python API',
+            category: 'required',
+            status: 'installed',
+            featureImpact: 'HornLab mesher build path is available.',
             guidance: [],
           },
           {
-            id: "hornlab_waveguide_mesher",
-            name: "HornLab waveguide mesher",
-            category: "required",
-            status: "missing",
+            id: 'hornlab_waveguide_mesher',
+            name: 'HornLab waveguide mesher',
+            category: 'required',
+            status: 'missing',
             featureImpact:
-              "/api/mesh/build, viewport meshing, and HornLab mesher jobs are unavailable.",
-            guidance: ["Install backend requirements"],
+              '/api/mesh/build, viewport meshing, and HornLab mesher jobs are unavailable.',
+            guidance: ['Install backend requirements'],
           },
         ],
       },
     },
-    "hornlab-mesher-mesh",
+    'hornlab-mesher-mesh'
   );
 
   assert.match(reason, /HornLab waveguide mesher/);
@@ -1344,31 +1295,31 @@ test("getFeatureBlockedReason reports missing HornLab mesher package for mesh bu
   assert.doesNotMatch(reason, /Gmsh Python API/);
 });
 
-test("getFeatureBlockedReason includes optional BEMPP path guidance for explicit BEMPP solve", () => {
+test('getFeatureBlockedReason includes optional BEMPP path guidance for explicit BEMPP solve', () => {
   const reason = getFeatureBlockedReason(
     {
       dependencyDoctor: {
         components: [
           {
-            id: "bempp_cl",
-            name: "bempp-cl",
-            category: "optional",
-            status: "missing",
+            id: 'bempp_cl',
+            name: 'bempp-cl',
+            category: 'optional',
+            status: 'missing',
             featureImpact:
-              "BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.",
-            guidance: ["Install bempp-cl"],
+              'BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.',
+            guidance: ['Install bempp-cl'],
           },
         ],
       },
     },
-    "bempp-solve",
+    'bempp-solve'
   );
 
   assert.match(reason, /BEMPP solve backend path is unavailable/);
   assert.match(reason, /Install bempp-cl/);
 });
 
-test("createDependencyStatusPanel renders required and optional dependency issues", () => {
+test('createDependencyStatusPanel renders required and optional dependency issues', () => {
   const originalDocument = global.document;
   global.document = {
     createElement(tagName) {
@@ -1381,33 +1332,31 @@ test("createDependencyStatusPanel renders required and optional dependency issue
       dependencyDoctor: {
         components: [
           {
-            id: "gmsh_python",
-            name: "Gmsh Python API",
-            category: "required",
-            status: "missing",
+            id: 'gmsh_python',
+            name: 'Gmsh Python API',
+            category: 'required',
+            status: 'missing',
             version: null,
-            requiredFor: "/api/mesh/build",
-            featureImpact: "/api/mesh/build and backend meshing are unavailable.",
-            guidance: [
-              "Install gmsh package: pip install -r server/requirements-gmsh.txt",
-            ],
+            requiredFor: '/api/mesh/build',
+            featureImpact: '/api/mesh/build and backend meshing are unavailable.',
+            guidance: ['Install gmsh package: pip install -r server/requirements-gmsh.txt'],
           },
           {
-            id: "matplotlib",
-            name: "Matplotlib",
-            category: "optional",
-            status: "missing",
+            id: 'matplotlib',
+            name: 'Matplotlib',
+            category: 'optional',
+            status: 'missing',
             version: null,
-            requiredFor: "chart/directivity image render endpoints",
+            requiredFor: 'chart/directivity image render endpoints',
             featureImpact:
-              "Chart/directivity image render endpoints are unavailable; solver core paths still work.",
-            guidance: ["Install matplotlib: pip install matplotlib"],
+              'Chart/directivity image render endpoints are unavailable; solver core paths still work.',
+            guidance: ['Install matplotlib: pip install matplotlib'],
           },
         ],
       },
     });
 
-    assert.equal(panel.classList.contains("has-warnings"), true);
+    assert.equal(panel.classList.contains('has-warnings'), true);
     const text = collectNodeText(panel);
     assert.match(text, /Runtime Dependencies/);
     assert.match(text, /Gmsh Python API/);
@@ -1419,24 +1368,24 @@ test("createDependencyStatusPanel renders required and optional dependency issue
   }
 });
 
-test("buildRequiredDependencyWarning returns null when required runtime is ready", () => {
+test('buildRequiredDependencyWarning returns null when required runtime is ready', () => {
   const warning = buildRequiredDependencyWarning({
     dependencyDoctor: {
       summary: { requiredReady: true },
       components: [
         {
-          id: "gmsh_python",
-          name: "Gmsh Python API",
-          category: "required",
-          status: "installed",
+          id: 'gmsh_python',
+          name: 'Gmsh Python API',
+          category: 'required',
+          status: 'installed',
           guidance: [],
         },
         {
-          id: "matplotlib",
-          name: "Matplotlib",
-          category: "optional",
-          status: "missing",
-          guidance: ["Install matplotlib: pip install matplotlib"],
+          id: 'matplotlib',
+          name: 'Matplotlib',
+          category: 'optional',
+          status: 'missing',
+          guidance: ['Install matplotlib: pip install matplotlib'],
         },
       ],
     },
@@ -1445,28 +1394,26 @@ test("buildRequiredDependencyWarning returns null when required runtime is ready
   assert.equal(warning, null);
 });
 
-test("buildRequiredDependencyWarning only includes required dependency guidance", () => {
+test('buildRequiredDependencyWarning only includes required dependency guidance', () => {
   const warning = buildRequiredDependencyWarning({
     dependencyDoctor: {
       components: [
         {
-          id: "gmsh_python",
-          name: "Gmsh Python API",
-          category: "required",
-          status: "missing",
-          featureImpact: "/api/mesh/build and backend meshing are unavailable.",
-          guidance: [
-            "Install gmsh package: pip install -r server/requirements-gmsh.txt",
-          ],
+          id: 'gmsh_python',
+          name: 'Gmsh Python API',
+          category: 'required',
+          status: 'missing',
+          featureImpact: '/api/mesh/build and backend meshing are unavailable.',
+          guidance: ['Install gmsh package: pip install -r server/requirements-gmsh.txt'],
         },
         {
-          id: "matplotlib",
-          name: "Matplotlib",
-          category: "optional",
-          status: "missing",
+          id: 'matplotlib',
+          name: 'Matplotlib',
+          category: 'optional',
+          status: 'missing',
           featureImpact:
-            "Chart/directivity image render endpoints are unavailable; solver core paths still work.",
-          guidance: ["Install matplotlib: pip install matplotlib"],
+            'Chart/directivity image render endpoints are unavailable; solver core paths still work.',
+          guidance: ['Install matplotlib: pip install matplotlib'],
         },
       ],
     },

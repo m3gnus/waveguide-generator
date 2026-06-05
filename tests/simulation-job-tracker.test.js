@@ -9,7 +9,8 @@ import {
   mergeJobs,
   removeJob,
   setJobsFromEntries,
-  upsertJob
+  sortJobs,
+  upsertJob,
 } from '../src/ui/simulation/jobTracker.js';
 
 function installLocalStorageMock() {
@@ -23,7 +24,7 @@ function installLocalStorageMock() {
     },
     removeItem(key) {
       store.delete(key);
-    }
+    },
   };
   return store;
 }
@@ -43,7 +44,7 @@ test('loadLocalIndex reads valid storage payload', () => {
     JSON.stringify({
       version: 1,
       saved_at: '2026-02-22T18:20:31.305018',
-      items: [{ id: 'job-1', status: 'queued', progress: 0 }]
+      items: [{ id: 'job-1', status: 'queued', progress: 0 }],
     })
   );
 
@@ -55,12 +56,12 @@ test('loadLocalIndex reads valid storage payload', () => {
 test('setJobsFromEntries and upsertJob manage active selection', () => {
   const panel = {
     jobs: new Map(),
-    activeJobId: null
+    activeJobId: null,
   };
 
   setJobsFromEntries(panel, [
     { id: 'job-complete', status: 'complete' },
-    { id: 'job-running', status: 'running' }
+    { id: 'job-running', status: 'running' },
   ]);
 
   assert.equal(panel.activeJobId, 'job-running');
@@ -73,11 +74,11 @@ test('mergeJobs keeps backend as source of truth and marks missing active local 
   const merged = mergeJobs(
     [
       { id: 'local-running', status: 'running' },
-      { id: 'local-terminal', status: 'complete' }
+      { id: 'local-terminal', status: 'complete' },
     ],
     [
       { id: 'remote-running', status: 'running' },
-      { id: 'remote-terminal', status: 'error' }
+      { id: 'remote-terminal', status: 'error' },
     ]
   );
 
@@ -96,8 +97,8 @@ test('mergeJobs preserves local label and script metadata when backend omits the
         id: 'job-1',
         status: 'queued',
         label: 'horn_design_1_91c1',
-        script: { outputName: 'horn_design', counter: 1 }
-      }
+        script: { outputName: 'horn_design', counter: 1 },
+      },
     ],
     [{ id: 'job-1', status: 'running', progress: 0.4, label: null, script: null }]
   );
@@ -111,18 +112,41 @@ test('mergeJobs preserves local label and script metadata when backend omits the
 test('mergeJobs preserves backend simulation mesh stats for the stats widget handoff', () => {
   const merged = mergeJobs(
     [{ id: 'job-1', status: 'queued', meshStats: null }],
-    [{
-      id: 'job-1',
-      status: 'running',
-      mesh_stats: { vertex_count: 88, triangle_count: 44, source: 'hornlab_waveguide_mesher' }
-    }]
+    [
+      {
+        id: 'job-1',
+        status: 'running',
+        mesh_stats: { vertex_count: 88, triangle_count: 44, source: 'hornlab_waveguide_mesher' },
+      },
+    ]
   );
 
   assert.deepEqual(merged[0].meshStats, {
     vertex_count: 88,
     triangle_count: 44,
-    source: 'hornlab_waveguide_mesher'
+    source: 'hornlab_waveguide_mesher',
   });
+});
+
+test('sortJobs orders newest lifecycle timestamp first', () => {
+  const sorted = sortJobs([
+    {
+      id: 'created-later',
+      status: 'running',
+      createdAt: '2026-03-11T09:10:00.000Z',
+    },
+    {
+      id: 'completed-later',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z',
+      completedAt: '2026-03-11T09:20:00.000Z',
+    },
+  ]);
+
+  assert.deepEqual(
+    sorted.map((job) => job.id),
+    ['completed-later', 'created-later']
+  );
 });
 
 test('removeJob removes job and result cache entry', () => {
@@ -130,7 +154,7 @@ test('removeJob removes job and result cache entry', () => {
     jobs: new Map([['job-1', { id: 'job-1', status: 'complete' }]]),
     resultCache: new Map([['job-1', { ok: true }]]),
     activeJobId: 'job-1',
-    currentJobId: 'job-1'
+    currentJobId: 'job-1',
   };
 
   const removed = removeJob(panel, 'job-1');
@@ -146,9 +170,9 @@ test('clearFailedJobs removes only error jobs', () => {
     jobs: new Map([
       ['job-1', { id: 'job-1', status: 'error' }],
       ['job-2', { id: 'job-2', status: 'cancelled' }],
-      ['job-3', { id: 'job-3', status: 'complete' }]
+      ['job-3', { id: 'job-3', status: 'complete' }],
     ]),
-    resultCache: new Map()
+    resultCache: new Map(),
   };
 
   const removed = clearFailedJobs(panel);
@@ -161,9 +185,17 @@ test('clearFailedJobs removes only error jobs', () => {
 test('upsertJob preserves existing label and script when incoming payload omits them', () => {
   const panel = {
     jobs: new Map([
-      ['job-1', { id: 'job-1', status: 'queued', label: 'horn_design_1_91c1', script: { outputName: 'horn_design', counter: 1 } }]
+      [
+        'job-1',
+        {
+          id: 'job-1',
+          status: 'queued',
+          label: 'horn_design_1_91c1',
+          script: { outputName: 'horn_design', counter: 1 },
+        },
+      ],
     ]),
-    activeJobId: null
+    activeJobId: null,
   };
 
   const next = upsertJob(panel, { id: 'job-1', status: 'running', label: null, script: null });

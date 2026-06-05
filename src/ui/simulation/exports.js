@@ -225,6 +225,15 @@ function readResultSeries(panel) {
   };
 }
 
+function finiteSeriesValues(values = []) {
+  return values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+}
+
+function formatReportCell(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : 'n/a';
+}
+
 function resolvePhaseReferenceDistance(results) {
   const metadata = results?.metadata || {};
   const directivityDistance = Number(metadata?.directivity?.effective_distance_m);
@@ -375,13 +384,9 @@ function buildJsonFile(panel, { baseName } = {}) {
 }
 
 function buildTextFile(panel, { baseName } = {}) {
-  const results = requireSimulationResults(panel);
+  const { frequencies, spl, di, impedanceReal, impedanceImaginary } = readResultSeries(panel);
 
   const { dateStamp, timeStamp } = localTimestampParts();
-  const frequencies = results.spl_on_axis?.frequencies || [];
-  const splValues = results.spl_on_axis?.spl || [];
-  const diData = results.di || {};
-  const impedanceData = results.impedance || {};
 
   let report = 'BEM SIMULATION RESULTS\n';
   report += '=====================\n\n';
@@ -394,10 +399,11 @@ function buildTextFile(panel, { baseName } = {}) {
   }
   report += `Number of points: ${frequencies.length}\n\n`;
 
-  if (splValues.length > 0) {
-    const avgSPL = splValues.reduce((a, b) => a + b, 0) / splValues.length;
-    const minSPL = Math.min(...splValues);
-    const maxSPL = Math.max(...splValues);
+  const validSpl = finiteSeriesValues(spl);
+  if (validSpl.length > 0) {
+    const avgSPL = validSpl.reduce((a, b) => a + b, 0) / validSpl.length;
+    const minSPL = Math.min(...validSpl);
+    const maxSPL = Math.max(...validSpl);
 
     report += 'FREQUENCY RESPONSE SUMMARY\n';
     report += '--------------------------\n';
@@ -406,9 +412,8 @@ function buildTextFile(panel, { baseName } = {}) {
     report += `Variation: ${(maxSPL - minSPL).toFixed(2)} dB\n\n`;
   }
 
-  const flatDI = extractFlatDI(diData);
-  if (flatDI.length > 0) {
-    const validDI = flatDI.filter((v) => v != null);
+  if (di.length > 0) {
+    const validDI = finiteSeriesValues(di);
     if (validDI.length > 0) {
       const avgDI = validDI.reduce((a, b) => a + b, 0) / validDI.length;
       const minDI = Math.min(...validDI);
@@ -421,8 +426,9 @@ function buildTextFile(panel, { baseName } = {}) {
     }
   }
 
-  if (impedanceData.real && impedanceData.real.length > 0) {
-    const avgZ = impedanceData.real.reduce((a, b) => a + b, 0) / impedanceData.real.length;
+  const validImpedanceReal = finiteSeriesValues(impedanceReal);
+  if (validImpedanceReal.length > 0) {
+    const avgZ = validImpedanceReal.reduce((a, b) => a + b, 0) / validImpedanceReal.length;
     report += 'IMPEDANCE SUMMARY\n';
     report += '-----------------\n';
     report += `Average Real Part: ${avgZ.toFixed(2)} Ω\n\n`;
@@ -435,10 +441,10 @@ function buildTextFile(panel, { baseName } = {}) {
 
   for (let i = 0; i < frequencies.length; i += 1) {
     report += `${frequencies[i].toString().padEnd(8)}  `;
-    report += `${(splValues[i] || 0).toFixed(2).padEnd(7)}  `;
-    report += `${(flatDI[i] != null ? flatDI[i] : 0).toFixed(2).padEnd(6)}  `;
-    report += `${((impedanceData.real && impedanceData.real[i]) || 0).toFixed(2).padEnd(9)}  `;
-    report += `${((impedanceData.imaginary && impedanceData.imaginary[i]) || 0).toFixed(2)}\n`;
+    report += `${formatReportCell(spl[i]).padEnd(7)}  `;
+    report += `${formatReportCell(di[i]).padEnd(6)}  `;
+    report += `${formatReportCell(impedanceReal[i]).padEnd(9)}  `;
+    report += `${formatReportCell(impedanceImaginary[i])}\n`;
   }
 
   return createGenerationDownloadFile('txt', baseName, report, {

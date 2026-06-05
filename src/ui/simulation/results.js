@@ -39,6 +39,20 @@ function formatCount(count) {
   return n.toLocaleString();
 }
 
+function resolveMeshStats(results = null, job = null) {
+  const metadata = isObject(results?.metadata) ? results.metadata : null;
+  const candidates = [
+    job?.meshStats,
+    metadata?.meshStats,
+    metadata?.mesh_stats,
+    metadata?.mesh,
+    results?.meshStats,
+    results?.mesh_stats,
+  ];
+
+  return candidates.find((candidate) => isObject(candidate)) || null;
+}
+
 function formatDegrees(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
@@ -156,7 +170,7 @@ export function renderSolveStatsSummary(results = null, job = null) {
   const freqMin = freqCount > 0 ? Math.min(...frequencies) : null;
   const freqMax = freqCount > 0 ? Math.max(...frequencies) : null;
 
-  const meshStats = isObject(job?.meshStats) ? job.meshStats : null;
+  const meshStats = resolveMeshStats(results, job);
   const vertexCount = meshStats?.vertex_count ?? meshStats?.vertexCount;
   const triangleCount = meshStats?.triangle_count ?? meshStats?.triangleCount;
 
