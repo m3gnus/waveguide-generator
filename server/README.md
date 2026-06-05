@@ -166,7 +166,7 @@ The backend now enforces a version matrix at runtime:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `334e51f8455def6c60e0683fbc29ae46ae6d6230` | `/api/mesh/build` |
+| HornLab mesher      | `2317b804976d54eb86240cae1b99bb5007659acf` | `/api/mesh/build` |
 | HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | default `/api/solve` backend when ready |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
 | bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | BEMPP fallback `/api/solve` backend |
