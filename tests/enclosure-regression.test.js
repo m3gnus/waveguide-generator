@@ -47,15 +47,37 @@ function triangleArea2(vertices, a, b, c) {
   return Math.hypot(nx, ny, nz);
 }
 
-function collectEnclosureVertexSet(vertices, indices, enclosureRange) {
+function collectTriangleRangeVertexSet(vertices, indices, triangleRange) {
   const vertexSet = new Set();
-  for (let t = enclosureRange.start; t < enclosureRange.end; t += 1) {
+  for (let t = triangleRange.start; t < triangleRange.end; t += 1) {
     const triOffset = t * 3;
     vertexSet.add(indices[triOffset]);
     vertexSet.add(indices[triOffset + 1]);
     vertexSet.add(indices[triOffset + 2]);
   }
   return vertexSet;
+}
+
+function measureGroupBounds(mesh, groupName) {
+  const range = mesh.groups?.[groupName];
+  assert.ok(range, `Expected ${groupName} triangle group`);
+
+  const vertexSet = collectTriangleRangeVertexSet(mesh.vertices, mesh.indices, range);
+  const bounds = {
+    minX: Infinity,
+    maxX: -Infinity,
+    minZ: Infinity,
+    maxZ: -Infinity
+  };
+  for (const idx of vertexSet) {
+    const x = mesh.vertices[idx * 3];
+    const z = mesh.vertices[idx * 3 + 2];
+    bounds.minX = Math.min(bounds.minX, x);
+    bounds.maxX = Math.max(bounds.maxX, x);
+    bounds.minZ = Math.min(bounds.minZ, z);
+    bounds.maxZ = Math.max(bounds.maxZ, z);
+  }
+  return bounds;
 }
 
 function countRearBoundaryEdges(vertices, indices, rearY, yEps = 1e-6) {
@@ -199,7 +221,7 @@ function analyzeEnclosure(mesh) {
   assert.ok(groups?.enclosure, 'Expected enclosure triangle group');
   const enclosureRange = groups.enclosure;
 
-  const enclosureVertices = collectEnclosureVertexSet(vertices, indices, enclosureRange);
+  const enclosureVertices = collectTriangleRangeVertexSet(vertices, indices, enclosureRange);
   let rearY = Infinity;
   for (const idx of enclosureVertices) {
     rearY = Math.min(rearY, vertices[idx * 3 + 1]);
@@ -325,7 +347,7 @@ test('legacy interface params do not push enclosure ahead of mouth plane', () =>
     mouthY = Math.max(mouthY, vertices[(mouthStart + i) * 3 + 1]);
   }
 
-  const enclosureVerts = collectEnclosureVertexSet(vertices, indices, groups.enclosure);
+  const enclosureVerts = collectTriangleRangeVertexSet(vertices, indices, groups.enclosure);
   let enclosureMaxY = -Infinity;
   for (const idx of enclosureVerts) {
     enclosureMaxY = Math.max(enclosureMaxY, vertices[idx * 3 + 1]);
@@ -411,6 +433,34 @@ test('enclosure edge treatment supports rounded and chamfered corners with clean
 
     for (const value of mesh.vertices) {
       assert.equal(Number.isFinite(value), true, 'enclosure vertices should remain finite after edge clamp');
+    }
+  }
+});
+
+test('enclosure edge radius may equal the smallest margin but clamps above it', () => {
+  for (const encEdgeType of [1, 2]) {
+    for (const encEdge of [8, 12]) {
+      const params = prepare('OSSE', {
+        encDepth: 180,
+        encEdgeType,
+        encEdge,
+        encSpaceL: 8,
+        encSpaceT: 8,
+        encSpaceR: 8,
+        encSpaceB: 8
+      });
+      const mesh = buildGeometryArtifacts(params, { includeEnclosure: true }).mesh;
+      const analysis = analyzeEnclosure(mesh);
+      const hornBounds = measureGroupBounds(mesh, 'horn');
+      const enclosureBounds = measureGroupBounds(mesh, 'enclosure');
+
+      assert.equal(analysis.rearBoundaryEdges, 0, 'rear closure should remain watertight');
+      assert.equal(analysis.nonManifoldSharedEdges, 0, 'enclosure should remain manifold');
+      assert.equal(analysis.tinyTriangles, 0, 'enclosure should not create tiny triangles');
+      assert.ok(hornBounds.minX >= enclosureBounds.minX + 8 - 1e-6);
+      assert.ok(hornBounds.maxX <= enclosureBounds.maxX - 8 + 1e-6);
+      assert.ok(hornBounds.minZ >= enclosureBounds.minZ + 8 - 1e-6);
+      assert.ok(hornBounds.maxZ <= enclosureBounds.maxZ - 8 + 1e-6);
     }
   }
 });

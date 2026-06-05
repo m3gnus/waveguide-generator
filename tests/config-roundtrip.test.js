@@ -101,3 +101,26 @@ test('mixed OSSE flat and internal keys normalize independently', () => {
   assert.equal(parsed.params.k, '7');
   assert.equal(parsed.params.h, '0.2');
 });
+
+test('zero-angle Slot.Length imports as throat extension length', () => {
+  const source = [
+    'Coverage.Angle = 45',
+    'Length = 120',
+    'Throat.Angle = 15.5',
+    'Throat.Diameter = 25.4',
+    'Throat.Ext.Angle = 0',
+    'Throat.Ext.Length = 4',
+    'Slot.Length = 6',
+    'Term.n = 4',
+    'Term.q = 1',
+    'Term.s = 0.6',
+    'OS.k = 7'
+  ].join('\n');
+
+  const parsed = MWGConfigParser.parse(source);
+
+  assert.equal(parsed.type, 'OSSE');
+  assert.equal(parsed.params.throatExtAngle, '0');
+  assert.equal(parsed.params.throatExtLength, '10');
+  assert.equal(parsed.params.slotLength, '0');
+});

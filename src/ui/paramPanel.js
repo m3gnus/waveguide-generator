@@ -199,13 +199,23 @@ export class ParamPanel {
         const schemaGroup = PARAM_SCHEMA[group] || {};
         keys.forEach((key) => {
           const def = schemaGroup[key];
-          if (def) {
+          if (def && this.shouldRenderControl(key, params)) {
             sectionNode.appendChild(this.createControlRow(key, def, params[key]));
           }
         });
       });
       target.appendChild(sectionNode);
     });
+  }
+
+  shouldRenderControl(key, params = {}) {
+    if (key !== 'slotLength') return true;
+
+    const angle = Number(params.throatExtAngle ?? 0);
+    const slotLength = Number(params.slotLength ?? 0);
+    if (Number.isFinite(slotLength) && Math.abs(slotLength) > 1e-12) return true;
+    if (!Number.isFinite(angle)) return true;
+    return Math.abs(angle) > 1e-12;
   }
 
   createModelTypeSection() {

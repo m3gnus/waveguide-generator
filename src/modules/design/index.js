@@ -24,13 +24,11 @@ const BACKEND_MESH_DEFAULTS = Object.freeze({
   scale: 1,
 });
 
-// Mesh resolution fields (throatResolution, mouthResolution, rearResolution,
-// encFrontResolution, encBackResolution) represent mesh ELEMENT SIZE in mm,
-// not element count. As element sizes, they MUST scale with geometry to
-// maintain consistent mesh density (same element count per geometric feature).
-// Scaling is handled in prepareBackendMeshSimulationParams (called by
-// prepareBackendMeshExportParams)
-// to ensure single-scaling for both simulation and export pipelines.
+// Horn mesh resolution fields (throatResolution, mouthResolution,
+// rearResolution) represent mesh ELEMENT SIZE in mm, not element count. As
+// element sizes, they scale with horn geometry to maintain consistent mesh
+// density. Enclosure resolution fields stay absolute because enclosure
+// dimensions and clearances intentionally do not scale with the horn.
 
 function isObject(value) {
   return value !== null && typeof value === 'object';
@@ -46,11 +44,11 @@ function toPositiveNumber(value, fallback) {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
 }
 
-function scaleResolutionValue(value, scale) {
+function normalizeResolutionValue(value) {
   if (value === undefined || value === null || value === '') return value;
 
   if (typeof value === 'number') {
-    return value > 0 ? value * scale : value;
+    return String(value);
   }
 
   const text = String(value).trim();
@@ -64,7 +62,7 @@ function scaleResolutionValue(value, scale) {
   const nums = parts.map((part) => Number(part));
   if (nums.some((n) => !Number.isFinite(n))) return value;
 
-  return nums.map((n) => (n > 0 ? n * scale : n)).join(',');
+  return nums.join(',');
 }
 
 function normalizeProfileCsvAngularSegments(value) {
@@ -193,17 +191,15 @@ export function prepareBackendMeshSimulationParams(preparedParams = {}) {
     rearResolution:
       toPositiveNumber(base.rearResolution, BACKEND_MESH_DEFAULTS.rearResolution) * scale,
     wallThickness: toFiniteNumber(base.wallThickness, BACKEND_MESH_DEFAULTS.wallThickness),
-    encFrontResolution: scaleResolutionValue(
+    encFrontResolution: normalizeResolutionValue(
       base.encFrontResolution != null
         ? String(base.encFrontResolution)
-        : BACKEND_MESH_DEFAULTS.encFrontResolution,
-      scale
+        : BACKEND_MESH_DEFAULTS.encFrontResolution
     ),
-    encBackResolution: scaleResolutionValue(
+    encBackResolution: normalizeResolutionValue(
       base.encBackResolution != null
         ? String(base.encBackResolution)
-        : BACKEND_MESH_DEFAULTS.encBackResolution,
-      scale
+        : BACKEND_MESH_DEFAULTS.encBackResolution
     ),
   });
 }

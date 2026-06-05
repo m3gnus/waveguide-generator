@@ -521,7 +521,7 @@ Required invariants:
 
 - Frontend backend mesh payload fields `enc_front_resolution` and `enc_back_resolution` are strings.
 - Defaults are `"25,25,25,25"` and `"40,40,40,40"`.
-- Defaults and export scaling are applied by `prepareBackendMeshSimulationParams(...)` and `prepareBackendMeshExportParams(...)`.
+- Defaults are applied by `prepareBackendMeshSimulationParams(...)` and `prepareBackendMeshExportParams(...)`; enclosure mesh resolutions remain absolute millimetre values when horn `scale` changes.
 - `buildWaveguidePayload(...)` forwards the values as strings and requires the fields to be present.
 
 #### Unit metadata

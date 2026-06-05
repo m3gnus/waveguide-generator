@@ -1,7 +1,10 @@
 import asyncio
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import numpy as np
 
 from api.routes_mesh import build_step_from_params
 from contracts import WaveguideParamsRequest
@@ -47,6 +50,90 @@ class StepExportRouteTest(unittest.TestCase):
 
 
 class StepExportAdapterTest(unittest.TestCase):
+    def test_step_writer_preserves_sampled_mouth_ring_as_grid_boundary(self):
+        class FakeOption:
+            def setNumber(self, *_args):
+                return None
+
+        class FakeOcc:
+            def __init__(self):
+                self.points = []
+                self.lines = []
+                self.curve_loops = []
+                self.plane_surfaces = []
+
+            def addPoint(self, x, y, z):
+                self.points.append((x, y, z))
+                return len(self.points)
+
+            def addLine(self, a, b):
+                self.lines.append((a, b))
+                return len(self.lines)
+
+            def addCurveLoop(self, curves):
+                self.curve_loops.append(tuple(curves))
+                return len(self.curve_loops)
+
+            def addPlaneSurface(self, loops):
+                self.plane_surfaces.append(tuple(loops))
+                return len(self.plane_surfaces)
+
+            def addBSplineSurface(self, *_args, **_kwargs):
+                raise AssertionError("STEP export must preserve grid rings, not fit one B-spline patch")
+
+            def synchronize(self):
+                return None
+
+        class FakeModel:
+            def __init__(self):
+                self.occ = FakeOcc()
+
+            def add(self, *_args):
+                return None
+
+        class FakeGmsh:
+            def __init__(self):
+                self.model = FakeModel()
+                self.option = FakeOption()
+                self.initialized = False
+
+            def isInitialized(self):
+                return self.initialized
+
+            def initialize(self):
+                self.initialized = True
+
+            def clear(self):
+                return None
+
+            def write(self, path):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("ISO-10303-21;\nEND-ISO-10303-21;\n")
+
+            def finalize(self):
+                self.initialized = False
+
+        fake_gmsh = FakeGmsh()
+        inner_points = np.asarray(
+            [
+                [[1.0, 0.0, 0.0], [2.0, 0.0, 10.0], [4.0, 0.0, 20.0]],
+                [[0.0, 1.0, 0.0], [0.0, 2.0, 10.0], [0.0, 4.0, 20.0]],
+                [[-1.0, 0.0, 0.0], [-2.0, 0.0, 10.0], [-4.0, 0.0, 20.0]],
+                [[0.0, -1.0, 0.0], [0.0, -2.0, 10.0], [0.0, -4.0, 20.0]],
+            ]
+        )
+
+        with patch.dict(sys.modules, {"gmsh": fake_gmsh}):
+            step_text = mesher_adapter._write_inner_surface_step(inner_points)
+
+        self.assertIn("ISO-10303-21", step_text)
+        self.assertEqual(len(fake_gmsh.model.occ.points), 12)
+        self.assertEqual(len(fake_gmsh.model.occ.plane_surfaces), 8)
+
+        mouth_ring = {tuple(point) for point in inner_points[:, -1, :].tolist()}
+        exported_points = set(fake_gmsh.model.occ.points)
+        self.assertTrue(mouth_ring.issubset(exported_points))
+
     def test_inner_surface_step_adapter_forces_bare_full_domain_config(self):
         captured_configs = []
 

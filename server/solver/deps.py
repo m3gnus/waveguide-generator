@@ -120,8 +120,8 @@ GMSH_SUPPORTED = GMSH_AVAILABLE and PYTHON_SUPPORTED and _in_supported_range(
 HORNLAB_MESHER_VERSION = None
 try:
     from hornlab_mesher.config_builder import build_from_config as _hornlab_mesher_build_from_config  # type: ignore  # noqa: F401
-    HORNLAB_MESHER_AVAILABLE = True
     HORNLAB_MESHER_VERSION = _distribution_version("hornlab-waveguide-mesher")
+    HORNLAB_MESHER_AVAILABLE = HORNLAB_MESHER_VERSION is not None
 except ImportError:
     HORNLAB_MESHER_AVAILABLE = False
 
@@ -194,7 +194,9 @@ if not BEMPP_AVAILABLE:
     else:
         logger.warning("bempp runtime not available (install bempp-cl >=0.4,<0.5).")
 if not HORNLAB_MESHER_AVAILABLE:
-    logger.warning("hornlab-waveguide-mesher runtime not available.")
+    logger.warning(
+        "hornlab-waveguide-mesher runtime not available or wrong hornlab_mesher package is installed."
+    )
 if not HORNLAB_METAL_BEM_AVAILABLE:
     logger.warning("hornlab-metal-bem runtime not available.")
 

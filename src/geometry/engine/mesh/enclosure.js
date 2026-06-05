@@ -6,6 +6,11 @@
 // Legacy plan-outline helpers were removed in Session 9 because the current
 // enclosure pipeline only uses angular ray-casting against a rounded box.
 
+function finiteOrDefault(value, fallback) {
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 // ---------------------------------------------------------------------------
 // Angular-distribution-based enclosure point generation.
 //
@@ -179,7 +184,10 @@ function generateEnclosurePointsFromAngles(
   const halfH = (boxTop - boxBot) / 2;
   const boxCR = parseFloat(edgeR) || 0;
   const scale = params.scale || 1;
-  const clampedBoxCR = Math.min(boxCR, halfW - 1e-4 * scale, halfH - 1e-4 * scale);
+  const clampedBoxCR = Math.max(
+    0,
+    Math.min(boxCR, halfW - 1e-4 * scale, halfH - 1e-4 * scale)
+  );
 
   for (let i = 0; i < ringSize; i++) {
     const angle = angleList[i];
@@ -358,10 +366,9 @@ export function addEnclosureGeometry(
   const lastRowStart = params.lengthSegments * ringSize;
   const mouthY = vertices[lastRowStart * 3 + 1];
 
-  const depth = parseFloat(params.encDepth) || 0;
-  const edgeR = parseFloat(params.encEdge) || 0;
+  const depth = finiteOrDefault(params.encDepth, 0);
+  const requestedEdgeR = Math.max(0, finiteOrDefault(params.encEdge, 0));
   const edgeType = parseInt(params.encEdgeType) || 1;
-  const axialSegs = edgeR > 0 ? Math.max(4, parseInt(params.cornerSegments) || 4) : 1;
   const backY = mouthY - depth;
 
   let maxX = -Infinity,
@@ -387,10 +394,13 @@ export function addEnclosureGeometry(
   }
 
   // Compute enclosure box boundaries
-  const sL = parseFloat(params.encSpaceL) || 25;
-  const sT = parseFloat(params.encSpaceT) || 25;
-  const sR = parseFloat(params.encSpaceR) || 25;
-  const sB = parseFloat(params.encSpaceB) || 25;
+  const sL = finiteOrDefault(params.encSpaceL, 25);
+  const sT = finiteOrDefault(params.encSpaceT, 25);
+  const sR = finiteOrDefault(params.encSpaceR, 25);
+  const sB = finiteOrDefault(params.encSpaceB, 25);
+  const marginEdgeLimit = Math.max(0, Math.min(sL, sT, sR, sB));
+  const edgeR = Math.min(requestedEdgeR, marginEdgeLimit);
+  const axialSegs = edgeR > 0 ? Math.max(4, parseInt(params.cornerSegments) || 4) : 1;
 
   let boxRight = maxX + sR;
   let boxLeft = minX - sL;

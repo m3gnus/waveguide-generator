@@ -1,4 +1,4 @@
-import { showError } from './feedback.js';
+import { showError, showSuccess } from './feedback.js';
 import { validateOutputName, validateCounter, sanitizeFileName } from './inputValidation.js';
 import { debugWarn } from '../logging/debug.js';
 import { subscribeFolderWorkspace, writeWorkspaceFile } from './workspace/folderWorkspace.js';
@@ -168,6 +168,20 @@ function finalizeExportCounter(options = {}) {
   hasPendingParameterChanges = false;
 }
 
+function showWorkspaceSaveSuccess(fileName, result) {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+
+  const path = String(result?.path || '').trim();
+  const workspaceRoot = String(result?.workspaceRoot || '').trim();
+  const destination = path || workspaceRoot;
+  if (!destination) {
+    showSuccess(`Saved ${fileName}.`);
+    return;
+  }
+
+  showSuccess(`Saved ${fileName} to ${destination}.`, 7000);
+}
+
 bindFolderWorkspaceLabel();
 
 export async function saveFile(content, fileName, options = {}) {
@@ -183,12 +197,13 @@ export async function saveFile(content, fileName, options = {}) {
   }
 
   try {
-    await writeWorkspaceFile(finalName, content, {
+    const result = await writeWorkspaceFile(finalName, content, {
       contentType: options.contentType,
       workspaceSubdir: options.workspaceSubdir,
       timeoutMs: 30000,
     });
     finalizeExportCounter(options);
+    showWorkspaceSaveSuccess(finalName, result);
     return;
   } catch (err) {
     debugWarn('Backend workspace export failed:', err);
