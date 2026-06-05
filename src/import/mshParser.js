@@ -152,6 +152,6 @@ export function parseMSH(text) {
     vertices,
     indices: new Uint32Array(triIndices),
     physicalNames,
-    physicalTags: new Uint32Array(triTags)
+    physicalTags: new Uint32Array(triTags),
   };
 }

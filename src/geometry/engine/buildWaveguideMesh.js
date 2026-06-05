@@ -1,5 +1,6 @@
 import { orientMeshConsistently } from '../meshIntegrity.js';
 import { validateMeshQuality } from '../quality.js';
+import { debugError } from '../../logging/debug.js';
 import { DEFAULTS, MORPH_TARGETS } from './constants.js';
 import { buildAngleList } from './mesh/angles.js';
 import { addEnclosureGeometry } from './mesh/enclosure.js';
@@ -11,7 +12,7 @@ import {
   createAdaptiveFanIndices,
   createAdaptiveRingVertices,
   createHornIndices,
-  createRingVertices
+  createRingVertices,
 } from './mesh/horn.js';
 import { buildSliceMap } from './mesh/sliceMap.js';
 import { generateThroatSource } from './mesh/source.js';
@@ -24,10 +25,10 @@ function clampSegmentCount(value, fallback, min) {
 
 function logQualityIssues(quality) {
   if (quality.degenerateTriangles > 0) {
-    console.error(`[Geometry] Degenerate triangles detected: ${quality.degenerateTriangles}`);
+    debugError(`[Geometry] Degenerate triangles detected: ${quality.degenerateTriangles}`);
   }
   if (quality.nonManifoldEdges > 0) {
-    console.error(`[Geometry] Non-manifold edges detected: ${quality.nonManifoldEdges}`);
+    debugError(`[Geometry] Non-manifold edges detected: ${quality.nonManifoldEdges}`);
   }
 }
 
@@ -58,11 +59,11 @@ export function buildWaveguideMesh(params, options = {}) {
   const meshParams = {
     ...params,
     angularSegments,
-    lengthSegments: lengthSteps
+    lengthSegments: lengthSteps,
   };
 
   const profileContext = {
-    coverageCache: new Map()
+    coverageCache: new Map(),
   };
 
   const sliceMap = buildSliceMap(meshParams, lengthSteps);
@@ -74,8 +75,8 @@ export function buildWaveguideMesh(params, options = {}) {
   const fullCircle = true;
 
   const morphTarget = Number(meshParams.morphTarget || MORPH_TARGETS.NONE);
-  const needsMorphTargets = morphTarget !== MORPH_TARGETS.NONE
-    && (!meshParams.morphWidth || !meshParams.morphHeight);
+  const needsMorphTargets =
+    morphTarget !== MORPH_TARGETS.NONE && (!meshParams.morphWidth || !meshParams.morphHeight);
   const morphTargets = needsMorphTargets
     ? buildMorphTargets(meshParams, lengthSteps, angleList, sliceMap, profileContext)
     : null;
@@ -86,10 +87,7 @@ export function buildWaveguideMesh(params, options = {}) {
   const outerBuildMode = resolveOuterBuildMode(meshParams, { includeEnclosure });
   const hasEnclosure = outerBuildMode === 'enclosure';
   const hasWall = outerBuildMode === 'freestandingWall';
-  const useAdaptivePhi = (options.adaptivePhi === true)
-    && fullCircle
-    && !hasEnclosure
-    && !hasWall;
+  const useAdaptivePhi = options.adaptivePhi === true && fullCircle && !hasEnclosure && !hasWall;
 
   let vertices;
   let indices;
@@ -98,17 +96,32 @@ export function buildWaveguideMesh(params, options = {}) {
 
   if (useAdaptivePhi) {
     const phiCounts = computeAdaptivePhiCounts(
-      meshParams, lengthSteps, sliceMap, angularSegments, profileContext
+      meshParams,
+      lengthSteps,
+      sliceMap,
+      angularSegments,
+      profileContext
     );
     vertices = createAdaptiveRingVertices(
-      meshParams, sliceMap, morphTargets, phiCounts, lengthSteps, profileContext
+      meshParams,
+      sliceMap,
+      morphTargets,
+      phiCounts,
+      lengthSteps,
+      profileContext
     );
     indices = createAdaptiveFanIndices(phiCounts, lengthSteps);
     mouthRingCount = phiCounts[lengthSteps];
     throatRingCount = phiCounts[0];
   } else {
     vertices = createRingVertices(
-      meshParams, sliceMap, angleList, morphTargets, ringCount, lengthSteps, profileContext
+      meshParams,
+      sliceMap,
+      angleList,
+      morphTargets,
+      ringCount,
+      lengthSteps,
+      profileContext
     );
     indices = createHornIndices(ringCount, lengthSteps, fullCircle);
     mouthRingCount = ringCount;
@@ -137,12 +150,12 @@ export function buildWaveguideMesh(params, options = {}) {
       ringCount: mouthRingCount,
       lengthSteps,
       fullCircle,
-      groupInfo
+      groupInfo,
     });
   }
 
   const sourceStartTri = indices.length / 3;
-  const throatSource = generateThroatSource(vertices, throatRingCount, fullCircle);
+  const throatSource = generateThroatSource(vertices, throatRingCount, fullCircle, meshParams);
   if (throatSource.center) {
     const centerIdx = vertices.length / 3;
     vertices.push(...throatSource.center);
@@ -160,16 +173,18 @@ export function buildWaveguideMesh(params, options = {}) {
   const vertexCount = vertices.length / 3;
   const maxIndex = Math.max(...indices, -1);
   if (maxIndex >= vertexCount) {
-    console.error(`[Geometry] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`);
+    debugError(
+      `[Geometry] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`
+    );
   }
 
   if (
-    hasEnclosure
-    || options.useLegacyOrientationRepair === true
-    || meshParams.useLegacyOrientationRepair === true
+    hasEnclosure ||
+    options.useLegacyOrientationRepair === true ||
+    meshParams.useLegacyOrientationRepair === true
   ) {
     orientMeshConsistently(vertices, indices, {
-      preferOutward: fullCircle
+      preferOutward: fullCircle,
     });
   }
 
@@ -180,7 +195,7 @@ export function buildWaveguideMesh(params, options = {}) {
     vertices,
     indices,
     ringCount: mouthRingCount,
-    fullCircle
+    fullCircle,
   };
 
   if (groupInfo) {

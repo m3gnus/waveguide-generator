@@ -50,7 +50,7 @@ export function getSummary() {
     totalLogs: logs.length,
     byAgent: {},
     byCategory: {},
-    recentActivity: []
+    recentActivity: [],
   };
 
   for (const log of logs) {
@@ -85,7 +85,7 @@ export function clearLogs() {
   addLogEntry({
     event: 'logs:cleared',
     category: 'system',
-    data: {}
+    data: {},
   });
 }
 

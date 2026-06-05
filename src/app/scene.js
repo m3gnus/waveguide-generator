@@ -1,5 +1,5 @@
-import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   createScene,
   createPerspectiveCamera,
@@ -7,23 +7,74 @@ import {
   ZebraShader,
   getSceneThemeColors,
   attachCameraLights,
-} from "../viewer/index.js";
-import { prepareViewportMesh } from "../modules/geometry/useCases.js";
-import { detachThroatDiscVertices, detachEnclosureSeamVertices } from "./viewportMesh.js";
-import { ImportedMeshState } from "../state.js";
-import { AppEvents } from "../events.js";
+} from '../viewer/index.js';
+import { prepareViewportMesh, validateViewportMesh } from '../modules/geometry/useCases.js';
+import { detachCreaseVertices } from './viewportMesh.js';
+import { GlobalState, ImportedMeshState } from '../state.js';
+import { AppEvents } from '../events.js';
+
+const GRID_DISPLAY_MODES = new Set(['wireframe', 'solidwire']);
+
+function variantForDisplayMode(mode) {
+  return GRID_DISPLAY_MODES.has(mode) ? 'grid' : 'smooth';
+}
+
+function resetMeshCache(app) {
+  app._meshCache = { grid: null, smooth: null, stateKey: null };
+  app._currentMeshVariant = null;
+}
+
+function invalidateMeshCacheIfStale(app) {
+  if (!app._meshCache) resetMeshCache(app);
+  const versionKey =
+    typeof GlobalState.getVersion === 'function'
+      ? GlobalState.getVersion()
+      : JSON.stringify(app.currentState || {});
+  if (app._meshCache.stateKey !== versionKey) {
+    app._meshCache.grid = null;
+    app._meshCache.smooth = null;
+    app._meshCache.stateKey = versionKey;
+  }
+}
+
+function buildVariantMesh(state, variant) {
+  const viewportMesh = prepareViewportMesh(state, { variant });
+  const renderMesh = detachCreaseVertices(viewportMesh);
+  const integrity = validateViewportMesh(renderMesh);
+  if (!integrity.ok) {
+    console.error(
+      `[Viewport] Mesh integrity violation after detachCreaseVertices (${variant}):\n  - ${integrity.errors.join('\n  - ')}`,
+      integrity.report
+    );
+  }
+  return {
+    vertices: renderMesh.vertices,
+    indices: renderMesh.indices,
+    normals: renderMesh.normals,
+    preparedParams: viewportMesh.preparedParams,
+  };
+}
+
+function getOrBuildVariant(app, variant) {
+  invalidateMeshCacheIfStale(app);
+  const cached = app._meshCache[variant];
+  if (cached) return cached;
+  const built = buildVariantMesh(app.currentState, variant);
+  app._meshCache[variant] = built;
+  return built;
+}
 
 export function setupScene(app) {
   app.scene = createScene();
   const viewerSettings = app.uiCoordinator.loadViewerSettings();
-  app.cameraMode = viewerSettings.startupCameraMode || "perspective";
+  app.cameraMode = viewerSettings.startupCameraMode || 'perspective';
   app.needsRender = true;
   app.currentDisplayMode = null;
 
   const width = Math.max(1, app.container.clientWidth);
   const height = Math.max(1, app.container.clientHeight);
   const aspect = width / height;
-  if (app.cameraMode === "orthographic") {
+  if (app.cameraMode === 'orthographic') {
     const size = getOrthoSize();
     app.camera = createOrthoCamera(aspect, size);
   } else {
@@ -41,29 +92,24 @@ export function setupScene(app) {
     app.renderer = null;
     app.controls = null;
     app.sceneInitError = error;
-    console.error("Failed to initialize WebGL renderer:", error);
-    const fallback = document.getElementById("webgl-fallback");
-    if (fallback) fallback.style.display = "flex";
-    app.stats.innerText = "Viewport unavailable: WebGL failed to initialize";
+    console.error('Failed to initialize WebGL renderer:', error);
+    const fallback = document.getElementById('webgl-fallback');
+    if (fallback) fallback.style.display = 'flex';
+    app.stats.innerText = 'Viewport unavailable: WebGL failed to initialize';
     return false;
   }
 
-  app.controls = new OrbitControls(app.camera, app.renderer.domElement);
-  app.uiCoordinator.applyViewerSettingsToControls(app.controls, viewerSettings);
-  app.uiCoordinator.configureWheelZoomInversion(
-    app.renderer.domElement,
-    viewerSettings.invertWheelZoom,
-  );
+  app.controls = createConfiguredControls(app, viewerSettings);
 
   let resizeTimeout;
-  window.addEventListener("resize", () => {
+  window.addEventListener('resize', () => {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => onResize(app), 100);
   });
 
   // Update scene background when OS color scheme changes
-  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  darkQuery.addEventListener("change", () => {
+  const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  darkQuery.addEventListener('change', () => {
     if (app.scene) {
       const colors = getSceneThemeColors();
       app.scene.background = colors.bg;
@@ -72,12 +118,12 @@ export function setupScene(app) {
   });
 
   // Re-render when an external mesh is imported
-  AppEvents.on("mesh:imported", () => {
+  AppEvents.on('mesh:imported', () => {
     renderModel(app);
     app.needsRender = true;
   });
 
-  app.controls.addEventListener("change", () => {
+  app.controls.addEventListener('change', () => {
     app.needsRender = true;
   });
 
@@ -92,7 +138,7 @@ export function onResize(app) {
   if (width <= 0 || height <= 0) return;
   const aspect = width / height;
 
-  if (app.cameraMode === "perspective") {
+  if (app.cameraMode === 'perspective') {
     app.camera.aspect = aspect;
   } else {
     const size = getOrthoSize();
@@ -111,35 +157,19 @@ export function renderModel(app) {
   if (!app.scene || !app.renderer) return;
 
   // Imported mesh mode — render imported data instead of parametric model
-  if (
-    ImportedMeshState.active &&
-    ImportedMeshState.vertices &&
-    ImportedMeshState.indices
-  ) {
-    if (app.hornMesh) {
-      app.scene.remove(app.hornMesh);
-      app.hornMesh.geometry.dispose();
-      app.hornMesh.material.dispose();
-    }
+  if (ImportedMeshState.active && ImportedMeshState.vertices && ImportedMeshState.indices) {
+    clearSceneMesh(app);
     removeOverlays(app);
-    applyMeshToScene(
-      app,
-      ImportedMeshState.vertices,
-      ImportedMeshState.indices,
-      {},
-    );
+    applyMeshToScene(app, ImportedMeshState.vertices, ImportedMeshState.indices, {});
 
     // Color-code by physical group tags if available
     if (ImportedMeshState.physicalTags && app.hornMesh) {
       const colors = buildPhysicalGroupColors(
         ImportedMeshState.vertices,
         ImportedMeshState.indices,
-        ImportedMeshState.physicalTags,
+        ImportedMeshState.physicalTags
       );
-      app.hornMesh.geometry.setAttribute(
-        "color",
-        new THREE.Float32BufferAttribute(colors, 3),
-      );
+      app.hornMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       app.hornMesh.material.dispose();
       app.hornMesh.material = new THREE.MeshPhongMaterial({
         vertexColors: true,
@@ -151,28 +181,39 @@ export function renderModel(app) {
   }
 
   if (!app.currentState) return;
-  if (app.hornMesh) {
-    app.scene.remove(app.hornMesh);
-    app.hornMesh.geometry.dispose();
-    app.hornMesh.material.dispose();
+  const mode = app.uiCoordinator.readDisplayModeSetting();
+  const variant = variantForDisplayMode(mode);
+  let mesh;
+  try {
+    mesh = getOrBuildVariant(app, variant);
+  } catch (error) {
+    console.error('[Viewport] Mesh build failed:', error?.message || error);
+    if (typeof app.uiCoordinator?.showError === 'function') {
+      try {
+        app.uiCoordinator.showError(`Mesh build failed: ${error?.message || error}`);
+      } catch {
+        // Optional toast surface.
+      }
+    }
+    return;
   }
-  removeOverlays(app);
-
-  const viewportMesh = prepareViewportMesh(app.currentState);
-  const renderMesh = detachEnclosureSeamVertices(detachThroatDiscVertices(viewportMesh));
-  applyMeshToScene(
-    app,
-    renderMesh.vertices,
-    renderMesh.indices,
-    viewportMesh.preparedParams,
-  );
+  applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals);
+  app._currentMeshVariant = variant;
   app.needsRender = true;
+}
+
+function clearSceneMesh(app) {
+  if (!app.hornMesh) return;
+  app.scene.remove(app.hornMesh);
+  app.hornMesh.geometry.dispose();
+  app.hornMesh.material.dispose();
+  app.hornMesh = null;
 }
 
 /**
  * Apply vertex/index data to the Three.js scene.
  */
-function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
+function applyMeshToScene(app, vertices, indices, preparedParams, normals, mode) {
   if (app.hornMesh) {
     app.scene.remove(app.hornMesh);
     app.hornMesh.geometry.dispose();
@@ -183,23 +224,17 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
   app.lastPreparedParams = preparedParams || {};
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(vertices, 3),
-  );
-  geometry.setIndex(Array.from(indices));
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(createIndexAttribute(indices));
 
   if (normals && normals.length === vertices.length) {
-    geometry.setAttribute(
-      "normal",
-      new THREE.Float32BufferAttribute(normals, 3),
-    );
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   } else {
     geometry.computeVertexNormals();
   }
 
-  const displayMode = app.uiCoordinator.readDisplayModeSetting();
-  const material = createMaterialForMode(displayMode, geometry, preparedParams);
+  const displayMode = mode || app.uiCoordinator.readDisplayModeSetting();
+  const material = createMaterialForMode(displayMode, geometry);
 
   app.hornMesh = new THREE.Mesh(geometry, material);
   app.scene.add(app.hornMesh);
@@ -209,7 +244,7 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
     vertexCount: vertices.length / 3,
     triangleCount: indices.length / 3,
   };
-  if (typeof app.setViewportMeshStats === "function") {
+  if (typeof app.setViewportMeshStats === 'function') {
     app.setViewportMeshStats(viewportStats);
   } else if (app.stats) {
     app.stats.innerText = `Viewport: ${viewportStats.vertexCount} vertices | ${viewportStats.triangleCount} triangles`;
@@ -219,12 +254,12 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals) {
 function curvatureJetColor(t) {
   // Multi-stop jet colormap: dark blue → blue → cyan → green → yellow → red → dark red
   const stops = [
-    [0.000, [0.0, 0.0, 0.5]],
+    [0.0, [0.0, 0.0, 0.5]],
     [0.125, [0.0, 0.0, 1.0]],
     [0.375, [0.0, 1.0, 1.0]],
     [0.625, [1.0, 1.0, 0.0]],
     [0.875, [1.0, 0.0, 0.0]],
-    [1.000, [0.5, 0.0, 0.0]],
+    [1.0, [0.5, 0.0, 0.0]],
   ];
   for (let i = 0; i < stops.length - 1; i++) {
     const [t0, c0] = stops[i];
@@ -256,14 +291,23 @@ export function calculateCurvatureColors(geometry) {
       const a = idx[t * 3];
       const b = idx[t * 3 + 1];
       const c = idx[t * 3 + 2];
-      const pairs = [[a, b], [b, c], [a, c]];
+      const pairs = [
+        [a, b],
+        [b, c],
+        [a, c],
+      ];
       for (const [vi, vj] of pairs) {
-        const ni = vi * 3, nj = vj * 3;
-        const dot = Math.max(-1, Math.min(1,
-          normals[ni]     * normals[nj] +
-          normals[ni + 1] * normals[nj + 1] +
-          normals[ni + 2] * normals[nj + 2]
-        ));
+        const ni = vi * 3,
+          nj = vj * 3;
+        const dot = Math.max(
+          -1,
+          Math.min(
+            1,
+            normals[ni] * normals[nj] +
+              normals[ni + 1] * normals[nj + 1] +
+              normals[ni + 2] * normals[nj + 2]
+          )
+        );
         const d = 1.0 - dot;
         rawCurvature[vi] += d;
         neighborCount[vi]++;
@@ -292,7 +336,7 @@ export function calculateCurvatureColors(geometry) {
     // Mild power curve to spread mid-range values
     const c = Math.min(1.0, Math.pow(rawCurvature[v] * scale, 0.6));
     const rgb = curvatureJetColor(c);
-    colors[v * 3]     = rgb[0];
+    colors[v * 3] = rgb[0];
     colors[v * 3 + 1] = rgb[1];
     colors[v * 3 + 2] = rgb[2];
   }
@@ -355,19 +399,19 @@ function createClayMaterial() {
   });
 }
 
-function createMaterialForMode(mode, geometry, preparedParams) {
+function createMaterialForMode(mode, geometry) {
   switch (mode) {
-    case "clay":
-    case "solidwire":
-    case "edges":
+    case 'clay':
+    case 'solidwire':
+    case 'edges':
       return createClayMaterial();
-    case "wireframe":
+    case 'wireframe':
       return new THREE.MeshBasicMaterial({
         color: 0xb8b0a8,
         wireframe: true,
         side: THREE.DoubleSide,
       });
-    case "xray":
+    case 'xray':
       return new THREE.MeshPhysicalMaterial({
         color: 0xb8b0a8,
         roughness: 0.6,
@@ -377,14 +421,14 @@ function createMaterialForMode(mode, geometry, preparedParams) {
         side: THREE.DoubleSide,
         depthWrite: false,
       });
-    case "zebra":
+    case 'zebra':
       return new THREE.ShaderMaterial({
         ...ZebraShader,
         side: THREE.DoubleSide,
       });
-    case "curvature": {
+    case 'curvature': {
       const colors = calculateCurvatureColors(geometry);
-      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       return new THREE.MeshPhongMaterial({
         vertexColors: true,
         side: THREE.DoubleSide,
@@ -399,7 +443,7 @@ function addOverlaysForMode(app, mode) {
   if (!app.hornMesh) return;
   const geom = app.hornMesh.geometry;
 
-  if (mode === "solidwire") {
+  if (mode === 'solidwire') {
     app.hornWireOverlay = new THREE.Mesh(
       geom,
       new THREE.MeshBasicMaterial({
@@ -412,10 +456,10 @@ function addOverlaysForMode(app, mode) {
         polygonOffsetFactor: -1,
         polygonOffsetUnit: -1,
         side: THREE.DoubleSide,
-      }),
+      })
     );
     app.scene.add(app.hornWireOverlay);
-  } else if (mode === "edges") {
+  } else if (mode === 'edges') {
     const edgesGeom = new THREE.EdgesGeometry(geom, 15);
     app.hornEdgeLines = new THREE.LineSegments(
       edgesGeom,
@@ -423,7 +467,7 @@ function addOverlaysForMode(app, mode) {
         color: 0x000000,
         transparent: true,
         opacity: 0.4,
-      }),
+      })
     );
     app.scene.add(app.hornEdgeLines);
   }
@@ -432,13 +476,34 @@ function addOverlaysForMode(app, mode) {
 export function applyDisplayMode(app, mode) {
   if (!app.hornMesh) return;
 
+  const requiredVariant = variantForDisplayMode(mode);
+  const canSwapVariant =
+    app.currentState &&
+    !(ImportedMeshState.active && ImportedMeshState.vertices && ImportedMeshState.indices);
+  if (canSwapVariant && requiredVariant !== app._currentMeshVariant) {
+    let mesh;
+    try {
+      mesh = getOrBuildVariant(app, requiredVariant);
+    } catch (error) {
+      console.error('[Viewport] Mesh build failed on display-mode swap:', error?.message || error);
+      if (typeof app.uiCoordinator?.showError === 'function') {
+        try {
+          app.uiCoordinator.showError(`Mesh build failed: ${error?.message || error}`);
+        } catch {
+          // Optional toast surface.
+        }
+      }
+      return;
+    }
+    applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals, mode);
+    app._currentMeshVariant = requiredVariant;
+    app.needsRender = true;
+    return;
+  }
+
   removeOverlays(app);
   app.hornMesh.material.dispose();
-  app.hornMesh.material = createMaterialForMode(
-    mode,
-    app.hornMesh.geometry,
-    app.lastPreparedParams,
-  );
+  app.hornMesh.material = createMaterialForMode(mode, app.hornMesh.geometry);
   addOverlaysForMode(app, mode);
   app.needsRender = true;
 }
@@ -463,7 +528,7 @@ export function focusOnModel(app) {
 
 export function zoom(app, factor) {
   if (!app.camera || !app.controls) return;
-  if (app.cameraMode === "perspective") {
+  if (app.cameraMode === 'perspective') {
     app.camera.position.multiplyScalar(factor);
   } else {
     app.camera.zoom /= factor;
@@ -475,22 +540,22 @@ export function zoom(app, factor) {
 
 export function toggleCamera(app) {
   if (!app.camera || !app.controls || !app.renderer || !app.scene) return;
-  const width = app.container.clientWidth;
-  const height = app.container.clientHeight;
+  const width = Math.max(1, app.container.clientWidth);
+  const height = Math.max(1, app.container.clientHeight);
   const aspect = width / height;
   const pos = app.camera.position.clone();
   const target = app.controls.target.clone();
   const prevCamera = app.camera;
 
-  if (app.cameraMode === "perspective") {
+  if (app.cameraMode === 'perspective') {
     const size = getOrthoSize();
     app.camera = createOrthoCamera(aspect, size);
-    app.cameraMode = "orthographic";
-    document.getElementById("camera-toggle").innerText = "▲";
+    app.cameraMode = 'orthographic';
+    updateCameraToggleLabel('▲');
   } else {
     app.camera = createPerspectiveCamera(aspect);
-    app.cameraMode = "perspective";
-    document.getElementById("camera-toggle").innerText = "⬚";
+    app.cameraMode = 'perspective';
+    updateCameraToggleLabel('⬚');
   }
 
   app.scene.remove(prevCamera);
@@ -499,17 +564,8 @@ export function toggleCamera(app) {
   attachCameraLights(app.camera, getSceneThemeColors());
 
   const oldControls = app.controls;
-  app.controls = new OrbitControls(app.camera, app.renderer.domElement);
-  app.controls.target.copy(target);
   const vs = app.uiCoordinator.getViewerSettings();
-  app.uiCoordinator.applyViewerSettingsToControls(app.controls, vs);
-  app.uiCoordinator.configureWheelZoomInversion(
-    app.renderer.domElement,
-    vs.invertWheelZoom,
-  );
-  app.controls.addEventListener("change", () => {
-    app.needsRender = true;
-  });
+  app.controls = createConfiguredControls(app, vs, target);
   app.controls.update();
   oldControls.dispose();
   app.needsRender = true;
@@ -526,5 +582,40 @@ function animate(app) {
   if (app.needsRender) {
     app.renderer.render(app.scene, app.camera);
     app.needsRender = false;
+  }
+}
+
+function createConfiguredControls(app, viewerSettings, target = null) {
+  const controls = new OrbitControls(app.camera, app.renderer.domElement);
+  if (target) {
+    controls.target.copy(target);
+  }
+  app.uiCoordinator.applyViewerSettingsToControls(controls, viewerSettings);
+  app.uiCoordinator.configureWheelZoomInversion(
+    app.renderer.domElement,
+    viewerSettings.invertWheelZoom
+  );
+  controls.addEventListener('change', () => {
+    app.needsRender = true;
+  });
+  return controls;
+}
+
+function createIndexAttribute(indices) {
+  let maxIndex = 0;
+  for (let i = 0; i < indices.length; i += 1) {
+    if (indices[i] > maxIndex) {
+      maxIndex = indices[i];
+    }
+  }
+  const ArrayType = maxIndex > 65535 ? Uint32Array : Uint16Array;
+  const typedIndices = indices instanceof ArrayType ? indices : new ArrayType(indices);
+  return new THREE.BufferAttribute(typedIndices, 1);
+}
+
+function updateCameraToggleLabel(label) {
+  const toggle = document.getElementById('camera-toggle');
+  if (toggle) {
+    toggle.innerText = label;
   }
 }

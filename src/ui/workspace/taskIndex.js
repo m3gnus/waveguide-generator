@@ -1,4 +1,8 @@
-import { createTaskManifestFromJob, normalizeTaskManifest, readTaskManifest } from './taskManifest.js';
+import {
+  createTaskManifestFromJob,
+  normalizeTaskManifest,
+  readTaskManifest,
+} from './taskManifest.js';
 
 export const TASK_INDEX_FILE_NAME = '.waveguide-tasks.index.v1.json';
 export const TASK_INDEX_VERSION = 1;
@@ -23,14 +27,16 @@ function normalizeExportedFiles(value) {
 }
 
 function resolveEntryTimestamp(entry) {
-  return Date.parse(
-    entry?.updatedAt
-    || entry?.completedAt
-    || entry?.startedAt
-    || entry?.createdAt
-    || entry?.queuedAt
-    || ''
-  ) || 0;
+  return (
+    Date.parse(
+      entry?.updatedAt ||
+        entry?.completedAt ||
+        entry?.startedAt ||
+        entry?.createdAt ||
+        entry?.queuedAt ||
+        ''
+    ) || 0
+  );
 }
 
 function prefersHumanReadableLabel(entry) {
@@ -59,7 +65,11 @@ function dedupeTaskIndexItems(items = []) {
       continue;
     }
 
-    if (currentTs === existingTs && prefersHumanReadableLabel(item) && !prefersHumanReadableLabel(existing)) {
+    if (
+      currentTs === existingTs &&
+      prefersHumanReadableLabel(item) &&
+      !prefersHumanReadableLabel(existing)
+    ) {
       byId.set(id, item);
     }
   }
@@ -90,7 +100,7 @@ export function normalizeTaskIndexEntry(raw = {}) {
       ? Number(fromManifest.scriptSchemaVersion)
       : 1,
     scriptSnapshot: fromManifest.scriptSnapshot ?? null,
-    script: fromManifest.scriptSnapshot ?? null
+    script: fromManifest.scriptSnapshot ?? null,
   };
 }
 
@@ -103,7 +113,7 @@ function normalizeTaskIndexPayload(raw = {}) {
   return {
     version: TASK_INDEX_VERSION,
     savedAt: raw.savedAt ?? raw.saved_at ?? nowIso(),
-    items
+    items,
   };
 }
 
@@ -129,7 +139,7 @@ export async function loadTaskIndex(rootDirectoryHandle) {
     return {
       items: [],
       warning: `Task index read failed: ${error?.message || 'unknown error'}`,
-      exists: false
+      exists: false,
     };
   }
 }
@@ -138,10 +148,12 @@ export async function writeTaskIndex(rootDirectoryHandle, items = []) {
   const payload = normalizeTaskIndexPayload({
     version: TASK_INDEX_VERSION,
     savedAt: nowIso(),
-    items
+    items,
   });
 
-  const fileHandle = await rootDirectoryHandle.getFileHandle(TASK_INDEX_FILE_NAME, { create: true });
+  const fileHandle = await rootDirectoryHandle.getFileHandle(TASK_INDEX_FILE_NAME, {
+    create: true,
+  });
   const writable = await fileHandle.createWritable();
   await writable.write(`${JSON.stringify(payload, null, 2)}\n`);
   await writable.close();
@@ -172,7 +184,7 @@ export async function rebuildIndexFromManifests(rootDirectoryHandle) {
     return {
       items: [],
       repaired: false,
-      warnings: ['Workspace folder does not support directory enumeration.']
+      warnings: ['Workspace folder does not support directory enumeration.'],
     };
   }
 
@@ -203,6 +215,6 @@ export async function rebuildIndexFromManifests(rootDirectoryHandle) {
   return {
     items: dedupedItems,
     repaired: true,
-    warnings
+    warnings,
   };
 }

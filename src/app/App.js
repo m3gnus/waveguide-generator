@@ -12,8 +12,9 @@ import { checkForUpdates } from './updates.js';
 import {
   exportMwgConfigFromApp,
   exportProfileCsvFromApp,
+  exportStepFromApp,
   exportStlFromApp,
-  registerBackendDiagnosticTool
+  registerBackendDiagnosticTool,
 } from './exports.js';
 
 export class App {
@@ -30,7 +31,7 @@ export class App {
       UiModule.task(
         UiModule.importApp(this, {
           feedback: appUiFeedback,
-          fileOps: appUiFileOps
+          fileOps: appUiFileOps,
         })
       )
     );
@@ -109,7 +110,6 @@ export class App {
     }
   }
 
-
   handleFileUpload(event) {
     return handleFileUpload(event, this.uiCoordinator);
   }
@@ -132,6 +132,10 @@ export class App {
 
   async exportSTL() {
     return exportStlFromApp();
+  }
+
+  async exportSTEP() {
+    return exportStepFromApp();
   }
 
   async exportMWGConfig() {
@@ -177,15 +181,14 @@ export class App {
     if (!this.stats) {
       return;
     }
-    const activeStats = this.activeMeshStatsSource === 'simulation'
-      ? this.simulationMeshStats
-      : this.viewportMeshStats;
+    const activeStats =
+      this.activeMeshStatsSource === 'simulation'
+        ? this.simulationMeshStats
+        : this.viewportMeshStats;
     if (!activeStats) {
       return;
     }
-    const label = this.activeMeshStatsSource === 'simulation'
-      ? 'Simulation'
-      : 'Viewport';
+    const label = this.activeMeshStatsSource === 'simulation' ? 'Simulation' : 'Viewport';
     this.stats.innerText = `${label}: ${activeStats.vertexCount} vertices | ${activeStats.triangleCount} triangles`;
   }
 
@@ -202,6 +205,6 @@ function normalizeMeshStats(meshStats = null) {
   }
   return {
     vertexCount: Math.max(0, Math.floor(vertexCount)),
-    triangleCount: Math.max(0, Math.floor(triangleCount))
+    triangleCount: Math.max(0, Math.floor(triangleCount)),
   };
 }

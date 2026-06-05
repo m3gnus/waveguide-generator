@@ -7,7 +7,11 @@ from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
 
-from contracts import SimulationRequest, WaveguideParamsRequest
+from contracts import (
+    SimulationRequest,
+    WaveguideParamsRequest,
+    normalize_contract_solver_backend,
+)
 from services.solver_runtime import normalize_mesh_validation_mode
 
 
@@ -17,11 +21,45 @@ class SimulationRequestValidation:
     waveguide_params: Optional[Dict[str, Any]] = None
 
 
-def validate_occ_adaptive_bem_shell(enc_depth: float, wall_thickness: float) -> None:
-    """Adaptive BEM requires either enclosure volume or wall shell thickness."""
+def is_hornlab_mesher_strategy(mesh_strategy: str) -> bool:
+    return str(mesh_strategy or "").strip().lower() == "hornlab_mesher"
+
+
+def solver_backend_requires_full_domain_quadrants(solver_backend: Any) -> bool:
+    return normalize_contract_solver_backend(solver_backend) == "bempp"
+
+
+def apply_solver_backend_quadrant_compatibility(
+    request: SimulationRequest,
+    solver_backend: Any,
+) -> SimulationRequest:
+    """Return a request whose HornLab mesher payload is compatible with backend limits."""
+    if not solver_backend_requires_full_domain_quadrants(solver_backend):
+        return request
+
+    options = request.options if isinstance(request.options, dict) else {}
+    mesh_opts = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
+    if not is_hornlab_mesher_strategy(str(mesh_opts.get("strategy", ""))):
+        return request
+
+    waveguide_params = mesh_opts.get("waveguide_params")
+    if not isinstance(waveguide_params, dict):
+        return request
+
+    next_options = dict(options)
+    next_mesh_opts = dict(mesh_opts)
+    next_waveguide_params = dict(waveguide_params)
+    next_waveguide_params["quadrants"] = 1234
+    next_mesh_opts["waveguide_params"] = next_waveguide_params
+    next_options["mesh"] = next_mesh_opts
+    return request.model_copy(update={"options": next_options}, deep=True)
+
+
+def validate_hornlab_mesher_bem_shell(enc_depth: float, wall_thickness: float) -> None:
+    """HornLab mesher BEM requests require either enclosure volume or wall shell thickness."""
     if float(enc_depth) <= 0.0 and float(wall_thickness) <= 0.0:
         raise ValueError(
-            "Adaptive BEM simulation requires a closed shell. "
+            "HornLab mesher BEM simulation requires a closed shell. "
             "Increase enclosure depth or wall thickness."
         )
 
@@ -57,14 +95,17 @@ def validate_submit_simulation_request(
     )
     mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
 
-    if mesh_strategy != "occ_adaptive":
-        return SimulationRequestValidation(mesh_strategy=mesh_strategy)
+    if not is_hornlab_mesher_strategy(mesh_strategy):
+        raise ValueError(
+            "Simulation requests must use options.mesh.strategy='hornlab_mesher'. "
+            "Client-side JS meshes are viewport-only and are not accepted as a solve pipeline."
+        )
 
     waveguide_params = mesh_opts.get("waveguide_params")
     if not isinstance(waveguide_params, dict):
         raise ValueError(
             "options.mesh.waveguide_params must be an object when "
-            "options.mesh.strategy='occ_adaptive'."
+            "options.mesh.strategy='hornlab_mesher'."
         )
 
     try:
@@ -74,15 +115,12 @@ def validate_submit_simulation_request(
             f"Invalid options.mesh.waveguide_params: {exc.errors()}"
         ) from exc
 
-    validate_occ_adaptive_bem_shell(
+    validate_hornlab_mesher_bem_shell(
         validated_waveguide.enc_depth,
         validated_waveguide.wall_thickness,
     )
 
     normalized_waveguide_params = validated_waveguide.model_dump()
-    # Active OCC solve path always builds full-domain meshes. Force quadrants=1234
-    # at the submission boundary so the queued payload reflects the active contract.
-    normalized_waveguide_params["quadrants"] = 1234
 
     return SimulationRequestValidation(
         mesh_strategy=mesh_strategy,
@@ -95,11 +133,12 @@ def build_submit_simulation_request(
     validation: SimulationRequestValidation,
 ) -> SimulationRequest:
     """Build the request object that will actually be queued for submission."""
-    if validation.mesh_strategy != "occ_adaptive" or not validation.waveguide_params:
+    if not is_hornlab_mesher_strategy(validation.mesh_strategy) or not validation.waveguide_params:
         return request
 
     options = dict(request.options or {})
     mesh_opts = dict(options.get("mesh", {}))
+    mesh_opts["strategy"] = "hornlab_mesher"
     mesh_opts["waveguide_params"] = dict(validation.waveguide_params)
     options["mesh"] = mesh_opts
     return request.model_copy(update={"options": options}, deep=True)

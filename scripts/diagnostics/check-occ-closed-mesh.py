@@ -4,10 +4,11 @@ import os
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
 
+sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, 'server'))
 
-from server.solver.waveguide_builder import build_waveguide_mesh
-from server.app import WaveguideParamsRequest
+from contracts import WaveguideParamsRequest
+from solver.mesher_adapter import build_waveguide_mesh
 
 # Manually create the request for a fully closed model
 payload_data = {

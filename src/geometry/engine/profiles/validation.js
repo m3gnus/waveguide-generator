@@ -4,7 +4,7 @@ const VALIDATION_RULES = {
   a0: { min: 0, max: 90, message: 'a0 must be between 0 and 90 degrees' },
   r0: { min: 0, exclusive: true, message: 'r0 must be positive' },
   k: { min: 0, exclusive: true, message: 'k must be greater than 0' },
-  tmax: { min: 0, max: 1, message: 'tmax must be between 0 and 1' }
+  tmax: { min: 0, max: 1, message: 'tmax must be between 0 and 1' },
 };
 
 function validateRule(name, value, rule) {

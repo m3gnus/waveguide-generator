@@ -5,9 +5,10 @@ import { getDefaults } from "../src/config/defaults.js";
 import { prepareGeometryParams } from "../src/geometry/index.js";
 import {
   DesignModule,
-  prepareOccExportParams,
-  prepareOccSimulationParams,
+  prepareBackendMeshExportParams,
+  prepareBackendMeshSimulationParams,
 } from "../src/modules/design/index.js";
+import { resolveAutoQuadrants } from "../src/modules/design/symmetry.js";
 
 function makeRawParams(overrides = {}) {
   return {
@@ -89,12 +90,12 @@ test("DesignModule output helpers preserve pre-prepared params", () => {
   );
 });
 
-test("DesignModule OCC normalization outputs centralize simulation/export request prep", () => {
+test("DesignModule backend mesh normalization outputs centralize simulation/export request prep", () => {
   const prepared = prepareGeometryParams(
     makeRawParams({
       angularSegments: 21.2,
       lengthSegments: 9.1,
-      quadrants: "not-a-quadrant",
+      quadrants: "1",
       scale: 2,
       throatResolution: 3,
       mouthResolution: 5,
@@ -108,32 +109,77 @@ test("DesignModule OCC normalization outputs centralize simulation/export reques
   );
 
   const designTask = DesignModule.task(DesignModule.importPrepared(prepared));
-  const occSimulation = DesignModule.output.occSimulationParams(designTask);
-  const occExport = DesignModule.output.occExportParams(designTask);
+  const backendMeshSimulation = DesignModule.output.backendMeshSimulationParams(designTask);
+  const backendMeshExport = DesignModule.output.backendMeshExportParams(designTask);
 
-  assert.equal(occSimulation.angularSegments, 21);
-  assert.equal(occSimulation.lengthSegments, 10);
-  assert.equal(occSimulation.quadrants, 1234);
-  assert.equal(occSimulation.throatResolution, 6);
-  assert.equal(occSimulation.mouthResolution, 10);
-  assert.equal(occSimulation.rearResolution, 14);
-  assert.equal(occSimulation.encFrontResolution, "8,10,12,14");
-  assert.equal(occSimulation.encBackResolution, "16,18,20,22");
+  assert.equal(backendMeshSimulation.angularSegments, 21);
+  assert.equal(backendMeshSimulation.lengthSegments, 10);
+  assert.equal(backendMeshSimulation.quadrants, 1);
+  assert.equal(backendMeshSimulation.throatResolution, 6);
+  assert.equal(backendMeshSimulation.mouthResolution, 10);
+  assert.equal(backendMeshSimulation.rearResolution, 14);
+  assert.equal(backendMeshSimulation.encFrontResolution, "8,10,12,14");
+  assert.equal(backendMeshSimulation.encBackResolution, "16,18,20,22");
 
-  assert.equal(occExport.angularSegments, 20);
-  assert.equal(occExport.lengthSegments, 10);
-  assert.equal(occExport.throatResolution, 6);
-  assert.equal(occExport.mouthResolution, 10);
-  assert.equal(occExport.rearResolution, 14);
-  assert.equal(occExport.encFrontResolution, "8,10,12,14");
-  assert.equal(occExport.encBackResolution, "16,18,20,22");
-  assert.equal(occExport.wallThickness, 5);
+  assert.equal(backendMeshExport.angularSegments, 20);
+  assert.equal(backendMeshExport.lengthSegments, 10);
+  assert.equal(backendMeshExport.quadrants, 1);
+  assert.equal(backendMeshExport.throatResolution, 6);
+  assert.equal(backendMeshExport.mouthResolution, 10);
+  assert.equal(backendMeshExport.rearResolution, 14);
+  assert.equal(backendMeshExport.encFrontResolution, "8,10,12,14");
+  assert.equal(backendMeshExport.encBackResolution, "16,18,20,22");
+  assert.equal(backendMeshExport.wallThickness, 5);
 
-  const directOccSimulation = prepareOccSimulationParams(prepared);
-  const directOccExport = prepareOccExportParams(prepared);
+  const directBackendMeshSimulation = prepareBackendMeshSimulationParams(prepared);
+  const directBackendMeshExport = prepareBackendMeshExportParams(prepared);
   assert.equal(
-    JSON.stringify(directOccSimulation),
-    JSON.stringify(occSimulation),
+    JSON.stringify(directBackendMeshSimulation),
+    JSON.stringify(backendMeshSimulation),
   );
-  assert.equal(JSON.stringify(directOccExport), JSON.stringify(occExport));
+  assert.equal(JSON.stringify(directBackendMeshExport), JSON.stringify(backendMeshExport));
+});
+
+test("DesignModule auto quadrants chooses quarter, half, or full from symmetry", () => {
+  const quarter = prepareGeometryParams(
+    makeRawParams({
+      quadrants: "auto",
+      a: "45 - 5*cos(2*p)^4",
+      s: "0.85 + 0.3*cos(p)^2",
+      verticalOffset: 0,
+    }),
+    { type: "OSSE", applyVerticalOffset: true },
+  );
+  const half = prepareGeometryParams(
+    makeRawParams({
+      quadrants: "auto",
+      a: "45 - 5*cos(2*p)^4",
+      s: "0.85 + 0.3*cos(p)^2",
+      verticalOffset: 80,
+    }),
+    { type: "OSSE", applyVerticalOffset: true },
+  );
+  const full = prepareGeometryParams(
+    makeRawParams({
+      quadrants: "auto",
+      a: "45 + 2*sin(p) + cos(p)",
+      s: "0.85",
+      verticalOffset: 0,
+    }),
+    { type: "OSSE", applyVerticalOffset: true },
+  );
+
+  assert.equal(resolveAutoQuadrants(quarter), 1);
+  assert.equal(prepareBackendMeshSimulationParams(quarter).quadrants, 1);
+  assert.equal(resolveAutoQuadrants(half), 14);
+  assert.equal(prepareBackendMeshSimulationParams(half).quadrants, 14);
+  assert.equal(resolveAutoQuadrants(full), 1234);
+  assert.equal(prepareBackendMeshSimulationParams(full).quadrants, 1234);
+});
+
+test("DesignModule exposes only HornLab backend mesh normalization outputs", () => {
+  assert.equal(typeof prepareBackendMeshSimulationParams, "function");
+  assert.equal(typeof prepareBackendMeshExportParams, "function");
+  assert.equal(DesignModule.output.occSimulationParams, undefined);
+  assert.equal(DesignModule.output.occExportParams, undefined);
 });

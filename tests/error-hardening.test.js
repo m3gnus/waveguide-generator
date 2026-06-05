@@ -39,6 +39,34 @@ test('EventBus wildcard listener failures are isolated from other wildcard liste
   assert.deepEqual(wildcardEvents, ['state:updated']);
 });
 
+test('EventBus listener failures do not write normal-runtime console warnings', () => {
+  const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
+  const originalWarn = console.warn;
+  const warnings = [];
+  const bus = new EventBus();
+
+  globalThis.__WAVEGUIDE_DEBUG__ = false;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    bus.on('demo:event', () => {
+      throw new Error('listener failure');
+    });
+    bus.emit('demo:event', { value: 42 });
+  } finally {
+    console.warn = originalWarn;
+    if (typeof originalDebug === 'undefined') {
+      delete globalThis.__WAVEGUIDE_DEBUG__;
+    } else {
+      globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
+    }
+  }
+
+  assert.deepEqual(warnings, []);
+});
+
 test('normalizePersistedState rejects malformed storage schema', () => {
   assert.equal(normalizePersistedState(null), null);
   assert.equal(normalizePersistedState({}), null);
@@ -70,6 +98,43 @@ test('AppState falls back to defaults when persisted state schema is invalid', (
   } finally {
     global.localStorage = originalStorage;
   }
+});
+
+test('AppState storage fallback does not write normal-runtime console warnings', () => {
+  const originalStorage = global.localStorage;
+  const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
+  const originalWarn = console.warn;
+  const warnings = [];
+
+  globalThis.__WAVEGUIDE_DEBUG__ = false;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+  global.localStorage = {
+    getItem(key) {
+      if (key === 'ath_state') {
+        return JSON.stringify({ type: 'UNKNOWN', params: {} });
+      }
+      return null;
+    },
+    setItem() {},
+    removeItem() {}
+  };
+
+  try {
+    const state = new AppState();
+    assert.equal(state.get().type, 'R-OSSE');
+  } finally {
+    console.warn = originalWarn;
+    global.localStorage = originalStorage;
+    if (typeof originalDebug === 'undefined') {
+      delete globalThis.__WAVEGUIDE_DEBUG__;
+    } else {
+      globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
+    }
+  }
+
+  assert.deepEqual(warnings, []);
 });
 
 test('AppState hydrates valid persisted state and merges defaults', () => {

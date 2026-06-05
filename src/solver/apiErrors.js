@@ -51,7 +51,7 @@ function formatApiErrorMessage({ operation, status, category, detail }) {
     validation: `${operation} failed validation (${status})`,
     dependency: `${operation} unavailable (${status})`,
     not_found: `${operation} resource not found (${status})`,
-    unexpected: `${operation} failed (${status})`
+    unexpected: `${operation} failed (${status})`,
   };
 
   const prefix = prefixByCategory[category] || `${operation} failed (${status})`;
@@ -73,7 +73,7 @@ export function createApiError({ operation, status, category, detail, cause = nu
 }
 
 export async function parseApiErrorResponse(response, { operation = 'Request' } = {}) {
-  let detail = '';
+  let detail;
   try {
     const payload = await response.json();
     detail = parseApiErrorPayload(payload);
@@ -86,14 +86,15 @@ export async function parseApiErrorResponse(response, { operation = 'Request' } 
     operation,
     status: response.status,
     category,
-    detail
+    detail,
   });
 }
 
 export function createNetworkApiError(operation, cause) {
-  const message = cause?.name === 'AbortError'
-    ? `${operation} timed out while contacting backend`
-    : `${operation} could not reach backend service`;
+  const message =
+    cause?.name === 'AbortError'
+      ? `${operation} timed out while contacting backend`
+      : `${operation} could not reach backend service`;
 
   const error = new Error(message);
   error.name = 'ApiError';

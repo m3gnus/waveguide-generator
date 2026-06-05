@@ -25,15 +25,16 @@ export function loadSimulationStateSnapshot(stateSnapshot, source = 'simulation-
 }
 
 export function applySimulationJobScriptState(script = {}, options = {}) {
-  const source = typeof options.source === 'string' && options.source.trim()
-    ? options.source
-    : 'simulation-job-load-script';
+  const source =
+    typeof options.source === 'string' && options.source.trim()
+      ? options.source
+      : 'simulation-job-load-script';
 
   if (isObject(script.stateSnapshot) && isObject(script.stateSnapshot.params)) {
     loadSimulationStateSnapshot(script.stateSnapshot, source);
     return {
       mode: 'snapshot',
-      params: script.stateSnapshot.params
+      params: script.stateSnapshot.params,
     };
   }
 
@@ -41,12 +42,12 @@ export function applySimulationJobScriptState(script = {}, options = {}) {
     updateSimulationStateParams(script.params);
     return {
       mode: 'params',
-      params: script.params
+      params: script.params,
     };
   }
 
   return {
     mode: 'none',
-    params: null
+    params: null,
   };
 }

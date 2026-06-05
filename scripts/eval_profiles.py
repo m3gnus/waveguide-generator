@@ -14,23 +14,61 @@ import math
 import sys
 from pathlib import Path
 
-# Add project root so we can import from server.solver
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Add project root and sibling dependency clone so local package installs and
+# server-managed environments both work.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MESHER_SOURCE = REPO_ROOT.parent / "hornlab-waveguide-mesher"
+sys.path.insert(0, str(REPO_ROOT))
+if MESHER_SOURCE.exists():
+    sys.path.insert(0, str(MESHER_SOURCE))
 
-from server.solver.waveguide_builder import (
-    _compute_rosse_profile,
-    _compute_osse_profile_arrays,
-    _build_osse_callables,
-    _compute_guiding_curve_radius,
+from hornlab_mesher.profile_common import eval_param
+from hornlab_mesher.profile_formulas import calculate_osse, calculate_rosse, osse_total_length
+from hornlab_mesher.profile_morph import (
+    _apply_morphing,
+    _guiding_curve_target_radius,
     _invert_osse_coverage_angle,
-    _get_rounded_rect_radius,
-    _apply_morph,
-    _make_callable,
-    _get_float,
-    _get_int,
+    _rounded_rect_radius,
 )
 
 import numpy as np
+
+
+ALIASES = {
+    "formula_type": "type",
+    "throat_ext_length": "throatExtLength",
+    "throat_ext_angle": "throatExtAngle",
+    "slot_length": "slotLength",
+    "gcurve_type": "gcurveType",
+    "gcurve_width": "gcurveWidth",
+    "gcurve_aspect_ratio": "gcurveAspectRatio",
+    "gcurve_dist": "gcurveDist",
+    "gcurve_rot": "gcurveRot",
+    "gcurve_sf": "gcurveSf",
+    "gcurve_se_n": "gcurveSeN",
+    "gcurve_sf_a": "gcurveSfA",
+    "gcurve_sf_b": "gcurveSfB",
+    "gcurve_sf_m1": "gcurveSfM1",
+    "gcurve_sf_m2": "gcurveSfM2",
+    "gcurve_sf_n1": "gcurveSfN1",
+    "gcurve_sf_n2": "gcurveSfN2",
+    "gcurve_sf_n3": "gcurveSfN3",
+    "morph_target": "morphTarget",
+    "morph_width": "morphWidth",
+    "morph_height": "morphHeight",
+    "morph_corner": "morphCorner",
+    "morph_rate": "morphRate",
+    "morph_fixed": "morphFixed",
+    "morph_allow_shrinkage": "morphAllowShrinkage",
+}
+
+
+def normalise_params(config):
+    out = dict(config or {})
+    for old, new in ALIASES.items():
+        if old in out and new not in out:
+            out[new] = out[old]
+    return out
 
 
 def evaluate_profiles(config, t_values, phi_values):
@@ -39,45 +77,31 @@ def evaluate_profiles(config, t_values, phi_values):
     Returns list of {t, phi, x, y} dicts with the raw 2D profile values
     (before 3D cylindrical projection).
     """
-    formula_type = config.get("formula_type", config.get("type", "OSSE"))
-    t_arr = np.array(t_values, dtype=float)
+    config = normalise_params(config)
+    formula_type = config.get("type", "OSSE")
     results = []
 
     if formula_type == "R-OSSE":
-        r0_fn = _make_callable(config.get("r0", 12.7), default=12.7)
-        a0_fn = _make_callable(config.get("a0", 15.5), default=15.5)
-        k_fn = _make_callable(config.get("k", 2.0), default=2.0)
-        r_fn = _make_callable(config.get("r", 0.4), default=0.4)
-        m_fn = _make_callable(config.get("m", 0.85), default=0.85)
-        q_fn = _make_callable(config.get("q", 3.4), default=3.4)
-        R_fn = _make_callable(config["R"])
-        a_fn = _make_callable(config["a"])
-        b_fn = _make_callable(config.get("b", 0.2), default=0.2)
-        tmax_fn = _make_callable(config.get("tmax", 1.0), default=1.0)
-
         for phi in phi_values:
-            x_arr, y_arr, L = _compute_rosse_profile(
-                t_arr, R_fn(phi), a_fn(phi),
-                r0_fn(phi), a0_fn(phi), k_fn(phi),
-                r_fn(phi), b_fn(phi), m_fn(phi), q_fn(phi),
-                tmax=tmax_fn(phi),
-            )
-            for j, t in enumerate(t_values):
+            tmax = float(eval_param(config.get("tmax"), phi, 1.0))
+            for t in t_values:
+                x, y = calculate_rosse(float(t) * tmax, phi, config)
                 results.append({
                     "t": t, "phi": phi,
-                    "x": float(x_arr[j]), "y": float(y_arr[j]),
+                    "x": float(x), "y": float(y),
                 })
 
     elif formula_type == "OSSE":
-        callables = _build_osse_callables(config)
         for phi in phi_values:
-            x_arr, y_arr, total_len = _compute_osse_profile_arrays(
-                t_arr, phi, config, callables=callables
-            )
-            for j, t in enumerate(t_values):
+            total_len = osse_total_length(config, phi)
+            h = eval_param(config.get("h"), phi, 0.0)
+            for t in t_values:
+                x, y = calculate_osse(float(t) * total_len, phi, config)
+                if h:
+                    y += h * math.sin(float(t) * math.pi)
                 results.append({
                     "t": t, "phi": phi,
-                    "x": float(x_arr[j]), "y": float(y_arr[j]),
+                    "x": float(x), "y": float(y),
                 })
     else:
         raise ValueError(f"Unsupported formula_type: {formula_type}")
@@ -97,7 +121,7 @@ def evaluate_individual_functions(config, t_values, phi_values):
         rr = config["rounded_rect"]
         results["rounded_rect"] = []
         for phi in rr.get("phi_values", phi_values):
-            r = _get_rounded_rect_radius(phi, rr["half_w"], rr["half_h"], rr["corner_r"])
+            r = _rounded_rect_radius(phi, rr["half_w"], rr["half_h"], rr["corner_r"])
             results["rounded_rect"].append({"phi": phi, "r": r})
 
     # Guiding curve radius
@@ -105,15 +129,21 @@ def evaluate_individual_functions(config, t_values, phi_values):
         gc = config["guiding_curve"]
         results["guiding_curve"] = []
         for phi in gc.get("phi_values", phi_values):
-            r = _compute_guiding_curve_radius(phi, gc["params"])
+            r = _guiding_curve_target_radius(phi, normalise_params(gc["params"]))
             results["guiding_curve"].append({"phi": phi, "r": r})
 
     # Coverage angle inversion
     if "coverage_inversion" in config:
         ci = config["coverage_inversion"]
+        params = normalise_params(ci.get("params", {}))
+        params.update({key: ci[key] for key in ("k", "s", "n", "q", "L") if key in ci})
         angle = _invert_osse_coverage_angle(
-            ci["target_r"], ci["z_main"], ci["r0_main"], ci["a0_deg"],
-            ci["k"], ci["s"], ci["n"], ci["q"], ci["L"],
+            ci["target_r"],
+            ci["z_main"],
+            0.0,
+            params,
+            a0_deg=ci["a0_deg"],
+            r0_main=ci["r0_main"],
         )
         results["coverage_inversion"] = {"angle_deg": angle}
 
@@ -122,9 +152,10 @@ def evaluate_individual_functions(config, t_values, phi_values):
         mp = config["morph"]
         results["morph"] = []
         for case in mp["cases"]:
-            r = _apply_morph(
-                case["current_r"], case["t"], case["phi"],
-                mp["params"], case.get("morph_target_info"),
+            r = _apply_morphing(
+                case["current_r"], case.get("mouth_radius", case["current_r"]),
+                case["t"], case["phi"],
+                normalise_params(mp["params"]),
             )
             results["morph"].append({"t": case["t"], "phi": case["phi"], "r": r})
 

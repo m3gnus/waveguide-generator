@@ -2,18 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
-import {
-  prepareGeometryParams,
-  buildCanonicalMeshPayload,
-  buildPreparedCanonicalMeshPayload
-} from '../src/geometry/index.js';
+import { prepareGeometryParams } from '../src/geometry/index.js';
 import { SimulationModule } from '../src/modules/simulation/index.js';
 import { DesignModule } from '../src/modules/design/index.js';
 import { GlobalState } from '../src/state.js';
 import {
   validateSimulationConfig,
-  prepareCanonicalSimulationMesh,
-  prepareOccAdaptiveSolveRequest,
+  prepareHornlabSolveContractMesh,
+  prepareHornlabMesherSolveRequest,
   summarizeCanonicalSimulationMesh,
   summarizePersistedSimulationMeshStats
 } from '../src/modules/simulation/domain.js';
@@ -48,53 +44,60 @@ function makeRawParams(overrides = {}) {
   };
 }
 
-test('SimulationModule task matches canonical mesh payload contract', () => {
-  const rawParams = makeRawParams({ encDepth: 180, quadrants: '1' });
-  const simulationInput = SimulationModule.import(rawParams, {
-    type: 'OSSE',
-    applyVerticalOffset: true
-  });
-  const simulationTask = SimulationModule.task(simulationInput, {
-    includeEnclosure: true,
-    adaptivePhi: false
-  });
-
-  const expectedPrepared = prepareGeometryParams(rawParams, {
-    type: 'OSSE',
-    applyVerticalOffset: true
-  });
-  const expected = buildCanonicalMeshPayload(expectedPrepared, {
-    includeEnclosure: true,
-    adaptivePhi: false
-  });
-
-  assert.equal(simulationInput.module, 'simulation');
-  assert.equal(simulationInput.stage, 'import');
-  assert.equal(simulationTask.stage, 'task');
-  assert.deepEqual(SimulationModule.output.mesh(simulationTask), expected);
-});
-
-test('SimulationModule occ adaptive output builds solver submit options', () => {
+test('SimulationModule HornLab mesher output builds solver submit options', () => {
   const preparedParams = prepareGeometryParams(
-    makeRawParams({ encDepth: 220, wallThickness: 6 }),
+    makeRawParams({ encDepth: 220, wallThickness: 6, quadrants: '1' }),
     {
       type: 'OSSE',
       applyVerticalOffset: true
     }
   );
   const simulationInput = SimulationModule.importPrepared(preparedParams);
-  const adaptive = SimulationModule.output.occAdaptive(simulationInput, {
+  const adaptive = SimulationModule.output.hornlabMesher(simulationInput, {
     mshVersion: '2.2',
     simType: 2
   });
 
   assert.equal(adaptive.waveguidePayload.formula_type, 'OSSE');
   assert.equal(adaptive.waveguidePayload.sim_type, 2);
-  assert.equal(adaptive.submitOptions.mesh.strategy, 'occ_adaptive');
+  assert.equal(adaptive.waveguidePayload.quadrants, 1);
+  assert.equal(adaptive.submitOptions.mesh.strategy, 'hornlab_mesher');
   assert.equal(
     adaptive.submitOptions.mesh.waveguide_params,
     adaptive.waveguidePayload
   );
+  assert.equal(SimulationModule.output.occAdaptive, undefined);
+});
+
+test('SimulationModule forces full-domain quadrants for explicit BEMPP solves', () => {
+  const preparedParams = prepareGeometryParams(
+    makeRawParams({ encDepth: 220, wallThickness: 6, quadrants: '1' }),
+    {
+      type: 'OSSE',
+      applyVerticalOffset: true
+    }
+  );
+  const simulationInput = SimulationModule.importPrepared(preparedParams);
+  const output = SimulationModule.output.hornlabMesher(simulationInput, {
+    mshVersion: '2.2',
+    simType: 2,
+    solverBackend: 'bempp'
+  });
+
+  assert.equal(output.waveguidePayload.quadrants, 1234);
+  assert.equal(
+    output.submitOptions.mesh.waveguide_params,
+    output.waveguidePayload
+  );
+});
+
+test('simulation domain emits a HornLab solve contract placeholder mesh', () => {
+  const payload = prepareHornlabSolveContractMesh();
+
+  assert.deepEqual(payload.vertices, [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  assert.deepEqual(payload.indices, [0, 1, 2]);
+  assert.deepEqual(payload.surfaceTags, [2]);
+  assert.equal(payload.metadata.source, 'hornlab_mesher_contract_placeholder');
 });
 
 test('SimulationModule.importDesign consumes DesignModule task output directly', () => {
@@ -137,65 +140,41 @@ test('simulation use case validates frequency configuration', () => {
   );
 });
 
-test('simulation domain prepares canonical mesh from an explicit state snapshot', () => {
+test('simulation domain prepares HornLab mesher solve requests from an explicit state snapshot', () => {
   const state = {
     type: 'OSSE',
-    params: makeRawParams({ encDepth: 180, quadrants: '1' })
+    params: makeRawParams({ encDepth: 220, wallThickness: 6, quadrants: '1' })
   };
-  const payload = prepareCanonicalSimulationMesh(state);
-  const expectedPrepared = prepareGeometryParams(state.params, {
-    type: 'OSSE',
-    applyVerticalOffset: true
-  });
-  const expected = buildCanonicalMeshPayload(expectedPrepared, {
-    includeEnclosure: true,
-    adaptivePhi: false
-  });
-
-  assert.deepEqual(payload, expected);
-});
-
-test('simulation domain applies scale exactly once when building canonical mesh from raw state', () => {
-  const state = {
-    type: 'OSSE',
-    params: makeRawParams({
-      scale: 0.5,
-      L: '100',
-      r0: '10',
-      encDepth: 0,
-      wallThickness: 0
-    })
-  };
-
-  const payload = prepareCanonicalSimulationMesh(state);
-  const expectedPrepared = prepareGeometryParams(state.params, {
-    type: 'OSSE',
-    applyVerticalOffset: true
-  });
-  const expected = buildPreparedCanonicalMeshPayload(expectedPrepared, {
-    includeEnclosure: false,
-    adaptivePhi: false
-  });
-
-  assert.equal(expectedPrepared.L, 50);
-  assert.deepEqual(payload, expected);
-});
-
-test('simulation domain prepares OCC adaptive solve requests from an explicit state snapshot', () => {
-  const state = {
-    type: 'OSSE',
-    params: makeRawParams({ encDepth: 220, wallThickness: 6 })
-  };
-  const request = prepareOccAdaptiveSolveRequest(state, {
+  const request = prepareHornlabMesherSolveRequest(state, {
     mshVersion: '2.2',
     simType: 2
   });
 
   assert.equal(request.waveguidePayload.formula_type, 'OSSE');
   assert.equal(request.waveguidePayload.sim_type, 2);
-  assert.equal(request.submitOptions.mesh.strategy, 'occ_adaptive');
+  assert.equal(request.waveguidePayload.quadrants, 1);
+  assert.equal(request.submitOptions.mesh.strategy, 'hornlab_mesher');
   assert.deepEqual(request.stateSnapshot, state);
   assert.notEqual(request.stateSnapshot, state);
+  assert.equal(typeof prepareHornlabMesherSolveRequest, 'function');
+});
+
+test('simulation domain forces full-domain quadrants for explicit BEMPP solves', () => {
+  const state = {
+    type: 'OSSE',
+    params: makeRawParams({ encDepth: 220, wallThickness: 6, quadrants: '1' })
+  };
+  const request = prepareHornlabMesherSolveRequest(state, {
+    mshVersion: '2.2',
+    simType: 2,
+    solverBackend: 'bempp'
+  });
+
+  assert.equal(request.waveguidePayload.quadrants, 1234);
+  assert.equal(
+    request.submitOptions.mesh.waveguide_params,
+    request.waveguidePayload
+  );
 });
 
 test('simulation state facade reads and updates GlobalState through module boundary', () => {

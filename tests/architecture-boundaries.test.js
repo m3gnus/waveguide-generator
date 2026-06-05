@@ -248,6 +248,93 @@ test('runtime frontend files do not rely on the window.app ambient global', () =
   );
 });
 
+test('app orchestration modules keep normal runtime console output behind debug helpers', () => {
+  const checkedFiles = [
+    'app/events.js',
+    'app/mesh.js'
+  ];
+  const violations = [];
+
+  for (const relativePath of checkedFiles) {
+    const content = fs.readFileSync(path.join(SRC_ROOT, relativePath), 'utf8');
+    if (/\bconsole\.(log|warn)\b/.test(content)) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
+
+test('geometry core diagnostics keep normal runtime console output behind debug helpers', () => {
+  const checkedFiles = [
+    'geometry/engine/buildWaveguideMesh.js',
+    'geometry/engine/profiles/osse.js',
+    'geometry/engine/profiles/rosse.js',
+    'geometry/meshIntegrity.js'
+  ];
+  const violations = [];
+
+  for (const relativePath of checkedFiles) {
+    const content = fs.readFileSync(path.join(SRC_ROOT, relativePath), 'utf8');
+    if (/\bconsole\.(log|warn|error)\b/.test(content)) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
+
+test('core infrastructure diagnostics keep normal runtime console output behind debug helpers', () => {
+  const checkedFiles = [
+    'events.js',
+    'state.js',
+    'logging/store.js'
+  ];
+  const violations = [];
+
+  for (const relativePath of checkedFiles) {
+    const content = fs.readFileSync(path.join(SRC_ROOT, relativePath), 'utf8');
+    if (/\bconsole\.(log|warn|error)\b/.test(content)) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
+
+test('file workspace diagnostics keep normal runtime console output behind debug helpers', () => {
+  const checkedFiles = [
+    'ui/fileOps.js',
+    'ui/workspace/folderWorkspace.js'
+  ];
+  const violations = [];
+
+  for (const relativePath of checkedFiles) {
+    const content = fs.readFileSync(path.join(SRC_ROOT, relativePath), 'utf8');
+    if (/\bconsole\.(log|warn|error)\b/.test(content)) {
+      violations.push(relativePath);
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    violations.join('\n')
+  );
+});
+
 test('ui simulation workflow files must not import GlobalState directly', () => {
   const simulationUiRoot = path.join(SRC_ROOT, 'ui', 'simulation');
   const files = listJsFiles(simulationUiRoot);

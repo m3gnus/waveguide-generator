@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Mesh params matching the 250917asro68 config with reduced resolution ──
-OCC_PARAMS = {
+MESHER_PARAMS = {
     "formula_type": "R-OSSE",
     "R": "160 * (abs(cos(p)/1.8)^3 + abs(sin(p)/1)^4)^(-1/7)",
     "a": "22 * (abs(cos(p)/1.2)^8 + abs(sin(p)/1)^4)^(-1/4)",
@@ -46,14 +46,14 @@ NUM_FREQS = 3
 
 
 def build_mesh():
-    """Build OCC mesh once, return mesh dict for solver."""
+    """Build HornLab mesher mesh once, return mesh dict for solver."""
     from contracts import WaveguideParamsRequest
-    from solver.waveguide_builder import build_waveguide_mesh
+    from solver.mesher_adapter import build_waveguide_mesh
     from scripts.benchmark_solver import load_mesh
 
     print("Building mesh...")
     t0 = time.time()
-    request = WaveguideParamsRequest(**OCC_PARAMS)
+    request = WaveguideParamsRequest(**MESHER_PARAMS)
     result = build_waveguide_mesh(request.model_dump(), include_canonical=True)
     msh_text = result["msh_text"]
 

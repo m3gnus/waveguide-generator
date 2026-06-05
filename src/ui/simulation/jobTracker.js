@@ -9,7 +9,9 @@ try {
   if (typeof localStorage !== 'undefined') {
     localStorage.removeItem(STORAGE_KEY);
   }
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 
 const TERMINAL = new Set(['complete', 'error', 'cancelled']);
 const ACTIVE = new Set(['queued', 'running']);
@@ -37,7 +39,9 @@ function normalizeItem(raw = {}) {
   return {
     id: String(raw.id || ''),
     status: String(raw.status || 'error'),
-    progress: Number.isFinite(Number(raw.progress)) ? Math.max(0, Math.min(1, Number(raw.progress))) : 0,
+    progress: Number.isFinite(Number(raw.progress))
+      ? Math.max(0, Math.min(1, Number(raw.progress)))
+      : 0,
     stage: raw.stage || null,
     stageMessage: raw.stageMessage ?? raw.stage_message ?? null,
     createdAt: raw.createdAt ?? raw.created_at ?? null,
@@ -61,7 +65,7 @@ function normalizeItem(raw = {}) {
     scriptSchemaVersion: Number.isFinite(Number(scriptSchemaInput))
       ? Number(scriptSchemaInput)
       : null,
-    scriptSnapshot
+    scriptSnapshot,
   };
 }
 
@@ -89,17 +93,20 @@ function toStorageItem(item) {
     exported_files: Array.isArray(item.exportedFiles) ? item.exportedFiles : [],
     raw_results_file: item.rawResultsFile ?? null,
     mesh_artifact_file: item.meshArtifactFile ?? null,
-    script_schema_version: item.scriptSchemaVersion !== null
-      && item.scriptSchemaVersion !== undefined
-      && Number.isFinite(Number(item.scriptSchemaVersion))
-      ? Number(item.scriptSchemaVersion)
-      : 1,
-    script_snapshot: item.scriptSnapshot ?? item.script ?? null
+    script_schema_version:
+      item.scriptSchemaVersion !== null &&
+      item.scriptSchemaVersion !== undefined &&
+      Number.isFinite(Number(item.scriptSchemaVersion))
+        ? Number(item.scriptSchemaVersion)
+        : 1,
+    script_snapshot: item.scriptSnapshot ?? item.script ?? null,
   };
 }
 
 function resolveSortTimestamp(item) {
-  return Date.parse(item.createdAt || item.queuedAt || item.startedAt || item.completedAt || '') || 0;
+  return (
+    Date.parse(item.createdAt || item.queuedAt || item.startedAt || item.completedAt || '') || 0
+  );
 }
 
 export function sortJobs(items, { sortBy = 'completed_desc' } = {}) {
@@ -149,7 +156,7 @@ export function createJobTracker() {
     pollDelayMs: 1000,
     pollBackoffMs: 1000,
     consecutivePollFailures: 0,
-    isPolling: false
+    isPolling: false,
   };
 }
 
@@ -175,7 +182,7 @@ export function saveLocalIndex(jobEntries) {
   const payload = {
     version: STORAGE_VERSION,
     saved_at: nowIso(),
-    items: prune(jobEntries).map((item) => toStorageItem(item))
+    items: prune(jobEntries).map((item) => toStorageItem(item)),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
@@ -204,19 +211,21 @@ export function mergeJobs(localItems, remoteItems) {
         script: normalized.script ?? existing.script ?? null,
         meshStats: normalized.meshStats ?? existing.meshStats ?? null,
         rating: normalized.rating ?? existing.rating ?? null,
-        autoExportCompletedAt: normalized.autoExportCompletedAt ?? existing.autoExportCompletedAt ?? null,
+        autoExportCompletedAt:
+          normalized.autoExportCompletedAt ?? existing.autoExportCompletedAt ?? null,
         exportedFiles: normalized.exportedFiles?.length
           ? normalized.exportedFiles
           : (existing.exportedFiles ?? []),
         justCompleted: normalized.status === 'complete' && existing.status !== 'complete',
         rawResultsFile: normalized.rawResultsFile ?? existing.rawResultsFile ?? null,
         meshArtifactFile: normalized.meshArtifactFile ?? existing.meshArtifactFile ?? null,
-        scriptSchemaVersion: normalized.scriptSchemaVersion !== null
-          && normalized.scriptSchemaVersion !== undefined
-          && Number.isFinite(Number(normalized.scriptSchemaVersion))
-          ? Number(normalized.scriptSchemaVersion)
-          : (existing.scriptSchemaVersion ?? 1),
-        scriptSnapshot: normalized.scriptSnapshot ?? existing.scriptSnapshot ?? null
+        scriptSchemaVersion:
+          normalized.scriptSchemaVersion !== null &&
+          normalized.scriptSchemaVersion !== undefined &&
+          Number.isFinite(Number(normalized.scriptSchemaVersion))
+            ? Number(normalized.scriptSchemaVersion)
+            : (existing.scriptSchemaVersion ?? 1),
+        scriptSnapshot: normalized.scriptSnapshot ?? existing.scriptSnapshot ?? null,
       });
     } else {
       merged.set(normalized.id, normalized);
@@ -235,7 +244,7 @@ export function mergeJobs(localItems, remoteItems) {
         stage: 'error',
         stageMessage: 'Job missing from backend after reconnect',
         errorMessage: 'Job state was lost after backend restart or reset.',
-        completedAt: item.completedAt || nowIso()
+        completedAt: item.completedAt || nowIso(),
       });
       continue;
     }
@@ -280,12 +289,13 @@ export function upsertJob(panel, rawEntry) {
     justCompleted: next.justCompleted ?? existing?.justCompleted ?? false,
     rawResultsFile: next.rawResultsFile ?? existing?.rawResultsFile ?? null,
     meshArtifactFile: next.meshArtifactFile ?? existing?.meshArtifactFile ?? null,
-    scriptSchemaVersion: next.scriptSchemaVersion !== null
-      && next.scriptSchemaVersion !== undefined
-      && Number.isFinite(Number(next.scriptSchemaVersion))
-      ? Number(next.scriptSchemaVersion)
-      : (existing?.scriptSchemaVersion ?? 1),
-    scriptSnapshot: next.scriptSnapshot ?? existing?.scriptSnapshot ?? null
+    scriptSchemaVersion:
+      next.scriptSchemaVersion !== null &&
+      next.scriptSchemaVersion !== undefined &&
+      Number.isFinite(Number(next.scriptSchemaVersion))
+        ? Number(next.scriptSchemaVersion)
+        : (existing?.scriptSchemaVersion ?? 1),
+    scriptSnapshot: next.scriptSnapshot ?? existing?.scriptSnapshot ?? null,
   });
   if (!panel.activeJobId && ACTIVE.has(next.status)) {
     panel.activeJobId = next.id;
@@ -343,7 +353,11 @@ export function hasActiveJobs(panel) {
 }
 
 export function isTerminalStatus(status) {
-  return TERMINAL.has(String(status || '').trim().toLowerCase());
+  return TERMINAL.has(
+    String(status || '')
+      .trim()
+      .toLowerCase()
+  );
 }
 
 export function toUiJob(entry) {
@@ -353,5 +367,5 @@ export function toUiJob(entry) {
 export const JOB_TRACKER_CONSTANTS = {
   STORAGE_KEY,
   STORAGE_VERSION,
-  MAX_LOCAL_ITEMS
+  MAX_LOCAL_ITEMS,
 };

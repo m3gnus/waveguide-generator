@@ -6,7 +6,7 @@ export function buildQueuedSimulationJob({
   config,
   waveguidePayload,
   preparedParams,
-  stateSnapshot
+  stateSnapshot,
 }) {
   return {
     id: jobId,
@@ -21,7 +21,7 @@ export function buildQueuedSimulationJob({
       formula_type: waveguidePayload.formula_type,
       frequency_range: [config.frequencyStart, config.frequencyEnd],
       num_frequencies: config.numFrequencies,
-      sim_type: '2'
+      sim_type: '2',
     },
     hasResults: false,
     hasMeshArtifact: false,
@@ -43,12 +43,15 @@ export function buildQueuedSimulationJob({
       advancedSettings: config.advancedSettings ? { ...config.advancedSettings } : null,
       polarConfig: config.polarConfig,
       params: { ...preparedParams },
-      stateSnapshot
-    }
+      stateSnapshot,
+    },
   };
 }
 
-export function buildCancelledSimulationJob(job, { message = 'Simulation cancelled by user', completedAt } = {}) {
+export function buildCancelledSimulationJob(
+  job,
+  { message = 'Simulation cancelled by user', completedAt } = {}
+) {
   if (!job || typeof job !== 'object' || !job.id) {
     return null;
   }
@@ -60,7 +63,7 @@ export function buildCancelledSimulationJob(job, { message = 'Simulation cancell
     stageMessage: message,
     errorMessage: message,
     completedAt: completedAt || new Date().toISOString(),
-    cancellationRequested: false
+    cancellationRequested: false,
   };
 }
 
@@ -79,7 +82,7 @@ export function buildCancellationRequestedSimulationJob(
     stageMessage: message,
     errorMessage: null,
     completedAt: null,
-    cancellationRequested: true
+    cancellationRequested: true,
   };
 }
 

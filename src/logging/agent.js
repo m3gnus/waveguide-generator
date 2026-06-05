@@ -1,4 +1,10 @@
-import { addLogEntry, getCurrentAgent, getCurrentSessionId, setCurrentAgent, setCurrentSessionId } from './store.js';
+import {
+  addLogEntry,
+  getCurrentAgent,
+  getCurrentSessionId,
+  setCurrentAgent,
+  setCurrentSessionId,
+} from './store.js';
 import { generateId } from './utils.js';
 
 export function setAgent(agent, metadata = {}) {
@@ -12,8 +18,8 @@ export function setAgent(agent, metadata = {}) {
     data: {
       from: previousAgent,
       to: agent,
-      metadata
-    }
+      metadata,
+    },
   });
 }
 
@@ -28,7 +34,7 @@ export function startSession(description = '') {
   addLogEntry({
     event: 'session:started',
     category: 'system',
-    data: { description }
+    data: { description },
   });
 
   return newSessionId;

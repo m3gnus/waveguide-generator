@@ -1,13 +1,14 @@
 // simAdvancedSettings.js — Stable public advanced simulation settings persistence.
 
-const SETTINGS_KEY = "waveguide-sim-advanced-settings";
-const SCHEMA_VERSION = 4;
+const SETTINGS_KEY = 'waveguide-sim-advanced-settings';
+const SCHEMA_VERSION = 5;
 
 export const RECOMMENDED_DEFAULTS = {
+  solverBackend: 'auto',
   useBurtonMiller: false,
   quadratureRegular: 4,
   workgroupSizeMultiple: 1,
-  assemblyBackend: "opencl",
+  assemblyBackend: 'opencl',
 };
 
 let _current = null;
@@ -19,13 +20,23 @@ function _coerceInt(value, fallback, min, max) {
 }
 
 function _coerceBackend(value) {
-  const v = String(value || "").trim().toLowerCase();
-  if (v === "numba" || v === "opencl") return v;
+  const v = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (v === 'numba' || v === 'opencl') return v;
   return RECOMMENDED_DEFAULTS.assemblyBackend;
 }
 
+function _coerceSolverBackend(value) {
+  const v = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (v === 'auto' || v === 'metal' || v === 'bempp') return v;
+  return RECOMMENDED_DEFAULTS.solverBackend;
+}
+
 export function loadSimAdvancedSettings() {
-  if (typeof localStorage === "undefined") {
+  if (typeof localStorage === 'undefined') {
     _current = { ...RECOMMENDED_DEFAULTS };
     return _current;
   }
@@ -44,27 +55,28 @@ export function loadSimAdvancedSettings() {
     }
 
     const stored = parsed.simAdvanced;
-    if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
       _current = { ...RECOMMENDED_DEFAULTS };
       return _current;
     }
 
     _current = {
+      solverBackend: _coerceSolverBackend(stored.solverBackend),
       useBurtonMiller:
-        typeof stored.useBurtonMiller === "boolean"
+        typeof stored.useBurtonMiller === 'boolean'
           ? stored.useBurtonMiller
           : RECOMMENDED_DEFAULTS.useBurtonMiller,
       quadratureRegular: _coerceInt(
         stored.quadratureRegular,
         RECOMMENDED_DEFAULTS.quadratureRegular,
         1,
-        10,
+        10
       ),
       workgroupSizeMultiple: _coerceInt(
         stored.workgroupSizeMultiple,
         RECOMMENDED_DEFAULTS.workgroupSizeMultiple,
         1,
-        8,
+        8
       ),
       assemblyBackend: _coerceBackend(stored.assemblyBackend),
     };
@@ -76,23 +88,22 @@ export function loadSimAdvancedSettings() {
 }
 
 export function saveSimAdvancedSettings(settings) {
-  if (typeof localStorage === "undefined") return;
+  if (typeof localStorage === 'undefined') return;
 
   _current = {
-    useBurtonMiller: Boolean(
-      settings?.useBurtonMiller ?? RECOMMENDED_DEFAULTS.useBurtonMiller,
-    ),
+    solverBackend: _coerceSolverBackend(settings?.solverBackend),
+    useBurtonMiller: Boolean(settings?.useBurtonMiller ?? RECOMMENDED_DEFAULTS.useBurtonMiller),
     quadratureRegular: _coerceInt(
       settings?.quadratureRegular,
       RECOMMENDED_DEFAULTS.quadratureRegular,
       1,
-      10,
+      10
     ),
     workgroupSizeMultiple: _coerceInt(
       settings?.workgroupSizeMultiple,
       RECOMMENDED_DEFAULTS.workgroupSizeMultiple,
       1,
-      8,
+      8
     ),
     assemblyBackend: _coerceBackend(settings?.assemblyBackend),
   };
@@ -100,11 +111,18 @@ export function saveSimAdvancedSettings(settings) {
   try {
     localStorage.setItem(
       SETTINGS_KEY,
-      JSON.stringify({ schemaVersion: SCHEMA_VERSION, simAdvanced: _current }),
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, simAdvanced: _current })
     );
   } catch {
     // Ignore storage errors.
   }
+}
+
+export function getSolverBackend() {
+  const el =
+    typeof document !== 'undefined' ? document.getElementById('simadvanced-solverBackend') : null;
+  if (el) return _coerceSolverBackend(el.value);
+  return _current?.solverBackend ?? RECOMMENDED_DEFAULTS.solverBackend;
 }
 
 export function getCurrentSimAdvancedSettings() {
@@ -113,17 +131,15 @@ export function getCurrentSimAdvancedSettings() {
 
 export function getUseBurtonMiller() {
   const el =
-    typeof document !== "undefined"
-      ? document.getElementById("simadvanced-useBurtonMiller")
-      : null;
+    typeof document !== 'undefined' ? document.getElementById('simadvanced-useBurtonMiller') : null;
   if (el) return el.checked;
   return _current?.useBurtonMiller ?? RECOMMENDED_DEFAULTS.useBurtonMiller;
 }
 
 export function getQuadratureRegular() {
   const el =
-    typeof document !== "undefined"
-      ? document.getElementById("simadvanced-quadratureRegular")
+    typeof document !== 'undefined'
+      ? document.getElementById('simadvanced-quadratureRegular')
       : null;
   if (el) return _coerceInt(el.value, RECOMMENDED_DEFAULTS.quadratureRegular, 1, 10);
   return _current?.quadratureRegular ?? RECOMMENDED_DEFAULTS.quadratureRegular;
@@ -131,8 +147,8 @@ export function getQuadratureRegular() {
 
 export function getWorkgroupSizeMultiple() {
   const el =
-    typeof document !== "undefined"
-      ? document.getElementById("simadvanced-workgroupSizeMultiple")
+    typeof document !== 'undefined'
+      ? document.getElementById('simadvanced-workgroupSizeMultiple')
       : null;
   if (el) return _coerceInt(el.value, RECOMMENDED_DEFAULTS.workgroupSizeMultiple, 1, 8);
   return _current?.workgroupSizeMultiple ?? RECOMMENDED_DEFAULTS.workgroupSizeMultiple;
@@ -140,9 +156,7 @@ export function getWorkgroupSizeMultiple() {
 
 export function getAssemblyBackend() {
   const el =
-    typeof document !== "undefined"
-      ? document.getElementById("simadvanced-assemblyBackend")
-      : null;
+    typeof document !== 'undefined' ? document.getElementById('simadvanced-assemblyBackend') : null;
   if (el) return _coerceBackend(el.value);
   return _current?.assemblyBackend ?? RECOMMENDED_DEFAULTS.assemblyBackend;
 }

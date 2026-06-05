@@ -63,6 +63,56 @@ test('exportResults writes selected bundle files into the task folder workspace'
   }
 });
 
+test('exportResults preserves zero-valued result cells in CSV bundle files', async () => {
+  const originalFetch = global.fetch;
+
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
+
+  const panel = {
+    currentSmoothing: 'none',
+    lastResults: {
+      spl_on_axis: { frequencies: [100, 200], spl: [0, 91] },
+      di: { frequencies: [100, 200], di: [0, 8] },
+      impedance: {
+        frequencies: [100, 200],
+        real: [0, 6],
+        imaginary: [0, -1]
+      },
+      directivity: {}
+    }
+  };
+
+  try {
+    await exportResults(panel, {
+      job: {
+        id: 'job-zero',
+        label: 'horn_zero'
+      },
+      selectedFormats: ['csv']
+    });
+
+    assert.equal(fetchCalls.length, 1);
+    const csvFile = fetchCalls[0].options.body.get('file');
+    const csv = await csvFile.text();
+    assert.match(
+      csv,
+      /100,0,0,0,0\n200,91,8,6,-1\n$/,
+    );
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});
+
 test('writeSimulationTaskBundleFile clears the selected workspace and falls back when task-folder writes fail', async () => {
   setSelectedFolderHandle({
     name: 'workspace',
@@ -179,6 +229,55 @@ test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts
     assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
     assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_56');
     assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_56');
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});
+
+test('persistSimulationGenerationArtifacts keeps writing later artifacts after an earlier write fails', async () => {
+  const originalFetch = global.fetch;
+  const fetchCalls = [];
+
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (fetchCalls.length === 1) {
+      return {
+        ok: false,
+        status: 500,
+        statusText: 'Write failed',
+        async json() {
+          return { detail: 'raw write failed' };
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      }
+    };
+  };
+
+  try {
+    const persisted = await persistSimulationGenerationArtifacts(
+      {
+        id: 'job-partial',
+        label: 'horn_partial'
+      },
+      {
+        results: { ok: true },
+        meshArtifactText: '$MeshFormat\n2.2 0 8\n$EndMeshFormat'
+      }
+    );
+
+    assert.equal(persisted.rawResultsFile, null);
+    assert.equal(persisted.meshArtifactFile, 'horn_partial_solver.mesh.msh');
+    assert.deepEqual(persisted.warnings, [
+      'Raw results artifact write failed: raw write failed'
+    ]);
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_partial');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();

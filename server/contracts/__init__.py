@@ -1,9 +1,10 @@
 """Shared Pydantic API contracts for backend routes and services."""
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
+VALID_SOLVER_BACKENDS = {"auto", "bempp", "metal"}
 VALID_BEM_PRECISIONS = {"single", "double"}
 DEVICE_MODE_ALIASES = {
     "opencl": "opencl_cpu",
@@ -139,6 +140,24 @@ def normalize_contract_device_mode(value: Any) -> str:
     return normalized
 
 
+def normalize_contract_solver_backend(value: Any) -> str:
+    raw = str(value or "auto").strip().lower().replace("_", "-")
+    aliases = {
+        "default": "auto",
+        "native": "auto",
+        "bempp-cl": "bempp",
+        "bempp_cl": "bempp",
+        "previous": "bempp",
+        "hornlab-metal": "metal",
+        "metal-bem": "metal",
+        "hornlab-metal-bem": "metal",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized not in VALID_SOLVER_BACKENDS:
+        raise ValueError("solver_backend must be one of: auto, bempp, metal.")
+    return normalized
+
+
 class SimulationRequest(BaseModel):
     mesh: MeshData
     frequency_range: List[float]
@@ -152,11 +171,17 @@ class SimulationRequest(BaseModel):
     mesh_validation_mode: str = "warn"
     frequency_spacing: str = "log"
     device_mode: str = "auto"
+    solver_backend: str = "auto"
 
     @field_validator("device_mode")
     @classmethod
     def validate_device_mode(cls, value: str) -> str:
         return normalize_contract_device_mode(value)
+
+    @field_validator("solver_backend")
+    @classmethod
+    def validate_solver_backend(cls, value: str) -> str:
+        return normalize_contract_solver_backend(value)
 
 
 class JobStatus(BaseModel):
@@ -165,6 +190,23 @@ class JobStatus(BaseModel):
     stage: Optional[str] = None
     stage_message: Optional[str] = None
     message: Optional[str] = None
+
+
+class JobMetadataPatch(BaseModel):
+    """Frontend metadata that can be persisted alongside a simulation job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: Optional[str] = None
+    script_snapshot: Optional[Dict[str, Any]] = None
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        return trimmed or None
 
 
 class SimulationResults(BaseModel):
@@ -176,7 +218,7 @@ class SimulationResults(BaseModel):
 
 
 class WaveguideParamsRequest(BaseModel):
-    """ATH-format waveguide parameters for the Python OCC mesh builder.
+    """ATH-format waveguide parameters for backend mesh builders.
 
     Grid parameters (n_angular, n_length) control geometry sampling density.
     Resolution parameters (throat_res, mouth_res, rear_res) control Gmsh
@@ -236,10 +278,9 @@ class WaveguideParamsRequest(BaseModel):
 
     n_angular: int = 100
     n_length: int = 20
-    # quadrants: import-compatibility only. Active OCC solve (/api/solve) and export
-    # (/api/mesh/build) paths always build full-domain meshes (quadrants=1234). Any
-    # non-1234 value supplied by legacy callers is accepted here for schema
-    # compatibility but is overridden to 1234 before reaching the OCC builder.
+    # quadrants: active solve (/api/solve) and mesh export (/api/mesh/build)
+    # support validated symmetry-reduced domains. STEP and viewport preview
+    # routes may still force full-domain where their output contracts require it.
     quadrants: int = 1234
 
     throat_res: float = 6.0
@@ -299,6 +340,8 @@ __all__ = [
     "SimulationResults",
     "VALID_DEVICE_MODES",
     "VALID_OBSERVATION_ORIGINS",
+    "VALID_SOLVER_BACKENDS",
     "WaveguideParamsRequest",
     "normalize_contract_device_mode",
+    "normalize_contract_solver_backend",
 ]

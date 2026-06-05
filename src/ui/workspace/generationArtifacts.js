@@ -10,7 +10,7 @@ const EXPORT_FILE_SUFFIX_BY_FORMAT = Object.freeze({
   txt: 'report.txt',
   polar_csv: 'polar.csv',
   impedance_csv: 'impedance.csv',
-  vacs: 'spectrum.txt'
+  vacs: 'spectrum.txt',
 });
 
 function normalizeBaseName(value, fallback = 'generation') {
@@ -19,11 +19,11 @@ function normalizeBaseName(value, fallback = 'generation') {
 }
 
 function normalizeToken(value, fallback = 'artifact') {
-  const text = String(value ?? '').trim().toLowerCase();
+  const text = String(value ?? '')
+    .trim()
+    .toLowerCase();
   if (!text) return fallback;
-  const normalized = text
-    .replace(/[^a-z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+  const normalized = text.replace(/[^a-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
   return normalized || fallback;
 }
 
@@ -51,11 +51,7 @@ function parseFusionVariant(fileName, baseName) {
 
 export function resolveGenerationExportFileName(
   formatId,
-  {
-    baseName,
-    chartKey = null,
-    originalFileName = null
-  } = {}
+  { baseName, chartKey = null, originalFileName = null } = {}
 ) {
   const normalizedBaseName = normalizeBaseName(baseName);
   const normalizedFormatId = String(formatId || '').trim();
@@ -84,7 +80,9 @@ export function resolveGenerationExportFileName(
   }
 
   const fallbackName = String(originalFileName || '').trim();
-  return fallbackName || `${normalizedBaseName}_${normalizeToken(normalizedFormatId, 'artifact')}.dat`;
+  return (
+    fallbackName || `${normalizedBaseName}_${normalizeToken(normalizedFormatId, 'artifact')}.dat`
+  );
 }
 
 export function resolveGenerationScriptSnapshotFileName() {
@@ -133,7 +131,7 @@ export function buildGenerationProjectManifest({
   scriptSnapshotFileName = null,
   rawResultsFileName = null,
   meshArtifactFileName = null,
-  updatedAt = null
+  updatedAt = null,
 } = {}) {
   const normalizedDirectoryName = normalizeBaseName(directoryName, '');
   const normalizedUpdatedAt = String(updatedAt || '').trim() || new Date().toISOString();
@@ -152,7 +150,7 @@ export function buildGenerationProjectManifest({
     seenExports.add(key);
     parsedExports.push({
       formatId: parsed.formatId,
-      fileName: parsed.fileName
+      fileName: parsed.fileName,
     });
   }
 
@@ -165,36 +163,36 @@ export function buildGenerationProjectManifest({
       label: String(job?.label || '').trim() || normalizedDirectoryName,
       status: String(job?.status || 'queued').trim(),
       createdAt: job?.createdAt ?? null,
-      completedAt: job?.completedAt ?? null
+      completedAt: job?.completedAt ?? null,
     },
     naming: {
       generationFolderContract: '<outputName>_<counter> (fallback: <jobId>)',
       scriptSnapshotFile: resolveGenerationScriptSnapshotFileName(),
       rawResultsFileSuffix: GENERATION_RAW_RESULTS_FILE_SUFFIX,
-      meshArtifactFileSuffix: GENERATION_MESH_ARTIFACT_FILE_SUFFIX
+      meshArtifactFileSuffix: GENERATION_MESH_ARTIFACT_FILE_SUFFIX,
     },
     artifacts: {
       scriptSnapshot: scriptSnapshotFileName
         ? {
-          fileName: scriptSnapshotFileName,
-          format: 'mwg'
-        }
+            fileName: scriptSnapshotFileName,
+            format: 'mwg',
+          }
         : null,
       rawResults: rawResultsFileName
         ? {
-          fileName: rawResultsFileName,
-          format: 'json',
-          source: '/api/results/{jobId}'
-        }
+            fileName: rawResultsFileName,
+            format: 'json',
+            source: '/api/results/{jobId}',
+          }
         : null,
       meshArtifact: meshArtifactFileName
         ? {
-          fileName: meshArtifactFileName,
-          format: 'msh',
-          source: '/api/mesh-artifact/{jobId}'
-        }
+            fileName: meshArtifactFileName,
+            format: 'msh',
+            source: '/api/mesh-artifact/{jobId}',
+          }
         : null,
-      selectedExports: parsedExports
-    }
+      selectedExports: parsedExports,
+    },
   };
 }

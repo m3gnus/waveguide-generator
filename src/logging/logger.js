@@ -6,6 +6,6 @@ export function logEvent(eventName, data, context = {}) {
     event: eventName,
     category: categorizeEvent(eventName),
     data: sanitizeData(data),
-    ...context
+    ...context,
   });
 }

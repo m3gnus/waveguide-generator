@@ -201,8 +201,23 @@ test("ParamPanel renders row-level formula buttons and removes the section-heade
         node.attributes["data-param-key"] === "verticalOffset" &&
         node.className === "input-row",
     );
+    const quadrantRows = collectNodes(
+      simulationContainer,
+      (node) =>
+        node.attributes["data-param-key"] === "quadrants" &&
+        node.className === "input-row",
+    );
+    const quadrantAutoButtons = collectNodes(
+      simulationContainer,
+      (node) =>
+        node.tagName === "BUTTON" &&
+        node.attributes["data-param-key"] === "quadrants" &&
+        node.textContent === "Auto",
+    );
     assert.equal(throatSliceDensityRows.length, 1);
     assert.equal(verticalOffsetRows.length, 1);
+    assert.equal(quadrantRows.length, 1);
+    assert.equal(quadrantAutoButtons.length, 1);
 
     const simulationSectionTitles = simulationContainer.children.map(
       (child) => child.children[0]?.textContent,

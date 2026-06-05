@@ -114,14 +114,14 @@ test('mergeJobs preserves backend simulation mesh stats for the stats widget han
     [{
       id: 'job-1',
       status: 'running',
-      mesh_stats: { vertex_count: 88, triangle_count: 44, source: 'occ_adaptive_canonical' }
+      mesh_stats: { vertex_count: 88, triangle_count: 44, source: 'hornlab_waveguide_mesher' }
     }]
   );
 
   assert.deepEqual(merged[0].meshStats, {
     vertex_count: 88,
     triangle_count: 44,
-    source: 'occ_adaptive_canonical'
+    source: 'hornlab_waveguide_mesher'
   });
 });
 

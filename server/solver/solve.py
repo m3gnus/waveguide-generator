@@ -246,14 +246,11 @@ class HornBEMSolver:
 
         # In DP0, DOFs map 1:1 to triangles
         if len(tags) != n_elements:
-            # Graceful fallback: assume all elements use tag 2 if counts mismatch
-            logger.warning(
-                "[HornBEM] physical_tags length %d != DP0 DOF count %d; "
-                "using tag-2 assumption for all elements.",
-                len(tags), n_elements,
+            raise ValueError(
+                "physical_tags length "
+                f"({len(tags)}) must match BEM element count ({n_elements}). "
+                "Check mesh surface tag generation before solve."
             )
-            tags = np.full(n_elements, self.tag_throat, dtype=np.int32)
-            self.physical_tags = tags
 
         self.driver_dofs = np.where(tags == self.tag_throat)[0]
         self.enclosure_dofs = np.where(tags != self.tag_throat)[0]
