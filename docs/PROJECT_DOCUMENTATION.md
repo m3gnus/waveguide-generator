@@ -370,9 +370,9 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
 | HornLab mesher      | `334e51f8455def6c60e0683fbc29ae46ae6d6230` | `/api/mesh/build` |
-| HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | `/api/solve`      |
+| HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | default `/api/solve` backend when ready |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
-| bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | `/api/solve`      |
+| bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | BEMPP fallback `/api/solve` backend |
 
 Notes:
 
@@ -383,7 +383,7 @@ Notes:
 - `server/scripts/benchmark_solver.py --preset reference-horn` is the bounded repro harness for the reference horn (HornLab mesher prep + 1-frequency/reduced sweep solve + precision support matrix and stage timings).
 - GMRES strong-form auto-enable is disabled in the active solver path; solves use explicit tolerance-only GMRES call parameters, with iteration counts recorded when available in the installed bempp runtime.
 - Public advanced solver overrides currently expose Burton-Miller coupling only. Warm-up and BEM precision remain compatibility-only controls and do not alter active `/api/solve` numerics (single precision, no warm-up).
-- The runtime requires `bempp-cl`; no legacy `bempp_api` compatibility lane remains in the maintained backend contract.
+- The runtime requires one ready solver backend: Metal BEM when available, otherwise `bempp-cl` plus OpenCL. No legacy `bempp_api` compatibility lane remains in the maintained backend contract.
 
 ### 7.1 Solver performance metadata
 
@@ -626,7 +626,7 @@ High-signal test suites:
 
 ### OpenCL / pyopencl setup
 
-`pyopencl` is required for `bempp-cl` GPU/CPU-OpenCL acceleration. Fully automatic cross-platform driver install is not supported (vendor/admin/reboot constraints). Install manually:
+`pyopencl` is required only for the `bempp-cl` GPU/CPU-OpenCL fallback. Fully automatic cross-platform driver install is not supported (vendor/admin/reboot constraints). Install manually:
 
 - **macOS (Apple Silicon)**: `./scripts/setup-opencl-backend.sh` — installs the `pocl` CPU runtime for investigation/repro only. Apple Silicon has no native OpenCL GPU driver (Metal-only) and `bempp-cl` has no Metal backend, so GPU-accelerated BEM is architecturally blocked. `/api/solve` reports Apple Silicon OpenCL unsupported.
 - **Windows**: Install vendor drivers (NVIDIA/AMD/Intel). Intel provides a standalone "CPU Runtime for OpenCL Applications" for CPU-only use.

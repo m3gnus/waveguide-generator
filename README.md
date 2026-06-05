@@ -50,7 +50,7 @@ The setup scripts validate that you are in the full project folder, install Java
 
 Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used.
 
-Network note: backend setup installs `hornlab-waveguide-mesher`, `hornlab-metal-bem`, and `bempp-cl` from GitHub using pinned commit SHAs for reproducible installs.
+Network note: backend setup installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs. If Metal BEM is not ready on the host, setup also installs the pinned `bempp-cl` fallback.
 
 ### 4. Launch
 
@@ -72,21 +72,23 @@ If no solver backend is ready, the app still works for 3D preview and local STL/
 - gmsh: `>=4.11,<5.0` (required by the HornLab mesher)
 - bempp-cl: pinned git commit `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` / version `0.4.2` (optional BEMPP solver backend)
 
-The maintained runtime supports the HornLab Metal BEM backend when available. Otherwise, the BEMPP path needs `bempp-cl` and OpenCL. There is no legacy `bempp_api` fallback path.
+The maintained runtime uses the HornLab Metal BEM backend when available. Otherwise, the BEMPP fallback path needs `bempp-cl`, `pyopencl`, and OpenCL. There is no legacy `bempp_api` fallback path.
 
 Manual install examples:
 
 ```bash
-# macOS / Linux
+# macOS / Linux BEMPP fallback
+.venv/bin/pip install pyopencl
 .venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 
-# Windows
+# Windows BEMPP fallback
+.venv\Scripts\python.exe -m pip install pyopencl
 .venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 ## OpenCL Setup
 
-For macOS Apple Silicon, use the OpenCL CPU helper:
+For BEMPP fallback investigations on macOS Apple Silicon, use the OpenCL CPU helper:
 
 ```bash
 ./scripts/setup-opencl-backend.sh

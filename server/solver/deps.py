@@ -42,10 +42,13 @@ SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     },
     "hornlab_metal_bem": {
         "range": "pinned git commit 0cc9c74",
-        "required_for": "/api/solve solver_backend=metal",
+        "required_for": "default /api/solve backend when ready",
     },
     "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
-    "bempp_cl": {"range": ">=0.4,<0.5", "required_for": "/api/solve"},
+    "bempp_cl": {
+        "range": ">=0.4,<0.5",
+        "required_for": "BEMPP fallback /api/solve backend",
+    },
 }
 
 

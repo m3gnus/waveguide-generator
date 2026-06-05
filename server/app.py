@@ -53,11 +53,11 @@ if __name__ == "__main__":
     import uvicorn
 
     print("Starting MWG Horn BEM Solver Backend...")
-    print(f"BEMPP solver available: {SOLVER_AVAILABLE}")
+    print(f"Solver backend available: {SOLVER_AVAILABLE}")
     print(f"Metal solver ready: {METAL_SOLVER_READY}")
     print(f"HornLab mesher ready: {HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_RUNTIME_READY}")
-    if not SOLVER_AVAILABLE and not METAL_SOLVER_READY:
+    if not SOLVER_AVAILABLE:
         print(
-            "Warning: no solver backend is ready. Install bempp-cl or hornlab-metal-bem runtime prerequisites."
+            "Warning: no solver backend is ready. Install/enable Metal BEM or install bempp-cl/OpenCL."
         )
     uvicorn.run(app, host="0.0.0.0", port=8000)
