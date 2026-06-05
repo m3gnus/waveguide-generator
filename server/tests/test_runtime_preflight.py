@@ -48,6 +48,8 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "validated",
                 "detail": "Bounded solve validation passed.",
             },
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"), patch(
+            "services.runtime_preflight.platform.machine", return_value="x86_64"
         ):
             report = collect_runtime_preflight()
 
@@ -94,6 +96,8 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "missing",
                 "detail": "No bounded solve validation record found.",
             },
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"), patch(
+            "services.runtime_preflight.platform.machine", return_value="x86_64"
         ):
             report = collect_runtime_preflight()
 
@@ -146,6 +150,8 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "validated",
                 "detail": "Bounded solve validation passed.",
             },
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"), patch(
+            "services.runtime_preflight.platform.machine", return_value="x86_64"
         ):
             report = collect_runtime_preflight()
 
@@ -177,6 +183,8 @@ class RuntimePreflightTest(unittest.TestCase):
             "available": True,
             "supportedPlatform": True,
             "nativeHelperAvailable": True,
+            "nativeHelperBuild": "release",
+            "nativeHelperPath": "/pkg/.build/release/HornlabMetalBemNative",
             "reason": None,
         }
 
@@ -196,6 +204,8 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "missing",
                 "detail": "No bounded solve validation record found.",
             },
+        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"), patch(
+            "services.runtime_preflight.platform.machine", return_value="arm64"
         ):
             report = collect_runtime_preflight()
 
@@ -205,8 +215,56 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertTrue(report["allRequiredReady"])
         self.assertTrue(report["requiredChecks"]["bempp_cl"]["ok"])
         self.assertTrue(report["requiredChecks"]["opencl_runtime"]["ok"])
+        self.assertTrue(report["requiredChecks"]["metal_release_helper"]["ok"])
         self.assertIn("Metal BEM is available", report["requiredChecks"]["bempp_cl"]["detail"])
         self.assertIn("Metal BEM is available", report["requiredChecks"]["opencl_runtime"]["detail"])
+        self.assertIn("build=release", report["requiredChecks"]["metal_release_helper"]["detail"])
+
+    def test_collect_runtime_preflight_rejects_debug_metal_helper_on_apple_silicon(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
+                "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
+            },
+            "supportedMatrix": {},
+        }
+        metal_backend = {
+            "available": True,
+            "supportedPlatform": True,
+            "nativeHelperAvailable": True,
+            "nativeHelperBuild": "debug",
+            "nativeHelperPath": "/pkg/.build/debug/HornlabMetalBemNative",
+            "reason": None,
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value={"opencl_available": False, "fallback_reason": "No OpenCL runtime available."},
+        ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value=metal_backend,
+        ), patch(
+            "services.runtime_preflight.read_bounded_solve_readiness",
+            return_value={
+                "ready": False,
+                "status": "missing",
+                "detail": "No bounded solve validation record found.",
+            },
+        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"), patch(
+            "services.runtime_preflight.platform.machine", return_value="arm64"
+        ):
+            report = collect_runtime_preflight()
+
+        ok, failing = evaluate_required_checks(report)
+        self.assertFalse(ok)
+        self.assertFalse(report["allRequiredReady"])
+        self.assertFalse(report["requiredChecks"]["metal_release_helper"]["ok"])
+        self.assertTrue(any("metal_release_helper" in item for item in failing), failing)
 
     def test_collect_runtime_doctor_report_classifies_required_and_optional_components(self):
         dependency_status = {
@@ -244,7 +302,9 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "validated",
                 "detail": "Bounded solve validation passed.",
             },
-        ), patch("services.runtime_preflight.platform.system", return_value="Linux"):
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"), patch(
+            "services.runtime_preflight.platform.machine", return_value="x86_64"
+        ):
             report = collect_runtime_doctor_report()
 
         self.assertEqual(report["schemaVersion"], 1)
@@ -296,7 +356,9 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "failed",
                 "detail": "Bounded solve validation failed: OpenCL error",
             },
-        ), patch("services.runtime_preflight.platform.system", return_value="Linux"):
+        ), patch("services.runtime_preflight.platform.system", return_value="Linux"), patch(
+            "services.runtime_preflight.platform.machine", return_value="x86_64"
+        ):
             report = collect_runtime_doctor_report()
 
         ok, failing = evaluate_runtime_doctor(report)
@@ -395,6 +457,8 @@ class RuntimePreflightTest(unittest.TestCase):
             "available": True,
             "supportedPlatform": True,
             "nativeHelperAvailable": True,
+            "nativeHelperBuild": "release",
+            "nativeHelperPath": "/pkg/.build/release/HornlabMetalBemNative",
             "reason": None,
         }
 
@@ -417,7 +481,9 @@ class RuntimePreflightTest(unittest.TestCase):
                 "status": "missing",
                 "detail": "No bounded solve validation record found.",
             },
-        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"):
+        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"), patch(
+            "services.runtime_preflight.platform.machine", return_value="arm64"
+        ):
             report = collect_runtime_doctor_report()
 
         ok, failing = evaluate_runtime_doctor(report)
@@ -433,7 +499,61 @@ class RuntimePreflightTest(unittest.TestCase):
         components_by_id = {item["id"]: item for item in report["components"]}
         self.assertEqual(components_by_id["bempp_cl"]["category"], "optional")
         self.assertEqual(components_by_id["opencl_runtime"]["category"], "optional")
+        self.assertEqual(components_by_id["metal_release_helper"]["category"], "required")
+        self.assertEqual(components_by_id["metal_release_helper"]["status"], "installed")
         self.assertIn("Metal BEM", components_by_id["bempp_cl"]["featureImpact"])
+
+    def test_collect_runtime_doctor_requires_release_metal_helper_on_apple_silicon(self):
+        dependency_status = {
+            "runtime": {
+                "python": {"version": "3.13.1", "supported": True},
+                "gmsh_python": {"available": True, "version": "4.15.0", "supported": True, "ready": True},
+                "hornlab_waveguide_mesher": {"available": True, "version": "0.1.0", "supported": True, "ready": True},
+                "bempp": {"available": False, "variant": None, "version": None, "supported": False, "ready": False},
+            },
+            "supportedMatrix": {},
+        }
+        metal_backend = {
+            "available": True,
+            "supportedPlatform": True,
+            "nativeHelperAvailable": True,
+            "nativeHelperBuild": "debug",
+            "nativeHelperPath": "/pkg/.build/debug/HornlabMetalBemNative",
+            "reason": None,
+        }
+
+        with patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status), patch(
+            "services.runtime_preflight.read_fastapi_runtime",
+            return_value={"available": True, "version": "0.110.0"},
+        ), patch(
+            "services.runtime_preflight.read_matplotlib_runtime",
+            return_value={"available": True, "version": "3.9.2"},
+        ), patch(
+            "services.runtime_preflight.read_opencl_device_metadata",
+            return_value={"opencl_available": False, "fallback_reason": "No OpenCL runtime available."},
+        ), patch(
+            "services.runtime_preflight.metal_backend_status",
+            return_value=metal_backend,
+        ), patch(
+            "services.runtime_preflight.read_bounded_solve_readiness",
+            return_value={
+                "ready": False,
+                "status": "missing",
+                "detail": "No bounded solve validation record found.",
+            },
+        ), patch("services.runtime_preflight.platform.system", return_value="Darwin"), patch(
+            "services.runtime_preflight.platform.machine", return_value="arm64"
+        ):
+            report = collect_runtime_doctor_report()
+
+        ok, failing = evaluate_runtime_doctor(report)
+        self.assertFalse(ok)
+        self.assertIn("metal_release_helper", report["summary"]["requiredIssues"])
+        self.assertIn("metal_release_helper", report["summary"]["solveIssues"])
+        self.assertTrue(any("metal_release_helper" in item for item in failing), failing)
+        component = {item["id"]: item for item in report["components"]}["metal_release_helper"]
+        self.assertEqual(component["status"], "missing")
+        self.assertTrue(any("build:metal-helper" in line for line in component["guidance"]))
 
 
 if __name__ == "__main__":

@@ -14,11 +14,13 @@ from .directivity_correct import calculate_di_from_polar_patterns
 try:
     from hornlab_metal_bem import ObservationConfig, native_config, solve
     from hornlab_metal_bem.backends import discover_metal_backend
+    from hornlab_metal_bem.metal.native import discover_native_runtime
 except ImportError:  # pragma: no cover - exercised through runtime status
     ObservationConfig = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     solve = None  # type: ignore[assignment]
     discover_metal_backend = None  # type: ignore[assignment]
+    discover_native_runtime = None  # type: ignore[assignment]
 
 
 VALID_SOLVER_BACKENDS = {"auto", "bempp", "metal"}
@@ -75,11 +77,35 @@ def metal_backend_status() -> dict[str, Any]:
             "nativeHelperAvailable": False,
             "reason": str(exc),
         }
+    helper_path = None
+    helper_source = None
+    helper_build = None
+    if discover_native_runtime is not None:
+        try:
+            native_status = discover_native_runtime(run_smoke_test=False)
+            raw_helper_path = getattr(native_status, "helper_executable_path", None)
+            helper_path = str(raw_helper_path) if raw_helper_path else None
+            helper_source = getattr(native_status, "helper_source", None)
+            helper_parts = getattr(raw_helper_path, "parts", ()) if raw_helper_path else ()
+            if "release" in helper_parts:
+                helper_build = "release"
+            elif "debug" in helper_parts:
+                helper_build = "debug"
+            elif raw_helper_path:
+                helper_build = "custom"
+        except Exception:
+            helper_path = None
+            helper_source = None
+            helper_build = None
+
     return {
         "available": bool(status.available),
         "supportedPlatform": bool(status.supported_platform),
         "nativeExecutable": status.native_executable,
         "nativeHelperAvailable": bool(status.native_helper_available),
+        "nativeHelperPath": helper_path,
+        "nativeHelperSource": helper_source,
+        "nativeHelperBuild": helper_build,
         "reason": status.reason,
     }
 

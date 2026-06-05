@@ -85,6 +85,7 @@ def _build_required_checks(
     device_metadata: Dict[str, Any],
     metal_backend: Dict[str, Any],
     solve_readiness: Dict[str, Any],
+    platform_payload: Dict[str, Any] | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     runtime = dependency_status.get("runtime") if isinstance(dependency_status, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -140,7 +141,7 @@ def _build_required_checks(
             or "No OpenCL runtime available."
         )
 
-    return {
+    checks = {
         "fastapi": {
             "ok": fastapi_ok,
             "requiredFor": "backend startup",
@@ -179,6 +180,13 @@ def _build_required_checks(
             "detail": opencl_detail,
         },
     }
+    metal_release_check = _build_metal_release_helper_required_check(
+        metal_backend=metal_backend,
+        platform_payload=platform_payload,
+    )
+    if metal_release_check is not None:
+        checks["metal_release_helper"] = metal_release_check
+    return checks
 
 
 def _solve_dependency_category(*, metal_ready: bool) -> str:
@@ -187,6 +195,46 @@ def _solve_dependency_category(*, metal_ready: bool) -> str:
 
 def _metal_path_ready(metal_backend: Dict[str, Any]) -> bool:
     return bool(metal_backend.get("available"))
+
+
+def _is_apple_silicon(platform_payload: Dict[str, Any] | None = None) -> bool:
+    payload = platform_payload if isinstance(platform_payload, dict) else {}
+    system_name = str(payload.get("system") or platform.system())
+    machine_name = str(payload.get("machine") or platform.machine())
+    return system_name == "Darwin" and machine_name == "arm64"
+
+
+def _metal_release_helper_ready(metal_backend: Dict[str, Any]) -> bool:
+    return bool(
+        metal_backend.get("available")
+        and metal_backend.get("nativeHelperAvailable")
+        and metal_backend.get("nativeHelperBuild") == "release"
+    )
+
+
+def _metal_release_helper_detail(metal_backend: Dict[str, Any]) -> str:
+    helper_build = str(metal_backend.get("nativeHelperBuild") or "missing")
+    helper_path = str(metal_backend.get("nativeHelperPath") or "unknown")
+    reason = str(metal_backend.get("reason") or "")
+    if _metal_release_helper_ready(metal_backend):
+        return f"build=release path={helper_path}"
+    if reason:
+        return f"build={helper_build} path={helper_path} reason={reason}"
+    return f"build={helper_build} path={helper_path}; expected release helper for fastest Metal solves."
+
+
+def _build_metal_release_helper_required_check(
+    *,
+    metal_backend: Dict[str, Any],
+    platform_payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    if not _is_apple_silicon(platform_payload):
+        return None
+    return {
+        "ok": _metal_release_helper_ready(metal_backend),
+        "requiredFor": "/api/solve",
+        "detail": _metal_release_helper_detail(metal_backend),
+    }
 
 
 def _bempp_feature_impact(status: str, *, metal_ready: bool) -> str:
@@ -264,6 +312,11 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
             "Install Linux OpenCL ICD runtime (CPU fallback): pocl-opencl-icd/pocl.",
             "Or install vendor GPU OpenCL drivers (NVIDIA/AMD/Intel).",
         ]
+    if component_id == "metal_release_helper":
+        return [
+            "Build the release Metal helper: npm run build:metal-helper",
+            "If swift is missing, install Xcode Command Line Tools: xcode-select --install",
+        ]
     if component_id == "bounded_solve_validation":
         return [
             "Run bounded solve validation: cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30",
@@ -340,6 +393,10 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         ready=opencl_available,
     )
     metal_ready = _metal_path_ready(metal_backend)
+    metal_release_helper_ready = _metal_release_helper_ready(metal_backend)
+    metal_release_helper_status = (
+        DOCTOR_STATUS_INSTALLED if metal_release_helper_ready else DOCTOR_STATUS_MISSING
+    )
 
     matplotlib_available = bool(matplotlib_runtime.get("available"))
     matplotlib_status = _resolve_doctor_status(
@@ -462,48 +519,76 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
                 )
             ),
         },
-        {
-            "id": "bounded_solve_validation",
-            "name": "Bounded solve validation",
-            "category": DOCTOR_CATEGORY_OPTIONAL,
-            "requiredFor": "/api/solve",
-            "featureImpact": (
-                "/api/solve readiness is unvalidated on this host/runtime."
-                if solve_readiness_status != DOCTOR_STATUS_INSTALLED
-                else "Bounded /api/solve runtime validation passed."
-            ),
-            "status": solve_readiness_status,
-            "available": bool(solve_readiness.get("status") not in {"missing", "invalid"}),
-            "supported": bool(solve_readiness.get("status") not in {"invalid", "stale_host", "mode_mismatch"}),
-            "ready": solve_readiness_ready,
-            "version": None,
-            "detail": str(
-                solve_readiness.get("detail")
-                or "No bounded solve validation evidence available."
-            ),
-        },
-        {
-            "id": "matplotlib",
-            "name": "Matplotlib",
-            "category": DOCTOR_CATEGORY_OPTIONAL,
-            "requiredFor": "chart/directivity image render endpoints",
-            "featureImpact": (
-                "Chart/directivity image render endpoints are unavailable; solver core paths still work."
-                if matplotlib_status != DOCTOR_STATUS_INSTALLED
-                else "Chart/directivity image rendering endpoints are available."
-            ),
-            "status": matplotlib_status,
-            "available": matplotlib_available,
-            "supported": matplotlib_available,
-            "ready": matplotlib_available,
-            "version": matplotlib_runtime.get("version"),
-            "detail": (
-                f"version={matplotlib_runtime.get('version') or 'unknown'}"
-                if matplotlib_available
-                else "matplotlib import failed."
-            ),
-        },
     ]
+
+    if _is_apple_silicon(platform_payload):
+        components.append(
+            {
+                "id": "metal_release_helper",
+                "name": "Metal native helper (release)",
+                "category": DOCTOR_CATEGORY_REQUIRED,
+                "requiredFor": "/api/solve",
+                "featureImpact": (
+                    "Fast Metal BEM solves are using the release native helper."
+                    if metal_release_helper_ready
+                    else "Metal BEM may use a slower debug helper or be unavailable."
+                ),
+                "status": metal_release_helper_status,
+                "available": bool(metal_backend.get("nativeHelperAvailable")),
+                "supported": bool(metal_backend.get("supportedPlatform") or metal_backend.get("available")),
+                "ready": metal_release_helper_ready,
+                "version": None,
+                "detail": _metal_release_helper_detail(metal_backend),
+            }
+        )
+
+    components.extend(
+        [
+            {
+                "id": "bounded_solve_validation",
+                "name": "Bounded solve validation",
+                "category": DOCTOR_CATEGORY_OPTIONAL,
+                "requiredFor": "/api/solve",
+                "featureImpact": (
+                    "/api/solve readiness is unvalidated on this host/runtime."
+                    if solve_readiness_status != DOCTOR_STATUS_INSTALLED
+                    else "Bounded /api/solve runtime validation passed."
+                ),
+                "status": solve_readiness_status,
+                "available": bool(solve_readiness.get("status") not in {"missing", "invalid"}),
+                "supported": bool(
+                    solve_readiness.get("status") not in {"invalid", "stale_host", "mode_mismatch"}
+                ),
+                "ready": solve_readiness_ready,
+                "version": None,
+                "detail": str(
+                    solve_readiness.get("detail")
+                    or "No bounded solve validation evidence available."
+                ),
+            },
+            {
+                "id": "matplotlib",
+                "name": "Matplotlib",
+                "category": DOCTOR_CATEGORY_OPTIONAL,
+                "requiredFor": "chart/directivity image render endpoints",
+                "featureImpact": (
+                    "Chart/directivity image render endpoints are unavailable; solver core paths still work."
+                    if matplotlib_status != DOCTOR_STATUS_INSTALLED
+                    else "Chart/directivity image rendering endpoints are available."
+                ),
+                "status": matplotlib_status,
+                "available": matplotlib_available,
+                "supported": matplotlib_available,
+                "ready": matplotlib_available,
+                "version": matplotlib_runtime.get("version"),
+                "detail": (
+                    f"version={matplotlib_runtime.get('version') or 'unknown'}"
+                    if matplotlib_available
+                    else "matplotlib import failed."
+                ),
+            },
+        ]
+    )
 
     for component in components:
         component["guidance"] = _guidance_for_component(
@@ -567,6 +652,7 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
         device_metadata=snapshot.get("deviceInterface", {}),
         metal_backend=snapshot.get("metalBackend", {}),
         solve_readiness=snapshot.get("solveReadiness", {}),
+        platform_payload=snapshot.get("platform", {}),
     )
     all_required_ok = all(bool(check.get("ok")) for check in required_checks.values())
 
@@ -650,6 +736,7 @@ def render_runtime_preflight_text(report: Dict[str, Any]) -> str:
         "hornlab_waveguide_mesher",
         "bempp_cl",
         "opencl_runtime",
+        "metal_release_helper",
     ):
         payload = required.get(check_id) if isinstance(required.get(check_id), dict) else {}
         ok = bool(payload.get("ok"))
