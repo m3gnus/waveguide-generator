@@ -8,6 +8,7 @@ from unittest.mock import patch
 from api.routes_simulation import (
     clear_failed_jobs,
     delete_job,
+    get_job_status,
     get_mesh_artifact,
     get_results,
     list_jobs,
@@ -215,6 +216,21 @@ class JobPersistenceTest(unittest.TestCase):
             resp["items"][0]["mesh_stats"]["identity_triangle_counts"]["inner_wall"],
             8,
         )
+
+    def test_status_preserves_live_mesh_stats_payload(self):
+        self._create_db_job("job-running", "running")
+        _jrt.db.update_job(
+            "job-running",
+            mesh_stats_json=(
+                '{"vertex_count": 42, "triangle_count": 20, '
+                '"source": "hornlab_waveguide_mesher"}'
+            ),
+        )
+
+        status = asyncio.run(get_job_status("job-running"))
+
+        self.assertEqual(status.mesh_stats["vertex_count"], 42)
+        self.assertEqual(status.mesh_stats["triangle_count"], 20)
 
     def test_update_job_rejects_unsupported_column_names(self):
         self._create_db_job("job-complete", "complete")

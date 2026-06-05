@@ -190,6 +190,7 @@ class JobStatus(BaseModel):
     stage: Optional[str] = None
     stage_message: Optional[str] = None
     message: Optional[str] = None
+    mesh_stats: Optional[Dict[str, Any]] = None
 
 
 class JobMetadataPatch(BaseModel):

@@ -1,32 +1,26 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
-import * as solverApi from "../src/solver/index.js";
-import { applySmoothingSelection } from "../src/ui/simulation/smoothing.js";
-import { downloadMeshArtifact } from "../src/ui/simulation/meshDownload.js";
-import {
-  renderJobList,
-  formatJobSummary,
-} from "../src/ui/simulation/jobActions.js";
-import {
-  pollSimulationStatus,
-  clearPollTimer,
-} from "../src/ui/simulation/polling.js";
-import { openViewResultsModal } from "../src/ui/simulation/viewResults.js";
-import { AppEvents } from "../src/events.js";
-import { getDownloadSimMeshEnabled } from "../src/ui/settings/modal.js";
+import * as solverApi from '../src/solver/index.js';
+import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
+import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
+import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
+import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
+import { openViewResultsModal } from '../src/ui/simulation/viewResults.js';
+import { AppEvents } from '../src/events.js';
+import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
 import {
   RECOMMENDED_DEFAULTS as SIM_MANAGEMENT_DEFAULTS,
   saveSimulationManagementSettings,
-} from "../src/ui/settings/simulationManagementSettings.js";
+} from '../src/ui/settings/simulationManagementSettings.js';
 
 const { BemSolver, validateCanonicalMeshPayload } = solverApi;
 
-test("solver public API no longer exposes mock fallback helpers", () => {
-  assert.equal("mockBEMSolver" in solverApi, false);
+test('solver public API no longer exposes mock fallback helpers', () => {
+  assert.equal('mockBEMSolver' in solverApi, false);
 });
 
-test("submitSimulation sends canonical mesh payload shape and adaptive mesh options", async () => {
+test('submitSimulation sends canonical mesh payload shape and adaptive mesh options', async () => {
   const originalFetch = global.fetch;
   const calls = [];
 
@@ -35,33 +29,33 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     return {
       ok: true,
       async json() {
-        return { job_id: "job-test-1" };
+        return { job_id: 'job-test-1' };
       },
     };
   };
 
   try {
     const solver = new BemSolver();
-    solver.backendUrl = "http://localhost:8000";
+    solver.backendUrl = 'http://localhost:8000';
 
     const mesh = {
       vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
       indices: [0, 1, 2],
       surfaceTags: [2],
-      format: "msh",
+      format: 'msh',
       boundaryConditions: {
-        throat: { type: "velocity", surfaceTag: 2, value: 1.0 },
-        wall: { type: "neumann", surfaceTag: 1, value: 0.0 },
-        mouth: { type: "robin", surfaceTag: 1, impedance: "spherical" },
+        throat: { type: 'velocity', surfaceTag: 2, value: 1.0 },
+        wall: { type: 'neumann', surfaceTag: 1, value: 0.0 },
+        mouth: { type: 'robin', surfaceTag: 1, impedance: 'spherical' },
       },
       metadata: { ringCount: 3, fullCircle: true },
     };
 
     const options = {
       mesh: {
-        strategy: "hornlab_mesher",
+        strategy: 'hornlab_mesher',
         waveguide_params: {
-          formula_type: "OSSE",
+          formula_type: 'OSSE',
           throat_res: 4,
           mouth_res: 9,
           rear_res: 12,
@@ -74,16 +68,16 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         frequencyStart: 100,
         frequencyEnd: 1000,
         numFrequencies: 4,
-        simulationType: "2",
-        meshValidationMode: "strict",
-        frequencySpacing: "linear",
+        simulationType: '2',
+        meshValidationMode: 'strict',
+        frequencySpacing: 'linear',
         verbose: false,
         polarConfig: {
           angle_range: [0, 180, 37],
           norm_angle: 5,
           distance: 2,
           inclination: 45,
-          enabled_axes: ["horizontal", "diagonal"],
+          enabled_axes: ['horizontal', 'diagonal'],
         },
         advancedSettings: {
           useBurtonMiller: false,
@@ -93,7 +87,7 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
         indices: [0, 1, 2],
         surfaceTags: [2],
-        format: "msh",
+        format: 'msh',
         boundaryConditions: {},
         metadata: {},
       },
@@ -102,20 +96,14 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
 
     const payload = JSON.parse(calls[0].options.body);
     assert.ok(payload.mesh);
-    assert.equal(
-      payload.mesh.surfaceTags.length,
-      payload.mesh.indices.length / 3,
-    );
-    assert.equal(payload.options.mesh.strategy, "hornlab_mesher");
-    assert.equal(payload.options.mesh.waveguide_params.formula_type, "OSSE");
-    assert.deepEqual(payload.polar_config.enabled_axes, [
-      "horizontal",
-      "diagonal",
-    ]);
-    assert.equal(payload.sim_type, "2");
-    assert.equal(payload.mesh_validation_mode, "strict");
-    assert.equal(payload.frequency_spacing, "linear");
-    assert.equal("device_mode" in payload, false);
+    assert.equal(payload.mesh.surfaceTags.length, payload.mesh.indices.length / 3);
+    assert.equal(payload.options.mesh.strategy, 'hornlab_mesher');
+    assert.equal(payload.options.mesh.waveguide_params.formula_type, 'OSSE');
+    assert.deepEqual(payload.polar_config.enabled_axes, ['horizontal', 'diagonal']);
+    assert.equal(payload.sim_type, '2');
+    assert.equal(payload.mesh_validation_mode, 'strict');
+    assert.equal(payload.frequency_spacing, 'linear');
+    assert.equal('device_mode' in payload, false);
     assert.equal(payload.verbose, false);
     assert.deepEqual(payload.advanced_settings, {
       use_burton_miller: false,
@@ -125,7 +113,7 @@ test("submitSimulation sends canonical mesh payload shape and adaptive mesh opti
   }
 });
 
-test("submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative", async () => {
+test('submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative', async () => {
   const originalFetch = global.fetch;
   const calls = [];
 
@@ -134,7 +122,7 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
     return {
       ok: true,
       async json() {
-        return { job_id: "job-test-omit-1" };
+        return { job_id: 'job-test-omit-1' };
       },
     };
   };
@@ -146,9 +134,9 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
         frequencyStart: 100,
         frequencyEnd: 1000,
         numFrequencies: 4,
-        simulationType: "2",
-        meshValidationMode: "invalid",
-        frequencySpacing: "bogus",
+        simulationType: '2',
+        meshValidationMode: 'invalid',
+        frequencySpacing: 'bogus',
         verbose: undefined,
         advancedSettings: {
           useBurtonMiller: null,
@@ -158,10 +146,10 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
         vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
         indices: [0, 1, 2],
         surfaceTags: [2],
-        format: "msh",
+        format: 'msh',
         boundaryConditions: {},
         metadata: {},
-      },
+      }
     );
 
     assert.equal(calls.length, 1);
@@ -169,24 +157,24 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
 
     const payload = JSON.parse(calls[0].options.body);
     assert.deepEqual(Object.keys(payload.mesh).sort(), [
-      "boundaryConditions",
-      "format",
-      "indices",
-      "metadata",
-      "surfaceTags",
-      "vertices",
+      'boundaryConditions',
+      'format',
+      'indices',
+      'metadata',
+      'surfaceTags',
+      'vertices',
     ]);
-    assert.equal("mesh_validation_mode" in payload, false);
-    assert.equal("frequency_spacing" in payload, false);
-    assert.equal("device_mode" in payload, false);
-    assert.equal("verbose" in payload, false);
-    assert.equal("advanced_settings" in payload, false);
+    assert.equal('mesh_validation_mode' in payload, false);
+    assert.equal('frequency_spacing' in payload, false);
+    assert.equal('device_mode' in payload, false);
+    assert.equal('verbose' in payload, false);
+    assert.equal('advanced_settings' in payload, false);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative", async () => {
+test('submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative', async () => {
   const originalFetch = global.fetch;
   const calls = [];
 
@@ -195,7 +183,7 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
     return {
       ok: true,
       async json() {
-        return { job_id: "job-test-omit-1" };
+        return { job_id: 'job-test-omit-1' };
       },
     };
   };
@@ -207,8 +195,8 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
         frequencyStart: 100,
         frequencyEnd: 1000,
         numFrequencies: 4,
-        meshValidationMode: "invalid",
-        frequencySpacing: "bogus",
+        meshValidationMode: 'invalid',
+        frequencySpacing: 'bogus',
         verbose: undefined,
         advancedSettings: {
           useBurtonMiller: null,
@@ -218,28 +206,28 @@ test("submitSimulation omits invalid or unset runtime settings so backend defaul
         vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
         indices: [0, 1, 2],
         surfaceTags: [2],
-        format: "msh",
+        format: 'msh',
         boundaryConditions: {},
         metadata: {},
-      },
+      }
     );
 
     const payload = JSON.parse(calls[0].options.body);
-    assert.equal("mesh_validation_mode" in payload, false);
-    assert.equal("frequency_spacing" in payload, false);
-    assert.equal("device_mode" in payload, false);
-    assert.equal("verbose" in payload, false);
-    assert.equal("advanced_settings" in payload, false);
+    assert.equal('mesh_validation_mode' in payload, false);
+    assert.equal('frequency_spacing' in payload, false);
+    assert.equal('device_mode' in payload, false);
+    assert.equal('verbose' in payload, false);
+    assert.equal('advanced_settings' in payload, false);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("smoothing update sets panel state without submitting a new job", () => {
+test('smoothing update sets panel state without submitting a new job', () => {
   let submitCalls = 0;
 
   const panel = {
-    currentSmoothing: "none",
+    currentSmoothing: 'none',
     lastResults: { spl_on_axis: { frequencies: [100], spl: [90] } },
     solver: {
       submitSimulation: () => {
@@ -248,13 +236,13 @@ test("smoothing update sets panel state without submitting a new job", () => {
     },
   };
 
-  applySmoothingSelection(panel, "1/6");
+  applySmoothingSelection(panel, '1/6');
 
-  assert.equal(panel.currentSmoothing, "1/6");
+  assert.equal(panel.currentSmoothing, '1/6');
   assert.equal(submitCalls, 0);
 });
 
-test("view results modal keeps header controls together and rerenders directivity separately", async () => {
+test('view results modal keeps header controls together and rerenders directivity separately', async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalFetch = global.fetch;
@@ -272,12 +260,12 @@ test("view results modal keeps header controls together and rerenders directivit
   };
   global.fetch = async (url, options = {}) => {
     const body = JSON.parse(options.body);
-    if (String(url).endsWith("/api/render-directivity")) {
+    if (String(url).endsWith('/api/render-directivity')) {
       directivityBodies.push(body);
       return {
         ok: true,
         async json() {
-          return { image: "data:image/png;base64,directivity" };
+          return { image: 'data:image/png;base64,directivity' };
         },
       };
     }
@@ -293,14 +281,14 @@ test("view results modal keeps header controls together and rerenders directivit
 
   try {
     const panel = {
-      currentSmoothing: "none",
+      currentSmoothing: 'none',
       currentDirectivityReferenceLevel: -6,
-      solver: { backendUrl: "http://localhost:8000" },
-      activeJobId: "job-1",
-      currentJobId: "job-1",
+      solver: { backendUrl: 'http://localhost:8000' },
+      activeJobId: 'job-1',
+      currentJobId: 'job-1',
       resultCache: new Map([
         [
-          "job-1",
+          'job-1',
           {
             spl_on_axis: { frequencies: [100, 200], spl: [90, 92] },
             di: { frequencies: [100, 200], di: [5, 6] },
@@ -311,8 +299,14 @@ test("view results modal keeps header controls together and rerenders directivit
             },
             directivity: {
               horizontal: [
-                [[0, 0], [10, -3]],
-                [[0, 0], [10, -4]],
+                [
+                  [0, 0],
+                  [10, -3],
+                ],
+                [
+                  [0, 0],
+                  [10, -4],
+                ],
               ],
             },
           },
@@ -324,89 +318,69 @@ test("view results modal keeps header controls together and rerenders directivit
     await openViewResultsModal(panel);
     await flushModalAsyncWork();
 
-    assert.equal(
-      appendedChildren.length,
-      1,
-      "Expected the backdrop to be mounted",
-    );
-    assert.equal(chartRenderBodies.length, 1, "Expected initial chart render fetch");
-    assert.equal(directivityBodies.length, 1, "Expected initial directivity render fetch");
+    assert.equal(appendedChildren.length, 1, 'Expected the backdrop to be mounted');
+    assert.equal(chartRenderBodies.length, 1, 'Expected initial chart render fetch');
+    assert.equal(directivityBodies.length, 1, 'Expected initial directivity render fetch');
     assert.equal(directivityBodies[0].reference_level, -6);
 
     const headerActions = createdElements.find(
-      (el) => el.className === "view-results-header-actions",
+      (el) => el.className === 'view-results-header-actions'
     );
     const controlContainers = createdElements.filter(
-      (el) => el.className === "view-results-smoothing",
+      (el) => el.className === 'view-results-smoothing'
     );
-    const closeButton = createdElements.find(
-      (el) => el.className === "view-results-close",
-    );
-    const smoothingSelect = fakeDocument.getElementById("vr-smoothing-select");
-    const directivitySelect = fakeDocument.getElementById("vr-directivity-ref-select");
+    const closeButton = createdElements.find((el) => el.className === 'view-results-close');
+    const smoothingSelect = fakeDocument.getElementById('vr-smoothing-select');
+    const directivitySelect = fakeDocument.getElementById('vr-directivity-ref-select');
 
-    assert.ok(headerActions, "Expected a dedicated header actions container");
-    assert.equal(controlContainers.length, 2, "Expected smoothing and map-ref controls");
-    assert.ok(closeButton, "Expected close button to be rendered");
-    assert.ok(
-      smoothingSelect,
-      "Expected smoothing select to be addressable by id",
-    );
-    assert.ok(
-      directivitySelect,
-      "Expected directivity reference select to be addressable by id",
-    );
+    assert.ok(headerActions, 'Expected a dedicated header actions container');
+    assert.equal(controlContainers.length, 2, 'Expected smoothing and map-ref controls');
+    assert.ok(closeButton, 'Expected close button to be rendered');
+    assert.ok(smoothingSelect, 'Expected smoothing select to be addressable by id');
+    assert.ok(directivitySelect, 'Expected directivity reference select to be addressable by id');
     assert.equal(headerActions._children.includes(smoothingSelect._parent), true);
     assert.equal(headerActions._children.includes(directivitySelect._parent), true);
     assert.equal(headerActions._children.includes(closeButton), true);
 
     const changeListeners = smoothingSelect._eventListeners.change || [];
-    assert.equal(
-      changeListeners.length,
-      1,
-      "Expected smoothing select change listener",
-    );
-    changeListeners[0]({ target: { value: "1/6" } });
+    assert.equal(changeListeners.length, 1, 'Expected smoothing select change listener');
+    changeListeners[0]({ target: { value: '1/6' } });
     await flushModalAsyncWork();
 
-    assert.equal(panel.currentSmoothing, "1/6");
+    assert.equal(panel.currentSmoothing, '1/6');
     assert.equal(
       fakeDocument.body._children.length,
       1,
-      "Modal should remain mounted after smoothing change",
+      'Modal should remain mounted after smoothing change'
     );
-    assert.equal(
-      chartRenderBodies.length,
-      2,
-      "Expected smoothing change to re-render charts",
-    );
+    assert.equal(chartRenderBodies.length, 2, 'Expected smoothing change to re-render charts');
     assert.equal(
       directivityBodies.length,
-      2,
-      "Expected smoothing change to refresh the directivity map",
+      1,
+      'Expected smoothing change to leave the unsmoothed directivity map alone'
     );
 
     const directivityChangeListeners = directivitySelect._eventListeners.change || [];
     assert.equal(
       directivityChangeListeners.length,
       1,
-      "Expected directivity reference change listener",
+      'Expected directivity reference change listener'
     );
-    directivityChangeListeners[0]({ target: { value: "-9" } });
+    directivityChangeListeners[0]({ target: { value: '-9' } });
     await flushModalAsyncWork();
 
     assert.equal(panel.currentDirectivityReferenceLevel, -9);
     assert.equal(
       chartRenderBodies.length,
       2,
-      "Expected directivity-only refresh to avoid re-rendering non-directivity charts",
+      'Expected directivity-only refresh to avoid re-rendering non-directivity charts'
     );
     assert.equal(
       directivityBodies.length,
-      3,
-      "Expected directivity-only refresh to request just the heatmap",
+      2,
+      'Expected directivity-only refresh to request just the heatmap'
     );
-    assert.equal(directivityBodies[2].reference_level, -9);
+    assert.equal(directivityBodies[1].reference_level, -9);
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;
@@ -453,14 +427,14 @@ function createModalDocument(createdElements, appendedChildren) {
         _attrs: {},
         _eventListeners: {},
         _parent: null,
-        id: "",
-        className: "",
-        textContent: "",
-        type: "",
-        title: "",
-        value: "",
+        id: '',
+        className: '',
+        textContent: '',
+        type: '',
+        title: '',
+        value: '',
         selected: false,
-        _innerHTML: "",
+        _innerHTML: '',
         setAttribute(key, value) {
           this._attrs[key] = value;
         },
@@ -509,21 +483,21 @@ function flushModalAsyncWork() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test("validateCanonicalMeshPayload rejects malformed canonical mesh", () => {
+test('validateCanonicalMeshPayload rejects malformed canonical mesh', () => {
   assert.throws(
     () =>
       validateCanonicalMeshPayload({
         vertices: [0, 0, 0],
         indices: [0, 1, 2],
         surfaceTags: [],
-        format: "msh",
+        format: 'msh',
         boundaryConditions: {},
       }),
-    /surfaceTags length must match triangle count/,
+    /surfaceTags length must match triangle count/
   );
 });
 
-test("submitSimulation preflight rejects mesh missing source tag before any API call", async () => {
+test('submitSimulation preflight rejects mesh missing source tag before any API call', async () => {
   const originalFetch = global.fetch;
   let fetchCalls = 0;
   global.fetch = async () => {
@@ -531,7 +505,7 @@ test("submitSimulation preflight rejects mesh missing source tag before any API 
     return {
       ok: true,
       async json() {
-        return { job_id: "should-not-happen" };
+        return { job_id: 'should-not-happen' };
       },
     };
   };
@@ -545,20 +519,20 @@ test("submitSimulation preflight rejects mesh missing source tag before any API 
             frequencyStart: 100,
             frequencyEnd: 1000,
             numFrequencies: 3,
-            simulationType: "2",
+            simulationType: '2',
           },
           {
             vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
             indices: [0, 1, 2],
             surfaceTags: [1],
-            format: "msh",
+            format: 'msh',
             boundaryConditions: {
-              throat: { type: "velocity", surfaceTag: 2, value: 1.0 },
+              throat: { type: 'velocity', surfaceTag: 2, value: 1.0 },
             },
             metadata: {},
-          },
+          }
         ),
-      /source surface tag \(2\) missing/i,
+      /source surface tag \(2\) missing/i
     );
     assert.equal(fetchCalls, 0);
   } finally {
@@ -566,7 +540,7 @@ test("submitSimulation preflight rejects mesh missing source tag before any API 
   }
 });
 
-test("submitSimulation maps backend 422 responses to typed validation ApiError", async () => {
+test('submitSimulation maps backend 422 responses to typed validation ApiError', async () => {
   const originalFetch = global.fetch;
 
   global.fetch = async () => ({
@@ -574,7 +548,7 @@ test("submitSimulation maps backend 422 responses to typed validation ApiError",
     status: 422,
     async json() {
       return {
-        detail: [{ loc: ["body", "mesh"], msg: "field required" }],
+        detail: [{ loc: ['body', 'mesh'], msg: 'field required' }],
       };
     },
   });
@@ -588,30 +562,27 @@ test("submitSimulation maps backend 422 responses to typed validation ApiError",
             frequencyStart: 100,
             frequencyEnd: 1000,
             numFrequencies: 3,
-            simulationType: "2",
+            simulationType: '2',
           },
           {
             vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
             indices: [0, 1, 2],
             surfaceTags: [2],
-            format: "msh",
+            format: 'msh',
             boundaryConditions: {
-              throat: { type: "velocity", surfaceTag: 2, value: 1.0 },
+              throat: { type: 'velocity', surfaceTag: 2, value: 1.0 },
             },
             metadata: {},
-          },
+          }
         ),
       (error) => {
-        assert.equal(error.name, "ApiError");
-        assert.equal(error.category, "validation");
+        assert.equal(error.name, 'ApiError');
+        assert.equal(error.category, 'validation');
         assert.equal(error.status, 422);
-        assert.match(
-          error.message,
-          /submit simulation failed validation \(422\)/i,
-        );
+        assert.match(error.message, /submit simulation failed validation \(422\)/i);
         assert.match(error.message, /body\.mesh: field required/i);
         return true;
-      },
+      }
     );
   } finally {
     global.fetch = originalFetch;
@@ -620,7 +591,7 @@ test("submitSimulation maps backend 422 responses to typed validation ApiError",
 
 // --- Check 5: mesh artifact download ---
 
-test("downloadMeshArtifact fetches mesh and triggers download", async () => {
+test('downloadMeshArtifact fetches mesh and triggers download', async () => {
   const originalFetch = global.fetch;
   const originalCreateElement = global.document?.createElement;
 
@@ -632,8 +603,8 @@ test("downloadMeshArtifact fetches mesh and triggers download", async () => {
   global.document = {
     createElement(tag) {
       const el = {
-        href: "",
-        download: "",
+        href: '',
+        download: '',
         click() {
           clickedLinks.push(this);
         },
@@ -649,7 +620,7 @@ test("downloadMeshArtifact fetches mesh and triggers download", async () => {
   };
   global.URL = {
     createObjectURL() {
-      return "blob:test";
+      return 'blob:test';
     },
     revokeObjectURL(u) {
       revokedUrls.push(u);
@@ -667,13 +638,13 @@ test("downloadMeshArtifact fetches mesh and triggers download", async () => {
     return {
       ok: true,
       async text() {
-        return "$MeshFormat\n2.2 0 8\n$EndMeshFormat";
+        return '$MeshFormat\n2.2 0 8\n$EndMeshFormat';
       },
     };
   };
 
   try {
-    await downloadMeshArtifact("job-42");
+    await downloadMeshArtifact('job-42');
     assert.equal(clickedLinks.length, 1);
     assert.match(clickedLinks[0].download, /simulation_mesh_job-42\.msh/);
     assert.equal(revokedUrls.length, 1);
@@ -687,19 +658,19 @@ test("downloadMeshArtifact fetches mesh and triggers download", async () => {
 
 // --- Session 6 regression tests: lifecycle safety + URL config ---
 
-test("downloadMeshArtifact uses the provided backendUrl instead of hardcoded default", async () => {
+test('downloadMeshArtifact uses the provided backendUrl instead of hardcoded default', async () => {
   const originalFetch = global.fetch;
   const fetchedUrls = [];
 
   global.document = {
     createElement() {
-      return { href: "", download: "", click() {} };
+      return { href: '', download: '', click() {} };
     },
     body: { appendChild() {}, removeChild() {} },
   };
   global.URL = {
     createObjectURL() {
-      return "blob:test";
+      return 'blob:test';
     },
     revokeObjectURL() {},
   };
@@ -714,24 +685,21 @@ test("downloadMeshArtifact uses the provided backendUrl instead of hardcoded def
     return {
       ok: true,
       async text() {
-        return "$MeshFormat";
+        return '$MeshFormat';
       },
     };
   };
 
   try {
-    await downloadMeshArtifact("job-99", "http://custom-backend:9000");
+    await downloadMeshArtifact('job-99', 'http://custom-backend:9000');
     assert.equal(fetchedUrls.length, 1);
-    assert.match(
-      fetchedUrls[0],
-      /^http:\/\/custom-backend:9000\/api\/mesh-artifact\/job-99$/,
-    );
+    assert.match(fetchedUrls[0], /^http:\/\/custom-backend:9000\/api\/mesh-artifact\/job-99$/);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("pollSimulationStatus guard: second call returns immediately when isPolling is true", () => {
+test('pollSimulationStatus guard: second call returns immediately when isPolling is true', () => {
   // When isPolling is already true, pollSimulationStatus should be a no-op.
   // No timer should be set and no DOM or fetch access should occur.
   const panel = {
@@ -742,7 +710,7 @@ test("pollSimulationStatus guard: second call returns immediately when isPolling
     pollBackoffMs: 1000,
     activeJobId: null,
     jobs: new Map(),
-    solver: { backendUrl: "http://localhost:8000" },
+    solver: { backendUrl: 'http://localhost:8000' },
   };
 
   pollSimulationStatus(panel);
@@ -752,7 +720,7 @@ test("pollSimulationStatus guard: second call returns immediately when isPolling
   assert.equal(panel.isPolling, true);
 });
 
-test("dispose() clears poll timers, connection timer, and resets isPolling", () => {
+test('dispose() clears poll timers, connection timer, and resets isPolling', () => {
   // Verify dispose() tear-down logic by exercising AppEvents.off round-trip.
   const removedEvents = [];
   const originalOff = AppEvents.off.bind(AppEvents);
@@ -771,7 +739,7 @@ test("dispose() clears poll timers, connection timer, and resets isPolling", () 
   try {
     // Simulate a panel that has active timers and registered listeners.
     const listener = () => {};
-    AppEvents.on("state:updated", listener);
+    AppEvents.on('state:updated', listener);
 
     const panel = {
       pollTimer: 7001,
@@ -795,19 +763,16 @@ test("dispose() clears poll timers, connection timer, and resets isPolling", () 
       panel.connectionPollTimer = null;
     }
     if (panel._onStateUpdated) {
-      AppEvents.off("state:updated", panel._onStateUpdated);
+      AppEvents.off('state:updated', panel._onStateUpdated);
       panel._onStateUpdated = null;
     }
 
-    assert.ok(clearedIds.includes(7001), "pollTimer was cleared");
-    assert.ok(clearedIds.includes(7002), "connectionPollTimer was cleared");
+    assert.ok(clearedIds.includes(7001), 'pollTimer was cleared');
+    assert.ok(clearedIds.includes(7002), 'connectionPollTimer was cleared');
     assert.equal(panel.pollTimer, null);
     assert.equal(panel.connectionPollTimer, null);
     assert.equal(panel.isPolling, false);
-    assert.ok(
-      removedEvents.includes("state:updated"),
-      "state:updated listener was removed",
-    );
+    assert.ok(removedEvents.includes('state:updated'), 'state:updated listener was removed');
     assert.equal(panel._onStateUpdated, null);
   } finally {
     global.clearTimeout = origClearTimeout;
@@ -817,34 +782,34 @@ test("dispose() clears poll timers, connection timer, and resets isPolling", () 
 
 // --- Session 7 regression tests: module split + DOM cache ---
 
-test("formatJobSummary is accessible from jobActions.js sub-module", () => {
-  assert.strictEqual(typeof formatJobSummary, "function");
+test('formatJobSummary is accessible from jobActions.js sub-module', () => {
+  assert.strictEqual(typeof formatJobSummary, 'function');
   // Verify it produces expected output for a complete job
   const job = {
-    status: "complete",
+    status: 'complete',
     progress: 1,
-    completedAt: "2026-02-24T12:00:00Z",
-    startedAt: "2026-02-24T11:59:00Z",
+    completedAt: '2026-02-24T12:00:00Z',
+    startedAt: '2026-02-24T11:59:00Z',
   };
   const summary = formatJobSummary(job);
   assert.ok(
-    summary.startsWith("Complete"),
-    `Expected summary starting with Complete, got: ${summary}`,
+    summary.startsWith('Complete'),
+    `Expected summary starting with Complete, got: ${summary}`
   );
 });
 
-test("renderJobList is accessible from jobActions.js sub-module", () => {
-  assert.strictEqual(typeof renderJobList, "function");
+test('renderJobList is accessible from jobActions.js sub-module', () => {
+  assert.strictEqual(typeof renderJobList, 'function');
 });
 
-test("renderJobList no-ops when document has no getElementById", () => {
+test('renderJobList no-ops when document has no getElementById', () => {
   const originalDocument = global.document;
   global.document = {};
 
   try {
     assert.doesNotThrow(() => {
       renderJobList({
-        jobSourceMode: "backend",
+        jobSourceMode: 'backend',
         activeJobId: null,
         jobs: new Map(),
       });
@@ -854,76 +819,76 @@ test("renderJobList no-ops when document has no getElementById", () => {
   }
 });
 
-test("renderJobList exposes folder source mode in the header and rows", () => {
+test('renderJobList exposes folder source mode in the header and rows', () => {
   const originalDocument = global.document;
-  const list = { innerHTML: "" };
-  const sourceLabel = { textContent: "" };
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
 
   global.document = {
     getElementById(id) {
-      if (id === "simulation-jobs-list") return list;
-      if (id === "simulation-jobs-source-label") return sourceLabel;
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
       return null;
     },
   };
 
   try {
     renderJobList({
-      jobSourceMode: "folder",
+      jobSourceMode: 'folder',
       activeJobId: null,
       jobs: new Map([
         [
-          "job-folder-1",
+          'job-folder-1',
           {
-            id: "job-folder-1",
-            label: "folder-task",
-            status: "complete",
-            createdAt: "2026-03-11T09:00:00.000Z",
-            completedAt: "2026-03-11T09:10:00.000Z",
+            id: 'job-folder-1',
+            label: 'folder-task',
+            status: 'complete',
+            createdAt: '2026-03-11T09:00:00.000Z',
+            completedAt: '2026-03-11T09:10:00.000Z',
           },
         ],
       ]),
     });
 
-    assert.equal(sourceLabel.textContent, "Folder Tasks");
+    assert.equal(sourceLabel.textContent, 'Folder Tasks');
     assert.match(list.innerHTML, /folder-task/);
   } finally {
     global.document = originalDocument;
   }
 });
 
-test("renderJobList keeps backend-only feeds free of redundant row source badges", () => {
+test('renderJobList keeps backend-only feeds free of redundant row source badges', () => {
   const originalDocument = global.document;
-  const list = { innerHTML: "" };
-  const sourceLabel = { textContent: "" };
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
 
   global.document = {
     getElementById(id) {
-      if (id === "simulation-jobs-list") return list;
-      if (id === "simulation-jobs-source-label") return sourceLabel;
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
       return null;
     },
   };
 
   try {
     renderJobList({
-      jobSourceMode: "backend",
+      jobSourceMode: 'backend',
       activeJobId: null,
       jobs: new Map([
         [
-          "job-backend-1",
+          'job-backend-1',
           {
-            id: "job-backend-1",
-            label: "backend-task",
-            status: "complete",
-            createdAt: "2026-03-11T09:00:00.000Z",
-            completedAt: "2026-03-11T09:10:00.000Z",
+            id: 'job-backend-1',
+            label: 'backend-task',
+            status: 'complete',
+            createdAt: '2026-03-11T09:00:00.000Z',
+            completedAt: '2026-03-11T09:10:00.000Z',
           },
         ],
       ]),
     });
 
-    assert.equal(sourceLabel.textContent, "Backend Jobs");
+    assert.equal(sourceLabel.textContent, 'Backend Jobs');
     assert.doesNotMatch(list.innerHTML, /simulation-job-source-badge/);
     assert.doesNotMatch(list.innerHTML, />Backend</);
   } finally {
@@ -931,34 +896,34 @@ test("renderJobList keeps backend-only feeds free of redundant row source badges
   }
 });
 
-test("renderJobList escapes job ids in action data attributes", () => {
+test('renderJobList escapes job ids in action data attributes', () => {
   const originalDocument = global.document;
-  const list = { innerHTML: "" };
-  const sourceLabel = { textContent: "" };
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
   const jobId = 'job-"quoted"';
 
   global.document = {
     getElementById(id) {
-      if (id === "simulation-jobs-list") return list;
-      if (id === "simulation-jobs-source-label") return sourceLabel;
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
       return null;
     },
   };
 
   try {
     renderJobList({
-      jobSourceMode: "backend",
+      jobSourceMode: 'backend',
       activeJobId: jobId,
       jobs: new Map([
         [
           jobId,
           {
             id: jobId,
-            label: "quoted-task",
-            status: "complete",
+            label: 'quoted-task',
+            status: 'complete',
             rating: 3,
-            createdAt: "2026-03-11T09:00:00.000Z",
-            completedAt: "2026-03-11T09:10:00.000Z",
+            createdAt: '2026-03-11T09:00:00.000Z',
+            completedAt: '2026-03-11T09:10:00.000Z',
           },
         ],
       ]),
@@ -971,13 +936,13 @@ test("renderJobList escapes job ids in action data attributes", () => {
   }
 });
 
-test("renderJobList applies rating filter and renders rating controls", () => {
+test('renderJobList applies rating filter and renders rating controls', () => {
   const originalDocument = global.document;
   const originalLocalStorage = global.localStorage;
-  const list = { innerHTML: "" };
-  const sourceLabel = { textContent: "" };
-  const sortSelect = { value: "completed_desc" };
-  const minRatingSelect = { value: "0" };
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+  const sortSelect = { value: 'completed_desc' };
+  const minRatingSelect = { value: '0' };
 
   global.localStorage = {
     values: new Map(),
@@ -991,46 +956,46 @@ test("renderJobList applies rating filter and renders rating controls", () => {
 
   saveSimulationManagementSettings({
     autoExportOnComplete: true,
-    selectedFormats: ["csv"],
-    defaultSort: "rating_desc",
+    selectedFormats: ['csv'],
+    defaultSort: 'rating_desc',
     minRatingFilter: 4,
   });
 
   global.document = {
     getElementById(id) {
-      if (id === "simulation-jobs-list") return list;
-      if (id === "simulation-jobs-source-label") return sourceLabel;
-      if (id === "simulation-jobs-sort") return sortSelect;
-      if (id === "simulation-jobs-min-rating") return minRatingSelect;
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      if (id === 'simulation-jobs-sort') return sortSelect;
+      if (id === 'simulation-jobs-min-rating') return minRatingSelect;
       return null;
     },
   };
 
   try {
     renderJobList({
-      jobSourceMode: "backend",
+      jobSourceMode: 'backend',
       activeJobId: null,
       jobs: new Map([
         [
-          "job-high",
+          'job-high',
           {
-            id: "job-high",
-            label: "rated-high",
-            status: "complete",
+            id: 'job-high',
+            label: 'rated-high',
+            status: 'complete',
             rating: 5,
-            createdAt: "2026-03-11T09:00:00.000Z",
-            completedAt: "2026-03-11T09:10:00.000Z",
+            createdAt: '2026-03-11T09:00:00.000Z',
+            completedAt: '2026-03-11T09:10:00.000Z',
           },
         ],
         [
-          "job-low",
+          'job-low',
           {
-            id: "job-low",
-            label: "rated-low",
-            status: "complete",
+            id: 'job-low',
+            label: 'rated-low',
+            status: 'complete',
             rating: 2,
-            createdAt: "2026-03-11T08:00:00.000Z",
-            completedAt: "2026-03-11T08:10:00.000Z",
+            createdAt: '2026-03-11T08:00:00.000Z',
+            completedAt: '2026-03-11T08:10:00.000Z',
           },
         ],
       ]),
@@ -1047,7 +1012,7 @@ test("renderJobList applies rating filter and renders rating controls", () => {
   }
 });
 
-test("clearPollTimer from polling.js resets isPolling and clears timer refs", () => {
+test('clearPollTimer from polling.js resets isPolling and clears timer refs', () => {
   const clearedIds = [];
   const origClearTimeout = global.clearTimeout;
   global.clearTimeout = (id) => {
@@ -1063,10 +1028,7 @@ test("clearPollTimer from polling.js resets isPolling and clears timer refs", ()
       isPolling: true,
     };
     clearPollTimer(panel);
-    assert.ok(
-      clearedIds.includes(9001),
-      "pollTimer was cleared via clearTimeout",
-    );
+    assert.ok(clearedIds.includes(9001), 'pollTimer was cleared via clearTimeout');
     assert.equal(panel.pollTimer, null);
     assert.equal(panel.pollInterval, null);
     assert.equal(panel.consecutivePollFailures, 0);
@@ -1076,17 +1038,17 @@ test("clearPollTimer from polling.js resets isPolling and clears timer refs", ()
   }
 });
 
-test("pollSimulationStatus publishes backend simulation mesh stats to the app widget", async () => {
+test('pollSimulationStatus publishes backend simulation mesh stats to the app widget', async () => {
   const originalDocument = global.document;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
 
-  const diagnosticsEl = { innerHTML: "" };
+  const diagnosticsEl = { innerHTML: '' };
   global.document = {
     getElementById(id) {
-      if (id === "simulation-mesh-diagnostics") return diagnosticsEl;
-      if (id === "simulation-jobs-list") return { innerHTML: "" };
-      if (id === "simulation-jobs-source-label") return { textContent: "" };
+      if (id === 'simulation-mesh-diagnostics') return diagnosticsEl;
+      if (id === 'simulation-jobs-list') return { innerHTML: '' };
+      if (id === 'simulation-jobs-source-label') return { textContent: '' };
       return null;
     },
   };
@@ -1098,7 +1060,7 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
   const meshStatsData = {
     vertex_count: 144,
     triangle_count: 72,
-    source: "hornlab_waveguide_mesher",
+    source: 'hornlab_waveguide_mesher',
     tag_counts: { 1: 68, 2: 4, 3: 0, 4: 0 },
     identity_triangle_counts: {
       inner_wall: 28,
@@ -1116,15 +1078,15 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
       pollDelayMs: 1000,
       pollBackoffMs: 1000,
       consecutivePollFailures: 0,
-      activeJobId: "job-mesh-stats",
-      currentJobId: "job-mesh-stats",
-      jobSourceMode: "backend",
+      activeJobId: 'job-mesh-stats',
+      currentJobId: 'job-mesh-stats',
+      jobSourceMode: 'backend',
       jobs: new Map([
         [
-          "job-mesh-stats",
+          'job-mesh-stats',
           {
-            id: "job-mesh-stats",
-            status: "running",
+            id: 'job-mesh-stats',
+            status: 'running',
             progress: 0.35,
           },
         ],
@@ -1134,10 +1096,10 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
         async getJobStatus(id) {
           return {
             id,
-            status: "running",
+            status: 'running',
             progress: 0.35,
-            stage: "mesh_prepare",
-            stage_message: "Building HornLab mesher mesh",
+            stage: 'mesh_prepare',
+            stage_message: 'Building HornLab mesher mesh',
             mesh_stats: meshStatsData,
           };
         },
@@ -1165,7 +1127,7 @@ test("pollSimulationStatus publishes backend simulation mesh stats to the app wi
   }
 });
 
-test("pollSimulationStatus schedules next poll after reconciliation with no active jobs", async () => {
+test('pollSimulationStatus schedules next poll after reconciliation with no active jobs', async () => {
   const originalDocument = global.document;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -1197,7 +1159,7 @@ test("pollSimulationStatus schedules next poll after reconciliation with no acti
       resultCache: new Map(),
       solver: {
         async getJobStatus() {
-          throw new Error("backend unavailable");
+          throw new Error('backend unavailable');
         },
       },
       checkSolverConnection() {},
@@ -1211,7 +1173,7 @@ test("pollSimulationStatus schedules next poll after reconciliation with no acti
     assert.equal(panel.consecutivePollFailures, 0);
     assert.ok(
       scheduledDelays.length >= 1,
-      `expected at least one scheduled delay, got ${scheduledDelays.length}`,
+      `expected at least one scheduled delay, got ${scheduledDelays.length}`
     );
   } finally {
     global.document = originalDocument;
@@ -1220,14 +1182,14 @@ test("pollSimulationStatus schedules next poll after reconciliation with no acti
   }
 });
 
-test("pollSimulationStatus clears early mesh persistence marker after terminal failure", async () => {
+test('pollSimulationStatus clears early mesh persistence marker after terminal failure', async () => {
   const originalDocument = global.document;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
   const originalFetch = global.fetch;
 
   let timeoutId = 0;
-  let remoteStatus = "running";
+  let remoteStatus = 'running';
   let meshArtifactFetches = 0;
 
   global.document = {
@@ -1243,7 +1205,7 @@ test("pollSimulationStatus clears early mesh persistence marker after terminal f
   global.fetch = async () => ({
     ok: true,
     async json() {
-      return { status: "success" };
+      return { status: 'success' };
     },
   });
 
@@ -1254,15 +1216,15 @@ test("pollSimulationStatus clears early mesh persistence marker after terminal f
     pollDelayMs: 1000,
     pollBackoffMs: 1000,
     consecutivePollFailures: 0,
-    activeJobId: "job-retry-mesh",
-    currentJobId: "job-retry-mesh",
-    jobSourceMode: "backend",
+    activeJobId: 'job-retry-mesh',
+    currentJobId: 'job-retry-mesh',
+    jobSourceMode: 'backend',
     jobs: new Map([
       [
-        "job-retry-mesh",
+        'job-retry-mesh',
         {
-          id: "job-retry-mesh",
-          status: "running",
+          id: 'job-retry-mesh',
+          status: 'running',
           progress: 0.2,
           hasMeshArtifact: true,
         },
@@ -1274,16 +1236,16 @@ test("pollSimulationStatus clears early mesh persistence marker after terminal f
         return {
           id,
           status: remoteStatus,
-          progress: remoteStatus === "running" ? 0.4 : 1,
+          progress: remoteStatus === 'running' ? 0.4 : 1,
           stage: remoteStatus,
           stage_message: remoteStatus,
           has_mesh_artifact: true,
-          error_message: remoteStatus === "error" ? "solver failed" : null,
+          error_message: remoteStatus === 'error' ? 'solver failed' : null,
         };
       },
       async getMeshArtifact() {
         meshArtifactFetches += 1;
-        return "$MeshFormat\n2.2 0 8\n$EndMeshFormat";
+        return '$MeshFormat\n2.2 0 8\n$EndMeshFormat';
       },
     },
     displayResults() {},
@@ -1302,20 +1264,20 @@ test("pollSimulationStatus clears early mesh persistence marker after terminal f
     assert.equal(meshArtifactFetches, 1);
 
     clearPollTimer(panel);
-    remoteStatus = "error";
+    remoteStatus = 'error';
     pollSimulationStatus(panel);
     await flushPolling();
     assert.equal(meshArtifactFetches, 1);
 
-    panel.jobs.set("job-retry-mesh", {
-      id: "job-retry-mesh",
-      status: "running",
+    panel.jobs.set('job-retry-mesh', {
+      id: 'job-retry-mesh',
+      status: 'running',
       progress: 0.1,
       hasMeshArtifact: true,
     });
-    panel.activeJobId = "job-retry-mesh";
-    panel.currentJobId = "job-retry-mesh";
-    remoteStatus = "running";
+    panel.activeJobId = 'job-retry-mesh';
+    panel.currentJobId = 'job-retry-mesh';
+    remoteStatus = 'running';
     pollSimulationStatus(panel);
     await flushPolling();
     assert.equal(meshArtifactFetches, 2);
@@ -1330,7 +1292,7 @@ test("pollSimulationStatus clears early mesh persistence marker after terminal f
 
 // --- Phase 1 migration regression: simulation flow unaffected by control migration ---
 
-test("getDownloadSimMeshEnabled returns false by default when modal is not open", () => {
+test('getDownloadSimMeshEnabled returns false by default when modal is not open', () => {
   // jobActions.js uses getDownloadSimMeshEnabled() to guard the mesh download at job start.
   // This default must be false so no unexpected download is triggered on startup before
   // the user has ever opened Settings.
@@ -1344,7 +1306,7 @@ test("getDownloadSimMeshEnabled returns false by default when modal is not open"
   }
 });
 
-test("getDownloadSimMeshEnabled does not access a static DOM element that would be absent when modal is closed", () => {
+test('getDownloadSimMeshEnabled does not access a static DOM element that would be absent when modal is closed', () => {
   // After migration, download-sim-mesh lives in a dynamically-created modal.
   // When the modal is closed, getElementById('download-sim-mesh') returns null.
   // The getter must NOT throw or return a falsy value that silently corrupts behavior.
@@ -1361,12 +1323,9 @@ test("getDownloadSimMeshEnabled does not access a static DOM element that would 
   try {
     const result = getDownloadSimMeshEnabled();
     // Should return a boolean (the in-memory default), never null or undefined
-    assert.equal(typeof result, "boolean");
+    assert.equal(typeof result, 'boolean');
     // Should have attempted to look up the element (DOM-first strategy)
-    assert.ok(
-      queriedIds.includes("download-sim-mesh"),
-      "getter should attempt DOM lookup first",
-    );
+    assert.ok(queriedIds.includes('download-sim-mesh'), 'getter should attempt DOM lookup first');
   } finally {
     global.document = originalDocument;
   }

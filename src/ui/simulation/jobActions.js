@@ -38,6 +38,7 @@ import {
   readSimulationState,
   updateSimulationStateParams,
 } from '../../modules/simulation/state.js';
+import { resolveAvailableSolveCounter } from '../../modules/simulation/naming.js';
 import { resolveClearedFailedJobIds } from '../../modules/simulation/jobs.js';
 import { deleteTaskWorkspaceDirectory } from './workspaceTasks.js';
 import {
@@ -280,12 +281,11 @@ function readOutputNameAndCounter() {
   return { name, counter };
 }
 
-function incrementOutputCounter() {
+function setOutputCounter(counter) {
   const counterEl = document.getElementById('export-counter');
   if (!counterEl) return;
-  const currentRaw = Number(counterEl.value);
-  const current = Number.isFinite(currentRaw) && currentRaw >= 1 ? Math.floor(currentRaw) : 1;
-  counterEl.value = String(current + 1);
+  const next = Number(counter);
+  counterEl.value = String(Number.isFinite(next) && next >= 1 ? Math.floor(next) : 1);
 }
 
 function setSimulationInputsFromScript(script = {}) {
@@ -642,14 +642,19 @@ export async function runSimulation(panel) {
       message: 'Mesh ready, submitting to BEM solver',
     });
 
-    const { name: outputName, counter } = readOutputNameAndCounter();
+    const { name: outputName, counter: requestedCounter } = readOutputNameAndCounter();
+    const counter = resolveAvailableSolveCounter({
+      outputName,
+      counter: requestedCounter,
+      existingJobs: allJobs(panel),
+    });
     await submitSimulationControllerJob(panel, {
       config,
       meshData,
       outputName,
       counter,
     });
-    incrementOutputCounter();
+    setOutputCounter(counter + 1);
     renderJobList(panel);
 
     updateStageUi(panel, {

@@ -164,6 +164,7 @@ async def get_job_status(job_id: str) -> JobStatus:
         stage=job.get("stage"),
         stage_message=job.get("stage_message"),
         message=job.get("error_message") or job.get("error"),
+        mesh_stats=job.get("mesh_stats"),
     )
 
 

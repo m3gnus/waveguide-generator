@@ -7,6 +7,14 @@ export function setupSmoothingListener(_panel) {
   // No persistent DOM element to listen on.
 }
 
+function syncModalSmoothingSelect(smoothingType) {
+  const smoothingSelect = document.getElementById('vr-smoothing-select');
+  if (smoothingSelect) {
+    smoothingSelect.value = smoothingType;
+    smoothingSelect.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
 export function setupKeyboardShortcuts(panel) {
   document.addEventListener('keydown', (e) => {
     // Check if Ctrl (or Cmd on Mac) + Shift is pressed
@@ -62,10 +70,7 @@ export function setupKeyboardShortcuts(panel) {
         }
 
         applySmoothingSelection(panel, smoothingType);
-        const smoothingSelect = document.getElementById('vr-smoothing-select');
-        if (smoothingSelect) {
-          smoothingSelect.value = smoothingType;
-        }
+        syncModalSmoothingSelect(smoothingType);
       }
     }
 
@@ -73,10 +78,7 @@ export function setupKeyboardShortcuts(panel) {
     if ((e.ctrlKey || e.metaKey) && e.key === '0' && !e.shiftKey) {
       e.preventDefault();
       applySmoothingSelection(panel, 'none');
-      const smoothingSelect = document.getElementById('vr-smoothing-select');
-      if (smoothingSelect) {
-        smoothingSelect.value = 'none';
-      }
+      syncModalSmoothingSelect('none');
     }
   });
 }

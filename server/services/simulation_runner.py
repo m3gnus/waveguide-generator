@@ -444,6 +444,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 )
 
         # Extract canonical mesh stats for the job record (informational only).
+        mesh_stats = None
         try:
             vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
             canonical_metadata = (
@@ -451,15 +452,16 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 if isinstance(mesher_result.get("canonical_mesh"), dict)
                 else None
             )
+            mesh_stats = _build_mesh_stats(
+                vertices,
+                indices,
+                source="hornlab_waveguide_mesher",
+                surface_tags=surface_tags,
+                metadata=canonical_metadata,
+            )
             _set_job_fields(
                 job_id,
-                mesh_stats=_build_mesh_stats(
-                    vertices,
-                    indices,
-                    source="hornlab_waveguide_mesher",
-                    surface_tags=surface_tags,
-                    metadata=canonical_metadata,
-                ),
+                mesh_stats=mesh_stats,
             )
         except Exception as _stats_exc:
             logger.warning(
@@ -497,6 +499,10 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         else:
             results = await _run_solve_in_subprocess(job_id, mesh, request)
         _cancellation_callback("Cancellation requested before result persistence")
+        if mesh_stats and isinstance(results, dict):
+            metadata = results.setdefault("metadata", {})
+            if isinstance(metadata, dict):
+                metadata["mesh_stats"] = mesh_stats
 
         # Check for cancellation before storing results.
         latest = _merge_job_cache_from_db(job_id)

@@ -104,8 +104,12 @@ function toStorageItem(item) {
 }
 
 function resolveSortTimestamp(item) {
-  return (
-    Date.parse(item.createdAt || item.queuedAt || item.startedAt || item.completedAt || '') || 0
+  return Math.max(
+    Date.parse(item.autoExportCompletedAt || '') || 0,
+    Date.parse(item.completedAt || '') || 0,
+    Date.parse(item.startedAt || '') || 0,
+    Date.parse(item.queuedAt || '') || 0,
+    Date.parse(item.createdAt || '') || 0
   );
 }
 

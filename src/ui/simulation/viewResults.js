@@ -298,7 +298,7 @@ export async function openViewResultsModal(panel) {
     }
   }
 
-  async function fetchCharts() {
+  async function fetchCharts({ includeDirectivityMap = true } = {}) {
     const splData = results.spl_on_axis || {};
     const frequencies = splData.frequencies || [];
     let spl = splData.spl || [];
@@ -329,6 +329,9 @@ export async function openViewResultsModal(panel) {
 
     // Show loading state
     for (const chart of chartNames) {
+      if (!includeDirectivityMap && chart.key === 'directivity_map') {
+        continue;
+      }
       const container = document.getElementById(`vr-${chart.key}`);
       if (container) container.innerHTML = '<div class="view-results-loading">Rendering...</div>';
     }
@@ -370,7 +373,9 @@ export async function openViewResultsModal(panel) {
         setChartImage(chart.key, chart.label, charts[chart.key] || null);
       }
 
-      await renderDirectivityMap();
+      if (includeDirectivityMap) {
+        await renderDirectivityMap();
+      }
     } catch (err) {
       console.warn('[view-results] Fetch failed:', err.message);
       showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
@@ -380,7 +385,7 @@ export async function openViewResultsModal(panel) {
   // Re-fetch charts when smoothing changes
   smoothingSelect.addEventListener('change', (e) => {
     panel.currentSmoothing = e.target.value;
-    fetchCharts();
+    fetchCharts({ includeDirectivityMap: false });
   });
 
   directivitySelect.addEventListener('change', (e) => {
