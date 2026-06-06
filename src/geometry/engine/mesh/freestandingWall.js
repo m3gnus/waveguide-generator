@@ -230,27 +230,54 @@ function stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, o
   }
 }
 
-function extrapolateRearRimVertex(vertices, outerStart, ringCount, lengthSteps, col, rearDiscY) {
-  const throatIdx = outerStart + col;
-  const x0 = vertices[throatIdx * 3];
-  const y0 = vertices[throatIdx * 3 + 1];
-  const z0 = vertices[throatIdx * 3 + 2];
+function computeRingCenterAndRadius(vertices, start, ringCount) {
+  let centerX = 0;
+  let centerY = 0;
+  let centerZ = 0;
 
-  if (lengthSteps <= 0) {
-    return [x0, rearDiscY, z0];
+  for (let col = 0; col < ringCount; col += 1) {
+    centerX += vertices[(start + col) * 3];
+    centerY += vertices[(start + col) * 3 + 1];
+    centerZ += vertices[(start + col) * 3 + 2];
   }
 
-  const nextIdx = outerStart + ringCount + col;
-  const x1 = vertices[nextIdx * 3];
-  const y1 = vertices[nextIdx * 3 + 1];
-  const z1 = vertices[nextIdx * 3 + 2];
-  const dy = y1 - y0;
-  if (Math.abs(dy) <= 1e-9) {
-    return [x0, rearDiscY, z0];
+  centerX /= ringCount;
+  centerY /= ringCount;
+  centerZ /= ringCount;
+
+  let radius = 0;
+  for (let col = 0; col < ringCount; col += 1) {
+    const x = vertices[(start + col) * 3] - centerX;
+    const z = vertices[(start + col) * 3 + 2] - centerZ;
+    radius += Math.hypot(x, z);
+  }
+  radius /= ringCount;
+
+  return { centerX, centerY, centerZ, radius };
+}
+
+function computeCircularRearRim(vertices, outerStart, ringCount, lengthSteps, rearDiscY) {
+  const throat = computeRingCenterAndRadius(vertices, outerStart, ringCount);
+  let rearRadius = throat.radius;
+
+  if (lengthSteps > 0) {
+    const next = computeRingCenterAndRadius(vertices, outerStart + ringCount, ringCount);
+    const dy = next.centerY - throat.centerY;
+    if (Math.abs(dy) > 1e-9) {
+      const t = (rearDiscY - throat.centerY) / dy;
+      rearRadius = throat.radius + (next.radius - throat.radius) * t;
+    }
   }
 
-  const t = (rearDiscY - y0) / dy;
-  return [x0 + (x1 - x0) * t, rearDiscY, z0 + (z1 - z0) * t];
+  if (!Number.isFinite(rearRadius) || rearRadius <= 1e-9) {
+    rearRadius = throat.radius;
+  }
+
+  return {
+    centerX: throat.centerX,
+    centerZ: throat.centerZ,
+    radius: rearRadius,
+  };
 }
 
 function addRearTransitionAndCap(
@@ -264,10 +291,19 @@ function addRearTransitionAndCap(
 ) {
   const throatReturnStartTri = indices.length / 3;
   const discRimStart = vertices.length / 3;
+  const rearRim = computeCircularRearRim(vertices, outerStart, ringCount, lengthSteps, rearDiscY);
 
   for (let col = 0; col < ringCount; col += 1) {
+    const throatIdx = outerStart + col;
+    const dx = vertices[throatIdx * 3] - rearRim.centerX;
+    const dz = vertices[throatIdx * 3 + 2] - rearRim.centerZ;
+    const len = Math.hypot(dx, dz);
+    const ux = len > 1e-12 ? dx / len : Math.cos((col / ringCount) * Math.PI * 2);
+    const uz = len > 1e-12 ? dz / len : Math.sin((col / ringCount) * Math.PI * 2);
     vertices.push(
-      ...extrapolateRearRimVertex(vertices, outerStart, ringCount, lengthSteps, col, rearDiscY)
+      rearRim.centerX + ux * rearRim.radius,
+      rearDiscY,
+      rearRim.centerZ + uz * rearRim.radius
     );
   }
 
@@ -279,17 +315,8 @@ function addRearTransitionAndCap(
   }
   const throatReturnEndTri = indices.length / 3;
 
-  let centerX = 0;
-  let centerZ = 0;
-  for (let col = 0; col < ringCount; col += 1) {
-    centerX += vertices[(discRimStart + col) * 3];
-    centerZ += vertices[(discRimStart + col) * 3 + 2];
-  }
-  centerX /= ringCount;
-  centerZ /= ringCount;
-
   const centerIdx = vertices.length / 3;
-  vertices.push(centerX, rearDiscY, centerZ);
+  vertices.push(rearRim.centerX, rearDiscY, rearRim.centerZ);
 
   for (let col = 0; col < radialSteps; col += 1) {
     const col2 = fullCircle ? (col + 1) % ringCount : col + 1;
