@@ -1,10 +1,10 @@
 /**
- * Generate MWG Config file content from parameters.
+ * Generate parameter config file content from parameters.
  * @param {Object} params - The parameter object.
  * @returns {string} The formatted config file content.
  */
 export function generateMWGConfigContent(params) {
-  let content = '; MWG config\n';
+  let content = '; Parameter config\n';
   // Use local time format to match system clock
   const now = new Date();
   const year = now.getFullYear();

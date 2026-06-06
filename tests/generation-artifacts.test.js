@@ -10,6 +10,7 @@ import {
 } from '../src/ui/workspace/generationArtifacts.js';
 
 test('resolveGenerationExportFileName returns deterministic names for known formats', () => {
+  assert.equal(resolveGenerationExportFileName('mwg_config', { baseName: 'horn_12' }), 'horn_12.txt');
   assert.equal(resolveGenerationExportFileName('csv', { baseName: 'horn_12' }), 'horn_12_results.csv');
   assert.equal(resolveGenerationExportFileName('json', { baseName: 'horn_12' }), 'horn_12_results.json');
   assert.equal(resolveGenerationExportFileName('txt', { baseName: 'horn_12' }), 'horn_12_report.txt');
@@ -17,6 +18,7 @@ test('resolveGenerationExportFileName returns deterministic names for known form
   assert.equal(resolveGenerationExportFileName('impedance_csv', { baseName: 'horn_12' }), 'horn_12_impedance.csv');
   assert.equal(resolveGenerationExportFileName('vacs', { baseName: 'horn_12' }), 'horn_12_spectrum.txt');
   assert.equal(resolveGenerationExportFileName('stl', { baseName: 'horn_12' }), 'horn_12.stl');
+  assert.equal(resolveGenerationExportFileName('step', { baseName: 'horn_12' }), 'horn_12.step');
   assert.equal(
     resolveGenerationExportFileName('png', { baseName: 'horn_12', chartKey: 'directivity_index' }),
     'horn_12_directivity_index.png'

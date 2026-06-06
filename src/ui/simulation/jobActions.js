@@ -66,6 +66,20 @@ const GEOMETRY_DIAGNOSTIC_ROWS = Object.freeze([
   ['enc_rear', 'Enclosure Rear'],
   ['enc_edge', 'Enclosure Edge'],
 ]);
+const JOB_EXPORT_MENU_ITEMS = Object.freeze([
+  ['selected', 'Selected Formats', 'Export formats enabled in Export Settings'],
+  ['mwg_config', 'Config (.txt)', 'Export task parameter config'],
+  ['step', 'STEP (.step)', 'Export waveguide STEP surface'],
+  ['stl', 'STL (.stl)', 'Export viewport STL mesh'],
+  ['fusion_csv', 'Fusion CSV', 'Export profiles and slices CSV'],
+  ['png', 'Charts (PNG)', 'Export result charts'],
+  ['csv', 'Results CSV', 'Export frequency result data'],
+  ['json', 'Results JSON', 'Export full result payload'],
+  ['txt', 'Report (.txt)', 'Export summary report'],
+  ['polar_csv', 'Polar CSV', 'Export polar directivity data'],
+  ['impedance_csv', 'Impedance CSV', 'Export impedance result data'],
+  ['vacs', 'ABEC VACS', 'Export ABEC spectrum data'],
+]);
 
 export function renderSimulationMeshDiagnostics(summary = null) {
   const container = document.getElementById('simulation-mesh-diagnostics');
@@ -258,6 +272,36 @@ function renderJobActionButton({
   return `<button type="button" class="${className}" data-job-action="${action}" data-job-id="${jobIdAttr}" title="${title}">${label}</button>`;
 }
 
+function renderJobExportMenu(jobIdAttr) {
+  const items = JOB_EXPORT_MENU_ITEMS.map(
+    ([formatId, label, title]) => `
+      <button
+        type="button"
+        role="menuitem"
+        data-job-action="export-format"
+        data-job-id="${jobIdAttr}"
+        data-export-format="${escapeHtml(formatId)}"
+        title="${escapeHtml(title)}"
+      >${escapeHtml(label)}</button>
+    `
+  ).join('');
+
+  return `
+    <div class="export-menu export-menu--job">
+      <button
+        type="button"
+        class="btn-secondary button-compact export-menu-trigger"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        title="Export task"
+      >Export</button>
+      <div class="export-menu-list" role="menu" aria-label="Export task">
+        ${items}
+      </div>
+    </div>
+  `;
+}
+
 function syncJobListPreferenceControls() {
   const settings = getCurrentSimulationManagementSettings();
   const sortEl = document.getElementById('simulation-jobs-sort');
@@ -397,7 +441,7 @@ export function renderJobList(panel) {
       </div>
       <div class="simulation-job-actions">
         ${job.status === 'complete' ? renderJobActionButton({ action: 'view', jobIdAttr, label: 'View', title: 'View results' }) : ''}
-        ${job.status === 'complete' ? renderJobActionButton({ action: 'export', jobIdAttr, label: 'Export', title: 'Export results' }) : ''}
+        ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr) : ''}
         ${job.status === 'complete' && source.mode === 'folder' ? renderJobActionButton({ action: 'open-folder', jobIdAttr, label: 'View Output', title: 'Open output folder' }) : ''}
         ${job.script ? renderJobActionButton({ action: 'load-script', jobIdAttr, label: 'Load', title: 'Load parameters' }) : ''}
         ${canRerun ? renderJobActionButton({ action: 'redo', jobIdAttr, label: 'Rerun', title: 'Rerun' }) : ''}
@@ -416,11 +460,11 @@ export async function viewJobResults(panel, jobId) {
   panel.pollSimulationStatus();
 }
 
-export async function exportJobResults(panel, jobId) {
+export async function exportJobResults(panel, jobId, selectedFormats = null) {
   const results = await ensureJobResults(panel, jobId, { display: true });
   if (!results) return;
   const job = panel.jobs?.get(jobId) || null;
-  const bundle = await panel.exportResults({ job });
+  const bundle = await panel.exportResults({ job, selectedFormats });
   if (bundle && (bundle.exportedFiles.length > 0 || bundle.failures.length > 0)) {
     await recordSimulationControllerExport(panel, jobId, {
       exportedFiles: bundle.exportedFiles,

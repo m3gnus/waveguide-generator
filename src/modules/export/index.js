@@ -6,6 +6,7 @@ import {
   buildCanonicalMeshPayloadFromShape,
   buildGeometryMeshFromShape,
 } from '../../geometry/pipeline.js';
+import { densifyForSmoothTessellation } from '../../geometry/tessellation.js';
 import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
 import { GeometryModule } from '../geometry/index.js';
 import { prepareBackendMeshExportParams, prepareProfileCsvParams } from '../design/index.js';
@@ -22,6 +23,7 @@ const EXPORT_KINDS = Object.freeze({
   PROFILE_CSV: 'profile-csv',
   CONFIG: 'config',
 });
+const DEFAULT_STEP_BUILD_TIMEOUT_MS = 120000;
 
 function isObject(value) {
   return value !== null && typeof value === 'object';
@@ -255,7 +257,7 @@ async function runStepExportTask(input, options = {}) {
     throw new Error(`Backend health check failed at ${backendUrl}.\nStart with: npm start`);
   }
 
-  if (!health?.mesherReady) {
+  if (health?.mesherReady === false) {
     throw new Error(
       formatDependencyBlockMessage(health, {
         features: ['meshBuild'],
@@ -280,7 +282,7 @@ async function runStepExportTask(input, options = {}) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestPayload),
       },
-      { timeoutMs: options.stepBuildTimeoutMs || 10000 }
+      { timeoutMs: options.stepBuildTimeoutMs || DEFAULT_STEP_BUILD_TIMEOUT_MS }
     );
 
     if (!res.ok) {
@@ -328,7 +330,8 @@ async function runStepExportTask(input, options = {}) {
 function runStlExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.STL);
 
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(input.params), {
+  const geometryParams = densifyForSmoothTessellation(input.params);
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(geometryParams), {
     includeEnclosure: false,
     adaptivePhi: true,
   });
@@ -420,7 +423,7 @@ function runConfigExportTask(input) {
         saveOptions: {
           contentType: 'text/plain',
           typeInfo: {
-            description: 'MWG Config',
+            description: 'Parameter Config',
             accept: { 'text/plain': ['.txt'] },
           },
         },

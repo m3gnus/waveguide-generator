@@ -9,6 +9,7 @@ import { debugLog, debugWarn } from '../logging/debug.js';
 
 export function setupEventListeners(app) {
   bindButtonEvents(app);
+  setupExportMenuInteractions(app);
   setupMobilePanelToggle();
 
   // live-update is inside the settings modal (created on demand).
@@ -51,16 +52,6 @@ function cycleDisplayMode(app) {
 export function bindButtonEvents(app) {
   const buttonBindings = [
     { id: 'render-btn', handler: () => app.requestRender(), type: 'click' },
-    {
-      id: 'export-config-btn',
-      handler: () => app.exportMWGConfig(),
-      type: 'click',
-    },
-    {
-      id: 'export-step-btn',
-      handler: () => app.exportSTEP(),
-      type: 'click',
-    },
     { id: 'zoom-in', handler: () => app.zoom(0.8), type: 'click' },
     { id: 'zoom-out', handler: () => app.zoom(1.2), type: 'click' },
     { id: 'camera-toggle', handler: () => app.toggleCamera(), type: 'click' },
@@ -183,6 +174,55 @@ export function bindButtonEvents(app) {
     if (!importMeshBtn) debugWarn('Element import-mesh-btn not found');
     if (!meshInput) debugWarn('Element mesh-upload not found');
   }
+}
+
+function setupExportMenuInteractions(app) {
+  const closeExportMenus = () => {
+    document.querySelectorAll('.export-menu.is-open').forEach((menu) => {
+      menu.classList.remove('is-open');
+      const trigger = menu.querySelector('.export-menu-trigger');
+      trigger?.setAttribute('aria-expanded', 'false');
+    });
+  };
+
+  document.addEventListener('click', async (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    const trigger = target.closest('.export-menu-trigger');
+    if (trigger) {
+      event.preventDefault();
+      const menu = trigger.closest('.export-menu');
+      if (!menu) return;
+      const shouldOpen = !menu.classList.contains('is-open');
+      closeExportMenus();
+      menu.classList.toggle('is-open', shouldOpen);
+      trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+      return;
+    }
+
+    const exportItem = target.closest('[data-app-export-format]');
+    if (exportItem instanceof HTMLElement) {
+      event.preventDefault();
+      closeExportMenus();
+      try {
+        await app.exportFormat(exportItem.dataset.appExportFormat);
+      } catch (error) {
+        app.uiCoordinator.showError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+
+    if (!target.closest('.export-menu')) {
+      closeExportMenus();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeExportMenus();
+    }
+  });
 }
 
 export function setupMobilePanelToggle() {

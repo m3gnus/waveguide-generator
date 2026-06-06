@@ -51,8 +51,84 @@ test('simulation management settings load defaults and persist selected formats'
     const reloaded = loadSimulationManagementSettings();
     assert.equal(reloaded.autoExportOnComplete, false);
     assert.deepEqual(reloaded.selectedFormats, ['csv', 'json']);
+
+    const noneSelected = saveSimulationManagementSettings({
+      autoExportOnComplete: false,
+      selectedFormats: [],
+      defaultSort: 'completed_desc',
+      minRatingFilter: 0
+    });
+
+    assert.deepEqual(noneSelected.selectedFormats, []);
   } finally {
     global.localStorage = originalLocalStorage;
+  }
+});
+
+test('simulation management settings migrate legacy default format selection to none', () => {
+  const originalLocalStorage = global.localStorage;
+  global.localStorage = createStorage();
+  global.localStorage.setItem(
+    'waveguide-simulation-management-settings',
+    JSON.stringify({
+      schemaVersion: 1,
+      simulationManagement: {
+        autoExportOnComplete: false,
+        selectedFormats: [
+          'png',
+          'csv',
+          'json',
+          'txt',
+          'polar_csv',
+          'impedance_csv',
+          'vacs',
+          'stl',
+          'fusion_csv'
+        ],
+        defaultSort: 'rating_desc',
+        minRatingFilter: 2
+      }
+    })
+  );
+
+  try {
+    const migrated = loadSimulationManagementSettings();
+    assert.deepEqual(migrated.selectedFormats, []);
+    assert.equal(migrated.defaultSort, 'rating_desc');
+    assert.equal(migrated.minRatingFilter, 2);
+  } finally {
+    global.localStorage = originalLocalStorage;
+  }
+});
+
+test('simulation management DOM getter preserves an empty live format selection', () => {
+  const originalDocument = global.document;
+  global.document = {
+    querySelectorAll(selector) {
+      if (selector !== 'input[data-sim-management-format]') {
+        return [];
+      }
+      return [
+        {
+          checked: false,
+          getAttribute(name) {
+            return name === 'data-sim-management-format' ? 'csv' : null;
+          }
+        },
+        {
+          checked: false,
+          getAttribute(name) {
+            return name === 'data-sim-management-format' ? 'json' : null;
+          }
+        }
+      ];
+    }
+  };
+
+  try {
+    assert.deepEqual(getSelectedExportFormats(), []);
+  } finally {
+    global.document = originalDocument;
   }
 });
 

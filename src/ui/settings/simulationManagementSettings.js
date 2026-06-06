@@ -1,5 +1,17 @@
 const SETTINGS_KEY = 'waveguide-simulation-management-settings';
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+const SUPPORTED_SCHEMA_VERSIONS = new Set([1, SCHEMA_VERSION]);
+const LEGACY_DEFAULT_SELECTED_FORMATS = Object.freeze([
+  'png',
+  'csv',
+  'json',
+  'txt',
+  'polar_csv',
+  'impedance_csv',
+  'vacs',
+  'stl',
+  'fusion_csv',
+]);
 const TASK_LIST_SORT_CONTROL_IDS = Object.freeze([
   'simmanage-default-sort',
   'simulation-jobs-sort',
@@ -10,6 +22,8 @@ const TASK_LIST_MIN_RATING_CONTROL_IDS = Object.freeze([
 ]);
 
 export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
+  'mwg_config',
+  'step',
   'png',
   'csv',
   'json',
@@ -23,12 +37,20 @@ export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
 
 export const RECOMMENDED_DEFAULTS = Object.freeze({
   autoExportOnComplete: false,
-  selectedFormats: [...SIMULATION_EXPORT_FORMAT_IDS],
+  selectedFormats: [],
   defaultSort: 'completed_desc',
   minRatingFilter: 0,
 });
 
 let currentSettings = null;
+
+function formatsMatchIgnoringOrder(value, expected) {
+  if (!Array.isArray(value) || value.length !== expected.length) {
+    return false;
+  }
+  const normalized = normalizeSelectedFormats(value);
+  return normalized.length === expected.length && expected.every((id) => normalized.includes(id));
+}
 
 function normalizeSelectedFormats(value) {
   if (!Array.isArray(value)) {
@@ -46,7 +68,7 @@ function normalizeSelectedFormats(value) {
     normalized.push(id);
   }
 
-  return normalized.length > 0 ? normalized : [...RECOMMENDED_DEFAULTS.selectedFormats];
+  return normalized;
 }
 
 function normalizeSettings(raw = {}) {
@@ -66,6 +88,17 @@ function normalizeSettings(raw = {}) {
   };
 }
 
+function migrateSettings(parsed) {
+  const settings = { ...(parsed.simulationManagement || {}) };
+  if (
+    parsed.schemaVersion === 1 &&
+    formatsMatchIgnoringOrder(settings.selectedFormats, LEGACY_DEFAULT_SELECTED_FORMATS)
+  ) {
+    settings.selectedFormats = [];
+  }
+  return settings;
+}
+
 export function loadSimulationManagementSettings() {
   if (typeof localStorage === 'undefined') {
     currentSettings = normalizeSettings();
@@ -82,14 +115,14 @@ export function loadSimulationManagementSettings() {
     const parsed = JSON.parse(raw);
     if (
       !parsed ||
-      parsed.schemaVersion !== SCHEMA_VERSION ||
+      !SUPPORTED_SCHEMA_VERSIONS.has(parsed.schemaVersion) ||
       typeof parsed.simulationManagement !== 'object'
     ) {
       currentSettings = normalizeSettings();
       return currentSettings;
     }
 
-    currentSettings = normalizeSettings(parsed.simulationManagement);
+    currentSettings = normalizeSettings(migrateSettings(parsed));
     return currentSettings;
   } catch {
     currentSettings = normalizeSettings();
@@ -134,12 +167,13 @@ export function getAutoExportOnComplete() {
 
 export function getSelectedExportFormats() {
   if (typeof document !== 'undefined') {
-    const selected = Array.from(document.querySelectorAll('input[data-sim-management-format]'))
-      .filter((input) => Boolean(input?.checked))
-      .map((input) => String(input.getAttribute('data-sim-management-format') || '').trim())
-      .filter(Boolean);
+    const controls = Array.from(document.querySelectorAll('input[data-sim-management-format]'));
+    if (controls.length > 0) {
+      const selected = controls
+        .filter((input) => Boolean(input?.checked))
+        .map((input) => String(input.getAttribute('data-sim-management-format') || '').trim())
+        .filter(Boolean);
 
-    if (selected.length > 0) {
       return normalizeSelectedFormats(selected);
     }
   }

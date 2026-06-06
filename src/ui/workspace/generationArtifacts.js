@@ -68,6 +68,14 @@ export function resolveGenerationExportFileName(
     return `${normalizedBaseName}.stl`;
   }
 
+  if (normalizedFormatId === 'step') {
+    return `${normalizedBaseName}.step`;
+  }
+
+  if (normalizedFormatId === 'mwg_config') {
+    return `${normalizedBaseName}.txt`;
+  }
+
   if (normalizedFormatId === 'fusion_csv') {
     const variant = parseFusionVariant(originalFileName, normalizedBaseName);
     const suffix = variant === 'slices' ? 'slices' : 'profiles';

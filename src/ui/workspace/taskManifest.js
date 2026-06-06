@@ -160,11 +160,11 @@ export function resolveTaskWorkspaceDirectoryName(job = {}, { fallbackId = null 
   const timestamp = resolveJobTimestamp(job);
   const label = normalizeDirectoryName(job?.label);
   if (label) {
-    return timestamp ? ensureDatedSolveLabel(label, timestamp) : label;
+    return ensureDatedSolveLabel(label, timestamp ?? new Date());
   }
 
   const scriptName = deriveGenerationFolderNameFromScript(job?.scriptSnapshot ?? job?.script, {
-    timestamp,
+    timestamp: timestamp ?? new Date(),
   });
   if (scriptName) {
     return scriptName;

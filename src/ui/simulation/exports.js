@@ -1,7 +1,12 @@
 import { applySmoothing } from '../../results/smoothing.js';
 import { extractFlatDI } from './diHelpers.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import { buildProfileCsvExportFiles, buildStlExportFiles } from '../../modules/export/useCases.js';
+import {
+  buildMwgConfigExportFiles,
+  buildProfileCsvExportFiles,
+  buildStepExportFiles,
+  buildStlExportFiles,
+} from '../../modules/export/useCases.js';
 import { readSimulationState } from '../../modules/simulation/state.js';
 import { writeSimulationTaskBundleFile } from './workspaceTasks.js';
 import {
@@ -11,10 +16,13 @@ import {
 import { showError, showMessage } from '../feedback.js';
 import { getExportBaseName, saveFile } from '../fileOps.js';
 import { resolveGenerationExportFileName } from '../workspace/generationArtifacts.js';
+import { resolveTaskWorkspaceDirectoryName } from '../workspace/taskManifest.js';
 import { getCachedRuntimeHealth } from '../runtimeCapabilities.js';
 import { getFeatureBlockedReason } from '../dependencyStatus.js';
 
 const EXPORT_FORMAT_LABELS = Object.freeze({
+  mwg_config: 'Parameter Config (.txt)',
+  step: 'Waveguide STEP',
   png: 'Chart Images (PNG)',
   csv: 'Frequency Data CSV',
   json: 'Full Results JSON',
@@ -25,6 +33,15 @@ const EXPORT_FORMAT_LABELS = Object.freeze({
   stl: 'Waveguide STL',
   fusion_csv: 'Fusion 360 CSV Curves',
 });
+const RESULT_EXPORT_FORMAT_IDS = Object.freeze([
+  'png',
+  'csv',
+  'json',
+  'txt',
+  'polar_csv',
+  'impedance_csv',
+  'vacs',
+]);
 const DIRECTIVITY_PLANE_ORDER = ['horizontal', 'vertical', 'diagonal'];
 const LEGACY_IMPEDANCE_RHO_C = 1.21 * 343.0;
 const LEGACY_IMPEDANCE_THRESHOLD = 20.0;
@@ -54,17 +71,28 @@ function resolveExportBaseName(job = null) {
   return label || getExportBaseName() || 'simulation';
 }
 
+function resolveExportDirectoryName(job = null, baseName = null) {
+  const fallback = String(baseName || '').trim() || 'simulation';
+  if (job?.id || job?.label) {
+    return resolveTaskWorkspaceDirectoryName(job, { fallbackId: fallback });
+  }
+  return resolveTaskWorkspaceDirectoryName({ label: fallback }, { fallbackId: fallback });
+}
+
 function readExportState() {
   return readSimulationState();
 }
 
-async function writeExportFile(file, { writer = null } = {}) {
+async function writeExportFile(file, options = {}) {
+  const { writer = null } = options;
   if (typeof writer === 'function') {
     return writer(file);
   }
 
   await saveFile(file.content, file.fileName, {
     ...file.saveOptions,
+    workspaceSubdir:
+      options.workspaceSubdir ?? resolveExportDirectoryName(options.job, options.baseName),
     incrementCounter: false,
   });
   return file.fileName;
@@ -738,6 +766,27 @@ async function runExportFormat(panel, formatId, options = {}) {
   const baseName = options.baseName || resolveExportBaseName(options.job);
 
   switch (formatId) {
+    case 'mwg_config':
+      return writeExportFiles(
+        normalizeGenerationExportFiles(
+          buildMwgConfigExportFiles(readExportState(), { baseName }),
+          'mwg_config',
+          baseName
+        ),
+        options
+      );
+    case 'step':
+      return writeExportFiles(
+        normalizeGenerationExportFiles(
+          await buildStepExportFiles(readExportState(), {
+            baseName,
+            backendUrl: DEFAULT_BACKEND_URL,
+          }),
+          'step',
+          baseName
+        ),
+        options
+      );
     case 'png':
       return writeExportFiles(await buildMatplotlibPngFiles(panel, { baseName }), options);
     case 'csv':
@@ -803,13 +852,14 @@ function formatBundleMessage({ exportedFiles, failures, selectedFormats, auto = 
 }
 
 function createTaskExportWriter(job, baseName) {
+  const workspaceSubdir = resolveExportDirectoryName(job, baseName);
   return async (file) => {
     const result = await writeSimulationTaskBundleFile(job, file, {
-      dirName: baseName,
+      dirName: workspaceSubdir,
       fallbackWrite: async (nextFile) => {
         await saveFile(nextFile.content, nextFile.fileName, {
           ...nextFile.saveOptions,
-          workspaceSubdir: baseName,
+          workspaceSubdir,
           incrementCounter: false,
         });
       },
@@ -822,14 +872,9 @@ export async function exportResults(
   panel,
   { job = null, auto = false, selectedFormats = null } = {}
 ) {
-  if (!panel.lastResults) {
-    showError('No simulation results available to export.');
-    return null;
-  }
-
   const normalizedFormats = normalizeSelectedFormats(selectedFormats ?? getSelectedExportFormats());
   if (normalizedFormats.length === 0) {
-    showError('Select at least one task export format in Settings.');
+    showError('Select at least one export format in Export Settings.');
     return {
       exportedFiles: [],
       failures: [],
@@ -843,6 +888,14 @@ export async function exportResults(
   const writer = createTaskExportWriter(job, baseName);
 
   for (const formatId of normalizedFormats) {
+    if (RESULT_EXPORT_FORMAT_IDS.includes(formatId) && !panel.lastResults) {
+      failures.push({
+        formatId,
+        message: 'No simulation results available.',
+      });
+      continue;
+    }
+
     try {
       const savedFiles = await runExportFormat(panel, formatId, {
         job,
@@ -904,77 +957,84 @@ export function applyExportSelection(panel, exportType, handlers = null) {
 }
 
 export async function exportAsMatplotlibPNG(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     await buildMatplotlibPngFiles(panel, {
-      baseName: options.baseName || resolveExportBaseName(options.job),
+      baseName,
     }),
-    options
+    { ...options, baseName }
   );
 }
 
 export async function exportAsCSV(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     [
       buildCsvFile(panel, {
-        baseName: options.baseName || resolveExportBaseName(options.job),
+        baseName,
       }),
     ],
-    options
+    { ...options, baseName }
   );
 }
 
 export async function exportAsJSON(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     [
       buildJsonFile(panel, {
-        baseName: options.baseName || resolveExportBaseName(options.job),
+        baseName,
       }),
     ],
-    options
+    { ...options, baseName }
   );
 }
 
 export async function exportAsText(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     [
       buildTextFile(panel, {
-        baseName: options.baseName || resolveExportBaseName(options.job),
+        baseName,
       }),
     ],
-    options
+    { ...options, baseName }
   );
 }
 
 export async function exportAsPolarCSV(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     [
       buildPolarCsvFile(panel, {
-        baseName: options.baseName || resolveExportBaseName(options.job),
+        baseName,
       }),
     ],
-    options
+    { ...options, baseName }
   );
 }
 
 export async function exportAsVACSSpectrum(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     [
       buildVacSpectrumFile(panel, {
-        baseName: options.baseName || resolveExportBaseName(options.job),
+        baseName,
       }),
     ],
-    options
+    { ...options, baseName }
   );
 }
 
 export async function exportAsImpedanceCSV(panel, options = {}) {
+  const baseName = options.baseName || resolveExportBaseName(options.job);
   return writeExportFiles(
     [
       buildImpedanceCsvFile(panel, {
-        baseName: options.baseName || resolveExportBaseName(options.job),
+        baseName,
       }),
     ],
-    options
+    { ...options, baseName }
   );
 }
 
@@ -986,7 +1046,7 @@ export async function exportAsWaveguideSTL(panel, options = {}) {
       'stl',
       baseName
     ),
-    options
+    { ...options, baseName }
   );
 }
 
@@ -1001,5 +1061,8 @@ export async function exportAsFusionCurvesCSV(panel, options = {}) {
   if (!files) {
     throw new Error('Fusion CSV export requires an active viewport mesh.');
   }
-  return writeExportFiles(normalizeGenerationExportFiles(files, 'fusion_csv', baseName), options);
+  return writeExportFiles(normalizeGenerationExportFiles(files, 'fusion_csv', baseName), {
+    ...options,
+    baseName,
+  });
 }

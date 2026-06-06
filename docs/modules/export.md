@@ -48,7 +48,7 @@
 **Folder workspace behavior**:
 - Backend workspace root is the canonical export target (`/api/export-file` + optional `workspace_subdir`)
 - On supporting browsers, a selected folder handle is an in-browser direct-write optimization
-- Bundle exports use job label/base name as subdirectory (`<workspace>/<jobLabel>/`) for both direct-write and backend-write paths
+- Bundle exports use a dated job label/base name as subdirectory (`<workspace>/<YYMMDD>_<jobLabel>/`) for backend-write paths
 - Bundle artifact names are deterministic within each generation folder:
   - `csv` → `<jobLabel>_results.csv`
   - `json` → `<jobLabel>_results.json`
