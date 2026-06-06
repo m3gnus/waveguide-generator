@@ -28,8 +28,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
     Object.freeze({
       id: 'morph-target',
       title: 'Morph Target',
-      description:
-        'Post-profile shaping used to transition the mouth toward another target shape.',
+      description: 'Post-profile shaping used to transition the mouth toward another target shape.',
       owner: 'paramPanel',
       groups: Object.freeze([
         Object.freeze({

@@ -10,7 +10,10 @@ let selectedFolderPath = null;
 const changeListeners = new Set();
 
 function labelFromPath(path) {
-  const normalized = String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalized = String(path || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
   if (!normalized) return DEFAULT_FOLDER_LABEL;
   return normalized.split('/').pop() || normalized;
 }

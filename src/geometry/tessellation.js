@@ -8,6 +8,13 @@ const SMOOTH_CORNER_MIN = 4;
 const SMOOTH_CORNER_MAX = 12;
 const SMOOTH_CORNER_MULTIPLIER = 2;
 
+const VIEWPORT_GRID_LENGTH_SEGMENTS = 48;
+const VIEWPORT_GRID_ANGULAR_SEGMENTS = 96;
+const VIEWPORT_GRID_CORNER_SEGMENTS = 6;
+const VIEWPORT_SMOOTH_LENGTH_SEGMENTS = 80;
+const VIEWPORT_SMOOTH_ANGULAR_SEGMENTS = 160;
+const VIEWPORT_SMOOTH_CORNER_SEGMENTS = 8;
+
 function clampInt(value, min, max) {
   const n = Math.round(Number(value) || 0);
   if (n < min) return min;
@@ -47,4 +54,32 @@ export function densifyForSmoothTessellation(preparedParams) {
     angularSegments,
     cornerSegments,
   };
+}
+
+function withViewportSampling(preparedParams, sampling) {
+  return {
+    ...preparedParams,
+    ...sampling,
+    // Mesh resolution fields are element-size controls for solve/export.
+    // Keep viewport slicing render-only unless the explicit preview bias is set.
+    throatResolution:
+      preparedParams.throatSliceDensity == null ? 1 : preparedParams.throatResolution,
+    mouthResolution: preparedParams.throatSliceDensity == null ? 1 : preparedParams.mouthResolution,
+  };
+}
+
+export function prepareViewportTessellationParams(preparedParams, { variant = 'grid' } = {}) {
+  if (variant === 'smooth') {
+    return withViewportSampling(preparedParams, {
+      lengthSegments: VIEWPORT_SMOOTH_LENGTH_SEGMENTS,
+      angularSegments: VIEWPORT_SMOOTH_ANGULAR_SEGMENTS,
+      cornerSegments: VIEWPORT_SMOOTH_CORNER_SEGMENTS,
+    });
+  }
+
+  return withViewportSampling(preparedParams, {
+    lengthSegments: VIEWPORT_GRID_LENGTH_SEGMENTS,
+    angularSegments: VIEWPORT_GRID_ANGULAR_SEGMENTS,
+    cornerSegments: VIEWPORT_GRID_CORNER_SEGMENTS,
+  });
 }

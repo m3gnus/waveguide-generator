@@ -184,10 +184,7 @@ function generateEnclosurePointsFromAngles(
   const halfH = (boxTop - boxBot) / 2;
   const boxCR = parseFloat(edgeR) || 0;
   const scale = params.scale || 1;
-  const clampedBoxCR = Math.max(
-    0,
-    Math.min(boxCR, halfW - 1e-4 * scale, halfH - 1e-4 * scale)
-  );
+  const clampedBoxCR = Math.max(0, Math.min(boxCR, halfW - 1e-4 * scale, halfH - 1e-4 * scale));
 
   for (let i = 0; i < ringSize; i++) {
     const angle = angleList[i];
