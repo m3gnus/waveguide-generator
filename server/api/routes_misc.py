@@ -4,6 +4,7 @@ workspace path/open.
 """
 
 import logging
+import json
 import platform
 import subprocess
 from datetime import datetime
@@ -199,11 +200,68 @@ async def export_file(
 # ── Workspace path / open / select ─────────────────────────────────────────────
 
 _REPO_OUTPUT_PATH: Path = (Path(__file__).parent.parent.parent / "output").resolve()
+_WORKSPACE_SETTINGS_PATH: Path = (
+    Path(__file__).resolve().parents[1] / "data" / "workspace_settings.json"
+)
 _custom_workspace_path: Optional[Path] = None
+_workspace_path_loaded: bool = False
+
+
+def _load_workspace_path_preference() -> None:
+    """Hydrate the selected output folder from backend settings once per process."""
+    global _custom_workspace_path, _workspace_path_loaded
+    if _workspace_path_loaded:
+        return
+    _workspace_path_loaded = True
+
+    try:
+        if not _WORKSPACE_SETTINGS_PATH.exists():
+            return
+        with open(_WORKSPACE_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as exc:
+        logger.warning("Could not load workspace settings: %s", exc)
+        return
+
+    raw_path = str(payload.get("workspacePath") or "").strip() if isinstance(payload, dict) else ""
+    if not raw_path:
+        return
+
+    resolved = Path(raw_path).expanduser().resolve()
+    if resolved.is_dir():
+        _custom_workspace_path = resolved
+    else:
+        logger.warning("Persisted workspace path is unavailable: %s", resolved)
+
+
+def _persist_workspace_path_preference(path: Optional[Path]) -> None:
+    """Persist the selected output folder so backend restarts keep the same workspace."""
+    try:
+        _WORKSPACE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_WORKSPACE_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "schemaVersion": 1,
+                    "workspacePath": str(path) if path is not None else None,
+                },
+                f,
+                indent=2,
+            )
+            f.write("\n")
+    except Exception as exc:
+        logger.warning("Could not persist workspace settings: %s", exc)
+
+
+def _set_custom_workspace_path(path: Optional[Path]) -> None:
+    global _custom_workspace_path, _workspace_path_loaded
+    _workspace_path_loaded = True
+    _custom_workspace_path = path
+    _persist_workspace_path_preference(path)
 
 
 def _get_default_output_path() -> Path:
     """Return the absolute path of the current output folder."""
+    _load_workspace_path_preference()
     if _custom_workspace_path is not None:
         output_path = _custom_workspace_path
     else:
@@ -215,8 +273,7 @@ def _get_default_output_path() -> Path:
 @router.post("/api/workspace/reset")
 async def workspace_reset() -> Dict[str, Any]:
     """Reset the workspace path back to the default."""
-    global _custom_workspace_path
-    _custom_workspace_path = None
+    _set_custom_workspace_path(None)
     default_path = _get_default_output_path()
     logger.info("Workspace path reset to default: %s", default_path)
     return {"path": str(default_path), "custom": False}
@@ -232,10 +289,9 @@ async def workspace_path() -> Dict[str, str]:
 @router.post("/api/workspace/path")
 async def set_workspace_path(path: str = Form(...)) -> Dict[str, str]:
     """Set a custom output folder path."""
-    global _custom_workspace_path
     raw = path.strip()
     if not raw:
-        _custom_workspace_path = None
+        _set_custom_workspace_path(None)
         logger.info("Workspace path reset to default: %s", _REPO_OUTPUT_PATH)
         return {"path": str(_REPO_OUTPUT_PATH), "custom": False}
 
@@ -243,7 +299,7 @@ async def set_workspace_path(path: str = Form(...)) -> Dict[str, str]:
     if not resolved.is_dir():
         raise HTTPException(status_code=400, detail=f"Directory does not exist: {resolved}")
 
-    _custom_workspace_path = resolved
+    _set_custom_workspace_path(resolved)
     logger.info("Workspace path set to: %s", resolved)
     return {"path": str(resolved), "custom": True}
 
@@ -251,7 +307,6 @@ async def set_workspace_path(path: str = Form(...)) -> Dict[str, str]:
 @router.post("/api/workspace/select")
 async def workspace_select() -> Dict[str, Any]:
     """Open a native OS folder picker and set the result as the workspace path."""
-    global _custom_workspace_path
     system = platform.system()
     selected: Optional[str] = None
 
@@ -324,7 +379,7 @@ async def workspace_select() -> Dict[str, Any]:
     if not resolved.is_dir():
         raise HTTPException(status_code=400, detail=f"Selected path is not a directory: {resolved}")
 
-    _custom_workspace_path = resolved
+    _set_custom_workspace_path(resolved)
     logger.info("Workspace folder selected via OS picker: %s", resolved)
     return {"selected": True, "path": str(resolved)}
 

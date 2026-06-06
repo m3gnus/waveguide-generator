@@ -11,9 +11,13 @@ import { renderResultDiagnostics, renderSolveStatsSummary } from '../src/ui/simu
 import { validateSimulationConfig } from '../src/modules/simulation/domain.js';
 import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
+  applySavedExportFields,
   deriveExportFieldsFromFileName,
+  loadExportFields,
   markParametersChanged,
   resetParameterChangeTracking,
+  saveExportFields,
+  setExportFields,
 } from '../src/ui/fileOps.js';
 import {
   SETTINGS_CONTROL_IDS,
@@ -45,6 +49,7 @@ import { PARAM_SCHEMA } from '../src/config/schema.js';
 
 test('index.html places clear-failed and refresh in the simulations summary', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
 
   assert.match(
     html,
@@ -57,6 +62,7 @@ test('index.html places clear-failed and refresh in the simulations summary', ()
   assert.doesNotMatch(html, /id="choose-folder-btn"/);
   assert.doesNotMatch(html, /id="simulation-jobs-source-label"/);
   assert.doesNotMatch(html, /id="output-folder-row"/);
+  assert.match(css, /\.simulation-summary-actions button\s*\{[\s\S]*white-space:\s*nowrap;/);
 });
 
 test('export menu hover bridge covers the visible dropdown gap', () => {
@@ -67,7 +73,10 @@ test('export menu hover bridge covers the visible dropdown gap', () => {
     css,
     /\.export-menu::before\s*\{[\s\S]*top:\s*100%;[\s\S]*width:\s*max\(100%,\s*180px\);[\s\S]*height:\s*var\(--export-menu-gap\);/
   );
-  assert.match(css, /\.export-menu-list\s*\{[\s\S]*top:\s*calc\(100% \+ var\(--export-menu-gap\)\);/);
+  assert.match(
+    css,
+    /\.export-menu-list\s*\{[\s\S]*top:\s*calc\(100% \+ var\(--export-menu-gap\)\);/
+  );
   assert.match(
     css,
     /\.simulation-job-actions\s+\.export-menu::before\s*\{[\s\S]*width:\s*max\(100%,\s*168px\);/
@@ -618,6 +627,78 @@ test('markParametersChanged increments counter once per change cycle and skips i
   } finally {
     global.document = originalDocument;
     resetParameterChangeTracking();
+  }
+});
+
+function createStorage() {
+  const data = new Map();
+  return {
+    getItem(key) {
+      return data.has(key) ? data.get(key) : null;
+    },
+    setItem(key, value) {
+      data.set(key, String(value));
+    },
+    removeItem(key) {
+      data.delete(key);
+    },
+    clear() {
+      data.clear();
+    },
+  };
+}
+
+test('export output fields persist and hydrate across reloads', () => {
+  const originalLocalStorage = global.localStorage;
+  const originalDocument = global.document;
+  const storage = createStorage();
+  const firstPrefix = { value: 'horn_design' };
+  const firstCounter = { value: '1' };
+  const secondPrefix = { value: 'horn_design' };
+  const secondCounter = { value: '1' };
+
+  global.localStorage = storage;
+
+  try {
+    setExportFields(
+      { outputName: 'saved_horn', counter: 42 },
+      {
+        getElementById(id) {
+          if (id === 'export-prefix') return firstPrefix;
+          if (id === 'export-counter') return firstCounter;
+          return null;
+        },
+      }
+    );
+
+    assert.deepEqual(loadExportFields(), { outputName: 'saved_horn', counter: 42 });
+
+    global.document = {
+      getElementById(id) {
+        if (id === 'export-prefix') return secondPrefix;
+        if (id === 'export-counter') return secondCounter;
+        return null;
+      },
+    };
+    applySavedExportFields();
+
+    assert.equal(secondPrefix.value, 'saved_horn');
+    assert.equal(secondCounter.value, '42');
+  } finally {
+    global.localStorage = originalLocalStorage;
+    global.document = originalDocument;
+  }
+});
+
+test('export output field persistence normalizes malformed storage', () => {
+  const originalLocalStorage = global.localStorage;
+  global.localStorage = createStorage();
+
+  try {
+    saveExportFields({ outputName: '', counter: -10 });
+    assert.deepEqual(loadExportFields(), { outputName: 'horn_design', counter: 1 });
+  } finally {
+    global.localStorage = originalLocalStorage;
   }
 });
 

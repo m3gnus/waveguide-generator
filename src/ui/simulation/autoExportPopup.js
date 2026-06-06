@@ -131,7 +131,10 @@ export function openAutoExportPopup() {
   let closed = false;
 
   const labelFromPath = (path) => {
-    const normalized = String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalized = String(path || '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/\/+$/, '');
     return normalized ? normalized.split('/').pop() || normalized : '';
   };
 
@@ -154,6 +157,8 @@ export function openAutoExportPopup() {
 
   // Folder workspace subscription — updates label and path live
   const unsubscribe = subscribeFolderWorkspace(updateFolderDisplay);
+
+  dialog.addEventListener('change', persistState);
 
   fetchWorkspacePath().then((path) => {
     if (!closed) {
