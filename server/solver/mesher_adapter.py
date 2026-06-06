@@ -260,9 +260,9 @@ def _assert_step_has_geometry(step_text: str) -> None:
 def _write_inner_surface_step(inner_points: np.ndarray) -> str:
     """Write a single-layer inner horn surface STEP file from mesher point-grid data.
 
-    The STEP contains one open B-spline loft through all sampled section rings.
-    Construction curves are removed after the loft so CAD importers do not show
-    one separate browser object for every sampled slice.
+    The STEP contains one bounded ruled loft through all sampled section rings.
+    A single smooth B-spline surface imports cleanly but can overshoot the mouth
+    boundary; ruled section faces stay inside the sampled waveguide envelope.
     """
 
     import gmsh
@@ -302,8 +302,8 @@ def _write_inner_surface_step(inner_points: np.ndarray) -> str:
         gmsh.model.occ.addThruSections(
             wire_tags,
             makeSolid=False,
-            makeRuled=False,
-            maxDegree=3,
+            makeRuled=True,
+            maxDegree=1,
         )
         gmsh.model.occ.remove(
             [(1, tag) for tag in construction_curve_tags],
@@ -333,8 +333,13 @@ def build_inner_surface_step(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     if build_viewport_geometry_from_config is None:
         raise HornlabMesherUnavailable("hornlab-waveguide-mesher viewport API is not installed.")
+    if payload.get("step_body", "inner_surface") != "inner_surface":
+        raise ValueError(
+            f"unsupported STEP body '{payload.get('step_body')}'; supported body: 'inner_surface'"
+        )
 
     step_payload = dict(payload)
+    step_payload["step_body"] = "inner_surface"
     step_payload["quadrants"] = 1234
     step_payload["enc_depth"] = 0.0
     step_payload["wall_thickness"] = 0.0
@@ -354,11 +359,13 @@ def build_inner_surface_step(payload: Mapping[str, Any]) -> dict[str, Any]:
         "step_text": step_text,
         "stats": {
             "units": "mm",
+            "stepBody": "inner_surface",
             "surfaceBody": "inner_horn",
             "singleLayer": True,
             "hasWallThickness": False,
             "hasEnclosure": False,
             "hasSourceCap": False,
+            "hasThroatPlate": False,
             "ringCount": n_phi,
             "lengthSteps": n_length,
         },

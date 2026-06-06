@@ -128,9 +128,18 @@ async def build_step_from_params(request: WaveguideParamsRequest) -> Dict[str, A
                 "Supported types: 'R-OSSE', 'OSSE'."
             ),
         )
+    if request.step_body != "inner_surface":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"step_body '{request.step_body}' is not supported. "
+                "Supported STEP body: 'inner_surface'."
+            ),
+        )
 
     try:
         payload = request.model_dump()
+        payload["step_body"] = "inner_surface"
         payload["quadrants"] = 1234
         payload["enc_depth"] = 0.0
         payload["wall_thickness"] = 0.0

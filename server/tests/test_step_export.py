@@ -1,16 +1,24 @@
 import asyncio
+import os
 import re
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+from fastapi import HTTPException
 
 from api.routes_mesh import build_step_from_params
 from contracts import WaveguideParamsRequest
 from contracts import SimulationRequest
 from solver import mesher_adapter
+
+
+_ATH_MUH_CONFIG_PATH = os.environ.get("ATH_MUH_CONFIG")
+ATH_MUH_CONFIG = Path(_ATH_MUH_CONFIG_PATH) if _ATH_MUH_CONFIG_PATH else None
 
 
 class StepExportRouteTest(unittest.TestCase):
@@ -48,6 +56,21 @@ class StepExportRouteTest(unittest.TestCase):
         self.assertEqual(captured_payloads[0]["quadrants"], 1234)
         self.assertEqual(captured_payloads[0]["enc_depth"], 0.0)
         self.assertEqual(captured_payloads[0]["wall_thickness"], 0.0)
+        self.assertEqual(captured_payloads[0]["step_body"], "inner_surface")
+
+    def test_step_export_rejects_unsupported_body(self):
+        request = WaveguideParamsRequest(
+            formula_type="OSSE",
+            step_body="throat_plate",
+        )
+
+        with patch("api.routes_mesh.HORNLAB_MESHER_AVAILABLE", True), patch(
+            "api.routes_mesh.HORNLAB_MESHER_RUNTIME_READY", True
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                asyncio.run(build_step_from_params(request))
+        self.assertEqual(exc.exception.status_code, 422)
+        self.assertIn("Supported STEP body", exc.exception.detail)
 
 
 class StepExportAdapterTest(unittest.TestCase):
@@ -142,8 +165,8 @@ class StepExportAdapterTest(unittest.TestCase):
         wire_tags, kwargs = fake_gmsh.model.occ.thru_sections[0]
         self.assertEqual(wire_tags, (1, 2, 3))
         self.assertEqual(kwargs["makeSolid"], False)
-        self.assertEqual(kwargs["makeRuled"], False)
-        self.assertEqual(kwargs["maxDegree"], 3)
+        self.assertEqual(kwargs["makeRuled"], True)
+        self.assertEqual(kwargs["maxDegree"], 1)
         self.assertEqual(len(fake_gmsh.model.occ.removed), 1)
         removed_dim_tags, remove_kwargs = fake_gmsh.model.occ.removed[0]
         self.assertEqual(removed_dim_tags, ((1, 1), (1, 2), (1, 3)))
@@ -219,7 +242,7 @@ class StepExportAdapterTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "without surface face geometry"):
                 mesher_adapter._write_inner_surface_step(inner_points)
 
-    def test_step_writer_preserves_morphed_mouth_boundary_in_single_surface(self):
+    def test_step_writer_preserves_morphed_mouth_boundary_without_loft_overshoot(self):
         try:
             import gmsh  # noqa: F401
         except ImportError:
@@ -240,9 +263,119 @@ class StepExportAdapterTest(unittest.TestCase):
 
         step_text = mesher_adapter._write_inner_surface_step(inner_points)
 
-        self.assertEqual(step_text.count("ADVANCED_FACE"), 1)
+        self.assertEqual(step_text.count("ADVANCED_FACE"), len(z_values) - 1)
         self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE"), 1)
         self.assertRegex(step_text, re.compile(r"\b120(?:\.0+)?\b"))
+        self.assertRegex(step_text, re.compile(r"\b180(?:\.0+)?\b"))
+
+        step_path = None
+        initialized_here = False
+        try:
+            if not gmsh.isInitialized():
+                gmsh.initialize()
+                initialized_here = True
+            gmsh.option.setNumber("General.Terminal", 0)
+            with tempfile.NamedTemporaryFile(prefix="waveguide-step-test-", suffix=".step", delete=False) as tmp:
+                step_path = Path(tmp.name)
+            step_path.write_text(step_text, encoding="utf-8")
+
+            gmsh.clear()
+            gmsh.model.add("StepReimport")
+            gmsh.merge(str(step_path))
+            gmsh.model.occ.synchronize()
+            surface_bboxes = [
+                gmsh.model.getBoundingBox(2, tag)
+                for _dim, tag in gmsh.model.getEntities(2)
+            ]
+        finally:
+            if step_path is not None:
+                step_path.unlink(missing_ok=True)
+            if initialized_here and gmsh.isInitialized():
+                gmsh.finalize()
+
+        self.assertTrue(surface_bboxes)
+        min_x = min(bbox[0] for bbox in surface_bboxes)
+        min_y = min(bbox[1] for bbox in surface_bboxes)
+        min_z = min(bbox[2] for bbox in surface_bboxes)
+        max_x = max(bbox[3] for bbox in surface_bboxes)
+        max_y = max(bbox[4] for bbox in surface_bboxes)
+        max_z = max(bbox[5] for bbox in surface_bboxes)
+        self.assertGreaterEqual(min_x, -180.0001)
+        self.assertLessEqual(max_x, 180.0001)
+        self.assertGreaterEqual(min_y, -80.0001)
+        self.assertLessEqual(max_y, 80.0001)
+        self.assertGreaterEqual(min_z, -0.0001)
+        self.assertLessEqual(max_z, 120.0001)
+
+    def test_ath_muh_step_export_keeps_bounded_rectangular_mouth_with_limited_faces(self):
+        if ATH_MUH_CONFIG is None or not ATH_MUH_CONFIG.exists():
+            self.skipTest("ATH_MUH_CONFIG reference config is not available")
+        try:
+            import gmsh  # noqa: F401
+            from hornlab_mesher.cli import build_geometry_params, load_config
+            from hornlab_mesher.profiles import build_point_grid
+        except ImportError:
+            self.skipTest("gmsh or hornlab-waveguide-mesher is not installed")
+
+        params, _formula, _mode = build_geometry_params(load_config(ATH_MUH_CONFIG))
+        params = {
+            **params,
+            "quadrants": "1234",
+            "encDepth": 0.0,
+            "wallThickness": 0.0,
+            "angularSegments": 160,
+            "cornerSegments": 8,
+        }
+        grid = build_point_grid(params)
+        n_phi = int(grid["grid_n_phi"])
+        n_length = int(grid["grid_n_length"])
+        inner_points = np.asarray(grid["inner_points"], dtype=float).reshape(n_phi, n_length + 1, 3)
+
+        step_text = mesher_adapter._write_inner_surface_step(inner_points)
+
+        self.assertEqual(n_phi, 160)
+        self.assertEqual(n_length, 20)
+        self.assertEqual(step_text.count("ADVANCED_FACE"), n_length)
+        self.assertLessEqual(step_text.count("PRODUCT("), n_length + 2)
+
+        step_path = None
+        initialized_here = False
+        try:
+            if not gmsh.isInitialized():
+                gmsh.initialize()
+                initialized_here = True
+            gmsh.option.setNumber("General.Terminal", 0)
+            with tempfile.NamedTemporaryFile(prefix="waveguide-ath-muh-", suffix=".step", delete=False) as tmp:
+                step_path = Path(tmp.name)
+            step_path.write_text(step_text, encoding="utf-8")
+
+            gmsh.clear()
+            gmsh.model.add("AthMuhStepReimport")
+            gmsh.merge(str(step_path))
+            gmsh.model.occ.synchronize()
+            surface_bboxes = [
+                gmsh.model.getBoundingBox(2, tag)
+                for _dim, tag in gmsh.model.getEntities(2)
+            ]
+        finally:
+            if step_path is not None:
+                step_path.unlink(missing_ok=True)
+            if initialized_here and gmsh.isInitialized():
+                gmsh.finalize()
+
+        self.assertTrue(surface_bboxes)
+        min_x = min(bbox[0] for bbox in surface_bboxes)
+        min_y = min(bbox[1] for bbox in surface_bboxes)
+        min_z = min(bbox[2] for bbox in surface_bboxes)
+        max_x = max(bbox[3] for bbox in surface_bboxes)
+        max_y = max(bbox[4] for bbox in surface_bboxes)
+        max_z = max(bbox[5] for bbox in surface_bboxes)
+        self.assertGreaterEqual(min_x, -197.2222)
+        self.assertLessEqual(max_x, 197.2222)
+        self.assertGreaterEqual(min_y, -345.9112)
+        self.assertLessEqual(max_y, 345.9112)
+        self.assertGreaterEqual(min_z, -0.0001)
+        self.assertLessEqual(max_z, 135.0001)
 
     def test_inner_surface_step_adapter_forces_bare_full_domain_config(self):
         captured_configs = []
@@ -285,7 +418,9 @@ class StepExportAdapterTest(unittest.TestCase):
             )
 
         self.assertEqual(result["stats"]["singleLayer"], True)
+        self.assertEqual(result["stats"]["stepBody"], "inner_surface")
         self.assertEqual(result["stats"]["hasWallThickness"], False)
+        self.assertEqual(result["stats"]["hasThroatPlate"], False)
         self.assertEqual(len(captured_configs), 1)
         config = captured_configs[0]
         self.assertEqual(config["mode"], "bare")
