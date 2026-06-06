@@ -1,5 +1,5 @@
 import { MORPH_TARGETS } from './constants.js';
-import { lerp } from './math.js';
+import { evalParam } from '../common.js';
 
 export function getRoundedRectRadius(p, halfWidth, halfHeight, cornerRadius) {
   const absCos = Math.abs(Math.cos(p));
@@ -31,26 +31,44 @@ export function getRoundedRectRadius(p, halfWidth, halfHeight, cornerRadius) {
 
 function getMorphTargetRadius(p, targetShape, halfWidth, halfHeight, cornerRadius) {
   if (targetShape === MORPH_TARGETS.CIRCLE) {
-    return Math.sqrt(Math.max(0, halfWidth * halfHeight));
+    return Math.max(halfWidth, halfHeight);
+  }
+  if (targetShape !== MORPH_TARGETS.RECTANGLE) {
+    throw new Error(`Unsupported morph target ${targetShape}`);
   }
   return getRoundedRectRadius(p, halfWidth, halfHeight, cornerRadius);
 }
 
-export function applyMorphing(currentR, t, p, params, morphTargetInfo = null) {
-  const targetShape = Number(params.morphTarget || MORPH_TARGETS.NONE);
+function evalNumber(value, p, fallback = 0) {
+  const n = Number(evalParam(value, p));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function isMorphActive(params, p = 0) {
+  const targetShape = Math.round(evalNumber(params.morphTarget, p, MORPH_TARGETS.NONE));
+  return targetShape === MORPH_TARGETS.RECTANGLE || targetShape === MORPH_TARGETS.CIRCLE;
+}
+
+export function hasConfiguredMorphDimension(params, key, p = 0) {
+  return evalNumber(params[key], p, 0) > 0;
+}
+
+export function applyMorphing(currentR, mouthR, t, p, params, morphTargetInfo = null) {
+  const targetShape = Math.round(evalNumber(params.morphTarget, p, MORPH_TARGETS.NONE));
   if (targetShape === MORPH_TARGETS.NONE) return currentR;
 
-  const morphStart = Number(params.morphFixed || 0);
+  const morphStart = evalNumber(params.morphFixed, p, 0);
   if (t <= morphStart) return currentR;
 
-  const rate = Number(params.morphRate || 3);
-  const morphFactor = Math.pow((t - morphStart) / Math.max(1e-9, 1 - morphStart), rate);
+  const rate = evalNumber(params.morphRate, p, 3);
+  const morphFactor =
+    Math.min(1, Math.max(0, (t - morphStart) / Math.max(1e-9, 1 - morphStart))) ** rate;
 
-  const hasExplicit = params.morphWidth > 0 || params.morphHeight > 0;
-  const halfWidth =
-    params.morphWidth > 0 ? params.morphWidth / 2 : (morphTargetInfo?.halfW ?? currentR);
-  const halfHeight =
-    params.morphHeight > 0 ? params.morphHeight / 2 : (morphTargetInfo?.halfH ?? currentR);
+  const morphWidth = evalNumber(params.morphWidth, p, 0);
+  const morphHeight = evalNumber(params.morphHeight, p, 0);
+  const hasExplicit = morphWidth > 0 || morphHeight > 0;
+  const halfWidth = morphWidth > 0 ? morphWidth / 2 : (morphTargetInfo?.halfW ?? mouthR);
+  const halfHeight = morphHeight > 0 ? morphHeight / 2 : (morphTargetInfo?.halfH ?? mouthR);
 
   if (!hasExplicit && !morphTargetInfo) return currentR;
 
@@ -59,10 +77,10 @@ export function applyMorphing(currentR, t, p, params, morphTargetInfo = null) {
     targetShape,
     halfWidth,
     halfHeight,
-    params.morphCorner || 0
+    evalNumber(params.morphCorner, p, 0)
   );
   const allowShrinkage = params.morphAllowShrinkage === 1 || params.morphAllowShrinkage === true;
-  const safeTarget = allowShrinkage ? targetR : Math.max(currentR, targetR);
+  const safeTarget = allowShrinkage ? targetR : Math.max(mouthR, targetR);
 
-  return lerp(currentR, safeTarget, morphFactor);
+  return currentR + (safeTarget - mouthR) * morphFactor;
 }

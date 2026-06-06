@@ -160,6 +160,63 @@ test('rounded rect radius matches known values', () => {
   assert.ok(Math.abs(getRoundedRectRadius(Math.PI / 2, halfW, halfH, cornerR) - halfH) < FUNC_TOL);
 });
 
+test('circle morph target is constant radius from the largest configured dimension', () => {
+  const params = {
+    morphTarget: 2,
+    morphWidth: 240,
+    morphHeight: 60,
+    morphRate: 1,
+    morphFixed: 0,
+    morphAllowShrinkage: 1,
+  };
+
+  assert.ok(Math.abs(applyMorphing(75, 75, 1, 0, params) - 120) < FUNC_TOL);
+  assert.ok(Math.abs(applyMorphing(75, 75, 1, Math.PI / 3, params) - 120) < FUNC_TOL);
+});
+
+test('morphing applies a mouth-target delta along the horn instead of lerping every slice to target', () => {
+  const params = {
+    morphTarget: 2,
+    morphWidth: 240,
+    morphHeight: 240,
+    morphRate: 1,
+    morphFixed: 0,
+    morphAllowShrinkage: 1,
+  };
+
+  assert.ok(Math.abs(applyMorphing(50, 100, 0.5, 0, params) - 60) < FUNC_TOL);
+});
+
+test('morph numeric fields support prepared expression functions', () => {
+  const params = {
+    morphTarget: 2,
+    morphWidth: (p) => 200 + 40 * Math.cos(p),
+    morphHeight: 60,
+    morphRate: () => 1,
+    morphFixed: () => 0,
+    morphAllowShrinkage: 1,
+  };
+
+  assert.ok(Math.abs(applyMorphing(75, 75, 1, 0, params) - 120) < FUNC_TOL);
+  assert.ok(Math.abs(applyMorphing(75, 75, 1, Math.PI, params) - 80) < FUNC_TOL);
+});
+
+test('zero morph dimensions preserve raw mouth dimensions for interior slices', () => {
+  const params = {
+    morphTarget: 1,
+    morphWidth: 0,
+    morphHeight: 0,
+    morphRate: 1,
+    morphFixed: 0,
+    morphAllowShrinkage: 1,
+  };
+
+  assert.ok(
+    Math.abs(applyMorphing(50, 100, 0.5, 0, params, { halfW: 100, halfH: 80 }) - 50) <
+      FUNC_TOL
+  );
+});
+
 test('OSSE with throat extension has correct radius at extension zone', () => {
   const params = OSSE_WITH_EXT;
   const z = 5; // midway through extension

@@ -1,6 +1,6 @@
 import { evalParam } from '../../common.js';
-import { DEFAULTS, MORPH_TARGETS } from '../constants.js';
-import { applyMorphing } from '../morphing.js';
+import { DEFAULTS } from '../constants.js';
+import { applyMorphing, hasConfiguredMorphDimension, isMorphActive } from '../morphing.js';
 import { calculateOSSE } from '../profiles/osse.js';
 import { calculateROSSE } from '../profiles/rosse.js';
 
@@ -39,9 +39,10 @@ export function computeMouthExtents(params, context) {
     360,
     Math.round((params.angularSegments || DEFAULTS.ANGULAR_SEGMENTS) * 4)
   );
-  const needsTarget =
-    params.morphTarget !== undefined && Number(params.morphTarget) !== MORPH_TARGETS.NONE;
-  const hasExplicit = params.morphWidth > 0 || params.morphHeight > 0;
+  const needsTarget = isMorphActive(params, 0);
+  const needsImplicitDimension =
+    !hasConfiguredMorphDimension(params, 'morphWidth') ||
+    !hasConfiguredMorphDimension(params, 'morphHeight');
 
   let rawMaxX = 0;
   let rawMaxZ = 0;
@@ -56,7 +57,8 @@ export function computeMouthExtents(params, context) {
     rawMaxZ = Math.max(rawMaxZ, Math.abs(r * Math.sin(p)));
   }
 
-  const morphTargetInfo = needsTarget && !hasExplicit ? { halfW: rawMaxX, halfH: rawMaxZ } : null;
+  const morphTargetInfo =
+    needsTarget && needsImplicitDimension ? { halfW: rawMaxX, halfH: rawMaxZ } : null;
 
   if (!needsTarget) {
     return { halfW: rawMaxX, halfH: rawMaxZ, morphTargetInfo };
@@ -67,7 +69,7 @@ export function computeMouthExtents(params, context) {
   for (let i = 0; i < sampleCount; i += 1) {
     const p = (i / sampleCount) * Math.PI * 2;
     const profile = evaluateAt(p);
-    const r = applyMorphing(profile.y, 1, p, params, morphTargetInfo);
+    const r = applyMorphing(profile.y, profile.y, 1, p, params, morphTargetInfo);
     maxX = Math.max(maxX, Math.abs(r * Math.cos(p)));
     maxZ = Math.max(maxZ, Math.abs(r * Math.sin(p)));
   }
@@ -79,20 +81,18 @@ export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, cont
   const safeAngles =
     Array.isArray(angleList) && angleList.length > 0 ? angleList : [0, Math.PI / 2];
 
-  return Array.from({ length: lengthSteps + 1 }, (_, j) => {
-    const t = sliceMap ? sliceMap[j] : j / lengthSteps;
-    let maxX = 0;
-    let maxZ = 0;
+  let maxX = 0;
+  let maxZ = 0;
 
-    for (const p of safeAngles) {
-      const profile = evaluateInnerProfileAt(t, p, params, context);
-      const r = profile.y;
-      maxX = Math.max(maxX, Math.abs(r * Math.cos(p)));
-      maxZ = Math.max(maxZ, Math.abs(r * Math.sin(p)));
-    }
+  for (const p of safeAngles) {
+    const profile = evaluateInnerProfileAt(1, p, params, context);
+    const r = profile.y;
+    maxX = Math.max(maxX, Math.abs(r * Math.cos(p)));
+    maxZ = Math.max(maxZ, Math.abs(r * Math.sin(p)));
+  }
 
-    return { halfW: maxX, halfH: maxZ };
-  });
+  const mouthTargetInfo = { halfW: maxX, halfH: maxZ };
+  return Array.from({ length: lengthSteps + 1 }, () => mouthTargetInfo);
 }
 
 export function createRingVertices(
@@ -112,9 +112,11 @@ export function createRingVertices(
     for (let i = 0; i < ringCount; i += 1) {
       const p = angleList[i];
       const profile = evaluateInnerProfileAt(t, p, params, context);
+      const mouthProfile =
+        j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
-      const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);
+      const r = applyMorphing(profile.y, mouthProfile.y, t, p, params, morphTargetInfo);
 
       vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
     }
@@ -243,9 +245,11 @@ export function createAdaptiveRingVertices(
     for (let i = 0; i < N; i += 1) {
       const p = (i / N) * Math.PI * 2;
       const profile = evaluateInnerProfileAt(t, p, params, context);
+      const mouthProfile =
+        j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
-      const r = applyMorphing(profile.y, t, p, params, morphTargetInfo);
+      const r = applyMorphing(profile.y, mouthProfile.y, t, p, params, morphTargetInfo);
 
       vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
     }
