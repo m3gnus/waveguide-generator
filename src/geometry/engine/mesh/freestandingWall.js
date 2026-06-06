@@ -162,10 +162,13 @@ function appendOuterOffsetShell(
   innerNormals,
   innerVertexCount,
   ringCount,
+  lengthSteps,
   thickness,
-  offsetSign
+  offsetSign,
+  rearDiscY
 ) {
   const outerStart = vertices.length / 3;
+  const outerRows = [];
 
   for (let idx = 0; idx < innerVertexCount; idx += 1) {
     const row = Math.floor(idx / ringCount);
@@ -182,9 +185,9 @@ function appendOuterOffsetShell(
       const radialLen = Math.hypot(nx, nz);
       const rx = radialLen > 1e-12 ? nx / radialLen : 0;
       const rz = radialLen > 1e-12 ? nz / radialLen : 0;
-      vertices.push(x + offsetSign * thickness * rx, y, z + offsetSign * thickness * rz);
+      outerRows.push(x + offsetSign * thickness * rx, y, z + offsetSign * thickness * rz);
     } else {
-      vertices.push(
+      outerRows.push(
         x + offsetSign * thickness * nx,
         y + offsetSign * thickness * ny,
         z + offsetSign * thickness * nz
@@ -192,12 +195,43 @@ function appendOuterOffsetShell(
     }
   }
 
-  return outerStart;
+  for (let col = 0; col < ringCount; col += 1) {
+    const base = col * 3;
+    const x0 = outerRows[base];
+    const y0 = outerRows[base + 1];
+    const z0 = outerRows[base + 2];
+
+    if (lengthSteps <= 0) {
+      vertices.push(x0, rearDiscY, z0);
+      continue;
+    }
+
+    const nextBase = (ringCount + col) * 3;
+    const x1 = outerRows[nextBase];
+    const y1 = outerRows[nextBase + 1];
+    const z1 = outerRows[nextBase + 2];
+    const dy = y1 - y0;
+    if (Math.abs(dy) <= 1e-9) {
+      vertices.push(x0, rearDiscY, z0);
+      continue;
+    }
+
+    const t = (rearDiscY - y0) / dy;
+    vertices.push(x0 + (x1 - x0) * t, rearDiscY, z0 + (z1 - z0) * t);
+  }
+
+  vertices.push(...outerRows);
+
+  return {
+    outerStart,
+    outerThroatStart: outerStart + ringCount,
+    outerRowCount: lengthSteps + 2,
+  };
 }
 
-function stitchOuterShell(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart) {
+function stitchOuterShell(vertices, indices, ringCount, outerRowCount, fullCircle, outerStart) {
   const radialSteps = getRadialSteps(ringCount, fullCircle);
-  for (let row = 0; row < lengthSteps; row += 1) {
+  for (let row = 0; row < outerRowCount - 1; row += 1) {
     for (let col = 0; col < radialSteps; col += 1) {
       const col2 = fullCircle ? (col + 1) % ringCount : col + 1;
 
@@ -212,10 +246,10 @@ function stitchOuterShell(vertices, indices, ringCount, lengthSteps, fullCircle,
   }
 }
 
-function stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart) {
+function stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, outerThroatStart) {
   const radialSteps = getRadialSteps(ringCount, fullCircle);
   const mouthInnerStart = lengthSteps * ringCount;
-  const mouthOuterStart = outerStart + mouthInnerStart;
+  const mouthOuterStart = outerThroatStart + mouthInnerStart;
 
   for (let col = 0; col < radialSteps; col += 1) {
     const col2 = fullCircle ? (col + 1) % ringCount : col + 1;
@@ -230,103 +264,34 @@ function stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, o
   }
 }
 
-function computeRingCenterAndRadius(vertices, start, ringCount) {
+function addRearCap(vertices, indices, ringCount, fullCircle, rearRimStart) {
+  const rearCapStartTri = indices.length / 3;
   let centerX = 0;
   let centerY = 0;
   let centerZ = 0;
 
   for (let col = 0; col < ringCount; col += 1) {
-    centerX += vertices[(start + col) * 3];
-    centerY += vertices[(start + col) * 3 + 1];
-    centerZ += vertices[(start + col) * 3 + 2];
+    centerX += vertices[(rearRimStart + col) * 3];
+    centerY += vertices[(rearRimStart + col) * 3 + 1];
+    centerZ += vertices[(rearRimStart + col) * 3 + 2];
   }
 
   centerX /= ringCount;
   centerY /= ringCount;
   centerZ /= ringCount;
 
-  let radius = 0;
-  for (let col = 0; col < ringCount; col += 1) {
-    const x = vertices[(start + col) * 3] - centerX;
-    const z = vertices[(start + col) * 3 + 2] - centerZ;
-    radius += Math.hypot(x, z);
-  }
-  radius /= ringCount;
-
-  return { centerX, centerY, centerZ, radius };
-}
-
-function computeCircularRearRim(vertices, outerStart, ringCount, lengthSteps, rearDiscY) {
-  const throat = computeRingCenterAndRadius(vertices, outerStart, ringCount);
-  let rearRadius = throat.radius;
-
-  if (lengthSteps > 0) {
-    const next = computeRingCenterAndRadius(vertices, outerStart + ringCount, ringCount);
-    const dy = next.centerY - throat.centerY;
-    if (Math.abs(dy) > 1e-9) {
-      const t = (rearDiscY - throat.centerY) / dy;
-      rearRadius = throat.radius + (next.radius - throat.radius) * t;
-    }
-  }
-
-  if (!Number.isFinite(rearRadius) || rearRadius <= 1e-9) {
-    rearRadius = throat.radius;
-  }
-
-  return {
-    centerX: throat.centerX,
-    centerZ: throat.centerZ,
-    radius: rearRadius,
-  };
-}
-
-function addRearTransitionAndCap(
-  vertices,
-  indices,
-  ringCount,
-  fullCircle,
-  outerStart,
-  lengthSteps,
-  rearDiscY
-) {
-  const throatReturnStartTri = indices.length / 3;
-  const discRimStart = vertices.length / 3;
-  const rearRim = computeCircularRearRim(vertices, outerStart, ringCount, lengthSteps, rearDiscY);
-
-  for (let col = 0; col < ringCount; col += 1) {
-    const throatIdx = outerStart + col;
-    const dx = vertices[throatIdx * 3] - rearRim.centerX;
-    const dz = vertices[throatIdx * 3 + 2] - rearRim.centerZ;
-    const len = Math.hypot(dx, dz);
-    const ux = len > 1e-12 ? dx / len : Math.cos((col / ringCount) * Math.PI * 2);
-    const uz = len > 1e-12 ? dz / len : Math.sin((col / ringCount) * Math.PI * 2);
-    vertices.push(
-      rearRim.centerX + ux * rearRim.radius,
-      rearDiscY,
-      rearRim.centerZ + uz * rearRim.radius
-    );
-  }
+  const centerIdx = vertices.length / 3;
+  vertices.push(centerX, centerY, centerZ);
 
   const radialSteps = getRadialSteps(ringCount, fullCircle);
   for (let col = 0; col < radialSteps; col += 1) {
     const col2 = fullCircle ? (col + 1) % ringCount : col + 1;
-    pushTri(vertices, indices, outerStart + col, outerStart + col2, discRimStart + col);
-    pushTri(vertices, indices, outerStart + col2, discRimStart + col2, discRimStart + col);
-  }
-  const throatReturnEndTri = indices.length / 3;
-
-  const centerIdx = vertices.length / 3;
-  vertices.push(rearRim.centerX, rearDiscY, rearRim.centerZ);
-
-  for (let col = 0; col < radialSteps; col += 1) {
-    const col2 = fullCircle ? (col + 1) % ringCount : col + 1;
-    pushTri(vertices, indices, discRimStart + col, discRimStart + col2, centerIdx);
+    pushTri(vertices, indices, rearRimStart + col, rearRimStart + col2, centerIdx);
   }
   const rearCapEndTri = indices.length / 3;
 
   return {
-    throatReturnStartTri,
-    throatReturnEndTri,
+    rearCapStartTri,
     rearCapEndTri,
   };
 }
@@ -347,40 +312,33 @@ export function addFreestandingWallGeometry(
   const innerNormals = computeInnerVertexNormals(vertices, indices, innerVertexCount);
   fillMissingNormals(innerNormals, vertices, ringCount, lengthSteps);
   const offsetSign = resolveOffsetSign(vertices, innerNormals, innerVertexCount);
-  const outerStart = appendOuterOffsetShell(
+  const throatY = computeThroatPlateY(vertices, ringCount);
+  const rearDiscY = throatY - thickness;
+  const { outerStart, outerThroatStart, outerRowCount } = appendOuterOffsetShell(
     vertices,
     innerNormals,
     innerVertexCount,
     ringCount,
-    thickness,
-    offsetSign
-  );
-  const throatY = computeThroatPlateY(vertices, ringCount);
-  const rearDiscY = throatY - thickness;
-
-  const outerWallStartTri = indices.length / 3;
-  stitchOuterShell(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart);
-  const outerWallEndTri = indices.length / 3;
-
-  stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, outerStart);
-  const mouthRimEndTri = indices.length / 3;
-
-  const { throatReturnStartTri, throatReturnEndTri, rearCapEndTri } = addRearTransitionAndCap(
-    vertices,
-    indices,
-    ringCount,
-    fullCircle,
-    outerStart,
     lengthSteps,
+    thickness,
+    offsetSign,
     rearDiscY
   );
+
+  const outerWallStartTri = indices.length / 3;
+  stitchOuterShell(vertices, indices, ringCount, outerRowCount, fullCircle, outerStart);
+  const outerWallEndTri = indices.length / 3;
+
+  stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, outerThroatStart);
+  const mouthRimEndTri = indices.length / 3;
+
+  const { rearCapStartTri, rearCapEndTri } = addRearCap(vertices, indices, ringCount, fullCircle, outerStart);
 
   const wallEndTri = indices.length / 3;
   if (groupInfo && wallEndTri > wallStartTri) {
     groupInfo.freestandingWall = { start: wallStartTri, end: wallEndTri };
     groupInfo.outer_wall = { start: outerWallStartTri, end: outerWallEndTri };
     groupInfo.mouth_rim = { start: outerWallEndTri, end: mouthRimEndTri };
-    groupInfo.throat_return = { start: throatReturnStartTri, end: throatReturnEndTri };
-    groupInfo.rear_cap = { start: throatReturnEndTri, end: rearCapEndTri };
+    groupInfo.rear_cap = { start: rearCapStartTri, end: rearCapEndTri };
   }
 }
