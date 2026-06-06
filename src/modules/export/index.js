@@ -330,15 +330,21 @@ async function runStepExportTask(input, options = {}) {
 function runStlExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.STL);
 
-  const geometryParams = densifyForSmoothTessellation(input.params);
+  const geometryParams = densifyForSmoothTessellation({
+    ...input.params,
+    encDepth: 0,
+    wallThickness: 0,
+  });
   const geometryTask = GeometryModule.task(GeometryModule.importPrepared(geometryParams), {
     includeEnclosure: false,
     adaptivePhi: true,
+    omitSource: true,
   });
   const geometryShape = GeometryModule.output.shape(geometryTask);
   const { vertices, indices } = buildGeometryMeshFromShape(geometryShape, {
     includeEnclosure: false,
     adaptivePhi: true,
+    omitSource: true,
   });
   const stlBinary = exportSTLBinary(
     rotateVerticesForStl(Float32Array.from(vertices)),

@@ -18,6 +18,7 @@ function resolveBuildOptions(buildParams, options = {}) {
     includeEnclosure: options.includeEnclosure ?? Number(buildParams.encDepth || 0) > 0,
     collectGroups: true,
     adaptivePhi: options.adaptivePhi ?? false,
+    omitSource: options.omitSource ?? false,
   };
 }
 
@@ -43,6 +44,7 @@ function createGeometryShape(preparedParams, options = {}) {
     tessellation: {
       includeEnclosure: Boolean(buildOptions.includeEnclosure),
       adaptivePhi: Boolean(buildOptions.adaptivePhi),
+      omitSource: Boolean(buildOptions.omitSource),
     },
   };
 }
@@ -65,6 +67,7 @@ function buildMeshDataFromShape(shape, options = {}) {
   const buildOptions = resolveBuildOptions(buildParams, {
     includeEnclosure: options.includeEnclosure ?? shapeOptions.includeEnclosure,
     adaptivePhi: options.adaptivePhi ?? shapeOptions.adaptivePhi,
+    omitSource: options.omitSource ?? shapeOptions.omitSource,
   });
 
   return buildWaveguideMesh(buildParams, buildOptions);

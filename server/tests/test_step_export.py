@@ -247,6 +247,7 @@ class StepExportAdapterTest(unittest.TestCase):
             )
 
         self.assertEqual(result["stats"]["singleLayer"], True)
+        self.assertEqual(result["stats"]["hasWallThickness"], False)
         self.assertEqual(len(captured_configs), 1)
         config = captured_configs[0]
         self.assertEqual(config["mode"], "bare")
