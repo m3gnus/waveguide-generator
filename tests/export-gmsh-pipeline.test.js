@@ -164,6 +164,7 @@ test("exportSTEP writes backend single-layer STEP file", async () => {
       ["http://localhost:8000/health", "http://localhost:8000/api/mesh/step"],
     );
     const payload = JSON.parse(requests[1].init.body);
+    assert.equal(payload.step_body, "inner_surface");
     assert.equal(payload.enc_depth, 0);
     assert.equal(payload.wall_thickness, 0);
   } finally {

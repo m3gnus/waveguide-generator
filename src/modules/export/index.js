@@ -273,8 +273,10 @@ async function runStepExportTask(input, options = {}) {
     encDepth: 0,
     wallThickness: 0,
   });
+  stepParams.lengthSegments = input.params.lengthSegments;
   const meshParams = prepareBackendMeshExportParams(stepParams);
   const requestPayload = buildWaveguidePayload(meshParams, '2.2');
+  requestPayload.step_body = 'inner_surface';
   requestPayload.enc_depth = 0;
   requestPayload.wall_thickness = 0;
 

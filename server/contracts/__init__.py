@@ -310,6 +310,7 @@ class WaveguideParamsRequest(BaseModel):
 
     sim_type: int = 2
     msh_version: str = "2.2"
+    step_body: str = "inner_surface"
 
 
 class ChartsRenderRequest(BaseModel):
