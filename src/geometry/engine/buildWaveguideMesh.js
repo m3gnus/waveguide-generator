@@ -175,7 +175,10 @@ export function buildWaveguideMesh(params, options = {}) {
   }
 
   const vertexCount = vertices.length / 3;
-  const maxIndex = Math.max(...indices, -1);
+  let maxIndex = -1;
+  for (const index of indices) {
+    if (index > maxIndex) maxIndex = index;
+  }
   if (maxIndex >= vertexCount) {
     debugError(
       `[Geometry] Invalid mesh generated: max index ${maxIndex} >= vertex count ${vertexCount}`

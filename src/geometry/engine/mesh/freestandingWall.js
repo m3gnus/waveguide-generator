@@ -332,7 +332,13 @@ export function addFreestandingWallGeometry(
   stitchMouthRim(vertices, indices, ringCount, lengthSteps, fullCircle, outerThroatStart);
   const mouthRimEndTri = indices.length / 3;
 
-  const { rearCapStartTri, rearCapEndTri } = addRearCap(vertices, indices, ringCount, fullCircle, outerStart);
+  const { rearCapStartTri, rearCapEndTri } = addRearCap(
+    vertices,
+    indices,
+    ringCount,
+    fullCircle,
+    outerStart
+  );
 
   const wallEndTri = indices.length / 3;
   if (groupInfo && wallEndTri > wallStartTri) {

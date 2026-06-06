@@ -180,7 +180,11 @@ export function deriveExportFieldsFromFileName(fileName, options = {}) {
   return { outputName: parsedOutputName, counter: parsedCounter };
 }
 
-export function setExportFields({ outputName, counter } = {}, doc = globalThis.document, options = {}) {
+export function setExportFields(
+  { outputName, counter } = {},
+  doc = globalThis.document,
+  options = {}
+) {
   if (!doc || typeof doc.getElementById !== 'function') return;
 
   const normalizedOutputName = normalizeOutputName(outputName, DEFAULT_OUTPUT_NAME);

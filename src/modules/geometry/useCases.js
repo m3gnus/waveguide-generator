@@ -4,7 +4,7 @@ import { GeometryModule } from './index.js';
 import { DesignModule } from '../design/index.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
-import { densifyForSmoothTessellation } from '../../geometry/tessellation.js';
+import { prepareViewportTessellationParams } from '../../geometry/tessellation.js';
 
 function requireViewportState(state) {
   if (!state || typeof state !== 'object') {
@@ -28,10 +28,9 @@ function assertViewportMeshResponse(payload) {
 /**
  * Prepare mesh data for viewport rendering.
  *
- * `grid` preserves the user's configured segment counts for wire display
- * modes. `smooth` raises sparse preview meshes to a bounded render-only
- * density and enables adaptive angular rings where the geometry engine can
- * support them.
+ * Both variants use bounded render-only tessellation. User `Mesh.*Segments`
+ * control solve/export sampling and must not make the live geometry preview
+ * look artificially faceted.
  */
 export function prepareViewportMesh(state, { variant = 'grid' } = {}) {
   const viewportState = requireViewportState(state);
@@ -42,9 +41,7 @@ export function prepareViewportMesh(state, { variant = 'grid' } = {}) {
   );
   const preparedParams = DesignModule.output.preparedParams(designTask);
   const useAdaptive = variant === 'smooth';
-  const geometryParams = useAdaptive
-    ? densifyForSmoothTessellation(preparedParams)
-    : preparedParams;
+  const geometryParams = prepareViewportTessellationParams(preparedParams, { variant });
   const geometryTask = GeometryModule.task(GeometryModule.importPrepared(geometryParams), {
     adaptivePhi: useAdaptive,
   });
