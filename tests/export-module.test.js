@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { getDefaults } from "../src/config/defaults.js";
 import { buildPreparedGeometryMesh } from "../src/geometry/pipeline.js";
+import { densifyForSmoothTessellation } from "../src/geometry/tessellation.js";
 import { prepareGeometryParams } from "../src/geometry/index.js";
 import { ExportModule } from "../src/modules/export/index.js";
 
@@ -161,6 +162,39 @@ test("ExportModule STL task uses smooth viewport tessellation density", () => {
     triangleCount > sparseMesh.indices.length / 3,
     "STL export should densify sparse design grids before tessellation",
   );
+});
+
+test("ExportModule STL task exports only waveguide skin without wall or throat plate", () => {
+  const prepared = makePreparedParams({
+    encDepth: 180,
+    wallThickness: 8,
+    angularSegments: 16,
+    lengthSegments: 8,
+    cornerSegments: 2,
+  });
+
+  const expectedMesh = buildPreparedGeometryMesh(
+    densifyForSmoothTessellation({
+      ...prepared,
+      encDepth: 0,
+      wallThickness: 0,
+    }),
+    {
+      includeEnclosure: false,
+      adaptivePhi: true,
+      omitSource: true,
+    },
+  );
+  const stlTask = ExportModule.task(
+    ExportModule.importStl(prepared, { baseName: "skin-demo" }),
+  );
+  const [stlFile] = ExportModule.output.files(stlTask);
+  const triangleCount = new DataView(stlFile.content).getUint32(80, true);
+
+  assert.equal(triangleCount, expectedMesh.indices.length / 3);
+  assert.equal(expectedMesh.groups.throat_disc, undefined);
+  assert.equal(expectedMesh.groups.freestandingWall, undefined);
+  assert.equal(expectedMesh.groups.enclosure, undefined);
 });
 
 test("ExportModule HornLab mesh build uses design-layer export normalization for request payload", async () => {

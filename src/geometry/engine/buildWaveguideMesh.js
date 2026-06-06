@@ -154,20 +154,22 @@ export function buildWaveguideMesh(params, options = {}) {
     });
   }
 
-  const sourceStartTri = indices.length / 3;
-  const throatSource = generateThroatSource(vertices, throatRingCount, fullCircle, meshParams);
-  if (throatSource.center) {
-    const centerIdx = vertices.length / 3;
-    vertices.push(...throatSource.center);
-    for (const [a, b] of throatSource.edges) {
-      indices.push(centerIdx, a, b);
+  if (options.omitSource !== true) {
+    const sourceStartTri = indices.length / 3;
+    const throatSource = generateThroatSource(vertices, throatRingCount, fullCircle, meshParams);
+    if (throatSource.center) {
+      const centerIdx = vertices.length / 3;
+      vertices.push(...throatSource.center);
+      for (const [a, b] of throatSource.edges) {
+        indices.push(centerIdx, a, b);
+      }
     }
-  }
-  const sourceEndTri = indices.length / 3;
+    const sourceEndTri = indices.length / 3;
 
-  if (groupInfo && sourceEndTri > sourceStartTri) {
-    groupInfo.source = { start: sourceStartTri, end: sourceEndTri };
-    groupInfo.throat_disc = { start: sourceStartTri, end: sourceEndTri };
+    if (groupInfo && sourceEndTri > sourceStartTri) {
+      groupInfo.source = { start: sourceStartTri, end: sourceEndTri };
+      groupInfo.throat_disc = { start: sourceStartTri, end: sourceEndTri };
+    }
   }
 
   const vertexCount = vertices.length / 3;
