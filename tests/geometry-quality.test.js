@@ -126,7 +126,7 @@ test('freestanding wall mesh remains closed and manifold', () => {
   assert.equal(integrity.duplicateTrianglesByGeometry, 0);
 });
 
-test('rear transition continues the outer back-side slope into the back plate instead of a cylinder', () => {
+test('rear transition continues the outer back-side slope into a circular back plate', () => {
   for (const type of ['OSSE', 'R-OSSE']) {
     const thickness = 8;
     const params = prepare(type, {
@@ -148,41 +148,58 @@ test('rear transition continues the outer back-side slope into the back plate in
     throatY /= ringCount;
     const rearY = throatY - thickness;
 
-    let maxRearShift = 0;
+    const throatOuterRadii = [];
+    const nextOuterRadii = [];
+    let throatOuterY = 0;
+    let nextOuterY = 0;
+    for (let col = 0; col < ringCount; col += 1) {
+      const throatOuterIdx = outerStart + col;
+      const nextOuterIdx = outerStart + ringCount + col;
+      throatOuterRadii.push(radiusAt(mesh.vertices, throatOuterIdx));
+      nextOuterRadii.push(radiusAt(mesh.vertices, nextOuterIdx));
+      throatOuterY += mesh.vertices[throatOuterIdx * 3 + 1];
+      nextOuterY += mesh.vertices[nextOuterIdx * 3 + 1];
+    }
+    throatOuterY /= ringCount;
+    nextOuterY /= ringCount;
+
+    const avgThroatOuterRadius =
+      throatOuterRadii.reduce((sum, radius) => sum + radius, 0) / ringCount;
+    const avgNextOuterRadius = nextOuterRadii.reduce((sum, radius) => sum + radius, 0) / ringCount;
+    const radiusT = (rearY - throatOuterY) / (nextOuterY - throatOuterY);
+    const expectedRearRadius =
+      avgThroatOuterRadius + (avgNextOuterRadius - avgThroatOuterRadius) * radiusT;
+    const rearRadii = [];
+
     for (let col = 0; col < ringCount; col += 1) {
       const innerIdx = col;
       const throatOuterIdx = outerStart + col;
-      const nextOuterIdx = outerStart + ringCount + col;
       const rearIdx = rearRimStart + col;
 
       const innerY = mesh.vertices[innerIdx * 3 + 1];
-      const throatOuterY = mesh.vertices[throatOuterIdx * 3 + 1];
       const rearOuterY = mesh.vertices[rearIdx * 3 + 1];
-      assert.ok(Math.abs(throatOuterY - innerY) < 1e-6, 'outer throat ring should keep throat axial station');
+      assert.ok(
+        Math.abs(mesh.vertices[throatOuterIdx * 3 + 1] - innerY) < 1e-6,
+        'outer throat ring should keep throat axial station'
+      );
       assert.ok(Math.abs(rearOuterY - rearY) < 1e-6, 'rear rim should lie on the back plate plane');
 
       const radialDelta = radiusAt(mesh.vertices, throatOuterIdx) - radiusAt(mesh.vertices, innerIdx);
       assert.ok(Math.abs(radialDelta - thickness) < 1e-3, 'outer throat ring should be one thickness radially outward');
 
-      const x0 = mesh.vertices[throatOuterIdx * 3];
-      const y0 = mesh.vertices[throatOuterIdx * 3 + 1];
-      const z0 = mesh.vertices[throatOuterIdx * 3 + 2];
-      const x1 = mesh.vertices[nextOuterIdx * 3];
-      const y1 = mesh.vertices[nextOuterIdx * 3 + 1];
-      const z1 = mesh.vertices[nextOuterIdx * 3 + 2];
-      const t = (rearY - y0) / (y1 - y0);
-
-      const expectedX = x0 + (x1 - x0) * t;
-      const expectedZ = z0 + (z1 - z0) * t;
-      const rearX = mesh.vertices[rearIdx * 3];
-      const rearZ = mesh.vertices[rearIdx * 3 + 2];
-
-      assert.ok(Math.abs(rearX - expectedX) < 1e-5, `rear rim x should continue the local back-side slope (${type}, col=${col})`);
-      assert.ok(Math.abs(rearZ - expectedZ) < 1e-5, `rear rim z should continue the local back-side slope (${type}, col=${col})`);
-
-      maxRearShift = Math.max(maxRearShift, Math.hypot(rearX - x0, rearZ - z0));
+      rearRadii.push(radiusAt(mesh.vertices, rearIdx));
     }
 
-    assert.ok(maxRearShift > 0.5, `${type} rear transition should not degenerate to a cylinder`);
+    const minRearRadius = Math.min(...rearRadii);
+    const maxRearRadius = Math.max(...rearRadii);
+    assert.ok(maxRearRadius - minRearRadius < 1e-6, `${type} rear cap rim should be circular`);
+    assert.ok(
+      Math.abs(rearRadii[0] - expectedRearRadius) < 1e-4,
+      `${type} rear cap radius should continue the average back-side slope`
+    );
+    assert.ok(
+      Math.abs(expectedRearRadius - avgThroatOuterRadius) > 0.5,
+      `${type} rear transition should not degenerate to a cylinder`
+    );
   }
 });

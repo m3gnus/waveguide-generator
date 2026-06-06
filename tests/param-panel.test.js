@@ -143,6 +143,14 @@ test("ParamPanel renders row-level formula buttons and removes the section-heade
     );
     assert.equal(rButtons.length, 1);
 
+    const morphRows = collectNodes(
+      paramContainer,
+      (node) =>
+        node.className === "input-row" &&
+        node.attributes["data-param-key"] === "morphTarget",
+    );
+    assert.equal(morphRows.length, 1);
+
     const encResolutionButtons = collectNodes(
       simulationContainer,
       (node) =>

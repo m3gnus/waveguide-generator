@@ -29,9 +29,8 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       id: 'morph-target',
       title: 'Morph Target',
       description:
-        'Post-profile shaping used by OSSE designs to transition the mouth toward another target shape.',
+        'Post-profile shaping used to transition the mouth toward another target shape.',
       owner: 'paramPanel',
-      whenTypes: Object.freeze(['OSSE']),
       groups: Object.freeze([
         Object.freeze({
           group: 'MORPH',
