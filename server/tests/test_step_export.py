@@ -62,6 +62,7 @@ class StepExportAdapterTest(unittest.TestCase):
                 self.bsplines = []
                 self.wires = []
                 self.thru_sections = []
+                self.removed = []
 
             def addPoint(self, x, y, z):
                 self.points.append((x, y, z))
@@ -78,6 +79,10 @@ class StepExportAdapterTest(unittest.TestCase):
             def addThruSections(self, wire_tags, **kwargs):
                 self.thru_sections.append((tuple(wire_tags), kwargs))
                 return [(2, len(self.thru_sections))]
+
+            def remove(self, dim_tags, **kwargs):
+                self.removed.append((tuple(dim_tags), kwargs))
+                return None
 
             def synchronize(self):
                 return None
@@ -133,15 +138,16 @@ class StepExportAdapterTest(unittest.TestCase):
         self.assertEqual(len(fake_gmsh.model.occ.points), 15)
         self.assertEqual(len(fake_gmsh.model.occ.bsplines), 3)
         self.assertEqual(len(fake_gmsh.model.occ.wires), 3)
-        self.assertEqual(len(fake_gmsh.model.occ.thru_sections), 2)
-        first_wire_tags, first_kwargs = fake_gmsh.model.occ.thru_sections[0]
-        second_wire_tags, second_kwargs = fake_gmsh.model.occ.thru_sections[1]
-        self.assertEqual(first_wire_tags, (1, 2))
-        self.assertEqual(second_wire_tags, (2, 3))
-        for kwargs in (first_kwargs, second_kwargs):
-            self.assertEqual(kwargs["makeSolid"], False)
-            self.assertEqual(kwargs["makeRuled"], False)
-            self.assertEqual(kwargs["maxDegree"], 3)
+        self.assertEqual(len(fake_gmsh.model.occ.thru_sections), 1)
+        wire_tags, kwargs = fake_gmsh.model.occ.thru_sections[0]
+        self.assertEqual(wire_tags, (1, 2, 3))
+        self.assertEqual(kwargs["makeSolid"], False)
+        self.assertEqual(kwargs["makeRuled"], False)
+        self.assertEqual(kwargs["maxDegree"], 3)
+        self.assertEqual(len(fake_gmsh.model.occ.removed), 1)
+        removed_dim_tags, remove_kwargs = fake_gmsh.model.occ.removed[0]
+        self.assertEqual(removed_dim_tags, ((1, 1), (1, 2), (1, 3)))
+        self.assertEqual(remove_kwargs["recursive"], True)
 
         mouth_ring = {tuple(point) for point in inner_points[:, -1, :].tolist()}
         exported_points = set(fake_gmsh.model.occ.points)
@@ -164,6 +170,9 @@ class StepExportAdapterTest(unittest.TestCase):
 
             def addThruSections(self, *_args, **_kwargs):
                 return [(2, 1)]
+
+            def remove(self, *_args, **_kwargs):
+                return None
 
             def synchronize(self):
                 return None
@@ -210,7 +219,7 @@ class StepExportAdapterTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "without surface face geometry"):
                 mesher_adapter._write_inner_surface_step(inner_points)
 
-    def test_step_writer_preserves_morphed_mouth_interval_as_explicit_face(self):
+    def test_step_writer_preserves_morphed_mouth_boundary_in_single_surface(self):
         try:
             import gmsh  # noqa: F401
         except ImportError:
@@ -231,8 +240,8 @@ class StepExportAdapterTest(unittest.TestCase):
 
         step_text = mesher_adapter._write_inner_surface_step(inner_points)
 
-        self.assertEqual(step_text.count("ADVANCED_FACE"), len(z_values) - 1)
-        self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE"), len(z_values) - 1)
+        self.assertEqual(step_text.count("ADVANCED_FACE"), 1)
+        self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE"), 1)
         self.assertRegex(step_text, re.compile(r"\b120(?:\.0+)?\b"))
 
     def test_inner_surface_step_adapter_forces_bare_full_domain_config(self):
