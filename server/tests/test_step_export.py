@@ -50,7 +50,7 @@ class StepExportRouteTest(unittest.TestCase):
 
 
 class StepExportAdapterTest(unittest.TestCase):
-    def test_step_writer_preserves_sampled_mouth_ring_as_grid_boundary(self):
+    def test_step_writer_exports_bspline_surface_geometry(self):
         class FakeOption:
             def setNumber(self, *_args):
                 return None
@@ -58,28 +58,108 @@ class StepExportAdapterTest(unittest.TestCase):
         class FakeOcc:
             def __init__(self):
                 self.points = []
-                self.lines = []
-                self.curve_loops = []
-                self.plane_surfaces = []
+                self.bsplines = []
+                self.wires = []
+                self.thru_sections = []
 
             def addPoint(self, x, y, z):
                 self.points.append((x, y, z))
                 return len(self.points)
 
-            def addLine(self, a, b):
-                self.lines.append((a, b))
-                return len(self.lines)
+            def addBSpline(self, point_tags):
+                self.bsplines.append(tuple(point_tags))
+                return len(self.bsplines)
 
-            def addCurveLoop(self, curves):
-                self.curve_loops.append(tuple(curves))
-                return len(self.curve_loops)
+            def addWire(self, curve_tags, **kwargs):
+                self.wires.append((tuple(curve_tags), kwargs))
+                return len(self.wires)
 
-            def addPlaneSurface(self, loops):
-                self.plane_surfaces.append(tuple(loops))
-                return len(self.plane_surfaces)
+            def addThruSections(self, wire_tags, **kwargs):
+                self.thru_sections.append((tuple(wire_tags), kwargs))
+                return [(2, len(self.thru_sections))]
 
-            def addBSplineSurface(self, *_args, **_kwargs):
-                raise AssertionError("STEP export must preserve grid rings, not fit one B-spline patch")
+            def synchronize(self):
+                return None
+
+        class FakeModel:
+            def __init__(self):
+                self.occ = FakeOcc()
+
+            def add(self, *_args):
+                return None
+
+        class FakeGmsh:
+            def __init__(self):
+                self.model = FakeModel()
+                self.option = FakeOption()
+                self.initialized = False
+
+            def isInitialized(self):
+                return self.initialized
+
+            def initialize(self):
+                self.initialized = True
+
+            def clear(self):
+                return None
+
+            def write(self, path):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(
+                        "ISO-10303-21;\n"
+                        "#1 = ADVANCED_FACE('',(),#2,.T.);\n"
+                        "#2 = B_SPLINE_SURFACE_WITH_KNOTS('',3,3,(),.UNSPECIFIED.,.F.,.F.,.F.,(),(),.UNSPECIFIED.);\n"
+                        "END-ISO-10303-21;\n"
+                    )
+
+            def finalize(self):
+                self.initialized = False
+
+        fake_gmsh = FakeGmsh()
+        inner_points = np.asarray(
+            [
+                [[1.0, 0.0, 0.0], [2.0, 0.0, 10.0], [4.0, 0.0, 20.0]],
+                [[0.0, 1.0, 0.0], [0.0, 2.0, 10.0], [0.0, 4.0, 20.0]],
+                [[-1.0, 0.0, 0.0], [-2.0, 0.0, 10.0], [-4.0, 0.0, 20.0]],
+                [[0.0, -1.0, 0.0], [0.0, -2.0, 10.0], [0.0, -4.0, 20.0]],
+            ]
+        )
+
+        with patch.dict(sys.modules, {"gmsh": fake_gmsh}):
+            step_text = mesher_adapter._write_inner_surface_step(inner_points)
+
+        self.assertIn("ISO-10303-21", step_text)
+        self.assertEqual(len(fake_gmsh.model.occ.points), 15)
+        self.assertEqual(len(fake_gmsh.model.occ.bsplines), 3)
+        self.assertEqual(len(fake_gmsh.model.occ.wires), 3)
+        self.assertEqual(len(fake_gmsh.model.occ.thru_sections), 1)
+        surface_wire_tags, kwargs = fake_gmsh.model.occ.thru_sections[0]
+        self.assertEqual(surface_wire_tags, (1, 2, 3))
+        self.assertEqual(kwargs["makeSolid"], False)
+        self.assertEqual(kwargs["makeRuled"], False)
+        self.assertEqual(kwargs["maxDegree"], 3)
+
+        mouth_ring = {tuple(point) for point in inner_points[:, -1, :].tolist()}
+        exported_points = set(fake_gmsh.model.occ.points)
+        self.assertTrue(mouth_ring.issubset(exported_points))
+
+    def test_step_writer_rejects_empty_geometry_step(self):
+        class FakeOption:
+            def setNumber(self, *_args):
+                return None
+
+        class FakeOcc:
+            def addPoint(self, *_args):
+                return 1
+
+            def addBSpline(self, *_args, **_kwargs):
+                return 1
+
+            def addWire(self, *_args, **_kwargs):
+                return 1
+
+            def addThruSections(self, *_args, **_kwargs):
+                return [(2, 1)]
 
             def synchronize(self):
                 return None
@@ -113,26 +193,18 @@ class StepExportAdapterTest(unittest.TestCase):
             def finalize(self):
                 self.initialized = False
 
-        fake_gmsh = FakeGmsh()
         inner_points = np.asarray(
             [
-                [[1.0, 0.0, 0.0], [2.0, 0.0, 10.0], [4.0, 0.0, 20.0]],
-                [[0.0, 1.0, 0.0], [0.0, 2.0, 10.0], [0.0, 4.0, 20.0]],
-                [[-1.0, 0.0, 0.0], [-2.0, 0.0, 10.0], [-4.0, 0.0, 20.0]],
-                [[0.0, -1.0, 0.0], [0.0, -2.0, 10.0], [0.0, -4.0, 20.0]],
+                [[1.0, 0.0, 0.0], [2.0, 0.0, 10.0]],
+                [[0.0, 1.0, 0.0], [0.0, 2.0, 10.0]],
+                [[-1.0, 0.0, 0.0], [-2.0, 0.0, 10.0]],
+                [[0.0, -1.0, 0.0], [0.0, -2.0, 10.0]],
             ]
         )
 
-        with patch.dict(sys.modules, {"gmsh": fake_gmsh}):
-            step_text = mesher_adapter._write_inner_surface_step(inner_points)
-
-        self.assertIn("ISO-10303-21", step_text)
-        self.assertEqual(len(fake_gmsh.model.occ.points), 12)
-        self.assertEqual(len(fake_gmsh.model.occ.plane_surfaces), 8)
-
-        mouth_ring = {tuple(point) for point in inner_points[:, -1, :].tolist()}
-        exported_points = set(fake_gmsh.model.occ.points)
-        self.assertTrue(mouth_ring.issubset(exported_points))
+        with patch.dict(sys.modules, {"gmsh": FakeGmsh()}):
+            with self.assertRaisesRegex(RuntimeError, "without surface face geometry"):
+                mesher_adapter._write_inner_surface_step(inner_points)
 
     def test_inner_surface_step_adapter_forces_bare_full_domain_config(self):
         captured_configs = []

@@ -246,18 +246,32 @@ def _reshape_point_grid(raw: Any, n_phi: int, n_length: int, name: str) -> np.nd
     return points.reshape(n_phi, n_length + 1, 3)
 
 
+def _assert_step_has_geometry(step_text: str) -> None:
+    if not isinstance(step_text, str) or not step_text.strip():
+        raise RuntimeError("STEP export produced an empty file.")
+    if "ISO-10303-21" not in step_text or "END-ISO-10303-21" not in step_text:
+        raise RuntimeError("STEP export did not produce a valid STEP exchange file.")
+    if "ADVANCED_FACE" not in step_text:
+        raise RuntimeError("STEP export produced a file without surface face geometry.")
+    if "B_SPLINE_SURFACE" not in step_text:
+        raise RuntimeError("STEP export produced a file without the horn surface geometry.")
+
+
 def _write_inner_surface_step(inner_points: np.ndarray) -> str:
     """Write a single-layer inner horn surface STEP file from mesher point-grid data.
 
-    The export preserves the sampled ring grid instead of fitting one global
-    B-spline patch. That keeps the final mouth ring as an exact boundary in the
-    STEP body, matching the bare no-wall/no-enclosure extracted horn surface.
+    The STEP contains one open B-spline surface body lofted through the sampled
+    rings. Exporting each sampled grid cell as its own planar face produces STEP
+    containers that some CAD importers accept syntactically but treat as empty
+    or faulty geometry.
     """
 
     import gmsh
 
     if inner_points.ndim != 3 or inner_points.shape[2] != 3:
         raise RuntimeError("inner_points must be shaped (n_phi, n_length + 1, 3).")
+    if not np.all(np.isfinite(inner_points)):
+        raise RuntimeError("inner_points contains non-finite coordinates.")
     n_phi, n_cols, _ = inner_points.shape
     if n_phi < 4 or n_cols < 2:
         raise RuntimeError("STEP export requires at least 4 angular samples and 2 axial rings.")
@@ -274,43 +288,30 @@ def _write_inner_surface_step(inner_points: np.ndarray) -> str:
         gmsh.clear()
         gmsh.model.add("WaveguideInnerSurface")
 
-        point_tags: dict[tuple[int, int], int] = {}
-        for i in range(n_phi):
-            for j in range(n_cols):
+        wire_tags: list[int] = []
+        for j in range(n_cols):
+            point_tags: list[int] = []
+            for i in list(range(n_phi)) + [0]:
                 x, y, z = inner_points[i, j]
-                point_tags[(i, j)] = int(gmsh.model.occ.addPoint(float(x), float(y), float(z)))
-
-        line_cache: dict[tuple[tuple[int, int], tuple[int, int]], int] = {}
-
-        def line(a: tuple[int, int], b: tuple[int, int]) -> int:
-            if (a, b) in line_cache:
-                return line_cache[(a, b)]
-            if (b, a) in line_cache:
-                return -line_cache[(b, a)]
-            tag = int(gmsh.model.occ.addLine(point_tags[a], point_tags[b]))
-            line_cache[(a, b)] = tag
-            return tag
-
-        for i in range(n_phi):
-            i_next = (i + 1) % n_phi
-            for j in range(n_cols - 1):
-                curves = [
-                    line((i, j), (i_next, j)),
-                    line((i_next, j), (i_next, j + 1)),
-                    line((i_next, j + 1), (i, j + 1)),
-                    line((i, j + 1), (i, j)),
-                ]
-                loop = gmsh.model.occ.addCurveLoop(curves)
-                try:
-                    gmsh.model.occ.addPlaneSurface([loop])
-                except Exception:
-                    gmsh.model.occ.addSurfaceFilling(loop)
+                point_tags.append(
+                    int(gmsh.model.occ.addPoint(float(x), float(y), float(z)))
+                )
+            curve = int(gmsh.model.occ.addBSpline(point_tags))
+            wire_tags.append(int(gmsh.model.occ.addWire([curve], checkClosed=True)))
+        gmsh.model.occ.addThruSections(
+            wire_tags,
+            makeSolid=False,
+            makeRuled=False,
+            maxDegree=3,
+        )
         gmsh.model.occ.synchronize()
 
         with tempfile.NamedTemporaryFile(prefix="waveguide-inner-", suffix=".step", delete=False) as tmp:
             step_path = Path(tmp.name)
         gmsh.write(str(step_path))
-        return step_path.read_text(encoding="utf-8", errors="replace")
+        step_text = step_path.read_text(encoding="utf-8", errors="replace")
+        _assert_step_has_geometry(step_text)
+        return step_text
     finally:
         if step_path is not None:
             step_path.unlink(missing_ok=True)
