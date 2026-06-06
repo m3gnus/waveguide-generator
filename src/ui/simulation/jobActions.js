@@ -1,4 +1,5 @@
 import { showError, showMessage } from '../feedback.js';
+import { persistCurrentExportFields } from '../fileOps.js';
 import {
   getFrequencySpacing,
   getMeshValidationMode,
@@ -330,6 +331,7 @@ function setOutputCounter(counter) {
   if (!counterEl) return;
   const next = Number(counter);
   counterEl.value = String(Number.isFinite(next) && next >= 1 ? Math.floor(next) : 1);
+  persistCurrentExportFields();
 }
 
 function setSimulationInputsFromScript(script = {}) {
@@ -359,6 +361,7 @@ function setSimulationInputsFromScript(script = {}) {
       counterEl.value = String(script.counter);
     }
   }
+  persistCurrentExportFields();
 
   if (script.polarConfig) {
     const currentState = readSimulationState();
@@ -440,7 +443,7 @@ export function renderJobList(panel) {
         ${job.status === 'complete' ? renderRatingStars(job) : ''}
       </div>
       <div class="simulation-job-actions">
-        ${job.status === 'complete' ? renderJobActionButton({ action: 'view', jobIdAttr, label: 'View', title: 'View results' }) : ''}
+        ${job.status === 'complete' ? renderJobActionButton({ action: 'view', jobIdAttr, label: 'Results', title: 'View results' }) : ''}
         ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr) : ''}
         ${job.status === 'complete' && source.mode === 'folder' ? renderJobActionButton({ action: 'open-folder', jobIdAttr, label: 'View Output', title: 'Open output folder' }) : ''}
         ${job.script ? renderJobActionButton({ action: 'load-script', jobIdAttr, label: 'Load', title: 'Load parameters' }) : ''}

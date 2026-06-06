@@ -8,7 +8,8 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
-from api.routes_misc import export_file, workspace_open, workspace_path
+import api.routes_misc as routes_misc
+from api.routes_misc import export_file, set_workspace_path, workspace_open, workspace_path, workspace_reset
 
 
 def make_upload_file(name: str, content: bytes) -> UploadFile:
@@ -16,6 +17,10 @@ def make_upload_file(name: str, content: bytes) -> UploadFile:
 
 
 class WorkspaceRoutesTest(unittest.TestCase):
+    def tearDown(self):
+        routes_misc._custom_workspace_path = None
+        routes_misc._workspace_path_loaded = False
+
     def test_export_file_writes_to_workspace_root(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_root = Path(tmpdir).resolve()
@@ -71,6 +76,54 @@ class WorkspaceRoutesTest(unittest.TestCase):
                 result = asyncio.run(workspace_path())
 
         self.assertEqual(result["path"], str(workspace_root))
+
+    def test_workspace_path_restores_persisted_custom_folder_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir).resolve()
+            settings_path = tmp_root / "data" / "workspace_settings.json"
+            default_root = tmp_root / "default-output"
+            selected_root = tmp_root / "selected-output"
+            selected_root.mkdir()
+
+            with patch("api.routes_misc._WORKSPACE_SETTINGS_PATH", settings_path), patch(
+                "api.routes_misc._REPO_OUTPUT_PATH", default_root
+            ):
+                routes_misc._custom_workspace_path = None
+                routes_misc._workspace_path_loaded = False
+
+                result = asyncio.run(set_workspace_path(str(selected_root)))
+                self.assertEqual(result, {"path": str(selected_root), "custom": True})
+                self.assertTrue(settings_path.exists())
+
+                routes_misc._custom_workspace_path = None
+                routes_misc._workspace_path_loaded = False
+                restored = asyncio.run(workspace_path())
+
+        self.assertEqual(restored["path"], str(selected_root))
+
+    def test_workspace_reset_persists_default_folder_choice(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir).resolve()
+            settings_path = tmp_root / "data" / "workspace_settings.json"
+            default_root = tmp_root / "default-output"
+            selected_root = tmp_root / "selected-output"
+            selected_root.mkdir()
+
+            with patch("api.routes_misc._WORKSPACE_SETTINGS_PATH", settings_path), patch(
+                "api.routes_misc._REPO_OUTPUT_PATH", default_root
+            ):
+                routes_misc._custom_workspace_path = None
+                routes_misc._workspace_path_loaded = False
+
+                asyncio.run(set_workspace_path(str(selected_root)))
+                reset_result = asyncio.run(workspace_reset())
+                self.assertEqual(reset_result, {"path": str(default_root), "custom": False})
+
+                routes_misc._custom_workspace_path = None
+                routes_misc._workspace_path_loaded = False
+                restored = asyncio.run(workspace_path())
+
+        self.assertEqual(restored["path"], str(default_root))
 
     def test_workspace_open_creates_and_opens_workspace_root(self):
         with tempfile.TemporaryDirectory() as tmpdir:

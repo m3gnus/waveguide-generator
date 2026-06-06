@@ -10,7 +10,10 @@ let skipNextParameterChange = false;
 const DEFAULT_OUTPUT_NAME = 'horn_design';
 const DEFAULT_COUNTER = 1;
 const MAX_COUNTER = 999999;
+const EXPORT_FIELDS_STORAGE_KEY = 'waveguide-export-fields';
+const EXPORT_FIELDS_SCHEMA_VERSION = 1;
 let folderWorkspaceBound = false;
+let exportFieldPersistenceBound = false;
 
 function bindFolderWorkspaceLabel() {
   if (folderWorkspaceBound || typeof document === 'undefined') {
@@ -44,6 +47,92 @@ function normalizeCounter(value, fallback = DEFAULT_COUNTER) {
     return Math.floor(fallbackNum);
   }
   return DEFAULT_COUNTER;
+}
+
+function getStorage() {
+  if (typeof localStorage === 'undefined') return null;
+  if (typeof localStorage.getItem !== 'function' || typeof localStorage.setItem !== 'function') {
+    return null;
+  }
+  return localStorage;
+}
+
+export function loadExportFields() {
+  const storage = getStorage();
+  if (!storage) {
+    return { outputName: DEFAULT_OUTPUT_NAME, counter: DEFAULT_COUNTER };
+  }
+
+  try {
+    const raw = storage.getItem(EXPORT_FIELDS_STORAGE_KEY);
+    if (!raw) {
+      return { outputName: DEFAULT_OUTPUT_NAME, counter: DEFAULT_COUNTER };
+    }
+    const parsed = JSON.parse(raw);
+    const fields =
+      parsed?.schemaVersion === EXPORT_FIELDS_SCHEMA_VERSION && parsed.exportFields
+        ? parsed.exportFields
+        : {};
+    return {
+      outputName: normalizeOutputName(fields.outputName, DEFAULT_OUTPUT_NAME),
+      counter: normalizeCounter(fields.counter, DEFAULT_COUNTER),
+    };
+  } catch {
+    return { outputName: DEFAULT_OUTPUT_NAME, counter: DEFAULT_COUNTER };
+  }
+}
+
+export function saveExportFields(fields = {}) {
+  const normalized = {
+    outputName: normalizeOutputName(fields.outputName, DEFAULT_OUTPUT_NAME),
+    counter: normalizeCounter(fields.counter, DEFAULT_COUNTER),
+  };
+
+  const storage = getStorage();
+  if (!storage) return normalized;
+
+  try {
+    storage.setItem(
+      EXPORT_FIELDS_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: EXPORT_FIELDS_SCHEMA_VERSION,
+        exportFields: normalized,
+      })
+    );
+  } catch {
+    // Storage failures should not block exports.
+  }
+
+  return normalized;
+}
+
+export function persistCurrentExportFields(doc = globalThis.document) {
+  if (!doc || typeof doc.getElementById !== 'function') {
+    return loadExportFields();
+  }
+  return saveExportFields({
+    outputName: doc.getElementById('export-prefix')?.value,
+    counter: doc.getElementById('export-counter')?.value,
+  });
+}
+
+export function applySavedExportFields(doc = globalThis.document) {
+  return setExportFields(loadExportFields(), doc, { persist: false });
+}
+
+function bindExportFieldPersistence() {
+  if (exportFieldPersistenceBound || typeof document === 'undefined') {
+    return;
+  }
+  exportFieldPersistenceBound = true;
+
+  applySavedExportFields(document);
+
+  const persist = () => persistCurrentExportFields(document);
+  document.getElementById('export-prefix')?.addEventListener('input', persist);
+  document.getElementById('export-prefix')?.addEventListener('change', persist);
+  document.getElementById('export-counter')?.addEventListener('input', persist);
+  document.getElementById('export-counter')?.addEventListener('change', persist);
 }
 
 export function deriveExportFieldsFromFileName(fileName, options = {}) {
@@ -91,7 +180,7 @@ export function deriveExportFieldsFromFileName(fileName, options = {}) {
   return { outputName: parsedOutputName, counter: parsedCounter };
 }
 
-export function setExportFields({ outputName, counter } = {}, doc = document) {
+export function setExportFields({ outputName, counter } = {}, doc = globalThis.document, options = {}) {
   if (!doc || typeof doc.getElementById !== 'function') return;
 
   const normalizedOutputName = normalizeOutputName(outputName, DEFAULT_OUTPUT_NAME);
@@ -105,6 +194,10 @@ export function setExportFields({ outputName, counter } = {}, doc = document) {
   const counterEl = doc.getElementById('export-counter');
   if (counterEl) {
     counterEl.value = String(normalizedCounter);
+  }
+
+  if (options.persist !== false) {
+    saveExportFields({ outputName: normalizedOutputName, counter: normalizedCounter });
   }
 }
 
@@ -135,11 +228,13 @@ export function incrementExportCounter() {
   // Respect maximum counter value
   if (next > MAX_COUNTER) {
     counterEl.value = String(MAX_COUNTER);
+    persistCurrentExportFields();
     showError(`Counter reached maximum (${MAX_COUNTER}). Set manually to continue.`);
     return;
   }
 
   counterEl.value = String(next);
+  persistCurrentExportFields();
 }
 
 export function markParametersChanged() {
@@ -183,6 +278,7 @@ function showWorkspaceSaveSuccess(fileName, result) {
 }
 
 bindFolderWorkspaceLabel();
+bindExportFieldPersistence();
 
 export async function saveFile(content, fileName, options = {}) {
   bindFolderWorkspaceLabel();

@@ -896,6 +896,47 @@ test('renderJobList keeps backend-only feeds free of redundant row source badges
   }
 });
 
+test('renderJobList labels completed job results action as Results with view tooltip', () => {
+  const originalDocument = global.document;
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    },
+  };
+
+  try {
+    renderJobList({
+      jobSourceMode: 'backend',
+      activeJobId: null,
+      jobs: new Map([
+        [
+          'job-results-1',
+          {
+            id: 'job-results-1',
+            label: 'results-task',
+            status: 'complete',
+            createdAt: '2026-03-11T09:00:00.000Z',
+            completedAt: '2026-03-11T09:10:00.000Z',
+          },
+        ],
+      ]),
+    });
+
+    assert.match(
+      list.innerHTML,
+      /data-job-action="view"[\s\S]*title="View results"[\s\S]*>Results<\/button>/
+    );
+    assert.doesNotMatch(list.innerHTML, />View<\/button>/);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
 test('renderJobList escapes job ids in action data attributes', () => {
   const originalDocument = global.document;
   const list = { innerHTML: '' };
