@@ -41,6 +41,7 @@ test('exportResults writes selected bundle files into the task folder workspace'
       job: {
         id: 'job-1',
         label: 'horn_12',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       selectedFormats: ['csv', 'json'],
     });
@@ -55,8 +56,8 @@ test('exportResults writes selected bundle files into the task folder workspace'
     assert.equal(fetchCalls.length, 2);
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
-    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_12');
-    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_12');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), '260311_horn_12');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_12');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();
@@ -96,6 +97,7 @@ test('exportResults preserves zero-valued result cells in CSV bundle files', asy
       job: {
         id: 'job-zero',
         label: 'horn_zero',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       selectedFormats: ['csv'],
     });
@@ -143,6 +145,7 @@ test('exportResults labels and normalizes legacy impedance values in text export
       job: {
         id: 'job-legacy-impedance',
         label: 'horn_legacy',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       selectedFormats: ['csv', 'txt', 'impedance_csv', 'vacs'],
     });
@@ -242,6 +245,7 @@ test('exportResults forwards Metal phase convention for rendered PNG charts', as
       job: {
         id: 'job-metal-phase',
         label: 'horn_metal',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       selectedFormats: ['png'],
     });
@@ -324,6 +328,7 @@ test('exportResults routes fallback bundle writes through backend workspace subd
       job: {
         id: 'job-3',
         label: 'horn_34',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       selectedFormats: ['csv'],
     });
@@ -332,7 +337,7 @@ test('exportResults routes fallback bundle writes through backend workspace subd
     assert.equal(fetchCalls.length, 1);
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     const body = fetchCalls[0].options.body;
-    assert.equal(body.get('workspace_subdir'), 'horn_34');
+    assert.equal(body.get('workspace_subdir'), '260311_horn_34');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();
@@ -358,6 +363,7 @@ test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts
       {
         id: 'job-4',
         label: 'horn_56',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       {
         results: { spl_on_axis: { frequencies: [100], spl: [90] }, metadata: { solveMs: 123 } },
@@ -373,8 +379,8 @@ test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts
     assert.equal(fetchCalls.length, 2);
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
-    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_56');
-    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_56');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), '260311_horn_56');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_56');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();
@@ -410,6 +416,7 @@ test('persistSimulationGenerationArtifacts keeps writing later artifacts after a
       {
         id: 'job-partial',
         label: 'horn_partial',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       {
         results: { ok: true },
@@ -421,7 +428,7 @@ test('persistSimulationGenerationArtifacts keeps writing later artifacts after a
     assert.equal(persisted.meshArtifactFile, 'horn_partial_solver.mesh.msh');
     assert.deepEqual(persisted.warnings, ['Raw results artifact write failed: raw write failed']);
     assert.equal(fetchCalls.length, 2);
-    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_partial');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_partial');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();
@@ -447,6 +454,7 @@ test('persistSimulationGenerationArtifacts falls back to backend workspace subdi
       {
         id: 'job-5',
         label: 'horn_57',
+        createdAt: '2026-03-11T10:00:00.000Z',
       },
       {
         results: { ok: true },
@@ -458,8 +466,8 @@ test('persistSimulationGenerationArtifacts falls back to backend workspace subdi
     assert.equal(fetchCalls.length, 2);
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     assert.equal(fetchCalls[1].url, 'http://localhost:8000/api/export-file');
-    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), 'horn_57');
-    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), 'horn_57');
+    assert.equal(fetchCalls[0].options.body.get('workspace_subdir'), '260311_horn_57');
+    assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_57');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();

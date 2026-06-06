@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { getDefaults } from "../src/config/defaults.js";
+import { buildPreparedGeometryMesh } from "../src/geometry/pipeline.js";
 import { prepareGeometryParams } from "../src/geometry/index.js";
 import { ExportModule } from "../src/modules/export/index.js";
 
@@ -135,6 +136,31 @@ test("ExportModule file tasks return save descriptors for STL, CSV, and config",
   assert.equal(configFiles.length, 1);
   assert.equal(configFiles[0].fileName, "demo.txt");
   assert.equal(typeof configFiles[0].content, "string");
+});
+
+test("ExportModule STL task uses smooth viewport tessellation density", () => {
+  const prepared = makePreparedParams({
+    encDepth: 0,
+    wallThickness: 0,
+    angularSegments: 16,
+    lengthSegments: 8,
+    cornerSegments: 2,
+  });
+
+  const sparseMesh = buildPreparedGeometryMesh(prepared, {
+    includeEnclosure: false,
+    adaptivePhi: true,
+  });
+  const stlTask = ExportModule.task(
+    ExportModule.importStl(prepared, { baseName: "smooth-demo" }),
+  );
+  const [stlFile] = ExportModule.output.files(stlTask);
+  const triangleCount = new DataView(stlFile.content).getUint32(80, true);
+
+  assert.ok(
+    triangleCount > sparseMesh.indices.length / 3,
+    "STL export should densify sparse design grids before tessellation",
+  );
 });
 
 test("ExportModule HornLab mesh build uses design-layer export normalization for request payload", async () => {
@@ -287,6 +313,63 @@ test("ExportModule STEP task requests a single-layer inner-surface export", asyn
       hasEnclosure: false,
       hasSourceCap: false,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ExportModule STEP task tolerates health payloads without mesherReady", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+
+    if (url.endsWith("/health")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return { status: "ok" };
+        },
+      };
+    }
+
+    if (url.endsWith("/api/mesh/step")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return {
+            step: "ISO-10303-21;\nEND-ISO-10303-21;\n",
+            generatedBy: "hornlab-waveguide-mesher",
+            stats: {},
+          };
+        },
+      };
+    }
+
+    throw new Error(`Unexpected request URL: ${url}`);
+  };
+
+  try {
+    const prepared = makePreparedParams();
+
+    const exportTask = await ExportModule.task(
+      ExportModule.importStep(prepared, {
+        backendUrl: "http://localhost:8000",
+        baseName: "demo",
+      }),
+    );
+    const files = ExportModule.output.files(exportTask);
+
+    assert.deepEqual(
+      requests.map((request) => request.url),
+      ["http://localhost:8000/health", "http://localhost:8000/api/mesh/step"],
+    );
+    assert.equal(files[0].fileName, "demo.step");
   } finally {
     globalThis.fetch = originalFetch;
   }

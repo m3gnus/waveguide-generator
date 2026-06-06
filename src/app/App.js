@@ -142,6 +142,26 @@ export class App {
     return exportMwgConfigFromApp();
   }
 
+  async exportSelectedFormats() {
+    const panel = await this.ensureSimulationPanel();
+    return panel.exportResults();
+  }
+
+  async exportFormat(formatId) {
+    switch (formatId) {
+      case 'mwg_config':
+        return this.exportMWGConfig();
+      case 'step':
+        return this.exportSTEP();
+      case 'stl':
+        return this.exportSTL();
+      case 'fusion_csv':
+        return this.exportProfileCSV();
+      default:
+        throw new Error(`Unsupported export format: ${formatId}`);
+    }
+  }
+
   async exportProfileCSV() {
     const vertices = this.hornMesh?.geometry?.attributes?.position?.array;
     return exportProfileCsvFromApp(vertices);

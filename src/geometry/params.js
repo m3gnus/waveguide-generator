@@ -58,7 +58,7 @@ export function isNumericString(value) {
 
 export function isMWGConfig(content) {
   if (typeof content !== 'string') return false;
-  return /;\s*MWG config/i.test(content);
+  return /;\s*(?:Parameter|MWG) config/i.test(content);
 }
 
 export function coerceConfigParams(params = {}) {

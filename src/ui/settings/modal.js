@@ -68,7 +68,7 @@ const SIMULATION_MANAGEMENT_HELP = Object.freeze({
   minRatingFilter: 'Hides completed jobs rated below this threshold in the Simulation Jobs list.',
   autoExportOnComplete:
     'Automatically exports results in the selected formats when a simulation completes.',
-  selectedFormats: 'Selects which file formats are included when exporting results.',
+  selectedFormats: 'Selects which file formats are included when using Export.',
 });
 const VIEWER_HELP = Object.freeze({
   liveUpdate:
@@ -127,7 +127,7 @@ const ADVANCED_CONTROL_COPY = Object.freeze({
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
   { key: 'simulation', label: 'Simulation' },
-  { key: 'task-exports', label: 'Task Exports' },
+  { key: 'task-exports', label: 'Export Settings' },
   { key: 'workspace', label: 'Workspace' },
   { key: 'system', label: 'System' },
 ]);
@@ -979,8 +979,8 @@ function _buildTaskExportsSection() {
 
   _appendSectionHeading(
     sec,
-    'Task Exports',
-    'Job-list preferences, automatic result bundles, and optional mesh artifact downloads all live together here.'
+    'Export Settings',
+    'Job-list preferences, automatic result bundles, and manual export formats all live together here.'
   );
 
   const managementSettings = getCurrentSimulationManagementSettings();
@@ -1322,6 +1322,8 @@ function _buildSimulationExportFormatsRow(managementSettings) {
   );
 
   const exportFormatLabels = new Map([
+    ['mwg_config', 'Parameter Config (.txt)'],
+    ['step', 'Waveguide STEP'],
     ['png', 'Chart Images (PNG)'],
     ['csv', 'Frequency Data CSV'],
     ['json', 'Full Results JSON'],

@@ -9,6 +9,20 @@ function isObject(value) {
   return value !== null && typeof value === 'object';
 }
 
+function resolveGenerationFileBaseName(job, fallbackId) {
+  const label = String(job?.label || '').trim();
+  if (label) {
+    return label;
+  }
+  const script = job?.scriptSnapshot ?? job?.script ?? job?.script_snapshot ?? null;
+  const outputName = String(script?.outputName || '').trim();
+  const counter = Number(script?.counter);
+  if (outputName && Number.isFinite(counter) && counter >= 1) {
+    return `${outputName}_${Math.floor(counter)}`;
+  }
+  return String(fallbackId || '').trim() || 'generation';
+}
+
 export async function readSimulationWorkspaceJobs() {
   return {
     items: [],
@@ -104,13 +118,14 @@ export async function persistSimulationGenerationArtifacts(
   }
 
   const subDirName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: jobId });
+  const fileBaseName = resolveGenerationFileBaseName(job, jobId);
   const warnings = [];
   let rawResultsFile = null;
   let meshArtifactFile = null;
 
   if (results && typeof results === 'object') {
     const result = await writeGenerationArtifact({
-      fileName: resolveGenerationRuntimeArtifactFileName('raw_results', { baseName: subDirName }),
+      fileName: resolveGenerationRuntimeArtifactFileName('raw_results', { baseName: fileBaseName }),
       content: `${JSON.stringify(results, null, 2)}\n`,
       contentType: 'application/json',
       workspaceSubdir: subDirName,
@@ -125,7 +140,9 @@ export async function persistSimulationGenerationArtifacts(
   const normalizedMeshText = typeof meshArtifactText === 'string' ? meshArtifactText.trim() : '';
   if (normalizedMeshText) {
     const result = await writeGenerationArtifact({
-      fileName: resolveGenerationRuntimeArtifactFileName('mesh_artifact', { baseName: subDirName }),
+      fileName: resolveGenerationRuntimeArtifactFileName('mesh_artifact', {
+        baseName: fileBaseName,
+      }),
       content: `${normalizedMeshText}\n`,
       contentType: 'text/plain',
       workspaceSubdir: subDirName,

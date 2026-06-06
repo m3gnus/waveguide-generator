@@ -83,6 +83,13 @@ test('resolveTaskWorkspaceDirectoryName prefers dated label, then dated script, 
     }),
     '260313_horn_4'
   );
+  assert.match(
+    resolveTaskWorkspaceDirectoryName({
+      id: 'job-script-no-timestamp',
+      scriptSnapshot: { outputName: 'waveguide', counter: 7 }
+    }),
+    /^[0-9]{6}_waveguide_7$/
+  );
   assert.equal(
     resolveTaskWorkspaceDirectoryName({ id: 'job-3' }),
     'job-3'
@@ -190,7 +197,7 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
   // Check the script snapshot file was written
   assert.ok(files.has(GENERATION_SCRIPT_SNAPSHOT_FILE_NAME), 'script snapshot should be written');
   const snapshotText = files.get(GENERATION_SCRIPT_SNAPSHOT_FILE_NAME).content;
-  assert.match(snapshotText, /; MWG config/);
+  assert.match(snapshotText, /; Parameter config/);
   assert.match(snapshotText, /Simulation.F1 = 100/);
   assert.match(snapshotText, /Simulation.F2 = 1000/);
   assert.match(snapshotText, /Simulation.NumFrequencies = 5/);

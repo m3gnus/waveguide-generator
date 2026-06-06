@@ -1,5 +1,6 @@
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 import { isDevRuntime } from '../config/runtimeMode.js';
+import { ensureDatedSolveLabel } from '../modules/simulation/naming.js';
 import { GlobalState } from '../state.js';
 import { showError } from '../ui/feedback.js';
 import { getExportBaseName, saveFile } from '../ui/fileOps.js';
@@ -17,45 +18,59 @@ function readExportState() {
   return GlobalState.get();
 }
 
-async function writeBrowserExportFile(file) {
-  await saveFile(file.content, file.fileName, file.saveOptions);
-  return file.fileName;
+function createBrowserExportWriter(baseName) {
+  const workspaceSubdir = ensureDatedSolveLabel(baseName, new Date());
+  return async function writeBrowserExportFile(file) {
+    await saveFile(file.content, file.fileName, {
+      ...file.saveOptions,
+      workspaceSubdir,
+    });
+    return file.fileName;
+  };
+}
+
+function readExportBaseName() {
+  return getExportBaseName();
 }
 
 export async function exportStlFromApp() {
   const { exportSTL } = await loadExportUseCases();
+  const baseName = readExportBaseName();
   return exportSTL({
     state: readExportState(),
-    baseName: getExportBaseName(),
-    writeFile: writeBrowserExportFile,
+    baseName,
+    writeFile: createBrowserExportWriter(baseName),
   });
 }
 
 export async function exportStepFromApp() {
   const { exportSTEP } = await loadExportUseCases();
+  const baseName = readExportBaseName();
   return exportSTEP({
     state: readExportState(),
-    baseName: getExportBaseName(),
+    baseName,
     backendUrl: DEFAULT_BACKEND_URL,
-    writeFile: writeBrowserExportFile,
+    writeFile: createBrowserExportWriter(baseName),
   });
 }
 
 export async function exportMwgConfigFromApp() {
   const { exportMWGConfig } = await loadExportUseCases();
+  const baseName = readExportBaseName();
   return exportMWGConfig({
     state: readExportState(),
-    baseName: getExportBaseName(),
-    writeFile: writeBrowserExportFile,
+    baseName,
+    writeFile: createBrowserExportWriter(baseName),
   });
 }
 
 export async function exportProfileCsvFromApp(vertices) {
   const { exportProfileCSV } = await loadExportUseCases();
+  const baseName = readExportBaseName();
   return exportProfileCSV(vertices, {
     state: readExportState(),
-    baseName: getExportBaseName(),
-    writeFile: writeBrowserExportFile,
+    baseName,
+    writeFile: createBrowserExportWriter(baseName),
     onMissingMesh: showError,
   });
 }

@@ -40,12 +40,20 @@ export function setupEventListeners(panel) {
 
   const refreshBtn = document.getElementById('refresh-jobs-btn');
   if (refreshBtn) {
-    refreshBtn.addEventListener('click', () => panel.refreshJobFeed());
+    refreshBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      panel.refreshJobFeed();
+    });
   }
 
   const clearFailedBtn = document.getElementById('clear-failed-jobs-btn');
   if (clearFailedBtn) {
-    clearFailedBtn.addEventListener('click', async () => clearFailedSimulations(panel));
+    clearFailedBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await clearFailedSimulations(panel);
+    });
   }
 
   const sortSelect = document.getElementById('simulation-jobs-sort');
@@ -68,15 +76,18 @@ export function setupEventListeners(panel) {
   if (jobList) {
     jobList.addEventListener('click', async (event) => {
       const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      const ratingValue = target.dataset.jobRating;
-      const ratingJobId = target.dataset.jobId;
+      if (!(target instanceof Element)) return;
+      const ratingTarget = target.closest('[data-job-rating]');
+      const ratingValue =
+        ratingTarget instanceof HTMLElement ? ratingTarget.dataset.jobRating : null;
+      const ratingJobId = ratingTarget instanceof HTMLElement ? ratingTarget.dataset.jobId : null;
       if (ratingValue && ratingJobId) {
         await rateJob(panel, ratingJobId, Number(ratingValue));
         return;
       }
-      const action = target.dataset.jobAction;
-      const jobId = target.dataset.jobId;
+      const actionTarget = target.closest('[data-job-action]');
+      const action = actionTarget instanceof HTMLElement ? actionTarget.dataset.jobAction : null;
+      const jobId = actionTarget instanceof HTMLElement ? actionTarget.dataset.jobId : null;
       if (!action || !jobId) return;
 
       if (action === 'stop') {
@@ -91,6 +102,16 @@ export function setupEventListeners(panel) {
 
       if (action === 'export') {
         await exportJobResults(panel, jobId);
+      }
+
+      if (action === 'export-format') {
+        const formatId =
+          actionTarget instanceof HTMLElement ? actionTarget.dataset.exportFormat : null;
+        const menu = actionTarget.closest('.export-menu');
+        menu?.classList.remove('is-open');
+        menu?.querySelector('.export-menu-trigger')?.setAttribute('aria-expanded', 'false');
+        const selectedFormats = formatId && formatId !== 'selected' ? [formatId] : null;
+        await exportJobResults(panel, jobId, selectedFormats);
       }
 
       if (action === 'load-script') {

@@ -43,12 +43,16 @@ import {
 } from '../src/ui/settings/viewerSettings.js';
 import { PARAM_SCHEMA } from '../src/config/schema.js';
 
-test('index.html places the output-folder action in the simulation jobs header', () => {
+test('index.html places clear-failed and refresh in the simulations summary', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
   assert.match(
     html,
-    /<div class="simulation-jobs-header-actions">[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"/
+    /<summary>[\s\S]*<span>Simulations<\/span>[\s\S]*id="clear-failed-jobs-btn"[\s\S]*id="refresh-jobs-btn"[\s\S]*<\/summary>/
+  );
+  assert.doesNotMatch(
+    html,
+    /<div class="simulation-jobs-header-actions">[\s\S]*id="refresh-jobs-btn"/
   );
   assert.doesNotMatch(html, /id="choose-folder-btn"/);
   assert.doesNotMatch(html, /id="simulation-jobs-source-label"/);
@@ -786,8 +790,8 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
       'Simulation section must be present'
     );
     assert.ok(
-      allText.some((t) => t === 'Task Exports'),
-      'Task Exports section must be present'
+      allText.some((t) => t === 'Export Settings'),
+      'Export Settings section must be present'
     );
     assert.ok(
       allText.some((t) => t === 'Workspace'),
@@ -799,11 +803,11 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
     );
     assert.ok(
       createdElements.some((el) => el.id === 'simmanage-default-sort'),
-      'Task Exports should expose a default task sort control'
+      'Export Settings should expose a default task sort control'
     );
     assert.ok(
       createdElements.some((el) => el.id === 'simmanage-min-rating'),
-      'Task Exports should expose a minimum rating filter control'
+      'Export Settings should expose a minimum rating filter control'
     );
     assert.ok(
       createdElements.some((el) => el.id === 'settings-choose-folder-btn'),

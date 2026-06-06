@@ -4,10 +4,16 @@ import {
   getCurrentSimulationManagementSettings,
   saveSimulationManagementSettings,
 } from '../settings/simulationManagementSettings.js';
-import { selectOutputFolder } from '../fileOps.js';
-import { subscribeFolderWorkspace } from '../workspace/folderWorkspace.js';
+import {
+  fetchWorkspacePath,
+  getSelectedFolderPath,
+  selectOutputFolder,
+  subscribeFolderWorkspace,
+} from '../workspace/folderWorkspace.js';
 
 const FORMAT_LABELS = new Map([
+  ['mwg_config', 'Parameter Config (.txt)'],
+  ['step', 'Waveguide STEP'],
   ['png', 'Chart Images (PNG)'],
   ['csv', 'Frequency Data CSV'],
   ['json', 'Full Results JSON'],
@@ -29,7 +35,7 @@ export function openAutoExportPopup() {
   dialog.className = 'ui-choice-dialog auto-export-dialog';
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
-  dialog.setAttribute('aria-label', 'Auto Export Settings');
+  dialog.setAttribute('aria-label', 'Export Settings');
 
   // Header
   const header = document.createElement('div');
@@ -37,7 +43,7 @@ export function openAutoExportPopup() {
 
   const title = document.createElement('h4');
   title.className = 'ui-choice-title';
-  title.textContent = 'Auto Export';
+  title.textContent = 'Export Settings';
   header.appendChild(title);
 
   const closeBtn = document.createElement('button');
@@ -110,23 +116,52 @@ export function openAutoExportPopup() {
   chooseFolderBtn.type = 'button';
   chooseFolderBtn.className = 'secondary button-compact';
   chooseFolderBtn.textContent = 'Choose Folder';
-  chooseFolderBtn.addEventListener('click', () => selectOutputFolder());
   folderRow.appendChild(chooseFolderBtn);
 
   body.appendChild(folderRow);
+
+  const folderPath = document.createElement('pre');
+  folderPath.className = 'ui-command-box auto-export-folder-path';
+  folderPath.textContent = getSelectedFolderPath() || 'Loading...';
+  body.appendChild(folderPath);
   dialog.appendChild(body);
   backdrop.appendChild(dialog);
 
-  // Folder workspace subscription — updates label live
-  const unsubscribe = subscribeFolderWorkspace(({ label }) => {
-    folderName.textContent = label || 'No folder selected';
-    const hasSelection = label && label !== 'No folder selected';
+  let releaseFocus;
+  let closed = false;
+
+  const labelFromPath = (path) => {
+    const normalized = String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    return normalized ? normalized.split('/').pop() || normalized : '';
+  };
+
+  const updateFolderDisplay = ({ label, path } = {}) => {
+    const effectivePath = path || getSelectedFolderPath();
+    folderName.textContent = label || labelFromPath(effectivePath) || 'No folder selected';
+    folderPath.textContent = effectivePath || 'No output folder selected.';
+    const hasSelection = Boolean(effectivePath) || (label && label !== 'No folder selected');
     chooseFolderBtn.textContent = hasSelection ? 'Change Folder' : 'Choose Folder';
+  };
+
+  chooseFolderBtn.addEventListener('click', async () => {
+    chooseFolderBtn.disabled = true;
+    const selectedPath = await selectOutputFolder();
+    chooseFolderBtn.disabled = false;
+    if (selectedPath) {
+      updateFolderDisplay({ path: selectedPath });
+    }
+  });
+
+  // Folder workspace subscription — updates label and path live
+  const unsubscribe = subscribeFolderWorkspace(updateFolderDisplay);
+
+  fetchWorkspacePath().then((path) => {
+    if (!closed) {
+      updateFolderDisplay({ path });
+    }
   });
 
   // Close logic
-  let releaseFocus;
-  let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
@@ -167,6 +202,6 @@ function persistState() {
   saveSimulationManagementSettings({
     ...current,
     autoExportOnComplete: autoExportEl ? autoExportEl.checked : current.autoExportOnComplete,
-    selectedFormats: selectedFormats.length > 0 ? selectedFormats : current.selectedFormats,
+    selectedFormats,
   });
 }
