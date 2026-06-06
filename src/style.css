@@ -854,11 +854,22 @@ button.secondary:hover:not(:disabled),
 }
 
 .export-menu {
+  --export-menu-gap: 4px;
   position: relative;
   display: inline-flex;
   width: 100%;
   min-width: 0;
   margin: 0;
+}
+
+.export-menu::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 89;
+  width: max(100%, 180px);
+  height: var(--export-menu-gap);
 }
 
 .export-menu-trigger {
@@ -876,7 +887,7 @@ button.secondary:hover:not(:disabled),
 
 .export-menu-list {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + var(--export-menu-gap));
   left: 0;
   z-index: 90;
   display: grid;
@@ -1501,6 +1512,10 @@ details.section > details.simulation-mesh-diagnostics-window {
 
 .simulation-job-actions .export-menu-list {
   min-width: 168px;
+}
+
+.simulation-job-actions .export-menu::before {
+  width: max(100%, 168px);
 }
 
 .simulation-job-actions .export-menu-list button {
