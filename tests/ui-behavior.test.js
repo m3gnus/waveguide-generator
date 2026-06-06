@@ -59,6 +59,21 @@ test('index.html places clear-failed and refresh in the simulations summary', ()
   assert.doesNotMatch(html, /id="output-folder-row"/);
 });
 
+test('export menu hover bridge covers the visible dropdown gap', () => {
+  const css = fs.readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
+
+  assert.match(css, /\.export-menu\s*\{[\s\S]*--export-menu-gap:\s*4px;/);
+  assert.match(
+    css,
+    /\.export-menu::before\s*\{[\s\S]*top:\s*100%;[\s\S]*width:\s*max\(100%,\s*180px\);[\s\S]*height:\s*var\(--export-menu-gap\);/
+  );
+  assert.match(css, /\.export-menu-list\s*\{[\s\S]*top:\s*calc\(100% \+ var\(--export-menu-gap\)\);/);
+  assert.match(
+    css,
+    /\.simulation-job-actions\s+\.export-menu::before\s*\{[\s\S]*width:\s*max\(100%,\s*168px\);/
+  );
+});
+
 test('normalizeParamInput parses numeric literals consistently', () => {
   assert.equal(normalizeParamInput('1.0'), 1);
   assert.equal(normalizeParamInput(' 1e3 '), 1000);
