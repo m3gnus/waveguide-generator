@@ -336,6 +336,9 @@ test("ExportModule STEP task requests a single-layer inner-surface export", asyn
     assert.equal(payload.enc_depth, 0);
     assert.equal(payload.wall_thickness, 0);
     assert.equal(payload.quadrants, 1234);
+    assert.equal(payload.n_angular, 100);
+    assert.equal(payload.n_length, 60);
+    assert.equal(payload.corner_segments, 8);
 
     assert.equal(files.length, 1);
     assert.equal(files[0].fileName, "demo.step");

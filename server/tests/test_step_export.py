@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 import unittest
 from types import SimpleNamespace
@@ -208,6 +209,31 @@ class StepExportAdapterTest(unittest.TestCase):
         with patch.dict(sys.modules, {"gmsh": FakeGmsh()}):
             with self.assertRaisesRegex(RuntimeError, "without surface face geometry"):
                 mesher_adapter._write_inner_surface_step(inner_points)
+
+    def test_step_writer_preserves_morphed_mouth_interval_as_explicit_face(self):
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh is not installed")
+
+        n_phi = 12
+        z_values = [0.0, 40.0, 80.0, 120.0]
+        inner_points = np.zeros((n_phi, len(z_values), 3), dtype=float)
+        for i in range(n_phi):
+            phi = 2.0 * np.pi * i / n_phi
+            for j, z in enumerate(z_values):
+                blend = j / (len(z_values) - 1)
+                half_w = 40.0 + 140.0 * blend
+                half_h = 40.0 + 40.0 * blend
+                x = half_w * np.sign(np.cos(phi)) * abs(np.cos(phi))
+                y = half_h * np.sign(np.sin(phi)) * abs(np.sin(phi))
+                inner_points[i, j] = [x, y, z]
+
+        step_text = mesher_adapter._write_inner_surface_step(inner_points)
+
+        self.assertEqual(step_text.count("ADVANCED_FACE"), len(z_values) - 1)
+        self.assertGreaterEqual(step_text.count("B_SPLINE_SURFACE"), len(z_values) - 1)
+        self.assertRegex(step_text, re.compile(r"\b120(?:\.0+)?\b"))
 
     def test_inner_surface_step_adapter_forces_bare_full_domain_config(self):
         captured_configs = []

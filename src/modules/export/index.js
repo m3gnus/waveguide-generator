@@ -268,7 +268,12 @@ async function runStepExportTask(input, options = {}) {
 
   input.onStatus?.('Building inner-surface STEP...');
 
-  const meshParams = prepareBackendMeshExportParams(input.params);
+  const stepParams = densifyForSmoothTessellation({
+    ...input.params,
+    encDepth: 0,
+    wallThickness: 0,
+  });
+  const meshParams = prepareBackendMeshExportParams(stepParams);
   const requestPayload = buildWaveguidePayload(meshParams, '2.2');
   requestPayload.enc_depth = 0;
   requestPayload.wall_thickness = 0;
