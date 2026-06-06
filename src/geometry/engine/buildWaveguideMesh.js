@@ -1,7 +1,8 @@
 import { orientMeshConsistently } from '../meshIntegrity.js';
 import { validateMeshQuality } from '../quality.js';
 import { debugError } from '../../logging/debug.js';
-import { DEFAULTS, MORPH_TARGETS } from './constants.js';
+import { DEFAULTS } from './constants.js';
+import { hasConfiguredMorphDimension, isMorphActive } from './morphing.js';
 import { buildAngleList } from './mesh/angles.js';
 import { addEnclosureGeometry } from './mesh/enclosure.js';
 import { addFreestandingWallGeometry } from './mesh/freestandingWall.js';
@@ -74,9 +75,10 @@ export function buildWaveguideMesh(params, options = {}) {
   const ringCount = angleList.length;
   const fullCircle = true;
 
-  const morphTarget = Number(meshParams.morphTarget || MORPH_TARGETS.NONE);
   const needsMorphTargets =
-    morphTarget !== MORPH_TARGETS.NONE && (!meshParams.morphWidth || !meshParams.morphHeight);
+    isMorphActive(meshParams, 0) &&
+    (!hasConfiguredMorphDimension(meshParams, 'morphWidth') ||
+      !hasConfiguredMorphDimension(meshParams, 'morphHeight'));
   const morphTargets = needsMorphTargets
     ? buildMorphTargets(meshParams, lengthSteps, angleList, sliceMap, profileContext)
     : null;
