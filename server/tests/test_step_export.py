@@ -132,12 +132,15 @@ class StepExportAdapterTest(unittest.TestCase):
         self.assertEqual(len(fake_gmsh.model.occ.points), 15)
         self.assertEqual(len(fake_gmsh.model.occ.bsplines), 3)
         self.assertEqual(len(fake_gmsh.model.occ.wires), 3)
-        self.assertEqual(len(fake_gmsh.model.occ.thru_sections), 1)
-        surface_wire_tags, kwargs = fake_gmsh.model.occ.thru_sections[0]
-        self.assertEqual(surface_wire_tags, (1, 2, 3))
-        self.assertEqual(kwargs["makeSolid"], False)
-        self.assertEqual(kwargs["makeRuled"], False)
-        self.assertEqual(kwargs["maxDegree"], 3)
+        self.assertEqual(len(fake_gmsh.model.occ.thru_sections), 2)
+        first_wire_tags, first_kwargs = fake_gmsh.model.occ.thru_sections[0]
+        second_wire_tags, second_kwargs = fake_gmsh.model.occ.thru_sections[1]
+        self.assertEqual(first_wire_tags, (1, 2))
+        self.assertEqual(second_wire_tags, (2, 3))
+        for kwargs in (first_kwargs, second_kwargs):
+            self.assertEqual(kwargs["makeSolid"], False)
+            self.assertEqual(kwargs["makeRuled"], False)
+            self.assertEqual(kwargs["maxDegree"], 3)
 
         mouth_ring = {tuple(point) for point in inner_points[:, -1, :].tolist()}
         exported_points = set(fake_gmsh.model.occ.points)

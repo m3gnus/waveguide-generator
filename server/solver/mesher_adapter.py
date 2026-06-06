@@ -260,10 +260,10 @@ def _assert_step_has_geometry(step_text: str) -> None:
 def _write_inner_surface_step(inner_points: np.ndarray) -> str:
     """Write a single-layer inner horn surface STEP file from mesher point-grid data.
 
-    The STEP contains one open B-spline surface body lofted through the sampled
-    rings. Exporting each sampled grid cell as its own planar face produces STEP
-    containers that some CAD importers accept syntactically but treat as empty
-    or faulty geometry.
+    The STEP contains one open B-spline surface strip per sampled axial interval.
+    Exporting a single global loft lets OpenCASCADE simplify away section
+    boundaries in some CAD importers; exporting each ring-to-ring interval keeps
+    the final mouth slice as an explicit face.
     """
 
     import gmsh
@@ -298,12 +298,13 @@ def _write_inner_surface_step(inner_points: np.ndarray) -> str:
                 )
             curve = int(gmsh.model.occ.addBSpline(point_tags))
             wire_tags.append(int(gmsh.model.occ.addWire([curve], checkClosed=True)))
-        gmsh.model.occ.addThruSections(
-            wire_tags,
-            makeSolid=False,
-            makeRuled=False,
-            maxDegree=3,
-        )
+        for j in range(n_cols - 1):
+            gmsh.model.occ.addThruSections(
+                [wire_tags[j], wire_tags[j + 1]],
+                makeSolid=False,
+                makeRuled=False,
+                maxDegree=3,
+            )
         gmsh.model.occ.synchronize()
 
         with tempfile.NamedTemporaryFile(prefix="waveguide-inner-", suffix=".step", delete=False) as tmp:
