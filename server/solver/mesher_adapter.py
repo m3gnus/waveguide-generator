@@ -260,10 +260,9 @@ def _assert_step_has_geometry(step_text: str) -> None:
 def _write_inner_surface_step(inner_points: np.ndarray) -> str:
     """Write a single-layer inner horn surface STEP file from mesher point-grid data.
 
-    The STEP contains one open B-spline surface strip per sampled axial interval.
-    Exporting a single global loft lets OpenCASCADE simplify away section
-    boundaries in some CAD importers; exporting each ring-to-ring interval keeps
-    the final mouth slice as an explicit face.
+    The STEP contains one open B-spline loft through all sampled section rings.
+    Construction curves are removed after the loft so CAD importers do not show
+    one separate browser object for every sampled slice.
     """
 
     import gmsh
@@ -289,6 +288,7 @@ def _write_inner_surface_step(inner_points: np.ndarray) -> str:
         gmsh.model.add("WaveguideInnerSurface")
 
         wire_tags: list[int] = []
+        construction_curve_tags: list[int] = []
         for j in range(n_cols):
             point_tags: list[int] = []
             for i in list(range(n_phi)) + [0]:
@@ -297,14 +297,18 @@ def _write_inner_surface_step(inner_points: np.ndarray) -> str:
                     int(gmsh.model.occ.addPoint(float(x), float(y), float(z)))
                 )
             curve = int(gmsh.model.occ.addBSpline(point_tags))
+            construction_curve_tags.append(curve)
             wire_tags.append(int(gmsh.model.occ.addWire([curve], checkClosed=True)))
-        for j in range(n_cols - 1):
-            gmsh.model.occ.addThruSections(
-                [wire_tags[j], wire_tags[j + 1]],
-                makeSolid=False,
-                makeRuled=False,
-                maxDegree=3,
-            )
+        gmsh.model.occ.addThruSections(
+            wire_tags,
+            makeSolid=False,
+            makeRuled=False,
+            maxDegree=3,
+        )
+        gmsh.model.occ.remove(
+            [(1, tag) for tag in construction_curve_tags],
+            recursive=True,
+        )
         gmsh.model.occ.synchronize()
 
         with tempfile.NamedTemporaryFile(prefix="waveguide-inner-", suffix=".step", delete=False) as tmp:
