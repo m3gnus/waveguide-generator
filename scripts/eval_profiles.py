@@ -30,6 +30,7 @@ from hornlab_mesher.profile_morph import (
     _invert_osse_coverage_angle,
     _rounded_rect_radius,
 )
+from hornlab_mesher.profile_sampling import build_point_grid
 
 import numpy as np
 
@@ -180,6 +181,10 @@ def main():
             payload.get("t_values", []),
             payload.get("phi_values", []),
         )
+        json.dump(results, sys.stdout)
+
+    elif mode == "point_grid":
+        results = build_point_grid(normalise_params(payload["config"]))
         json.dump(results, sys.stdout)
 
     else:

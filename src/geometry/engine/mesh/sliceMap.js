@@ -1,4 +1,4 @@
-import { evalParam } from '../../common.js';
+import { resolveOsseLengthConfig } from '../profiles/osse.js';
 
 function buildResolutionMap(lengthSteps, resT, resM) {
   if (!Number.isFinite(resT) || !Number.isFinite(resM) || resT <= 0 || resM <= 0) return null;
@@ -11,10 +11,9 @@ function buildResolutionMap(lengthSteps, resT, resM) {
   });
 }
 
-function buildThroatSegmentMap(lengthSteps, throatSegments, extLen, slotLen, L) {
+function buildThroatSegmentMap(lengthSteps, throatSegments, extLen, slotLen, totalLength) {
   if (throatSegments <= 0 || throatSegments >= lengthSteps) return null;
 
-  const totalLength = L + extLen + slotLen;
   const extFraction = (extLen + slotLen) / totalLength;
 
   if (extFraction <= 0 || extFraction >= 1) return null;
@@ -42,9 +41,7 @@ export function buildSliceMap(params, lengthSteps) {
   if (resolutionMap) return resolutionMap;
 
   const throatSegments = Number(params.throatSegments || 0);
-  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, 0));
-  const slotLen = Math.max(0, evalParam(params.slotLength || 0, 0));
-  const L = Math.max(0, evalParam(params.L || 0, 0));
+  const { extLen, slotLen, totalLength } = resolveOsseLengthConfig(params, 0);
 
-  return buildThroatSegmentMap(lengthSteps, throatSegments, extLen, slotLen, L);
+  return buildThroatSegmentMap(lengthSteps, throatSegments, extLen, slotLen, totalLength);
 }

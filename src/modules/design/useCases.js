@@ -23,6 +23,7 @@ export function importMWGConfig(content, fileName) {
     }
 
     if (!isMWGConfig(content)) {
+      typedParams._athLengthMode = 'total';
       applyAthImportDefaults(parsed, typedParams);
     }
 

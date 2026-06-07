@@ -20,6 +20,30 @@ function computeOsseTermRadius(z, L, s, n, q) {
   return ((s * L) / q) * (1 - Math.pow(1 - Math.pow(zNorm, n), 1 / n));
 }
 
+export function resolveOsseLengthConfig(params, p, options = {}) {
+  const rawL = options.L ?? evalParam(params.L, p);
+  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
+  const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
+  const lengthMode = options.lengthMode ?? params._athLengthMode;
+
+  if (lengthMode === 'total') {
+    const totalLength = Math.max(0, rawL);
+    return {
+      L: Math.max(0, totalLength - extLen - slotLen),
+      totalLength,
+      extLen,
+      slotLen,
+    };
+  }
+
+  return {
+    L: Math.max(0, rawL),
+    totalLength: Math.max(0, rawL + extLen + slotLen),
+    extLen,
+    slotLen,
+  };
+}
+
 export function computeOsseRadius(z, p, params, overrides = {}) {
   const L = overrides.L ?? evalParam(params.L, p);
   const a = toRad(overrides.aDeg ?? evalParam(params.a, p));
@@ -156,10 +180,7 @@ export function calculateOSSE(z, p, params, options = {}) {
     return { x: NaN, y: NaN };
   }
 
-  const L = options.L ?? evalParam(params.L, p);
-  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
-  const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
-  const totalLength = L + extLen + slotLen;
+  const { L, totalLength, extLen, slotLen } = resolveOsseLengthConfig(params, p, options);
   const extAngleRad = toRad(evalParam(params.throatExtAngle || 0, p));
 
   const r0Base = evalParam(params.r0, p);

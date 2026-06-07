@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { handleFileUpload } from '../src/app/configImport.js';
+import { importMWGConfig } from '../src/modules/design/useCases.js';
 import {
   deriveExportFieldsFromFileName,
   resetParameterChangeTracking,
@@ -132,4 +133,27 @@ test('handleFileUpload leaves output fields unchanged on parse failure and still
     GlobalState.update = originalUpdate;
     console.error = originalConsoleError;
   }
+});
+
+test('ATH flat config maps diameter aliases and marks total-length mode', () => {
+  const result = importMWGConfig(
+    `
+Coverage.Angle = 52
+Length = 150
+Slot.Length = 45 - 0*sin(p)
+Throat.Diameter = 36
+OS.k = 0.9
+Term.n = 3
+Term.q = 0.996
+Term.s = 0.9
+`,
+    'm2-clone.cfg'
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.type, 'OSSE');
+  assert.equal(result.params.r0, 18);
+  assert.equal(result.params.L, 150);
+  assert.equal(result.params.slotLength, '45 - 0*sin(p)');
+  assert.equal(result.params._athLengthMode, 'total');
 });
