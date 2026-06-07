@@ -39,6 +39,22 @@ function formatCount(count) {
   return n.toLocaleString();
 }
 
+function formatLengthMeters(meters) {
+  const n = Number(meters);
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (n === 0) return '0 mm';
+
+  if (Math.abs(n) < 1) {
+    const mm = n * 1000;
+    const absMm = Math.abs(mm);
+    const decimals = absMm >= 100 ? 0 : absMm >= 10 ? 1 : 2;
+    return `${mm.toFixed(decimals)} mm`;
+  }
+
+  const decimals = Math.abs(n) >= 10 ? 1 : 2;
+  return `${n.toFixed(decimals)} m`;
+}
+
 function resolveMeshStats(results = null, job = null) {
   const metadata = isObject(results?.metadata) ? results.metadata : null;
   const candidates = [
@@ -51,6 +67,47 @@ function resolveMeshStats(results = null, job = null) {
   ];
 
   return candidates.find((candidate) => isObject(candidate)) || null;
+}
+
+function resolveDimensionValue(dimensions, name) {
+  if (!isObject(dimensions)) return null;
+  const value = Number(dimensions[name] ?? dimensions[`${name}_m`] ?? dimensions[`${name}M`]);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function resolveBoundsDimension(bounds, minKey, maxKey) {
+  if (!isObject(bounds)) return null;
+  const min = Number(bounds[minKey] ?? bounds[minKey.replace('_', '')]);
+  const max = Number(bounds[maxKey] ?? bounds[maxKey.replace('_', '')]);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  const value = max - min;
+  return value >= 0 ? value : null;
+}
+
+function resolveWaveguideDimensions(meshStats) {
+  if (!isObject(meshStats)) return null;
+
+  const dimensions =
+    (isObject(meshStats.dimensions_m) && meshStats.dimensions_m) ||
+    (isObject(meshStats.dimensionsM) && meshStats.dimensionsM) ||
+    (isObject(meshStats.dimensions) && meshStats.dimensions) ||
+    null;
+  let width = resolveDimensionValue(dimensions, 'width');
+  let height = resolveDimensionValue(dimensions, 'height');
+  let depth = resolveDimensionValue(dimensions, 'depth');
+
+  if (width == null || height == null || depth == null) {
+    const bounds =
+      (isObject(meshStats.bounds_m) && meshStats.bounds_m) ||
+      (isObject(meshStats.boundsM) && meshStats.boundsM) ||
+      (isObject(meshStats.bounds) && meshStats.bounds) ||
+      null;
+    width = width ?? resolveBoundsDimension(bounds, 'min_x', 'max_x');
+    height = height ?? resolveBoundsDimension(bounds, 'min_z', 'max_z');
+    depth = depth ?? resolveBoundsDimension(bounds, 'min_y', 'max_y');
+  }
+
+  return width != null && height != null && depth != null ? { width, height, depth } : null;
 }
 
 function formatDegrees(value) {
@@ -369,6 +426,7 @@ export function renderSolveStatsSummary(results = null, job = null) {
   const meshStats = resolveMeshStats(results, job);
   const vertexCount = meshStats?.vertex_count ?? meshStats?.vertexCount;
   const triangleCount = meshStats?.triangle_count ?? meshStats?.triangleCount;
+  const waveguideDimensions = resolveWaveguideDimensions(meshStats);
 
   const obsDistM = Number(directivity?.effective_distance_m ?? observation?.effective_distance_m);
   const requestedObsDistM = Number(
@@ -406,6 +464,17 @@ export function renderSolveStatsSummary(results = null, job = null) {
   }
   if (Number.isFinite(triangleCount)) {
     items.push({ label: 'Triangles', value: formatCount(triangleCount) });
+  }
+  if (waveguideDimensions) {
+    const height = formatLengthMeters(waveguideDimensions.height);
+    const depth = formatLengthMeters(waveguideDimensions.depth);
+    const width = formatLengthMeters(waveguideDimensions.width);
+    if (height && depth && width) {
+      items.push({
+        label: 'Waveguide shape',
+        value: `Height ${height}, Depth ${depth}, Width ${width}`,
+      });
+    }
   }
 
   if (Number.isFinite(obsDistM)) {
@@ -475,10 +544,10 @@ export function renderSolveStatsSummary(results = null, job = null) {
     .join('');
 
   return `
-    <section class="view-results-summary" aria-label="Solve statistics summary">
+    <section class="view-results-summary" aria-label="Simulation summary">
       <div class="view-results-summary-header">
         <div class="view-results-summary-copy">
-          <div class="view-results-summary-title">Solve Statistics</div>
+          <div class="view-results-summary-title">Simulation Summary</div>
         </div>
       </div>
       <div class="view-results-summary-grid">${itemsMarkup}</div>

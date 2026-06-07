@@ -28,9 +28,6 @@ import {
   getCurrentSimAdvancedSettings,
   getSolverBackend,
   getUseBurtonMiller,
-  getQuadratureRegular,
-  getWorkgroupSizeMultiple,
-  getAssemblyBackend,
   saveSimAdvancedSettings,
 } from './simAdvancedSettings.js';
 import {
@@ -93,36 +90,13 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   solverBackend:
-    'Selects the acoustic solver used by submitted jobs. Auto uses Metal BEM on supported Apple Silicon systems, otherwise BEMPP.',
+    'Chooses the solver for new jobs. Auto uses Metal BEM when it is ready, otherwise BEMPP.',
   useBurtonMiller:
-    'Eliminates fictitious interior resonances by adding hypersingular operator coupling to the BEM formulation. ' +
-    'OFF: ~1.8x faster (assembles 2 operators instead of 4 per frequency). ' +
-    'Risk: SPL deviations of up to 7 dB at frequencies where mesh interior resonances occur. ' +
-    'ON: Accurate and artifact-free, recommended for final/publication solves. ' +
-    'Default: Off (fast exploratory mode).',
-  quadratureRegular:
-    'Gauss quadrature points per element pair for regular integrals. Directly affects operator assembly time. ' +
-    '4: bempp default, highest accuracy. ' +
-    '3: ~1.25x faster, good balance for most work. ' +
-    '2: ~1.35x faster, noticeable accuracy loss at high frequencies. ' +
-    'Set to 4 for final solves. Default: 3 (fast mode).',
-  workgroupSizeMultiple:
-    'OpenCL work-group sizing factor for kernel launches. ' +
-    '1: 30\u201350% faster on CPU-only runtimes (pocl on Apple Silicon, Intel OpenCL on AMD CPUs). ' +
-    '2: bempp default, tuned for discrete GPUs. ' +
-    'No effect on accuracy. Always use 1 on CPU. Default: 1.',
-  assemblyBackend:
-    'Compute backend for operator assembly. ' +
-    'OpenCL: Parallel kernels via pocl (CPU) or GPU driver. Slightly faster with Burton-Miller on. ' +
-    'Numba: JIT-compiled via LLVM. Competitive with OpenCL on CPU, no driver dependencies. ' +
-    'Try both \u2014 performance varies by system. Default: OpenCL.',
+    'BEMPP only. Turns on resonance-safe coupling for final solves; Metal BEM ignores this setting.',
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   solver_backend: { label: 'Solver Backend' },
   use_burton_miller: { label: 'Burton-Miller Coupling' },
-  quadrature_regular: { label: 'Quadrature Order (Regular)' },
-  workgroup_size_multiple: { label: 'OpenCL Workgroup Size' },
-  assembly_backend: { label: 'Assembly Backend' },
 });
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
@@ -821,88 +795,19 @@ function _buildSimulationSection() {
   const advancedIntro = document.createElement('div');
   advancedIntro.className = 'settings-section-help';
   advancedIntro.innerHTML =
-    'These settings control BEM operator assembly speed and accuracy. ' +
-    'Defaults are tuned for fast exploratory sweeps (~1.8x faster). ' +
-    'For final accurate solves, enable Burton-Miller.' +
-    '<br><br>' +
-    '<strong>Benchmarked speedups</strong> (Apple M1 Max, 7732-element mesh, 20 freq):<br>' +
-    '\u2022 <strong>Workgroup Size 1</strong> \u2014 ~30\u201350% faster on CPU OpenCL. No accuracy loss. Always recommended.<br>' +
-    '\u2022 <strong>Burton-Miller off</strong> \u2014 ~1.8x faster (2 operators instead of 4). ' +
-    'May produce SPL deviations of up to 7 dB at certain frequencies where mesh interior resonances occur. ' +
-    'Good for quick exploratory sweeps, not recommended for final results.<br>' +
-    '\u2022 <strong>Quadrature 3</strong> \u2014 ~1.25x faster. Amplifies Burton-Miller artifacts significantly ' +
-    '(up to 28 dB deviation). Only use with Burton-Miller on.<br>' +
-    '\u2022 <strong>Numba backend</strong> \u2014 Competitive with OpenCL on CPU. Good alternative if OpenCL/pocl is unavailable.';
+    'Auto selects Metal BEM when that backend is ready; otherwise it falls back to BEMPP. ' +
+    'The stable public accuracy override is Burton-Miller for BEMPP. ' +
+    'Metal BEM uses its own native solver settings.';
   sec.appendChild(advancedIntro);
 
-  // ── Preset buttons ──
-  const PRESETS = {
-    fast: {
-      ...currentSimAdvanced,
-      useBurtonMiller: false,
-      quadratureRegular: 4,
-      workgroupSizeMultiple: 1,
-      assemblyBackend: 'opencl',
-    },
-    accurate: {
-      ...currentSimAdvanced,
-      useBurtonMiller: true,
-      quadratureRegular: 4,
-      workgroupSizeMultiple: 1,
-      assemblyBackend: 'opencl',
-    },
-  };
-
-  function _applyPreset(preset) {
-    saveSimAdvancedSettings(preset);
-    const sb = document.getElementById('simadvanced-solverBackend');
-    if (sb) sb.value = preset.solverBackend;
-    const ubm = document.getElementById('simadvanced-useBurtonMiller');
-    if (ubm) ubm.checked = preset.useBurtonMiller;
-    const qr = document.getElementById('simadvanced-quadratureRegular');
-    if (qr) qr.value = preset.quadratureRegular;
-    const wg = document.getElementById('simadvanced-workgroupSizeMultiple');
-    if (wg) wg.value = preset.workgroupSizeMultiple;
-    const ab = document.getElementById('simadvanced-assemblyBackend');
-    if (ab) ab.value = preset.assemblyBackend;
-    // Update badges
-    if (typeof ubmBadge !== 'undefined' && ubmBadge)
-      ubmBadge.hidden = preset.useBurtonMiller === SIM_ADVANCED_DEFAULTS.useBurtonMiller;
-    if (typeof sbBadge !== 'undefined' && sbBadge)
-      sbBadge.hidden = preset.solverBackend === SIM_ADVANCED_DEFAULTS.solverBackend;
-    if (typeof qrBadge !== 'undefined' && qrBadge)
-      qrBadge.hidden = preset.quadratureRegular === SIM_ADVANCED_DEFAULTS.quadratureRegular;
-    if (typeof wgBadge !== 'undefined' && wgBadge)
-      wgBadge.hidden = preset.workgroupSizeMultiple === SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple;
-    if (typeof abBadge !== 'undefined' && abBadge)
-      abBadge.hidden = preset.assemblyBackend === SIM_ADVANCED_DEFAULTS.assemblyBackend;
-  }
-
-  const presetRow = document.createElement('div');
-  presetRow.style.cssText = 'display:flex;gap:8px;margin:8px 0 4px;';
-
-  const fastBtn = document.createElement('button');
-  fastBtn.type = 'button';
-  fastBtn.className = 'settings-reset-btn';
-  fastBtn.style.cssText = 'flex:1;padding:6px 12px;font-size:13px;font-weight:600;';
-  fastBtn.textContent = 'Fast';
-  fastBtn.title = 'BM off, quad 4, wg 1 — ~1.5x faster, max 5 dB deviation';
-  fastBtn.addEventListener('click', () => _applyPreset(PRESETS.fast));
-
-  const accurateBtn = document.createElement('button');
-  accurateBtn.type = 'button';
-  accurateBtn.className = 'settings-reset-btn';
-  accurateBtn.style.cssText = 'flex:1;padding:6px 12px;font-size:13px;font-weight:600;';
-  accurateBtn.textContent = 'Accurate';
-  accurateBtn.title = 'BM on, quad 4, wg 1 — artifact-free, recommended for final solves';
-  accurateBtn.addEventListener('click', () => _applyPreset(PRESETS.accurate));
-
-  presetRow.appendChild(fastBtn);
-  presetRow.appendChild(accurateBtn);
-  sec.appendChild(presetRow);
-
   const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
-    _applyPreset({ ...SIM_ADVANCED_DEFAULTS });
+    saveSimAdvancedSettings({ ...SIM_ADVANCED_DEFAULTS });
+    const sb = document.getElementById('simadvanced-solverBackend');
+    if (sb) sb.value = SIM_ADVANCED_DEFAULTS.solverBackend;
+    const ubm = document.getElementById('simadvanced-useBurtonMiller');
+    if (ubm) ubm.checked = SIM_ADVANCED_DEFAULTS.useBurtonMiller;
+    if (typeof sbBadge !== 'undefined' && sbBadge) sbBadge.hidden = true;
+    if (typeof ubmBadge !== 'undefined' && ubmBadge) ubmBadge.hidden = true;
   });
   sec.appendChild(advancedActiveHeader);
 
@@ -930,42 +835,6 @@ function _buildSimulationSection() {
   );
   sec.appendChild(ubmResult.row);
   let ubmBadge = ubmResult.badge;
-
-  const qrResult = _buildSimAdvancedNumberRow(
-    ADVANCED_CONTROL_COPY.quadrature_regular.label,
-    'simadvanced-quadratureRegular',
-    currentSimAdvanced.quadratureRegular,
-    SIM_ADVANCED_DEFAULTS.quadratureRegular,
-    { min: '1', max: '10', step: '1' },
-    SIMULATION_ADVANCED_HELP.quadratureRegular
-  );
-  sec.appendChild(qrResult.row);
-  let qrBadge = qrResult.badge;
-
-  const wgResult = _buildSimAdvancedNumberRow(
-    ADVANCED_CONTROL_COPY.workgroup_size_multiple.label,
-    'simadvanced-workgroupSizeMultiple',
-    currentSimAdvanced.workgroupSizeMultiple,
-    SIM_ADVANCED_DEFAULTS.workgroupSizeMultiple,
-    { min: '1', max: '8', step: '1' },
-    SIMULATION_ADVANCED_HELP.workgroupSizeMultiple
-  );
-  sec.appendChild(wgResult.row);
-  let wgBadge = wgResult.badge;
-
-  const abResult = _buildSimBasicSelectRow(
-    ADVANCED_CONTROL_COPY.assembly_backend.label,
-    'simadvanced-assemblyBackend',
-    [
-      { value: 'opencl', label: 'OpenCL (pocl/CPU)' },
-      { value: 'numba', label: 'Numba (JIT/CPU)' },
-    ],
-    currentSimAdvanced.assemblyBackend,
-    SIM_ADVANCED_DEFAULTS.assemblyBackend,
-    SIMULATION_ADVANCED_HELP.assemblyBackend
-  );
-  sec.appendChild(abResult.row);
-  let abBadge = abResult.badge;
 
   return sec;
 }
@@ -1521,12 +1390,6 @@ function _saveSimAdvancedSettingsFromModal(root) {
     solverBackend: _getControl(root, 'simadvanced-solverBackend')?.value ?? getSolverBackend(),
     useBurtonMiller:
       _getControl(root, 'simadvanced-useBurtonMiller')?.checked ?? getUseBurtonMiller(),
-    quadratureRegular:
-      _getControl(root, 'simadvanced-quadratureRegular')?.value ?? getQuadratureRegular(),
-    workgroupSizeMultiple:
-      _getControl(root, 'simadvanced-workgroupSizeMultiple')?.value ?? getWorkgroupSizeMultiple(),
-    assemblyBackend:
-      _getControl(root, 'simadvanced-assemblyBackend')?.value ?? getAssemblyBackend(),
   });
 }
 

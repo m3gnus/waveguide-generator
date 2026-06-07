@@ -5,6 +5,7 @@ BEM simulation runner — executes a single simulation job asynchronously.
 import asyncio
 import json
 import logging
+import math
 import multiprocessing as mp
 import tempfile
 from pathlib import Path
@@ -120,11 +121,27 @@ def _build_mesh_stats(
     surface_tags: Optional[list[int]] = None,
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    bounds = _build_vertex_bounds(vertices)
     mesh_stats = {
         "vertex_count": len(vertices) // 3,
         "triangle_count": len(indices) // 3,
         "source": source,
     }
+    if bounds is not None:
+        min_x, min_y, min_z, max_x, max_y, max_z = bounds
+        mesh_stats["bounds_m"] = {
+            "min_x": min_x,
+            "min_y": min_y,
+            "min_z": min_z,
+            "max_x": max_x,
+            "max_y": max_y,
+            "max_z": max_z,
+        }
+        mesh_stats["dimensions_m"] = {
+            "width": max_x - min_x,
+            "height": max_z - min_z,
+            "depth": max_y - min_y,
+        }
     if isinstance(surface_tags, list):
         tag_counts = {1: 0, 2: 0, 3: 0, 4: 0}
         for raw_tag in surface_tags:
@@ -142,6 +159,37 @@ def _build_mesh_stats(
             json.dumps(metadata_identity_counts)
         )
     return mesh_stats
+
+
+def _build_vertex_bounds(
+    vertices: list[Any],
+) -> Optional[tuple[float, float, float, float, float, float]]:
+    if len(vertices) < 3:
+        return None
+
+    min_x = min_y = min_z = float("inf")
+    max_x = max_y = max_z = float("-inf")
+    found = False
+    for index in range(0, len(vertices) - 2, 3):
+        try:
+            x = float(vertices[index])
+            y = float(vertices[index + 1])
+            z = float(vertices[index + 2])
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (x, y, z)):
+            continue
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        min_z = min(min_z, z)
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+        max_z = max(max_z, z)
+        found = True
+
+    if not found:
+        return None
+    return min_x, min_y, min_z, max_x, max_y, max_z
 
 
 def _apply_solver_stage_to_job(

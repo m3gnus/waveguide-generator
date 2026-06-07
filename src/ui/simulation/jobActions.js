@@ -5,13 +5,7 @@ import {
   getMeshValidationMode,
   getVerbose,
 } from '../settings/simBasicSettings.js';
-import {
-  getSolverBackend,
-  getUseBurtonMiller,
-  getQuadratureRegular,
-  getWorkgroupSizeMultiple,
-  getAssemblyBackend,
-} from '../settings/simAdvancedSettings.js';
+import { getSolverBackend, getUseBurtonMiller } from '../settings/simAdvancedSettings.js';
 import {
   getCurrentSimulationManagementSettings,
   getTaskListMinRatingFilter,
@@ -641,9 +635,6 @@ export async function runSimulation(panel) {
     solverBackend: getSolverBackend(),
     advancedSettings: {
       useBurtonMiller: getUseBurtonMiller(),
-      quadratureRegular: getQuadratureRegular(),
-      workgroupSizeMultiple: getWorkgroupSizeMultiple(),
-      assemblyBackend: getAssemblyBackend(),
     },
   };
 

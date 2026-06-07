@@ -864,6 +864,19 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
                     "vertex_count": 5,
                     "triangle_count": 4,
                     "source": "hornlab_waveguide_mesher",
+                    "bounds_m": {
+                        "min_x": 0.0,
+                        "min_y": 0.0,
+                        "min_z": 0.0,
+                        "max_x": 1.0,
+                        "max_y": 1.0,
+                        "max_z": 0.5,
+                    },
+                    "dimensions_m": {
+                        "width": 1.0,
+                        "height": 0.5,
+                        "depth": 1.0,
+                    },
                     "tag_counts": {1: 1, 2: 1, 3: 1, 4: 1},
                     "identity_triangle_counts": {
                         "inner_wall": 1,
