@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 
 import { calculateOSSE } from '../src/geometry/engine/profiles/osse.js';
 import { calculateROSSE } from '../src/geometry/engine/profiles/rosse.js';
+import { buildWaveguideMesh } from '../src/geometry/engine/buildWaveguideMesh.js';
 import { getGuidingCurveRadius } from '../src/geometry/engine/profiles/guidingCurve.js';
 import { getRoundedRectRadius, applyMorphing } from '../src/geometry/engine/morphing.js';
 
@@ -113,6 +114,47 @@ const OSSE_CIRCULAR_ARC = {
   circ_arc_radius: 0,
   circArcTermAngle: 18,
   circ_arc_term_angle: 18,
+};
+
+const OSSE_ATH_SLOT_MORPH = {
+  formula_type: 'OSSE',
+  type: 'OSSE',
+  L: 150,
+  a: 52,
+  a0: 0,
+  r0: 18,
+  k: 0.9,
+  s: 0.9,
+  n: 3,
+  q: 0.996,
+  h: 0,
+  throatExtLength: 0,
+  throatExtAngle: 0,
+  slotLength: 45,
+  throat_ext_length: 0,
+  throat_ext_angle: 0,
+  slot_length: 45,
+  throatProfile: 1,
+  throat_profile: 1,
+  rot: 0,
+  gcurveType: 0,
+  gcurve_type: 0,
+  morphTarget: 1,
+  morph_target: 1,
+  morphWidth: 0,
+  morphHeight: 0,
+  morphCorner: 8,
+  morphRate: 3,
+  morphFixed: 0,
+  morphAllowShrinkage: 0,
+  angularSegments: 16,
+  lengthSegments: 8,
+  throatResolution: 1,
+  mouthResolution: 1,
+  wallThickness: 0,
+  encDepth: 0,
+  samplingMode: 'uniform',
+  _athLengthMode: 'total',
 };
 
 // -------------------------------------------------------------------------
@@ -223,6 +265,17 @@ test('OSSE with throat extension has correct radius at extension zone', () => {
   const { y } = calculateOSSE(z, 0, params);
   const expected = params.r0 + z * Math.tan(params.throatExtAngle * Math.PI / 180);
   assert.ok(Math.abs(y - expected) < FUNC_TOL, `extension zone radius: got ${y}, expected ${expected}`);
+});
+
+test('ATH total-length OSSE keeps slot inside Length', () => {
+  const params = OSSE_ATH_SLOT_MORPH;
+  const inSlot = calculateOSSE(44, 0, params);
+  const mouth = calculateOSSE(150, 0, params);
+
+  assert.ok(Math.abs(inSlot.x - 44) < FUNC_TOL);
+  assert.ok(Math.abs(inSlot.y - 18) < FUNC_TOL, `slot radius: got ${inSlot.y}`);
+  assert.ok(Math.abs(mouth.x - 150) < FUNC_TOL);
+  assert.ok(mouth.y < 220, `mouth should use 105 mm OSSE body, got ${mouth.y}`);
 });
 
 test('R-OSSE with throat extension has correct radius at extension zone', () => {
@@ -357,6 +410,66 @@ test('OSSE with throat extension matches Python', { skip: !hasPython && 'Python 
         `OSSE+ext y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
       );
       idx++;
+    }
+  }
+});
+
+test('ATH total-length OSSE profile matches Python', { skip: !hasPython && 'Python not available' }, () => {
+  const tValues = [0, 0.25, 0.3, 0.5, 0.75, 1.0];
+  const pyResults = callPython({
+    mode: 'profiles',
+    config: OSSE_ATH_SLOT_MORPH,
+    t_values: tValues,
+    phi_values: [0],
+  });
+
+  for (let j = 0; j < tValues.length; j++) {
+    const t = tValues[j];
+    const js = calculateOSSE(t * OSSE_ATH_SLOT_MORPH.L, 0, OSSE_ATH_SLOT_MORPH);
+    const py = pyResults[j];
+
+    assert.ok(
+      Math.abs(js.x - py.x) < PROFILE_TOL,
+      `ATH total-length x mismatch at t=${t}: JS=${js.x}, PY=${py.x}`
+    );
+    assert.ok(
+      Math.abs(js.y - py.y) < PROFILE_TOL,
+      `ATH total-length y mismatch at t=${t}: JS=${js.y}, PY=${py.y}`
+    );
+  }
+});
+
+test('ATH slot morph viewport mesh matches Python point grid', { skip: !hasPython && 'Python not available' }, () => {
+  const pyGrid = callPython({
+    mode: 'point_grid',
+    config: OSSE_ATH_SLOT_MORPH,
+  });
+  const mesh = buildWaveguideMesh(OSSE_ATH_SLOT_MORPH, {
+    includeEnclosure: false,
+    omitSource: true,
+  });
+
+  assert.equal(mesh.ringCount, pyGrid.grid_n_phi);
+  assert.equal(OSSE_ATH_SLOT_MORPH.lengthSegments, pyGrid.grid_n_length);
+
+  const nPhi = pyGrid.grid_n_phi;
+  const nLength = pyGrid.grid_n_length;
+  const py = pyGrid.inner_points;
+
+  for (let j = 0; j <= nLength; j++) {
+    for (let i = 0; i < nPhi; i++) {
+      const jsIdx = (j * nPhi + i) * 3;
+      const pyIdx = (i * (nLength + 1) + j) * 3;
+      const jsX = mesh.vertices[jsIdx];
+      const jsY = mesh.vertices[jsIdx + 1];
+      const jsZ = mesh.vertices[jsIdx + 2];
+      const pyX = py[pyIdx];
+      const pyZ = py[pyIdx + 1];
+      const pyY = py[pyIdx + 2];
+
+      assert.ok(Math.abs(jsX - pyX) < PROFILE_TOL, `x mismatch at i=${i}, j=${j}`);
+      assert.ok(Math.abs(jsY - pyY) < PROFILE_TOL, `axial mismatch at i=${i}, j=${j}`);
+      assert.ok(Math.abs(jsZ - pyZ) < PROFILE_TOL, `z mismatch at i=${i}, j=${j}`);
     }
   }
 });

@@ -1,7 +1,7 @@
 import { evalParam } from '../../common.js';
 import { DEFAULTS } from '../constants.js';
 import { applyMorphing, hasConfiguredMorphDimension, isMorphActive } from '../morphing.js';
-import { calculateOSSE } from '../profiles/osse.js';
+import { calculateOSSE, resolveOsseLengthConfig } from '../profiles/osse.js';
 import { calculateROSSE } from '../profiles/rosse.js';
 
 function computeRosseProfileAt(t, p, params) {
@@ -10,10 +10,7 @@ function computeRosseProfileAt(t, p, params) {
 }
 
 export function computeOsseProfileAt(t, p, params, context) {
-  const L = evalParam(params.L, p);
-  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
-  const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
-  const totalLength = L + extLen + slotLen;
+  const { totalLength } = resolveOsseLengthConfig(params, p);
 
   const profile = calculateOSSE(t * totalLength, p, params, {
     gcurveCache: context?.coverageCache || null,
@@ -32,6 +29,13 @@ export function evaluateInnerProfileAt(t, p, params, context) {
     return computeRosseProfileAt(t, p, params);
   }
   return computeOsseProfileAt(t, p, params, context);
+}
+
+function resolveMorphProgress(t, p, params) {
+  if (params.type !== 'OSSE') return t;
+  const { L, totalLength, extLen, slotLen } = resolveOsseLengthConfig(params, p);
+  if (L <= 1e-12 || totalLength <= 1e-12) return t;
+  return Math.min(1, Math.max(0, (t * totalLength - extLen - slotLen) / L));
 }
 
 export function computeMouthExtents(params, context) {
@@ -116,7 +120,8 @@ export function createRingVertices(
         j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
-      const r = applyMorphing(profile.y, mouthProfile.y, t, p, params, morphTargetInfo);
+      const morphT = resolveMorphProgress(t, p, params);
+      const r = applyMorphing(profile.y, mouthProfile.y, morphT, p, params, morphTargetInfo);
 
       vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
     }
@@ -182,10 +187,7 @@ function _sampleEffectiveRadius(params, t, context) {
  * [12, userMax]. Values are monotonically non-decreasing (throat → mouth).
  */
 export function computeAdaptivePhiCounts(params, lengthSteps, sliceMap, userMax, profileContext) {
-  const L = Math.max(0, evalParam(params.L || 0, 0));
-  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, 0));
-  const slotLen = Math.max(0, evalParam(params.slotLength || 0, 0));
-  const totalLength = L + extLen + slotLen;
+  const { totalLength } = resolveOsseLengthConfig(params, 0);
   const TARGET_ASPECT = 1.5;
   const MIN_PHI = 12;
 
@@ -249,7 +251,8 @@ export function createAdaptiveRingVertices(
         j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
-      const r = applyMorphing(profile.y, mouthProfile.y, t, p, params, morphTargetInfo);
+      const morphT = resolveMorphProgress(t, p, params);
+      const r = applyMorphing(profile.y, mouthProfile.y, morphT, p, params, morphTargetInfo);
 
       vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
     }
