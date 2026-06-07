@@ -37,18 +37,18 @@ cd waveguide-generator
 
 Or download the ZIP from [GitHub](https://github.com/m3gnus/waveguide-generator) -> **Code** -> **Download ZIP**, then extract it.
 
-### 3. Install
+### 3. Install / Update
 
-Run once from the project folder, the folder containing `package.json`:
+Run from the project folder, the folder containing `package.json`. Use the same script for first install, repair, and future updates:
 
 | Platform      | Command                          |
 | ------------- | -------------------------------- |
-| macOS / Linux | `bash install/install.sh`        |
-| Windows       | double-click `install/install.bat` |
+| macOS / Linux | `bash install/install-and-update.sh` |
+| Windows       | double-click `install\install-and-update.bat` |
 
-The setup scripts validate that you are in the full project folder, install JavaScript and Python dependencies, and write the preferred backend interpreter to `.waveguide/backend-python.path`.
+The setup scripts validate that you are in the full project folder, pull the latest code when the folder is a Git clone, install JavaScript and Python dependencies, and write the preferred backend interpreter to `.waveguide/backend-python.path`.
 
-Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used. On Apple Silicon, install also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper.
+Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used. On Apple Silicon, install/update also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper.
 
 Network note: backend setup installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs. If Metal BEM is not ready on the host, setup also installs the pinned `bempp-cl` fallback.
 
