@@ -1,5 +1,5 @@
 #!/bin/bash
-# Waveguide Generator — one-time installer for macOS and Linux
+# Waveguide Generator — installer/updater for macOS and Linux
 # Run from the project root: bash install/install.sh
 
 set -euo pipefail
@@ -10,7 +10,7 @@ PREFERRED_PYTHON_FILE="$ROOT/.waveguide/backend-python.path"
 BEMPP_CL_URL="git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  WG - Waveguide Generator — Setup                           ║"
+echo "║  WG - Waveguide Generator — Install / Update                ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -25,6 +25,32 @@ print_project_folder_help() {
     echo "  4. Re-run this script."
     echo ""
     echo "GitHub: https://github.com/m3gnus/waveguide-generator"
+}
+
+update_from_git() {
+    if [[ ! -d ".git" ]]; then
+        echo "Code update skipped: this folder is not a Git clone."
+        echo "ZIP downloads can be repaired by this script, but updating requires downloading a fresh ZIP."
+        echo ""
+        return 0
+    fi
+
+    if ! command -v git >/dev/null 2>&1; then
+        echo "ERROR: This folder is a Git clone, but Git is not installed or not available in PATH."
+        echo "       Install Git, then re-run this script."
+        exit 1
+    fi
+
+    echo "  $(git --version)"
+    echo "Checking for code updates..."
+    if ! git pull --ff-only; then
+        echo ""
+        echo "ERROR: Code update failed."
+        echo "       This installer only performs safe fast-forward updates."
+        echo "       If you have local changes, commit or stash them before updating."
+        exit 1
+    fi
+    echo ""
 }
 
 # ── Project folder sanity check ───────────────────────────────────
@@ -43,6 +69,8 @@ if [[ "$missing" -ne 0 ]]; then
 fi
 echo "  Project folder looks good."
 echo ""
+
+update_from_git
 
 # ── Node.js ────────────────────────────────────────────────────────
 echo "Checking Node.js..."
@@ -366,7 +394,7 @@ fi
 echo ""
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Setup complete!                                             ║"
+echo "║  Install / update complete!                                  ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "To start the app:"

@@ -7,7 +7,7 @@ set "NODEJS_HINT=C:\Program Files\nodejs"
 set "BEMPP_CL_URL=git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 echo ===============================================================
-echo WG - Waveguide Generator Setup
+echo WG - Waveguide Generator Install / Update
 echo ===============================================================
 echo.
 
@@ -35,6 +35,9 @@ if defined ROOT_INVALID (
 )
 echo   Project folder looks good.
 echo.
+
+call :update_from_git
+if errorlevel 1 exit /b 1
 
 call :ensure_node
 if errorlevel 1 exit /b 1
@@ -281,11 +284,39 @@ if errorlevel 1 (
 echo.
 
 echo ===============================================================
-echo Setup complete.
+echo Install / update complete.
 echo ===============================================================
 echo To start the app:
 echo   - Double-click launch\windows.bat
 echo   - Or run: npm.cmd start
+echo.
+exit /b 0
+
+:update_from_git
+if not exist ".git\" (
+    echo Code update skipped: this folder is not a Git clone.
+    echo ZIP downloads can be repaired by this script, but updating requires downloading a fresh ZIP.
+    echo.
+    exit /b 0
+)
+
+where git >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: This folder is a Git clone, but Git is not installed or not available in PATH.
+    echo        Install Git for Windows, then run install\install.bat again.
+    exit /b 1
+)
+
+for /f "tokens=*" %%v in ('git --version') do echo   %%v
+echo Checking for code updates...
+git pull --ff-only
+if errorlevel 1 (
+    echo.
+    echo ERROR: Code update failed.
+    echo        This installer only performs safe fast-forward updates.
+    echo        If you have local changes, commit or stash them before updating.
+    exit /b 1
+)
 echo.
 exit /b 0
 
