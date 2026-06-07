@@ -71,6 +71,25 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       ]),
     }),
     Object.freeze({
+      id: 'preview-mesh',
+      title: 'Viewport Mesh',
+      description:
+        'Live preview tessellation controls. They change viewport smoothness and responsiveness, not the BEM solve mesh.',
+      owner: 'paramPanel',
+      groups: Object.freeze([
+        Object.freeze({
+          group: 'MESH',
+          keys: Object.freeze([
+            'angularSegments',
+            'lengthSegments',
+            'cornerSegments',
+            'throatSegments',
+            'throatSliceDensity',
+          ]),
+        }),
+      ]),
+    }),
+    Object.freeze({
       id: 'profile-path',
       title: 'Profile Path & Guiding Curve',
       description:
@@ -141,25 +160,6 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'sourceCurv',
             'sourceVelocity',
             'sourceContours',
-          ]),
-        }),
-      ]),
-    }),
-    Object.freeze({
-      id: 'preview-mesh',
-      title: 'Preview Mesh',
-      description:
-        'Three.js tessellation controls for the live viewport only. They do not change HornLab mesher or BEM mesh sizes.',
-      owner: 'paramPanel',
-      groups: Object.freeze([
-        Object.freeze({
-          group: 'MESH',
-          keys: Object.freeze([
-            'angularSegments',
-            'lengthSegments',
-            'cornerSegments',
-            'throatSegments',
-            'throatSliceDensity',
           ]),
         }),
       ]),

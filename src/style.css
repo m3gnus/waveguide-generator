@@ -459,7 +459,7 @@ details.section > summary {
   left: 0;
   top: 100%;
   z-index: 100;
-  max-width: 260px;
+  width: min(340px, calc(100vw - 32px));
   padding: 6px 10px;
   background: var(--panel);
   color: var(--text);
@@ -737,7 +737,7 @@ input[type='checkbox'] {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  width: min(240px, 60vw);
+  width: min(340px, calc(100vw - 32px));
   padding: var(--sp-2);
   border-radius: var(--r-md);
   background: var(--panel);

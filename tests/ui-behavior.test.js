@@ -109,6 +109,19 @@ test('mesh control labels separate surface sampling from solve mesh sizing', () 
   assert.match(PARAM_SCHEMA.SIMULATION.numFreqs.tooltip, /number of solved frequencies/i);
 });
 
+test('all generated parameter controls have tooltips', () => {
+  const missing = [];
+  for (const [group, defs] of Object.entries(PARAM_SCHEMA)) {
+    for (const [key, def] of Object.entries(defs)) {
+      if (!String(def.tooltip || '').trim()) {
+        missing.push(`${group}.${key}`);
+      }
+    }
+  }
+
+  assert.deepEqual(missing, []);
+});
+
 test('validateSimulationConfig catches invalid ranges and counts', () => {
   assert.match(
     validateSimulationConfig({
@@ -190,6 +203,27 @@ test('renderSolveStatsSummary includes mesh counts from result metadata', () => 
   assert.match(markup, /144/);
   assert.match(markup, /Triangles/);
   assert.match(markup, /72/);
+});
+
+test('renderSolveStatsSummary includes solved waveguide dimensions from mesh stats', () => {
+  const markup = renderSolveStatsSummary({
+    frequencies: [100, 1000],
+    metadata: {
+      performance: { total_time_seconds: 12.4 },
+      mesh_stats: {
+        vertex_count: 144,
+        triangle_count: 72,
+        dimensions_m: {
+          width: 0.42,
+          height: 0.28,
+          depth: 0.31,
+        },
+      },
+    },
+  });
+
+  assert.match(markup, /Waveguide shape/);
+  assert.match(markup, /Height 280 mm, Depth 310 mm, Width 420 mm/);
 });
 
 test('renderSolveStatsSummary uses persisted directivity metadata for solve settings', () => {

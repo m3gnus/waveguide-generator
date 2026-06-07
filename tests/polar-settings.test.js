@@ -9,7 +9,7 @@ import {
   readPolarStateSettings,
   renderPolarSettingsSection,
   syncPolarControlsFromBlocks,
-  syncPolarControlsFromState
+  syncPolarControlsFromState,
 } from '../src/ui/simulation/polarSettings.js';
 
 function makeDoc(overrides = {}) {
@@ -23,7 +23,7 @@ function makeDoc(overrides = {}) {
     'polar-axis-horizontal': { checked: true },
     'polar-axis-vertical': { checked: true },
     'polar-axis-diagonal': { checked: true },
-    'polar-observation-origin': { value: 'mouth' }
+    'polar-observation-origin': { value: 'mouth' },
   };
 
   Object.entries(overrides).forEach(([id, patch]) => {
@@ -34,7 +34,7 @@ function makeDoc(overrides = {}) {
     getElementById(id) {
       return elements[id] || null;
     },
-    _elements: elements
+    _elements: elements,
   };
 }
 
@@ -61,7 +61,7 @@ class FakeRenderElement {
         const existing = new Set(this.className.split(/\s+/).filter(Boolean));
         tokens.forEach((token) => existing.add(token));
         this.className = Array.from(existing).join(' ');
-      }
+      },
     };
   }
 
@@ -121,14 +121,17 @@ test('readPolarUiSettings returns default all-axis selection', () => {
 
 test('syncPolarControlsFromBlocks maps 90 degrees to vertical axis', () => {
   const doc = makeDoc();
-  syncPolarControlsFromBlocks({
-    'ABEC.Polars:SPL_V': {
-      _items: {
-        MapAngleRange: '0,180,37',
-        Inclination: '90'
-      }
-    }
-  }, doc);
+  syncPolarControlsFromBlocks(
+    {
+      'ABEC.Polars:SPL_V': {
+        _items: {
+          MapAngleRange: '0,180,37',
+          Inclination: '90',
+        },
+      },
+    },
+    doc
+  );
 
   assert.equal(doc._elements['polar-axis-horizontal'].checked, false);
   assert.equal(doc._elements['polar-axis-vertical'].checked, true);
@@ -137,14 +140,17 @@ test('syncPolarControlsFromBlocks maps 90 degrees to vertical axis', () => {
 
 test('syncPolarControlsFromBlocks maps non-cardinal inclination to diagonal and preserves angle', () => {
   const doc = makeDoc();
-  syncPolarControlsFromBlocks({
-    'ABEC.Polars:SPL_D': {
-      _items: {
-        MapAngleRange: '0,180,37',
-        Inclination: '35'
-      }
-    }
-  }, doc);
+  syncPolarControlsFromBlocks(
+    {
+      'ABEC.Polars:SPL_D': {
+        _items: {
+          MapAngleRange: '0,180,37',
+          Inclination: '35',
+        },
+      },
+    },
+    doc
+  );
 
   assert.equal(doc._elements['polar-axis-horizontal'].checked, false);
   assert.equal(doc._elements['polar-axis-vertical'].checked, false);
@@ -154,14 +160,17 @@ test('syncPolarControlsFromBlocks maps non-cardinal inclination to diagonal and 
 
 test('syncPolarControlsFromBlocks maps 270 degrees to vertical axis', () => {
   const doc = makeDoc();
-  syncPolarControlsFromBlocks({
-    'ABEC.Polars:SPL_V': {
-      _items: {
-        MapAngleRange: '0,180,37',
-        Inclination: '270'
-      }
-    }
-  }, doc);
+  syncPolarControlsFromBlocks(
+    {
+      'ABEC.Polars:SPL_V': {
+        _items: {
+          MapAngleRange: '0,180,37',
+          Inclination: '270',
+        },
+      },
+    },
+    doc
+  );
 
   assert.equal(doc._elements['polar-axis-horizontal'].checked, false);
   assert.equal(doc._elements['polar-axis-vertical'].checked, true);
@@ -172,7 +181,7 @@ test('readPolarUiSettings rejects empty axis selection', () => {
   const doc = makeDoc({
     'polar-axis-horizontal': { checked: false },
     'polar-axis-vertical': { checked: false },
-    'polar-axis-diagonal': { checked: false }
+    'polar-axis-diagonal': { checked: false },
   });
   const settings = readPolarUiSettings(doc);
 
@@ -186,7 +195,7 @@ test('buildCanonicalPolarBlocks emits only selected canonical axes with correct 
     polarRange: '0,180,37',
     distance: 2,
     normAngle: 5,
-    diagonalAngle: 33
+    diagonalAngle: 33,
   });
 
   assert.deepEqual(Object.keys(blocks).sort(), ['ABEC.Polars:SPL_D', 'ABEC.Polars:SPL_H']);
@@ -202,10 +211,10 @@ test('readPolarStateSettings derives state-backed settings from canonical blocks
           MapAngleRange: '10,190,19',
           NormAngle: '7',
           Distance: '3',
-          Inclination: '90'
-        }
-      }
-    }
+          Inclination: '90',
+        },
+      },
+    },
   });
 
   assert.equal(settings.ok, true);
@@ -217,14 +226,18 @@ test('readPolarStateSettings derives state-backed settings from canonical blocks
 
 test('buildPolarStatePatchForControl persists explicit state fields and synced canonical blocks', () => {
   const doc = makeDoc({
-    'polar-angle-start': { value: '15' }
+    'polar-angle-start': { value: '15' },
   });
 
-  const patch = buildPolarStatePatchForControl('polar-angle-start', {
-    _blocks: {
-      'Other.Block': { _items: { Foo: 'Bar' } }
-    }
-  }, doc);
+  const patch = buildPolarStatePatchForControl(
+    'polar-angle-start',
+    {
+      _blocks: {
+        'Other.Block': { _items: { Foo: 'Bar' } },
+      },
+    },
+    doc
+  );
 
   assert.equal(patch.polarAngleStart, 15);
   assert.deepEqual(patch.polarEnabledAxes, ['horizontal', 'vertical', 'diagonal']);
@@ -233,13 +246,16 @@ test('buildPolarStatePatchForControl persists explicit state fields and synced c
 });
 
 test('buildPolarStatePatchFromConfig converts job polar config into explicit state keys', () => {
-  const patch = buildPolarStatePatchFromConfig({}, {
-    angle_range: [0, 90, 10],
-    norm_angle: 3,
-    distance: 4,
-    inclination: 22,
-    enabled_axes: ['diagonal']
-  });
+  const patch = buildPolarStatePatchFromConfig(
+    {},
+    {
+      angle_range: [0, 90, 10],
+      norm_angle: 3,
+      distance: 4,
+      inclination: 22,
+      enabled_axes: ['diagonal'],
+    }
+  );
 
   assert.equal(patch.polarAngleStep, 10);
   assert.equal(patch.polarNormAngle, 3);
@@ -251,15 +267,18 @@ test('buildPolarStatePatchFromConfig converts job polar config into explicit sta
 
 test('syncPolarControlsFromState projects explicit state-backed values to the DOM', () => {
   const doc = makeDoc();
-  syncPolarControlsFromState({
-    polarAngleStart: 5,
-    polarAngleEnd: 95,
-    polarAngleStep: 15,
-    polarNormAngle: 2,
-    polarDistance: 6,
-    polarDiagonalAngle: 30,
-    polarEnabledAxes: ['diagonal']
-  }, doc);
+  syncPolarControlsFromState(
+    {
+      polarAngleStart: 5,
+      polarAngleEnd: 95,
+      polarAngleStep: 15,
+      polarNormAngle: 2,
+      polarDistance: 6,
+      polarDiagonalAngle: 30,
+      polarEnabledAxes: ['diagonal'],
+    },
+    doc
+  );
 
   assert.equal(doc._elements['polar-angle-start'].value, '5');
   assert.equal(doc._elements['polar-angle-end'].value, '95');
@@ -284,10 +303,17 @@ test('renderPolarSettingsSection builds the directivity block from polar metadat
   assert.ok(doc.getElementById('polar-axis-horizontal'));
   assert.ok(doc.getElementById('polar-axis-diagonal'));
   assert.ok(doc.getElementById('polar-observation-origin'));
+  assert.equal(doc.getElementById('polar-angle-start').min, '');
+  assert.equal(doc.getElementById('polar-angle-start').max, '');
+  assert.equal(doc.getElementById('polar-distance').min, '0.1');
+  assert.equal(doc.getElementById('polar-distance').max, '');
+  assert.equal(doc.getElementById('polar-inclination').min, '');
+  assert.equal(doc.getElementById('polar-inclination').max, '');
   const section = container.children[0];
   assert.equal(section.children[0].textContent, 'Directivity Map');
   // Description is now a data-tooltip on the summary/section, not a visible child element
-  const tooltipText = section.children[0].attributes?.["data-tooltip"] || section.attributes?.["data-tooltip"] || '';
+  const tooltipText =
+    section.children[0].attributes?.['data-tooltip'] || section.attributes?.['data-tooltip'] || '';
   assert.match(tooltipText, /Polar planes and angular sampling/i);
   assert.equal(container.children.length, 1);
 });
@@ -325,14 +351,17 @@ test('readPolarStateSettings includes observationOrigin in returned settings', (
 });
 
 test('buildPolarStatePatchFromConfig maps observation_origin from polar config', () => {
-  const patch = buildPolarStatePatchFromConfig({}, {
-    angle_range: [0, 180, 37],
-    norm_angle: 5,
-    distance: 2,
-    inclination: 45,
-    enabled_axes: ['horizontal'],
-    observation_origin: 'throat'
-  });
+  const patch = buildPolarStatePatchFromConfig(
+    {},
+    {
+      angle_range: [0, 180, 37],
+      norm_angle: 5,
+      distance: 2,
+      inclination: 45,
+      enabled_axes: ['horizontal'],
+      observation_origin: 'throat',
+    }
+  );
 
   assert.equal(patch.polarObservationOrigin, 'throat');
 });
