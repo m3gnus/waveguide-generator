@@ -33,6 +33,23 @@ function getStorage() {
   return storage;
 }
 
+function paramsEqual(a = {}, b = {}) {
+  const aKeys = Object.keys(a || {});
+  const bKeys = Object.keys(b || {});
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.hasOwn(b, key) || !Object.is(a[key], b[key])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function stateEqual(a, b) {
+  if (!a || !b) return false;
+  return a.type === b.type && paramsEqual(a.params || {}, b.params || {});
+}
+
 export function normalizePersistedState(candidate) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     return null;
@@ -85,22 +102,22 @@ export class AppState {
   }
 
   update(newParams, modelType = null) {
+    const paramsPatch = newParams && typeof newParams === 'object' ? newParams : {};
+    const nextState = {
+      type: modelType || this.current.type,
+      params: modelType
+        ? { ...getDefaults(modelType), ...paramsPatch }
+        : { ...this.current.params, ...paramsPatch },
+    };
+    if (stateEqual(this.current, nextState)) {
+      return false;
+    }
+
     // Create deep copy for history
     const previousState = JSON.parse(JSON.stringify(this.current));
     this.pushHistory(previousState);
 
-    if (modelType) {
-      this.current.type = modelType;
-      // If switching types, merge new defaults with existing compatible params?
-      // For now, simpler: getting defaults for new type and carrying over common ones implies
-      // a sophisticated merge strategy.
-      // Phase 1 strategy: If type changes, load defaults for that type + preserve shared params.
-      const defaults = getDefaults(modelType);
-      this.current.params = { ...defaults, ...newParams };
-    } else {
-      // Just updating params
-      this.current.params = { ...this.current.params, ...newParams };
-    }
+    this.current = nextState;
 
     this._stateVersion++;
     this.saveToStorage();
@@ -108,14 +125,19 @@ export class AppState {
     // Emit with context including previous state and agent
     AppEvents.emit('state:updated', this.current, {
       previousState,
-      changedParams: newParams,
+      changedParams: paramsPatch,
       modelTypeChanged: modelType !== null,
       source: 'AppState.update',
     });
+    return true;
   }
 
   // Replace entire state (e.g. loading config file)
   loadState(newState, source = 'config-load') {
+    if (stateEqual(this.current, newState)) {
+      return false;
+    }
+
     const previousState = JSON.parse(JSON.stringify(this.current));
     this.pushHistory(previousState);
 
@@ -127,6 +149,7 @@ export class AppState {
       source: `AppState.loadState(${source})`,
       fullReplace: true,
     });
+    return true;
   }
 
   pushHistory(state) {

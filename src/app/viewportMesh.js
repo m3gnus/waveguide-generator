@@ -3,7 +3,10 @@
  * smooth island independently. This catches mouth rims, enclosure corners,
  * throat caps, and other hard edges without relying on mesh group names.
  */
+import { createPerfTimer } from '../logging/performance.js';
+
 export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
+  const perf = createPerfTimer('detachCreaseVertices');
   const vertices = Array.isArray(mesh.vertices)
     ? mesh.vertices.slice()
     : Array.from(mesh.vertices || []);
@@ -19,6 +22,7 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
   const triCount = Math.floor(indices.length / 3);
 
   if (triCount === 0) {
+    perf.end({ empty: true });
     return { vertices, indices, groups, normals };
   }
 
@@ -53,6 +57,7 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
     faceNy[t] = ny;
     faceNz[t] = nz;
   }
+  perf.mark('face-normals', { triangleCount: triCount });
 
   const edgeToTris = new Map();
   for (let t = 0; t < triCount; t += 1) {
@@ -70,6 +75,7 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
       list.push(t);
     }
   }
+  perf.mark('edge-adjacency', { edgeCount: edgeToTris.size });
 
   const cosThreshold = Math.cos((thresholdDeg * Math.PI) / 180);
   const creaseEdges = new Set();
@@ -83,6 +89,7 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
   }
 
   if (creaseEdges.size === 0) {
+    perf.end({ creaseEdgeCount: 0, vertexCount: vertices.length / 3, triangleCount: triCount });
     return { vertices, indices, groups, normals };
   }
 
@@ -183,7 +190,13 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
     }
   }
 
-  return { vertices, indices, groups, normals };
+  const result = { vertices, indices, groups, normals };
+  perf.end({
+    creaseEdgeCount: creaseEdges.size,
+    vertexCount: vertices.length / 3,
+    triangleCount: triCount,
+  });
+  return result;
 }
 
 function normalizeTriangleRange(range, triangleCount) {
