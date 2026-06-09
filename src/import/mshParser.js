@@ -5,6 +5,8 @@
  * and per-triangle physical tags from a Gmsh 2.2 ASCII mesh file.
  */
 
+import { createPerfTimer } from '../logging/performance.js';
+
 /**
  * Parse a Gmsh 2.2 MSH text string.
  *
@@ -17,7 +19,9 @@
  * }}
  */
 export function parseMSH(text) {
+  const perf = createPerfTimer('parseMSH');
   const lines = text.split('\n');
+  perf.mark('split-lines', { lineCount: lines.length });
   let cursor = 0;
 
   const nextLine = () => {
@@ -47,6 +51,7 @@ export function parseMSH(text) {
   if (!advanceTo('$EndMeshFormat')) {
     throw new Error('Missing $EndMeshFormat');
   }
+  perf.mark('mesh-format');
 
   // --- $PhysicalNames (optional) ---
   const physicalNames = new Map();
@@ -70,6 +75,7 @@ export function parseMSH(text) {
     // Rewind if $PhysicalNames not found — it's optional
     cursor = savedCursor;
   }
+  perf.mark('physical-names', { physicalNameCount: physicalNames.size });
 
   // --- $Nodes ---
   if (!advanceTo('$Nodes')) {
@@ -81,8 +87,8 @@ export function parseMSH(text) {
     throw new Error(`Invalid node count: ${nodeCountLine}`);
   }
 
-  // Temporary storage keyed by 1-based ID
-  const nodeMap = new Map();
+  const vertices = new Float32Array(nodeCount * 3);
+  const idToIndex = new Map();
   let maxNodeId = 0;
   for (let i = 0; i < nodeCount; i++) {
     const nline = nextLine();
@@ -92,25 +98,17 @@ export function parseMSH(text) {
     const x = parseFloat(parts[1]);
     const y = parseFloat(parts[2]);
     const z = parseFloat(parts[3]);
-    nodeMap.set(id, [x, y, z]);
+    vertices[i * 3] = x;
+    vertices[i * 3 + 1] = y;
+    vertices[i * 3 + 2] = z;
+    idToIndex.set(id, i);
     if (id > maxNodeId) maxNodeId = id;
   }
   if (!advanceTo('$EndNodes')) {
     throw new Error('Missing $EndNodes');
   }
-
-  // Build contiguous vertex array with 0-based mapping
-  // If IDs are 1..N contiguous, map directly: 0-based index = id - 1
-  const vertices = new Float32Array(nodeCount * 3);
-  const idToIndex = new Map();
-  let idx = 0;
-  for (const [id, [x, y, z]] of nodeMap) {
-    vertices[idx * 3] = x;
-    vertices[idx * 3 + 1] = y;
-    vertices[idx * 3 + 2] = z;
-    idToIndex.set(id, idx);
-    idx++;
-  }
+  perf.mark('nodes-read', { nodeCount, maxNodeId });
+  perf.mark('vertices-built', { vertexCount: nodeCount });
 
   // --- $Elements ---
   if (!advanceTo('$Elements')) {
@@ -122,36 +120,47 @@ export function parseMSH(text) {
     throw new Error(`Invalid element count: ${elemCountLine}`);
   }
 
-  const triIndices = [];
-  const triTags = [];
+  const triIndices = new Uint32Array(elemCount * 3);
+  const triTags = new Uint32Array(elemCount);
+  let triCount = 0;
 
   for (let i = 0; i < elemCount; i++) {
     const eline = nextLine();
     if (!eline) throw new Error('Unexpected end in $Elements');
-    const parts = eline.split(/\s+/).map(Number);
+    const parts = eline.split(/\s+/);
     // parts: [id, type, num-tags, tag1, tag2, ..., n1, n2, n3]
-    const elemType = parts[1];
+    const elemType = parseInt(parts[1], 10);
     if (elemType !== 2) continue; // skip non-triangle elements
 
-    const numTags = parts[2];
-    const physicalTag = numTags > 0 ? parts[3] : 0;
+    const numTags = parseInt(parts[2], 10);
+    const physicalTag = numTags > 0 ? parseInt(parts[3], 10) : 0;
     const nodeOffset = 3 + numTags;
-    const n1 = parts[nodeOffset];
-    const n2 = parts[nodeOffset + 1];
-    const n3 = parts[nodeOffset + 2];
+    const n1 = parseInt(parts[nodeOffset], 10);
+    const n2 = parseInt(parts[nodeOffset + 1], 10);
+    const n3 = parseInt(parts[nodeOffset + 2], 10);
 
-    triIndices.push(idToIndex.get(n1), idToIndex.get(n2), idToIndex.get(n3));
-    triTags.push(physicalTag);
+    const triOffset = triCount * 3;
+    triIndices[triOffset] = idToIndex.get(n1);
+    triIndices[triOffset + 1] = idToIndex.get(n2);
+    triIndices[triOffset + 2] = idToIndex.get(n3);
+    triTags[triCount] = physicalTag;
+    triCount++;
   }
+  perf.mark('elements-read', { elementCount: elemCount, triangleCount: triCount });
 
   if (!advanceTo('$EndElements')) {
     throw new Error('Missing $EndElements');
   }
 
-  return {
+  const result = {
     vertices,
-    indices: new Uint32Array(triIndices),
+    indices: triIndices.slice(0, triCount * 3),
     physicalNames,
-    physicalTags: new Uint32Array(triTags),
+    physicalTags: triTags.slice(0, triCount),
   };
+  perf.end({
+    vertexCount: result.vertices.length / 3,
+    triangleCount: result.indices.length / 3,
+  });
+  return result;
 }

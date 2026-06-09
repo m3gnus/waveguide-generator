@@ -5,6 +5,7 @@ import { DesignModule } from '../design/index.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { prepareViewportTessellationParams } from '../../geometry/tessellation.js';
+import { createPerfTimer } from '../../logging/performance.js';
 
 function requireViewportState(state) {
   if (!state || typeof state !== 'object') {
@@ -33,6 +34,7 @@ function assertViewportMeshResponse(payload) {
  * look artificially faceted.
  */
 export function prepareViewportMesh(state, { variant = 'grid' } = {}) {
+  const perf = createPerfTimer(`prepareViewportMesh:${variant}`);
   const viewportState = requireViewportState(state);
   const designTask = DesignModule.task(
     DesignModule.importState(viewportState, {
@@ -40,25 +42,34 @@ export function prepareViewportMesh(state, { variant = 'grid' } = {}) {
     })
   );
   const preparedParams = DesignModule.output.preparedParams(designTask);
+  perf.mark('design-params');
   const useAdaptive = variant === 'smooth';
   const geometryParams = prepareViewportTessellationParams(preparedParams, { variant });
+  perf.mark('viewport-tessellation');
   const geometryTask = GeometryModule.task(GeometryModule.importPrepared(geometryParams), {
     adaptivePhi: useAdaptive,
   });
   const geometryShape = GeometryModule.output.shape(geometryTask);
+  perf.mark('geometry-shape');
   const { vertices, indices, groups, normals } = buildGeometryMeshFromShape(geometryShape, {
     adaptivePhi: useAdaptive,
+  });
+  perf.end({
+    vertexCount: vertices.length / 3,
+    triangleCount: indices.length / 3,
   });
 
   return { vertices, indices, groups, normals, preparedParams, variant };
 }
 
 export function validateViewportMesh(mesh = {}, options = {}) {
+  const perf = createPerfTimer('validateViewportMesh');
   const { strict = false } = options;
   const vertices = mesh.vertices || [];
   const indices = mesh.indices || [];
 
   if (indices.length === 0) {
+    perf.end({ empty: true });
     return { ok: true, errors: [], report: null };
   }
 
@@ -81,10 +92,17 @@ export function validateViewportMesh(mesh = {}, options = {}) {
   }
 
   if (errors.length > 0 && strict) {
+    perf.end({ ok: false, strict: true });
     throw new Error(`Viewport mesh integrity violation:\n  - ${errors.join('\n  - ')}`);
   }
 
-  return { ok: errors.length === 0, errors, report };
+  const result = { ok: errors.length === 0, errors, report };
+  perf.end({
+    ok: result.ok,
+    vertexCount,
+    triangleCount: indices.length / 3,
+  });
+  return result;
 }
 
 /**

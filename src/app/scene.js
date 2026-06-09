@@ -10,10 +10,19 @@ import {
 } from '../viewer/index.js';
 import { prepareViewportMesh, validateViewportMesh } from '../modules/geometry/useCases.js';
 import { detachCreaseVertices } from './viewportMesh.js';
-import { GlobalState, ImportedMeshState } from '../state.js';
+import { ImportedMeshState } from '../state.js';
 import { AppEvents } from '../events.js';
+import { PARAM_SCHEMA } from '../config/schema.js';
+import { createPerfTimer, measurePerf } from '../logging/performance.js';
 
 const GRID_DISPLAY_MODES = new Set(['wireframe', 'solidwire']);
+const VIEWPORT_CACHE_SCHEMA_GROUPS = ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE'];
+const VIEWPORT_CACHE_PARAM_KEYS = new Set();
+for (const group of VIEWPORT_CACHE_SCHEMA_GROUPS) {
+  for (const key of Object.keys(PARAM_SCHEMA[group] || {})) {
+    VIEWPORT_CACHE_PARAM_KEYS.add(key);
+  }
+}
 
 function variantForDisplayMode(mode) {
   return GRID_DISPLAY_MODES.has(mode) ? 'grid' : 'smooth';
@@ -24,12 +33,21 @@ function resetMeshCache(app) {
   app._currentMeshVariant = null;
 }
 
+function getViewportStateCacheKey(state = {}) {
+  const type = state.type || '';
+  const params = state.params || {};
+  const modelKeys = Object.keys(PARAM_SCHEMA[type] || {});
+  const keyParts = [`type:${type}`];
+
+  for (const key of [...modelKeys, ...VIEWPORT_CACHE_PARAM_KEYS].sort()) {
+    keyParts.push(`${key}:${JSON.stringify(params[key])}`);
+  }
+  return keyParts.join('|');
+}
+
 function invalidateMeshCacheIfStale(app) {
   if (!app._meshCache) resetMeshCache(app);
-  const versionKey =
-    typeof GlobalState.getVersion === 'function'
-      ? GlobalState.getVersion()
-      : JSON.stringify(app.currentState || {});
+  const versionKey = getViewportStateCacheKey(app.currentState || {});
   if (app._meshCache.stateKey !== versionKey) {
     app._meshCache.grid = null;
     app._meshCache.smooth = null;
@@ -38,21 +56,33 @@ function invalidateMeshCacheIfStale(app) {
 }
 
 function buildVariantMesh(state, variant) {
+  const perf = createPerfTimer(`viewportMesh:${variant}`);
   const viewportMesh = prepareViewportMesh(state, { variant });
+  perf.mark('prepareViewportMesh', {
+    vertexCount: viewportMesh.vertices.length / 3,
+    triangleCount: viewportMesh.indices.length / 3,
+  });
   const renderMesh = detachCreaseVertices(viewportMesh);
+  perf.mark('detachCreaseVertices', {
+    vertexCount: renderMesh.vertices.length / 3,
+    triangleCount: renderMesh.indices.length / 3,
+  });
   const integrity = validateViewportMesh(renderMesh);
+  perf.mark('validateViewportMesh', { ok: integrity.ok });
   if (!integrity.ok) {
     console.error(
       `[Viewport] Mesh integrity violation after detachCreaseVertices (${variant}):\n  - ${integrity.errors.join('\n  - ')}`,
       integrity.report
     );
   }
-  return {
+  const result = {
     vertices: renderMesh.vertices,
     indices: renderMesh.indices,
     normals: renderMesh.normals,
     preparedParams: viewportMesh.preparedParams,
   };
+  perf.end();
+  return result;
 }
 
 function getOrBuildVariant(app, variant) {
@@ -158,24 +188,37 @@ export function renderModel(app) {
 
   // Imported mesh mode — render imported data instead of parametric model
   if (ImportedMeshState.active && ImportedMeshState.vertices && ImportedMeshState.indices) {
-    clearSceneMesh(app);
-    removeOverlays(app);
-    applyMeshToScene(app, ImportedMeshState.vertices, ImportedMeshState.indices, {});
-
-    // Color-code by physical group tags if available
-    if (ImportedMeshState.physicalTags && app.hornMesh) {
-      const colors = buildPhysicalGroupColors(
-        ImportedMeshState.vertices,
-        ImportedMeshState.indices,
-        ImportedMeshState.physicalTags
-      );
-      app.hornMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-      app.hornMesh.material.dispose();
-      app.hornMesh.material = new THREE.MeshPhongMaterial({
-        vertexColors: true,
-        side: THREE.DoubleSide,
-      });
+    const mode = app.uiCoordinator.readDisplayModeSetting();
+    const cache = app._importedMeshRenderCache;
+    if (
+      cache &&
+      cache.mesh === app.hornMesh &&
+      cache.vertices === ImportedMeshState.vertices &&
+      cache.indices === ImportedMeshState.indices &&
+      cache.physicalTags === ImportedMeshState.physicalTags &&
+      cache.displayMode === mode
+    ) {
+      app.needsRender = true;
+      return;
     }
+    const perf = createPerfTimer('importedMesh:renderModel');
+    applyMeshToScene(app, ImportedMeshState.vertices, ImportedMeshState.indices, {}, null, mode, {
+      physicalTags: ImportedMeshState.physicalTags,
+      imported: true,
+    });
+    perf.end({
+      vertexCount: ImportedMeshState.vertices.length / 3,
+      triangleCount: ImportedMeshState.indices.length / 3,
+      displayMode: mode,
+      physicalTags: Boolean(ImportedMeshState.physicalTags),
+    });
+    app._importedMeshRenderCache = {
+      mesh: app.hornMesh,
+      vertices: ImportedMeshState.vertices,
+      indices: ImportedMeshState.indices,
+      physicalTags: ImportedMeshState.physicalTags,
+      displayMode: mode,
+    };
     app.needsRender = true;
     return;
   }
@@ -202,43 +245,51 @@ export function renderModel(app) {
   app.needsRender = true;
 }
 
-function clearSceneMesh(app) {
-  if (!app.hornMesh) return;
-  app.scene.remove(app.hornMesh);
-  app.hornMesh.geometry.dispose();
-  app.hornMesh.material.dispose();
-  app.hornMesh = null;
-}
-
 /**
  * Apply vertex/index data to the Three.js scene.
  */
-function applyMeshToScene(app, vertices, indices, preparedParams, normals, mode) {
+function applyMeshToScene(app, vertices, indices, preparedParams, normals, mode, options = {}) {
+  const perf = createPerfTimer(
+    options.imported ? 'importedMesh:applyMeshToScene' : 'applyMeshToScene'
+  );
   if (app.hornMesh) {
     app.scene.remove(app.hornMesh);
     app.hornMesh.geometry.dispose();
     app.hornMesh.material.dispose();
+    app._importedMeshRenderCache = null;
   }
   removeOverlays(app);
 
   app.lastPreparedParams = preparedParams || {};
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('position', createFloatAttribute(vertices, 3));
   geometry.setIndex(createIndexAttribute(indices));
+  perf.mark('attributes-and-index', {
+    vertexCount: vertices.length / 3,
+    triangleCount: indices.length / 3,
+  });
 
   if (normals && normals.length === vertices.length) {
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('normal', createFloatAttribute(normals, 3));
   } else {
-    geometry.computeVertexNormals();
+    measurePerf('BufferGeometry.computeVertexNormals', () => geometry.computeVertexNormals(), {
+      vertexCount: vertices.length / 3,
+      triangleCount: indices.length / 3,
+    });
   }
+  perf.mark('normals');
 
   const displayMode = mode || app.uiCoordinator.readDisplayModeSetting();
-  const material = createMaterialForMode(displayMode, geometry);
+  const material = options.physicalTags
+    ? createPhysicalGroupMaterial(geometry, vertices, indices, options.physicalTags)
+    : createMaterialForMode(displayMode, geometry);
+  perf.mark(options.physicalTags ? 'physical-material' : 'display-material', { displayMode });
 
   app.hornMesh = new THREE.Mesh(geometry, material);
   app.scene.add(app.hornMesh);
   addOverlaysForMode(app, displayMode);
+  perf.mark('scene-attach', { displayMode });
 
   const viewportStats = {
     vertexCount: vertices.length / 3,
@@ -249,6 +300,7 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals, mode)
   } else if (app.stats) {
     app.stats.innerText = `Viewport: ${viewportStats.vertexCount} vertices | ${viewportStats.triangleCount} triangles`;
   }
+  perf.end();
 }
 
 function curvatureJetColor(t) {
@@ -374,6 +426,22 @@ export function buildPhysicalGroupColors(vertices, indices, physicalTags) {
     }
   }
   return colors;
+}
+
+function createPhysicalGroupMaterial(geometry, vertices, indices, physicalTags) {
+  const colors = measurePerf(
+    'physicalTagColors',
+    () => buildPhysicalGroupColors(vertices, indices, physicalTags),
+    {
+      vertexCount: vertices.length / 3,
+      triangleCount: indices.length / 3,
+    }
+  );
+  geometry.setAttribute('color', createFloatAttribute(colors, 3));
+  return new THREE.MeshPhongMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+  });
 }
 
 function removeOverlays(app) {
@@ -503,7 +571,24 @@ export function applyDisplayMode(app, mode) {
 
   removeOverlays(app);
   app.hornMesh.material.dispose();
-  app.hornMesh.material = createMaterialForMode(mode, app.hornMesh.geometry);
+  if (
+    ImportedMeshState.active &&
+    ImportedMeshState.vertices &&
+    ImportedMeshState.indices &&
+    ImportedMeshState.physicalTags
+  ) {
+    app.hornMesh.material = createPhysicalGroupMaterial(
+      app.hornMesh.geometry,
+      ImportedMeshState.vertices,
+      ImportedMeshState.indices,
+      ImportedMeshState.physicalTags
+    );
+    if (app._importedMeshRenderCache?.mesh === app.hornMesh) {
+      app._importedMeshRenderCache.displayMode = mode;
+    }
+  } else {
+    app.hornMesh.material = createMaterialForMode(mode, app.hornMesh.geometry);
+  }
   addOverlaysForMode(app, mode);
   app.needsRender = true;
 }
@@ -610,7 +695,15 @@ function createIndexAttribute(indices) {
   }
   const ArrayType = maxIndex > 65535 ? Uint32Array : Uint16Array;
   const typedIndices = indices instanceof ArrayType ? indices : new ArrayType(indices);
-  return new THREE.BufferAttribute(typedIndices, 1);
+  if (ArrayType === Uint32Array) {
+    return new THREE.Uint32BufferAttribute(typedIndices, 1);
+  }
+  return new THREE.Uint16BufferAttribute(typedIndices, 1);
+}
+
+function createFloatAttribute(values, itemSize) {
+  const typedValues = values instanceof Float32Array ? values : new Float32Array(values);
+  return new THREE.BufferAttribute(typedValues, itemSize);
 }
 
 function updateCameraToggleLabel(label) {
