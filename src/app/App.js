@@ -101,12 +101,30 @@ export class App {
   }
 
   requestRender() {
-    if (!this.renderRequested) {
-      this.renderRequested = true;
-      requestAnimationFrame(() => {
+    // Throttle model rebuilds: geometry rebuilds cost tens of milliseconds, so
+    // rapid state updates (held arrow keys, spinner clicks) would otherwise
+    // saturate the main thread. Leading call is immediate; further requests
+    // inside the window coalesce into one trailing rebuild.
+    const THROTTLE_MS = 90;
+    const now = Date.now();
+    const elapsed = now - (this._lastModelRenderAt || 0);
+    if (elapsed >= THROTTLE_MS) {
+      this._lastModelRenderAt = now;
+      if (!this.renderRequested) {
+        this.renderRequested = true;
+        requestAnimationFrame(() => {
+          this.renderModel();
+          this.renderRequested = false;
+        });
+      }
+      return;
+    }
+    if (!this._trailingRenderTimer) {
+      this._trailingRenderTimer = setTimeout(() => {
+        this._trailingRenderTimer = null;
+        this._lastModelRenderAt = Date.now();
         this.renderModel();
-        this.renderRequested = false;
-      });
+      }, THROTTLE_MS - elapsed);
     }
   }
 

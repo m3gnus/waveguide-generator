@@ -67,13 +67,18 @@ function buildVariantMesh(state, variant) {
     vertexCount: renderMesh.vertices.length / 3,
     triangleCount: renderMesh.indices.length / 3,
   });
-  const integrity = validateViewportMesh(renderMesh);
-  perf.mark('validateViewportMesh', { ok: integrity.ok });
-  if (!integrity.ok) {
-    console.error(
-      `[Viewport] Mesh integrity violation after detachCreaseVertices (${variant}):\n  - ${integrity.errors.join('\n  - ')}`,
-      integrity.report
-    );
+  // The full integrity audit is O(triangles) on every rebuild; it exists to
+  // catch detachCreaseVertices regressions, so it only runs when debugging is
+  // explicitly forced (covered by viewport-render-mesh.test.js otherwise).
+  if (globalThis.__WAVEGUIDE_DEBUG__ === true) {
+    const integrity = validateViewportMesh(renderMesh);
+    perf.mark('validateViewportMesh', { ok: integrity.ok });
+    if (!integrity.ok) {
+      console.error(
+        `[Viewport] Mesh integrity violation after detachCreaseVertices (${variant}):\n  - ${integrity.errors.join('\n  - ')}`,
+        integrity.report
+      );
+    }
   }
   const result = {
     vertices: renderMesh.vertices,
