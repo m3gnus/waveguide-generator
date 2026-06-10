@@ -56,6 +56,10 @@ function resolvePhaseReferenceDistance(results) {
 }
 
 function resolvePhaseTimeConvention(results) {
+  // Reads saved-result metadata only. New results always report a metal backend;
+  // the bempp/device_interface branches remain so historical saved results
+  // (from the removed bempp backend) still render charts with the correct
+  // phase convention.
   const metadata = results?.metadata || {};
   const backend = String(metadata?.solver_backend || '')
     .trim()

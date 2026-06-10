@@ -6,20 +6,13 @@ import asyncio
 import json
 import logging
 import math
-import multiprocessing as mp
 import tempfile
 from pathlib import Path
-from queue import Empty as QueueEmpty
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
-from services.simulation_validation import (
-    apply_solver_backend_quadrant_compatibility,
-    is_hornlab_mesher_strategy,
-    validate_solver_backend_waveguide_compatibility,
-)
+from services.simulation_validation import is_hornlab_mesher_strategy
 from services.solver_runtime import (
-    BEMSolver,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     build_waveguide_mesh,
@@ -32,8 +25,6 @@ from services.job_runtime import (
     _now_iso,
     _keep_task,
     update_job_stage,
-    register_solver_process,
-    unregister_solver_process,
     running_jobs,
     jobs_lock,
     db,
@@ -226,146 +217,6 @@ def _apply_solver_stage_to_job(
         update_job_stage(job_id, str(stage), stage_message=message)
 
 
-_SUBPROCESS_QUEUE_POLL_SECONDS = 0.5
-
-
-async def _run_solve_in_subprocess(
-    job_id: str, mesh: Any, request: "SimulationRequest"
-) -> dict:
-    """
-    Spawn a child process to run the BEM solve, monitor its IPC queue for
-    progress/stage updates, and hard-kill it on cancellation.
-    """
-    from solver.solve import _serialize_mesh_for_subprocess, _solve_subprocess_worker
-
-    serialized_mesh = _serialize_mesh_for_subprocess(mesh)
-
-    # Build the kwargs dict that will be forwarded to solve_optimized() inside the child.
-    # Callbacks are set inside the worker; we only pass serializable scalars here.
-    advanced = (
-        request.advanced_settings.model_dump(exclude_none=True)
-        if request.advanced_settings else None
-    )
-    solve_kwargs: dict = {
-        "frequency_range": list(request.frequency_range),
-        "num_frequencies": request.num_frequencies,
-        "sim_type": request.sim_type,
-        "polar_config": request.polar_config.model_dump() if request.polar_config else None,
-        "verbose": request.verbose,
-        "mesh_validation_mode": request.mesh_validation_mode,
-        "frequency_spacing": request.frequency_spacing,
-        "device_mode": request.device_mode,
-    }
-    if advanced:
-        # Unpack stable runtime settings.
-        _STABLE = {"use_burton_miller", "quadrature_regular", "workgroup_size_multiple", "assembly_backend"}
-        for key in list(advanced.keys()):
-            if key in _STABLE:
-                solve_kwargs[key] = advanced[key]
-
-    ctx = mp.get_context("spawn")
-    progress_queue = ctx.Queue()
-    cancel_event = ctx.Event()
-
-    proc = ctx.Process(
-        target=_solve_subprocess_worker,
-        args=(serialized_mesh, solve_kwargs, progress_queue, cancel_event),
-        daemon=True,
-    )
-    proc.start()
-    register_solver_process(job_id, proc)
-    logger.info("Solver subprocess started for job %s (pid=%s)", job_id, proc.pid)
-
-    try:
-        return await _monitor_solver_subprocess(job_id, proc, progress_queue, cancel_event)
-    finally:
-        unregister_solver_process(job_id)
-        # Ensure the child process is cleaned up.
-        if proc.is_alive():
-            proc.terminate()
-            proc.join(timeout=3)
-            if proc.is_alive():
-                proc.kill()
-                proc.join(timeout=2)
-
-
-async def _monitor_solver_subprocess(
-    job_id: str,
-    proc: "mp.Process",
-    progress_queue: "mp.Queue",
-    cancel_event: "mp.Event",
-) -> dict:
-    """
-    Drain IPC messages from the solver subprocess and update job state.
-
-    Returns the results dict on success, raises on error/cancellation.
-    """
-    loop = asyncio.get_running_loop()
-
-    while True:
-        # Check for cancellation from the job runtime (user pressed Stop).
-        latest = _merge_job_cache_from_db(job_id)
-        if latest and latest.get("cancellation_requested"):
-            cancel_event.set()
-            # Give the subprocess a moment to notice, then hard-kill.
-            proc.terminate()
-            proc.join(timeout=5)
-            if proc.is_alive():
-                proc.kill()
-                proc.join(timeout=3)
-            raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
-
-        # Check if the process died unexpectedly (no message on queue).
-        if not proc.is_alive():
-            # Drain any remaining messages.
-            _drain_remaining = _drain_queue_sync(progress_queue)
-            for msg in _drain_remaining:
-                if msg.get("type") == "result":
-                    return msg["data"]
-                if msg.get("type") == "error":
-                    raise RuntimeError(msg.get("message", "Solver subprocess failed"))
-                if msg.get("type") == "cancelled":
-                    raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
-            raise RuntimeError(
-                f"Solver subprocess exited unexpectedly (exit code {proc.exitcode})"
-            )
-
-        # Poll the queue in a thread to avoid blocking the event loop.
-        try:
-            msg = await loop.run_in_executor(
-                None, lambda: progress_queue.get(timeout=_SUBPROCESS_QUEUE_POLL_SECONDS)
-            )
-        except QueueEmpty:
-            continue
-
-        msg_type = msg.get("type")
-        if msg_type == "result":
-            return msg["data"]
-        if msg_type == "error":
-            raise RuntimeError(msg.get("message", "Solver subprocess failed"))
-        if msg_type == "cancelled":
-            raise SimulationCancelled(SIMULATION_CANCELLED_MESSAGE)
-        if msg_type == "stage":
-            _apply_solver_stage_to_job(
-                job_id, msg.get("stage", ""), msg.get("progress"), msg.get("message")
-            )
-        elif msg_type == "progress":
-            _apply_solver_stage_to_job(
-                job_id, "frequency_solve", msg.get("progress"), None
-            )
-
-
-def _drain_queue_sync(q: "mp.Queue") -> list:
-    """Read all immediately available messages from a multiprocessing.Queue."""
-    messages = []
-    while True:
-        try:
-            messages.append(q.get_nowait())
-        except QueueEmpty:
-            break
-    return messages
-
-
 async def run_simulation(job_id: str, request: SimulationRequest) -> None:
     """Run BEM simulation in background."""
     tmp_msh_path: str | None = None
@@ -400,14 +251,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             mesh_strategy=mesh_strategy,
         )
         request.solver_backend = solver_backend
-        request = apply_solver_backend_quadrant_compatibility(
-            request,
-            solver_backend,
-        )
-        options = request.options if isinstance(request.options, dict) else {}
-        mesh_opts = (
-            options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
-        )
 
         if not is_hornlab_mesher_strategy(mesh_strategy):
             raise RuntimeError(
@@ -430,7 +273,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         _cancellation_callback("Cancellation requested before mesh build started")
         validated = WaveguideParamsRequest(**waveguide_params)
         validated_payload = validated.model_dump()
-        validate_solver_backend_waveguide_compatibility(validated_payload, solver_backend)
         mesher_result = build_waveguide_mesh(
             validated_payload,
             include_canonical=True,
@@ -469,28 +311,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             tmp_msh.write(msh_artifact)
             tmp_msh_path = tmp_msh.name
 
-        if solver_backend == "bempp":
-            solver = BEMSolver()
-            from solver.mesh import load_msh_for_bem
-
-            try:
-                mesh = load_msh_for_bem(tmp_msh_path, scale_factor=1.0)
-            except Exception:
-                canonical = mesher_result.get("canonical_mesh") if isinstance(mesher_result, dict) else None
-                if not isinstance(canonical, dict):
-                    raise
-                vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
-                mesh = solver.prepare_mesh(
-                    vertices,
-                    indices,
-                    surface_tags=surface_tags,
-                    boundary_conditions=request.mesh.boundaryConditions,
-                    mesh_metadata={
-                        **(canonical.get("metadata") or {}),
-                        "unitScaleToMeter": 1.0,
-                    },
-                )
-
         # Extract canonical mesh stats for the job record (informational only).
         mesh_stats = None
         try:
@@ -517,35 +337,27 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 job_id, _stats_exc,
             )
 
-        # Run simulation in a subprocess for hard-kill cancellation support.
         update_job_stage(
             job_id,
             "bem_solve",
             progress=0.30,
-            stage_message=(
-                "Configuring Metal BEM solve"
-                if solver_backend == "metal"
-                else "Configuring BEMPP solve"
-            ),
+            stage_message="Configuring Metal BEM solve",
         )
         _cancellation_callback("Cancellation requested before solve start")
 
-        if solver_backend == "metal":
-            if not tmp_msh_path:
-                raise RuntimeError("Metal BEM solve requires a generated .msh artifact.")
-            results = await asyncio.to_thread(
-                solve_metal_from_msh,
-                tmp_msh_path,
-                request,
-                progress_callback=lambda progress: _apply_solver_stage_to_job(
-                    job_id, "frequency_solve", progress, None
-                ),
-                stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
-                    job_id, stage, progress, message
-                ),
-            )
-        else:
-            results = await _run_solve_in_subprocess(job_id, mesh, request)
+        if not tmp_msh_path:
+            raise RuntimeError("Metal BEM solve requires a generated .msh artifact.")
+        results = await asyncio.to_thread(
+            solve_metal_from_msh,
+            tmp_msh_path,
+            request,
+            progress_callback=lambda progress: _apply_solver_stage_to_job(
+                job_id, "frequency_solve", progress, None
+            ),
+            stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
+                job_id, stage, progress, message
+            ),
+        )
         _cancellation_callback("Cancellation requested before result persistence")
         if mesh_stats and isinstance(results, dict):
             metadata = results.setdefault("metadata", {})

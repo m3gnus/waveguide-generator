@@ -46,10 +46,6 @@ const DIRECTIVITY_PLANE_ORDER = ['horizontal', 'vertical', 'diagonal'];
 const LEGACY_IMPEDANCE_RHO_C = 1.21 * 343.0;
 const LEGACY_IMPEDANCE_THRESHOLD = 20.0;
 
-function resolveApp(panel) {
-  return panel?.app || null;
-}
-
 function normalizeSelectedFormats(formatIds) {
   const seen = new Set();
   const normalized = [];
@@ -324,6 +320,10 @@ function resolvePhaseReferenceDistance(results) {
 }
 
 function resolvePhaseTimeConvention(results) {
+  // Reads saved-result metadata only. New results always report a metal backend;
+  // the bempp/device_interface branches remain so historical saved results
+  // (from the removed bempp backend) still render charts with the correct
+  // phase convention.
   const metadata = results?.metadata || {};
   const backend = String(metadata?.solver_backend || '')
     .trim()
@@ -811,15 +811,10 @@ async function runExportFormat(panel, formatId, options = {}) {
         options
       );
     case 'fusion_csv': {
-      const app = resolveApp(panel);
-      const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
-      const files = buildProfileCsvExportFiles(vertices, {
+      const files = buildProfileCsvExportFiles(null, {
         state: readExportState(),
         baseName,
       });
-      if (!files) {
-        throw new Error('Fusion CSV export requires an active viewport mesh.');
-      }
       return writeExportFiles(
         normalizeGenerationExportFiles(files, 'fusion_csv', baseName),
         options
@@ -1051,16 +1046,11 @@ export async function exportAsWaveguideSTL(panel, options = {}) {
 }
 
 export async function exportAsFusionCurvesCSV(panel, options = {}) {
-  const app = resolveApp(panel);
-  const vertices = app?.hornMesh?.geometry?.attributes?.position?.array;
   const baseName = options.baseName || resolveExportBaseName(options.job);
-  const files = buildProfileCsvExportFiles(vertices, {
+  const files = buildProfileCsvExportFiles(null, {
     state: readExportState(),
     baseName,
   });
-  if (!files) {
-    throw new Error('Fusion CSV export requires an active viewport mesh.');
-  }
   return writeExportFiles(normalizeGenerationExportFiles(files, 'fusion_csv', baseName), {
     ...options,
     baseName,

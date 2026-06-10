@@ -384,8 +384,24 @@ function runProfileCsvExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.PROFILE_CSV);
 
   const csvParams = prepareProfileCsvParams(input.params);
+  const geometryParams = {
+    ...csvParams,
+    encDepth: 0,
+    wallThickness: 0,
+  };
+  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(geometryParams), {
+    includeEnclosure: false,
+    adaptivePhi: false,
+    omitSource: true,
+  });
+  const geometryShape = GeometryModule.output.shape(geometryTask);
+  const mesh = buildGeometryMeshFromShape(geometryShape, {
+    includeEnclosure: false,
+    adaptivePhi: false,
+    omitSource: true,
+  });
   const meshParams = {
-    angularSegments: csvParams.angularSegments,
+    angularSegments: mesh.ringCount,
     lengthSegments: csvParams.lengthSegments,
   };
 
@@ -396,7 +412,7 @@ function runProfileCsvExportTask(input) {
     input,
     files: [
       {
-        content: exportProfilesCSV(input.vertices, meshParams),
+        content: exportProfilesCSV(mesh.vertices, meshParams),
         fileName: `${input.baseName}_profiles.csv`,
         saveOptions: {
           contentType: 'text/csv',
@@ -407,7 +423,7 @@ function runProfileCsvExportTask(input) {
         },
       },
       {
-        content: exportSlicesCSV(input.vertices, meshParams),
+        content: exportSlicesCSV(mesh.vertices, meshParams),
         fileName: `${input.baseName}_slices.csv`,
         saveOptions: {
           contentType: 'text/csv',

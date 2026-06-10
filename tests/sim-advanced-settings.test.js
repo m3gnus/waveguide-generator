@@ -9,6 +9,8 @@ import {
   getCurrentSimAdvancedSettings,
 } from '../src/ui/settings/simAdvancedSettings.js';
 
+const SETTINGS_KEY = 'waveguide-sim-advanced-settings';
+
 const store = {};
 
 global.localStorage = {
@@ -29,8 +31,8 @@ test('RECOMMENDED_DEFAULTS no longer exposes bemPrecision', () => {
 });
 
 test('RECOMMENDED_DEFAULTS has expected keys', () => {
-  assert.equal(typeof RECOMMENDED_DEFAULTS.useBurtonMiller, 'boolean');
   assert.equal(typeof RECOMMENDED_DEFAULTS.solverBackend, 'string');
+  assert.equal('useBurtonMiller' in RECOMMENDED_DEFAULTS, false);
   assert.equal('enableWarmup' in RECOMMENDED_DEFAULTS, false);
   assert.equal('bemPrecision' in RECOMMENDED_DEFAULTS, false);
   assert.equal('quadratureRegular' in RECOMMENDED_DEFAULTS, false);
@@ -41,38 +43,63 @@ test('RECOMMENDED_DEFAULTS has expected keys', () => {
 test('loadSimAdvancedSettings returns RECOMMENDED_DEFAULTS when localStorage is empty', () => {
   global.localStorage.clear();
   const settings = loadSimAdvancedSettings();
-  assert.equal(settings.useBurtonMiller, RECOMMENDED_DEFAULTS.useBurtonMiller);
+  assert.equal(settings.solverBackend, RECOMMENDED_DEFAULTS.solverBackend);
 });
 
-test('saveSimAdvancedSettings persists useBurtonMiller true', () => {
+test('saveSimAdvancedSettings persists metal backend selection', () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
+    solverBackend: 'metal',
+  });
+  const loaded = loadSimAdvancedSettings();
+  assert.equal(loaded.solverBackend, 'metal');
+});
+
+test('saveSimAdvancedSettings coerces removed bempp backend to auto', () => {
+  global.localStorage.clear();
+  saveSimAdvancedSettings({
+    solverBackend: 'bempp',
+  });
+  const loaded = loadSimAdvancedSettings();
+  assert.equal(loaded.solverBackend, 'auto');
+});
+
+test('loadSimAdvancedSettings resets stale schema versions to defaults', () => {
+  global.localStorage.clear();
+  global.localStorage.setItem(
+    SETTINGS_KEY,
+    JSON.stringify({
+      schemaVersion: 5,
+      simAdvanced: { solverBackend: 'bempp', useBurtonMiller: true },
+    })
+  );
+  const loaded = loadSimAdvancedSettings();
+  assert.deepEqual(loaded, { ...RECOMMENDED_DEFAULTS });
+});
+
+test('persisted settings no longer include useBurtonMiller', () => {
+  global.localStorage.clear();
+  saveSimAdvancedSettings({
+    solverBackend: 'metal',
     useBurtonMiller: true,
   });
-  const loaded = loadSimAdvancedSettings();
-  assert.equal(loaded.useBurtonMiller, true);
-});
-
-test('saveSimAdvancedSettings persists useBurtonMiller false', () => {
-  global.localStorage.clear();
-  saveSimAdvancedSettings({
-    useBurtonMiller: false,
-  });
-  const loaded = loadSimAdvancedSettings();
-  assert.equal(loaded.useBurtonMiller, false);
+  const persisted = JSON.parse(global.localStorage.getItem(SETTINGS_KEY));
+  assert.equal('useBurtonMiller' in persisted.simAdvanced, false);
+  assert.deepEqual(persisted.simAdvanced, { solverBackend: 'metal' });
 });
 
 test('resetSimAdvancedSettings restores defaults', () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
-    useBurtonMiller: !RECOMMENDED_DEFAULTS.useBurtonMiller,
+    solverBackend: 'metal',
   });
   const reset = resetSimAdvancedSettings();
-  assert.equal(reset.useBurtonMiller, RECOMMENDED_DEFAULTS.useBurtonMiller);
+  assert.equal(reset.solverBackend, RECOMMENDED_DEFAULTS.solverBackend);
 });
 
 test('getCurrentSimAdvancedSettings returns default advanced settings', () => {
   global.localStorage.clear();
+  loadSimAdvancedSettings();
   const current = getCurrentSimAdvancedSettings();
-  assert.equal(current.useBurtonMiller, RECOMMENDED_DEFAULTS.useBurtonMiller);
+  assert.equal(current.solverBackend, RECOMMENDED_DEFAULTS.solverBackend);
 });

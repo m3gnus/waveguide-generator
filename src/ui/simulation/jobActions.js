@@ -5,7 +5,7 @@ import {
   getMeshValidationMode,
   getVerbose,
 } from '../settings/simBasicSettings.js';
-import { getSolverBackend, getUseBurtonMiller } from '../settings/simAdvancedSettings.js';
+import { getSolverBackend } from '../settings/simAdvancedSettings.js';
 import {
   getCurrentSimulationManagementSettings,
   getTaskListMinRatingFilter,
@@ -633,9 +633,6 @@ export async function runSimulation(panel) {
     frequencySpacing: getFrequencySpacing(),
     verbose: getVerbose(),
     solverBackend: getSolverBackend(),
-    advancedSettings: {
-      useBurtonMiller: getUseBurtonMiller(),
-    },
   };
 
   const polarSettings = readPolarStateSettings(readSimulationState()?.params);

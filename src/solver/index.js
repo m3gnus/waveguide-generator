@@ -47,14 +47,8 @@ function createAbortController(timeoutMs) {
  * @property {Record<string, unknown>|null} [polarConfig]
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
- * @property {'auto'|'bempp'|'metal'} [solverBackend]
+ * @property {'auto'|'metal'} [solverBackend]
  * @property {boolean} [verbose]
- * @property {{
- *   useBurtonMiller?: boolean,
- *   quadratureRegular?: number,
- *   workgroupSizeMultiple?: number,
- *   assemblyBackend?: 'opencl'|'numba',
- * }} [advancedSettings]
  */
 
 /**
@@ -173,7 +167,7 @@ async function fetchOrApiError(url, options, operation, timeoutMs = DEFAULT_TIME
 
 const VALID_MESH_VALIDATION_MODES = new Set(['strict', 'warn', 'off']);
 const VALID_FREQUENCY_SPACING = new Set(['linear', 'log']);
-const VALID_SOLVER_BACKENDS = new Set(['auto', 'bempp', 'metal']);
+const VALID_SOLVER_BACKENDS = new Set(['auto', 'metal']);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
   if (typeof value !== 'string') {
@@ -190,32 +184,6 @@ function assignBooleanSetting(payload, key, value) {
   if (typeof value === 'boolean') {
     payload[key] = value;
   }
-}
-
-function buildAdvancedSettingsPayload(settings) {
-  if (!settings || typeof settings !== 'object') {
-    return null;
-  }
-
-  const payload = {};
-  assignBooleanSetting(payload, 'use_burton_miller', settings.useBurtonMiller);
-  if (
-    typeof settings.quadratureRegular === 'number' &&
-    Number.isFinite(settings.quadratureRegular)
-  ) {
-    payload.quadrature_regular = settings.quadratureRegular;
-  }
-  if (
-    typeof settings.workgroupSizeMultiple === 'number' &&
-    Number.isFinite(settings.workgroupSizeMultiple)
-  ) {
-    payload.workgroup_size_multiple = settings.workgroupSizeMultiple;
-  }
-  if (typeof settings.assemblyBackend === 'string' && settings.assemblyBackend) {
-    payload.assembly_backend = settings.assemblyBackend;
-  }
-
-  return Object.keys(payload).length > 0 ? payload : null;
 }
 
 export class BemSolver {
@@ -240,14 +208,13 @@ export class BemSolver {
   }
 
   /**
-   * Check if backend meshing and at least one solver runtime are ready.
+   * Check if backend meshing and the Metal BEM solver runtime are ready.
    */
   async checkConnection() {
     try {
       const health = await this.getHealthStatus();
-      const bemppReady = Boolean(health?.solverReady || health?.solverBackends?.bempp?.ready);
-      const metalReady = Boolean(health?.solverBackends?.metal?.ready);
-      return Boolean(bemppReady || metalReady) && Boolean(health?.mesherReady);
+      const metalReady = Boolean(health?.solverReady || health?.solverBackends?.metal?.ready);
+      return metalReady && Boolean(health?.mesherReady);
     } catch {
       return false;
     }
@@ -293,10 +260,6 @@ export class BemSolver {
     );
     assignEnumSetting(payload, 'solver_backend', config.solverBackend, VALID_SOLVER_BACKENDS);
     assignBooleanSetting(payload, 'verbose', config.verbose);
-    const advancedSettingsPayload = buildAdvancedSettingsPayload(config.advancedSettings);
-    if (advancedSettingsPayload) {
-      payload.advanced_settings = advancedSettingsPayload;
-    }
 
     const response = await fetchOrApiError(
       `${this.backendUrl}/api/solve`,

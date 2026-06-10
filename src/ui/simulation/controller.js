@@ -1,5 +1,4 @@
 import {
-  applySolverBackendQuadrantCompatibility,
   createSimulationClient,
   prepareHornlabMesherSolveRequest,
 } from '../../modules/simulation/domain.js';
@@ -371,7 +370,6 @@ export function prepareSimulationControllerSubmission(options = {}) {
   return prepareHornlabMesherSolveRequest(readSimulationState(), {
     mshVersion: options.mshVersion || '2.2',
     simType: options.simType ?? 2,
-    solverBackend: options.solverBackend,
   });
 }
 
@@ -387,37 +385,17 @@ export async function submitSimulationControllerJob(
 ) {
   const health = await controller.solver.getHealthStatus();
 
-  const requestedBackend = String(config?.solverBackend || 'auto')
-    .trim()
-    .toLowerCase();
-  const hasBackendReadiness = Boolean(health?.solverBackends);
-  const bemppReady = hasBackendReadiness
-    ? Boolean(health?.solverBackends?.bempp?.ready)
-    : Boolean(health?.solverReady);
-  const metalReady = Boolean(health?.solverBackends?.metal?.ready);
-  const anySolverReady = Boolean(health?.solverReady || bemppReady || metalReady);
-  const backendReady =
-    requestedBackend === 'metal'
-      ? metalReady
-      : requestedBackend === 'auto'
-        ? anySolverReady
-        : bemppReady;
-  const resolvedBackendForPayload =
-    requestedBackend === 'auto' ? (metalReady ? 'metal' : 'bempp') : requestedBackend;
+  const metalReady = Boolean(health?.solverBackends?.metal?.ready ?? health?.solverReady);
 
-  if (!backendReady || !health?.mesherReady) {
+  if (!metalReady || !health?.mesherReady) {
     const cachedHealth = getCachedRuntimeHealth() || health;
-    const dependencyFeature = requestedBackend === 'bempp' ? 'bempp-solve' : 'bem-solve';
-    const blockedReason = getFeatureBlockedReason(cachedHealth, dependencyFeature);
+    const blockedReason = getFeatureBlockedReason(cachedHealth, 'bem-solve');
     throw new Error(
-      blockedReason || 'Selected solver backend and HornLab mesher must be ready to run simulation.'
+      blockedReason || 'Metal BEM solver and HornLab mesher must be ready to run simulation.'
     );
   }
 
-  const waveguidePayload = applySolverBackendQuadrantCompatibility(
-    { ...submission.waveguidePayload },
-    resolvedBackendForPayload
-  );
+  const waveguidePayload = { ...submission.waveguidePayload };
   const submitOptions = {
     ...submission.submitOptions,
     mesh: {

@@ -179,7 +179,6 @@ export function prepareHornlabMesherSolveRequest(state, options = {}) {
   const preparedParams = DesignModule.output.simulationParams(designTask);
   const meshParams = DesignModule.output.backendMeshSimulationParams(designTask);
   const waveguidePayload = buildWaveguidePayload(meshParams, options.mshVersion || '2.2');
-  applySolverBackendQuadrantCompatibility(waveguidePayload, options.solverBackend);
   waveguidePayload.sim_type = options.simType ?? 2;
 
   return {
@@ -193,25 +192,6 @@ export function prepareHornlabMesherSolveRequest(state, options = {}) {
     preparedParams,
     stateSnapshot: JSON.parse(JSON.stringify(state)),
   };
-}
-
-export function solverBackendRequiresFullDomainQuadrants(solverBackend) {
-  const normalized = String(solverBackend || '')
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, '-');
-  return normalized === 'bempp' || normalized === 'bempp-cl';
-}
-
-export function applySolverBackendQuadrantCompatibility(waveguidePayload, solverBackend) {
-  if (
-    waveguidePayload &&
-    typeof waveguidePayload === 'object' &&
-    solverBackendRequiresFullDomainQuadrants(solverBackend)
-  ) {
-    waveguidePayload.quadrants = 1234;
-  }
-  return waveguidePayload;
 }
 
 export function createSimulationClient() {

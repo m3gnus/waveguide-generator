@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Report backend dependency/runtime status for the selected Python interpreter "
-            "(fastapi, gmsh, bempp-cl, OpenCL, bounded solve validation evidence)."
+            "(fastapi, gmsh, hornlab-waveguide-mesher, hornlab-metal-bem)."
         )
     )
     parser.add_argument(
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device-mode",
         default="auto",
-        help="Device mode probe for OpenCL availability (default: auto).",
+        help="Deprecated compatibility flag; ignored.",
     )
     parser.add_argument(
         "--doctor",

@@ -24,6 +24,10 @@ function makePreparedParams(overrides = {}) {
   );
 }
 
+function splitCsvSections(content) {
+  return content.trim().split("\r\n\r\n").map((section) => section.split("\r\n"));
+}
+
 test("ExportModule HornLab mesh task requests backend mesh build and returns canonical payload", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
@@ -137,6 +141,31 @@ test("ExportModule file tasks return save descriptors for STL, CSV, and config",
   assert.equal(configFiles.length, 1);
   assert.equal(configFiles[0].fileName, "demo.txt");
   assert.equal(typeof configFiles[0].content, "string");
+});
+
+test("ExportModule Fusion CSV builds the design export grid instead of using viewport vertices", () => {
+  const prepared = makePreparedParams({
+    encDepth: 180,
+    wallThickness: 8,
+    angularSegments: 8,
+    lengthSegments: 2,
+  });
+
+  const csvTask = ExportModule.task(
+    ExportModule.importProfileCsv(prepared, {
+      vertices: new Float32Array([999, 999, 999]),
+      baseName: "design-grid",
+    }),
+  );
+  const csvFiles = ExportModule.output.files(csvTask);
+  const profiles = splitCsvSections(csvFiles[0].content);
+  const slices = splitCsvSections(csvFiles[1].content);
+
+  assert.equal(profiles.length, 8);
+  assert.ok(profiles.every((section) => section.length === 3));
+  assert.equal(slices.length, 3);
+  assert.ok(slices.every((section) => section.length === 9));
+  assert.equal(csvFiles[0].content.includes("99.900000;99.900000;99.900000"), false);
 });
 
 test("ExportModule STL task uses smooth viewport tessellation density", () => {

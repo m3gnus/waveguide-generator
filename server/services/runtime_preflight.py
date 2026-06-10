@@ -11,9 +11,7 @@ from importlib import metadata
 from importlib.util import find_spec
 from typing import Any, Dict, List, Tuple
 
-from services.solve_readiness import read_bounded_solve_readiness
 from services.solver_runtime import get_dependency_status, metal_backend_status
-from solver.device_interface import selected_device_metadata
 
 DOCTOR_SCHEMA_VERSION = 1
 DOCTOR_STATUS_INSTALLED = "installed"
@@ -45,18 +43,6 @@ def read_matplotlib_runtime() -> Dict[str, Any]:
     return _read_package_runtime("matplotlib", "matplotlib")
 
 
-def read_opencl_device_metadata(preferred_mode: str = "auto") -> Dict[str, Any]:
-    try:
-        metadata_payload = selected_device_metadata(preferred_mode)
-    except Exception as exc:  # pragma: no cover - runtime-specific
-        return {
-            "opencl_available": False,
-            "fallback_reason": f"OpenCL probe failed: {exc}",
-            "warning": f"OpenCL probe failed: {exc}",
-        }
-    return metadata_payload if isinstance(metadata_payload, dict) else {}
-
-
 def _collect_runtime_snapshot(preferred_mode: str = "auto") -> Dict[str, Any]:
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -73,18 +59,14 @@ def _collect_runtime_snapshot(preferred_mode: str = "auto") -> Dict[str, Any]:
         "dependencies": get_dependency_status(),
         "fastapi": read_fastapi_runtime(),
         "matplotlib": read_matplotlib_runtime(),
-        "deviceInterface": read_opencl_device_metadata(preferred_mode),
         "metalBackend": metal_backend_status(),
-        "solveReadiness": read_bounded_solve_readiness(preferred_mode=preferred_mode),
     }
 
 
 def _build_required_checks(
     dependency_status: Dict[str, Any],
     fastapi_runtime: Dict[str, Any],
-    device_metadata: Dict[str, Any],
     metal_backend: Dict[str, Any],
-    solve_readiness: Dict[str, Any],
     platform_payload: Dict[str, Any] | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     runtime = dependency_status.get("runtime") if isinstance(dependency_status, dict) else {}
@@ -96,50 +78,24 @@ def _build_required_checks(
         else {}
     )
     gmsh_runtime = runtime.get("gmsh_python") if isinstance(runtime.get("gmsh_python"), dict) else {}
-    bempp_runtime = runtime.get("bempp") if isinstance(runtime.get("bempp"), dict) else {}
-    supported_modes = (
-        list(device_metadata.get("supported_modes"))
-        if isinstance(device_metadata.get("supported_modes"), list)
-        else []
+    metal_bem_runtime = (
+        runtime.get("hornlab_metal_bem")
+        if isinstance(runtime.get("hornlab_metal_bem"), dict)
+        else {}
     )
-    selection_policy = str(device_metadata.get("selection_policy") or "unknown")
 
     fastapi_ok = bool(fastapi_runtime.get("available"))
     mesher_ok = bool(mesher_runtime.get("ready"))
     gmsh_ok = bool(gmsh_runtime.get("ready"))
-    bempp_ok = bool(bempp_runtime.get("ready"))
-    opencl_ok = bool(device_metadata.get("opencl_available"))
     metal_ok = bool(metal_backend.get("available"))
-    if bempp_runtime:
-        bempp_detail = (
-            "variant="
-            f"{bempp_runtime.get('variant') or 'unknown'} "
-            f"version={bempp_runtime.get('version') or 'unknown'} "
-            f"supported={bempp_runtime.get('supported')}"
-        )
-    elif metal_ok:
-        bempp_detail = "Metal BEM is available; bempp-cl runtime status unavailable."
-    else:
-        bempp_detail = "bempp runtime status unavailable."
-    if metal_ok and not bempp_ok:
-        bempp_detail = "Metal BEM is available; bempp-cl is not required for the default solve path."
 
-    if opencl_ok:
-        opencl_detail = (
-            "selected_mode="
-            f"{device_metadata.get('selected_mode') or 'none'} "
-            f"device={device_metadata.get('device_name') or 'unknown'} "
-            f"supported_modes={','.join(supported_modes) or 'none'} "
-            f"policy={selection_policy}"
+    if metal_ok:
+        metal_detail = (
+            f"version={metal_bem_runtime.get('version') or 'unknown'} "
+            f"native_helper={metal_backend.get('nativeHelperBuild') or 'unknown'}"
         )
-    elif metal_ok:
-        opencl_detail = "Metal BEM is available; OpenCL is only required for the BEMPP solve path."
     else:
-        opencl_detail = str(
-            device_metadata.get("fallback_reason")
-            or device_metadata.get("warning")
-            or "No OpenCL runtime available."
-        )
+        metal_detail = str(metal_backend.get("reason") or "Metal BEM backend is unavailable.")
 
     checks = {
         "fastapi": {
@@ -169,15 +125,10 @@ def _build_required_checks(
                 else "hornlab-waveguide-mesher runtime status unavailable."
             ),
         },
-        "bempp_cl": {
-            "ok": bool(bempp_ok or metal_ok),
+        "hornlab_metal_bem": {
+            "ok": metal_ok,
             "requiredFor": "/api/solve",
-            "detail": bempp_detail,
-        },
-        "opencl_runtime": {
-            "ok": bool(opencl_ok or metal_ok),
-            "requiredFor": "/api/solve",
-            "detail": opencl_detail,
+            "detail": metal_detail,
         },
     }
     metal_release_check = _build_metal_release_helper_required_check(
@@ -187,10 +138,6 @@ def _build_required_checks(
     if metal_release_check is not None:
         checks["metal_release_helper"] = metal_release_check
     return checks
-
-
-def _solve_dependency_category(*, metal_ready: bool) -> str:
-    return DOCTOR_CATEGORY_OPTIONAL if metal_ready else DOCTOR_CATEGORY_REQUIRED
 
 
 def _metal_path_ready(metal_backend: Dict[str, Any]) -> bool:
@@ -237,22 +184,6 @@ def _build_metal_release_helper_required_check(
     }
 
 
-def _bempp_feature_impact(status: str, *, metal_ready: bool) -> str:
-    if status == DOCTOR_STATUS_INSTALLED:
-        return "BEMPP solve backend path is available."
-    if metal_ready:
-        return "BEMPP solve backend path is unavailable; Metal BEM can still run supported solves."
-    return "/api/solve BEM simulation is unavailable."
-
-
-def _opencl_feature_impact(status: str, *, metal_ready: bool) -> str:
-    if status == DOCTOR_STATUS_INSTALLED:
-        return "OpenCL runtime is available for bempp-cl."
-    if metal_ready:
-        return "OpenCL runtime is unavailable; only the Metal BEM solve path is ready."
-    return "/api/solve BEM simulation is unavailable because bempp-cl requires OpenCL."
-
-
 def _resolve_doctor_status(*, available: bool, supported: bool, ready: bool) -> str:
     if not available:
         return DOCTOR_STATUS_MISSING
@@ -290,37 +221,16 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
             "Install backend requirements: pip install -r server/requirements.txt",
             "Verify with selected interpreter: python -c \"import hornlab_mesher; print(hornlab_mesher.__file__)\"",
         ]
-    if component_id == "bempp_cl":
-        guidance = [
-            "Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33",
-        ]
-        if status == DOCTOR_STATUS_UNSUPPORTED:
-            guidance.append("Use supported bempp-cl range: >=0.4,<0.5.")
-        return guidance
-    if component_id == "opencl_runtime":
-        if os_name == "darwin":
-            return [
-                "Install OpenCL CPU runtime: ./scripts/setup-opencl-backend.sh",
-                "Or install pocl via Homebrew: brew install pocl ocl-icd",
-            ]
-        if os_name == "windows":
-            return [
-                "Install/update vendor GPU drivers (NVIDIA/AMD/Intel) that provide OpenCL ICDs.",
-                "CPU-only Intel fallback: install Intel OpenCL Runtime for CPU.",
-            ]
+    if component_id == "hornlab_metal_bem":
         return [
-            "Install Linux OpenCL ICD runtime (CPU fallback): pocl-opencl-icd/pocl.",
-            "Or install vendor GPU OpenCL drivers (NVIDIA/AMD/Intel).",
+            "Install backend requirements: pip install -r server/requirements.txt",
+            "Verify with selected interpreter: python -c \"import hornlab_metal_bem; print(hornlab_metal_bem.__file__)\"",
+            "Metal BEM solves require an Apple Silicon Mac.",
         ]
     if component_id == "metal_release_helper":
         return [
             "Build the release Metal helper: npm run build:metal-helper",
             "If swift is missing, install Xcode Command Line Tools: xcode-select --install",
-        ]
-    if component_id == "bounded_solve_validation":
-        return [
-            "Run bounded solve validation: cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30",
-            "Validation evidence is only recorded when solve runs (do not use --no-solve).",
         ]
     if component_id == "matplotlib":
         return [
@@ -344,15 +254,7 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     fastapi_runtime = snapshot.get("fastapi") if isinstance(snapshot.get("fastapi"), dict) else {}
     matplotlib_runtime = snapshot.get("matplotlib") if isinstance(snapshot.get("matplotlib"), dict) else {}
-    device_metadata = snapshot.get("deviceInterface") if isinstance(snapshot.get("deviceInterface"), dict) else {}
     metal_backend = snapshot.get("metalBackend") if isinstance(snapshot.get("metalBackend"), dict) else {}
-    solve_readiness = snapshot.get("solveReadiness") if isinstance(snapshot.get("solveReadiness"), dict) else {}
-    supported_modes = (
-        list(device_metadata.get("supported_modes"))
-        if isinstance(device_metadata.get("supported_modes"), list)
-        else []
-    )
-    selection_policy = str(device_metadata.get("selection_policy") or "unknown")
 
     gmsh_runtime = runtime.get("gmsh_python") if isinstance(runtime.get("gmsh_python"), dict) else {}
     mesher_runtime = (
@@ -360,7 +262,11 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         if isinstance(runtime.get("hornlab_waveguide_mesher"), dict)
         else {}
     )
-    bempp_runtime = runtime.get("bempp") if isinstance(runtime.get("bempp"), dict) else {}
+    metal_bem_runtime = (
+        runtime.get("hornlab_metal_bem")
+        if isinstance(runtime.get("hornlab_metal_bem"), dict)
+        else {}
+    )
 
     fastapi_available = bool(fastapi_runtime.get("available"))
     fastapi_status = _resolve_doctor_status(
@@ -380,19 +286,12 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         ready=bool(mesher_runtime.get("ready")),
     )
 
-    bempp_status = _resolve_doctor_status(
-        available=bool(bempp_runtime.get("available")),
-        supported=bool(bempp_runtime.get("supported")),
-        ready=bool(bempp_runtime.get("ready")),
-    )
-
-    opencl_available = bool(device_metadata.get("opencl_available"))
-    opencl_status = _resolve_doctor_status(
-        available=opencl_available,
-        supported=opencl_available,
-        ready=opencl_available,
-    )
     metal_ready = _metal_path_ready(metal_backend)
+    metal_status = _resolve_doctor_status(
+        available=bool(metal_bem_runtime.get("available")),
+        supported=bool(metal_bem_runtime.get("supported")),
+        ready=metal_ready,
+    )
     metal_release_helper_ready = _metal_release_helper_ready(metal_backend)
     metal_release_helper_status = (
         DOCTOR_STATUS_INSTALLED if metal_release_helper_ready else DOCTOR_STATUS_MISSING
@@ -403,11 +302,6 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         available=matplotlib_available,
         supported=matplotlib_available,
         ready=matplotlib_available,
-    )
-
-    solve_readiness_ready = bool(solve_readiness.get("ready"))
-    solve_readiness_status = (
-        DOCTOR_STATUS_INSTALLED if solve_readiness_ready else DOCTOR_STATUS_MISSING
     )
 
     components = [
@@ -475,48 +369,25 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
             ),
         },
         {
-            "id": "bempp_cl",
-            "name": "bempp-cl",
-            "category": _solve_dependency_category(metal_ready=metal_ready),
+            "id": "hornlab_metal_bem",
+            "name": "HornLab Metal BEM",
+            "category": DOCTOR_CATEGORY_REQUIRED,
             "requiredFor": "/api/solve",
-            "featureImpact": _bempp_feature_impact(bempp_status, metal_ready=metal_ready),
-            "status": bempp_status,
-            "available": bool(bempp_runtime.get("available")),
-            "supported": bool(bempp_runtime.get("supported")),
-            "ready": bool(bempp_runtime.get("ready")),
-            "version": bempp_runtime.get("version"),
-            "detail": (
-                "variant="
-                f"{bempp_runtime.get('variant') or 'unknown'} "
-                f"version={bempp_runtime.get('version') or 'unknown'} "
-                f"supported={bempp_runtime.get('supported')}"
-                if bempp_runtime
-                else "bempp runtime status unavailable."
+            "featureImpact": (
+                "/api/solve BEM simulation is unavailable."
+                if metal_status != DOCTOR_STATUS_INSTALLED
+                else "Metal BEM solve backend is available."
             ),
-        },
-        {
-            "id": "opencl_runtime",
-            "name": "OpenCL Runtime",
-            "category": _solve_dependency_category(metal_ready=metal_ready),
-            "requiredFor": "/api/solve",
-            "featureImpact": _opencl_feature_impact(opencl_status, metal_ready=metal_ready),
-            "status": opencl_status,
-            "available": opencl_available,
-            "supported": opencl_available,
-            "ready": opencl_available,
-            "version": None,
+            "status": metal_status,
+            "available": bool(metal_bem_runtime.get("available")),
+            "supported": bool(metal_bem_runtime.get("supported")),
+            "ready": metal_ready,
+            "version": metal_bem_runtime.get("version"),
             "detail": (
-                "selected_mode="
-                f"{device_metadata.get('selected_mode') or 'none'} "
-                f"device={device_metadata.get('device_name') or 'unknown'} "
-                f"supported_modes={','.join(supported_modes) or 'none'} "
-                f"policy={selection_policy}"
-                if opencl_available
-                else str(
-                    device_metadata.get("fallback_reason")
-                    or device_metadata.get("warning")
-                    or "No OpenCL runtime available."
-                )
+                f"version={metal_bem_runtime.get('version') or 'unknown'} "
+                f"backend_available={metal_ready}"
+                if metal_bem_runtime
+                else str(metal_backend.get("reason") or "hornlab-metal-bem runtime status unavailable.")
             ),
         },
     ]
@@ -542,52 +413,28 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
         )
 
-    components.extend(
-        [
-            {
-                "id": "bounded_solve_validation",
-                "name": "Bounded solve validation",
-                "category": DOCTOR_CATEGORY_OPTIONAL,
-                "requiredFor": "/api/solve",
-                "featureImpact": (
-                    "/api/solve readiness is unvalidated on this host/runtime."
-                    if solve_readiness_status != DOCTOR_STATUS_INSTALLED
-                    else "Bounded /api/solve runtime validation passed."
-                ),
-                "status": solve_readiness_status,
-                "available": bool(solve_readiness.get("status") not in {"missing", "invalid"}),
-                "supported": bool(
-                    solve_readiness.get("status") not in {"invalid", "stale_host", "mode_mismatch"}
-                ),
-                "ready": solve_readiness_ready,
-                "version": None,
-                "detail": str(
-                    solve_readiness.get("detail")
-                    or "No bounded solve validation evidence available."
-                ),
-            },
-            {
-                "id": "matplotlib",
-                "name": "Matplotlib",
-                "category": DOCTOR_CATEGORY_OPTIONAL,
-                "requiredFor": "chart/directivity image render endpoints",
-                "featureImpact": (
-                    "Chart/directivity image render endpoints are unavailable; solver core paths still work."
-                    if matplotlib_status != DOCTOR_STATUS_INSTALLED
-                    else "Chart/directivity image rendering endpoints are available."
-                ),
-                "status": matplotlib_status,
-                "available": matplotlib_available,
-                "supported": matplotlib_available,
-                "ready": matplotlib_available,
-                "version": matplotlib_runtime.get("version"),
-                "detail": (
-                    f"version={matplotlib_runtime.get('version') or 'unknown'}"
-                    if matplotlib_available
-                    else "matplotlib import failed."
-                ),
-            },
-        ]
+    components.append(
+        {
+            "id": "matplotlib",
+            "name": "Matplotlib",
+            "category": DOCTOR_CATEGORY_OPTIONAL,
+            "requiredFor": "chart/directivity image render endpoints",
+            "featureImpact": (
+                "Chart/directivity image render endpoints are unavailable; solver core paths still work."
+                if matplotlib_status != DOCTOR_STATUS_INSTALLED
+                else "Chart/directivity image rendering endpoints are available."
+            ),
+            "status": matplotlib_status,
+            "available": matplotlib_available,
+            "supported": matplotlib_available,
+            "ready": matplotlib_available,
+            "version": matplotlib_runtime.get("version"),
+            "detail": (
+                f"version={matplotlib_runtime.get('version') or 'unknown'}"
+                if matplotlib_available
+                else "matplotlib import failed."
+            ),
+        }
     )
 
     for component in components:
@@ -649,9 +496,7 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
     required_checks = _build_required_checks(
         dependency_status=snapshot.get("dependencies", {}),
         fastapi_runtime=snapshot.get("fastapi", {}),
-        device_metadata=snapshot.get("deviceInterface", {}),
         metal_backend=snapshot.get("metalBackend", {}),
-        solve_readiness=snapshot.get("solveReadiness", {}),
         platform_payload=snapshot.get("platform", {}),
     )
     all_required_ok = all(bool(check.get("ok")) for check in required_checks.values())
@@ -661,9 +506,7 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
         "interpreter": snapshot.get("interpreter"),
         "dependencies": snapshot.get("dependencies"),
         "fastapi": snapshot.get("fastapi"),
-        "deviceInterface": snapshot.get("deviceInterface"),
         "metalBackend": snapshot.get("metalBackend"),
-        "solveReadiness": snapshot.get("solveReadiness"),
         "requiredChecks": required_checks,
         "allRequiredReady": all_required_ok,
     }
@@ -681,9 +524,7 @@ def collect_runtime_doctor_report(preferred_mode: str = "auto") -> Dict[str, Any
         "components": components,
         "summary": summary,
         "dependencies": snapshot.get("dependencies"),
-        "deviceInterface": snapshot.get("deviceInterface"),
         "metalBackend": snapshot.get("metalBackend"),
-        "solveReadiness": snapshot.get("solveReadiness"),
     }
 
 
@@ -734,8 +575,7 @@ def render_runtime_preflight_text(report: Dict[str, Any]) -> str:
         "fastapi",
         "gmsh_python",
         "hornlab_waveguide_mesher",
-        "bempp_cl",
-        "opencl_runtime",
+        "hornlab_metal_bem",
         "metal_release_helper",
     ):
         payload = required.get(check_id) if isinstance(required.get(check_id), dict) else {}

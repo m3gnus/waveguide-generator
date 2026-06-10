@@ -2,13 +2,6 @@ import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
 
 let cachedRuntimeHealth = null;
 
-function normalizeMode(mode, fallback = 'auto') {
-  const normalized = String(mode || '')
-    .trim()
-    .toLowerCase();
-  return normalized || fallback;
-}
-
 export function cacheRuntimeHealth(health) {
   cachedRuntimeHealth = health && typeof health === 'object' ? health : null;
   return cachedRuntimeHealth;
@@ -31,129 +24,18 @@ export async function fetchRuntimeHealth({
   return health;
 }
 
-export function modeLabel(mode) {
-  switch (normalizeMode(mode, 'unknown')) {
-    case 'opencl_gpu':
-      return 'OpenCL GPU';
-    case 'opencl_cpu':
-      return 'OpenCL CPU';
-    case 'auto':
-      return 'Auto';
-    default:
-      return String(mode || 'Unknown').trim();
-  }
-}
-
 export function describeSelectedDevice(health) {
-  if (
-    String(health?.solver || '')
-      .trim()
-      .toLowerCase() === 'metal-bem'
-  ) {
+  const solver = String(health?.solver || '')
+    .trim()
+    .toLowerCase();
+  if (solver === 'metal-bem') {
     return 'Using: Metal BEM';
   }
-
-  const deviceInfo = health?.deviceInterface;
-  if (!deviceInfo || typeof deviceInfo !== 'object') {
-    return '';
-  }
-
-  const selectedMode = modeLabel(deviceInfo.selected_mode || deviceInfo.requested_mode || 'auto');
-  const deviceName = String(deviceInfo.device_name || '').trim();
-  const hasDeviceName = deviceName && deviceName.toLowerCase() !== 'none';
-  const modeAlreadyMentionsCpu = selectedMode.toLowerCase().includes('cpu');
-  const deviceNameIsCpuLabel = /^cpu$/i.test(deviceName);
-  const shouldShowDeviceSuffix = hasDeviceName && !(modeAlreadyMentionsCpu && deviceNameIsCpuLabel);
-
-  return shouldShowDeviceSuffix
-    ? `Using: ${selectedMode} (${deviceName})`
-    : `Using: ${selectedMode}`;
-}
-
-export function describeSimBasicDeviceAvailability(health, requestedMode = 'auto') {
-  const deviceInfo = health?.deviceInterface;
-  const availability = deviceInfo?.mode_availability;
-  const normalizedRequestedMode = normalizeMode(requestedMode);
-
-  if (!availability || typeof availability !== 'object') {
-    return {
-      unavailableModes: ['opencl_gpu', 'opencl_cpu'],
-      statusText: 'Solver unavailable. Auto mode only.',
-    };
-  }
-
-  const unavailableModes = ['opencl_gpu', 'opencl_cpu'].filter((mode) => {
-    const info = availability[mode];
-    return Boolean(info && info.available === false);
-  });
-
-  if (normalizedRequestedMode !== 'auto' && unavailableModes.includes(normalizedRequestedMode)) {
-    return {
-      unavailableModes,
-      statusText: `${modeLabel(normalizedRequestedMode)} unavailable on this machine.`,
-    };
-  }
-
-  const selectedMode = normalizeMode(deviceInfo?.selected_mode, '');
-  if (normalizedRequestedMode === 'auto' && selectedMode && selectedMode !== 'auto') {
-    return {
-      unavailableModes,
-      statusText: `Auto resolves to: ${modeLabel(selectedMode)}`,
-    };
-  }
-
-  return {
-    unavailableModes,
-    statusText:
-      unavailableModes.length > 0
-        ? `${unavailableModes.length} mode(s) unavailable on this machine`
-        : '',
-  };
-}
-
-/**
- * Return platform-specific OpenCL setup instructions based on OS/arch fields
- * from the health endpoint's opencl_diagnostics.
- *
- * @param {object|null} health - Cached health response from /health
- * @returns {string} Setup help text, or empty string if no guidance is available.
- */
-export function getOpenCLSetupHelp(health) {
-  const diagnostics = health?.deviceInterface?.opencl_diagnostics;
-  if (!diagnostics || typeof diagnostics !== 'object') {
-    return '';
-  }
-
-  const osPlatform = String(diagnostics.os_platform || '').toLowerCase();
-  const osArch = String(diagnostics.os_arch || '').toLowerCase();
-
-  if (osPlatform === 'darwin') {
-    if (osArch === 'arm64' || osArch.startsWith('aarch')) {
-      return 'Install CPU-based OpenCL via pocl: `brew install pocl ocl-icd`';
-    }
-    return 'Check Apple OpenCL driver status. Note: OpenCL is deprecated on macOS 13+.';
-  }
-
-  if (osPlatform === 'linux') {
-    return (
-      'Install the appropriate OpenCL ICD package for your GPU vendor: ' +
-      'intel-opencl-icd, rocm-opencl-runtime, or nvidia-opencl-icd'
-    );
-  }
-
-  if (osPlatform === 'win32') {
-    return 'Install Intel OpenCL Runtime or CUDA toolkit (NVIDIA)';
-  }
-
   return '';
 }
 
 export function summarizeRuntimeCapabilities(health) {
-  const solverReady = Boolean(
-    health?.solverReady ||
-    health?.solverBackends?.bempp?.ready ||
-    health?.solverBackends?.metal?.ready
-  );
+  const solverReady = Boolean(health?.solverReady || health?.solverBackends?.metal?.ready);
   const mesherReady = Boolean(health?.mesherReady);
   const fullyReady = solverReady && mesherReady;
   const advancedCapability = health?.capabilities?.simulationAdvanced;
@@ -191,9 +73,8 @@ export function getDependencyStatusSummary(health) {
   const deps = health?.dependencies?.runtime || {};
   const gmsh = deps?.gmsh_python || {};
   const mesher = deps?.hornlab_waveguide_mesher || {};
-  const bempp = deps?.bempp || {};
+  const metalDep = deps?.hornlab_metal_bem || {};
   const python = deps?.python || {};
-  const deviceInfo = health?.deviceInterface || {};
   const metalStatus = health?.solverBackends?.metal?.status || {};
   const metalReady = Boolean(health?.solverBackends?.metal?.ready || metalStatus?.available);
 
@@ -235,43 +116,18 @@ export function getDependencyStatusSummary(health) {
           ? 'Installed HornLab waveguide mesher is outside the supported runtime contract.'
           : null,
     },
-    bempp: {
-      name: 'Bempp-cl',
-      version: bempp.version || null,
-      variant: bempp.variant || null,
-      available: bempp.available === true,
-      supported: bempp.supported !== false,
-      ready: bempp.ready === true,
-      feature: 'BEM simulation',
-      guidance: !bempp.available
-        ? 'Install bempp-cl: pip install bempp-cl>=0.4,<0.5'
-        : bempp.supported === false
-          ? `Bempp-cl ${bempp.version || 'unknown'} is outside supported range (>=0.4,<0.5). Install a compatible version.`
-          : null,
-    },
     metal: {
       name: 'Metal BEM',
-      version: deps?.hornlab_metal_bem?.version || null,
+      version: metalDep?.version || null,
       available: metalReady,
       supported: metalStatus.supportedPlatform !== false,
       ready: metalReady,
-      feature: 'BEM simulation on supported Apple Silicon',
-      guidance: !metalReady && metalStatus.reason ? String(metalStatus.reason) : null,
-    },
-    opencl: {
-      name: 'OpenCL Runtime',
-      version: null,
-      available: Boolean(
-        deviceInfo?.mode_availability?.opencl_gpu?.available ||
-        deviceInfo?.mode_availability?.opencl_cpu?.available
-      ),
-      supported: true,
-      ready: Boolean(
-        deviceInfo?.mode_availability?.opencl_gpu?.available ||
-        deviceInfo?.mode_availability?.opencl_cpu?.available
-      ),
-      feature: 'BEM acceleration',
-      guidance: getOpenCLSetupHelp(health) || null,
+      feature: 'BEM simulation (Apple Silicon macOS)',
+      guidance: !metalReady
+        ? metalStatus.reason
+          ? String(metalStatus.reason)
+          : 'Install hornlab-metal-bem (Apple Silicon macOS required): pip install -r server/requirements.txt'
+        : null,
     },
   };
 }
@@ -300,17 +156,8 @@ export function getFeatureBlockedReason(health, feature) {
 
     case 'bem-solve':
     case 'simulation':
-      if (summary.metal.ready) {
-        return null;
-      }
-      if (!summary.bempp.ready) {
-        return summary.bempp.guidance || `${summary.bempp.name} is not ready for BEM simulation.`;
-      }
-      if (!summary.opencl.available) {
-        return (
-          summary.opencl.guidance ||
-          'OpenCL runtime is not available. BEM solve may be slow or unavailable.'
-        );
+      if (!summary.metal.ready) {
+        return summary.metal.guidance || `${summary.metal.name} is not ready for BEM simulation.`;
       }
       return null;
 
@@ -321,32 +168,4 @@ export function getFeatureBlockedReason(health, feature) {
     default:
       return null;
   }
-}
-
-export function renderDependencyStatusHTML(health) {
-  const summary = getDependencyStatusSummary(health);
-  const items = Object.values(summary);
-
-  const renderItem = (dep) => {
-    const statusClass = dep.ready
-      ? 'dep-status-ready'
-      : dep.available
-        ? 'dep-status-partial'
-        : 'dep-status-missing';
-
-    const statusIcon = dep.ready ? '✓' : dep.available ? '!' : '✗';
-    const versionText = dep.version ? ` (${dep.version})` : '';
-
-    let html = `<div class="dep-item ${statusClass}">`;
-    html += `<span class="dep-icon">${statusIcon}</span>`;
-    html += `<span class="dep-name">${dep.name}${versionText}</span>`;
-    html += `<span class="dep-feature">${dep.feature}</span>`;
-    if (dep.guidance) {
-      html += `<span class="dep-guidance">${dep.guidance}</span>`;
-    }
-    html += '</div>';
-    return html;
-  };
-
-  return `<div class="dependency-status">${items.map(renderItem).join('')}</div>`;
 }

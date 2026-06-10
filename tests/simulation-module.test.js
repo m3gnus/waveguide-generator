@@ -69,7 +69,7 @@ test('SimulationModule HornLab mesher output builds solver submit options', () =
   assert.equal(SimulationModule.output.occAdaptive, undefined);
 });
 
-test('SimulationModule forces full-domain quadrants for explicit BEMPP solves', () => {
+test('SimulationModule preserves reduced-domain quadrants for Metal BEM solves', () => {
   const preparedParams = prepareGeometryParams(
     makeRawParams({ encDepth: 220, wallThickness: 6, quadrants: '1' }),
     {
@@ -80,11 +80,10 @@ test('SimulationModule forces full-domain quadrants for explicit BEMPP solves', 
   const simulationInput = SimulationModule.importPrepared(preparedParams);
   const output = SimulationModule.output.hornlabMesher(simulationInput, {
     mshVersion: '2.2',
-    simType: 2,
-    solverBackend: 'bempp'
+    simType: 2
   });
 
-  assert.equal(output.waveguidePayload.quadrants, 1234);
+  assert.equal(output.waveguidePayload.quadrants, 1);
   assert.equal(
     output.submitOptions.mesh.waveguide_params,
     output.waveguidePayload
@@ -157,24 +156,6 @@ test('simulation domain prepares HornLab mesher solve requests from an explicit 
   assert.deepEqual(request.stateSnapshot, state);
   assert.notEqual(request.stateSnapshot, state);
   assert.equal(typeof prepareHornlabMesherSolveRequest, 'function');
-});
-
-test('simulation domain forces full-domain quadrants for explicit BEMPP solves', () => {
-  const state = {
-    type: 'OSSE',
-    params: makeRawParams({ encDepth: 220, wallThickness: 6, quadrants: '1' })
-  };
-  const request = prepareHornlabMesherSolveRequest(state, {
-    mshVersion: '2.2',
-    simType: 2,
-    solverBackend: 'bempp'
-  });
-
-  assert.equal(request.waveguidePayload.quadrants, 1234);
-  assert.equal(
-    request.submitOptions.mesh.waveguide_params,
-    request.waveguidePayload
-  );
 });
 
 test('simulation state facade reads and updates GlobalState through module boundary', () => {
@@ -286,9 +267,6 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
       meshValidationMode: 'strict',
       frequencySpacing: 'log',
       verbose: true,
-      advancedSettings: {
-        useBurtonMiller: false
-      },
       polarConfig: {
         angle_range: [0, 90, 15],
         norm_angle: 0,
@@ -313,9 +291,7 @@ test('simulation use case builds queued job metadata and script snapshot', () =>
   assert.equal(job.script.frequencySpacing, 'log');
   assert.equal('enableSymmetry' in job.script, false);
   assert.equal(job.script.verbose, true);
-  assert.deepEqual(job.script.advancedSettings, {
-    useBurtonMiller: false
-  });
+  assert.equal('advancedSettings' in job.script, false);
 });
 
 test('simulation use case summarizes canonical tag counts and warnings', () => {

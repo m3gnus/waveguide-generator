@@ -83,39 +83,25 @@ Supporting fixtures:
 ## Python backend suites (`server/tests/`)
 
 - `server/tests/test_api_validation.py`
-- `server/tests/test_benchmark_solver_script.py`
+- `server/tests/test_charts.py`
 - `server/tests/test_dependency_runtime.py`
-- `server/tests/test_device_interface.py`
 - `server/tests/test_directivity_plot.py`
-- `server/tests/test_impedance.py`
 - `server/tests/test_import_boundaries.py`
 - `server/tests/test_job_persistence.py`
-- `server/tests/test_mesh_cleaner.py`
-- `server/tests/test_mesh_validation.py`
-- `server/tests/test_observation.py`
-- `server/tests/test_observation_distance.py`
-- `server/tests/test_reference_horn_benchmark.py`
-- `server/tests/test_reference_smoke.py`
+- `server/tests/test_metal_solver_adapter.py`
 - `server/tests/test_runtime_preflight.py`
-- `server/tests/test_solve_readiness.py`
 - `server/tests/test_solver_backend_selection.py`
-- `server/tests/test_solver_hardening.py`
 - `server/tests/test_solver_tag_contract.py`
 - `server/tests/test_step_export.py`
 - `server/tests/test_units.py`
 - `server/tests/test_updates_endpoint.py`
 - `server/tests/test_workspace_routes.py`
 
+The backend suites cover the metal-only solver contract: `hornlab-metal-bem` is the only `/api/solve` backend (`solver_backend` accepts `auto`/`metal`, and `bempp` is rejected with `422`).
+
 ## Manual diagnostics (`scripts/diagnostics/`)
 
 These are ad-hoc debugging helpers and are not part of the automated suites.
-
-Backend research helpers:
-
-- `cd server && python3 scripts/benchmark_solver.py <mesh.msh> [options]`
-- `cd server && python3 scripts/benchmark_solver.py --preset reference-horn [--json] [--device auto|opencl_cpu|opencl_gpu] [--precision-modes single,double]`
-- `cd server && python3 scripts/benchmark_symmetry.py [--case NAME] [--iterations N] [--json]`
-- `node scripts/run-backend-python.js --cwd server scripts/benchmark_reference_horn.py [options]` — bounded reference-horn repro path (mesh prep + optional 1-frequency solve with precision mode testing)
 
 Run from repository root:
 
@@ -124,7 +110,6 @@ npm run diag:payload
 npm run diag:geometry
 npm run diag:mesher:reference-horn
 npm run diag:mesher:closed
-npm run benchmark:reference-horn
 ```
 
 Generated diagnostic outputs are written to `scripts/diagnostics/out/`.

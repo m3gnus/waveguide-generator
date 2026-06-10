@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from .contract import build_directivity_metadata
-from .directivity_correct import calculate_di_from_polar_patterns
+from .directivity_index import calculate_di_from_polar_patterns
 
 try:
     from hornlab_metal_bem import ObservationConfig, native_config, solve
@@ -23,7 +23,8 @@ except ImportError:  # pragma: no cover - exercised through runtime status
     discover_native_runtime = None  # type: ignore[assignment]
 
 
-VALID_SOLVER_BACKENDS = {"auto", "bempp", "metal"}
+VALID_SOLVER_BACKENDS = {"auto", "metal"}
+REMOVED_SOLVER_BACKENDS = {"bempp", "bempp-cl", "bempp_cl", "previous"}
 REFERENCE_PRESSURE_PA = 20e-6
 
 
@@ -36,28 +37,26 @@ def normalize_solver_backend(value: Any) -> str:
     aliases = {
         "default": "auto",
         "native": "auto",
-        "bempp-cl": "bempp",
-        "bempp_cl": "bempp",
-        "previous": "bempp",
         "hornlab-metal": "metal",
         "metal-bem": "metal",
         "hornlab-metal-bem": "metal",
     }
     normalized = aliases.get(raw, raw)
+    if normalized in REMOVED_SOLVER_BACKENDS:
+        raise ValueError(
+            "The bempp solver backend was removed; hornlab-metal-bem is the only "
+            "solve backend. Use solver_backend='auto' or 'metal'."
+        )
     if normalized not in VALID_SOLVER_BACKENDS:
-        raise ValueError("solver_backend must be one of: auto, bempp, metal.")
+        raise ValueError("solver_backend must be one of: auto, metal.")
     return normalized
 
 
 def resolve_solver_backend(value: Any, *, mesh_strategy: Any = None) -> str:
     """Resolve the public backend selector to the concrete runtime backend."""
 
-    backend = normalize_solver_backend(value)
-    if backend == "auto":
-        if is_metal_solver_available():
-            return "metal"
-        return "bempp"
-    return backend
+    normalize_solver_backend(value)
+    return "metal"
 
 
 def metal_backend_status() -> dict[str, Any]:

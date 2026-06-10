@@ -18,7 +18,6 @@ from contracts import ChartsRenderRequest, DirectivityRenderRequest
 from services.runtime_preflight import collect_runtime_doctor_report
 from services.solver_runtime import (
     SOLVER_AVAILABLE,
-    BEMPP_RUNTIME_READY,
     METAL_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
@@ -27,7 +26,6 @@ from services.solver_runtime import (
     metal_backend_status,
     render_all_charts,
     render_directivity_plot,
-    selected_device_metadata,
 )
 from services.update_service import get_update_status
 
@@ -56,26 +54,13 @@ async def health_check() -> Dict[str, Any]:
     """Health check endpoint."""
     logger.info("Health check requested")
     dependency_status = get_dependency_status()
-    device_info = selected_device_metadata("auto")
     doctor_report = collect_runtime_doctor_report("auto")
-    doctor_summary = doctor_report.get("summary") if isinstance(doctor_report.get("summary"), dict) else {}
-    doctor_solve_ready = doctor_summary.get("solveReady")
-    if isinstance(doctor_solve_ready, bool):
-        bempp_ready = bool(BEMPP_RUNTIME_READY and doctor_solve_ready)
-    else:
-        bempp_ready = bool(BEMPP_RUNTIME_READY)
-    solve_ready = bool(bempp_ready or METAL_SOLVER_READY)
 
     return {
         "status": "ok",
-        "solver": (
-            "metal-bem"
-            if METAL_SOLVER_READY
-            else "bempp-cl" if SOLVER_AVAILABLE else "unavailable"
-        ),
-        "solverReady": bool(solve_ready),
+        "solver": "metal-bem" if METAL_SOLVER_READY else "unavailable",
+        "solverReady": bool(METAL_SOLVER_READY),
         "solverBackends": {
-            "bempp": {"ready": bool(bempp_ready), "available": bool(BEMPP_RUNTIME_READY)},
             "metal": {"ready": bool(METAL_SOLVER_READY), "status": metal_backend_status()},
         },
         "mesherReady": HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_RUNTIME_READY,
@@ -89,7 +74,6 @@ async def health_check() -> Dict[str, Any]:
             "solveReadiness": doctor_report.get("solveReadiness"),
         },
         "capabilities": get_settings_capabilities(),
-        "deviceInterface": device_info,
         "timestamp": datetime.now().isoformat(),
     }
 

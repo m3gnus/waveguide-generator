@@ -72,15 +72,13 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         meshValidationMode: 'strict',
         frequencySpacing: 'linear',
         verbose: false,
+        solverBackend: 'metal',
         polarConfig: {
           angle_range: [0, 180, 37],
           norm_angle: 5,
           distance: 2,
           inclination: 45,
           enabled_axes: ['horizontal', 'diagonal'],
-        },
-        advancedSettings: {
-          useBurtonMiller: false,
         },
       },
       {
@@ -103,11 +101,10 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.sim_type, '2');
     assert.equal(payload.mesh_validation_mode, 'strict');
     assert.equal(payload.frequency_spacing, 'linear');
+    assert.equal(payload.solver_backend, 'metal');
     assert.equal('device_mode' in payload, false);
     assert.equal(payload.verbose, false);
-    assert.deepEqual(payload.advanced_settings, {
-      use_burton_miller: false,
-    });
+    assert.equal('advanced_settings' in payload, false);
   } finally {
     global.fetch = originalFetch;
   }
@@ -137,10 +134,8 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
         simulationType: '2',
         meshValidationMode: 'invalid',
         frequencySpacing: 'bogus',
+        solverBackend: 'bempp',
         verbose: undefined,
-        advancedSettings: {
-          useBurtonMiller: null,
-        },
       },
       {
         vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
@@ -166,55 +161,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
     ]);
     assert.equal('mesh_validation_mode' in payload, false);
     assert.equal('frequency_spacing' in payload, false);
-    assert.equal('device_mode' in payload, false);
-    assert.equal('verbose' in payload, false);
-    assert.equal('advanced_settings' in payload, false);
-  } finally {
-    global.fetch = originalFetch;
-  }
-});
-
-test('submitSimulation omits invalid or unset runtime settings so backend defaults remain authoritative', async () => {
-  const originalFetch = global.fetch;
-  const calls = [];
-
-  global.fetch = async (url, options = {}) => {
-    calls.push({ url, options });
-    return {
-      ok: true,
-      async json() {
-        return { job_id: 'job-test-omit-1' };
-      },
-    };
-  };
-
-  try {
-    const solver = new BemSolver();
-    await solver.submitSimulation(
-      {
-        frequencyStart: 100,
-        frequencyEnd: 1000,
-        numFrequencies: 4,
-        meshValidationMode: 'invalid',
-        frequencySpacing: 'bogus',
-        verbose: undefined,
-        advancedSettings: {
-          useBurtonMiller: null,
-        },
-      },
-      {
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        indices: [0, 1, 2],
-        surfaceTags: [2],
-        format: 'msh',
-        boundaryConditions: {},
-        metadata: {},
-      }
-    );
-
-    const payload = JSON.parse(calls[0].options.body);
-    assert.equal('mesh_validation_mode' in payload, false);
-    assert.equal('frequency_spacing' in payload, false);
+    assert.equal('solver_backend' in payload, false);
     assert.equal('device_mode' in payload, false);
     assert.equal('verbose' in payload, false);
     assert.equal('advanced_settings' in payload, false);

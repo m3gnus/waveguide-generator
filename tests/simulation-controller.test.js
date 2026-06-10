@@ -497,7 +497,7 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
   const expectedSubmitOptions = {
     mesh: {
       strategy: 'hornlab_mesher',
-      waveguide_params: { formula_type: 'OSSE', quadrants: 1234 },
+      waveguide_params: { formula_type: 'OSSE' },
     },
   };
   assert.deepEqual(calls, [['health'], ['submit', config, meshData, expectedSubmitOptions]]);
@@ -510,17 +510,18 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
         return {
           solverReady: false,
           mesherReady: true,
+          solverBackends: {
+            metal: { ready: false, status: { available: false } },
+          },
           dependencyDoctor: {
             components: [
               {
-                id: 'bempp_cl',
-                name: 'bempp-cl',
+                id: 'hornlab_metal_bem',
+                name: 'hornlab-metal-bem',
                 category: 'required',
                 status: 'missing',
                 featureImpact: '/api/solve BEM simulation is unavailable.',
-                guidance: [
-                  'Install bempp-cl: pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33',
-                ],
+                guidance: ['Install hornlab-metal-bem: pip install -r server/requirements.txt'],
               },
             ],
           },
@@ -547,33 +548,22 @@ test('submitSimulationControllerJob rejects when backend solver dependencies are
           stateSnapshot: { params: {} },
         },
       }),
-    /Install bempp-cl/i
+    /Install hornlab-metal-bem/i
   );
 });
 
-test('submitSimulationControllerJob does not treat Metal readiness as explicit BEMPP readiness', async () => {
+test('submitSimulationControllerJob rejects when Metal backend readiness is false', async () => {
   const controller = createSimulationControllerStore({
     solver: {
       async getHealthStatus() {
         return {
-          solverReady: true,
+          solverReady: false,
           mesherReady: true,
           solverBackends: {
-            bempp: { ready: false, available: false },
-            metal: { ready: true },
-          },
-          dependencyDoctor: {
-            components: [
-              {
-                id: 'bempp_cl',
-                name: 'bempp-cl',
-                category: 'optional',
-                status: 'missing',
-                featureImpact:
-                  'BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.',
-                guidance: ['Install bempp-cl'],
-              },
-            ],
+            metal: {
+              ready: false,
+              status: { available: false, reason: 'Metal BEM requires Apple Silicon macOS.' },
+            },
           },
         };
       },
@@ -584,7 +574,7 @@ test('submitSimulationControllerJob does not treat Metal readiness as explicit B
     () =>
       submitSimulationControllerJob(controller, {
         config: {
-          solverBackend: 'bempp',
+          solverBackend: 'metal',
           frequencyStart: 100,
           frequencyEnd: 1000,
           numFrequencies: 3,
@@ -599,7 +589,7 @@ test('submitSimulationControllerJob does not treat Metal readiness as explicit B
           stateSnapshot: { params: {} },
         },
       }),
-    /Install bempp-cl/i
+    /must be ready to run simulation|dependency requirements/i
   );
 });
 

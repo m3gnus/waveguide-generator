@@ -1,11 +1,10 @@
 // simAdvancedSettings.js — Stable public advanced simulation settings persistence.
 
 const SETTINGS_KEY = 'waveguide-sim-advanced-settings';
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export const RECOMMENDED_DEFAULTS = {
   solverBackend: 'auto',
-  useBurtonMiller: false,
 };
 
 let _current = null;
@@ -14,7 +13,7 @@ function _coerceSolverBackend(value) {
   const v = String(value || '')
     .trim()
     .toLowerCase();
-  if (v === 'auto' || v === 'metal' || v === 'bempp') return v;
+  if (v === 'auto' || v === 'metal') return v;
   return RECOMMENDED_DEFAULTS.solverBackend;
 }
 
@@ -45,10 +44,6 @@ export function loadSimAdvancedSettings() {
 
     _current = {
       solverBackend: _coerceSolverBackend(stored.solverBackend),
-      useBurtonMiller:
-        typeof stored.useBurtonMiller === 'boolean'
-          ? stored.useBurtonMiller
-          : RECOMMENDED_DEFAULTS.useBurtonMiller,
     };
     return _current;
   } catch {
@@ -62,7 +57,6 @@ export function saveSimAdvancedSettings(settings) {
 
   _current = {
     solverBackend: _coerceSolverBackend(settings?.solverBackend),
-    useBurtonMiller: Boolean(settings?.useBurtonMiller ?? RECOMMENDED_DEFAULTS.useBurtonMiller),
   };
 
   try {
@@ -84,13 +78,6 @@ export function getSolverBackend() {
 
 export function getCurrentSimAdvancedSettings() {
   return _current ?? loadSimAdvancedSettings();
-}
-
-export function getUseBurtonMiller() {
-  const el =
-    typeof document !== 'undefined' ? document.getElementById('simadvanced-useBurtonMiller') : null;
-  if (el) return el.checked;
-  return _current?.useBurtonMiller ?? RECOMMENDED_DEFAULTS.useBurtonMiller;
 }
 
 export function resetSimAdvancedSettings() {
