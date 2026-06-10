@@ -124,7 +124,6 @@ export function getFeatureBlockedReason(health, feature) {
     'mesh-build': ['meshBuild'],
     'export-msh': ['meshBuild'],
     'bem-solve': ['solve', 'meshBuild'],
-    'bempp-solve': ['solve', 'meshBuild'],
     simulation: ['solve', 'meshBuild'],
     'chart-render': ['charts'],
     matplotlib: ['charts'],
@@ -132,10 +131,9 @@ export function getFeatureBlockedReason(health, feature) {
 
   const normalizedFeature = String(feature || '').trim();
   const features = featureAliases[normalizedFeature] || [];
-  const includeOptional = normalizedFeature === 'bempp-solve';
   const issues = getRuntimeDoctorIssues(health, {
     features,
-    includeOptional,
+    includeOptional: false,
   });
   if (issues.length === 0) {
     return null;
@@ -144,6 +142,6 @@ export function getFeatureBlockedReason(health, feature) {
   return formatDependencyBlockMessage(health, {
     features,
     fallback: 'Backend dependency requirements are not satisfied.',
-    includeOptional,
+    includeOptional: false,
   });
 }

@@ -4,7 +4,6 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0\.."
 
 set "NODEJS_HINT=C:\Program Files\nodejs"
-set "BEMPP_CL_URL=git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 echo ===============================================================
 echo WG - Waveguide Generator Install / Update
@@ -173,83 +172,16 @@ for /f "tokens=*" %%v in ('.venv\Scripts\python.exe -c "import gmsh; print(gmsh.
 echo.
 
 echo Checking Metal BEM backend...
-set "METAL_BEM_READY=0"
 set "PYTHONPATH=%CD%\server;%PYTHONPATH%"
 .venv\Scripts\python.exe -c "import sys; from solver.metal_solver import metal_backend_status; status = metal_backend_status(); print((status.get('reason') or 'Metal BEM backend is ready.') if status.get('available') else (status.get('reason') or 'Metal BEM backend is not available on this host.')); sys.exit(0 if status.get('available') else 1)"
 if errorlevel 1 (
-    echo   Metal BEM is not ready.
-    echo   Installing BEMPP/OpenCL fallback dependencies.
+    echo   WARNING: Metal BEM is not ready.
+    echo   hornlab-metal-bem is the only solve backend; /api/solve requires an
+    echo   Apple Silicon Mac with the native helper built.
+    echo   Mesh building and exports still work without it.
 ) else (
-    set "METAL_BEM_READY=1"
     echo   Metal BEM is ready.
-    echo   Skipping bempp-cl and OpenCL fallback setup.
 )
-echo.
-
-if "%METAL_BEM_READY%"=="1" goto :opencl_done
-
-echo Installing bempp-cl fallback ^(needed when Metal BEM is unavailable^)...
-.venv\Scripts\python.exe -m pip install --quiet pyopencl
-if errorlevel 1 (
-    echo   WARNING: pyopencl automatic install failed.
-    echo            You can retry later with:
-    echo              .venv\Scripts\python.exe -m pip install pyopencl
-    goto :opencl_done
-)
-.venv\Scripts\python.exe -m pip install %BEMPP_CL_URL%
-if errorlevel 1 (
-    echo   WARNING: bempp-cl automatic install failed.
-    echo            You can retry later with:
-    echo              .venv\Scripts\python.exe -m pip install %BEMPP_CL_URL%
-    goto :opencl_done
-) else (
-    echo   bempp-cl installed.
-)
-echo.
-
-:: ── OpenCL runtime check ──────────────────────────────────────────
-echo Checking OpenCL runtime for bempp-cl simulations...
-.venv\Scripts\python.exe -c "import pyopencl; assert pyopencl.get_platforms()" >nul 2>&1
-if not errorlevel 1 (
-    echo   OpenCL is available.
-    goto :opencl_done
-)
-echo   No OpenCL platform found.
-
-:: Check whether any OpenCL ICD is registered (GPU drivers present but pyopencl failed)
-reg query "HKLM\SOFTWARE\Khronos\OpenCL\Vendors" >nul 2>&1
-if not errorlevel 1 (
-    echo.
-    echo   WARNING: OpenCL vendor entries exist in registry but pyopencl could not use them.
-    echo            Try updating your GPU drivers, then restart and re-run a simulation.
-    goto :opencl_done
-)
-
-:: No ICDs at all — try winget to install Intel CPU OpenCL runtime
-where winget >nul 2>&1
-if errorlevel 1 goto :opencl_warn
-
-echo   Attempting to install Intel OpenCL CPU Runtime via winget...
-winget install --id Intel.OpenCLRuntimeForIntel --silent --accept-package-agreements --accept-source-agreements >nul 2>&1
-if errorlevel 1 goto :opencl_warn
-
-:: Re-test after winget install
-.venv\Scripts\python.exe -c "import pyopencl; assert pyopencl.get_platforms()" >nul 2>&1
-if not errorlevel 1 (
-    echo   OpenCL ^(Intel CPU runtime^) is now available.
-    goto :opencl_done
-)
-
-:opencl_warn
-echo.
-echo   WARNING: No OpenCL runtime is available. Acoustic simulations will not work.
-echo   To fix, choose one of:
-echo     1. Update your GPU drivers ^(NVIDIA/AMD drivers include OpenCL^)
-echo     2. Install Intel OpenCL CPU Runtime ^(works on Intel CPUs^):
-echo          winget install Intel.OpenCLRuntimeForIntel
-echo     3. On a VM: enable GPU passthrough or use a physical machine.
-
-:opencl_done
 echo.
 
 echo Recording backend interpreter contract...

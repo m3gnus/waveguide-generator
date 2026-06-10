@@ -54,7 +54,6 @@ backend.on('error', (err) => {
   console.error('💡 Backend failed to start. This might be because:');
   console.error(`   - Python command is not available: ${backendPython}`);
   console.error('   - Backend dependencies are not installed for that interpreter');
-  console.error('   - Run: ./scripts/setup-opencl-backend.sh (macOS OpenCL CPU env)');
   console.error('   - Or: python3 -m venv .venv && ./.venv/bin/pip install -r server/requirements.txt');
   console.error('');
   console.error('Frontend remains available, but backend-dependent features are blocked until the backend starts.');

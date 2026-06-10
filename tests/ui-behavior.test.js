@@ -28,7 +28,6 @@ import {
   openSettingsModal,
 } from '../src/ui/settings/modal.js';
 import {
-  describeSimBasicDeviceAvailability,
   describeSelectedDevice,
   getDependencyStatusSummary,
   getFeatureBlockedReason as getLegacyRuntimeFeatureBlockedReason,
@@ -332,53 +331,18 @@ test('renderResultDiagnostics omits clean result metadata', () => {
   assert.equal(markup, '');
 });
 
-test('describeSimBasicDeviceAvailability reports selected auto mode and unavailable concrete modes', () => {
-  const summary = describeSimBasicDeviceAvailability(
-    {
-      deviceInterface: {
-        selected_mode: 'opencl_gpu',
-        mode_availability: {
-          auto: { available: true },
-          opencl_gpu: { available: true },
-          opencl_cpu: { available: false },
-        },
-      },
-    },
-    'auto'
-  );
-
-  assert.deepEqual(summary.unavailableModes, ['opencl_cpu']);
-  assert.equal(summary.statusText, 'Auto resolves to: OpenCL GPU');
-});
-
-test('describeSimBasicDeviceAvailability reports requested unavailable mode explicitly', () => {
-  const summary = describeSimBasicDeviceAvailability(
-    {
-      deviceInterface: {
-        mode_availability: {
-          auto: { available: true },
-          opencl_gpu: { available: false },
-          opencl_cpu: { available: true },
-        },
-      },
-    },
-    'opencl_gpu'
-  );
-
-  assert.deepEqual(summary.unavailableModes, ['opencl_gpu']);
-  assert.equal(summary.statusText, 'OpenCL GPU unavailable on this machine.');
-});
-
 test('summarizeRuntimeCapabilities reports advanced controls unavailable until backend advertises support', () => {
   const summary = summarizeRuntimeCapabilities({
     solverReady: true,
     mesherReady: true,
+    solverBackends: {
+      metal: { ready: true, status: { available: true } },
+    },
     capabilities: {
       simulationAdvanced: {
         available: true,
-        controls: ['use_burton_miller'],
-        reason:
-          'The public solve contract now exposes Burton-Miller coupling as the stable advanced override.',
+        controls: ['solver_backend'],
+        reason: 'The public solve contract exposes solver backend selection.',
         plannedControls: ['method'],
       },
     },
@@ -390,9 +354,9 @@ test('summarizeRuntimeCapabilities reports advanced controls unavailable until b
   assert.equal(summary.simulationAdvanced.available, true);
   assert.equal(
     summary.simulationAdvanced.reason,
-    'The public solve contract now exposes Burton-Miller coupling as the stable advanced override.'
+    'The public solve contract exposes solver backend selection.'
   );
-  assert.deepEqual(summary.simulationAdvanced.controls, ['use_burton_miller']);
+  assert.deepEqual(summary.simulationAdvanced.controls, ['solver_backend']);
   assert.deepEqual(summary.simulationAdvanced.plannedControls, ['method']);
 });
 
@@ -413,7 +377,7 @@ test('legacy dependency summary blocks mesh builds when HornLab mesher package i
           supported: false,
           ready: false,
         },
-        bempp: { available: true, supported: true, ready: true },
+        hornlab_metal_bem: { available: true, supported: true, ready: true, version: '1.0.0' },
       },
     },
   };
@@ -427,37 +391,22 @@ test('legacy dependency summary blocks mesh builds when HornLab mesher package i
   assert.match(reason, /Install backend requirements/);
 });
 
-test('describeSelectedDevice includes device name only when it adds signal', () => {
+test('describeSelectedDevice labels the Metal BEM solver and stays quiet otherwise', () => {
   assert.equal(
     describeSelectedDevice({
       solver: 'metal-bem',
-      deviceInterface: {
-        selected_mode: 'opencl_cpu',
-        device_name: 'CPU',
-      },
     }),
     'Using: Metal BEM'
   );
 
   assert.equal(
     describeSelectedDevice({
-      deviceInterface: {
-        selected_mode: 'opencl_gpu',
-        device_name: 'Fake GPU',
-      },
+      solver: 'unavailable',
     }),
-    'Using: OpenCL GPU (Fake GPU)'
+    ''
   );
 
-  assert.equal(
-    describeSelectedDevice({
-      deviceInterface: {
-        selected_mode: 'opencl_cpu',
-        device_name: 'CPU',
-      },
-    }),
-    'Using: OpenCL CPU'
-  );
+  assert.equal(describeSelectedDevice({}), '');
 });
 
 test('renderSimulationMeshDiagnostics shows canonical tag counts and warnings', () => {
@@ -958,12 +907,17 @@ test('openSettingsModal creates the grouped settings sections and workspace acti
       false,
       'Simulation section should not expose the compute-device selector'
     );
-    assert.ok(
+    assert.equal(
       createdElements.some((el) => el.id === 'simadvanced-useBurtonMiller'),
-      'Simulation section should expose the Burton-Miller advanced control'
+      false,
+      'Simulation section should not expose the removed Burton-Miller control'
+    );
+    assert.ok(
+      createdElements.some((el) => el.id === 'simadvanced-solverBackend'),
+      'Simulation section should expose the solver backend selector'
     );
     // No additional advanced controls should be rendered beyond the supported
-    // Burton-Miller override.
+    // solver backend selection.
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;
@@ -1377,19 +1331,17 @@ test('formatDependencyBlockMessage includes feature impact and guidance for miss
   assert.match(message, /Install gmsh package/);
 });
 
-test('formatDependencyBlockMessage does not include optional bounded solve validation in solve feature block', () => {
+test('formatDependencyBlockMessage does not include optional component issues in solve feature block', () => {
   const health = {
     dependencyDoctor: {
       components: [
         {
-          id: 'bounded_solve_validation',
-          name: 'Bounded solve validation',
+          id: 'metal_release_helper',
+          name: 'Metal release helper',
           category: 'optional',
           status: 'missing',
-          featureImpact: '/api/solve readiness is unvalidated on this host/runtime.',
-          guidance: [
-            'Run bounded solve validation: cd server && python3 scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30',
-          ],
+          featureImpact: 'Native Metal helper rebuilds are unavailable; solves still run.',
+          guidance: ['Build the helper: npm run build:metal-helper'],
         },
       ],
     },
@@ -1404,27 +1356,26 @@ test('formatDependencyBlockMessage does not include optional bounded solve valid
   assert.strictEqual(message, 'Simulation is unavailable.');
 });
 
-test('getFeatureBlockedReason ignores optional BEMPP path issues when solve has another ready backend', () => {
+test('getFeatureBlockedReason ignores optional component issues for bem-solve', () => {
   const reason = getFeatureBlockedReason(
     {
       dependencyDoctor: {
         components: [
           {
-            id: 'bempp_cl',
-            name: 'bempp-cl',
+            id: 'metal_release_helper',
+            name: 'Metal release helper',
             category: 'optional',
             status: 'missing',
-            featureImpact:
-              'BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.',
-            guidance: ['Install bempp-cl'],
+            featureImpact: 'Native Metal helper rebuilds are unavailable; solves still run.',
+            guidance: ['Build the helper: npm run build:metal-helper'],
           },
           {
-            id: 'opencl_runtime',
-            name: 'OpenCL Runtime',
+            id: 'matplotlib',
+            name: 'Matplotlib',
             category: 'optional',
             status: 'missing',
-            featureImpact: 'OpenCL runtime is unavailable; only the Metal BEM solve path is ready.',
-            guidance: ['Install OpenCL'],
+            featureImpact: 'Chart render endpoints are unavailable; solver core paths still work.',
+            guidance: ['Install matplotlib: pip install matplotlib'],
           },
         ],
       },
@@ -1490,28 +1441,27 @@ test('getFeatureBlockedReason reports missing HornLab mesher package for mesh bu
   assert.doesNotMatch(reason, /Gmsh Python API/);
 });
 
-test('getFeatureBlockedReason includes optional BEMPP path guidance for explicit BEMPP solve', () => {
+test('getFeatureBlockedReason reports missing hornlab-metal-bem for bem-solve', () => {
   const reason = getFeatureBlockedReason(
     {
       dependencyDoctor: {
         components: [
           {
-            id: 'bempp_cl',
-            name: 'bempp-cl',
-            category: 'optional',
+            id: 'hornlab_metal_bem',
+            name: 'hornlab-metal-bem',
+            category: 'required',
             status: 'missing',
-            featureImpact:
-              'BEMPP solve backend path is unavailable; Metal BEM can still run supported solves.',
-            guidance: ['Install bempp-cl'],
+            featureImpact: '/api/solve BEM simulation is unavailable.',
+            guidance: ['Install hornlab-metal-bem: pip install -r server/requirements.txt'],
           },
         ],
       },
     },
-    'bempp-solve'
+    'bem-solve'
   );
 
-  assert.match(reason, /BEMPP solve backend path is unavailable/);
-  assert.match(reason, /Install bempp-cl/);
+  assert.match(reason, /BEM simulation is unavailable/);
+  assert.match(reason, /Install hornlab-metal-bem/);
 });
 
 test('createDependencyStatusPanel renders required and optional dependency issues', () => {

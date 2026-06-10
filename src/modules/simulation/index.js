@@ -1,7 +1,6 @@
 import { DesignModule, prepareBackendMeshSimulationParams } from '../design/index.js';
 import { BemSolver } from '../../solver/index.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
-import { applySolverBackendQuadrantCompatibility } from './domain.js';
 
 const SIMULATION_MODULE_ID = 'simulation';
 const SIMULATION_IMPORT_STAGE = 'import';
@@ -57,7 +56,6 @@ export function buildHornlabMesherSimulationOutput(input, options = {}) {
   const simType = options.simType ?? 2;
   const meshParams = prepareBackendMeshSimulationParams(input.params);
   const waveguidePayload = buildWaveguidePayload(meshParams, mshVersion);
-  applySolverBackendQuadrantCompatibility(waveguidePayload, options.solverBackend);
   waveguidePayload.sim_type = simType;
 
   return Object.freeze({

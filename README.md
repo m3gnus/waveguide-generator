@@ -48,9 +48,9 @@ Run from the project folder, the folder containing `package.json`. Use the same 
 
 The setup scripts validate that you are in the full project folder, pull the latest code when the folder is a Git clone, install JavaScript and Python dependencies, and write the preferred backend interpreter to `.waveguide/backend-python.path`.
 
-Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, solver backend availability, and OpenCL when the BEMPP path is used. On Apple Silicon, install/update also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper.
+Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, and `hornlab-metal-bem`. On Apple Silicon, install/update also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper.
 
-Network note: backend setup installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs. If Metal BEM is not ready on the host, setup also installs the pinned `bempp-cl` fallback.
+Network note: backend setup installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs.
 
 ### 4. Launch
 
@@ -64,43 +64,14 @@ The app opens in your browser at `http://localhost:3000`. Close the terminal to 
 
 ## Solver Dependencies
 
-If no solver backend is ready, the app still works for 3D preview and local STL/config/profile exports, but **Start BEM Simulation** requires a ready solver backend plus the HornLab mesher.
+`hornlab-metal-bem` is the only solve backend, and it requires Apple Silicon macOS. On other platforms the app still works for 3D preview, mesh building, and local STL/config/profile exports, but **Start BEM Simulation** requires the Metal BEM solver plus the HornLab mesher.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `2317b804976d54eb86240cae1b99bb5007659acf` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
-- hornlab-metal-bem: pinned git commit `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` (optional Metal solver backend)
+- hornlab-waveguide-mesher: pinned git commit `2eb7b85e16952b2854ae0cadb661b87c4ad02313` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-metal-bem: pinned git commit `59528f5a0993ff4718d9037baae5fac008705b0c` (required solve backend; Apple Silicon macOS only)
 - gmsh: `>=4.11,<5.0` (required by the HornLab mesher)
-- bempp-cl: pinned git commit `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` / version `0.4.2` (optional BEMPP solver backend)
 
-The maintained runtime uses the HornLab Metal BEM backend when available. On Apple Silicon, `npm run build:metal-helper` builds/verifies the required release native helper. Otherwise, the BEMPP fallback path needs `bempp-cl`, `pyopencl`, and OpenCL. There is no legacy `bempp_api` fallback path.
-
-Manual install examples:
-
-```bash
-# macOS / Linux BEMPP fallback
-.venv/bin/pip install pyopencl
-.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
-
-# Windows BEMPP fallback
-.venv\Scripts\python.exe -m pip install pyopencl
-.venv\Scripts\python.exe -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
-```
-
-## OpenCL Setup
-
-For BEMPP fallback investigations on macOS Apple Silicon, use the OpenCL CPU helper:
-
-```bash
-./scripts/setup-opencl-backend.sh
-```
-
-This creates a dedicated environment at `$HOME/.waveguide-generator/opencl-cpu-env/`.
-The helper updates `.waveguide/backend-python.path` so launcher and backend startup use the OpenCL environment by default for this repo.
-
-Other platforms:
-
-- **Windows/Linux**: OpenCL GPU setup depends on vendor drivers (NVIDIA/AMD/Intel).
-- **Linux CPU fallback**: install `pocl-opencl-icd` via your package manager.
+On Apple Silicon, `npm run build:metal-helper` builds/verifies the required release native helper.
 
 ## Mesh Control Guide
 

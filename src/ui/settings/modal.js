@@ -27,7 +27,6 @@ import {
   RECOMMENDED_DEFAULTS as SIM_ADVANCED_DEFAULTS,
   getCurrentSimAdvancedSettings,
   getSolverBackend,
-  getUseBurtonMiller,
   saveSimAdvancedSettings,
 } from './simAdvancedSettings.js';
 import {
@@ -90,13 +89,10 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   solverBackend:
-    'Chooses the solver for new jobs. Auto uses Metal BEM when it is ready, otherwise BEMPP.',
-  useBurtonMiller:
-    'BEMPP only. Turns on resonance-safe coupling for final solves; Metal BEM ignores this setting.',
+    'Chooses the solver for new jobs. Auto uses Metal BEM, the only available solve backend.',
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   solver_backend: { label: 'Solver Backend' },
-  use_burton_miller: { label: 'Burton-Miller Coupling' },
 });
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
@@ -795,19 +791,15 @@ function _buildSimulationSection() {
   const advancedIntro = document.createElement('div');
   advancedIntro.className = 'settings-section-help';
   advancedIntro.innerHTML =
-    'Auto selects Metal BEM when that backend is ready; otherwise it falls back to BEMPP. ' +
-    'The stable public accuracy override is Burton-Miller for BEMPP. ' +
-    'Metal BEM uses its own native solver settings.';
+    'Metal BEM (hornlab-metal-bem) is the only solve backend. ' +
+    'Auto and Metal BEM behave identically; Metal BEM uses its own native solver settings.';
   sec.appendChild(advancedIntro);
 
   const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
     saveSimAdvancedSettings({ ...SIM_ADVANCED_DEFAULTS });
     const sb = document.getElementById('simadvanced-solverBackend');
     if (sb) sb.value = SIM_ADVANCED_DEFAULTS.solverBackend;
-    const ubm = document.getElementById('simadvanced-useBurtonMiller');
-    if (ubm) ubm.checked = SIM_ADVANCED_DEFAULTS.useBurtonMiller;
     if (typeof sbBadge !== 'undefined' && sbBadge) sbBadge.hidden = true;
-    if (typeof ubmBadge !== 'undefined' && ubmBadge) ubmBadge.hidden = true;
   });
   sec.appendChild(advancedActiveHeader);
 
@@ -816,7 +808,6 @@ function _buildSimulationSection() {
     'simadvanced-solverBackend',
     [
       { value: 'auto', label: 'Auto' },
-      { value: 'bempp', label: 'BEMPP (previous)' },
       { value: 'metal', label: 'Metal BEM' },
     ],
     currentSimAdvanced.solverBackend,
@@ -825,16 +816,6 @@ function _buildSimulationSection() {
   );
   sec.appendChild(sbResult.row);
   let sbBadge = sbResult.badge;
-
-  const ubmResult = _buildSimBasicCheckboxRow(
-    ADVANCED_CONTROL_COPY.use_burton_miller.label,
-    'simadvanced-useBurtonMiller',
-    currentSimAdvanced.useBurtonMiller,
-    SIM_ADVANCED_DEFAULTS.useBurtonMiller,
-    SIMULATION_ADVANCED_HELP.useBurtonMiller
-  );
-  sec.appendChild(ubmResult.row);
-  let ubmBadge = ubmResult.badge;
 
   return sec;
 }
@@ -1135,47 +1116,6 @@ function _buildSimBasicCheckboxRow(
   return { row, badge, checkbox };
 }
 
-function _buildSimAdvancedNumberRow(
-  labelText,
-  inputId,
-  currentValue,
-  defaultValue,
-  { min = '', max = '', step = '0.0001' } = {},
-  helpText = ''
-) {
-  const row = document.createElement('div');
-  row.className = 'settings-control-row';
-  row.appendChild(_buildSettingsLabelCopy(labelText, inputId, helpText));
-
-  const valueWrapper = document.createElement('div');
-  valueWrapper.className = 'settings-control-value';
-
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.id = inputId;
-  input.value = String(currentValue);
-  if (min) input.min = min;
-  if (max) input.max = max;
-  input.step = step;
-
-  const badge = _makeDefaultBadge(currentValue, defaultValue);
-  input.addEventListener('change', () => {
-    const numeric = Number(input.value);
-    if (!Number.isFinite(numeric) || numeric <= 0) {
-      input.value = String(defaultValue);
-      badge.hidden = false;
-      return;
-    }
-    badge.hidden = numeric === defaultValue;
-  });
-
-  valueWrapper.appendChild(input);
-  valueWrapper.appendChild(badge);
-  row.appendChild(valueWrapper);
-
-  return { row, badge, input };
-}
-
 function _buildSimulationExportFormatsRow(managementSettings) {
   const exportFormatsRow = document.createElement('div');
   exportFormatsRow.className = 'settings-control-row';
@@ -1388,8 +1328,6 @@ function _saveSimAdvancedSettingsFromModal(root) {
   saveSimAdvancedSettings({
     ...current,
     solverBackend: _getControl(root, 'simadvanced-solverBackend')?.value ?? getSolverBackend(),
-    useBurtonMiller:
-      _getControl(root, 'simadvanced-useBurtonMiller')?.checked ?? getUseBurtonMiller(),
   });
 }
 

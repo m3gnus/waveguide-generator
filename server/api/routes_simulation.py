@@ -15,15 +15,11 @@ from contracts import (
     SimulationRequest,
 )
 from services.simulation_validation import (
-    apply_solver_backend_quadrant_compatibility,
     build_submit_simulation_request,
     is_hornlab_mesher_strategy,
-    validate_solver_backend_waveguide_compatibility,
     validate_submit_simulation_request,
 )
 from services.solver_runtime import (
-    SOLVER_AVAILABLE,
-    BEMPP_RUNTIME_READY,
     METAL_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
@@ -66,17 +62,6 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
         mesh_strategy=validation.mesh_strategy,
     )
     request_to_submit.solver_backend = solver_backend
-    request_to_submit = apply_solver_backend_quadrant_compatibility(
-        request_to_submit,
-        solver_backend,
-    )
-    try:
-        validate_solver_backend_waveguide_compatibility(
-            validation.waveguide_params,
-            solver_backend,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if is_hornlab_mesher_strategy(validation.mesh_strategy):
         if not HORNLAB_MESHER_AVAILABLE or build_waveguide_mesh is None:
@@ -104,21 +89,6 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
                 ),
             )
 
-    if solver_backend == "bempp" and not SOLVER_AVAILABLE:
-        dep = get_dependency_status()
-        bempp_info = dep["runtime"]["bempp"]
-        py_info = dep["runtime"]["python"]
-        bempp_cl_range = dep["supportedMatrix"].get("bempp_cl", {}).get("range", ">=0.4,<0.5")
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "BEM solver not available. Please install bempp-cl. "
-                f"python={py_info.get('version')} supported={py_info.get('supported')}; "
-                f"bempp variant={bempp_info.get('variant')} version={bempp_info.get('version')} "
-                f"supported={bempp_info.get('supported')}. "
-                f"Supported matrix: bempp-cl {bempp_cl_range}."
-            ),
-        )
     if solver_backend == "metal" and not METAL_SOLVER_READY:
         status = metal_backend_status()
         raise HTTPException(

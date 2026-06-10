@@ -125,11 +125,7 @@ export async function exportMWGConfig({ state, baseName, writeFile } = {}) {
   return writeExportFiles(buildMwgConfigExportFiles(state, { baseName }), writeFile);
 }
 
-export function buildProfileCsvExportFiles(vertices, { state, baseName } = {}) {
-  if (!vertices || vertices.length === 0) {
-    return null;
-  }
-
+export function buildProfileCsvExportFiles(_vertices, { state, baseName } = {}) {
   const exportState = requireExportState(state);
   const designTask = DesignModule.task(
     DesignModule.importState(exportState, {
@@ -140,7 +136,6 @@ export function buildProfileCsvExportFiles(vertices, { state, baseName } = {}) {
 
   const exportTask = ExportModule.task(
     ExportModule.importProfileCsv(preparedParams, {
-      vertices,
       baseName: normalizeBaseName(baseName),
     })
   );
@@ -152,11 +147,6 @@ export async function exportProfileCSV(
   { state, baseName, writeFile, onMissingMesh } = {}
 ) {
   const files = buildProfileCsvExportFiles(vertices, { state, baseName });
-  if (!files) {
-    if (typeof onMissingMesh === 'function') {
-      onMissingMesh('Please generate a horn model first.');
-    }
-    return null;
-  }
+  void onMissingMesh;
   return writeExportFiles(files, writeFile);
 }

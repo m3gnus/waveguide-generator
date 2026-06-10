@@ -12,7 +12,6 @@ from solver.metal_solver import (
     solve_metal_from_msh,
 )
 from solver_bootstrap import (
-    BEMPP_RUNTIME_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     METAL_SOLVER_AVAILABLE,
@@ -20,11 +19,6 @@ from solver_bootstrap import (
     SOLVER_AVAILABLE,
     get_dependency_status,
 )
-
-try:
-    from solver import BEMSolver
-except ImportError:
-    BEMSolver = None  # type: ignore[assignment,misc]
 
 try:
     from solver.mesher_adapter import (
@@ -52,21 +46,16 @@ def get_settings_capabilities() -> Dict[str, Any]:
             "available": True,
             "controls": [
                 "solver_backend",
-                "use_burton_miller",
             ],
             "reason": (
                 "The public solve contract exposes solver backend selection "
-                "and Burton-Miller coupling as stable overrides."
+                "as a stable override."
             ),
         },
         "solverBackends": {
             "available": True,
             "default": "auto",
             "backends": {
-                "bempp": {
-                    "available": bool(BEMPP_RUNTIME_READY),
-                    "label": "BEMPP",
-                },
                 "metal": {
                     "available": bool(METAL_SOLVER_READY),
                     "label": "Metal BEM",
@@ -75,18 +64,6 @@ def get_settings_capabilities() -> Dict[str, Any]:
             },
         },
     }
-
-
-def selected_device_metadata(mode: str = "auto") -> Optional[Dict[str, Any]]:
-    try:
-        from solver.device_interface import selected_device_metadata as _selected_device_metadata
-    except ImportError:
-        return None
-
-    try:
-        return _selected_device_metadata(mode)
-    except Exception:
-        return None
 
 
 def render_all_charts(payload: Dict[str, Any]) -> Dict[str, Any]:

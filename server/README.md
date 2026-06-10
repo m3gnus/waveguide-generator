@@ -15,15 +15,11 @@ python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r server/requirements.txt
 ./.venv/bin/pip install -r server/requirements-gmsh.txt
-
-# BEMPP fallback only, when Metal BEM is not ready on this host
-./.venv/bin/pip install pyopencl
-./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
 ```
 
 Notes:
 
-- The root setup scripts (`install/install.sh` and `install/install.bat`) automatically install HornLab mesher, Metal BEM, and gmsh, then install `bempp-cl`/OpenCL fallback dependencies only when Metal BEM is not ready.
+- The root setup scripts (`install/install.sh` and `install/install.bat`) automatically install the HornLab mesher, Metal BEM, and gmsh.
 - `server/requirements.txt` installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs.
 - `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
@@ -33,19 +29,9 @@ Notes:
   - `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev -r server/requirements-gmsh.txt`
   - Headless Linux: `./.venv/bin/pip install --pre --extra-index-url https://gmsh.info/python-packages-dev-nox -r server/requirements-gmsh.txt`
 
-### 1.0 macOS OpenCL CPU setup (investigation-only on Apple Silicon)
+### 1.0 Backend Python resolution
 
-On Apple Silicon, the helper below creates a no-space conda environment with `pocl` (Portable OpenCL CPU runtime). This environment is still useful for reproducing the current `bempp-cl` OpenCL failure boundary, but it is not a validated `/api/solve` runtime contract today.
-
-**Apple Silicon GPU viability (concluded 2026-03-21):** Apple Silicon exposes GPU compute only through Metal; there is no native OpenCL GPU driver. `pocl` provides a CPU-only OpenCL runtime — it cannot target the Apple GPU. `bempp-cl 0.4.x` requires an OpenCL context and has no Metal backend, so GPU-accelerated BEM solving on Apple Silicon is architecturally blocked under the current stack. The maintained runtime contract treats Apple Silicon OpenCL (both CPU and GPU modes) as unsupported for `/api/solve`.
-
-From repository root:
-
-```bash
-./scripts/setup-opencl-backend.sh
-```
-
-After that, the helper writes this repo marker:
+The install scripts write the preferred backend interpreter to this repo marker:
 
 ```bash
 .waveguide/backend-python.path
@@ -56,15 +42,9 @@ After that, the helper writes this repo marker:
 1. `PYTHON_BIN`
 2. `WG_BACKEND_PYTHON`
 3. `.waveguide/backend-python.path`
-4. fallback probe across project `.venv`, OpenCL CPU env fallback, then `python3`
+4. fallback probe across project `.venv`, a legacy `$HOME/.waveguide-generator/opencl-cpu-env` interpreter when present, then `python3`
 
-When step 4 is used, startup prefers the first interpreter whose runtime doctor reports all required dependencies ready; if none are ready, it falls back to the same raw order (`.venv` -> OpenCL CPU env -> `python3`).
-
-For OpenCL CPU setup, the marker value is:
-
-```bash
-$HOME/.waveguide-generator/opencl-cpu-env/bin/python
-```
+When step 4 is used, startup prefers the first interpreter whose runtime doctor reports all required dependencies ready; if none are ready, it falls back to the same raw order.
 
 ### 1.0.1 Backend preflight verification
 
@@ -85,20 +65,13 @@ Preflight always runs under the interpreter selected by the shared startup contr
 - `fastapi` (backend startup)
 - `gmsh` (`/api/mesh/build`)
 - `hornlab-waveguide-mesher` (`/api/mesh/build`, viewport meshing, and HornLab mesher jobs)
-- `bempp-cl` and OpenCL runtime availability (`/api/solve`) unless the Metal BEM backend is ready
-
-The dependency doctor also reports optional bounded solve validation evidence (`bounded_solve_validation`) sourced from the persisted reference-horn probe record:
-
-- default path: `output/runtime/bounded_solve_validation.json`
-- override path: `WG_BOUNDED_SOLVE_RECORD_PATH=/abs/path.json`
-- refresh command (must run with solve enabled): `node scripts/run-backend-python.js --cwd server scripts/benchmark_reference_horn.py --freq 1000 --device auto --precision single --timeout 30`
+- `hornlab-metal-bem` (`/api/solve`)
 
 Current Apple Silicon contract:
 
-- HornLab Metal BEM is the preferred `/api/solve` path when available.
+- HornLab Metal BEM is the only `/api/solve` backend and requires Apple Silicon macOS. Mesh building and exports work on all platforms.
 - The Swift native helper must be selected from `.build/release`; strict preflight and doctor report `metal_release_helper` as required on Apple Silicon.
 - Build or repair the helper with `npm run build:metal-helper`.
-- The BEMPP/OpenCL path remains a fallback path when Metal BEM is unavailable on supported hosts.
 
 ### 1.0.2 Backend dependency doctor
 
@@ -129,36 +102,25 @@ Doctor report contract:
   - `fastapi`
   - `gmsh` Python API
   - `hornlab-waveguide-mesher`
-  - `bempp-cl`
-  - OpenCL runtime
+  - `hornlab-metal-bem` (required; `/api/solve`)
   - Metal native release helper (`metal_release_helper`, required on Apple Silicon)
-  - bounded solve validation (`bounded_solve_validation`)
   - `matplotlib` (optional; chart render endpoints)
 - Summary includes endpoint-scoped readiness:
   - `summary.solveReady` / `summary.solveIssues` (`/api/solve`)
   - `summary.meshBuildReady` / `summary.meshBuildIssues` (`/api/mesh/build`)
 
-Cross-platform notes:
+### 1.1 Solver backend policy (`/api/solve`)
 
-- Windows/Linux GPU OpenCL relies on vendor driver packages (NVIDIA/AMD/Intel).
-- This repository does not currently provide a fully automatic cross-vendor GPU driver installer.
-- Linux CPU fallback is typically `pocl-opencl-icd` from your distro packages.
+`hornlab-metal-bem` is the only solve backend. The request field `solver_backend` accepts:
 
-### 1.1 Device mode policy (`/api/solve`)
-
-The solver now supports explicit device mode selection:
-
-- `auto`
-- `opencl_cpu`
-- `opencl_gpu`
+- `auto` (resolves to `metal`)
+- `metal`
 
 Notes:
 
-- `auto` follows a conservative supported-runtime policy: `opencl_cpu` first, then `opencl_gpu` only when both GPU and CPU OpenCL contexts are validated.
-- OpenCL drivers are required. If OpenCL modes are unavailable, `/api/solve` returns an explicit runtime warning/error (no numba fallback).
-- With current bempp-cl `0.4.x`, singular assembly still requires a CPU OpenCL context. GPU-only OpenCL runtimes are reported unsupported for `opencl_gpu` instead of using context aliasing fallbacks.
-- On Apple Silicon, the current OpenCL solve path is intentionally reported unsupported/unready until a bounded solve is validated end-to-end; the existing `pocl` CPU setup is investigation-only.
-- The solver now clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
+- Requests with `solver_backend: "bempp"` are rejected with `422`: the bempp solver backend was removed; hornlab-metal-bem is the only solve backend.
+- Metal BEM requires Apple Silicon macOS. On other hosts `/api/solve` reports the solver runtime as unavailable, while mesh building and exports keep working.
+- The solver clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
 - Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalized plane descriptors, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
 - `results.directivity` is a plane-keyed map containing only the requested planes; callers must not assume all of `horizontal`, `vertical`, and `diagonal` are always present.
 
@@ -169,10 +131,9 @@ The backend now enforces a version matrix at runtime:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `2317b804976d54eb86240cae1b99bb5007659acf` | `/api/mesh/build` |
-| HornLab Metal BEM   | `0cc9c7426173ac51bf9333a0f51f4d2012c92dcc` | default `/api/solve` backend when ready |
+| HornLab mesher      | `2eb7b85e16952b2854ae0cadb661b87c4ad02313` | `/api/mesh/build` |
+| HornLab Metal BEM   | `59528f5a0993ff4718d9037baae5fac008705b0c` | `/api/solve` (only solve backend; Apple Silicon macOS) |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
-| bempp-cl            | `d4f23c4b77b4e86e0b2c9da42db39fea2995bb33` | BEMPP fallback `/api/solve` backend |
 
 Notes:
 
@@ -184,12 +145,6 @@ From repository root:
 
 ```bash
 ./.venv/bin/python server/app.py
-```
-
-Or explicitly use the OpenCL CPU environment:
-
-```bash
-$HOME/.waveguide-generator/opencl-cpu-env/bin/python server/app.py
 ```
 
 This starts Uvicorn on `0.0.0.0:8000`.
@@ -208,17 +163,10 @@ python3 -m venv .venv
 ./.venv/bin/python server/app.py
 ```
 
-Optional for `/api/solve`:
-
-```bash
-./.venv/bin/pip install pyopencl
-./.venv/bin/pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33
-```
-
 Notes:
 
 - `/api/mesh/build` requires the Python `gmsh` package.
-- `/api/solve` requires one ready solver backend: Metal BEM when available, otherwise `bempp-cl` plus OpenCL.
+- `/api/solve` requires the Metal BEM solver backend (`hornlab-metal-bem`, Apple Silicon macOS only).
 - Plot rendering uses the non-interactive Matplotlib `Agg` backend, so chart/directivity endpoints do not require a display server.
 - On headless Linux, prefer the Gmsh `-nox` wheel index documented above if the default wheel is unavailable.
 
@@ -228,63 +176,6 @@ Quick verification:
 curl http://localhost:8000/health
 ```
 
-### 2.2 Symmetry benchmark harness
-
-For repeatable symmetry-policy experiments that do not require `gmsh` or `bempp-cl`, run:
-
-```bash
-cd server
-python3 scripts/benchmark_symmetry.py --iterations 25
-```
-
-This uses deterministic synthetic fixtures for:
-
-- full-domain reference
-- half-domain symmetry reduction
-- quarter-domain symmetry reduction
-- rejected reduction when the source tag is off-center
-
-### 2.3 Reference-horn bounded runtime repro harness
-
-For a bounded reference-horn repro (HornLab mesh build + optional 1-frequency solve + precision support matrix), run:
-
-```bash
-cd server
-python3 scripts/benchmark_reference_horn.py [options]
-```
-
-Or from repository root:
-
-```bash
-npm run benchmark:reference-horn
-```
-
-Options:
-
-- `--freq FLOAT` — Single frequency to solve (Hz, default: 1000)
-- `--sweep` — Run a 3-frequency sweep (0.8×, 1×, 1.2×) instead of single frequency
-- `--device MODE` — Device mode: `auto|opencl_gpu|opencl_cpu` (default: `auto`)
-- `--precision MODE` — BEM precision: `single|double|both` (default: `single`; `both` tests single then double)
-- `--json` — Output results as JSON
-- `--no-solve` — Skip solve step, only test mesh preparation
-- `--timeout SECONDS` — Max time per solve attempt (default: 120)
-
-What this reports:
-
-- mesh-prep success/failure for the reference-horn HornLab mesher preset (vertices, triangles, tag counts)
-- selected runtime/device metadata for the requested mode
-- per-precision (`single`, `double`) solve outcomes on the active host
-- solver stage timings (elapsed, GMRES iterations, SPL value)
-- unsupported precision modes surfaced explicitly
-- persisted bounded-solve readiness evidence for preflight/doctor (`output/runtime/bounded_solve_validation.json`) when solve is enabled (not `--no-solve`)
-
-Exit codes:
-
-- `0` — All requested operations succeeded
-- `1` — Mesh preparation failed
-- `2` — All solve attempts failed (but mesh prep succeeded)
-- `3` — Runtime unavailable (bempp/OpenCL not installed)
-
 ## 3. API Endpoints
 
 ### `GET /health`
@@ -293,31 +184,22 @@ Health check and solver status.
 
 Includes:
 
-- dependency matrix/runtime payload under `dependencies`
-- solver readiness gate (`solverReady`) derived from doctor `summary.solveReady` (includes bounded solve validation evidence)
+- `solver`: `metal-bem` when the Metal BEM runtime is ready, otherwise `unavailable`
+- `solverReady`: Metal BEM solve readiness
+- `solverBackends.metal`: `{ ready, status }` for the only solve backend
+- dependency matrix/runtime payload under `dependencies` (runtime entries: `python`, `gmsh_python`, `hornlab_waveguide_mesher`, `hornlab_metal_bem`)
 - settings capability metadata under `capabilities`, including:
   - `simulationBasic.controls`
   - `simulationAdvanced.available`
-  - `simulationAdvanced.controls`
+  - `simulationAdvanced.controls` (`solver_backend`)
   - `simulationAdvanced.reason`
   - `simulationAdvanced.plannedControls`
-- selected BEM device metadata under `deviceInterface`, including:
-  - `requested_mode`
-  - `selected_mode`
-  - `interface` (`opencl` when available)
-  - `device_type` (`cpu` or `gpu`)
-  - `device_name`
-  - `fallback_reason`
-  - `selection_policy` (`supported_opencl_modes`)
-  - `supported_modes` (validated concrete modes for the current runtime)
-  - `available_modes`
-  - `mode_availability` (per-mode `available` / `supported` / `reason` for `auto|opencl_cpu|opencl_gpu`)
-  - `opencl_diagnostics` (base/runtime/cpu/gpu detection details)
+  - `solverBackends.backends` (`metal` only)
 - dependency doctor payload under `dependencyDoctor`, including:
   - `summary.requiredReady|requiredIssues`
   - `summary.solveReady|solveIssues`
   - `components`
-  - `solveReadiness` (bounded solve validation status/detail/path)
+  - `solveReadiness`
 
 ### `GET /api/updates/check`
 
@@ -354,9 +236,8 @@ Optional:
   - solve results package directivity per requested plane only; use `results.metadata.directivity.enabled_axes` or `results.metadata.directivity.planes` to inspect which cuts were computed
 - `verbose`
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
-- `advanced_settings`:
-  - `use_burton_miller` (bool, stable solver runtime override)
-- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, `advanced_settings.bem_precision`. `device_mode` must still be `auto`, `opencl_cpu`, or `opencl_gpu` when provided. `device_mode`, `use_optimized`, `advanced_settings.enable_warmup`, and `advanced_settings.bem_precision` are ignored; `/api/solve` always runs the stable solver entrypoint with the reduced public override surface and fixed numerics (single precision, no warm-up).
+- `solver_backend` (`auto` | `metal`, default `auto`; both resolve to the Metal BEM backend)
+- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, and `advanced_settings`. They are validated for shape but ignored; `/api/solve` always runs the Metal BEM solver entrypoint with its native solver settings.
 
 Validation behavior:
 
@@ -377,7 +258,7 @@ Runtime metadata behavior:
   - `metadata.partial_success`
   - `metadata.mesh_validation`
   - `metadata.unit_detection`
-  - `metadata.device_interface` (selected interface/device information and fallback details)
+  - `metadata.device_interface` (selected Metal device information)
   - `metadata.performance.total_time_seconds`
   - `metadata.performance.bem_precision` (`single` for the stable optimized solve path)
 
@@ -492,7 +373,7 @@ MWG_LOG_LEVEL=DEBUG ./.venv/bin/python server/app.py
   - unsupported request values (`sim_type`, `msh_version`, etc.)
 - `503` dependency/runtime unavailable:
   - missing or unsupported `gmsh` Python runtime for HornLab mesh build
-  - missing/unsupported `bempp` runtime for solve
+  - missing/unsupported `hornlab-metal-bem` runtime for solve
 - `404` missing resource:
   - unknown `job_id`
   - results/artifacts not present
@@ -507,7 +388,7 @@ MWG_LOG_LEVEL=DEBUG ./.venv/bin/python server/app.py
 curl http://localhost:8000/health
 ```
 
-2. Confirm runtime versions against supported matrix (`python`, `gmsh`, `bempp`).
+2. Confirm runtime versions against supported matrix (`python`, `gmsh`, `hornlab-metal-bem`).
 3. Reproduce with a minimal request (for `422`/contract debugging use the payload-validation curl above).
 4. For `503`, inspect `detail` from response and install/fix missing runtime.
 5. For job-state issues, inspect:

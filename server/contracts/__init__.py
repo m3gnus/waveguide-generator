@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, ConfigDict, field_validator
 
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
-VALID_SOLVER_BACKENDS = {"auto", "bempp", "metal"}
+VALID_SOLVER_BACKENDS = {"auto", "metal"}
 VALID_BEM_PRECISIONS = {"single", "double"}
 DEVICE_MODE_ALIASES = {
     "opencl": "opencl_cpu",
@@ -145,16 +145,18 @@ def normalize_contract_solver_backend(value: Any) -> str:
     aliases = {
         "default": "auto",
         "native": "auto",
-        "bempp-cl": "bempp",
-        "bempp_cl": "bempp",
-        "previous": "bempp",
         "hornlab-metal": "metal",
         "metal-bem": "metal",
         "hornlab-metal-bem": "metal",
     }
     normalized = aliases.get(raw, raw)
+    if normalized in {"bempp", "bempp-cl", "previous"}:
+        raise ValueError(
+            "The bempp solver backend was removed; hornlab-metal-bem is the only "
+            "solve backend. Use solver_backend='auto' or 'metal'."
+        )
     if normalized not in VALID_SOLVER_BACKENDS:
-        raise ValueError("solver_backend must be one of: auto, bempp, metal.")
+        raise ValueError("solver_backend must be one of: auto, metal.")
     return normalized
 
 

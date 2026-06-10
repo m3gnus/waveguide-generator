@@ -12,8 +12,8 @@ scipy
 meshio>=4.0.16
 
 # Pinned VCS dependencies for reproducible public installs.
-git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@2317b804976d54eb86240cae1b99bb5007659acf
-git+https://github.com/m3gnus/hornlab-metal-bem.git@0cc9c7426173ac51bf9333a0f51f4d2012c92dcc
+git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@2eb7b85e16952b2854ae0cadb661b87c4ad02313
+git+https://github.com/m3gnus/hornlab-metal-bem.git@59528f5a0993ff4718d9037baae5fac008705b0c
 
 # hornlab-waveguide-mesher owns the production Gmsh mesh build dependency.
 

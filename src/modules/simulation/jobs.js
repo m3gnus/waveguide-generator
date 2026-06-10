@@ -42,7 +42,6 @@ export function buildQueuedSimulationJob({
       meshValidationMode: config.meshValidationMode,
       frequencySpacing: config.frequencySpacing,
       verbose: config.verbose,
-      advancedSettings: config.advancedSettings ? { ...config.advancedSettings } : null,
       polarConfig: config.polarConfig,
       params: { ...preparedParams },
       stateSnapshot,

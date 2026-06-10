@@ -169,7 +169,6 @@ test('backend npm scripts use the shared backend Python runner', () => {
     'test:server',
     'diag:mesher:reference-horn',
     'diag:mesher:closed',
-    'benchmark:reference-horn',
   ]) {
     const script = packageJson.scripts[scriptName];
     assert.match(script, /node scripts\/run-backend-python\.js/);

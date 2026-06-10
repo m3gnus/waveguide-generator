@@ -7,7 +7,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PREFERRED_PYTHON_FILE="$ROOT/.waveguide/backend-python.path"
-BEMPP_CL_URL="git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  WG - Waveguide Generator — Install / Update                ║"
@@ -204,7 +203,6 @@ echo "  gmsh Python version: $(.venv/bin/python -c "import gmsh; print(gmsh.__ve
 echo ""
 
 echo "Checking Metal BEM backend..."
-_METAL_BEM_READY=0
 if _METAL_STATUS_OUTPUT="$(PYTHONPATH="$ROOT/server" .venv/bin/python - <<'METALCHECK' 2>&1
 import sys
 from solver.metal_solver import metal_backend_status
@@ -217,155 +215,21 @@ print(status.get("reason") or "Metal BEM backend is not available on this host."
 sys.exit(1)
 METALCHECK
 )"; then
-    _METAL_BEM_READY=1
     echo "  Metal BEM is ready."
     [[ -n "$_METAL_STATUS_OUTPUT" ]] && echo "  $_METAL_STATUS_OUTPUT"
-    echo "  Skipping bempp-cl and OpenCL fallback setup."
 else
-    echo "  Metal BEM is not ready."
+    echo "  WARNING: Metal BEM is not ready."
     [[ -n "$_METAL_STATUS_OUTPUT" ]] && echo "  $_METAL_STATUS_OUTPUT"
-    echo "  Installing BEMPP/OpenCL fallback dependencies."
+    echo "  hornlab-metal-bem is the only solve backend; /api/solve requires an"
+    echo "  Apple Silicon Mac with the native helper built (npm run build:metal-helper)."
+    echo "  Mesh building and exports still work without it."
 fi
 echo ""
-
-_OPENCL_OK=0
-
-if [[ "$_METAL_BEM_READY" -eq 0 ]]; then
-    # ── Automatic: bempp-cl ────────────────────────────────────────────
-    echo "Installing bempp-cl fallback (needed when Metal BEM is unavailable)..."
-    if .venv/bin/pip install --quiet pyopencl && .venv/bin/pip install "$BEMPP_CL_URL"; then
-        echo "  bempp-cl installed."
-
-        # Patch bempp-cl's get_vector_width for non-standard native vector widths.
-        # pocl on Apple Silicon reports native_vector_width_float=2 which triggers
-        # a KeyError in unpatched bempp-cl (only {1,4,8,16} accepted).
-        .venv/bin/python - <<'VECPATCH'
-import importlib, pathlib, sys
-
-spec = importlib.util.find_spec("bempp_cl.core.opencl_kernels")
-if spec is None or spec.origin is None:
-    sys.exit(0)
-target = pathlib.Path(spec.origin)
-src = target.read_text()
-if "_SUPPORTED_VECTOR_WIDTHS" in src:
-    print("  Vector-width patch: already applied.")
-    sys.exit(0)
-
-old = (
-    '    if bempp_cl.api.VECTORIZATION_MODE == "auto":\n'
-    '        return get_native_vector_width(default_device(device_type), precision)\n'
-    '    else:'
-)
-new = (
-    '    if bempp_cl.api.VECTORIZATION_MODE == "auto":\n'
-    '        native = get_native_vector_width(default_device(device_type), precision)\n'
-    '        if native not in _SUPPORTED_VECTOR_WIDTHS:\n'
-    '            return max((w for w in _SUPPORTED_VECTOR_WIDTHS if w <= native), default=1)\n'
-    '        return native\n'
-    '    else:'
-)
-if old not in src:
-    print("  Vector-width patch: could not locate target — skipping.")
-    sys.exit(0)
-# Also insert the constant before get_vector_width
-marker = 'def get_vector_width(precision, device_type="cpu"):'
-src = src.replace(marker, '_SUPPORTED_VECTOR_WIDTHS = {1, 4, 8, 16}\n\n\n' + marker, 1)
-src = src.replace(old, new)
-target.write_text(src)
-print("  Vector-width patch: applied to", target)
-VECPATCH
-
-    else
-        echo "  WARNING: bempp-cl automatic install failed."
-        echo "           You can retry later with:"
-        echo "             .venv/bin/pip install pyopencl"
-        echo "             .venv/bin/pip install $BEMPP_CL_URL"
-    fi
-    echo ""
-
-    # ── OpenCL runtime check ───────────────────────────────────────────
-    echo "Checking OpenCL runtime for bempp-cl simulations..."
-    _OS="$(uname -s)"
-    _ARCH="$(uname -m)"
-
-    if .venv/bin/python -c "import pyopencl; assert pyopencl.get_platforms()" 2>/dev/null; then
-        echo "  OpenCL is available."
-        _OPENCL_OK=1
-    else
-        echo "  No OpenCL platform found."
-
-        if [[ "$_OS" == "Linux" ]]; then
-            _POCL_INSTALLED=0
-            if command -v apt-get >/dev/null 2>&1; then
-                echo "  Installing pocl-opencl-icd via apt-get..."
-                sudo apt-get install -y pocl-opencl-icd >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
-            elif command -v dnf >/dev/null 2>&1; then
-                echo "  Installing pocl via dnf..."
-                sudo dnf install -y pocl >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
-            elif command -v pacman >/dev/null 2>&1; then
-                echo "  Installing pocl via pacman..."
-                sudo pacman -S --noconfirm pocl >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
-            fi
-
-            if [[ "$_POCL_INSTALLED" -eq 1 ]] && .venv/bin/python -c "import pyopencl; assert pyopencl.get_platforms()" 2>/dev/null; then
-                echo "  OpenCL (pocl CPU runtime) is now available."
-                _OPENCL_OK=1
-            else
-                echo ""
-                echo "  WARNING: No OpenCL runtime available. Acoustic simulations will not work."
-                echo "           To fix, install a CPU or GPU OpenCL runtime:"
-                echo "             sudo apt-get install pocl-opencl-icd   # Debian/Ubuntu"
-                echo "             sudo dnf install pocl                   # Fedora/RHEL"
-                echo "             sudo pacman -S pocl                     # Arch Linux"
-                echo "           Or install proprietary GPU drivers that include OpenCL."
-            fi
-
-        elif [[ "$_OS" == "Darwin" ]]; then
-            _POCL_INSTALLED=0
-            if command -v brew >/dev/null 2>&1; then
-                echo "  Installing pocl via Homebrew..."
-                brew install pocl >/dev/null 2>&1 && _POCL_INSTALLED=1 || true
-            fi
-
-            if [[ "$_POCL_INSTALLED" -eq 1 ]] && .venv/bin/python -c "import pyopencl; assert pyopencl.get_platforms()" 2>/dev/null; then
-                echo "  OpenCL (pocl CPU runtime) is now available."
-                _OPENCL_OK=1
-            else
-                echo ""
-                echo "  WARNING: No OpenCL runtime available. Acoustic simulations will not work."
-                if command -v brew >/dev/null 2>&1; then
-                    echo "           To fix: brew install pocl"
-                else
-                    echo "           To fix: install Homebrew (https://brew.sh/), then: brew install pocl"
-                fi
-                if [[ "$_ARCH" == "arm64" ]]; then
-                    echo ""
-                    echo "           Apple Silicon recommended path:"
-                    echo "             bash scripts/setup-opencl-backend.sh"
-                    echo "           This creates a conda environment with pocl (CPU OpenCL)."
-                    echo "           pip's pyopencl on macOS cannot discover pocl — the conda"
-                    echo "           build is required for BEM solves on Apple Silicon."
-                fi
-            fi
-        fi
-    fi
-    echo ""
-fi
 
 echo "Recording backend interpreter contract..."
 mkdir -p "$ROOT/.waveguide"
 
-# Determine the best backend interpreter.
-# On macOS/arm64 pip's pyopencl links to Apple's OpenCL.framework which cannot
-# discover pocl, so the conda-based opencl-cpu-env (created by
-# scripts/setup-opencl-backend.sh) is the only path to working BEM solves.
-# Prefer opencl-cpu-env when it exists and .venv lacks a working OpenCL CPU
-# runtime.
 _BACKEND_PYTHON="$ROOT/.venv/bin/python"
-_OPENCL_CPU_ENV="$HOME/.waveguide-generator/opencl-cpu-env/bin/python"
-if [[ "$_METAL_BEM_READY" -eq 0 && "$_OPENCL_OK" -eq 0 ]] && [ -x "$_OPENCL_CPU_ENV" ]; then
-    _BACKEND_PYTHON="$_OPENCL_CPU_ENV"
-fi
 
 printf '%s\n' "$_BACKEND_PYTHON" > "$PREFERRED_PYTHON_FILE"
 echo "  Preferred backend interpreter: $_BACKEND_PYTHON"
