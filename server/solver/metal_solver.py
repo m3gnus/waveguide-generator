@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,7 @@ def metal_backend_status() -> dict[str, Any]:
     helper_path = None
     helper_source = None
     helper_build = None
+    helper_modified = None
     if discover_native_runtime is not None:
         try:
             native_status = discover_native_runtime(run_smoke_test=False)
@@ -92,10 +94,18 @@ def metal_backend_status() -> dict[str, Any]:
                 helper_build = "debug"
             elif raw_helper_path:
                 helper_build = "custom"
+            if raw_helper_path:
+                try:
+                    helper_modified = datetime.fromtimestamp(
+                        Path(raw_helper_path).stat().st_mtime, tz=timezone.utc
+                    ).isoformat()
+                except OSError:
+                    helper_modified = None
         except Exception:
             helper_path = None
             helper_source = None
             helper_build = None
+            helper_modified = None
 
     return {
         "available": bool(status.available),
@@ -105,6 +115,10 @@ def metal_backend_status() -> dict[str, Any]:
         "nativeHelperPath": helper_path,
         "nativeHelperSource": helper_source,
         "nativeHelperBuild": helper_build,
+        # Stale solver runtimes are invisible otherwise: the server process
+        # keeps its imported hornlab-metal-bem code until restart, so expose
+        # when the helper binary on disk was last rebuilt.
+        "nativeHelperModified": helper_modified,
         "reason": status.reason,
     }
 
