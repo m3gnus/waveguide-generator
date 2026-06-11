@@ -28,7 +28,7 @@ SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
         "required_for": "/api/solve backend",
     },
     "hornlab_bempp_bem": {
-        "range": "pinned git commit 4e4c75f",
+        "range": "pinned git commit a8f9bfa",
         "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
     },
     "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
