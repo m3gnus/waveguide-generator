@@ -72,11 +72,33 @@ def opencl_runtime_status() -> dict[str, Any]:
 
     if len(platforms) == 0 or device_count == 0:
         return {"available": False, "reason": "No OpenCL platforms/devices were found."}
+
+    # Platform presence is not sufficient: bempp-cl needs an initializable CPU
+    # device/context (e.g. Apple's OpenCL framework lists a GPU but offers no
+    # usable CPU device). Verify with the exact call the solve path makes; the
+    # result is lru_cached inside the package, so a successful probe is reused.
+    device_name = None
+    try:
+        from hornlab_bempp_bem.device import configure_opencl
+    except ImportError:
+        pass
+    else:
+        try:
+            device_name = configure_opencl("cpu")
+        except Exception as exc:
+            return {
+                "available": False,
+                "platformCount": len(platforms),
+                "deviceCount": device_count,
+                "platforms": platform_names,
+                "reason": f"OpenCL device initialization failed: {exc}",
+            }
     return {
         "available": True,
         "platformCount": len(platforms),
         "deviceCount": device_count,
         "platforms": platform_names,
+        "device": device_name,
         "reason": "OpenCL runtime detected.",
     }
 

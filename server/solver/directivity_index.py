@@ -2,6 +2,11 @@
 
 import numpy as np
 
+try:
+    _trapezoid = np.trapezoid
+except AttributeError:  # numpy < 2 has trapz only; numpy >= 2 removed it
+    _trapezoid = np.trapz
+
 
 def calculate_di_from_polar_patterns(directivity_patterns):
     """
@@ -53,7 +58,7 @@ def calculate_di_from_polar_patterns(directivity_patterns):
             # Trapezoidal integration of p²(θ) sin(θ) dθ over full range
             integrand = p_linear ** 2 * np.sin(angles_rad)
             # Handle θ=0 (sin=0) and θ=π (sin=0) gracefully
-            integral = float(np.trapz(integrand, angles_rad))
+            integral = float(_trapezoid(integrand, angles_rad))
 
             if integral > 0:
                 # DI = 10 * log10(2 / integral)
