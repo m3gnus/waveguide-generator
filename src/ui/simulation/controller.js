@@ -385,13 +385,17 @@ export async function submitSimulationControllerJob(
 ) {
   const health = await controller.solver.getHealthStatus();
 
-  const metalReady = Boolean(health?.solverBackends?.metal?.ready ?? health?.solverReady);
+  const solverReady = Boolean(
+    health?.solverReady ||
+      health?.solverBackends?.metal?.ready ||
+      health?.solverBackends?.bempp?.ready
+  );
 
-  if (!metalReady || !health?.mesherReady) {
+  if (!solverReady || !health?.mesherReady) {
     const cachedHealth = getCachedRuntimeHealth() || health;
     const blockedReason = getFeatureBlockedReason(cachedHealth, 'bem-solve');
     throw new Error(
-      blockedReason || 'Metal BEM solver and HornLab mesher must be ready to run simulation.'
+      blockedReason || 'Metal BEM or Bempp and HornLab mesher must be ready to run simulation.'
     );
   }
 

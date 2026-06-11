@@ -8,8 +8,9 @@ function read(path) {
 
 const MESHER_PIN = '2eb7b85e16952b2854ae0cadb661b87c4ad02313';
 const METAL_BEM_PIN = '59528f5a0993ff4718d9037baae5fac008705b0c';
+const BEMPP_BEM_PIN = '796bef42b6e6e6e02086d1b94bfc9d5e8a65ea0e';
 
-test('maintained docs stay aligned with the metal-only solver/runtime contract', () => {
+test('maintained docs stay aligned with the Metal-or-Bempp solver/runtime contract', () => {
   const readme = read('../README.md');
   const projectDoc = read('../docs/PROJECT_DOCUMENTATION.md');
   const serverReadme = read('../server/README.md');
@@ -22,7 +23,10 @@ test('maintained docs stay aligned with the metal-only solver/runtime contract',
 
   for (const [label, text] of maintainedDocs) {
     assert.match(text, /hornlab-metal-bem/i, `${label} should document hornlab-metal-bem`);
+    assert.match(text, /hornlab-bempp-bem|Bempp/i, `${label} should document Bempp`);
     assert.match(text, /Apple Silicon/, `${label} should state the Apple Silicon requirement`);
+    assert.match(text, /OpenCL.*optional|optional OpenCL|OpenCL is optional/i, `${label} should document OpenCL as optional`);
+    assert.match(text, /numba/i, `${label} should document the Bempp numba fallback`);
     assert.match(
       text,
       new RegExp(MESHER_PIN),
@@ -33,10 +37,15 @@ test('maintained docs stay aligned with the metal-only solver/runtime contract',
       new RegExp(METAL_BEM_PIN),
       `${label} should keep the pinned hornlab-metal-bem commit`
     );
+    assert.match(
+      text,
+      new RegExp(BEMPP_BEM_PIN),
+      `${label} should keep the pinned hornlab-bempp-bem commit`
+    );
     assert.doesNotMatch(
       text,
-      /bempp-cl|pyopencl|pocl|opencl_gpu|opencl_cpu/i,
-      `${label} should not document removed bempp/OpenCL install paths`
+      /server\/solver\/solve\.py|opencl-cpu-env|opencl_gpu|opencl_cpu/i,
+      `${label} should not document deleted in-repo solver/OpenCL runtime paths`
     );
     assert.doesNotMatch(
       text,
@@ -47,12 +56,12 @@ test('maintained docs stay aligned with the metal-only solver/runtime contract',
 
   assert.match(
     serverReadme,
-    /only solve backend/i,
-    'server/README.md should state hornlab-metal-bem is the only solve backend'
+    /auto.*Metal.*Bempp|Metal.*Bempp/i,
+    'server/README.md should state Auto can use Metal or Bempp'
   );
   assert.match(
     projectDoc,
-    /only solve backend/i,
-    'PROJECT_DOCUMENTATION.md should state hornlab-metal-bem is the only solve backend'
+    /solver_backend.*auto.*metal.*bempp/i,
+    'PROJECT_DOCUMENTATION.md should document all public solver_backend values'
   );
 });

@@ -134,7 +134,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
         simulationType: '2',
         meshValidationMode: 'invalid',
         frequencySpacing: 'bogus',
-        solverBackend: 'bempp',
+        solverBackend: 'invalid-backend',
         verbose: undefined,
       },
       {
@@ -165,6 +165,47 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
     assert.equal('device_mode' in payload, false);
     assert.equal('verbose' in payload, false);
     assert.equal('advanced_settings' in payload, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('submitSimulation sends Bempp backend selection when requested', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { job_id: 'job-test-bempp' };
+      },
+    };
+  };
+
+  try {
+    const solver = new BemSolver();
+    await solver.submitSimulation(
+      {
+        frequencyStart: 100,
+        frequencyEnd: 1000,
+        numFrequencies: 4,
+        simulationType: '2',
+        solverBackend: 'bempp',
+      },
+      {
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2],
+        surfaceTags: [2],
+        format: 'msh',
+        boundaryConditions: {},
+        metadata: {},
+      }
+    );
+
+    const payload = JSON.parse(calls[0].options.body);
+    assert.equal(payload.solver_backend, 'bempp');
   } finally {
     global.fetch = originalFetch;
   }
@@ -256,6 +297,12 @@ test('view results modal keeps header controls together and rerenders directivit
                 ],
               ],
             },
+            metadata: {
+              solver_backend: 'bempp',
+              engine: 'hornlab-bempp-bem',
+              phase_time_convention: 'exp(+ikr)',
+              device_interface: { selected: 'bempp-cl-numba' },
+            },
           },
         ],
       ]),
@@ -267,6 +314,7 @@ test('view results modal keeps header controls together and rerenders directivit
 
     assert.equal(appendedChildren.length, 1, 'Expected the backdrop to be mounted');
     assert.equal(chartRenderBodies.length, 1, 'Expected initial chart render fetch');
+    assert.equal(chartRenderBodies[0].phase_time_convention, 'metal');
     assert.equal(directivityBodies.length, 1, 'Expected initial directivity render fetch');
     assert.equal(directivityBodies[0].reference_level, -6);
 

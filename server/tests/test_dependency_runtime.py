@@ -25,6 +25,8 @@ def _dependency_status(
     mesher_ready=True,
     metal_bem_ready=True,
     metal_bem_version="0.2.0",
+    bempp_bem_ready=False,
+    bempp_bem_version=None,
 ):
     return {
         "supportedMatrix": {
@@ -36,6 +38,10 @@ def _dependency_status(
             "hornlab_metal_bem": {
                 "range": "pinned git commit 59528f5",
                 "required_for": "/api/solve backend",
+            },
+            "hornlab_bempp_bem": {
+                "range": "pinned git commit 796bef4",
+                "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
             },
             "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
         },
@@ -59,6 +65,12 @@ def _dependency_status(
                 "supported": metal_bem_ready,
                 "ready": metal_bem_ready,
             },
+            "hornlab_bempp_bem": {
+                "available": bempp_bem_ready,
+                "version": bempp_bem_version if bempp_bem_ready else None,
+                "supported": bempp_bem_ready,
+                "ready": bempp_bem_ready,
+            },
         },
     }
 
@@ -75,6 +87,8 @@ class DependencyRuntimeTest(unittest.TestCase):
         fake_metal = types.ModuleType("solver.metal_solver")
         fake_metal.is_metal_solver_available = lambda: False
         fake_metal.metal_backend_status = lambda: {"available": False}
+        fake_bempp = types.ModuleType("solver.bempp_solver")
+        fake_bempp.is_bempp_solver_available = lambda: False
         fake_adapter = types.ModuleType("solver.mesher_adapter")
         fake_adapter.build_waveguide_mesh = lambda payload: {}
 
@@ -84,6 +98,7 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "solver": fake_solver,
                 "solver.deps": fake_deps,
                 "solver.metal_solver": fake_metal,
+                "solver.bempp_solver": fake_bempp,
                 "solver.mesher_adapter": fake_adapter,
             },
         ):
@@ -97,6 +112,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         self.assertFalse(module.HORNLAB_MESHER_AVAILABLE)
         self.assertFalse(module.METAL_SOLVER_READY)
+        self.assertFalse(module.BEMPP_SOLVER_READY)
         self.assertFalse(module.SOLVER_AVAILABLE)
 
     def test_solver_deps_rejects_same_module_from_wrong_distribution(self):
@@ -126,25 +142,38 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertFalse(module.HORNLAB_MESHER_AVAILABLE)
         self.assertIsNone(module.HORNLAB_MESHER_VERSION)
 
-    def test_dependency_matrix_pins_metal_bem_and_mesher_without_bempp(self):
+    def test_dependency_matrix_pins_solve_backends_and_mesher(self):
         self.assertEqual(
             set(SUPPORTED_DEPENDENCY_MATRIX.keys()),
-            {"python", "hornlab_waveguide_mesher", "hornlab_metal_bem", "gmsh_python"},
+            {
+                "python",
+                "hornlab_waveguide_mesher",
+                "hornlab_metal_bem",
+                "hornlab_bempp_bem",
+                "gmsh_python",
+            },
         )
         self.assertIn("2eb7b85", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
         self.assertIn("59528f5", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
+        self.assertIn("796bef4", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
         self.assertEqual(
-            SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["required_for"],
-            "/api/solve backend",
+            SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["required_for"],
+            "/api/solve fallback backend (non-Apple-Silicon)",
         )
 
         status = get_dependency_status()
         self.assertEqual(
             set(status["runtime"].keys()),
-            {"python", "gmsh_python", "hornlab_waveguide_mesher", "hornlab_metal_bem"},
+            {
+                "python",
+                "gmsh_python",
+                "hornlab_waveguide_mesher",
+                "hornlab_metal_bem",
+                "hornlab_bempp_bem",
+            },
         )
-        self.assertNotIn("bempp", status["runtime"])
-        self.assertNotIn("bempp_cl", status["supportedMatrix"])
+        self.assertIn("hornlab_bempp_bem", status["runtime"])
+        self.assertIn("hornlab_bempp_bem", status["supportedMatrix"])
 
     def test_health_reports_dependency_payload(self):
         dependency_status = _dependency_status(metal_bem_ready=False)
@@ -176,6 +205,9 @@ class DependencyRuntimeTest(unittest.TestCase):
         ), patch("api.routes_misc.METAL_SOLVER_READY", False), patch(
             "api.routes_misc.metal_backend_status",
             return_value={"available": False, "reason": "hornlab-metal-bem is not installed."},
+        ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
+            "api.routes_misc.bempp_backend_status",
+            return_value={"available": False, "reason": "hornlab-bempp-bem is not installed."},
         ), patch("api.routes_misc.HORNLAB_MESHER_AVAILABLE", True), patch(
             "api.routes_misc.HORNLAB_MESHER_RUNTIME_READY", True
         ):
@@ -191,8 +223,9 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertEqual(
             response["dependencyDoctor"]["components"], dependency_doctor["components"]
         )
-        self.assertEqual(set(response["solverBackends"].keys()), {"metal"})
+        self.assertEqual(set(response["solverBackends"].keys()), {"metal", "bempp"})
         self.assertFalse(response["solverBackends"]["metal"]["ready"])
+        self.assertFalse(response["solverBackends"]["bempp"]["ready"])
         self.assertNotIn("deviceInterface", response)
         self.assertEqual(
             response["capabilities"]["simulationBasic"]["controls"],
@@ -259,6 +292,9 @@ class DependencyRuntimeTest(unittest.TestCase):
             "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
         ), patch("api.routes_misc.METAL_SOLVER_READY", True), patch(
             "api.routes_misc.metal_backend_status", return_value=metal_status
+        ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
+            "api.routes_misc.bempp_backend_status",
+            return_value={"available": False, "reason": "hornlab-bempp-bem is not installed."},
         ), patch("api.routes_misc.HORNLAB_MESHER_AVAILABLE", True), patch(
             "api.routes_misc.HORNLAB_MESHER_RUNTIME_READY", True
         ):
@@ -287,6 +323,9 @@ class DependencyRuntimeTest(unittest.TestCase):
             "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
         ), patch("api.routes_misc.METAL_SOLVER_READY", True), patch(
             "api.routes_misc.metal_backend_status", return_value=metal_status
+        ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
+            "api.routes_misc.bempp_backend_status",
+            return_value={"available": False, "reason": "hornlab-bempp-bem is not installed."},
         ), patch("api.routes_misc.HORNLAB_MESHER_AVAILABLE", True), patch(
             "api.routes_misc.HORNLAB_MESHER_RUNTIME_READY", True
         ):
@@ -294,9 +333,10 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         self.assertTrue(response["solverReady"])
         self.assertEqual(response["solver"], "metal-bem")
-        self.assertEqual(set(response["solverBackends"].keys()), {"metal"})
+        self.assertEqual(set(response["solverBackends"].keys()), {"metal", "bempp"})
         self.assertTrue(response["solverBackends"]["metal"]["ready"])
         self.assertEqual(response["solverBackends"]["metal"]["status"], metal_status)
+        self.assertFalse(response["solverBackends"]["bempp"]["ready"])
         self.assertNotIn("deviceInterface", response)
 
     def test_solve_metal_not_ready_returns_503(self):
@@ -343,6 +383,53 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("supported_platform=False", detail)
         create_simulation_job.assert_not_called()
 
+    def test_auto_solve_with_no_backend_returns_neither_backend_guidance(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format="msh",
+                boundaryConditions={},
+                metadata={},
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=8,
+            sim_type="2",
+            solver_backend="auto",
+            options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": {
+                "formula_type": "OSSE",
+                "wall_thickness": 6.0,
+                "enc_depth": 0.0,
+            }}},
+        )
+
+        with patch("api.routes_simulation.resolve_solver_backend", return_value="metal"), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch(
+            "api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True
+        ), patch(
+            "api.routes_simulation.build_waveguide_mesh", MagicMock()
+        ), patch("api.routes_simulation.METAL_SOLVER_READY", False), patch(
+            "api.routes_simulation.BEMPP_SOLVER_READY", False
+        ), patch(
+            "api.routes_simulation.metal_backend_status",
+            return_value={"available": False, "reason": "metal missing"},
+        ), patch(
+            "api.routes_simulation.bempp_backend_status",
+            return_value={"available": False, "reason": "bempp missing"},
+        ), patch("api.routes_simulation.create_simulation_job") as create_simulation_job:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(submit_simulation(request))
+
+        self.assertEqual(ctx.exception.status_code, 503)
+        detail = str(ctx.exception.detail)
+        self.assertIn("No BEM solver backend is available", detail)
+        self.assertIn("Metal: metal missing", detail)
+        self.assertIn("BEMPP: bempp missing", detail)
+        self.assertIn("server/requirements-bempp.txt", detail)
+        create_simulation_job.assert_not_called()
+
     def test_hornlab_solve_requires_mesher_runtime(self):
         dependency_status = _dependency_status(
             gmsh_ready=False,
@@ -384,6 +471,9 @@ class DependencyRuntimeTest(unittest.TestCase):
         ), patch("api.routes_misc.METAL_SOLVER_READY", True), patch(
             "api.routes_misc.metal_backend_status",
             return_value={"available": True, "supportedPlatform": True, "reason": None},
+        ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
+            "api.routes_misc.bempp_backend_status",
+            return_value={"available": False, "reason": "hornlab-bempp-bem is not installed."},
         ), patch(
             "api.routes_misc.HORNLAB_MESHER_AVAILABLE", True
         ), patch("api.routes_misc.HORNLAB_MESHER_RUNTIME_READY", False):

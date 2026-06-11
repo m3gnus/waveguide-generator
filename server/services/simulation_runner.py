@@ -17,6 +17,7 @@ from services.solver_runtime import (
     HORNLAB_MESHER_RUNTIME_READY,
     build_waveguide_mesh,
     resolve_solver_backend,
+    solve_bempp_from_msh,
     solve_metal_from_msh,
 )
 from services.job_runtime import (
@@ -337,18 +338,20 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 job_id, _stats_exc,
             )
 
+        solver_label = "BEMPP BEM" if solver_backend == "bempp" else "Metal BEM"
+        solve_from_msh = solve_bempp_from_msh if solver_backend == "bempp" else solve_metal_from_msh
         update_job_stage(
             job_id,
             "bem_solve",
             progress=0.30,
-            stage_message="Configuring Metal BEM solve",
+            stage_message=f"Configuring {solver_label} solve",
         )
         _cancellation_callback("Cancellation requested before solve start")
 
         if not tmp_msh_path:
-            raise RuntimeError("Metal BEM solve requires a generated .msh artifact.")
+            raise RuntimeError(f"{solver_label} solve requires a generated .msh artifact.")
         results = await asyncio.to_thread(
-            solve_metal_from_msh,
+            solve_from_msh,
             tmp_msh_path,
             request,
             progress_callback=lambda progress: _apply_solver_stage_to_job(

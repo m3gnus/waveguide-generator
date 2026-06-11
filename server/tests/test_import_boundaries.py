@@ -132,6 +132,7 @@ class ImportBoundaryTest(unittest.TestCase):
         allowed_route_import = {'router'}
         allowed_job_runtime_import = {'startup_jobs_runtime'}
         allowed_solver_bootstrap_import = {
+            'BEMPP_SOLVER_READY',
             'HORNLAB_MESHER_AVAILABLE',
             'HORNLAB_MESHER_RUNTIME_READY',
             'METAL_SOLVER_READY',

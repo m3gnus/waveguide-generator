@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from solver.contract import normalize_mesh_validation_mode
+from solver.bempp_solver import (
+    bempp_backend_status,
+    opencl_runtime_status,
+    solve_bempp_from_msh,
+)
 from solver.metal_solver import (
     metal_backend_status,
     normalize_solver_backend,
@@ -12,6 +17,8 @@ from solver.metal_solver import (
     solve_metal_from_msh,
 )
 from solver_bootstrap import (
+    BEMPP_SOLVER_AVAILABLE,
+    BEMPP_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     METAL_SOLVER_AVAILABLE,
@@ -60,6 +67,11 @@ def get_settings_capabilities() -> Dict[str, Any]:
                     "available": bool(METAL_SOLVER_READY),
                     "label": "Metal BEM",
                     "status": metal_backend_status(),
+                },
+                "bempp": {
+                    "available": bool(BEMPP_SOLVER_READY),
+                    "label": "BEMPP BEM",
+                    "status": bempp_backend_status(),
                 },
             },
         },

@@ -14,9 +14,9 @@
 
 **Solver & meshing**:
 - `server/solver/mesher_adapter.py` — Waveguide Generator payload adapter for `hornlab-waveguide-mesher`
-- `server/solver/metal_solver.py` — optional `hornlab-metal-bem` solver adapter
+- `server/solver/metal_solver.py` — `hornlab-metal-bem` solver adapter and backend selector
+- `server/solver/bempp_solver.py` — `hornlab-bempp-bem` cross-platform solver adapter
 - `server/solver/mesh.py` — mesh validation, tag contract checks
-- `server/solver/solve*.py` — BEM assembly and solve execution
 - `server/solver/deps.py` — dependency matrix (Python, HornLab mesher, Metal BEM, gmsh, bempp versions)
 
 ## Core Responsibilities
@@ -28,7 +28,7 @@
 - **Viewport mesher geometry**: Serve HornLab mesher point grids + enclosure profile rings via `/api/mesh/viewport` (no Gmsh; the browser tessellates them for display)
 - **BEM solve**: Select `auto`, `bempp`, or `metal` backend, then assemble/solve through the selected runtime
 - **Job orchestration**: Queue jobs FIFO, track state, persist results
-- **Device management**: Auto-detect OpenCL device availability, apply user device selection
+- **Device management**: Auto-detect Metal/Bempp availability; OpenCL is an optional Bempp acceleration path
 
 ## Operational Details
 
@@ -36,4 +36,4 @@ See [`server/README.md`](../server/README.md) for:
 - Setup and dependency installation
 - API endpoint reference and payload contracts
 - Health checks and troubleshooting
-- Device mode policy and OpenCL setup
+- Solver backend and optional OpenCL acceleration policy

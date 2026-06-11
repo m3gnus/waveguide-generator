@@ -25,6 +25,10 @@ def _dependency_status(
     metal_bem_available=True,
     metal_bem_supported=True,
     metal_bem_version="0.2.0",
+    bempp_bem_ready=True,
+    bempp_bem_available=True,
+    bempp_bem_supported=True,
+    bempp_bem_version="0.1.0",
 ):
     return {
         "runtime": {
@@ -46,6 +50,12 @@ def _dependency_status(
                 "version": metal_bem_version,
                 "supported": metal_bem_supported,
                 "ready": metal_bem_ready,
+            },
+            "hornlab_bempp_bem": {
+                "available": bempp_bem_available,
+                "version": bempp_bem_version,
+                "supported": bempp_bem_supported,
+                "ready": bempp_bem_ready,
             },
         },
         "supportedMatrix": {},
@@ -71,20 +81,47 @@ def _metal_backend(
     }
 
 
+def _bempp_backend(*, available=True, assembly_backend="numba", reason=None):
+    return {
+        "available": available,
+        "packageInstalled": available,
+        "openclAvailable": assembly_backend == "opencl",
+        "assemblyBackend": assembly_backend,
+        "reason": reason or (
+            "hornlab-bempp-bem is installed."
+            if available
+            else "hornlab-bempp-bem is not installed."
+        ),
+    }
+
+
+def _opencl_runtime(*, available=False):
+    return {
+        "available": available,
+        "reason": "OpenCL runtime detected." if available else "pyopencl is unavailable",
+    }
+
+
 def _patch_runtime(
     *,
     dependency_status,
     metal_backend,
+    bempp_backend=None,
+    opencl_runtime=None,
     fastapi_runtime=None,
     matplotlib_runtime=None,
     system="Linux",
     machine="x86_64",
 ):
+    bempp_backend = bempp_backend or _bempp_backend()
+    opencl_runtime = opencl_runtime or _opencl_runtime()
     fastapi_runtime = fastapi_runtime or {"available": True, "version": "0.110.0"}
     matplotlib_runtime = matplotlib_runtime or {"available": True, "version": "3.9.2"}
     return (
         patch("services.runtime_preflight.get_dependency_status", return_value=dependency_status),
         patch("services.runtime_preflight.metal_backend_status", return_value=metal_backend),
+        patch("services.runtime_preflight.bempp_backend_status", return_value=bempp_backend),
+        patch("services.runtime_preflight.opencl_runtime_status", return_value=opencl_runtime),
         patch("services.runtime_preflight.read_fastapi_runtime", return_value=fastapi_runtime),
         patch("services.runtime_preflight.read_matplotlib_runtime", return_value=matplotlib_runtime),
         patch("services.runtime_preflight.platform.system", return_value=system),
@@ -95,12 +132,12 @@ def _patch_runtime(
 class RuntimePreflightTest(unittest.TestCase):
     def _collect_preflight(self, **kwargs):
         patches = _patch_runtime(**kwargs)
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
             return collect_runtime_preflight()
 
     def _collect_doctor(self, **kwargs):
         patches = _patch_runtime(**kwargs)
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
             return collect_runtime_doctor_report()
 
     def test_collect_runtime_preflight_marks_required_checks_ready(self):
@@ -114,18 +151,19 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertTrue(report["allRequiredReady"])
         self.assertEqual(
             set(report["requiredChecks"].keys()),
-            {"fastapi", "gmsh_python", "hornlab_waveguide_mesher", "hornlab_metal_bem"},
+            {"fastapi", "gmsh_python", "hornlab_waveguide_mesher", "hornlab_bempp_bem"},
         )
         self.assertTrue(report["requiredChecks"]["fastapi"]["ok"])
         self.assertTrue(report["requiredChecks"]["gmsh_python"]["ok"])
         self.assertTrue(report["requiredChecks"]["hornlab_waveguide_mesher"]["ok"])
-        self.assertTrue(report["requiredChecks"]["hornlab_metal_bem"]["ok"])
+        self.assertTrue(report["requiredChecks"]["hornlab_bempp_bem"]["ok"])
         self.assertEqual(
-            report["requiredChecks"]["hornlab_metal_bem"]["requiredFor"], "/api/solve"
+            report["requiredChecks"]["hornlab_bempp_bem"]["requiredFor"],
+            "/api/solve on non-Apple-Silicon hosts",
         )
-        self.assertIn("version=0.2.0", report["requiredChecks"]["hornlab_metal_bem"]["detail"])
+        self.assertIn("version=0.1.0", report["requiredChecks"]["hornlab_bempp_bem"]["detail"])
         self.assertIn(
-            "native_helper=release", report["requiredChecks"]["hornlab_metal_bem"]["detail"]
+            "assembly_backend=numba", report["requiredChecks"]["hornlab_bempp_bem"]["detail"]
         )
 
         ok, failing = evaluate_required_checks(report)
@@ -147,12 +185,20 @@ class RuntimePreflightTest(unittest.TestCase):
                 metal_bem_available=False,
                 metal_bem_supported=False,
                 metal_bem_version=None,
+                bempp_bem_ready=False,
+                bempp_bem_available=False,
+                bempp_bem_supported=False,
+                bempp_bem_version=None,
             ),
             metal_backend=_metal_backend(
                 available=False,
                 helper_available=False,
                 helper_build=None,
                 reason="hornlab-metal-bem is not installed.",
+            ),
+            bempp_backend=_bempp_backend(
+                available=False,
+                reason="hornlab-bempp-bem is not installed.",
             ),
             fastapi_runtime={"available": False, "version": None},
             system="Linux",
@@ -166,16 +212,16 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertFalse(report["requiredChecks"]["fastapi"]["ok"])
         self.assertFalse(report["requiredChecks"]["gmsh_python"]["ok"])
         self.assertFalse(report["requiredChecks"]["hornlab_waveguide_mesher"]["ok"])
-        self.assertFalse(report["requiredChecks"]["hornlab_metal_bem"]["ok"])
+        self.assertFalse(report["requiredChecks"]["hornlab_bempp_bem"]["ok"])
         self.assertEqual(
-            report["requiredChecks"]["hornlab_metal_bem"]["detail"],
-            "hornlab-metal-bem is not installed.",
+            report["requiredChecks"]["hornlab_bempp_bem"]["detail"],
+            "hornlab-bempp-bem is not installed.",
         )
 
         text_summary = render_runtime_preflight_text(report)
         self.assertIn("Overall required runtime status: NOT READY", text_summary)
         self.assertIn("- fastapi: MISSING", text_summary)
-        self.assertIn("- hornlab_metal_bem: MISSING", text_summary)
+        self.assertIn("- hornlab_bempp_bem: MISSING", text_summary)
 
     def test_collect_runtime_preflight_requires_hornlab_mesher_package(self):
         report = self._collect_preflight(
@@ -263,21 +309,36 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertTrue(report["summary"]["requiredReady"])
         self.assertTrue(report["summary"]["solveReady"])
         self.assertTrue(report["summary"]["meshBuildReady"])
-        self.assertEqual(report["summary"]["counts"]["installed"], 5)
-        self.assertEqual(report["summary"]["counts"]["missing"], 0)
-        self.assertEqual(report["summary"]["counts"]["optional"], 1)
+        self.assertEqual(report["summary"]["counts"]["installed"], 6)
+        self.assertEqual(report["summary"]["counts"]["missing"], 1)
+        self.assertEqual(report["summary"]["counts"]["optional"], 3)
 
         components_by_id = {item["id"]: item for item in report["components"]}
         self.assertEqual(
             set(components_by_id.keys()),
-            {"fastapi", "gmsh_python", "hornlab_waveguide_mesher", "hornlab_metal_bem", "matplotlib"},
+            {
+                "fastapi",
+                "gmsh_python",
+                "hornlab_waveguide_mesher",
+                "hornlab_metal_bem",
+                "hornlab_bempp_bem",
+                "opencl_runtime",
+                "matplotlib",
+            },
         )
         self.assertEqual(components_by_id["fastapi"]["status"], "installed")
         self.assertEqual(components_by_id["gmsh_python"]["status"], "installed")
         self.assertEqual(components_by_id["hornlab_waveguide_mesher"]["status"], "installed")
         self.assertEqual(components_by_id["hornlab_metal_bem"]["status"], "installed")
-        self.assertEqual(components_by_id["hornlab_metal_bem"]["category"], "required")
-        self.assertEqual(components_by_id["hornlab_metal_bem"]["requiredFor"], "/api/solve")
+        self.assertEqual(components_by_id["hornlab_metal_bem"]["category"], "optional")
+        self.assertEqual(components_by_id["hornlab_bempp_bem"]["status"], "installed")
+        self.assertEqual(components_by_id["hornlab_bempp_bem"]["category"], "required")
+        self.assertEqual(
+            components_by_id["hornlab_bempp_bem"]["requiredFor"],
+            "/api/solve on non-Apple-Silicon hosts",
+        )
+        self.assertEqual(components_by_id["opencl_runtime"]["category"], "optional")
+        self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
         self.assertEqual(components_by_id["matplotlib"]["category"], "optional")
         self.assertEqual(components_by_id["matplotlib"]["status"], "installed")
 
@@ -300,12 +361,20 @@ class RuntimePreflightTest(unittest.TestCase):
                 metal_bem_available=False,
                 metal_bem_supported=False,
                 metal_bem_version=None,
+                bempp_bem_ready=False,
+                bempp_bem_available=False,
+                bempp_bem_supported=False,
+                bempp_bem_version=None,
             ),
             metal_backend=_metal_backend(
                 available=False,
                 helper_available=False,
                 helper_build=None,
                 reason="hornlab-metal-bem is not installed.",
+            ),
+            bempp_backend=_bempp_backend(
+                available=False,
+                reason="hornlab-bempp-bem is not installed.",
             ),
             fastapi_runtime={"available": False, "version": None},
             matplotlib_runtime={"available": False, "version": None},
@@ -321,25 +390,30 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertIn("fastapi", report["summary"]["requiredIssues"])
         self.assertIn("gmsh_python", report["summary"]["requiredIssues"])
         self.assertIn("hornlab_waveguide_mesher", report["summary"]["requiredIssues"])
-        self.assertIn("hornlab_metal_bem", report["summary"]["requiredIssues"])
-        self.assertEqual(report["summary"]["solveIssues"], ["hornlab_metal_bem"])
+        self.assertIn("hornlab_bempp_bem", report["summary"]["requiredIssues"])
+        self.assertEqual(report["summary"]["solveIssues"], ["hornlab_bempp_bem"])
         self.assertIn("gmsh_python", report["summary"]["meshBuildIssues"])
         self.assertIn("hornlab_waveguide_mesher", report["summary"]["meshBuildIssues"])
-        self.assertEqual(report["summary"]["optionalIssues"], ["matplotlib"])
+        self.assertEqual(
+            report["summary"]["optionalIssues"],
+            ["hornlab_metal_bem", "opencl_runtime", "matplotlib"],
+        )
 
         components_by_id = {item["id"]: item for item in report["components"]}
         self.assertEqual(components_by_id["fastapi"]["status"], "missing")
         self.assertEqual(components_by_id["gmsh_python"]["status"], "unsupported")
         self.assertEqual(components_by_id["hornlab_waveguide_mesher"]["status"], "missing")
         self.assertEqual(components_by_id["hornlab_metal_bem"]["status"], "missing")
+        self.assertEqual(components_by_id["hornlab_bempp_bem"]["status"], "missing")
+        self.assertEqual(components_by_id["opencl_runtime"]["status"], "missing")
         self.assertEqual(components_by_id["matplotlib"]["status"], "missing")
 
         self.assertTrue(
             any(
-                "pip install -r server/requirements.txt" in line
-                for line in components_by_id["hornlab_metal_bem"]["guidance"]
+                "pip install -r server/requirements-bempp.txt" in line
+                for line in components_by_id["hornlab_bempp_bem"]["guidance"]
             ),
-            components_by_id["hornlab_metal_bem"]["guidance"],
+            components_by_id["hornlab_bempp_bem"]["guidance"],
         )
         self.assertTrue(
             any(
@@ -368,8 +442,11 @@ class RuntimePreflightTest(unittest.TestCase):
         text_summary = render_runtime_doctor_text(report)
         self.assertIn("Waveguide backend dependency doctor", text_summary)
         self.assertIn("Required dependency status: NOT READY", text_summary)
-        self.assertIn("- hornlab_metal_bem: MISSING [required] (requiredFor=/api/solve)", text_summary)
-        self.assertIn("guidance: Install backend requirements: pip install -r server/requirements.txt", text_summary)
+        self.assertIn(
+            "- hornlab_bempp_bem: MISSING [required] (requiredFor=/api/solve on non-Apple-Silicon hosts)",
+            text_summary,
+        )
+        self.assertIn("guidance: Install BEMPP fallback requirements: pip install -r server/requirements-bempp.txt", text_summary)
 
     def test_collect_runtime_doctor_requires_release_metal_helper_on_apple_silicon(self):
         report = self._collect_doctor(
@@ -382,7 +459,8 @@ class RuntimePreflightTest(unittest.TestCase):
         ok, failing = evaluate_runtime_doctor(report)
         self.assertFalse(ok)
         self.assertIn("metal_release_helper", report["summary"]["requiredIssues"])
-        self.assertIn("metal_release_helper", report["summary"]["solveIssues"])
+        self.assertTrue(report["summary"]["solveReady"])
+        self.assertEqual(report["summary"]["solveIssues"], [])
         self.assertTrue(any("metal_release_helper" in item for item in failing), failing)
 
         component = {item["id"]: item for item in report["components"]}["metal_release_helper"]
