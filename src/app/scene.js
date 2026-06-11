@@ -8,7 +8,11 @@ import {
   getSceneThemeColors,
   attachCameraLights,
 } from '../viewer/index.js';
-import { prepareViewportMesh, validateViewportMesh } from '../modules/geometry/useCases.js';
+import {
+  prepareBackendViewportMesh,
+  prepareViewportMesh,
+  validateViewportMesh,
+} from '../modules/geometry/useCases.js';
 import { detachCreaseVertices } from './viewportMesh.js';
 import { ImportedMeshState } from '../state.js';
 import { AppEvents } from '../events.js';
@@ -16,6 +20,10 @@ import { PARAM_SCHEMA } from '../config/schema.js';
 import { createPerfTimer, measurePerf } from '../logging/performance.js';
 
 const GRID_DISPLAY_MODES = new Set(['wireframe', 'solidwire']);
+// After a failed backend viewport fetch, render with the local JS engine and
+// only retry the backend once this cooldown has elapsed.
+const BACKEND_VIEWPORT_RETRY_MS = 15000;
+const BACKEND_VIEWPORT_TIMEOUT_MS = 5000;
 const VIEWPORT_CACHE_SCHEMA_GROUPS = ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE'];
 const VIEWPORT_CACHE_PARAM_KEYS = new Set();
 for (const group of VIEWPORT_CACHE_SCHEMA_GROUPS) {
@@ -55,15 +63,9 @@ function invalidateMeshCacheIfStale(app) {
   }
 }
 
-function buildVariantMesh(state, variant) {
-  const perf = createPerfTimer(`viewportMesh:${variant}`);
-  const viewportMesh = prepareViewportMesh(state, { variant });
-  perf.mark('prepareViewportMesh', {
-    vertexCount: viewportMesh.vertices.length / 3,
-    triangleCount: viewportMesh.indices.length / 3,
-  });
+function toRenderMesh(viewportMesh, variant, perf) {
   const renderMesh = detachCreaseVertices(viewportMesh);
-  perf.mark('detachCreaseVertices', {
+  perf?.mark('detachCreaseVertices', {
     vertexCount: renderMesh.vertices.length / 3,
     triangleCount: renderMesh.indices.length / 3,
   });
@@ -72,7 +74,7 @@ function buildVariantMesh(state, variant) {
   // explicitly forced (covered by viewport-render-mesh.test.js otherwise).
   if (globalThis.__WAVEGUIDE_DEBUG__ === true) {
     const integrity = validateViewportMesh(renderMesh);
-    perf.mark('validateViewportMesh', { ok: integrity.ok });
+    perf?.mark('validateViewportMesh', { ok: integrity.ok });
     if (!integrity.ok) {
       console.error(
         `[Viewport] Mesh integrity violation after detachCreaseVertices (${variant}):\n  - ${integrity.errors.join('\n  - ')}`,
@@ -80,12 +82,22 @@ function buildVariantMesh(state, variant) {
       );
     }
   }
-  const result = {
+  return {
     vertices: renderMesh.vertices,
     indices: renderMesh.indices,
     normals: renderMesh.normals,
     preparedParams: viewportMesh.preparedParams,
   };
+}
+
+function buildVariantMesh(state, variant) {
+  const perf = createPerfTimer(`viewportMesh:${variant}`);
+  const viewportMesh = prepareViewportMesh(state, { variant });
+  perf.mark('prepareViewportMesh', {
+    vertexCount: viewportMesh.vertices.length / 3,
+    triangleCount: viewportMesh.indices.length / 3,
+  });
+  const result = { ...toRenderMesh(viewportMesh, variant, perf), source: 'local' };
   perf.end();
   return result;
 }
@@ -97,6 +109,123 @@ function getOrBuildVariant(app, variant) {
   const built = buildVariantMesh(app.currentState, variant);
   app._meshCache[variant] = built;
   return built;
+}
+
+function isBackendViewportInCooldown(app) {
+  return (
+    Number.isFinite(app._viewportBackendDownAt) &&
+    Date.now() - app._viewportBackendDownAt < BACKEND_VIEWPORT_RETRY_MS
+  );
+}
+
+function applyVariantToScene(app, variant, mesh) {
+  applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals);
+  app._currentMeshVariant = variant;
+  app.needsRender = true;
+}
+
+/** Apply `mesh` only if the app still wants this state + variant. */
+function applyVariantIfCurrent(app, stateKey, variant, mesh) {
+  if (ImportedMeshState.active && ImportedMeshState.vertices && ImportedMeshState.indices) return;
+  if (!app._meshCache || app._meshCache.stateKey !== stateKey) return;
+  const mode = app.uiCoordinator.readDisplayModeSetting();
+  if (variantForDisplayMode(mode) !== variant) return;
+  applyVariantToScene(app, variant, mesh);
+}
+
+/**
+ * Fetch viewport geometry from the backend mesher and apply it when it lands.
+ * Stale responses (state changed while in flight) are discarded; failures put
+ * the backend on a retry cooldown and fall back to the local JS engine.
+ */
+function startBackendViewportBuild(app, variant) {
+  invalidateMeshCacheIfStale(app);
+  const stateKey = app._meshCache.stateKey;
+  const fetchKey = `${stateKey}::${variant}`;
+  if (app._viewportFetch?.key === fetchKey) return;
+  if (app._viewportFetch) {
+    // A newer state/variant superseded the in-flight fetch; its abort must
+    // not count as a backend failure.
+    app._viewportFetch.superseded = true;
+    app._viewportFetch.controller?.abort();
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BACKEND_VIEWPORT_TIMEOUT_MS);
+  const fetchRecord = { key: fetchKey, controller, superseded: false };
+  app._viewportFetch = fetchRecord;
+
+  prepareBackendViewportMesh(app.currentState, { variant, signal: controller.signal })
+    .then((viewportMesh) => {
+      if (fetchRecord.superseded) return;
+      const built = { ...toRenderMesh(viewportMesh, variant), source: 'backend' };
+      app._viewportBackendDownAt = null;
+      invalidateMeshCacheIfStale(app);
+      if (app._meshCache.stateKey !== stateKey) return;
+      app._meshCache[variant] = built;
+      applyVariantIfCurrent(app, stateKey, variant, built);
+    })
+    .catch((error) => {
+      if (fetchRecord.superseded) return;
+      app._viewportBackendDownAt = Date.now();
+      console.warn(
+        '[Viewport] Backend viewport geometry unavailable; using local JS engine:',
+        error?.message || error
+      );
+      invalidateMeshCacheIfStale(app);
+      if (app._meshCache.stateKey !== stateKey) return;
+      try {
+        const mesh = getOrBuildVariant(app, variant);
+        applyVariantIfCurrent(app, stateKey, variant, mesh);
+      } catch (buildError) {
+        reportMeshBuildFailure(app, buildError);
+      }
+    })
+    .finally(() => {
+      clearTimeout(timeout);
+      if (app._viewportFetch === fetchRecord) {
+        app._viewportFetch = null;
+      }
+    });
+}
+
+function reportMeshBuildFailure(app, error) {
+  console.error('[Viewport] Mesh build failed:', error?.message || error);
+  if (typeof app.uiCoordinator?.showError === 'function') {
+    try {
+      app.uiCoordinator.showError(`Mesh build failed: ${error?.message || error}`);
+    } catch {
+      // Optional toast surface.
+    }
+  }
+}
+
+/**
+ * Resolve the mesh for a display variant. Cached meshes return immediately.
+ * Otherwise the backend mesher builds asynchronously (the previous mesh stays
+ * on screen until it lands); the local JS engine covers backend-down cooldown
+ * windows and the very first paint, where a blank viewport would be worse
+ * than one synchronous local build.
+ */
+function resolveVariantMesh(app, variant) {
+  invalidateMeshCacheIfStale(app);
+  const cached = app._meshCache[variant];
+  if (cached) {
+    // A locally-built mesh can be upgraded to backend geometry once the
+    // cooldown lapses; the upgrade applies asynchronously.
+    if (cached.source === 'local' && !isBackendViewportInCooldown(app)) {
+      startBackendViewportBuild(app, variant);
+    }
+    return cached;
+  }
+  if (isBackendViewportInCooldown(app)) {
+    return getOrBuildVariant(app, variant);
+  }
+  startBackendViewportBuild(app, variant);
+  if (!app.hornMesh) {
+    return getOrBuildVariant(app, variant);
+  }
+  return null;
 }
 
 export function setupScene(app) {
@@ -233,21 +362,15 @@ export function renderModel(app) {
   const variant = variantForDisplayMode(mode);
   let mesh;
   try {
-    mesh = getOrBuildVariant(app, variant);
+    mesh = resolveVariantMesh(app, variant);
   } catch (error) {
-    console.error('[Viewport] Mesh build failed:', error?.message || error);
-    if (typeof app.uiCoordinator?.showError === 'function') {
-      try {
-        app.uiCoordinator.showError(`Mesh build failed: ${error?.message || error}`);
-      } catch {
-        // Optional toast surface.
-      }
-    }
+    reportMeshBuildFailure(app, error);
     return;
   }
-  applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals);
-  app._currentMeshVariant = variant;
-  app.needsRender = true;
+  // No mesh yet: a backend build is in flight and will apply when it lands;
+  // the previous mesh stays on screen meanwhile.
+  if (!mesh) return;
+  applyVariantToScene(app, variant, mesh);
 }
 
 /**
@@ -556,22 +679,19 @@ export function applyDisplayMode(app, mode) {
   if (canSwapVariant && requiredVariant !== app._currentMeshVariant) {
     let mesh;
     try {
-      mesh = getOrBuildVariant(app, requiredVariant);
+      mesh = resolveVariantMesh(app, requiredVariant);
     } catch (error) {
-      console.error('[Viewport] Mesh build failed on display-mode swap:', error?.message || error);
-      if (typeof app.uiCoordinator?.showError === 'function') {
-        try {
-          app.uiCoordinator.showError(`Mesh build failed: ${error?.message || error}`);
-        } catch {
-          // Optional toast surface.
-        }
-      }
+      reportMeshBuildFailure(app, error);
       return;
     }
-    applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals, mode);
-    app._currentMeshVariant = requiredVariant;
-    app.needsRender = true;
-    return;
+    if (mesh) {
+      applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals, mode);
+      app._currentMeshVariant = requiredVariant;
+      app.needsRender = true;
+      return;
+    }
+    // Backend build in flight: restyle the current mesh with the new display
+    // mode immediately; the correct variant applies when the fetch lands.
   }
 
   removeOverlays(app);

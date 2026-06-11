@@ -73,7 +73,7 @@
 - `server/services/update_service.py`
   - Git-backed update status checks
 - `server/solver/mesher_adapter.py`
-  - HornLab mesher request adapter for solver/export `.msh`, STEP surface export, and viewport Gmsh display meshes
+  - HornLab mesher request adapter for solver/export `.msh`, STEP surface export, and fast viewport geometry (point grids + enclosure rings, no Gmsh)
 - `server/solver/mesh.py`
   - Canonical payload integrity checks and BEM mesh loading/validation helpers
 - `server/solver/bem_solver.py`, `server/solver/solve.py`
@@ -105,9 +105,9 @@ flowchart LR
 
 1. UI parameter updates mutate `GlobalState`.
 2. `App` schedules render.
-3. `src/app/scene.js` resolves prepared design inputs via `DesignModule`, gets a geometry shape from `GeometryModule`, then tessellates it for viewport rendering.
-4. Returned mesh is rendered in Three.js. The viewport path may detach `throat_disc` vertices before normal generation so the source cap keeps a crisp render seam without affecting backend solve/export meshes.
-5. `/api/mesh/viewport` is available for backend/Gmsh display-mesh parity checks, but it is not the active scene render path.
+3. `src/app/scene.js` fetches `POST /api/mesh/viewport` (HornLab mesher point grids + enclosure profile rings, no Gmsh) and tessellates them with `src/geometry/viewportTessellator.js`; while a fetch is in flight the previous mesh stays on screen.
+4. Returned mesh is rendered in Three.js. The viewport path detaches crease vertices before normal generation so hard seams (mouth rim, baffle, source cap) keep crisp shading without affecting backend solve/export meshes.
+5. When the backend is unreachable, the scene falls back to the in-browser JS engine (`DesignModule` → `GeometryModule` → `buildGeometryMeshFromShape`) and retries the backend after a cooldown.
 
 ### 3.2 Simulation flow
 

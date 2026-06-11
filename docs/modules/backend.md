@@ -25,7 +25,7 @@
 - **Request validation**: Enforce mesh array lengths, source tag presence, dependency availability
 - **Backend meshing**: Build horn/enclosure `.msh` files through `hornlab-waveguide-mesher`
 - **STEP surface export**: Build full-domain single-layer inner horn STEP surfaces through `hornlab-waveguide-mesher`
-- **Viewport mesher geometry**: Expose HornLab mesher/Gmsh display triangles via `/api/mesh/viewport`
+- **Viewport mesher geometry**: Serve HornLab mesher point grids + enclosure profile rings via `/api/mesh/viewport` (no Gmsh; the browser tessellates them for display)
 - **BEM solve**: Select `auto`, `bempp`, or `metal` backend, then assemble/solve through the selected runtime
 - **Job orchestration**: Queue jobs FIFO, track state, persist results
 - **Device management**: Auto-detect OpenCL device availability, apply user device selection

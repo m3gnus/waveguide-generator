@@ -429,80 +429,120 @@ class StepExportAdapterTest(unittest.TestCase):
         self.assertEqual(config["mesh"]["quadrants"], 1234)
 
 
-class ViewportMeshAdapterTest(unittest.TestCase):
-    def test_viewport_mesh_uses_mesher_gmsh_output_and_fixed_geometry_sampling(self):
+class ViewportGeometryAdapterTest(unittest.TestCase):
+    def test_viewport_geometry_serves_point_grid_without_gmsh(self):
         captured_configs = []
 
-        def fake_build_from_config(config, mesh_path):
+        def fake_viewport_geometry(config):
             captured_configs.append(config)
-            return SimpleNamespace(
-                formula="OSSE",
-                mode="bare",
-                physical_groups={1: "SD1G0", 2: "SD1D1001"},
-            )
+            return {
+                "params": {"type": "OSSE", "sourceShape": 1},
+                "formula": "OSSE",
+                "mode": "freestanding",
+                "grid": {
+                    "inner_points": [0.0] * (8 * 3 * 3),
+                    "outer_points": None,
+                    "grid_n_phi": 8,
+                    "grid_n_length": 2,
+                    "full_circle": True,
+                    "sampling_mode": "uniform",
+                },
+                "enclosure": None,
+            }
 
-        canonical = {
-            "vertices": [
-                0.0, 0.0, 0.0,
-                0.001, 0.002, 0.003,
-                0.004, 0.005, 0.006,
-                0.007, 0.008, 0.009,
-            ],
-            "indices": [0, 1, 2, 0, 2, 3],
-            "surfaceTags": [1, 2],
-            "metadata": {"tagCounts": {"1": 1, "2": 1, "3": 0, "4": 0}},
-        }
-
-        with patch.object(mesher_adapter, "build_from_config", fake_build_from_config), patch.object(
-            mesher_adapter, "_canonical_mesh_from_msh", return_value=canonical
+        with patch.object(
+            mesher_adapter,
+            "build_viewport_geometry_from_config",
+            fake_viewport_geometry,
         ):
-            mesh = mesher_adapter.build_viewport_mesh(
+            result = mesher_adapter.build_viewport_geometry(
                 {
                     "formula_type": "OSSE",
-                    "n_angular": 8,
-                    "n_length": 2,
+                    "n_angular": 96,
+                    "n_length": 48,
                     "quadrants": 12,
                 }
             )
 
         self.assertEqual(len(captured_configs), 1)
         config = captured_configs[0]
-        self.assertEqual(config["mesh"]["angularSegments"], 128)
-        self.assertEqual(config["mesh"]["lengthSegments"], 64)
         self.assertEqual(config["mesh"]["quadrants"], 1234)
-        self.assertEqual(config["mesh"]["preserveGrid"], False)
-        self.assertEqual(mesh["vertices"][3:6], [1.0, 3.0, 2.0])
-        self.assertEqual(mesh["indices"], [0, 1, 2, 0, 2, 3])
-        self.assertEqual(mesh["surfaceTags"], [1, 2])
-        self.assertEqual(mesh["groups"]["horn"], {"start": 0, "end": 1})
-        self.assertEqual(mesh["groups"]["throat_disc"], {"start": 1, "end": 2})
-        self.assertEqual(mesh["metadata"]["source"], "hornlab_waveguide_mesher_gmsh")
-        self.assertEqual(mesh["metadata"]["samplingMode"], "gmsh_surface_mesh")
+        self.assertEqual(config["mesh"]["angularSegments"], 96)
+        self.assertEqual(config["mesh"]["lengthSegments"], 48)
+        self.assertEqual(result["formula"], "OSSE")
+        self.assertEqual(result["mode"], "freestanding")
+        self.assertEqual(result["grid"]["grid_n_phi"], 8)
+        self.assertIsNone(result["enclosure"])
+        self.assertEqual(result["params"]["sourceShape"], 1)
+        self.assertEqual(
+            result["metadata"]["source"], "hornlab_waveguide_mesher_point_grid"
+        )
+        self.assertEqual(result["metadata"]["units"], "mm")
+        self.assertEqual(result["metadata"]["gridNPhi"], 8)
+        self.assertEqual(result["metadata"]["gridNLength"], 2)
+        self.assertEqual(result["metadata"]["samplingMode"], "uniform")
 
-    def test_viewport_mesh_sorts_tag_groups_into_contiguous_ranges(self):
-        canonical = {
-            "vertices": [
-                0, 0, 0,
-                1, 0, 0,
-                0, 1, 0,
-                0, 0, 1,
-            ],
-            "indices": [0, 1, 2, 0, 2, 3, 0, 3, 1],
-            "surfaceTags": [2, 1, 3],
-            "metadata": {"tagCounts": {"1": 1, "2": 1, "3": 1, "4": 0}},
-        }
+    def test_viewport_geometry_clamps_display_density(self):
+        captured_configs = []
+
+        def fake_viewport_geometry(config):
+            captured_configs.append(config)
+            return {"params": {}, "formula": "OSSE", "mode": "bare", "grid": {}, "enclosure": None}
 
         with patch.object(
             mesher_adapter,
-            "build_from_config",
-            return_value=SimpleNamespace(formula="OSSE", mode="enclosure", physical_groups={}),
-        ), patch.object(mesher_adapter, "_canonical_mesh_from_msh", return_value=canonical):
-            mesh = mesher_adapter.build_viewport_mesh({"formula_type": "OSSE", "enc_depth": 220})
+            "build_viewport_geometry_from_config",
+            fake_viewport_geometry,
+        ):
+            mesher_adapter.build_viewport_geometry(
+                {"formula_type": "OSSE", "n_angular": 100000, "n_length": 0}
+            )
 
-        self.assertEqual(mesh["surfaceTags"], [1, 3, 2])
-        self.assertEqual(mesh["groups"]["horn"], {"start": 0, "end": 1})
-        self.assertEqual(mesh["groups"]["enclosure"], {"start": 1, "end": 2})
-        self.assertEqual(mesh["groups"]["throat_disc"], {"start": 2, "end": 3})
+        config = captured_configs[0]
+        self.assertEqual(
+            config["mesh"]["angularSegments"],
+            mesher_adapter.VIEWPORT_GEOMETRY_MAX_ANGULAR_SEGMENTS,
+        )
+        self.assertEqual(
+            config["mesh"]["lengthSegments"],
+            mesher_adapter.VIEWPORT_GEOMETRY_MIN_LENGTH_SEGMENTS,
+        )
+
+    def test_viewport_geometry_returns_enclosure_rings_in_enclosure_mode(self):
+        def fake_viewport_geometry(config):
+            return {
+                "params": {"type": "OSSE"},
+                "formula": "OSSE",
+                "mode": "enclosure",
+                "grid": {"grid_n_phi": 8, "grid_n_length": 2, "sampling_mode": "uniform"},
+                "enclosure": {
+                    "mouth_points": [0.0] * (8 * 3),
+                    "profile_rings": [
+                        {"role": "front_inset", "points": [0.0] * 12},
+                        {"role": "side_back_outer", "points": [0.0] * 12},
+                    ],
+                    "bounds": {"bx0": -1.0, "bx1": 1.0, "by0": -1.0, "by1": 1.0,
+                               "z_front": 10.0, "z_back": -5.0, "cx": 0.0, "cy": 0.0},
+                    "plan_type": 1,
+                    "edge_type": 1,
+                    "edge_mm": 0.0,
+                    "edge_depth": 0.0,
+                },
+            }
+
+        with patch.object(
+            mesher_adapter,
+            "build_viewport_geometry_from_config",
+            fake_viewport_geometry,
+        ):
+            result = mesher_adapter.build_viewport_geometry(
+                {"formula_type": "OSSE", "enc_depth": 220}
+            )
+
+        self.assertEqual(result["mode"], "enclosure")
+        rings = result["enclosure"]["profile_rings"]
+        self.assertEqual([ring["role"] for ring in rings], ["front_inset", "side_back_outer"])
+        self.assertIn("bounds", result["enclosure"])
 
 
 class SimulationRequestContractTest(unittest.TestCase):

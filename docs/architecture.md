@@ -33,10 +33,10 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 
 **Render pipeline** (viewport update):
 1. UI parameter changes → `GlobalState`
-2. `App.requestRender()` → `DesignModule` (parameter normalization)
-3. `GeometryModule` builds a JS geometry shape and `buildGeometryMeshFromShape(...)` tessellates it
+2. `App.requestRender()` (≈90 ms throttle) → `DesignModule` (parameter normalization)
+3. `POST /api/mesh/viewport` returns hornlab-waveguide-mesher point grids + enclosure profile rings (no Gmsh, milliseconds); `src/geometry/viewportTessellator.js` turns them into render triangles
 4. Three.js renders the viewport mesh in WebGL
-5. `/api/mesh/viewport` exists as a HornLab mesher/Gmsh display-mesh route for parity and backend-generated viewport checks, but it is not the active scene render path
+5. When the backend is unreachable, `src/app/scene.js` falls back to the in-browser JS engine (`GeometryModule` + `buildGeometryMeshFromShape(...)`) and retries the backend after a cooldown
 
 **Simulation pipeline** (async job):
 1. UI submission → `SimulationModule` (payload + HornLab mesher params)

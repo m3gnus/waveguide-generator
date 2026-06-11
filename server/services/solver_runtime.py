@@ -23,13 +23,13 @@ from solver_bootstrap import (
 try:
     from solver.mesher_adapter import (
         build_inner_surface_step,
-        build_viewport_mesh,
+        build_viewport_geometry,
         build_waveguide_mesh,
     )
 except ImportError:
     build_inner_surface_step = None  # type: ignore[assignment]
     build_waveguide_mesh = None  # type: ignore[assignment]
-    build_viewport_mesh = None  # type: ignore[assignment]
+    build_viewport_geometry = None  # type: ignore[assignment]
 
 def get_settings_capabilities() -> Dict[str, Any]:
     return {

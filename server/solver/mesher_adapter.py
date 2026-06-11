@@ -372,121 +372,101 @@ def build_inner_surface_step(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-VIEWPORT_GEOMETRY_ANGULAR_SEGMENTS = 128
-VIEWPORT_GEOMETRY_LENGTH_SEGMENTS = 64
+VIEWPORT_GEOMETRY_MIN_ANGULAR_SEGMENTS = 8
+VIEWPORT_GEOMETRY_MAX_ANGULAR_SEGMENTS = 256
+VIEWPORT_GEOMETRY_MIN_LENGTH_SEGMENTS = 4
+VIEWPORT_GEOMETRY_MAX_LENGTH_SEGMENTS = 160
+VIEWPORT_GEOMETRY_DEFAULT_ANGULAR_SEGMENTS = 96
+VIEWPORT_GEOMETRY_DEFAULT_LENGTH_SEGMENTS = 48
 
 
-def _viewport_config(payload: Mapping[str, Any]) -> dict[str, Any]:
-    config = waveguide_payload_to_mesher_config(payload)
-    mesh = config.setdefault("mesh", {})
-    # The browser preview is no longer driven by the legacy Preview Angular/
-    # Length Segments controls. HornLab mesher owns the surface and Gmsh owns
-    # the triangle tessellation; these fixed grid values only describe the
-    # surface sent to the mesher geometry builder.
-    mesh["angularSegments"] = VIEWPORT_GEOMETRY_ANGULAR_SEGMENTS
-    mesh["lengthSegments"] = VIEWPORT_GEOMETRY_LENGTH_SEGMENTS
-    mesh["quadrants"] = 1234
-    mesh["preserveGrid"] = False
-    return config
+def _clamp_segments(value: Any, lo: int, hi: int, fallback: int) -> int:
+    try:
+        numeric = int(round(float(value)))
+    except (TypeError, ValueError):
+        return fallback
+    return max(lo, min(hi, numeric))
 
 
-def _viewport_vertices_from_canonical(canonical: Mapping[str, Any]) -> list[float]:
-    raw_vertices = canonical.get("vertices")
-    points = np.asarray(raw_vertices, dtype=float)
-    if points.size % 3 != 0:
-        raise RuntimeError("HornLab mesher canonical vertices must contain xyz triples.")
-    points = points.reshape(-1, 3)
-    if not np.all(np.isfinite(points)):
-        raise RuntimeError("HornLab mesher canonical vertices contain non-finite coordinates.")
-    points_mm = points * 1000.0
-    viewport_points = np.column_stack((points_mm[:, 0], points_mm[:, 2], points_mm[:, 1]))
-    return viewport_points.reshape(-1).tolist()
+def _round_point_list(values: Any, ndigits: int = 6) -> Any:
+    """Round display-coordinate lists so the JSON payload stays small."""
+    if values is None:
+        return None
+    return np.round(np.asarray(values, dtype=float), ndigits).tolist()
 
 
-def _sorted_viewport_triangles(
-    canonical: Mapping[str, Any],
-) -> tuple[list[int], list[int], dict[str, dict[str, int]]]:
-    raw_indices = np.asarray(canonical.get("indices"), dtype=np.int64)
-    if raw_indices.size % 3 != 0:
-        raise RuntimeError("HornLab mesher canonical indices must contain triangle triples.")
-    triangles = raw_indices.reshape(-1, 3)
-    tags = np.asarray(canonical.get("surfaceTags"), dtype=np.int32)
-    if len(tags) != len(triangles):
-        raise RuntimeError("HornLab mesher canonical surface tags must match triangle count.")
-
-    source_mask = tags == 2
-    enclosure_mask = tags == 3
-    wall_mask = ~source_mask & ~enclosure_mask
-
-    ordered_parts = [
-        ("horn", wall_mask),
-        ("enclosure", enclosure_mask),
-        ("throat_disc", source_mask),
-    ]
-    ordered_triangles: list[np.ndarray] = []
-    ordered_tags: list[np.ndarray] = []
-    groups: dict[str, dict[str, int]] = {}
-    cursor = 0
-    for name, mask in ordered_parts:
-        part_triangles = triangles[mask]
-        if len(part_triangles) == 0:
-            continue
-        ordered_triangles.append(part_triangles)
-        ordered_tags.append(tags[mask])
-        groups[name] = {"start": cursor, "end": cursor + len(part_triangles)}
-        cursor += len(part_triangles)
-
-    if "horn" in groups:
-        groups["inner_wall"] = dict(groups["horn"])
-        groups["horn_wall"] = dict(groups["horn"])
-    if "throat_disc" in groups:
-        groups["source"] = dict(groups["throat_disc"])
-
-    if not ordered_triangles:
-        return [], [], groups
-    sorted_triangles = np.vstack(ordered_triangles)
-    sorted_tags = np.concatenate(ordered_tags)
-    return sorted_triangles.reshape(-1).astype(int).tolist(), sorted_tags.astype(int).tolist(), groups
+def _rounded_viewport_grid(grid: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(grid)
+    out["inner_points"] = _round_point_list(grid.get("inner_points"))
+    out["outer_points"] = _round_point_list(grid.get("outer_points"))
+    return out
 
 
-def build_viewport_mesh(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Build viewport triangles from the HornLab mesher Gmsh geometry output."""
+def _rounded_viewport_enclosure(enclosure: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if enclosure is None:
+        return None
+    out = dict(enclosure)
+    for key in ("mouth_points", "front_outer_points", "back_outer_points"):
+        if key in out:
+            out[key] = _round_point_list(out[key])
+    rings = []
+    for ring in enclosure.get("profile_rings") or []:
+        rounded = dict(ring)
+        rounded["points"] = _round_point_list(ring.get("points"))
+        rings.append(rounded)
+    out["profile_rings"] = rings
+    return out
 
-    if build_from_config is None:
+
+def build_viewport_geometry(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build fast viewport geometry: horn point grids plus enclosure rings.
+
+    No Gmsh involved — hornlab-waveguide-mesher samples its canonical profile
+    math and returns the horn point grid (and outer wall grid when a
+    freestanding wall is configured) plus enclosure profile rings so the
+    browser can run a cheap display tessellation. Responds in milliseconds,
+    unlike the Gmsh surface build, so it is safe to call per keystroke.
+    """
+
+    if build_viewport_geometry_from_config is None:
         raise HornlabMesherUnavailable(
             "hornlab-waveguide-mesher is not installed. Install server requirements."
         )
 
-    config = _viewport_config(payload)
-    with tempfile.TemporaryDirectory(prefix="wg-viewport-mesher-") as tmp_dir:
-        mesh_path = Path(tmp_dir) / "viewport.msh"
-        result = build_from_config(config, mesh_path)
-        canonical = _canonical_mesh_from_msh(mesh_path)
+    config = waveguide_payload_to_mesher_config(payload)
+    mesh = config.setdefault("mesh", {})
+    # The display contract requires the full closed surface; symmetry-reduced
+    # domains are a solve/export concern.
+    mesh["quadrants"] = 1234
+    mesh["angularSegments"] = _clamp_segments(
+        mesh.get("angularSegments"),
+        VIEWPORT_GEOMETRY_MIN_ANGULAR_SEGMENTS,
+        VIEWPORT_GEOMETRY_MAX_ANGULAR_SEGMENTS,
+        VIEWPORT_GEOMETRY_DEFAULT_ANGULAR_SEGMENTS,
+    )
+    mesh["lengthSegments"] = _clamp_segments(
+        mesh.get("lengthSegments"),
+        VIEWPORT_GEOMETRY_MIN_LENGTH_SEGMENTS,
+        VIEWPORT_GEOMETRY_MAX_LENGTH_SEGMENTS,
+        VIEWPORT_GEOMETRY_DEFAULT_LENGTH_SEGMENTS,
+    )
 
-    vertices = _viewport_vertices_from_canonical(canonical)
-    indices, surface_tags, groups = _sorted_viewport_triangles(canonical)
-    metadata = canonical.get("metadata") if isinstance(canonical.get("metadata"), Mapping) else {}
+    result = build_viewport_geometry_from_config(config)
+    grid = _rounded_viewport_grid(result.get("grid") or {})
 
     return {
-        "vertices": vertices,
-        "indices": indices,
-        "groups": groups,
-        "surfaceTags": surface_tags,
+        "formula": result.get("formula"),
+        "mode": result.get("mode"),
+        "params": result.get("params"),
+        "grid": grid,
+        "enclosure": _rounded_viewport_enclosure(result.get("enclosure")),
         "metadata": {
             "generatedBy": "hornlab-waveguide-mesher",
-            "source": "hornlab_waveguide_mesher_gmsh",
+            "source": "hornlab_waveguide_mesher_point_grid",
             "units": "mm",
-            "formula": result.formula,
-            "mode": result.mode,
-            "vertexCount": len(vertices) // 3,
-            "triangleCount": len(indices) // 3,
-            "tagCounts": metadata.get("tagCounts", {}),
-            "physicalGroups": result.physical_groups,
-            "viewportGeometrySegments": {
-                "angular": VIEWPORT_GEOMETRY_ANGULAR_SEGMENTS,
-                "length": VIEWPORT_GEOMETRY_LENGTH_SEGMENTS,
-            },
-            "samplingMode": "gmsh_surface_mesh",
+            "gridNPhi": int(grid.get("grid_n_phi") or 0),
+            "gridNLength": int(grid.get("grid_n_length") or 0),
+            "samplingMode": grid.get("sampling_mode"),
         },
     }
 

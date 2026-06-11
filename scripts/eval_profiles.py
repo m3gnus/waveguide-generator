@@ -187,6 +187,14 @@ def main():
         results = build_point_grid(normalise_params(payload["config"]))
         json.dump(results, sys.stdout)
 
+    elif mode == "viewport_geometry":
+        # Exercise the real server adapter (payload translation, density
+        # clamping, coordinate rounding) that POST /api/mesh/viewport serves.
+        sys.path.insert(0, str(REPO_ROOT / "server"))
+        from solver.mesher_adapter import build_viewport_geometry
+
+        json.dump(build_viewport_geometry(payload["payload"]), sys.stdout)
+
     else:
         json.dump({"error": f"Unknown mode: {mode}"}, sys.stdout)
 
