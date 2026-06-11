@@ -5,6 +5,7 @@ import { DesignModule } from '../design/index.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { buildWaveguidePayload } from '../../solver/waveguidePayload.js';
 import { prepareViewportTessellationParams } from '../../geometry/tessellation.js';
+import { tessellateViewportGeometry } from '../../geometry/viewportTessellator.js';
 import { createPerfTimer } from '../../logging/performance.js';
 
 function requireViewportState(state) {
@@ -14,15 +15,12 @@ function requireViewportState(state) {
   return state;
 }
 
-function assertViewportMeshResponse(payload) {
+function assertViewportGeometryResponse(payload) {
   if (!payload || typeof payload !== 'object') {
-    throw new Error('Backend viewport mesh response must be an object.');
+    throw new Error('Backend viewport geometry response must be an object.');
   }
-  if (!Array.isArray(payload.vertices) || !Array.isArray(payload.indices)) {
-    throw new Error('Backend viewport mesh response is missing vertices/indices arrays.');
-  }
-  if (payload.vertices.length % 3 !== 0 || payload.indices.length % 3 !== 0) {
-    throw new Error('Backend viewport mesh response has invalid vertex or index array length.');
+  if (!payload.grid || typeof payload.grid !== 'object') {
+    throw new Error('Backend viewport geometry response is missing the point grid.');
   }
 }
 
@@ -107,13 +105,17 @@ export function validateViewportMesh(mesh = {}, options = {}) {
 
 /**
  * Prepare viewport mesh data through the Python mesher geometry pipeline.
- * The backend returns a HornLab mesher Gmsh surface mesh converted to
- * millimetres for display.
+ *
+ * The backend (`POST /api/mesh/viewport`) returns the canonical mesher point
+ * grids plus enclosure profile rings (no Gmsh); the browser tessellates them
+ * into render triangles. Sampling density follows the same per-variant
+ * viewport tessellation values as the local JS engine fallback.
  */
 export async function prepareBackendViewportMesh(
   state,
-  { backendUrl = DEFAULT_BACKEND_URL, fetchImpl = fetch } = {}
+  { variant = 'grid', backendUrl = DEFAULT_BACKEND_URL, fetchImpl = fetch, signal } = {}
 ) {
+  const perf = createPerfTimer(`prepareBackendViewportMesh:${variant}`);
   const viewportState = requireViewportState(state);
   const designTask = DesignModule.task(
     DesignModule.importState(viewportState, {
@@ -122,25 +124,35 @@ export async function prepareBackendViewportMesh(
   );
   const preparedParams = DesignModule.output.preparedParams(designTask);
   const requestParams = DesignModule.output.backendMeshSimulationParams(designTask);
-  const requestPayload = buildWaveguidePayload(requestParams, '2.2');
+  const viewportParams = prepareViewportTessellationParams(requestParams, { variant });
+  const requestPayload = buildWaveguidePayload(viewportParams, '2.2');
+  perf.mark('request-payload');
 
   const response = await fetchImpl(`${backendUrl}/api/mesh/viewport`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestPayload),
+    signal,
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Backend viewport mesh failed (${response.status}): ${text}`);
+    throw new Error(`Backend viewport geometry failed (${response.status}): ${text}`);
   }
   const payload = await response.json();
-  assertViewportMeshResponse(payload);
+  perf.mark('fetch');
+  assertViewportGeometryResponse(payload);
+  const { vertices, indices, groups } = tessellateViewportGeometry(payload);
+  perf.end({
+    vertexCount: vertices.length / 3,
+    triangleCount: indices.length / 3,
+  });
+
   return {
-    vertices: payload.vertices,
-    indices: payload.indices,
-    groups: payload.groups || {},
-    surfaceTags: payload.surfaceTags || [],
+    vertices,
+    indices,
+    groups,
     metadata: payload.metadata || {},
     preparedParams,
+    variant,
   };
 }
