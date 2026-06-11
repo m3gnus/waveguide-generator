@@ -48,10 +48,6 @@ select_fallback_python() {
         candidates+=("$ROOT_DIR/.venv/Scripts/python.exe")
         sources+=("fallback:.venv")
     fi
-    if [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
-        candidates+=("$HOME/.waveguide-generator/opencl-cpu-env/bin/python")
-        sources+=("fallback:opencl-cpu-env")
-    fi
     if command -v python3 &> /dev/null; then
         candidates+=("python3")
         sources+=("fallback:python3")
@@ -93,8 +89,6 @@ if [ -z "$PYTHON_BIN" ] && [ -x "$ROOT_DIR/.venv/bin/python" ]; then
     select_fallback_python
 elif [ -z "$PYTHON_BIN" ] && [ -x "$ROOT_DIR/.venv/Scripts/python.exe" ]; then
     select_fallback_python
-elif [ -z "$PYTHON_BIN" ] && [ -x "$HOME/.waveguide-generator/opencl-cpu-env/bin/python" ]; then
-    select_fallback_python
 elif [ -z "$PYTHON_BIN" ] && command -v python3 &> /dev/null; then
     select_fallback_python
 fi
@@ -122,7 +116,7 @@ echo ""
 # Check solver backend availability
 echo "Checking solver backend availability..."
 $PYTHON_BIN - <<'PY'
-from solver.deps import BEMPP_RUNTIME_READY
+from solver.bempp_solver import bempp_backend_status
 from solver.metal_solver import metal_backend_status
 import sys
 
@@ -130,14 +124,15 @@ metal_status = metal_backend_status()
 if metal_status.get("available"):
     print("✅ Metal BEM backend is ready")
     sys.exit(0)
-if BEMPP_RUNTIME_READY:
-    print("✅ bempp-cl fallback backend is ready")
+bempp_status = bempp_backend_status()
+if bempp_status.get("available"):
+    assembly_backend = bempp_status.get("assemblyBackend") or "numba"
+    print(f"✅ Bempp backend is ready ({assembly_backend})")
     sys.exit(0)
 print("⚠️  Warning: no solver backend is ready.")
-print("   The server can start, but /api/solve will stay unavailable until Metal BEM or bempp-cl is ready.")
+print("   The server can start, but /api/solve will stay unavailable until Metal BEM or Bempp is ready.")
 print("   To install the BEMPP fallback, run:")
-print("   python -m pip install pyopencl")
-print("   python -m pip install git+https://github.com/bempp/bempp-cl.git@d4f23c4b77b4e86e0b2c9da42db39fea2995bb33")
+print("   python -m pip install -r server/requirements-bempp.txt")
 sys.exit(1)
 PY
 true

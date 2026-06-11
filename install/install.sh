@@ -203,6 +203,7 @@ echo "  gmsh Python version: $(.venv/bin/python -c "import gmsh; print(gmsh.__ve
 echo ""
 
 echo "Checking Metal BEM backend..."
+METAL_READY=0
 if _METAL_STATUS_OUTPUT="$(PYTHONPATH="$ROOT/server" .venv/bin/python - <<'METALCHECK' 2>&1
 import sys
 from solver.metal_solver import metal_backend_status
@@ -215,14 +216,65 @@ print(status.get("reason") or "Metal BEM backend is not available on this host."
 sys.exit(1)
 METALCHECK
 )"; then
+    METAL_READY=1
     echo "  Metal BEM is ready."
     [[ -n "$_METAL_STATUS_OUTPUT" ]] && echo "  $_METAL_STATUS_OUTPUT"
 else
     echo "  WARNING: Metal BEM is not ready."
     [[ -n "$_METAL_STATUS_OUTPUT" ]] && echo "  $_METAL_STATUS_OUTPUT"
-    echo "  hornlab-metal-bem is the only solve backend; /api/solve requires an"
-    echo "  Apple Silicon Mac with the native helper built (npm run build:metal-helper)."
-    echo "  Mesh building and exports still work without it."
+fi
+echo ""
+
+SOLVER_BACKEND_SUMMARY="Metal or Bempp solve backend: not ready"
+if [[ "$METAL_READY" -eq 1 ]]; then
+    echo "Skipping Bempp install because Metal BEM is ready."
+    SOLVER_BACKEND_SUMMARY="Metal or Bempp solve backend: Metal BEM ready (Bempp install skipped)"
+else
+    echo "Installing Bempp cross-platform backend..."
+    if .venv/bin/pip install --quiet -r server/requirements-bempp.txt; then
+        if _BEMPP_STATUS_OUTPUT="$(PYTHONPATH="$ROOT/server" .venv/bin/python - <<'BEMPPPROBE' 2>&1
+import sys
+
+try:
+    import hornlab_bempp_bem  # noqa: F401
+except Exception as exc:
+    print(f"Bempp import failed: {exc}")
+    sys.exit(1)
+
+try:
+    import pyopencl as cl  # type: ignore
+    platforms = cl.get_platforms()
+    device_count = 0
+    for platform in platforms:
+        try:
+            device_count += len(platform.get_devices())
+        except Exception:
+            pass
+    if platforms and device_count:
+        print("bempp ready with OpenCL acceleration")
+    else:
+        raise RuntimeError("no OpenCL platforms/devices found")
+except Exception:
+    print(
+        "bempp ready using the numba CPU backend "
+        "(works everywhere, slower; speed-up hint: install an OpenCL runtime - "
+        "Linux: pocl from your package manager; macOS x86_64: none needed, numba is fine)"
+    )
+BEMPPPROBE
+)"; then
+            echo "  $_BEMPP_STATUS_OUTPUT"
+            SOLVER_BACKEND_SUMMARY="Metal or Bempp solve backend: Bempp ready"
+        else
+            echo "  bempp install failed."
+            [[ -n "$_BEMPP_STATUS_OUTPUT" ]] && echo "  $_BEMPP_STATUS_OUTPUT"
+            echo "  Manual command:"
+            echo "    .venv/bin/pip install -r server/requirements-bempp.txt"
+        fi
+    else
+        echo "  bempp install failed."
+        echo "  Manual command:"
+        echo "    .venv/bin/pip install -r server/requirements-bempp.txt"
+    fi
 fi
 echo ""
 
@@ -265,4 +317,6 @@ echo "To start the app:"
 echo "  - macOS: double-click launch/mac.command"
 echo "  - Linux: run bash launch/linux.sh"
 echo "  - Or run npm start"
+echo ""
+echo "$SOLVER_BACKEND_SUMMARY"
 echo ""

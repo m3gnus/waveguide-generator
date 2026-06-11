@@ -55,10 +55,19 @@ test('saveSimAdvancedSettings persists metal backend selection', () => {
   assert.equal(loaded.solverBackend, 'metal');
 });
 
-test('saveSimAdvancedSettings coerces removed bempp backend to auto', () => {
+test('saveSimAdvancedSettings persists bempp backend selection', () => {
   global.localStorage.clear();
   saveSimAdvancedSettings({
     solverBackend: 'bempp',
+  });
+  const loaded = loadSimAdvancedSettings();
+  assert.equal(loaded.solverBackend, 'bempp');
+});
+
+test('saveSimAdvancedSettings coerces invalid backend to auto', () => {
+  global.localStorage.clear();
+  saveSimAdvancedSettings({
+    solverBackend: 'invalid-backend',
   });
   const loaded = loadSimAdvancedSettings();
   assert.equal(loaded.solverBackend, 'auto');

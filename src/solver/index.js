@@ -47,7 +47,7 @@ function createAbortController(timeoutMs) {
  * @property {Record<string, unknown>|null} [polarConfig]
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
- * @property {'auto'|'metal'} [solverBackend]
+ * @property {'auto'|'metal'|'bempp'} [solverBackend]
  * @property {boolean} [verbose]
  */
 
@@ -167,7 +167,7 @@ async function fetchOrApiError(url, options, operation, timeoutMs = DEFAULT_TIME
 
 const VALID_MESH_VALIDATION_MODES = new Set(['strict', 'warn', 'off']);
 const VALID_FREQUENCY_SPACING = new Set(['linear', 'log']);
-const VALID_SOLVER_BACKENDS = new Set(['auto', 'metal']);
+const VALID_SOLVER_BACKENDS = new Set(['auto', 'metal', 'bempp']);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
   if (typeof value !== 'string') {
@@ -208,13 +208,17 @@ export class BemSolver {
   }
 
   /**
-   * Check if backend meshing and the Metal BEM solver runtime are ready.
+   * Check if backend meshing and a BEM solver runtime are ready.
    */
   async checkConnection() {
     try {
       const health = await this.getHealthStatus();
-      const metalReady = Boolean(health?.solverReady || health?.solverBackends?.metal?.ready);
-      return metalReady && Boolean(health?.mesherReady);
+      const solverReady = Boolean(
+        health?.solverReady ||
+          health?.solverBackends?.metal?.ready ||
+          health?.solverBackends?.bempp?.ready
+      );
+      return solverReady && Boolean(health?.mesherReady);
     } catch {
       return false;
     }

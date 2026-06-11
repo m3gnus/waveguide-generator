@@ -11,7 +11,12 @@ from importlib import metadata
 from importlib.util import find_spec
 from typing import Any, Dict, List, Tuple
 
-from services.solver_runtime import get_dependency_status, metal_backend_status
+from services.solver_runtime import (
+    bempp_backend_status,
+    get_dependency_status,
+    metal_backend_status,
+    opencl_runtime_status,
+)
 
 DOCTOR_SCHEMA_VERSION = 1
 DOCTOR_STATUS_INSTALLED = "installed"
@@ -60,6 +65,8 @@ def _collect_runtime_snapshot(preferred_mode: str = "auto") -> Dict[str, Any]:
         "fastapi": read_fastapi_runtime(),
         "matplotlib": read_matplotlib_runtime(),
         "metalBackend": metal_backend_status(),
+        "bemppBackend": bempp_backend_status(),
+        "openclRuntime": opencl_runtime_status(),
     }
 
 
@@ -67,6 +74,7 @@ def _build_required_checks(
     dependency_status: Dict[str, Any],
     fastapi_runtime: Dict[str, Any],
     metal_backend: Dict[str, Any],
+    bempp_backend: Dict[str, Any],
     platform_payload: Dict[str, Any] | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     runtime = dependency_status.get("runtime") if isinstance(dependency_status, dict) else {}
@@ -83,11 +91,18 @@ def _build_required_checks(
         if isinstance(runtime.get("hornlab_metal_bem"), dict)
         else {}
     )
+    bempp_bem_runtime = (
+        runtime.get("hornlab_bempp_bem")
+        if isinstance(runtime.get("hornlab_bempp_bem"), dict)
+        else {}
+    )
 
     fastapi_ok = bool(fastapi_runtime.get("available"))
     mesher_ok = bool(mesher_runtime.get("ready"))
     gmsh_ok = bool(gmsh_runtime.get("ready"))
     metal_ok = bool(metal_backend.get("available"))
+    bempp_ok = bool(bempp_backend.get("available"))
+    apple_silicon = _is_apple_silicon(platform_payload)
 
     if metal_ok:
         metal_detail = (
@@ -96,6 +111,13 @@ def _build_required_checks(
         )
     else:
         metal_detail = str(metal_backend.get("reason") or "Metal BEM backend is unavailable.")
+
+    bempp_detail = (
+        f"version={bempp_bem_runtime.get('version') or 'unknown'} "
+        f"assembly_backend={bempp_backend.get('assemblyBackend') or 'unknown'}"
+        if bempp_ok
+        else str(bempp_backend.get("reason") or "hornlab-bempp-bem is not installed.")
+    )
 
     checks = {
         "fastapi": {
@@ -125,12 +147,19 @@ def _build_required_checks(
                 else "hornlab-waveguide-mesher runtime status unavailable."
             ),
         },
-        "hornlab_metal_bem": {
-            "ok": metal_ok,
-            "requiredFor": "/api/solve",
-            "detail": metal_detail,
-        },
     }
+    if apple_silicon:
+        checks["hornlab_metal_bem"] = {
+            "ok": metal_ok,
+            "requiredFor": "/api/solve on Apple-Silicon hosts",
+            "detail": metal_detail,
+        }
+    else:
+        checks["hornlab_bempp_bem"] = {
+            "ok": bempp_ok,
+            "requiredFor": "/api/solve on non-Apple-Silicon hosts",
+            "detail": bempp_detail,
+        }
     metal_release_check = _build_metal_release_helper_required_check(
         metal_backend=metal_backend,
         platform_payload=platform_payload,
@@ -227,6 +256,22 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
             "Verify with selected interpreter: python -c \"import hornlab_metal_bem; print(hornlab_metal_bem.__file__)\"",
             "Metal BEM solves require an Apple Silicon Mac.",
         ]
+    if component_id == "hornlab_bempp_bem":
+        return [
+            "Install BEMPP fallback requirements: pip install -r server/requirements-bempp.txt",
+            "Verify with selected interpreter: python -c \"import hornlab_bempp_bem; print(hornlab_bempp_bem.__file__)\"",
+        ]
+    if component_id == "opencl_runtime":
+        guidance = [
+            "BEMPP solves work without OpenCL through the numba backend, but solves are slower.",
+        ]
+        if os_name == "linux":
+            guidance.append("For faster OpenCL solves on Linux, install pocl from the distro package manager.")
+        elif os_name == "windows":
+            guidance.append(
+                "For faster OpenCL solves on Windows, install GPU drivers or the Intel CPU OpenCL runtime."
+            )
+        return guidance
     if component_id == "metal_release_helper":
         return [
             "Build the release Metal helper: npm run build:metal-helper",
@@ -255,6 +300,8 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     fastapi_runtime = snapshot.get("fastapi") if isinstance(snapshot.get("fastapi"), dict) else {}
     matplotlib_runtime = snapshot.get("matplotlib") if isinstance(snapshot.get("matplotlib"), dict) else {}
     metal_backend = snapshot.get("metalBackend") if isinstance(snapshot.get("metalBackend"), dict) else {}
+    bempp_backend = snapshot.get("bemppBackend") if isinstance(snapshot.get("bemppBackend"), dict) else {}
+    opencl_runtime = snapshot.get("openclRuntime") if isinstance(snapshot.get("openclRuntime"), dict) else {}
 
     gmsh_runtime = runtime.get("gmsh_python") if isinstance(runtime.get("gmsh_python"), dict) else {}
     mesher_runtime = (
@@ -265,6 +312,11 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     metal_bem_runtime = (
         runtime.get("hornlab_metal_bem")
         if isinstance(runtime.get("hornlab_metal_bem"), dict)
+        else {}
+    )
+    bempp_bem_runtime = (
+        runtime.get("hornlab_bempp_bem")
+        if isinstance(runtime.get("hornlab_bempp_bem"), dict)
         else {}
     )
 
@@ -287,11 +339,20 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     )
 
     metal_ready = _metal_path_ready(metal_backend)
+    bempp_ready = bool(bempp_backend.get("available"))
+    apple_silicon = _is_apple_silicon(platform_payload)
     metal_status = _resolve_doctor_status(
         available=bool(metal_bem_runtime.get("available")),
         supported=bool(metal_bem_runtime.get("supported")),
         ready=metal_ready,
     )
+    bempp_status = _resolve_doctor_status(
+        available=bool(bempp_bem_runtime.get("available")),
+        supported=bool(bempp_bem_runtime.get("supported")),
+        ready=bempp_ready,
+    )
+    opencl_available = bool(opencl_runtime.get("available"))
+    opencl_status = DOCTOR_STATUS_INSTALLED if opencl_available else DOCTOR_STATUS_MISSING
     metal_release_helper_ready = _metal_release_helper_ready(metal_backend)
     metal_release_helper_status = (
         DOCTOR_STATUS_INSTALLED if metal_release_helper_ready else DOCTOR_STATUS_MISSING
@@ -371,10 +432,14 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         {
             "id": "hornlab_metal_bem",
             "name": "HornLab Metal BEM",
-            "category": DOCTOR_CATEGORY_REQUIRED,
-            "requiredFor": "/api/solve",
+            "category": DOCTOR_CATEGORY_REQUIRED if apple_silicon else DOCTOR_CATEGORY_OPTIONAL,
+            "requiredFor": (
+                "/api/solve on Apple-Silicon hosts"
+                if apple_silicon
+                else "/api/solve acceleration on Apple-Silicon hosts"
+            ),
             "featureImpact": (
-                "/api/solve BEM simulation is unavailable."
+                "Metal BEM simulation path is unavailable."
                 if metal_status != DOCTOR_STATUS_INSTALLED
                 else "Metal BEM solve backend is available."
             ),
@@ -388,6 +453,28 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
                 f"backend_available={metal_ready}"
                 if metal_bem_runtime
                 else str(metal_backend.get("reason") or "hornlab-metal-bem runtime status unavailable.")
+            ),
+        },
+        {
+            "id": "hornlab_bempp_bem",
+            "name": "HornLab BEMPP BEM",
+            "category": DOCTOR_CATEGORY_OPTIONAL if apple_silicon else DOCTOR_CATEGORY_REQUIRED,
+            "requiredFor": "/api/solve on non-Apple-Silicon hosts",
+            "featureImpact": (
+                "BEMPP fallback solves are unavailable."
+                if bempp_status != DOCTOR_STATUS_INSTALLED
+                else "BEMPP fallback solve backend is available."
+            ),
+            "status": bempp_status,
+            "available": bool(bempp_bem_runtime.get("available")),
+            "supported": bool(bempp_bem_runtime.get("supported")),
+            "ready": bempp_ready,
+            "version": bempp_bem_runtime.get("version"),
+            "detail": (
+                f"version={bempp_bem_runtime.get('version') or 'unknown'} "
+                f"assembly_backend={bempp_backend.get('assemblyBackend') or 'unknown'}"
+                if bempp_bem_runtime
+                else str(bempp_backend.get("reason") or "hornlab-bempp-bem runtime status unavailable.")
             ),
         },
     ]
@@ -412,6 +499,26 @@ def _build_doctor_components(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "detail": _metal_release_helper_detail(metal_backend),
             }
         )
+
+    components.append(
+        {
+            "id": "opencl_runtime",
+            "name": "OpenCL runtime",
+            "category": DOCTOR_CATEGORY_OPTIONAL,
+            "requiredFor": "faster BEMPP solves",
+            "featureImpact": (
+                "BEMPP solves will use the numba backend, which is slower but complete."
+                if opencl_status != DOCTOR_STATUS_INSTALLED
+                else "OpenCL acceleration is available for BEMPP solves."
+            ),
+            "status": opencl_status,
+            "available": opencl_available,
+            "supported": opencl_available,
+            "ready": opencl_available,
+            "version": None,
+            "detail": str(opencl_runtime.get("reason") or "OpenCL runtime status unavailable."),
+        }
+    )
 
     components.append(
         {
@@ -456,7 +563,7 @@ def _build_doctor_summary(components: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
     required_issues: List[str] = []
     optional_issues: List[str] = []
-    solve_issues: List[str] = []
+    failed_solve_components: List[str] = []
     mesh_build_issues: List[str] = []
 
     for component in components:
@@ -472,18 +579,28 @@ def _build_doctor_summary(components: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         if category == DOCTOR_CATEGORY_REQUIRED and status != DOCTOR_STATUS_INSTALLED:
             required_issues.append(component_id)
-            if required_for == "/api/solve":
-                solve_issues.append(component_id)
+            if required_for.startswith("/api/solve"):
+                failed_solve_components.append(component_id)
             if required_for == "/api/mesh/build":
                 mesh_build_issues.append(component_id)
         if category == DOCTOR_CATEGORY_OPTIONAL and status != DOCTOR_STATUS_INSTALLED:
             optional_issues.append(component_id)
 
+    ready_by_id = {
+        str(component.get("id") or ""): bool(component.get("ready"))
+        for component in components
+        if isinstance(component, dict)
+    }
+    solve_ready = bool(
+        ready_by_id.get("hornlab_metal_bem") or ready_by_id.get("hornlab_bempp_bem")
+    )
+    solve_issues = [] if solve_ready else failed_solve_components
+
     return {
         "requiredReady": len(required_issues) == 0,
         "requiredIssues": required_issues,
         "optionalIssues": optional_issues,
-        "solveReady": len(solve_issues) == 0,
+        "solveReady": solve_ready,
         "solveIssues": solve_issues,
         "meshBuildReady": len(mesh_build_issues) == 0,
         "meshBuildIssues": mesh_build_issues,
@@ -497,6 +614,7 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
         dependency_status=snapshot.get("dependencies", {}),
         fastapi_runtime=snapshot.get("fastapi", {}),
         metal_backend=snapshot.get("metalBackend", {}),
+        bempp_backend=snapshot.get("bemppBackend", {}),
         platform_payload=snapshot.get("platform", {}),
     )
     all_required_ok = all(bool(check.get("ok")) for check in required_checks.values())
@@ -507,6 +625,8 @@ def collect_runtime_preflight(preferred_mode: str = "auto") -> Dict[str, Any]:
         "dependencies": snapshot.get("dependencies"),
         "fastapi": snapshot.get("fastapi"),
         "metalBackend": snapshot.get("metalBackend"),
+        "bemppBackend": snapshot.get("bemppBackend"),
+        "openclRuntime": snapshot.get("openclRuntime"),
         "requiredChecks": required_checks,
         "allRequiredReady": all_required_ok,
     }
@@ -523,8 +643,21 @@ def collect_runtime_doctor_report(preferred_mode: str = "auto") -> Dict[str, Any
         "platform": snapshot.get("platform"),
         "components": components,
         "summary": summary,
+        "solveReadiness": {
+            "ready": bool(summary.get("solveReady")),
+            "backends": {
+                "metal": bool((snapshot.get("metalBackend") or {}).get("available"))
+                if isinstance(snapshot.get("metalBackend"), dict)
+                else False,
+                "bempp": bool((snapshot.get("bemppBackend") or {}).get("available"))
+                if isinstance(snapshot.get("bemppBackend"), dict)
+                else False,
+            },
+        },
         "dependencies": snapshot.get("dependencies"),
         "metalBackend": snapshot.get("metalBackend"),
+        "bemppBackend": snapshot.get("bemppBackend"),
+        "openclRuntime": snapshot.get("openclRuntime"),
     }
 
 
@@ -576,8 +709,11 @@ def render_runtime_preflight_text(report: Dict[str, Any]) -> str:
         "gmsh_python",
         "hornlab_waveguide_mesher",
         "hornlab_metal_bem",
+        "hornlab_bempp_bem",
         "metal_release_helper",
     ):
+        if check_id not in required:
+            continue
         payload = required.get(check_id) if isinstance(required.get(check_id), dict) else {}
         ok = bool(payload.get("ok"))
         status = "OK" if ok else "MISSING"

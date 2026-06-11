@@ -20,9 +20,11 @@ from services.simulation_validation import (
     validate_submit_simulation_request,
 )
 from services.solver_runtime import (
+    BEMPP_SOLVER_READY,
     METAL_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
+    bempp_backend_status,
     build_waveguide_mesh,
     get_dependency_status,
     metal_backend_status,
@@ -57,6 +59,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     request_to_submit = build_submit_simulation_request(request, validation)
+    requested_solver_backend = request_to_submit.solver_backend
     solver_backend = resolve_solver_backend(
         request_to_submit.solver_backend,
         mesh_strategy=validation.mesh_strategy,
@@ -91,6 +94,17 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
 
     if solver_backend == "metal" and not METAL_SOLVER_READY:
         status = metal_backend_status()
+        if requested_solver_backend == "auto" and not BEMPP_SOLVER_READY:
+            bempp_status = bempp_backend_status()
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No BEM solver backend is available. "
+                    f"Metal: {status.get('reason') or 'unavailable'}; "
+                    f"BEMPP: {bempp_status.get('reason') or 'unavailable'}. "
+                    "Install the BEMPP fallback with: pip install -r server/requirements-bempp.txt"
+                ),
+            )
         raise HTTPException(
             status_code=503,
             detail=(
@@ -98,6 +112,16 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
                 f"reason={status.get('reason') or 'unavailable'}; "
                 f"supported_platform={status.get('supportedPlatform')} "
                 f"native_helper_available={status.get('nativeHelperAvailable')}."
+            ),
+        )
+    if solver_backend == "bempp" and not BEMPP_SOLVER_READY:
+        status = bempp_backend_status()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "BEMPP BEM solver not available. "
+                f"reason={status.get('reason') or 'unavailable'}; "
+                "install with: pip install -r server/requirements-bempp.txt."
             ),
         )
 

@@ -97,7 +97,7 @@ Supporting fixtures:
 - `server/tests/test_updates_endpoint.py`
 - `server/tests/test_workspace_routes.py`
 
-The backend suites cover the metal-only solver contract: `hornlab-metal-bem` is the only `/api/solve` backend (`solver_backend` accepts `auto`/`metal`, and `bempp` is rejected with `422`).
+The backend suites cover solver backend selection across Metal and Bempp: `solver_backend` accepts `auto`, `metal`, and `bempp`; Auto prefers Metal BEM when ready and falls back to Bempp on other hosts.
 
 ## Manual diagnostics (`scripts/diagnostics/`)
 

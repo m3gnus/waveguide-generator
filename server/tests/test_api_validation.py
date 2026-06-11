@@ -167,30 +167,29 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn("waveguide_params", str(ctx.exception.detail))
 
-    def test_removed_bempp_backend_is_rejected_at_contract_level(self):
-        with self.assertRaises(ValidationError) as ctx:
-            SimulationRequest(
-                mesh=MeshData(
-                    vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    indices=[0, 1, 2],
-                    surfaceTags=[2],
-                    format='msh',
-                    boundaryConditions={},
-                    metadata={}
-                ),
-                frequency_range=[100.0, 1000.0],
-                num_frequencies=10,
-                sim_type='2',
-                solver_backend="bempp",
-                options={
-                    "mesh": {
-                        "strategy": "hornlab_mesher",
-                        "waveguide_params": {"formula_type": "OSSE"},
-                    }
-                },
-            )
+    def test_bempp_backend_is_valid_at_contract_level(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            solver_backend="bempp",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "OSSE"},
+                }
+            },
+        )
 
-        self.assertIn("bempp solver backend was removed", str(ctx.exception))
+        self.assertEqual(request.solver_backend, "bempp")
 
     def test_hornlab_mesher_runtime_gate_returns_503(self):
         request = SimulationRequest(

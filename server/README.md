@@ -21,6 +21,7 @@ Notes:
 
 - The root setup scripts (`install/install.sh` and `install/install.bat`) automatically install the HornLab mesher, Metal BEM, and gmsh.
 - `server/requirements.txt` installs `hornlab-waveguide-mesher` and `hornlab-metal-bem` from GitHub using pinned commit SHAs for reproducible installs.
+- When Metal BEM is unavailable, setup installs `hornlab-bempp-bem` from `server/requirements-bempp.txt`; OpenCL is optional and the numba CPU backend is used when no OpenCL runtime is present.
 - `gmsh` is mandatory for `/api/mesh/build`: setup exits if gmsh cannot be installed/imported after retries.
 - `gmsh` Python wheels on default PyPI may be missing for some Linux/Python combinations.
 - Dependency audit (March 19, 2026): `trimesh` was removed from backend requirements after proving it unused in active runtime/tests.
@@ -42,7 +43,7 @@ The install scripts write the preferred backend interpreter to this repo marker:
 1. `PYTHON_BIN`
 2. `WG_BACKEND_PYTHON`
 3. `.waveguide/backend-python.path`
-4. fallback probe across project `.venv`, a legacy `$HOME/.waveguide-generator/opencl-cpu-env` interpreter when present, then `python3`
+4. fallback probe across project `.venv`, then `python3`
 
 When step 4 is used, startup prefers the first interpreter whose runtime doctor reports all required dependencies ready; if none are ready, it falls back to the same raw order.
 
@@ -65,13 +66,15 @@ Preflight always runs under the interpreter selected by the shared startup contr
 - `fastapi` (backend startup)
 - `gmsh` (`/api/mesh/build`)
 - `hornlab-waveguide-mesher` (`/api/mesh/build`, viewport meshing, and HornLab mesher jobs)
-- `hornlab-metal-bem` (`/api/solve`)
+- `hornlab-metal-bem` (`/api/solve` on Apple Silicon)
+- `hornlab-bempp-bem` (`/api/solve` on other hosts)
 
 Current Apple Silicon contract:
 
-- HornLab Metal BEM is the only `/api/solve` backend and requires Apple Silicon macOS. Mesh building and exports work on all platforms.
+- Auto solver selection prefers HornLab Metal BEM on Apple Silicon and falls back to Bempp on other hosts. Mesh building and exports work on all platforms.
 - The Swift native helper must be selected from `.build/release`; strict preflight and doctor report `metal_release_helper` as required on Apple Silicon.
 - Build or repair the helper with `npm run build:metal-helper`.
+- Bempp uses OpenCL acceleration when available and otherwise uses the numba CPU backend.
 
 ### 1.0.2 Backend dependency doctor
 
@@ -102,7 +105,9 @@ Doctor report contract:
   - `fastapi`
   - `gmsh` Python API
   - `hornlab-waveguide-mesher`
-  - `hornlab-metal-bem` (required; `/api/solve`)
+  - `hornlab-metal-bem` (`/api/solve` on Apple Silicon)
+  - `hornlab-bempp-bem` (`/api/solve` on non-Apple-Silicon hosts)
+  - OpenCL runtime (optional Bempp speed-up)
   - Metal native release helper (`metal_release_helper`, required on Apple Silicon)
   - `matplotlib` (optional; chart render endpoints)
 - Summary includes endpoint-scoped readiness:
@@ -111,15 +116,16 @@ Doctor report contract:
 
 ### 1.1 Solver backend policy (`/api/solve`)
 
-`hornlab-metal-bem` is the only solve backend. The request field `solver_backend` accepts:
+The request field `solver_backend` accepts:
 
-- `auto` (resolves to `metal`)
+- `auto` (resolves to `metal` when Metal BEM is ready, otherwise `bempp` when Bempp is ready)
 - `metal`
+- `bempp`
 
 Notes:
 
-- Requests with `solver_backend: "bempp"` are rejected with `422`: the bempp solver backend was removed; hornlab-metal-bem is the only solve backend.
-- Metal BEM requires Apple Silicon macOS. On other hosts `/api/solve` reports the solver runtime as unavailable, while mesh building and exports keep working.
+- Metal BEM requires Apple Silicon macOS.
+- Bempp is cross-platform for Windows, Linux, and Intel Mac hosts. OpenCL acceleration is used when available; otherwise the numba CPU backend remains supported.
 - The solver clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
 - Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalized plane descriptors, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
 - `results.directivity` is a plane-keyed map containing only the requested planes; callers must not assume all of `horizontal`, `vertical`, and `diagonal` are always present.
@@ -132,7 +138,8 @@ The backend now enforces a version matrix at runtime:
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
 | HornLab mesher      | `2eb7b85e16952b2854ae0cadb661b87c4ad02313` | `/api/mesh/build` |
-| HornLab Metal BEM   | `59528f5a0993ff4718d9037baae5fac008705b0c` | `/api/solve` (only solve backend; Apple Silicon macOS) |
+| HornLab Metal BEM   | `59528f5a0993ff4718d9037baae5fac008705b0c` | `/api/solve` (Apple Silicon macOS) |
+| HornLab Bempp BEM   | `796bef42b6e6e6e02086d1b94bfc9d5e8a65ea0e` | `/api/solve` (cross-platform fallback) |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
 
 Notes:
@@ -166,7 +173,7 @@ python3 -m venv .venv
 Notes:
 
 - `/api/mesh/build` requires the Python `gmsh` package.
-- `/api/solve` requires the Metal BEM solver backend (`hornlab-metal-bem`, Apple Silicon macOS only).
+- `/api/solve` requires Metal BEM or Bempp.
 - Plot rendering uses the non-interactive Matplotlib `Agg` backend, so chart/directivity endpoints do not require a display server.
 - On headless Linux, prefer the Gmsh `-nox` wheel index documented above if the default wheel is unavailable.
 
@@ -184,17 +191,17 @@ Health check and solver status.
 
 Includes:
 
-- `solver`: `metal-bem` when the Metal BEM runtime is ready, otherwise `unavailable`
-- `solverReady`: Metal BEM solve readiness
-- `solverBackends.metal`: `{ ready, status }` for the only solve backend
-- dependency matrix/runtime payload under `dependencies` (runtime entries: `python`, `gmsh_python`, `hornlab_waveguide_mesher`, `hornlab_metal_bem`)
+- `solver`: `metal-bem`, `bempp-bem`, or `unavailable`
+- `solverReady`: aggregate Metal-or-Bempp solve readiness
+- `solverBackends.metal` and `solverBackends.bempp`: `{ ready, status }` per backend
+- dependency matrix/runtime payload under `dependencies` (runtime entries: `python`, `gmsh_python`, `hornlab_waveguide_mesher`, `hornlab_metal_bem`, `hornlab_bempp_bem`)
 - settings capability metadata under `capabilities`, including:
   - `simulationBasic.controls`
   - `simulationAdvanced.available`
   - `simulationAdvanced.controls` (`solver_backend`)
   - `simulationAdvanced.reason`
   - `simulationAdvanced.plannedControls`
-  - `solverBackends.backends` (`metal` only)
+  - `solverBackends.backends` (`metal`, `bempp`)
 - dependency doctor payload under `dependencyDoctor`, including:
   - `summary.requiredReady|requiredIssues`
   - `summary.solveReady|solveIssues`
@@ -236,8 +243,8 @@ Optional:
   - solve results package directivity per requested plane only; use `results.metadata.directivity.enabled_axes` or `results.metadata.directivity.planes` to inspect which cuts were computed
 - `verbose`
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
-- `solver_backend` (`auto` | `metal`, default `auto`; both resolve to the Metal BEM backend)
-- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, and `advanced_settings`. They are validated for shape but ignored; `/api/solve` always runs the Metal BEM solver entrypoint with its native solver settings.
+- `solver_backend` (`auto` | `metal` | `bempp`, default `auto`; Auto prefers Metal BEM and falls back to Bempp)
+- Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, and `advanced_settings`. They are validated for shape; active frontend controls expose only the solver backend selector.
 
 Validation behavior:
 

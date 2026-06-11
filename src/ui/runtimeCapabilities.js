@@ -31,11 +31,21 @@ export function describeSelectedDevice(health) {
   if (solver === 'metal-bem') {
     return 'Using: Metal BEM';
   }
+  if (solver === 'bempp-bem') {
+    const assemblyBackend = String(
+      health?.solverBackends?.bempp?.status?.assemblyBackend || ''
+    ).trim();
+    return assemblyBackend ? `Using: Bempp (${assemblyBackend})` : 'Using: Bempp';
+  }
   return '';
 }
 
 export function summarizeRuntimeCapabilities(health) {
-  const solverReady = Boolean(health?.solverReady || health?.solverBackends?.metal?.ready);
+  const solverReady = Boolean(
+    health?.solverReady ||
+      health?.solverBackends?.metal?.ready ||
+      health?.solverBackends?.bempp?.ready
+  );
   const mesherReady = Boolean(health?.mesherReady);
   const fullyReady = solverReady && mesherReady;
   const advancedCapability = health?.capabilities?.simulationAdvanced;
@@ -74,9 +84,12 @@ export function getDependencyStatusSummary(health) {
   const gmsh = deps?.gmsh_python || {};
   const mesher = deps?.hornlab_waveguide_mesher || {};
   const metalDep = deps?.hornlab_metal_bem || {};
+  const bemppDep = deps?.hornlab_bempp_bem || {};
   const python = deps?.python || {};
   const metalStatus = health?.solverBackends?.metal?.status || {};
   const metalReady = Boolean(health?.solverBackends?.metal?.ready || metalStatus?.available);
+  const bemppStatus = health?.solverBackends?.bempp?.status || {};
+  const bemppReady = Boolean(health?.solverBackends?.bempp?.ready || bemppStatus?.available);
 
   return {
     python: {
@@ -129,6 +142,19 @@ export function getDependencyStatusSummary(health) {
           : 'Install hornlab-metal-bem (Apple Silicon macOS required): pip install -r server/requirements.txt'
         : null,
     },
+    bempp: {
+      name: 'Bempp',
+      version: bemppDep?.version || null,
+      available: bemppReady,
+      supported: bemppDep.supported !== false,
+      ready: bemppReady,
+      feature: 'BEM simulation (cross-platform)',
+      guidance: !bemppReady
+        ? bemppStatus.reason
+          ? String(bemppStatus.reason)
+          : 'Install Bempp requirements: pip install -r server/requirements-bempp.txt'
+        : null,
+    },
   };
 }
 
@@ -156,8 +182,12 @@ export function getFeatureBlockedReason(health, feature) {
 
     case 'bem-solve':
     case 'simulation':
-      if (!summary.metal.ready) {
-        return summary.metal.guidance || `${summary.metal.name} is not ready for BEM simulation.`;
+      if (!summary.metal.ready && !summary.bempp.ready) {
+        return (
+          summary.metal.guidance ||
+          summary.bempp.guidance ||
+          'Metal BEM or Bempp must be ready for BEM simulation.'
+        );
       }
       return null;
 

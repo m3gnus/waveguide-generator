@@ -35,7 +35,7 @@ function readPreferredPythonFromMarker(rootDir, { existsSync, readFileSync }) {
   }
 }
 
-function buildFallbackCandidates(rootDir, { existsSync, homeDir }) {
+function buildFallbackCandidates(rootDir, { existsSync }) {
   const candidates = [];
 
   const venvPythonUnix = path.join(rootDir, '.venv', 'bin', 'python');
@@ -46,11 +46,6 @@ function buildFallbackCandidates(rootDir, { existsSync, homeDir }) {
   const venvPythonWindows = path.join(rootDir, '.venv', 'Scripts', 'python.exe');
   if (existsSync(venvPythonWindows)) {
     candidates.push({ python: venvPythonWindows, source: 'fallback:.venv' });
-  }
-
-  const openclCpuEnvPython = path.join(homeDir, '.waveguide-generator', 'opencl-cpu-env', 'bin', 'python');
-  if (existsSync(openclCpuEnvPython)) {
-    candidates.push({ python: openclCpuEnvPython, source: 'fallback:opencl-cpu-env' });
   }
 
   candidates.push({ python: 'python3', source: 'fallback:python3' });
@@ -126,7 +121,7 @@ export function resolveBackendPython(
     };
   }
 
-  const fallbackCandidates = buildFallbackCandidates(rootDir, { existsSync, homeDir });
+  const fallbackCandidates = buildFallbackCandidates(rootDir, { existsSync });
   for (const candidate of fallbackCandidates) {
     if (runtimeDoctorReady(rootDir, candidate, { env, spawnSyncFn })) {
       return candidate;

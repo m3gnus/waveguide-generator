@@ -76,8 +76,8 @@
   - HornLab mesher request adapter for solver/export `.msh`, STEP surface export, and fast viewport geometry (point grids + enclosure rings, no Gmsh)
 - `server/solver/mesh.py`
   - Canonical payload integrity checks and BEM mesh loading/validation helpers
-- `server/solver/bem_solver.py`, `server/solver/solve.py`
-  - BEM solve pipeline (single stable runtime entrypoint)
+- `server/solver/metal_solver.py`, `server/solver/bempp_solver.py`
+  - BEM solve backend adapters and backend selection (`hornlab-metal-bem`, `hornlab-bempp-bem`)
 - `server/solver/deps.py`
   - Runtime dependency/version gating
 
@@ -118,9 +118,9 @@ flowchart LR
 
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
 - Simulation settings forward `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
-- Simulation settings forward `solver_backend` (`auto`, `metal`) as the public backend selector. Both values resolve to the Metal BEM backend; `hornlab-metal-bem` is the only solve backend.
+- Simulation settings forward `solver_backend` (`auto`, `metal`, `bempp`) as the public backend selector. Auto prefers Metal BEM on Apple Silicon and falls back to Bempp on other hosts.
 - Solver runtime availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
-- Metal BEM requires Apple Silicon macOS. On other hosts `/health` reports the solver as unavailable while mesh building and exports keep working.
+- Metal BEM requires Apple Silicon macOS. Bempp is the cross-platform backend for Windows, Linux, and Intel Mac; it uses OpenCL acceleration when available and the numba CPU backend otherwise.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
 
@@ -295,16 +295,16 @@ Base URL: `http://localhost:8000`
     - `summary.solveReady`
     - `summary.solveIssues`
     - `components[].id|name|category|status|requiredFor|featureImpact|guidance`
-    - Doctor components: `fastapi`, `gmsh_python`, `hornlab_waveguide_mesher`, `hornlab_metal_bem` (required; `/api/solve`), `metal_release_helper` (Apple Silicon only), `matplotlib` (optional)
+    - Doctor components: `fastapi`, `gmsh_python`, `hornlab_waveguide_mesher`, `hornlab_metal_bem`, `hornlab_bempp_bem`, `opencl_runtime` (optional Bempp speed-up), `metal_release_helper` (Apple Silicon only), `matplotlib` (optional)
   - Frontend solver UI only surfaces dependency guidance when required components are missing; healthy dependency state is not rendered as a persistent status panel.
-  - Reports solver readiness: `solver` (`metal-bem` | `unavailable`), `solverReady`, and `solverBackends.metal` (`{ ready, status }`; metal is the only backend entry)
+  - Reports solver readiness: `solver` (`metal-bem` | `bempp-bem` | `unavailable`), `solverReady`, and `solverBackends.metal` / `solverBackends.bempp` (`{ ready, status }`)
   - Includes `capabilities` metadata for frontend settings gating:
     - `simulationBasic.controls`
     - `simulationAdvanced.available`
     - `simulationAdvanced.controls` (`solver_backend`)
     - `simulationAdvanced.reason`
     - `simulationAdvanced.plannedControls`
-    - `solverBackends.backends` (`metal` only)
+    - `solverBackends.backends` (`metal`, `bempp`)
 
 - `GET /api/updates/check`
   - Git remote/update check against `origin`
@@ -323,7 +323,7 @@ Base URL: `http://localhost:8000`
     and `polar_config.inclination` (diagonal plane angle)
   - Returns `results.directivity` as a plane-keyed map that includes only the requested enabled axes; frontend/export consumers must not assume all three plane keys are always present
   - Supports `mesh_validation_mode` (`strict`, `warn`, `off`)
-  - Supports `solver_backend` (`auto` | `metal`; both resolve to the Metal BEM backend). `solver_backend: "bempp"` is rejected with `422` because the bempp solver backend was removed.
+  - Supports `solver_backend` (`auto` | `metal` | `bempp`). Auto resolves to Metal BEM when ready, otherwise Bempp when ready.
   - Accepts compatibility `device_mode` and `advanced_settings` fields for older/non-frontend callers, but ignores them in the active `/api/solve` runtime path
   - Creates async job and returns `{ job_id }`
   - Backend schedules jobs FIFO with `max_concurrent_jobs=1` by default
@@ -358,15 +358,16 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
 | HornLab mesher      | `2eb7b85e16952b2854ae0cadb661b87c4ad02313` | `/api/mesh/build` |
-| HornLab Metal BEM   | `59528f5a0993ff4718d9037baae5fac008705b0c` | `/api/solve` (only solve backend; Apple Silicon macOS) |
+| HornLab Metal BEM   | `59528f5a0993ff4718d9037baae5fac008705b0c` | `/api/solve` (Apple Silicon macOS) |
+| HornLab Bempp BEM   | `796bef42b6e6e6e02086d1b94bfc9d5e8a65ea0e` | `/api/solve` (cross-platform fallback) |
 | gmsh Python package | `>=4.11,<5.0`   | `/api/mesh/build` |
 
 Notes:
 
 - Backend runtime still accepts `use_optimized` for compatibility, but it is ignored; the active runtime always executes the stable solver entrypoint.
 - Solver internals normalize mesh coordinates to meters before BEM assembly.
-- `hornlab-metal-bem` is the only solve backend; it requires Apple Silicon macOS. Mesh building and exports work on all platforms.
-- The public advanced solver surface exposes solver backend selection only (`solver_backend`: `auto` | `metal`); Metal BEM uses its own native solver settings.
+- Metal BEM is the fast Apple Silicon solve backend; Bempp is the cross-platform backend. Mesh building and exports work on all platforms.
+- The public advanced solver surface exposes solver backend selection only (`solver_backend`: `auto` | `metal` | `bempp`).
 
 ### 7.1 Solver performance metadata
 
@@ -595,14 +596,14 @@ High-signal test suites:
   1. `PYTHON_BIN`
   2. `WG_BACKEND_PYTHON`
   3. repo marker `.waveguide/backend-python.path` (written by install/setup scripts)
-  4. fallback probe across project `.venv`, a legacy `$HOME/.waveguide-generator/opencl-cpu-env/bin/python` interpreter when present, then `python3`
+  4. fallback probe across project `.venv`, then `python3`
   5. if no fallback candidate is runtime-ready, keep the same raw fallback order
 - Backend jobs are in-memory; restarting backend clears job history.
 - gmsh Python API calls are guarded for thread-safety and main-thread constraints.
 
 ### Solver runtime availability
 
-`hornlab-metal-bem` is the only solve backend and requires Apple Silicon macOS. If the Metal BEM runtime is unavailable, `/health` reports `solver: "unavailable"` with `solverBackends.metal.status` carrying the reason, and `/api/solve` rejects submissions; mesh building and exports keep working on all platforms. On Apple Silicon, the runtime doctor/preflight also require the Swift release helper (`metal_release_helper`); build or repair it with `npm run build:metal-helper`.
+Metal BEM is the fast Apple Silicon solve backend. Bempp is the cross-platform backend for Windows, Linux, and Intel Mac, with optional OpenCL acceleration and a numba CPU fallback. `/health` reports `solver: "metal-bem"`, `solver: "bempp-bem"`, or `solver: "unavailable"` with per-backend status under `solverBackends`; `/api/solve` requires Metal BEM or Bempp plus the HornLab mesher. On Apple Silicon, the runtime doctor/preflight also require the Swift release helper (`metal_release_helper`); build or repair it with `npm run build:metal-helper`.
 
 ## 11. Key File Map
 

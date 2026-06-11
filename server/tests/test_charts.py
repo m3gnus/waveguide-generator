@@ -111,6 +111,45 @@ class ChartRenderingTest(unittest.TestCase):
         self.assertIsNotNone(captured_phase)
         np.testing.assert_allclose(captured_phase, np.zeros_like(freqs), atol=1e-9)
 
+    def test_render_all_charts_prefers_explicit_bempp_phase_metadata(self):
+        import matplotlib.pyplot as plt
+        from solver.charts import render_all_charts
+
+        captured_phase = None
+        original_close = plt.close
+        freqs = np.array([100.0, 1000.0, 10000.0])
+        distance_m = 2.0
+        raw_phase = np.rad2deg(2.0 * np.pi * freqs * distance_m / 343.0)
+        wrapped_phase = (raw_phase + 180.0) % 360.0 - 180.0
+
+        def capture_close(fig):
+            nonlocal captured_phase
+            if len(fig.axes) > 1 and fig.axes[1].lines:
+                captured_phase = np.asarray(fig.axes[1].lines[0].get_ydata(), dtype=float)
+            original_close(fig)
+
+        try:
+            plt.close = capture_close
+            charts = render_all_charts(
+                {
+                    "frequencies": freqs.tolist(),
+                    "spl": [90.0, 94.0, 91.0],
+                    "phase_degrees": wrapped_phase.tolist(),
+                    "phase_reference_distance_m": distance_m,
+                    "sound_speed_m_per_s": None,
+                    "metadata": {
+                        "solver_backend": "bempp",
+                        "phase_time_convention": "exp(+ikr)",
+                    },
+                }
+            )
+        finally:
+            plt.close = original_close
+
+        self.assertIsInstance(charts["frequency_response"], str)
+        self.assertIsNotNone(captured_phase)
+        np.testing.assert_allclose(captured_phase, np.zeros_like(freqs), atol=1e-9)
+
     def test_impedance_axis_margin_is_scaled_for_normalized_values(self):
         import matplotlib.pyplot as plt
         from solver.charts import render_impedance

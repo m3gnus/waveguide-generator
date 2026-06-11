@@ -260,6 +260,97 @@ test('exportResults forwards Metal phase convention for rendered PNG charts', as
   }
 });
 
+test('exportResults distinguishes restored Bempp metadata from legacy Bempp phase convention', async () => {
+  const originalFetch = global.fetch;
+
+  const chartPayloads = [];
+  global.fetch = async (url, options = {}) => {
+    if (String(url).endsWith('/api/render-charts')) {
+      chartPayloads.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        async json() {
+          return {
+            charts: {
+              frequency_response: 'data:image/png;base64,AA==',
+            },
+          };
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  const baseResults = {
+    spl_on_axis: {
+      frequencies: [100],
+      spl: [90],
+      phase_degrees: [15],
+    },
+    di: { frequencies: [100], di: [8] },
+    impedance: { frequencies: [100], real: [1], imaginary: [0] },
+    directivity: {},
+  };
+
+  try {
+    await exportResults(
+      {
+        currentSmoothing: 'none',
+        lastResults: {
+          ...baseResults,
+          metadata: {
+            solver_backend: 'bempp',
+            engine: 'hornlab-bempp-bem',
+            phase_time_convention: 'exp(+ikr)',
+            device_interface: { selected: 'bempp-cl-opencl' },
+          },
+        },
+      },
+      {
+        job: {
+          id: 'job-new-bempp-phase',
+          label: 'horn_new_bempp',
+          createdAt: '2026-03-11T10:00:00.000Z',
+        },
+        selectedFormats: ['png'],
+      }
+    );
+
+    await exportResults(
+      {
+        currentSmoothing: 'none',
+        lastResults: {
+          ...baseResults,
+          metadata: {
+            solver_backend: 'bempp',
+          },
+        },
+      },
+      {
+        job: {
+          id: 'job-legacy-bempp-phase',
+          label: 'horn_legacy_bempp',
+          createdAt: '2026-03-11T10:00:00.000Z',
+        },
+        selectedFormats: ['png'],
+      }
+    );
+
+    assert.equal(chartPayloads.length, 2);
+    assert.equal(chartPayloads[0].phase_time_convention, 'metal');
+    assert.equal(chartPayloads[1].phase_time_convention, 'bempp');
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});
+
 test('writeSimulationTaskBundleFile clears the selected workspace and falls back when task-folder writes fail', async () => {
   setSelectedFolderHandle(
     {

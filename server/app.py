@@ -12,6 +12,7 @@ from api.routes_misc import router as misc_router
 from api.routes_simulation import router as simulation_router
 from services.job_runtime import startup_jobs_runtime
 from solver_bootstrap import (
+    BEMPP_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     METAL_SOLVER_READY,
@@ -55,9 +56,11 @@ if __name__ == "__main__":
     print("Starting MWG Horn BEM Solver Backend...")
     print(f"Solver backend available: {SOLVER_AVAILABLE}")
     print(f"Metal solver ready: {METAL_SOLVER_READY}")
+    print(f"BEMPP solver ready: {BEMPP_SOLVER_READY}")
     print(f"HornLab mesher ready: {HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_RUNTIME_READY}")
     if not SOLVER_AVAILABLE:
         print(
-            "Warning: no solver backend is ready. Install/enable Metal BEM or install bempp-cl/OpenCL."
+            "Warning: no solver backend is ready. Install/enable Metal BEM or install "
+            "the BEMPP fallback with: pip install -r server/requirements-bempp.txt"
         )
     uvicorn.run(app, host="0.0.0.0", port=8000)

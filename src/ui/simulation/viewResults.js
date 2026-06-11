@@ -56,11 +56,45 @@ function resolvePhaseReferenceDistance(results) {
 }
 
 function resolvePhaseTimeConvention(results) {
-  // Reads saved-result metadata only. New results always report a metal backend;
-  // the bempp/device_interface branches remain so historical saved results
-  // (from the removed bempp backend) still render charts with the correct
-  // phase convention.
   const metadata = results?.metadata || {};
+  const explicitPhase = String(metadata?.phase_time_convention || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('_', '-')
+    .replaceAll(' ', '');
+  if (
+    explicitPhase === 'exp(+ikr)' ||
+    explicitPhase === 'e(+ikr)' ||
+    explicitPhase === '+ikr' ||
+    explicitPhase === 'positive' ||
+    explicitPhase === 'positive-spatial'
+  ) {
+    return 'metal';
+  }
+  if (
+    explicitPhase === 'exp(-ikr)' ||
+    explicitPhase === 'e(-ikr)' ||
+    explicitPhase === '-ikr' ||
+    explicitPhase === 'negative' ||
+    explicitPhase === 'negative-spatial' ||
+    explicitPhase === 'legacy'
+  ) {
+    return 'bempp';
+  }
+
+  const engine = String(metadata?.engine || '').trim().toLowerCase();
+  if (engine === 'hornlab-bempp-bem') {
+    return 'metal';
+  }
+
+  const selected = String(metadata?.device_interface?.selected || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('_', '-');
+  if (selected === 'metal' || selected === 'bempp-cl-numba' || selected === 'bempp-cl-opencl') {
+    return 'metal';
+  }
+
   const backend = String(metadata?.solver_backend || '')
     .trim()
     .toLowerCase()
@@ -74,11 +108,7 @@ function resolvePhaseTimeConvention(results) {
   if (metadata?.metal && typeof metadata.metal === 'object') {
     return 'metal';
   }
-  const selected = String(metadata?.device_interface?.selected || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-');
-  return selected === 'metal' ? 'metal' : null;
+  return null;
 }
 
 /**

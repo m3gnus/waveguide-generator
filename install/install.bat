@@ -175,12 +175,41 @@ echo Checking Metal BEM backend...
 set "PYTHONPATH=%CD%\server;%PYTHONPATH%"
 .venv\Scripts\python.exe -c "import sys; from solver.metal_solver import metal_backend_status; status = metal_backend_status(); print((status.get('reason') or 'Metal BEM backend is ready.') if status.get('available') else (status.get('reason') or 'Metal BEM backend is not available on this host.')); sys.exit(0 if status.get('available') else 1)"
 if errorlevel 1 (
+    set "METAL_READY=0"
     echo   WARNING: Metal BEM is not ready.
-    echo   hornlab-metal-bem is the only solve backend; /api/solve requires an
-    echo   Apple Silicon Mac with the native helper built.
-    echo   Mesh building and exports still work without it.
 ) else (
+    set "METAL_READY=1"
     echo   Metal BEM is ready.
+)
+echo.
+
+set "SOLVER_BACKEND_SUMMARY=Metal or Bempp solve backend: not ready"
+if "%METAL_READY%"=="1" (
+    echo Skipping Bempp install because Metal BEM is ready.
+    set "SOLVER_BACKEND_SUMMARY=Metal or Bempp solve backend: Metal BEM ready (Bempp install skipped)"
+) else (
+    echo Installing Bempp cross-platform backend...
+    .venv\Scripts\python.exe -m pip install --quiet -r server\requirements-bempp.txt
+    if errorlevel 1 (
+        echo   bempp install failed.
+        echo   Manual command:
+        echo     .venv\Scripts\python.exe -m pip install -r server\requirements-bempp.txt
+    ) else (
+        .venv\Scripts\python.exe -c "import hornlab_bempp_bem" >nul 2>&1
+        if errorlevel 1 (
+            echo   bempp install failed.
+            echo   Manual command:
+            echo     .venv\Scripts\python.exe -m pip install -r server\requirements-bempp.txt
+        ) else (
+            .venv\Scripts\python.exe -c "import sys; import pyopencl as cl; platforms=cl.get_platforms(); device_count=0; [globals().__setitem__('device_count', device_count + len(p.get_devices())) for p in platforms]; sys.exit(0 if platforms and device_count else 1)" >nul 2>&1
+            if errorlevel 1 (
+                echo   bempp ready using the numba CPU backend ^(works everywhere, slower; speed-up hint: install an OpenCL runtime - Windows: up-to-date GPU drivers or winget install Intel.OpenCLRuntimeForIntel^)
+            ) else (
+                echo   bempp ready with OpenCL acceleration
+            )
+            set "SOLVER_BACKEND_SUMMARY=Metal or Bempp solve backend: Bempp ready"
+        )
+    )
 )
 echo.
 
@@ -221,6 +250,8 @@ echo ===============================================================
 echo To start the app:
 echo   - Double-click launch\windows.bat
 echo   - Or run: npm.cmd start
+echo.
+echo %SOLVER_BACKEND_SUMMARY%
 echo.
 exit /b 0
 

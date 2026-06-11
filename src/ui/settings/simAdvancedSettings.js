@@ -13,7 +13,7 @@ function _coerceSolverBackend(value) {
   const v = String(value || '')
     .trim()
     .toLowerCase();
-  if (v === 'auto' || v === 'metal') return v;
+  if (v === 'auto' || v === 'metal' || v === 'bempp') return v;
   return RECOMMENDED_DEFAULTS.solverBackend;
 }
 

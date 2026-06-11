@@ -89,7 +89,7 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   solverBackend:
-    'Chooses the solver for new jobs. Auto uses Metal BEM, the only available solve backend.',
+    'Chooses the solver for new jobs. Auto prefers Metal BEM on Apple Silicon and falls back to Bempp on other hosts.',
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   solver_backend: { label: 'Solver Backend' },
@@ -791,8 +791,8 @@ function _buildSimulationSection() {
   const advancedIntro = document.createElement('div');
   advancedIntro.className = 'settings-section-help';
   advancedIntro.innerHTML =
-    'Metal BEM (hornlab-metal-bem) is the only solve backend. ' +
-    'Auto and Metal BEM behave identically; Metal BEM uses its own native solver settings.';
+    'Auto uses Metal BEM on Apple Silicon and Bempp on other hosts. ' +
+    'Bempp is cross-platform and uses OpenCL acceleration when available, with a numba CPU fallback.';
   sec.appendChild(advancedIntro);
 
   const advancedActiveHeader = _buildSubSectionHeader('Active Contract Overrides', () => {
@@ -809,6 +809,7 @@ function _buildSimulationSection() {
     [
       { value: 'auto', label: 'Auto' },
       { value: 'metal', label: 'Metal BEM' },
+      { value: 'bempp', label: 'Bempp (cross-platform)' },
     ],
     currentSimAdvanced.solverBackend,
     SIM_ADVANCED_DEFAULTS.solverBackend,

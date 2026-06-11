@@ -30,12 +30,11 @@ test('resolveBackendPython prefers project marker over fallback interpreters', (
   const markerPath = path.join(rootDir, '.waveguide', 'backend-python.path');
   const markerPython = '/opt/verified/python';
   const venvPython = path.join(rootDir, '.venv', 'bin', 'python');
-  const openclPython = '/home/user/.waveguide-generator/opencl-cpu-env/bin/python';
 
   const resolved = resolveBackendPython(rootDir, {
     env: {},
     homeDir: '/home/user',
-    existsSync: createExistsSync([markerPath, markerPython, venvPython, openclPython]),
+    existsSync: createExistsSync([markerPath, markerPython, venvPython]),
     readFileSync(candidate) {
       assert.equal(candidate, markerPath);
       return `${markerPython}\n`;
@@ -68,37 +67,35 @@ test('resolveBackendPython falls back to .venv when marker is missing', () => {
 test('resolveBackendPython prefers the first runtime-ready fallback interpreter', () => {
   const rootDir = '/repo';
   const venvPython = path.join(rootDir, '.venv', 'bin', 'python');
-  const openclPython = '/home/user/.waveguide-generator/opencl-cpu-env/bin/python';
 
   const resolved = resolveBackendPython(rootDir, {
     env: {},
     homeDir: '/home/user',
-    existsSync: createExistsSync([venvPython, openclPython]),
+    existsSync: createExistsSync([venvPython]),
     spawnSyncFn(python) {
       return {
         status: 0,
         stdout: JSON.stringify({
           summary: {
-            requiredReady: python === openclPython,
+            requiredReady: python === 'python3',
           },
         }),
       };
     },
   });
 
-  assert.equal(resolved.python, openclPython);
-  assert.equal(resolved.source, 'fallback:opencl-cpu-env');
+  assert.equal(resolved.python, 'python3');
+  assert.equal(resolved.source, 'fallback:python3');
 });
 
 test('resolveBackendPython keeps the original fallback order when no candidate is runtime-ready', () => {
   const rootDir = '/repo';
   const venvPython = path.join(rootDir, '.venv', 'bin', 'python');
-  const openclPython = '/home/user/.waveguide-generator/opencl-cpu-env/bin/python';
 
   const resolved = resolveBackendPython(rootDir, {
     env: {},
     homeDir: '/home/user',
-    existsSync: createExistsSync([venvPython, openclPython]),
+    existsSync: createExistsSync([venvPython]),
     spawnSyncFn() {
       return {
         status: 0,

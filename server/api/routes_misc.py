@@ -17,10 +17,12 @@ from pydantic import BaseModel
 from contracts import ChartsRenderRequest, DirectivityRenderRequest
 from services.runtime_preflight import collect_runtime_doctor_report
 from services.solver_runtime import (
+    BEMPP_SOLVER_READY,
     SOLVER_AVAILABLE,
     METAL_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
+    bempp_backend_status,
     get_dependency_status,
     get_settings_capabilities,
     metal_backend_status,
@@ -55,13 +57,20 @@ async def health_check() -> Dict[str, Any]:
     logger.info("Health check requested")
     dependency_status = get_dependency_status()
     doctor_report = collect_runtime_doctor_report("auto")
+    solver_ready = bool(METAL_SOLVER_READY or BEMPP_SOLVER_READY)
+    solver_name = (
+        "metal-bem"
+        if METAL_SOLVER_READY
+        else "bempp-bem" if BEMPP_SOLVER_READY else "unavailable"
+    )
 
     return {
         "status": "ok",
-        "solver": "metal-bem" if METAL_SOLVER_READY else "unavailable",
-        "solverReady": bool(METAL_SOLVER_READY),
+        "solver": solver_name,
+        "solverReady": solver_ready,
         "solverBackends": {
             "metal": {"ready": bool(METAL_SOLVER_READY), "status": metal_backend_status()},
+            "bempp": {"ready": bool(BEMPP_SOLVER_READY), "status": bempp_backend_status()},
         },
         "mesherReady": HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_RUNTIME_READY,
         "dependencies": dependency_status,

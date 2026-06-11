@@ -144,6 +144,10 @@ def _phase_time_convention_from_payload(payload):
     if not isinstance(metadata, dict):
         return _normalize_phase_time_convention(None)
 
+    metadata_phase = metadata.get('phase_time_convention')
+    if metadata_phase is not None:
+        return _normalize_phase_time_convention(metadata_phase)
+
     metadata_backend = str(metadata.get('solver_backend') or "").strip().lower().replace("_", "-")
     if metadata_backend:
         return _normalize_phase_time_convention(metadata_backend)

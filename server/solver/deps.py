@@ -27,6 +27,10 @@ SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
         "range": "pinned git commit 59528f5",
         "required_for": "/api/solve backend",
     },
+    "hornlab_bempp_bem": {
+        "range": "pinned git commit 796bef4",
+        "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
+    },
     "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
 }
 
@@ -114,6 +118,14 @@ try:
 except ImportError:
     HORNLAB_METAL_BEM_AVAILABLE = False
 
+HORNLAB_BEMPP_BEM_VERSION = None
+try:
+    import hornlab_bempp_bem  # type: ignore  # noqa: F401
+    HORNLAB_BEMPP_BEM_AVAILABLE = True
+    HORNLAB_BEMPP_BEM_VERSION = _distribution_version("hornlab-bempp-bem")
+except ImportError:
+    HORNLAB_BEMPP_BEM_AVAILABLE = False
+
 
 if not PYTHON_SUPPORTED:
     logger.warning(
@@ -130,6 +142,8 @@ if not HORNLAB_MESHER_AVAILABLE:
     )
 if not HORNLAB_METAL_BEM_AVAILABLE:
     logger.warning("hornlab-metal-bem runtime not available.")
+if not HORNLAB_BEMPP_BEM_AVAILABLE:
+    logger.warning("hornlab-bempp-bem runtime not available.")
 
 
 def get_dependency_status() -> Dict[str, Dict[str, object]]:
@@ -157,6 +171,12 @@ def get_dependency_status() -> Dict[str, Dict[str, object]]:
                 "version": HORNLAB_METAL_BEM_VERSION,
                 "supported": HORNLAB_METAL_BEM_AVAILABLE,
                 "ready": HORNLAB_METAL_BEM_AVAILABLE,
+            },
+            "hornlab_bempp_bem": {
+                "available": HORNLAB_BEMPP_BEM_AVAILABLE,
+                "version": HORNLAB_BEMPP_BEM_VERSION,
+                "supported": HORNLAB_BEMPP_BEM_AVAILABLE,
+                "ready": HORNLAB_BEMPP_BEM_AVAILABLE,
             },
         },
     }
