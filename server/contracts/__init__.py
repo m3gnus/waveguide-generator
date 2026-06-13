@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
 VALID_SOLVER_BACKENDS = {"auto", "metal", "bempp"}
 VALID_BEM_PRECISIONS = {"single", "double"}
+VALID_BEM_FORMULATIONS = {"standard", "complex_k", "burton_miller"}
 DEVICE_MODE_ALIASES = {
     "opencl": "opencl_cpu",
     "cpu_opencl": "opencl_cpu",
@@ -86,6 +87,8 @@ class AdvancedSimulationSettings(BaseModel):
     """Advanced solve settings forwarded to the BEM solver runtime."""
     enable_warmup: Optional[bool] = None
     bem_precision: Optional[str] = None
+    bem_formulation: Optional[str] = None
+    complex_k_shift: Optional[float] = None
     use_burton_miller: Optional[bool] = None
     quadrature_regular: Optional[int] = None
     workgroup_size_multiple: Optional[int] = None
@@ -100,6 +103,29 @@ class AdvancedSimulationSettings(BaseModel):
         if normalized not in VALID_BEM_PRECISIONS:
             raise ValueError("advanced_settings.bem_precision must be one of: single, double.")
         return normalized
+
+    @field_validator("bem_formulation")
+    @classmethod
+    def validate_bem_formulation(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = str(value).strip().lower().replace("-", "_")
+        if normalized not in VALID_BEM_FORMULATIONS:
+            raise ValueError(
+                "advanced_settings.bem_formulation must be one of: "
+                "standard, complex_k, burton_miller."
+            )
+        return normalized
+
+    @field_validator("complex_k_shift")
+    @classmethod
+    def validate_complex_k_shift(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return value
+        v = float(value)
+        if v < 0.0:
+            raise ValueError("advanced_settings.complex_k_shift must be non-negative.")
+        return v
 
     @field_validator("quadrature_regular")
     @classmethod

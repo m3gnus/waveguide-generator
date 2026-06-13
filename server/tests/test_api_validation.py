@@ -145,6 +145,44 @@ class ApiValidationTest(unittest.TestCase):
                 advanced_settings={'bem_precision': 'fp16'}
             )
 
+    def test_advanced_bem_formulation_is_normalized(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            options={},
+            advanced_settings={'bem_formulation': 'complex-k', 'complex_k_shift': 0.0125}
+        )
+
+        self.assertEqual(request.advanced_settings.bem_formulation, 'complex_k')
+        self.assertEqual(request.advanced_settings.complex_k_shift, 0.0125)
+
+    def test_invalid_advanced_bem_formulation_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            SimulationRequest(
+                mesh=MeshData(
+                    vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    indices=[0, 1, 2],
+                    surfaceTags=[2],
+                    format='msh',
+                    boundaryConditions={},
+                    metadata={}
+                ),
+                frequency_range=[100.0, 1000.0],
+                num_frequencies=10,
+                sim_type='2',
+                options={},
+                advanced_settings={'bem_formulation': 'magic'}
+            )
+
     def test_hornlab_mesher_requires_waveguide_params(self):
         request = SimulationRequest(
             mesh=MeshData(
@@ -216,7 +254,7 @@ class ApiValidationTest(unittest.TestCase):
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.15"},
                 "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
-                "hornlab_metal_bem": {"range": "pinned git commit 59528f5", "required_for": "/api/solve backend"},
+                "hornlab_metal_bem": {"range": "pinned git commit a97dc67", "required_for": "/api/solve backend"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
@@ -395,7 +433,7 @@ class ApiValidationTest(unittest.TestCase):
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.15"},
                 "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
-                "hornlab_metal_bem": {"range": "pinned git commit 59528f5", "required_for": "/api/solve backend"},
+                "hornlab_metal_bem": {"range": "pinned git commit a97dc67", "required_for": "/api/solve backend"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},

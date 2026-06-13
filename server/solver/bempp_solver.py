@@ -12,6 +12,7 @@ from .result_mapping import (
     native_symmetry_plane,
     observation_config,
 )
+from .formulation import complex_k_shift_from_request, formulation_from_request
 
 try:
     from hornlab_bempp_bem import (  # type: ignore
@@ -159,10 +160,16 @@ def _phase_safe_device_interface(assembly_backend: str) -> str:
     return f"bempp-cl-{assembly_backend}"
 
 
-def _bempp_formulation_standard():
+def _bempp_formulation_from_request(request):
+    formulation = formulation_from_request(request, allow_burton_miller=True)
     if BIEFormulation is None:
-        return "standard"
-    return getattr(BIEFormulation, "STANDARD", "standard")
+        return formulation
+    enum_names = {
+        "standard": "STANDARD",
+        "complex_k": "COMPLEX_K",
+        "burton_miller": "BURTON_MILLER",
+    }
+    return getattr(BIEFormulation, enum_names[formulation], formulation)
 
 
 def _precision_from_request(request) -> str:
@@ -217,7 +224,8 @@ def solve_bempp_from_msh(
         freq_max_hz=float(request.frequency_range[1]),
         freq_count=int(request.num_frequencies),
         freq_spacing=str(request.frequency_spacing or "log"),
-        formulation=_bempp_formulation_standard(),
+        formulation=_bempp_formulation_from_request(request),
+        complex_k_shift=complex_k_shift_from_request(request),
         observation=_observation_config(request),
         progress_callback=_progress,
         mesh_scale=1.0,
@@ -249,6 +257,8 @@ def solve_bempp_from_msh(
         },
         "bempp": {
             "native_symmetry_plane": config.native_symmetry_plane,
+            "formulation": json_safe_native_value(config.formulation),
+            "complex_k_shift": float(config.complex_k_shift),
             "assembly_backend": assembly_backend,
             "opencl_device": config.opencl_device,
             "precision": config.precision,
