@@ -24,11 +24,11 @@ SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
         "required_for": "/api/mesh/build",
     },
     "hornlab_metal_bem": {
-        "range": "pinned git commit 59528f5",
+        "range": "pinned git commit a97dc67",
         "required_for": "/api/solve backend",
     },
     "hornlab_bempp_bem": {
-        "range": "pinned git commit a8f9bfa",
+        "range": "pinned git commit 96d6da9",
         "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
     },
     "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
