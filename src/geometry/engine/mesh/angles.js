@@ -1,5 +1,5 @@
 import { evalParam } from '../../common.js';
-import { DEFAULTS } from '../constants.js';
+import { DEFAULTS, MORPH_TARGETS } from '../constants.js';
 
 function buildUniformAngles(segmentCount) {
   return Array.from({ length: segmentCount }, (_, i) => (i / segmentCount) * Math.PI * 2);
@@ -12,62 +12,52 @@ function normalizeAngularSegments(rawCount) {
   return Math.max(8, Math.ceil(count / 8) * 8);
 }
 
-function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR, cornerSegments) {
+/**
+ * First-quadrant azimuth samples for a rounded-rectangle morph target.
+ *
+ * Ported one-to-one from the canonical mesher
+ * (hornlab_mesher.profile_sampling._rounded_rect_quadrant_angles): the corner
+ * arc always carries three segments at fixed 30/60/90-degree arc steps and the
+ * two wall spans take the remaining (>=2) segments, split proportionally to
+ * their angular extents. Mesh.CornerSegments only grows the point budget; it
+ * does not change the arc structure.
+ */
+function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR) {
   if (!Number.isFinite(halfW) || !Number.isFinite(halfH) || halfW <= 0 || halfH <= 0) {
     return null;
   }
 
-  const maxCorner = Math.max(0, Math.min(halfW, halfH) - 1e-6);
-  const clampedCorner = Math.min(cornerR, maxCorner);
+  const ppq = Math.max(1, Math.round(pointsPerQuadrant));
+  const clampedCorner = Math.min(Math.max(cornerR, 0), halfW, halfH);
 
-  if (clampedCorner <= 0 || cornerSegments <= 0) {
-    return Array.from(
-      { length: pointsPerQuadrant + 1 },
-      (_, i) => (Math.PI / 2) * (i / pointsPerQuadrant)
-    );
+  if (clampedCorner <= 1e-9) {
+    return Array.from({ length: ppq + 1 }, (_, i) => (Math.PI / 2) * (i / ppq));
   }
 
   const theta1 = Math.atan2(halfH - clampedCorner, halfW);
   const theta2 = Math.atan2(halfH, halfW - clampedCorner);
-
-  // cornerSegments is the number of internal points for the corner arc.
-  // We need pointsPerQuadrant + 1 total points in the array.
-  const remainingSegments = Math.max(1, pointsPerQuadrant - cornerSegments);
-
-  const side1Seg = Math.max(
-    1,
-    Math.min(
-      remainingSegments - 1,
-      Math.round((remainingSegments * theta1) / (theta1 + Math.max(0, Math.PI / 2 - theta2)))
-    )
-  );
-  const side2Seg = Math.max(1, remainingSegments - side1Seg);
+  const arcSegments = 3;
+  const sideSegments = Math.max(2, ppq - arcSegments);
+  const span1 = theta1;
+  const span2 = Math.PI / 2 - theta2;
+  const side1Seg = Math.max(1, Math.round((sideSegments * span1) / Math.max(span1 + span2, 1e-12)));
+  const side2Seg = Math.max(1, sideSegments - side1Seg);
 
   const angles = [];
-  // Loop 1: Start point to corner start
   for (let i = 0; i <= side1Seg; i += 1) {
-    angles.push(theta1 * (i / side1Seg));
+    angles.push((theta1 * i) / side1Seg);
   }
-
-  // Loop 2: Corner internal points
   const cx = halfW - clampedCorner;
   const cy = halfH - clampedCorner;
-  if (cornerSegments > 0) {
-    for (let i = 1; i <= cornerSegments; i += 1) {
-      const phi = (i / (cornerSegments + 1)) * (Math.PI / 2);
-      angles.push(
-        Math.atan2(cy + clampedCorner * Math.sin(phi), cx + clampedCorner * Math.cos(phi))
-      );
-    }
+  for (let i = 1; i <= arcSegments; i += 1) {
+    const cornerPhi = (i / arcSegments) * (Math.PI / 2);
+    angles.push(
+      Math.atan2(cy + clampedCorner * Math.sin(cornerPhi), cx + clampedCorner * Math.cos(cornerPhi))
+    );
   }
-
-  // Loop 3: Corner end to 90 degrees
   for (let i = 1; i <= side2Seg; i += 1) {
-    angles.push(theta2 + (Math.PI / 2 - theta2) * (i / side2Seg));
+    angles.push(theta2 + ((Math.PI / 2 - theta2) * i) / side2Seg);
   }
-
-  // Final length should be (side1Seg + 1) + cornerSegments + side2Seg
-  // = remainingSegments + 1 + cornerSegments = pointsPerQuadrant + 1.
   return angles;
 }
 
@@ -97,26 +87,34 @@ export function buildAngleList(params, mouthExtents) {
     return { fullAngles: [0], pointsPerQuadrant: 0 };
   }
 
-  const pointsPerQuadrant = angularSegments / 4;
-  const cornerR = Math.max(0, evalParam(params.morphCorner || 0, 0));
-  const cornerSegments = Math.max(0, Math.round(params.cornerSegments || 4) - 1);
+  // Only an explicit rounded-rectangle morph (target 1) gets the corner-aware
+  // azimuth list, matching the canonical mesher. Circle/none targets keep the
+  // uniform ring. The corner-segment budget folds Mesh.CornerSegments into the
+  // angular point count and rounds up to a whole number of points per quadrant
+  // (ATH: 64+4 -> 17, 16+0 -> 4), then the rounded-rect builder layers its
+  // fixed three-segment corner arc on top.
+  const morphTarget = Math.round(evalParam(params.morphTarget || 0, 0));
+  if (morphTarget === MORPH_TARGETS.RECTANGLE && mouthExtents.halfW > 0 && mouthExtents.halfH > 0) {
+    const cornerR = Math.max(0, evalParam(params.morphCorner || 0, 0));
+    const cornerSegments = Math.max(0, Math.round(evalParam(params.cornerSegments || 0, 0)));
+    const pointsPerQuadrant = Math.max(1, Math.ceil((angularSegments + cornerSegments) / 4));
 
-  const quadrantAngles = buildQuadrantAngles(
-    pointsPerQuadrant,
-    mouthExtents.halfW,
-    mouthExtents.halfH,
-    cornerR,
-    cornerSegments
-  );
+    const quadrantAngles = buildQuadrantAngles(
+      pointsPerQuadrant,
+      mouthExtents.halfW,
+      mouthExtents.halfH,
+      cornerR
+    );
 
-  if (!quadrantAngles || quadrantAngles.length !== pointsPerQuadrant + 1) {
-    return { fullAngles: buildUniformAngles(angularSegments), pointsPerQuadrant: 0 };
+    if (quadrantAngles && quadrantAngles.length >= 2) {
+      return {
+        fullAngles: mirrorQuadrantAngles(quadrantAngles),
+        pointsPerQuadrant: quadrantAngles.length - 1,
+      };
+    }
   }
 
-  return {
-    fullAngles: mirrorQuadrantAngles(quadrantAngles),
-    pointsPerQuadrant,
-  };
+  return { fullAngles: buildUniformAngles(angularSegments), pointsPerQuadrant: angularSegments / 4 };
 }
 
 export function selectAnglesForQuadrants(fullAngles, quadrants) {

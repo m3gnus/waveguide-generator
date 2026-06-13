@@ -2,18 +2,18 @@ import { orientMeshConsistently } from '../meshIntegrity.js';
 import { validateMeshQuality } from '../quality.js';
 import { debugError } from '../../logging/debug.js';
 import { DEFAULTS } from './constants.js';
-import { hasConfiguredMorphDimension, isMorphActive } from './morphing.js';
+import { isMorphActive } from './morphing.js';
 import { buildAngleList } from './mesh/angles.js';
 import { addEnclosureGeometry } from './mesh/enclosure.js';
 import { addFreestandingWallGeometry } from './mesh/freestandingWall.js';
 import {
   buildMorphTargets,
   computeAdaptivePhiCounts,
-  computeMouthExtents,
   createAdaptiveFanIndices,
   createAdaptiveRingVertices,
   createHornIndices,
   createRingVertices,
+  resolveMorphDimensions,
 } from './mesh/horn.js';
 import { buildSliceMap } from './mesh/sliceMap.js';
 import { generateThroatSource } from './mesh/source.js';
@@ -68,18 +68,28 @@ export function buildWaveguideMesh(params, options = {}) {
   };
 
   const sliceMap = buildSliceMap(meshParams, lengthSteps);
-  const mouthExtents = computeMouthExtents(meshParams, profileContext);
 
-  const angleListData = buildAngleList(meshParams, mouthExtents);
+  // Resolve the morph-target half-dimensions the way the canonical mesher does
+  // (explicit/implicit derivation + no-shrinkage dimension floor) and feed them
+  // both to the rect-morph corner densification and to the morph blend. Raw
+  // mouth extents are sampled on the un-densified angle list, then the rect
+  // angle list is rebuilt from the resolved dimensions, mirroring
+  // hornlab_mesher.profile_sampling.build_point_grid.
+  const morphActive = isMorphActive(meshParams, 0);
+  const initialAngles = buildAngleList(meshParams, { halfW: 0, halfH: 0 }).fullAngles;
+  const resolvedMorph = morphActive
+    ? resolveMorphDimensions(meshParams, initialAngles, profileContext)
+    : null;
+
+  const angleListData = buildAngleList(
+    meshParams,
+    resolvedMorph || { halfW: 0, halfH: 0 }
+  );
   const angleList = angleListData.fullAngles;
   const ringCount = angleList.length;
   const fullCircle = true;
 
-  const needsMorphTargets =
-    isMorphActive(meshParams, 0) &&
-    (!hasConfiguredMorphDimension(meshParams, 'morphWidth') ||
-      !hasConfiguredMorphDimension(meshParams, 'morphHeight'));
-  const morphTargets = needsMorphTargets
+  const morphTargets = morphActive
     ? buildMorphTargets(meshParams, lengthSteps, angleList, sliceMap, profileContext)
     : null;
 

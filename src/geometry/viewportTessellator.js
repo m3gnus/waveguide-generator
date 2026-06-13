@@ -233,14 +233,23 @@ function zipperStitchRings(vertices, pushTri, ringA, ringB, cx, cz) {
   }
 }
 
-/**
- * Append one enclosure profile ring (mesher coords) as viewport vertices,
- * normalized to CCW order in the viewport x/z plane so the zipper stitch can
- * assume one winding direction.
- */
-function appendRingVertices(vertices, points) {
+function stitchMatchedRings(vertices, pushTri, ringA, ringB, fullCircle) {
+  if (ringA.count !== ringB.count) {
+    return false;
+  }
+  const count = ringA.count;
+  const limit = fullCircle ? count : count - 1;
+  for (let k = 0; k < limit; k += 1) {
+    const k2 = (k + 1) % count;
+    pushTri(ringB.start + k, ringA.start + k, ringA.start + k2);
+    pushTri(ringB.start + k, ringA.start + k2, ringB.start + k2);
+  }
+  return true;
+}
+
+function normalizedViewportRingPoints(points) {
   const count = Math.floor(points.length / 3);
-  const start = vertices.length / 3;
+  const ring = [];
 
   let shoelace = 0;
   for (let k = 0; k < count; k += 1) {
@@ -251,9 +260,97 @@ function appendRingVertices(vertices, points) {
 
   for (let k = 0; k < count; k += 1) {
     const src = reversed ? count - 1 - k : k;
-    vertices.push(points[src * 3], points[src * 3 + 2], points[src * 3 + 1]);
+    ring.push([points[src * 3], points[src * 3 + 2], points[src * 3 + 1]]);
+  }
+  return ring;
+}
+
+/**
+ * Append one enclosure profile ring (mesher coords) as viewport vertices,
+ * normalized to CCW order in the viewport x/z plane so the zipper stitch can
+ * assume one winding direction.
+ */
+function appendRingVertices(vertices, points) {
+  const ring = normalizedViewportRingPoints(points);
+  const count = ring.length;
+  const start = vertices.length / 3;
+
+  for (let k = 0; k < count; k += 1) {
+    vertices.push(ring[k][0], ring[k][1], ring[k][2]);
   }
   return { start, count };
+}
+
+function raySegmentIntersection(cx, cz, dx, dz, ax, az, bx, bz) {
+  const sx = bx - ax;
+  const sz = bz - az;
+  const denom = dx * sz - dz * sx;
+  if (Math.abs(denom) <= 1e-12) return null;
+
+  const ox = ax - cx;
+  const oz = az - cz;
+  const t = (ox * sz - oz * sx) / denom;
+  const u = (ox * dz - oz * dx) / denom;
+  if (t < -1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+  return { t, u: Math.max(0, Math.min(1, u)) };
+}
+
+function nearestAngularRingPoint(ring, theta, cx, cz) {
+  let best = ring[0] || [cx, 0, cz];
+  let bestDelta = Infinity;
+  for (const point of ring) {
+    const pTheta = Math.atan2(point[2] - cz, point[0] - cx);
+    let delta = Math.abs(pTheta - theta) % (Math.PI * 2);
+    if (delta > Math.PI) delta = Math.PI * 2 - delta;
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = point;
+    }
+  }
+  return best;
+}
+
+function appendRingVerticesAlignedToReference(vertices, points, referenceRing, cx, cz) {
+  const ring = normalizedViewportRingPoints(points);
+  if (ring.length < 3 || referenceRing.count < 3) {
+    return appendRingVertices(vertices, points);
+  }
+
+  const start = vertices.length / 3;
+  for (let k = 0; k < referenceRing.count; k += 1) {
+    const refIdx = referenceRing.start + k;
+    const dx = vertices[refIdx * 3] - cx;
+    const dz = vertices[refIdx * 3 + 2] - cz;
+    const dirLen = Math.hypot(dx, dz);
+    if (dirLen <= 1e-12) {
+      const fallback = ring[0];
+      vertices.push(fallback[0], fallback[1], fallback[2]);
+      continue;
+    }
+
+    let best = null;
+    for (let i = 0; i < ring.length; i += 1) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      const hit = raySegmentIntersection(cx, cz, dx, dz, a[0], a[2], b[0], b[2]);
+      if (!hit) continue;
+      if (!best || hit.t < best.t) {
+        best = { ...hit, a, b };
+      }
+    }
+
+    if (best) {
+      const x = best.a[0] + (best.b[0] - best.a[0]) * best.u;
+      const y = best.a[1] + (best.b[1] - best.a[1]) * best.u;
+      const z = best.a[2] + (best.b[2] - best.a[2]) * best.u;
+      vertices.push(x, y, z);
+    } else {
+      const fallback = nearestAngularRingPoint(ring, Math.atan2(dz, dx), cx, cz);
+      vertices.push(fallback[0], fallback[1], fallback[2]);
+    }
+  }
+
+  return { start, count: referenceRing.count };
 }
 
 function classifyEnclosureStitch(prevRole, nextRole) {
@@ -290,15 +387,25 @@ function addEnclosure(vertices, indices, enclosure, nPhi, nLength, fullCircle, g
   mouthCx /= nPhi;
   mouthCz /= nPhi;
 
-  const placedRings = rings.map((ring) => ({
+  const placedRings = rings.map((ring, index) => ({
     role: ring.role,
-    ...appendRingVertices(vertices, ring.points || []),
+    ...(index === 0
+      ? appendRingVerticesAlignedToReference(
+          vertices,
+          ring.points || [],
+          mouthRing,
+          mouthCx,
+          mouthCz
+        )
+      : appendRingVertices(vertices, ring.points || [])),
   }));
 
   const enclosureStartTri = indices.length / 3;
   // Front baffle: stitched around the mouth centroid, which lies inside both
   // the mouth ring and the surrounding front inset ring.
-  zipperStitchRings(vertices, pushTri, mouthRing, placedRings[0], mouthCx, mouthCz);
+  if (!stitchMatchedRings(vertices, pushTri, mouthRing, placedRings[0], fullCircle)) {
+    zipperStitchRings(vertices, pushTri, mouthRing, placedRings[0], mouthCx, mouthCz);
+  }
   const frontEndTri = indices.length / 3;
 
   const edgeRanges = [];

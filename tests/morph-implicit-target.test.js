@@ -45,24 +45,24 @@ test('R-OSSE morphing derives implicit target extents when width/height are unse
   const noMorph = buildMesh(noMorphParams);
   const implicitMorph = buildMesh(implicitMorphParams);
 
-  assert.equal(noMorph.ringCount, implicitMorph.ringCount);
-  const ringCount = noMorph.ringCount;
-  const mouthStart = Number(noMorphParams.lengthSegments) * ringCount;
+  // The rounded-rect morph folds Mesh.CornerSegments into the angular point
+  // budget (canonical ATH behaviour), so the morphed mesh has its own ring
+  // topology. Compare the two mouths by largest radius rather than by matching
+  // vertex index — the implicit extents must enlarge the widest mouth radius.
+  const mouthMaxRadius = (mesh) => {
+    const mouthStart = Number(noMorphParams.lengthSegments) * mesh.ringCount;
+    let maxR = 0;
+    for (let i = 0; i < mesh.ringCount; i += 1) {
+      const idx = mouthStart + i;
+      maxR = Math.max(
+        maxR,
+        Math.hypot(mesh.vertices[idx * 3], mesh.vertices[idx * 3 + 2])
+      );
+    }
+    return maxR;
+  };
 
-  let maxIncrease = 0;
-  for (let i = 0; i < ringCount; i += 1) {
-    const idx = mouthStart + i;
-    const rBase = Math.hypot(
-      noMorph.vertices[idx * 3],
-      noMorph.vertices[idx * 3 + 2]
-    );
-    const rMorph = Math.hypot(
-      implicitMorph.vertices[idx * 3],
-      implicitMorph.vertices[idx * 3 + 2]
-    );
-    maxIncrease = Math.max(maxIncrease, rMorph - rBase);
-  }
-
+  const maxIncrease = mouthMaxRadius(implicitMorph) - mouthMaxRadius(noMorph);
   assert.ok(
     maxIncrease > 1e-3,
     `implicit morph target extents should change the mouth profile (maxIncrease=${maxIncrease})`

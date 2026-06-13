@@ -57,7 +57,14 @@ export function applyMorphing(currentR, mouthR, t, p, params, morphTargetInfo = 
   const targetShape = Math.round(evalNumber(params.morphTarget, p, MORPH_TARGETS.NONE));
   if (targetShape === MORPH_TARGETS.NONE) return currentR;
 
-  const morphStart = evalNumber(params.morphFixed, p, 0);
+  // The canonical mesher snaps the morph onset to the nearest grid slice at or
+  // after morphFixed (and past any reserved throat-extension/slot slices). When
+  // the grid builder has resolved that snapped start it rides on morphTargetInfo;
+  // direct callers fall back to the raw configured morphFixed.
+  const morphStart =
+    morphTargetInfo?.morphStart != null
+      ? morphTargetInfo.morphStart
+      : evalNumber(params.morphFixed, p, 0);
   if (t <= morphStart) return currentR;
 
   const rate = evalNumber(params.morphRate, p, 3);
@@ -67,8 +74,24 @@ export function applyMorphing(currentR, mouthR, t, p, params, morphTargetInfo = 
   const morphWidth = evalNumber(params.morphWidth, p, 0);
   const morphHeight = evalNumber(params.morphHeight, p, 0);
   const hasExplicit = morphWidth > 0 || morphHeight > 0;
-  const halfWidth = morphWidth > 0 ? morphWidth / 2 : (morphTargetInfo?.halfW ?? mouthR);
-  const halfHeight = morphHeight > 0 ? morphHeight / 2 : (morphTargetInfo?.halfH ?? mouthR);
+  // Resolved half-dimensions (from buildMorphTargets) already fold in
+  // implicit-extent derivation, the no-shrinkage dimension floor, and the
+  // millimetre ceil that the canonical mesher applies, so they take priority
+  // over the raw configured values. They are supplied for both explicit and
+  // implicit morph dimensions. Direct callers that omit morphTargetInfo keep
+  // the legacy behaviour: explicit value, else mouth radius.
+  const halfWidth =
+    morphTargetInfo?.halfW != null
+      ? morphTargetInfo.halfW
+      : morphWidth > 0
+        ? morphWidth / 2
+        : mouthR;
+  const halfHeight =
+    morphTargetInfo?.halfH != null
+      ? morphTargetInfo.halfH
+      : morphHeight > 0
+        ? morphHeight / 2
+        : mouthR;
 
   if (!hasExplicit && !morphTargetInfo) return currentR;
 
