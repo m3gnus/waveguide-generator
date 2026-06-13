@@ -24,7 +24,6 @@ import {
 } from '../src/geometry/engine/mesh/horn.js';
 import {
   applyMorphing,
-  hasConfiguredMorphDimension,
   isMorphActive,
 } from '../src/geometry/engine/morphing.js';
 import { tessellateViewportGeometry } from '../src/geometry/viewportTessellator.js';
@@ -210,11 +209,11 @@ function assertEngineMatchesBackendGrid(config, geometry) {
   const evalConfig = { ...config, morphFixed: snappedStart };
 
   const context = { coverageCache: new Map() };
-  const needsMorphTargets =
-    isMorphActive(evalConfig, 0) &&
-    (!hasConfiguredMorphDimension(evalConfig, 'morphWidth') ||
-      !hasConfiguredMorphDimension(evalConfig, 'morphHeight'));
-  const morphTargets = needsMorphTargets
+  // The engine resolves morph-target half-dimensions (explicit/implicit
+  // derivation + no-shrinkage dimension floor) for every active morph and
+  // threads them through applyMorphing; mirror that here so the grid check
+  // sees the same blend the engine produces.
+  const morphTargets = isMorphActive(evalConfig, 0)
     ? buildMorphTargets(evalConfig, nLength, angles, null, context)
     : null;
 

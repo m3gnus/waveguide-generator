@@ -36,6 +36,51 @@ function ringPoints(count, radius, z, { startAngle = 0, reverse = false } = {}) 
   return points;
 }
 
+function rectangularRingPoints(halfW, halfH, z) {
+  const points = [
+    [halfW, -halfH],
+    [halfW, 0],
+    [halfW, halfH],
+    [halfW * 0.5, halfH],
+    [0, halfH],
+    [-halfW * 0.5, halfH],
+    [-halfW, halfH],
+    [-halfW, 0],
+    [-halfW, -halfH],
+    [-halfW * 0.5, -halfH],
+    [0, -halfH],
+    [halfW * 0.5, -halfH],
+  ];
+  return points.flatMap(([x, y]) => [x, y, z]);
+}
+
+function scaledGridFromMouthRing(mouthRing, scales, ringZ) {
+  const nPhi = mouthRing.length / 3;
+  const nLength = scales.length - 1;
+  const points = [];
+  for (let i = 0; i < nPhi; i += 1) {
+    const x = mouthRing[i * 3];
+    const y = mouthRing[i * 3 + 1];
+    for (let j = 0; j <= nLength; j += 1) {
+      points.push(x * scales[j], y * scales[j], ringZ[j]);
+    }
+  }
+  return points;
+}
+
+function pointInPolygon(point, polygon) {
+  const [x, y] = point;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-300) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function hornPayload({ nPhi = 8, sourceShape = 0, params = {}, outer = false } = {}) {
   const ringRadii = [1, 1.5, 2];
   const ringZ = [0, 5, 10];
@@ -88,7 +133,10 @@ test('throat disc fans the throat ring and honors the mesher source contract', (
   assert.ok(flat.groups.throat_disc);
   assert.deepEqual(flat.groups.source, flat.groups.throat_disc);
   const flatCenterY = flat.vertices[flat.vertices.length * 1 - 2];
-  assert.ok(Math.abs(flatCenterY - 0) < 1e-12, `flat disc center at throat plane, got ${flatCenterY}`);
+  assert.ok(
+    Math.abs(flatCenterY - 0) < 1e-12,
+    `flat disc center at throat plane, got ${flatCenterY}`
+  );
 
   // sourceShape 1 = rounded cap (mesher contract): OSSE cap height r0*tan(a0).
   const capped = tessellateViewportGeometry(
@@ -154,6 +202,56 @@ test('enclosure rings stitch into a closed solid across differing ring sizes', (
   assert.deepEqual(report.errors, []);
 });
 
+test('tangent enclosure front ring does not triangulate across the mouth aperture', () => {
+  const mouthRing = rectangularRingPoints(2, 1, 10);
+  const nPhi = mouthRing.length / 3;
+  const payload = {
+    ...hornPayload({ nPhi }),
+    mode: 'enclosure',
+    grid: {
+      inner_points: scaledGridFromMouthRing(mouthRing, [0.25, 0.6, 1], [0, 5, 10]),
+      outer_points: null,
+      grid_n_phi: nPhi,
+      grid_n_length: 2,
+      full_circle: true,
+    },
+    enclosure: {
+      mouth_points: [],
+      profile_rings: [
+        { role: 'front_inset', points: rectangularRingPoints(2, 5, 10) },
+        { role: 'side_back_outer', points: rectangularRingPoints(2.5, 5.5, -5) },
+      ],
+      bounds: { bx0: -2.5, bx1: 2.5, by0: -5.5, by1: 5.5, z_front: 10, z_back: -5, cx: 0, cy: 0 },
+      plan_type: 1,
+      edge_type: 1,
+      edge_mm: 0,
+      edge_depth: 0,
+    },
+  };
+
+  const mesh = tessellateViewportGeometry(payload, { omitSource: true });
+  const mouthStart = payload.grid.grid_n_length * nPhi;
+  const mouthPolygon = Array.from({ length: nPhi }, (_, i) => [
+    mesh.vertices[(mouthStart + i) * 3],
+    mesh.vertices[(mouthStart + i) * 3 + 2],
+  ]);
+
+  let trianglesInsideMouth = 0;
+  for (let t = mesh.groups.enc_front.start; t < mesh.groups.enc_front.end; t += 1) {
+    const base = t * 3;
+    let x = 0;
+    let z = 0;
+    for (let k = 0; k < 3; k += 1) {
+      const idx = mesh.indices[base + k];
+      x += mesh.vertices[idx * 3];
+      z += mesh.vertices[idx * 3 + 2];
+    }
+    if (pointInPolygon([x / 3, z / 3], mouthPolygon)) trianglesInsideMouth += 1;
+  }
+
+  assert.equal(trianglesInsideMouth, 0);
+});
+
 test('clockwise enclosure rings are normalized before stitching', () => {
   const payload = hornPayload({ nPhi: 8 });
   payload.enclosure = {
@@ -179,12 +277,16 @@ test('clockwise enclosure rings are normalized before stitching', () => {
 
 test('invalid grids are rejected with explicit errors', () => {
   assert.throws(
-    () => tessellateViewportGeometry({ grid: { grid_n_phi: 8, grid_n_length: 2, inner_points: [1, 2, 3] } }),
+    () =>
+      tessellateViewportGeometry({
+        grid: { grid_n_phi: 8, grid_n_length: 2, inner_points: [1, 2, 3] },
+      }),
     /inner_points/
   );
   assert.throws(() => tessellateViewportGeometry({ grid: null }), /point grid/);
   assert.throws(
-    () => tessellateViewportGeometry({ grid: { grid_n_phi: 2, grid_n_length: 0, inner_points: [] } }),
+    () =>
+      tessellateViewportGeometry({ grid: { grid_n_phi: 2, grid_n_length: 0, inner_points: [] } }),
     /invalid dimensions/
   );
 });

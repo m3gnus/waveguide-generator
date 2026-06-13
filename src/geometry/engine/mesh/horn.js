@@ -31,11 +31,13 @@ export function evaluateInnerProfileAt(t, p, params, context) {
   return computeOsseProfileAt(t, p, params, context);
 }
 
-function resolveMorphProgress(t, p, params) {
-  if (params.type !== 'OSSE') return t;
-  const { L, totalLength, extLen, slotLen } = resolveOsseLengthConfig(params, p);
-  if (L <= 1e-12 || totalLength <= 1e-12) return t;
-  return Math.min(1, Math.max(0, (t * totalLength - extLen - slotLen) / L));
+function resolveMorphProgress(t) {
+  // Morph progress is the global normalized axial position, identical for every
+  // azimuth, matching the canonical mesher
+  // (hornlab_mesher.profile_sampling.build_point_grid). The throat-extension /
+  // slot region is kept unmorphed by snapping the morph onset to a reserved
+  // grid slice (see resolveMorphStart), not by shifting the blend per azimuth.
+  return t;
 }
 
 export function computeMouthExtents(params, context) {
@@ -81,21 +83,85 @@ export function computeMouthExtents(params, context) {
   return { halfW: maxX, halfH: maxZ, morphTargetInfo };
 }
 
-export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, context) {
+/**
+ * Resolve the morph-target half-dimensions exactly as the canonical mesher
+ * (hornlab_mesher.profile_sampling.build_point_grid) does:
+ *   - explicit dimension      -> dimension / 2
+ *   - implicit (0) dimension  -> ceil(raw mouth half-extent)
+ *   - no-shrinkage            -> max(resolved, raw mouth half-extent) per axis
+ * Returns null when morph is inactive.
+ */
+export function resolveMorphDimensions(params, angleList, context) {
+  if (!isMorphActive(params, 0)) return null;
+
   const safeAngles =
     Array.isArray(angleList) && angleList.length > 0 ? angleList : [0, Math.PI / 2];
 
-  let maxX = 0;
-  let maxZ = 0;
-
+  let rawHalfW = 0;
+  let rawHalfH = 0;
   for (const p of safeAngles) {
-    const profile = evaluateInnerProfileAt(1, p, params, context);
-    const r = profile.y;
-    maxX = Math.max(maxX, Math.abs(r * Math.cos(p)));
-    maxZ = Math.max(maxZ, Math.abs(r * Math.sin(p)));
+    const r = evaluateInnerProfileAt(1, p, params, context).y;
+    rawHalfW = Math.max(rawHalfW, Math.abs(r * Math.cos(p)));
+    rawHalfH = Math.max(rawHalfH, Math.abs(r * Math.sin(p)));
   }
 
-  const mouthTargetInfo = { halfW: maxX, halfH: maxZ };
+  const morphWidth = evalParam(params.morphWidth || 0, 0);
+  const morphHeight = evalParam(params.morphHeight || 0, 0);
+  let halfW = morphWidth > 0 ? morphWidth / 2 : Math.ceil(rawHalfW - 1e-9);
+  let halfH = morphHeight > 0 ? morphHeight / 2 : Math.ceil(rawHalfH - 1e-9);
+
+  const allowShrinkage = params.morphAllowShrinkage === 1 || params.morphAllowShrinkage === true;
+  if (!allowShrinkage) {
+    halfW = Math.max(halfW, rawHalfW);
+    halfH = Math.max(halfH, rawHalfH);
+  }
+
+  return { halfW, halfH };
+}
+
+/**
+ * Snap the configured morph onset to the grid slice at or after morphFixed and
+ * past any reserved throat-extension/slot slices, matching the canonical mesher
+ * (hornlab_mesher.profile_sampling.build_point_grid). Returns the snapped start
+ * in normalized-axial (t) space.
+ */
+export function resolveMorphStart(params, lengthSteps, sliceMap, angleList) {
+  const tValues = Array.from({ length: lengthSteps + 1 }, (_, j) =>
+    sliceMap ? sliceMap[j] : j / lengthSteps
+  );
+
+  const configuredStart = evalParam(params.morphFixed || 0, 0);
+  let idx = tValues.findIndex((t) => t >= configuredStart - 1e-12);
+  if (idx < 0) idx = tValues.length - 1;
+  let snapped = tValues[idx];
+
+  // ATH reserves ceil(n * (ext + slot) / totalLength) axial slices for the
+  // unmorphed throat-extension/slot region and starts the morph on that slice.
+  if (params.type !== 'R-OSSE') {
+    const angles = Array.isArray(angleList) && angleList.length > 0 ? angleList : [0, Math.PI / 2];
+    let maxFixedLen = 0;
+    let maxTotalLen = 0;
+    for (const p of angles) {
+      const { totalLength, extLen, slotLen } = resolveOsseLengthConfig(params, p);
+      maxFixedLen = Math.max(maxFixedLen, extLen + slotLen);
+      maxTotalLen = Math.max(maxTotalLen, totalLength);
+    }
+    if (maxTotalLen > 1e-12 && maxFixedLen > 0) {
+      const reservedIdx = Math.min(
+        lengthSteps,
+        Math.ceil((lengthSteps * maxFixedLen) / maxTotalLen - 1e-9)
+      );
+      snapped = Math.max(snapped, tValues[reservedIdx]);
+    }
+  }
+
+  return snapped;
+}
+
+export function buildMorphTargets(params, lengthSteps, angleList, sliceMap, context) {
+  const resolved = resolveMorphDimensions(params, angleList, context);
+  const morphStart = resolveMorphStart(params, lengthSteps, sliceMap, angleList);
+  const mouthTargetInfo = { ...(resolved || { halfW: 0, halfH: 0 }), morphStart };
   return Array.from({ length: lengthSteps + 1 }, () => mouthTargetInfo);
 }
 
@@ -120,7 +186,7 @@ export function createRingVertices(
         j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
-      const morphT = resolveMorphProgress(t, p, params);
+      const morphT = resolveMorphProgress(t);
       const r = applyMorphing(profile.y, mouthProfile.y, morphT, p, params, morphTargetInfo);
 
       vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
@@ -251,7 +317,7 @@ export function createAdaptiveRingVertices(
         j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
 
       const morphTargetInfo = morphTargets?.[j] || null;
-      const morphT = resolveMorphProgress(t, p, params);
+      const morphT = resolveMorphProgress(t);
       const r = applyMorphing(profile.y, mouthProfile.y, morphT, p, params, morphTargetInfo);
 
       vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
