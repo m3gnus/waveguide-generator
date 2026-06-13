@@ -36,7 +36,7 @@ class FakeSolveConfig:
 
 
 class MetalSolverAdapterTest(unittest.TestCase):
-    def _request(self, quadrants=1):
+    def _request(self, quadrants=1, advanced_settings=None):
         return SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -57,6 +57,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 observation_origin="mouth",
             ),
             solver_backend="metal",
+            advanced_settings=advanced_settings,
             options={
                 "mesh": {
                     "strategy": "hornlab_mesher",
@@ -111,7 +112,56 @@ class MetalSolverAdapterTest(unittest.TestCase):
             result = metal_solver.solve_metal_from_msh(msh_file.name, self._request(quadrants=1))
 
         self.assertEqual(seen_configs[0].native_symmetry_plane, "yz+xz")
+        self.assertEqual(seen_configs[0].formulation, "complex_k")
+        self.assertEqual(seen_configs[0].complex_k_shift, 0.005)
         self.assertEqual(result["metadata"]["metal"]["native_symmetry_plane"], "yz+xz")
+        self.assertEqual(result["metadata"]["metal"]["formulation"], "complex_k")
+        self.assertEqual(result["metadata"]["metal"]["complex_k_shift"], 0.005)
+
+    def test_standard_formulation_override_is_forwarded(self):
+        seen_configs = []
+
+        def fake_native_config(**kwargs):
+            cfg = FakeSolveConfig(**kwargs)
+            seen_configs.append(cfg)
+            return cfg
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve", return_value=self._fake_result()
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ):
+            metal_solver.solve_metal_from_msh(
+                msh_file.name,
+                self._request(
+                    quadrants=1,
+                    advanced_settings={
+                        "bem_formulation": "standard",
+                        "complex_k_shift": 0.0125,
+                    },
+                ),
+            )
+
+        self.assertEqual(seen_configs[0].formulation, "standard")
+        self.assertEqual(seen_configs[0].complex_k_shift, 0.0125)
+
+    def test_burton_miller_is_rejected_for_metal(self):
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.metal_solver.native_config", side_effect=lambda **kwargs: FakeSolveConfig(**kwargs)
+        ), patch(
+            "solver.metal_solver.solve", return_value=self._fake_result()
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ):
+            with self.assertRaises(ValueError):
+                metal_solver.solve_metal_from_msh(
+                    msh_file.name,
+                    self._request(advanced_settings={"bem_formulation": "burton_miller"}),
+                )
 
     def test_half_domain_quadrants_map_to_expected_symmetry_planes(self):
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=14)), "yz")

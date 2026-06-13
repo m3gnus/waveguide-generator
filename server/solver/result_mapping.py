@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import time
 from typing import Any
 
@@ -16,6 +17,8 @@ REFERENCE_PRESSURE_PA = 20e-6
 def json_safe_native_value(value: Any) -> Any:
     if isinstance(value, complex):
         return {"real": float(value.real), "imaginary": float(value.imag)}
+    if isinstance(value, enum.Enum):
+        return json_safe_native_value(value.value)
     if isinstance(value, np.generic):
         return json_safe_native_value(value.item())
     if isinstance(value, np.ndarray):

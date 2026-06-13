@@ -153,7 +153,7 @@ class BemppSolverAdapterTest(unittest.TestCase):
         self.assertEqual(config.freq_count, 3)
         self.assertEqual(config.freq_spacing, "linear")
         self.assertEqual(config.mesh_scale, 1.0)
-        self.assertEqual(config.formulation, "standard")
+        self.assertEqual(config.formulation, "complex_k")
         self.assertEqual(config.native_symmetry_plane, "yz")
         self.assertEqual(config.assembly_backend, "numba")
         self.assertEqual(config.opencl_device, "cpu")

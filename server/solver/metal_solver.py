@@ -13,6 +13,7 @@ from .result_mapping import (
     native_symmetry_plane,
     observation_config,
 )
+from .formulation import complex_k_shift_from_request, formulation_from_request
 
 try:
     from hornlab_metal_bem import ObservationConfig, native_config, solve
@@ -191,16 +192,28 @@ def solve_metal_from_msh(
                 f"Solving frequency {index + 1}/{total} with Metal BEM",
             )
 
-    config = native_config(
-        freq_min_hz=float(request.frequency_range[0]),
-        freq_max_hz=float(request.frequency_range[1]),
-        freq_count=int(request.num_frequencies),
-        freq_spacing=str(request.frequency_spacing or "log"),
-        observation=_observation_config(request),
-        progress_callback=_progress,
-        mesh_scale=1.0,
-        native_symmetry_plane=_native_symmetry_plane(request),
-    )
+    config_kwargs = {
+        "freq_min_hz": float(request.frequency_range[0]),
+        "freq_max_hz": float(request.frequency_range[1]),
+        "freq_count": int(request.num_frequencies),
+        "freq_spacing": str(request.frequency_spacing or "log"),
+        "formulation": formulation_from_request(request, allow_burton_miller=False),
+        "complex_k_shift": complex_k_shift_from_request(request),
+        "observation": _observation_config(request),
+        "progress_callback": _progress,
+        "mesh_scale": 1.0,
+        "native_symmetry_plane": _native_symmetry_plane(request),
+    }
+    try:
+        config = native_config(**config_kwargs)
+    except TypeError as exc:
+        message = str(exc)
+        if "formulation" in message or "complex_k_shift" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support explicit BEM formulation "
+                "options. Install the updated hornlab-metal-bem package."
+            ) from exc
+        raise
     result = solve(str(msh_path), config)
 
     if stage_callback:
@@ -218,6 +231,8 @@ def solve_metal_from_msh(
         },
         "metal": {
             "native_symmetry_plane": config.native_symmetry_plane,
+            "formulation": getattr(config, "formulation", config_kwargs["formulation"]),
+            "complex_k_shift": getattr(config, "complex_k_shift", config_kwargs["complex_k_shift"]),
             "solver_log": json_safe_native_value(list(result.solver_log or [])),
             "native_diagnostics": json_safe_native_value(list(result.native_diagnostics or [])),
         },
