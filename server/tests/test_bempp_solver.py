@@ -36,7 +36,7 @@ class FakeSolveConfig:
 
 
 class BemppSolverAdapterTest(unittest.TestCase):
-    def _request(self, quadrants=14):
+    def _request(self, quadrants=1234):
         return SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -154,7 +154,7 @@ class BemppSolverAdapterTest(unittest.TestCase):
         self.assertEqual(config.freq_spacing, "linear")
         self.assertEqual(config.mesh_scale, 1.0)
         self.assertEqual(config.formulation, "complex_k")
-        self.assertEqual(config.native_symmetry_plane, "yz")
+        self.assertIsNone(config.native_symmetry_plane)
         self.assertEqual(config.assembly_backend, "numba")
         self.assertEqual(config.opencl_device, "cpu")
         self.assertEqual(config.precision, "single")
@@ -172,11 +172,19 @@ class BemppSolverAdapterTest(unittest.TestCase):
         self.assertEqual(metadata["assemblyBackend"], "numba")
         self.assertEqual(metadata["device_interface"]["selected"], "bempp-cl-numba")
         self.assertNotIn(metadata["device_interface"]["selected"], {"bempp", "bempp-cl", "bemppcl"})
-        self.assertEqual(metadata["bempp"]["native_symmetry_plane"], "yz")
+        self.assertIsNone(metadata["bempp"]["native_symmetry_plane"])
         self.assertEqual(
             metadata["bempp"]["solver_log"][0]["impedance"],
             {"real": 1.0, "imaginary": 0.5},
         )
+
+    def test_reduced_domain_request_is_rejected_before_bempp_config(self):
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file:
+            with self.assertRaises(ValueError) as ctx:
+                bempp_solver.solve_bempp_from_msh(msh_file.name, self._request(quadrants=1))
+
+        self.assertIn("full-domain mesh", str(ctx.exception))
+        self.assertIn("Mesh.Quadrants=1", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -20,6 +20,18 @@ class SimulationRequestValidation:
     waveguide_params: Optional[Dict[str, Any]] = None
 
 
+def normalize_waveguide_params_for_solver_backend(
+    waveguide_params: Optional[Dict[str, Any]],
+    solver_backend: str,
+) -> Optional[Dict[str, Any]]:
+    if waveguide_params is None:
+        return None
+    normalized = dict(waveguide_params)
+    if str(solver_backend or "").strip().lower() == "bempp":
+        normalized["quadrants"] = 1234
+    return normalized
+
+
 def is_hornlab_mesher_strategy(mesh_strategy: str) -> bool:
     return str(mesh_strategy or "").strip().lower() == "hornlab_mesher"
 

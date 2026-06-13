@@ -346,7 +346,9 @@ function resolvePhaseTimeConvention(results) {
     return 'bempp';
   }
 
-  const engine = String(metadata?.engine || '').trim().toLowerCase();
+  const engine = String(metadata?.engine || '')
+    .trim()
+    .toLowerCase();
   if (engine === 'hornlab-bempp-bem') {
     return 'metal';
   }

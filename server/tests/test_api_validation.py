@@ -314,6 +314,45 @@ class ApiValidationTest(unittest.TestCase):
         # Queued payload preserves the validated symmetry-reduction domain.
         self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
 
+    def test_hornlab_mesher_submission_forces_full_domain_for_bempp_without_mutating_input(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='2',
+            solver_backend="bempp",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "OSSE", "quadrants": 1}
+                }
+            }
+        )
+
+        job_id = "11111111-1111-1111-1111-111111111112"
+
+        with patch(
+            "api.routes_simulation.BEMPP_SOLVER_READY", True
+        ), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
+            "api.routes_simulation.create_simulation_job", return_value=job_id
+        ) as create_simulation_job:
+            result = asyncio.run(submit_simulation(request))
+
+        self.assertEqual(result["job_id"], job_id)
+        self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
+        submitted_request = create_simulation_job.call_args.args[0].model_dump()
+        self.assertEqual(submitted_request["solver_backend"], "bempp")
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
+
     def test_auto_metal_submission_allows_bare_horn_without_closed_shell(self):
         request = SimulationRequest(
             mesh=MeshData(
@@ -659,6 +698,52 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
                 "Metal solve path must preserve the requested symmetry-reduction domain")
             self.assertEqual(_jrt.jobs[job_id].get("status"), "complete",
                 "Reduced-domain quadrants must be accepted for the HornLab mesher path")
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_hornlab_mesher_forces_full_domain_quadrants_for_bempp_build_call(self):
+        request = self._make_hornlab_mesher_request({"quadrants": 14})
+        request.solver_backend = "bempp"
+
+        fake_mesher_result = {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 5, "elementCount": 4},
+            "canonical_mesh": {
+                "vertices": [0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0, 0.5, 0.5, 0.5, 0],
+                "indices": [0, 1, 2, 1, 2, 3, 2, 3, 4, 0, 2, 4],
+                "surfaceTags": [1, 1, 2, 1],
+                "metadata": {},
+            },
+        }
+
+        def fake_bempp_solve(*_args, **_kwargs):
+            return {"frequencies": [100.0], "directivity": {}}
+
+        job_id = "test-hornlab-bempp-full-domain"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch(
+                "services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True
+            ), patch(
+                "services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True
+            ), patch(
+                "services.simulation_runner.build_waveguide_mesh",
+                return_value=fake_mesher_result,
+            ) as build_mesh, patch(
+                "services.simulation_runner.solve_bempp_from_msh",
+                side_effect=fake_bempp_solve,
+            ), patch(
+                "services.simulation_runner.db"
+            ):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            build_mesh.assert_called_once()
+            forwarded_params = build_mesh.call_args.args[0]
+            self.assertEqual(forwarded_params.get("quadrants"), 1234)
+            self.assertEqual(_jrt.jobs[job_id].get("status"), "complete")
         finally:
             _jrt.jobs.pop(job_id, None)
 

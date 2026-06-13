@@ -215,8 +215,8 @@ export class BemSolver {
       const health = await this.getHealthStatus();
       const solverReady = Boolean(
         health?.solverReady ||
-          health?.solverBackends?.metal?.ready ||
-          health?.solverBackends?.bempp?.ready
+        health?.solverBackends?.metal?.ready ||
+        health?.solverBackends?.bempp?.ready
       );
       return solverReady && Boolean(health?.mesherReady);
     } catch {
