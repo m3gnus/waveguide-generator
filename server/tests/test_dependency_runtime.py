@@ -32,15 +32,15 @@ def _dependency_status(
         "supportedMatrix": {
             "python": {"range": ">=3.10,<3.15"},
             "hornlab_waveguide_mesher": {
-                "range": "pinned git commit 2eb7b85",
+                "range": "pinned git commit 340214e",
                 "required_for": "/api/mesh/build",
             },
             "hornlab_metal_bem": {
-                "range": "pinned git commit a97dc67",
+                "range": "pinned git commit 12b43ec",
                 "required_for": "/api/solve backend",
             },
             "hornlab_bempp_bem": {
-                "range": "pinned git commit 96d6da9",
+                "range": "pinned git commit 8c112bb",
                 "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
             },
             "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
@@ -153,9 +153,9 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "gmsh_python",
             },
         )
-        self.assertIn("2eb7b85", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
-        self.assertIn("a97dc67", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
-        self.assertIn("96d6da9", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
+        self.assertIn("340214e", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
+        self.assertIn("12b43ec", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
+        self.assertIn("8c112bb", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
         self.assertEqual(
             SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["required_for"],
             "/api/solve fallback backend (non-Apple-Silicon)",
