@@ -81,10 +81,7 @@ export function buildWaveguideMesh(params, options = {}) {
     ? resolveMorphDimensions(meshParams, initialAngles, profileContext)
     : null;
 
-  const angleListData = buildAngleList(
-    meshParams,
-    resolvedMorph || { halfW: 0, halfH: 0 }
-  );
+  const angleListData = buildAngleList(meshParams, resolvedMorph || { halfW: 0, halfH: 0 });
   const angleList = angleListData.fullAngles;
   const ringCount = angleList.length;
   const fullCircle = true;

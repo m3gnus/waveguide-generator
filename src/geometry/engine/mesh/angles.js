@@ -28,7 +28,11 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR) {
   }
 
   const ppq = Math.max(1, Math.round(pointsPerQuadrant));
-  const clampedCorner = Math.min(Math.max(cornerR, 0), halfW, halfH);
+  const maxCorner = Math.min(halfW, halfH);
+  const scaleTolerance = 1e-9 * Math.max(1, halfW, halfH);
+  const rawCorner = Math.min(Math.max(cornerR, 0), maxCorner);
+  const clampedCorner = maxCorner - rawCorner <= scaleTolerance ? maxCorner : rawCorner;
+  const angleTolerance = 1e-9;
 
   if (clampedCorner <= 1e-9) {
     return Array.from({ length: ppq + 1 }, (_, i) => (Math.PI / 2) * (i / ppq));
@@ -40,24 +44,43 @@ function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR) {
   const sideSegments = Math.max(2, ppq - arcSegments);
   const span1 = theta1;
   const span2 = Math.PI / 2 - theta2;
-  const side1Seg = Math.max(1, Math.round((sideSegments * span1) / Math.max(span1 + span2, 1e-12)));
-  const side2Seg = Math.max(1, sideSegments - side1Seg);
+  let side1Seg = 0;
+  let side2Seg = 0;
+  const sideSpan = span1 + span2;
+  if (sideSpan > angleTolerance) {
+    if (span1 <= angleTolerance) {
+      side2Seg = sideSegments;
+    } else if (span2 <= angleTolerance) {
+      side1Seg = sideSegments;
+    } else {
+      side1Seg = Math.round((sideSegments * span1) / sideSpan);
+      side1Seg = Math.max(1, Math.min(sideSegments - 1, side1Seg));
+      side2Seg = sideSegments - side1Seg;
+    }
+  }
 
   const angles = [];
-  for (let i = 0; i <= side1Seg; i += 1) {
-    angles.push((theta1 * i) / side1Seg);
+  const pushUnique = (value) => {
+    if (angles.length === 0 || Math.abs(value - angles[angles.length - 1]) > angleTolerance) {
+      angles.push(value);
+    }
+  };
+  pushUnique(0);
+  for (let i = 1; i <= side1Seg; i += 1) {
+    pushUnique((theta1 * i) / side1Seg);
   }
   const cx = halfW - clampedCorner;
   const cy = halfH - clampedCorner;
   for (let i = 1; i <= arcSegments; i += 1) {
     const cornerPhi = (i / arcSegments) * (Math.PI / 2);
-    angles.push(
+    pushUnique(
       Math.atan2(cy + clampedCorner * Math.sin(cornerPhi), cx + clampedCorner * Math.cos(cornerPhi))
     );
   }
   for (let i = 1; i <= side2Seg; i += 1) {
-    angles.push(theta2 + ((Math.PI / 2 - theta2) * i) / side2Seg);
+    pushUnique(theta2 + ((Math.PI / 2 - theta2) * i) / side2Seg);
   }
+  pushUnique(Math.PI / 2);
   return angles;
 }
 
@@ -114,7 +137,10 @@ export function buildAngleList(params, mouthExtents) {
     }
   }
 
-  return { fullAngles: buildUniformAngles(angularSegments), pointsPerQuadrant: angularSegments / 4 };
+  return {
+    fullAngles: buildUniformAngles(angularSegments),
+    pointsPerQuadrant: angularSegments / 4,
+  };
 }
 
 export function selectAnglesForQuadrants(fullAngles, quadrants) {

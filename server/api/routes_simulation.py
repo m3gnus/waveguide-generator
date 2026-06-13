@@ -17,7 +17,9 @@ from contracts import (
 from services.simulation_validation import (
     build_submit_simulation_request,
     is_hornlab_mesher_strategy,
+    normalize_waveguide_params_for_solver_backend,
     validate_submit_simulation_request,
+    SimulationRequestValidation,
 )
 from services.solver_runtime import (
     BEMPP_SOLVER_READY,
@@ -58,12 +60,19 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
         validation = validate_submit_simulation_request(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    request_to_submit = build_submit_simulation_request(request, validation)
-    requested_solver_backend = request_to_submit.solver_backend
+    requested_solver_backend = request.solver_backend
     solver_backend = resolve_solver_backend(
-        request_to_submit.solver_backend,
+        request.solver_backend,
         mesh_strategy=validation.mesh_strategy,
     )
+    validation = SimulationRequestValidation(
+        mesh_strategy=validation.mesh_strategy,
+        waveguide_params=normalize_waveguide_params_for_solver_backend(
+            validation.waveguide_params,
+            solver_backend,
+        ),
+    )
+    request_to_submit = build_submit_simulation_request(request, validation)
     request_to_submit.solver_backend = solver_backend
 
     if is_hornlab_mesher_strategy(validation.mesh_strategy):

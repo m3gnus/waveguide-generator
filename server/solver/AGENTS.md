@@ -1,11 +1,12 @@
 # Solver Agent Guide
 
-Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-wide Definition of Done.
+Scope: applies to `server/solver/*`.
 
 ## Responsibilities
 
 - HornLab mesher integration (`mesher_adapter.py`).
-- Metal BEM solve adapter and backend status (`metal_solver.py`); hornlab-metal-bem is the only solve backend.
+- Metal BEM solve adapter and backend status (`metal_solver.py`).
+- Bempp fallback solve adapter and backend status (`bempp_solver.py`).
 - Directivity Index computation from solved polar patterns (`directivity_index.py`).
 - Runtime dependency gating and reporting (`deps.py`).
 - Result contract helpers (`contract.py`) and chart/directivity rendering (`charts.py`, `directivity_plot.py`).
@@ -22,9 +23,12 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
   - `msh_version in {"2.2","4.1"}`
 - `sim_type` affects solve semantics, not geometry generation.
 - Gmsh Python calls must stay thread-safe and avoid unsafe worker-thread initialization patterns.
-- `solver_backend` accepts only `auto`/`metal`; `bempp` values must keep
-  failing with an explicit removal message (the bempp engine was deleted
-  2026-06-11).
+- `solver_backend` accepts `auto`/`metal`/`bempp`. Auto prefers Metal when
+  ready and falls back to Bempp when Metal is unavailable.
+- Native symmetry/reduced-domain solves are Metal-only. Bempp `/api/solve`
+  requests must be normalized to `quadrants=1234` before HornLab mesher
+  generation; `bempp_solver.py` may keep a defensive guard against reduced
+  meshes reaching the adapter directly.
 
 ## Required Tests Before Merge
 
@@ -35,6 +39,9 @@ Scope: applies to `server/solver/*`; root-level `AGENTS.md` still defines repo-w
   - `server/tests/test_metal_solver_adapter.py`
   - `server/tests/test_solver_backend_selection.py`
   - `server/tests/test_solver_tag_contract.py`
+- For `bempp_solver.py` changes:
+  - `server/tests/test_bempp_solver.py`
+  - `server/tests/test_solver_backend_selection.py`
 - For `deps.py` / preflight changes:
   - `server/tests/test_dependency_runtime.py`
   - `server/tests/test_runtime_preflight.py`

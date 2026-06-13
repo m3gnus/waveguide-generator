@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from contracts import SimulationRequest, WaveguideParamsRequest
-from services.simulation_validation import is_hornlab_mesher_strategy
+from services.simulation_validation import (
+    is_hornlab_mesher_strategy,
+    normalize_waveguide_params_for_solver_backend,
+)
 from services.solver_runtime import (
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
@@ -272,6 +275,10 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             job_id, "mesh_prepare", progress=0.15, stage_message="Building HornLab mesher mesh"
         )
         _cancellation_callback("Cancellation requested before mesh build started")
+        waveguide_params = normalize_waveguide_params_for_solver_backend(
+            waveguide_params,
+            solver_backend,
+        )
         validated = WaveguideParamsRequest(**waveguide_params)
         validated_payload = validated.model_dump()
         mesher_result = build_waveguide_mesh(

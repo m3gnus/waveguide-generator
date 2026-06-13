@@ -29,6 +29,31 @@ function buildMesh(params) {
   return buildGeometryArtifacts(params, { includeEnclosure: false }).mesh;
 }
 
+function triangleArea(vertices, indices, triOffset) {
+  const ia = indices[triOffset] * 3;
+  const ib = indices[triOffset + 1] * 3;
+  const ic = indices[triOffset + 2] * 3;
+  const ax = vertices[ia];
+  const ay = vertices[ia + 1];
+  const az = vertices[ia + 2];
+  const bx = vertices[ib];
+  const by = vertices[ib + 1];
+  const bz = vertices[ib + 2];
+  const cx = vertices[ic];
+  const cy = vertices[ic + 1];
+  const cz = vertices[ic + 2];
+  const abx = bx - ax;
+  const aby = by - ay;
+  const abz = bz - az;
+  const acx = cx - ax;
+  const acy = cy - ay;
+  const acz = cz - az;
+  const crossX = aby * acz - abz * acy;
+  const crossY = abz * acx - abx * acz;
+  const crossZ = abx * acy - aby * acx;
+  return 0.5 * Math.hypot(crossX, crossY, crossZ);
+}
+
 test('R-OSSE morphing derives implicit target extents when width/height are unset', () => {
   const noMorphParams = prepare({
     morphTarget: 0,
@@ -67,4 +92,23 @@ test('R-OSSE morphing derives implicit target extents when width/height are unse
     maxIncrease > 1e-3,
     `implicit morph target extents should change the mouth profile (maxIncrease=${maxIncrease})`
   );
+});
+
+test('full-radius rounded-rect morph does not duplicate azimuth samples', () => {
+  const mesh = buildMesh(
+    prepare({
+      morphTarget: 1,
+      morphWidth: 100,
+      morphHeight: 100,
+      morphCorner: 50 - 1e-9,
+      morphAllowShrinkage: 1
+    })
+  );
+
+  let minArea = Infinity;
+  for (let i = 0; i < mesh.indices.length; i += 3) {
+    minArea = Math.min(minArea, triangleArea(mesh.vertices, mesh.indices, i));
+  }
+
+  assert.ok(minArea > 1e-9, `expected no degenerate triangles, min area ${minArea}`);
 });

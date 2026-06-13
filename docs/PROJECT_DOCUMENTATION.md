@@ -459,7 +459,9 @@ Runtime behavior by pipeline:
 - JS canonical payload helpers (`src/geometry/pipeline.js`, `src/geometry/tags.js`) emit only tags `1` and `2` in regression coverage.
 - HornLab mesh build output (`/api/mesh/build`) emits tags `1`, `2`, and optional `3` when exterior surfaces exist.
 - Neither active JS runtime nor active HornLab mesh build emits tag `4`.
-- HornLab mesher `/api/solve` preserves selected symmetry-reduced `quadrants` and passes canonical `surfaceTags` through to solver mesh preparation unchanged.
+- HornLab mesher `/api/solve` preserves selected symmetry-reduced `quadrants`
+  for Metal solves, normalizes Bempp solves to full-domain `quadrants=1234`,
+  and passes canonical `surfaceTags` through to solver mesh preparation unchanged.
 
 Required invariants:
 
@@ -498,8 +500,12 @@ Required invariants:
 - Frontend backend-mesh request normalization (`src/modules/design/index.js`) accepts canonical values `1`, `12`, `14`, `1234`; otherwise it attempts numeric coercion and falls back to `1234`.
 - A UI Auto action samples prepared angular parameters and enclosure/offset constraints to choose `1`, `12`, `14`, or `1234` conservatively.
 - Waveguide payload mapping (`src/solver/waveguidePayload.js`) expects normalized integer `quadrants` and maps it directly.
-- `/api/solve` validates the HornLab mesher request and preserves normalized `quadrants` in the queued solve request.
-- Simulation runner forwards queued backend mesh `quadrants` to HornLab mesh generation.
+- `/api/solve` validates the HornLab mesher request, preserves normalized
+  `quadrants` for Metal solve requests, and normalizes Bempp solve requests to
+  `quadrants=1234` before queuing.
+- Simulation runner forwards Metal backend mesh `quadrants` to HornLab mesh
+  generation and defensively normalizes Bempp build parameters to
+  `quadrants=1234`.
 
 #### Enclosure resolution fields
 

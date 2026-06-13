@@ -11,6 +11,7 @@ from .result_mapping import (
     json_safe_native_value,
     native_symmetry_plane,
     observation_config,
+    waveguide_quadrants,
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
 
@@ -30,6 +31,18 @@ except ImportError:  # pragma: no cover - exercised through runtime status
 
 class BemppBemUnavailable(RuntimeError):
     """Raised when the BEMPP fallback solver dependency is unavailable."""
+
+
+def _reject_reduced_domain_request(request) -> None:
+    symmetry_plane = native_symmetry_plane(request)
+    if symmetry_plane is None:
+        return
+    raise ValueError(
+        "BEMPP fallback solves require a full-domain mesh. "
+        f"Got Mesh.Quadrants={waveguide_quadrants(request)!r}, which maps to "
+        f"native_symmetry_plane={symmetry_plane!r}. Use Mesh.Quadrants=1234, "
+        "or select the Metal backend for native symmetry solves."
+    )
 
 
 def _load_bempp_api() -> bool:
@@ -192,6 +205,8 @@ def solve_bempp_from_msh(
     progress_callback=None,
     stage_callback=None,
 ) -> dict[str, Any]:
+    _reject_reduced_domain_request(request)
+
     if not _load_bempp_api():
         raise BemppBemUnavailable(
             "hornlab-bempp-bem is not installed. Install with: "

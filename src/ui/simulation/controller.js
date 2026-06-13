@@ -387,8 +387,8 @@ export async function submitSimulationControllerJob(
 
   const solverReady = Boolean(
     health?.solverReady ||
-      health?.solverBackends?.metal?.ready ||
-      health?.solverBackends?.bempp?.ready
+    health?.solverBackends?.metal?.ready ||
+    health?.solverBackends?.bempp?.ready
   );
 
   if (!solverReady || !health?.mesherReady) {

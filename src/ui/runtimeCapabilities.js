@@ -43,8 +43,8 @@ export function describeSelectedDevice(health) {
 export function summarizeRuntimeCapabilities(health) {
   const solverReady = Boolean(
     health?.solverReady ||
-      health?.solverBackends?.metal?.ready ||
-      health?.solverBackends?.bempp?.ready
+    health?.solverBackends?.metal?.ready ||
+    health?.solverBackends?.bempp?.ready
   );
   const mesherReady = Boolean(health?.mesherReady);
   const fullyReady = solverReady && mesherReady;
