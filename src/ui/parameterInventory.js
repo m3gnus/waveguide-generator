@@ -172,6 +172,10 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       owner: 'paramPanel',
       groups: Object.freeze([
         Object.freeze({
+          group: 'SIMULATION',
+          keys: Object.freeze(['simType']),
+        }),
+        Object.freeze({
           group: 'MESH',
           keys: Object.freeze([
             'throatResolution',

@@ -87,9 +87,12 @@ export function getDependencyStatusSummary(health) {
   const bemppDep = deps?.hornlab_bempp_bem || {};
   const python = deps?.python || {};
   const metalStatus = health?.solverBackends?.metal?.status || {};
-  const metalReady = Boolean(health?.solverBackends?.metal?.ready || metalStatus?.available);
+  const metalReady = Boolean(health?.solverBackends?.metal?.ready);
+  const metalAvailable = Boolean(metalStatus?.available || metalReady);
+  const metalHelperBuild = String(metalStatus?.nativeHelperBuild || '').trim();
   const bemppStatus = health?.solverBackends?.bempp?.status || {};
-  const bemppReady = Boolean(health?.solverBackends?.bempp?.ready || bemppStatus?.available);
+  const bemppReady = Boolean(health?.solverBackends?.bempp?.ready);
+  const bemppAvailable = Boolean(bemppStatus?.available || bemppReady);
 
   return {
     python: {
@@ -132,20 +135,22 @@ export function getDependencyStatusSummary(health) {
     metal: {
       name: 'Metal BEM',
       version: metalDep?.version || null,
-      available: metalReady,
+      available: metalAvailable,
       supported: metalStatus.supportedPlatform !== false,
       ready: metalReady,
       feature: 'BEM simulation (Apple Silicon macOS)',
       guidance: !metalReady
         ? metalStatus.reason
           ? String(metalStatus.reason)
-          : 'Install hornlab-metal-bem (Apple Silicon macOS required): pip install -r server/requirements.txt'
+          : metalAvailable && metalHelperBuild !== 'release'
+            ? `Build the Metal release helper: npm run build:metal-helper (current: ${metalHelperBuild || 'missing'})`
+            : 'Install hornlab-metal-bem (Apple Silicon macOS required): pip install -r server/requirements.txt'
         : null,
     },
     bempp: {
       name: 'Bempp',
       version: bemppDep?.version || null,
-      available: bemppReady,
+      available: bemppAvailable,
       supported: bemppDep.supported !== false,
       ready: bemppReady,
       feature: 'BEM simulation (cross-platform)',

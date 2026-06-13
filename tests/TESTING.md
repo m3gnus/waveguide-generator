@@ -97,7 +97,7 @@ Supporting fixtures:
 - `server/tests/test_updates_endpoint.py`
 - `server/tests/test_workspace_routes.py`
 
-The backend suites cover solver backend selection across Metal and Bempp: `solver_backend` accepts `auto`, `metal`, and `bempp`; Auto prefers Metal BEM when ready and falls back to Bempp on other hosts.
+The backend suites cover solver backend selection across Metal and Bempp: `solver_backend` accepts `auto`, `metal`, and `bempp`; Auto uses the Metal BEM release-helper fast path when ready and falls back to Bempp on other hosts.
 
 ## Manual diagnostics (`scripts/diagnostics/`)
 

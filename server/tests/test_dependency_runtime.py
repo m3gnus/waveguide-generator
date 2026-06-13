@@ -202,7 +202,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
             "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
-        ), patch("api.routes_misc.METAL_SOLVER_READY", False), patch(
+        ), patch("api.routes_misc.is_metal_fast_solve_ready", return_value=False), patch(
             "api.routes_misc.metal_backend_status",
             return_value={"available": False, "reason": "hornlab-metal-bem is not installed."},
         ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
@@ -268,8 +268,8 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("python >=3.10,<3.15", detail)
         self.assertIn("gmsh >=4.11,<5.0", detail)
 
-    def test_health_solver_ready_tracks_metal_runtime_not_doctor_gate(self):
-        """The doctor's solveReady gate no longer feeds solverReady; metal runtime does."""
+    def test_health_solver_ready_requires_fast_metal_helper(self):
+        """The doctor's summary is informational; Metal readiness requires the release helper."""
         dependency_status = _dependency_status()
         dependency_doctor = {
             "schemaVersion": 1,
@@ -290,7 +290,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
             "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
-        ), patch("api.routes_misc.METAL_SOLVER_READY", True), patch(
+        ), patch("api.routes_misc.is_metal_fast_solve_ready", return_value=False), patch(
             "api.routes_misc.metal_backend_status", return_value=metal_status
         ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
             "api.routes_misc.bempp_backend_status",
@@ -300,9 +300,9 @@ class DependencyRuntimeTest(unittest.TestCase):
         ):
             response = asyncio.run(health_check())
 
-        self.assertTrue(response["solverReady"])
-        self.assertEqual(response["solver"], "metal-bem")
-        self.assertTrue(response["solverBackends"]["metal"]["ready"])
+        self.assertFalse(response["solverReady"])
+        self.assertEqual(response["solver"], "unavailable")
+        self.assertFalse(response["solverBackends"]["metal"]["ready"])
 
     def test_health_solver_ready_accepts_metal_backend(self):
         dependency_status = _dependency_status()
@@ -321,7 +321,7 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         with patch("api.routes_misc.get_dependency_status", return_value=dependency_status), patch(
             "api.routes_misc.collect_runtime_doctor_report", return_value=dependency_doctor
-        ), patch("api.routes_misc.METAL_SOLVER_READY", True), patch(
+        ), patch("api.routes_misc.is_metal_fast_solve_ready", return_value=True), patch(
             "api.routes_misc.metal_backend_status", return_value=metal_status
         ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(
             "api.routes_misc.bempp_backend_status",
@@ -370,7 +370,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             "api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True
         ), patch(
             "api.routes_simulation.build_waveguide_mesh", MagicMock()
-        ), patch("api.routes_simulation.METAL_SOLVER_READY", False), patch(
+        ), patch("api.routes_simulation.is_metal_fast_solve_ready", return_value=False), patch(
             "api.routes_simulation.metal_backend_status", return_value=metal_status
         ), patch("api.routes_simulation.create_simulation_job") as create_simulation_job:
             with self.assertRaises(HTTPException) as ctx:
@@ -381,6 +381,60 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("Metal BEM solver not available", detail)
         self.assertIn("reason=hornlab-metal-bem is not installed.", detail)
         self.assertIn("supported_platform=False", detail)
+        create_simulation_job.assert_not_called()
+
+    def test_solve_metal_requires_release_helper_for_fast_path(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format="msh",
+                boundaryConditions={},
+                metadata={},
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=8,
+            sim_type="2",
+            solver_backend="metal",
+            options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": {
+                "formula_type": "OSSE",
+                "wall_thickness": 6.0,
+                "enc_depth": 0.0,
+            }}},
+        )
+        metal_status = {
+            "available": True,
+            "supportedPlatform": True,
+            "nativeHelperAvailable": True,
+            "nativeHelperBuild": "debug",
+            "nativeHelperPath": "/tmp/HornlabMetalBemNative",
+            "reason": None,
+        }
+
+        with patch("api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True
+        ), patch(
+            "api.routes_simulation.build_waveguide_mesh", MagicMock()
+        ), patch(
+            "api.routes_simulation.is_metal_fast_solve_ready", return_value=False
+        ), patch(
+            "api.routes_simulation.metal_backend_status", return_value=metal_status
+        ), patch(
+            "api.routes_simulation.metal_fast_solve_unavailable_reason",
+            return_value=(
+                "Metal BEM fastest solve requires the Swift native release helper. "
+                "build=debug path=/tmp/HornlabMetalBemNative; run: npm run build:metal-helper"
+            ),
+        ), patch("api.routes_simulation.create_simulation_job") as create_simulation_job:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(submit_simulation(request))
+
+        self.assertEqual(ctx.exception.status_code, 503)
+        detail = str(ctx.exception.detail)
+        self.assertIn("Metal BEM fastest solve requires", detail)
+        self.assertIn("build=debug", detail)
+        self.assertIn("npm run build:metal-helper", detail)
         create_simulation_job.assert_not_called()
 
     def test_auto_solve_with_no_backend_returns_neither_backend_guidance(self):
@@ -410,7 +464,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             "api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True
         ), patch(
             "api.routes_simulation.build_waveguide_mesh", MagicMock()
-        ), patch("api.routes_simulation.METAL_SOLVER_READY", False), patch(
+        ), patch("api.routes_simulation.is_metal_fast_solve_ready", return_value=False), patch(
             "api.routes_simulation.BEMPP_SOLVER_READY", False
         ), patch(
             "api.routes_simulation.metal_backend_status",
@@ -468,7 +522,7 @@ class DependencyRuntimeTest(unittest.TestCase):
                     "solveIssues": [],
                 },
             },
-        ), patch("api.routes_misc.METAL_SOLVER_READY", True), patch(
+        ), patch("api.routes_misc.is_metal_fast_solve_ready", return_value=True), patch(
             "api.routes_misc.metal_backend_status",
             return_value={"available": True, "supportedPlatform": True, "reason": None},
         ), patch("api.routes_misc.BEMPP_SOLVER_READY", False), patch(

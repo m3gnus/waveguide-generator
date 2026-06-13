@@ -92,6 +92,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
             "throatExtLength": payload.get("throat_ext_length"),
             "throatExtAngle": payload.get("throat_ext_angle"),
             "slotLength": payload.get("slot_length"),
+            "_athLengthMode": payload.get("length_mode"),
         }
     )
     if formula == "OSSE":
@@ -123,7 +124,13 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
         )
 
     enc_depth = float(payload.get("enc_depth") or 0.0)
-    mode = "enclosure" if enc_depth > 0.0 else "freestanding"
+    sim_type = str(payload.get("sim_type") or "2").strip()
+    if enc_depth > 0.0:
+        mode = "enclosure"
+    elif sim_type == "1":
+        mode = "infinite-baffle"
+    else:
+        mode = "freestanding"
     config = {
         "formula": formula,
         "mode": mode,
@@ -133,6 +140,8 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                 "angularSegments": payload.get("n_angular"),
                 "lengthSegments": payload.get("n_length"),
                 "cornerSegments": payload.get("corner_segments"),
+                "samplingMode": payload.get("sampling_mode"),
+                "zMapPoints": payload.get("z_map_points"),
                 "quadrants": payload.get("quadrants", 1234),
                 "wallThickness": payload.get("wall_thickness"),
                 "throatResolution": payload.get("throat_res"),
@@ -435,8 +444,8 @@ def build_viewport_geometry(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     config = waveguide_payload_to_mesher_config(payload)
     mesh = config.setdefault("mesh", {})
-    # The display contract requires the full closed surface; symmetry-reduced
-    # domains are a solve/export concern.
+    # The display contract mirrors ATH's full exported geometry. Symmetry-
+    # reduced domains remain a solve/export concern.
     mesh["quadrants"] = 1234
     mesh["angularSegments"] = _clamp_segments(
         mesh.get("angularSegments"),

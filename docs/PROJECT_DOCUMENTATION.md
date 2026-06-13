@@ -118,9 +118,9 @@ flowchart LR
 
 - `options.mesh.waveguide_params = WaveguideParamsRequest-compatible payload`
 - Simulation settings forward `mesh_validation_mode`, `frequency_spacing`, and `verbose` when the saved values are valid
-- Simulation settings forward `solver_backend` (`auto`, `metal`, `bempp`) as the public backend selector. Auto prefers Metal BEM on Apple Silicon and falls back to Bempp on other hosts.
+- Simulation settings forward `solver_backend` (`auto`, `metal`, `bempp`) as the public backend selector. Auto uses the Metal BEM release-helper fast path on Apple Silicon and falls back to Bempp on other hosts.
 - Solver runtime availability details come from `/health` metadata in results/status surfaces, while active Simulation settings expose only stable public overrides
-- Metal BEM requires Apple Silicon macOS. Bempp is the cross-platform backend for Windows, Linux, and Intel Mac; it uses OpenCL acceleration when available and the numba CPU backend otherwise.
+- Metal BEM requires Apple Silicon macOS and the Swift native release helper. Bempp is the cross-platform backend for Windows, Linux, and Intel Mac; it uses OpenCL acceleration when available and the numba CPU backend otherwise.
 - On-axis and polar observation distance now share one effective value, and the backend pushes that value forward if the requested point would land inside or too close to the enclosure/horn geometry.
 - Completed solve payloads persist both `metadata.observation` and `metadata.directivity`, so downstream UI can read the effective observation distance and the actual polar-map settings without reconstructing them from saved form state. `metadata.directivity` includes both `enabled_axes` and normalized `planes`, while `results.directivity` includes only the requested plane keys.
 
@@ -609,7 +609,7 @@ High-signal test suites:
 
 ### Solver runtime availability
 
-Metal BEM is the fast Apple Silicon solve backend. Bempp is the cross-platform backend for Windows, Linux, and Intel Mac, with optional OpenCL acceleration and a numba CPU fallback. `/health` reports `solver: "metal-bem"`, `solver: "bempp-bem"`, or `solver: "unavailable"` with per-backend status under `solverBackends`; `/api/solve` requires Metal BEM or Bempp plus the HornLab mesher. On Apple Silicon, the runtime doctor/preflight also require the Swift release helper (`metal_release_helper`); build or repair it with `npm run build:metal-helper`.
+Metal BEM is the fast Apple Silicon solve backend. Bempp is the cross-platform backend for Windows, Linux, and Intel Mac, with optional OpenCL acceleration and a numba CPU fallback. `/health` reports `solver: "metal-bem"`, `solver: "bempp-bem"`, or `solver: "unavailable"` with per-backend status under `solverBackends`; `/api/solve` requires Metal BEM or Bempp plus the HornLab mesher. On Apple Silicon, Metal solve readiness requires the Swift release helper (`metal_release_helper`) so jobs use the fastest validated path; build or repair it with `npm run build:metal-helper`.
 
 ## 11. Key File Map
 

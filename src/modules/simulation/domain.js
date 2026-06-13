@@ -56,6 +56,13 @@ function createSimulationDesignTask(state) {
   );
 }
 
+function resolveSimulationType(options = {}, meshParams = {}, preparedParams = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'simType')) {
+    return options.simType;
+  }
+  return meshParams.simType ?? preparedParams.simType ?? 2;
+}
+
 export function prepareHornlabSolveContractMesh() {
   return {
     vertices: Array.from(HORNLAB_SOLVE_CONTRACT_MESH.vertices),
@@ -179,7 +186,7 @@ export function prepareHornlabMesherSolveRequest(state, options = {}) {
   const preparedParams = DesignModule.output.simulationParams(designTask);
   const meshParams = DesignModule.output.backendMeshSimulationParams(designTask);
   const waveguidePayload = buildWaveguidePayload(meshParams, options.mshVersion || '2.2');
-  waveguidePayload.sim_type = options.simType ?? 2;
+  waveguidePayload.sim_type = resolveSimulationType(options, meshParams, preparedParams);
 
   return {
     waveguidePayload,

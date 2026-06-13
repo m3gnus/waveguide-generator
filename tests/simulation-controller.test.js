@@ -476,7 +476,7 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
     surfaceTags: [2],
   };
   const submission = {
-    waveguidePayload: { formula_type: 'OSSE' },
+    waveguidePayload: { formula_type: 'OSSE', sim_type: 1 },
     submitOptions: { mesh: { strategy: 'hornlab_mesher' } },
     preparedParams: { L: 120 },
     stateSnapshot: { type: 'OSSE', params: { L: 120 } },
@@ -497,10 +497,50 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
   const expectedSubmitOptions = {
     mesh: {
       strategy: 'hornlab_mesher',
-      waveguide_params: { formula_type: 'OSSE' },
+      waveguide_params: { formula_type: 'OSSE', sim_type: 1 },
     },
   };
-  assert.deepEqual(calls, [['health'], ['submit', config, meshData, expectedSubmitOptions]]);
+  assert.deepEqual(calls, [
+    ['health'],
+    ['submit', { ...config, simulationType: 1 }, meshData, expectedSubmitOptions],
+  ]);
+});
+
+test('submitSimulationControllerJob forces a free-standing solve when the Bempp backend is selected', async () => {
+  const calls = [];
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getHealthStatus() {
+        return { solverReady: true, mesherReady: true };
+      },
+      async submitSimulation(config, meshData, submitOptions) {
+        calls.push(['submit', config, meshData, submitOptions]);
+        return 'job-bempp-1';
+      },
+    },
+  });
+
+  const config = { solverBackend: 'bempp', polarConfig: {} };
+  const meshData = { vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 2], surfaceTags: [2] };
+  const submission = {
+    waveguidePayload: { formula_type: 'OSSE', sim_type: 1 },
+    submitOptions: { mesh: { strategy: 'hornlab_mesher' } },
+    preparedParams: {},
+    stateSnapshot: { type: 'OSSE', params: {} },
+  };
+
+  await submitSimulationControllerJob(controller, {
+    config,
+    meshData,
+    outputName: 'simulation',
+    counter: 1,
+    submission,
+  });
+
+  const [, submittedConfig, , submittedOptions] = calls[0];
+  // Infinite baffle (sim_type=1) must never reach the Bempp backend.
+  assert.equal(submittedOptions.mesh.waveguide_params.sim_type, 2);
+  assert.equal(submittedConfig.simulationType, '2');
 });
 
 test('submitSimulationControllerJob rejects when backend solver dependencies are unavailable', async () => {

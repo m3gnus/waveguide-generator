@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,11 +136,85 @@ def metal_backend_status() -> dict[str, Any]:
 
 
 def is_metal_solver_available() -> bool:
-    return bool(metal_backend_status().get("available"))
+    return is_metal_fast_solve_ready()
+
+
+def is_apple_silicon_host() -> bool:
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
+
+
+def is_metal_fast_solve_ready(status: dict[str, Any] | None = None) -> bool:
+    status = status if status is not None else metal_backend_status()
+    if not status.get("available"):
+        return False
+    if not is_apple_silicon_host():
+        return True
+    return bool(
+        status.get("nativeHelperAvailable")
+        and status.get("nativeHelperBuild") == "release"
+    )
+
+
+def metal_fast_solve_unavailable_reason(status: dict[str, Any] | None = None) -> str:
+    status = status if status is not None else metal_backend_status()
+    if is_metal_fast_solve_ready(status):
+        return ""
+    if not status.get("available"):
+        return status.get("reason") or "Metal solver backend is unavailable."
+    if is_apple_silicon_host() and not is_metal_fast_solve_ready(status):
+        helper_build = str(status.get("nativeHelperBuild") or "missing")
+        helper_path = str(status.get("nativeHelperPath") or "unknown")
+        reason = str(status.get("reason") or "").strip()
+        detail = f"build={helper_build} path={helper_path}"
+        if reason:
+            detail = f"{detail} reason={reason}"
+        return (
+            "Metal BEM fastest solve requires the Swift native release helper. "
+            f"{detail}; run: npm run build:metal-helper"
+        )
+    return "Metal solver backend is unavailable."
 
 
 def _native_symmetry_plane(request) -> str | None:
     return native_symmetry_plane(request)
+
+
+def _float_option(value: Any, fallback: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number
+
+
+def _waveguide_params(request) -> dict[str, Any]:
+    options = request.options if isinstance(request.options, dict) else {}
+    mesh_options = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
+    params = mesh_options.get("waveguide_params")
+    return dict(params) if isinstance(params, dict) else {}
+
+
+def _native_check_open_edges(request) -> bool:
+    if _native_symmetry_plane(request) is None:
+        return True
+
+    params = _waveguide_params(request)
+    if not params:
+        return True
+
+    enc_depth = _float_option(params.get("enc_depth"), 0.0)
+    wall_thickness = _float_option(params.get("wall_thickness"), 0.0)
+
+    # The canonical mesher's no-enclosure, no-wall reduced-domain solve mesh is
+    # an open shell: its mouth rim is a legitimate free edge off the symmetry
+    # planes after mirroring. This holds regardless of sim_type — infinite-baffle
+    # requests are coerced to free-standing before the solve, and a free-standing
+    # open shell has the same off-plane mouth rim. Closed topologies (an enclosure
+    # or a thickened wall that caps the rim) keep the strict native guard so
+    # accidental off-plane cuts are still caught.
+    if enc_depth <= 0.0 and wall_thickness <= 0.0:
+        return False
+    return True
 
 
 def _observation_config(request):
@@ -203,6 +278,7 @@ def solve_metal_from_msh(
         "progress_callback": _progress,
         "mesh_scale": 1.0,
         "native_symmetry_plane": _native_symmetry_plane(request),
+        "native_check_open_edges": _native_check_open_edges(request),
     }
     try:
         config = native_config(**config_kwargs)
@@ -231,6 +307,11 @@ def solve_metal_from_msh(
         },
         "metal": {
             "native_symmetry_plane": config.native_symmetry_plane,
+            "native_check_open_edges": getattr(
+                config,
+                "native_check_open_edges",
+                config_kwargs["native_check_open_edges"],
+            ),
             "formulation": getattr(config, "formulation", config_kwargs["formulation"]),
             "complex_k_shift": getattr(config, "complex_k_shift", config_kwargs["complex_k_shift"]),
             "solver_log": json_safe_native_value(list(result.solver_log or [])),

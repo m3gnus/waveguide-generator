@@ -27,6 +27,29 @@ def normalize_waveguide_params_for_solver_backend(
     if waveguide_params is None:
         return None
     normalized = dict(waveguide_params)
+
+    # No available BEM backend models a true infinite baffle, so an
+    # infinite-baffle request (sim_type=1) is solved as free-standing
+    # (sim_type=2). This rebuilds the mesh without the baffle surface and lets
+    # the reduced-symmetry solve proceed instead of failing on the off-plane
+    # mouth rim. See the infinite-baffle support investigation for re-enabling
+    # a real half-space solve.
+    sim_type_raw = normalized.get("sim_type")
+    if sim_type_raw is not None:
+        try:
+            sim_type_int = int(float(sim_type_raw))
+        except (TypeError, ValueError):
+            sim_type_int = None
+        if sim_type_int == 1:
+            normalized["sim_type"] = 2
+            # The free-standing builder cannot produce half-models (quadrants 12 /
+            # 14): it caps the cut cross-section in the symmetry plane, which is
+            # invalid for a half-domain solve. A single-axis-symmetric horn would
+            # otherwise fail the mesh build after coercion, so fall back to the
+            # full domain (always valid) to keep the free-standing solve working.
+            if str(normalized.get("quadrants", "")).strip() in {"12", "14"}:
+                normalized["quadrants"] = 1234
+
     if str(solver_backend or "").strip().lower() == "bempp":
         normalized["quadrants"] = 1234
     return normalized
@@ -53,11 +76,8 @@ def validate_submit_simulation_request(
         raise ValueError(
             "Mesh surfaceTags must include source tag 2 before solve submission."
         )
-    if str(request.sim_type).strip() != "2":
-        raise ValueError(
-            "Only sim_type='2' (free-standing) is supported; "
-            "infinite-baffle sim_type='1' was removed."
-        )
+    if str(request.sim_type).strip() not in {"1", "2"}:
+        raise ValueError("sim_type must be '1' (infinite-baffle) or '2' (free-standing).")
 
     normalize_mesh_validation_mode(request.mesh_validation_mode)
 

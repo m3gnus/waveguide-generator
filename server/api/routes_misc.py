@@ -19,12 +19,12 @@ from services.runtime_preflight import collect_runtime_doctor_report
 from services.solver_runtime import (
     BEMPP_SOLVER_READY,
     SOLVER_AVAILABLE,
-    METAL_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     bempp_backend_status,
     get_dependency_status,
     get_settings_capabilities,
+    is_metal_fast_solve_ready,
     metal_backend_status,
     render_all_charts,
     render_directivity_plot,
@@ -57,10 +57,13 @@ async def health_check() -> Dict[str, Any]:
     logger.info("Health check requested")
     dependency_status = get_dependency_status()
     doctor_report = collect_runtime_doctor_report("auto")
-    solver_ready = bool(METAL_SOLVER_READY or BEMPP_SOLVER_READY)
+    metal_status = metal_backend_status()
+    metal_ready = is_metal_fast_solve_ready(metal_status)
+    bempp_status = bempp_backend_status()
+    solver_ready = bool(metal_ready or BEMPP_SOLVER_READY)
     solver_name = (
         "metal-bem"
-        if METAL_SOLVER_READY
+        if metal_ready
         else "bempp-bem" if BEMPP_SOLVER_READY else "unavailable"
     )
 
@@ -69,8 +72,8 @@ async def health_check() -> Dict[str, Any]:
         "solver": solver_name,
         "solverReady": solver_ready,
         "solverBackends": {
-            "metal": {"ready": bool(METAL_SOLVER_READY), "status": metal_backend_status()},
-            "bempp": {"ready": bool(BEMPP_SOLVER_READY), "status": bempp_backend_status()},
+            "metal": {"ready": metal_ready, "status": metal_status},
+            "bempp": {"ready": bool(BEMPP_SOLVER_READY), "status": bempp_status},
         },
         "mesherReady": HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_RUNTIME_READY,
         "dependencies": dependency_status,
