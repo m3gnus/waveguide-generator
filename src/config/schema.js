@@ -642,6 +642,20 @@ export const PARAM_SCHEMA = {
       controlId: 'freq-steps',
       tooltip: 'Number of solved frequencies between the start and end values.',
     },
+    simType: {
+      type: 'select',
+      label: 'Simulation Type',
+      default: '2',
+      controlId: 'sim-type',
+      tooltip:
+        'BEM boundary condition. Free-standing radiates into full space. Infinite baffle ' +
+        'is an Apple-Silicon Metal-only mode and currently falls back to a free-standing solve; ' +
+        'the Bempp backend always solves free-standing.',
+      options: [
+        { value: '2', label: 'Free-standing' },
+        { value: '1', label: 'Infinite baffle' },
+      ],
+    },
   },
   // Output actions are handled via export buttons in the UI.
 };

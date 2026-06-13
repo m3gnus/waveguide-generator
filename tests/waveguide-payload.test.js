@@ -67,6 +67,33 @@ test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
   assert.equal(payload.b, '0.2+0.1*sin(p)');
 });
 
+test('buildWaveguidePayload preserves angular slot-length expression strings', () => {
+  const slotLength = () => 0;
+  slotLength._rawExpr = '45 - 42*sin(2*p)^4';
+
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      type: 'OSSE',
+      slotLength
+    }),
+    '2.2'
+  );
+
+  assert.equal(payload.slot_length, '45 - 42*sin(2*p)^4');
+});
+
+test('buildWaveguidePayload preserves ATH total-length mode', () => {
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      type: 'OSSE',
+      _athLengthMode: 'total'
+    }),
+    '2.2'
+  );
+
+  assert.equal(payload.length_mode, 'total');
+});
+
 test('buildWaveguidePayload rejects unprepared backend mesh payload fields', () => {
   assert.throws(
     () => buildWaveguidePayload(

@@ -11,7 +11,9 @@ from solver.bempp_solver import (
     solve_bempp_from_msh,
 )
 from solver.metal_solver import (
+    is_metal_fast_solve_ready,
     metal_backend_status,
+    metal_fast_solve_unavailable_reason,
     normalize_solver_backend,
     resolve_solver_backend,
     solve_metal_from_msh,
@@ -22,7 +24,6 @@ from solver_bootstrap import (
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     METAL_SOLVER_AVAILABLE,
-    METAL_SOLVER_READY,
     SOLVER_AVAILABLE,
     get_dependency_status,
 )
@@ -39,6 +40,7 @@ except ImportError:
     build_viewport_geometry = None  # type: ignore[assignment]
 
 def get_settings_capabilities() -> Dict[str, Any]:
+    metal_status = metal_backend_status()
     return {
         "simulationBasic": {
             "available": True,
@@ -64,9 +66,9 @@ def get_settings_capabilities() -> Dict[str, Any]:
             "default": "auto",
             "backends": {
                 "metal": {
-                    "available": bool(METAL_SOLVER_READY),
+                    "available": is_metal_fast_solve_ready(metal_status),
                     "label": "Metal BEM",
-                    "status": metal_backend_status(),
+                    "status": metal_status,
                 },
                 "bempp": {
                     "available": bool(BEMPP_SOLVER_READY),

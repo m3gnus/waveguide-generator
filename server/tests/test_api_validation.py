@@ -16,6 +16,35 @@ from api.routes_simulation import (
 from contracts import DirectivityRenderRequest, JobMetadataPatch, MeshData, SimulationRequest
 import services.job_runtime as _jrt
 import services.simulation_runner as _sim_runner
+from services.simulation_validation import (
+    normalize_waveguide_params_for_solver_backend,
+    validate_submit_simulation_request,
+)
+
+
+class NormalizeWaveguideParamsTest(unittest.TestCase):
+    def test_infinite_baffle_is_coerced_to_freestanding(self):
+        # No BEM backend models a true infinite baffle, so sim_type=1 must be
+        # solved as free-standing (sim_type=2) for every backend.
+        for backend in ("metal", "bempp", "auto"):
+            for raw in (1, "1", 1.0):
+                result = normalize_waveguide_params_for_solver_backend(
+                    {"sim_type": raw, "quadrants": 1}, backend
+                )
+                self.assertEqual(result["sim_type"], 2, f"{backend!r}/{raw!r}")
+
+    def test_freestanding_and_missing_sim_type_are_untouched(self):
+        self.assertEqual(
+            normalize_waveguide_params_for_solver_backend({"sim_type": 2}, "metal")["sim_type"],
+            2,
+        )
+        self.assertNotIn(
+            "sim_type",
+            normalize_waveguide_params_for_solver_backend({"quadrants": 1}, "metal"),
+        )
+
+    def test_none_params_pass_through(self):
+        self.assertIsNone(normalize_waveguide_params_for_solver_backend(None, "metal"))
 
 
 class ApiValidationTest(unittest.TestCase):
@@ -63,7 +92,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn('source tag 2', str(ctx.exception.detail))
 
-    def test_sim_type_one_is_rejected_as_unsupported(self):
+    def test_sim_type_one_is_accepted_for_hornlab_mesher_strategy(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -76,6 +105,30 @@ class ApiValidationTest(unittest.TestCase):
             frequency_range=[100.0, 1000.0],
             num_frequencies=10,
             sim_type='1',
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "OSSE", "sim_type": 1},
+                }
+            },
+        )
+
+        validation = validate_submit_simulation_request(request)
+        self.assertEqual(validation.waveguide_params["sim_type"], 1)
+
+    def test_invalid_sim_type_is_rejected(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[2],
+                format='msh',
+                boundaryConditions={},
+                metadata={}
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type='3',
             options={}
         )
 
@@ -83,8 +136,7 @@ class ApiValidationTest(unittest.TestCase):
             asyncio.run(submit_simulation(request))
 
         self.assertEqual(ctx.exception.status_code, 422)
-        self.assertIn("sim_type='2'", str(ctx.exception.detail))
-        self.assertIn("removed", str(ctx.exception.detail))
+        self.assertIn("sim_type must be", str(ctx.exception.detail))
 
     def test_invalid_mesh_validation_mode_is_rejected(self):
         request = SimulationRequest(
@@ -299,7 +351,7 @@ class ApiValidationTest(unittest.TestCase):
         job_id = "11111111-1111-1111-1111-111111111111"
 
         with patch(
-            "api.routes_simulation.METAL_SOLVER_READY", True
+            "api.routes_simulation.is_metal_fast_solve_ready", return_value=True
         ), patch(
             "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
         ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
@@ -383,7 +435,7 @@ class ApiValidationTest(unittest.TestCase):
         job_id = "11111111-1111-1111-1111-111111111113"
 
         with patch("api.routes_simulation.resolve_solver_backend", return_value="metal"), patch(
-            "api.routes_simulation.METAL_SOLVER_READY", True
+            "api.routes_simulation.is_metal_fast_solve_ready", return_value=True
         ), patch(
             "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
         ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(

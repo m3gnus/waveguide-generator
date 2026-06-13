@@ -430,6 +430,88 @@ class StepExportAdapterTest(unittest.TestCase):
 
 
 class ViewportGeometryAdapterTest(unittest.TestCase):
+    def test_payload_sim_type_one_selects_infinite_baffle_and_preserves_sampling(self):
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "L": "150",
+                "a": "62",
+                "a0": 0,
+                "r0": 18,
+                "n_angular": 100,
+                "n_length": 32,
+                "sampling_mode": "ath-default-zmap",
+                "sim_type": 1,
+                "enc_depth": 0,
+                "wall_thickness": 0,
+            }
+        )
+
+        self.assertEqual(config["mode"], "infinite-baffle")
+        self.assertEqual(config["mesh"]["samplingMode"], "ath-default-zmap")
+        self.assertEqual(config["mesh"]["wallThickness"], 0)
+
+    def test_payload_preserves_angular_slot_length_expression(self):
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "slot_length": "45 - 42*sin(2*p)^4",
+                "length_mode": "total",
+            }
+        )
+
+        self.assertEqual(
+            config["profile"]["slotLength"],
+            "45 - 42*sin(2*p)^4",
+        )
+        self.assertEqual(config["profile"]["_athLengthMode"], "total")
+
+    def test_m2_payload_total_length_mode_keeps_mouth_at_ath_size(self):
+        from hornlab_mesher.config_builder import build_geometry_params
+        from hornlab_mesher.profiles import build_point_grid
+
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "length_mode": "total",
+                "L": "150",
+                "a": "62 - 10*sin(p)^2 - 10*sin(2*(p+pi/4))^4",
+                "a0": 0,
+                "r0": 18,
+                "k": 0.9,
+                "s": 0.9,
+                "n": "3 + 5*sin(2*p)^2",
+                "q": 0.996,
+                "slot_length": "45 - 42*sin(2*p)^4",
+                "morph_target": 1,
+                "morph_corner": 8,
+                "morph_rate": 3,
+                "morph_fixed": 0,
+                "morph_allow_shrinkage": 0,
+                "n_angular": 100,
+                "corner_segments": 4,
+                "n_length": 32,
+                "sampling_mode": "ath-default-zmap",
+                "quadrants": 1234,
+                "sim_type": 1,
+                "enc_depth": 0,
+                "wall_thickness": 0,
+            }
+        )
+        params, _formula, mode = build_geometry_params(config)
+        self.assertEqual(mode, "infinite-baffle")
+
+        grid = build_point_grid(params)
+        n_phi = int(grid["grid_n_phi"])
+        n_length = int(grid["grid_n_length"])
+        inner = np.asarray(grid["inner_points"], dtype=float).reshape(n_phi, n_length + 1, 3)
+        mouth = inner[:, -1, :]
+
+        self.assertEqual((n_phi, n_length), (104, 32))
+        self.assertLess(abs(float(np.max(np.abs(mouth[:, 0]))) - 229.0), 1.0e-6)
+        self.assertLess(abs(float(np.max(np.abs(mouth[:, 1]))) - 204.0), 1.0e-6)
+        self.assertLess(abs(float(np.max(mouth[:, 2])) - 150.0), 1.0e-6)
+
     def test_viewport_geometry_serves_point_grid_without_gmsh(self):
         captured_configs = []
 

@@ -118,13 +118,13 @@ Doctor report contract:
 
 The request field `solver_backend` accepts:
 
-- `auto` (resolves to `metal` when Metal BEM is ready, otherwise `bempp` when Bempp is ready)
+- `auto` (resolves to `metal` when the Metal BEM fast path is ready, otherwise `bempp` when Bempp is ready)
 - `metal`
 - `bempp`
 
 Notes:
 
-- Metal BEM requires Apple Silicon macOS.
+- Metal BEM requires Apple Silicon macOS and the Swift native release helper for `/api/solve`.
 - Bempp is cross-platform for Windows, Linux, and Intel Mac hosts. OpenCL acceleration is used when available; otherwise the numba CPU backend remains supported.
 - The solver clamps the effective observation distance so the on-axis microphone and polar map stay outside the modeled geometry, and it records the adjustment in `results.metadata.observation`.
 - Solve results also persist the effective polar-map settings in `results.metadata.directivity`, including angle range, sample count/step, enabled axes, normalized plane descriptors, normalization angle, diagonal angle, observation origin, and requested/effective observation distance.
@@ -243,7 +243,7 @@ Optional:
   - solve results package directivity per requested plane only; use `results.metadata.directivity.enabled_axes` or `results.metadata.directivity.planes` to inspect which cuts were computed
 - `verbose`
 - `mesh_validation_mode` (`strict` | `warn` | `off`, default `warn`)
-- `solver_backend` (`auto` | `metal` | `bempp`, default `auto`; Auto prefers Metal BEM and falls back to Bempp)
+- `solver_backend` (`auto` | `metal` | `bempp`, default `auto`; Auto uses the Metal BEM release-helper fast path when ready and falls back to Bempp)
 - Compatibility-only legacy fields still accepted by backend runtime (not exposed by the active frontend contract): `device_mode`, `use_optimized`, and `advanced_settings`. They are validated for shape; active frontend controls expose only the solver backend selector.
 
 Validation behavior:
@@ -251,7 +251,7 @@ Validation behavior:
 - `vertices.length` must be divisible by 3
 - `indices.length` must be divisible by 3
 - `surfaceTags.length` must equal triangle count (`indices.length / 3`)
-- `sim_type` currently must be `"2"` (free-standing); `"1"` is deferred in hardened runtime
+- `sim_type` must be `"1"` (infinite-baffle) or `"2"` (free-standing)
 - malformed payloads return `422`
 - compatibility-only `advanced_settings.bem_precision` must still be `single` or `double` when provided, even though the active `/api/solve` runtime ignores it
 

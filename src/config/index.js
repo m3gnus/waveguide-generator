@@ -186,6 +186,15 @@ export class MWGConfigParser {
       if (p['Mesh.MouthResolution']) {
         p.mouthResolution = p['Mesh.MouthResolution'];
       }
+      if (p['Mesh.SamplingMode']) {
+        p.samplingMode = p['Mesh.SamplingMode'];
+      }
+      if (p['Mesh.ZMapPoints']) {
+        p.zMapPoints = p['Mesh.ZMapPoints'];
+      }
+      if (p['Mesh.ZMap']) {
+        p.zMapPoints = p['Mesh.ZMap'];
+      }
       if (p['Mesh.VerticalOffset']) {
         p.verticalOffset = p['Mesh.VerticalOffset'];
       }
@@ -228,6 +237,9 @@ export class MWGConfigParser {
       }
       if (p['ABEC.NumFrequencies']) {
         p.numFreqs = p['ABEC.NumFrequencies'];
+      }
+      if (p['ABEC.SimType']) {
+        p.simType = p['ABEC.SimType'];
       }
       if (p['Simulation.F1']) {
         p.freqStart = p['Simulation.F1'];
@@ -290,6 +302,15 @@ export class MWGConfigParser {
       if (p['Mesh.MouthResolution']) {
         p.mouthResolution = p['Mesh.MouthResolution'];
       }
+      if (p['Mesh.SamplingMode']) {
+        p.samplingMode = p['Mesh.SamplingMode'];
+      }
+      if (p['Mesh.ZMapPoints']) {
+        p.zMapPoints = p['Mesh.ZMapPoints'];
+      }
+      if (p['Mesh.ZMap']) {
+        p.zMapPoints = p['Mesh.ZMap'];
+      }
       if (p['Mesh.VerticalOffset']) {
         p.verticalOffset = p['Mesh.VerticalOffset'];
       }
@@ -331,6 +352,9 @@ export class MWGConfigParser {
       }
       if (p['ABEC.NumFrequencies']) {
         p.numFreqs = p['ABEC.NumFrequencies'];
+      }
+      if (p['ABEC.SimType']) {
+        p.simType = p['ABEC.SimType'];
       }
       if (p['Simulation.F1']) {
         p.freqStart = p['Simulation.F1'];

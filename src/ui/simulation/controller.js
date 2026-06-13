@@ -367,10 +367,13 @@ export async function recordSimulationControllerRating(controller, jobId, rating
 }
 
 export function prepareSimulationControllerSubmission(options = {}) {
-  return prepareHornlabMesherSolveRequest(readSimulationState(), {
+  const requestOptions = {
     mshVersion: options.mshVersion || '2.2',
-    simType: options.simType ?? 2,
-  });
+  };
+  if (Object.prototype.hasOwnProperty.call(options, 'simType')) {
+    requestOptions.simType = options.simType;
+  }
+  return prepareHornlabMesherSolveRequest(readSimulationState(), requestOptions);
 }
 
 export async function submitSimulationControllerJob(
@@ -400,6 +403,16 @@ export async function submitSimulationControllerJob(
   }
 
   const waveguidePayload = { ...submission.waveguidePayload };
+
+  // Bempp cannot model an infinite baffle, so force a free-standing solve on
+  // that backend. The server's normalize_waveguide_params_for_solver_backend is
+  // the authoritative guard (it coerces sim_type=1 -> 2 for every backend); this
+  // keeps the submitted payload and the job record honest for the Bempp path.
+  const isBemppBackend = String(config?.solverBackend || '').trim().toLowerCase() === 'bempp';
+  if (isBemppBackend) {
+    waveguidePayload.sim_type = 2;
+  }
+
   const submitOptions = {
     ...submission.submitOptions,
     mesh: {
@@ -407,15 +420,21 @@ export async function submitSimulationControllerJob(
       waveguide_params: waveguidePayload,
     },
   };
+  const submitConfig = {
+    ...config,
+    simulationType: isBemppBackend
+      ? '2'
+      : config?.simulationType ?? waveguidePayload.sim_type ?? '2',
+  };
   const { preparedParams, stateSnapshot } = submission;
   const startedIso = new Date().toISOString();
-  const jobId = await controller.solver.submitSimulation(config, meshData, submitOptions);
+  const jobId = await controller.solver.submitSimulation(submitConfig, meshData, submitOptions);
   const createdJob = await queueSimulationControllerJob(controller, {
     jobId,
     startedIso,
     outputName,
     counter,
-    config,
+    config: submitConfig,
     waveguidePayload,
     preparedParams,
     stateSnapshot,

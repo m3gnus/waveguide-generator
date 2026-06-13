@@ -23,13 +23,14 @@ from services.simulation_validation import (
 )
 from services.solver_runtime import (
     BEMPP_SOLVER_READY,
-    METAL_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     bempp_backend_status,
     build_waveguide_mesh,
     get_dependency_status,
+    is_metal_fast_solve_ready,
     metal_backend_status,
+    metal_fast_solve_unavailable_reason,
     resolve_solver_backend,
 )
 from services.job_runtime import (
@@ -101,28 +102,29 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
                 ),
             )
 
-    if solver_backend == "metal" and not METAL_SOLVER_READY:
+    if solver_backend == "metal":
         status = metal_backend_status()
-        if requested_solver_backend == "auto" and not BEMPP_SOLVER_READY:
-            bempp_status = bempp_backend_status()
+        if not is_metal_fast_solve_ready(status):
+            if requested_solver_backend == "auto" and not BEMPP_SOLVER_READY:
+                bempp_status = bempp_backend_status()
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "No BEM solver backend is available. "
+                        f"Metal: {metal_fast_solve_unavailable_reason(status) or 'unavailable'}; "
+                        f"BEMPP: {bempp_status.get('reason') or 'unavailable'}. "
+                        "Install the BEMPP fallback with: pip install -r server/requirements-bempp.txt"
+                    ),
+                )
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "No BEM solver backend is available. "
-                    f"Metal: {status.get('reason') or 'unavailable'}; "
-                    f"BEMPP: {bempp_status.get('reason') or 'unavailable'}. "
-                    "Install the BEMPP fallback with: pip install -r server/requirements-bempp.txt"
+                    "Metal BEM solver not available. "
+                    f"reason={metal_fast_solve_unavailable_reason(status)}; "
+                    f"supported_platform={status.get('supportedPlatform')} "
+                    f"native_helper_available={status.get('nativeHelperAvailable')}."
                 ),
             )
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Metal BEM solver not available. "
-                f"reason={status.get('reason') or 'unavailable'}; "
-                f"supported_platform={status.get('supportedPlatform')} "
-                f"native_helper_available={status.get('nativeHelperAvailable')}."
-            ),
-        )
     if solver_backend == "bempp" and not BEMPP_SOLVER_READY:
         status = bempp_backend_status()
         raise HTTPException(

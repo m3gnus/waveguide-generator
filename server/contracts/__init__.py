@@ -253,6 +253,7 @@ class WaveguideParamsRequest(BaseModel):
     """
 
     formula_type: str = "R-OSSE"
+    length_mode: Optional[str] = None
 
     R: Optional[str] = None
     r: Union[float, str] = 0.4
@@ -272,10 +273,10 @@ class WaveguideParamsRequest(BaseModel):
     q: Union[float, str] = 3.4
 
     throat_profile: int = 1
-    throat_ext_angle: float = 0.0
-    throat_ext_length: float = 0.0
-    slot_length: float = 0.0
-    rot: float = 0.0
+    throat_ext_angle: Union[float, str] = 0.0
+    throat_ext_length: Union[float, str] = 0.0
+    slot_length: Union[float, str] = 0.0
+    rot: Union[float, str] = 0.0
 
     circ_arc_term_angle: float = 1.0
     circ_arc_radius: float = 0.0
@@ -305,6 +306,8 @@ class WaveguideParamsRequest(BaseModel):
 
     n_angular: int = 100
     n_length: int = 20
+    sampling_mode: Optional[str] = None
+    z_map_points: Optional[Any] = None
     # quadrants: active solve (/api/solve) and mesh export (/api/mesh/build)
     # support validated symmetry-reduced domains. STEP and viewport preview
     # routes may still force full-domain where their output contracts require it.

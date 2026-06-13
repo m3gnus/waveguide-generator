@@ -391,6 +391,35 @@ test('legacy dependency summary blocks mesh builds when HornLab mesher package i
   assert.match(reason, /Install backend requirements/);
 });
 
+test('dependency summary reports installed Metal debug helper as not ready', () => {
+  const summary = getDependencyStatusSummary({
+    solverBackends: {
+      metal: {
+        ready: false,
+        status: {
+          available: true,
+          supportedPlatform: true,
+          nativeHelperBuild: 'debug',
+        },
+      },
+      bempp: {
+        ready: false,
+        status: { available: false },
+      },
+    },
+    dependencies: {
+      runtime: {
+        python: { version: '3.13.1', supported: true },
+        hornlab_metal_bem: { version: '0.2.0', supported: true, ready: true },
+      },
+    },
+  });
+
+  assert.equal(summary.metal.available, true);
+  assert.equal(summary.metal.ready, false);
+  assert.match(summary.metal.guidance, /build:metal-helper/);
+});
+
 test('describeSelectedDevice labels the Metal BEM solver and stays quiet otherwise', () => {
   assert.equal(
     describeSelectedDevice({

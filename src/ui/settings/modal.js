@@ -89,7 +89,7 @@ const SIMULATION_BASIC_HELP = Object.freeze({
 });
 const SIMULATION_ADVANCED_HELP = Object.freeze({
   solverBackend:
-    'Chooses the solver for new jobs. Auto prefers Metal BEM on Apple Silicon and falls back to Bempp on other hosts.',
+    'Chooses the solver for new jobs. Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on other hosts.',
 });
 const ADVANCED_CONTROL_COPY = Object.freeze({
   solver_backend: { label: 'Solver Backend' },
@@ -791,7 +791,7 @@ function _buildSimulationSection() {
   const advancedIntro = document.createElement('div');
   advancedIntro.className = 'settings-section-help';
   advancedIntro.innerHTML =
-    'Auto uses Metal BEM on Apple Silicon and Bempp on other hosts. ' +
+    'Auto uses the Metal BEM release-helper path on Apple Silicon and Bempp on other hosts. ' +
     'Bempp is cross-platform and uses OpenCL acceleration when available, with a numba CPU fallback.';
   sec.appendChild(advancedIntro);
 

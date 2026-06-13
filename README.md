@@ -64,7 +64,7 @@ The app opens in your browser at `http://localhost:3000`. Close the terminal to 
 
 ## Solver Dependencies
 
-Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto prefers Metal BEM on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
+Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
 
 - Python: `>=3.10,<3.15`
 - hornlab-waveguide-mesher: pinned git commit `340214e1c85f51853cf3920f78047b34281cb8c3` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
@@ -74,7 +74,7 @@ Waveguide Generator supports two solve backends. The Settings solver dropdown of
 
 OpenCL is a Bempp speed-up, not a hard requirement. Without OpenCL, Bempp runs through its numba CPU backend. On Linux, install `pocl` from your package manager for an OpenCL CPU runtime; on Windows, use up-to-date GPU drivers or install Intel's OpenCL runtime; on macOS x86_64, numba is fine.
 
-On Apple Silicon, `npm run build:metal-helper` builds/verifies the required release native helper.
+On Apple Silicon, `/api/solve` requires the release native helper so Metal jobs use the fastest validated solver path. `npm run build:metal-helper` builds/verifies that helper.
 
 ## Mesh Control Guide
 

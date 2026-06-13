@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { handleFileUpload } from '../src/app/configImport.js';
 import { importMWGConfig } from '../src/modules/design/useCases.js';
+import { DesignModule } from '../src/modules/design/index.js';
+import { buildWaveguidePayload } from '../src/solver/waveguidePayload.js';
 import {
   deriveExportFieldsFromFileName,
   resetParameterChangeTracking,
@@ -156,4 +158,57 @@ Term.s = 0.9
   assert.equal(result.params.L, 150);
   assert.equal(result.params.slotLength, '45 - 0*sin(p)');
   assert.equal(result.params._athLengthMode, 'total');
+});
+
+test('ATH m2-style flat config preserves importer topology and defaults through backend payload', () => {
+  const result = importMWGConfig(
+    `
+ABEC.SimType = 1
+ABEC.f1 = 500
+ABEC.f2 = 10000
+ABEC.NumFrequencies = 20
+Coverage.Angle = 62 - 10*sin(p)^2 - 10*sin(2*(p+pi/4))^4
+Length = 150
+Mesh.AngularSegments = 100
+Mesh.CornerSegments = 4
+Mesh.LengthSegments = 32
+Mesh.MouthResolution = 10
+Mesh.ThroatResolution = 3
+Morph.CornerRadius = 8
+Morph.TargetShape = 1
+OS.k = 0.9
+Slot.Length = 45 - 42*sin(2*p)^4
+Term.n = 3 + 5*sin(2*p)^2
+Term.q = 0.996
+Term.s = 0.9
+Throat.Diameter = 36
+Throat.Profile = 1
+`,
+    'm2-clone.cfg'
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.params.a0, 0);
+  assert.equal(result.params.simType, 1);
+  assert.equal(result.params._athLengthMode, 'total');
+  assert.equal(result.params.slotLength, '45 - 42*sin(2*p)^4');
+  assert.equal(result.params.samplingMode, 'ath-default-zmap');
+  assert.equal(result.params.wallThickness, 0);
+  assert.equal(result.params.rearResolution, 10);
+  assert.equal(result.params.sourceShape, 1);
+
+  const designTask = DesignModule.task(
+    DesignModule.importState({ type: result.type, params: result.params }, { applyVerticalOffset: true })
+  );
+  const meshParams = DesignModule.output.backendMeshSimulationParams(designTask);
+  const payload = buildWaveguidePayload(meshParams, '2.2');
+
+  assert.equal(payload.a0, 0);
+  assert.equal(payload.length_mode, 'total');
+  assert.equal(payload.sim_type, 1);
+  assert.equal(payload.slot_length, '45 - 42*sin(2*p)^4');
+  assert.equal(payload.sampling_mode, 'ath-default-zmap');
+  assert.equal(payload.wall_thickness, 0);
+  assert.equal(payload.rear_res, 10);
+  assert.equal(payload.source_shape, 1);
 });

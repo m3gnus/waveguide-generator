@@ -75,8 +75,23 @@ export function applyAthImportDefaults(parsed, typedParams) {
   if (!parsed || !parsed.type || !typedParams || typeof typedParams !== 'object') return;
 
   const isOSSE = parsed.type === 'OSSE';
+  const hasOwnParam = (key) => Object.prototype.hasOwnProperty.call(typedParams, key);
+  const parseAthBool = (value) => {
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (typeof value === 'number') return value !== 0 ? 1 : 0;
+    const raw = String(value ?? '').trim().toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(raw) ? 1 : 0;
+  };
+  const importedMorphTarget = typedParams.morphTarget !== undefined;
+
   if (typedParams.morphTarget === undefined) {
     typedParams.morphTarget = 0;
+  }
+  if (importedMorphTarget && typedParams.morphCorner === undefined) {
+    typedParams.morphCorner = 35;
+  }
+  if (typedParams.morphAllowShrinkage !== undefined) {
+    typedParams.morphAllowShrinkage = parseAthBool(typedParams.morphAllowShrinkage);
   }
 
   const hasMeshEnclosure = parsed.blocks && parsed.blocks['Mesh.Enclosure'];
@@ -84,7 +99,45 @@ export function applyAthImportDefaults(parsed, typedParams) {
     typedParams.encDepth = 0;
   }
 
+  if (typedParams.simType === undefined) {
+    typedParams.simType = hasMeshEnclosure ? 2 : 1;
+  }
+
+  if (typedParams.samplingMode === undefined) {
+    typedParams.samplingMode = typedParams.zMapPoints !== undefined ? 'zmap' : 'ath-default-zmap';
+  }
+  if (typedParams.throatResolution === undefined) {
+    typedParams.throatResolution = 5;
+  }
+  if (typedParams.mouthResolution === undefined) {
+    typedParams.mouthResolution = 8;
+  }
+  if (typedParams.rearResolution === undefined) {
+    typedParams.rearResolution = 10;
+  }
+  if (typedParams.wallThickness === undefined) {
+    typedParams.wallThickness = String(typedParams.simType).trim() === '1' ? 0 : 5;
+  }
+  if (typedParams.sourceShape === undefined) {
+    typedParams.sourceShape = 1;
+  }
+  if (typedParams.sourceRadius === undefined) {
+    typedParams.sourceRadius = -1;
+  }
+  if (typedParams.sourceCurv === undefined) {
+    typedParams.sourceCurv = 0;
+  }
+  if (typedParams.sourceVelocity === undefined) {
+    typedParams.sourceVelocity = 1;
+  }
+
   if (isOSSE) {
+    if (!hasOwnParam('a0')) {
+      typedParams.a0 = 0;
+    }
+    if (!hasOwnParam('s')) {
+      typedParams.s = 0.7;
+    }
     if (typedParams.k === undefined) {
       typedParams.k = 1;
     }

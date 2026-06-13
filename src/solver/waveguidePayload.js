@@ -52,8 +52,12 @@ function requireStringValue(name, value) {
 
 export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
   const type = preparedParams.type || 'R-OSSE';
+  const lengthMode =
+    preparedParams._athLengthMode ?? preparedParams.athLengthMode ?? preparedParams.lengthMode;
   return {
     formula_type: type,
+    length_mode:
+      lengthMode != null && String(lengthMode).trim() ? String(lengthMode).trim() : undefined,
 
     // R-OSSE formula
     R: toExprString(preparedParams.R),
@@ -77,10 +81,10 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
 
     // Throat geometry
     throat_profile: toFiniteNumber(preparedParams.throatProfile, 1),
-    throat_ext_angle: toFiniteNumber(preparedParams.throatExtAngle, 0),
-    throat_ext_length: toFiniteNumber(preparedParams.throatExtLength, 0),
-    slot_length: toFiniteNumber(preparedParams.slotLength, 0),
-    rot: toFiniteNumber(preparedParams.rot, 0),
+    throat_ext_angle: toNumberOrExpr(preparedParams.throatExtAngle, 0),
+    throat_ext_length: toNumberOrExpr(preparedParams.throatExtLength, 0),
+    slot_length: toNumberOrExpr(preparedParams.slotLength, 0),
+    rot: toNumberOrExpr(preparedParams.rot, 0),
 
     // Circular arc
     circ_arc_term_angle: toFiniteNumber(preparedParams.circArcTermAngle, 1),
@@ -115,6 +119,14 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     n_angular: requireIntegerNumber('angularSegments', preparedParams.angularSegments),
     n_length: requireIntegerNumber('lengthSegments', preparedParams.lengthSegments),
     quadrants: requireIntegerNumber('quadrants', preparedParams.quadrants),
+    sampling_mode:
+      preparedParams.samplingMode != null && String(preparedParams.samplingMode).trim()
+        ? String(preparedParams.samplingMode)
+        : undefined,
+    z_map_points:
+      preparedParams.zMapPoints != null && String(preparedParams.zMapPoints).trim()
+        ? String(preparedParams.zMapPoints)
+        : undefined,
 
     // BEM mesh element sizes
     throat_res: requireFiniteNumber('throatResolution', preparedParams.throatResolution),
@@ -151,7 +163,7 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     vertical_offset: toFiniteNumber(preparedParams.verticalOffset, 0),
 
     // Simulation / output
-    sim_type: 2,
+    sim_type: toFiniteNumber(preparedParams.simType, 2),
     msh_version: mshVersion,
   };
 }

@@ -53,8 +53,10 @@ export function buildHornlabMesherSimulationOutput(input, options = {}) {
   assertSimulationImportEnvelope(input);
 
   const mshVersion = options.mshVersion || '2.2';
-  const simType = options.simType ?? 2;
   const meshParams = prepareBackendMeshSimulationParams(input.params);
+  const simType = Object.prototype.hasOwnProperty.call(options, 'simType')
+    ? options.simType
+    : meshParams.simType ?? input.params.simType ?? 2;
   const waveguidePayload = buildWaveguidePayload(meshParams, mshVersion);
   waveguidePayload.sim_type = simType;
 
