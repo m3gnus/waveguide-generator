@@ -36,11 +36,11 @@ def _dependency_status(
                 "required_for": "/api/mesh/build",
             },
             "hornlab_metal_bem": {
-                "range": "pinned git commit 59528f5",
+                "range": "pinned git commit a97dc67",
                 "required_for": "/api/solve backend",
             },
             "hornlab_bempp_bem": {
-                "range": "pinned git commit a8f9bfa",
+                "range": "pinned git commit 96d6da9",
                 "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
             },
             "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
@@ -154,8 +154,8 @@ class DependencyRuntimeTest(unittest.TestCase):
             },
         )
         self.assertIn("2eb7b85", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
-        self.assertIn("59528f5", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
-        self.assertIn("a8f9bfa", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
+        self.assertIn("a97dc67", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
+        self.assertIn("96d6da9", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
         self.assertEqual(
             SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["required_for"],
             "/api/solve fallback backend (non-Apple-Silicon)",
