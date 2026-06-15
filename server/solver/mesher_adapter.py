@@ -52,8 +52,10 @@ def _normalize_formula(value: Any) -> str:
     raw = str(value or "R-OSSE").strip().upper().replace("_", "-")
     if raw == "ROSSE":
         return "R-OSSE"
-    if raw not in {"OSSE", "R-OSSE"}:
-        raise ValueError(f"formula_type '{value}' is not supported. Supported types: 'R-OSSE', 'OSSE'.")
+    if raw not in {"OSSE", "R-OSSE", "ICW"}:
+        raise ValueError(
+            f"formula_type '{value}' is not supported. Supported types: 'R-OSSE', 'OSSE', 'ICW'."
+        )
     return raw
 
 
@@ -107,6 +109,26 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                     "throatProfile": payload.get("throat_profile"),
                     "circArcRadius": payload.get("circ_arc_radius"),
                     "circArcTermAngle": payload.get("circ_arc_term_angle"),
+                }
+            )
+        )
+    elif formula == "ICW":
+        # ICW is solved by the mesher's intrinsic-curvature kernel. Emit only its
+        # own size targets and shape inputs; OSSE/R-OSSE shape keys (n, s, rot, m,
+        # r, b, tmax) are REJECTED by the mesher's config_builder under ICW, so
+        # they must never be forwarded here. r0/a0/k/q from the shared block above
+        # are accepted by the ICW validator.
+        profile.update(
+            _clean_dict(
+                {
+                    "L": payload.get("L"),
+                    "R": payload.get("R"),
+                    "termination": payload.get("termination"),
+                    "n_coeff": payload.get("n_coeff"),
+                    "theta1_deg": payload.get("theta1_deg"),
+                    # Rollback axial target; the mesher's ICW kernel requires one
+                    # of depth / x_aperture / x_setback. Ignored for flat_baffle.
+                    "depth": payload.get("depth"),
                 }
             )
         )

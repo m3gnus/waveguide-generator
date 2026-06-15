@@ -23,6 +23,21 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
           whenTypes: Object.freeze(['OSSE']),
           keys: Object.freeze(['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h']),
         }),
+        Object.freeze({
+          group: 'ICW',
+          whenTypes: Object.freeze(['ICW']),
+          keys: Object.freeze([
+            'scale',
+            'r0',
+            'a0',
+            'L',
+            'R',
+            'n_coeff',
+            'termination',
+            'theta1_deg',
+            'depth',
+          ]),
+        }),
       ]),
     }),
     Object.freeze({

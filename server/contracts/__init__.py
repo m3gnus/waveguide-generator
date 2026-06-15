@@ -266,6 +266,14 @@ class WaveguideParamsRequest(BaseModel):
     n: Union[float, str] = 4.158
     h: Union[float, str] = 0.0
 
+    # ICW (intrinsic-curvature waveguide) — solved server-side by the mesher.
+    # r0/a0/L/R are shared with the other families above; these are ICW-only.
+    termination: Optional[str] = None
+    n_coeff: Optional[int] = None
+    theta1_deg: Optional[float] = None
+    # Rollback axial-depth target (mm). Distinct from the enclosure `enc_depth`.
+    depth: Optional[float] = None
+
     a: Optional[str] = None
     r0: Union[float, str] = 12.7
     a0: Union[float, str] = 15.5

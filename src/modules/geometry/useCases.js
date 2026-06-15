@@ -15,6 +15,16 @@ function requireViewportState(state) {
   return state;
 }
 
+// Formula families whose profile math only exists in the Python mesher (not in
+// the local JS engine). The JS engine's evaluateInnerProfileAt only knows
+// OSSE/R-OSSE, so running it for these would silently emit a wrong (OSSE-shaped)
+// profile. They render exclusively via the backend viewport route.
+const SERVER_ONLY_FORMULAS = new Set(['ICW']);
+
+export function isServerOnlyViewportFormula(state = {}) {
+  return SERVER_ONLY_FORMULAS.has(state?.type);
+}
+
 function assertViewportGeometryResponse(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Backend viewport geometry response must be an object.');
@@ -34,6 +44,23 @@ function assertViewportGeometryResponse(payload) {
 export function prepareViewportMesh(state, { variant = 'grid' } = {}) {
   const perf = createPerfTimer(`prepareViewportMesh:${variant}`);
   const viewportState = requireViewportState(state);
+  if (isServerOnlyViewportFormula(viewportState)) {
+    // The local JS engine cannot evaluate this formula; it only renders via the
+    // backend mesher. Return an empty mesh so callers leave the prior frame on
+    // screen (or show nothing) instead of rendering an incorrect OSSE profile.
+    perf.end({ serverOnly: true, vertexCount: 0, triangleCount: 0 });
+    return {
+      vertices: [],
+      indices: [],
+      groups: [],
+      normals: [],
+      preparedParams: DesignModule.output.preparedParams(
+        DesignModule.task(DesignModule.importState(viewportState, { applyVerticalOffset: true }))
+      ),
+      variant,
+      serverOnly: true,
+    };
+  }
   const designTask = DesignModule.task(
     DesignModule.importState(viewportState, {
       applyVerticalOffset: true,
@@ -136,7 +163,19 @@ export async function prepareBackendViewportMesh(
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Backend viewport geometry failed (${response.status}): ${text}`);
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.detail != null) {
+        detail = typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail);
+      }
+    } catch {
+      // Non-JSON error body; fall back to the raw text.
+    }
+    const error = new Error(`Backend viewport geometry failed (${response.status}): ${detail}`);
+    error.status = response.status;
+    error.backendDetail = detail;
+    throw error;
   }
   const payload = await response.json();
   perf.mark('fetch');

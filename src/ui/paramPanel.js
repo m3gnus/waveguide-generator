@@ -209,6 +209,16 @@ export class ParamPanel {
   }
 
   shouldRenderControl(key, params = {}) {
+    // ICW: the rollback axial-target inputs only apply when Termination =
+    // Rollback. Horn Length (L) is the flat-baffle axial target and is ignored
+    // by the rollback solver, so hide it there rather than imply it has effect.
+    if (key === 'depth' || key === 'theta1_deg') {
+      return params.termination === 'rollback';
+    }
+    if (key === 'L' && params.termination === 'rollback') {
+      return false;
+    }
+
     if (key !== 'slotLength') return true;
 
     const angle = Number(params.throatExtAngle ?? 0);
@@ -226,7 +236,7 @@ export class ParamPanel {
     typeSelect.id = 'model-type';
 
     const currentType = GlobalState.get().type;
-    ['R-OSSE', 'OSSE'].forEach((type) => {
+    ['R-OSSE', 'OSSE', 'ICW'].forEach((type) => {
       const option = document.createElement('option');
       option.value = type;
       option.textContent = type;

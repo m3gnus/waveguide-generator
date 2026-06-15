@@ -12,6 +12,7 @@ import {
   prepareBackendViewportMesh,
   prepareViewportMesh,
   validateViewportMesh,
+  isServerOnlyViewportFormula,
 } from '../modules/geometry/useCases.js';
 import { detachCreaseVertices } from './viewportMesh.js';
 import { ImportedMeshState } from '../state.js';
@@ -167,13 +168,28 @@ function startBackendViewportBuild(app, variant) {
     })
     .catch((error) => {
       if (fetchRecord.superseded) return;
-      app._viewportBackendDownAt = Date.now();
-      console.warn(
-        '[Viewport] Backend viewport geometry unavailable; using local JS engine:',
-        error?.message || error
-      );
+      const status = typeof error?.status === 'number' ? error.status : null;
+      // A 4xx means the backend is up but rejected these params (e.g. an
+      // infeasible ICW rollback). Do NOT enter the backend-down cooldown — that
+      // would block the rebuild once the user corrects the offending input.
+      const isValidationError = status !== null && status >= 400 && status < 500;
+      const isAbort = error?.name === 'AbortError';
+      if (!isValidationError) {
+        app._viewportBackendDownAt = Date.now();
+      }
+      console.warn('[Viewport] Backend viewport geometry unavailable:', error?.message || error);
       invalidateMeshCacheIfStale(app);
       if (app._meshCache.stateKey !== stateKey) return;
+      // Server-only formulas have no JS engine fallback. Surface the failure
+      // instead of silently leaving the prior frame on screen, so an infeasible
+      // or invalid solve reads as an error rather than a frozen viewport.
+      if (isServerOnlyViewportFormula(app.currentState)) {
+        reportMeshBuildFailure(
+          app,
+          isAbort ? new Error('Backend geometry request timed out.') : error
+        );
+        return;
+      }
       try {
         const mesh = getOrBuildVariant(app, variant);
         applyVariantIfCurrent(app, stateKey, variant, mesh);
@@ -190,10 +206,13 @@ function startBackendViewportBuild(app, variant) {
 }
 
 function reportMeshBuildFailure(app, error) {
-  console.error('[Viewport] Mesh build failed:', error?.message || error);
+  // Backend errors carry the mesher's own reason on `backendDetail` (e.g. an
+  // ICW infeasibility hint); prefer it over the wrapped HTTP message.
+  const detail = error?.backendDetail || error?.message || error;
+  console.error('[Viewport] Mesh build failed:', detail);
   if (typeof app.uiCoordinator?.showError === 'function') {
     try {
-      app.uiCoordinator.showError(`Mesh build failed: ${error?.message || error}`);
+      app.uiCoordinator.showError(`Mesh build failed: ${detail}`);
     } catch {
       // Optional toast surface.
     }
@@ -209,6 +228,11 @@ function reportMeshBuildFailure(app, error) {
  */
 function resolveVariantMesh(app, variant) {
   invalidateMeshCacheIfStale(app);
+  // Server-only formulas (e.g. ICW) have no local JS engine implementation, so
+  // they must never fall back to getOrBuildVariant — that would render an
+  // incorrect OSSE-shaped profile. They render exclusively via the backend; a
+  // null return keeps the prior frame on screen until the backend mesh lands.
+  const serverOnly = isServerOnlyViewportFormula(app.currentState);
   const cached = app._meshCache[variant];
   if (cached) {
     // A locally-built mesh can be upgraded to backend geometry once the
@@ -217,6 +241,12 @@ function resolveVariantMesh(app, variant) {
       startBackendViewportBuild(app, variant);
     }
     return cached;
+  }
+  if (serverOnly) {
+    if (!isBackendViewportInCooldown(app)) {
+      startBackendViewportBuild(app, variant);
+    }
+    return null;
   }
   if (isBackendViewportInCooldown(app)) {
     return getOrBuildVariant(app, variant);

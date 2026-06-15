@@ -1,6 +1,7 @@
 export const FORMULA_FIELD_ALLOWLIST = Object.freeze({
   'R-OSSE': ['R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
+  ICW: ['r0', 'a0', 'L', 'R'],
   MORPH: ['morphWidth', 'morphHeight', 'morphCorner', 'morphRate', 'morphFixed'],
   GEOMETRY: [
     'throatExtAngle',
@@ -198,6 +199,89 @@ export const PARAM_SCHEMA = {
       step: 0.1,
       default: 0.0,
       tooltip: 'Adds extra profile shaping when nonzero.',
+    },
+  },
+  ICW: {
+    scale: {
+      type: 'range',
+      label: 'Scale',
+      min: 0.1,
+      max: 2,
+      step: 0.001,
+      default: 1.0,
+      tooltip:
+        'Scaling factor for waveguide geometry only. Values < 1 shrink the waveguide, > 1 enlarge it. Does not affect enclosure dimensions.',
+    },
+    r0: {
+      type: 'expression',
+      label: 'Throat Radius (r0)',
+      unit: 'mm',
+      default: 12.7,
+      tooltip: 'Initial throat radius. Can be constant or an expression such as "12.7 + sin(p)".',
+    },
+    a0: {
+      type: 'expression',
+      label: 'Throat Half-Angle (a0)',
+      unit: 'deg',
+      default: 15.0,
+      tooltip:
+        "Throat half-angle in degrees (the curve's initial wall angle). Can be constant or an expression.",
+    },
+    L: {
+      type: 'expression',
+      label: 'Horn Length (L)',
+      unit: 'mm',
+      default: 120,
+      tooltip: 'Target axial horn length. The intrinsic-curvature solver sizes the curve to it.',
+    },
+    R: {
+      type: 'expression',
+      label: 'Mouth Radius (R)',
+      unit: 'mm',
+      default: 150,
+      tooltip: 'Target mouth radius. The intrinsic-curvature solver sizes the curve to it.',
+    },
+    n_coeff: {
+      type: 'number',
+      label: 'Curvature Coefficients (n_coeff)',
+      min: 2,
+      max: 24,
+      step: 1,
+      default: 6,
+      tooltip:
+        'Number of curvature-spline control coefficients the solver uses. More coefficients allow finer wall shaping.',
+    },
+    termination: {
+      type: 'select',
+      label: 'Termination',
+      options: [
+        { value: 'flat_baffle', label: 'Flat Baffle' },
+        { value: 'rollback', label: 'Rollback' },
+      ],
+      default: 'flat_baffle',
+      tooltip:
+        'Mouth termination. Flat baffle ends tangent to the baffle (theta1 = 90 deg, curvature continuous); rollback curls the lip past 90 deg.',
+    },
+    theta1_deg: {
+      type: 'number',
+      label: 'Rollback Curl Angle',
+      unit: 'deg',
+      min: 91,
+      max: 179,
+      step: 1,
+      default: 160,
+      tooltip:
+        'Rollback only: terminal wall angle past 90 deg — how far the mouth lip curls back. Must exceed 90. Ignored for Flat Baffle.',
+    },
+    depth: {
+      type: 'number',
+      label: 'Rollback Depth',
+      unit: 'mm',
+      min: 1,
+      step: 1,
+      default: 100,
+      tooltip:
+        'Rollback only: target total axial depth of the curled mouth. A rollback solve REQUIRES this (Mouth Radius then sets the aperture radius). Ignored for Flat Baffle.',
     },
   },
   GEOMETRY: {
