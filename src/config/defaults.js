@@ -22,5 +22,12 @@ export function getDefaults(modelType) {
     }
   }
 
+  // ICW is phi-independent (a body of revolution), so its natural mouth is
+  // already circular. Default it to no morph rather than the shared Rectangle
+  // default, which would otherwise make a fresh ICW horn non-circular.
+  if (modelType === 'ICW') {
+    defaults.morphTarget = 0;
+  }
+
   return defaults;
 }

@@ -72,6 +72,15 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     n: toNumberOrExpr(preparedParams.n, 4.158),
     h: toNumberOrExpr(preparedParams.h, 0.0),
 
+    // ICW formula (intrinsic-curvature waveguide; solved server-side by the mesher)
+    termination:
+      preparedParams.termination != null && String(preparedParams.termination).trim()
+        ? String(preparedParams.termination).trim()
+        : undefined,
+    n_coeff: toFiniteNumber(preparedParams.n_coeff, undefined),
+    theta1_deg: toNumberOrExpr(preparedParams.theta1_deg, undefined),
+    depth: toFiniteNumber(preparedParams.depth, undefined),
+
     // Shared formula
     a: toExprString(preparedParams.a),
     r0: toNumberOrExpr(preparedParams.r0, 12.7),
