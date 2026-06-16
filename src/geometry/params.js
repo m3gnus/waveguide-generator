@@ -22,6 +22,7 @@ const SCALE_LENGTH_KEYS = [
   'L',
   'R',
   'r0',
+  'depth', // ICW rollback axial depth (mm) — scale with geometry like L/R/r0
   'throatExtLength',
   'slotLength',
   'circArcRadius',

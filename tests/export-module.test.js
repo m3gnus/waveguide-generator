@@ -196,6 +196,28 @@ test("ExportModule STL task uses smooth viewport tessellation density", () => {
   );
 });
 
+test("ExportModule rejects server-only ICW geometry for STL and profile-CSV instead of emitting OSSE-shaped output", () => {
+  // ICW has no local JS geometry; the local GeometryModule path would silently produce an
+  // OSSE-shaped mesh, so these exports must fail loudly until a backend-geometry path exists.
+  const icw = { type: "ICW", r0: 12.7, a0: 15, L: 120, R: 150, n_coeff: 6 };
+  assert.throws(
+    () => ExportModule.task(ExportModule.importStl(icw, { baseName: "icw" })),
+    /solved server-side/,
+    "ICW STL export must fail loudly (no local ICW geometry)",
+  );
+  assert.throws(
+    () => ExportModule.task(ExportModule.importProfileCsv(icw, { vertices: [] })),
+    /solved server-side/,
+    "ICW profile-CSV export must fail loudly",
+  );
+  // Config (.mwg/ATH) export has no ICW representation and would write OSSE fields as undefined.
+  assert.throws(
+    () => ExportModule.task(ExportModule.importConfig({ params: icw, baseName: "icw" })),
+    /not supported/,
+    "ICW config export must fail loudly",
+  );
+});
+
 test("ExportModule STL task exports only waveguide skin without wall or throat plate", () => {
   const prepared = makePreparedParams({
     encDepth: 180,
