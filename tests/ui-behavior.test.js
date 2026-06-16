@@ -168,6 +168,37 @@ test('formatJobSummary appends complete duration in h:mm:ss', () => {
   assert.equal(summary, 'Complete (1:04:32)');
 });
 
+test('formatJobSummary surfaces the real solver error for failed jobs', () => {
+  const summary = formatJobSummary({
+    status: 'error',
+    stage: 'error',
+    stageMessage: 'Simulation failed',
+    errorMessage: 'Metal BEM solve failed: native helper crashed (exit 139).',
+  });
+  assert.equal(summary, 'Failed: Metal BEM solve failed: native helper crashed (exit 139).');
+});
+
+test('formatJobSummary keeps a real error that contains the word "error"', () => {
+  // The previous suppression regex matched any message containing "error" and hid it.
+  const summary = formatJobSummary({
+    status: 'error',
+    errorMessage: 'RuntimeError: hornlab-waveguide-mesher did not produce .msh output.',
+  });
+  assert.equal(
+    summary,
+    'Failed: RuntimeError: hornlab-waveguide-mesher did not produce .msh output.'
+  );
+});
+
+test('formatJobSummary collapses the generic placeholder to plain Failed', () => {
+  const summary = formatJobSummary({
+    status: 'error',
+    stageMessage: 'Simulation failed',
+    errorMessage: null,
+  });
+  assert.equal(summary, 'Failed');
+});
+
 test('renderSolveStatsSummary includes persisted job completion timestamp', () => {
   const markup = renderSolveStatsSummary(
     {

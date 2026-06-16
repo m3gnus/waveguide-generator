@@ -11,6 +11,7 @@ import {
   removeJob,
   setJobsFromEntries,
   sortJobs,
+  toUiJob,
   upsertJob,
 } from '../src/ui/simulation/jobTracker.js';
 
@@ -237,4 +238,30 @@ test('upsertJob preserves existing label and script when incoming payload omits 
   const next = upsertJob(panel, { id: 'job-1', status: 'running', label: null, script: null });
   assert.equal(next.label, 'horn_design_1_91c1');
   assert.deepEqual(next.script, { outputName: 'horn_design', counter: 1 });
+});
+
+test('toUiJob reads the /api/status message field as the failure reason', () => {
+  // The status endpoint (JobStatus) carries the solver error in `message`, not
+  // `error_message`. Without this mapping the real error is dropped on live polling.
+  const job = toUiJob({
+    id: 'job-err',
+    status: 'error',
+    stage: 'error',
+    stage_message: 'Simulation failed',
+    message: 'Metal BEM solve failed: mesh has open edges off the symmetry plane.',
+  });
+  assert.equal(
+    job.errorMessage,
+    'Metal BEM solve failed: mesh has open edges off the symmetry plane.'
+  );
+});
+
+test('toUiJob prefers explicit error_message over message when both are present', () => {
+  const job = toUiJob({
+    id: 'job-err',
+    status: 'error',
+    error_message: 'canonical error',
+    message: 'status channel error',
+  });
+  assert.equal(job.errorMessage, 'canonical error');
 });
