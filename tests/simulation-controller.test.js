@@ -267,6 +267,40 @@ test('reconcileSimulationControllerRemoteJobs updates active jobs via per-job st
   assert.equal(controller.jobs.get('job-active')?.progress, 0.7);
 });
 
+test('reconcileSimulationControllerRemoteJobs surfaces the solver error from the status message field', async () => {
+  const controller = createSimulationControllerStore({
+    solver: {
+      async getJobStatus(id) {
+        return {
+          id,
+          status: 'error',
+          progress: 1,
+          stage: 'error',
+          stage_message: 'Simulation failed',
+          // JobStatus carries the failure reason here, not in error_message.
+          message: 'Metal BEM solve failed: mesh has open edges off the symmetry plane.',
+        };
+      },
+    },
+  });
+
+  controller.jobs.set('job-failing', {
+    id: 'job-failing',
+    status: 'running',
+    progress: 0.4,
+    createdAt: '2026-03-11T10:00:00.000Z',
+  });
+  controller.activeJobId = 'job-failing';
+
+  const result = await reconcileSimulationControllerRemoteJobs(controller);
+
+  assert.equal(result.activeJob?.status, 'error');
+  assert.equal(
+    controller.jobs.get('job-failing')?.errorMessage,
+    'Metal BEM solve failed: mesh has open edges off the symmetry plane.'
+  );
+});
+
 test('reconcileSimulationControllerRemoteJobs selects an active job when activeJobId is missing', async () => {
   const controller = createSimulationControllerStore({
     solver: {
