@@ -184,6 +184,9 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 self._request(quadrants=1, waveguide_params={"enc_depth": 0, "wall_thickness": 6})
             )
         )
+        # An enclosure is a sealed box (the mesher closes the baffle front), so a
+        # reduced enclosure mesh has no off-plane open edges. Keep the strict guard
+        # so a closure defect surfaces loudly instead of solving a leaking model.
         self.assertTrue(
             metal_solver._native_check_open_edges(
                 self._request(quadrants=1, waveguide_params={"enc_depth": 200, "wall_thickness": 0})

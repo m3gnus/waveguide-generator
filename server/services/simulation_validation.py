@@ -42,13 +42,11 @@ def normalize_waveguide_params_for_solver_backend(
             sim_type_int = None
         if sim_type_int == 1:
             normalized["sim_type"] = 2
-            # The free-standing builder cannot produce half-models (quadrants 12 /
-            # 14): it caps the cut cross-section in the symmetry plane, which is
-            # invalid for a half-domain solve. A single-axis-symmetric horn would
-            # otherwise fail the mesh build after coercion, so fall back to the
-            # full domain (always valid) to keep the free-standing solve working.
-            if str(normalized.get("quadrants", "")).strip() in {"12", "14"}:
-                normalized["quadrants"] = 1234
+            # Half-symmetry quadrants (12 / 14) are preserved through the
+            # coercion: the free-standing builder produces a valid half-model
+            # mesh (open on the single cut plane) and the Metal solver reflects
+            # it across that plane, so an IB-coerced half-model solves at the
+            # reduced domain instead of falling back to the full domain.
 
     if str(solver_backend or "").strip().lower() == "bempp":
         normalized["quadrants"] = 1234

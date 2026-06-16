@@ -151,8 +151,12 @@ export function formatJobSummary(job) {
     return `Running (${progress}%)`;
   }
   if (status === 'error') {
-    if (detail && !/simulation\s+failed|error/i.test(detail)) {
-      return `Failed: ${detail}`;
+    // Prefer the specific backend error over the generic "Simulation failed" stage
+    // message, and only suppress the exact generic placeholder — the previous regex
+    // also matched any real error containing the word "error" and hid it.
+    const errorDetail = String(job.errorMessage || job.stageMessage || '').trim();
+    if (errorDetail && !/^simulation failed\.?$/i.test(errorDetail)) {
+      return `Failed: ${errorDetail}`;
     }
     return 'Failed';
   }
@@ -424,6 +428,7 @@ export function renderJobList(panel) {
       const canRerun = (job.status === 'error' || job.status === 'cancelled') && job.script;
       const canStop =
         (job.status === 'queued' || job.status === 'running') && job.stage !== 'cancelling';
+      const jobSummary = formatJobSummary(job);
       return `
     <div class="simulation-job-item ${isActive ? 'is-active' : ''} ${statusClass}" data-job-id="${jobIdAttr}">
       <div class="simulation-job-header">
@@ -433,7 +438,7 @@ export function renderJobList(panel) {
         <button type="button" class="simulation-job-remove" data-job-action="remove" data-job-id="${jobIdAttr}" aria-label="Remove" title="Remove">&#x2715;</button>
       </div>
       <div class="simulation-job-status-row">
-        <div class="simulation-job-meta">${escapeHtml(formatJobSummary(job))}</div>
+        <div class="simulation-job-meta" title="${escapeHtml(jobSummary)}">${escapeHtml(jobSummary)}</div>
         ${job.status === 'complete' ? renderRatingStars(job) : ''}
       </div>
       <div class="simulation-job-actions">

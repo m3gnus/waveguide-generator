@@ -53,7 +53,10 @@ function normalizeItem(raw = {}) {
     hasResults: Boolean(raw.hasResults ?? raw.has_results),
     hasMeshArtifact: Boolean(raw.hasMeshArtifact ?? raw.has_mesh_artifact),
     label: raw.label ?? null,
-    errorMessage: raw.errorMessage ?? raw.error_message ?? null,
+    // `/api/status/{job}` carries the failure reason in `message` (JobStatus.message),
+    // while `/api/jobs` and local storage use `error_message`. Read both so the real
+    // solver error survives live polling instead of collapsing to the generic stage text.
+    errorMessage: raw.errorMessage ?? raw.error_message ?? raw.message ?? null,
     cancellationRequested: Boolean(raw.cancellationRequested ?? raw.cancellation_requested),
     meshStats: raw.meshStats ?? raw.mesh_stats ?? null,
     script: raw.script ?? scriptSnapshot,
