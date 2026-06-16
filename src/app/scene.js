@@ -184,6 +184,9 @@ function startBackendViewportBuild(app, variant) {
       // instead of silently leaving the prior frame on screen, so an infeasible
       // or invalid solve reads as an error rather than a frozen viewport.
       if (isServerOnlyViewportFormula(app.currentState)) {
+        // The backend build failed (e.g. an infeasible ICW solve -> 422); no mesh is coming, so
+        // clear the stale prior frame instead of leaving it on screen under the error toast.
+        clearViewportMesh(app);
         reportMeshBuildFailure(
           app,
           isAbort ? new Error('Backend geometry request timed out.') : error
@@ -401,6 +404,21 @@ export function renderModel(app) {
   // the previous mesh stays on screen meanwhile.
   if (!mesh) return;
   applyVariantToScene(app, variant, mesh);
+}
+
+/**
+ * Remove the current horn mesh and its overlays from the scene (no replacement). Used when a
+ * server-only build fails so the stale prior frame does not linger under the error toast.
+ */
+function clearViewportMesh(app) {
+  if (app.hornMesh) {
+    app.scene.remove(app.hornMesh);
+    app.hornMesh.geometry.dispose();
+    app.hornMesh.material.dispose();
+    app.hornMesh = null;
+    app._importedMeshRenderCache = null;
+  }
+  removeOverlays(app);
 }
 
 /**

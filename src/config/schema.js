@@ -244,7 +244,10 @@ export const PARAM_SCHEMA = {
     n_coeff: {
       type: 'number',
       label: 'Curvature Coefficients (n_coeff)',
-      min: 2,
+      // The cubic curvature B-spline needs >= degree+1 = 4 coefficients (fewer hard-errors in
+      // the solver), and the default flat-baffle target is only feasible from 5 up, so 4 always
+      // fails. Floor at 5 so no selectable value 422s on the shipped defaults.
+      min: 5,
       max: 24,
       step: 1,
       default: 6,

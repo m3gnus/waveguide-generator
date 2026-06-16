@@ -9,6 +9,7 @@ import {
 import { densifyForSmoothTessellation } from '../../geometry/tessellation.js';
 import { mapVertexToAth, transformVerticesToAth } from '../../geometry/transforms.js';
 import { GeometryModule } from '../geometry/index.js';
+import { isServerOnlyViewportFormula } from '../geometry/useCases.js';
 import { prepareBackendMeshExportParams, prepareProfileCsvParams } from '../design/index.js';
 import { formatDependencyBlockMessage } from '../runtime/health.js';
 
@@ -27,6 +28,19 @@ const DEFAULT_STEP_BUILD_TIMEOUT_MS = 120000;
 
 function isObject(value) {
   return value !== null && typeof value === 'object';
+}
+
+// ICW (and any server-only formula) is solved by the backend mesher and has no local JS geometry,
+// so the local GeometryModule export path would silently emit OSSE-shaped geometry. Fail loudly
+// instead. STL / profile-CSV for these formulas need a backend-backed geometry path (not yet wired).
+function assertLocalGeometryFormula(input, kind) {
+  if (isServerOnlyViewportFormula(input?.params)) {
+    const type = input?.params?.type;
+    throw new Error(
+      `${type} geometry is solved server-side and has no local ${kind} export yet. ` +
+        `The local geometry engine cannot build ${type}; use a backend-backed export instead.`
+    );
+  }
 }
 
 function createExportImportEnvelope(kind, payload) {
@@ -215,17 +229,24 @@ async function runHornlabMesherMeshExportTask(input, options = {}) {
     throw new Error('Invalid response from /api/mesh/build: expected HornLab mesher mesh data.');
   }
 
-  const geometryTask = GeometryModule.task(GeometryModule.importPrepared(meshParams), {
-    includeEnclosure: Number(meshParams.encDepth || 0) > 0,
-  });
-  const geometryShape = GeometryModule.output.shape(geometryTask);
-  const payload = buildCanonicalMeshPayloadFromShape(geometryShape, {
-    includeEnclosure: Number(meshParams.encDepth || 0) > 0,
-    validateIntegrity: false,
-  });
-  const mesh = buildGeometryMeshFromShape(geometryShape, {
-    includeEnclosure: Number(meshParams.encDepth || 0) > 0,
-  });
+  // Server-only formulas (e.g. ICW) have no local JS geometry; the local GeometryModule path would
+  // produce OSSE-shaped companion artifacts alongside the correct backend .msh. Skip it and omit the
+  // companions rather than attach wrong-shaped geometry -- the backend .msh / stats are authoritative.
+  let payload = null;
+  let mesh = null;
+  if (!isServerOnlyViewportFormula(input?.params)) {
+    const geometryTask = GeometryModule.task(GeometryModule.importPrepared(meshParams), {
+      includeEnclosure: Number(meshParams.encDepth || 0) > 0,
+    });
+    const geometryShape = GeometryModule.output.shape(geometryTask);
+    payload = buildCanonicalMeshPayloadFromShape(geometryShape, {
+      includeEnclosure: Number(meshParams.encDepth || 0) > 0,
+      validateIntegrity: false,
+    });
+    mesh = buildGeometryMeshFromShape(geometryShape, {
+      includeEnclosure: Number(meshParams.encDepth || 0) > 0,
+    });
+  }
 
   return Object.freeze({
     module: EXPORT_MODULE_ID,
@@ -233,7 +254,7 @@ async function runHornlabMesherMeshExportTask(input, options = {}) {
     kind: EXPORT_KINDS.HORNLAB_MESHER_MESH,
     input,
     result: {
-      artifacts: buildExportArtifacts(mesh, payload),
+      artifacts: mesh ? buildExportArtifacts(mesh, payload) : null,
       payload,
       msh: response.msh,
       meshStats: response.stats || null,
@@ -336,6 +357,7 @@ async function runStepExportTask(input, options = {}) {
 
 function runStlExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.STL);
+  assertLocalGeometryFormula(input, 'STL');
 
   const geometryParams = densifyForSmoothTessellation({
     ...input.params,
@@ -382,6 +404,7 @@ function runStlExportTask(input) {
 
 function runProfileCsvExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.PROFILE_CSV);
+  assertLocalGeometryFormula(input, 'profile-CSV');
 
   const csvParams = prepareProfileCsvParams(input.params);
   const geometryParams = {
@@ -439,6 +462,14 @@ function runProfileCsvExportTask(input) {
 
 function runConfigExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.CONFIG);
+  if (isServerOnlyViewportFormula(input?.params)) {
+    const type = input?.params?.type;
+    throw new Error(
+      `${type} config export is not supported: the .mwg/ATH parameter config format has no ` +
+        `${type} representation and would emit OSSE fields with undefined values. ` +
+        `Use the HornLab mesher mesh export instead.`
+    );
+  }
 
   return Object.freeze({
     module: EXPORT_MODULE_ID,
