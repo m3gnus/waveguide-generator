@@ -245,6 +245,30 @@ class RuntimePreflightTest(unittest.TestCase):
             failing,
         )
 
+    def test_collect_runtime_preflight_keeps_mesher_package_ready_when_gmsh_unsupported(self):
+        report = self._collect_preflight(
+            dependency_status=_dependency_status(
+                gmsh_ready=False,
+                gmsh_available=True,
+                gmsh_supported=False,
+                gmsh_version="4.11.0",
+                mesher_ready=True,
+                mesher_available=True,
+                mesher_supported=True,
+            ),
+            metal_backend=_metal_backend(),
+            system="Linux",
+            machine="x86_64",
+        )
+
+        ok, failing = evaluate_required_checks(report)
+        self.assertFalse(ok)
+        self.assertFalse(report["allRequiredReady"])
+        self.assertFalse(report["requiredChecks"]["gmsh_python"]["ok"])
+        self.assertTrue(report["requiredChecks"]["hornlab_waveguide_mesher"]["ok"])
+        self.assertTrue(any("gmsh_python" in item for item in failing), failing)
+        self.assertFalse(any("hornlab_waveguide_mesher" in item for item in failing), failing)
+
     def test_collect_runtime_preflight_requires_release_metal_helper_on_apple_silicon(self):
         report = self._collect_preflight(
             dependency_status=_dependency_status(),

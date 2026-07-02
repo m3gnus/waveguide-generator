@@ -98,7 +98,8 @@ test('mesh control labels separate surface sampling from solve mesh sizing', () 
   assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, 'Rear Mesh Resolution');
   assert.equal(PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label, 'Front Baffle Mesh Resolution');
   assert.equal(PARAM_SCHEMA.ENCLOSURE.encBackResolution.label, 'Rear Baffle Mesh Resolution');
-  assert.match(PARAM_SCHEMA.MESH.angularSegments.tooltip, /HornLab mesher Gmsh tessellation/i);
+  assert.match(PARAM_SCHEMA.MESH.angularSegments.tooltip, /HornLab mesher tessellation/i);
+  assert.doesNotMatch(PARAM_SCHEMA.MESH.angularSegments.tooltip, /Gmsh/i);
   assert.match(PARAM_SCHEMA.MESH.throatResolution.tooltip, /HornLab mesher solve\/export/i);
   assert.equal(PARAM_SCHEMA.SIMULATION.freqStart.label, 'Sweep Start');
   assert.equal(PARAM_SCHEMA.SIMULATION.freqEnd.label, 'Sweep End');
@@ -1522,6 +1523,52 @@ test('getFeatureBlockedReason reports missing hornlab-metal-bem for bem-solve', 
 
   assert.match(reason, /BEM simulation is unavailable/);
   assert.match(reason, /Install hornlab-metal-bem/);
+});
+
+test('getFeatureBlockedReason reports missing hornlab-bempp-bem for bem-solve', () => {
+  const reason = getFeatureBlockedReason(
+    {
+      dependencyDoctor: {
+        components: [
+          {
+            id: 'hornlab_bempp_bem',
+            name: 'hornlab-bempp-bem',
+            category: 'required',
+            status: 'missing',
+            featureImpact: 'BEMPP fallback solves are unavailable.',
+            guidance: ['Install BEMPP fallback requirements'],
+          },
+        ],
+      },
+    },
+    'bem-solve'
+  );
+
+  assert.match(reason, /BEMPP fallback solves are unavailable/);
+  assert.match(reason, /Install BEMPP fallback requirements/);
+});
+
+test('getFeatureBlockedReason reports required Metal release helper for bem-solve', () => {
+  const reason = getFeatureBlockedReason(
+    {
+      dependencyDoctor: {
+        components: [
+          {
+            id: 'metal_release_helper',
+            name: 'Metal release helper',
+            category: 'required',
+            status: 'missing',
+            featureImpact: 'Release Metal helper is required for Apple-Silicon solves.',
+            guidance: ['Build the release Metal helper'],
+          },
+        ],
+      },
+    },
+    'bem-solve'
+  );
+
+  assert.match(reason, /Release Metal helper is required/);
+  assert.match(reason, /Build the release Metal helper/);
 });
 
 test('createDependencyStatusPanel renders required and optional dependency issues', () => {

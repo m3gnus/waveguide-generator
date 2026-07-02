@@ -164,7 +164,7 @@ def get_dependency_status() -> Dict[str, Dict[str, object]]:
                 "available": HORNLAB_MESHER_AVAILABLE,
                 "version": HORNLAB_MESHER_VERSION,
                 "supported": HORNLAB_MESHER_AVAILABLE,
-                "ready": HORNLAB_MESHER_RUNTIME_READY,
+                "ready": HORNLAB_MESHER_AVAILABLE,
             },
             "hornlab_metal_bem": {
                 "available": HORNLAB_METAL_BEM_AVAILABLE,
