@@ -1,7 +1,11 @@
 export const FORMULA_FIELD_ALLOWLIST = Object.freeze({
   'R-OSSE': ['R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
-  ICW: ['r0', 'a0', 'L', 'R'],
+  // ICW is axisymmetric-by-construction: the mesher evaluates every ICW
+  // param at phi=0, so a per-phi expression would be silently flattened to
+  // a constant. Keep the fields plain numbers instead of advertising a
+  // formula editor whose input gets dropped.
+  ICW: [],
   MORPH: ['morphWidth', 'morphHeight', 'morphCorner', 'morphRate', 'morphFixed'],
   GEOMETRY: [
     'throatExtAngle',

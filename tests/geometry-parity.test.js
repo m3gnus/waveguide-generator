@@ -17,6 +17,7 @@ import { calculateOSSE } from '../src/geometry/engine/profiles/osse.js';
 import { calculateROSSE } from '../src/geometry/engine/profiles/rosse.js';
 import { buildWaveguideMesh } from '../src/geometry/engine/buildWaveguideMesh.js';
 import { getGuidingCurveRadius } from '../src/geometry/engine/profiles/guidingCurve.js';
+import { validateParameters } from '../src/geometry/engine/profiles/validation.js';
 import { getRoundedRectRadius, applyMorphing } from '../src/geometry/engine/morphing.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -643,4 +644,88 @@ test('guiding curve superellipse matches Python', { skip: !hasPython && 'Python 
       `guiding curve SE mismatch at phi=${phiValues[i]}: JS=${jsR}, PY=${pyR}`
     );
   }
+});
+
+// -------------------------------------------------------------------------
+// Guiding-curve inversion point: canonical semantics are "fraction of the
+// MAIN OSSE length" (ext/slot excluded), unset -> mouth. The viewport used
+// to map the fraction over the total length and subtract ext+slot, picking
+// a different inversion point than the solved mesh whenever a throat
+// extension or slot was present.
+// -------------------------------------------------------------------------
+
+const OSSE_GCURVE_EXT = {
+  ...OSSE_BASIC,
+  throatExtLength: 10, throatExtAngle: 5, slotLength: 5,
+  throat_ext_length: 10, throat_ext_angle: 5, slot_length: 5,
+  gcurveType: 1, gcurveWidth: 300, gcurveAspectRatio: 0.8, gcurveSeN: 3,
+  gcurveRot: 0, gcurveDist: 0.5,
+  gcurve_type: 1, gcurve_width: 300, gcurve_aspect_ratio: 0.8, gcurve_se_n: 3,
+  gcurve_rot: 0, gcurve_dist: 0.5,
+};
+
+// Same design with gcurveDist unset: Python defaults to the mouth (1.0);
+// the old JS default (0) ignored the guiding curve entirely.
+const OSSE_GCURVE_EXT_NO_DIST = (() => {
+  const clone = { ...OSSE_GCURVE_EXT };
+  delete clone.gcurveDist;
+  delete clone.gcurve_dist;
+  return clone;
+})();
+
+for (const [label, config] of [
+  ['gcurveDist=0.5', OSSE_GCURVE_EXT],
+  ['gcurveDist unset', OSSE_GCURVE_EXT_NO_DIST],
+]) {
+  test(`OSSE guiding curve with throat extension matches Python (${label})`, { skip: !hasPython && 'Python not available' }, () => {
+    const pyResults = callPython({
+      mode: 'profiles',
+      config,
+      t_values: T_VALUES,
+      phi_values: PHI_VALUES,
+    });
+
+    const totalLength = config.L + config.throatExtLength + config.slotLength;
+
+    let idx = 0;
+    for (const phi of PHI_VALUES) {
+      for (const t of T_VALUES) {
+        const z = t * totalLength;
+        const js = calculateOSSE(z, phi, config);
+        const py = pyResults[idx];
+
+        assert.ok(
+          Math.abs(js.x - py.x) < PROFILE_TOL,
+          `OSSE+gcurve+ext x mismatch at t=${t}, phi=${phi} (${label}): JS=${js.x}, PY=${py.x}`
+        );
+        assert.ok(
+          Math.abs(js.y - py.y) < PROFILE_TOL,
+          `OSSE+gcurve+ext y mismatch at t=${t}, phi=${phi} (${label}): JS=${js.y}, PY=${py.y}`
+        );
+        idx++;
+      }
+    }
+  });
+}
+
+// -------------------------------------------------------------------------
+// Unreachable R: the canonical mesher raises "R is unreachable from r0";
+// the JS engine used to clamp the discriminant to 0 and render a plausible
+// horn the solve/export would then reject.
+// -------------------------------------------------------------------------
+
+test('unreachable R yields NaN and a validation error (matches mesher rejection)', () => {
+  // a0=0 makes c2=0, so the discriminant is negative iff (k*r0)^2 > target^2:
+  // r0=50, k=2 -> c1=10000; R=40 -> target=90 -> 8100 < 10000 -> unreachable.
+  const params = { R: 40, r0: 50, k: 2, a: 45, a0: 0, q: 1, m: 0.85, r: 0.4, b: 0.2, tmax: 1 };
+
+  const point = calculateROSSE(0.5, 0, params);
+  assert.ok(Number.isNaN(point.y), `expected NaN for unreachable R, got ${point.y}`);
+
+  const validation = validateParameters(params, 'ROSSE');
+  assert.equal(validation.valid, false);
+  assert.ok(
+    validation.errors.some((error) => error.includes('unreachable')),
+    `expected an unreachable-R validation error, got: ${validation.errors.join('; ')}`
+  );
 });

@@ -119,6 +119,22 @@ function isBackendViewportInCooldown(app) {
   );
 }
 
+function scheduleServerOnlyCooldownRetry(app) {
+  // Server-only formulas render exclusively via the backend: after a
+  // backend-down cooldown the viewport would otherwise stay blank (it was
+  // cleared on failure) until the user nudges a parameter, because nothing
+  // re-triggers a build when the cooldown lapses. Schedule one retry render
+  // at expiry.
+  if (!isServerOnlyViewportFormula(app.currentState)) return;
+  if (app._viewportCooldownRetryTimer) return;
+  app._viewportCooldownRetryTimer = setTimeout(() => {
+    app._viewportCooldownRetryTimer = null;
+    if (typeof app.requestRender === 'function') {
+      app.requestRender();
+    }
+  }, BACKEND_VIEWPORT_RETRY_MS + 50);
+}
+
 function applyVariantToScene(app, variant, mesh) {
   applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals);
   app._currentMeshVariant = variant;
@@ -176,6 +192,7 @@ function startBackendViewportBuild(app, variant) {
       const isAbort = error?.name === 'AbortError';
       if (!isValidationError) {
         app._viewportBackendDownAt = Date.now();
+        scheduleServerOnlyCooldownRetry(app);
       }
       console.warn('[Viewport] Backend viewport geometry unavailable:', error?.message || error);
       invalidateMeshCacheIfStale(app);
