@@ -144,13 +144,20 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
   const targetR = getGuidingCurveRadius(p, params);
   if (!Number.isFinite(targetR)) return evalParam(params.a, p);
 
-  const distParam = evalParam(params.gcurveDist || 0, p);
-  const distRaw = distParam <= 1 ? totalLength * distParam : distParam;
-  const dist = clamp(distRaw, 0, totalLength);
-  if (!Number.isFinite(dist) || dist <= 0) return evalParam(params.a, p);
+  // Canonical semantics (hornlab_mesher.profile_morph): gcurveDist is a
+  // fraction of the MAIN OSSE length (throat extension/slot excluded);
+  // absolute values are main-section z; unset/invalid falls back to the
+  // mouth. The viewport previously mapped the fraction over the total
+  // length and subtracted ext+slot, picking a different inversion point
+  // than the solved mesh whenever an extension or slot was present.
+  const distParam = evalParam(params.gcurveDist ?? 1, p);
+  const mainLength = Math.max(0, totalLength - extLen - slotLen);
+  let zMain = distParam > 0 && distParam <= 1 ? mainLength * distParam : distParam;
+  if (!Number.isFinite(zMain) || zMain <= 0) zMain = mainLength;
+  zMain = Math.min(mainLength, zMain);
+  if (zMain <= 0) return evalParam(params.a, p);
 
   const r0Main = r0Base + extLen * Math.tan(extAngleRad);
-  const zMain = Math.max(0, dist - extLen - slotLen);
 
   let low = 0.5;
   let high = 89;

@@ -26,7 +26,13 @@ function calculateRossLength(constants, R, r0, k) {
     return (target ** 2 - c1) / c2;
   }
 
-  return (Math.sqrt(Math.max(0, discriminant)) - c2) / (2 * c3);
+  // The canonical mesher rejects these parameters ("R is unreachable from
+  // r0"); clamping to 0 here rendered a plausible horn the solve/export
+  // would then refuse. NaN keeps the two engines in agreement (validation
+  // surfaces the message).
+  if (discriminant < 0) return NaN;
+
+  return (Math.sqrt(discriminant) - c2) / (2 * c3);
 }
 
 function calculateROSSEMain(t, p, params) {
@@ -54,7 +60,8 @@ function calculateROSSEMain(t, p, params) {
 
   const tPowQ = t ** q;
   const throatR = Math.sqrt(c1 + c2 * L * t + c3 * (L * t) ** 2) + r0 * (1 - k);
-  const mouthR = R + L * (1 - Math.sqrt(1 + c3 * (t - 1) ** 2));
+  // max(0, ...) matches the canonical mesher's clamp for pathological params.
+  const mouthR = Math.max(0, R + L * (1 - Math.sqrt(1 + c3 * (t - 1) ** 2)));
 
   const y = (1 - tPowQ) * throatR + tPowQ * mouthR;
 
