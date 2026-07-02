@@ -67,9 +67,9 @@ The app opens in your browser at `http://localhost:3000`. Close the terminal to 
 Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `715365fef7ffd42ce2458e00030f8231805e88ed` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
-- hornlab-metal-bem: pinned git commit `93ba809209bb4b195aa8593699e94647bf82b43e` (fast Metal solve backend; Apple Silicon macOS)
-- hornlab-bempp-bem: pinned git commit `8c112bbc8c083e7e8aed973500aef847c69970cf` (Bempp cross-platform solve backend; installed when Metal is unavailable)
+- hornlab-waveguide-mesher: pinned git commit `37241be24a7ab1709e459de91eeb40d44628cd09` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-metal-bem: pinned git commit `723f22803b17c830650e8a9f2ce8f3c92a4e8211` (fast Metal solve backend; Apple Silicon macOS)
+- hornlab-bempp-bem: pinned git commit `d1527551cf17e7b2fa5110cf2765a025f07a53b7` (Bempp cross-platform solve backend; installed when Metal is unavailable)
 - gmsh: `>=4.11.1,<5.0` (required by the HornLab mesher)
 
 OpenCL is a Bempp speed-up, not a hard requirement. Without OpenCL, Bempp runs through its numba CPU backend. On Linux, install `pocl` from your package manager for an OpenCL CPU runtime; on Windows, use up-to-date GPU drivers or install Intel's OpenCL runtime; on macOS x86_64, numba is fine.
