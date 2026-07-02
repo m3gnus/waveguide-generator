@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from contracts import WaveguideParamsRequest
+from services.gmsh_worker import run_on_gmsh_worker
 from services.solver_runtime import (
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
@@ -66,8 +67,10 @@ async def build_mesh_from_params(request: WaveguideParamsRequest) -> Dict[str, A
 
     try:
         payload = request.model_dump()
-        # Run directly on the request thread — gmsh Python API fails in worker threads.
-        result = build_waveguide_mesh(payload)
+        # Multi-second gmsh build: the dedicated gmsh worker thread keeps the
+        # event loop responsive. asyncio.to_thread is not safe here — gmsh
+        # requires all calls on one persistent thread (services/gmsh_worker.py).
+        result = await run_on_gmsh_worker(build_waveguide_mesh, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -144,7 +147,8 @@ async def build_step_from_params(request: WaveguideParamsRequest) -> Dict[str, A
         payload["quadrants"] = 1234
         payload["enc_depth"] = 0.0
         payload["wall_thickness"] = 0.0
-        result = build_inner_surface_step(payload)
+        # gmsh-backed STEP export; same gmsh worker-thread contract as above.
+        result = await run_on_gmsh_worker(build_inner_surface_step, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:

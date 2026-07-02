@@ -15,6 +15,7 @@ from services.simulation_validation import (
     is_hornlab_mesher_strategy,
     normalize_waveguide_params_for_solver_backend,
 )
+from services.gmsh_worker import run_on_gmsh_worker
 from services.solver_runtime import (
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
@@ -281,7 +282,12 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         )
         validated = WaveguideParamsRequest(**waveguide_params)
         validated_payload = validated.model_dump()
-        mesher_result = build_waveguide_mesh(
+        # Multi-second gmsh build: run it on the dedicated gmsh worker thread
+        # so status polling and every other HTTP response stay responsive.
+        # asyncio.to_thread is not safe here — gmsh requires all calls on one
+        # persistent thread (see services/gmsh_worker.py).
+        mesher_result = await run_on_gmsh_worker(
+            build_waveguide_mesh,
             validated_payload,
             include_canonical=True,
             cancellation_callback=lambda: _cancellation_callback(
