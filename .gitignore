@@ -44,3 +44,6 @@ server/scripts/*_results.json
 _references/
 ATHequivalent/
 architecture/
+
+# Local run artifacts (never commit)
+runs/
