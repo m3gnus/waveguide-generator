@@ -137,9 +137,9 @@ The backend now enforces a version matrix at runtime:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `715365fef7ffd42ce2458e00030f8231805e88ed` | `/api/mesh/build` |
-| HornLab Metal BEM   | `93ba809209bb4b195aa8593699e94647bf82b43e` | `/api/solve` (Apple Silicon macOS) |
-| HornLab Bempp BEM   | `8c112bbc8c083e7e8aed973500aef847c69970cf` | `/api/solve` (cross-platform fallback) |
+| HornLab mesher      | `37241be24a7ab1709e459de91eeb40d44628cd09` | `/api/mesh/build` |
+| HornLab Metal BEM   | `723f22803b17c830650e8a9f2ce8f3c92a4e8211` | `/api/solve` (Apple Silicon macOS) |
+| HornLab Bempp BEM   | `d1527551cf17e7b2fa5110cf2765a025f07a53b7` | `/api/solve` (cross-platform fallback) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |
 
 Notes:
