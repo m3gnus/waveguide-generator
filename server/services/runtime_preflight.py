@@ -238,7 +238,7 @@ def _guidance_for_component(component_id: str, status: str, system_name: str, ma
             "Install gmsh package: pip install -r server/requirements-gmsh.txt",
         ]
         if status == DOCTOR_STATUS_UNSUPPORTED:
-            guidance.append("Use supported gmsh range: >=4.11,<5.0.")
+            guidance.append("Use supported gmsh range: >=4.11.1,<5.0.")
         if os_name == "linux":
             guidance.append(
                 "If default wheels are unavailable on headless Linux: "

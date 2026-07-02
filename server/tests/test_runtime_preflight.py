@@ -417,7 +417,7 @@ class RuntimePreflightTest(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                ">=4.11,<5.0" in line
+                ">=4.11.1,<5.0" in line
                 for line in components_by_id["gmsh_python"]["guidance"]
             ),
             components_by_id["gmsh_python"]["guidance"],

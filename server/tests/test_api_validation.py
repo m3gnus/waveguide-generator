@@ -325,8 +325,8 @@ class ApiValidationTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.15"},
-                "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
-                "hornlab_metal_bem": {"range": "pinned git commit 12b43ec", "required_for": "/api/solve backend"},
+                "gmsh_python": {"range": ">=4.11.1,<5.0", "required_for": "hornlab-waveguide-mesher"},
+                "hornlab_metal_bem": {"range": "pinned git commit 93ba809", "required_for": "/api/solve backend"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},
@@ -543,8 +543,8 @@ class ApiValidationTest(unittest.TestCase):
         dependency_status = {
             "supportedMatrix": {
                 "python": {"range": ">=3.10,<3.15"},
-                "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
-                "hornlab_metal_bem": {"range": "pinned git commit 12b43ec", "required_for": "/api/solve backend"},
+                "gmsh_python": {"range": ">=4.11.1,<5.0", "required_for": "hornlab-waveguide-mesher"},
+                "hornlab_metal_bem": {"range": "pinned git commit 93ba809", "required_for": "/api/solve backend"},
             },
             "runtime": {
                 "python": {"version": "3.13.1", "supported": True},

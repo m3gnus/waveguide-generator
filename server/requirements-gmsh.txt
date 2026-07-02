@@ -1,2 +1,2 @@
 # Gmsh Python API — transitive runtime dependency for hornlab-waveguide-mesher.
-gmsh>=4.11,<5.0
+gmsh>=4.11.1,<5.0
