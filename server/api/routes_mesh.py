@@ -41,7 +41,7 @@ async def build_mesh_from_params(request: WaveguideParamsRequest) -> Dict[str, A
         dep = get_dependency_status()
         gmsh_info = dep["runtime"]["gmsh_python"]
         py_info = dep["runtime"]["python"]
-        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.11,<5.0")
+        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.11.1,<5.0")
         py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.15")
         raise HTTPException(
             status_code=503,
@@ -112,7 +112,7 @@ async def build_step_from_params(request: WaveguideParamsRequest) -> Dict[str, A
         dep = get_dependency_status()
         gmsh_info = dep["runtime"]["gmsh_python"]
         py_info = dep["runtime"]["python"]
-        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.11,<5.0")
+        gmsh_range = dep["supportedMatrix"].get("gmsh_python", {}).get("range", ">=4.11.1,<5.0")
         py_range = dep["supportedMatrix"].get("python", {}).get("range", ">=3.10,<3.15")
         raise HTTPException(
             status_code=503,

@@ -127,12 +127,16 @@ function scheduleServerOnlyCooldownRetry(app) {
   // at expiry.
   if (!isServerOnlyViewportFormula(app.currentState)) return;
   if (app._viewportCooldownRetryTimer) return;
+  const elapsed = Number.isFinite(app._viewportBackendDownAt)
+    ? Date.now() - app._viewportBackendDownAt
+    : 0;
+  const delay = Math.max(0, BACKEND_VIEWPORT_RETRY_MS - elapsed) + 50;
   app._viewportCooldownRetryTimer = setTimeout(() => {
     app._viewportCooldownRetryTimer = null;
     if (typeof app.requestRender === 'function') {
       app.requestRender();
     }
-  }, BACKEND_VIEWPORT_RETRY_MS + 50);
+  }, delay);
 }
 
 function applyVariantToScene(app, variant, mesh) {
@@ -265,6 +269,8 @@ function resolveVariantMesh(app, variant) {
   if (serverOnly) {
     if (!isBackendViewportInCooldown(app)) {
       startBackendViewportBuild(app, variant);
+    } else {
+      scheduleServerOnlyCooldownRetry(app);
     }
     return null;
   }

@@ -14,24 +14,24 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_PYTHON_MIN = (3, 10, 0)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 15, 0)
-SUPPORTED_GMSH_MIN = (4, 11, 0)
+SUPPORTED_GMSH_MIN = (4, 11, 1)
 SUPPORTED_GMSH_MAX_EXCLUSIVE = (5, 0, 0)
 
 SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     "python": {"range": ">=3.10,<3.15"},
     "hornlab_waveguide_mesher": {
-        "range": "pinned git commit 340214e",
+        "range": "pinned git commit 715365f",
         "required_for": "/api/mesh/build",
     },
     "hornlab_metal_bem": {
-        "range": "pinned git commit 12b43ec",
+        "range": "pinned git commit 93ba809",
         "required_for": "/api/solve backend",
     },
     "hornlab_bempp_bem": {
         "range": "pinned git commit 8c112bb",
         "required_for": "/api/solve fallback backend (non-Apple-Silicon)",
     },
-    "gmsh_python": {"range": ">=4.11,<5.0", "required_for": "hornlab-waveguide-mesher"},
+    "gmsh_python": {"range": ">=4.11.1,<5.0", "required_for": "hornlab-waveguide-mesher"},
 }
 
 
@@ -133,7 +133,7 @@ if not PYTHON_SUPPORTED:
     )
 if GMSH_AVAILABLE and not GMSH_SUPPORTED:
     logger.warning(
-        "Unsupported gmsh Python package version %s; supported range is >=4.11,<5.0.",
+        "Unsupported gmsh Python package version %s; supported range is >=4.11.1,<5.0.",
         GMSH_VERSION or "unknown",
     )
 if not HORNLAB_MESHER_AVAILABLE:
