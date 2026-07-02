@@ -1,6 +1,6 @@
 const FEATURE_COMPONENTS = Object.freeze({
   meshBuild: ['gmsh_python', 'hornlab_waveguide_mesher'],
-  solve: ['hornlab_metal_bem'],
+  solve: ['hornlab_metal_bem', 'hornlab_bempp_bem', 'metal_release_helper'],
   charts: ['matplotlib'],
 });
 

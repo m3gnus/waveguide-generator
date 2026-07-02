@@ -114,7 +114,7 @@ export function getDependencyStatusSummary(health) {
       ready: gmsh.ready === true,
       feature: 'HornLab mesher build/export',
       guidance: !gmsh.available
-        ? 'Install gmsh: pip install gmsh>=4.11.1,<5.0'
+        ? 'Install gmsh: pip install "gmsh>=4.11.1,<5.0"'
         : gmsh.supported === false
           ? `Gmsh ${gmsh.version || 'unknown'} is outside supported range (>=4.11.1,<5.0). Install a compatible version.`
           : null,
