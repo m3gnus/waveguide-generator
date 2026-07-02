@@ -128,6 +128,55 @@ def phase_on_axis(result) -> list[float | None]:
     return phase_values
 
 
+def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
+    """Surface per-frequency solver failures from solver_log.
+
+    bempp marks GMRES convergence per frequency (``converged``); metal
+    records the LAPACK return code (``lapack_info``) and conditioning
+    diagnostics (``native_diagnostics.dense_solve_suspect``). Unreliable
+    frequencies flip ``partial_success``; a suspect-conditioning frequency
+    only warns.
+    """
+    solver_log: list | None = None
+    for backend_key in ("metal", "bempp"):
+        backend_meta = metadata.get(backend_key)
+        if isinstance(backend_meta, dict) and isinstance(
+            backend_meta.get("solver_log"), list
+        ):
+            solver_log = backend_meta["solver_log"]
+            break
+    if solver_log is None:
+        return
+    warnings = metadata.setdefault("warnings", [])
+    unreliable = 0
+    for entry in solver_log:
+        if not isinstance(entry, dict):
+            continue
+        frequency = entry.get("frequency_hz")
+        label = f"{float(frequency):.1f} Hz" if isinstance(frequency, (int, float)) else "unknown frequency"
+        if entry.get("converged") is False:
+            warnings.append(
+                f"GMRES did not converge at {label}; SPL/DI at this frequency is unreliable."
+            )
+            unreliable += 1
+        lapack_info = entry.get("lapack_info")
+        if isinstance(lapack_info, (int, float)) and int(lapack_info) != 0:
+            warnings.append(
+                f"Dense LU solve failed (LAPACK info={int(lapack_info)}) at {label}; "
+                "results at this frequency are unreliable."
+            )
+            unreliable += 1
+        diagnostics = entry.get("native_diagnostics")
+        if isinstance(diagnostics, dict) and diagnostics.get("dense_solve_suspect") is True:
+            warnings.append(
+                f"Dense-solve conditioning is suspect at {label} (near a fictitious "
+                "resonance); compare against neighbouring frequencies."
+            )
+    metadata["warning_count"] = len(warnings)
+    if unreliable:
+        metadata["partial_success"] = True
+
+
 def build_solver_response(
     *,
     result,
@@ -153,6 +202,11 @@ def build_solver_response(
     metadata.setdefault("failures", [])
     metadata.setdefault("failure_count", 0)
     metadata.setdefault("partial_success", False)
+    # Per-frequency failure flags recorded by the solvers were embedded raw in
+    # solver_log but never surfaced: a non-converged GMRES frequency (bempp)
+    # or a failed dense LU (metal) rendered as normal data. Aggregate them
+    # into the response-level warnings both adapters share.
+    _apply_solver_log_warnings(metadata)
     metadata.setdefault("performance", {})
     metadata["performance"].setdefault("total_time_seconds", time.time() - start_time)
     metadata["observation"] = observation

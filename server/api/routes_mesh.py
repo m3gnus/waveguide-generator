@@ -1,5 +1,6 @@
 """Mesh building routes for HornLab waveguide meshing."""
 
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -191,7 +192,12 @@ async def build_viewport_geometry_from_params(request: WaveguideParamsRequest) -
     try:
         payload = request.model_dump()
         payload["quadrants"] = 1234
-        return build_viewport_geometry(payload)
+        # Profile math is pure Python but not free: an ICW rollback homotopy
+        # runs ~1 s, and the UI fires throttled requests during a drag.
+        # Running it inline would block the event loop (job polling, other
+        # viewport requests) behind every build; no gmsh runs here, so a
+        # plain worker thread is safe.
+        return await asyncio.to_thread(build_viewport_geometry, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:

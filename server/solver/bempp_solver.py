@@ -14,6 +14,7 @@ from .result_mapping import (
     waveguide_quadrants,
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
+from .metal_solver import _float_option, _waveguide_params
 
 try:
     from hornlab_bempp_bem import (  # type: ignore
@@ -198,6 +199,22 @@ def _opencl_device_from_request(request) -> str:
     return "gpu" if device_mode == "opencl_gpu" else "cpu"
 
 
+def _require_closed_mesh(request) -> bool:
+    """Closed-mode meshes (enclosure / thickened wall) must arrive sealed.
+
+    Mirrors the bare-shell derivation in metal_solver._native_check_open_edges
+    minus the symmetry precondition: bempp always solves the full domain, so
+    the only legitimately open mesh is a bare wall-less horn. Unknown payloads
+    (imported meshes without waveguide_params) stay permissive.
+    """
+    params = _waveguide_params(request)
+    if not params:
+        return False
+    enc_depth = _float_option(params.get("enc_depth"), 0.0)
+    wall_thickness = _float_option(params.get("wall_thickness"), 0.0)
+    return enc_depth > 0.0 or wall_thickness > 0.0
+
+
 def solve_bempp_from_msh(
     msh_path: str | Path,
     request,
@@ -249,6 +266,12 @@ def solve_bempp_from_msh(
         opencl_device=_opencl_device_from_request(request),
         precision=_precision_from_request(request),
     )
+    # hornlab-bempp-bem newer than the 8c112bb pin validates surface closure
+    # at load (a closed-mode mesh with open edges is a leaking model this
+    # backend would otherwise solve silently). Feature-detect so the current
+    # public pin keeps working until the requirements bump.
+    if hasattr(config, "require_closed_mesh"):
+        config.require_closed_mesh = _require_closed_mesh(request)
     result = bempp_solve(str(msh_path), config)
 
     if stage_callback:
