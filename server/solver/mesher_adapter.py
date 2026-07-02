@@ -251,6 +251,12 @@ def _triangles_and_tags(mesh: meshio.Mesh) -> tuple[np.ndarray, np.ndarray]:
     return np.vstack(triangles), np.concatenate(tags)
 
 
+def _tag_counts_from_msh(path: Path) -> dict[str, int]:
+    mesh = meshio.read(path)
+    _, tags = _triangles_and_tags(mesh)
+    return {str(tag): int(np.count_nonzero(tags == tag)) for tag in (1, 2, 3, 4)}
+
+
 def _canonical_mesh_from_msh(path: Path) -> dict[str, Any]:
     mesh = meshio.read(path)
     triangles, tags = _triangles_and_tags(mesh)
@@ -524,12 +530,21 @@ def build_waveguide_mesh(
         if cancellation_callback:
             cancellation_callback()
         msh_text = mesh_path.read_text(encoding="utf-8", errors="replace")
-        canonical = _canonical_mesh_from_msh(mesh_path)
+        # The canonical payload converts every vertex/index/tag into Python
+        # lists — significant CPU/RAM on solve-density meshes. Callers that
+        # only want the .msh (include_canonical=False) still need tagCounts
+        # for stats, which a plain array pass provides cheaply.
+        if include_canonical:
+            canonical = _canonical_mesh_from_msh(mesh_path)
+            tag_counts = canonical["metadata"]["tagCounts"]
+        else:
+            canonical = None
+            tag_counts = _tag_counts_from_msh(mesh_path)
 
     stats = {
         "vertexCount": int(result.n_vertices),
         "triangleCount": int(result.n_triangles),
-        "tagCounts": canonical["metadata"]["tagCounts"],
+        "tagCounts": tag_counts,
         "units": result.units,
         "source": "hornlab_waveguide_mesher",
         "generatedBy": "hornlab-waveguide-mesher",
