@@ -1,4 +1,4 @@
 # BEMPP fallback backend requirements.
 # Installed conditionally by install scripts on hosts where Metal BEM is unavailable.
 # Published at github.com/m3gnus/hornlab-bempp-bem (2026-06-11).
-git+https://github.com/m3gnus/hornlab-bempp-bem.git@8c112bbc8c083e7e8aed973500aef847c69970cf
+git+https://github.com/m3gnus/hornlab-bempp-bem.git@29f13dd22944916c36d50df3782f983c92521d00
