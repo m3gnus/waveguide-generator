@@ -80,6 +80,9 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     n_coeff: toFiniteNumber(preparedParams.n_coeff, undefined),
     theta1_deg: toNumberOrExpr(preparedParams.theta1_deg, undefined),
     depth: toFiniteNumber(preparedParams.depth, undefined),
+    coverage_angle: toFiniteNumber(preparedParams.coverage_angle, undefined),
+    hold_start: toFiniteNumber(preparedParams.hold_start, undefined),
+    hold_end: toFiniteNumber(preparedParams.hold_end, undefined),
 
     // Shared formula
     a: toExprString(preparedParams.a),

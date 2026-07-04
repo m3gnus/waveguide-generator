@@ -218,6 +218,12 @@ export class ParamPanel {
     if (key === 'L' && params.termination === 'rollback') {
       return false;
     }
+    if (
+      (key === 'coverage_angle' || key === 'hold_start' || key === 'hold_end') &&
+      params.termination === 'rollback'
+    ) {
+      return false;
+    }
 
     if (key !== 'slotLength') return true;
 

@@ -272,3 +272,64 @@ test('ParamPanel hides inactive straight slot row but keeps active slot values v
     global.document = originalDocument;
   }
 });
+
+test('ParamPanel renders ICW coverage controls for flat baffle only', () => {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement('div');
+  paramContainer.id = 'param-container';
+  fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement('div');
+  simulationSettingsContainer.id = 'simulation-settings-container';
+  fakeDocument.body.appendChild(simulationSettingsContainer);
+  const simulationContainer = fakeDocument.createElement('div');
+  simulationContainer.id = 'simulation-param-container';
+  fakeDocument.body.appendChild(simulationContainer);
+
+  global.document = fakeDocument;
+
+  const countRows = (key) =>
+    collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-param-key'] === key && node.className === 'input-row'
+    ).length;
+
+  try {
+    GlobalState.loadState(
+      {
+        type: 'ICW',
+        params: getDefaults('ICW'),
+      },
+      'param-panel-icw-coverage-visible-test'
+    );
+    const panel = new ParamPanel('param-container');
+    panel.createFullPanel();
+
+    assert.equal(countRows('coverage_angle'), 1);
+    assert.equal(countRows('hold_start'), 1);
+    assert.equal(countRows('hold_end'), 1);
+
+    GlobalState.loadState(
+      {
+        type: 'ICW',
+        params: {
+          ...getDefaults('ICW'),
+          termination: 'rollback',
+        },
+      },
+      'param-panel-icw-coverage-hidden-test'
+    );
+    panel.createFullPanel();
+
+    assert.equal(countRows('coverage_angle'), 0);
+    assert.equal(countRows('hold_start'), 0);
+    assert.equal(countRows('hold_end'), 0);
+    assert.equal(countRows('theta1_deg'), 1);
+    assert.equal(countRows('depth'), 1);
+    assert.equal(countRows('L'), 0);
+  } finally {
+    GlobalState.loadState(previousState, 'param-panel-icw-coverage-test-restore');
+    global.document = originalDocument;
+  }
+});

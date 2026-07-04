@@ -245,6 +245,39 @@ export const PARAM_SCHEMA = {
       default: 150,
       tooltip: 'Target mouth radius. The intrinsic-curvature solver sizes the curve to it.',
     },
+    coverage_angle: {
+      type: 'number',
+      label: 'Coverage Angle',
+      unit: 'deg',
+      min: 0,
+      max: 80,
+      step: 1,
+      default: 0,
+      tooltip:
+        '0 = off (pure size targets). >0 holds a constant wall angle (the constant-directivity plateau) between Hold Start and Hold End; Mouth Radius then becomes an emergent output rather than a target. Flat baffle only.',
+    },
+    hold_start: {
+      type: 'number',
+      label: 'Coverage Hold Start',
+      unit: 'σ',
+      min: 0.05,
+      max: 0.9,
+      step: 0.01,
+      default: 0.30,
+      tooltip:
+        'Normalised arc-length (0..1 throat→mouth) where the coverage plateau begins. Only used when Coverage Angle > 0.',
+    },
+    hold_end: {
+      type: 'number',
+      label: 'Coverage Hold End',
+      unit: 'σ',
+      min: 0.1,
+      max: 0.95,
+      step: 0.01,
+      default: 0.70,
+      tooltip:
+        'Normalised arc-length where the coverage plateau ends. Must exceed Hold Start. Only used when Coverage Angle > 0.',
+    },
     n_coeff: {
       type: 'number',
       label: 'Curvature Coefficients (n_coeff)',

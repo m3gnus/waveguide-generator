@@ -271,6 +271,9 @@ class WaveguideParamsRequest(BaseModel):
     termination: Optional[str] = None
     n_coeff: Optional[int] = None
     theta1_deg: Optional[float] = None
+    coverage_angle: Optional[float] = None
+    hold_start: Optional[float] = None
+    hold_end: Optional[float] = None
     # Rollback axial-depth target (mm). Distinct from the enclosure `enc_depth`.
     depth: Optional[float] = None
 

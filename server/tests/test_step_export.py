@@ -466,6 +466,50 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
         )
         self.assertEqual(config["profile"]["_athLengthMode"], "total")
 
+    def test_icw_payload_forwards_positive_coverage_controls(self):
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "ICW",
+                "L": "120",
+                "R": "150",
+                "r0": 12.7,
+                "a0": 15,
+                "termination": "flat_baffle",
+                "n_coeff": 16,
+                "coverage_angle": 50,
+                "hold_start": 0.3,
+                "hold_end": 0.7,
+            }
+        )
+
+        profile = config["profile"]
+        self.assertEqual(profile["formula"], "ICW")
+        self.assertEqual(profile["coverage_angle"], 50.0)
+        self.assertEqual(profile["hold_start"], 0.3)
+        self.assertEqual(profile["hold_end"], 0.7)
+        self.assertEqual(profile["R"], "150")
+
+    def test_icw_payload_omits_nonpositive_coverage_controls(self):
+        for payload in (
+            {
+                "formula_type": "ICW",
+                "hold_start": 0.3,
+                "hold_end": 0.7,
+            },
+            {
+                "formula_type": "ICW",
+                "coverage_angle": 0,
+                "hold_start": 0.3,
+                "hold_end": 0.7,
+            },
+        ):
+            with self.subTest(payload=payload):
+                config = mesher_adapter.waveguide_payload_to_mesher_config(payload)
+                profile = config["profile"]
+                self.assertNotIn("coverage_angle", profile)
+                self.assertNotIn("hold_start", profile)
+                self.assertNotIn("hold_end", profile)
+
     def test_m2_payload_total_length_mode_keeps_mouth_at_ath_size(self):
         from hornlab_mesher.config_builder import build_geometry_params
         from hornlab_mesher.profiles import build_point_grid
@@ -628,6 +672,18 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
 
 
 class SimulationRequestContractTest(unittest.TestCase):
+    def test_waveguide_params_accepts_icw_coverage_controls(self):
+        request = WaveguideParamsRequest(
+            formula_type="ICW",
+            coverage_angle=50,
+            hold_start=0.3,
+            hold_end=0.7,
+        )
+
+        self.assertEqual(request.coverage_angle, 50)
+        self.assertEqual(request.hold_start, 0.3)
+        self.assertEqual(request.hold_end, 0.7)
+
     def test_solver_backend_defaults_to_auto(self):
         request = SimulationRequest(
             mesh={
