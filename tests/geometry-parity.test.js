@@ -264,7 +264,11 @@ test('OSSE with throat extension has correct radius at extension zone', () => {
   const params = OSSE_WITH_EXT;
   const z = 5; // midway through extension
   const { y } = calculateOSSE(z, 0, params);
-  const expected = params.r0 + z * Math.tan(params.throatExtAngle * Math.PI / 180);
+  // ATH anchors r0 at the MAIN throat and tapers the extension BACK to the
+  // driver end, so the extension runs from r0 - ext*tan(angle) up to r0.
+  const tanExt = Math.tan(params.throatExtAngle * Math.PI / 180);
+  const r0Throat = Math.max(0, params.r0 - params.throatExtLength * tanExt);
+  const expected = r0Throat + z * tanExt;
   assert.ok(Math.abs(y - expected) < FUNC_TOL, `extension zone radius: got ${y}, expected ${expected}`);
 });
 

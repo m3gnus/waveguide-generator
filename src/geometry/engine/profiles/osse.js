@@ -27,10 +27,12 @@ export function resolveOsseLengthConfig(params, p, options = {}) {
   const lengthMode = options.lengthMode ?? params._athLengthMode;
 
   if (lengthMode === 'total') {
-    const totalLength = Math.max(0, rawL);
+    // ATH adds Throat.Ext.Length on TOP of Length but carves Slot.Length OUT of
+    // it: the main section loses only the slot, and the total axial grows by the
+    // extension. Mirrors hornlab_mesher.profile_formulas.osse_length_config.
     return {
-      L: Math.max(0, totalLength - extLen - slotLen),
-      totalLength,
+      L: Math.max(0, rawL - slotLen),
+      totalLength: Math.max(0, rawL + extLen),
       extLen,
       slotLen,
     };
@@ -157,7 +159,8 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
   zMain = Math.min(mainLength, zMain);
   if (zMain <= 0) return evalParam(params.a, p);
 
-  const r0Main = r0Base + extLen * Math.tan(extAngleRad);
+  // ATH anchors r0 at the MAIN throat; the extension tapers back from it.
+  const r0Main = r0Base;
 
   let low = 0.5;
   let high = 89;
@@ -192,7 +195,11 @@ export function calculateOSSE(z, p, params, options = {}) {
 
   const r0Base = evalParam(params.r0, p);
   const a0Deg = evalParam(params.a0, p);
-  const r0Main = r0Base + extLen * Math.tan(extAngleRad);
+  // ATH anchors Throat.Diameter (r0) at the MAIN horn throat and tapers the
+  // extension BACK from r0 to the driver end (r0 - ext*tan(angle)); it does not
+  // enlarge the main throat. Mirrors hornlab_mesher.profile_formulas.calculate_osse.
+  const r0Main = r0Base;
+  const r0Throat = Math.max(0, r0Base - extLen * Math.tan(extAngleRad));
 
   const config = { totalLength, extLen, slotLen, r0Base, extAngleRad, a0Deg, L };
 
@@ -206,7 +213,7 @@ export function calculateOSSE(z, p, params, options = {}) {
 
   let radius;
   if (z <= extLen) {
-    radius = r0Base + z * Math.tan(extAngleRad);
+    radius = r0Throat + z * Math.tan(extAngleRad);
   } else if (z <= extLen + slotLen) {
     radius = r0Main;
   } else {
