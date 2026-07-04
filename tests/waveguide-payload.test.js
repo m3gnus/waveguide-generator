@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { getDefaults } from '../src/config/defaults.js';
 import { buildWaveguidePayload } from '../src/solver/waveguidePayload.js';
 import { prepareBackendMeshSimulationParams } from '../src/modules/design/index.js';
 
@@ -92,6 +93,61 @@ test('buildWaveguidePayload preserves ATH total-length mode', () => {
   );
 
   assert.equal(payload.length_mode, 'total');
+});
+
+test('buildWaveguidePayload emits ICW coverage controls when enabled', () => {
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      ...getDefaults('ICW'),
+      type: 'ICW',
+      coverage_angle: 50,
+      hold_start: 0.3,
+      hold_end: 0.7
+    }),
+    '2.2'
+  );
+
+  assert.equal(payload.formula_type, 'ICW');
+  assert.equal(payload.coverage_angle, 50);
+  assert.equal(payload.hold_start, 0.3);
+  assert.equal(payload.hold_end, 0.7);
+});
+
+test('buildWaveguidePayload keeps ICW coverage off by default and OSSE/R-OSSE JSON unchanged', () => {
+  const icwPayload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      ...getDefaults('ICW'),
+      type: 'ICW'
+    }),
+    '2.2'
+  );
+
+  assert.equal(icwPayload.formula_type, 'ICW');
+  assert.equal(icwPayload.coverage_angle, 0);
+  assert.equal(icwPayload.hold_start, 0.3);
+  assert.equal(icwPayload.hold_end, 0.7);
+
+  const ossePayload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      type: 'OSSE'
+    }),
+    '2.2'
+  );
+  const osseJson = JSON.stringify(ossePayload);
+  assert.equal(osseJson.includes('coverage_angle'), false);
+  assert.equal(osseJson.includes('hold_start'), false);
+  assert.equal(osseJson.includes('hold_end'), false);
+
+  const rossePayload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      type: 'R-OSSE'
+    }),
+    '2.2'
+  );
+  const rosseJson = JSON.stringify(rossePayload);
+  assert.equal(rosseJson.includes('coverage_angle'), false);
+  assert.equal(rosseJson.includes('hold_start'), false);
+  assert.equal(rosseJson.includes('hold_end'), false);
 });
 
 test('buildWaveguidePayload rejects unprepared backend mesh payload fields', () => {

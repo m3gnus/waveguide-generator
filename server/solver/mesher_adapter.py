@@ -79,6 +79,14 @@ def _finite_float(value: Any, fallback: float = 0.0) -> float:
     return numeric if np.isfinite(numeric) else fallback
 
 
+def _positive_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) and numeric > 0.0 else None
+
+
 def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Translate the existing backend request payload into mesher public config."""
 
@@ -118,6 +126,16 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
         # r, b, tmax) are REJECTED by the mesher's config_builder under ICW, so
         # they must never be forwarded here. r0/a0/k/q from the shared block above
         # are accepted by the ICW validator.
+        coverage_angle = _positive_float(payload.get("coverage_angle"))
+        coverage_params = (
+            {
+                "coverage_angle": coverage_angle,
+                "hold_start": payload.get("hold_start"),
+                "hold_end": payload.get("hold_end"),
+            }
+            if coverage_angle is not None
+            else {}
+        )
         profile.update(
             _clean_dict(
                 {
@@ -129,6 +147,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                     # Rollback axial target; the mesher's ICW kernel requires one
                     # of depth / x_aperture / x_setback. Ignored for flat_baffle.
                     "depth": payload.get("depth"),
+                    **coverage_params,
                 }
             )
         )
