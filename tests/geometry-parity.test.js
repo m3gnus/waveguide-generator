@@ -292,6 +292,22 @@ test('zero morph dimensions preserve raw mouth dimensions for interior slices', 
   );
 });
 
+test('resolved no-shrinkage morph dimensions do not clamp per azimuth', () => {
+  const params = {
+    morphTarget: 1,
+    morphWidth: 120,
+    morphHeight: 200,
+    morphCorner: 0,
+    morphRate: 1,
+    morphFixed: 0,
+    morphAllowShrinkage: 0,
+  };
+
+  assert.ok(
+    Math.abs(applyMorphing(80, 80, 1, 0, params, { halfW: 60, halfH: 100 }) - 60) < FUNC_TOL
+  );
+});
+
 test('OSSE with throat extension has correct radius at extension zone', () => {
   const params = OSSE_WITH_EXT;
   const z = 5; // midway through extension
@@ -728,6 +744,38 @@ test(
   }
 );
 
+test(
+  'guiding curve superformula defaults and clamps match Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const phiValues = [0, Math.PI / 5, Math.PI / 2, Math.PI];
+    const params = {
+      gcurveType: 2,
+      gcurveWidth: 300,
+      gcurveAspectRatio: 0.8,
+      gcurveSfA: 0,
+      gcurveSfB: -2,
+      gcurveSfN1: -2,
+    };
+
+    const pyResults = callPython({
+      mode: 'functions',
+      config: {
+        guiding_curve: { params, phi_values: phiValues },
+      },
+    });
+
+    for (let i = 0; i < phiValues.length; i++) {
+      const jsR = getGuidingCurveRadius(phiValues[i], params);
+      const pyR = pyResults.guiding_curve[i].r;
+      assert.ok(
+        Math.abs(jsR - pyR) < FUNC_TOL,
+        `guiding curve SF mismatch at phi=${phiValues[i]}: JS=${jsR}, PY=${pyR}`
+      );
+    }
+  }
+);
+
 // -------------------------------------------------------------------------
 // Guiding-curve inversion point: canonical semantics are "fraction of the
 // MAIN OSSE length" (ext/slot excluded), unset -> mouth. The viewport used
@@ -826,4 +874,26 @@ test('unreachable R yields NaN and a validation error (matches mesher rejection)
     validation.errors.some((error) => error.includes('unreachable')),
     `expected an unreachable-R validation error, got: ${validation.errors.join('; ')}`
   );
+});
+
+test('unreachable R with throat extension yields NaN before extension fallback', () => {
+  const params = {
+    R: 40,
+    r0: 50,
+    k: 2,
+    a: 45,
+    a0: 0,
+    q: 1,
+    m: 0.85,
+    r: 0.4,
+    b: 0.2,
+    tmax: 1,
+    throatExtLength: 10,
+    throatExtAngle: 0,
+    slotLength: 4,
+  };
+
+  const point = calculateROSSE(0.5, 0, params);
+  assert.ok(Number.isNaN(point.x), `expected NaN x for unreachable R, got ${point.x}`);
+  assert.ok(Number.isNaN(point.y), `expected NaN y for unreachable R, got ${point.y}`);
 });

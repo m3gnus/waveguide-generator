@@ -3,6 +3,10 @@ import { debugError } from '../../../logging/debug.js';
 import { DEFAULTS } from '../constants.js';
 import { validateParameters } from './validation.js';
 
+function paramOrDefault(value, fallback) {
+  return value === undefined || value === null || value === '' ? fallback : value;
+}
+
 function calculateRossConstants(p, params) {
   const a = toRad(evalParam(params.a, p));
   const a0 = toRad(evalParam(params.a0, p));
@@ -69,10 +73,10 @@ function calculateROSSEMain(t, p, params) {
 }
 
 export function calculateROSSE(t, p, params) {
-  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
-  const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
+  const extLen = Math.max(0, evalParam(paramOrDefault(params.throatExtLength, 0), p));
+  const slotLen = Math.max(0, evalParam(paramOrDefault(params.slotLength, 0), p));
   const r0Base = evalParam(params.r0, p);
-  const extAngleRad = toRad(evalParam(params.throatExtAngle || 0, p));
+  const extAngleRad = toRad(evalParam(paramOrDefault(params.throatExtAngle, 0), p));
   // ATH anchors r0 at the MAIN throat and tapers the extension back to the
   // driver end, matching hornlab_mesher.profile_formulas.calculate_rosse.
   const r0Main = r0Base;
@@ -89,8 +93,11 @@ export function calculateROSSE(t, p, params) {
     r0Main,
     evalParam(mainParams.k, p)
   );
+  if (!Number.isFinite(mainLength)) {
+    return { x: NaN, y: NaN };
+  }
   const fullLength = extLen + slotLen + mainLength;
-  if (!Number.isFinite(fullLength) || fullLength <= 1e-12) {
+  if (fullLength <= 1e-12) {
     return { x: 0, y: r0Base };
   }
 

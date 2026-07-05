@@ -11,6 +11,26 @@ export const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 export const evalParam = (value, p = 0) => (typeof value === 'function' ? value(p) : value);
 
+const QUADRANTS_LEADING_INT_RE = /^[+-]?\d+/;
+
+export function normalizeQuadrantsValue(value, fallback = '1234') {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'boolean') return '1';
+
+  let numeric;
+  if (typeof value === 'number') {
+    numeric = Math.trunc(value);
+  } else {
+    const match = QUADRANTS_LEADING_INT_RE.exec(String(value).trim());
+    numeric = match ? Number(match[0]) : NaN;
+  }
+
+  if (numeric === 1234) return '1234';
+  if (numeric === 12) return '12';
+  if (numeric === 14) return '14';
+  return '1';
+}
+
 export const parseNumberList = (value) => {
   if (value === undefined || value === null) return null;
   if (Array.isArray(value)) {
@@ -29,8 +49,7 @@ export const parseNumberList = (value) => {
 };
 
 export const isFullCircle = (quadrants) => {
-  const q = String(quadrants ?? '1234').trim();
-  return q === '' || q === '1234';
+  return normalizeQuadrantsValue(quadrants) === '1234';
 };
 
 /**
@@ -45,9 +64,9 @@ export const isFullCircle = (quadrants) => {
  * @returns {{ startAngle: number, endAngle: number, fullCircle: boolean }}
  */
 export function parseQuadrants(quadrants) {
-  const q = String(quadrants || '1234');
+  const q = normalizeQuadrantsValue(quadrants);
 
-  if (q === '1234' || q === '') {
+  if (q === '1234') {
     return { startAngle: 0, endAngle: Math.PI * 2, fullCircle: true };
   }
 
@@ -70,8 +89,7 @@ export function parseQuadrants(quadrants) {
     return { startAngle: 0, endAngle: Math.PI / 2, fullCircle: false };
   }
 
-  // Default to full circle for unrecognized values
-  return { startAngle: 0, endAngle: Math.PI * 2, fullCircle: true };
+  return { startAngle: 0, endAngle: Math.PI / 2, fullCircle: false };
 }
 
 export const cleanNumber = (value) => (Math.abs(value) < EPS ? 0 : value);

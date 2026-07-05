@@ -4,6 +4,10 @@ import { DEFAULTS, HORN_PROFILES } from '../constants.js';
 import { getGuidingCurveRadius } from './guidingCurve.js';
 import { validateParameters } from './validation.js';
 
+function paramOrDefault(value, fallback) {
+  return value === undefined || value === null || value === '' ? fallback : value;
+}
+
 function computeOsseBaseRadius(z, r0, k, a0, a) {
   const term1 = (k * r0) ** 2;
   const term2 = 2 * k * r0 * z * Math.tan(a0);
@@ -22,8 +26,8 @@ function computeOsseTermRadius(z, L, s, n, q) {
 
 export function resolveOsseLengthConfig(params, p, options = {}) {
   const rawL = options.L ?? evalParam(params.L, p);
-  const extLen = Math.max(0, evalParam(params.throatExtLength || 0, p));
-  const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
+  const extLen = Math.max(0, evalParam(paramOrDefault(params.throatExtLength, 0), p));
+  const slotLen = Math.max(0, evalParam(paramOrDefault(params.slotLength, 0), p));
   const lengthMode = options.lengthMode ?? params._athLengthMode;
 
   if (lengthMode === 'total') {
@@ -99,7 +103,7 @@ function calculateArcCenterFromTangent(p1, p2, tangentAngle) {
 }
 
 function evaluateCircularArc(zMain, r0Main, mouthR, params, p, L) {
-  const explicitRadius = evalParam(params.circArcRadius || 0, p);
+  const explicitRadius = evalParam(paramOrDefault(params.circArcRadius, 0), p);
   const p1 = { x: 0, y: r0Main };
   const p2 = { x: L, y: mouthR };
 
@@ -111,7 +115,7 @@ function evaluateCircularArc(zMain, r0Main, mouthR, params, p, L) {
   }
 
   if (!center) {
-    const termAngle = toRad(evalParam(params.circArcTermAngle || 1, p));
+    const termAngle = toRad(evalParam(paramOrDefault(params.circArcTermAngle, 1), p));
     const tangent = calculateArcCenterFromTangent(p1, p2, termAngle);
     if (tangent) {
       center = { x: tangent.x, y: tangent.y };
@@ -191,7 +195,7 @@ export function calculateOSSE(z, p, params, options = {}) {
   }
 
   const { L, totalLength, extLen, slotLen } = resolveOsseLengthConfig(params, p, options);
-  const extAngleRad = toRad(evalParam(params.throatExtAngle || 0, p));
+  const extAngleRad = toRad(evalParam(paramOrDefault(params.throatExtAngle, 0), p));
 
   const r0Base = evalParam(params.r0, p);
   const a0Deg = evalParam(params.a0, p);
@@ -203,8 +207,8 @@ export function calculateOSSE(z, p, params, options = {}) {
 
   const config = { totalLength, extLen, slotLen, r0Base, extAngleRad, a0Deg, L };
 
-  const throatProfile = Number(params.throatProfile || HORN_PROFILES.STANDARD);
-  const gcurveType = Number(params.gcurveType || 0);
+  const throatProfile = Number(paramOrDefault(params.throatProfile, HORN_PROFILES.STANDARD));
+  const gcurveType = Number(evalParam(paramOrDefault(params.gcurveType, 0), p));
   const coverageAngle =
     options.coverageAngle ??
     (gcurveType === 0
@@ -235,7 +239,7 @@ export function calculateOSSE(z, p, params, options = {}) {
 
   let x = z;
   let y = radius;
-  const rotDeg = evalParam(params.rot || 0, p);
+  const rotDeg = evalParam(paramOrDefault(params.rot, 0), p);
 
   if (Number.isFinite(rotDeg) && rotDeg !== 0) {
     const rotRad = toRad(rotDeg);

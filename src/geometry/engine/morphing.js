@@ -103,7 +103,8 @@ export function applyMorphing(currentR, mouthR, t, p, params, morphTargetInfo = 
     evalNumber(params.morphCorner, p, 0)
   );
   const allowShrinkage = params.morphAllowShrinkage === 1 || params.morphAllowShrinkage === true;
-  const safeTarget = allowShrinkage ? targetR : Math.max(mouthR, targetR);
+  const hasResolvedDimensions = morphTargetInfo?.halfW != null || morphTargetInfo?.halfH != null;
+  const safeTarget = allowShrinkage || hasResolvedDimensions ? targetR : Math.max(mouthR, targetR);
 
   return currentR + (safeTarget - mouthR) * morphFactor;
 }

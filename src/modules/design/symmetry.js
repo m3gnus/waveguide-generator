@@ -9,6 +9,7 @@ const VALID_QUADRANTS = new Set([
   HALF_RIGHT_QUADRANTS,
   QUARTER_Q1_QUADRANTS,
 ]);
+const QUADRANTS_LEADING_INT_RE = /^[+-]?\d+/;
 
 const ANGULAR_SYMMETRY_KEYS = Object.freeze([
   'R',
@@ -128,10 +129,17 @@ function enclosureSymmetry(params) {
   };
 }
 
+function quadrantsLeadingInt(value) {
+  if (value === undefined || value === null || typeof value === 'boolean') return null;
+  if (typeof value === 'number') return Math.trunc(value);
+  const match = QUADRANTS_LEADING_INT_RE.exec(String(value).trim());
+  return match ? Number(match[0]) : null;
+}
+
 export function normalizeQuadrants(value, fallback = FULL_QUADRANTS) {
-  const text = String(value ?? '').trim();
-  const numeric = Number(text);
-  return VALID_QUADRANTS.has(numeric) ? numeric : fallback;
+  if (value === undefined || value === null) return fallback;
+  const numeric = quadrantsLeadingInt(value);
+  return VALID_QUADRANTS.has(numeric) ? numeric : QUARTER_Q1_QUADRANTS;
 }
 
 export function resolveAutoQuadrants(params = {}) {

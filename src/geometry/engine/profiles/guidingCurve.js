@@ -9,14 +9,25 @@ function calculateSuperellipseRadius(cosP, sinP, width, aspect, exponent) {
   return Math.pow(term, -1 / exponent);
 }
 
+function paramOrDefault(value, fallback) {
+  return value === undefined || value === null || value === '' ? fallback : value;
+}
+
+function evalParamOrDefault(value, p, fallback) {
+  return evalParam(paramOrDefault(value, fallback), p);
+}
+
 function parseSuperformulaParams(params, p) {
-  let a = evalParam(params.gcurveSfA || 1, p);
-  let b = evalParam(params.gcurveSfB || 1, p);
-  let m1 = evalParam(params.gcurveSfM1 || 0, p);
-  let m2 = evalParam(params.gcurveSfM2 || 0, p);
-  let n1 = evalParam(params.gcurveSfN1 || 1, p);
-  let n2 = evalParam(params.gcurveSfN2 || 1, p);
-  let n3 = evalParam(params.gcurveSfN3 || 1, p);
+  let a = evalParamOrDefault(params.gcurveSfA, p, 1);
+  let b = evalParamOrDefault(params.gcurveSfB, p, 1);
+  let m1 = evalParamOrDefault(params.gcurveSfM1, p, 4);
+  let m2 =
+    params.gcurveSfM2 === undefined || params.gcurveSfM2 === null || params.gcurveSfM2 === ''
+      ? m1
+      : evalParam(params.gcurveSfM2, p);
+  let n1 = evalParamOrDefault(params.gcurveSfN1, p, 2);
+  let n2 = evalParamOrDefault(params.gcurveSfN2, p, 2);
+  let n3 = evalParamOrDefault(params.gcurveSfN3, p, 2);
 
   const list = parseNumberList(params.gcurveSf);
   if (list?.length >= 6) {
@@ -24,7 +35,15 @@ function parseSuperformulaParams(params, p) {
     m2 = m1;
   }
 
-  return { a, b, m1, m2, n1, n2, n3 };
+  return {
+    a: Math.max(Math.abs(a), 1e-12),
+    b: Math.max(Math.abs(b), 1e-12),
+    m1,
+    m2,
+    n1: Math.max(Math.abs(n1), 1e-12),
+    n2,
+    n3,
+  };
 }
 
 function calculateSuperformulaRadius(pr, cosP, sinP, width, aspect, sfParams) {
@@ -43,20 +62,20 @@ function calculateSuperformulaRadius(pr, cosP, sinP, width, aspect, sfParams) {
 }
 
 export function getGuidingCurveRadius(p, params) {
-  const type = Number(params.gcurveType || GUIDING_CURVES.NONE);
+  const type = Number(evalParamOrDefault(params.gcurveType, p, GUIDING_CURVES.NONE));
   if (type === GUIDING_CURVES.NONE) return null;
 
-  const width = evalParam(params.gcurveWidth || 0, p);
+  const width = evalParamOrDefault(params.gcurveWidth, p, 0);
   if (!Number.isFinite(width) || width <= 0) return null;
 
-  const aspect = evalParam(params.gcurveAspectRatio || 1, p);
-  const rotation = toRad(evalParam(params.gcurveRot || 0, p));
+  const aspect = evalParamOrDefault(params.gcurveAspectRatio, p, 1);
+  const rotation = toRad(evalParamOrDefault(params.gcurveRot, p, 0));
   const pr = p - rotation;
   const cosP = Math.cos(pr);
   const sinP = Math.sin(pr);
 
   if (type === GUIDING_CURVES.SUPERELLIPSE) {
-    const n = Math.max(2, evalParam(params.gcurveSeN || 3, p));
+    const n = Math.max(2, evalParamOrDefault(params.gcurveSeN, p, 3));
     return calculateSuperellipseRadius(cosP, sinP, width, aspect, n);
   }
 
