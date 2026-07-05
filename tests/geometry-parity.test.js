@@ -68,33 +68,64 @@ function isPythonAvailable() {
 const OSSE_BASIC = {
   formula_type: 'OSSE',
   type: 'OSSE',
-  L: 120, a: 45, a0: 15.5, r0: 12.7,
-  s: 0.6, n: 4.158, q: 0.991, k: 7, h: 0,
-  throatExtLength: 0, throatExtAngle: 0, slotLength: 0,
-  throatProfile: 1, rot: 0, gcurveType: 0,
+  L: 120,
+  a: 45,
+  a0: 15.5,
+  r0: 12.7,
+  s: 0.6,
+  n: 4.158,
+  q: 0.991,
+  k: 7,
+  h: 0,
+  throatExtLength: 0,
+  throatExtAngle: 0,
+  slotLength: 0,
+  throatProfile: 1,
+  rot: 0,
+  gcurveType: 0,
   morphTarget: 0,
   // Python snake_case aliases
-  throat_ext_length: 0, throat_ext_angle: 0, slot_length: 0,
-  throat_profile: 1, gcurve_type: 0, morph_target: 0,
+  throat_ext_length: 0,
+  throat_ext_angle: 0,
+  slot_length: 0,
+  throat_profile: 1,
+  gcurve_type: 0,
+  morph_target: 0,
 };
 
 const ROSSE_BASIC = {
   formula_type: 'R-OSSE',
   type: 'R-OSSE',
-  R: 140, a: 45, a0: 15.5, r0: 12.7,
-  k: 2, r: 0.4, b: 0.2, m: 0.85, q: 3.4, tmax: 1.0,
+  R: 140,
+  a: 45,
+  a0: 15.5,
+  r0: 12.7,
+  k: 2,
+  r: 0.4,
+  b: 0.2,
+  m: 0.85,
+  q: 3.4,
+  tmax: 1.0,
 };
 
 const OSSE_WITH_EXT = {
   ...OSSE_BASIC,
-  throatExtLength: 10, throatExtAngle: 5, slotLength: 5,
-  throat_ext_length: 10, throat_ext_angle: 5, slot_length: 5,
+  throatExtLength: 10,
+  throatExtAngle: 5,
+  slotLength: 5,
+  throat_ext_length: 10,
+  throat_ext_angle: 5,
+  slot_length: 5,
 };
 
 const ROSSE_WITH_EXT = {
   ...ROSSE_BASIC,
-  throatExtLength: 12, throatExtAngle: 20, slotLength: 5,
-  throat_ext_length: 12, throat_ext_angle: 20, slot_length: 5,
+  throatExtLength: 12,
+  throatExtAngle: 20,
+  slotLength: 5,
+  throat_ext_length: 12,
+  throat_ext_angle: 20,
+  slot_length: 5,
 };
 
 const OSSE_WITH_ROT = {
@@ -195,7 +226,9 @@ test('R-OSSE length calculation handles near-zero coverage angle', () => {
 });
 
 test('rounded rect radius matches known values', () => {
-  const halfW = 100, halfH = 60, cornerR = 10;
+  const halfW = 100,
+    halfH = 60,
+    cornerR = 10;
 
   // At phi=0 (pure X axis), should return halfW
   assert.ok(Math.abs(getRoundedRectRadius(0, halfW, halfH, cornerR) - halfW) < FUNC_TOL);
@@ -255,8 +288,7 @@ test('zero morph dimensions preserve raw mouth dimensions for interior slices', 
   };
 
   assert.ok(
-    Math.abs(applyMorphing(50, 100, 0.5, 0, params, { halfW: 100, halfH: 80 }) - 50) <
-      FUNC_TOL
+    Math.abs(applyMorphing(50, 100, 0.5, 0, params, { halfW: 100, halfH: 80 }) - 50) < FUNC_TOL
   );
 });
 
@@ -266,10 +298,13 @@ test('OSSE with throat extension has correct radius at extension zone', () => {
   const { y } = calculateOSSE(z, 0, params);
   // ATH anchors r0 at the MAIN throat and tapers the extension BACK to the
   // driver end, so the extension runs from r0 - ext*tan(angle) up to r0.
-  const tanExt = Math.tan(params.throatExtAngle * Math.PI / 180);
+  const tanExt = Math.tan((params.throatExtAngle * Math.PI) / 180);
   const r0Throat = Math.max(0, params.r0 - params.throatExtLength * tanExt);
   const expected = r0Throat + z * tanExt;
-  assert.ok(Math.abs(y - expected) < FUNC_TOL, `extension zone radius: got ${y}, expected ${expected}`);
+  assert.ok(
+    Math.abs(y - expected) < FUNC_TOL,
+    `extension zone radius: got ${y}, expected ${expected}`
+  );
 });
 
 test('ATH total-length OSSE keeps slot inside Length', () => {
@@ -287,10 +322,15 @@ test('R-OSSE with throat extension has correct radius at extension zone', () => 
   const params = ROSSE_WITH_EXT;
   const extensionT = 6 / 120;
   const { x, y } = calculateROSSE(extensionT, 0, params);
-  const expected = params.r0 + x * Math.tan(params.throatExtAngle * Math.PI / 180);
+  const tanExt = Math.tan((params.throatExtAngle * Math.PI) / 180);
+  const r0Throat = Math.max(0, params.r0 - params.throatExtLength * tanExt);
+  const expected = r0Throat + x * tanExt;
 
   assert.ok(x > 0 && x < params.throatExtLength, `x should be inside extension zone, got ${x}`);
-  assert.ok(Math.abs(y - expected) < FUNC_TOL, `extension zone radius: got ${y}, expected ${expected}`);
+  assert.ok(
+    Math.abs(y - expected) < FUNC_TOL,
+    `extension zone radius: got ${y}, expected ${expected}`
+  );
 });
 
 test('OSSE with rotation rotates the profile', () => {
@@ -307,177 +347,201 @@ test('OSSE with rotation rotates the profile', () => {
 
 const hasPython = isPythonAvailable();
 
-test('OSSE profiles match between JS and Python', { skip: !hasPython && 'Python not available' }, () => {
-  const pyResults = callPython({
-    mode: 'profiles',
-    config: OSSE_BASIC,
-    t_values: T_VALUES,
-    phi_values: PHI_VALUES,
-  });
+test(
+  'OSSE profiles match between JS and Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const pyResults = callPython({
+      mode: 'profiles',
+      config: OSSE_BASIC,
+      t_values: T_VALUES,
+      phi_values: PHI_VALUES,
+    });
 
-  let idx = 0;
-  for (const phi of PHI_VALUES) {
-    for (const t of T_VALUES) {
-      const z = t * OSSE_BASIC.L;
-      const js = calculateOSSE(z, phi, OSSE_BASIC);
-      const py = pyResults[idx];
+    let idx = 0;
+    for (const phi of PHI_VALUES) {
+      for (const t of T_VALUES) {
+        const z = t * OSSE_BASIC.L;
+        const js = calculateOSSE(z, phi, OSSE_BASIC);
+        const py = pyResults[idx];
+
+        assert.ok(
+          Math.abs(js.x - py.x) < PROFILE_TOL,
+          `OSSE x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}, diff=${Math.abs(js.x - py.x)}`
+        );
+        assert.ok(
+          Math.abs(js.y - py.y) < PROFILE_TOL,
+          `OSSE y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}, diff=${Math.abs(js.y - py.y)}`
+        );
+        idx++;
+      }
+    }
+  }
+);
+
+test(
+  'R-OSSE profiles match between JS and Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const pyResults = callPython({
+      mode: 'profiles',
+      config: ROSSE_BASIC,
+      t_values: T_VALUES,
+      phi_values: PHI_VALUES,
+    });
+
+    let idx = 0;
+    for (const phi of PHI_VALUES) {
+      for (const t of T_VALUES) {
+        const js = calculateROSSE(t, phi, ROSSE_BASIC);
+        const py = pyResults[idx];
+
+        assert.ok(
+          Math.abs(js.x - py.x) < PROFILE_TOL,
+          `R-OSSE x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}, diff=${Math.abs(js.x - py.x)}`
+        );
+        assert.ok(
+          Math.abs(js.y - py.y) < PROFILE_TOL,
+          `R-OSSE y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}, diff=${Math.abs(js.y - py.y)}`
+        );
+        idx++;
+      }
+    }
+  }
+);
+
+test(
+  'R-OSSE with throat extension matches Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const pyResults = callPython({
+      mode: 'profiles',
+      config: ROSSE_WITH_EXT,
+      t_values: T_VALUES,
+      phi_values: PHI_VALUES,
+    });
+
+    let idx = 0;
+    for (const phi of PHI_VALUES) {
+      for (const t of T_VALUES) {
+        const js = calculateROSSE(t, phi, ROSSE_WITH_EXT);
+        const py = pyResults[idx];
+
+        assert.ok(
+          Math.abs(js.x - py.x) < PROFILE_TOL,
+          `R-OSSE+ext x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
+        );
+        assert.ok(
+          Math.abs(js.y - py.y) < PROFILE_TOL,
+          `R-OSSE+ext y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
+        );
+        idx++;
+      }
+    }
+  }
+);
+
+test(
+  'OSSE with throat extension matches Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const pyResults = callPython({
+      mode: 'profiles',
+      config: OSSE_WITH_EXT,
+      t_values: T_VALUES,
+      phi_values: PHI_VALUES,
+    });
+
+    const totalLength = OSSE_WITH_EXT.L + OSSE_WITH_EXT.throatExtLength + OSSE_WITH_EXT.slotLength;
+
+    let idx = 0;
+    for (const phi of PHI_VALUES) {
+      for (const t of T_VALUES) {
+        const z = t * totalLength;
+        const js = calculateOSSE(z, phi, OSSE_WITH_EXT);
+        const py = pyResults[idx];
+
+        assert.ok(
+          Math.abs(js.x - py.x) < PROFILE_TOL,
+          `OSSE+ext x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
+        );
+        assert.ok(
+          Math.abs(js.y - py.y) < PROFILE_TOL,
+          `OSSE+ext y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
+        );
+        idx++;
+      }
+    }
+  }
+);
+
+test(
+  'ATH total-length OSSE profile matches Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const tValues = [0, 0.25, 0.3, 0.5, 0.75, 1.0];
+    const pyResults = callPython({
+      mode: 'profiles',
+      config: OSSE_ATH_SLOT_MORPH,
+      t_values: tValues,
+      phi_values: [0],
+    });
+
+    for (let j = 0; j < tValues.length; j++) {
+      const t = tValues[j];
+      const js = calculateOSSE(t * OSSE_ATH_SLOT_MORPH.L, 0, OSSE_ATH_SLOT_MORPH);
+      const py = pyResults[j];
 
       assert.ok(
         Math.abs(js.x - py.x) < PROFILE_TOL,
-        `OSSE x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}, diff=${Math.abs(js.x - py.x)}`
+        `ATH total-length x mismatch at t=${t}: JS=${js.x}, PY=${py.x}`
       );
       assert.ok(
         Math.abs(js.y - py.y) < PROFILE_TOL,
-        `OSSE y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}, diff=${Math.abs(js.y - py.y)}`
+        `ATH total-length y mismatch at t=${t}: JS=${js.y}, PY=${py.y}`
       );
-      idx++;
     }
   }
-});
+);
 
-test('R-OSSE profiles match between JS and Python', { skip: !hasPython && 'Python not available' }, () => {
-  const pyResults = callPython({
-    mode: 'profiles',
-    config: ROSSE_BASIC,
-    t_values: T_VALUES,
-    phi_values: PHI_VALUES,
-  });
+test(
+  'ATH slot morph viewport mesh matches Python point grid',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const pyGrid = callPython({
+      mode: 'point_grid',
+      config: OSSE_ATH_SLOT_MORPH,
+    });
+    const mesh = buildWaveguideMesh(OSSE_ATH_SLOT_MORPH, {
+      includeEnclosure: false,
+      omitSource: true,
+    });
 
-  let idx = 0;
-  for (const phi of PHI_VALUES) {
-    for (const t of T_VALUES) {
-      const js = calculateROSSE(t, phi, ROSSE_BASIC);
-      const py = pyResults[idx];
+    assert.equal(mesh.ringCount, pyGrid.grid_n_phi);
+    assert.equal(OSSE_ATH_SLOT_MORPH.lengthSegments, pyGrid.grid_n_length);
 
-      assert.ok(
-        Math.abs(js.x - py.x) < PROFILE_TOL,
-        `R-OSSE x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}, diff=${Math.abs(js.x - py.x)}`
-      );
-      assert.ok(
-        Math.abs(js.y - py.y) < PROFILE_TOL,
-        `R-OSSE y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}, diff=${Math.abs(js.y - py.y)}`
-      );
-      idx++;
+    const nPhi = pyGrid.grid_n_phi;
+    const nLength = pyGrid.grid_n_length;
+    const py = pyGrid.inner_points;
+
+    for (let j = 0; j <= nLength; j++) {
+      for (let i = 0; i < nPhi; i++) {
+        const jsIdx = (j * nPhi + i) * 3;
+        const pyIdx = (i * (nLength + 1) + j) * 3;
+        const jsX = mesh.vertices[jsIdx];
+        const jsY = mesh.vertices[jsIdx + 1];
+        const jsZ = mesh.vertices[jsIdx + 2];
+        const pyX = py[pyIdx];
+        const pyZ = py[pyIdx + 1];
+        const pyY = py[pyIdx + 2];
+
+        assert.ok(Math.abs(jsX - pyX) < PROFILE_TOL, `x mismatch at i=${i}, j=${j}`);
+        assert.ok(Math.abs(jsY - pyY) < PROFILE_TOL, `axial mismatch at i=${i}, j=${j}`);
+        assert.ok(Math.abs(jsZ - pyZ) < PROFILE_TOL, `z mismatch at i=${i}, j=${j}`);
+      }
     }
   }
-});
-
-test('R-OSSE with throat extension matches Python', { skip: !hasPython && 'Python not available' }, () => {
-  const pyResults = callPython({
-    mode: 'profiles',
-    config: ROSSE_WITH_EXT,
-    t_values: T_VALUES,
-    phi_values: PHI_VALUES,
-  });
-
-  let idx = 0;
-  for (const phi of PHI_VALUES) {
-    for (const t of T_VALUES) {
-      const js = calculateROSSE(t, phi, ROSSE_WITH_EXT);
-      const py = pyResults[idx];
-
-      assert.ok(
-        Math.abs(js.x - py.x) < PROFILE_TOL,
-        `R-OSSE+ext x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
-      );
-      assert.ok(
-        Math.abs(js.y - py.y) < PROFILE_TOL,
-        `R-OSSE+ext y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
-      );
-      idx++;
-    }
-  }
-});
-
-test('OSSE with throat extension matches Python', { skip: !hasPython && 'Python not available' }, () => {
-  const pyResults = callPython({
-    mode: 'profiles',
-    config: OSSE_WITH_EXT,
-    t_values: T_VALUES,
-    phi_values: PHI_VALUES,
-  });
-
-  const totalLength = OSSE_WITH_EXT.L + OSSE_WITH_EXT.throatExtLength + OSSE_WITH_EXT.slotLength;
-
-  let idx = 0;
-  for (const phi of PHI_VALUES) {
-    for (const t of T_VALUES) {
-      const z = t * totalLength;
-      const js = calculateOSSE(z, phi, OSSE_WITH_EXT);
-      const py = pyResults[idx];
-
-      assert.ok(
-        Math.abs(js.x - py.x) < PROFILE_TOL,
-        `OSSE+ext x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
-      );
-      assert.ok(
-        Math.abs(js.y - py.y) < PROFILE_TOL,
-        `OSSE+ext y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
-      );
-      idx++;
-    }
-  }
-});
-
-test('ATH total-length OSSE profile matches Python', { skip: !hasPython && 'Python not available' }, () => {
-  const tValues = [0, 0.25, 0.3, 0.5, 0.75, 1.0];
-  const pyResults = callPython({
-    mode: 'profiles',
-    config: OSSE_ATH_SLOT_MORPH,
-    t_values: tValues,
-    phi_values: [0],
-  });
-
-  for (let j = 0; j < tValues.length; j++) {
-    const t = tValues[j];
-    const js = calculateOSSE(t * OSSE_ATH_SLOT_MORPH.L, 0, OSSE_ATH_SLOT_MORPH);
-    const py = pyResults[j];
-
-    assert.ok(
-      Math.abs(js.x - py.x) < PROFILE_TOL,
-      `ATH total-length x mismatch at t=${t}: JS=${js.x}, PY=${py.x}`
-    );
-    assert.ok(
-      Math.abs(js.y - py.y) < PROFILE_TOL,
-      `ATH total-length y mismatch at t=${t}: JS=${js.y}, PY=${py.y}`
-    );
-  }
-});
-
-test('ATH slot morph viewport mesh matches Python point grid', { skip: !hasPython && 'Python not available' }, () => {
-  const pyGrid = callPython({
-    mode: 'point_grid',
-    config: OSSE_ATH_SLOT_MORPH,
-  });
-  const mesh = buildWaveguideMesh(OSSE_ATH_SLOT_MORPH, {
-    includeEnclosure: false,
-    omitSource: true,
-  });
-
-  assert.equal(mesh.ringCount, pyGrid.grid_n_phi);
-  assert.equal(OSSE_ATH_SLOT_MORPH.lengthSegments, pyGrid.grid_n_length);
-
-  const nPhi = pyGrid.grid_n_phi;
-  const nLength = pyGrid.grid_n_length;
-  const py = pyGrid.inner_points;
-
-  for (let j = 0; j <= nLength; j++) {
-    for (let i = 0; i < nPhi; i++) {
-      const jsIdx = (j * nPhi + i) * 3;
-      const pyIdx = (i * (nLength + 1) + j) * 3;
-      const jsX = mesh.vertices[jsIdx];
-      const jsY = mesh.vertices[jsIdx + 1];
-      const jsZ = mesh.vertices[jsIdx + 2];
-      const pyX = py[pyIdx];
-      const pyZ = py[pyIdx + 1];
-      const pyY = py[pyIdx + 2];
-
-      assert.ok(Math.abs(jsX - pyX) < PROFILE_TOL, `x mismatch at i=${i}, j=${j}`);
-      assert.ok(Math.abs(jsY - pyY) < PROFILE_TOL, `axial mismatch at i=${i}, j=${j}`);
-      assert.ok(Math.abs(jsZ - pyZ) < PROFILE_TOL, `z mismatch at i=${i}, j=${j}`);
-    }
-  }
-});
+);
 
 test('OSSE with rotation matches Python', { skip: !hasPython && 'Python not available' }, () => {
   const pyResults = callPython({
@@ -507,33 +571,37 @@ test('OSSE with rotation matches Python', { skip: !hasPython && 'Python not avai
   }
 });
 
-test('OSSE circular-arc throat profile matches Python', { skip: !hasPython && 'Python not available' }, () => {
-  const pyResults = callPython({
-    mode: 'profiles',
-    config: OSSE_CIRCULAR_ARC,
-    t_values: T_VALUES,
-    phi_values: PHI_VALUES,
-  });
+test(
+  'OSSE circular-arc throat profile matches Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const pyResults = callPython({
+      mode: 'profiles',
+      config: OSSE_CIRCULAR_ARC,
+      t_values: T_VALUES,
+      phi_values: PHI_VALUES,
+    });
 
-  let idx = 0;
-  for (const phi of PHI_VALUES) {
-    for (const t of T_VALUES) {
-      const z = t * OSSE_CIRCULAR_ARC.L;
-      const js = calculateOSSE(z, phi, OSSE_CIRCULAR_ARC);
-      const py = pyResults[idx];
+    let idx = 0;
+    for (const phi of PHI_VALUES) {
+      for (const t of T_VALUES) {
+        const z = t * OSSE_CIRCULAR_ARC.L;
+        const js = calculateOSSE(z, phi, OSSE_CIRCULAR_ARC);
+        const py = pyResults[idx];
 
-      assert.ok(
-        Math.abs(js.x - py.x) < PROFILE_TOL,
-        `OSSE+arc x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
-      );
-      assert.ok(
-        Math.abs(js.y - py.y) < PROFILE_TOL,
-        `OSSE+arc y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
-      );
-      idx++;
+        assert.ok(
+          Math.abs(js.x - py.x) < PROFILE_TOL,
+          `OSSE+arc x mismatch at t=${t}, phi=${phi}: JS=${js.x}, PY=${py.x}`
+        );
+        assert.ok(
+          Math.abs(js.y - py.y) < PROFILE_TOL,
+          `OSSE+arc y mismatch at t=${t}, phi=${phi}: JS=${js.y}, PY=${py.y}`
+        );
+        idx++;
+      }
     }
   }
-});
+);
 
 test('OSSE with h-bulge matches Python', { skip: !hasPython && 'Python not available' }, () => {
   const pyResults = callPython({
@@ -566,37 +634,43 @@ test('OSSE with h-bulge matches Python', { skip: !hasPython && 'Python not avail
   }
 });
 
-test('R-OSSE near-zero angle matches Python', { skip: !hasPython && 'Python not available' }, () => {
-  // Tests the fixed safeDiv edge case
-  const config = { ...ROSSE_BASIC, a: 0.001 };
-  const tValues = [0, 0.25, 0.5, 0.75, 1.0];
+test(
+  'R-OSSE near-zero angle matches Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    // Tests the fixed safeDiv edge case
+    const config = { ...ROSSE_BASIC, a: 0.001 };
+    const tValues = [0, 0.25, 0.5, 0.75, 1.0];
 
-  const pyResults = callPython({
-    mode: 'profiles',
-    config,
-    t_values: tValues,
-    phi_values: [0],
-  });
+    const pyResults = callPython({
+      mode: 'profiles',
+      config,
+      t_values: tValues,
+      phi_values: [0],
+    });
 
-  for (let j = 0; j < tValues.length; j++) {
-    const t = tValues[j];
-    const js = calculateROSSE(t, 0, config);
-    const py = pyResults[j];
+    for (let j = 0; j < tValues.length; j++) {
+      const t = tValues[j];
+      const js = calculateROSSE(t, 0, config);
+      const py = pyResults[j];
 
-    assert.ok(
-      Math.abs(js.x - py.x) < PROFILE_TOL,
-      `R-OSSE edge x mismatch at t=${t}: JS=${js.x}, PY=${py.x}`
-    );
-    assert.ok(
-      Math.abs(js.y - py.y) < PROFILE_TOL,
-      `R-OSSE edge y mismatch at t=${t}: JS=${js.y}, PY=${py.y}`
-    );
+      assert.ok(
+        Math.abs(js.x - py.x) < PROFILE_TOL,
+        `R-OSSE edge x mismatch at t=${t}: JS=${js.x}, PY=${py.x}`
+      );
+      assert.ok(
+        Math.abs(js.y - py.y) < PROFILE_TOL,
+        `R-OSSE edge y mismatch at t=${t}: JS=${js.y}, PY=${py.y}`
+      );
+    }
   }
-});
+);
 
 test('rounded rect radius matches Python', { skip: !hasPython && 'Python not available' }, () => {
   const phiValues = [0, Math.PI / 6, Math.PI / 4, Math.PI / 3, Math.PI / 2];
-  const halfW = 100, halfH = 60, cornerR = 10;
+  const halfW = 100,
+    halfH = 60,
+    cornerR = 10;
 
   const pyResults = callPython({
     mode: 'functions',
@@ -615,40 +689,44 @@ test('rounded rect radius matches Python', { skip: !hasPython && 'Python not ava
   }
 });
 
-test('guiding curve superellipse matches Python', { skip: !hasPython && 'Python not available' }, () => {
-  const phiValues = [0, Math.PI / 4, Math.PI / 2, Math.PI, 3 * Math.PI / 2];
-  const gcParams = {
-    gcurve_type: 1,
-    gcurve_width: 300,
-    gcurve_aspect_ratio: 0.8,
-    gcurve_se_n: 3,
-    gcurve_rot: 0,
-  };
-  // JS params use camelCase
-  const jsParams = {
-    gcurveType: 1,
-    gcurveWidth: 300,
-    gcurveAspectRatio: 0.8,
-    gcurveSeN: 3,
-    gcurveRot: 0,
-  };
+test(
+  'guiding curve superellipse matches Python',
+  { skip: !hasPython && 'Python not available' },
+  () => {
+    const phiValues = [0, Math.PI / 4, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+    const gcParams = {
+      gcurve_type: 1,
+      gcurve_width: 300,
+      gcurve_aspect_ratio: 0.8,
+      gcurve_se_n: 3,
+      gcurve_rot: 0,
+    };
+    // JS params use camelCase
+    const jsParams = {
+      gcurveType: 1,
+      gcurveWidth: 300,
+      gcurveAspectRatio: 0.8,
+      gcurveSeN: 3,
+      gcurveRot: 0,
+    };
 
-  const pyResults = callPython({
-    mode: 'functions',
-    config: {
-      guiding_curve: { params: gcParams, phi_values: phiValues },
-    },
-  });
+    const pyResults = callPython({
+      mode: 'functions',
+      config: {
+        guiding_curve: { params: gcParams, phi_values: phiValues },
+      },
+    });
 
-  for (let i = 0; i < phiValues.length; i++) {
-    const jsR = getGuidingCurveRadius(phiValues[i], jsParams);
-    const pyR = pyResults.guiding_curve[i].r;
-    assert.ok(
-      Math.abs(jsR - pyR) < FUNC_TOL,
-      `guiding curve SE mismatch at phi=${phiValues[i]}: JS=${jsR}, PY=${pyR}`
-    );
+    for (let i = 0; i < phiValues.length; i++) {
+      const jsR = getGuidingCurveRadius(phiValues[i], jsParams);
+      const pyR = pyResults.guiding_curve[i].r;
+      assert.ok(
+        Math.abs(jsR - pyR) < FUNC_TOL,
+        `guiding curve SE mismatch at phi=${phiValues[i]}: JS=${jsR}, PY=${pyR}`
+      );
+    }
   }
-});
+);
 
 // -------------------------------------------------------------------------
 // Guiding-curve inversion point: canonical semantics are "fraction of the
@@ -660,12 +738,24 @@ test('guiding curve superellipse matches Python', { skip: !hasPython && 'Python 
 
 const OSSE_GCURVE_EXT = {
   ...OSSE_BASIC,
-  throatExtLength: 10, throatExtAngle: 5, slotLength: 5,
-  throat_ext_length: 10, throat_ext_angle: 5, slot_length: 5,
-  gcurveType: 1, gcurveWidth: 300, gcurveAspectRatio: 0.8, gcurveSeN: 3,
-  gcurveRot: 0, gcurveDist: 0.5,
-  gcurve_type: 1, gcurve_width: 300, gcurve_aspect_ratio: 0.8, gcurve_se_n: 3,
-  gcurve_rot: 0, gcurve_dist: 0.5,
+  throatExtLength: 10,
+  throatExtAngle: 5,
+  slotLength: 5,
+  throat_ext_length: 10,
+  throat_ext_angle: 5,
+  slot_length: 5,
+  gcurveType: 1,
+  gcurveWidth: 300,
+  gcurveAspectRatio: 0.8,
+  gcurveSeN: 3,
+  gcurveRot: 0,
+  gcurveDist: 0.5,
+  gcurve_type: 1,
+  gcurve_width: 300,
+  gcurve_aspect_ratio: 0.8,
+  gcurve_se_n: 3,
+  gcurve_rot: 0,
+  gcurve_dist: 0.5,
 };
 
 // Same design with gcurveDist unset: Python defaults to the mouth (1.0);
@@ -681,35 +771,39 @@ for (const [label, config] of [
   ['gcurveDist=0.5', OSSE_GCURVE_EXT],
   ['gcurveDist unset', OSSE_GCURVE_EXT_NO_DIST],
 ]) {
-  test(`OSSE guiding curve with throat extension matches Python (${label})`, { skip: !hasPython && 'Python not available' }, () => {
-    const pyResults = callPython({
-      mode: 'profiles',
-      config,
-      t_values: T_VALUES,
-      phi_values: PHI_VALUES,
-    });
+  test(
+    `OSSE guiding curve with throat extension matches Python (${label})`,
+    { skip: !hasPython && 'Python not available' },
+    () => {
+      const pyResults = callPython({
+        mode: 'profiles',
+        config,
+        t_values: T_VALUES,
+        phi_values: PHI_VALUES,
+      });
 
-    const totalLength = config.L + config.throatExtLength + config.slotLength;
+      const totalLength = config.L + config.throatExtLength + config.slotLength;
 
-    let idx = 0;
-    for (const phi of PHI_VALUES) {
-      for (const t of T_VALUES) {
-        const z = t * totalLength;
-        const js = calculateOSSE(z, phi, config);
-        const py = pyResults[idx];
+      let idx = 0;
+      for (const phi of PHI_VALUES) {
+        for (const t of T_VALUES) {
+          const z = t * totalLength;
+          const js = calculateOSSE(z, phi, config);
+          const py = pyResults[idx];
 
-        assert.ok(
-          Math.abs(js.x - py.x) < PROFILE_TOL,
-          `OSSE+gcurve+ext x mismatch at t=${t}, phi=${phi} (${label}): JS=${js.x}, PY=${py.x}`
-        );
-        assert.ok(
-          Math.abs(js.y - py.y) < PROFILE_TOL,
-          `OSSE+gcurve+ext y mismatch at t=${t}, phi=${phi} (${label}): JS=${js.y}, PY=${py.y}`
-        );
-        idx++;
+          assert.ok(
+            Math.abs(js.x - py.x) < PROFILE_TOL,
+            `OSSE+gcurve+ext x mismatch at t=${t}, phi=${phi} (${label}): JS=${js.x}, PY=${py.x}`
+          );
+          assert.ok(
+            Math.abs(js.y - py.y) < PROFILE_TOL,
+            `OSSE+gcurve+ext y mismatch at t=${t}, phi=${phi} (${label}): JS=${js.y}, PY=${py.y}`
+          );
+          idx++;
+        }
       }
     }
-  });
+  );
 }
 
 // -------------------------------------------------------------------------

@@ -383,7 +383,7 @@ export function addEnclosureGeometry(
   }
 
   const scale = params.scale || 1;
-  if (params.useAthEnclosureRounding) {
+  if (params.useAthEnclosureRounding !== false) {
     if (Number.isFinite(maxX)) maxX = Math.ceil(maxX / scale) * scale;
     if (Number.isFinite(minX)) minX = Math.floor(minX / scale) * scale;
     if (Number.isFinite(maxZ)) maxZ = Math.ceil(maxZ / scale) * scale;

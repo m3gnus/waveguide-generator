@@ -73,7 +73,10 @@ export function calculateROSSE(t, p, params) {
   const slotLen = Math.max(0, evalParam(params.slotLength || 0, p));
   const r0Base = evalParam(params.r0, p);
   const extAngleRad = toRad(evalParam(params.throatExtAngle || 0, p));
-  const r0Main = r0Base + extLen * Math.tan(extAngleRad);
+  // ATH anchors r0 at the MAIN throat and tapers the extension back to the
+  // driver end, matching hornlab_mesher.profile_formulas.calculate_rosse.
+  const r0Main = r0Base;
+  const r0Throat = Math.max(0, r0Base - extLen * Math.tan(extAngleRad));
   const mainParams = { ...params, r0: r0Main };
 
   if (extLen <= 0 && slotLen <= 0) {
@@ -93,7 +96,7 @@ export function calculateROSSE(t, p, params) {
 
   const axial = Math.max(0, t) * fullLength;
   if (axial <= extLen) {
-    return { x: axial, y: r0Base + axial * Math.tan(extAngleRad) };
+    return { x: axial, y: r0Throat + axial * Math.tan(extAngleRad) };
   }
   if (axial <= extLen + slotLen) {
     return { x: axial, y: r0Main };
