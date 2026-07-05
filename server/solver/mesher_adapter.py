@@ -79,6 +79,31 @@ def _finite_float(value: Any, fallback: float = 0.0) -> float:
     return numeric if np.isfinite(numeric) else fallback
 
 
+def _reject_unsupported_source_payload(payload: Mapping[str, Any]) -> None:
+    contours = payload.get("source_contours")
+    if contours is not None and str(contours).strip():
+        raise ValueError(
+            "source contours are not supported by the HornLab mesher path; "
+            "only the single cap/disc throat source is implemented"
+        )
+
+    velocity = payload.get("source_velocity")
+    if velocity is None or (isinstance(velocity, str) and not velocity.strip()):
+        return
+    try:
+        numeric_velocity = float(velocity)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "source velocity must be 1 for the HornLab mesher path; "
+            f"got {velocity!r}"
+        ) from exc
+    if not np.isfinite(numeric_velocity) or int(numeric_velocity) != 1 or numeric_velocity != 1.0:
+        raise ValueError(
+            "source velocity values other than 1 are not supported by the "
+            "HornLab mesher path; only normal source velocity is implemented"
+        )
+
+
 def _quadrants_leading_int(value: Any) -> int:
     if value is None or isinstance(value, bool):
         return 0
@@ -126,6 +151,8 @@ def _positive_float(value: Any) -> float | None:
 
 def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Translate the existing backend request payload into mesher public config."""
+
+    _reject_unsupported_source_payload(payload)
 
     formula = _normalize_formula(payload.get("formula_type") or payload.get("formula"))
     profile: dict[str, Any] = _clean_dict(
