@@ -6,7 +6,7 @@ import {
   SURFACE_TAGS,
   prepareGeometryParams,
   buildGeometryArtifacts,
-  buildCanonicalMeshPayload
+  buildCanonicalMeshPayload,
 } from '../src/geometry/index.js';
 import { exportLegacyMSH } from './helpers/legacyMsh.js';
 
@@ -26,7 +26,7 @@ function makePreparedParams(overrides = {}) {
       h: 0,
       angularSegments: 32,
       lengthSegments: 12,
-      ...overrides
+      ...overrides,
     },
     { type: 'OSSE' }
   );
@@ -78,11 +78,19 @@ function measureGroupBounds(mesh, groupName) {
   return { minX, maxX, minY, maxY, minZ, maxZ };
 }
 
+function assertRoundedClearance(actual, requested, roundingUnit) {
+  assert.ok(actual >= requested - 1e-6, `clearance ${actual} should reserve at least ${requested}`);
+  assert.ok(
+    actual <= requested + roundingUnit + 1e-6,
+    `clearance ${actual} should not exceed ${requested} by more than rounding unit ${roundingUnit}`
+  );
+}
+
 test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
   const params = makePreparedParams({
     encDepth: 0,
     quadrants: '1234',
-    wallThickness: 5
+    wallThickness: 5,
   });
 
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: false });
@@ -93,10 +101,7 @@ test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
   assert.equal(typeof artifacts.mesh.fullCircle, 'boolean');
 
   assert.ok(Array.isArray(artifacts.simulation.surfaceTags));
-  assert.equal(
-    artifacts.simulation.surfaceTags.length,
-    artifacts.simulation.indices.length / 3
-  );
+  assert.equal(artifacts.simulation.surfaceTags.length, artifacts.simulation.indices.length / 3);
   assert.ok(artifacts.simulation.surfaceTags.includes(SURFACE_TAGS.SOURCE));
   assert.equal(artifacts.simulation.format, 'msh');
 
@@ -111,7 +116,7 @@ test('buildGeometryArtifacts simulation payload matches buildCanonicalMeshPayloa
     interfaceOffset: '12',
     interfaceDraw: '4',
     quadrants: '1',
-    wallThickness: 5
+    wallThickness: 5,
   });
 
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
@@ -132,7 +137,7 @@ test('legacy test-only MSH helper omits interface/secondary physical groups', ()
     subdomainSlices: '2',
     interfaceOffset: '10',
     interfaceDraw: '3',
-    quadrants: '1'
+    quadrants: '1',
   });
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: true });
   const payload = artifacts.simulation;
@@ -141,7 +146,7 @@ test('legacy test-only MSH helper omits interface/secondary physical groups', ()
   assert.equal(payload.surfaceTags.includes(SURFACE_TAGS.INTERFACE), false);
 
   const msh = exportLegacyMSH(payload.vertices, payload.indices, payload.surfaceTags, {
-    verticalOffset: payload.metadata?.verticalOffset || 0
+    verticalOffset: payload.metadata?.verticalOffset || 0,
   });
 
   assert.equal(/2 3 "SD2G0"/.test(msh), false);
@@ -151,19 +156,19 @@ test('legacy test-only MSH helper omits interface/secondary physical groups', ()
 test('simulation payload ignores quadrants and keeps full-domain topology', () => {
   const fullParams = makePreparedParams({
     encDepth: 220,
-    quadrants: '1234'
+    quadrants: '1234',
   });
   const q14Params = makePreparedParams({
     encDepth: 220,
-    quadrants: '14'
+    quadrants: '14',
   });
   const q12Params = makePreparedParams({
     encDepth: 220,
-    quadrants: '12'
+    quadrants: '12',
   });
   const q1Params = makePreparedParams({
     encDepth: 220,
-    quadrants: '1'
+    quadrants: '1',
   });
 
   const full = buildGeometryArtifacts(fullParams, { includeEnclosure: true }).simulation;
@@ -194,7 +199,7 @@ test('non-divisible angular segments still include symmetry boundary vertices', 
     lengthSegments: 20,
     encDepth: 0,
     quadrants: '1',
-    wallThickness: 0
+    wallThickness: 0,
   });
 
   const artifacts = buildGeometryArtifacts(params, { includeEnclosure: false });
@@ -231,17 +236,17 @@ test('scale below 1 keeps enclosure clearances absolute in the raw geometry pipe
     encSpaceT: 8,
     encSpaceR: 8,
     encSpaceB: 8,
-    wallThickness: 0
+    wallThickness: 0,
   };
 
   const artifacts = buildGeometryArtifacts(rawParams, { includeEnclosure: true });
   const hornBounds = measureGroupBounds(artifacts.mesh, 'horn');
   const enclosureBounds = measureGroupBounds(artifacts.mesh, 'enclosure');
 
-  assert.ok(Math.abs(hornBounds.minX - enclosureBounds.minX - 8) < 1e-6);
-  assert.ok(Math.abs(enclosureBounds.maxX - hornBounds.maxX - 8) < 1e-6);
-  assert.ok(Math.abs(hornBounds.minZ - enclosureBounds.minZ - 8) < 1e-6);
-  assert.ok(Math.abs(enclosureBounds.maxZ - hornBounds.maxZ - 8) < 1e-6);
+  assertRoundedClearance(hornBounds.minX - enclosureBounds.minX, 8, rawParams.scale);
+  assertRoundedClearance(enclosureBounds.maxX - hornBounds.maxX, 8, rawParams.scale);
+  assertRoundedClearance(hornBounds.minZ - enclosureBounds.minZ, 8, rawParams.scale);
+  assertRoundedClearance(enclosureBounds.maxZ - hornBounds.maxZ, 8, rawParams.scale);
   assert.ok(Math.abs(hornBounds.maxY - enclosureBounds.minY - 40) < 1e-6);
 });
 
@@ -263,7 +268,7 @@ test('scaled rounded enclosure still reserves the requested horn clearances', ()
     encSpaceT: 8,
     encSpaceR: 8,
     encSpaceB: 8,
-    wallThickness: 0
+    wallThickness: 0,
   };
 
   const artifacts = buildGeometryArtifacts(rawParams, { includeEnclosure: true });

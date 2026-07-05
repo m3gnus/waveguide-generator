@@ -80,7 +80,9 @@ export function applyAthImportDefaults(parsed, typedParams) {
   const parseAthBool = (value) => {
     if (typeof value === 'boolean') return value ? 1 : 0;
     if (typeof value === 'number') return value !== 0 ? 1 : 0;
-    const raw = String(value ?? '').trim().toLowerCase();
+    const raw = String(value ?? '')
+      .trim()
+      .toLowerCase();
     return ['1', 'true', 'yes', 'y', 'on'].includes(raw) ? 1 : 0;
   };
   const importedMorphTarget = typedParams.morphTarget !== undefined;

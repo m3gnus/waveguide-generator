@@ -263,7 +263,7 @@ export const PARAM_SCHEMA = {
       min: 0.05,
       max: 0.9,
       step: 0.01,
-      default: 0.30,
+      default: 0.3,
       tooltip:
         'Normalised arc-length (0..1 throat→mouth) where the coverage plateau begins. Only used when Coverage Angle > 0.',
     },
@@ -274,7 +274,7 @@ export const PARAM_SCHEMA = {
       min: 0.1,
       max: 0.95,
       step: 0.01,
-      default: 0.70,
+      default: 0.7,
       tooltip:
         'Normalised arc-length where the coverage plateau ends. Must exceed Hold Start. Only used when Coverage Angle > 0.',
     },

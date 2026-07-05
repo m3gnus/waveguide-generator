@@ -141,7 +141,7 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
     return computed;
   }
 
-  const { totalLength, extLen, slotLen, r0Base, extAngleRad, a0Deg, L } = config;
+  const { totalLength, extLen, slotLen, r0Base, a0Deg, L } = config;
 
   const targetR = getGuidingCurveRadius(p, params);
   if (!Number.isFinite(targetR)) return evalParam(params.a, p);
