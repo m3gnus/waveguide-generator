@@ -3,8 +3,8 @@ const toFiniteNumber = (value, fallback = 0) => {
   return Number.isFinite(num) ? num : fallback;
 };
 
-export function mapVertexToAth(x, y, z, { verticalOffset = 0, offsetSign = 1 } = {}) {
-  return [x, z + verticalOffset * offsetSign, y];
+export function mapVertexToAth(x, y, z) {
+  return [x, z, y];
 }
 
 export function transformVerticesToAth(vertices, options = {}) {
@@ -14,12 +14,9 @@ export function transformVerticesToAth(vertices, options = {}) {
   const out = new Array(source.length);
 
   for (let i = 0; i < source.length; i += 3) {
-    const [athX, athY, athZ] = mapVertexToAth(source[i], source[i + 1], source[i + 2], {
-      verticalOffset,
-      offsetSign,
-    });
+    const [athX, athY, athZ] = mapVertexToAth(source[i], source[i + 1], source[i + 2]);
     out[i] = athX;
-    out[i + 1] = athY;
+    out[i + 1] = athY + verticalOffset * offsetSign;
     out[i + 2] = athZ;
   }
 

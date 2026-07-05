@@ -451,6 +451,39 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
         self.assertEqual(config["mesh"]["samplingMode"], "ath-default-zmap")
         self.assertEqual(config["mesh"]["wallThickness"], 0)
 
+    def test_payload_forwards_vertical_offset_to_mesher_mesh_config(self):
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "vertical_offset": 37.5,
+            }
+        )
+
+        self.assertEqual(config["mesh"]["verticalOffset"], 37.5)
+
+    def test_payload_omits_vertical_offset_for_y_cut_native_symmetry(self):
+        for quadrants in (1, 12, "1,2", "not-a-quadrant"):
+            with self.subTest(quadrants=quadrants):
+                config = mesher_adapter.waveguide_payload_to_mesher_config(
+                    {
+                        "formula_type": "OSSE",
+                        "quadrants": quadrants,
+                        "vertical_offset": 37.5,
+                    }
+                )
+                self.assertEqual(config["mesh"]["verticalOffset"], 0.0)
+
+    def test_payload_keeps_vertical_offset_for_x_cut_native_symmetry(self):
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "quadrants": 14,
+                "vertical_offset": 37.5,
+            }
+        )
+
+        self.assertEqual(config["mesh"]["verticalOffset"], 37.5)
+
     def test_payload_preserves_angular_slot_length_expression(self):
         config = mesher_adapter.waveguide_payload_to_mesher_config(
             {

@@ -7,6 +7,8 @@ import {
   prepareGeometryParams,
   buildGeometryArtifacts,
   buildCanonicalMeshPayload,
+  mapVertexToAth,
+  transformVerticesToAth,
 } from '../src/geometry/index.js';
 import { exportLegacyMSH } from './helpers/legacyMsh.js';
 
@@ -107,6 +109,16 @@ test('buildGeometryArtifacts returns mesh/simulation/export contract', () => {
 
   const athVertices = artifacts.export.toAthVertices();
   assert.equal(athVertices.length, artifacts.simulation.vertices.length);
+});
+
+test('ATH transform applies vertical offset exactly once', () => {
+  assert.deepEqual(mapVertexToAth(1, 2, 3, { verticalOffset: 5 }), [1, 3, 2]);
+  assert.deepEqual(transformVerticesToAth([1, 2, 3], { verticalOffset: 5 }), [1, 8, 2]);
+  assert.deepEqual(transformVerticesToAth([1, 2, 3], { verticalOffset: 5, offsetSign: -1 }), [
+    1,
+    -2,
+    2,
+  ]);
 });
 
 test('buildGeometryArtifacts simulation payload matches buildCanonicalMeshPayload', () => {

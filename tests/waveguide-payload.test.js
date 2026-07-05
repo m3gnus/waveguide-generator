@@ -204,7 +204,21 @@ test('buildWaveguidePayload preserves valid reduced-domain quadrants from Design
       prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: 'not-a-quadrant' }),
       '2.2'
     ).quadrants,
+    1
+  );
+  assert.equal(
+    buildWaveguidePayload(
+      prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: '1234x' }),
+      '2.2'
+    ).quadrants,
     1234
+  );
+  assert.equal(
+    buildWaveguidePayload(
+      prepareBackendMeshSimulationParams({ type: 'OSSE', quadrants: '1,2' }),
+      '2.2'
+    ).quadrants,
+    1
   );
 });
 

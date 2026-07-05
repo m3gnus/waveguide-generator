@@ -79,6 +79,43 @@ def _finite_float(value: Any, fallback: float = 0.0) -> float:
     return numeric if np.isfinite(numeric) else fallback
 
 
+def _quadrants_leading_int(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    text = str(value).strip()
+    sign = 1
+    if text.startswith(("+", "-")):
+        sign = -1 if text[0] == "-" else 1
+        text = text[1:]
+    digits = []
+    for char in text:
+        if not char.isdigit():
+            break
+        digits.append(char)
+    return sign * int("".join(digits)) if digits else 0
+
+
+def _normalise_quadrants(value: Any) -> int:
+    leading = _quadrants_leading_int(value)
+    return leading if leading in {12, 14, 1234} else 1
+
+
+def _solver_safe_vertical_offset(payload: Mapping[str, Any]) -> Any:
+    vertical_offset = payload.get("vertical_offset")
+    if _normalise_quadrants(payload.get("quadrants", 1234)) in {1, 12}:
+        # A nonzero y-offset moves y-cut free edges off y=0, which Metal native
+        # symmetry rejects. The design layer's auto-symmetry already selects
+        # quadrants=14 for offset designs; explicit legacy y-cut payloads keep
+        # their requested symmetry domain and omit the unsafe placement.
+        if abs(_finite_float(vertical_offset, 0.0)) > 0.0:
+            return 0.0
+    return vertical_offset
+
+
 def _positive_float(value: Any) -> float | None:
     try:
         numeric = float(value)
@@ -190,6 +227,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                 "rearResolution": payload.get("rear_res"),
                 "encFrontResolution": _first_number(payload.get("enc_front_resolution")),
                 "encBackResolution": _first_number(payload.get("enc_back_resolution")),
+                "verticalOffset": _solver_safe_vertical_offset(payload),
                 "scaleToMetres": True,
             }
         ),

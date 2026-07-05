@@ -177,6 +177,17 @@ test("DesignModule auto quadrants chooses quarter, half, or full from symmetry",
   assert.equal(prepareBackendMeshSimulationParams(full).quadrants, 1234);
 });
 
+test("DesignModule normalizes explicit quadrants with ATH leading-integer fallback", () => {
+  assert.equal(prepareBackendMeshSimulationParams({ type: "OSSE" }).quadrants, 1234);
+  assert.equal(
+    prepareBackendMeshSimulationParams({ type: "OSSE", quadrants: "not-a-quadrant" }).quadrants,
+    1,
+  );
+  assert.equal(prepareBackendMeshSimulationParams({ type: "OSSE", quadrants: "1234x" }).quadrants, 1234);
+  assert.equal(prepareBackendMeshSimulationParams({ type: "OSSE", quadrants: "1,2" }).quadrants, 1);
+  assert.equal(prepareBackendMeshSimulationParams({ type: "OSSE", quadrants: "21" }).quadrants, 1);
+});
+
 test("DesignModule exposes only HornLab backend mesh normalization outputs", () => {
   assert.equal(typeof prepareBackendMeshSimulationParams, "function");
   assert.equal(typeof prepareBackendMeshExportParams, "function");

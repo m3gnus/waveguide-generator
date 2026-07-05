@@ -355,6 +355,7 @@ export function addEnclosureGeometry(
   ringCount = null,
   angleList = null
 ) {
+  void verticalOffset;
   const ringSize =
     Number.isFinite(ringCount) && ringCount > 0
       ? ringCount
@@ -401,8 +402,8 @@ export function addEnclosureGeometry(
 
   let boxRight = maxX + sR;
   let boxLeft = minX - sL;
-  let boxTop = maxZ + sT + verticalOffset;
-  let boxBot = minZ - sB + verticalOffset;
+  let boxTop = maxZ + sT;
+  let boxBot = minZ - sB;
 
   // Centroid for ray-casting
   let mCx = 0,

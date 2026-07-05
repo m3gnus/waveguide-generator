@@ -313,7 +313,7 @@ test("ExportModule HornLab mesh build uses design-layer export normalization for
     assert.equal(payload.mouth_res, 10);
     assert.equal(payload.rear_res, 14);
     assert.equal(payload.wall_thickness, 5);
-    assert.equal(payload.quadrants, 1234);
+    assert.equal(payload.quadrants, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

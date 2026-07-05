@@ -22,6 +22,7 @@ const BACKEND_MESH_DEFAULTS = Object.freeze({
   encBackResolution: '40,40,40,40',
   wallThickness: 6,
   scale: 1,
+  quadrants: 1234,
 });
 
 // Horn mesh resolution fields (throatResolution, mouthResolution,
@@ -171,7 +172,7 @@ export function prepareBackendMeshSimulationParams(preparedParams = {}) {
       .trim()
       .toLowerCase() === 'auto'
       ? resolveAutoQuadrants(base)
-      : normalizeQuadrants(base.quadrants);
+      : normalizeQuadrants(base.quadrants ?? BACKEND_MESH_DEFAULTS.quadrants);
 
   return Object.freeze({
     ...base,
