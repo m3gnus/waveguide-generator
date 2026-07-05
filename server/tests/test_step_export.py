@@ -484,6 +484,24 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
 
         self.assertEqual(config["mesh"]["verticalOffset"], 37.5)
 
+    def test_payload_rejects_source_contours_in_mesher_path(self):
+        with self.assertRaisesRegex(ValueError, "source contours"):
+            mesher_adapter.waveguide_payload_to_mesher_config(
+                {
+                    "formula_type": "OSSE",
+                    "source_contours": "custom-source",
+                }
+            )
+
+    def test_payload_rejects_non_normal_source_velocity_in_mesher_path(self):
+        with self.assertRaisesRegex(ValueError, "source velocity"):
+            mesher_adapter.waveguide_payload_to_mesher_config(
+                {
+                    "formula_type": "OSSE",
+                    "source_velocity": 2,
+                }
+            )
+
     def test_payload_preserves_angular_slot_length_expression(self):
         config = mesher_adapter.waveguide_payload_to_mesher_config(
             {
