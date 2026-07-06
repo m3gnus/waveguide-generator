@@ -188,6 +188,19 @@ class ChartRenderingTest(unittest.TestCase):
         np.testing.assert_allclose(real, [1.0, 2.0])
         np.testing.assert_allclose(imag, [0.0, 0.5])
 
+    def test_impedance_chart_does_not_renormalize_marked_values(self):
+        from solver.charts import _normalize_impedance_for_plot
+
+        real, imag = _normalize_impedance_for_plot(
+            np.array([32.0]),
+            np.array([-4.0]),
+            rho_c=415.03,
+            already_normalized=True,
+        )
+
+        np.testing.assert_allclose(real, [32.0])
+        np.testing.assert_allclose(imag, [-4.0])
+
     def test_impedance_skips_sparse_samples(self):
         from solver.charts import render_impedance
 

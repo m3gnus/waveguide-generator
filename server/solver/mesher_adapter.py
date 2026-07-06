@@ -176,6 +176,29 @@ def _positive_float(value: Any) -> float | None:
     return numeric if np.isfinite(numeric) and numeric > 0.0 else None
 
 
+def _solver_safe_enclosure_edge(payload: Mapping[str, Any]) -> Any:
+    edge = _finite_float(payload.get("enc_edge"), 18.0)
+    enc_depth = _finite_float(payload.get("enc_depth"), 0.0)
+    if edge <= 0.0 or enc_depth <= 0.0:
+        return payload.get("enc_edge")
+    if _normalise_quadrants(payload.get("quadrants", 1234)) == 1234:
+        return payload.get("enc_edge")
+
+    margins = [
+        _finite_float(payload.get(name), 0.0)
+        for name in ("enc_space_l", "enc_space_t", "enc_space_r", "enc_space_b")
+    ]
+    positive_margins = [value for value in margins if value > 0.0]
+    if positive_margins and edge >= min(positive_margins) - 1.0e-9:
+        # A reduced-domain enclosure whose roundover consumes the smallest
+        # baffle margin is geometrically degenerate at the symmetry cut. Some
+        # mesher versions tear the front-to-side-wall join after clamping; a
+        # sharp edge preserves the requested box extents and keeps the solver
+        # boundary closed.
+        return 0.0
+    return payload.get("enc_edge")
+
+
 def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Translate the existing backend request payload into mesher public config."""
 
@@ -335,7 +358,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                 "space_t": payload.get("enc_space_t"),
                 "space_r": payload.get("enc_space_r"),
                 "space_b": payload.get("enc_space_b"),
-                "edge": payload.get("enc_edge"),
+                "edge": _solver_safe_enclosure_edge(payload),
                 "edgeType": payload.get("enc_edge_type"),
                 "frontMeshSize": _first_number(payload.get("enc_front_resolution")),
                 "backMeshSize": _first_number(payload.get("enc_back_resolution")),

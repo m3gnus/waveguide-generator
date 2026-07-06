@@ -984,6 +984,156 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
         finally:
             _jrt.jobs.pop(job_id, None)
 
+    def test_non_circular_infinite_baffle_rewrites_to_large_enclosure(self):
+        request = self._make_hornlab_mesher_request(
+            {
+                "formula_type": "OSSE",
+                "L": "120",
+                "R": None,
+                "sim_type": 1,
+                "enc_depth": 0.0,
+                "wall_thickness": 0.0,
+                "morph_target": 1,
+                "morph_width": 420.0,
+                "morph_height": 260.0,
+            }
+        ).model_copy(update={"sim_type": "1", "solver_mode": "auto"})
+
+        captured_build_params = []
+        captured_solve_requests = []
+        fake_mesher_result = {
+            "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            "stats": {"nodeCount": 3, "elementCount": 1},
+            "canonical_mesh": {
+                "vertices": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                "indices": [0, 1, 2],
+                "surfaceTags": [2],
+                "metadata": {},
+            },
+        }
+
+        def fake_build(params, **_kwargs):
+            captured_build_params.append(dict(params))
+            return fake_mesher_result
+
+        def fake_metal_solve(_msh_path, solve_request, **_kwargs):
+            captured_solve_requests.append(solve_request)
+            return {"frequencies": [100.0], "directivity": {}, "metadata": {}}
+
+        job_id = "test-noncircular-ib-large-baffle"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch(
+                     "services.simulation_runner._circsym_rejection_reasons_for_payload",
+                     return_value=["CircSym requires a circular waveguide: morphTarget is 1"],
+                 ), \
+                 patch("services.simulation_runner.build_waveguide_mesh", side_effect=fake_build), \
+                 patch("services.simulation_runner.solve_metal_from_msh", side_effect=fake_metal_solve), \
+                 patch("services.simulation_runner.db"):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
+            self.assertEqual(len(captured_build_params), 1)
+            forwarded = captured_build_params[0]
+            self.assertEqual(forwarded["sim_type"], 2)
+            self.assertAlmostEqual(forwarded["enc_depth"], 121.0)
+            self.assertEqual(forwarded["enc_space_l"], 420.0)
+            self.assertEqual(forwarded["enc_space_t"], 420.0)
+            self.assertEqual(forwarded["enc_space_r"], 420.0)
+            self.assertEqual(forwarded["enc_space_b"], 420.0)
+            self.assertEqual(forwarded["enc_edge"], 18.0)
+            self.assertEqual(forwarded["enc_edge_type"], 1)
+            self.assertEqual(captured_solve_requests[0].sim_type, "2")
+            self.assertEqual(captured_solve_requests[0].solver_mode, "full_3d")
+            metadata = _jrt.jobs[job_id]["results"]["metadata"]
+            approximation = metadata["infinite_baffle_approximation"]
+            self.assertEqual(approximation["method"], "finite_large_baffle_enclosure")
+            self.assertIn("60-90 deg", approximation["note"])
+            self.assertEqual(approximation["derived"]["horn_length_mm"], 120.0)
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_circular_infinite_baffle_still_uses_circsym_path(self):
+        request = self._make_hornlab_mesher_request(
+            {
+                "formula_type": "OSSE",
+                "L": "120",
+                "R": None,
+                "sim_type": 1,
+                "enc_depth": 0.0,
+                "wall_thickness": 0.0,
+                "morph_target": 0,
+            }
+        ).model_copy(update={"sim_type": "1", "solver_mode": "auto"})
+
+        def fail_if_meshed(*_args, **_kwargs):
+            raise AssertionError("circular infinite baffle must not build a full-3D mesh")
+
+        job_id = "test-circular-ib-circsym"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch(
+                     "services.simulation_runner._circsym_rejection_reasons_for_payload",
+                     return_value=[],
+                 ), \
+                 patch("services.simulation_runner.build_waveguide_mesh", side_effect=fail_if_meshed), \
+                 patch(
+                     "services.simulation_runner.solve_circsym_from_params",
+                     return_value={"frequencies": [100.0], "directivity": {}, "metadata": {}},
+                 ) as circsym_solve, \
+                 patch("services.simulation_runner.db"):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
+            circsym_solve.assert_called_once()
+            self.assertEqual(circsym_solve.call_args.args[0]["sim_type"], 1)
+            self.assertNotIn(
+                "infinite_baffle_approximation",
+                _jrt.jobs[job_id]["results"]["metadata"],
+            )
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_infinite_baffle_with_user_enclosure_depth_errors_before_fallback(self):
+        request = self._make_hornlab_mesher_request(
+            {"sim_type": 1, "enc_depth": 10.0, "wall_thickness": 0.0}
+        ).model_copy(update={"sim_type": "1", "solver_mode": "auto"})
+
+        job_id = "test-ib-enclosure-conflict"
+        _jrt.jobs[job_id] = {
+            "status": "queued", "progress": 0.0, "stage": "queued",
+            "stage_message": "", "results": None, "error": None,
+        }
+        try:
+            with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch(
+                     "services.simulation_runner._circsym_rejection_reasons_for_payload",
+                 ) as rejection_probe, \
+                 patch("services.simulation_runner.build_waveguide_mesh") as build_mesh, \
+                 patch("services.simulation_runner.db"):
+                asyncio.run(_sim_runner.run_simulation(job_id, request))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "error")
+            self.assertEqual(
+                _jrt.jobs[job_id]["error_message"],
+                _sim_runner.INFINITE_BAFFLE_ENCLOSURE_ERROR,
+            )
+            rejection_probe.assert_not_called()
+            build_mesh.assert_not_called()
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
 
 class MeshArtifactEndpointTest(unittest.TestCase):
     def test_mesh_artifact_returns_404_for_unknown_job(self):

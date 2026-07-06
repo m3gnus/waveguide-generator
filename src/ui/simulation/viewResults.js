@@ -113,6 +113,30 @@ function resolvePhaseTimeConvention(results) {
   return null;
 }
 
+function isRhoCNormalizedImpedance(results) {
+  const metadata = results?.metadata || {};
+  const units = String(metadata?.impedance_units || metadata?.impedance?.units || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll(' ', '');
+  const normalization = String(
+    metadata?.impedance_normalization || metadata?.impedance?.normalization || ''
+  )
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_');
+  const quantity = String(metadata?.impedance_quantity || metadata?.impedance?.quantity || '')
+    .trim()
+    .toLowerCase();
+
+  return (
+    units === 'z/(rho*c)' ||
+    units === 'z/rhoc' ||
+    normalization === 'rho_c' ||
+    quantity === 'specific_acoustic_impedance'
+  );
+}
+
 /**
  * Open a modal dialog displaying all result charts rendered server-side
  * by Matplotlib as high-quality PNG images.
@@ -410,6 +434,10 @@ export async function openViewResultsModal(panel) {
       impedance_imaginary: impedanceImag,
       directivity,
     };
+    if (isRhoCNormalizedImpedance(results)) {
+      payload.impedance_units = 'Z/(rho*c)';
+      payload.impedance_normalization = 'rho_c';
+    }
 
     try {
       const response = await fetch(`${backendUrl}/api/render-charts`, {

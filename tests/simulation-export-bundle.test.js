@@ -193,6 +193,61 @@ test('exportResults labels and normalizes legacy impedance values in text export
   }
 });
 
+test('exportResults does not renormalize backend Z over rho c impedance metadata', async () => {
+  const originalFetch = global.fetch;
+
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  const panel = {
+    currentSmoothing: 'none',
+    lastResults: {
+      spl_on_axis: { frequencies: [100], spl: [90] },
+      di: { frequencies: [100], di: [8] },
+      impedance: {
+        frequencies: [100],
+        real: [32],
+        imaginary: [-4],
+      },
+      directivity: {},
+      metadata: {
+        impedance_units: 'Z/(rho*c)',
+        impedance_quantity: 'specific_acoustic_impedance',
+      },
+    },
+  };
+
+  try {
+    await exportResults(panel, {
+      job: {
+        id: 'job-normalized-impedance',
+        label: 'horn_normalized',
+        createdAt: '2026-03-11T10:00:00.000Z',
+      },
+      selectedFormats: ['impedance_csv'],
+    });
+
+    assert.equal(fetchCalls.length, 1);
+    const file = fetchCalls[0].options.body.get('file');
+    const impedanceCsv = await file.text();
+    assert.equal(
+      impedanceCsv.trim(),
+      'Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c\n100,32,-4'
+    );
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});
+
 test('exportResults forwards Metal phase convention for rendered PNG charts', async () => {
   const originalFetch = global.fetch;
 
@@ -254,6 +309,8 @@ test('exportResults forwards Metal phase convention for rendered PNG charts', as
     assert.equal(chartPayloads.length, 1);
     assert.equal(chartPayloads[0].phase_time_convention, 'metal');
     assert.equal(chartPayloads[0].phase_reference_distance_m, 2);
+    assert.equal(chartPayloads[0].impedance_units, 'Z/(rho*c)');
+    assert.equal(chartPayloads[0].impedance_normalization, 'rho_c');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();

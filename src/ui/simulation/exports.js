@@ -222,9 +222,37 @@ function finiteImpedanceNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function normalizeLegacyImpedanceSeries(real = [], imaginary = []) {
+function isRhoCNormalizedImpedance(results) {
+  const metadata = results?.metadata || {};
+  const units = String(metadata?.impedance_units || metadata?.impedance?.units || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll(' ', '');
+  const normalization = String(
+    metadata?.impedance_normalization || metadata?.impedance?.normalization || ''
+  )
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_');
+  const quantity = String(metadata?.impedance_quantity || metadata?.impedance?.quantity || '')
+    .trim()
+    .toLowerCase();
+
+  return (
+    units === 'z/(rho*c)' ||
+    units === 'z/rhoc' ||
+    normalization === 'rho_c' ||
+    quantity === 'specific_acoustic_impedance'
+  );
+}
+
+function normalizeLegacyImpedanceSeries(real = [], imaginary = [], options = {}) {
   const realSeries = Array.isArray(real) ? real : [];
   const imaginarySeries = Array.isArray(imaginary) ? imaginary : [];
+  if (options.alreadyNormalized) {
+    return { real: realSeries, imaginary: imaginarySeries };
+  }
+
   const finiteValues = [...realSeries, ...imaginarySeries]
     .map(finiteImpedanceNumber)
     .filter((value) => value !== null);
@@ -251,7 +279,8 @@ function readNormalizedImpedanceSeries(results, fallbackFrequencies = []) {
   const impedanceData = results?.impedance || {};
   const normalized = normalizeLegacyImpedanceSeries(
     impedanceData.real || [],
-    impedanceData.imaginary || []
+    impedanceData.imaginary || [],
+    { alreadyNormalized: isRhoCNormalizedImpedance(results) }
   );
   return {
     frequencies: impedanceData.frequencies || fallbackFrequencies,
@@ -416,6 +445,8 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
     impedance_frequencies: impedanceFrequencies,
     impedance_real: impedanceReal,
     impedance_imaginary: impedanceImaginary,
+    impedance_units: 'Z/(rho*c)',
+    impedance_normalization: 'rho_c',
     directivity,
   };
 

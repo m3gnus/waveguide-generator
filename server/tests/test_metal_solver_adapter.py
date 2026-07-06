@@ -9,6 +9,7 @@ import numpy as np
 
 from contracts import MeshData, PolarConfig, SimulationRequest
 from solver import metal_solver
+from solver.result_mapping import REFERENCE_RHO_C
 
 
 class FakeObservationConfig:
@@ -116,7 +117,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 ],
                 dtype=float,
             ),
-            impedance=np.array([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex128),
+            impedance=np.array([1.0 - 2.0j, 3.0 - 4.0j], dtype=np.complex128),
             timings={"total_s": 0.1},
             solver_log=[
                 {"frequency_hz": np.float64(1000.0), "impedance": 1.0 + 2.0j},
@@ -281,6 +282,14 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertIn("horizontal", result["di"]["di"])
         self.assertEqual(len(result["di"]["di"]["horizontal"]), 2)
         self.assertTrue(all(math.isfinite(value) for value in result["di"]["di"]["horizontal"]))
+        raw_impedance = self._fake_result().impedance
+        expected = np.conjugate(
+            1j * 2.0 * np.pi * self._fake_result().frequencies_hz * raw_impedance
+        ) / REFERENCE_RHO_C
+        np.testing.assert_allclose(result["impedance"]["real"], expected.real)
+        np.testing.assert_allclose(result["impedance"]["imaginary"], expected.imag)
+        self.assertTrue(all(value > 0.0 for value in result["impedance"]["real"]))
+        self.assertEqual(result["metadata"]["impedance_units"], "Z/(rho*c)")
         json.dumps(result)
         self.assertEqual(
             result["metadata"]["metal"]["solver_log"][0]["impedance"],
