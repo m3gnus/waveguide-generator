@@ -24,6 +24,7 @@ from services.solver_runtime import (
     solve_bempp_from_msh,
     solve_metal_from_msh,
 )
+from solver.mesher_adapter import source_motion_from_payload
 from services.job_runtime import (
     _merge_job_cache_from_db,
     _set_job_fields,
@@ -282,6 +283,11 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         )
         validated = WaveguideParamsRequest(**waveguide_params)
         validated_payload = validated.model_dump()
+        # Source velocity BC (1=normal breathing cap, 2=axial rigid piston). Only
+        # threaded to the solver when non-default so an older metal-bem stays
+        # compatible; the BEMPP fallback rejects axial rather than downgrade it.
+        source_motion = source_motion_from_payload(validated_payload)
+        solve_source_motion = source_motion if source_motion != "normal" else None
         # Multi-second gmsh build: run it on the dedicated gmsh worker thread
         # so status polling and every other HTTP response stay responsive.
         # asyncio.to_thread is not safe here — gmsh requires all calls on one
@@ -367,6 +373,7 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             solve_from_msh,
             tmp_msh_path,
             request,
+            source_motion=solve_source_motion,
             progress_callback=lambda progress: _apply_solver_stage_to_job(
                 job_id, "frequency_solve", progress, None
             ),

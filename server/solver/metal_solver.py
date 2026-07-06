@@ -235,6 +235,7 @@ def solve_metal_from_msh(
     *,
     progress_callback=None,
     stage_callback=None,
+    source_motion: str | None = None,
 ) -> dict[str, Any]:
     if native_config is None or solve is None:
         raise MetalBemUnavailable("hornlab-metal-bem is not installed.")
@@ -283,10 +284,21 @@ def solve_metal_from_msh(
         "native_symmetry_plane": _native_symmetry_plane(request),
         "native_check_open_edges": _native_check_open_edges(request),
     }
+    # Axial (rigid-piston) vs normal (breathing cap) source BC. Only forwarded
+    # when explicitly requested so an older metal-bem (no source_motion) keeps
+    # working for the default normal source.
+    if source_motion is not None:
+        config_kwargs["source_motion"] = source_motion
     try:
         config = native_config(**config_kwargs)
     except TypeError as exc:
         message = str(exc)
+        if "source_motion" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support axial source motion. "
+                "Install the updated hornlab-metal-bem package for an axial "
+                "(rigid-piston) source."
+            ) from exc
         if "formulation" in message or "complex_k_shift" in message:
             raise MetalBemUnavailable(
                 "Installed hornlab-metal-bem does not support explicit BEM formulation "

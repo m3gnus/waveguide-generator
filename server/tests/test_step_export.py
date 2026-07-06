@@ -493,14 +493,38 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
                 }
             )
 
-    def test_payload_rejects_non_normal_source_velocity_in_mesher_path(self):
-        with self.assertRaisesRegex(ValueError, "source velocity"):
+    def test_payload_accepts_axial_source_velocity_in_mesher_path(self):
+        # source_velocity 2 = axial (rigid piston). It is a solve-time BC, not a
+        # geometry change, so the mesher path accepts it without error.
+        config = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "source_velocity": 2,
+            }
+        )
+        self.assertIsInstance(config, dict)
+
+    def test_payload_rejects_unsupported_source_velocity_in_mesher_path(self):
+        with self.assertRaisesRegex(ValueError, "source_velocity"):
             mesher_adapter.waveguide_payload_to_mesher_config(
                 {
                     "formula_type": "OSSE",
-                    "source_velocity": 2,
+                    "source_velocity": 3,
                 }
             )
+
+    def test_source_motion_from_payload_maps_velocity_enum(self):
+        self.assertEqual(mesher_adapter.source_motion_from_payload({}), "normal")
+        self.assertEqual(
+            mesher_adapter.source_motion_from_payload({"source_velocity": 1}),
+            "normal",
+        )
+        self.assertEqual(
+            mesher_adapter.source_motion_from_payload({"source_velocity": 2}),
+            "axial",
+        )
+        with self.assertRaisesRegex(ValueError, "source_velocity"):
+            mesher_adapter.source_motion_from_payload({"source_velocity": 5})
 
     def test_payload_preserves_angular_slot_length_expression(self):
         config = mesher_adapter.waveguide_payload_to_mesher_config(
