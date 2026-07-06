@@ -412,6 +412,12 @@ def solve_circsym_from_params(
         "progress_callback": _progress,
         "circsym_baffle_z": meridian_build.baffle_z,
     }
+    # Infinite baffle: the mesher tags a mouth-aperture disc; naming it here
+    # switches metal-bem to the exact coupled-IB path (interior BEM + Rayleigh
+    # aperture), which is the only correct flush-mount formulation.
+    aperture_tag = (meridian_build.metadata or {}).get("apertureTag")
+    if aperture_tag is not None:
+        config_kwargs["circsym_aperture_tag"] = int(aperture_tag)
     if cancellation_callback is not None:
         config_kwargs["on_frequency_result"] = _on_frequency_result
     if source_motion is not None:
@@ -424,6 +430,11 @@ def solve_circsym_from_params(
             raise MetalBemUnavailable(
                 "Installed hornlab-metal-bem does not support CircSym baffle configuration. "
                 "Install the updated hornlab-metal-bem package."
+            ) from exc
+        if "circsym_aperture_tag" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support the coupled infinite-baffle "
+                "CircSym path. Install the updated hornlab-metal-bem package."
             ) from exc
         if "source_motion" in message:
             raise MetalBemUnavailable(

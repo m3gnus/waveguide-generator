@@ -83,11 +83,6 @@ def test_solve_circsym_from_params_unmocked_tiny_round_waveguide(sim_type: int):
     payload = _payload(sim_type=sim_type)
     request = _request(payload)
 
-    if sim_type == 1:
-        with pytest.raises(Exception, match="CircSym does not support infinite baffle"):
-            solve_circsym_from_params(payload, request)
-        return
-
     result = solve_circsym_from_params(payload, request)
 
     assert result["frequencies"] == [500.0]
@@ -95,7 +90,21 @@ def test_solve_circsym_from_params_unmocked_tiny_round_waveguide(sim_type: int):
     assert result["metadata"]["metal"]["solver_mode"] == "circsym"
     assert result["metadata"]["metal"]["meridian"]["freqMaxHz"] == 500.0
     assert len(result["spl_on_axis"]["spl"]) == 1
-    assert result["spl_on_axis"]["spl"][0] is not None
+    spl_on_axis = result["spl_on_axis"]["spl"][0]
+    assert spl_on_axis is not None
+    assert math.isfinite(float(spl_on_axis))
     assert math.isfinite(float(result["impedance"]["real"][0]))
     assert "horizontal" in result["directivity"]
     assert len(result["directivity"]["horizontal"][0]) == 5
+
+    if sim_type == 1:
+        native_diagnostics = result["metadata"]["metal"]["native_diagnostics"]
+        diagnostic_entries = [
+            entry for entry in native_diagnostics if isinstance(entry, dict)
+        ]
+        assert any(entry.get("coupled_ib") is True for entry in diagnostic_entries)
+        assert any(
+            int(entry.get("aperture_tag")) == 12
+            for entry in diagnostic_entries
+            if entry.get("aperture_tag") is not None
+        )

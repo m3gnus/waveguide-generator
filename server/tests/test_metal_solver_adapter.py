@@ -2,7 +2,7 @@ import json
 import math
 import tempfile
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -55,6 +55,12 @@ class FakeMeridianBuild:
             physical_tags=np.array([2, 1], dtype=np.int32),
             normals=np.array([[0.0, 1.0], [-0.8, 0.6]], dtype=float),
         )
+
+
+def _fake_hornlab_mesher_module():
+    module = ModuleType("hornlab_mesher")
+    module.build_meridian = lambda *args, **kwargs: None
+    return module
 
 
 class MetalSolverAdapterTest(unittest.TestCase):
@@ -145,35 +151,28 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["metal"]["formulation"], "complex_k")
         self.assertEqual(result["metadata"]["metal"]["complex_k_shift"], 0.005)
 
-    def test_infinite_baffle_sets_xy_symmetry_and_relaxes_open_edge_guard(self):
-        seen_configs = []
+    def test_infinite_baffle_full_3d_native_symmetry_is_rejected(self):
+        request = self._request(
+            quadrants=1234,
+            sim_type="1",
+            waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
+        )
 
-        def fake_native_config(**kwargs):
-            cfg = FakeSolveConfig(**kwargs)
-            seen_configs.append(cfg)
-            return cfg
+        with self.assertRaisesRegex(ValueError, "infinite baffle"):
+            metal_solver._native_symmetry_plane(request)
 
         with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
             "solver.metal_solver.ObservationConfig", FakeObservationConfig
-        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+        ), patch("solver.metal_solver.native_config") as native_config_mock, patch(
             "solver.metal_solver.solve", return_value=self._fake_result()
         ), patch(
             "solver.metal_solver.metal_backend_status",
             return_value={"available": True, "supportedPlatform": True},
         ):
-            result = metal_solver.solve_metal_from_msh(
-                msh_file.name,
-                self._request(
-                    quadrants=1234,
-                    sim_type="1",
-                    waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
-                ),
-            )
+            with self.assertRaisesRegex(ValueError, "infinite baffle"):
+                metal_solver.solve_metal_from_msh(msh_file.name, request)
 
-        self.assertEqual(seen_configs[0].native_symmetry_plane, "xy")
-        self.assertFalse(seen_configs[0].native_check_open_edges)
-        self.assertEqual(result["metadata"]["metal"]["native_symmetry_plane"], "xy")
-        self.assertFalse(result["metadata"]["metal"]["native_check_open_edges"])
+        native_config_mock.assert_not_called()
 
     def test_standard_formulation_override_is_forwarded(self):
         seen_configs = []
@@ -224,12 +223,11 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=14)), "yz")
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=12)), "xz")
         self.assertIsNone(metal_solver._native_symmetry_plane(self._request(quadrants=1234)))
-        self.assertEqual(
-            metal_solver._native_symmetry_plane(self._request(quadrants=1234, sim_type="1")),
-            "xy",
-        )
-        with self.assertRaisesRegex(ValueError, "Quadrant IB"):
-            metal_solver._native_symmetry_plane(self._request(quadrants=1, sim_type="1"))
+        for quadrants in (1234, 1):
+            with self.assertRaisesRegex(ValueError, "infinite baffle"):
+                metal_solver._native_symmetry_plane(
+                    self._request(quadrants=quadrants, sim_type="1")
+                )
 
     def test_open_edge_guard_policy_follows_mesher_topology(self):
         self.assertFalse(
@@ -250,7 +248,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 self._request(quadrants=1, waveguide_params={"enc_depth": 200, "wall_thickness": 0})
             )
         )
-        self.assertFalse(
+        with self.assertRaisesRegex(ValueError, "infinite baffle"):
             metal_solver._native_check_open_edges(
                 self._request(
                     quadrants=1234,
@@ -258,7 +256,6 @@ class MetalSolverAdapterTest(unittest.TestCase):
                     waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
                 )
             )
-        )
         self.assertTrue(
             metal_solver._native_check_open_edges(
                 self._request(quadrants=1234, waveguide_params={"enc_depth": 0, "wall_thickness": 0})
@@ -310,6 +307,8 @@ class MetalSolverAdapterTest(unittest.TestCase):
         ), patch(
             "solver.metal_solver.metal_backend_status",
             return_value={"available": True, "supportedPlatform": True},
+        ), patch.dict(
+            "sys.modules", {"hornlab_mesher": _fake_hornlab_mesher_module()}
         ), patch(
             "hornlab_mesher.build_meridian",
             return_value=FakeMeridianBuild(),
@@ -361,6 +360,8 @@ class MetalSolverAdapterTest(unittest.TestCase):
         ), patch(
             "solver.metal_solver.metal_backend_status",
             return_value={"available": True, "supportedPlatform": True},
+        ), patch.dict(
+            "sys.modules", {"hornlab_mesher": _fake_hornlab_mesher_module()}
         ), patch(
             "hornlab_mesher.build_meridian",
             return_value=FakeMeridianBuild(),
