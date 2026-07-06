@@ -29,6 +29,7 @@
 - Payload submission includes a minimal source-tagged contract mesh plus required HornLab mesher parameters
 - `solver_backend` supports `auto`, `bempp`, and `metal`; `auto` prefers a ready Metal backend when available, otherwise BEMPP
 - Active BEM solves use HornLab mesher parameters; `quadrants` may reduce the solve/export mesh domain when manually selected or auto-resolved, except the BEMPP backend forces full-domain quadrants for compatibility
+- `solver_mode="circsym"` selects the Metal-only axisymmetric meridian solver. Use it for round, circular waveguides that are free-standing and unmorphed when sweep speed matters. Use `solver_mode="full_3d"` for infinite-baffle jobs, non-round or morphed geometry, enclosure models, and any case where azimuthal detail or full surface-mesh parity is required.
 
 **Results handling**:
 - Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)

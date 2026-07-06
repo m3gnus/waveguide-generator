@@ -313,7 +313,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
         ), patch(
             "hornlab_mesher.build_meridian",
             return_value=FakeMeridianBuild(),
-        ):
+        ) as build_meridian_mock:
             request = self._request(
                 quadrants=1234,
                 waveguide_params={"source_velocity": 2},
@@ -338,6 +338,42 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertIsInstance(seen["meridian"], FakeMeridianMesh)
         self.assertEqual(seen["config"].source_motion, "axial")
         self.assertEqual(seen["config"].circsym_baffle_z, 0.0)
+        self.assertEqual(build_meridian_mock.call_args.kwargs["freq_max_hz"], 2000.0)
+
+    def test_circsym_from_params_wires_cancellation_between_frequencies(self):
+        seen = {}
+        cancellation_checks = []
+
+        def fake_native_config(**kwargs):
+            cfg = FakeSolveConfig(**kwargs)
+            seen["config"] = cfg
+            return cfg
+
+        def fake_solve(meridian, config):
+            self.assertTrue(callable(config.on_frequency_result))
+            config.on_frequency_result(0, 1000.0, {})
+            return self._fake_result()
+
+        with patch("solver.metal_solver.MeridianMesh", FakeMeridianMesh), patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve_circsym", side_effect=fake_solve
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ), patch(
+            "hornlab_mesher.build_meridian",
+            return_value=FakeMeridianBuild(),
+        ):
+            request = self._request(quadrants=1234).model_copy(update={"solver_mode": "circsym"})
+            metal_solver.solve_circsym_from_params(
+                {"formula_type": "OSSE", "quadrants": 1234},
+                request,
+                cancellation_callback=lambda: cancellation_checks.append("checked"),
+            )
+
+        self.assertEqual(cancellation_checks, ["checked"])
+        self.assertTrue(callable(seen["config"].on_frequency_result))
 
 
 if __name__ == "__main__":

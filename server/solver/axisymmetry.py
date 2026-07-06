@@ -40,26 +40,11 @@ def _finite_number(value: Any, default: float | None = None) -> float | None:
     return number if np.isfinite(number) else default
 
 
-def _optional_number(params: Mapping[str, Any], *names: str) -> float | None:
-    for name in names:
-        if name in params and params[name] is not None:
-            return _finite_number(params[name], None)
-    return None
-
-
 def circsym_axisymmetric_rejection_reasons(
     waveguide_params: Mapping[str, Any] | None,
 ) -> list[str]:
     params = waveguide_params if isinstance(waveguide_params, Mapping) else {}
     reasons: list[str] = []
-
-    exponent = _optional_number(params, "cross_section_exponent", "exponent")
-    if exponent is not None and not math.isclose(exponent, 2.0, rel_tol=0.0, abs_tol=1.0e-9):
-        reasons.append(f"CrossSection exponent is {exponent:g}, not 2")
-
-    aspect = _optional_number(params, "aspect_ratio", "aspectRatio")
-    if aspect is not None and not math.isclose(aspect, 1.0, rel_tol=0.0, abs_tol=1.0e-9):
-        reasons.append(f"CrossSection aspectRatio is {aspect:g}, not 1")
 
     morph_target = _finite_number(params.get("morph_target", 0), None)
     if morph_target is None or not math.isclose(morph_target, 0.0, rel_tol=0.0, abs_tol=1.0e-9):
@@ -73,6 +58,17 @@ def circsym_axisymmetric_rejection_reasons(
 
 
 def validate_circsym_axisymmetric(waveguide_params: Mapping[str, Any] | None) -> None:
+    params = waveguide_params if isinstance(waveguide_params, Mapping) else {}
+    # CircSym cannot solve infinite baffle: the image-plane meridian seals the
+    # mouth aperture into a driven closed cavity (omnidirectional near-zero-level
+    # artifact). Guard here for a clear error before the mesher/solve.
+    if str(params.get("sim_type", "2")).strip() == "1":
+        raise ValueError(
+            "CircSym does not support infinite baffle (Simulation Type = Infinite "
+            "baffle): the image-plane meridian seals the mouth aperture. Use the "
+            "full-3D solver for infinite baffle, or set Simulation Type to "
+            "Free-standing."
+        )
     reasons = circsym_axisymmetric_rejection_reasons(waveguide_params)
     if reasons:
         raise ValueError("CircSym requires a circular waveguide: " + "; ".join(reasons))

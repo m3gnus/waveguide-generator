@@ -354,6 +354,7 @@ def solve_circsym_from_params(
     *,
     progress_callback=None,
     stage_callback=None,
+    cancellation_callback=None,
     source_motion: str | None = None,
 ) -> dict[str, Any]:
     if native_config is None or solve_circsym is None or MeridianMesh is None:
@@ -389,7 +390,15 @@ def solve_circsym_from_params(
                 f"Solving frequency {index + 1}/{total} with CircSym",
             )
 
-    meridian_build = build_meridian(waveguide_payload_to_mesher_config(waveguide_params))
+    def _on_frequency_result(index: int, frequency_hz: float, entry: dict[str, Any]) -> bool:
+        if cancellation_callback:
+            cancellation_callback()
+        return True
+
+    meridian_build = build_meridian(
+        waveguide_payload_to_mesher_config(waveguide_params),
+        freq_max_hz=float(request.frequency_range[1]),
+    )
     meridian = meridian_build.as_metal_meridian(MeridianMesh)
 
     config_kwargs = {
@@ -403,6 +412,8 @@ def solve_circsym_from_params(
         "progress_callback": _progress,
         "circsym_baffle_z": meridian_build.baffle_z,
     }
+    if cancellation_callback is not None:
+        config_kwargs["on_frequency_result"] = _on_frequency_result
     if source_motion is not None:
         config_kwargs["source_motion"] = source_motion
     try:
@@ -419,6 +430,11 @@ def solve_circsym_from_params(
                 "Installed hornlab-metal-bem does not support axial source motion. "
                 "Install the updated hornlab-metal-bem package for an axial "
                 "(rigid-piston) source."
+            ) from exc
+        if "on_frequency_result" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support cancellable CircSym sweeps. "
+                "Install the updated hornlab-metal-bem package."
             ) from exc
         if "formulation" in message or "complex_k_shift" in message:
             raise MetalBemUnavailable(
