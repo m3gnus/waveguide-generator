@@ -398,7 +398,8 @@ class _SolveJobHarnessTest(unittest.TestCase):
         def fail_build(*_args, **_kwargs):
             raise AssertionError("CircSym should not build a gmsh mesh")
 
-        def fake_circsym(waveguide_params, request, **_kwargs):
+        def fake_circsym(waveguide_params, request, **kwargs):
+            self.assertTrue(callable(kwargs.get("cancellation_callback")))
             solve_calls.append((dict(waveguide_params), request.solver_mode))
             return _fake_circsym_result()
 
