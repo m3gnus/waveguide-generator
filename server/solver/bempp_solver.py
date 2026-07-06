@@ -38,6 +38,16 @@ def _reject_reduced_domain_request(request) -> None:
     symmetry_plane = native_symmetry_plane(request)
     if symmetry_plane is None:
         return
+    if str(symmetry_plane) == "xy":
+        # Infinite baffle maps to the z=0 image plane (not a quadrant cut), so a
+        # "use full azimuth" message would be wrong -- the request already is full
+        # azimuth. Point the user at the Metal backend or free-standing instead.
+        raise ValueError(
+            "The BEMPP fallback cannot solve an infinite-baffle request. Infinite "
+            "baffle uses the Metal native xy image-plane solve, which the BEMPP "
+            "backend does not implement. Select the Metal backend for "
+            "infinite-baffle solves, or set Simulation Type to Free-standing."
+        )
     raise ValueError(
         "BEMPP fallback solves require a full-domain mesh. "
         f"Got Mesh.Quadrants={waveguide_quadrants(request)!r}, which maps to "

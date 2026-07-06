@@ -186,6 +186,20 @@ class BemppSolverAdapterTest(unittest.TestCase):
         self.assertIn("full-domain mesh", str(ctx.exception))
         self.assertIn("Mesh.Quadrants=1", str(ctx.exception))
 
+    def test_infinite_baffle_request_gets_ib_specific_error(self):
+        # IB maps to native_symmetry_plane="xy" (the Metal image plane), not a
+        # quadrant cut, so the error must name infinite baffle and NOT tell the
+        # user to use full azimuth (they already are).
+        from tests import test_infinite_baffle_image_integration as ib
+
+        with self.assertRaises(ValueError) as ctx:
+            bempp_solver.solve_bempp_from_msh(
+                "unused.msh", ib._request(ib._payload(sim_type=1))
+            )
+        msg = str(ctx.exception)
+        self.assertIn("infinite-baffle", msg.lower())
+        self.assertNotIn("Mesh.Quadrants=1234", msg)
+
 
 if __name__ == "__main__":
     unittest.main()
