@@ -59,7 +59,7 @@ export function buildHornlabMesherSimulationOutput(input, options = {}) {
     : (meshParams.simType ?? input.params.simType ?? 2);
   const solverMode = Object.prototype.hasOwnProperty.call(options, 'solverMode')
     ? options.solverMode
-    : (meshParams.solverMode ?? input.params.solverMode ?? 'full_3d');
+    : (meshParams.solverMode ?? input.params.solverMode ?? 'auto');
   const waveguidePayload = buildWaveguidePayload(meshParams, mshVersion);
   waveguidePayload.sim_type = simType;
   waveguidePayload.solver_mode = solverMode;

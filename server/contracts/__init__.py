@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
 VALID_SOLVER_BACKENDS = {"auto", "metal", "bempp"}
-VALID_SOLVER_MODES = {"full_3d", "circsym"}
+VALID_SOLVER_MODES = {"full_3d", "circsym", "auto"}
 VALID_BEM_PRECISIONS = {"single", "double"}
 VALID_BEM_FORMULATIONS = {"standard", "complex_k", "burton_miller"}
 DEVICE_MODE_ALIASES = {
@@ -186,7 +186,7 @@ def normalize_contract_solver_backend(value: Any) -> str:
 
 
 def normalize_contract_solver_mode(value: Any) -> str:
-    raw = str(value or "full_3d").strip().lower().replace("-", "_")
+    raw = str(value or "auto").strip().lower().replace("-", "_")
     aliases = {
         "full": "full_3d",
         "3d": "full_3d",
@@ -195,10 +195,13 @@ def normalize_contract_solver_mode(value: Any) -> str:
         "circ_sym": "circsym",
         "axisymmetric": "circsym",
         "axisym": "circsym",
+        "auto": "auto",
+        "automatic": "auto",
+        "default": "auto",
     }
     normalized = aliases.get(raw, raw)
     if normalized not in VALID_SOLVER_MODES:
-        raise ValueError("solver_mode must be one of: full_3d, circsym.")
+        raise ValueError("solver_mode must be one of: full_3d, circsym, auto.")
     return normalized
 
 
@@ -216,7 +219,7 @@ class SimulationRequest(BaseModel):
     frequency_spacing: str = "log"
     device_mode: str = "auto"
     solver_backend: str = "auto"
-    solver_mode: str = "full_3d"
+    solver_mode: str = "auto"
 
     @field_validator("device_mode")
     @classmethod

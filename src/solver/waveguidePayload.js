@@ -51,14 +51,20 @@ function requireStringValue(name, value) {
 }
 
 function normalizeSolverMode(value) {
-  const raw = String(value ?? 'full_3d')
+  const raw = String(value ?? 'auto')
     .trim()
     .toLowerCase()
     .replace(/-/g, '_');
+  if (raw === 'auto' || raw === 'automatic') {
+    return 'auto';
+  }
+  if (raw === 'full_3d') {
+    return 'full_3d';
+  }
   if (raw === 'circsym' || raw === 'circ_sym' || raw === 'axisym' || raw === 'axisymmetric') {
     return 'circsym';
   }
-  return 'full_3d';
+  return 'auto';
 }
 
 export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {

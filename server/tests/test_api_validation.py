@@ -655,6 +655,10 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
             num_frequencies=1,
             sim_type="2",
             solver_backend="metal",
+            # This contract is specifically the full-3D gmsh mesh build; pin it so
+            # 'auto' does not route this circular geometry to the CircSym path
+            # (which never calls build_waveguide_mesh).
+            solver_mode="full_3d",
             options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": wp}},
         )
 
@@ -1088,6 +1092,10 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
             num_frequencies=2,
             sim_type="2",
             solver_backend="metal",
+            # These cancellation tests patch the full-3D metal solve path; pin
+            # full_3d so 'auto' does not route this circular geometry to CircSym
+            # (which would call the real, unpatched solve_circsym_from_params).
+            solver_mode="full_3d",
             options={"mesh": {"strategy": "hornlab_mesher", "waveguide_params": {
                 "formula_type": "OSSE",
                 "wall_thickness": 6.0,

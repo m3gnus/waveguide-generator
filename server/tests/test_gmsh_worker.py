@@ -206,7 +206,13 @@ class _SolveJobHarnessTest(unittest.TestCase):
             return {"frequencies": [], "metadata": {}}
 
         def _fake_circsym(
-            waveguide_params, request, progress_callback=None, stage_callback=None, source_motion=None
+            waveguide_params,
+            request,
+            progress_callback=None,
+            stage_callback=None,
+            source_motion=None,
+            cancellation_callback=None,
+            **_kwargs,
         ):
             return _fake_circsym_result()
 
@@ -236,7 +242,12 @@ class _SolveJobHarnessTest(unittest.TestCase):
     # ── HTTP helpers ────────────────────────────────────────────────────────
 
     def _submit_job(self, port: int) -> str:
-        return self._submit_job_payload(port, _solve_request_dump())
+        # These harness tests exercise the full-3D gmsh worker path; pin full_3d
+        # so 'auto' does not route the round default geometry to CircSym (which
+        # bypasses the gmsh mesh build these tests assert on).
+        payload = _solve_request_dump()
+        payload["solver_mode"] = "full_3d"
+        return self._submit_job_payload(port, payload)
 
     def _submit_job_payload(self, port: int, payload: dict) -> str:
         request = urllib.request.Request(

@@ -417,7 +417,7 @@ export async function submitSimulationControllerJob(
   const submitConfig = {
     ...config,
     simulationType: config?.simulationType ?? waveguidePayload.sim_type ?? '2',
-    solverMode: config?.solverMode ?? waveguidePayload.solver_mode ?? 'full_3d',
+    solverMode: config?.solverMode ?? waveguidePayload.solver_mode ?? 'auto',
   };
   const { preparedParams, stateSnapshot } = submission;
   const startedIso = new Date().toISOString();

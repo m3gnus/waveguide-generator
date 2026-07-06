@@ -8,11 +8,11 @@ from typing import Any, Mapping
 import numpy as np
 
 
-VALID_SOLVER_MODES = {"full_3d", "circsym"}
+VALID_SOLVER_MODES = {"full_3d", "circsym", "auto"}
 
 
 def normalize_solver_mode(value: Any) -> str:
-    raw = str(value or "full_3d").strip().lower().replace("-", "_")
+    raw = str(value or "auto").strip().lower().replace("-", "_")
     aliases = {
         "full": "full_3d",
         "3d": "full_3d",
@@ -21,15 +21,68 @@ def normalize_solver_mode(value: Any) -> str:
         "circ_sym": "circsym",
         "axisymmetric": "circsym",
         "axisym": "circsym",
+        "auto": "auto",
+        "automatic": "auto",
+        "default": "auto",
     }
     normalized = aliases.get(raw, raw)
     if normalized not in VALID_SOLVER_MODES:
-        raise ValueError("solver_mode must be one of: full_3d, circsym.")
+        raise ValueError("solver_mode must be one of: full_3d, circsym, auto.")
     return normalized
 
 
 def solver_mode_from_request(request: Any) -> str:
-    return normalize_solver_mode(getattr(request, "solver_mode", "full_3d"))
+    return normalize_solver_mode(getattr(request, "solver_mode", "auto"))
+
+
+def _circsym_rejection_reasons_for_payload(
+    waveguide_params: Mapping[str, Any] | None,
+    freq_max_hz: float | None,
+) -> list[str]:
+    """Mesher-authoritative CircSym-eligibility reasons for a WG payload.
+
+    Uses the exact same payload->mesher-config transform the CircSym solve path
+    uses, so an empty list here means ``build_meridian`` will actually succeed.
+    Any transform/import failure is treated as "not eligible" so auto mode falls
+    back to the general full-3D solver rather than crashing.
+    """
+    try:
+        from hornlab_mesher import circsym_rejection_reasons
+        from solver.mesher_adapter import waveguide_payload_to_mesher_config
+
+        config = waveguide_payload_to_mesher_config(dict(waveguide_params or {}))
+        return list(circsym_rejection_reasons(config, freq_max_hz=freq_max_hz))
+    except Exception as exc:  # noqa: BLE001 - be conservative, fall back to full_3d
+        return [f"CircSym eligibility probe failed: {exc}"]
+
+
+def resolve_effective_solver_mode(
+    requested_mode: Any,
+    waveguide_params: Mapping[str, Any] | None,
+    *,
+    solver_backend: str,
+    freq_max_hz: float | None = None,
+) -> tuple[str, str | None]:
+    """Resolve a requested solver mode (possibly "auto") to "full_3d"|"circsym".
+
+    Returns ``(effective_mode, reason)``. ``reason`` is a human-readable note for
+    logging when auto falls back to full-3D (backend or geometry); it is ``None``
+    when the mode was explicit or auto picked CircSym. Auto NEVER raises -- it
+    falls back to full-3D. Explicit "circsym" is returned unchanged and is still
+    validated strictly by :func:`validate_circsym_axisymmetric` downstream.
+    """
+    mode = normalize_solver_mode(requested_mode)
+    if mode != "auto":
+        return mode, None
+    if str(solver_backend or "").strip().lower() != "metal":
+        return (
+            "full_3d",
+            f"CircSym needs the Metal backend (solver_backend={solver_backend!r})",
+        )
+    reasons = _circsym_rejection_reasons_for_payload(waveguide_params, freq_max_hz)
+    if reasons:
+        return "full_3d", "; ".join(reasons)
+    return "circsym", None
 
 
 def _finite_number(value: Any, default: float | None = None) -> float | None:

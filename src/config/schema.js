@@ -782,11 +782,12 @@ export const PARAM_SCHEMA = {
     solverMode: {
       type: 'select',
       label: 'Solver Mode',
-      default: 'full_3d',
+      default: 'auto',
       controlId: 'solver-mode',
       tooltip:
-        'Exact for circular waveguides, much faster, valid to higher frequency; only valid when the waveguide is circular.',
+        'Auto selects CircSym for circular Metal jobs when valid, otherwise full 3D.',
       options: [
+        { value: 'auto', label: 'Auto — CircSym when circular' },
         { value: 'full_3d', label: 'Full 3D' },
         { value: 'circsym', label: 'CircSym (axisymmetric, fast)' },
       ],

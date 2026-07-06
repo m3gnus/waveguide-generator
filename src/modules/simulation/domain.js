@@ -67,7 +67,7 @@ function resolveSolverMode(options = {}, meshParams = {}, preparedParams = {}) {
   if (Object.prototype.hasOwnProperty.call(options, 'solverMode')) {
     return options.solverMode;
   }
-  return meshParams.solverMode ?? preparedParams.solverMode ?? 'full_3d';
+  return meshParams.solverMode ?? preparedParams.solverMode ?? 'auto';
 }
 
 export function prepareHornlabSolveContractMesh() {

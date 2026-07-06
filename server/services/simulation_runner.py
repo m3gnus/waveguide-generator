@@ -25,7 +25,11 @@ from services.solver_runtime import (
     solve_circsym_from_params,
     solve_metal_from_msh,
 )
-from solver.axisymmetry import solver_mode_from_request, validate_circsym_axisymmetric
+from solver.axisymmetry import (
+    resolve_effective_solver_mode,
+    solver_mode_from_request,
+    validate_circsym_axisymmetric,
+)
 from solver.mesher_adapter import source_motion_from_payload
 from services.job_runtime import (
     _merge_job_cache_from_db,
@@ -272,12 +276,44 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 "options.mesh.waveguide_params must be provided for "
                 "options.mesh.strategy='hornlab_mesher'."
             )
-        solver_mode = solver_mode_from_request(request)
+        requested_solver_mode = solver_mode_from_request(request)
+        # 'auto' may fall back to the gmsh full-3D path, so require the full mesher
+        # runtime unless the caller pinned CircSym explicitly.
         if not HORNLAB_MESHER_AVAILABLE or (
-            solver_mode != "circsym"
+            requested_solver_mode != "circsym"
             and (build_waveguide_mesh is None or not HORNLAB_MESHER_RUNTIME_READY)
         ):
             raise RuntimeError("hornlab-waveguide-mesher is unavailable.")
+
+        _cancellation_callback("Cancellation requested before mesh build started")
+        waveguide_params = normalize_waveguide_params_for_solver_backend(
+            waveguide_params,
+            solver_backend,
+        )
+        validated = WaveguideParamsRequest(**waveguide_params)
+        validated_payload = validated.model_dump()
+        # Resolve 'auto' now that the payload is validated: pick CircSym only when
+        # the Metal backend + a circular geometry make it actually solvable, else
+        # fall back to full-3D (logged, never a hard failure). Explicit modes pass
+        # through unchanged.
+        try:
+            freq_max_hz = float(request.frequency_range[1])
+        except (TypeError, ValueError, IndexError):
+            freq_max_hz = None
+        solver_mode, solver_mode_reason = resolve_effective_solver_mode(
+            requested_solver_mode,
+            validated_payload,
+            solver_backend=solver_backend,
+            freq_max_hz=freq_max_hz,
+        )
+        if requested_solver_mode == "auto":
+            if solver_mode == "circsym":
+                logger.info("Auto solver mode: selected CircSym (circular waveguide).")
+            else:
+                logger.info(
+                    "Auto solver mode: selected full-3D (%s).",
+                    solver_mode_reason or "not CircSym-eligible",
+                )
 
         update_job_stage(
             job_id,
@@ -289,13 +325,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 else "Building HornLab mesher mesh"
             ),
         )
-        _cancellation_callback("Cancellation requested before mesh build started")
-        waveguide_params = normalize_waveguide_params_for_solver_backend(
-            waveguide_params,
-            solver_backend,
-        )
-        validated = WaveguideParamsRequest(**waveguide_params)
-        validated_payload = validated.model_dump()
         # Source velocity BC (1=normal breathing cap, 2=axial rigid piston). Only
         # threaded to the solver when non-default so an older metal-bem stays
         # compatible; the BEMPP fallback rejects axial rather than downgrade it.
