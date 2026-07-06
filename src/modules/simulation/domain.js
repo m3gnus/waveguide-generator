@@ -63,6 +63,13 @@ function resolveSimulationType(options = {}, meshParams = {}, preparedParams = {
   return meshParams.simType ?? preparedParams.simType ?? 2;
 }
 
+function resolveSolverMode(options = {}, meshParams = {}, preparedParams = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'solverMode')) {
+    return options.solverMode;
+  }
+  return meshParams.solverMode ?? preparedParams.solverMode ?? 'full_3d';
+}
+
 export function prepareHornlabSolveContractMesh() {
   return {
     vertices: Array.from(HORNLAB_SOLVE_CONTRACT_MESH.vertices),
@@ -187,6 +194,7 @@ export function prepareHornlabMesherSolveRequest(state, options = {}) {
   const meshParams = DesignModule.output.backendMeshSimulationParams(designTask);
   const waveguidePayload = buildWaveguidePayload(meshParams, options.mshVersion || '2.2');
   waveguidePayload.sim_type = resolveSimulationType(options, meshParams, preparedParams);
+  waveguidePayload.solver_mode = resolveSolverMode(options, meshParams, preparedParams);
 
   return {
     waveguidePayload,

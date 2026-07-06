@@ -18,13 +18,15 @@ from .result_mapping import (
 from .formulation import complex_k_shift_from_request, formulation_from_request
 
 try:
-    from hornlab_metal_bem import ObservationConfig, native_config, solve
+    from hornlab_metal_bem import MeridianMesh, ObservationConfig, native_config, solve, solve_circsym
     from hornlab_metal_bem.backends import discover_metal_backend
     from hornlab_metal_bem.metal.native import discover_native_runtime
 except ImportError:  # pragma: no cover - exercised through runtime status
+    MeridianMesh = None  # type: ignore[assignment]
     ObservationConfig = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     solve = None  # type: ignore[assignment]
+    solve_circsym = None  # type: ignore[assignment]
     discover_metal_backend = None  # type: ignore[assignment]
     discover_native_runtime = None  # type: ignore[assignment]
 
@@ -334,6 +336,121 @@ def solve_metal_from_msh(
             "complex_k_shift": getattr(config, "complex_k_shift", config_kwargs["complex_k_shift"]),
             "solver_log": json_safe_native_value(list(result.solver_log or [])),
             "native_diagnostics": json_safe_native_value(list(result.native_diagnostics or [])),
+        },
+    }
+
+    return build_solver_response(
+        result=result,
+        config=config,
+        request=request,
+        start_time=start_time,
+        metadata=metadata,
+    )
+
+
+def solve_circsym_from_params(
+    waveguide_params: dict[str, Any],
+    request,
+    *,
+    progress_callback=None,
+    stage_callback=None,
+    source_motion: str | None = None,
+) -> dict[str, Any]:
+    if native_config is None or solve_circsym is None or MeridianMesh is None:
+        raise MetalBemUnavailable(
+            "Installed hornlab-metal-bem does not support CircSym. "
+            "Install the updated hornlab-metal-bem package."
+        )
+
+    try:
+        from hornlab_mesher import build_meridian
+        from solver.mesher_adapter import waveguide_payload_to_mesher_config
+    except ImportError as exc:
+        raise MetalBemUnavailable(
+            "hornlab-waveguide-mesher is required to build a CircSym meridian."
+        ) from exc
+
+    status = metal_backend_status()
+    if not status.get("available"):
+        raise MetalBemUnavailable(status.get("reason") or "Metal solver backend is unavailable.")
+
+    start_time = time.time()
+
+    if stage_callback:
+        stage_callback("setup", 0.0, "Configuring CircSym solve")
+
+    def _progress(index: int, total: int, frequency_hz: float) -> None:
+        if progress_callback:
+            progress_callback(index / max(1, total))
+        if stage_callback:
+            stage_callback(
+                "frequency_solve",
+                index / max(1, total),
+                f"Solving frequency {index + 1}/{total} with CircSym",
+            )
+
+    meridian_build = build_meridian(waveguide_payload_to_mesher_config(waveguide_params))
+    meridian = meridian_build.as_metal_meridian(MeridianMesh)
+
+    config_kwargs = {
+        "freq_min_hz": float(request.frequency_range[0]),
+        "freq_max_hz": float(request.frequency_range[1]),
+        "freq_count": int(request.num_frequencies),
+        "freq_spacing": str(request.frequency_spacing or "log"),
+        "formulation": formulation_from_request(request, allow_burton_miller=False),
+        "complex_k_shift": complex_k_shift_from_request(request),
+        "observation": _observation_config(request),
+        "progress_callback": _progress,
+        "circsym_baffle_z": meridian_build.baffle_z,
+    }
+    if source_motion is not None:
+        config_kwargs["source_motion"] = source_motion
+    try:
+        config = native_config(**config_kwargs)
+    except TypeError as exc:
+        message = str(exc)
+        if "circsym_baffle_z" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support CircSym baffle configuration. "
+                "Install the updated hornlab-metal-bem package."
+            ) from exc
+        if "source_motion" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support axial source motion. "
+                "Install the updated hornlab-metal-bem package for an axial "
+                "(rigid-piston) source."
+            ) from exc
+        if "formulation" in message or "complex_k_shift" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support explicit BEM formulation "
+                "options. Install the updated hornlab-metal-bem package."
+            ) from exc
+        raise
+
+    result = solve_circsym(meridian, config)
+
+    if stage_callback:
+        stage_callback("finalizing", 1.0, "Packaging CircSym solver results")
+
+    metadata = {
+        "solver_backend": "metal",
+        "solver_mode": "circsym",
+        "device_interface": {"selected": "metal", "metal": status},
+        "engine": "hornlab-metal-bem",
+        "phase_time_convention": "exp(+ikr)",
+        "mesh_validation": {"mode": request.mesh_validation_mode, "backend": "hornlab-metal-bem-circsym"},
+        "performance": {
+            "total_time_seconds": time.time() - start_time,
+            "native_timings": dict(result.timings or {}),
+        },
+        "metal": {
+            "solver_mode": "circsym",
+            "circsym_baffle_z": getattr(config, "circsym_baffle_z", meridian_build.baffle_z),
+            "formulation": getattr(config, "formulation", config_kwargs["formulation"]),
+            "complex_k_shift": getattr(config, "complex_k_shift", config_kwargs["complex_k_shift"]),
+            "solver_log": json_safe_native_value(list(result.solver_log or [])),
+            "native_diagnostics": json_safe_native_value(list(result.native_diagnostics or [])),
+            "meridian": json_safe_native_value(dict(meridian_build.metadata or {})),
         },
     }
 

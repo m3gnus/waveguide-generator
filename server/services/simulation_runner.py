@@ -22,8 +22,10 @@ from services.solver_runtime import (
     build_waveguide_mesh,
     resolve_solver_backend,
     solve_bempp_from_msh,
+    solve_circsym_from_params,
     solve_metal_from_msh,
 )
+from solver.axisymmetry import solver_mode_from_request, validate_circsym_axisymmetric
 from solver.mesher_adapter import source_motion_from_payload
 from services.job_runtime import (
     _merge_job_cache_from_db,
@@ -270,11 +272,22 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 "options.mesh.waveguide_params must be provided for "
                 "options.mesh.strategy='hornlab_mesher'."
             )
-        if not HORNLAB_MESHER_AVAILABLE or build_waveguide_mesh is None or not HORNLAB_MESHER_RUNTIME_READY:
+        solver_mode = solver_mode_from_request(request)
+        if not HORNLAB_MESHER_AVAILABLE or (
+            solver_mode != "circsym"
+            and (build_waveguide_mesh is None or not HORNLAB_MESHER_RUNTIME_READY)
+        ):
             raise RuntimeError("hornlab-waveguide-mesher is unavailable.")
 
         update_job_stage(
-            job_id, "mesh_prepare", progress=0.15, stage_message="Building HornLab mesher mesh"
+            job_id,
+            "mesh_prepare",
+            progress=0.15,
+            stage_message=(
+                "Preparing CircSym meridian"
+                if solver_mode == "circsym"
+                else "Building HornLab mesher mesh"
+            ),
         )
         _cancellation_callback("Cancellation requested before mesh build started")
         waveguide_params = normalize_waveguide_params_for_solver_backend(
@@ -288,104 +301,134 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         # compatible; the BEMPP fallback rejects axial rather than downgrade it.
         source_motion = source_motion_from_payload(validated_payload)
         solve_source_motion = source_motion if source_motion != "normal" else None
-        # Multi-second gmsh build: run it on the dedicated gmsh worker thread
-        # so status polling and every other HTTP response stay responsive.
-        # asyncio.to_thread is not safe here — gmsh requires all calls on one
-        # persistent thread (see services/gmsh_worker.py).
-        mesher_result = await run_on_gmsh_worker(
-            build_waveguide_mesh,
-            validated_payload,
-            include_canonical=True,
-            cancellation_callback=lambda: _cancellation_callback(
-                "Cancellation requested while preparing solver mesh"
-            ),
-        )
-        _cancellation_callback("Cancellation requested after solver mesh build completed")
-
-        # Store mesh artifact for optional download.
-        msh_artifact = mesher_result.get("msh_text")
-        _set_job_fields(
-            job_id, mesh_artifact=msh_artifact, has_mesh_artifact=bool(msh_artifact)
-        )
-        if msh_artifact:
-            try:
-                db.store_mesh_artifact(job_id, msh_artifact)
-            except Exception as _artifact_persist_exc:
-                # Artifact is optional; do not abort the simulation.
-                logger.warning(
-                    "Mesh artifact persistence failed for job %s: %s",
-                    job_id,
-                    _artifact_persist_exc,
-                )
-                _set_job_fields(job_id, has_mesh_artifact=False)
-
-        # Load mesh for BEM directly from the .msh file via meshio.
-        # This avoids using the viewport/client tessellation as solver input.
-        if not msh_artifact:
-            raise RuntimeError(
-                "hornlab-waveguide-mesher did not produce .msh output."
-            )
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".msh", delete=False, encoding="utf-8"
-        ) as tmp_msh:
-            tmp_msh.write(msh_artifact)
-            tmp_msh_path = tmp_msh.name
-
-        # Extract canonical mesh stats for the job record (informational only).
         mesh_stats = None
-        try:
-            vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
-            canonical_metadata = (
-                mesher_result.get("canonical_mesh", {}).get("metadata")
-                if isinstance(mesher_result.get("canonical_mesh"), dict)
-                else None
-            )
-            mesh_stats = _build_mesh_stats(
-                vertices,
-                indices,
-                source="hornlab_waveguide_mesher",
-                surface_tags=surface_tags,
-                metadata=canonical_metadata,
-            )
-            _set_job_fields(
+        if solver_mode == "circsym":
+            if solver_backend != "metal":
+                raise ValueError(
+                    "CircSym requires the Metal backend. The BEMPP backend cannot solve "
+                    "axisymmetric CircSym requests; select solver_backend='metal' or use "
+                    "solver_mode='full_3d'."
+                )
+            validate_circsym_axisymmetric(validated_payload)
+            _set_job_fields(job_id, mesh_artifact=None, has_mesh_artifact=False)
+            update_job_stage(
                 job_id,
-                mesh_stats=mesh_stats,
+                "bem_solve",
+                progress=0.30,
+                stage_message="Configuring CircSym solve",
             )
-        except Exception as _stats_exc:
-            logger.warning(
-                "Canonical mesh stats extraction failed for job %s: %s",
-                job_id, _stats_exc,
+            _cancellation_callback("Cancellation requested before CircSym solve start")
+            results = await asyncio.to_thread(
+                solve_circsym_from_params,
+                validated_payload,
+                request,
+                source_motion=solve_source_motion,
+                progress_callback=lambda progress: _apply_solver_stage_to_job(
+                    job_id, "frequency_solve", progress, None
+                ),
+                stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
+                    job_id, stage, progress, message
+                ),
             )
+            _cancellation_callback("Cancellation requested before result persistence")
+        else:
+            # Multi-second gmsh build: run it on the dedicated gmsh worker thread
+            # so status polling and every other HTTP response stay responsive.
+            # asyncio.to_thread is not safe here — gmsh requires all calls on one
+            # persistent thread (see services/gmsh_worker.py).
+            mesher_result = await run_on_gmsh_worker(
+                build_waveguide_mesh,
+                validated_payload,
+                include_canonical=True,
+                cancellation_callback=lambda: _cancellation_callback(
+                    "Cancellation requested while preparing solver mesh"
+                ),
+            )
+            _cancellation_callback("Cancellation requested after solver mesh build completed")
 
-        solver_label = "BEMPP BEM" if solver_backend == "bempp" else "Metal BEM"
-        solve_from_msh = solve_bempp_from_msh if solver_backend == "bempp" else solve_metal_from_msh
-        update_job_stage(
-            job_id,
-            "bem_solve",
-            progress=0.30,
-            stage_message=f"Configuring {solver_label} solve",
-        )
-        _cancellation_callback("Cancellation requested before solve start")
+            # Store mesh artifact for optional download.
+            msh_artifact = mesher_result.get("msh_text")
+            _set_job_fields(
+                job_id, mesh_artifact=msh_artifact, has_mesh_artifact=bool(msh_artifact)
+            )
+            if msh_artifact:
+                try:
+                    db.store_mesh_artifact(job_id, msh_artifact)
+                except Exception as _artifact_persist_exc:
+                    # Artifact is optional; do not abort the simulation.
+                    logger.warning(
+                        "Mesh artifact persistence failed for job %s: %s",
+                        job_id,
+                        _artifact_persist_exc,
+                    )
+                    _set_job_fields(job_id, has_mesh_artifact=False)
 
-        if not tmp_msh_path:
-            raise RuntimeError(f"{solver_label} solve requires a generated .msh artifact.")
-        results = await asyncio.to_thread(
-            solve_from_msh,
-            tmp_msh_path,
-            request,
-            source_motion=solve_source_motion,
-            progress_callback=lambda progress: _apply_solver_stage_to_job(
-                job_id, "frequency_solve", progress, None
-            ),
-            stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
-                job_id, stage, progress, message
-            ),
-        )
-        _cancellation_callback("Cancellation requested before result persistence")
-        if mesh_stats and isinstance(results, dict):
-            metadata = results.setdefault("metadata", {})
-            if isinstance(metadata, dict):
-                metadata["mesh_stats"] = mesh_stats
+            # Load mesh for BEM directly from the .msh file via meshio.
+            # This avoids using the viewport/client tessellation as solver input.
+            if not msh_artifact:
+                raise RuntimeError(
+                    "hornlab-waveguide-mesher did not produce .msh output."
+                )
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".msh", delete=False, encoding="utf-8"
+            ) as tmp_msh:
+                tmp_msh.write(msh_artifact)
+                tmp_msh_path = tmp_msh.name
+
+            # Extract canonical mesh stats for the job record (informational only).
+            try:
+                vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
+                canonical_metadata = (
+                    mesher_result.get("canonical_mesh", {}).get("metadata")
+                    if isinstance(mesher_result.get("canonical_mesh"), dict)
+                    else None
+                )
+                mesh_stats = _build_mesh_stats(
+                    vertices,
+                    indices,
+                    source="hornlab_waveguide_mesher",
+                    surface_tags=surface_tags,
+                    metadata=canonical_metadata,
+                )
+                _set_job_fields(
+                    job_id,
+                    mesh_stats=mesh_stats,
+                )
+            except Exception as _stats_exc:
+                logger.warning(
+                    "Canonical mesh stats extraction failed for job %s: %s",
+                    job_id, _stats_exc,
+                )
+
+            solver_label = "BEMPP BEM" if solver_backend == "bempp" else "Metal BEM"
+            solve_from_msh = solve_bempp_from_msh if solver_backend == "bempp" else solve_metal_from_msh
+            update_job_stage(
+                job_id,
+                "bem_solve",
+                progress=0.30,
+                stage_message=f"Configuring {solver_label} solve",
+            )
+            _cancellation_callback("Cancellation requested before solve start")
+
+            if not tmp_msh_path:
+                raise RuntimeError(f"{solver_label} solve requires a generated .msh artifact.")
+            results = await asyncio.to_thread(
+                solve_from_msh,
+                tmp_msh_path,
+                request,
+                source_motion=solve_source_motion,
+                progress_callback=lambda progress: _apply_solver_stage_to_job(
+                    job_id, "frequency_solve", progress, None
+                ),
+                stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
+                    job_id, stage, progress, message
+                ),
+            )
+            _cancellation_callback("Cancellation requested before result persistence")
+            if mesh_stats and isinstance(results, dict):
+                metadata = results.setdefault("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata["mesh_stats"] = mesh_stats
 
         # Check for cancellation before storing results.
         latest = _merge_job_cache_from_db(job_id)

@@ -73,6 +73,7 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
         frequencySpacing: 'linear',
         verbose: false,
         solverBackend: 'metal',
+        solverMode: 'circsym',
         polarConfig: {
           angle_range: [0, 180, 37],
           norm_angle: 5,
@@ -102,6 +103,7 @@ test('submitSimulation sends canonical mesh payload shape and adaptive mesh opti
     assert.equal(payload.mesh_validation_mode, 'strict');
     assert.equal(payload.frequency_spacing, 'linear');
     assert.equal(payload.solver_backend, 'metal');
+    assert.equal(payload.solver_mode, 'circsym');
     assert.equal('device_mode' in payload, false);
     assert.equal(payload.verbose, false);
     assert.equal('advanced_settings' in payload, false);
@@ -135,6 +137,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
         meshValidationMode: 'invalid',
         frequencySpacing: 'bogus',
         solverBackend: 'invalid-backend',
+        solverMode: 'invalid-mode',
         verbose: undefined,
       },
       {
@@ -162,6 +165,7 @@ test('submitSimulation omits invalid or unset runtime settings so backend defaul
     assert.equal('mesh_validation_mode' in payload, false);
     assert.equal('frequency_spacing' in payload, false);
     assert.equal('solver_backend' in payload, false);
+    assert.equal('solver_mode' in payload, false);
     assert.equal('device_mode' in payload, false);
     assert.equal('verbose' in payload, false);
     assert.equal('advanced_settings' in payload, false);

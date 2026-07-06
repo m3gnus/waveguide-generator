@@ -50,6 +50,17 @@ function requireStringValue(name, value) {
   return String(value);
 }
 
+function normalizeSolverMode(value) {
+  const raw = String(value ?? 'full_3d')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+  if (raw === 'circsym' || raw === 'circ_sym' || raw === 'axisym' || raw === 'axisymmetric') {
+    return 'circsym';
+  }
+  return 'full_3d';
+}
+
 export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
   const type = preparedParams.type || 'R-OSSE';
   const lengthMode =
@@ -176,6 +187,7 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
 
     // Simulation / output
     sim_type: toFiniteNumber(preparedParams.simType, 2),
+    solver_mode: normalizeSolverMode(preparedParams.solverMode),
     msh_version: mshVersion,
   };
 }

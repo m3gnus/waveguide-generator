@@ -1,0 +1,88 @@
+"""Axisymmetric CircSym eligibility helpers for Waveguide Generator."""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Mapping
+
+import numpy as np
+
+
+VALID_SOLVER_MODES = {"full_3d", "circsym"}
+
+
+def normalize_solver_mode(value: Any) -> str:
+    raw = str(value or "full_3d").strip().lower().replace("-", "_")
+    aliases = {
+        "full": "full_3d",
+        "3d": "full_3d",
+        "full3d": "full_3d",
+        "full_3d": "full_3d",
+        "circ_sym": "circsym",
+        "axisymmetric": "circsym",
+        "axisym": "circsym",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized not in VALID_SOLVER_MODES:
+        raise ValueError("solver_mode must be one of: full_3d, circsym.")
+    return normalized
+
+
+def solver_mode_from_request(request: Any) -> str:
+    return normalize_solver_mode(getattr(request, "solver_mode", "full_3d"))
+
+
+def _finite_number(value: Any, default: float | None = None) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if np.isfinite(number) else default
+
+
+def _optional_number(params: Mapping[str, Any], *names: str) -> float | None:
+    for name in names:
+        if name in params and params[name] is not None:
+            return _finite_number(params[name], None)
+    return None
+
+
+def circsym_axisymmetric_rejection_reasons(
+    waveguide_params: Mapping[str, Any] | None,
+) -> list[str]:
+    params = waveguide_params if isinstance(waveguide_params, Mapping) else {}
+    reasons: list[str] = []
+
+    exponent = _optional_number(params, "cross_section_exponent", "exponent")
+    if exponent is not None and not math.isclose(exponent, 2.0, rel_tol=0.0, abs_tol=1.0e-9):
+        reasons.append(f"CrossSection exponent is {exponent:g}, not 2")
+
+    aspect = _optional_number(params, "aspect_ratio", "aspectRatio")
+    if aspect is not None and not math.isclose(aspect, 1.0, rel_tol=0.0, abs_tol=1.0e-9):
+        reasons.append(f"CrossSection aspectRatio is {aspect:g}, not 1")
+
+    morph_target = _finite_number(params.get("morph_target", 0), None)
+    if morph_target is None or not math.isclose(morph_target, 0.0, rel_tol=0.0, abs_tol=1.0e-9):
+        reasons.append(f"morphTarget is {params.get('morph_target')!r}, not 0")
+
+    enc_depth = _finite_number(params.get("enc_depth", 0.0), 0.0) or 0.0
+    if enc_depth > 0.0:
+        reasons.append(f"enclosure depth is {enc_depth:g} mm")
+
+    return reasons
+
+
+def validate_circsym_axisymmetric(waveguide_params: Mapping[str, Any] | None) -> None:
+    reasons = circsym_axisymmetric_rejection_reasons(waveguide_params)
+    if reasons:
+        raise ValueError("CircSym requires a circular waveguide: " + "; ".join(reasons))
+
+
+def reject_bempp_circsym_request(request: Any) -> None:
+    if solver_mode_from_request(request) != "circsym":
+        return
+    raise ValueError(
+        "CircSym requires the Metal backend. The BEMPP backend cannot solve "
+        "axisymmetric CircSym requests; select solver_backend='metal' or use "
+        "solver_mode='full_3d'."
+    )

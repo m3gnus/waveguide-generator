@@ -105,6 +105,9 @@ export function applyAthImportDefaults(parsed, typedParams) {
   if (typedParams.simType === undefined) {
     typedParams.simType = hasMeshEnclosure ? 2 : 1;
   }
+  if (typedParams.solverMode === undefined) {
+    typedParams.solverMode = 'full_3d';
+  }
 
   if (typedParams.samplingMode === undefined) {
     typedParams.samplingMode = typedParams.zMapPoints !== undefined ? 'zmap' : 'ath-default-zmap';

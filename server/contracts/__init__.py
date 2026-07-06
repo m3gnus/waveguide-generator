@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
 VALID_SOLVER_BACKENDS = {"auto", "metal", "bempp"}
+VALID_SOLVER_MODES = {"full_3d", "circsym"}
 VALID_BEM_PRECISIONS = {"single", "double"}
 VALID_BEM_FORMULATIONS = {"standard", "complex_k", "burton_miller"}
 DEVICE_MODE_ALIASES = {
@@ -184,6 +185,23 @@ def normalize_contract_solver_backend(value: Any) -> str:
     return normalized
 
 
+def normalize_contract_solver_mode(value: Any) -> str:
+    raw = str(value or "full_3d").strip().lower().replace("-", "_")
+    aliases = {
+        "full": "full_3d",
+        "3d": "full_3d",
+        "full3d": "full_3d",
+        "full_3d": "full_3d",
+        "circ_sym": "circsym",
+        "axisymmetric": "circsym",
+        "axisym": "circsym",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized not in VALID_SOLVER_MODES:
+        raise ValueError("solver_mode must be one of: full_3d, circsym.")
+    return normalized
+
+
 class SimulationRequest(BaseModel):
     mesh: MeshData
     frequency_range: List[float]
@@ -198,6 +216,7 @@ class SimulationRequest(BaseModel):
     frequency_spacing: str = "log"
     device_mode: str = "auto"
     solver_backend: str = "auto"
+    solver_mode: str = "full_3d"
 
     @field_validator("device_mode")
     @classmethod
@@ -208,6 +227,11 @@ class SimulationRequest(BaseModel):
     @classmethod
     def validate_solver_backend(cls, value: str) -> str:
         return normalize_contract_solver_backend(value)
+
+    @field_validator("solver_mode")
+    @classmethod
+    def validate_solver_mode(cls, value: str) -> str:
+        return normalize_contract_solver_mode(value)
 
 
 class JobStatus(BaseModel):
@@ -387,7 +411,9 @@ __all__ = [
     "VALID_DEVICE_MODES",
     "VALID_OBSERVATION_ORIGINS",
     "VALID_SOLVER_BACKENDS",
+    "VALID_SOLVER_MODES",
     "WaveguideParamsRequest",
     "normalize_contract_device_mode",
     "normalize_contract_solver_backend",
+    "normalize_contract_solver_mode",
 ]

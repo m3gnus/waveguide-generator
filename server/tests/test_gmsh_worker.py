@@ -108,6 +108,25 @@ def _fake_mesh_result() -> dict:
     }
 
 
+def _fake_circsym_result() -> dict:
+    return {
+        "frequencies": [100.0],
+        "directivity": {"horizontal": [[[0.0, 0.0]]]},
+        "spl_on_axis": {
+            "frequencies": [100.0],
+            "spl": [80.0],
+            "phase_degrees": [0.0],
+        },
+        "impedance": {
+            "frequencies": [100.0],
+            "real": [1.0],
+            "imaginary": [0.0],
+        },
+        "di": {"frequencies": [100.0], "di": {"horizontal": [0.0]}},
+        "metadata": {"solver_backend": "metal", "solver_mode": "circsym"},
+    }
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         try:
@@ -186,6 +205,11 @@ class _SolveJobHarnessTest(unittest.TestCase):
         ):
             return {"frequencies": [], "metadata": {}}
 
+        def _fake_circsym(
+            waveguide_params, request, progress_callback=None, stage_callback=None, source_motion=None
+        ):
+            return _fake_circsym_result()
+
         for target, name, value in (
             (_routes, "HORNLAB_MESHER_AVAILABLE", True),
             (_routes, "HORNLAB_MESHER_RUNTIME_READY", True),
@@ -197,6 +221,7 @@ class _SolveJobHarnessTest(unittest.TestCase):
             (_runner, "HORNLAB_MESHER_RUNTIME_READY", True),
             (_runner, "resolve_solver_backend", _fake_resolve),
             (_runner, "solve_metal_from_msh", _fake_solve),
+            (_runner, "solve_circsym_from_params", _fake_circsym),
         ):
             self._start_patch(target, name, value)
 
@@ -211,9 +236,12 @@ class _SolveJobHarnessTest(unittest.TestCase):
     # ── HTTP helpers ────────────────────────────────────────────────────────
 
     def _submit_job(self, port: int) -> str:
+        return self._submit_job_payload(port, _solve_request_dump())
+
+    def _submit_job_payload(self, port: int, payload: dict) -> str:
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/solve",
-            data=json.dumps(_solve_request_dump()).encode("utf-8"),
+            data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -363,6 +391,46 @@ class _SolveJobHarnessTest(unittest.TestCase):
             later["start"],
             f"mesh builds overlapped in time: {records}",
         )
+
+    def test_circsym_job_bypasses_gmsh_worker_and_uses_circsym_solver(self):
+        solve_calls = []
+
+        def fail_build(*_args, **_kwargs):
+            raise AssertionError("CircSym should not build a gmsh mesh")
+
+        def fake_circsym(waveguide_params, request, **_kwargs):
+            solve_calls.append((dict(waveguide_params), request.solver_mode))
+            return _fake_circsym_result()
+
+        self._install_fake_build(fail_build)
+        self._start_patch(_runner, "solve_circsym_from_params", fake_circsym)
+
+        payload = _solve_request_dump()
+        payload["solver_mode"] = "circsym"
+        payload["solver_backend"] = "metal"
+
+        with _LoopbackServer(_make_test_app()) as server:
+            job_id = self._submit_job_payload(server.port, payload)
+            final = self._wait_terminal(server.port, job_id)
+
+        self.assertEqual(final["status"], "complete", final)
+        self.assertEqual(len(solve_calls), 1)
+        self.assertEqual(solve_calls[0][1], "circsym")
+        self.assertEqual(solve_calls[0][0]["formula_type"], "OSSE")
+
+    def test_circsym_job_rejects_non_circular_waveguide(self):
+        payload = _solve_request_dump()
+        payload["solver_mode"] = "circsym"
+        payload["solver_backend"] = "metal"
+        payload["options"]["mesh"]["waveguide_params"]["morph_target"] = 1
+
+        with _LoopbackServer(_make_test_app()) as server:
+            job_id = self._submit_job_payload(server.port, payload)
+            final = self._wait_terminal(server.port, job_id)
+
+        self.assertEqual(final["status"], "error", final)
+        self.assertIn("CircSym requires a circular waveguide", final.get("message") or "")
+        self.assertIn("morphTarget", final.get("message") or "")
 
 
 def _mesher_runtime_ready() -> bool:
