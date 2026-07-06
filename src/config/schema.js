@@ -772,8 +772,9 @@ export const PARAM_SCHEMA = {
       default: '2',
       controlId: 'sim-type',
       tooltip:
-        'BEM boundary condition. Free-standing radiates into full space. Infinite baffle ' +
-        'uses the Metal native xy image-plane solve and currently requires full azimuth.',
+        'Infinite baffle: solved exactly for CIRCULAR waveguides via the CircSym coupled ' +
+        'path (Solver Mode auto/circsym, Metal backend). Non-circular guides are not yet ' +
+        'supported in infinite-baffle mode.',
       options: [
         { value: '2', label: 'Free-standing' },
         { value: '1', label: 'Infinite baffle' },
