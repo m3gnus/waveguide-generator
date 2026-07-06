@@ -392,6 +392,8 @@ class ChartsRenderRequest(BaseModel):
     impedance_frequencies: List[float] = []
     impedance_real: List[Optional[float]] = []
     impedance_imaginary: List[Optional[float]] = []
+    impedance_units: Optional[str] = None
+    impedance_normalization: Optional[str] = None
     directivity: Dict[str, Any] = {}
 
 

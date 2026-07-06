@@ -9,6 +9,7 @@ import numpy as np
 
 from contracts import MeshData, PolarConfig, SimulationRequest
 from solver import bempp_solver
+from solver.result_mapping import REFERENCE_RHO_C
 
 
 class FakeObservationConfig:
@@ -86,7 +87,7 @@ class BemppSolverAdapterTest(unittest.TestCase):
                 ],
                 dtype=float,
             ),
-            impedance=np.array([1.0 + 0.5j, 2.0 + 1.5j, 3.0 + 2.5j], dtype=np.complex128),
+            impedance=np.array([1.0 - 0.5j, 2.0 - 1.5j, 3.0 - 2.5j], dtype=np.complex128),
             timings={"total_s": 0.2},
             solver_log=[
                 {"frequency_hz": np.float64(500.0), "impedance": 1.0 + 0.5j},
@@ -140,8 +141,13 @@ class BemppSolverAdapterTest(unittest.TestCase):
 
         self.assertEqual(set(result.keys()), {"frequencies", "directivity", "spl_on_axis", "impedance", "di", "metadata"})
         self.assertEqual(result["frequencies"], [500.0, 1000.0, 2000.0])
-        self.assertEqual(result["impedance"]["real"], [1.0, 2.0, 3.0])
-        self.assertEqual(result["impedance"]["imaginary"], [0.5, 1.5, 2.5])
+        raw_impedance = self._fake_result().impedance
+        expected = np.conjugate(
+            1j * 2.0 * np.pi * self._fake_result().frequencies_hz * raw_impedance
+        ) / REFERENCE_RHO_C
+        np.testing.assert_allclose(result["impedance"]["real"], expected.real)
+        np.testing.assert_allclose(result["impedance"]["imaginary"], expected.imag)
+        self.assertTrue(all(value > 0.0 for value in result["impedance"]["real"]))
         self.assertEqual(result["spl_on_axis"]["phase_degrees"], [0.0, 0.0, 0.0])
         self.assertIn("horizontal", result["di"]["di"])
         self.assertTrue(all(math.isfinite(value) for value in result["di"]["di"]["horizontal"]))
@@ -169,6 +175,9 @@ class BemppSolverAdapterTest(unittest.TestCase):
         self.assertEqual(metadata["solver_backend"], "bempp")
         self.assertEqual(metadata["engine"], "hornlab-bempp-bem")
         self.assertEqual(metadata["phase_time_convention"], "exp(+ikr)")
+        self.assertEqual(metadata["impedance_units"], "Z/(rho*c)")
+        self.assertEqual(metadata["impedance_quantity"], "specific_acoustic_impedance")
+        self.assertEqual(metadata["impedance_drive"], "unit_acceleration")
         self.assertEqual(metadata["assemblyBackend"], "numba")
         self.assertEqual(metadata["device_interface"]["selected"], "bempp-cl-numba")
         self.assertNotIn(metadata["device_interface"]["selected"], {"bempp", "bempp-cl", "bemppcl"})

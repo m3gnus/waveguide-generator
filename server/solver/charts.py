@@ -191,10 +191,24 @@ def _response_phase_degrees(*args, **kwargs):
     return _time_referenced_phase_degrees(*args, **kwargs)
 
 
-def _normalize_impedance_for_plot(real_values, imaginary_values, rho_c=1.21 * 343.0):
+def _impedance_payload_is_normalized(payload):
+    units = str(payload.get('impedance_units') or '').strip().lower().replace(' ', '')
+    normalization = str(payload.get('impedance_normalization') or '').strip().lower().replace('-', '_')
+    return units in {'z/(rho*c)', 'z/rhoc'} or normalization == 'rho_c'
+
+
+def _normalize_impedance_for_plot(
+    real_values,
+    imaginary_values,
+    rho_c=1.21 * 343.0,
+    *,
+    already_normalized=False,
+):
     """Return normalized impedance values, accepting old Pa.s/m cached payloads."""
     arrays = [arr for arr in (real_values, imaginary_values) if len(arr) > 0]
     if not arrays:
+        return real_values, imaginary_values
+    if already_normalized:
         return real_values, imaginary_values
     finite = np.concatenate([arr[np.isfinite(arr)] for arr in arrays])
     if finite.size == 0:
@@ -384,7 +398,7 @@ def render_directivity_index(frequencies, di, dpi=150):
     return _fig_to_base64(fig, dpi)
 
 
-def render_impedance(frequencies, real, imaginary, dpi=150):
+def render_impedance(frequencies, real, imaginary, dpi=150, *, already_normalized=False):
     """
     Render acoustic impedance chart (real + imaginary).
 
@@ -399,7 +413,11 @@ def render_impedance(frequencies, real, imaginary, dpi=150):
     """
     re_freqs, re_vals = _finite_xy(frequencies, real)
     im_freqs, im_vals = _finite_xy(frequencies, imaginary)
-    re_vals, im_vals = _normalize_impedance_for_plot(re_vals, im_vals)
+    re_vals, im_vals = _normalize_impedance_for_plot(
+        re_vals,
+        im_vals,
+        already_normalized=already_normalized,
+    )
 
     if len(re_freqs) == 0 and len(im_freqs) == 0:
         return None
@@ -482,7 +500,13 @@ def render_all_charts(payload, dpi=150):
     # DI can be a flat list (legacy) or per-plane dict
     di_input = payload.get('di', [])
     charts['directivity_index'] = render_directivity_index(di_freqs, di_input, dpi) if di_input else None
-    charts['impedance'] = render_impedance(imp_freqs, imp_real, imp_imag, dpi) if imp_real else None
+    charts['impedance'] = render_impedance(
+        imp_freqs,
+        imp_real,
+        imp_imag,
+        dpi,
+        already_normalized=_impedance_payload_is_normalized(payload),
+    ) if imp_real else None
 
     dir_b64 = None
     if directivity and freqs:

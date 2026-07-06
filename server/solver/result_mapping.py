@@ -12,6 +12,7 @@ from .contract import build_directivity_metadata
 from .directivity_index import calculate_di_from_polar_patterns
 
 REFERENCE_PRESSURE_PA = 20e-6
+REFERENCE_RHO_C = 1.21 * 343.0
 
 
 def json_safe_native_value(value: Any) -> Any:
@@ -151,6 +152,18 @@ def phase_on_axis(result) -> list[float | None]:
     return phase_values
 
 
+def specific_impedance_z_over_rho_c(result) -> np.ndarray:
+    """Map solver raw unit-acceleration pressure to engineering Z/(rho*c)."""
+    frequencies = np.asarray(result.frequencies_hz, dtype=float)
+    raw_pressure = np.asarray(result.impedance, dtype=np.complex128)
+    if raw_pressure.shape != frequencies.shape:
+        raw_pressure = np.reshape(raw_pressure, frequencies.shape)
+
+    omega = 2.0 * np.pi * frequencies
+    physical_impedance = 1j * omega * raw_pressure
+    return np.conjugate(physical_impedance) / REFERENCE_RHO_C
+
+
 def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
     """Surface per-frequency solver failures from solver_log.
 
@@ -209,7 +222,7 @@ def build_solver_response(
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
     frequencies = [float(value) for value in np.asarray(result.frequencies_hz).tolist()]
-    impedance = np.asarray(result.impedance)
+    impedance = specific_impedance_z_over_rho_c(result)
     polar = polar_config(request)
     observation = {
         "requested_distance_m": float(config.observation.distance_m),
@@ -241,6 +254,9 @@ def build_solver_response(
         },
         observation,
     )
+    metadata["impedance_units"] = "Z/(rho*c)"
+    metadata["impedance_quantity"] = "specific_acoustic_impedance"
+    metadata["impedance_drive"] = "unit_acceleration"
 
     return {
         "frequencies": frequencies,
