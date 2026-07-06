@@ -13,7 +13,7 @@ meshio>=4.0.16
 
 # Pinned VCS dependencies for reproducible public installs.
 git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@d3c4d45c516c52795b02150ae8ddce3ea9b9ebc4
-git+https://github.com/m3gnus/hornlab-metal-bem.git@723f22803b17c830650e8a9f2ce8f3c92a4e8211
+git+https://github.com/m3gnus/hornlab-metal-bem.git@599b3894408f7b3d77d0c40029b5571680168a8f
 
 # Optional non-Metal fallback backend lives in server/requirements-bempp.txt.
 
