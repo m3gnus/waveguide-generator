@@ -3,9 +3,9 @@
 The Metal solver's open-edge guard is disabled for bare meshes (the mouth rim
 is a legitimate free edge after mirroring), so a regression to the
 pre-585a9f8 mesher behaviour — capping the cut cross-section with triangles
-lying in the symmetry plane — produces NO open-edge signal at all: a bare
-IB-coerced half solve would silently mirror a duplicated surface. This test
-covers the gap the enclosure-closure test cannot see.
+lying in the symmetry plane — produces NO open-edge signal at all. This test
+covers the bare reduced-domain gap the enclosure-closure and true-IB image
+tests cannot see.
 
 Also asserts the include_canonical=False stats path (tag counts without the
 full canonical list payload).

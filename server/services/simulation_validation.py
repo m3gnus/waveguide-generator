@@ -28,26 +28,6 @@ def normalize_waveguide_params_for_solver_backend(
         return None
     normalized = dict(waveguide_params)
 
-    # No available BEM backend models a true infinite baffle, so an
-    # infinite-baffle request (sim_type=1) is solved as free-standing
-    # (sim_type=2). This rebuilds the mesh without the baffle surface and lets
-    # the reduced-symmetry solve proceed instead of failing on the off-plane
-    # mouth rim. See the infinite-baffle support investigation for re-enabling
-    # a real half-space solve.
-    sim_type_raw = normalized.get("sim_type")
-    if sim_type_raw is not None:
-        try:
-            sim_type_int = int(float(sim_type_raw))
-        except (TypeError, ValueError):
-            sim_type_int = None
-        if sim_type_int == 1:
-            normalized["sim_type"] = 2
-            # Half-symmetry quadrants (12 / 14) are preserved through the
-            # coercion: the free-standing builder produces a valid half-model
-            # mesh (open on the single cut plane) and the Metal solver reflects
-            # it across that plane, so an IB-coerced half-model solves at the
-            # reduced domain instead of falling back to the full domain.
-
     if str(solver_backend or "").strip().lower() == "bempp":
         normalized["quadrants"] = 1234
     return normalized
