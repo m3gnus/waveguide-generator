@@ -48,7 +48,7 @@ function createAbortController(timeoutMs) {
  * @property {'strict'|'warn'|'off'} [meshValidationMode]
  * @property {'linear'|'log'} [frequencySpacing]
  * @property {'auto'|'metal'|'bempp'} [solverBackend]
- * @property {'full_3d'|'circsym'} [solverMode]
+ * @property {'full_3d'|'circsym'|'auto'} [solverMode]
  * @property {boolean} [verbose]
  */
 
@@ -169,7 +169,7 @@ async function fetchOrApiError(url, options, operation, timeoutMs = DEFAULT_TIME
 const VALID_MESH_VALIDATION_MODES = new Set(['strict', 'warn', 'off']);
 const VALID_FREQUENCY_SPACING = new Set(['linear', 'log']);
 const VALID_SOLVER_BACKENDS = new Set(['auto', 'metal', 'bempp']);
-const VALID_SOLVER_MODES = new Set(['full_3d', 'circsym']);
+const VALID_SOLVER_MODES = new Set(['full_3d', 'circsym', 'auto']);
 
 function assignEnumSetting(payload, key, value, allowedValues) {
   if (typeof value !== 'string') {

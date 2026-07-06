@@ -317,7 +317,9 @@ Base URL: `http://localhost:8000`
 - `POST /api/solve`
   - Validates mesh array lengths and `surfaceTags` triangle parity
   - Accepts `sim_type` `"1"` (infinite baffle) and `"2"` (free-standing);
-    CircSym rejects infinite baffle and requires the full 3D solver for that mode
+    `solver_mode="auto"` is the default; on the Metal backend it selects CircSym automatically
+    for circular waveguides (circular cross-section, no morph, no enclosure, no infinite baffle),
+    otherwise it uses full 3D. CircSym rejects infinite baffle and requires the full 3D solver for that mode
   - Supports HornLab mesher simulation meshing through `options.mesh.strategy="hornlab_mesher"`
     with required `options.mesh.waveguide_params`
   - Supports `polar_config.enabled_axes` (`horizontal|vertical|diagonal`, at least one required)
@@ -358,7 +360,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `d45c6c6fd581d954f8c333aab2262e0d7d4bf3cd` | `/api/mesh/build` |
+| HornLab mesher      | `ce7fbf2ce6b53dd92f2945c37405cf59fb34c78b` | `/api/mesh/build` |
 | HornLab Metal BEM   | `06726228cc410296d4105f73a249b60b73681c9d` | `/api/solve` (Apple Silicon macOS) |
 | HornLab Bempp BEM   | `4638578290eb0a56d0f81018b8806f0746ceb442` | `/api/solve` (cross-platform fallback) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |

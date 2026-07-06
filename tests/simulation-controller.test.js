@@ -536,7 +536,7 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
   };
   assert.deepEqual(calls, [
     ['health'],
-    ['submit', { ...config, simulationType: 1, solverMode: 'full_3d' }, meshData, expectedSubmitOptions],
+    ['submit', { ...config, simulationType: 1, solverMode: 'auto' }, meshData, expectedSubmitOptions],
   ]);
 });
 
