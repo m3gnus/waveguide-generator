@@ -38,9 +38,8 @@ class AxisymmetryHelperTest(unittest.TestCase):
 
         self.assertEqual(reasons, [])
 
-    def test_validate_rejects_infinite_baffle_and_non_axisymmetric_wg_fields(self):
-        with self.assertRaisesRegex(ValueError, "infinite baffle"):
-            validate_circsym_axisymmetric({"sim_type": 1})
+    def test_validate_allows_infinite_baffle_but_rejects_non_axisymmetric_wg_fields(self):
+        self.assertIsNone(validate_circsym_axisymmetric({"sim_type": 1}))
         with self.assertRaisesRegex(ValueError, "CircSym requires a circular waveguide"):
             validate_circsym_axisymmetric({"sim_type": 2, "morph_target": "bad"})
 

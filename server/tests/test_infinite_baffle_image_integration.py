@@ -1,10 +1,8 @@
-"""Integration coverage for true infinite-baffle image-plane solves."""
+"""Integration coverage for true infinite-baffle coupled CircSym solves."""
 
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 
 import numpy as np
 
@@ -14,7 +12,7 @@ except Exception:  # pragma: no cover - guarded by runtime skip
     build_waveguide_mesh = None
 
 from contracts import MeshData, PolarConfig, SimulationRequest
-from solver.metal_solver import metal_backend_status, solve_metal_from_msh
+from solver.metal_solver import metal_backend_status, solve_circsym_from_params
 
 
 _BASE_PAYLOAD = {
@@ -92,7 +90,7 @@ def _request(payload: dict) -> SimulationRequest:
             boundaryConditions={},
             metadata={},
         ),
-        frequency_range=[200.0, 400.0],
+        frequency_range=[1000.0, 2000.0],
         num_frequencies=2,
         frequency_spacing="linear",
         sim_type=str(payload["sim_type"]),
@@ -147,45 +145,42 @@ class InfiniteBaffleImageMeshIntegrationTest(unittest.TestCase):
     "hornlab-waveguide-mesher and Metal runtime not available",
 )
 class InfiniteBaffleImageSolveIntegrationTest(unittest.TestCase):
-    def test_ib_solve_has_half_space_signature_vs_freestanding(self):
+    def test_ib_solve_is_forward_beam_via_coupled_circsym(self):
         ib_payload = _payload(sim_type=1)
-        fs_payload = _payload(sim_type=2)
+        request = _request(ib_payload).model_copy(update={"solver_mode": "circsym"})
 
-        with tempfile.TemporaryDirectory(prefix="wg-ib-image-test-") as tmp_dir:
-            tmp = Path(tmp_dir)
-            ib_path = tmp / "ib.msh"
-            fs_path = tmp / "freestanding.msh"
-            ib_path.write_text(
-                build_waveguide_mesh(ib_payload, include_canonical=False)["msh_text"],
-                encoding="utf-8",
-            )
-            fs_path.write_text(
-                build_waveguide_mesh(fs_payload, include_canonical=False)["msh_text"],
-                encoding="utf-8",
-            )
+        ib = solve_circsym_from_params(ib_payload, request)
 
-            ib = solve_metal_from_msh(ib_path, _request(ib_payload))
-            fs = solve_metal_from_msh(fs_path, _request(fs_payload))
-
-        # Infinite-baffle signature = on-axis half-space GAIN over free-standing.
-        # A rigid baffle radiates into 2*pi instead of 4*pi, so on-axis SPL rises
-        # by up to +6 dB at low frequency (the source is acoustically small there).
+        self.assertEqual(ib["metadata"]["solver_mode"], "circsym")
+        self.assertEqual(ib["metadata"]["metal"]["solver_mode"], "circsym")
         ib_spl = np.asarray(ib["spl_on_axis"]["spl"], dtype=float)
-        fs_spl = np.asarray(fs["spl_on_axis"]["spl"], dtype=float)
-        delta_db = float(ib_spl[0] - fs_spl[0])
-        self.assertGreater(delta_db, 2.0)
-        self.assertLess(delta_db, 6.5)  # bounded by the 2*pi/4*pi (+6 dB) limit
+        self.assertTrue(np.all(np.isfinite(ib_spl)))
 
-        # The xy image models the rigid baffle by MIRRORING the horn across z=0,
-        # so the far field is symmetric about the plane: 180 deg is the mirror of
-        # the 0 deg front and MUST equal it. It is not a physical rear lobe, so we
-        # assert the image symmetry rather than rear suppression (the meaningful
-        # infinite-baffle test is the on-axis gain above).
+        native_diagnostics = ib["metadata"]["metal"]["native_diagnostics"]
+        diagnostic_entries = [
+            entry for entry in native_diagnostics if isinstance(entry, dict)
+        ]
+        self.assertTrue(any(entry.get("coupled_ib") is True for entry in diagnostic_entries))
+
         ib_horizontal = ib["directivity"]["horizontal"][0]
-        ib_front = float(ib_horizontal[0][1])
-        ib_rear = ib_horizontal[-1][1]
-        ib_rear_db = float(ib_rear) if ib_rear is not None else -np.inf
-        self.assertAlmostEqual(ib_rear_db, ib_front, delta=0.5)
+        front = next(
+            float(value)
+            for angle, value in ib_horizontal
+            if np.isclose(float(angle), 0.0) and value is not None
+        )
+        rear = next(
+            value
+            for angle, value in ib_horizontal
+            if np.isclose(float(angle), 180.0)
+        )
+        finite_horizontal = [
+            float(value)
+            for _, value in ib_horizontal
+            if value is not None and np.isfinite(float(value))
+        ]
+        self.assertAlmostEqual(front, max(finite_horizontal), delta=1.0e-6)
+        rear_db = float(rear) if rear is not None else -np.inf
+        self.assertGreater(front - rear_db, 10.0)
 
 
 if __name__ == "__main__":

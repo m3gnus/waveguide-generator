@@ -111,17 +111,9 @@ def circsym_axisymmetric_rejection_reasons(
 
 
 def validate_circsym_axisymmetric(waveguide_params: Mapping[str, Any] | None) -> None:
-    params = waveguide_params if isinstance(waveguide_params, Mapping) else {}
-    # CircSym cannot solve infinite baffle: the image-plane meridian seals the
-    # mouth aperture into a driven closed cavity (omnidirectional near-zero-level
-    # artifact). Guard here for a clear error before the mesher/solve.
-    if str(params.get("sim_type", "2")).strip() == "1":
-        raise ValueError(
-            "CircSym does not support infinite baffle (Simulation Type = Infinite "
-            "baffle): the image-plane meridian seals the mouth aperture. Use the "
-            "full-3D solver for infinite baffle, or set Simulation Type to "
-            "Free-standing."
-        )
+    # Infinite baffle (sim_type=1) IS supported on CircSym for circular waveguides
+    # via the exact coupled-IB path (interior BEM + Rayleigh aperture); the mesher
+    # builds the aperture meridian. Only non-circular geometry is rejected here.
     reasons = circsym_axisymmetric_rejection_reasons(waveguide_params)
     if reasons:
         raise ValueError("CircSym requires a circular waveguide: " + "; ".join(reasons))

@@ -62,13 +62,19 @@ def native_symmetry_plane(request) -> str | None:
     # 14: X >= 0 -> mirror across YZ. 12: Y >= 0 -> mirror across XZ.
     quadrants = waveguide_quadrants(request)
     if waveguide_sim_type(request) == 1:
-        if quadrants == 1234:
-            return "xy"
+        # Infinite baffle is NOT a full-3D symmetry reduction. The xy image plane
+        # mirrors the horn into an hourglass double-horn radiating in free space
+        # (front=back, grazing-loud, comb banding) -- it cannot represent a
+        # flush-mounted recessed horn. The correct formulation is CircSym's
+        # coupled-IB path (interior BEM + analytic Rayleigh aperture), which runs
+        # automatically for circular waveguides. Full-3D infinite baffle is
+        # therefore unsupported.
         raise ValueError(
-            "Infinite-baffle solves use native_symmetry_plane='xy' and currently "
-            "support only full-azimuth Mesh.Quadrants=1234. Quadrant IB would "
-            "require composing xy with yz/xz native symmetry planes, which "
-            "hornlab-metal-bem does not accept."
+            "Infinite baffle is supported only for circular waveguides via the "
+            "CircSym solver (which runs automatically). The full-3D backend cannot "
+            "solve infinite baffle: this geometry is not circular, or full-3D was "
+            "forced. Use a circular waveguide, or switch to Free-standing or "
+            "Enclosure mode."
         )
     return {
         1: "yz+xz",
