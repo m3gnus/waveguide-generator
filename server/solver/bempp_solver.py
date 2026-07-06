@@ -225,16 +225,6 @@ def solve_bempp_from_msh(
 ) -> dict[str, Any]:
     _reject_reduced_domain_request(request)
 
-    # The BEMPP fallback models a uniform-normal source only. Refuse an axial
-    # request rather than silently downgrading it to normal (which would return
-    # a wrong wavefront under the guise of success).
-    if source_motion is not None and str(source_motion).lower() == "axial":
-        raise ValueError(
-            "Axial (rigid-piston) source motion is only supported by the Metal "
-            "BEM backend; the BEMPP fallback models a uniform-normal source. "
-            "Select the Metal backend for an axial source."
-        )
-
     if not _load_bempp_api():
         raise BemppBemUnavailable(
             "hornlab-bempp-bem is not installed. Install with: "
@@ -277,6 +267,17 @@ def solve_bempp_from_msh(
         opencl_device=_opencl_device_from_request(request),
         precision=_precision_from_request(request),
     )
+    # Axial (rigid-piston) source motion. Feature-detect like require_closed_mesh
+    # below so an older pinned bempp still serves the default normal source; a
+    # non-normal request against an old bempp fails loudly rather than silently
+    # downgrading to normal.
+    if source_motion and str(source_motion).lower() != "normal":
+        if not hasattr(config, "source_motion"):
+            raise BemppBemUnavailable(
+                "Installed hornlab-bempp-bem does not support axial source motion; "
+                "update the pinned hornlab-bempp-bem (>= 4638578)."
+            )
+        config.source_motion = str(source_motion).lower()
     # hornlab-bempp-bem newer than the 8c112bb pin validates surface closure
     # at load (a closed-mode mesh with open edges is a leaking model this
     # backend would otherwise solve silently). Feature-detect so the current
