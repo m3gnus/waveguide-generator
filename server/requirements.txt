@@ -12,8 +12,8 @@ scipy
 meshio>=4.0.16
 
 # Pinned VCS dependencies for reproducible public installs.
-git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@ce7fbf2ce6b53dd92f2945c37405cf59fb34c78b
-git+https://github.com/m3gnus/hornlab-metal-bem.git@06726228cc410296d4105f73a249b60b73681c9d
+git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@583886f74b173d536d4ac9f9bec0f0d7d247727a
+git+https://github.com/m3gnus/hornlab-metal-bem.git@2bf66ff8a1dc1a7df01d48267d166d34ec8f04bc
 
 # Optional non-Metal fallback backend lives in server/requirements-bempp.txt.
 
