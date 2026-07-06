@@ -177,7 +177,10 @@ class _SolveJobHarnessTest(unittest.TestCase):
         def _fake_resolve(backend, mesh_strategy=None):
             return "metal"
 
-        def _fake_solve(msh_path, request, progress_callback=None, stage_callback=None):
+        def _fake_solve(
+            msh_path, request, progress_callback=None, stage_callback=None,
+            source_motion=None,
+        ):
             return {"frequencies": [], "metadata": {}}
 
         for target, name, value in (

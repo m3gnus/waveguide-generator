@@ -79,6 +79,47 @@ def _finite_float(value: Any, fallback: float = 0.0) -> float:
     return numeric if np.isfinite(numeric) else fallback
 
 
+# Source.Velocity enum (ABEC/ATH convention): 1 = normal velocity (a uniformly
+# breathing cap), 2 = axial (rigid-piston motion, v_n = U * (n_hat . axis) --
+# the realistic wavefront for a dome/cone). Both are supported: axial is a
+# solve-time boundary condition in the metal-bem solver (config.source_motion),
+# NOT a geometry change, so the mesher path accepts either and the solve layer
+# applies it.
+_SOURCE_VELOCITY_TO_MOTION = {1: "normal", 2: "axial"}
+
+
+def source_motion_from_payload(payload: Mapping[str, Any]) -> str:
+    """Map the WG ``source_velocity`` enum onto a metal-bem ``source_motion``.
+
+    ``1 -> "normal"`` (uniform normal velocity), ``2 -> "axial"`` (rigid piston).
+    An unset/blank value defaults to ``"normal"``; any other value is rejected.
+    This is the single source of truth for which velocity enums are accepted --
+    ``_reject_unsupported_source_payload`` reuses it so the accept/reject sets
+    cannot drift apart.
+    """
+    velocity = payload.get("source_velocity")
+    if velocity is None or (isinstance(velocity, str) and not velocity.strip()):
+        return "normal"
+    try:
+        numeric_velocity = float(velocity)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "source_velocity must be 1 (normal) or 2 (axial) for the HornLab "
+            f"mesher path; got {velocity!r}"
+        ) from exc
+    motion = (
+        _SOURCE_VELOCITY_TO_MOTION.get(int(numeric_velocity))
+        if np.isfinite(numeric_velocity) and numeric_velocity == int(numeric_velocity)
+        else None
+    )
+    if motion is None:
+        raise ValueError(
+            "source_velocity must be 1 (normal) or 2 (axial) for the HornLab "
+            f"mesher path; got {velocity!r}"
+        )
+    return motion
+
+
 def _reject_unsupported_source_payload(payload: Mapping[str, Any]) -> None:
     contours = payload.get("source_contours")
     if contours is not None and str(contours).strip():
@@ -86,22 +127,8 @@ def _reject_unsupported_source_payload(payload: Mapping[str, Any]) -> None:
             "source contours are not supported by the HornLab mesher path; "
             "only the single cap/disc throat source is implemented"
         )
-
-    velocity = payload.get("source_velocity")
-    if velocity is None or (isinstance(velocity, str) and not velocity.strip()):
-        return
-    try:
-        numeric_velocity = float(velocity)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "source velocity must be 1 for the HornLab mesher path; "
-            f"got {velocity!r}"
-        ) from exc
-    if not np.isfinite(numeric_velocity) or int(numeric_velocity) != 1 or numeric_velocity != 1.0:
-        raise ValueError(
-            "source velocity values other than 1 are not supported by the "
-            "HornLab mesher path; only normal source velocity is implemented"
-        )
+    # Validate the velocity enum (normal/axial). Rejects unsupported values.
+    source_motion_from_payload(payload)
 
 
 def _quadrants_leading_int(value: Any) -> int:

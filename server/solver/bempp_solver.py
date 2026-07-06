@@ -221,8 +221,19 @@ def solve_bempp_from_msh(
     *,
     progress_callback=None,
     stage_callback=None,
+    source_motion: str | None = None,
 ) -> dict[str, Any]:
     _reject_reduced_domain_request(request)
+
+    # The BEMPP fallback models a uniform-normal source only. Refuse an axial
+    # request rather than silently downgrading it to normal (which would return
+    # a wrong wavefront under the guise of success).
+    if source_motion is not None and str(source_motion).lower() == "axial":
+        raise ValueError(
+            "Axial (rigid-piston) source motion is only supported by the Metal "
+            "BEM backend; the BEMPP fallback models a uniform-normal source. "
+            "Select the Metal backend for an axial source."
+        )
 
     if not _load_bempp_api():
         raise BemppBemUnavailable(
