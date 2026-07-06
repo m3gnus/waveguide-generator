@@ -13,6 +13,7 @@ from .result_mapping import (
     json_safe_native_value,
     native_symmetry_plane,
     observation_config,
+    waveguide_sim_type,
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
 
@@ -198,6 +199,9 @@ def _native_check_open_edges(request) -> bool:
     if _native_symmetry_plane(request) is None:
         return True
 
+    if waveguide_sim_type(request) == 1:
+        return False
+
     params = _waveguide_params(request)
     if not params:
         return True
@@ -205,16 +209,15 @@ def _native_check_open_edges(request) -> bool:
     enc_depth = _float_option(params.get("enc_depth"), 0.0)
     wall_thickness = _float_option(params.get("wall_thickness"), 0.0)
 
-    # Only the bare, no-wall reduced-domain mesh is a genuinely open shell: its
-    # mouth rim is a legitimate free edge off the symmetry planes after mirroring.
-    # This holds regardless of sim_type — infinite-baffle requests are coerced to
-    # free-standing before the solve, and a free-standing open shell has the same
-    # off-plane mouth rim. Closed topologies keep the strict native guard so an
-    # off-plane open edge (which should not exist) is caught as a real defect: a
-    # thickened wall caps the mouth rim, and the mesher seals the enclosure box
-    # front (hornlab-waveguide-mesher clamps the edge roundover below the baffle
-    # spacing). An off-plane open edge on either is a mesher closure defect, not a
-    # clean mirror cut, so failing loudly beats silently solving a leaking model.
+    # Bare no-wall reduced-domain meshes and true infinite-baffle image-plane
+    # meshes are genuinely open shells: their mouth rims are legitimate free
+    # edges for the mirrored solve. Closed topologies keep the strict native
+    # guard so an off-plane open edge (which should not exist) is caught as a
+    # real defect: a thickened wall caps the mouth rim, and the mesher seals the
+    # enclosure box front (hornlab-waveguide-mesher clamps the edge roundover
+    # below the baffle spacing). An off-plane open edge on either is a mesher
+    # closure defect, not a clean mirror cut, so failing loudly beats silently
+    # solving a leaking model.
     if enc_depth <= 0.0 and wall_thickness <= 0.0:
         return False
     return True

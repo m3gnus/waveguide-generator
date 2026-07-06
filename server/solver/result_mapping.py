@@ -50,15 +50,32 @@ def waveguide_quadrants(request) -> int:
         return 1234
 
 
+def waveguide_sim_type(request) -> int:
+    try:
+        return int(float(getattr(request, "sim_type", 2)))
+    except (TypeError, ValueError):
+        return 2
+
+
 def native_symmetry_plane(request) -> str | None:
     # HornLab/WG quadrants are in the transverse X/Y plane after mesher export.
     # 14: X >= 0 -> mirror across YZ. 12: Y >= 0 -> mirror across XZ.
+    quadrants = waveguide_quadrants(request)
+    if waveguide_sim_type(request) == 1:
+        if quadrants == 1234:
+            return "xy"
+        raise ValueError(
+            "Infinite-baffle solves use native_symmetry_plane='xy' and currently "
+            "support only full-azimuth Mesh.Quadrants=1234. Quadrant IB would "
+            "require composing xy with yz/xz native symmetry planes, which "
+            "hornlab-metal-bem does not accept."
+        )
     return {
         1: "yz+xz",
         12: "xz",
         14: "yz",
         1234: None,
-    }.get(waveguide_quadrants(request))
+    }.get(quadrants)
 
 
 def observation_config(request, observation_config_cls, unavailable_error, package_name: str):

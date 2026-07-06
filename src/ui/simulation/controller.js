@@ -404,18 +404,6 @@ export async function submitSimulationControllerJob(
 
   const waveguidePayload = { ...submission.waveguidePayload };
 
-  // Bempp cannot model an infinite baffle, so force a free-standing solve on
-  // that backend. The server's normalize_waveguide_params_for_solver_backend is
-  // the authoritative guard (it coerces sim_type=1 -> 2 for every backend); this
-  // keeps the submitted payload and the job record honest for the Bempp path.
-  const isBemppBackend =
-    String(config?.solverBackend || '')
-      .trim()
-      .toLowerCase() === 'bempp';
-  if (isBemppBackend) {
-    waveguidePayload.sim_type = 2;
-  }
-
   const submitOptions = {
     ...submission.submitOptions,
     mesh: {
@@ -425,9 +413,7 @@ export async function submitSimulationControllerJob(
   };
   const submitConfig = {
     ...config,
-    simulationType: isBemppBackend
-      ? '2'
-      : (config?.simulationType ?? waveguidePayload.sim_type ?? '2'),
+    simulationType: config?.simulationType ?? waveguidePayload.sim_type ?? '2',
   };
   const { preparedParams, stateSnapshot } = submission;
   const startedIso = new Date().toISOString();

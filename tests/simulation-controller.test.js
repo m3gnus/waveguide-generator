@@ -540,7 +540,7 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
   ]);
 });
 
-test('submitSimulationControllerJob forces a free-standing solve when the Bempp backend is selected', async () => {
+test('submitSimulationControllerJob preserves infinite-baffle requests for Bempp backend rejection', async () => {
   const calls = [];
   const controller = createSimulationControllerStore({
     solver: {
@@ -572,9 +572,8 @@ test('submitSimulationControllerJob forces a free-standing solve when the Bempp 
   });
 
   const [, submittedConfig, , submittedOptions] = calls[0];
-  // Infinite baffle (sim_type=1) must never reach the Bempp backend.
-  assert.equal(submittedOptions.mesh.waveguide_params.sim_type, 2);
-  assert.equal(submittedConfig.simulationType, '2');
+  assert.equal(submittedOptions.mesh.waveguide_params.sim_type, 1);
+  assert.equal(submittedConfig.simulationType, 1);
 });
 
 test('submitSimulationControllerJob rejects when backend solver dependencies are unavailable', async () => {

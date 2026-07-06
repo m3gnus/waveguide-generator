@@ -36,7 +36,7 @@ class FakeSolveConfig:
 
 
 class MetalSolverAdapterTest(unittest.TestCase):
-    def _request(self, quadrants=1, advanced_settings=None, waveguide_params=None):
+    def _request(self, quadrants=1, advanced_settings=None, waveguide_params=None, sim_type="2"):
         params = {"formula_type": "OSSE", "quadrants": quadrants}
         if waveguide_params:
             params.update(waveguide_params)
@@ -51,7 +51,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
             ),
             frequency_range=[1000.0, 2000.0],
             num_frequencies=2,
-            sim_type="2",
+            sim_type=str(sim_type),
             frequency_spacing="linear",
             polar_config=PolarConfig(
                 angle_range=[0.0, 180.0, 3],
@@ -123,6 +123,36 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["metal"]["formulation"], "complex_k")
         self.assertEqual(result["metadata"]["metal"]["complex_k_shift"], 0.005)
 
+    def test_infinite_baffle_sets_xy_symmetry_and_relaxes_open_edge_guard(self):
+        seen_configs = []
+
+        def fake_native_config(**kwargs):
+            cfg = FakeSolveConfig(**kwargs)
+            seen_configs.append(cfg)
+            return cfg
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve", return_value=self._fake_result()
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ):
+            result = metal_solver.solve_metal_from_msh(
+                msh_file.name,
+                self._request(
+                    quadrants=1234,
+                    sim_type="1",
+                    waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
+                ),
+            )
+
+        self.assertEqual(seen_configs[0].native_symmetry_plane, "xy")
+        self.assertFalse(seen_configs[0].native_check_open_edges)
+        self.assertEqual(result["metadata"]["metal"]["native_symmetry_plane"], "xy")
+        self.assertFalse(result["metadata"]["metal"]["native_check_open_edges"])
+
     def test_standard_formulation_override_is_forwarded(self):
         seen_configs = []
 
@@ -172,6 +202,12 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=14)), "yz")
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=12)), "xz")
         self.assertIsNone(metal_solver._native_symmetry_plane(self._request(quadrants=1234)))
+        self.assertEqual(
+            metal_solver._native_symmetry_plane(self._request(quadrants=1234, sim_type="1")),
+            "xy",
+        )
+        with self.assertRaisesRegex(ValueError, "Quadrant IB"):
+            metal_solver._native_symmetry_plane(self._request(quadrants=1, sim_type="1"))
 
     def test_open_edge_guard_policy_follows_mesher_topology(self):
         self.assertFalse(
@@ -192,14 +228,11 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 self._request(quadrants=1, waveguide_params={"enc_depth": 200, "wall_thickness": 0})
             )
         )
-        # The guard is topology-driven (enclosure / wall), not sim_type. An
-        # infinite-baffle (sim_type=1) request is coerced to free-standing before
-        # the solve, so a no-enclosure, no-wall open shell relaxes the guard the
-        # same way a free-standing one does.
         self.assertFalse(
             metal_solver._native_check_open_edges(
                 self._request(
-                    quadrants=1,
+                    quadrants=1234,
+                    sim_type="1",
                     waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
                 )
             )

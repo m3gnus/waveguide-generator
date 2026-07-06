@@ -773,8 +773,7 @@ export const PARAM_SCHEMA = {
       controlId: 'sim-type',
       tooltip:
         'BEM boundary condition. Free-standing radiates into full space. Infinite baffle ' +
-        'is an Apple-Silicon Metal-only mode and currently falls back to a free-standing solve; ' +
-        'the Bempp backend always solves free-standing.',
+        'uses the Metal native xy image-plane solve and currently requires full azimuth.',
       options: [
         { value: '2', label: 'Free-standing' },
         { value: '1', label: 'Infinite baffle' },

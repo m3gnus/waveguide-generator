@@ -110,7 +110,10 @@ def _fake_mesh_result() -> dict:
 
 def _free_port() -> int:
     with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
+        try:
+            sock.bind(("127.0.0.1", 0))
+        except PermissionError as exc:
+            raise unittest.SkipTest("loopback socket binding is unavailable") from exc
         return sock.getsockname()[1]
 
 

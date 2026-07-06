@@ -23,15 +23,13 @@ from services.simulation_validation import (
 
 
 class NormalizeWaveguideParamsTest(unittest.TestCase):
-    def test_infinite_baffle_is_coerced_to_freestanding(self):
-        # No BEM backend models a true infinite baffle, so sim_type=1 must be
-        # solved as free-standing (sim_type=2) for every backend.
+    def test_infinite_baffle_is_not_coerced_to_freestanding(self):
         for backend in ("metal", "bempp", "auto"):
             for raw in (1, "1", 1.0):
                 result = normalize_waveguide_params_for_solver_backend(
-                    {"sim_type": raw, "quadrants": 1}, backend
+                    {"sim_type": raw, "quadrants": 1234}, backend
                 )
-                self.assertEqual(result["sim_type"], 2, f"{backend!r}/{raw!r}")
+                self.assertEqual(result["sim_type"], raw, f"{backend!r}/{raw!r}")
 
     def test_freestanding_and_missing_sim_type_are_untouched(self):
         self.assertEqual(
@@ -43,24 +41,22 @@ class NormalizeWaveguideParamsTest(unittest.TestCase):
             normalize_waveguide_params_for_solver_backend({"quadrants": 1}, "metal"),
         )
 
-    def test_ib_coerced_half_models_keep_their_quadrants_for_metal(self):
-        # The free-standing builder now produces valid half-model meshes, so an
-        # IB-coerced (sim_type=1 -> 2) half-symmetry request solves at the
-        # reduced domain instead of falling back to the full domain.
+    def test_ib_half_models_keep_their_quadrants_for_metal_validation(self):
         for q in ("12", "14", 12, 14):
             result = normalize_waveguide_params_for_solver_backend(
                 {"sim_type": 1, "quadrants": q}, "metal"
             )
-            self.assertEqual(result["sim_type"], 2, f"q={q!r}")
+            self.assertEqual(result["sim_type"], 1, f"q={q!r}")
             self.assertEqual(str(result["quadrants"]), str(q), f"q={q!r}")
 
-    def test_bempp_still_forces_full_domain_for_ib_half_models(self):
-        # Bempp has no reduced-symmetry path, so every Bempp solve (including an
-        # IB-coerced half-model) is normalized to the full domain.
+    def test_bempp_still_forces_full_azimuth_for_ib_half_models(self):
+        # Bempp has no reduced-symmetry path, so every Bempp solve is normalized
+        # to full azimuth. sim_type remains truthful; the Bempp adapter rejects
+        # native xy symmetry later.
         result = normalize_waveguide_params_for_solver_backend(
             {"sim_type": 1, "quadrants": "12"}, "bempp"
         )
-        self.assertEqual(result["sim_type"], 2)
+        self.assertEqual(result["sim_type"], 1)
         self.assertEqual(result["quadrants"], 1234)
 
     def test_none_params_pass_through(self):
