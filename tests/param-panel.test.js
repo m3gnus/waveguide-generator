@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { getDefaults } from '../src/config/defaults.js';
 import { PARAM_SCHEMA } from '../src/config/schema.js';
 import { GlobalState } from '../src/state.js';
+import { getParameterSections } from '../src/ui/parameterInventory.js';
 import { getControlInputMode, ParamPanel } from '../src/ui/paramPanel.js';
 
 class FakeElement {
@@ -97,6 +98,78 @@ test('formula allowlist limits per-row formula controls to audited fields', () =
   assert.equal(getControlInputMode(PARAM_SCHEMA.SOURCE.sourceShape), 'select');
 });
 
+test('parameter inventory exposes throat extension and scopes OSSE-only guiding curve', () => {
+  const osseSections = getParameterSections('geometry', 'OSSE');
+  assert.deepEqual(
+    osseSections.map((section) => section.id),
+    [
+      'model-type',
+      'core-profile',
+      'throat-extension',
+      'morph-target',
+      'wall-enclosure',
+      'guiding-curve',
+      'preview-mesh',
+    ]
+  );
+
+  const throatSection = osseSections.find((section) => section.id === 'throat-extension');
+  assert.deepEqual(throatSection.groups.flatMap((group) => group.keys), [
+    'throatExtAngle',
+    'throatExtLength',
+    'slotLength',
+  ]);
+
+  const guidingSection = osseSections.find((section) => section.id === 'guiding-curve');
+  assert.deepEqual(guidingSection.groups.flatMap((group) => group.keys), [
+    'throatProfile',
+    'rot',
+    'gcurveType',
+    'gcurveDist',
+    'gcurveWidth',
+    'gcurveAspectRatio',
+    'gcurveSeN',
+    'gcurveSf',
+    'gcurveSfA',
+    'gcurveSfB',
+    'gcurveSfM1',
+    'gcurveSfM2',
+    'gcurveSfN1',
+    'gcurveSfN2',
+    'gcurveSfN3',
+    'gcurveRot',
+    'circArcTermAngle',
+    'circArcRadius',
+  ]);
+
+  const rosseSections = getParameterSections('geometry', 'R-OSSE');
+  assert.deepEqual(
+    rosseSections.map((section) => section.id),
+    [
+      'model-type',
+      'core-profile',
+      'throat-extension',
+      'morph-target',
+      'wall-enclosure',
+      'preview-mesh',
+    ]
+  );
+
+  const icwSectionIds = getParameterSections('geometry', 'ICW').map((section) => section.id);
+  assert.ok(!icwSectionIds.includes('throat-extension'));
+  assert.ok(!icwSectionIds.includes('guiding-curve'));
+
+  const sourceSection = getParameterSections('simulation', 'R-OSSE').find(
+    (section) => section.id === 'source-definition'
+  );
+  assert.deepEqual(sourceSection.groups.flatMap((group) => group.keys), [
+    'sourceShape',
+    'sourceRadius',
+    'sourceCurv',
+    'sourceVelocity',
+  ]);
+});
+
 test('ParamPanel renders row-level formula buttons and removes the section-header affordance', () => {
   const originalDocument = global.document;
   const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
@@ -149,6 +222,12 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
       (node) => node.tagName === 'BUTTON' && node.attributes['data-param-key'] === 'sourceContours'
     );
     assert.equal(sourceContourButtons.length, 0);
+    const sourceContourRows = collectNodes(
+      simulationContainer,
+      (node) =>
+        node.className === 'input-row' && node.attributes['data-param-key'] === 'sourceContours'
+    );
+    assert.equal(sourceContourRows.length, 0);
 
     const freqStartInput = fakeDocument.getElementById('freq-start');
     const freqEndInput = fakeDocument.getElementById('freq-end');
@@ -198,7 +277,14 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
     const geometrySectionTitles = paramContainer.children.map(
       (child) => child.children[0]?.textContent
     );
-    assert.ok(geometrySectionTitles.includes('Viewport Mesh'));
+    assert.deepEqual(geometrySectionTitles, [
+      'Model Type',
+      'Profile Dimensions',
+      'Throat Extension',
+      'Morph Target',
+      'Wall & Enclosure',
+      'Viewport Mesh',
+    ]);
 
     const simulationSectionTitles = simulationContainer.children.map(
       (child) => child.children[0]?.textContent

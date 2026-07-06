@@ -44,6 +44,20 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       ]),
     }),
     Object.freeze({
+      id: 'throat-extension',
+      title: 'Throat Extension',
+      description:
+        'Optional conical throat extension and initial straight slot controls for OSSE-family profiles.',
+      owner: 'paramPanel',
+      whenTypes: Object.freeze(['R-OSSE', 'OSSE']),
+      groups: Object.freeze([
+        Object.freeze({
+          group: 'GEOMETRY',
+          keys: Object.freeze(['throatExtAngle', 'throatExtLength', 'slotLength']),
+        }),
+      ]),
+    }),
+    Object.freeze({
       id: 'morph-target',
       title: 'Morph Target',
       description: 'Post-profile shaping used to transition the mouth toward another target shape.',
@@ -89,38 +103,17 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       ]),
     }),
     Object.freeze({
-      id: 'preview-mesh',
-      title: 'Viewport Mesh',
+      id: 'guiding-curve',
+      title: 'Guiding Curve',
       description:
-        'Live preview tessellation controls. They change viewport smoothness and responsiveness, not the BEM solve mesh.',
+        'OSSE-only throat profile, rotation, and guide-shape controls used to bend or infer the horn profile.',
       owner: 'paramPanel',
-      groups: Object.freeze([
-        Object.freeze({
-          group: 'MESH',
-          keys: Object.freeze([
-            'angularSegments',
-            'lengthSegments',
-            'cornerSegments',
-            'throatSegments',
-            'throatSliceDensity',
-          ]),
-        }),
-      ]),
-    }),
-    Object.freeze({
-      id: 'profile-path',
-      title: 'Profile Path & Guiding Curve',
-      description:
-        'Advanced throat, rotation, and guiding-curve controls used to bend or infer the horn profile.',
-      owner: 'paramPanel',
+      whenTypes: Object.freeze(['OSSE']),
       groups: Object.freeze([
         Object.freeze({
           group: 'GEOMETRY',
           keys: Object.freeze([
             'throatProfile',
-            'throatExtAngle',
-            'throatExtLength',
-            'slotLength',
             'rot',
             'gcurveType',
             'gcurveDist',
@@ -138,6 +131,25 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'gcurveRot',
             'circArcTermAngle',
             'circArcRadius',
+          ]),
+        }),
+      ]),
+    }),
+    Object.freeze({
+      id: 'preview-mesh',
+      title: 'Viewport Mesh',
+      description:
+        'Live preview tessellation controls. They change viewport smoothness and responsiveness, not the BEM solve mesh.',
+      owner: 'paramPanel',
+      groups: Object.freeze([
+        Object.freeze({
+          group: 'MESH',
+          keys: Object.freeze([
+            'angularSegments',
+            'lengthSegments',
+            'cornerSegments',
+            'throatSegments',
+            'throatSliceDensity',
           ]),
         }),
       ]),
@@ -177,7 +189,6 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'sourceRadius',
             'sourceCurv',
             'sourceVelocity',
-            'sourceContours',
           ]),
         }),
       ]),

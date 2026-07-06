@@ -137,7 +137,7 @@ export class ParamPanel {
         getParameterSections('simulation', type),
         state.params,
         {
-          includeIds: ['source-definition', 'preview-mesh', 'solve-export-mesh'],
+          includeIds: ['source-definition', 'solve-export-mesh'],
         }
       );
     }
