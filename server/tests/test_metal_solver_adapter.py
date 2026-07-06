@@ -35,6 +35,28 @@ class FakeSolveConfig:
         self.__dict__.update(kwargs)
 
 
+class FakeMeridianMesh:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class FakeMeridianBuild:
+    baffle_z = 0.0
+    metadata = {
+        "throatRadiusM": 0.0127,
+        "mouthRadiusM": 0.08,
+        "sourceCapHeightM": 0.0,
+    }
+
+    def as_metal_meridian(self, meridian_cls):
+        return meridian_cls(
+            nodes=np.array([[0.0, -0.1], [0.0127, -0.1], [0.08, 0.0]], dtype=float),
+            segments=np.array([[0, 1], [1, 2]], dtype=np.int32),
+            physical_tags=np.array([2, 1], dtype=np.int32),
+            normals=np.array([[0.0, 1.0], [-0.8, 0.6]], dtype=float),
+        )
+
+
 class MetalSolverAdapterTest(unittest.TestCase):
     def _request(self, quadrants=1, advanced_settings=None, waveguide_params=None, sim_type="2"):
         params = {"formula_type": "OSSE", "quadrants": quadrants}
@@ -267,6 +289,55 @@ class MetalSolverAdapterTest(unittest.TestCase):
             result["metadata"]["metal"]["solver_log"][0]["impedance"],
             {"real": 1.0, "imaginary": 2.0},
         )
+
+    def test_circsym_from_params_maps_config_and_response_contract(self):
+        seen = {}
+
+        def fake_native_config(**kwargs):
+            cfg = FakeSolveConfig(**kwargs)
+            seen["config"] = cfg
+            return cfg
+
+        def fake_solve(meridian, config):
+            seen["meridian"] = meridian
+            seen["solve_config"] = config
+            return self._fake_result()
+
+        with patch("solver.metal_solver.MeridianMesh", FakeMeridianMesh), patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve_circsym", side_effect=fake_solve
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ), patch(
+            "hornlab_mesher.build_meridian",
+            return_value=FakeMeridianBuild(),
+        ):
+            request = self._request(
+                quadrants=1234,
+                waveguide_params={"source_velocity": 2},
+            ).model_copy(update={"solver_mode": "circsym"})
+            result = metal_solver.solve_circsym_from_params(
+                {
+                    "formula_type": "OSSE",
+                    "quadrants": 1234,
+                    "source_velocity": 2,
+                },
+                request,
+                source_motion="axial",
+            )
+
+        self.assertEqual(set(result.keys()), {"frequencies", "directivity", "spl_on_axis", "impedance", "di", "metadata"})
+        self.assertEqual(result["frequencies"], [1000.0, 2000.0])
+        self.assertEqual(result["metadata"]["solver_backend"], "metal")
+        self.assertEqual(result["metadata"]["solver_mode"], "circsym")
+        self.assertEqual(result["metadata"]["metal"]["solver_mode"], "circsym")
+        self.assertEqual(result["metadata"]["metal"]["circsym_baffle_z"], 0.0)
+        self.assertEqual(result["metadata"]["metal"]["meridian"]["throatRadiusM"], 0.0127)
+        self.assertIsInstance(seen["meridian"], FakeMeridianMesh)
+        self.assertEqual(seen["config"].source_motion, "axial")
+        self.assertEqual(seen["config"].circsym_baffle_z, 0.0)
 
 
 if __name__ == "__main__":

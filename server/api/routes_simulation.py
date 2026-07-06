@@ -75,9 +75,20 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     )
     request_to_submit = build_submit_simulation_request(request, validation)
     request_to_submit.solver_backend = solver_backend
+    solver_mode = request_to_submit.solver_mode
+
+    if solver_mode == "circsym" and solver_backend == "bempp":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "CircSym requires the Metal backend. The BEMPP backend cannot solve "
+                "axisymmetric CircSym requests; select solver_backend='metal' or use "
+                "solver_mode='full_3d'."
+            ),
+        )
 
     if is_hornlab_mesher_strategy(validation.mesh_strategy):
-        if not HORNLAB_MESHER_AVAILABLE or build_waveguide_mesh is None:
+        if not HORNLAB_MESHER_AVAILABLE or (solver_mode != "circsym" and build_waveguide_mesh is None):
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -86,7 +97,7 @@ async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
                 ),
             )
 
-        if not HORNLAB_MESHER_RUNTIME_READY:
+        if solver_mode != "circsym" and not HORNLAB_MESHER_RUNTIME_READY:
             dep = get_dependency_status()
             gmsh_info = dep["runtime"]["gmsh_python"]
             py_info = dep["runtime"]["python"]

@@ -200,6 +200,16 @@ class BemppSolverAdapterTest(unittest.TestCase):
         self.assertIn("infinite-baffle", msg.lower())
         self.assertNotIn("Mesh.Quadrants=1234", msg)
 
+    def test_circsym_request_gets_metal_only_error(self):
+        request = self._request().model_copy(update={"solver_mode": "circsym"})
+
+        with self.assertRaises(ValueError) as ctx:
+            bempp_solver.solve_bempp_from_msh("unused.msh", request)
+
+        msg = str(ctx.exception)
+        self.assertIn("CircSym requires the Metal backend", msg)
+        self.assertIn("BEMPP backend cannot solve", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

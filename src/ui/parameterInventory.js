@@ -191,7 +191,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       groups: Object.freeze([
         Object.freeze({
           group: 'SIMULATION',
-          keys: Object.freeze(['simType']),
+          keys: Object.freeze(['simType', 'solverMode']),
         }),
         Object.freeze({
           group: 'MESH',

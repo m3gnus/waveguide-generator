@@ -55,11 +55,13 @@ test('SimulationModule HornLab mesher output builds solver submit options', () =
   const simulationInput = SimulationModule.importPrepared(preparedParams);
   const adaptive = SimulationModule.output.hornlabMesher(simulationInput, {
     mshVersion: '2.2',
-    simType: 2
+    simType: 2,
+    solverMode: 'circsym'
   });
 
   assert.equal(adaptive.waveguidePayload.formula_type, 'OSSE');
   assert.equal(adaptive.waveguidePayload.sim_type, 2);
+  assert.equal(adaptive.waveguidePayload.solver_mode, 'circsym');
   assert.equal(adaptive.waveguidePayload.quadrants, 1);
   assert.equal(adaptive.submitOptions.mesh.strategy, 'hornlab_mesher');
   assert.equal(
@@ -146,11 +148,13 @@ test('simulation domain prepares HornLab mesher solve requests from an explicit 
   };
   const request = prepareHornlabMesherSolveRequest(state, {
     mshVersion: '2.2',
-    simType: 2
+    simType: 2,
+    solverMode: 'circsym'
   });
 
   assert.equal(request.waveguidePayload.formula_type, 'OSSE');
   assert.equal(request.waveguidePayload.sim_type, 2);
+  assert.equal(request.waveguidePayload.solver_mode, 'circsym');
   assert.equal(request.waveguidePayload.quadrants, 1);
   assert.equal(request.submitOptions.mesh.strategy, 'hornlab_mesher');
   assert.deepEqual(request.stateSnapshot, state);

@@ -258,6 +258,18 @@ test('buildWaveguidePayload uses defaults for source definition fields when omit
   assert.equal(payload.vertical_offset, 0);
 });
 
+test('buildWaveguidePayload includes solver mode', () => {
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      type: 'OSSE',
+      solverMode: 'circsym'
+    }),
+    '2.2'
+  );
+
+  assert.equal(payload.solver_mode, 'circsym');
+});
+
 test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
   const payload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({

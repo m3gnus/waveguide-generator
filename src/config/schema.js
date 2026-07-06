@@ -779,6 +779,18 @@ export const PARAM_SCHEMA = {
         { value: '1', label: 'Infinite baffle' },
       ],
     },
+    solverMode: {
+      type: 'select',
+      label: 'Solver Mode',
+      default: 'full_3d',
+      controlId: 'solver-mode',
+      tooltip:
+        'Exact for circular waveguides, much faster, valid to higher frequency; only valid when the waveguide is circular.',
+      options: [
+        { value: 'full_3d', label: 'Full 3D' },
+        { value: 'circsym', label: 'CircSym (axisymmetric, fast)' },
+      ],
+    },
   },
   // Output actions are handled via export buttons in the UI.
 };

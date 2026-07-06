@@ -373,6 +373,9 @@ export function prepareSimulationControllerSubmission(options = {}) {
   if (Object.prototype.hasOwnProperty.call(options, 'simType')) {
     requestOptions.simType = options.simType;
   }
+  if (Object.prototype.hasOwnProperty.call(options, 'solverMode')) {
+    requestOptions.solverMode = options.solverMode;
+  }
   return prepareHornlabMesherSolveRequest(readSimulationState(), requestOptions);
 }
 
@@ -414,6 +417,7 @@ export async function submitSimulationControllerJob(
   const submitConfig = {
     ...config,
     simulationType: config?.simulationType ?? waveguidePayload.sim_type ?? '2',
+    solverMode: config?.solverMode ?? waveguidePayload.solver_mode ?? 'full_3d',
   };
   const { preparedParams, stateSnapshot } = submission;
   const startedIso = new Date().toISOString();

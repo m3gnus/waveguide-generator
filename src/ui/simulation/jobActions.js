@@ -638,6 +638,7 @@ export async function runSimulation(panel) {
     frequencySpacing: getFrequencySpacing(),
     verbose: getVerbose(),
     solverBackend: getSolverBackend(),
+    solverMode: document.getElementById('solver-mode')?.value || 'full_3d',
   };
 
   const polarSettings = readPolarStateSettings(readSimulationState()?.params);

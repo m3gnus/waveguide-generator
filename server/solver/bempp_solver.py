@@ -15,6 +15,7 @@ from .result_mapping import (
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
 from .metal_solver import _float_option, _waveguide_params
+from .axisymmetry import reject_bempp_circsym_request
 
 try:
     from hornlab_bempp_bem import (  # type: ignore
@@ -233,6 +234,7 @@ def solve_bempp_from_msh(
     stage_callback=None,
     source_motion: str | None = None,
 ) -> dict[str, Any]:
+    reject_bempp_circsym_request(request)
     _reject_reduced_domain_request(request)
 
     if not _load_bempp_api():

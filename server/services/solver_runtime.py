@@ -16,6 +16,7 @@ from solver.metal_solver import (
     metal_fast_solve_unavailable_reason,
     normalize_solver_backend,
     resolve_solver_backend,
+    solve_circsym_from_params,
     solve_metal_from_msh,
 )
 from solver_bootstrap import (
