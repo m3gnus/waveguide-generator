@@ -58,6 +58,13 @@ class FakeMeridianBuild:
         )
 
 
+class FakeMeridianBuildWithAperture(FakeMeridianBuild):
+    metadata = {
+        **FakeMeridianBuild.metadata,
+        "apertureTag": 12,
+    }
+
+
 def _fake_hornlab_mesher_module():
     module = ModuleType("hornlab_mesher")
     module.build_meridian = lambda *args, **kwargs: None
@@ -152,15 +159,14 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["metal"]["formulation"], "complex_k")
         self.assertEqual(result["metadata"]["metal"]["complex_k_shift"], 0.005)
 
-    def test_infinite_baffle_full_3d_native_symmetry_is_rejected(self):
+    def test_infinite_baffle_full_3d_requires_mesher_aperture_tag(self):
         request = self._request(
             quadrants=1234,
             sim_type="1",
             waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
         )
 
-        with self.assertRaisesRegex(ValueError, "infinite baffle"):
-            metal_solver._native_symmetry_plane(request)
+        self.assertIsNone(metal_solver._native_symmetry_plane(request))
 
         with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
             "solver.metal_solver.ObservationConfig", FakeObservationConfig
@@ -170,10 +176,82 @@ class MetalSolverAdapterTest(unittest.TestCase):
             "solver.metal_solver.metal_backend_status",
             return_value={"available": True, "supportedPlatform": True},
         ):
-            with self.assertRaisesRegex(ValueError, "infinite baffle"):
+            with self.assertRaisesRegex(metal_solver.MetalBemUnavailable, "aperture tag"):
                 metal_solver.solve_metal_from_msh(msh_file.name, request)
 
         native_config_mock.assert_not_called()
+
+    def test_infinite_baffle_full_3d_forwards_aperture_tag_metadata(self):
+        request = self._request(
+            quadrants=1,
+            sim_type="1",
+            waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
+        )
+        seen_configs = []
+
+        def fake_native_config(**kwargs):
+            cfg = FakeSolveConfig(**kwargs)
+            seen_configs.append(cfg)
+            return cfg
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve", return_value=self._fake_result()
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ):
+            result = metal_solver.solve_metal_from_msh(
+                msh_file.name,
+                request,
+                mesh_metadata={"apertureTag": 12},
+            )
+
+        self.assertEqual(seen_configs[0].native_symmetry_plane, "yz+xz")
+        self.assertTrue(seen_configs[0].native_check_open_edges)
+        self.assertEqual(seen_configs[0].aperture_tag, 12)
+        self.assertFalse(seen_configs[0].mesh_validate)
+        metadata = result["metadata"]
+        self.assertEqual(metadata["solver_mode"], "full_3d")
+        self.assertEqual(metadata["metal"]["solver_mode"], "full_3d")
+        self.assertEqual(metadata["metal"]["aperture_tag"], 12)
+        self.assertEqual(
+            metadata["infinite_baffle"],
+            {
+                "backend": "full_3d_coupled",
+                "aperture_tag": 12,
+                "source": "hornlab-waveguide-mesher",
+            },
+        )
+
+    def test_infinite_baffle_full_3d_aperture_tag_capability_error(self):
+        request = self._request(
+            quadrants=1234,
+            sim_type="1",
+            waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
+        )
+
+        def fake_native_config(**_kwargs):
+            raise TypeError("got an unexpected keyword argument 'aperture_tag'")
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve", return_value=self._fake_result()
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ):
+            with self.assertRaisesRegex(
+                metal_solver.MetalBemUnavailable,
+                "coupled infinite-baffle full-3D path",
+            ):
+                metal_solver.solve_metal_from_msh(
+                    msh_file.name,
+                    request,
+                    mesh_metadata={"aperture_tag": 12},
+                )
 
     def test_standard_formulation_override_is_forwarded(self):
         seen_configs = []
@@ -224,11 +302,21 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=14)), "yz")
         self.assertEqual(metal_solver._native_symmetry_plane(self._request(quadrants=12)), "xz")
         self.assertIsNone(metal_solver._native_symmetry_plane(self._request(quadrants=1234)))
-        for quadrants in (1234, 1):
-            with self.assertRaisesRegex(ValueError, "infinite baffle"):
-                metal_solver._native_symmetry_plane(
-                    self._request(quadrants=quadrants, sim_type="1")
-                )
+        self.assertEqual(
+            metal_solver._native_symmetry_plane(self._request(quadrants=1, sim_type="1")),
+            "yz+xz",
+        )
+        self.assertEqual(
+            metal_solver._native_symmetry_plane(self._request(quadrants=14, sim_type="1")),
+            "yz",
+        )
+        self.assertEqual(
+            metal_solver._native_symmetry_plane(self._request(quadrants=12, sim_type="1")),
+            "xz",
+        )
+        self.assertIsNone(
+            metal_solver._native_symmetry_plane(self._request(quadrants=1234, sim_type="1"))
+        )
 
     def test_open_edge_guard_policy_follows_mesher_topology(self):
         self.assertFalse(
@@ -249,7 +337,16 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 self._request(quadrants=1, waveguide_params={"enc_depth": 200, "wall_thickness": 0})
             )
         )
-        with self.assertRaisesRegex(ValueError, "infinite baffle"):
+        self.assertTrue(
+            metal_solver._native_check_open_edges(
+                self._request(
+                    quadrants=1,
+                    sim_type="1",
+                    waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
+                )
+            )
+        )
+        self.assertTrue(
             metal_solver._native_check_open_edges(
                 self._request(
                     quadrants=1234,
@@ -257,6 +354,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
                     waveguide_params={"sim_type": 1, "enc_depth": 0, "wall_thickness": 0},
                 )
             )
+        )
         self.assertTrue(
             metal_solver._native_check_open_edges(
                 self._request(quadrants=1234, waveguide_params={"enc_depth": 0, "wall_thickness": 0})
@@ -347,6 +445,53 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(seen["config"].source_motion, "axial")
         self.assertEqual(seen["config"].circsym_baffle_z, 0.0)
         self.assertEqual(build_meridian_mock.call_args.kwargs["freq_max_hz"], 2000.0)
+
+    def test_circsym_infinite_baffle_reports_coupled_metadata(self):
+        seen = {}
+
+        def fake_native_config(**kwargs):
+            cfg = FakeSolveConfig(**kwargs)
+            seen["config"] = cfg
+            return cfg
+
+        with patch("solver.metal_solver.MeridianMesh", FakeMeridianMesh), patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=fake_native_config), patch(
+            "solver.metal_solver.solve_circsym", return_value=self._fake_result()
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ), patch.dict(
+            "sys.modules", {"hornlab_mesher": _fake_hornlab_mesher_module()}
+        ), patch(
+            "hornlab_mesher.build_meridian",
+            return_value=FakeMeridianBuildWithAperture(),
+        ):
+            request = self._request(
+                quadrants=1234,
+                sim_type="1",
+                waveguide_params={"sim_type": 1},
+            ).model_copy(update={"solver_mode": "circsym"})
+            result = metal_solver.solve_circsym_from_params(
+                {
+                    "formula_type": "OSSE",
+                    "quadrants": 1234,
+                    "sim_type": 1,
+                },
+                request,
+            )
+
+        self.assertEqual(seen["config"].circsym_aperture_tag, 12)
+        metadata = result["metadata"]
+        self.assertEqual(
+            metadata["infinite_baffle"],
+            {
+                "backend": "circsym_coupled",
+                "aperture_tag": 12,
+                "source": "hornlab-waveguide-mesher",
+            },
+        )
+        self.assertEqual(metadata["metal"]["aperture_tag"], 12)
 
     def test_circsym_from_params_wires_cancellation_between_frequencies(self):
         seen = {}

@@ -12,6 +12,7 @@ from .result_mapping import (
     native_symmetry_plane,
     observation_config,
     waveguide_quadrants,
+    waveguide_sim_type,
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
 from .metal_solver import _float_option, _waveguide_params
@@ -39,21 +40,22 @@ def _reject_reduced_domain_request(request) -> None:
     symmetry_plane = native_symmetry_plane(request)
     if symmetry_plane is None:
         return
-    if str(symmetry_plane) == "xy":
-        # Infinite baffle maps to the z=0 image plane (not a quadrant cut), so a
-        # "use full azimuth" message would be wrong -- the request already is full
-        # azimuth. Point the user at the Metal backend or free-standing instead.
-        raise ValueError(
-            "The BEMPP fallback cannot solve an infinite-baffle request. Infinite "
-            "baffle uses the Metal native xy image-plane solve, which the BEMPP "
-            "backend does not implement. Select the Metal backend for "
-            "infinite-baffle solves, or set Simulation Type to Free-standing."
-        )
     raise ValueError(
         "BEMPP fallback solves require a full-domain mesh. "
         f"Got Mesh.Quadrants={waveguide_quadrants(request)!r}, which maps to "
         f"native_symmetry_plane={symmetry_plane!r}. Use Mesh.Quadrants=1234, "
         "or select the Metal backend for native symmetry solves."
+    )
+
+
+def _reject_infinite_baffle_request(request) -> None:
+    if waveguide_sim_type(request) != 1:
+        return
+    raise ValueError(
+        "The BEMPP fallback cannot solve coupled infinite-baffle requests. "
+        "Use the Metal backend: circular waveguides may route to CircSym "
+        "coupled IB, and full-3D infinite baffle uses native aperture_tag/"
+        "Rayleigh aperture coupling."
     )
 
 
@@ -233,7 +235,9 @@ def solve_bempp_from_msh(
     progress_callback=None,
     stage_callback=None,
     source_motion: str | None = None,
+    mesh_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    _reject_infinite_baffle_request(request)
     reject_bempp_circsym_request(request)
     _reject_reduced_domain_request(request)
 

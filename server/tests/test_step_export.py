@@ -428,6 +428,62 @@ class StepExportAdapterTest(unittest.TestCase):
         self.assertEqual(config["mesh"]["wallThickness"], 0.0)
         self.assertEqual(config["mesh"]["quadrants"], 1234)
 
+    def test_build_waveguide_mesh_preserves_mesher_metadata_and_aperture_tag_counts(self):
+        captured_configs = []
+
+        def fake_build_from_config(config, mesh_path):
+            captured_configs.append(config)
+            Path(mesh_path).write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+            return SimpleNamespace(
+                n_vertices=4,
+                n_triangles=2,
+                units="m",
+                metadata={"apertureTag": 12},
+            )
+
+        fake_mesh = SimpleNamespace(
+            points=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            ),
+            cells=[
+                SimpleNamespace(
+                    type="triangle",
+                    data=np.array([[0, 1, 2], [0, 1, 3]], dtype=np.int64),
+                )
+            ],
+            cell_data={"gmsh:physical": [np.array([2, 12], dtype=np.int32)]},
+        )
+
+        with patch.object(
+            mesher_adapter,
+            "build_from_config",
+            side_effect=fake_build_from_config,
+        ), patch.object(mesher_adapter.meshio, "read", return_value=fake_mesh):
+            result = mesher_adapter.build_waveguide_mesh(
+                {"formula_type": "OSSE", "sim_type": 1},
+                include_canonical=True,
+            )
+            stats_only = mesher_adapter.build_waveguide_mesh(
+                {"formula_type": "OSSE", "sim_type": 1},
+                include_canonical=False,
+            )
+
+        self.assertEqual(captured_configs[0]["mode"], "infinite-baffle")
+        self.assertEqual(result["metadata"]["apertureTag"], 12)
+        self.assertEqual(result["stats"]["metadata"]["apertureTag"], 12)
+        canonical_metadata = result["canonical_mesh"]["metadata"]
+        self.assertEqual(canonical_metadata["apertureTag"], 12)
+        self.assertEqual(canonical_metadata["mesherMetadata"]["apertureTag"], 12)
+        self.assertEqual(canonical_metadata["tagCounts"]["12"], 1)
+        self.assertEqual(canonical_metadata["tagCounts"]["2"], 1)
+        self.assertEqual(stats_only["stats"]["tagCounts"]["12"], 1)
+
 
 class ViewportGeometryAdapterTest(unittest.TestCase):
     def test_payload_sim_type_one_selects_infinite_baffle_and_preserves_sampling(self):

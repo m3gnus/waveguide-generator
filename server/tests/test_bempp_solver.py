@@ -214,11 +214,19 @@ class BemppSolverAdapterTest(unittest.TestCase):
         )
 
         with self.assertRaises(ValueError) as ctx:
-            bempp_solver.solve_bempp_from_msh("unused.msh", request)
+            bempp_solver.solve_bempp_from_msh(
+                "unused.msh",
+                request,
+                mesh_metadata={"apertureTag": 12},
+            )
         msg = str(ctx.exception)
         self.assertIn("infinite baffle", msg.lower())
+        self.assertIn("metal", msg.lower())
         self.assertIn("circular", msg.lower())
         self.assertIn("circsym", msg.lower())
+        self.assertIn("full-3d", msg.lower())
+        self.assertIn("aperture_tag", msg)
+        self.assertIn("Rayleigh aperture", msg)
         self.assertNotIn("Mesh.Quadrants=1234", msg)
 
     def test_circsym_request_gets_metal_only_error(self):

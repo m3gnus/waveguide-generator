@@ -52,7 +52,7 @@ class NormalizeWaveguideParamsTest(unittest.TestCase):
     def test_bempp_still_forces_full_azimuth_for_ib_half_models(self):
         # Bempp has no reduced-symmetry path, so every Bempp solve is normalized
         # to full azimuth. sim_type remains truthful; the Bempp adapter rejects
-        # native xy symmetry later.
+        # coupled infinite-baffle requests later.
         result = normalize_waveguide_params_for_solver_backend(
             {"sim_type": 1, "quadrants": "12"}, "bempp"
         )
@@ -984,7 +984,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
         finally:
             _jrt.jobs.pop(job_id, None)
 
-    def test_non_circular_infinite_baffle_rewrites_to_large_enclosure(self):
+    def test_non_circular_infinite_baffle_routes_to_full_3d_with_aperture_metadata(self):
         request = self._make_hornlab_mesher_request(
             {
                 "formula_type": "OSSE",
@@ -1001,14 +1001,26 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
 
         captured_build_params = []
         captured_solve_requests = []
+        captured_solve_kwargs = []
         fake_mesher_result = {
             "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
-            "stats": {"nodeCount": 3, "elementCount": 1},
+            "metadata": {"apertureTag": 12},
+            "stats": {"nodeCount": 5, "elementCount": 3, "metadata": {"apertureTag": 12}},
             "canonical_mesh": {
-                "vertices": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                "indices": [0, 1, 2],
-                "surfaceTags": [2],
-                "metadata": {},
+                "vertices": [
+                    0.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0,
+                    1.0, 1.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.5, 0.5, 0.5,
+                ],
+                "indices": [
+                    0, 1, 4,
+                    1, 2, 4,
+                    2, 3, 4,
+                ],
+                "surfaceTags": [1, 2, 12],
+                "metadata": {"apertureTag": 12},
             },
         }
 
@@ -1016,11 +1028,12 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
             captured_build_params.append(dict(params))
             return fake_mesher_result
 
-        def fake_metal_solve(_msh_path, solve_request, **_kwargs):
+        def fake_metal_solve(_msh_path, solve_request, **kwargs):
             captured_solve_requests.append(solve_request)
+            captured_solve_kwargs.append(kwargs)
             return {"frequencies": [100.0], "directivity": {}, "metadata": {}}
 
-        job_id = "test-noncircular-ib-large-baffle"
+        job_id = "test-noncircular-ib-full-3d"
         _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
@@ -1029,7 +1042,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
             with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
                  patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
                  patch(
-                     "services.simulation_runner._circsym_rejection_reasons_for_payload",
+                     "solver.axisymmetry._circsym_rejection_reasons_for_payload",
                      return_value=["CircSym requires a circular waveguide: morphTarget is 1"],
                  ), \
                  patch("services.simulation_runner.build_waveguide_mesh", side_effect=fake_build), \
@@ -1040,21 +1053,13 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
             self.assertEqual(_jrt.jobs[job_id]["status"], "complete")
             self.assertEqual(len(captured_build_params), 1)
             forwarded = captured_build_params[0]
-            self.assertEqual(forwarded["sim_type"], 2)
-            self.assertAlmostEqual(forwarded["enc_depth"], 121.0)
-            self.assertEqual(forwarded["enc_space_l"], 420.0)
-            self.assertEqual(forwarded["enc_space_t"], 420.0)
-            self.assertEqual(forwarded["enc_space_r"], 420.0)
-            self.assertEqual(forwarded["enc_space_b"], 420.0)
-            self.assertEqual(forwarded["enc_edge"], 18.0)
-            self.assertEqual(forwarded["enc_edge_type"], 1)
-            self.assertEqual(captured_solve_requests[0].sim_type, "2")
-            self.assertEqual(captured_solve_requests[0].solver_mode, "full_3d")
+            self.assertEqual(forwarded["sim_type"], 1)
+            self.assertEqual(forwarded["enc_depth"], 0.0)
+            self.assertEqual(captured_solve_requests[0].sim_type, "1")
+            self.assertEqual(captured_solve_kwargs[0]["mesh_metadata"], {"apertureTag": 12})
             metadata = _jrt.jobs[job_id]["results"]["metadata"]
-            approximation = metadata["infinite_baffle_approximation"]
-            self.assertEqual(approximation["method"], "finite_large_baffle_enclosure")
-            self.assertIn("60-90 deg", approximation["note"])
-            self.assertEqual(approximation["derived"]["horn_length_mm"], 120.0)
+            self.assertNotIn("infinite_baffle_approximation", metadata)
+            self.assertEqual(metadata["mesh_stats"]["tag_counts"], {1: 1, 2: 1, 3: 0, 4: 0, 12: 1})
         finally:
             _jrt.jobs.pop(job_id, None)
 
@@ -1083,7 +1088,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
             with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
                  patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
                  patch(
-                     "services.simulation_runner._circsym_rejection_reasons_for_payload",
+                     "solver.axisymmetry._circsym_rejection_reasons_for_payload",
                      return_value=[],
                  ), \
                  patch("services.simulation_runner.build_waveguide_mesh", side_effect=fail_if_meshed), \
@@ -1118,7 +1123,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
             with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
                  patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
                  patch(
-                     "services.simulation_runner._circsym_rejection_reasons_for_payload",
+                     "solver.axisymmetry._circsym_rejection_reasons_for_payload",
                  ) as rejection_probe, \
                  patch("services.simulation_runner.build_waveguide_mesh") as build_mesh, \
                  patch("services.simulation_runner.db"):

@@ -385,27 +385,59 @@ def _triangles_and_tags(mesh: meshio.Mesh) -> tuple[np.ndarray, np.ndarray]:
     return np.vstack(triangles), np.concatenate(tags)
 
 
+def _json_safe_metadata(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe_metadata(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_metadata(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _json_safe_metadata(value.tolist())
+    if isinstance(value, np.generic):
+        return _json_safe_metadata(value.item())
+    return value
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    safe = _json_safe_metadata(value)
+    return dict(safe) if isinstance(safe, dict) else {}
+
+
+def _tag_counts_from_tags(tags: np.ndarray) -> dict[str, int]:
+    counts = {str(tag): 0 for tag in (1, 2, 3, 4)}
+    for raw_tag in np.asarray(tags, dtype=np.int32).tolist():
+        tag = int(raw_tag)
+        key = str(tag)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _tag_counts_from_msh(path: Path) -> dict[str, int]:
     mesh = meshio.read(path)
     _, tags = _triangles_and_tags(mesh)
-    return {str(tag): int(np.count_nonzero(tags == tag)) for tag in (1, 2, 3, 4)}
+    return _tag_counts_from_tags(tags)
 
 
-def _canonical_mesh_from_msh(path: Path) -> dict[str, Any]:
+def _canonical_mesh_from_msh(path: Path, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
     mesh = meshio.read(path)
     triangles, tags = _triangles_and_tags(mesh)
     vertices = np.asarray(mesh.points, dtype=float)
-    tag_counts = {str(tag): int(np.count_nonzero(tags == tag)) for tag in (1, 2, 3, 4)}
+    tag_counts = _tag_counts_from_tags(tags)
+    mesher_metadata = _metadata_dict(metadata)
+    canonical_metadata = {
+        "units": "m",
+        "unitScaleToMeter": 1.0,
+        "tagCounts": tag_counts,
+        "generatedBy": "hornlab-waveguide-mesher",
+    }
+    canonical_metadata.update(mesher_metadata)
+    canonical_metadata["mesherMetadata"] = mesher_metadata
     return {
         "vertices": vertices.reshape(-1).tolist(),
         "indices": triangles.reshape(-1).astype(int).tolist(),
         "surfaceTags": tags.astype(int).tolist(),
-        "metadata": {
-            "units": "m",
-            "unitScaleToMeter": 1.0,
-            "tagCounts": tag_counts,
-            "generatedBy": "hornlab-waveguide-mesher",
-        },
+        "metadata": canonical_metadata,
     }
 
 
@@ -661,6 +693,7 @@ def build_waveguide_mesh(
     with tempfile.TemporaryDirectory(prefix="wg-hornlab-mesher-") as tmp_dir:
         mesh_path = Path(tmp_dir) / "waveguide.msh"
         result = build_from_config(config, mesh_path)
+        mesher_metadata = _metadata_dict(getattr(result, "metadata", None))
         if cancellation_callback:
             cancellation_callback()
         msh_text = mesh_path.read_text(encoding="utf-8", errors="replace")
@@ -669,7 +702,7 @@ def build_waveguide_mesh(
         # only want the .msh (include_canonical=False) still need tagCounts
         # for stats, which a plain array pass provides cheaply.
         if include_canonical:
-            canonical = _canonical_mesh_from_msh(mesh_path)
+            canonical = _canonical_mesh_from_msh(mesh_path, mesher_metadata)
             tag_counts = canonical["metadata"]["tagCounts"]
         else:
             canonical = None
@@ -682,10 +715,12 @@ def build_waveguide_mesh(
         "units": result.units,
         "source": "hornlab_waveguide_mesher",
         "generatedBy": "hornlab-waveguide-mesher",
+        "metadata": mesher_metadata,
     }
     out: dict[str, Any] = {
         "msh_text": msh_text,
         "stats": stats,
+        "metadata": mesher_metadata,
     }
     if include_canonical:
         out["canonical_mesh"] = canonical
