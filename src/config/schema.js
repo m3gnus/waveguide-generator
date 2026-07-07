@@ -772,9 +772,8 @@ export const PARAM_SCHEMA = {
       default: '2',
       controlId: 'sim-type',
       tooltip:
-        'Infinite baffle: exact for circular waveguides (CircSym coupled path, Metal); ' +
-        'non-circular guides use a large flat-baffle approximation (60-90 deg indicative, ' +
-        '+-1-2 dB LF ripple).',
+        'Infinite baffle: exact Metal coupled path for any geometry; circular guides ' +
+        'may use the faster CircSym coupled path.',
       options: [
         { value: '2', label: 'Free-standing' },
         { value: '1', label: 'Infinite baffle' },

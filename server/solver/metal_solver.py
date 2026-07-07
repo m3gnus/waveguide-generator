@@ -197,12 +197,43 @@ def _waveguide_params(request) -> dict[str, Any]:
     return dict(params) if isinstance(params, dict) else {}
 
 
+def _aperture_tag_from_mesh_metadata(mesh_metadata: Any) -> int | None:
+    if not isinstance(mesh_metadata, dict):
+        return None
+    for key in ("apertureTag", "aperture_tag"):
+        raw_value = mesh_metadata.get(key)
+        if raw_value is None or isinstance(raw_value, bool):
+            continue
+        try:
+            numeric_value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid coupled infinite-baffle aperture tag {raw_value!r} "
+                f"reported by hornlab-waveguide-mesher metadata key {key!r}."
+            ) from exc
+        if not numeric_value.is_integer():
+            raise ValueError(
+                f"Invalid coupled infinite-baffle aperture tag {raw_value!r} "
+                f"reported by hornlab-waveguide-mesher metadata key {key!r}; "
+                "expected an integer physical tag."
+            )
+        value = int(numeric_value)
+        if value <= 0:
+            raise ValueError(
+                f"Invalid coupled infinite-baffle aperture tag {raw_value!r} "
+                f"reported by hornlab-waveguide-mesher metadata key {key!r}; "
+                "expected a positive integer physical tag."
+            )
+        return value
+    return None
+
+
 def _native_check_open_edges(request) -> bool:
-    if _native_symmetry_plane(request) is None:
+    if waveguide_sim_type(request) == 1:
         return True
 
-    if waveguide_sim_type(request) == 1:
-        return False
+    if _native_symmetry_plane(request) is None:
+        return True
 
     params = _waveguide_params(request)
     if not params:
@@ -211,15 +242,10 @@ def _native_check_open_edges(request) -> bool:
     enc_depth = _float_option(params.get("enc_depth"), 0.0)
     wall_thickness = _float_option(params.get("wall_thickness"), 0.0)
 
-    # Bare no-wall reduced-domain meshes and true infinite-baffle image-plane
-    # meshes are genuinely open shells: their mouth rims are legitimate free
-    # edges for the mirrored solve. Closed topologies keep the strict native
-    # guard so an off-plane open edge (which should not exist) is caught as a
-    # real defect: a thickened wall caps the mouth rim, and the mesher seals the
-    # enclosure box front (hornlab-waveguide-mesher clamps the edge roundover
-    # below the baffle spacing). An off-plane open edge on either is a mesher
-    # closure defect, not a clean mirror cut, so failing loudly beats silently
-    # solving a leaking model.
+    # Bare no-wall reduced-domain free-standing meshes are genuinely open
+    # shells: their mouth rims are legitimate free edges for the mirrored solve.
+    # Closed topologies keep the strict native guard so an off-plane open edge
+    # (which should not exist) is caught as a real defect.
     if enc_depth <= 0.0 and wall_thickness <= 0.0:
         return False
     return True
@@ -241,6 +267,7 @@ def solve_metal_from_msh(
     progress_callback=None,
     stage_callback=None,
     source_motion: str | None = None,
+    mesh_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if native_config is None or solve is None:
         raise MetalBemUnavailable("hornlab-metal-bem is not installed.")
@@ -276,6 +303,16 @@ def solve_metal_from_msh(
                 f"Solving frequency {index + 1}/{total} with Metal BEM",
             )
 
+    aperture_tag: int | None = None
+    if waveguide_sim_type(request) == 1:
+        aperture_tag = _aperture_tag_from_mesh_metadata(mesh_metadata)
+        if aperture_tag is None:
+            raise MetalBemUnavailable(
+                "Full-3D infinite-baffle Metal solve requires the coupled IB "
+                "aperture tag, but hornlab-waveguide-mesher did not report "
+                "apertureTag/aperture_tag in mesh metadata."
+            )
+
     config_kwargs = {
         "freq_min_hz": float(request.frequency_range[0]),
         "freq_max_hz": float(request.frequency_range[1]),
@@ -289,6 +326,13 @@ def solve_metal_from_msh(
         "native_symmetry_plane": _native_symmetry_plane(request),
         "native_check_open_edges": _native_check_open_edges(request),
     }
+    if aperture_tag is not None:
+        config_kwargs["aperture_tag"] = aperture_tag
+        # Coupled IB meshes are interior-BEM surfaces plus a z=0 Rayleigh
+        # aperture cap. The generic exterior signed-volume winding check is not
+        # meaningful for this topology; metal-bem's aperture_tag path performs
+        # the coupled-specific geometry validation after load.
+        config_kwargs["mesh_validate"] = False
     # Axial (rigid-piston) vs normal (breathing cap) source BC. Only forwarded
     # when explicitly requested so an older metal-bem (no source_motion) keeps
     # working for the default normal source.
@@ -304,6 +348,13 @@ def solve_metal_from_msh(
                 "Install the updated hornlab-metal-bem package for an axial "
                 "(rigid-piston) source."
             ) from exc
+        if "aperture_tag" in message:
+            raise MetalBemUnavailable(
+                "Installed hornlab-metal-bem does not support the coupled "
+                "infinite-baffle full-3D path. Install the updated "
+                "hornlab-metal-bem package for native aperture_tag/Rayleigh "
+                "aperture coupling."
+            ) from exc
         if "formulation" in message or "complex_k_shift" in message:
             raise MetalBemUnavailable(
                 "Installed hornlab-metal-bem does not support explicit BEM formulation "
@@ -317,6 +368,7 @@ def solve_metal_from_msh(
 
     metadata = {
         "solver_backend": "metal",
+        "solver_mode": "full_3d",
         "device_interface": {"selected": "metal", "metal": status},
         "engine": "hornlab-metal-bem",
         "phase_time_convention": "exp(+ikr)",
@@ -326,6 +378,7 @@ def solve_metal_from_msh(
             "native_timings": dict(result.timings or {}),
         },
         "metal": {
+            "solver_mode": "full_3d",
             "native_symmetry_plane": config.native_symmetry_plane,
             "native_check_open_edges": getattr(
                 config,
@@ -338,6 +391,16 @@ def solve_metal_from_msh(
             "native_diagnostics": json_safe_native_value(list(result.native_diagnostics or [])),
         },
     }
+    config_aperture_tag = getattr(config, "aperture_tag", aperture_tag)
+    if config_aperture_tag is not None:
+        config_aperture_tag = int(config_aperture_tag)
+        metadata["metal"]["aperture_tag"] = config_aperture_tag
+    if waveguide_sim_type(request) == 1:
+        metadata["infinite_baffle"] = {
+            "backend": "full_3d_coupled",
+            "aperture_tag": int(config_aperture_tag if config_aperture_tag is not None else aperture_tag),
+            "source": "hornlab-waveguide-mesher",
+        }
 
     return build_solver_response(
         result=result,
@@ -459,6 +522,11 @@ def solve_circsym_from_params(
     if stage_callback:
         stage_callback("finalizing", 1.0, "Packaging CircSym solver results")
 
+    circsym_aperture_tag = getattr(
+        config,
+        "circsym_aperture_tag",
+        config_kwargs.get("circsym_aperture_tag"),
+    )
     metadata = {
         "solver_backend": "metal",
         "solver_mode": "circsym",
@@ -480,6 +548,15 @@ def solve_circsym_from_params(
             "meridian": json_safe_native_value(dict(meridian_build.metadata or {})),
         },
     }
+    if circsym_aperture_tag is not None:
+        circsym_aperture_tag = int(circsym_aperture_tag)
+        metadata["metal"]["aperture_tag"] = circsym_aperture_tag
+        if waveguide_sim_type(request) == 1:
+            metadata["infinite_baffle"] = {
+                "backend": "circsym_coupled",
+                "aperture_tag": circsym_aperture_tag,
+                "source": "hornlab-waveguide-mesher",
+            }
 
     return build_solver_response(
         result=result,

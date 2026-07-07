@@ -6,8 +6,8 @@ function read(path) {
   return fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
-const MESHER_PIN = '583886f74b173d536d4ac9f9bec0f0d7d247727a';
-const METAL_BEM_PIN = '2bf66ff8a1dc1a7df01d48267d166d34ec8f04bc';
+const MESHER_PIN = '0e5c6aa4fa960946c1e020af080cd9c1a2fe4951';
+const METAL_BEM_PIN = 'b8eb3bbd8a1bc97713b50657d81f8b6371987b6b';
 const BEMPP_BEM_PIN = '4638578290eb0a56d0f81018b8806f0746ceb442';
 
 test('maintained docs stay aligned with the Metal-or-Bempp solver/runtime contract', () => {
