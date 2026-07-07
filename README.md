@@ -67,8 +67,8 @@ The app opens in your browser at `http://localhost:3000`. Close the terminal to 
 Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `0d586a02071d2670e696732658f507c5d8bc77cc` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
-- hornlab-metal-bem: pinned git commit `6534e9b7196440cd121e2b9c60bbac1489fa295f` (fast Metal solve backend; Apple Silicon macOS)
+- hornlab-waveguide-mesher: pinned git commit `60e459d46f243a38148a1c98d15526cf6e03b73d` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-metal-bem: pinned git commit `ba7b063b5e78d3e1543a76300fd53727a01d7fdb` (fast Metal solve backend; Apple Silicon macOS)
 - hornlab-bempp-bem: pinned git commit `4638578290eb0a56d0f81018b8806f0746ceb442` (Bempp cross-platform solve backend; installed when Metal is unavailable)
 - gmsh: `>=4.11.1,<5.0` (required by the HornLab mesher)
 
@@ -81,7 +81,7 @@ On Apple Silicon, `/api/solve` requires the release native helper so Metal jobs 
 | Control                                      | Affects                                                        | Does not affect                                |
 | -------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------- |
 | Surface sample controls                      | Live JS viewport/local export tessellation and mesher sampling | Mesh element-size fields                       |
-| `Solve * Resolution` + enclosure resolutions | HornLab mesher solve/export `.msh` artifacts                   | Live JS viewport triangle count                |
+| `Solve * Resolution` + aperture/enclosure sizing | HornLab mesher solve/export `.msh` artifacts                | Live JS viewport triangle count                |
 | `Quadrants` + `Auto`                         | HornLab solve/export mesh symmetry domain                      | STEP and viewport preview full-domain contracts |
 | `Auto-download solve mesh`                   | Whether `.msh` is downloaded after solve                       | Mesh generation itself                         |
 | `Task Exports` settings                      | Export bundle formats for completed tasks                      | Solver execution                               |

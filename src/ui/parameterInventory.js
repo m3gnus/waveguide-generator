@@ -210,6 +210,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'throatResolution',
             'mouthResolution',
             'rearResolution',
+            'apertureResolutionScale',
             'verticalOffset',
             'quadrants',
           ]),

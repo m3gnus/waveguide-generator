@@ -93,6 +93,7 @@ test('formula allowlist limits per-row formula controls to audited fields', () =
   assert.equal(getControlInputMode(PARAM_SCHEMA.MORPH.morphWidth), 'formula');
   assert.equal(getControlInputMode(PARAM_SCHEMA.GEOMETRY.rot), 'formula');
   assert.equal(getControlInputMode(PARAM_SCHEMA.MESH.angularSegments), 'number');
+  assert.equal(getControlInputMode(PARAM_SCHEMA.MESH.apertureResolutionScale), 'number');
   assert.equal(getControlInputMode(PARAM_SCHEMA.ENCLOSURE.encFrontResolution), 'text');
   assert.equal(getControlInputMode(PARAM_SCHEMA.SOURCE.sourceContours), 'text');
   assert.equal(getControlInputMode(PARAM_SCHEMA.SOURCE.sourceShape), 'select');
@@ -167,6 +168,22 @@ test('parameter inventory exposes throat extension and scopes OSSE-only guiding 
     'sourceRadius',
     'sourceCurv',
     'sourceVelocity',
+  ]);
+
+  const meshSection = getParameterSections('simulation', 'R-OSSE').find(
+    (section) => section.id === 'solve-export-mesh'
+  );
+  assert.deepEqual(meshSection.groups.flatMap((group) => group.keys), [
+    'simType',
+    'solverMode',
+    'throatResolution',
+    'mouthResolution',
+    'rearResolution',
+    'apertureResolutionScale',
+    'verticalOffset',
+    'quadrants',
+    'encFrontResolution',
+    'encBackResolution',
   ]);
 });
 
@@ -258,6 +275,12 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
       (node) =>
         node.attributes['data-param-key'] === 'verticalOffset' && node.className === 'input-row'
     );
+    const apertureScaleRows = collectNodes(
+      simulationContainer,
+      (node) =>
+        node.attributes['data-param-key'] === 'apertureResolutionScale' &&
+        node.className === 'input-row'
+    );
     const quadrantRows = collectNodes(
       simulationContainer,
       (node) => node.attributes['data-param-key'] === 'quadrants' && node.className === 'input-row'
@@ -271,6 +294,7 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
     );
     assert.equal(throatSliceDensityRows.length, 1);
     assert.equal(verticalOffsetRows.length, 1);
+    assert.equal(apertureScaleRows.length, 1);
     assert.equal(quadrantRows.length, 1);
     assert.equal(quadrantAutoButtons.length, 1);
 

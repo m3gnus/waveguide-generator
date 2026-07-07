@@ -496,6 +496,7 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
                 "r0": 18,
                 "n_angular": 100,
                 "n_length": 32,
+                "aperture_resolution_scale": 2.25,
                 "sampling_mode": "ath-default-zmap",
                 "sim_type": 1,
                 "enc_depth": 0,
@@ -505,6 +506,7 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
 
         self.assertEqual(config["mode"], "infinite-baffle")
         self.assertEqual(config["mesh"]["samplingMode"], "ath-default-zmap")
+        self.assertEqual(config["mesh"]["apertureResolutionScale"], 2.25)
         self.assertEqual(config["mesh"]["wallThickness"], 0)
 
     def test_payload_forwards_vertical_offset_to_mesher_mesh_config(self):

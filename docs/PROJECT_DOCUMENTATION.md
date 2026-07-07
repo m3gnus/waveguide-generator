@@ -229,6 +229,7 @@ HornLab mesher resolution semantics:
 - `mouth_res`: nominal element size at mouth plane.
 - Horn surfaces use smooth axial interpolation `throat_res -> mouth_res`.
 - `rear_res`: rear-wall size for freestanding thickened horns (no enclosure).
+- `aperture_resolution_scale`: infinite-baffle aperture-cap element-size multiplier.
 - `enc_front_resolution` / `enc_back_resolution`:
   comma list (`q1,q2,q3,q4`) or scalar broadcast for enclosure front/back baffle corners.
   Quadrant mapping: `Q1(+x,+y)`, `Q2(-x,+y)`, `Q3(-x,-y)`, `Q4(+x,-y)`.
@@ -360,8 +361,8 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `0d586a02071d2670e696732658f507c5d8bc77cc` | `/api/mesh/build` |
-| HornLab Metal BEM   | `6534e9b7196440cd121e2b9c60bbac1489fa295f` | `/api/solve` (Apple Silicon macOS) |
+| HornLab mesher      | `60e459d46f243a38148a1c98d15526cf6e03b73d` | `/api/mesh/build` |
+| HornLab Metal BEM   | `ba7b063b5e78d3e1543a76300fd53727a01d7fdb` | `/api/solve` (Apple Silicon macOS) |
 | HornLab Bempp BEM   | `4638578290eb0a56d0f81018b8806f0746ceb442` | `/api/solve` (cross-platform fallback) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |
 
@@ -433,7 +434,7 @@ Mesh sizing classes are meshing semantics only, not solver boundary-condition se
 Runtime status:
 
 - JS runtime maps geometry identities to logical `MESH_SIZING_CLASS` constants via `src/geometry/tags.js`.
-- HornLab meshing uses numeric resolution fields directly (`throat_res`, `mouth_res`, `rear_res`, `enc_front_resolution`, `enc_back_resolution`).
+- HornLab meshing uses numeric resolution fields directly (`throat_res`, `mouth_res`, `rear_res`, `aperture_resolution_scale`, `enc_front_resolution`, `enc_back_resolution`).
 
 #### Solver boundary classes
 

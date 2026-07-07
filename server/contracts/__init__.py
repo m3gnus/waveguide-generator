@@ -354,6 +354,7 @@ class WaveguideParamsRequest(BaseModel):
     throat_res: float = 6.0
     mouth_res: float = 15.0
     rear_res: float = 40.0
+    aperture_resolution_scale: float = 1.5
     wall_thickness: float = 6.0
 
     enc_depth: float = 0.0

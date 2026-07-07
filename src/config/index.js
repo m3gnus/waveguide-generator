@@ -207,6 +207,9 @@ export class MWGConfigParser {
       if (p['Mesh.RearResolution']) {
         p.rearResolution = p['Mesh.RearResolution'];
       }
+      if (p['Mesh.ApertureResolutionScale']) {
+        p.apertureResolutionScale = p['Mesh.ApertureResolutionScale'];
+      }
 
       if (p['Source.Shape']) {
         p.sourceShape = p['Source.Shape'];
@@ -322,6 +325,9 @@ export class MWGConfigParser {
       }
       if (p['Mesh.RearResolution']) {
         p.rearResolution = p['Mesh.RearResolution'];
+      }
+      if (p['Mesh.ApertureResolutionScale']) {
+        p.apertureResolutionScale = p['Mesh.ApertureResolutionScale'];
       }
       if (p['Source.Shape']) {
         p.sourceShape = p['Source.Shape'];
@@ -494,6 +500,7 @@ export const CONFIG_DEFAULTS = {
     quadrants: '1234',
     wallThickness: 5.0,
     rearResolution: 40.0,
+    apertureResolutionScale: 1.5,
     encDepth: 280,
     encEdge: 18,
     encEdgeType: 1,
@@ -562,6 +569,7 @@ export const CONFIG_DEFAULTS = {
     quadrants: '1234',
     wallThickness: 5.0,
     rearResolution: 40.0,
+    apertureResolutionScale: 1.5,
     encDepth: 280,
     encEdge: 18,
     encEdgeType: 1,

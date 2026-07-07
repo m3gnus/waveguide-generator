@@ -171,6 +171,8 @@ export function generateMWGConfigContent(params) {
   if (params.wallThickness > 0) content += `Mesh.WallThickness = ${params.wallThickness}\n`;
   if (isNonZero(params.rearResolution))
     content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;
+  if (isNonZero(params.apertureResolutionScale))
+    content += `Mesh.ApertureResolutionScale = ${formatValue(params.apertureResolutionScale)}\n`;
 
   if (params.outputSTL !== undefined) {
     content += `Output.STL = ${formatValue(params.outputSTL)}\n`;

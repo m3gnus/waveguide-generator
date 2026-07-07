@@ -607,6 +607,13 @@ export const PARAM_SCHEMA = {
       tooltip:
         'HornLab mesher solve/export element size for the rear wall on freestanding thickened horns.',
     },
+    apertureResolutionScale: {
+      type: 'number',
+      label: 'Aperture Mesh Scale',
+      default: 1.5,
+      tooltip:
+        'Multiplies infinite-baffle aperture-cap mesh size relative to the local horn mesh. Higher values coarsen the aperture cap.',
+    },
     quadrants: {
       type: 'select',
       label: 'Quadrants',
