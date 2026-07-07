@@ -18,6 +18,7 @@ const BACKEND_MESH_DEFAULTS = Object.freeze({
   throatResolution: 6,
   mouthResolution: 15,
   rearResolution: 40,
+  apertureResolutionScale: 1.5,
   encFrontResolution: '25,25,25,25',
   encBackResolution: '40,40,40,40',
   wallThickness: 6,
@@ -191,6 +192,10 @@ export function prepareBackendMeshSimulationParams(preparedParams = {}) {
       toPositiveNumber(base.mouthResolution, BACKEND_MESH_DEFAULTS.mouthResolution) * scale,
     rearResolution:
       toPositiveNumber(base.rearResolution, BACKEND_MESH_DEFAULTS.rearResolution) * scale,
+    apertureResolutionScale: toPositiveNumber(
+      base.apertureResolutionScale,
+      BACKEND_MESH_DEFAULTS.apertureResolutionScale
+    ),
     wallThickness: toFiniteNumber(base.wallThickness, BACKEND_MESH_DEFAULTS.wallThickness),
     encFrontResolution: normalizeResolutionValue(
       base.encFrontResolution != null

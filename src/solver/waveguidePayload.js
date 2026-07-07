@@ -161,6 +161,10 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     throat_res: requireFiniteNumber('throatResolution', preparedParams.throatResolution),
     mouth_res: requireFiniteNumber('mouthResolution', preparedParams.mouthResolution),
     rear_res: requireFiniteNumber('rearResolution', preparedParams.rearResolution),
+    aperture_resolution_scale: requireFiniteNumber(
+      'apertureResolutionScale',
+      preparedParams.apertureResolutionScale
+    ),
     wall_thickness: requireFiniteNumber('wallThickness', preparedParams.wallThickness),
 
     // Enclosure
