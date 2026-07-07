@@ -328,11 +328,9 @@ def solve_metal_from_msh(
     }
     if aperture_tag is not None:
         config_kwargs["aperture_tag"] = aperture_tag
-        # Coupled IB meshes are interior-BEM surfaces plus a z=0 Rayleigh
-        # aperture cap. The generic exterior signed-volume winding check is not
-        # meaningful for this topology; metal-bem's aperture_tag path performs
-        # the coupled-specific geometry validation after load.
-        config_kwargs["mesh_validate"] = False
+        # metal-bem load validation recognizes this aperture-tagged topology as
+        # an interior-domain coupled IB mesh, so keep validation enabled.
+        config_kwargs["mesh_validate"] = True
     # Axial (rigid-piston) vs normal (breathing cap) source BC. Only forwarded
     # when explicitly requested so an older metal-bem (no source_motion) keeps
     # working for the default normal source.

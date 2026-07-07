@@ -211,7 +211,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(seen_configs[0].native_symmetry_plane, "yz+xz")
         self.assertTrue(seen_configs[0].native_check_open_edges)
         self.assertEqual(seen_configs[0].aperture_tag, 12)
-        self.assertFalse(seen_configs[0].mesh_validate)
+        self.assertTrue(seen_configs[0].mesh_validate)
         metadata = result["metadata"]
         self.assertEqual(metadata["solver_mode"], "full_3d")
         self.assertEqual(metadata["metal"]["solver_mode"], "full_3d")
