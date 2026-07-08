@@ -13,6 +13,7 @@ import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats,
 } from '../settings/simulationManagementSettings.js';
+import { getChartTheme } from '../settings/appearanceSettings.js';
 import { showError, showMessage } from '../feedback.js';
 import { getExportBaseName, saveFile } from '../fileOps.js';
 import { resolveGenerationExportFileName } from '../workspace/generationArtifacts.js';
@@ -448,6 +449,7 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
     impedance_units: 'Z/(rho*c)',
     impedance_normalization: 'rho_c',
     directivity,
+    theme: getChartTheme(),
   };
 
   const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;

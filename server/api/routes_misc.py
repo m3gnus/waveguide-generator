@@ -18,13 +18,16 @@ from contracts import ChartsRenderRequest, DirectivityRenderRequest
 from services.runtime_preflight import collect_runtime_doctor_report
 from services.solver_runtime import (
     BEMPP_SOLVER_READY,
+    DEFAULT_CHART_THEME,
     SOLVER_AVAILABLE,
     HORNLAB_MESHER_AVAILABLE,
     HORNLAB_MESHER_RUNTIME_READY,
     bempp_backend_status,
+    build_theme_montage_b64,
     get_dependency_status,
     get_settings_capabilities,
     is_metal_fast_solve_ready,
+    list_available_themes,
     metal_backend_status,
     render_all_charts,
     render_directivity_plot,
@@ -98,14 +101,51 @@ async def check_updates() -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/api/themes")
+async def list_chart_themes() -> Dict[str, Any]:
+    """
+    List the chart themes the backend can render result charts in.
+
+    Returns each theme's registry ``name`` plus a short human ``label`` (so the
+    frontend does not hardcode the hornlab-plots registry) and marks the default.
+    """
+    themes = list_available_themes()
+    return {"themes": themes, "default": DEFAULT_CHART_THEME}
+
+
+@router.get("/api/theme-preview")
+async def theme_preview(theme: Optional[str] = None) -> Dict[str, str]:
+    """
+    Render a 2x2 montage preview (directivity heatmap, frequency response,
+    directivity index, impedance) for a theme from synthetic demo data.
+
+    Returns a base64 PNG data URI. Results are cached per theme on the backend.
+    """
+    try:
+        image_b64 = build_theme_montage_b64(theme)
+        return {
+            "theme": theme or DEFAULT_CHART_THEME,
+            "image": f"data:image/png;base64,{image_b64}",
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Theme preview failed: {exc}") from exc
+
+
 @router.post("/api/render-charts")
 async def render_charts(request: ChartsRenderRequest) -> Dict[str, Any]:
     """
     Render all result charts as PNG images using Matplotlib.
-    Returns base64-encoded PNGs for each chart type.
+    Returns base64-encoded PNGs for each chart type. ``request.theme`` selects
+    the hornlab-plots theme (falls back to the backend default when omitted).
     """
     try:
-        charts = render_all_charts(request.model_dump())
+        payload = request.model_dump()
+        payload["theme"] = request.theme
+        charts = render_all_charts(payload)
         result = {}
         for key, b64 in charts.items():
             if b64 is not None:
@@ -121,7 +161,8 @@ async def render_charts(request: ChartsRenderRequest) -> Dict[str, Any]:
 async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str]:
     """
     Render directivity heatmap as a PNG image using Matplotlib.
-    Returns base64-encoded PNG.
+    Returns base64-encoded PNG. ``request.theme`` selects the hornlab-plots
+    theme (falls back to the backend default when omitted).
     """
     if not request.frequencies or not request.directivity:
         raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
@@ -131,6 +172,7 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
             request.frequencies,
             request.directivity,
             reference_level=request.reference_level,
+            theme=request.theme,
         )
         if image_b64 is None:
             raise HTTPException(status_code=400, detail="No directivity patterns to render")

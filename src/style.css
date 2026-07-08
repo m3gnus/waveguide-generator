@@ -2574,6 +2574,77 @@ details.section > details.simulation-mesh-diagnostics-window {
   margin: 0;
 }
 
+/* Appearance section: chart-theme picker cards + montage preview */
+.theme-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 var(--sp-3);
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+  padding: var(--sp-2);
+  text-align: left;
+  font: inherit;
+  border-radius: var(--r-md);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.theme-card:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.theme-card.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.theme-card-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.theme-card-tag {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.theme-preview {
+  margin-top: var(--sp-1);
+}
+
+.theme-preview-img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+}
+
+.theme-preview-img:not([src]) {
+  display: none;
+}
+
+.theme-preview-status {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+}
+
 .settings-subsection-header {
   display: flex;
   align-items: center;
