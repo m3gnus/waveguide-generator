@@ -15,13 +15,11 @@ meshio>=4.0.16
 git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@6eb4a140e47a56062d28ecac773cf7e731526e33
 git+https://github.com/m3gnus/hornlab-metal-bem.git@70c18fd9bde22e1e1e20e195f994a8fdc2a11f67
 
-# Canonical plot renderer (theme-aware result charts). Installed locally as an
-# editable sibling checkout (../hornlab-plots, resolved from the repo root where
-# `pip install -r server/requirements.txt` is normally run). Once hornlab-plots
-# has a public remote, replace this line with a git+https@<SHA> pin like the two
-# lines above. If the sibling checkout is absent, the backend falls back to the
-# in-repo server/solver charts renderer, so this install is not hard-required.
--e ../hornlab-plots
+# Canonical plot renderer (theme-aware result charts). If this install is
+# absent the backend falls back to the in-repo server/solver charts renderer,
+# so it is not hard-required. Local dev may `pip install -e ../hornlab-plots`
+# to pick up sibling edits.
+git+https://github.com/m3gnus/hornlab-plots.git@7a4f1d503ea4b963c57e191b855955d734a954f0
 
 # Optional non-Metal fallback backend lives in server/requirements-bempp.txt.
 
