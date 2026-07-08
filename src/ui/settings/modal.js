@@ -105,8 +105,8 @@ const APPEARANCE_HELP = Object.freeze({
 // Static fallback used only if GET /api/themes is unreachable (backend down).
 // Mirrors the hornlab-plots registry order and labels.
 const FALLBACK_CHART_THEMES = Object.freeze([
-  { name: 'classic', label: 'Classic', default: true },
-  { name: 'hornlab', label: 'Arctic Night', default: false },
+  { name: 'classic', label: 'Classic', default: false },
+  { name: 'hornlab', label: 'Arctic Night', default: true },
   { name: 'granite', label: 'Light Paper', default: false },
   { name: 'abyss', label: 'Dark Studio', default: false },
   { name: 'blueprint', label: 'Blueprint', default: false },
