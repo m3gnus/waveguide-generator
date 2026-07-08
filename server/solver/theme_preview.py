@@ -30,27 +30,46 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 
-# ``dark`` and ``hornlab`` are byte-identical today; ``dark`` is the
-# WG-designated variant (see module docstring), so it is the default.
-DEFAULT_CHART_THEME = "dark"
+# ``classic`` (Klippel-report look) is the default chart theme and leads the
+# picker. ``dark`` is byte-identical to ``hornlab`` (Arctic Night) and is hidden
+# from the picker (see _CHART_THEME_ORDER) so only one Arctic Night shows; both
+# stay valid theme values for back-compat.
+DEFAULT_CHART_THEME = "classic"
 
 
 # Short human labels for the hornlab-plots built-in themes, shown in the
 # Appearance settings picker. Any registered theme missing here falls back to a
 # title-cased name.
 _CHART_THEME_LABELS: Dict[str, str] = {
-    "hornlab": "HornLab — Arctic Night",
-    "dark": "Dark — Arctic Night",
-    "granite": "Granite — light paper",
-    "abyss": "Abyss — dark studio",
-    "blueprint": "Blueprint — drafting blue",
-    "journal": "Journal — print / grayscale",
+    "classic": "Classic",
+    "hornlab": "Arctic Night",
+    "dark": "Arctic Night",
+    "granite": "Light Paper",
+    "abyss": "Dark Studio",
+    "blueprint": "Blueprint",
+    "journal": "Journal",
     "contrast": "High Contrast",
-    "sepia": "Sepia — warm paper",
-    "phosphor": "Phosphor — CRT green",
-    "ember": "Ember — warm charcoal",
-    "classic": "Classic — Klippel report",
+    "sepia": "Sepia",
+    "phosphor": "CRT Green",
+    "ember": "Warm Charcoal",
 }
+
+
+# Picker order: Classic first, then the rest. ``dark`` is intentionally omitted
+# because it is byte-identical to ``hornlab`` (Arctic Night) — the picker shows
+# a single Arctic Night entry.
+_CHART_THEME_ORDER: tuple = (
+    "classic",
+    "hornlab",
+    "granite",
+    "abyss",
+    "blueprint",
+    "journal",
+    "contrast",
+    "sepia",
+    "phosphor",
+    "ember",
+)
 
 
 # Montage cache keyed by resolved theme name (montages are deterministic).
@@ -83,8 +102,17 @@ def list_available_themes() -> List[Dict[str, Any]]:
             }
         ]
 
+    # Curated order (Classic first); ``dark`` is hidden as a duplicate Arctic
+    # Night. Any newly registered theme not in the curated order is appended
+    # (except the hidden ``dark`` alias) so the picker never silently drops one.
+    ordered = [name for name in _CHART_THEME_ORDER if name in BUILTIN_THEMES]
+    extras = [
+        name
+        for name in BUILTIN_THEMES
+        if name not in _CHART_THEME_ORDER and name != "dark"
+    ]
     themes: List[Dict[str, Any]] = []
-    for name in BUILTIN_THEMES:
+    for name in [*ordered, *extras]:
         themes.append(
             {
                 "name": name,

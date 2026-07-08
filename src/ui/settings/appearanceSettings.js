@@ -7,9 +7,9 @@ const SETTINGS_KEY = 'waveguide-appearance-settings';
 const SCHEMA_VERSION = 1;
 
 // Default chart theme. MUST match the backend default (DEFAULT_CHART_THEME in
-// server/solver/theme_preview.py) so first-run renders reproduce the legacy
-// hardcoded-dark look before the user picks anything.
-export const DEFAULT_CHART_THEME = 'dark';
+// server/solver/theme_preview.py). 'classic' is the Klippel-report look that
+// leads the picker.
+export const DEFAULT_CHART_THEME = 'classic';
 
 /**
  * Recommended defaults for all Appearance settings.

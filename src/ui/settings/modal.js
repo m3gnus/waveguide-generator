@@ -105,17 +105,16 @@ const APPEARANCE_HELP = Object.freeze({
 // Static fallback used only if GET /api/themes is unreachable (backend down).
 // Mirrors the hornlab-plots registry order and labels.
 const FALLBACK_CHART_THEMES = Object.freeze([
-  { name: 'hornlab', label: 'HornLab — Arctic Night', default: false },
-  { name: 'dark', label: 'Dark — Arctic Night', default: true },
-  { name: 'granite', label: 'Granite — light paper', default: false },
-  { name: 'abyss', label: 'Abyss — dark studio', default: false },
-  { name: 'blueprint', label: 'Blueprint — drafting blue', default: false },
-  { name: 'journal', label: 'Journal — print / grayscale', default: false },
+  { name: 'classic', label: 'Classic', default: true },
+  { name: 'hornlab', label: 'Arctic Night', default: false },
+  { name: 'granite', label: 'Light Paper', default: false },
+  { name: 'abyss', label: 'Dark Studio', default: false },
+  { name: 'blueprint', label: 'Blueprint', default: false },
+  { name: 'journal', label: 'Journal', default: false },
   { name: 'contrast', label: 'High Contrast', default: false },
-  { name: 'sepia', label: 'Sepia — warm paper', default: false },
-  { name: 'phosphor', label: 'Phosphor — CRT green', default: false },
-  { name: 'ember', label: 'Ember — warm charcoal', default: false },
-  { name: 'classic', label: 'Classic — Klippel report', default: false },
+  { name: 'sepia', label: 'Sepia', default: false },
+  { name: 'phosphor', label: 'CRT Green', default: false },
+  { name: 'ember', label: 'Warm Charcoal', default: false },
 ]);
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
