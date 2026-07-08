@@ -3,6 +3,7 @@ import { extractPerPlaneDI } from './diHelpers.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { renderResultDiagnostics, renderSolveStatsSummary } from './results.js';
 import { trapFocus } from '../focusTrap.js';
+import { getChartTheme } from '../settings/appearanceSettings.js';
 
 const DEFAULT_DIRECTIVITY_REFERENCE_LEVEL = -6;
 const DIRECTIVITY_REFERENCE_OPTIONS = [
@@ -365,6 +366,7 @@ export async function openViewResultsModal(panel) {
           reference_level: resolveDirectivityReferenceLevel(
             panel?.currentDirectivityReferenceLevel
           ),
+          theme: getChartTheme(),
         }),
       });
 
@@ -433,6 +435,7 @@ export async function openViewResultsModal(panel) {
       impedance_real: impedanceReal,
       impedance_imaginary: impedanceImag,
       directivity,
+      theme: getChartTheme(),
     };
     if (isRhoCNormalizedImpedance(results)) {
       payload.impedance_units = 'Z/(rho*c)';

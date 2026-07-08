@@ -44,6 +44,10 @@ import {
   openWorkspaceInFinder,
 } from '../workspace/folderWorkspace.js';
 
+import { getChartTheme, setChartTheme, resetAppearanceSettings } from './appearanceSettings.js';
+
+import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
+
 // DOM IDs of controls that now live in Settings (used by events.js wiring)
 export const SETTINGS_CONTROL_IDS = {
   liveUpdate: 'live-update',
@@ -94,8 +98,28 @@ const SIMULATION_ADVANCED_HELP = Object.freeze({
 const ADVANCED_CONTROL_COPY = Object.freeze({
   solver_backend: { label: 'Solver Backend' },
 });
+const APPEARANCE_HELP = Object.freeze({
+  chartTheme:
+    'Selects the color theme used to render simulation result charts (frequency response, directivity heatmap, directivity index, impedance). The preview shows all four canonical charts in the chosen theme. New renders and exports use the selected theme. "Dark" matches the app\'s built-in look.',
+});
+// Static fallback used only if GET /api/themes is unreachable (backend down).
+// Mirrors the hornlab-plots registry order and labels.
+const FALLBACK_CHART_THEMES = Object.freeze([
+  { name: 'hornlab', label: 'HornLab — Arctic Night', default: false },
+  { name: 'dark', label: 'Dark — Arctic Night', default: true },
+  { name: 'granite', label: 'Granite — light paper', default: false },
+  { name: 'abyss', label: 'Abyss — dark studio', default: false },
+  { name: 'blueprint', label: 'Blueprint — drafting blue', default: false },
+  { name: 'journal', label: 'Journal — print / grayscale', default: false },
+  { name: 'contrast', label: 'High Contrast', default: false },
+  { name: 'sepia', label: 'Sepia — warm paper', default: false },
+  { name: 'phosphor', label: 'Phosphor — CRT green', default: false },
+  { name: 'ember', label: 'Ember — warm charcoal', default: false },
+  { name: 'classic', label: 'Classic — Klippel report', default: false },
+]);
 const SETTINGS_SECTION_ITEMS = Object.freeze([
   { key: 'viewer', label: 'Viewer' },
+  { key: 'appearance', label: 'Appearance' },
   { key: 'simulation', label: 'Simulation' },
   { key: 'task-exports', label: 'Export Settings' },
   { key: 'workspace', label: 'Workspace' },
@@ -314,12 +338,183 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
   content.className = 'settings-modal-content';
 
   content.appendChild(_buildViewerSection(viewerRuntime));
+  content.appendChild(_buildAppearanceSection());
   content.appendChild(_buildSimulationSection());
   content.appendChild(_buildTaskExportsSection());
   content.appendChild(_buildWorkspaceSection(cleanupFns));
   content.appendChild(_buildSystemSection(viewerRuntime));
 
   return content;
+}
+
+function _buildAppearanceSection() {
+  const sec = document.createElement('div');
+  sec.id = 'settings-section-appearance';
+  sec.className = 'settings-section';
+  sec.hidden = true;
+  sec.setAttribute('role', 'tabpanel');
+
+  _appendSectionHeading(sec, 'Appearance', 'Theme used to render simulation result charts.');
+
+  // Reset restores the default theme (also persists it).
+  const header = _buildSubSectionHeader('Result Chart Theme', () => {
+    const reset = resetAppearanceSettings();
+    applyThemeSelection(reset.chartTheme, { persist: false });
+  });
+  sec.appendChild(header);
+
+  // Compact <select> control (accessible, always present).
+  const select = document.createElement('select');
+  select.id = 'appearance-chartTheme';
+  const initialTheme = getChartTheme();
+  const seedOption = document.createElement('option');
+  seedOption.value = initialTheme;
+  seedOption.textContent = initialTheme;
+  seedOption.selected = true;
+  select.appendChild(seedOption);
+
+  _appendInlineRow(sec, {
+    labelText: 'Chart Theme',
+    labelFor: 'appearance-chartTheme',
+    helpText: APPEARANCE_HELP.chartTheme,
+    controlNode: select,
+  });
+
+  // Grid of clickable theme cards (visual picker).
+  const grid = document.createElement('div');
+  grid.className = 'theme-card-grid';
+  grid.id = 'appearance-theme-grid';
+  sec.appendChild(grid);
+
+  // Montage preview for the focused/selected theme (lazy-loaded per theme).
+  const previewWrap = document.createElement('div');
+  previewWrap.className = 'theme-preview';
+
+  const previewImg = document.createElement('img');
+  previewImg.className = 'theme-preview-img';
+  previewImg.alt = 'Result-chart theme preview montage';
+  previewImg.loading = 'lazy';
+
+  const previewStatus = document.createElement('div');
+  previewStatus.className = 'theme-preview-status';
+
+  previewWrap.appendChild(previewImg);
+  previewWrap.appendChild(previewStatus);
+  sec.appendChild(previewWrap);
+
+  const backendUrl = DEFAULT_BACKEND_URL;
+  let selectedTheme = initialTheme;
+  const previewCache = new Map();
+
+  function highlightCards() {
+    grid.querySelectorAll('.theme-card').forEach((card) => {
+      const active = card.dataset.theme === selectedTheme;
+      card.classList.toggle('active', active);
+      card.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  async function loadPreview(theme) {
+    if (previewCache.has(theme)) {
+      previewImg.src = previewCache.get(theme);
+      previewStatus.textContent = '';
+      return;
+    }
+    previewStatus.textContent = 'Rendering preview…';
+    try {
+      const res = await fetch(`${backendUrl}/api/theme-preview?theme=${encodeURIComponent(theme)}`);
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = await res.json();
+      if (!data.image) throw new Error('empty preview');
+      previewCache.set(theme, data.image);
+      // Only apply if this is still the active selection (avoid races).
+      if (selectedTheme === theme) {
+        previewImg.src = data.image;
+        previewStatus.textContent = '';
+      }
+    } catch {
+      if (selectedTheme === theme) {
+        previewStatus.textContent = 'Preview unavailable — is the backend running?';
+      }
+    }
+  }
+
+  function applyThemeSelection(theme, { persist = true } = {}) {
+    selectedTheme = theme;
+    if (![...select.options].some((opt) => opt.value === theme)) {
+      const opt = document.createElement('option');
+      opt.value = theme;
+      opt.textContent = theme;
+      select.appendChild(opt);
+    }
+    select.value = theme;
+    if (persist) setChartTheme(theme);
+    highlightCards();
+    loadPreview(theme);
+  }
+
+  select.addEventListener('change', () => applyThemeSelection(select.value));
+
+  // Populate themes from the backend (non-blocking); fall back to static list.
+  (async () => {
+    let themes = null;
+    try {
+      const res = await fetch(`${backendUrl}/api/themes`);
+      if (res.ok) {
+        const body = await res.json();
+        if (Array.isArray(body.themes) && body.themes.length > 0) {
+          themes = body.themes;
+        }
+      }
+    } catch {
+      // fall through to the static fallback
+    }
+    if (!themes) themes = FALLBACK_CHART_THEMES;
+
+    // Rebuild the select from the resolved theme list.
+    select.innerHTML = '';
+    themes.forEach((theme) => {
+      const opt = document.createElement('option');
+      opt.value = theme.name;
+      opt.textContent = theme.label || theme.name;
+      select.appendChild(opt);
+    });
+
+    // Keep the stored selection if still valid, else fall back to the default.
+    if (!themes.some((theme) => theme.name === selectedTheme)) {
+      const fallback = themes.find((theme) => theme.default) || themes[0];
+      selectedTheme = fallback.name;
+    }
+    select.value = selectedTheme;
+
+    // Build the visual card grid.
+    grid.innerHTML = '';
+    themes.forEach((theme) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'theme-card';
+      card.dataset.theme = theme.name;
+      card.setAttribute('aria-pressed', theme.name === selectedTheme ? 'true' : 'false');
+
+      const name = document.createElement('span');
+      name.className = 'theme-card-name';
+      name.textContent = theme.label || theme.name;
+
+      const tag = document.createElement('span');
+      tag.className = 'theme-card-tag';
+      tag.textContent = theme.default ? `${theme.name} · default` : theme.name;
+
+      card.appendChild(name);
+      card.appendChild(tag);
+      card.addEventListener('click', () => applyThemeSelection(theme.name));
+      grid.appendChild(card);
+    });
+
+    highlightCards();
+    loadPreview(selectedTheme);
+  })();
+
+  return sec;
 }
 
 // ---------------------------------------------------------------------------

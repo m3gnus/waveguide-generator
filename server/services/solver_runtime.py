@@ -28,6 +28,12 @@ from solver_bootstrap import (
     SOLVER_AVAILABLE,
     get_dependency_status,
 )
+from solver.theme_preview import (
+    DEFAULT_CHART_THEME,
+    build_theme_montage_b64,
+    list_available_themes,
+    resolve_chart_theme,
+)
 
 try:
     from solver.mesher_adapter import (
@@ -82,12 +88,25 @@ def get_settings_capabilities() -> Dict[str, Any]:
 
 
 def render_all_charts(payload: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        from solver.charts import render_all_charts as _render_all_charts
-    except ImportError as exc:
-        raise RuntimeError(f"Chart renderer not available: {exc}") from exc
+    """Render the four result charts, theme-aware, via ``hornlab_plots``.
 
-    return _render_all_charts(payload)
+    The canonical ``hornlab_plots`` renderer is preferred; ``payload['theme']``
+    (falling back to :data:`DEFAULT_CHART_THEME`) selects the theme. When the
+    sibling package is not installed the in-repo legacy ``solver.charts``
+    renderer is used instead — it ignores the theme and reproduces the former
+    hardcoded-dark look.
+    """
+    theme = resolve_chart_theme(payload.get("theme"))
+    try:
+        import hornlab_plots
+    except ImportError:
+        try:
+            from solver.charts import render_all_charts as _legacy_render_all_charts
+        except ImportError as exc:
+            raise RuntimeError(f"Chart renderer not available: {exc}") from exc
+        return _legacy_render_all_charts(payload)
+
+    return hornlab_plots.render_all_charts_b64(payload, theme=theme)
 
 
 def render_directivity_plot(
@@ -95,14 +114,33 @@ def render_directivity_plot(
     directivity: Any,
     *,
     reference_level: Optional[float] = None,
+    theme: Optional[str] = None,
 ) -> Optional[str]:
-    try:
-        from solver.directivity_plot import render_directivity_plot as _render_directivity_plot
-    except ImportError as exc:
-        raise RuntimeError(f"Matplotlib not available: {exc}") from exc
+    """Render the directivity heatmap, theme-aware, via ``hornlab_plots``.
 
-    return _render_directivity_plot(
+    Falls back to the in-repo legacy ``solver.directivity_plot`` renderer (which
+    ignores the theme) when the sibling package is not installed.
+    """
+    ref = -6.0 if reference_level is None else reference_level
+    resolved_theme = resolve_chart_theme(theme)
+    try:
+        import hornlab_plots
+    except ImportError:
+        try:
+            from solver.directivity_plot import (
+                render_directivity_plot as _legacy_render_directivity_plot,
+            )
+        except ImportError as exc:
+            raise RuntimeError(f"Matplotlib not available: {exc}") from exc
+        return _legacy_render_directivity_plot(
+            frequencies,
+            directivity,
+            reference_level=ref,
+        )
+
+    return hornlab_plots.directivity_heatmap_from_legacy_dict(
         frequencies,
         directivity,
-        reference_level=reference_level,
+        reference_level=ref,
+        theme=resolved_theme,
     )

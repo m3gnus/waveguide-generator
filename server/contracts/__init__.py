@@ -8,6 +8,31 @@ VALID_SOLVER_BACKENDS = {"auto", "metal", "bempp"}
 VALID_SOLVER_MODES = {"full_3d", "circsym", "auto"}
 VALID_BEM_PRECISIONS = {"single", "double"}
 VALID_BEM_FORMULATIONS = {"standard", "complex_k", "burton_miller"}
+
+
+def normalize_contract_chart_theme(value: Any) -> Optional[str]:
+    """Normalize/validate a chart theme name against the hornlab-plots registry.
+
+    ``None`` (or an empty string) means "use the backend default theme" and is
+    passed through untouched. Any other value must name a built-in hornlab-plots
+    theme. The import is lazy so the contracts module still loads when the
+    optional ``hornlab_plots`` sibling package is not installed — in that case
+    any non-empty name is accepted and the runtime falls back to the legacy
+    renderer, which ignores the theme.
+    """
+    if value is None:
+        return None
+    name = str(value).strip().lower()
+    if not name:
+        return None
+    try:
+        from hornlab_plots import BUILTIN_THEMES
+    except ImportError:
+        return name
+    if name not in BUILTIN_THEMES:
+        valid = ", ".join(sorted(BUILTIN_THEMES))
+        raise ValueError(f"theme must be one of: {valid}.")
+    return name
 DEVICE_MODE_ALIASES = {
     "opencl": "opencl_cpu",
     "cpu_opencl": "opencl_cpu",
@@ -396,12 +421,26 @@ class ChartsRenderRequest(BaseModel):
     impedance_units: Optional[str] = None
     impedance_normalization: Optional[str] = None
     directivity: Dict[str, Any] = {}
+    # Optional hornlab-plots theme name; None uses the backend default theme.
+    theme: Optional[str] = None
+
+    @field_validator("theme")
+    @classmethod
+    def validate_theme(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_contract_chart_theme(value)
 
 
 class DirectivityRenderRequest(BaseModel):
     frequencies: List[float]
     directivity: Dict[str, Any]
     reference_level: float = -6.0
+    # Optional hornlab-plots theme name; None uses the backend default theme.
+    theme: Optional[str] = None
+
+    @field_validator("theme")
+    @classmethod
+    def validate_theme(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_contract_chart_theme(value)
 
 
 __all__ = [
@@ -419,6 +458,7 @@ __all__ = [
     "VALID_SOLVER_BACKENDS",
     "VALID_SOLVER_MODES",
     "WaveguideParamsRequest",
+    "normalize_contract_chart_theme",
     "normalize_contract_device_mode",
     "normalize_contract_solver_backend",
     "normalize_contract_solver_mode",
