@@ -338,7 +338,7 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
   content.className = 'settings-modal-content';
 
   content.appendChild(_buildViewerSection(viewerRuntime));
-  content.appendChild(_buildAppearanceSection());
+  content.appendChild(_buildAppearanceSection(cleanupFns));
   content.appendChild(_buildSimulationSection());
   content.appendChild(_buildTaskExportsSection());
   content.appendChild(_buildWorkspaceSection(cleanupFns));
@@ -347,7 +347,7 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
   return content;
 }
 
-function _buildAppearanceSection() {
+function _buildAppearanceSection(cleanupFns = []) {
   const sec = document.createElement('div');
   sec.id = 'settings-section-appearance';
   sec.className = 'settings-section';
@@ -406,6 +406,15 @@ function _buildAppearanceSection() {
   let selectedTheme = initialTheme;
   const previewCache = new Map();
 
+  // The theme list/preview load asynchronously; if the modal closes (or a test
+  // tears down the DOM) first, stop so no continuation writes to detached or
+  // undefined nodes. `document === undefined` covers teardown without a close.
+  let cancelled = false;
+  cleanupFns.push(() => {
+    cancelled = true;
+  });
+  const stopped = () => cancelled || typeof document === 'undefined';
+
   function highlightCards() {
     grid.querySelectorAll('.theme-card').forEach((card) => {
       const active = card.dataset.theme === selectedTheme;
@@ -415,6 +424,7 @@ function _buildAppearanceSection() {
   }
 
   async function loadPreview(theme) {
+    if (stopped()) return;
     if (previewCache.has(theme)) {
       previewImg.src = previewCache.get(theme);
       previewStatus.textContent = '';
@@ -423,8 +433,10 @@ function _buildAppearanceSection() {
     previewStatus.textContent = 'Rendering preview…';
     try {
       const res = await fetch(`${backendUrl}/api/theme-preview?theme=${encodeURIComponent(theme)}`);
+      if (stopped()) return;
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
+      if (stopped()) return;
       if (!data.image) throw new Error('empty preview');
       previewCache.set(theme, data.image);
       // Only apply if this is still the active selection (avoid races).
@@ -433,7 +445,7 @@ function _buildAppearanceSection() {
         previewStatus.textContent = '';
       }
     } catch {
-      if (selectedTheme === theme) {
+      if (!stopped() && selectedTheme === theme) {
         previewStatus.textContent = 'Preview unavailable — is the backend running?';
       }
     }
@@ -460,8 +472,10 @@ function _buildAppearanceSection() {
     let themes = null;
     try {
       const res = await fetch(`${backendUrl}/api/themes`);
+      if (stopped()) return;
       if (res.ok) {
         const body = await res.json();
+        if (stopped()) return;
         if (Array.isArray(body.themes) && body.themes.length > 0) {
           themes = body.themes;
         }
@@ -469,6 +483,7 @@ function _buildAppearanceSection() {
     } catch {
       // fall through to the static fallback
     }
+    if (stopped()) return;
     if (!themes) themes = FALLBACK_CHART_THEMES;
 
     // Rebuild the select from the resolved theme list.
@@ -480,10 +495,13 @@ function _buildAppearanceSection() {
       select.appendChild(opt);
     });
 
-    // Keep the stored selection if still valid, else fall back to the default.
+    // Keep the stored selection if still valid, else fall back to the default
+    // and persist the repair so a stale/invalid stored theme cannot keep
+    // 422-ing chart renders.
     if (!themes.some((theme) => theme.name === selectedTheme)) {
       const fallback = themes.find((theme) => theme.default) || themes[0];
       selectedTheme = fallback.name;
+      setChartTheme(selectedTheme);
     }
     select.value = selectedTheme;
 
