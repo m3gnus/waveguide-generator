@@ -30,11 +30,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 
-# ``classic`` (Klippel-report look) is the default chart theme and leads the
-# picker. ``dark`` is byte-identical to ``hornlab`` (Arctic Night) and is hidden
-# from the picker (see _CHART_THEME_ORDER) so only one Arctic Night shows; both
-# stay valid theme values for back-compat.
-DEFAULT_CHART_THEME = "classic"
+# ``hornlab`` (Arctic Night) is the default chart theme; ``classic`` leads the
+# picker order but is not the default. ``dark`` is byte-identical to ``hornlab``
+# and is hidden from the picker (see _CHART_THEME_ORDER) so only one Arctic Night
+# shows; both stay valid theme values for back-compat.
+DEFAULT_CHART_THEME = "hornlab"
 
 
 # Short human labels for the hornlab-plots built-in themes, shown in the
