@@ -138,14 +138,19 @@ def phase_on_axis(result) -> list[float | None]:
 
 
 def specific_impedance_z_over_rho_c(result) -> np.ndarray:
-    """Map solver raw unit-acceleration pressure to engineering Z/(rho*c)."""
+    """Map solver raw unit-acceleration pressure to engineering Z/(rho*c).
+
+    The solvers' acceleration drive is v = a/(-i*omega) under e^{-i omega t}
+    (metal-bem/bempp-bem 2026-07-09 sign fix, ABEC-validated), so the specific
+    impedance is z = <p>/v = -i*omega*<p>/a before the engineering conjugation.
+    """
     frequencies = np.asarray(result.frequencies_hz, dtype=float)
     raw_pressure = np.asarray(result.impedance, dtype=np.complex128)
     if raw_pressure.shape != frequencies.shape:
         raw_pressure = np.reshape(raw_pressure, frequencies.shape)
 
     omega = 2.0 * np.pi * frequencies
-    physical_impedance = 1j * omega * raw_pressure
+    physical_impedance = -1j * omega * raw_pressure
     return np.conjugate(physical_impedance) / REFERENCE_RHO_C
 
 
