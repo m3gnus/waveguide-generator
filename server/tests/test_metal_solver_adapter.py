@@ -124,7 +124,9 @@ class MetalSolverAdapterTest(unittest.TestCase):
                 ],
                 dtype=float,
             ),
-            impedance=np.array([1.0 - 2.0j, 3.0 - 4.0j], dtype=np.complex128),
+            # raw <p> for a radiating case under the corrected acceleration
+            # mapping (v = a/(-i*omega)): sign-flipped vs the pre-2026-07-09 fakes
+            impedance=np.array([-1.0 + 2.0j, -3.0 + 4.0j], dtype=np.complex128),
             timings={"total_s": 0.1},
             solver_log=[
                 {"frequency_hz": np.float64(1000.0), "impedance": 1.0 + 2.0j},
@@ -382,7 +384,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertTrue(all(math.isfinite(value) for value in result["di"]["di"]["horizontal"]))
         raw_impedance = self._fake_result().impedance
         expected = np.conjugate(
-            1j * 2.0 * np.pi * self._fake_result().frequencies_hz * raw_impedance
+            -1j * 2.0 * np.pi * self._fake_result().frequencies_hz * raw_impedance
         ) / REFERENCE_RHO_C
         np.testing.assert_allclose(result["impedance"]["real"], expected.real)
         np.testing.assert_allclose(result["impedance"]["imaginary"], expected.imag)
