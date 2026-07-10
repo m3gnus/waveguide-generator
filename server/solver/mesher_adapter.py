@@ -279,13 +279,16 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
         )
 
     enc_depth = float(payload.get("enc_depth") or 0.0)
+    wall_thickness = _finite_float(payload.get("wall_thickness"), 0.0)
     sim_type = str(payload.get("sim_type") or "2").strip()
     if enc_depth > 0.0:
         mode = "enclosure"
     elif sim_type == "1":
         mode = "infinite-baffle"
-    else:
+    elif wall_thickness > 0.0:
         mode = "freestanding"
+    else:
+        mode = "bare"
     config = {
         "formula": formula,
         "mode": mode,

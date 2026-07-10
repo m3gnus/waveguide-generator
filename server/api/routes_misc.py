@@ -212,12 +212,25 @@ async def export_file(
     if workspace_root != target_dir and workspace_root not in target_dir.parents:
         raise HTTPException(status_code=400, detail="Invalid workspace_subdir")
 
+    raw_filename = str(file.filename or "").strip()
+    if (
+        not raw_filename
+        or raw_filename in {".", ".."}
+        or "/" in raw_filename
+        or "\\" in raw_filename
+        or "\x00" in raw_filename
+    ):
+        raise HTTPException(status_code=400, detail="Invalid export filename")
+
+    file_path = (target_dir / raw_filename).resolve()
+    if file_path.parent != target_dir:
+        raise HTTPException(status_code=400, detail="Invalid export filename")
+
     try:
         # Create folder if it doesn't exist
         target_dir.mkdir(parents=True, exist_ok=True)
 
         # Save file
-        file_path = target_dir / file.filename
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
@@ -226,7 +239,7 @@ async def export_file(
         return {
             "status": "success",
             "path": str(file_path),
-            "filename": file.filename,
+            "filename": raw_filename,
             "workspaceRoot": str(workspace_root),
             "workspaceSubdir": str(Path(*normalized_parts)) if normalized_parts else ""
         }

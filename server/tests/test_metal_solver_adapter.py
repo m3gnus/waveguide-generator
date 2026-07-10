@@ -161,6 +161,29 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["metal"]["formulation"], "complex_k")
         self.assertEqual(result["metadata"]["metal"]["complex_k_shift"], 0.005)
 
+    def test_full_3d_progress_checks_cancellation_before_next_frequency(self):
+        cancellation_checks = []
+
+        def fake_solve(_mesh_path, config):
+            config.progress_callback(0, 2, 1000.0)
+            return self._fake_result()
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.metal_solver.ObservationConfig", FakeObservationConfig
+        ), patch("solver.metal_solver.native_config", side_effect=FakeSolveConfig), patch(
+            "solver.metal_solver.solve", side_effect=fake_solve
+        ), patch(
+            "solver.metal_solver.metal_backend_status",
+            return_value={"available": True, "supportedPlatform": True},
+        ):
+            metal_solver.solve_metal_from_msh(
+                msh_file.name,
+                self._request(quadrants=1234),
+                cancellation_callback=lambda: cancellation_checks.append("checked"),
+            )
+
+        self.assertEqual(cancellation_checks, ["checked"])
+
     def test_infinite_baffle_full_3d_requires_mesher_aperture_tag(self):
         request = self._request(
             quadrants=1234,

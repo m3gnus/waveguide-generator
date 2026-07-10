@@ -69,6 +69,46 @@ class WorkspaceRoutesTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("workspace_subdir", str(ctx.exception.detail))
 
+    def test_export_file_rejects_unsafe_filenames(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_root = (Path(tmpdir) / "workspace").resolve()
+            workspace_root.mkdir()
+            for filename in ("../outside.txt", "..\\outside.txt", "/tmp/outside.txt", "nested/file.txt", ""):
+                with self.subTest(filename=filename), patch(
+                    "api.routes_misc._get_default_output_path", return_value=workspace_root
+                ):
+                    with self.assertRaises(HTTPException) as ctx:
+                        asyncio.run(
+                            export_file(
+                                file=make_upload_file(filename, b"bad"),
+                                workspace_subdir="",
+                            )
+                        )
+                self.assertEqual(ctx.exception.status_code, 400)
+                self.assertIn("filename", str(ctx.exception.detail))
+
+            self.assertEqual(list(workspace_root.iterdir()), [])
+
+    def test_export_file_rejects_symlink_that_escapes_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            outside = root / "outside.txt"
+            (workspace_root / "linked.txt").symlink_to(outside)
+
+            with patch("api.routes_misc._get_default_output_path", return_value=workspace_root):
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(
+                        export_file(
+                            file=make_upload_file("linked.txt", b"bad"),
+                            workspace_subdir="",
+                        )
+                    )
+
+            self.assertEqual(ctx.exception.status_code, 400)
+            self.assertFalse(outside.exists())
+
     def test_workspace_path_returns_backend_workspace_root(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_root = Path(tmpdir).resolve()

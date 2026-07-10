@@ -1330,6 +1330,130 @@ test('pollSimulationStatus clears early mesh persistence marker after terminal f
   }
 });
 
+test('pollSimulationStatus auto-downloads exactly once after mesh artifact becomes ready', async () => {
+  const originalDocument = global.document;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalFetch = global.fetch;
+  const originalURL = global.URL;
+  let timeoutId = 0;
+  let artifactReady = false;
+  let downloadFetches = 0;
+  let downloadClicks = 0;
+
+  global.document = {
+    getElementById(id) {
+      return id === 'download-sim-mesh' ? { checked: true } : null;
+    },
+    createElement(tag) {
+      assert.equal(tag, 'a');
+      return {
+        click() {
+          downloadClicks += 1;
+        },
+      };
+    },
+    body: {
+      appendChild() {},
+      removeChild() {},
+    },
+  };
+  global.URL = {
+    createObjectURL() {
+      return 'blob:mesh';
+    },
+    revokeObjectURL() {},
+  };
+  global.setTimeout = () => {
+    timeoutId += 1;
+    return timeoutId;
+  };
+  global.clearTimeout = () => {};
+  global.fetch = async (url) => {
+    if (String(url).includes('/api/mesh-artifact/')) {
+      downloadFetches += 1;
+      return {
+        ok: true,
+        async text() {
+          return '$MeshFormat\n2.2 0 8\n$EndMeshFormat';
+        },
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  const panel = {
+    isPolling: false,
+    pollTimer: null,
+    pollInterval: null,
+    pollDelayMs: 1000,
+    pollBackoffMs: 1000,
+    consecutivePollFailures: 0,
+    activeJobId: 'job-auto-download-ready',
+    currentJobId: 'job-auto-download-ready',
+    jobSourceMode: 'backend',
+    jobs: new Map([
+      [
+        'job-auto-download-ready',
+        { id: 'job-auto-download-ready', status: 'running', progress: 0.2 },
+      ],
+    ]),
+    resultCache: new Map(),
+    solver: {
+      backendUrl: 'http://backend.example.test',
+      async getJobStatus(id) {
+        return {
+          id,
+          status: 'running',
+          progress: 0.4,
+          stage: 'bem_solve',
+          has_mesh_artifact: artifactReady,
+        };
+      },
+      async getMeshArtifact() {
+        return '$MeshFormat\n2.2 0 8\n$EndMeshFormat';
+      },
+    },
+    displayResults() {},
+  };
+
+  async function flushPolling() {
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  }
+
+  try {
+    pollSimulationStatus(panel);
+    await flushPolling();
+    assert.equal(downloadFetches, 0);
+    assert.equal(downloadClicks, 0);
+
+    clearPollTimer(panel);
+    artifactReady = true;
+    pollSimulationStatus(panel);
+    await flushPolling();
+    assert.equal(downloadFetches, 1);
+    assert.equal(downloadClicks, 1);
+
+    clearPollTimer(panel);
+    pollSimulationStatus(panel);
+    await flushPolling();
+    assert.equal(downloadFetches, 1);
+    assert.equal(downloadClicks, 1);
+  } finally {
+    clearPollTimer(panel);
+    global.document = originalDocument;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    global.fetch = originalFetch;
+    global.URL = originalURL;
+  }
+});
+
 // --- Phase 1 migration regression: simulation flow unaffected by control migration ---
 
 test('getDownloadSimMeshEnabled returns false by default when modal is not open', () => {

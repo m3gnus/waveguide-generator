@@ -5,8 +5,8 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
+from app_config import add_cors_middleware, get_backend_host, get_backend_port
 from api.routes_mesh import router as mesh_router
 from api.routes_misc import router as misc_router
 from api.routes_simulation import router as simulation_router
@@ -34,13 +34,7 @@ async def app_lifespan(_app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="MWG Horn BEM Solver", version="1.1.0", lifespan=app_lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    add_cors_middleware(app)
     app.include_router(misc_router)
     app.include_router(mesh_router)
     app.include_router(simulation_router)
@@ -63,4 +57,4 @@ if __name__ == "__main__":
             "Warning: no solver backend is ready. Install/enable Metal BEM or install "
             "the BEMPP fallback with: pip install -r server/requirements-bempp.txt"
         )
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=get_backend_host(), port=get_backend_port())

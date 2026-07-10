@@ -189,10 +189,17 @@ class InfiniteBaffleCoupledMeshIntegrationTest(unittest.TestCase):
         self.assertGreater(int(np.count_nonzero(aperture)), 0)
         aperture_z = np.abs(verts[tris[aperture]][:, :, 2])
         self.assertLessEqual(float(np.max(aperture_z)), 1.0e-9)
-        aperture_z_projection = float(
-            np.sum(np.cross(p1[aperture] - p0[aperture], p2[aperture] - p0[aperture])[:, 2])
-        )
-        self.assertGreater(aperture_z_projection, 0.0)
+        aperture_face_z = np.cross(
+            p1[aperture] - p0[aperture],
+            p2[aperture] - p0[aperture],
+        )[:, 2]
+        aperture_z_projection = float(np.sum(aperture_face_z))
+        # Canonical coupled-IB meshes describe the interior cavity domain:
+        # source normals point +Z toward the mouth, while every Rayleigh
+        # aperture face points -Z into the cavity. Exterior half-space
+        # evaluation is selected by tag 12, not by reversing that winding.
+        self.assertTrue(np.all(aperture_face_z < 0.0))
+        self.assertLess(aperture_z_projection, 0.0)
 
         edges = _open_boundary_edges(tris)
         self.assertEqual(len(edges), 0, "full-domain coupled aperture mesh should be closed")

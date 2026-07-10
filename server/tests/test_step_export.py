@@ -584,6 +584,27 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source_velocity"):
             mesher_adapter.source_motion_from_payload({"source_velocity": 5})
 
+    def test_wall_less_free_standing_payload_maps_to_bare_mode(self):
+        bare = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "sim_type": 2,
+                "enc_depth": 0,
+                "wall_thickness": 0,
+            }
+        )
+        thickened = mesher_adapter.waveguide_payload_to_mesher_config(
+            {
+                "formula_type": "OSSE",
+                "sim_type": 2,
+                "enc_depth": 0,
+                "wall_thickness": 6,
+            }
+        )
+
+        self.assertEqual(bare["mode"], "bare")
+        self.assertEqual(thickened["mode"], "freestanding")
+
     def test_payload_preserves_angular_slot_length_expression(self):
         config = mesher_adapter.waveguide_payload_to_mesher_config(
             {
@@ -684,7 +705,10 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
         inner = np.asarray(grid["inner_points"], dtype=float).reshape(n_phi, n_length + 1, 3)
         mouth = inner[:, -1, :]
 
-        self.assertEqual((n_phi, n_length), (104, 32))
+        # Current ATH keeps AngularSegments as the fixed profile budget.
+        # CornerSegments redistributes those profiles around the rounded
+        # corner instead of increasing 100 to 104.
+        self.assertEqual((n_phi, n_length), (100, 32))
         self.assertLess(abs(float(np.max(np.abs(mouth[:, 0]))) - 229.0), 1.0e-6)
         self.assertLess(abs(float(np.max(np.abs(mouth[:, 1]))) - 204.0), 1.0e-6)
         self.assertLess(abs(float(np.max(mouth[:, 2])) - 150.0), 1.0e-6)

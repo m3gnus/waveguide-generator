@@ -189,9 +189,9 @@ function assertBoxesClose(actual, expected, tolerance, label) {
 /**
  * Evaluate the JS engine profile + morph math at the backend grid's own
  * (slice, angle) sample points and compare each grid point. This checks the
- * morph-target contract (commit 6310fa0) independently of angle-list density,
- * which matters because the canonical mesher densifies corners for explicit
- * rect morphs while the JS engine redistributes a fixed angle count.
+ * morph-target contract (commit 6310fa0) at the canonical mesher's own sample
+ * points. Current ATH and both implementations redistribute the same fixed
+ * angular budget for explicit rounded-rectangle morphs.
  */
 function assertEngineMatchesBackendGrid(config, geometry) {
   const grid = geometry.grid;
@@ -256,8 +256,8 @@ for (const { name, config } of CASES) {
     // Morph + profile contract at the backend's own sample points.
     assertEngineMatchesBackendGrid(config, geometry);
 
-    // When both pipelines use the same angle list (no explicit rect-morph
-    // corner densification), the horn grids must be vertex-for-vertex equal.
+    // When both pipelines use the same angle list, the horn grids must be
+    // vertex-for-vertex equal.
     const sameAngleList = nPhi === engineMesh.ringCount;
     if (sameAngleList) {
       const hornVertexCount = nPhi * (nLength + 1) * 3;

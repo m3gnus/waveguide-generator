@@ -3,7 +3,9 @@
 import { updateStageUi, setProgressVisible, restoreConnectionStatus } from './progressUi.js';
 import { showError } from '../feedback.js';
 import { getAutoExportOnComplete } from '../settings/simulationManagementSettings.js';
+import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { persistSimulationGenerationArtifacts } from './workspaceTasks.js';
+import { downloadMeshArtifact } from './meshDownload.js';
 import { renderBackendSimulationMeshDiagnostics, renderJobList } from './jobActions.js';
 import { setPollTimer, clearPollTimer } from './jobOrchestration.js';
 import {
@@ -18,6 +20,7 @@ const MAX_POLL_BACKOFF_MS = 30000;
 
 /** Track jobs whose mesh artifact has already been persisted early (before completion). */
 const _earlyMeshPersisted = new Set();
+const _autoDownloadedMeshes = new Set();
 
 /**
  * @typedef {Object} SolverPollingApi
@@ -80,6 +83,20 @@ export function pollSimulationStatus(panel) {
         if (activeJob.meshStats && typeof panel.app?.setSimulationMeshStats === 'function') {
           panel.app.setSimulationMeshStats(activeJob.meshStats);
           renderBackendSimulationMeshDiagnostics(activeJob.meshStats);
+        }
+
+        if (
+          activeJob.hasMeshArtifact &&
+          getDownloadSimMeshEnabled() &&
+          !_autoDownloadedMeshes.has(activeJob.id)
+        ) {
+          _autoDownloadedMeshes.add(activeJob.id);
+          try {
+            await downloadMeshArtifact(activeJob.id, panel.solver?.backendUrl);
+          } catch (error) {
+            _autoDownloadedMeshes.delete(activeJob.id);
+            console.warn('Automatic mesh artifact download failed:', error);
+          }
         }
 
         // Persist mesh artifact to workspace folder as soon as the backend has it,
@@ -188,6 +205,7 @@ export function pollSimulationStatus(panel) {
           }
         } else if (activeJob.status === 'error' || activeJob.status === 'cancelled') {
           _earlyMeshPersisted.delete(activeJob.id);
+          _autoDownloadedMeshes.delete(activeJob.id);
           panel.completedStatusMessage = null;
           panel.simulationStartedAtMs = null;
           panel.lastSimulationDurationMs = null;

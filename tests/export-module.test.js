@@ -161,13 +161,13 @@ test("ExportModule Fusion CSV builds the design export grid instead of using vie
   const profiles = splitCsvSections(csvFiles[0].content);
   const slices = splitCsvSections(csvFiles[1].content);
 
-  // The default OSSE config carries an implicit rounded-rect morph, so the
-  // canonical angle list folds Mesh.CornerSegments (4) into the angularSegments
-  // (8) budget: ceil((8 + 4) / 4) = 3 points per quadrant -> 12 rings.
-  assert.equal(profiles.length, 12);
+  // The default OSSE config carries an implicit rounded-rect morph. Current
+  // ATH redistributes the fixed AngularSegments=8 budget around the rounded
+  // corner; CornerSegments does not grow the ring count.
+  assert.equal(profiles.length, 8);
   assert.ok(profiles.every((section) => section.length === 3));
   assert.equal(slices.length, 3);
-  assert.ok(slices.every((section) => section.length === 13));
+  assert.ok(slices.every((section) => section.length === 9));
   assert.equal(csvFiles[0].content.includes("99.900000;99.900000;99.900000"), false);
 });
 

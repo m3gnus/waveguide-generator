@@ -47,6 +47,7 @@ from services.job_runtime import (
     request_stop_job,
     update_job_label,
     update_job_script_snapshot,
+    update_job_task_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,19 @@ async def patch_job_metadata(job_id: str, body: JobMetadataPatch) -> Dict[str, s
             update_job_label(job_id, body.label)
         if "script_snapshot" in changed_fields:
             update_job_script_snapshot(job_id, body.script_snapshot)
+        task_fields = {
+            field: getattr(body, field)
+            for field in (
+                "rating",
+                "exported_files",
+                "auto_export_completed_at",
+                "raw_results_file",
+                "mesh_artifact_file",
+            )
+            if field in changed_fields
+        }
+        if task_fields:
+            update_job_task_metadata(job_id, **task_fields)
     except JobRuntimeNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
     return {"status": "ok"}

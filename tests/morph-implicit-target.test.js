@@ -70,10 +70,10 @@ test('R-OSSE morphing derives implicit target extents when width/height are unse
   const noMorph = buildMesh(noMorphParams);
   const implicitMorph = buildMesh(implicitMorphParams);
 
-  // The rounded-rect morph folds Mesh.CornerSegments into the angular point
-  // budget (canonical ATH behaviour), so the morphed mesh has its own ring
-  // topology. Compare the two mouths by largest radius rather than by matching
-  // vertex index — the implicit extents must enlarge the widest mouth radius.
+  // The rounded-rect morph redistributes the fixed angular point budget
+  // (canonical current ATH behaviour). Compare the two mouths by largest
+  // radius rather than by matching vertex index because the morphed angle
+  // placement is non-uniform.
   const mouthMaxRadius = (mesh) => {
     const mouthStart = Number(noMorphParams.lengthSegments) * mesh.ringCount;
     let maxR = 0;
