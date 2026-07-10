@@ -278,6 +278,11 @@ class JobMetadataPatch(BaseModel):
 
     label: Optional[str] = None
     script_snapshot: Optional[Dict[str, Any]] = None
+    rating: Optional[int] = None
+    exported_files: Optional[List[str]] = None
+    auto_export_completed_at: Optional[str] = None
+    raw_results_file: Optional[str] = None
+    mesh_artifact_file: Optional[str] = None
 
     @field_validator("label")
     @classmethod
@@ -286,6 +291,31 @@ class JobMetadataPatch(BaseModel):
             return None
         trimmed = value.strip()
         return trimmed or None
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        rating = int(value)
+        if rating < 0 or rating > 5:
+            raise ValueError("rating must be between 0 and 5.")
+        return rating
+
+    @field_validator("exported_files")
+    @classmethod
+    def normalize_exported_files(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @field_validator("auto_export_completed_at", "raw_results_file", "mesh_artifact_file")
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class SimulationResults(BaseModel):

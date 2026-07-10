@@ -23,6 +23,7 @@ ALLOWED_JOB_UPDATE_FIELDS = {
     "mesh_stats_json",
     "label",
     "script_snapshot_json",
+    "task_metadata_json",
 }
 
 
@@ -55,7 +56,9 @@ class SimulationDB:
                   has_results INTEGER NOT NULL DEFAULT 0,
                   has_mesh_artifact INTEGER NOT NULL DEFAULT 0,
                   mesh_stats_json TEXT,
-                  label TEXT
+                  label TEXT,
+                  script_snapshot_json TEXT,
+                  task_metadata_json TEXT
                 )
                 """
             )
@@ -91,7 +94,9 @@ class SimulationDB:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN mesh_stats_json TEXT")
             if "script_snapshot_json" not in columns:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN script_snapshot_json TEXT")
-            conn.execute("PRAGMA user_version = 3")
+            if "task_metadata_json" not in columns:
+                conn.execute("ALTER TABLE simulation_jobs ADD COLUMN task_metadata_json TEXT")
+            conn.execute("PRAGMA user_version = 4")
 
     def create_job(self, job: Dict[str, Any]) -> None:
         with self._lock, self._managed_connection() as conn:
@@ -102,8 +107,8 @@ class SimulationDB:
                   started_at, completed_at, progress, stage, stage_message,
                   error_message, cancellation_requested, config_json,
                   config_summary_json, has_results, has_mesh_artifact, mesh_stats_json, label,
-                  script_snapshot_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  script_snapshot_json, task_metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job["id"],
@@ -124,7 +129,8 @@ class SimulationDB:
                     1 if job.get("has_mesh_artifact") else 0,
                     json.dumps(job["mesh_stats"]) if job.get("mesh_stats") is not None else None,
                     job.get("label"),
-                    json.dumps(job["script_snapshot"]) if job.get("script_snapshot") is not None else None,
+                    json.dumps(job.get("script_snapshot")) if job.get("script_snapshot") is not None else None,
+                    json.dumps(job.get("task_metadata") or {}),
                 ),
             )
 
@@ -381,4 +387,9 @@ class SimulationDB:
         if "script_snapshot_json" in cols:
             raw = row["script_snapshot_json"]
             result["script_snapshot"] = json.loads(raw) if raw else None
+        if "task_metadata_json" in cols:
+            raw = row["task_metadata_json"]
+            result["task_metadata"] = json.loads(raw) if raw else {}
+        else:
+            result["task_metadata"] = {}
         return result

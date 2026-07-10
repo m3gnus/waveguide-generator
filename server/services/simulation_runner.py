@@ -504,6 +504,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 stage_callback=lambda stage, progress, message: _apply_solver_stage_to_job(
                     job_id, stage, progress, message
                 ),
+                cancellation_callback=lambda: _cancellation_callback(
+                    "Cancellation requested between full-3D solve frequencies"
+                ),
             )
             _cancellation_callback("Cancellation requested before result persistence")
             if mesh_stats and isinstance(results, dict):

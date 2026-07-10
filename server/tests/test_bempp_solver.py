@@ -188,6 +188,29 @@ class BemppSolverAdapterTest(unittest.TestCase):
             {"real": 1.0, "imaginary": 0.5},
         )
 
+    def test_full_3d_progress_checks_cancellation_before_next_frequency(self):
+        cancellation_checks = []
+
+        def fake_solve(_mesh_path, config):
+            config.progress_callback(0, 3, 500.0)
+            return self._fake_result()
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.bempp_solver._load_bempp_api", return_value=True
+        ), patch("solver.bempp_solver.ObservationConfig", FakeObservationConfig), patch(
+            "solver.bempp_solver.SolveConfig", FakeSolveConfig
+        ), patch("solver.bempp_solver.bempp_solve", side_effect=fake_solve), patch(
+            "solver.bempp_solver.bempp_backend_status",
+            return_value={"available": True, "assemblyBackend": "numba"},
+        ):
+            bempp_solver.solve_bempp_from_msh(
+                msh_file.name,
+                self._request(),
+                cancellation_callback=lambda: cancellation_checks.append("checked"),
+            )
+
+        self.assertEqual(cancellation_checks, ["checked"])
+
     def test_reduced_domain_request_is_rejected_before_bempp_config(self):
         with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file:
             with self.assertRaises(ValueError) as ctx:

@@ -122,6 +122,11 @@ def create_simulation_job(request: SimulationRequest) -> str:
         "has_results": False,
         "has_mesh_artifact": False,
         "label": None,
+        "rating": None,
+        "exported_files": [],
+        "auto_export_completed_at": None,
+        "raw_results_file": None,
+        "mesh_artifact_file": None,
     }
 
     db.create_job(
@@ -142,6 +147,7 @@ def create_simulation_job(request: SimulationRequest) -> str:
             "has_mesh_artifact": False,
             "mesh_stats": None,
             "label": None,
+            "task_metadata": {},
         }
     )
 
@@ -308,6 +314,17 @@ def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
         "cancellation_requested": row.get("cancellation_requested"),
         "config_summary": row.get("config_summary_json"),
     }
+    task_metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
+    merged.update(
+        {
+            "rating": task_metadata.get("rating"),
+            "exported_files": task_metadata.get("exported_files") or [],
+            "auto_export_completed_at": task_metadata.get("auto_export_completed_at"),
+            "raw_results_file": task_metadata.get("raw_results_file"),
+            "mesh_artifact_file": task_metadata.get("mesh_artifact_file"),
+            "task_metadata": task_metadata,
+        }
+    )
     config = row.get("config_json")
     if isinstance(config, dict):
         merged["request"] = config
@@ -361,6 +378,24 @@ def _set_job_fields(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
         db_fields["script_snapshot_json"] = (
             json.dumps(mapped["script_snapshot"]) if mapped["script_snapshot"] is not None else None
         )
+    task_metadata_keys = {
+        "rating",
+        "exported_files",
+        "auto_export_completed_at",
+        "raw_results_file",
+        "mesh_artifact_file",
+    }
+    if task_metadata_keys.intersection(mapped):
+        current_job = _merge_job_cache_from_db(job_id) or {}
+        task_metadata = (
+            dict(current_job.get("task_metadata"))
+            if isinstance(current_job.get("task_metadata"), dict)
+            else {}
+        )
+        for key in task_metadata_keys.intersection(mapped):
+            task_metadata[key] = mapped[key]
+        mapped["task_metadata"] = task_metadata
+        db_fields["task_metadata_json"] = json.dumps(task_metadata)
     if db_fields:
         db.update_job(job_id, **db_fields)
 
@@ -388,6 +423,25 @@ def update_job_script_snapshot(job_id: str, script_snapshot: Any) -> None:
     if not job:
         raise JobRuntimeNotFoundError(job_id)
     _set_job_fields(job_id, script_snapshot=script_snapshot)
+
+
+def update_job_task_metadata(job_id: str, **fields: Any) -> None:
+    """Persist task-management metadata used by the jobs list and export workflow."""
+    allowed = {
+        "rating",
+        "exported_files",
+        "auto_export_completed_at",
+        "raw_results_file",
+        "mesh_artifact_file",
+    }
+    unsupported = sorted(set(fields) - allowed)
+    if unsupported:
+        raise ValueError(f"Unsupported task metadata field(s): {', '.join(unsupported)}")
+    job = _merge_job_cache_from_db(job_id)
+    if not job:
+        raise JobRuntimeNotFoundError(job_id)
+    if fields:
+        _set_job_fields(job_id, **fields)
 
 
 def update_progress(job_id: str, progress: float) -> None:
@@ -560,6 +614,11 @@ def _serialize_job_item(job: Dict[str, Any]) -> Dict[str, Any]:
         "cancellation_requested": bool(job.get("cancellation_requested")),
         "mesh_stats": job.get("mesh_stats"),
         "script_snapshot": job.get("script_snapshot"),
+        "rating": job.get("rating"),
+        "exported_files": job.get("exported_files") or [],
+        "auto_export_completed_at": job.get("auto_export_completed_at"),
+        "raw_results_file": job.get("raw_results_file"),
+        "mesh_artifact_file": job.get("mesh_artifact_file"),
     }
 
 
@@ -626,6 +685,14 @@ async def startup_jobs_runtime() -> None:
                 "has_mesh_artifact": row.get("has_mesh_artifact", False),
                 "label": row.get("label"),
                 "script_snapshot": row.get("script_snapshot"),
+                "rating": (row.get("task_metadata") or {}).get("rating"),
+                "exported_files": (row.get("task_metadata") or {}).get("exported_files") or [],
+                "auto_export_completed_at": (row.get("task_metadata") or {}).get(
+                    "auto_export_completed_at"
+                ),
+                "raw_results_file": (row.get("task_metadata") or {}).get("raw_results_file"),
+                "mesh_artifact_file": (row.get("task_metadata") or {}).get("mesh_artifact_file"),
+                "task_metadata": row.get("task_metadata") or {},
             }
             if row["id"] not in queued_job_ids:
                 job_queue.append(row["id"])

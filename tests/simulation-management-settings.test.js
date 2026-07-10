@@ -8,7 +8,7 @@ import {
   getTaskListMinRatingFilter,
   getTaskListSortPreference,
   loadSimulationManagementSettings,
-  saveSimulationManagementSettings
+  saveSimulationManagementSettings,
 } from '../src/ui/settings/simulationManagementSettings.js';
 
 function createStorage() {
@@ -25,7 +25,7 @@ function createStorage() {
     },
     clear() {
       map.clear();
-    }
+    },
   };
 }
 
@@ -36,27 +36,32 @@ test('simulation management settings load defaults and persist selected formats'
   try {
     const defaults = loadSimulationManagementSettings();
     assert.equal(defaults.autoExportOnComplete, RECOMMENDED_DEFAULTS.autoExportOnComplete);
+    assert.equal(defaults.downloadSimMesh, RECOMMENDED_DEFAULTS.downloadSimMesh);
     assert.deepEqual(defaults.selectedFormats, RECOMMENDED_DEFAULTS.selectedFormats);
 
     const saved = saveSimulationManagementSettings({
       autoExportOnComplete: false,
+      downloadSimMesh: true,
       selectedFormats: ['csv', 'json', 'csv'],
       defaultSort: 'completed_desc',
-      minRatingFilter: 0
+      minRatingFilter: 0,
     });
 
     assert.equal(saved.autoExportOnComplete, false);
+    assert.equal(saved.downloadSimMesh, true);
     assert.deepEqual(saved.selectedFormats, ['csv', 'json']);
 
     const reloaded = loadSimulationManagementSettings();
     assert.equal(reloaded.autoExportOnComplete, false);
+    assert.equal(reloaded.downloadSimMesh, true);
     assert.deepEqual(reloaded.selectedFormats, ['csv', 'json']);
 
     const noneSelected = saveSimulationManagementSettings({
       autoExportOnComplete: false,
+      downloadSimMesh: false,
       selectedFormats: [],
       defaultSort: 'completed_desc',
-      minRatingFilter: 0
+      minRatingFilter: 0,
     });
 
     assert.deepEqual(noneSelected.selectedFormats, []);
@@ -83,11 +88,11 @@ test('simulation management settings migrate legacy default format selection to 
           'impedance_csv',
           'vacs',
           'stl',
-          'fusion_csv'
+          'fusion_csv',
         ],
         defaultSort: 'rating_desc',
-        minRatingFilter: 2
-      }
+        minRatingFilter: 2,
+      },
     })
   );
 
@@ -113,16 +118,16 @@ test('simulation management DOM getter preserves an empty live format selection'
           checked: false,
           getAttribute(name) {
             return name === 'data-sim-management-format' ? 'csv' : null;
-          }
+          },
         },
         {
           checked: false,
           getAttribute(name) {
             return name === 'data-sim-management-format' ? 'json' : null;
-          }
-        }
+          },
+        },
       ];
-    }
+    },
   };
 
   try {
@@ -162,16 +167,16 @@ test('simulation management DOM getters prefer live modal controls', () => {
           checked: true,
           getAttribute(name) {
             return name === 'data-sim-management-format' ? 'csv' : null;
-          }
+          },
         },
         {
           checked: false,
           getAttribute(name) {
             return name === 'data-sim-management-format' ? 'json' : null;
-          }
-        }
+          },
+        },
       ];
-    }
+    },
   };
 
   try {

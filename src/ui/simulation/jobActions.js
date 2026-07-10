@@ -12,7 +12,6 @@ import {
   getTaskListSortPreference,
 } from '../settings/simulationManagementSettings.js';
 import { buildPolarStatePatchFromConfig, readPolarStateSettings } from './polarSettings.js';
-import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { allJobs, hasActiveJobs } from './jobTracker.js';
 import {
   updateStageUi,
@@ -23,7 +22,6 @@ import {
   resetProgressAnnouncement,
 } from './progressUi.js';
 import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
-import { downloadMeshArtifact } from './meshDownload.js';
 import {
   summarizePersistedSimulationMeshStats,
   validateSimulationConfig,
@@ -705,13 +703,6 @@ export async function runSimulation(panel) {
     });
 
     panel.pollSimulationStatus();
-
-    // Non-blocking: download simulation mesh artifact if toggle is on
-    if (getDownloadSimMeshEnabled() && panel.activeJobId) {
-      downloadMeshArtifact(panel.activeJobId, panel.solver.backendUrl).catch((err) => {
-        console.warn('Mesh artifact download failed (non-blocking):', err.message);
-      });
-    }
   } catch (error) {
     console.error('Simulation error:', error);
     panel.completedStatusMessage = null;

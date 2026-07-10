@@ -266,6 +266,7 @@ def solve_metal_from_msh(
     *,
     progress_callback=None,
     stage_callback=None,
+    cancellation_callback=None,
     source_motion: str | None = None,
     mesh_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -294,6 +295,8 @@ def solve_metal_from_msh(
         stage_callback("setup", 0.0, "Configuring Metal BEM solve")
 
     def _progress(index: int, total: int, frequency_hz: float) -> None:
+        if cancellation_callback:
+            cancellation_callback()
         if progress_callback:
             progress_callback(index / max(1, total))
         if stage_callback:

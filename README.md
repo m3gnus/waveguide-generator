@@ -60,17 +60,20 @@ Network note: backend setup installs `hornlab-waveguide-mesher`, `hornlab-metal-
 | Windows  | double-click `launch\windows.bat` |
 | Linux    | `bash launch/linux.sh`            |
 
-The app opens in your browser at `http://localhost:3000`. Close the terminal to stop it.
+The app opens in your browser at `http://localhost:3000`. Both development servers bind to
+loopback by default; close the terminal to stop them. Developers who intentionally need remote
+access can set `HOST` for the frontend and `MWG_BACKEND_HOST` plus `MWG_CORS_ORIGINS` for the
+backend.
 
 ## Solver Dependencies
 
 Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `6eb4a140e47a56062d28ecac773cf7e731526e33` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
-- hornlab-metal-bem: pinned git commit `70c18fd9bde22e1e1e20e195f994a8fdc2a11f67` (fast Metal solve backend; Apple Silicon macOS)
-- hornlab-bempp-bem: pinned git commit `4638578290eb0a56d0f81018b8806f0746ceb442` (Bempp cross-platform solve backend; installed when Metal is unavailable)
-- hornlab-plots: pinned git commit `7a4f1d503ea4b963c57e191b855955d734a954f0` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
+- hornlab-waveguide-mesher: pinned git commit `ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-metal-bem: pinned git commit `09f3b0b0e99b23936cac31531b1f82c6e369ea44` (fast Metal solve backend; Apple Silicon macOS)
+- hornlab-bempp-bem: pinned git commit `5c0b751eb3bf80e30040c6e19685568b874e89a8` (Bempp cross-platform solve backend; installed when Metal is unavailable)
+- hornlab-plots: pinned git commit `916ed784bb026838f47a380c542638da32080fa3` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
 - gmsh: `>=4.11.1,<5.0` (required by the HornLab mesher)
 
 OpenCL is a Bempp speed-up, not a hard requirement. Without OpenCL, Bempp runs through its numba CPU backend. On Linux, install `pocl` from your package manager for an OpenCL CPU runtime; on Windows, use up-to-date GPU drivers or install Intel's OpenCL runtime; on macOS x86_64, numba is fine.
@@ -84,10 +87,12 @@ On Apple Silicon, `/api/solve` requires the release native helper so Metal jobs 
 | Surface sample controls                      | Live JS viewport/local export tessellation and mesher sampling | Mesh element-size fields                       |
 | `Solve * Resolution` + aperture/enclosure sizing | HornLab mesher solve/export `.msh` artifacts                | Live JS viewport triangle count                |
 | `Quadrants` + `Auto`                         | HornLab solve/export mesh symmetry domain                      | STEP and viewport preview full-domain contracts |
-| `Auto-download solve mesh`                   | Whether `.msh` is downloaded after solve                       | Mesh generation itself                         |
+| `Auto-download solve mesh`                   | Downloads `.msh` when the backend reports it ready             | Mesh generation itself                         |
 | `Task Exports` settings                      | Export bundle formats for completed tasks                      | Solver execution                               |
 
 JS canonical/viewport geometry remains full-domain. HornLab solve/export mesh generation honors `Mesh.Quadrants`; the UI Auto action chooses the smallest supported symmetry domain it can detect conservatively.
+For rounded-rectangle morphs, `Mesh.AngularSegments` is the fixed normalized profile budget;
+`Mesh.CornerSegments` controls how that budget is placed around the corner and does not add profiles.
 
 ## Project Layout
 

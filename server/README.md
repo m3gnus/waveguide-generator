@@ -137,10 +137,10 @@ The backend now enforces a version matrix at runtime:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `6eb4a140e47a56062d28ecac773cf7e731526e33` | `/api/mesh/build` |
-| HornLab Metal BEM   | `70c18fd9bde22e1e1e20e195f994a8fdc2a11f67` | `/api/solve` (Apple Silicon macOS) |
-| HornLab Bempp BEM   | `4638578290eb0a56d0f81018b8806f0746ceb442` | `/api/solve` (cross-platform fallback) |
-| HornLab plots       | `7a4f1d503ea4b963c57e191b855955d734a954f0` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
+| HornLab mesher      | `ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8` | `/api/mesh/build` |
+| HornLab Metal BEM   | `09f3b0b0e99b23936cac31531b1f82c6e369ea44` | `/api/solve` (Apple Silicon macOS) |
+| HornLab Bempp BEM   | `5c0b751eb3bf80e30040c6e19685568b874e89a8` | `/api/solve` (cross-platform fallback) |
+| HornLab plots       | `916ed784bb026838f47a380c542638da32080fa3` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |
 
 Notes:
@@ -155,7 +155,16 @@ From repository root:
 ./.venv/bin/python server/app.py
 ```
 
-This starts Uvicorn on `0.0.0.0:8000`.
+This starts Uvicorn on `127.0.0.1:8000`. The loopback default keeps the local filesystem and
+solver APIs off the LAN. For an intentional remote deployment, set the bind address and the exact
+frontend origins explicitly:
+
+```bash
+MWG_BACKEND_HOST=0.0.0.0 \
+MWG_BACKEND_PORT=8000 \
+MWG_CORS_ORIGINS=https://waveguide.example \
+./.venv/bin/python server/app.py
+```
 
 ### 2.1 Headless / backend-only mode
 
@@ -292,6 +301,13 @@ Returns paginated persisted job rows.
   - `vertex_count` / `triangle_count`
   - canonical `tag_counts`
   - mesher-derived `identity_triangle_counts` sourced from the same canonical extraction the solver consumes
+- Task-management metadata is also persisted and returned: `rating`, `exported_files`,
+  `auto_export_completed_at`, `raw_results_file`, and `mesh_artifact_file`.
+
+### `PATCH /api/jobs/{job_id}/metadata`
+
+Updates persisted task metadata. Supported fields are `label`, `script_snapshot`, `rating` (0-5),
+`exported_files`, `auto_export_completed_at`, `raw_results_file`, and `mesh_artifact_file`.
 
 ### `POST /api/stop/{job_id}`
 

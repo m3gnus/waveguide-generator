@@ -1,6 +1,6 @@
 const SETTINGS_KEY = 'waveguide-simulation-management-settings';
-const SCHEMA_VERSION = 2;
-const SUPPORTED_SCHEMA_VERSIONS = new Set([1, SCHEMA_VERSION]);
+const SCHEMA_VERSION = 3;
+const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2, SCHEMA_VERSION]);
 const LEGACY_DEFAULT_SELECTED_FORMATS = Object.freeze([
   'png',
   'csv',
@@ -37,6 +37,7 @@ export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
 
 export const RECOMMENDED_DEFAULTS = Object.freeze({
   autoExportOnComplete: false,
+  downloadSimMesh: false,
   selectedFormats: [],
   defaultSort: 'completed_desc',
   minRatingFilter: 0,
@@ -77,6 +78,10 @@ function normalizeSettings(raw = {}) {
       typeof raw.autoExportOnComplete === 'boolean'
         ? raw.autoExportOnComplete
         : RECOMMENDED_DEFAULTS.autoExportOnComplete,
+    downloadSimMesh:
+      typeof raw.downloadSimMesh === 'boolean'
+        ? raw.downloadSimMesh
+        : RECOMMENDED_DEFAULTS.downloadSimMesh,
     selectedFormats: normalizeSelectedFormats(raw.selectedFormats),
     defaultSort:
       typeof raw.defaultSort === 'string' && raw.defaultSort.trim()

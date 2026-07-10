@@ -57,7 +57,7 @@ test('bindSimulationControllerState creates live field proxies on panel adapter'
   assert.equal(panelAdapter.pollDelayMs, 2500);
 });
 
-test('restoreSimulationControllerJobs initializes with empty workspace and folder source mode', async () => {
+test('restoreSimulationControllerJobs initializes with backend source mode', async () => {
   const controller = createSimulationControllerStore({ solver: {} });
 
   let jobsUpdatedCalls = 0;
@@ -70,7 +70,7 @@ test('restoreSimulationControllerJobs initializes with empty workspace and folde
 
   // readSimulationWorkspaceJobs always returns empty items (backend-only mode)
   assert.equal(controller.jobs.size, 0);
-  assert.equal(controller.jobSourceMode, 'folder');
+  assert.equal(controller.jobSourceMode, 'backend');
   assert.equal(jobsUpdatedCalls >= 1, true);
 });
 
@@ -82,16 +82,27 @@ test('restoreSimulationControllerJobs returns empty jobs with no stale localStor
   // Workspace always returns empty (backend-only); no stale localStorage items loaded
   assert.equal(controller.jobs.has('job-stale-complete'), false);
   assert.equal(controller.jobs.size, 0);
-  assert.equal(controller.jobSourceMode, 'folder');
+  assert.equal(controller.jobSourceMode, 'backend');
 });
 
-test('restoreSimulationControllerJobs sets folder source mode and calls solver listJobs when available', async () => {
+test('restoreSimulationControllerJobs sets backend source mode and calls solver listJobs when available', async () => {
   let listJobsCalls = 0;
   const controller = createSimulationControllerStore({
     solver: {
       async listJobs() {
         listJobsCalls += 1;
-        return { items: [{ id: 'job-backend-1', status: 'complete' }] };
+        return {
+          items: [
+            {
+              id: 'job-backend-1',
+              status: 'complete',
+              rating: 4,
+              exported_files: ['csv:results.csv'],
+              raw_results_file: 'raw.results.json',
+            },
+          ],
+          total: 1,
+        };
       },
     },
   });
@@ -100,9 +111,38 @@ test('restoreSimulationControllerJobs sets folder source mode and calls solver l
 
   // Restore now calls solver.listJobs to restore jobs from the backend database
   assert.equal(listJobsCalls, 1);
-  assert.equal(controller.jobSourceMode, 'folder');
-  assert.equal(controller.jobSourceLabel, 'Folder Tasks');
+  assert.equal(controller.jobSourceMode, 'backend');
+  assert.equal(controller.jobSourceLabel, 'Backend Jobs');
   assert.deepEqual(Array.from(controller.jobs.keys()), ['job-backend-1']);
+  assert.equal(controller.jobs.get('job-backend-1')?.rating, 4);
+  assert.deepEqual(controller.jobs.get('job-backend-1')?.exportedFiles, ['csv:results.csv']);
+  assert.equal(controller.jobs.get('job-backend-1')?.rawResultsFile, 'raw.results.json');
+});
+
+test('restoreSimulationControllerJobs paginates through all backend jobs', async () => {
+  const allItems = Array.from({ length: 450 }, (_, index) => ({
+    id: `job-${index}`,
+    status: 'complete',
+  }));
+  const offsets = [];
+  const controller = createSimulationControllerStore({
+    solver: {
+      async listJobs({ limit, offset }) {
+        offsets.push(offset);
+        return {
+          items: allItems.slice(offset, offset + limit),
+          total: allItems.length,
+        };
+      },
+    },
+  });
+
+  await restoreSimulationControllerJobs(controller);
+
+  assert.deepEqual(offsets, [0, 200, 400]);
+  assert.equal(controller.jobs.size, 450);
+  assert.equal(controller.jobs.has('job-449'), true);
+  assert.equal(controller.jobSourceMode, 'backend');
 });
 
 test('createSimulationPanelRuntime binds a controller store and injected ui coordinator', () => {
@@ -147,9 +187,9 @@ test('restoreSimulationPanelRuntime delegates to controller restore using runtim
 
   await restoreSimulationPanelRuntime(runtime);
 
-  // Workspace returns empty items; controller initializes with folder source mode
+  // Backend-only mode stays the active source when workspace manifests are unavailable.
   assert.equal(runtime.controller.jobs.size, 0);
-  assert.equal(runtime.controller.jobSourceMode, 'folder');
+  assert.equal(runtime.controller.jobSourceMode, 'backend');
 });
 
 test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', () => {
@@ -200,7 +240,10 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
       },
     },
   });
-  controller.jobs.set('job-complete', { id: 'job-complete', status: 'complete' });
+  controller.jobs.set('job-complete', {
+    id: 'job-complete',
+    status: 'complete',
+  });
   controller.jobs.set('job-running', { id: 'job-running', status: 'running' });
   controller.resultCache.set('job-cached', { cached: true });
   controller.jobs.set('job-cached', { id: 'job-cached', status: 'complete' });
@@ -480,6 +523,51 @@ test('recordSimulationControllerRating persists bounded rating values', async ()
   assert.equal(updated.rating, 5);
 });
 
+test('rating and export metadata are patched to the backend for reload persistence', async () => {
+  const originalFetch = global.fetch;
+  const metadataBodies = [];
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/metadata')) {
+      metadataBodies.push(JSON.parse(options.body));
+    }
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  try {
+    const controller = createSimulationControllerStore({
+      solver: { backendUrl: 'http://backend.example.test' },
+    });
+    controller.jobs.set('job-persist-1', {
+      id: 'job-persist-1',
+      status: 'complete',
+      rating: null,
+      exportedFiles: [],
+    });
+
+    await recordSimulationControllerRating(controller, 'job-persist-1', 4);
+    await recordSimulationControllerExport(controller, 'job-persist-1', {
+      exportedFiles: ['csv:results.csv'],
+      autoExportCompletedAt: '2026-07-10T12:00:00Z',
+      rawResultsFile: 'raw.results.json',
+      meshArtifactFile: 'solver.mesh.msh',
+    });
+
+    assert.equal(metadataBodies.length, 2);
+    assert.equal(metadataBodies[0].rating, 4);
+    assert.deepEqual(metadataBodies[1].exported_files, ['csv:results.csv']);
+    assert.equal(metadataBodies[1].auto_export_completed_at, '2026-07-10T12:00:00Z');
+    assert.equal(metadataBodies[1].raw_results_file, 'raw.results.json');
+    assert.equal(metadataBodies[1].mesh_artifact_file, 'solver.mesh.msh');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('submitSimulationControllerJob checks solver health and queues the submitted job through the controller boundary', async () => {
   const calls = [];
   const controller = createSimulationControllerStore({
@@ -536,7 +624,12 @@ test('submitSimulationControllerJob checks solver health and queues the submitte
   };
   assert.deepEqual(calls, [
     ['health'],
-    ['submit', { ...config, simulationType: 1, solverMode: 'auto' }, meshData, expectedSubmitOptions],
+    [
+      'submit',
+      { ...config, simulationType: 1, solverMode: 'auto' },
+      meshData,
+      expectedSubmitOptions,
+    ],
   ]);
 });
 
@@ -555,7 +648,11 @@ test('submitSimulationControllerJob preserves infinite-baffle requests for Bempp
   });
 
   const config = { solverBackend: 'bempp', polarConfig: {} };
-  const meshData = { vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 2], surfaceTags: [2] };
+  const meshData = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2],
+    surfaceTags: [2],
+  };
   const submission = {
     waveguidePayload: { formula_type: 'OSSE', sim_type: 1 },
     submitOptions: { mesh: { strategy: 'hornlab_mesher' } },
@@ -635,7 +732,10 @@ test('submitSimulationControllerJob rejects when Metal backend readiness is fals
           solverBackends: {
             metal: {
               ready: false,
-              status: { available: false, reason: 'Metal BEM requires Apple Silicon macOS.' },
+              status: {
+                available: false,
+                reason: 'Metal BEM requires Apple Silicon macOS.',
+              },
             },
           },
         };
@@ -677,7 +777,11 @@ test('stopSimulationControllerJob keeps running job in cancelling state until ba
       },
     },
   });
-  controller.jobs.set('job-running', { id: 'job-running', status: 'running', progress: 0.4 });
+  controller.jobs.set('job-running', {
+    id: 'job-running',
+    status: 'running',
+    progress: 0.4,
+  });
   controller.activeJobId = 'job-running';
   controller.currentJobId = 'job-running';
 

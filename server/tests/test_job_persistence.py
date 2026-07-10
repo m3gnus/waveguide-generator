@@ -1,7 +1,9 @@
 import asyncio
+import sqlite3
 import tempfile
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -288,6 +290,49 @@ class JobPersistenceTest(unittest.TestCase):
         listed = asyncio.run(list_jobs(status="complete", limit=10, offset=0))
         self.assertIsNone(listed["items"][0]["label"])
         self.assertIsNone(listed["items"][0]["script_snapshot"])
+
+    def test_patch_job_metadata_persists_task_rating_and_export_state(self):
+        self._create_db_job("job-complete", "complete")
+        asyncio.run(
+            patch_job_metadata(
+                "job-complete",
+                JobMetadataPatch(
+                    rating=4,
+                    exported_files=["csv:results.csv", "json:results.json"],
+                    auto_export_completed_at="2026-07-10T12:00:00Z",
+                    raw_results_file="raw.results.json",
+                    mesh_artifact_file="solver.mesh.msh",
+                ),
+            )
+        )
+
+        _jrt.jobs.clear()
+        item = asyncio.run(list_jobs(status="complete", limit=10, offset=0))["items"][0]
+        self.assertEqual(item["rating"], 4)
+        self.assertEqual(item["exported_files"], ["csv:results.csv", "json:results.json"])
+        self.assertEqual(item["auto_export_completed_at"], "2026-07-10T12:00:00Z")
+        self.assertEqual(item["raw_results_file"], "raw.results.json")
+        self.assertEqual(item["mesh_artifact_file"], "solver.mesh.msh")
+
+    def test_initialize_migrates_version_three_database_for_task_metadata(self):
+        db_path = Path(self.tmp.name) / "version-three.db"
+        legacy_db = SimulationDB(db_path)
+        legacy_db.initialize()
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("ALTER TABLE simulation_jobs DROP COLUMN task_metadata_json")
+            conn.execute("PRAGMA user_version = 3")
+            conn.commit()
+
+        migrated_db = SimulationDB(db_path)
+        migrated_db.initialize()
+        with closing(sqlite3.connect(db_path)) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(simulation_jobs)").fetchall()
+            }
+            user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+        self.assertIn("task_metadata_json", columns)
+        self.assertEqual(user_version, 4)
 
     def test_prune_terminal_jobs_closes_database_connection(self):
         class FakeCursor:

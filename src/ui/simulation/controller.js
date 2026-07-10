@@ -339,6 +339,7 @@ export async function recordSimulationControllerExport(controller, jobId, export
       rawResultsFile: next.rawResultsFile ?? null,
       meshArtifactFile: next.meshArtifactFile ?? null,
     });
+    await persistJobMetadataToBackend(controller, next);
   }
   return next;
 }
@@ -362,6 +363,7 @@ export async function recordSimulationControllerRating(controller, jobId, rating
   persistControllerJobs(controller);
   if (next) {
     await syncSimulationWorkspaceJobManifest(next, { rating: next.rating });
+    await persistJobMetadataToBackend(controller, next);
   }
   return next;
 }
@@ -444,21 +446,35 @@ function resolveControllerBackendUrl(controller) {
   return controller?.solver?.backendUrl || DEFAULT_BACKEND_URL;
 }
 
-function persistJobMetadataToBackend(controller, job) {
+async function persistJobMetadataToBackend(controller, job) {
   const metadata = {};
   if (job.label) metadata.label = job.label;
   if (job.script) metadata.script_snapshot = job.script;
-  if (Object.keys(metadata).length === 0) return;
+  if (job.rating !== undefined) metadata.rating = job.rating;
+  if (Array.isArray(job.exportedFiles)) metadata.exported_files = job.exportedFiles;
+  if (job.autoExportCompletedAt !== undefined) {
+    metadata.auto_export_completed_at = job.autoExportCompletedAt;
+  }
+  if (job.rawResultsFile !== undefined) metadata.raw_results_file = job.rawResultsFile;
+  if (job.meshArtifactFile !== undefined) metadata.mesh_artifact_file = job.meshArtifactFile;
+  if (Object.keys(metadata).length === 0) return true;
 
   const backendUrl = resolveControllerBackendUrl(controller);
-  fetch(`${backendUrl}/api/jobs/${encodeURIComponent(job.id)}/metadata`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(metadata),
-    signal: AbortSignal.timeout(5000),
-  }).catch((err) => {
+  try {
+    const response = await fetch(`${backendUrl}/api/jobs/${encodeURIComponent(job.id)}/metadata`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(metadata),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`metadata update failed (${response.status})`);
+    }
+    return true;
+  } catch (err) {
     console.warn('Failed to persist job metadata to backend:', err);
-  });
+    return false;
+  }
 }
 
 export async function queueSimulationControllerJob(controller, jobInput) {
@@ -469,7 +485,7 @@ export async function queueSimulationControllerJob(controller, jobInput) {
     await syncSimulationWorkspaceJobManifest(createdJob);
     // Persist label and script snapshot to backend so they survive page reloads.
     if (createdJob.id) {
-      persistJobMetadataToBackend(controller, createdJob);
+      void persistJobMetadataToBackend(controller, createdJob);
     }
   }
   return createdJob;
@@ -626,30 +642,51 @@ export async function restoreSimulationControllerJobs(
   controller.isPolling = tracker.isPolling;
   syncCurrentJobId(controller);
 
-  // Restore jobs from the backend database (survives page reloads).
-  setJobSourceMode(controller, JOB_SOURCE_MODES.FOLDER);
-  let restoredFromBackend = false;
+  // Restore all jobs from the backend database (survives page reloads).
+  setJobSourceMode(controller, JOB_SOURCE_MODES.BACKEND);
+  let backendRequestSucceeded = false;
 
   if (typeof controller.solver?.listJobs === 'function') {
     try {
-      const response = await controller.solver.listJobs({ limit: 50 });
-      const items = Array.isArray(response?.items) ? response.items : [];
-      if (items.length > 0) {
-        setJobsFromEntries(controller, items);
-        restoredFromBackend = true;
+      const pageSize = 200;
+      const items = [];
+      let offset = 0;
+      while (true) {
+        const response = await controller.solver.listJobs({
+          limit: pageSize,
+          offset,
+        });
+        const pageItems = Array.isArray(response?.items) ? response.items : [];
+        items.push(...pageItems);
+        const total = Number(response?.total);
+        offset += pageItems.length;
+        if (
+          pageItems.length === 0 ||
+          pageItems.length < pageSize ||
+          (Number.isFinite(total) && offset >= total)
+        ) {
+          break;
+        }
       }
+      setJobsFromEntries(controller, items);
+      setJobSourceMode(controller, JOB_SOURCE_MODES.BACKEND);
+      backendRequestSucceeded = true;
     } catch (error) {
       console.warn('[SimController] Failed to restore jobs from backend:', error);
     }
   }
 
-  // Fall back to workspace folder if backend returned nothing.
-  if (!restoredFromBackend) {
+  // Fall back to workspace manifests only when the backend could not be queried.
+  if (!backendRequestSucceeded) {
     const workspace = await readSimulationWorkspaceJobs();
     if (workspace.repaired || workspace.warnings.length > 0) {
       onRecoverFromManifests();
     }
     setJobsFromEntries(controller, workspace.items);
+    setJobSourceMode(
+      controller,
+      workspace.available ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND
+    );
   }
 
   syncCurrentJobId(controller);

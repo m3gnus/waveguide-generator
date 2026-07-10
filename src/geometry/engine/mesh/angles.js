@@ -19,8 +19,8 @@ function normalizeAngularSegments(rawCount) {
  * (hornlab_mesher.profile_sampling._rounded_rect_quadrant_angles): the corner
  * arc always carries three segments at fixed 30/60/90-degree arc steps and the
  * two wall spans take the remaining (>=2) segments, split proportionally to
- * their angular extents. Mesh.CornerSegments only grows the point budget; it
- * does not change the arc structure.
+ * their angular extents. Mesh.CornerSegments selects this placement policy;
+ * it does not grow the fixed Mesh.AngularSegments profile budget.
  */
 function buildQuadrantAngles(pointsPerQuadrant, halfW, halfH, cornerR) {
   if (!Number.isFinite(halfW) || !Number.isFinite(halfH) || halfW <= 0 || halfH <= 0) {
@@ -112,15 +112,14 @@ export function buildAngleList(params, mouthExtents) {
 
   // Only an explicit rounded-rectangle morph (target 1) gets the corner-aware
   // azimuth list, matching the canonical mesher. Circle/none targets keep the
-  // uniform ring. The corner-segment budget folds Mesh.CornerSegments into the
-  // angular point count and rounds up to a whole number of points per quadrant
-  // (ATH: 64+4 -> 17, 16+0 -> 4), then the rounded-rect builder layers its
-  // fixed three-segment corner arc on top.
+  // uniform ring. Current ATH keeps Mesh.AngularSegments as the fixed profile
+  // budget and redistributes that budget over the wall spans and fixed
+  // three-segment corner arc. Mesh.CornerSegments selects the corner-aware
+  // placement policy but does not add profiles.
   const morphTarget = Math.round(evalParam(params.morphTarget || 0, 0));
   if (morphTarget === MORPH_TARGETS.RECTANGLE && mouthExtents.halfW > 0 && mouthExtents.halfH > 0) {
     const cornerR = Math.max(0, evalParam(params.morphCorner || 0, 0));
-    const cornerSegments = Math.max(0, Math.round(evalParam(params.cornerSegments || 0, 0)));
-    const pointsPerQuadrant = Math.max(1, Math.ceil((angularSegments + cornerSegments) / 4));
+    const pointsPerQuadrant = Math.max(1, Math.floor(angularSegments / 4));
 
     const quadrantAngles = buildQuadrantAngles(
       pointsPerQuadrant,

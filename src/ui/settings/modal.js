@@ -60,10 +60,10 @@ export const SETTINGS_CONTROL_IDS = {
 const _state = {
   liveUpdate: true,
   displayMode: 'clay',
-  downloadSimMesh: false,
 };
 const SIMULATION_MANAGEMENT_HELP = Object.freeze({
-  downloadMesh: 'Automatically downloads the solver mesh file (.msh) when a job starts.',
+  downloadMesh:
+    'Automatically downloads the solver mesh file (.msh) as soon as the backend reports it ready.',
   defaultSort: 'Sets the default order used in the Simulation Jobs list.',
   minRatingFilter: 'Hides completed jobs rated below this threshold in the Simulation Jobs list.',
   autoExportOnComplete:
@@ -155,7 +155,7 @@ export function setDisplayMode(mode) {
 export function getDownloadSimMeshEnabled() {
   const el = document.getElementById('download-sim-mesh');
   if (el) return el.checked;
-  return _state.downloadSimMesh;
+  return getCurrentSimulationManagementSettings().downloadSimMesh;
 }
 
 /**
@@ -244,7 +244,6 @@ function _buildModal(viewerRuntime) {
     const t = event.target;
     if (!t) return;
     if (t.id === 'live-update') _state.liveUpdate = t.checked;
-    if (t.id === 'download-sim-mesh') _state.downloadSimMesh = t.checked;
 
     // Sim Basic settings: save on any simbasic-* control change
     if (t.id && t.id.startsWith('simbasic-')) {
@@ -1090,6 +1089,10 @@ function _buildTaskExportsSection() {
     if (minRating) {
       minRating.value = String(resetSettings.minRatingFilter);
     }
+    const downloadMesh = document.getElementById('download-sim-mesh');
+    if (downloadMesh) {
+      downloadMesh.checked = resetSettings.downloadSimMesh;
+    }
     _syncTaskListPreferenceControls(resetSettings);
   });
   sec.appendChild(exportHeader);
@@ -1098,7 +1101,7 @@ function _buildTaskExportsSection() {
     labelText: 'Auto-download solve mesh (.msh)',
     labelFor: 'download-sim-mesh',
     helpText: SIMULATION_MANAGEMENT_HELP.downloadMesh,
-    controlHtml: `<input type="checkbox" id="download-sim-mesh"${_state.downloadSimMesh ? ' checked' : ''}>`,
+    controlHtml: `<input type="checkbox" id="download-sim-mesh"${managementSettings.downloadSimMesh ? ' checked' : ''}>`,
   });
 
   return sec;
@@ -1514,6 +1517,7 @@ function _buildSelectElement(id, currentValue, options) {
 function _isSimulationManagementControl(target) {
   return Boolean(
     target?.id === 'simmanage-auto-export' ||
+    target?.id === 'download-sim-mesh' ||
     target?.id === 'simmanage-default-sort' ||
     target?.id === 'simmanage-min-rating' ||
     target?.getAttribute?.('data-sim-management-format')
@@ -1556,6 +1560,7 @@ function _readSimulationManagementSettings(root) {
     ...current,
     autoExportOnComplete:
       _getControl(root, 'simmanage-auto-export')?.checked ?? current.autoExportOnComplete,
+    downloadSimMesh: _getControl(root, 'download-sim-mesh')?.checked ?? current.downloadSimMesh,
     selectedFormats,
     defaultSort: _getControl(root, 'simmanage-default-sort')?.value || current.defaultSort,
     minRatingFilter: Number.isFinite(minRating)

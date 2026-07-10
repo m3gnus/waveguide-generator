@@ -238,7 +238,9 @@ UI control mapping:
 
 - Surface sample controls affect live JS viewport/local export tessellation and the HornLab mesher sampling input.
 - `Throat/Mouth/Rear Mesh Resolution`, `Front/Rear Baffle Mesh Resolution`, and `Export Vertical Offset` affect HornLab mesher solve/export mesh density or coordinates; they do not change the active JS viewport triangle count.
-- `Auto-download solve mesh artifact (.msh)` affects only whether the persisted backend `.msh` artifact is downloaded.
+- `Auto-download solve mesh artifact (.msh)` is persisted with the other simulation-management
+  settings and downloads the artifact once the backend reports `has_mesh_artifact`; it does not
+  use a fixed post-submit delay.
 
 Physical groups written by HornLab mesher:
 
@@ -254,13 +256,17 @@ Active runtime export surfaces:
 
 - App-level exports: STL (`exportSTL`), MWG config text (`exportMWGConfig`), and profile/slice CSV (`exportProfileCSV`)
 - Simulation-result exports: bundle-coordinated PNG / CSV / JSON / text / polar CSV / impedance CSV / VACS / STL / Fusion CSV task exports in `src/ui/simulation/exports.js`
-- Completed-job mesh download: `.msh` artifact fetch via `src/ui/simulation/meshDownload.js` when backend jobs persist mesh artifacts
+- Solve mesh download: `.msh` artifact fetch via `src/ui/simulation/meshDownload.js` as soon as an
+  active backend job reports its mesh artifact ready
 
 Task-history controls:
 
 - `src/ui/simulation/jobActions.js` renders inline 1-5 star rating controls and applies persisted sort/filter preferences.
-- `src/ui/settings/simulationManagementSettings.js` stores task export settings plus task-list preferences (`defaultSort`, `minRatingFilter`) used by the `Task Exports` settings section and Simulation Jobs toolbar.
-- `src/ui/simulation/controller.js` persists rating updates through the same job/task-manifest contract used for export bookkeeping.
+- `src/ui/settings/simulationManagementSettings.js` stores task export settings, the mesh
+  auto-download preference, and task-list preferences (`defaultSort`, `minRatingFilter`) used by
+  the `Task Exports` settings section and Simulation Jobs toolbar.
+- `src/ui/simulation/controller.js` persists rating and export bookkeeping to both workspace
+  manifests (when available) and the backend job database.
 
 ABEC bundle export is removed from the active runtime. The live solver path is fully backend-driven via `/api/solve`.
 
@@ -334,8 +340,11 @@ Base URL: `http://localhost:8000`
 
 - `GET /api/jobs`
   - Lists jobs with optional `status` filter and `limit`/`offset` pagination
-  - Returns compact job metadata, status/progress/stage timestamps, `has_results`/`has_mesh_artifact`, and persisted `mesh_stats`
+  - Returns compact job metadata, status/progress/stage timestamps, `has_results`/`has_mesh_artifact`, persisted `mesh_stats`, ratings, and export bookkeeping
   - `mesh_stats` is the authoritative solve-mesh summary for HornLab mesher jobs, including vertex/triangle counts plus canonical tag counts and mesher-derived face-identity triangle counts
+
+- `PATCH /api/jobs/{job_id}/metadata`
+  - Persists label/script snapshots plus task rating and export bookkeeping across reloads
 
 - `DELETE /api/jobs/{job_id}`
   - Deletes terminal jobs (`complete|error|cancelled`)
@@ -361,10 +370,10 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `6eb4a140e47a56062d28ecac773cf7e731526e33` | `/api/mesh/build` |
-| HornLab Metal BEM   | `70c18fd9bde22e1e1e20e195f994a8fdc2a11f67` | `/api/solve` (Apple Silicon macOS) |
-| HornLab Bempp BEM   | `4638578290eb0a56d0f81018b8806f0746ceb442` | `/api/solve` (cross-platform fallback) |
-| HornLab plots       | `7a4f1d503ea4b963c57e191b855955d734a954f0` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
+| HornLab mesher      | `ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8` | `/api/mesh/build` |
+| HornLab Metal BEM   | `09f3b0b0e99b23936cac31531b1f82c6e369ea44` | `/api/solve` (Apple Silicon macOS) |
+| HornLab Bempp BEM   | `5c0b751eb3bf80e30040c6e19685568b874e89a8` | `/api/solve` (cross-platform fallback) |
+| HornLab plots       | `916ed784bb026838f47a380c542638da32080fa3` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |
 
 Notes:
@@ -594,8 +603,11 @@ High-signal test suites:
 
 ## 10. Operational Notes and Constraints
 
-- Frontend dev server: `http://localhost:3000` (`scripts/dev-server.js`)
-- Backend API server: `http://localhost:8000` (`server/app.py`)
+- Frontend dev server: `http://localhost:3000` (`scripts/dev-server.js`), loopback-bound by default;
+  set `HOST` only when intentional remote access is required
+- Backend API server: `http://localhost:8000` (`server/app.py`), loopback-bound with explicit
+  local CORS origins by default; remote deployments must set `MWG_BACKEND_HOST` and
+  `MWG_CORS_ORIGINS`
 - Combined startup script: `npm start` (`scripts/start-all.js`)
 - Backend preflight command (selected interpreter): `npm run preflight:backend`
 - Strict backend preflight command: `npm run preflight:backend:strict`
@@ -609,7 +621,8 @@ High-signal test suites:
   3. repo marker `.waveguide/backend-python.path` (written by install/setup scripts)
   4. fallback probe across project `.venv`, then `python3`
   5. if no fallback candidate is runtime-ready, keep the same raw fallback order
-- Backend jobs are in-memory; restarting backend clears job history.
+- Backend job history and task metadata are persisted in SQLite; the live queue/cache is rebuilt
+  from those rows at startup.
 - gmsh Python API calls are guarded for thread-safety and main-thread constraints.
 
 ### Solver runtime availability

@@ -7,9 +7,6 @@ import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
  * @param {string} [backendUrl] - Backend base URL (defaults to DEFAULT_BACKEND_URL)
  */
 export async function downloadMeshArtifact(jobId, backendUrl = DEFAULT_BACKEND_URL) {
-  // Brief delay to allow backend to finish mesh generation and store artifact
-  await new Promise((r) => setTimeout(r, 2000));
-
   const resp = await fetch(`${backendUrl}/api/mesh-artifact/${jobId}`);
   if (!resp.ok) {
     throw new Error(`Mesh artifact not available (${resp.status})`);

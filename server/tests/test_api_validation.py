@@ -598,7 +598,21 @@ class PolarConfigValidationTest(unittest.TestCase):
 class JobMetadataPatchValidationTest(unittest.TestCase):
     def test_unknown_metadata_fields_are_rejected(self):
         with self.assertRaises(ValidationError):
-            JobMetadataPatch.model_validate({"rating": 5})
+            JobMetadataPatch.model_validate({"unknown": 5})
+
+    def test_task_metadata_is_normalized_and_rating_is_bounded(self):
+        metadata = JobMetadataPatch.model_validate(
+            {
+                "rating": 5,
+                "exported_files": [" first.csv ", "first.csv", "second.json"],
+                "raw_results_file": " results.json ",
+            }
+        )
+        self.assertEqual(metadata.rating, 5)
+        self.assertEqual(metadata.exported_files, ["first.csv", "second.json"])
+        self.assertEqual(metadata.raw_results_file, "results.json")
+        with self.assertRaises(ValidationError):
+            JobMetadataPatch.model_validate({"rating": 6})
 
     def test_script_snapshot_must_be_object_or_null(self):
         with self.assertRaises(ValidationError):
@@ -1317,6 +1331,31 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
                 _jrt.jobs[job_id]["error_message"],
                 "Simulation cancelled by user",
             )
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_full_3d_runner_forwards_live_cancellation_check_to_solver(self):
+        job_id = "test-runner-full-3d-cancellation-callback"
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
+        callback_seen = []
+
+        def fake_metal_solve(*_args, cancellation_callback=None, **_kwargs):
+            self.assertIsNotNone(cancellation_callback)
+            callback_seen.append(True)
+            _jrt.jobs[job_id]["cancellation_requested"] = True
+            cancellation_callback()
+            raise AssertionError("cancellation callback must stop the solve")
+
+        try:
+            with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", return_value=self._fake_mesher_result()), \
+                 patch("services.simulation_runner.solve_metal_from_msh", side_effect=fake_metal_solve):
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
+
+            self.assertEqual(callback_seen, [True])
+            self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
+            self.assertEqual(_jrt.jobs[job_id]["stage"], "cancelled")
         finally:
             _jrt.jobs.pop(job_id, None)
 
