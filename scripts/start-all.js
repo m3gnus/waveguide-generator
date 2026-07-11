@@ -1,13 +1,15 @@
-import { spawn, exec } from 'child_process';
+import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { resolveBackendPython } from './backend-python.js';
+import { resolveServerUrls } from './server-urls.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 const serverDir = path.join(rootDir, 'server');
 const backendPythonResolution = resolveBackendPython(rootDir);
 const backendPython = backendPythonResolution.python;
+const serverUrls = resolveServerUrls(process.env);
 
 console.log('╔══════════════════════════════════════════════════════════════╗');
 console.log('║  WG - Waveguide Generator                     ║');
@@ -76,8 +78,8 @@ backend.on('exit', (code) => {
 
 console.log('');
 console.log('📡 Servers starting...');
-console.log('   Frontend: http://localhost:3000');
-console.log('   Backend:  http://localhost:8000');
+console.log(`   Frontend: ${serverUrls.frontend}`);
+console.log(`   Backend:  ${serverUrls.backend}`);
 console.log(`   Python:   ${backendPython} (${backendPythonResolution.source})`);
 console.log('');
 console.log('Press Ctrl+C to stop both servers');
@@ -85,9 +87,15 @@ console.log('');
 
 // Open browser after servers have had time to start
 setTimeout(() => {
-  const url = 'http://localhost:3000';
-  const cmd = process.platform === 'win32' ? `start ${url}`
-            : process.platform === 'darwin' ? `open ${url}`
-            : `xdg-open ${url}`;
-  exec(cmd);
+  const command = process.platform === 'win32' ? 'cmd'
+    : process.platform === 'darwin' ? 'open'
+    : 'xdg-open';
+  const args = process.platform === 'win32'
+    ? ['/c', 'start', '', serverUrls.frontend]
+    : [serverUrls.frontend];
+  const browser = spawn(command, args, { detached: true, stdio: 'ignore' });
+  browser.on('error', (err) => {
+    console.warn('Could not open browser automatically:', err.message);
+  });
+  browser.unref();
 }, 3000);

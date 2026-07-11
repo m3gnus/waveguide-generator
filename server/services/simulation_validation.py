@@ -37,33 +37,42 @@ def is_hornlab_mesher_strategy(mesh_strategy: str) -> bool:
     return str(mesh_strategy or "").strip().lower() == "hornlab_mesher"
 
 
-def validate_submit_simulation_request(
-    request: SimulationRequest,
-) -> SimulationRequestValidation:
-    triangle_count = len(request.mesh.indices) // 3
-    if len(request.mesh.vertices) % 3 != 0:
+def _validate_client_mesh(mesh: Optional[Any]) -> None:
+    """Validate a client mesh only for legacy, non-mesher submissions."""
+    if mesh is None:
+        return
+    triangle_count = len(mesh.indices) // 3
+    if len(mesh.vertices) % 3 != 0:
         raise ValueError("Mesh vertices length must be divisible by 3.")
-    if len(request.mesh.indices) % 3 != 0:
+    if len(mesh.indices) % 3 != 0:
         raise ValueError("Mesh indices length must be divisible by 3.")
-    if len(request.mesh.surfaceTags) != triangle_count:
+    if len(mesh.surfaceTags) != triangle_count:
         raise ValueError(
-            f"Mesh surfaceTags length ({len(request.mesh.surfaceTags)}) "
+            f"Mesh surfaceTags length ({len(mesh.surfaceTags)}) "
             f"must match triangle count ({triangle_count})."
         )
-    if not any(int(tag) == 2 for tag in request.mesh.surfaceTags):
+    if not any(int(tag) == 2 for tag in mesh.surfaceTags):
         raise ValueError(
             "Mesh surfaceTags must include source tag 2 before solve submission."
         )
-    if str(request.sim_type).strip() not in {"1", "2"}:
-        raise ValueError("sim_type must be '1' (infinite-baffle) or '2' (free-standing).")
 
-    normalize_mesh_validation_mode(request.mesh_validation_mode)
 
+def validate_submit_simulation_request(
+    request: SimulationRequest,
+) -> SimulationRequestValidation:
     options = request.options if isinstance(request.options, dict) else {}
     mesh_opts = (
         options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
     )
     mesh_strategy = str(mesh_opts.get("strategy", "")).strip().lower()
+
+    if not is_hornlab_mesher_strategy(mesh_strategy):
+        _validate_client_mesh(request.mesh)
+
+    if str(request.sim_type).strip() not in {"1", "2"}:
+        raise ValueError("sim_type must be '1' (infinite-baffle) or '2' (free-standing).")
+
+    normalize_mesh_validation_mode(request.mesh_validation_mode)
 
     if not is_hornlab_mesher_strategy(mesh_strategy):
         raise ValueError(

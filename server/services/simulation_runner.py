@@ -425,6 +425,12 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             )
             mesher_metadata = _extract_mesher_metadata(mesher_result)
             _cancellation_callback("Cancellation requested after solver mesh build completed")
+            vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
+            canonical_metadata = (
+                mesher_result.get("canonical_mesh", {}).get("metadata")
+                if isinstance(mesher_result.get("canonical_mesh"), dict)
+                else None
+            )
 
             # Store mesh artifact for optional download.
             msh_artifact = mesher_result.get("msh_text")
@@ -455,14 +461,9 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
                 tmp_msh.write(msh_artifact)
                 tmp_msh_path = tmp_msh.name
 
-            # Extract canonical mesh stats for the job record (informational only).
+            # Canonical mesh validation above is required for the solve contract;
+            # stats persistence remains informational only.
             try:
-                vertices, indices, surface_tags = _extract_mesher_canonical_mesh(mesher_result)
-                canonical_metadata = (
-                    mesher_result.get("canonical_mesh", {}).get("metadata")
-                    if isinstance(mesher_result.get("canonical_mesh"), dict)
-                    else None
-                )
                 mesh_stats = _build_mesh_stats(
                     vertices,
                     indices,

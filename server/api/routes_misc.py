@@ -3,6 +3,7 @@ Miscellaneous routes: health, updates, chart rendering, directivity rendering, f
 workspace path/open.
 """
 
+import asyncio
 import logging
 import json
 import platform
@@ -96,7 +97,7 @@ async def health_check() -> Dict[str, Any]:
 @router.get("/api/updates/check")
 async def check_updates() -> Dict[str, Any]:
     try:
-        return get_update_status()
+        return await asyncio.to_thread(get_update_status)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -355,9 +356,8 @@ async def set_workspace_path(path: str = Form(...)) -> Dict[str, str]:
     return {"path": str(resolved), "custom": True}
 
 
-@router.post("/api/workspace/select")
-async def workspace_select() -> Dict[str, Any]:
-    """Open a native OS folder picker and set the result as the workspace path."""
+def _select_workspace_folder() -> Optional[str]:
+    """Open a native folder picker and return its selection, if any."""
     system = platform.system()
     selected: Optional[str] = None
 
@@ -421,7 +421,13 @@ async def workspace_select() -> Dict[str, Any]:
                 pass
     except Exception as exc:
         logger.warning("Folder picker failed unexpectedly: %s", exc)
-        return {"selected": False, "path": str(_get_default_output_path())}
+    return selected
+
+
+@router.post("/api/workspace/select")
+async def workspace_select() -> Dict[str, Any]:
+    """Open a native OS folder picker and set the result as the workspace path."""
+    selected = await asyncio.to_thread(_select_workspace_folder)
 
     if not selected:
         return {"selected": False, "path": str(_get_default_output_path())}

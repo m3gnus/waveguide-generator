@@ -3,8 +3,9 @@ import { realpath, stat } from 'fs/promises';
 import http from 'http';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { resolveFrontendPort } from './server-urls.js';
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = resolveFrontendPort();
 const ROOT_DIR = process.cwd();
 
 export function resolveDevServerHost(env = process.env) {
