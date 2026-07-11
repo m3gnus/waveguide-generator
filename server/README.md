@@ -228,16 +228,15 @@ Submits an async simulation job.
 
 Required payload fields:
 
-- `mesh.vertices` (flat xyz array)
-- `mesh.indices` (flat triangle index array)
-- `mesh.surfaceTags` (one tag per triangle)
-- `mesh.format`
 - `frequency_range`
 - `num_frequencies`
 - `sim_type`
+- `options.mesh.strategy` (`hornlab_mesher`)
+- `options.mesh.waveguide_params`
 
 Optional:
 
+- `mesh` (accepted for compatibility but not used by the HornLab mesher solve path)
 - `mesh.boundaryConditions`
 - `mesh.metadata` (supports `units` and `unitScaleToMeter`)
 - `polar_config`:
@@ -258,10 +257,8 @@ Optional:
 
 Validation behavior:
 
-- `vertices.length` must be divisible by 3
-- `indices.length` must be divisible by 3
-- `surfaceTags.length` must equal triangle count (`indices.length / 3`)
 - `sim_type` must be `"1"` (infinite-baffle) or `"2"` (free-standing)
+- the HornLab mesher-built canonical mesh must include source tag `2`
 - malformed payloads return `422`
 - compatibility-only `advanced_settings.bem_precision` must still be `single` or `double` when provided, even though the active `/api/solve` runtime ignores it
 

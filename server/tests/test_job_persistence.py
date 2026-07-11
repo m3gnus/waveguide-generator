@@ -219,6 +219,33 @@ class JobPersistenceTest(unittest.TestCase):
             8,
         )
 
+    def test_list_jobs_uses_selected_rows_without_caching_terminal_records(self):
+        self._create_db_job("job-complete", "complete")
+        _jrt.db.update_job(
+            "job-complete",
+            mesh_stats_json='{"vertex_count": 42, "triangle_count": 20}',
+            task_metadata_json=(
+                '{"rating": 4, "exported_files": ["csv:results.csv"], '
+                '"auto_export_completed_at": "2026-07-10T12:00:00Z"}'
+            ),
+        )
+        _jrt.jobs.clear()
+
+        with patch.object(
+            _jrt.db,
+            "get_job_row",
+            side_effect=AssertionError("list_jobs must not re-query selected rows"),
+        ):
+            response = asyncio.run(list_jobs(status="complete", limit=10, offset=0))
+
+        self.assertEqual(response["total"], 1)
+        item = response["items"][0]
+        self.assertEqual(item["mesh_stats"]["vertex_count"], 42)
+        self.assertEqual(item["rating"], 4)
+        self.assertEqual(item["exported_files"], ["csv:results.csv"])
+        self.assertEqual(item["auto_export_completed_at"], "2026-07-10T12:00:00Z")
+        self.assertNotIn("job-complete", _jrt.jobs)
+
     def test_status_preserves_live_mesh_stats_payload(self):
         self._create_db_job("job-running", "running")
         _jrt.db.update_job(

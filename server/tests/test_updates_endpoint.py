@@ -1,6 +1,7 @@
 import asyncio
+import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
@@ -62,6 +63,41 @@ class UpdatesEndpointTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertIn("network unavailable", str(ctx.exception.detail))
+
+    def test_check_updates_runs_git_work_in_a_worker_thread(self):
+        to_thread = AsyncMock(return_value={"updateAvailable": False})
+        with patch("api.routes_misc.asyncio.to_thread", to_thread):
+            result = asyncio.run(check_updates())
+
+        self.assertEqual(result, {"updateAvailable": False})
+        to_thread.assert_awaited_once_with(get_update_status)
+
+    @patch("services.update_service._run_git")
+    @patch("services.update_service.subprocess.run")
+    def test_git_version_probe_has_a_timeout(self, mock_run, mock_run_git):
+        mock_run.return_value = None
+        mock_run_git.side_effect = [
+            "git@github.com:m3gnus/waveguide-generator.git",
+            "",
+            "1111111111111111111111111111111111111111",
+            "main",
+            "refs/remotes/origin/main",
+            "1111111111111111111111111111111111111111",
+            "0 0",
+        ]
+
+        get_update_status()
+
+        mock_run.assert_called_once_with(
+            ["git", "--version"], check=True, capture_output=True, timeout=10
+        )
+
+    @patch("services.update_service.subprocess.run")
+    def test_git_version_probe_timeout_maps_to_runtime_error(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(["git", "--version"], 10)
+
+        with self.assertRaisesRegex(RuntimeError, "Git version check timed out"):
+            get_update_status()
 
 
 if __name__ == "__main__":

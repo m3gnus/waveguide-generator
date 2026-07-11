@@ -3,13 +3,20 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
 import api.routes_misc as routes_misc
-from api.routes_misc import export_file, set_workspace_path, workspace_open, workspace_path, workspace_reset
+from api.routes_misc import (
+    export_file,
+    set_workspace_path,
+    workspace_open,
+    workspace_path,
+    workspace_reset,
+    workspace_select,
+)
 
 
 def make_upload_file(name: str, content: bytes) -> UploadFile:
@@ -177,6 +184,18 @@ class WorkspaceRoutesTest(unittest.TestCase):
             popen.assert_called_once_with(["open", str(workspace_root)])
             self.assertEqual(result["status"], "opened")
             self.assertEqual(result["path"], str(workspace_root))
+
+    def test_workspace_select_runs_native_picker_off_the_event_loop(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selected_root = Path(tmpdir).resolve()
+            to_thread = AsyncMock(return_value=str(selected_root))
+            with patch("api.routes_misc.asyncio.to_thread", to_thread), patch(
+                "api.routes_misc._persist_workspace_path_preference"
+            ):
+                result = asyncio.run(workspace_select())
+
+        to_thread.assert_awaited_once_with(routes_misc._select_workspace_folder)
+        self.assertEqual(result, {"selected": True, "path": str(selected_root)})
 
 
 if __name__ == "__main__":

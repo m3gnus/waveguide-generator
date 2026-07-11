@@ -8,7 +8,6 @@ queue one job at a time (max_concurrent_jobs=1).
 import asyncio
 import json
 import logging
-import multiprocessing
 import threading
 import uuid
 from collections import deque
@@ -25,8 +24,6 @@ logger = logging.getLogger(__name__)
 jobs: Dict[str, Dict[str, Any]] = {}
 job_queue: deque[str] = deque()
 running_jobs: set[str] = set()
-# Subprocess references for hard-kill cancellation.  Maps job_id → Process.
-running_processes: Dict[str, multiprocessing.Process] = {}
 jobs_lock = threading.RLock()
 scheduler_loop_running: bool = False
 max_concurrent_jobs: int = 1
@@ -194,8 +191,8 @@ def request_stop_job(job_id: str) -> Dict[str, str]:
             "status": "cancelled",
         }
     else:
-        # Hard-kill the solver subprocess if one is running.
-        _terminate_solver_process(job_id)
+        # Solver cancellation is cooperative; worker code observes this flag at
+        # its supported checkpoints before releasing the scheduler slot.
         _set_job_fields(
             job_id,
             stage="cancelling",
@@ -250,8 +247,12 @@ def list_job_items(
     rows, total = db.list_jobs(statuses=statuses, limit=limit, offset=offset)
     items: List[Dict[str, Any]] = []
     for row in rows:
-        merged = _merge_job_cache_from_db(row["id"]) or row
-        items.append(_serialize_job_item(merged))
+        with jobs_lock:
+            cached = jobs.get(row["id"])
+        if cached and not _is_terminal_status(str(cached.get("status", ""))):
+            items.append(_serialize_job_item(cached))
+        else:
+            items.append(_serialize_job_item(_job_from_db_row(row, include_request=False)))
     return items, total
 
 
@@ -285,15 +286,12 @@ def delete_job_record(job_id: str) -> None:
 
 # ── Job cache + DB merge ───────────────────────────────────────────────────────
 
-def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
-    ensure_db_ready()
-    with jobs_lock:
-        cached = jobs.get(job_id)
-        if cached:
-            return cached
-    row = db.get_job_row(job_id)
-    if not row:
-        return None
+def _job_from_db_row(
+    row: Dict[str, Any],
+    *,
+    include_request: bool = True,
+) -> Dict[str, Any]:
+    """Build a runtime-shaped job record without adding it to the cache."""
     merged: Dict[str, Any] = {
         "id": row["id"],
         "status": row["status"],
@@ -326,14 +324,27 @@ def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
         }
     )
     config = row.get("config_json")
-    if isinstance(config, dict):
+    if include_request and isinstance(config, dict):
         merged["request"] = config
         try:
             merged["request_obj"] = SimulationRequest(**config)
         except Exception as _exc:
             logger.debug(
-                "Could not reconstruct SimulationRequest for job %s: %s", job_id, _exc
+                "Could not reconstruct SimulationRequest for job %s: %s", row["id"], _exc
             )
+    return merged
+
+
+def _merge_job_cache_from_db(job_id: str) -> Optional[Dict[str, Any]]:
+    ensure_db_ready()
+    with jobs_lock:
+        cached = jobs.get(job_id)
+        if cached:
+            return cached
+    row = db.get_job_row(job_id)
+    if not row:
+        return None
+    merged = _job_from_db_row(row)
     with jobs_lock:
         jobs[job_id] = merged
     return merged
@@ -472,34 +483,6 @@ def update_job_stage(
     if progress is not None:
         payload["progress"] = progress
     _set_job_fields(job_id, **payload)
-
-
-def register_solver_process(job_id: str, process: multiprocessing.Process) -> None:
-    """Store a reference to the solver subprocess for hard-kill support."""
-    with jobs_lock:
-        running_processes[job_id] = process
-
-
-def unregister_solver_process(job_id: str) -> None:
-    """Remove the solver subprocess reference after it finishes."""
-    with jobs_lock:
-        running_processes.pop(job_id, None)
-
-
-def _terminate_solver_process(job_id: str) -> None:
-    """Send SIGTERM to the solver subprocess, then SIGKILL if it doesn't exit."""
-    with jobs_lock:
-        proc = running_processes.get(job_id)
-    if proc is None or not proc.is_alive():
-        return
-    logger.info("Hard-killing solver subprocess for job %s (pid=%s)", job_id, proc.pid)
-    proc.terminate()
-    proc.join(timeout=5)
-    if proc.is_alive():
-        logger.warning("Subprocess for job %s did not exit after SIGTERM; sending SIGKILL", job_id)
-        proc.kill()
-        proc.join(timeout=3)
-    unregister_solver_process(job_id)
 
 
 def _remove_from_queue(job_id: str) -> None:

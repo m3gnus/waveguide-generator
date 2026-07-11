@@ -132,6 +132,53 @@ class ApiValidationTest(unittest.TestCase):
         validation = validate_submit_simulation_request(request)
         self.assertEqual(validation.waveguide_params["sim_type"], 1)
 
+    def test_hornlab_mesher_submission_accepts_no_client_mesh(self):
+        request = SimulationRequest(
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type="2",
+            solver_backend="metal",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "OSSE"},
+                }
+            },
+        )
+        job_id = "11111111-1111-1111-1111-111111111110"
+
+        with patch("api.routes_simulation.is_metal_fast_solve_ready", return_value=True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True
+        ), patch("api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True), patch(
+            "api.routes_simulation.create_simulation_job", return_value=job_id
+        ) as create_simulation_job:
+            result = asyncio.run(submit_simulation(request))
+
+        self.assertEqual(result["job_id"], job_id)
+        self.assertIsNone(create_simulation_job.call_args.args[0].mesh)
+
+    def test_hornlab_mesher_ignores_client_source_tag_placeholder(self):
+        request = SimulationRequest(
+            mesh=MeshData(
+                vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                indices=[0, 1, 2],
+                surfaceTags=[1],
+            ),
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=10,
+            sim_type="2",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "OSSE"},
+                }
+            },
+        )
+
+        validation = validate_submit_simulation_request(request)
+
+        self.assertEqual(validation.mesh_strategy, "hornlab_mesher")
+
     def test_invalid_sim_type_is_rejected(self):
         request = SimulationRequest(
             mesh=MeshData(
@@ -1186,6 +1233,11 @@ class MeshArtifactEndpointTest(unittest.TestCase):
 
 
 class StopSimulationLifecycleTest(unittest.TestCase):
+    def test_runtime_has_no_subprocess_cancellation_registry(self):
+        self.assertFalse(hasattr(_jrt, "running_processes"))
+        self.assertFalse(hasattr(_jrt, "register_solver_process"))
+        self.assertFalse(hasattr(_jrt, "unregister_solver_process"))
+
     def test_stop_simulation_cancels_queued_job_immediately(self):
         job_id = "test-stop-queued"
         _jrt.jobs[job_id] = {
@@ -1356,6 +1408,29 @@ class CooperativeCancellationRunnerTest(unittest.TestCase):
             self.assertEqual(callback_seen, [True])
             self.assertEqual(_jrt.jobs[job_id]["status"], "cancelled")
             self.assertEqual(_jrt.jobs[job_id]["stage"], "cancelled")
+        finally:
+            _jrt.jobs.pop(job_id, None)
+
+    def test_full_3d_runner_rejects_mesher_mesh_without_source_tag_before_solve(self):
+        job_id = "test-runner-mesher-missing-source-tag"
+        _jrt.jobs[job_id] = self._make_job_entry(job_id)
+        mesher_result = self._fake_mesher_result()
+        mesher_result["canonical_mesh"]["surfaceTags"] = [1]
+
+        async def fake_mesher_worker(*_args, **_kwargs):
+            return mesher_result
+
+        try:
+            with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
+                 patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
+                 patch("services.simulation_runner.build_waveguide_mesh", object()), \
+                 patch("services.simulation_runner.run_on_gmsh_worker", side_effect=fake_mesher_worker), \
+                 patch("services.simulation_runner.solve_metal_from_msh") as solve_metal:
+                asyncio.run(_sim_runner.run_simulation(job_id, self._make_minimal_request()))
+
+            self.assertEqual(_jrt.jobs[job_id]["status"], "error")
+            self.assertIn("no source-tagged elements", _jrt.jobs[job_id]["error_message"])
+            solve_metal.assert_not_called()
         finally:
             _jrt.jobs.pop(job_id, None)
 

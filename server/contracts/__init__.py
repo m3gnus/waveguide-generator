@@ -231,7 +231,9 @@ def normalize_contract_solver_mode(value: Any) -> str:
 
 
 class SimulationRequest(BaseModel):
-    mesh: MeshData
+    # The active solve path rebuilds its mesh from options.mesh.waveguide_params.
+    # A client mesh remains accepted for compatibility but is not required.
+    mesh: Optional[MeshData] = None
     frequency_range: List[float]
     num_frequencies: int
     sim_type: str

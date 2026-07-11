@@ -36,7 +36,9 @@ def get_update_status() -> Dict[str, Any]:
         )
 
     try:
-        subprocess.run(["git", "--version"], check=True, capture_output=True)
+        subprocess.run(["git", "--version"], check=True, capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Git version check timed out.") from exc
     except (subprocess.CalledProcessError, FileNotFoundError):
         raise RuntimeError("Git is not installed or not in system PATH.")
 

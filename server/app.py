@@ -6,7 +6,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app_config import add_cors_middleware, get_backend_host, get_backend_port
+from app_config import (
+    add_cors_middleware,
+    add_origin_guard_middleware,
+    get_backend_host,
+    get_backend_port,
+)
 from api.routes_mesh import router as mesh_router
 from api.routes_misc import router as misc_router
 from api.routes_simulation import router as simulation_router
@@ -35,6 +40,7 @@ async def app_lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="MWG Horn BEM Solver", version="1.1.0", lifespan=app_lifespan)
     add_cors_middleware(app)
+    add_origin_guard_middleware(app)
     app.include_router(misc_router)
     app.include_router(mesh_router)
     app.include_router(simulation_router)
