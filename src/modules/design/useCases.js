@@ -1,5 +1,10 @@
 import { MWGConfigParser } from '../../config/index.js';
-import { coerceConfigParams, applyAthImportDefaults, isMWGConfig } from '../../geometry/params.js';
+import {
+  coerceConfigParams,
+  applyAthImportDefaults,
+  isMWGConfig,
+  validateGeometryParamExpressions,
+} from '../../geometry/params.js';
 
 /**
  * Process a configuration file content and update GlobalState.
@@ -25,6 +30,16 @@ export function importMWGConfig(content, fileName) {
     if (!isMWGConfig(content)) {
       typedParams._athLengthMode = 'total';
       applyAthImportDefaults(parsed, typedParams);
+    }
+
+    const expressionValidation = validateGeometryParamExpressions(typedParams, {
+      type: parsed.type,
+    });
+    if (!expressionValidation.valid) {
+      return {
+        success: false,
+        error: `Invalid formula for ${expressionValidation.key}: ${expressionValidation.error}`,
+      };
     }
 
     // establish a new baseline (skip next change tracking update)

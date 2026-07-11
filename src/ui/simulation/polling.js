@@ -7,7 +7,12 @@ import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { persistSimulationGenerationArtifacts } from './workspaceTasks.js';
 import { downloadMeshArtifact } from './meshDownload.js';
 import { renderBackendSimulationMeshDiagnostics, renderJobList } from './jobActions.js';
-import { setPollTimer, clearPollTimer } from './jobOrchestration.js';
+import {
+  setPollTimer,
+  clearPollTimer,
+  clearProgressHideTimer,
+  scheduleProgressHide,
+} from './jobOrchestration.js';
 import {
   ensureSimulationControllerJobResults,
   recordSimulationControllerExport,
@@ -17,6 +22,7 @@ export { setPollTimer, clearPollTimer, setActiveJob } from './jobOrchestration.j
 
 const ACTIVE_POLL_MS = 1000;
 const MAX_POLL_BACKOFF_MS = 30000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
 /** Track jobs whose mesh artifact has already been persisted early (before completion). */
 const _earlyMeshPersisted = new Set();
@@ -32,6 +38,7 @@ const _autoDownloadedMeshes = new Set();
 /**
  * @typedef {Object} PollingPanel
  * @property {ReturnType<typeof setTimeout>|null} pollTimer
+ * @property {ReturnType<typeof setTimeout>|null} progressHideTimer
  * @property {ReturnType<typeof setTimeout>|null} pollInterval
  * @property {boolean} isPolling
  * @property {number} consecutivePollFailures
@@ -65,6 +72,7 @@ function nextBackoffMs(currentBackoffMs) {
  * @param {PollingPanel} panel
  */
 export function pollSimulationStatus(panel) {
+  clearProgressHideTimer(panel);
   // Guard must run before any DOM access to support test environments.
   if (panel.isPolling) {
     return;
@@ -225,10 +233,14 @@ export function pollSimulationStatus(panel) {
       if (!anyActive) {
         renderJobList(panel);
         // Show the final stage briefly, then restore connection status and stop polling.
-        setTimeout(() => {
-          setProgressVisible(false);
-          restoreConnectionStatus(panel);
-        }, 3000);
+        scheduleProgressHide(
+          panel,
+          () => {
+            setProgressVisible(false);
+            restoreConnectionStatus(panel);
+          },
+          3000
+        );
         clearPollTimer(panel);
         return;
       }
@@ -239,15 +251,25 @@ export function pollSimulationStatus(panel) {
       panel.pollBackoffMs = nextBackoffMs(panel.pollBackoffMs);
       panel.pollDelayMs = panel.pollBackoffMs;
       console.error('Status polling error:', error);
+      const activeJob = panel.activeJobId ? panel.jobs?.get(panel.activeJobId) : null;
+
+      if (panel.consecutivePollFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+        updateStageUi(panel, {
+          progress: Number(activeJob?.progress) || 0,
+          stage: 'error',
+          message: 'Unable to check simulation status',
+        });
+        showError('Unable to check simulation status. Polling stopped after repeated failures.');
+        restoreConnectionStatus(panel);
+        clearPollTimer(panel);
+        return;
+      }
+
       updateStageUi(panel, {
-        progress: 1,
-        stage: 'error',
-        message: 'Error checking status',
+        progress: Number(activeJob?.progress) || 0,
+        stage: activeJob?.stage || activeJob?.status || 'bem_solve',
+        message: `Connection lost. Retrying status check in ${Math.ceil(panel.pollDelayMs / 1000)} seconds.`,
       });
-      showError('Error checking simulation status.');
-      restoreConnectionStatus(panel);
-      clearPollTimer(panel);
-      return;
     } finally {
       // Only reschedule if the loop hasn't been stopped (clearPollTimer resets isPolling).
       if (panel.isPolling) {

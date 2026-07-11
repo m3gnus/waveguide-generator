@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  exportAsPolarCSV,
-  exportAsVACSSpectrum,
+  buildPolarCsvFile,
+  buildVacSpectrumFile,
 } from "../src/ui/simulation/exports.js";
 import { extractFlatDI, extractPerPlaneDI } from "../src/ui/simulation/diHelpers.js";
 import { renderSolveStatsSummary } from "../src/ui/simulation/results.js";
@@ -44,7 +44,7 @@ test("renderSolveStatsSummary derives axes from directivity result keys when met
   assert.match(markup, /33°/);
 });
 
-test("exportAsPolarCSV serializes only present directivity planes", async () => {
+test("buildPolarCsvFile serializes only present directivity planes", () => {
   const panel = {
     currentSmoothing: "none",
     lastResults: {
@@ -58,26 +58,18 @@ test("exportAsPolarCSV serializes only present directivity planes", async () => 
     },
   };
 
-  let writtenFile = null;
-  const files = await exportAsPolarCSV(panel, {
-    baseName: "horn_12",
-    writer: async (file) => {
-      writtenFile = file;
-      return file.fileName;
-    },
-  });
+  const file = buildPolarCsvFile(panel, { baseName: "horn_12" });
 
-  assert.deepEqual(files, ["horn_12_polar.csv"]);
-  assert.ok(writtenFile);
-  assert.match(writtenFile.content, /Frequency_Hz,Plane,Theta_deg,SPL_norm_dB/);
-  assert.match(writtenFile.content, /100,diagonal,0,0\.00/);
-  assert.match(writtenFile.content, /100,diagonal,30,-3\.00/);
-  assert.match(writtenFile.content, /200,diagonal,30,\n/);
-  assert.doesNotMatch(writtenFile.content, /,horizontal,/);
-  assert.doesNotMatch(writtenFile.content, /,vertical,/);
+  assert.equal(file.fileName, "horn_12_polar.csv");
+  assert.match(file.content, /Frequency_Hz,Plane,Theta_deg,SPL_norm_dB/);
+  assert.match(file.content, /100,diagonal,0,0\.00/);
+  assert.match(file.content, /100,diagonal,30,-3\.00/);
+  assert.match(file.content, /200,diagonal,30,\n/);
+  assert.doesNotMatch(file.content, /,horizontal,/);
+  assert.doesNotMatch(file.content, /,vertical,/);
 });
 
-test("exportAsVACSSpectrum falls back to the first available plane when horizontal is missing", async () => {
+test("buildVacSpectrumFile falls back to the first available plane when horizontal is missing", () => {
   const panel = {
     currentSmoothing: "none",
     lastResults: {
@@ -89,21 +81,13 @@ test("exportAsVACSSpectrum falls back to the first available plane when horizont
     },
   };
 
-  let writtenFile = null;
-  const files = await exportAsVACSSpectrum(panel, {
-    baseName: "horn_34",
-    writer: async (file) => {
-      writtenFile = file;
-      return file.fileName;
-    },
-  });
+  const file = buildVacSpectrumFile(panel, { baseName: "horn_34" });
 
-  assert.deepEqual(files, ["horn_34_spectrum.txt"]);
-  assert.ok(writtenFile);
+  assert.equal(file.fileName, "horn_34_spectrum.txt");
   assert.match(
-    writtenFile.content,
+    file.content,
     /Data_Legend="Polar, Pressure, Vertical \(far-field\)"/,
   );
-  assert.match(writtenFile.content, /Param_Identifier="WG_Polar_V"/);
-  assert.doesNotMatch(writtenFile.content, /Param_Identifier="WG_Polar_H"/);
+  assert.match(file.content, /Param_Identifier="WG_Polar_V"/);
+  assert.doesNotMatch(file.content, /Param_Identifier="WG_Polar_H"/);
 });

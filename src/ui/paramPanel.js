@@ -9,6 +9,7 @@ import {
   validateOutputName,
   validateCounter,
   validateJobLabel,
+  validateFormula,
   showInputError,
   hideInputError,
 } from './inputValidation.js';
@@ -73,6 +74,82 @@ const FORMULA_REFERENCE = {
   ],
 };
 
+function getParamKey(element) {
+  if (!element) return null;
+  return (
+    element.dataset?.paramKey ||
+    element.getAttribute?.('data-param-key') ||
+    element.attributes?.['data-param-key'] ||
+    null
+  );
+}
+
+function isDescendantOf(element, root) {
+  if (!element || !root) return false;
+  if (typeof root.contains === 'function') return root.contains(element);
+
+  let current = element;
+  while (current) {
+    if (current === root) return true;
+    current = current.parentNode || current.parentElement || null;
+  }
+  return false;
+}
+
+function findControlByParamKey(root, key, tagName) {
+  if (!root) return null;
+
+  const matches =
+    getParamKey(root) === key && String(root.tagName || '').toUpperCase() === String(tagName || '');
+  if (matches) return root;
+
+  for (const child of root.children || []) {
+    const match = findControlByParamKey(child, key, tagName);
+    if (match) return match;
+  }
+  return null;
+}
+
+function isNumericLiteral(value) {
+  return (
+    /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(value) ||
+    /^[+-]?(?:infinity|nan)$/i.test(value)
+  );
+}
+
+function validateNumericValue(input, def) {
+  const inputMode = getControlInputMode(def);
+  const requiresNumber = input?.type === 'number' || inputMode === 'number';
+  const supportsFormula = inputMode === 'formula';
+  if (!requiresNumber && !supportsFormula) return { valid: true };
+
+  const raw = String(input?.value ?? '').trim();
+  if (!raw) {
+    return { valid: false, error: 'Enter a finite number.' };
+  }
+
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) {
+    if (requiresNumber || isNumericLiteral(raw)) {
+      return { valid: false, error: 'Enter a finite number.' };
+    }
+    return { valid: true };
+  }
+
+  if (def?.min !== undefined && numeric < def.min) {
+    return def.max !== undefined
+      ? { valid: false, error: `Enter a value between ${def.min} and ${def.max}.` }
+      : { valid: false, error: `Enter a value of at least ${def.min}.` };
+  }
+  if (def?.max !== undefined && numeric > def.max) {
+    return def.min !== undefined
+      ? { valid: false, error: `Enter a value between ${def.min} and ${def.max}.` }
+      : { valid: false, error: `Enter a value of at most ${def.max}.` };
+  }
+
+  return { valid: true };
+}
+
 export class ParamPanel {
   constructor(containerId) {
     this.container = document.getElementById(containerId);
@@ -105,6 +182,7 @@ export class ParamPanel {
 
   // Create the full UI structure
   createFullPanel() {
+    const focusedControl = this.captureFocusedControl();
     this.container.innerHTML = '';
     if (this.simulationSettingsContainer) {
       this.simulationSettingsContainer.innerHTML = '';
@@ -140,6 +218,59 @@ export class ParamPanel {
           includeIds: ['source-definition', 'solve-export-mesh'],
         }
       );
+    }
+
+    this.restoreFocusedControl(focusedControl);
+  }
+
+  captureFocusedControl() {
+    const activeElement = document.activeElement;
+    const paramKey = getParamKey(activeElement);
+    const roots = [this.container, this.simulationSettingsContainer, this.simulationContainer];
+    if (!paramKey || !roots.some((root) => isDescendantOf(activeElement, root))) {
+      return null;
+    }
+
+    const selectionStart = activeElement.selectionStart;
+    const selectionEnd = activeElement.selectionEnd;
+    return {
+      paramKey,
+      tagName: String(activeElement.tagName || '').toUpperCase(),
+      selection:
+        typeof selectionStart === 'number' && typeof selectionEnd === 'number'
+          ? {
+              start: selectionStart,
+              end: selectionEnd,
+              direction: activeElement.selectionDirection || 'none',
+            }
+          : null,
+    };
+  }
+
+  restoreFocusedControl(focusedControl) {
+    if (!focusedControl) return;
+
+    const roots = [this.container, this.simulationSettingsContainer, this.simulationContainer];
+    const replacement = roots
+      .map((root) => findControlByParamKey(root, focusedControl.paramKey, focusedControl.tagName))
+      .find(Boolean);
+    if (!replacement || typeof replacement.focus !== 'function') return;
+
+    try {
+      replacement.focus({ preventScroll: true });
+    } catch {
+      replacement.focus();
+    }
+
+    if (!focusedControl.selection || typeof replacement.setSelectionRange !== 'function') return;
+    try {
+      replacement.setSelectionRange(
+        focusedControl.selection.start,
+        focusedControl.selection.end,
+        focusedControl.selection.direction
+      );
+    } catch {
+      // Some input types do not support text selections.
     }
   }
 
@@ -240,6 +371,7 @@ export class ParamPanel {
     typeRow.className = 'input-row';
     const typeSelect = document.createElement('select');
     typeSelect.id = 'model-type';
+    typeSelect.setAttribute('data-param-key', 'model-type');
 
     const currentType = GlobalState.get().type;
     ['R-OSSE', 'OSSE', 'ICW'].forEach((type) => {
@@ -319,11 +451,11 @@ export class ParamPanel {
       }
 
       input.oninput = (e) => {
-        this.validateInputOnChange(e.target, key);
+        this.validateInputOnChange(e.target, key, def);
       };
 
       input.onchange = (e) => {
-        const valid = this.validateInputOnChange(e.target, key);
+        const valid = this.validateInputOnChange(e.target, key, def);
         if (valid !== false) {
           this.updateParam(key, normalizeParamInput(e.target.value));
         }
@@ -491,7 +623,7 @@ export class ParamPanel {
     GlobalState.update({ [key]: value });
   }
 
-  validateInputOnChange(input, key) {
+  validateInputOnChange(input, key, def = null) {
     const validators = {
       outputName: validateOutputName,
       counter: validateCounter,
@@ -499,12 +631,10 @@ export class ParamPanel {
     };
 
     const validator = validators[key];
-    if (!validator) {
-      hideInputError(input, true);
-      return true;
+    let result = validator ? validator(input.value) : validateNumericValue(input, def);
+    if (result.valid && !validator && getControlInputMode(def) === 'formula') {
+      result = validateFormula(input.value);
     }
-
-    const result = validator(input.value);
     if (!result.valid) {
       showInputError(input, result.error);
       return false;

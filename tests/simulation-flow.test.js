@@ -7,6 +7,10 @@ import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
 import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { openViewResultsModal } from '../src/ui/simulation/viewResults.js';
+import {
+  clearProgressHideTimer,
+  scheduleProgressHide,
+} from '../src/ui/simulation/jobOrchestration.js';
 import { AppEvents } from '../src/events.js';
 import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
 import {
@@ -384,6 +388,97 @@ test('view results modal keeps header controls together and rerenders directivit
     global.document = originalDocument;
     global.window = originalWindow;
     global.fetch = originalFetch;
+  }
+});
+
+test('view results distinguishes chart service errors from missing Matplotlib', async () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const originalFetch = global.fetch;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  const cases = [
+    {
+      label: 'server error',
+      fetch: async () => ({
+        ok: false,
+        status: 500,
+        async text() {
+          return 'solver <detail>';
+        },
+      }),
+      expected: 'Chart rendering failed: solver &lt;detail&gt;',
+      excludesMatplotlib: true,
+    },
+    {
+      label: 'unreachable backend',
+      fetch: async () => {
+        throw new Error('network unavailable');
+      },
+      expected: 'backend is unreachable. Check that the backend is running.',
+      excludesMatplotlib: true,
+    },
+    {
+      label: 'Matplotlib unavailable',
+      fetch: async () => ({
+        ok: false,
+        status: 503,
+        async text() {
+          return 'renderer unavailable';
+        },
+      }),
+      expected: 'Matplotlib is required for chart rendering',
+      excludesMatplotlib: false,
+    },
+  ];
+
+  try {
+    for (const scenario of cases) {
+      const appendedChildren = [];
+      const createdElements = [];
+      const fakeDocument = createModalDocument(createdElements, appendedChildren);
+      global.document = fakeDocument;
+      global.window = {
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      global.fetch = scenario.fetch;
+
+      const panel = {
+        currentSmoothing: 'none',
+        currentDirectivityReferenceLevel: -6,
+        solver: { backendUrl: 'http://localhost:8000' },
+        activeJobId: 'job-chart-error',
+        currentJobId: 'job-chart-error',
+        resultCache: new Map([
+          [
+            'job-chart-error',
+            {
+              spl_on_axis: { frequencies: [100], spl: [90] },
+              di: { frequencies: [100], di: [5] },
+              impedance: { frequencies: [100], real: [8], imaginary: [1] },
+              directivity: {},
+            },
+          ],
+        ]),
+        lastResults: null,
+      };
+
+      await openViewResultsModal(panel);
+      await flushModalAsyncWork();
+
+      const chartMarkup = fakeDocument.getElementById('vr-frequency_response')?.innerHTML || '';
+      assert.match(chartMarkup, new RegExp(scenario.expected));
+      if (scenario.excludesMatplotlib) {
+        assert.doesNotMatch(chartMarkup, /Matplotlib is required/);
+      }
+    }
+  } finally {
+    global.document = originalDocument;
+    global.window = originalWindow;
+    global.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });
 
@@ -1052,6 +1147,59 @@ test('renderJobList applies rating filter and renders rating controls', () => {
   }
 });
 
+test('renderJobList skips identical feed updates and refreshes when a job changes', () => {
+  const originalDocument = global.document;
+  let assignments = 0;
+  let markup = '';
+  const list = {};
+  Object.defineProperty(list, 'innerHTML', {
+    get() {
+      return markup;
+    },
+    set(value) {
+      assignments += 1;
+      markup = value;
+    },
+  });
+  const sourceLabel = { textContent: '' };
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    },
+  };
+
+  try {
+    const panel = {
+      jobSourceMode: 'backend',
+      activeJobId: 'job-signature',
+      jobs: new Map([
+        [
+          'job-signature',
+          {
+            id: 'job-signature',
+            label: 'signature-task',
+            status: 'running',
+            progress: 0.2,
+            createdAt: '2026-03-11T09:00:00.000Z',
+          },
+        ],
+      ]),
+    };
+
+    renderJobList(panel);
+    renderJobList(panel);
+    assert.equal(assignments, 1);
+
+    panel.jobs.get('job-signature').progress = 0.4;
+    renderJobList(panel);
+    assert.equal(assignments, 2);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
 test('clearPollTimer from polling.js resets isPolling and clears timer refs', () => {
   const clearedIds = [];
   const origClearTimeout = global.clearTimeout;
@@ -1075,6 +1223,248 @@ test('clearPollTimer from polling.js resets isPolling and clears timer refs', ()
     assert.equal(panel.isPolling, false);
   } finally {
     global.clearTimeout = origClearTimeout;
+  }
+});
+
+test('progress hide callbacks from an earlier run cannot affect a newer run', () => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const scheduled = [];
+  const cleared = [];
+  global.setTimeout = (callback, delay) => {
+    const timer = { id: scheduled.length + 1, callback, delay };
+    scheduled.push(timer);
+    return timer;
+  };
+  global.clearTimeout = (timer) => {
+    cleared.push(timer);
+  };
+
+  try {
+    const panel = { progressHideTimer: null };
+    let hidden = 0;
+    scheduleProgressHide(panel, () => {
+      hidden += 1;
+    }, 3000);
+    const stale = scheduled[0];
+
+    // runSimulation/pollSimulationStatus clears this handle before a new run begins.
+    clearProgressHideTimer(panel);
+    stale.callback();
+    assert.equal(hidden, 0);
+
+    scheduleProgressHide(panel, () => {
+      hidden += 1;
+    }, 3000);
+    scheduled[1].callback();
+    assert.equal(hidden, 1);
+    assert.ok(cleared.includes(stale));
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('pollSimulationStatus persists and auto-exports once on a running-to-complete transition', async () => {
+  const originalDocument = global.document;
+  const originalFetch = global.fetch;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const fetchCalls = [];
+  let timerId = 0;
+
+  global.document = {
+    getElementById() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+      async text() {
+        return '';
+      },
+    };
+  };
+  global.setTimeout = () => {
+    timerId += 1;
+    return timerId;
+  };
+  global.clearTimeout = () => {};
+  saveSimulationManagementSettings({
+    ...SIM_MANAGEMENT_DEFAULTS,
+    autoExportOnComplete: true,
+    selectedFormats: ['csv'],
+  });
+
+  try {
+    let autoExportCalls = 0;
+    const panel = {
+      isPolling: false,
+      pollTimer: null,
+      progressHideTimer: null,
+      pollInterval: null,
+      pollDelayMs: 1000,
+      pollBackoffMs: 1000,
+      consecutivePollFailures: 0,
+      activeJobId: 'job-complete-once',
+      currentJobId: 'job-complete-once',
+      jobSourceMode: 'backend',
+      jobs: new Map([
+        [
+          'job-complete-once',
+          {
+            id: 'job-complete-once',
+            label: 'complete_once',
+            status: 'running',
+            progress: 0.5,
+            createdAt: '2026-03-11T10:00:00.000Z',
+          },
+        ],
+      ]),
+      resultCache: new Map(),
+      solver: {
+        backendUrl: 'http://backend.example.test',
+        async getJobStatus(id) {
+          return {
+            id,
+            status: 'complete',
+            progress: 1,
+            stage: 'complete',
+            completed_at: '2026-03-11T10:01:00.000Z',
+          };
+        },
+        async getResults() {
+          return { spl_on_axis: { frequencies: [100], spl: [90] } };
+        },
+      },
+      displayResults() {},
+      async exportResults(options) {
+        autoExportCalls += 1;
+        assert.equal(options.auto, true);
+        return { exportedFiles: ['complete_once_results.csv'] };
+      },
+      checkSolverConnection() {},
+    };
+
+    pollSimulationStatus(panel);
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+
+    assert.equal(autoExportCalls, 1);
+    assert.equal(panel.jobs.get('job-complete-once')?.justCompleted, false);
+    assert.equal(panel.jobs.get('job-complete-once')?.rawResultsFile, 'complete_once_raw.results.json');
+    const rawResultsWrite = fetchCalls.find(
+      ({ options }) => options.body?.get?.('file')?.name === 'complete_once_raw.results.json'
+    );
+    assert.ok(rawResultsWrite, 'expected raw-results persistence write');
+
+    pollSimulationStatus(panel);
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+    assert.equal(autoExportCalls, 1);
+  } finally {
+    saveSimulationManagementSettings(SIM_MANAGEMENT_DEFAULTS);
+    global.document = originalDocument;
+    global.fetch = originalFetch;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('pollSimulationStatus recovers after a transient result-fetch failure', async () => {
+  const originalDocument = global.document;
+  const originalFetch = global.fetch;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalConsoleError = console.error;
+  const scheduled = [];
+
+  global.document = {
+    getElementById() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  global.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { status: 'success' };
+    },
+    async text() {
+      return '';
+    },
+  });
+  global.setTimeout = (callback, delay) => {
+    const timer = { callback, delay };
+    scheduled.push(timer);
+    return timer;
+  };
+  global.clearTimeout = () => {};
+  console.error = () => {};
+
+  try {
+    let resultFetches = 0;
+    const panel = {
+      isPolling: false,
+      pollTimer: null,
+      progressHideTimer: null,
+      pollInterval: null,
+      pollDelayMs: 1000,
+      pollBackoffMs: 1000,
+      consecutivePollFailures: 0,
+      activeJobId: 'job-recover',
+      currentJobId: 'job-recover',
+      jobSourceMode: 'backend',
+      jobs: new Map([
+        [
+          'job-recover',
+          { id: 'job-recover', status: 'running', progress: 0.5, label: 'recover' },
+        ],
+      ]),
+      resultCache: new Map(),
+      solver: {
+        async getJobStatus(id) {
+          return { id, status: 'complete', progress: 1, stage: 'complete' };
+        },
+        async getResults() {
+          resultFetches += 1;
+          if (resultFetches === 1) {
+            throw new Error('temporary result endpoint failure');
+          }
+          return { spl_on_axis: { frequencies: [100], spl: [90] } };
+        },
+      },
+      displayResults() {},
+      checkSolverConnection() {},
+    };
+
+    pollSimulationStatus(panel);
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+
+    assert.equal(panel.consecutivePollFailures, 1);
+    assert.equal(panel.isPolling, true);
+    assert.equal(scheduled[0]?.delay, 2000);
+
+    scheduled[0].callback();
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+
+    assert.equal(resultFetches, 2);
+    assert.equal(panel.resultCache.has('job-recover'), true);
+    assert.equal(panel.isPolling, false);
+  } finally {
+    global.document = originalDocument;
+    global.fetch = originalFetch;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    console.error = originalConsoleError;
   }
 });
 

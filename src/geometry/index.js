@@ -5,13 +5,14 @@ export {
   buildHornMesh,
   buildWaveguideMesh,
 } from './engine/index.js';
-export { parseExpression } from './expression.js';
+export { parseExpression, validateExpression } from './expression.js';
 export { evalParam, parseQuadrants } from './common.js';
 export {
   isNumericString,
   isMWGConfig,
   coerceConfigParams,
   applyAthImportDefaults,
+  validateGeometryParamExpressions,
   prepareGeometryParams,
   isPreparedGeometryParams,
 } from './params.js';

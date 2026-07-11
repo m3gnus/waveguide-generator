@@ -1,4 +1,9 @@
 import { applySmoothing } from '../../results/smoothing.js';
+import {
+  isRhoCNormalizedImpedance,
+  resolvePhaseReferenceDistance,
+  resolvePhaseTimeConvention,
+} from '../../results/conventions.js';
 import { extractFlatDI } from './diHelpers.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import {
@@ -223,30 +228,6 @@ function finiteImpedanceNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function isRhoCNormalizedImpedance(results) {
-  const metadata = results?.metadata || {};
-  const units = String(metadata?.impedance_units || metadata?.impedance?.units || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll(' ', '');
-  const normalization = String(
-    metadata?.impedance_normalization || metadata?.impedance?.normalization || ''
-  )
-    .trim()
-    .toLowerCase()
-    .replaceAll('-', '_');
-  const quantity = String(metadata?.impedance_quantity || metadata?.impedance?.quantity || '')
-    .trim()
-    .toLowerCase();
-
-  return (
-    units === 'z/(rho*c)' ||
-    units === 'z/rhoc' ||
-    normalization === 'rho_c' ||
-    quantity === 'specific_acoustic_impedance'
-  );
-}
-
 function normalizeLegacyImpedanceSeries(real = [], imaginary = [], options = {}) {
   const realSeries = Array.isArray(real) ? real : [];
   const imaginarySeries = Array.isArray(imaginary) ? imaginary : [];
@@ -334,77 +315,6 @@ function finiteSeriesValues(values = []) {
 function formatReportCell(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toFixed(2) : 'n/a';
-}
-
-function resolvePhaseReferenceDistance(results) {
-  const metadata = results?.metadata || {};
-  const directivityDistance = Number(metadata?.directivity?.effective_distance_m);
-  if (Number.isFinite(directivityDistance) && directivityDistance > 0) {
-    return directivityDistance;
-  }
-  const observationDistance = Number(metadata?.observation?.effective_distance_m);
-  if (Number.isFinite(observationDistance) && observationDistance > 0) {
-    return observationDistance;
-  }
-  return null;
-}
-
-function resolvePhaseTimeConvention(results) {
-  const metadata = results?.metadata || {};
-  const explicitPhase = String(metadata?.phase_time_convention || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-')
-    .replaceAll(' ', '');
-  if (
-    explicitPhase === 'exp(+ikr)' ||
-    explicitPhase === 'e(+ikr)' ||
-    explicitPhase === '+ikr' ||
-    explicitPhase === 'positive' ||
-    explicitPhase === 'positive-spatial'
-  ) {
-    return 'metal';
-  }
-  if (
-    explicitPhase === 'exp(-ikr)' ||
-    explicitPhase === 'e(-ikr)' ||
-    explicitPhase === '-ikr' ||
-    explicitPhase === 'negative' ||
-    explicitPhase === 'negative-spatial' ||
-    explicitPhase === 'legacy'
-  ) {
-    return 'bempp';
-  }
-
-  const engine = String(metadata?.engine || '')
-    .trim()
-    .toLowerCase();
-  if (engine === 'hornlab-bempp-bem') {
-    return 'metal';
-  }
-
-  const selected = String(metadata?.device_interface?.selected || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-');
-  if (selected === 'metal' || selected === 'bempp-cl-numba' || selected === 'bempp-cl-opencl') {
-    return 'metal';
-  }
-
-  const backend = String(metadata?.solver_backend || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-');
-  if (backend === 'metal' || backend === 'hornlab-metal' || backend === 'hornlab-metal-bem') {
-    return 'metal';
-  }
-  if (backend === 'bempp' || backend === 'bempp-cl' || backend === 'bemppcl') {
-    return 'bempp';
-  }
-  if (metadata?.metal && typeof metadata.metal === 'object') {
-    return 'metal';
-  }
-  return null;
 }
 
 function formatCsvCell(value) {
@@ -621,7 +531,7 @@ function buildTextFile(panel, { baseName } = {}) {
   });
 }
 
-function buildPolarCsvFile(panel, { baseName } = {}) {
+export function buildPolarCsvFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
   if (!results) {
     throw new Error('No simulation results available.');
@@ -659,7 +569,7 @@ function buildPolarCsvFile(panel, { baseName } = {}) {
   });
 }
 
-function buildVacSpectrumFile(panel, { baseName } = {}) {
+export function buildVacSpectrumFile(panel, { baseName } = {}) {
   const results = panel.lastResults;
   if (!results) {
     throw new Error('No simulation results available.');
@@ -991,133 +901,4 @@ export async function exportResults(
     failures,
     selectedFormats: normalizedFormats,
   };
-}
-
-export function applyExportSelection(panel, exportType, handlers = null) {
-  const actionMap = handlers || {
-    1: () => exportAsMatplotlibPNG(panel),
-    2: () => exportAsCSV(panel),
-    3: () => exportAsJSON(panel),
-    4: () => exportAsText(panel),
-    5: () => exportAsPolarCSV(panel),
-    6: () => exportAsImpedanceCSV(panel),
-    7: () => exportAsVACSSpectrum(panel),
-    8: () => exportAsWaveguideSTL(panel),
-    9: () => exportAsFusionCurvesCSV(panel),
-  };
-
-  const action = actionMap[exportType];
-  if (!action) {
-    showError('Invalid export selection.');
-    return false;
-  }
-
-  void action();
-  return true;
-}
-
-export async function exportAsMatplotlibPNG(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    await buildMatplotlibPngFiles(panel, {
-      baseName,
-    }),
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsCSV(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    [
-      buildCsvFile(panel, {
-        baseName,
-      }),
-    ],
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsJSON(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    [
-      buildJsonFile(panel, {
-        baseName,
-      }),
-    ],
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsText(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    [
-      buildTextFile(panel, {
-        baseName,
-      }),
-    ],
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsPolarCSV(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    [
-      buildPolarCsvFile(panel, {
-        baseName,
-      }),
-    ],
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsVACSSpectrum(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    [
-      buildVacSpectrumFile(panel, {
-        baseName,
-      }),
-    ],
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsImpedanceCSV(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    [
-      buildImpedanceCsvFile(panel, {
-        baseName,
-      }),
-    ],
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsWaveguideSTL(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  return writeExportFiles(
-    normalizeGenerationExportFiles(
-      buildStlExportFiles(readExportState(), { baseName }),
-      'stl',
-      baseName
-    ),
-    { ...options, baseName }
-  );
-}
-
-export async function exportAsFusionCurvesCSV(panel, options = {}) {
-  const baseName = options.baseName || resolveExportBaseName(options.job);
-  const files = buildProfileCsvExportFiles(null, {
-    state: readExportState(),
-    baseName,
-  });
-  return writeExportFiles(normalizeGenerationExportFiles(files, 'fusion_csv', baseName), {
-    ...options,
-    baseName,
-  });
 }

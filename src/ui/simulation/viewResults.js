@@ -1,4 +1,9 @@
 import { applySmoothing } from '../../results/smoothing.js';
+import {
+  isRhoCNormalizedImpedance,
+  resolvePhaseReferenceDistance,
+  resolvePhaseTimeConvention,
+} from '../../results/conventions.js';
 import { extractPerPlaneDI } from './diHelpers.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { renderResultDiagnostics, renderSolveStatsSummary } from './results.js';
@@ -40,101 +45,6 @@ function normalizeDirectivityPayload(directivity) {
 function hasDirectivityPatterns(directivity) {
   return Object.values(directivity).some(
     (patterns) => Array.isArray(patterns) && patterns.length > 0
-  );
-}
-
-function resolvePhaseReferenceDistance(results) {
-  const metadata = results?.metadata || {};
-  const directivityDistance = Number(metadata?.directivity?.effective_distance_m);
-  if (Number.isFinite(directivityDistance) && directivityDistance > 0) {
-    return directivityDistance;
-  }
-  const observationDistance = Number(metadata?.observation?.effective_distance_m);
-  if (Number.isFinite(observationDistance) && observationDistance > 0) {
-    return observationDistance;
-  }
-  return null;
-}
-
-function resolvePhaseTimeConvention(results) {
-  const metadata = results?.metadata || {};
-  const explicitPhase = String(metadata?.phase_time_convention || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-')
-    .replaceAll(' ', '');
-  if (
-    explicitPhase === 'exp(+ikr)' ||
-    explicitPhase === 'e(+ikr)' ||
-    explicitPhase === '+ikr' ||
-    explicitPhase === 'positive' ||
-    explicitPhase === 'positive-spatial'
-  ) {
-    return 'metal';
-  }
-  if (
-    explicitPhase === 'exp(-ikr)' ||
-    explicitPhase === 'e(-ikr)' ||
-    explicitPhase === '-ikr' ||
-    explicitPhase === 'negative' ||
-    explicitPhase === 'negative-spatial' ||
-    explicitPhase === 'legacy'
-  ) {
-    return 'bempp';
-  }
-
-  const engine = String(metadata?.engine || '')
-    .trim()
-    .toLowerCase();
-  if (engine === 'hornlab-bempp-bem') {
-    return 'metal';
-  }
-
-  const selected = String(metadata?.device_interface?.selected || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-');
-  if (selected === 'metal' || selected === 'bempp-cl-numba' || selected === 'bempp-cl-opencl') {
-    return 'metal';
-  }
-
-  const backend = String(metadata?.solver_backend || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll('_', '-');
-  if (backend === 'metal' || backend === 'hornlab-metal' || backend === 'hornlab-metal-bem') {
-    return 'metal';
-  }
-  if (backend === 'bempp' || backend === 'bempp-cl' || backend === 'bemppcl') {
-    return 'bempp';
-  }
-  if (metadata?.metal && typeof metadata.metal === 'object') {
-    return 'metal';
-  }
-  return null;
-}
-
-function isRhoCNormalizedImpedance(results) {
-  const metadata = results?.metadata || {};
-  const units = String(metadata?.impedance_units || metadata?.impedance?.units || '')
-    .trim()
-    .toLowerCase()
-    .replaceAll(' ', '');
-  const normalization = String(
-    metadata?.impedance_normalization || metadata?.impedance?.normalization || ''
-  )
-    .trim()
-    .toLowerCase()
-    .replaceAll('-', '_');
-  const quantity = String(metadata?.impedance_quantity || metadata?.impedance?.quantity || '')
-    .trim()
-    .toLowerCase();
-
-  return (
-    units === 'z/(rho*c)' ||
-    units === 'z/rhoc' ||
-    normalization === 'rho_c' ||
-    quantity === 'specific_acoustic_impedance'
   );
 }
 
@@ -339,6 +249,20 @@ export async function openViewResultsModal(panel) {
     }
   }
 
+  function showChartRenderError(chartKeys = [], message = 'Chart rendering failed.') {
+    const safeMessage = escapeHtml(message);
+    for (const chartKey of chartKeys) {
+      const container = document.getElementById(`vr-${chartKey}`);
+      if (!container) continue;
+      container.innerHTML = `<div class="view-results-loading view-results-chart-error">${safeMessage}</div>`;
+    }
+  }
+
+  function chartFailureMessage(detail, status) {
+    const text = String(detail || '').trim();
+    return `Chart rendering failed: ${text || `HTTP ${status}`}`;
+  }
+
   const backendUrl = panel?.solver?.backendUrl || DEFAULT_BACKEND_URL;
 
   async function renderDirectivityMap() {
@@ -373,7 +297,11 @@ export async function openViewResultsModal(panel) {
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
         console.warn(`[view-results] Directivity render returned ${response.status}: ${detail}`);
-        showMatplotlibRequiredForCharts([chart.key]);
+        if (response.status === 503) {
+          showMatplotlibRequiredForCharts([chart.key]);
+        } else {
+          showChartRenderError([chart.key], chartFailureMessage(detail, response.status));
+        }
         return;
       }
 
@@ -381,7 +309,10 @@ export async function openViewResultsModal(panel) {
       setChartImage(chart.key, chart.label, data.image || null);
     } catch (err) {
       console.warn('[view-results] Directivity render failed:', err.message);
-      showMatplotlibRequiredForCharts([chart.key]);
+      showChartRenderError(
+        [chart.key],
+        'Chart rendering failed: backend is unreachable. Check that the backend is running.'
+      );
     }
   }
 
@@ -452,7 +383,14 @@ export async function openViewResultsModal(panel) {
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
         console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
-        showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
+        if (response.status === 503) {
+          showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
+        } else {
+          showChartRenderError(
+            chartNames.map((chart) => chart.key),
+            chartFailureMessage(detail, response.status)
+          );
+        }
         return;
       }
 
@@ -471,7 +409,10 @@ export async function openViewResultsModal(panel) {
       }
     } catch (err) {
       console.warn('[view-results] Fetch failed:', err.message);
-      showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
+      showChartRenderError(
+        chartNames.map((chart) => chart.key),
+        'Chart rendering failed: backend is unreachable. Check that the backend is running.'
+      );
     }
   }
 
@@ -487,6 +428,15 @@ export async function openViewResultsModal(panel) {
   });
 
   fetchCharts();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function resolveDirectivityReferenceLevel(value) {

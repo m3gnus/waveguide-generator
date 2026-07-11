@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { getDefaults } from "../src/config/defaults.js";
 import {
   parseExpression,
+  validateExpression,
   prepareGeometryParams,
   coerceConfigParams,
   applyAthImportDefaults,
@@ -75,6 +76,37 @@ test("parseExpression falls back without normal-runtime console warnings", () =>
   }
 
   assert.deepEqual(warnings, []);
+});
+
+test("parseExpression evaluates documented formulas without compiling JavaScript", () => {
+  const p = Math.PI / 3;
+  const formula = parseExpression("2sin(p) + .5p + pi + fma(2, 3, 4) + log(100)");
+
+  assert.ok(Math.abs(formula(p) - (2 * Math.sin(p) + 0.5 * p + Math.PI + 10 + 2)) < 1e-12);
+  assert.equal(formula._rawExpr, "2sin(p) + .5p + pi + fma(2, 3, 4) + log(100)");
+});
+
+test("parseExpression keeps scientific notation atomic and rejects hostile source", () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = () => {
+    fetchCalls += 1;
+  };
+
+  try {
+    const scientific = parseExpression("1e-3*cos(p)");
+    assert.ok(Math.abs(scientific(0) - 0.001) < 1e-15);
+    assert.ok(Math.abs(scientific(Math.PI / 2)) < 1e-15);
+
+    const hostile = parseExpression("fetch(1) || 1");
+    assert.equal(hostile(0), 0);
+    assert.equal(hostile._rawExpr, undefined);
+    assert.equal(fetchCalls, 0);
+    assert.equal(validateExpression("fetch(1) || 1").valid, false);
+    assert.equal(validateExpression("1e-").valid, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("coerceConfigParams and applyAthImportDefaults preserve ATH compatibility defaults", () => {
