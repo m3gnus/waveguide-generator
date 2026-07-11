@@ -30,6 +30,32 @@ export function clearPollTimer(panel) {
 
 /**
  * @param {object} panel
+ */
+export function clearProgressHideTimer(panel) {
+  if (panel.progressHideTimer !== null && panel.progressHideTimer !== undefined) {
+    clearTimeout(panel.progressHideTimer);
+  }
+  panel.progressHideTimer = null;
+}
+
+/**
+ * @param {object} panel
+ * @param {() => void} callback
+ * @param {number} delayMs
+ */
+export function scheduleProgressHide(panel, callback, delayMs) {
+  clearProgressHideTimer(panel);
+  const timer = setTimeout(() => {
+    if (panel.progressHideTimer !== timer) return;
+    panel.progressHideTimer = null;
+    callback();
+  }, delayMs);
+  panel.progressHideTimer = timer;
+  return timer;
+}
+
+/**
+ * @param {object} panel
  * @param {string|null|undefined} jobId
  */
 export function setActiveJob(panel, jobId) {

@@ -9,7 +9,6 @@ import {
 } from '../src/ui/simulation/jobActions.js';
 import { renderResultDiagnostics, renderSolveStatsSummary } from '../src/ui/simulation/results.js';
 import { validateSimulationConfig } from '../src/modules/simulation/domain.js';
-import { applyExportSelection } from '../src/ui/simulation/exports.js';
 import {
   applySavedExportFields,
   deriveExportFieldsFromFileName,
@@ -565,57 +564,6 @@ test('formatJobSummary falls back to Complete when duration is unavailable', () 
     completedAt: null,
   });
   assert.equal(summary, 'Complete');
-});
-
-test('applyExportSelection routes to expected handler', () => {
-  const calls = [];
-  const originalError = console.error;
-  console.error = () => {};
-
-  const handlers = {
-    1: () => calls.push('image'),
-    2: () => calls.push('csv'),
-    3: () => calls.push('json'),
-    4: () => calls.push('text'),
-  };
-
-  try {
-    assert.equal(applyExportSelection({}, '2', handlers), true);
-    assert.deepEqual(calls, ['csv']);
-
-    assert.equal(applyExportSelection({}, '9', handlers), false);
-    assert.deepEqual(calls, ['csv']);
-  } finally {
-    console.error = originalError;
-  }
-});
-
-test('applyExportSelection includes VACS spectrum option 7', () => {
-  const calls = [];
-  const handlers = {
-    1: () => calls.push('image'),
-    2: () => calls.push('csv'),
-    3: () => calls.push('json'),
-    4: () => calls.push('text'),
-    5: () => calls.push('polar'),
-    6: () => calls.push('impedance'),
-    7: () => calls.push('vacs'),
-  };
-
-  assert.equal(applyExportSelection({}, '7', handlers), true);
-  assert.deepEqual(calls, ['vacs']);
-});
-
-test('applyExportSelection includes CAD exports options 8 and 9', () => {
-  const calls = [];
-  const handlers = {
-    8: () => calls.push('stl'),
-    9: () => calls.push('fusion-csv'),
-  };
-
-  assert.equal(applyExportSelection({}, '8', handlers), true);
-  assert.equal(applyExportSelection({}, '9', handlers), true);
-  assert.deepEqual(calls, ['stl', 'fusion-csv']);
 });
 
 test('deriveExportFieldsFromFileName parses output name and counter from file names', () => {

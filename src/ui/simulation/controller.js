@@ -48,6 +48,7 @@ export const SIMULATION_CONTROLLER_FIELDS = Object.freeze([
   'resultCache',
   'activeJobId',
   'pollTimer',
+  'progressHideTimer',
   'pollDelayMs',
   'pollBackoffMs',
   'consecutivePollFailures',
@@ -204,6 +205,7 @@ export function createSimulationControllerStore({ solver = createSimulationClien
     resultCache: new Map(),
     activeJobId: null,
     pollTimer: null,
+    progressHideTimer: null,
     pollDelayMs: 1000,
     pollBackoffMs: 1000,
     consecutivePollFailures: 0,
@@ -263,6 +265,11 @@ export function disposeSimulationPanelRuntime(runtime) {
     controller.pollTimer = null;
     controller.pollInterval = null;
     controller.isPolling = false;
+  }
+
+  if (controller?.progressHideTimer !== null && controller?.progressHideTimer !== undefined) {
+    clearTimeout(controller.progressHideTimer);
+    controller.progressHideTimer = null;
   }
 
   if (controller?.connectionPollTimer) {
@@ -599,12 +606,15 @@ export async function reconcileSimulationControllerRemoteJobs(
         const statusChanged = localJob.status !== updated.status;
         const justCompleted = updated.status === 'complete' && localJob.status !== 'complete';
 
-        upsertJob(controller, updated);
+        const next = upsertJob(controller, {
+          ...updated,
+          justCompleted: justCompleted || localJob.justCompleted === true,
+        });
 
         if (statusChanged || justCompleted) {
-          syncSimulationWorkspaceJobManifest(updated).catch((error) => {
+          syncSimulationWorkspaceJobManifest(next || updated).catch((error) => {
             if (typeof onManifestSyncError === 'function') {
-              onManifestSyncError(error, updated);
+              onManifestSyncError(error, next || updated);
             }
           });
         }

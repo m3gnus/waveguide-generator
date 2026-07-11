@@ -26,21 +26,6 @@ const CONSTRAINTS = {
     maxLength: 500,
     description: 'Mathematical formula, up to 500 characters',
   },
-  frequencyStart: {
-    min: 10,
-    max: 50000,
-    description: 'Frequency must be between 10 Hz and 50 kHz',
-  },
-  frequencyEnd: {
-    min: 10,
-    max: 50000,
-    description: 'Frequency must be between 10 Hz and 50 kHz',
-  },
-  frequencySteps: {
-    min: 1,
-    max: 1000,
-    description: 'Steps must be between 1 and 1000',
-  },
 };
 
 /**
@@ -132,66 +117,6 @@ export function validateFormula(value) {
   }
 
   return { valid: true, normalized: raw };
-}
-
-export function validateFrequencyRange(startValue, endValue) {
-  const start = Number(startValue);
-  const end = Number(endValue);
-
-  if (!Number.isFinite(start)) {
-    return { valid: false, error: 'Start frequency must be a valid number' };
-  }
-  if (!Number.isFinite(end)) {
-    return { valid: false, error: 'End frequency must be a valid number' };
-  }
-  if (start < CONSTRAINTS.frequencyStart.min) {
-    return {
-      valid: false,
-      error: `Start frequency must be at least ${CONSTRAINTS.frequencyStart.min} Hz`,
-    };
-  }
-  if (end > CONSTRAINTS.frequencyEnd.max) {
-    return {
-      valid: false,
-      error: `End frequency cannot exceed ${CONSTRAINTS.frequencyEnd.max.toLocaleString()} Hz`,
-    };
-  }
-  if (start >= end) {
-    return {
-      valid: false,
-      error: 'Start frequency must be less than end frequency',
-    };
-  }
-  if (start > CONSTRAINTS.frequencyStart.max) {
-    return {
-      valid: false,
-      error: `Start frequency cannot exceed ${CONSTRAINTS.frequencyStart.max.toLocaleString()} Hz`,
-    };
-  }
-
-  return { valid: true, normalized: { start, end } };
-}
-
-export function validateFrequencySteps(value) {
-  const num = Number(value);
-
-  if (!Number.isFinite(num) || !Number.isInteger(num)) {
-    return { valid: false, error: 'Frequency steps must be a whole number' };
-  }
-  if (num < CONSTRAINTS.frequencySteps.min) {
-    return {
-      valid: false,
-      error: `At least ${CONSTRAINTS.frequencySteps.min} frequency step required`,
-    };
-  }
-  if (num > CONSTRAINTS.frequencySteps.max) {
-    return {
-      valid: false,
-      error: `Frequency steps cannot exceed ${CONSTRAINTS.frequencySteps.max.toLocaleString()}`,
-    };
-  }
-
-  return { valid: true, normalized: num };
 }
 
 /**

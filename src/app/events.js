@@ -24,16 +24,44 @@ export function setupEventListeners(app) {
   });
 
   // Undo/Redo keys
-  document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-      e.preventDefault();
-      if (e.shiftKey) {
-        GlobalState.redo();
-      } else {
-        GlobalState.undo();
-      }
-    }
-  });
+  document.addEventListener('keydown', handleUndoRedoShortcut);
+}
+
+function isEditableTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+
+  const tagName = String(target.tagName || '').toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+    return true;
+  }
+
+  if (target.isContentEditable) return true;
+
+  const contentEditable = target.getAttribute?.('contenteditable');
+  if (typeof contentEditable === 'string' && contentEditable.toLowerCase() !== 'false') {
+    return true;
+  }
+
+  const editableAncestor = target.closest?.('[contenteditable]');
+  if (!editableAncestor) return false;
+
+  const ancestorValue = editableAncestor.getAttribute?.('contenteditable');
+  return String(ancestorValue || '').toLowerCase() !== 'false';
+}
+
+export function handleUndoRedoShortcut(event) {
+  if (isEditableTarget(event.target)) return false;
+
+  const key = String(event.key || '').toLowerCase();
+  if (!(event.metaKey || event.ctrlKey) || key !== 'z') return false;
+
+  event.preventDefault();
+  if (event.shiftKey) {
+    GlobalState.redo();
+  } else {
+    GlobalState.undo();
+  }
+  return true;
 }
 
 function cycleDisplayMode(app) {

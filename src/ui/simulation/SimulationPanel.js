@@ -28,13 +28,7 @@ import {
   disposeSimulationPanelRuntime,
 } from './controller.js';
 import { displayResults } from './results.js';
-import {
-  exportResults,
-  exportAsMatplotlibPNG,
-  exportAsCSV,
-  exportAsJSON,
-  exportAsText,
-} from './exports.js';
+import { exportResults } from './exports.js';
 import { openViewResultsModal } from './viewResults.js';
 
 /**
@@ -143,22 +137,6 @@ export class SimulationPanel {
 
   exportResults(options = {}) {
     return exportResults(this, options);
-  }
-
-  exportAsMatplotlibPNG() {
-    return exportAsMatplotlibPNG(this);
-  }
-
-  exportAsCSV() {
-    return exportAsCSV(this);
-  }
-
-  exportAsJSON() {
-    return exportAsJSON(this);
-  }
-
-  exportAsText() {
-    return exportAsText(this);
   }
 
   /**

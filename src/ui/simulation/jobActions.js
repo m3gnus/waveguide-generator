@@ -21,7 +21,12 @@ import {
   resolveJobDurationMs,
   resetProgressAnnouncement,
 } from './progressUi.js';
-import { clearPollTimer, setActiveJob } from './jobOrchestration.js';
+import {
+  clearPollTimer,
+  clearProgressHideTimer,
+  scheduleProgressHide,
+  setActiveJob,
+} from './jobOrchestration.js';
 import {
   summarizePersistedSimulationMeshStats,
   validateSimulationConfig,
@@ -313,6 +318,96 @@ function syncJobListPreferenceControls() {
   }
 }
 
+function buildJobListSignature(panel, source, jobs, sortBy, minRating) {
+  return JSON.stringify({
+    source: source.mode,
+    activeJobId: String(panel.activeJobId ?? ''),
+    sortBy,
+    minRating,
+    jobs: jobs.map((job) => ({
+      id: readJobId(job),
+      status: job.status,
+      progress: job.progress,
+      stage: job.stage,
+      stageMessage: job.stageMessage,
+      errorMessage: job.errorMessage,
+      cancellationRequested: Boolean(job.cancellationRequested),
+      rating: job.rating,
+      label: job.label,
+      createdAt: job.createdAt,
+      queuedAt: job.queuedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      hasScript: Boolean(job.script),
+    })),
+  });
+}
+
+function findJobRow(list, jobId) {
+  if (!list?.querySelectorAll || !jobId) return null;
+  return (
+    Array.from(list.querySelectorAll('[data-job-id]')).find(
+      (row) => row.getAttribute?.('data-job-id') === jobId
+    ) || null
+  );
+}
+
+function captureJobListInteractionState(list) {
+  if (!list?.querySelector) return null;
+
+  const openMenu = list.querySelector('.export-menu.is-open');
+  const openMenuJobId = openMenu?.closest?.('[data-job-id]')?.getAttribute?.('data-job-id') || null;
+  const focused = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!focused || typeof list.contains !== 'function' || !list.contains(focused)) {
+    return { openMenuJobId, focusedControl: null };
+  }
+
+  const jobId = focused.closest?.('[data-job-id]')?.getAttribute?.('data-job-id') || null;
+  if (!jobId) {
+    return { openMenuJobId, focusedControl: null };
+  }
+
+  return {
+    openMenuJobId,
+    focusedControl: {
+      jobId,
+      action: focused.getAttribute?.('data-job-action') || null,
+      exportFormat: focused.getAttribute?.('data-export-format') || null,
+      rating: focused.getAttribute?.('data-job-rating') || null,
+      isExportTrigger: Boolean(focused.classList?.contains('export-menu-trigger')),
+    },
+  };
+}
+
+function restoreJobListInteractionState(list, state) {
+  if (!state) return;
+
+  if (state.openMenuJobId) {
+    const row = findJobRow(list, state.openMenuJobId);
+    const menu = row?.querySelector?.('.export-menu');
+    if (menu) {
+      menu.classList.add('is-open');
+      menu.querySelector?.('.export-menu-trigger')?.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  const focus = state.focusedControl;
+  if (!focus) return;
+  const row = findJobRow(list, focus.jobId);
+  if (!row?.querySelectorAll) return;
+  const control = Array.from(
+    row.querySelectorAll('button, [data-job-action], [data-job-rating]')
+  ).find((candidate) => {
+    if (focus.isExportTrigger && candidate.classList?.contains('export-menu-trigger')) return true;
+    return (
+      candidate.getAttribute?.('data-job-action') === focus.action &&
+      candidate.getAttribute?.('data-export-format') === focus.exportFormat &&
+      candidate.getAttribute?.('data-job-rating') === focus.rating
+    );
+  });
+  control?.focus?.();
+}
+
 function readOutputNameAndCounter() {
   const name =
     (document.getElementById('export-prefix')?.value || 'simulation').trim() || 'simulation';
@@ -401,12 +496,22 @@ export function renderJobList(panel) {
   }
 
   syncJobListPreferenceControls();
+  const sortBy = getTaskListSortPreference();
+  const minRating = getTaskListMinRatingFilter();
   const jobs = allJobs(panel, {
-    sortBy: getTaskListSortPreference(),
-    minRating: getTaskListMinRatingFilter(),
+    sortBy,
+    minRating,
   });
+  const signature = buildJobListSignature(panel, source, jobs, sortBy, minRating);
+  if (panel._jobListElement === list && panel._jobListSignature === signature) {
+    return;
+  }
+  const interactionState = captureJobListInteractionState(list);
+
   if (jobs.length === 0) {
     list.innerHTML = `<div class="simulation-job-meta">No ${source.mode === 'folder' ? 'folder tasks' : 'backend jobs'} yet.</div>`;
+    panel._jobListElement = list;
+    panel._jobListSignature = signature;
     return;
   }
 
@@ -451,6 +556,9 @@ export function renderJobList(panel) {
   `;
     })
     .join('');
+  panel._jobListElement = list;
+  panel._jobListSignature = signature;
+  restoreJobListInteractionState(list, interactionState);
 }
 
 export async function viewJobResults(panel, jobId) {
@@ -582,6 +690,7 @@ export async function clearFailedSimulations(panel) {
 }
 
 export async function stopSimulation(panel) {
+  clearProgressHideTimer(panel);
   const targetJobId = panel.activeJobId || panel.currentJobId;
   const { stopError, cancelledJob } = await stopSimulationControllerJob(panel, targetJobId);
   if (stopError) {
@@ -615,9 +724,13 @@ export async function stopSimulation(panel) {
     });
   }
   if (!hasActiveJobs(panel)) {
-    setTimeout(() => {
-      setProgressVisible(false);
-    }, 1000);
+    scheduleProgressHide(
+      panel,
+      () => {
+        setProgressVisible(false);
+      },
+      1000
+    );
     clearPollTimer(panel);
     setActiveJob(panel, null);
     restoreConnectionStatus(panel);
@@ -625,6 +738,7 @@ export async function stopSimulation(panel) {
 }
 
 export async function runSimulation(panel) {
+  clearProgressHideTimer(panel);
   panel.completedStatusMessage = null;
 
   // Get simulation settings
@@ -715,10 +829,14 @@ export async function runSimulation(panel) {
     });
     showError(`Simulation failed: ${error.message}`);
 
-    setTimeout(() => {
-      setProgressVisible(false);
-      restoreConnectionStatus(panel);
-    }, 3000);
+    scheduleProgressHide(
+      panel,
+      () => {
+        setProgressVisible(false);
+        restoreConnectionStatus(panel);
+      },
+      3000
+    );
   }
 }
 

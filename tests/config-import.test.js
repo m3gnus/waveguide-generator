@@ -160,6 +160,31 @@ Term.s = 0.9
   assert.equal(result.params._athLengthMode, 'total');
 });
 
+test('config import rejects unsupported formulas before they can be evaluated', () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = () => {
+    fetchCalls += 1;
+  };
+
+  try {
+    const result = importMWGConfig(
+      `
+OSSE = {
+  a = fetch(1)
+}
+`,
+      'unsafe.cfg'
+    );
+
+    assert.equal(result.success, false);
+    assert.match(result.error, /Invalid formula for a/i);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('ATH m2-style flat config preserves importer topology and defaults through backend payload', () => {
   const result = importMWGConfig(
     `

@@ -23,6 +23,13 @@ class FakeElement {
         }
         this.className = Array.from(existing).join(' ');
       },
+      remove: (...tokens) => {
+        const removed = new Set(tokens);
+        this.className = this.className
+          .split(/\s+/)
+          .filter((token) => token && !removed.has(token))
+          .join(' ');
+      },
     };
     this.textContent = '';
     this.value = '';
@@ -30,6 +37,9 @@ class FakeElement {
     this.type = '';
     this.parentNode = null;
     this._id = '';
+    this.selectionStart = null;
+    this.selectionEnd = null;
+    this.selectionDirection = 'none';
   }
 
   set id(value) {
@@ -41,6 +51,10 @@ class FakeElement {
 
   get id() {
     return this._id;
+  }
+
+  get parentElement() {
+    return this.parentNode;
   }
 
   set innerHTML(_value) {
@@ -59,12 +73,47 @@ class FakeElement {
   setAttribute(name, value) {
     this.attributes[name] = String(value);
   }
+
+  getAttribute(name) {
+    return this.attributes[name] ?? null;
+  }
+
+  removeAttribute(name) {
+    delete this.attributes[name];
+  }
+
+  querySelector(selector) {
+    if (selector !== '.input-error-message') return null;
+    return collectNodes(this, (node) => node.className === 'input-error-message')[0] || null;
+  }
+
+  contains(node) {
+    if (node === this) return true;
+    return this.children.some((child) => child.contains(node));
+  }
+
+  focus() {
+    this.ownerDocument.activeElement = this;
+  }
+
+  setSelectionRange(start, end, direction = 'none') {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+    this.selectionDirection = direction;
+  }
+
+  remove() {
+    if (!this.parentNode) return;
+    this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
+    this.parentNode = null;
+  }
 }
 
 class FakeDocument {
   constructor() {
     this.elementsById = new Map();
     this.body = new FakeElement('body', this);
+    this.activeElement = this.body;
   }
 
   createElement(tagName) {
@@ -440,6 +489,127 @@ test('ParamPanel renders ICW coverage controls for flat baffle only', () => {
     assert.equal(countRows('L'), 0);
   } finally {
     GlobalState.loadState(previousState, 'param-panel-icw-coverage-test-restore');
+    global.document = originalDocument;
+  }
+});
+
+test('ParamPanel restores focused control selection after rebuilding', () => {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement('div');
+  paramContainer.id = 'param-container';
+  fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement('div');
+  simulationSettingsContainer.id = 'simulation-settings-container';
+  fakeDocument.body.appendChild(simulationSettingsContainer);
+  const simulationContainer = fakeDocument.createElement('div');
+  simulationContainer.id = 'simulation-param-container';
+  fakeDocument.body.appendChild(simulationContainer);
+
+  global.document = fakeDocument;
+
+  try {
+    GlobalState.loadState(
+      { type: 'R-OSSE', params: getDefaults('R-OSSE') },
+      'param-panel-focus-test'
+    );
+    const panel = new ParamPanel('param-container');
+    panel.createFullPanel();
+
+    const originalInput = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'INPUT' && node.attributes['data-param-key'] === 'R'
+    )[0];
+    originalInput.focus();
+    originalInput.setSelectionRange(1, 3, 'forward');
+
+    panel.createFullPanel();
+
+    const restoredInput = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'INPUT' && node.attributes['data-param-key'] === 'R'
+    )[0];
+    assert.notEqual(restoredInput, originalInput);
+    assert.equal(fakeDocument.activeElement, restoredInput);
+    assert.equal(restoredInput.selectionStart, 1);
+    assert.equal(restoredInput.selectionEnd, 3);
+    assert.equal(restoredInput.selectionDirection, 'forward');
+  } finally {
+    GlobalState.loadState(previousState, 'param-panel-focus-test-restore');
+    global.document = originalDocument;
+  }
+});
+
+test('ParamPanel rejects invalid numeric commits using schema limits', () => {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement('div');
+  paramContainer.id = 'param-container';
+  fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement('div');
+  simulationSettingsContainer.id = 'simulation-settings-container';
+  fakeDocument.body.appendChild(simulationSettingsContainer);
+  const simulationContainer = fakeDocument.createElement('div');
+  simulationContainer.id = 'simulation-param-container';
+  fakeDocument.body.appendChild(simulationContainer);
+
+  global.document = fakeDocument;
+
+  try {
+    GlobalState.loadState(
+      { type: 'OSSE', params: getDefaults('OSSE') },
+      'param-panel-validation-test'
+    );
+    const panel = new ParamPanel('param-container');
+    panel.createFullPanel();
+
+    const frequencyStart = fakeDocument.getElementById('freq-start');
+    const originalFrequencyStart = GlobalState.get().params.freqStart;
+    for (const value of ['', 'Infinity', '15']) {
+      frequencyStart.value = value;
+      frequencyStart.onchange({ target: frequencyStart });
+      assert.equal(GlobalState.get().params.freqStart, originalFrequencyStart);
+      assert.equal(frequencyStart.attributes['aria-invalid'], 'true');
+    }
+    assert.equal(
+      frequencyStart.parentElement.querySelector('.input-error-message').textContent,
+      'Enter a value between 20 and 20000.'
+    );
+
+    frequencyStart.value = '25';
+    frequencyStart.onchange({ target: frequencyStart });
+    assert.equal(GlobalState.get().params.freqStart, 25);
+
+    const terminationSmoothness = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'INPUT' && node.attributes['data-param-key'] === 'q'
+    )[0];
+    const originalSmoothness = GlobalState.get().params.q;
+    terminationSmoothness.value = '9';
+    terminationSmoothness.onchange({ target: terminationSmoothness });
+    assert.equal(GlobalState.get().params.q, originalSmoothness);
+    assert.equal(
+      terminationSmoothness.parentElement.querySelector('.input-error-message').textContent,
+      'Enter a value between 0.1 and 2.'
+    );
+
+    terminationSmoothness.value = '0.85 + 0.3*cos(p)^2';
+    assert.equal(
+      panel.validateInputOnChange(terminationSmoothness, 'q', PARAM_SCHEMA.OSSE.q),
+      true
+    );
+
+    terminationSmoothness.value = 'x'.repeat(501);
+    terminationSmoothness.onchange({ target: terminationSmoothness });
+    assert.equal(GlobalState.get().params.q, originalSmoothness);
+    assert.match(
+      terminationSmoothness.parentElement.querySelector('.input-error-message').textContent,
+      /Formula too long/
+    );
+  } finally {
+    GlobalState.loadState(previousState, 'param-panel-validation-test-restore');
     global.document = originalDocument;
   }
 });

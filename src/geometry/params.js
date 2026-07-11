@@ -1,5 +1,5 @@
 import { PARAM_SCHEMA } from '../config/schema.js';
-import { parseExpression } from './expression.js';
+import { parseExpression, validateExpression } from './expression.js';
 
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 const PREPARED_GEOMETRY_PARAMS = Symbol('preparedGeometryParams');
@@ -179,6 +179,35 @@ function applySchemaToParams(params, schema) {
       }
     }
   }
+}
+
+export function validateGeometryParamExpressions(params = {}, { type = params.type } = {}) {
+  const schemas = [PARAM_SCHEMA[type] || {}].concat(
+    SCHEMA_GROUPS.map((group) => PARAM_SCHEMA[group] || {})
+  );
+
+  for (const schema of schemas) {
+    for (const [key, def] of Object.entries(schema)) {
+      if (RAW_EXPRESSION_KEYS.has(key)) continue;
+      if (def.type !== 'expression' && def.type !== 'number' && def.type !== 'range') continue;
+
+      const value = params[key];
+      if (typeof value !== 'string') continue;
+      const expression = value.trim();
+      if (!expression || isNumericString(expression)) continue;
+
+      const validation = validateExpression(expression);
+      if (!validation.valid) {
+        return {
+          valid: false,
+          key,
+          error: validation.error || 'Invalid expression.',
+        };
+      }
+    }
+  }
+
+  return { valid: true };
 }
 
 export function prepareGeometryParams(
