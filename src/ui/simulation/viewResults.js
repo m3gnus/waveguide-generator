@@ -328,7 +328,9 @@ export async function openViewResultsModal(panel) {
     const impedanceFrequencies = impedanceData.frequencies || frequencies;
     let impedanceReal = impedanceData.real || [];
     let impedanceImag = impedanceData.imaginary || [];
-    const directivity = normalizeDirectivityPayload(results.directivity);
+    const renderedChartKeys = chartNames
+      .filter((chart) => chart.key !== 'directivity_map')
+      .map((chart) => chart.key);
 
     if (panel.currentSmoothing !== 'none') {
       spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
@@ -365,7 +367,6 @@ export async function openViewResultsModal(panel) {
       impedance_frequencies: impedanceFrequencies,
       impedance_real: impedanceReal,
       impedance_imaginary: impedanceImag,
-      directivity,
       theme: getChartTheme(),
     };
     if (isRhoCNormalizedImpedance(results)) {
@@ -373,47 +374,47 @@ export async function openViewResultsModal(panel) {
       payload.impedance_normalization = 'rho_c';
     }
 
-    try {
-      const response = await fetch(`${backendUrl}/api/render-charts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+    const chartsRenderPromise = (async () => {
+      try {
+        const response = await fetch(`${backendUrl}/api/render-charts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
 
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
-        if (response.status === 503) {
-          showMatplotlibRequiredForCharts(chartNames.map((chart) => chart.key));
-        } else {
-          showChartRenderError(
-            chartNames.map((chart) => chart.key),
-            chartFailureMessage(detail, response.status)
-          );
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '');
+          console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
+          if (response.status === 503) {
+            showMatplotlibRequiredForCharts(renderedChartKeys);
+          } else {
+            showChartRenderError(renderedChartKeys, chartFailureMessage(detail, response.status));
+          }
+          return;
         }
-        return;
-      }
 
-      const data = await response.json();
-      const charts = data.charts || {};
+        const data = await response.json();
+        const charts = data.charts || {};
 
-      for (const chart of chartNames) {
-        if (chart.key === 'directivity_map') {
-          continue;
+        for (const chart of chartNames) {
+          if (chart.key === 'directivity_map') {
+            continue;
+          }
+          setChartImage(chart.key, chart.label, charts[chart.key] || null);
         }
-        setChartImage(chart.key, chart.label, charts[chart.key] || null);
+      } catch (err) {
+        console.warn('[view-results] Fetch failed:', err.message);
+        showChartRenderError(
+          renderedChartKeys,
+          'Chart rendering failed: backend is unreachable. Check that the backend is running.'
+        );
       }
+    })();
+    const directivityRenderPromise = includeDirectivityMap
+      ? renderDirectivityMap()
+      : Promise.resolve();
 
-      if (includeDirectivityMap) {
-        await renderDirectivityMap();
-      }
-    } catch (err) {
-      console.warn('[view-results] Fetch failed:', err.message);
-      showChartRenderError(
-        chartNames.map((chart) => chart.key),
-        'Chart rendering failed: backend is unreachable. Check that the backend is running.'
-      );
-    }
+    await Promise.all([chartsRenderPromise, directivityRenderPromise]);
   }
 
   // Re-fetch charts when smoothing changes

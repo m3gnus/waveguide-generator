@@ -391,6 +391,106 @@ test('view results modal keeps header controls together and rerenders directivit
   }
 });
 
+test('view results dispatches chart and directivity renders concurrently without duplicating directivity', async () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const originalFetch = global.fetch;
+
+  const appendedChildren = [];
+  const createdElements = [];
+  const requests = [];
+  const pendingResponses = new Map();
+  const fakeDocument = createModalDocument(createdElements, appendedChildren);
+
+  global.document = fakeDocument;
+  global.window = {
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  global.fetch = (url, options = {}) => {
+    const endpoint = String(url).endsWith('/api/render-directivity')
+      ? 'render-directivity'
+      : 'render-charts';
+    requests.push({ endpoint, body: JSON.parse(options.body) });
+    return new Promise((resolve) => {
+      pendingResponses.set(endpoint, resolve);
+    });
+  };
+
+  const releaseResponses = () => {
+    pendingResponses.get('render-charts')?.({
+      ok: true,
+      async json() {
+        return { charts: {} };
+      },
+    });
+    pendingResponses.get('render-directivity')?.({
+      ok: true,
+      async json() {
+        return { image: 'data:image/png;base64,directivity' };
+      },
+    });
+    pendingResponses.clear();
+  };
+
+  try {
+    const panel = {
+      currentSmoothing: 'none',
+      currentDirectivityReferenceLevel: -6,
+      solver: { backendUrl: 'http://localhost:8000' },
+      activeJobId: 'job-concurrent-charts',
+      currentJobId: 'job-concurrent-charts',
+      resultCache: new Map([
+        [
+          'job-concurrent-charts',
+          {
+            spl_on_axis: { frequencies: [100], spl: [90] },
+            di: { frequencies: [100], di: [5] },
+            impedance: { frequencies: [100], real: [8], imaginary: [1] },
+            directivity: {
+              horizontal: [
+                [
+                  [0, 0],
+                  [10, -3],
+                ],
+              ],
+            },
+          },
+        ],
+      ]),
+      lastResults: null,
+    };
+
+    await openViewResultsModal(panel);
+
+    assert.equal(
+      requests.length,
+      2,
+      'Both render requests should be dispatched before either response resolves'
+    );
+    const chartRequest = requests.find((request) => request.endpoint === 'render-charts');
+    const directivityRequest = requests.find(
+      (request) => request.endpoint === 'render-directivity'
+    );
+    assert.ok(chartRequest, 'Expected the non-directivity charts request');
+    assert.ok(directivityRequest, 'Expected the dedicated directivity request');
+    assert.equal('directivity' in chartRequest.body, false);
+    assert.deepEqual(
+      directivityRequest.body.directivity,
+      panel.resultCache.get(panel.activeJobId).directivity
+    );
+
+    releaseResponses();
+    await flushModalAsyncWork();
+  } finally {
+    releaseResponses();
+    await flushModalAsyncWork();
+    global.document = originalDocument;
+    global.window = originalWindow;
+    global.fetch = originalFetch;
+  }
+});
+
 test('view results distinguishes chart service errors from missing Matplotlib', async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
