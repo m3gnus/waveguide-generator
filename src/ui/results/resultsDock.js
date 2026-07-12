@@ -1,9 +1,11 @@
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { getChartTheme } from '../settings/appearanceSettings.js';
 import {
+  MAX_RESULT_PANELS,
   getCurrentLayoutSettings,
   getPanelCharts,
   setPanelChart,
+  setPanelCharts,
   setPanelMode,
 } from '../settings/layoutSettings.js';
 import { renderResultDiagnostics, renderSolveStatsSummary } from '../simulation/results.js';
@@ -38,8 +40,12 @@ export function resolveResultsDockPanelCount({
   previousCount = 1,
   mode = 'auto',
 } = {}) {
-  if (mode === '1') return 1;
-  if (mode === '2') return 2;
+  if (mode !== 'auto') {
+    const forced = Number(mode);
+    if (Number.isInteger(forced) && forced >= 1) {
+      return Math.min(forced, MAX_RESULT_PANELS);
+    }
+  }
 
   const dockWidth = Number(width);
   const dockHeight = Number(height);
@@ -55,14 +61,29 @@ export function resolveResultsDockPanelCount({
 
 export const resolveAutoPanelCount = resolveResultsDockPanelCount;
 
-export function resolveResultsDockStacked({ width, height, panelCount } = {}) {
-  if (panelCount !== 2) return false;
+export function resolveResultsDockColumns({
+  panelCount,
+  arrangement = 'auto',
+  width,
+  height,
+} = {}) {
+  const count = Math.max(1, Math.min(MAX_RESULT_PANELS, Number(panelCount) || 1));
+  if (count === 1) return 1;
+  if (arrangement === 'rows') return 1;
+  if (arrangement === 'columns') return count;
+  if (arrangement === 'grid') return Math.ceil(count / 2);
+
+  // 'auto': two panels reuse the side-by-side room rule; more panels use a
+  // near-square grid, collapsing to one column on very narrow docks.
   const dockWidth = Number(width);
   const dockHeight = Number(height);
-  if (!Number.isFinite(dockWidth) || !Number.isFinite(dockHeight)) return false;
-  // Two panels side by side need the same room the auto rule demands; when a
-  // forced two-panel dock is narrower than that, stack them vertically.
-  return dockWidth < Math.max(AUTO_MIN_WIDTH, dockHeight * AUTO_MIN_ASPECT);
+  const haveDims = Number.isFinite(dockWidth) && Number.isFinite(dockHeight);
+  if (count === 2) {
+    if (!haveDims) return 2;
+    return dockWidth >= Math.max(AUTO_MIN_WIDTH, dockHeight * AUTO_MIN_ASPECT) ? 2 : 1;
+  }
+  if (haveDims && dockWidth < 600) return 1;
+  return Math.ceil(Math.sqrt(count));
 }
 
 export function buildResultsDockCacheKey({
@@ -237,26 +258,16 @@ export function setupResultsDock(app) {
     return null;
   }
 
-  const requestGuard = createPanelRequestGuard(2);
+  const requestGuard = createPanelRequestGuard(MAX_RESULT_PANELS);
   const imageCache = createLruImageCache();
-  const states = [
-    {
-      chartKey: null,
-      compareJobId: null,
-      compareOptionsSignature: null,
-      root: null,
-      body: null,
-      compareSelect: null,
-    },
-    {
-      chartKey: null,
-      compareJobId: null,
-      compareOptionsSignature: null,
-      root: null,
-      body: null,
-      compareSelect: null,
-    },
-  ];
+  const states = Array.from({ length: MAX_RESULT_PANELS }, () => ({
+    chartKey: null,
+    compareJobId: null,
+    compareOptionsSignature: null,
+    root: null,
+    body: null,
+    compareSelect: null,
+  }));
   const mobileQuery =
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 768px)')
@@ -294,6 +305,12 @@ export function setupResultsDock(app) {
 
       this._updatePanelCount(settings.panelMode);
       app.onResize();
+      // The dock may not have final dimensions on the first layout pass
+      // (e.g. when it was just unhidden), so recompute the grid once more
+      // after layout settles; the ResizeObserver covers later changes.
+      setTimeout(() => {
+        if (this.visible) this._updateGridLayout();
+      }, 0);
       if (this.latestResults) {
         void this.refresh();
       } else {
@@ -367,24 +384,40 @@ export function setupResultsDock(app) {
       if (mode === 'auto') this.previousAutoPanelCount = nextCount;
       if (nextCount === this.panelCount) {
         this._syncPanelChartSelections();
-        this._updateStackedLayout();
+        this._updateGridLayout();
         return false;
       }
 
       this.panelCount = nextCount;
       this._buildPanels();
-      this._updateStackedLayout();
+      this._updateGridLayout();
       return true;
     },
 
-    _updateStackedLayout() {
+    _updateGridLayout() {
       const rect = this.element.getBoundingClientRect();
-      const stacked = resolveResultsDockStacked({
+      const columns = resolveResultsDockColumns({
+        panelCount: this.panelCount,
+        arrangement: getCurrentLayoutSettings().panelArrangement,
         width: rect.width || this.element.clientWidth,
         height: rect.height || this.element.clientHeight,
-        panelCount: this.panelCount,
       });
-      this.element.classList.toggle('results-dock--stacked', stacked);
+      this.element.style.setProperty('--results-dock-cols', String(columns));
+    },
+
+    _setPanelCount(count) {
+      const next = Math.max(1, Math.min(MAX_RESULT_PANELS, count));
+      setPanelMode(String(next));
+      if (this._updatePanelCount(String(next))) {
+        void this.refresh();
+      }
+    },
+
+    _closePanel(index) {
+      const charts = getPanelCharts();
+      charts.splice(index, 1);
+      setPanelCharts(charts);
+      this._setPanelCount(this.panelCount - 1);
     },
 
     _syncPanelChartSelections() {
@@ -404,13 +437,6 @@ export function setupResultsDock(app) {
       state.compareSelect.disabled = isSummary;
       if (isSummary) {
         state.compareSelect.title = 'Comparison is not available for the summary view';
-      }
-    },
-
-    _setPanelMode(mode) {
-      setPanelMode(mode);
-      if (this._updatePanelCount(mode)) {
-        void this.refresh();
       }
     },
 
@@ -469,15 +495,25 @@ export function setupResultsDock(app) {
         header.appendChild(chartSelect);
         header.appendChild(compareSelect);
         header.appendChild(openButton);
-        if (index === 1) {
+        if (this.panelCount > 1) {
           const closeButton = document.createElement('button');
           closeButton.type = 'button';
           closeButton.className = 'results-panel-close';
           closeButton.textContent = '×';
           closeButton.title = 'Close this panel';
-          closeButton.setAttribute('aria-label', 'Close this panel');
-          closeButton.addEventListener('click', () => this._setPanelMode('1'));
+          closeButton.setAttribute('aria-label', `Close panel ${index + 1}`);
+          closeButton.addEventListener('click', () => this._closePanel(index));
           header.appendChild(closeButton);
+        }
+        if (index === this.panelCount - 1 && this.panelCount < MAX_RESULT_PANELS) {
+          const addButton = document.createElement('button');
+          addButton.type = 'button';
+          addButton.className = 'results-panel-add';
+          addButton.textContent = '+';
+          addButton.title = 'Add another results panel';
+          addButton.setAttribute('aria-label', 'Add another results panel');
+          addButton.addEventListener('click', () => this._setPanelCount(this.panelCount + 1));
+          header.appendChild(addButton);
         }
         root.appendChild(header);
         root.appendChild(body);
@@ -491,17 +527,6 @@ export function setupResultsDock(app) {
           compareOptionsSignature: null,
         });
         this._syncPanelControlState(state);
-      }
-
-      if (this.panelCount === 1) {
-        const addButton = document.createElement('button');
-        addButton.type = 'button';
-        addButton.className = 'results-dock-add';
-        addButton.textContent = '+';
-        addButton.title = 'Add a second results panel';
-        addButton.setAttribute('aria-label', 'Add a second results panel');
-        addButton.addEventListener('click', () => this._setPanelMode('2'));
-        this.element.appendChild(addButton);
       }
 
       for (let index = this.panelCount; index < states.length; index += 1) {
@@ -740,7 +765,7 @@ export function setupResultsDock(app) {
       if (!dock.visible) return;
       const mode = getCurrentLayoutSettings().panelMode;
       if (mode !== 'auto') {
-        dock._updateStackedLayout();
+        dock._updateGridLayout();
         return;
       }
       if (dock._updatePanelCount('auto')) void dock.refresh();

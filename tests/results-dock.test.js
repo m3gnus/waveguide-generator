@@ -6,8 +6,8 @@ import {
   buildResultsDockRequest,
   createLruImageCache,
   createPanelRequestGuard,
+  resolveResultsDockColumns,
   resolveResultsDockPanelCount,
-  resolveResultsDockStacked,
   setupResultsDock,
 } from '../src/ui/results/resultsDock.js';
 import { resetLayoutSettings, setResultsLayout } from '../src/ui/settings/layoutSettings.js';
@@ -98,18 +98,46 @@ describe('resolveResultsDockPanelCount', () => {
     assert.equal(resolveResultsDockPanelCount({ width: 1060, height: 500, previousCount: 2 }), 2);
   });
 
-  test('stacks two panels only when the dock is too narrow for side-by-side', () => {
-    assert.equal(resolveResultsDockStacked({ width: 899, height: 300, panelCount: 2 }), true);
-    assert.equal(resolveResultsDockStacked({ width: 900, height: 300, panelCount: 2 }), false);
-    assert.equal(resolveResultsDockStacked({ width: 1000, height: 500, panelCount: 2 }), true);
-    assert.equal(resolveResultsDockStacked({ width: 1100, height: 500, panelCount: 2 }), false);
-    assert.equal(resolveResultsDockStacked({ width: 500, height: 300, panelCount: 1 }), false);
-    assert.equal(resolveResultsDockStacked({ width: NaN, height: 300, panelCount: 2 }), false);
+  test('column resolver honors explicit arrangements', () => {
+    assert.equal(resolveResultsDockColumns({ panelCount: 4, arrangement: 'rows' }), 1);
+    assert.equal(resolveResultsDockColumns({ panelCount: 4, arrangement: 'columns' }), 4);
+    assert.equal(resolveResultsDockColumns({ panelCount: 3, arrangement: 'grid' }), 2);
+    assert.equal(resolveResultsDockColumns({ panelCount: 6, arrangement: 'grid' }), 3);
+    assert.equal(resolveResultsDockColumns({ panelCount: 1, arrangement: 'columns' }), 1);
+  });
+
+  test('column resolver auto mode adapts to dock size and count', () => {
+    // Two panels reuse the side-by-side room rule.
+    assert.equal(
+      resolveResultsDockColumns({ panelCount: 2, arrangement: 'auto', width: 899, height: 300 }),
+      1
+    );
+    assert.equal(
+      resolveResultsDockColumns({ panelCount: 2, arrangement: 'auto', width: 900, height: 300 }),
+      2
+    );
+    // More panels form a near-square grid, collapsing on narrow docks.
+    assert.equal(
+      resolveResultsDockColumns({ panelCount: 4, arrangement: 'auto', width: 1200, height: 400 }),
+      2
+    );
+    assert.equal(
+      resolveResultsDockColumns({ panelCount: 6, arrangement: 'auto', width: 1200, height: 400 }),
+      3
+    );
+    assert.equal(
+      resolveResultsDockColumns({ panelCount: 4, arrangement: 'auto', width: 500, height: 400 }),
+      1
+    );
   });
 
   test('forced modes ignore dimensions and prior state', () => {
     assert.equal(resolveResultsDockPanelCount({ width: 2000, height: 200, mode: '1' }), 1);
     assert.equal(resolveResultsDockPanelCount({ width: 0, height: 0, mode: '2' }), 2);
+    assert.equal(resolveResultsDockPanelCount({ width: 0, height: 0, mode: '4' }), 4);
+    assert.equal(resolveResultsDockPanelCount({ width: 0, height: 0, mode: '6' }), 6);
+    // Values beyond the maximum clamp instead of overflowing.
+    assert.equal(resolveResultsDockPanelCount({ width: 0, height: 0, mode: '9' }), 6);
   });
 });
 

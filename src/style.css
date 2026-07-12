@@ -2094,22 +2094,20 @@ details.section > details.simulation-mesh-diagnostics-window {
 
 #results-dock {
   --results-dock-height: 38%;
+  --results-dock-cols: 1;
   flex: 0 0 var(--results-dock-height);
   height: var(--results-dock-height);
   min-height: 180px;
   max-height: 70%;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--results-dock-cols), minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   gap: var(--sp-2);
   padding: var(--sp-2);
   overflow: hidden;
   border-top: 1px solid var(--border);
   background: var(--panel);
-}
-
-/* Two forced panels on a narrow dock stack vertically (e.g. H over V). */
-#results-dock.results-dock--stacked {
-  flex-direction: column;
 }
 
 .results-panel {
@@ -2190,21 +2188,23 @@ details.section > details.simulation-mesh-diagnostics-window {
   background: var(--input-bg);
 }
 
-/* Slim strip that opens the second panel when only one is shown. */
-.results-dock-add {
-  flex: 0 0 28px;
-  align-self: stretch;
+/* Compact add-panel button in the last panel's header. */
+.results-panel-add {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
   margin: 0;
   padding: 0;
   border: 1px dashed var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: var(--text-lg);
+  font-size: var(--text-base);
   line-height: 1;
 }
 
-.results-dock-add:hover:not(:disabled) {
+.results-panel-add:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--input-bg);

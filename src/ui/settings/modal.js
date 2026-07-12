@@ -49,6 +49,7 @@ import {
   RECOMMENDED_DEFAULTS as LAYOUT_DEFAULTS,
   getCurrentLayoutSettings,
   resetLayoutSettings,
+  setPanelArrangement,
   setPanelMode,
   setResultsLayout,
 } from './layoutSettings.js';
@@ -92,7 +93,9 @@ const VIEWER_HELP = Object.freeze({
   resultsLayout:
     'Chooses between the classic results modal and a results dock below the viewport. Split view applies to the desktop layout; mobile keeps the classic layout.',
   panelMode:
-    'Controls how many charts appear in the desktop results dock. Auto chooses one or two from the available dock space. The + and × buttons on the dock switch this too.',
+    'Controls how many charts appear in the desktop results dock (up to 6). Auto chooses one or two from the available dock space. The + and × buttons on the dock switch this too.',
+  panelArrangement:
+    'How multiple panels are laid out in the dock: side by side, stacked vertically, a two-row grid, or Auto (near-square grid chosen from the dock shape).',
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
   meshValidationMode:
@@ -591,6 +594,10 @@ function _buildViewerSection(viewerRuntime, app = null) {
       { value: 'auto', label: 'Auto' },
       { value: '1', label: '1' },
       { value: '2', label: '2' },
+      { value: '3', label: '3' },
+      { value: '4', label: '4' },
+      { value: '5', label: '5' },
+      { value: '6', label: '6' },
     ],
     _layoutState.panelMode,
     LAYOUT_DEFAULTS.panelMode,
@@ -599,13 +606,39 @@ function _buildViewerSection(viewerRuntime, app = null) {
   panelModeResult.select.disabled = _layoutState.resultsLayout === 'classic';
   sec.appendChild(panelModeResult.row);
 
+  const panelArrangementResult = _buildSimBasicSelectRow(
+    'Panel arrangement',
+    'layout-panelArrangement',
+    [
+      { value: 'auto', label: 'Auto' },
+      { value: 'columns', label: 'Side by side' },
+      { value: 'rows', label: 'Stacked' },
+      { value: 'grid', label: 'Grid (2 rows)' },
+    ],
+    _layoutState.panelArrangement,
+    LAYOUT_DEFAULTS.panelArrangement,
+    VIEWER_HELP.panelArrangement
+  );
+  panelArrangementResult.select.disabled = _layoutState.resultsLayout === 'classic';
+  sec.appendChild(panelArrangementResult.row);
+
+  const syncLayoutRowState = () => {
+    const isClassic = _layoutState.resultsLayout === 'classic';
+    panelModeResult.select.disabled = isClassic;
+    panelArrangementResult.select.disabled = isClassic;
+  };
+
   resultsLayoutResult.select.addEventListener('change', () => {
     _layoutState = setResultsLayout(resultsLayoutResult.select.value);
-    panelModeResult.select.disabled = _layoutState.resultsLayout === 'classic';
+    syncLayoutRowState();
     app?.applyResultsLayout?.();
   });
   panelModeResult.select.addEventListener('change', () => {
     _layoutState = setPanelMode(panelModeResult.select.value);
+    app?.applyResultsLayout?.();
+  });
+  panelArrangementResult.select.addEventListener('change', () => {
+    _layoutState = setPanelArrangement(panelArrangementResult.select.value);
     app?.applyResultsLayout?.();
   });
 
@@ -613,9 +646,12 @@ function _buildViewerSection(viewerRuntime, app = null) {
     _layoutState = resetLayoutSettings();
     resultsLayoutResult.select.value = _layoutState.resultsLayout;
     panelModeResult.select.value = _layoutState.panelMode;
+    panelArrangementResult.select.value = _layoutState.panelArrangement;
     resultsLayoutResult.badge.hidden = _layoutState.resultsLayout === LAYOUT_DEFAULTS.resultsLayout;
     panelModeResult.badge.hidden = _layoutState.panelMode === LAYOUT_DEFAULTS.panelMode;
-    panelModeResult.select.disabled = _layoutState.resultsLayout === 'classic';
+    panelArrangementResult.badge.hidden =
+      _layoutState.panelArrangement === LAYOUT_DEFAULTS.panelArrangement;
+    syncLayoutRowState();
     app?.applyResultsLayout?.();
   }
 

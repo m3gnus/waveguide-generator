@@ -12,6 +12,7 @@ import {
   loadLayoutSettings,
   resetLayoutSettings,
   saveLayoutSettings,
+  setPanelArrangement,
   setPanelChart,
   setPanelCharts,
   setPanelMode,
@@ -119,30 +120,47 @@ describe('loadLayoutSettings', () => {
   });
 
   test('repairs panel chart arrays per slot', () => {
+    const slotDefaults = [
+      'directivity_map_h',
+      'frequency_response',
+      'directivity_map_v',
+      'directivity_index',
+      'impedance',
+      'summary',
+    ];
+    const withSlots = (overrides) =>
+      slotDefaults.map((fallback, index) => overrides[index] ?? fallback);
+
     const cases = [
-      [null, ['directivity_map_h', 'frequency_response']],
-      ['impedance', ['directivity_map_h', 'frequency_response']],
-      [[], ['directivity_map_h', 'frequency_response']],
-      [['impedance'], ['impedance', 'frequency_response']],
-      [
-        ['invalid', 'directivity_index'],
-        ['directivity_map_h', 'directivity_index'],
-      ],
+      [null, withSlots({})],
+      ['impedance', withSlots({})],
+      [[], withSlots({})],
+      [['impedance'], withSlots({ 0: 'impedance' })],
+      [['invalid', 'directivity_index'], withSlots({ 1: 'directivity_index' })],
       [
         ['directivity_map_v', 'directivity_map'],
-        ['directivity_map_v', 'directivity_map'],
+        withSlots({ 0: 'directivity_map_v', 1: 'directivity_map' }),
       ],
+      [['summary', 'directivity_map_h'], withSlots({ 0: 'summary', 1: 'directivity_map_h' })],
+      [['frequency_response', null], withSlots({ 0: 'frequency_response' })],
       [
-        ['summary', 'directivity_map_h'],
-        ['summary', 'directivity_map_h'],
-      ],
-      [
-        ['frequency_response', null],
-        ['frequency_response', 'frequency_response'],
-      ],
-      [
-        ['impedance', 'directivity_index', 'frequency_response'],
-        ['impedance', 'directivity_index'],
+        [
+          'impedance',
+          'directivity_index',
+          'frequency_response',
+          'summary',
+          'directivity_map',
+          'directivity_map_v',
+          'frequency_response',
+        ],
+        [
+          'impedance',
+          'directivity_index',
+          'frequency_response',
+          'summary',
+          'directivity_map',
+          'directivity_map_v',
+        ],
       ],
     ];
 
@@ -166,8 +184,16 @@ describe('loadLayoutSettings', () => {
     assert.deepEqual(loaded, {
       resultsLayout: 'split',
       panelMode: '1',
+      panelArrangement: 'auto',
       splitFraction: 0.5,
-      panelCharts: ['impedance', 'directivity_index'],
+      panelCharts: [
+        'impedance',
+        'directivity_index',
+        'directivity_map_v',
+        'directivity_index',
+        'impedance',
+        'summary',
+      ],
     });
     assert.equal(Object.hasOwn(loaded, 'futureSetting'), false);
   });
@@ -195,7 +221,10 @@ describe('layout field helpers', () => {
     setPanelMode('1');
 
     assert.equal(setResultsLayout('unsupported').resultsLayout, 'split');
-    assert.equal(setPanelMode('3').panelMode, 'auto');
+    assert.equal(setPanelMode('3').panelMode, '3');
+    assert.equal(setPanelMode('6').panelMode, '6');
+    assert.equal(setPanelMode('7').panelMode, 'auto');
+    assert.equal(setPanelMode(2).panelMode, 'auto');
     assert.equal(setSplitFraction(0.01).splitFraction, 0.15);
     assert.equal(setSplitFraction(0.99).splitFraction, 0.7);
     assert.equal(
@@ -210,24 +239,37 @@ describe('layout field helpers', () => {
     assert.equal(getPanelChart(1), 'directivity_index');
 
     setPanelChart(1, 'frequency_response');
-    assert.deepEqual(getPanelCharts(), ['impedance', 'frequency_response']);
+    assert.deepEqual(getPanelCharts().slice(0, 2), ['impedance', 'frequency_response']);
 
     setPanelChart(0, 'invalid');
-    assert.deepEqual(getPanelCharts(), ['directivity_map_h', 'frequency_response']);
+    assert.deepEqual(getPanelCharts().slice(0, 2), ['directivity_map_h', 'frequency_response']);
 
     const charts = getPanelCharts();
     charts[0] = 'directivity_index';
     assert.equal(getPanelChart(0), 'directivity_map_h');
   });
 
-  test('setPanelChart ignores indexes outside the two persisted slots', () => {
+  test('setPanelChart ignores indexes outside the persisted slots', () => {
     setPanelCharts(['impedance', 'directivity_index']);
 
     const before = getPanelCharts();
     setPanelChart(-1, 'frequency_response');
-    setPanelChart(2, 'frequency_response');
-
+    setPanelChart(6, 'frequency_response');
     assert.deepEqual(getPanelCharts(), before);
+
+    setPanelChart(5, 'frequency_response');
+    assert.equal(getPanelChart(5), 'frequency_response');
+  });
+
+  test('panel arrangement accepts known values and repairs invalid ones', () => {
+    storeLayout({ panelArrangement: 'grid' });
+    assert.equal(loadLayoutSettings().panelArrangement, 'grid');
+
+    storeLayout({ panelArrangement: 'diagonal' });
+    assert.equal(loadLayoutSettings().panelArrangement, 'auto');
+
+    assert.equal(setPanelArrangement('rows').panelArrangement, 'rows');
+    assert.equal(setPanelArrangement('bogus').panelArrangement, 'auto');
   });
 });
 
@@ -246,8 +288,16 @@ describe('persistence and reset', () => {
       layout: {
         resultsLayout: 'split',
         panelMode: '2',
+        panelArrangement: 'auto',
         splitFraction: 0.6,
-        panelCharts: ['impedance', 'directivity_index'],
+        panelCharts: [
+          'impedance',
+          'directivity_index',
+          'directivity_map_v',
+          'directivity_index',
+          'impedance',
+          'summary',
+        ],
       },
     });
   });

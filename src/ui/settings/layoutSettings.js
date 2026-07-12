@@ -6,7 +6,12 @@ const SETTINGS_KEY = 'waveguide-layout-settings';
 const SCHEMA_VERSION = 1;
 
 const RESULTS_LAYOUTS = new Set(['classic', 'split']);
-const PANEL_MODES = new Set(['auto', '1', '2']);
+export const MAX_RESULT_PANELS = 6;
+const PANEL_MODES = new Set([
+  'auto',
+  ...Array.from({ length: MAX_RESULT_PANELS }, (_, index) => String(index + 1)),
+]);
+const PANEL_ARRANGEMENTS = new Set(['auto', 'columns', 'rows', 'grid']);
 export const CHART_KEYS = [
   'directivity_map',
   'directivity_map_h',
@@ -23,8 +28,18 @@ const MAX_SPLIT_FRACTION = 0.7;
 export const RECOMMENDED_DEFAULTS = {
   resultsLayout: 'split',
   panelMode: 'auto',
+  panelArrangement: 'auto',
   splitFraction: 0.38,
-  panelCharts: ['directivity_map_h', 'frequency_response'],
+  // One remembered chart per panel slot; slots beyond the visible count keep
+  // their last choice so re-opening a panel restores it.
+  panelCharts: [
+    'directivity_map_h',
+    'frequency_response',
+    'directivity_map_v',
+    'directivity_index',
+    'impedance',
+    'summary',
+  ],
 };
 
 let _current = null;
@@ -50,6 +65,9 @@ function normalizeSettings(stored) {
   }
   if (PANEL_MODES.has(stored.panelMode)) {
     normalized.panelMode = stored.panelMode;
+  }
+  if (PANEL_ARRANGEMENTS.has(stored.panelArrangement)) {
+    normalized.panelArrangement = stored.panelArrangement;
   }
   if (typeof stored.splitFraction === 'number') {
     normalized.splitFraction = clampSplitFraction(stored.splitFraction);
@@ -128,6 +146,14 @@ export function setPanelMode(panelMode) {
   return saveLayoutSettings({ ...getCurrentLayoutSettings(), panelMode });
 }
 
+export function getPanelArrangement() {
+  return getCurrentLayoutSettings().panelArrangement;
+}
+
+export function setPanelArrangement(panelArrangement) {
+  return saveLayoutSettings({ ...getCurrentLayoutSettings(), panelArrangement });
+}
+
 export function getSplitFraction() {
   return getCurrentLayoutSettings().splitFraction;
 }
@@ -149,7 +175,9 @@ export function setPanelCharts(panelCharts) {
 }
 
 export function setPanelChart(index, chartKey) {
-  if (index !== 0 && index !== 1) return getCurrentLayoutSettings();
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_RESULT_PANELS) {
+    return getCurrentLayoutSettings();
+  }
   const panelCharts = getPanelCharts();
   panelCharts[index] = chartKey;
   return setPanelCharts(panelCharts);
