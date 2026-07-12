@@ -41,6 +41,25 @@ def polar_config(request) -> dict[str, Any]:
     return request.polar_config.model_dump()
 
 
+def response_solver_log(solver_log) -> list:
+    """Solver log entries as stored in response metadata.
+
+    Drops the per-frequency raw sphere pressure: it is megabytes of complex
+    samples already summarized into the response's ``balloon`` block, and
+    serializing it into metadata made results ~17x larger.
+    """
+    entries = []
+    for entry in solver_log or []:
+        if isinstance(entry, dict) and "observation_sphere_pressure_complex" in entry:
+            entry = {
+                key: value
+                for key, value in entry.items()
+                if key != "observation_sphere_pressure_complex"
+            }
+        entries.append(entry)
+    return entries
+
+
 def waveguide_quadrants(request) -> int:
     options = request.options if isinstance(getattr(request, "options", None), dict) else {}
     mesh_opts = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
@@ -99,12 +118,13 @@ def observation_config(request, observation_config_cls, unavailable_error, packa
     try:
         return observation_config_cls(**kwargs)
     except TypeError as exc:
-        if "sphere" in str(exc):
-            raise unavailable_error(
-                f"Installed {package_name} does not support balloon (spherical) "
-                "sampling. Update the pinned package or disable spherical "
-                "sampling in the directivity settings."
-            ) from exc
+        if "sphere" in str(exc) and "sphere_grid" in kwargs:
+            # Backend without balloon support (e.g. hornlab-bempp-bem):
+            # degrade to arcs-only rather than failing the solve. The
+            # response then simply carries no balloon/beam_shape blocks.
+            kwargs.pop("sphere_grid", None)
+            kwargs.pop("sphere_theta_max_deg", None)
+            return observation_config_cls(**kwargs)
         raise
 
 

@@ -74,9 +74,10 @@ class PolarConfig(BaseModel):
     enabled_axes: List[str] = ["horizontal", "vertical", "diagonal"]
     observation_origin: str = "mouth"
     # Balloon (full-sphere) sampling for the 3D balloon viewer and the
-    # forward beam shape chart. Off by default: it adds theta*phi field
-    # points per frequency and megabytes of balloon data to the results.
-    spherical_sampling: bool = False
+    # forward beam shape chart. On by default: measured cost on the default
+    # waveguide is ~+0.3 s per 48-frequency solve and ~+1 MB of stored
+    # results (the balloon grid). Disable for lean batch runs.
+    spherical_sampling: bool = True
     spherical_theta_count: int = 37
     spherical_phi_count: int = 72
 

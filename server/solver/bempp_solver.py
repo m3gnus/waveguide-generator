@@ -11,6 +11,7 @@ from .result_mapping import (
     json_safe_native_value,
     native_symmetry_plane,
     observation_config,
+    response_solver_log,
     waveguide_quadrants,
     waveguide_sim_type,
 )
@@ -331,7 +332,7 @@ def solve_bempp_from_msh(
             "assembly_backend": assembly_backend,
             "opencl_device": config.opencl_device,
             "precision": config.precision,
-            "solver_log": json_safe_native_value(list(result.solver_log or [])),
+            "solver_log": json_safe_native_value(response_solver_log(result.solver_log)),
         },
     }
 
