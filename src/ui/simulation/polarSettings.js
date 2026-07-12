@@ -73,6 +73,7 @@ const POLAR_NUMERIC_FIELDS = Object.freeze([
 ]);
 const DIAGONAL_ANGLE_INPUT_ID = 'polar-inclination';
 const OBSERVATION_ORIGIN_SELECT_ID = 'polar-observation-origin';
+const SPHERICAL_CHECKBOX_ID = 'polar-spherical-sampling';
 const POLAR_SETTINGS_CONTAINER_ID = 'polar-settings-container';
 const EPSILON = 1e-6;
 const VALID_OBSERVATION_ORIGINS = Object.freeze(['mouth', 'throat']);
@@ -85,6 +86,7 @@ const DEFAULT_POLAR_UI_STATE = Object.freeze({
   diagonalAngle: 45,
   enabledAxes: [...POLAR_AXIS_ORDER],
   observationOrigin: 'mouth',
+  sphericalSampling: false,
 });
 const POLAR_SECTION_METADATA = Object.freeze(
   getParameterSection('simulation', 'directivity-map') || {
@@ -199,6 +201,12 @@ function getObservationOriginFromDom(doc) {
   const select = getElement(doc, OBSERVATION_ORIGIN_SELECT_ID);
   if (!select) return DEFAULT_POLAR_UI_STATE.observationOrigin;
   return normalizeObservationOrigin(select.value);
+}
+
+function getSphericalSamplingFromDom(doc) {
+  const checkbox = getElement(doc, SPHERICAL_CHECKBOX_ID);
+  if (!checkbox) return DEFAULT_POLAR_UI_STATE.sphericalSampling;
+  return checkbox.checked === true;
 }
 
 export function classifyInclinationAngle(angleDeg) {
@@ -333,6 +341,9 @@ function derivePolarUiStateFromConfig(polarConfig) {
   if (polarConfig.observation_origin !== undefined) {
     resolved.observationOrigin = normalizeObservationOrigin(polarConfig.observation_origin);
   }
+  if (polarConfig.spherical_sampling !== undefined) {
+    resolved.sphericalSampling = polarConfig.spherical_sampling === true;
+  }
   return resolved;
 }
 
@@ -353,6 +364,10 @@ function applyExplicitPolarStateOverrides(resolved, params) {
 
   if (params.polarObservationOrigin !== undefined && params.polarObservationOrigin !== null) {
     resolved.observationOrigin = normalizeObservationOrigin(params.polarObservationOrigin);
+  }
+
+  if (params.polarSphericalSampling !== undefined && params.polarSphericalSampling !== null) {
+    resolved.sphericalSampling = params.polarSphericalSampling === true;
   }
 
   return resolved;
@@ -408,6 +423,7 @@ function buildPersistedPolarStatePatch(currentParams, nextUiState) {
     polarDiagonalAngle: nextUiState.diagonalAngle,
     polarEnabledAxes: [...nextUiState.enabledAxes],
     polarObservationOrigin: nextUiState.observationOrigin,
+    polarSphericalSampling: nextUiState.sphericalSampling === true,
   };
   patch._blocks = mergePolarBlocks(
     currentParams?._blocks,
@@ -475,6 +491,37 @@ function appendPolarNumberRow(section, field, doc) {
 
   section.appendChild(row);
 }
+
+function appendPolarCheckboxRow(section, { id, label, help, defaultValue }, doc) {
+  const row = doc.createElement('div');
+  row.className = 'input-row';
+
+  const { row: labelRow } = createLabelRow(doc, {
+    labelText: label,
+    htmlFor: id,
+    helpText: help,
+  });
+  row.appendChild(labelRow);
+
+  const optionLabel = doc.createElement('label');
+  optionLabel.className = 'polar-axis-option';
+  const input = doc.createElement('input');
+  input.type = 'checkbox';
+  input.id = id;
+  input.checked = defaultValue === true;
+  optionLabel.appendChild(input);
+
+  const copy = doc.createElement('div');
+  copy.className = 'polar-axis-option-copy';
+  const text = doc.createElement('span');
+  text.textContent = 'Enabled';
+  copy.appendChild(text);
+  optionLabel.appendChild(copy);
+
+  row.appendChild(optionLabel);
+  section.appendChild(row);
+}
+
 
 function appendPolarAxisRow(section, doc) {
   const row = doc.createElement('div');
@@ -571,6 +618,17 @@ export function renderPolarSettingsSection(doc = document) {
     doc
   );
 
+  appendPolarCheckboxRow(
+    section,
+    {
+      id: SPHERICAL_CHECKBOX_ID,
+      label: '3D Balloon Sampling',
+      help: 'Sample a full sphere of observation points for the 3D balloon viewer and the Forward Beam Shape chart. Adds solve time and result size.',
+      defaultValue: DEFAULT_POLAR_UI_STATE.sphericalSampling,
+    },
+    doc
+  );
+
   container.appendChild(section);
   return section;
 }
@@ -629,6 +687,11 @@ export function applyPolarUiStateToDom(uiState, doc = document) {
       originSelect.value = nextOrigin;
     }
   }
+
+  const sphericalCheckbox = getElement(doc, SPHERICAL_CHECKBOX_ID);
+  if (sphericalCheckbox) {
+    sphericalCheckbox.checked = uiState.sphericalSampling === true;
+  }
 }
 
 export function syncPolarControlsFromBlocks(blocks, doc = document) {
@@ -658,6 +721,7 @@ export function readPolarUiSettings(doc = document) {
   const diagonalAngle = readNumberInput(doc, DIAGONAL_ANGLE_INPUT_ID, 45);
   const enabledAxes = getEnabledAxesFromDom(doc);
   const observationOrigin = getObservationOriginFromDom(doc);
+  const sphericalSampling = getSphericalSamplingFromDom(doc);
 
   if (enabledAxes.length === 0) {
     return {
@@ -675,6 +739,7 @@ export function readPolarUiSettings(doc = document) {
     diagonalAngle,
     enabledAxes,
     observationOrigin,
+    sphericalSampling,
   };
 }
 
@@ -698,12 +763,16 @@ export function readPolarStateSettings(params = {}) {
     diagonalAngle: uiState.diagonalAngle,
     enabledAxes: [...uiState.enabledAxes],
     observationOrigin: uiState.observationOrigin,
+    sphericalSampling: uiState.sphericalSampling === true,
   };
 }
 
 export function isPolarControlId(id) {
   return Boolean(
-    getNumericFieldById(id) || isPolarAxisControlId(id) || id === OBSERVATION_ORIGIN_SELECT_ID
+    getNumericFieldById(id) ||
+      isPolarAxisControlId(id) ||
+      id === OBSERVATION_ORIGIN_SELECT_ID ||
+      id === SPHERICAL_CHECKBOX_ID
   );
 }
 
@@ -724,6 +793,8 @@ export function buildPolarStatePatchForControl(id, currentParams = {}, doc = doc
     nextUiState.enabledAxes = getEnabledAxesFromDom(doc);
   } else if (id === OBSERVATION_ORIGIN_SELECT_ID) {
     nextUiState.observationOrigin = getObservationOriginFromDom(doc);
+  } else if (id === SPHERICAL_CHECKBOX_ID) {
+    nextUiState.sphericalSampling = getSphericalSamplingFromDom(doc);
   }
 
   return buildPersistedPolarStatePatch(currentParams, nextUiState);

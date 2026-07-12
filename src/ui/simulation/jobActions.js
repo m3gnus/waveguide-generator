@@ -778,6 +778,7 @@ export async function runSimulation(panel) {
     inclination: polarSettings.diagonalAngle,
     enabled_axes: polarSettings.enabledAxes,
     observation_origin: polarSettings.observationOrigin,
+    spherical_sampling: polarSettings.sphericalSampling === true,
   };
 
   // Validate settings

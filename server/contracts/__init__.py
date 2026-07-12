@@ -73,6 +73,26 @@ class PolarConfig(BaseModel):
     inclination: float = 45.0
     enabled_axes: List[str] = ["horizontal", "vertical", "diagonal"]
     observation_origin: str = "mouth"
+    # Balloon (full-sphere) sampling for the 3D balloon viewer and the
+    # forward beam shape chart. Off by default: it adds theta*phi field
+    # points per frequency and megabytes of balloon data to the results.
+    spherical_sampling: bool = False
+    spherical_theta_count: int = 37
+    spherical_phi_count: int = 72
+
+    @field_validator("spherical_theta_count")
+    @classmethod
+    def validate_spherical_theta_count(cls, value: int) -> int:
+        if not 5 <= int(value) <= 121:
+            raise ValueError("polar_config.spherical_theta_count must be in [5, 121].")
+        return int(value)
+
+    @field_validator("spherical_phi_count")
+    @classmethod
+    def validate_spherical_phi_count(cls, value: int) -> int:
+        if not 8 <= int(value) <= 241:
+            raise ValueError("polar_config.spherical_phi_count must be in [8, 241].")
+        return int(value)
 
     @field_validator("observation_origin")
     @classmethod
@@ -449,6 +469,7 @@ class ChartsReferencePayload(BaseModel):
     impedance_imaginary: List[Optional[float]] = []
     impedance_units: Optional[str] = None
     impedance_normalization: Optional[str] = None
+    beam_shape: Optional[Dict[str, Any]] = None
 
 
 class ChartsRenderRequest(BaseModel):
@@ -466,6 +487,7 @@ class ChartsRenderRequest(BaseModel):
     impedance_units: Optional[str] = None
     impedance_normalization: Optional[str] = None
     directivity: Dict[str, Any] = {}
+    beam_shape: Optional[Dict[str, Any]] = None
     reference: Optional[ChartsReferencePayload] = None
     # Optional hornlab-plots theme name; None uses the backend default theme.
     theme: Optional[str] = None

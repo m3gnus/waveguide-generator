@@ -10,6 +10,7 @@ export const CHART_TYPES = Object.freeze([
   Object.freeze({ key: 'directivity_map', label: 'Polar Directivity Map' }),
   Object.freeze({ key: 'impedance', label: 'Acoustic Impedance' }),
   Object.freeze({ key: 'directivity_index', label: 'Directivity Index' }),
+  Object.freeze({ key: 'beam_shape', label: 'Forward Beam Shape' }),
   Object.freeze({ key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' }),
 ]);
 
@@ -23,6 +24,8 @@ export const PANEL_CHART_TYPES = Object.freeze([
   Object.freeze({ key: 'directivity_map', label: 'Directivity Map (All planes)' }),
   Object.freeze({ key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' }),
   Object.freeze({ key: 'directivity_index', label: 'Directivity Index' }),
+  Object.freeze({ key: 'beam_shape', label: 'Forward Beam Shape' }),
+  Object.freeze({ key: 'balloon', label: '3D Balloon' }),
   Object.freeze({ key: 'impedance', label: 'Acoustic Impedance' }),
   Object.freeze({ key: 'summary', label: 'Simulation Summary' }),
 ]);
@@ -139,6 +142,10 @@ function buildLineReference(reference, smoothing) {
     impedance_imaginary: series.impedanceImaginary,
   };
 
+  if (resolved.results?.beam_shape && typeof resolved.results.beam_shape === 'object') {
+    payload.beam_shape = resolved.results.beam_shape;
+  }
+
   if (isRhoCNormalizedImpedance(resolved.results)) {
     payload.impedance_units = 'Z/(rho*c)';
     payload.impedance_normalization = 'rho_c';
@@ -164,6 +171,10 @@ export function buildLineChartsPayload(
     impedance_imaginary: series.impedanceImaginary,
     theme,
   };
+
+  if (results?.beam_shape && typeof results.beam_shape === 'object') {
+    payload.beam_shape = results.beam_shape;
+  }
 
   if (isRhoCNormalizedImpedance(results)) {
     payload.impedance_units = 'Z/(rho*c)';

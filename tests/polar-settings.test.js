@@ -365,3 +365,62 @@ test('buildPolarStatePatchFromConfig maps observation_origin from polar config',
 
   assert.equal(patch.polarObservationOrigin, 'throat');
 });
+
+test('readPolarUiSettings reads spherical sampling checkbox from DOM', () => {
+  const doc = makeDoc({ 'polar-spherical-sampling': { checked: true } });
+  const settings = readPolarUiSettings(doc);
+
+  assert.equal(settings.ok, true);
+  assert.equal(settings.sphericalSampling, true);
+});
+
+test('readPolarUiSettings defaults spherical sampling to false when element absent', () => {
+  const doc = makeDoc();
+  delete doc._elements['polar-spherical-sampling'];
+  const settings = readPolarUiSettings(doc);
+
+  assert.equal(settings.ok, true);
+  assert.equal(settings.sphericalSampling, false);
+});
+
+test('buildPolarStatePatchForControl handles the spherical sampling checkbox', () => {
+  const doc = makeDoc({ 'polar-spherical-sampling': { checked: true } });
+  const patch = buildPolarStatePatchForControl('polar-spherical-sampling', {}, doc);
+
+  assert.ok(patch !== null);
+  assert.equal(patch.polarSphericalSampling, true);
+});
+
+test('readPolarStateSettings includes sphericalSampling from explicit state', () => {
+  const settings = readPolarStateSettings({ polarSphericalSampling: true });
+
+  assert.equal(settings.ok, true);
+  assert.equal(settings.sphericalSampling, true);
+
+  const defaults = readPolarStateSettings({});
+  assert.equal(defaults.sphericalSampling, false);
+});
+
+test('buildPolarStatePatchFromConfig maps spherical_sampling from polar config', () => {
+  const patch = buildPolarStatePatchFromConfig(
+    {},
+    {
+      angle_range: [0, 180, 37],
+      enabled_axes: ['horizontal'],
+      spherical_sampling: true,
+    }
+  );
+
+  assert.equal(patch.polarSphericalSampling, true);
+});
+
+test('renderPolarSettingsSection includes the spherical sampling checkbox', () => {
+  const doc = new FakeRenderDocument();
+  const container = doc.createElement('div');
+  container.id = 'polar-settings-container';
+  doc.body.appendChild(container);
+
+  renderPolarSettingsSection(doc);
+
+  assert.ok(doc.getElementById('polar-spherical-sampling'));
+});

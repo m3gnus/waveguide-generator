@@ -19,6 +19,11 @@ import {
   requestDirectivityMap,
   requestLineCharts,
 } from '../simulation/chartRequests.js';
+import {
+  disposeBalloonPanel,
+  isBalloonChartKey,
+  renderBalloonPanel,
+} from './balloonPanel.js';
 import { allJobs, formatJobListLabel } from '../simulation/jobTracker.js';
 
 const MIN_SPLIT_FRACTION = 0.15;
@@ -156,6 +161,10 @@ export function buildResultsDockRequest({
 } = {}) {
   if (chartKey === 'summary') {
     return { kind: 'summary', chartKey };
+  }
+
+  if (isBalloonChartKey(chartKey)) {
+    return { kind: 'balloon', chartKey };
   }
 
   if (isDirectivityChartKey(chartKey)) {
@@ -434,14 +443,20 @@ export function setupResultsDock(app) {
     _syncPanelControlState(state) {
       if (!state?.compareSelect) return;
       const isSummary = state.chartKey === 'summary';
-      state.compareSelect.disabled = isSummary;
+      const isBalloon = isBalloonChartKey(state.chartKey);
+      state.compareSelect.disabled = isSummary || isBalloon;
       if (isSummary) {
         state.compareSelect.title = 'Comparison is not available for the summary view';
+      } else if (isBalloon) {
+        state.compareSelect.title = 'Comparison is not available for the 3D balloon view';
       }
     },
 
     _buildPanels() {
       requestGuard.invalidateAll();
+      for (const state of states) {
+        disposeBalloonPanel(state);
+      }
       clearElement(this.element);
       const panelCharts = getPanelCharts();
 
@@ -668,6 +683,12 @@ export function setupResultsDock(app) {
       if (!this.visible || !state?.body) return null;
       const token = requestGuard.begin(index);
 
+      // The balloon panel owns a live WebGL context; drop it as soon as the
+      // panel shows anything else (status text and images just replace DOM).
+      if (!isBalloonChartKey(state.chartKey)) {
+        disposeBalloonPanel(state);
+      }
+
       if (!this.latestResults) {
         renderPanelStatus(state, 'Run a simulation to see results here');
         return null;
@@ -675,6 +696,16 @@ export function setupResultsDock(app) {
 
       if (state.chartKey === 'summary') {
         renderPanelSummary(state, this.latestResults, this.latestJob);
+        return null;
+      }
+
+      if (isBalloonChartKey(state.chartKey)) {
+        if (!renderBalloonPanel(state, this.latestResults)) {
+          renderPanelStatus(
+            state,
+            'No balloon data. Enable "3D Balloon Sampling" under Directivity Map settings and run a new simulation.'
+          );
+        }
         return null;
       }
 

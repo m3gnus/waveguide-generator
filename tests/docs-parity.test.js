@@ -7,7 +7,7 @@ function read(path) {
 }
 
 const MESHER_PIN = 'ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8';
-const METAL_BEM_PIN = '09f3b0b0e99b23936cac31531b1f82c6e369ea44';
+const METAL_BEM_PIN = 'c1da8881dc2ee1e8931c4a11bd49cbf055d88de5';
 const BEMPP_BEM_PIN = '5c0b751eb3bf80e30040c6e19685568b874e89a8';
 
 test('maintained docs stay aligned with the Metal-or-Bempp solver/runtime contract', () => {
