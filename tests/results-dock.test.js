@@ -162,6 +162,18 @@ describe('buildResultsDockRequest comparison mapping', () => {
   const comparison = makeResults({ offset: 10 });
   const reference = { results: comparison, label: 'Reference job' };
 
+  test('summary panels build a client-rendered request with no payload', () => {
+    const request = buildResultsDockRequest({
+      results: current,
+      chartKey: 'summary',
+      reference,
+    });
+
+    assert.equal(request.kind, 'summary');
+    assert.equal(request.chartKey, 'summary');
+    assert.equal(Object.hasOwn(request, 'payload'), false);
+  });
+
   test('maps a comparison descriptor to the pinned line-chart reference block', () => {
     const request = buildResultsDockRequest({
       results: current,

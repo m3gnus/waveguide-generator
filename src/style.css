@@ -2169,6 +2169,54 @@ details.section > details.simulation-mesh-diagnostics-window {
   background: var(--input-bg);
 }
 
+.results-panel-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.results-panel-close:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+  background: var(--input-bg);
+}
+
+/* Slim strip that opens the second panel when only one is shown. */
+.results-dock-add {
+  flex: 0 0 28px;
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.results-dock-add:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--input-bg);
+}
+
+.results-panel-summary {
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-2) var(--sp-3);
+}
+
 .results-panel-body {
   flex: 1 1 auto;
   min-width: 0;
