@@ -86,7 +86,7 @@ const DEFAULT_POLAR_UI_STATE = Object.freeze({
   diagonalAngle: 45,
   enabledAxes: [...POLAR_AXIS_ORDER],
   observationOrigin: 'mouth',
-  sphericalSampling: false,
+  sphericalSampling: true,
 });
 const POLAR_SECTION_METADATA = Object.freeze(
   getParameterSection('simulation', 'directivity-map') || {

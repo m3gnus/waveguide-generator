@@ -374,13 +374,13 @@ test('readPolarUiSettings reads spherical sampling checkbox from DOM', () => {
   assert.equal(settings.sphericalSampling, true);
 });
 
-test('readPolarUiSettings defaults spherical sampling to false when element absent', () => {
+test('readPolarUiSettings defaults spherical sampling to true when element absent', () => {
   const doc = makeDoc();
   delete doc._elements['polar-spherical-sampling'];
   const settings = readPolarUiSettings(doc);
 
   assert.equal(settings.ok, true);
-  assert.equal(settings.sphericalSampling, false);
+  assert.equal(settings.sphericalSampling, true);
 });
 
 test('buildPolarStatePatchForControl handles the spherical sampling checkbox', () => {
@@ -398,7 +398,10 @@ test('readPolarStateSettings includes sphericalSampling from explicit state', ()
   assert.equal(settings.sphericalSampling, true);
 
   const defaults = readPolarStateSettings({});
-  assert.equal(defaults.sphericalSampling, false);
+  assert.equal(defaults.sphericalSampling, true);
+
+  const disabled = readPolarStateSettings({ polarSphericalSampling: false });
+  assert.equal(disabled.sphericalSampling, false);
 });
 
 test('buildPolarStatePatchFromConfig maps spherical_sampling from polar config', () => {

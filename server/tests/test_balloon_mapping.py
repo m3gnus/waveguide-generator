@@ -107,12 +107,12 @@ class ObservationConfigSphereTest(unittest.TestCase):
         )
         self.assertEqual(cfg.kwargs["sphere_theta_max_deg"], 90.0)
 
-    def test_legacy_backend_without_sphere_support_raises_helpful_error(self):
-        with self.assertRaises(_Unavailable) as ctx:
-            observation_config(
-                _request(spherical=True), _LegacyObservationConfig, _Unavailable, "pkg"
-            )
-        self.assertIn("spherical", str(ctx.exception))
+    def test_legacy_backend_without_sphere_support_degrades_to_arcs(self):
+        cfg = observation_config(
+            _request(spherical=True), _LegacyObservationConfig, _Unavailable, "pkg"
+        )
+        self.assertEqual(cfg.distance_m, 2.0)
+        self.assertFalse(hasattr(cfg, "sphere_grid"))
 
     def test_legacy_backend_still_works_without_spherical(self):
         cfg = observation_config(_request(), _LegacyObservationConfig, _Unavailable, "pkg")
@@ -163,3 +163,28 @@ class BalloonResponseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResponseSolverLogTest(unittest.TestCase):
+    def test_strips_raw_sphere_pressure_only(self):
+        from solver.result_mapping import response_solver_log
+
+        entries = [
+            {"frequency_hz": 100.0, "observation_sphere_pressure_complex": np.ones(4)},
+            {"frequency_hz": 200.0},
+            "not-a-dict",
+        ]
+        sanitized = response_solver_log(entries)
+        self.assertEqual(len(sanitized), 3)
+        self.assertNotIn("observation_sphere_pressure_complex", sanitized[0])
+        self.assertEqual(sanitized[0]["frequency_hz"], 100.0)
+        self.assertEqual(sanitized[1], {"frequency_hz": 200.0})
+        self.assertEqual(sanitized[2], "not-a-dict")
+        # Original entries are not mutated.
+        self.assertIn("observation_sphere_pressure_complex", entries[0])
+
+    def test_empty_and_none_logs(self):
+        from solver.result_mapping import response_solver_log
+
+        self.assertEqual(response_solver_log(None), [])
+        self.assertEqual(response_solver_log([]), [])

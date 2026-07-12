@@ -13,6 +13,7 @@ from .result_mapping import (
     json_safe_native_value,
     native_symmetry_plane,
     observation_config,
+    response_solver_log,
     waveguide_sim_type,
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
@@ -388,7 +389,7 @@ def solve_metal_from_msh(
             ),
             "formulation": getattr(config, "formulation", config_kwargs["formulation"]),
             "complex_k_shift": getattr(config, "complex_k_shift", config_kwargs["complex_k_shift"]),
-            "solver_log": json_safe_native_value(list(result.solver_log or [])),
+            "solver_log": json_safe_native_value(response_solver_log(result.solver_log)),
             "native_diagnostics": json_safe_native_value(list(result.native_diagnostics or [])),
         },
     }
@@ -544,7 +545,7 @@ def solve_circsym_from_params(
             "circsym_baffle_z": getattr(config, "circsym_baffle_z", meridian_build.baffle_z),
             "formulation": getattr(config, "formulation", config_kwargs["formulation"]),
             "complex_k_shift": getattr(config, "complex_k_shift", config_kwargs["complex_k_shift"]),
-            "solver_log": json_safe_native_value(list(result.solver_log or [])),
+            "solver_log": json_safe_native_value(response_solver_log(result.solver_log)),
             "native_diagnostics": json_safe_native_value(list(result.native_diagnostics or [])),
             "meridian": json_safe_native_value(dict(meridian_build.metadata or {})),
         },
