@@ -4,10 +4,13 @@ workspace path/open.
 """
 
 import asyncio
-import logging
+import hashlib
 import json
+import logging
 import platform
 import subprocess
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -38,6 +41,42 @@ from services.update_service import get_update_status
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_MATPLOTLIB_RENDER_LOCK = threading.Lock()
+_RENDER_CACHE_MAX_ENTRIES = 32
+_RENDER_CACHE: OrderedDict[str, Any] = OrderedDict()
+_CACHE_MISS = object()
+
+
+def _stable_render_cache_key(render_type: str, inputs: Dict[str, Any]) -> str:
+    serialized = json.dumps(
+        inputs,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return f"{render_type}:{hashlib.sha256(serialized).hexdigest()}"
+
+
+def _render_cache_get(key: str) -> Any:
+    try:
+        value = _RENDER_CACHE.pop(key)
+    except KeyError:
+        return _CACHE_MISS
+    _RENDER_CACHE[key] = value
+    return value
+
+
+def _render_cache_put(key: str, value: Any) -> None:
+    _RENDER_CACHE.pop(key, None)
+    _RENDER_CACHE[key] = value
+    while len(_RENDER_CACHE) > _RENDER_CACHE_MAX_ENTRIES:
+        _RENDER_CACHE.popitem(last=False)
+
+
+def _render_with_matplotlib_lock(render_function: Any, *args: Any, **kwargs: Any) -> Any:
+    with _MATPLOTLIB_RENDER_LOCK:
+        return render_function(*args, **kwargs)
 
 
 def _coerce_form_string(value: Any) -> str:
@@ -123,7 +162,11 @@ async def theme_preview(theme: Optional[str] = None) -> Dict[str, str]:
     Returns a base64 PNG data URI. Results are cached per theme on the backend.
     """
     try:
-        image_b64 = build_theme_montage_b64(theme)
+        image_b64 = await asyncio.to_thread(
+            _render_with_matplotlib_lock,
+            build_theme_montage_b64,
+            theme,
+        )
         return {
             "theme": theme or DEFAULT_CHART_THEME,
             "image": f"data:image/png;base64,{image_b64}",
@@ -146,11 +189,21 @@ async def render_charts(request: ChartsRenderRequest) -> Dict[str, Any]:
     try:
         payload = request.model_dump()
         payload["theme"] = request.theme
-        charts = render_all_charts(payload)
+        cache_key = _stable_render_cache_key("charts", payload)
+        cached = _render_cache_get(cache_key)
+        if cached is not _CACHE_MISS:
+            return {"charts": dict(cached)}
+
+        charts = await asyncio.to_thread(
+            _render_with_matplotlib_lock,
+            render_all_charts,
+            payload,
+        )
         result = {}
         for key, b64 in charts.items():
             if b64 is not None:
                 result[key] = f"data:image/png;base64,{b64}"
+        _render_cache_put(cache_key, dict(result))
         return {"charts": result}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -169,7 +222,20 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
         raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
 
     try:
-        image_b64 = render_directivity_plot(
+        render_inputs = {
+            "frequencies": request.frequencies,
+            "directivity": request.directivity,
+            "reference_level": request.reference_level,
+            "theme": request.theme,
+        }
+        cache_key = _stable_render_cache_key("directivity", render_inputs)
+        cached = _render_cache_get(cache_key)
+        if cached is not _CACHE_MISS:
+            return {"image": cached}
+
+        image_b64 = await asyncio.to_thread(
+            _render_with_matplotlib_lock,
+            render_directivity_plot,
             request.frequencies,
             request.directivity,
             reference_level=request.reference_level,
@@ -177,7 +243,9 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
         )
         if image_b64 is None:
             raise HTTPException(status_code=400, detail="No directivity patterns to render")
-        return {"image": f"data:image/png;base64,{image_b64}"}
+        image = f"data:image/png;base64,{image_b64}"
+        _render_cache_put(cache_key, image)
+        return {"image": image}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
