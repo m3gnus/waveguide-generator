@@ -2258,6 +2258,44 @@ details.section > details.simulation-mesh-diagnostics-window {
   background: var(--error-bg);
 }
 
+.balloon-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.balloon-panel-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.balloon-panel-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.balloon-panel-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.balloon-panel-controls input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.balloon-panel-readout {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
 @media (pointer: coarse) {
   #viewport-results-resizer {
     height: 20px;

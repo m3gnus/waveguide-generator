@@ -13,13 +13,13 @@ meshio>=4.0.16
 
 # Pinned VCS dependencies for reproducible public installs.
 git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8
-git+https://github.com/m3gnus/hornlab-metal-bem.git@09f3b0b0e99b23936cac31531b1f82c6e369ea44
+git+https://github.com/m3gnus/hornlab-metal-bem.git@c1da8881dc2ee1e8931c4a11bd49cbf055d88de5
 
 # Canonical plot renderer (theme-aware result charts). If this install is
 # absent the backend falls back to the in-repo server/solver charts renderer,
 # so it is not hard-required. Local dev may `pip install -e ../hornlab-plots`
 # to pick up sibling edits.
-git+https://github.com/m3gnus/hornlab-plots.git@f8282c2361cc99c0f630d264dd94303dec14d8c9
+git+https://github.com/m3gnus/hornlab-plots.git@8664719d7be98279d7ce5283a557687ede26643d
 
 # Optional non-Metal fallback backend lives in server/requirements-bempp.txt.
 

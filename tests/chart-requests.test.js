@@ -34,11 +34,12 @@ function makeLineResults({ offset = 0, metadata = {} } = {}) {
   };
 }
 
-test('CHART_TYPES exposes the four dock and modal chart choices in display order', () => {
+test('CHART_TYPES exposes the modal chart choices in display order', () => {
   assert.deepEqual(CHART_TYPES, [
     { key: 'directivity_map', label: 'Polar Directivity Map' },
     { key: 'impedance', label: 'Acoustic Impedance' },
     { key: 'directivity_index', label: 'Directivity Index' },
+    { key: 'beam_shape', label: 'Forward Beam Shape' },
     { key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   ]);
   assert.equal(Object.isFrozen(CHART_TYPES), true);
@@ -397,4 +398,29 @@ test('request helpers normalize 503, other HTTP errors, and network failures', a
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('buildLineChartsPayload forwards beam_shape and its reference when present', () => {
+  const beamShape = {
+    frequencies: [500, 1000],
+    shape_exponent: [2.1, null],
+    fit_residual_percent: [1.2, null],
+    spherical_di_db: [6.5, 7.1],
+  };
+  const referenceBeamShape = { ...beamShape, spherical_di_db: [5.5, 6.1] };
+  const results = { ...makeLineResults(), beam_shape: beamShape };
+  const reference = {
+    results: { ...makeLineResults({ offset: 3 }), beam_shape: referenceBeamShape },
+    label: 'Job 7',
+  };
+
+  const payload = buildLineChartsPayload(results, { smoothing: 'none', reference });
+
+  assert.deepEqual(payload.beam_shape, beamShape);
+  assert.deepEqual(payload.reference.beam_shape, referenceBeamShape);
+});
+
+test('buildLineChartsPayload omits beam_shape when results lack it', () => {
+  const payload = buildLineChartsPayload(makeLineResults(), { smoothing: 'none' });
+  assert.equal('beam_shape' in payload, false);
 });

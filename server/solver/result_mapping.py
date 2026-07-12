@@ -8,11 +8,15 @@ from typing import Any
 
 import numpy as np
 
+from .beam_shape import beam_shape_summary
 from .contract import build_directivity_metadata
 from .directivity_index import calculate_di_from_polar_patterns
 
 REFERENCE_PRESSURE_PA = 20e-6
 REFERENCE_RHO_C = 1.21 * 343.0
+# Silent balloon points floor at -120 dB SPL, matching the solvers'
+# directivity floor, so log10 never sees zero amplitude.
+_BALLOON_FLOOR_AMPLITUDE = REFERENCE_PRESSURE_PA * 10.0 ** (-120.0 / 20.0)
 
 
 def json_safe_native_value(value: Any) -> Any:
@@ -75,14 +79,33 @@ def observation_config(request, observation_config_cls, unavailable_error, packa
         raise unavailable_error(f"{package_name} is not installed.")
     polar = polar_config(request)
     angle_range = polar.get("angle_range") or [0.0, 180.0, 37]
-    return observation_config_cls(
-        planes=list(polar.get("enabled_axes") or ["horizontal", "vertical"]),
-        distance_m=float(polar.get("distance", 2.0)),
-        angle_min_deg=float(angle_range[0]),
-        angle_max_deg=float(angle_range[1]),
-        angle_count=int(angle_range[2]),
-        origin=str(polar.get("observation_origin") or "mouth"),
-    )
+    kwargs = {
+        "planes": list(polar.get("enabled_axes") or ["horizontal", "vertical"]),
+        "distance_m": float(polar.get("distance", 2.0)),
+        "angle_min_deg": float(angle_range[0]),
+        "angle_max_deg": float(angle_range[1]),
+        "angle_count": int(angle_range[2]),
+        "origin": str(polar.get("observation_origin") or "mouth"),
+    }
+    if polar.get("spherical_sampling"):
+        kwargs["sphere_grid"] = (
+            int(polar.get("spherical_theta_count") or 37),
+            int(polar.get("spherical_phi_count") or 72),
+        )
+        # Infinite-baffle solves radiate into a half space; the rear
+        # hemisphere does not exist, so the balloon stops at 90 degrees.
+        if waveguide_sim_type(request) == 1:
+            kwargs["sphere_theta_max_deg"] = 90.0
+    try:
+        return observation_config_cls(**kwargs)
+    except TypeError as exc:
+        if "sphere" in str(exc):
+            raise unavailable_error(
+                f"Installed {package_name} does not support balloon (spherical) "
+                "sampling. Update the pinned package or disable spherical "
+                "sampling in the directivity settings."
+            ) from exc
+        raise
 
 
 def directivity(result) -> dict[str, list[list[list[float | None]]]]:
@@ -203,6 +226,50 @@ def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
         metadata["partial_success"] = True
 
 
+def _balloon_grid_from_result(result) -> dict[str, Any] | None:
+    """Reshape the solver's flat sphere samples into a (F, T, P) SPL grid.
+
+    Returns None when the solve did not request sphere sampling (or the
+    backend does not support it). SPL is normalized to the theta=0 pole so
+    the balloon matches the polar directivity convention (on-axis = 0 dB).
+    """
+    pressure = getattr(result, "sphere_pressure_complex", None)
+    theta_deg = getattr(result, "sphere_theta_deg", None)
+    phi_deg = getattr(result, "sphere_phi_deg", None)
+    if pressure is None or theta_deg is None or phi_deg is None:
+        return None
+
+    pressure = np.asarray(pressure, dtype=np.complex128)
+    theta_flat = np.asarray(theta_deg, dtype=float)
+    phi_flat = np.asarray(phi_deg, dtype=float)
+    if pressure.ndim != 2 or theta_flat.ndim != 1 or theta_flat.size != pressure.shape[1]:
+        return None
+
+    theta_axis = np.unique(theta_flat)
+    n_theta = theta_axis.size
+    total = theta_flat.size
+    if n_theta < 2 or total % n_theta != 0:
+        return None
+    n_phi = total // n_theta
+    # Theta-major contract from the solver: verify before reshaping.
+    if not np.allclose(theta_flat.reshape(n_theta, n_phi), theta_axis[:, None]):
+        return None
+    phi_axis = phi_flat[:n_phi]
+
+    amplitudes = np.maximum(np.abs(pressure), _BALLOON_FLOOR_AMPLITUDE)
+    spl = 20.0 * np.log10(amplitudes / REFERENCE_PRESSURE_PA)
+    # theta=0 pole (first sample) is the same physical point as the polar
+    # arcs' 0-degree sample, so this matches the arc normalization.
+    spl_norm = spl - spl[:, 0][:, None]
+    grid = spl_norm.reshape(pressure.shape[0], n_theta, n_phi)
+    return {
+        "theta_deg": theta_axis,
+        "phi_deg": phi_axis,
+        "spl_norm_db": grid,
+        "hemisphere": bool(theta_axis[-1] <= 90.0 + 1e-9),
+    }
+
+
 def build_solver_response(
     *,
     result,
@@ -248,7 +315,7 @@ def build_solver_response(
     metadata["impedance_quantity"] = "specific_acoustic_impedance"
     metadata["impedance_drive"] = "unit_acceleration"
 
-    return {
+    response = {
         "frequencies": frequencies,
         "directivity": directivity_payload,
         "spl_on_axis": {
@@ -264,3 +331,25 @@ def build_solver_response(
         "di": {"frequencies": frequencies, "di": di_per_plane},
         "metadata": metadata,
     }
+
+    balloon = _balloon_grid_from_result(result)
+    if balloon is not None:
+        response["balloon"] = {
+            "frequencies": frequencies,
+            "theta_deg": [round(float(v), 3) for v in balloon["theta_deg"]],
+            "phi_deg": [round(float(v), 3) for v in balloon["phi_deg"]],
+            "spl_norm_db": np.round(balloon["spl_norm_db"], 2).tolist(),
+            "distance_m": float(config.observation.distance_m),
+            "hemisphere": balloon["hemisphere"],
+        }
+        beam_shape = beam_shape_summary(
+            balloon["theta_deg"],
+            balloon["phi_deg"],
+            balloon["spl_norm_db"],
+            frequencies,
+            hemisphere=balloon["hemisphere"],
+        )
+        if beam_shape is not None:
+            response["beam_shape"] = beam_shape
+
+    return response

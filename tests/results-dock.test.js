@@ -393,3 +393,12 @@ test('classic layout stays hidden without loading results or requesting charts',
     else globalThis.ResizeObserver = originalResizeObserver;
   }
 });
+
+test('balloon panels build a client-rendered request with no payload', () => {
+  const request = buildResultsDockRequest({
+    results: { balloon: { theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0]]] } },
+    chartKey: 'balloon',
+  });
+
+  assert.deepEqual(request, { kind: 'balloon', chartKey: 'balloon' });
+});
