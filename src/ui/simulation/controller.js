@@ -16,6 +16,7 @@ import {
 } from '../../modules/simulation/jobs.js';
 import {
   createJobTracker,
+  foldLocalJobMetadataIntoRemote,
   removeJob,
   setJobsFromEntries,
   persistPanelJobs,
@@ -684,7 +685,12 @@ export async function restoreSimulationControllerJobs(
           break;
         }
       }
-      setJobsFromEntries(controller, items);
+      // A refresh must not discard local-only job metadata (label, script)
+      // that is still being PATCHed to the backend.
+      setJobsFromEntries(
+        controller,
+        foldLocalJobMetadataIntoRemote(Array.from(controller.jobs.values()), items)
+      );
       setJobSourceMode(controller, JOB_SOURCE_MODES.BACKEND);
       backendRequestSucceeded = true;
     } catch (error) {

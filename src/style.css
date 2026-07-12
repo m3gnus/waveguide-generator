@@ -1425,6 +1425,19 @@ details.section > details.simulation-mesh-diagnostics-window {
   line-height: 1.4;
 }
 
+/* Long backend errors: clamp to a few lines, click the text to expand. */
+.simulation-job-item.is-failed .simulation-job-meta {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.simulation-job-item.is-failed .simulation-job-meta.is-expanded {
+  -webkit-line-clamp: unset;
+}
+
 /* Star rating */
 
 .simulation-job-rating {
@@ -2092,6 +2105,11 @@ details.section > details.simulation-mesh-diagnostics-window {
   overflow: hidden;
   border-top: 1px solid var(--border);
   background: var(--panel);
+}
+
+/* Two forced panels on a narrow dock stack vertically (e.g. H over V). */
+#results-dock.results-dock--stacked {
+  flex-direction: column;
 }
 
 .results-panel {

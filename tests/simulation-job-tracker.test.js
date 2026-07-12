@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   clearFailedJobs,
+  foldLocalJobMetadataIntoRemote,
   createJobTracker,
   JOB_TRACKER_CONSTANTS,
   allJobs,
@@ -264,4 +265,30 @@ test('toUiJob prefers explicit error_message over message when both are present'
     message: 'status channel error',
   });
   assert.equal(job.errorMessage, 'canonical error');
+});
+
+test('foldLocalJobMetadataIntoRemote keeps local labels and scripts without pruning', () => {
+  const localJobs = [
+    {
+      id: 'fresh-job',
+      status: 'running',
+      label: '260712_horn_design_2',
+      script: { outputName: 'horn_design', counter: 2 },
+    },
+  ];
+  const remoteItems = Array.from({ length: 120 }, (_, index) => ({
+    id: index === 0 ? 'fresh-job' : `old-${index}`,
+    status: 'complete',
+    label: index === 0 ? null : `labeled-${index}`,
+  }));
+
+  const folded = foldLocalJobMetadataIntoRemote(localJobs, remoteItems);
+
+  assert.equal(folded.length, 120);
+  const fresh = folded.find((job) => job.id === 'fresh-job');
+  assert.equal(fresh.label, '260712_horn_design_2');
+  assert.deepEqual(fresh.script, { outputName: 'horn_design', counter: 2 });
+  assert.equal(fresh.status, 'complete');
+  const untouched = folded.find((job) => job.id === 'old-5');
+  assert.equal(untouched.label, 'labeled-5');
 });

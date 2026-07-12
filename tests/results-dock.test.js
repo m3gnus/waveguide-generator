@@ -7,9 +7,10 @@ import {
   createLruImageCache,
   createPanelRequestGuard,
   resolveResultsDockPanelCount,
+  resolveResultsDockStacked,
   setupResultsDock,
 } from '../src/ui/results/resultsDock.js';
-import { resetLayoutSettings } from '../src/ui/settings/layoutSettings.js';
+import { resetLayoutSettings, setResultsLayout } from '../src/ui/settings/layoutSettings.js';
 import { displayResults } from '../src/ui/simulation/results.js';
 
 function makeResults({ offset = 0 } = {}) {
@@ -95,6 +96,15 @@ describe('resolveResultsDockPanelCount', () => {
       1
     );
     assert.equal(resolveResultsDockPanelCount({ width: 1060, height: 500, previousCount: 2 }), 2);
+  });
+
+  test('stacks two panels only when the dock is too narrow for side-by-side', () => {
+    assert.equal(resolveResultsDockStacked({ width: 899, height: 300, panelCount: 2 }), true);
+    assert.equal(resolveResultsDockStacked({ width: 900, height: 300, panelCount: 2 }), false);
+    assert.equal(resolveResultsDockStacked({ width: 1000, height: 500, panelCount: 2 }), true);
+    assert.equal(resolveResultsDockStacked({ width: 1100, height: 500, panelCount: 2 }), false);
+    assert.equal(resolveResultsDockStacked({ width: 500, height: 300, panelCount: 1 }), false);
+    assert.equal(resolveResultsDockStacked({ width: NaN, height: 300, panelCount: 2 }), false);
   });
 
   test('forced modes ignore dimensions and prior state', () => {
@@ -315,7 +325,9 @@ test('classic layout stays hidden without loading results or requesting charts',
     fetchCalls += 1;
     throw new Error('classic layout must not fetch');
   };
+  // Split view is the recommended default, so classic must be chosen explicitly.
   resetLayoutSettings();
+  setResultsLayout('classic');
 
   try {
     const app = {

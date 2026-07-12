@@ -605,6 +605,9 @@ export function loadJobScript(panel, jobId) {
   });
 
   setSimulationInputsFromScript(script);
+  // A loaded config can have a completely different scale — reframe once so
+  // the user is not left staring at a zoomed-in fragment of the new geometry.
+  panel.app?.focusOnModel?.();
   showMessage(`Loaded parameters from ${job.label || jobId}.`, {
     type: 'info',
     duration: 2500,

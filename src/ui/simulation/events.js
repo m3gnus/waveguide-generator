@@ -77,6 +77,11 @@ export function setupEventListeners(panel) {
     jobList.addEventListener('click', async (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      const clampedError = target.closest('.simulation-job-item.is-failed .simulation-job-meta');
+      if (clampedError) {
+        clampedError.classList.toggle('is-expanded');
+        return;
+      }
       const ratingTarget = target.closest('[data-job-rating]');
       const ratingValue =
         ratingTarget instanceof HTMLElement ? ratingTarget.dataset.jobRating : null;

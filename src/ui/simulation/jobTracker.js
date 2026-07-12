@@ -261,6 +261,34 @@ export function mergeJobs(localItems, remoteItems) {
   return prune(Array.from(merged.values()));
 }
 
+export function foldLocalJobMetadataIntoRemote(localItems, remoteItems) {
+  // Hydration keeps the backend list authoritative (no prune, drops jobs the
+  // backend no longer knows) but must not discard local-only metadata such as
+  // a freshly assigned label or script snapshot whose PATCH is still in flight.
+  const localById = new Map();
+  for (const item of localItems || []) {
+    const normalized = normalizeItem(item);
+    if (normalized.id) localById.set(normalized.id, normalized);
+  }
+
+  return (remoteItems || []).map((item) => {
+    const normalized = normalizeItem(item);
+    const existing = normalized.id ? localById.get(normalized.id) : null;
+    if (!existing) return item;
+    return {
+      ...normalized,
+      label: normalized.label ?? existing.label ?? null,
+      script: normalized.script ?? existing.script ?? null,
+      meshStats: normalized.meshStats ?? existing.meshStats ?? null,
+      rating: normalized.rating ?? existing.rating ?? null,
+      exportedFiles: normalized.exportedFiles?.length
+        ? normalized.exportedFiles
+        : (existing.exportedFiles ?? []),
+      scriptSnapshot: normalized.scriptSnapshot ?? existing.scriptSnapshot ?? null,
+    };
+  });
+}
+
 export function setJobsFromEntries(panel, items) {
   panel.jobs.clear();
   for (const raw of items) {
