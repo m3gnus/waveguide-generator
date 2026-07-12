@@ -14,6 +14,7 @@ export const CHART_KEYS = [
   'impedance',
   'directivity_index',
   'frequency_response',
+  'summary',
 ];
 const VALID_CHART_KEYS = new Set(CHART_KEYS);
 const MIN_SPLIT_FRACTION = 0.15;

@@ -133,6 +133,10 @@ describe('loadLayoutSettings', () => {
         ['directivity_map_v', 'directivity_map'],
       ],
       [
+        ['summary', 'directivity_map_h'],
+        ['summary', 'directivity_map_h'],
+      ],
+      [
         ['frequency_response', null],
         ['frequency_response', 'frequency_response'],
       ],

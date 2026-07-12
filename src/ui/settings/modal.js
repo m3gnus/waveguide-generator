@@ -92,7 +92,7 @@ const VIEWER_HELP = Object.freeze({
   resultsLayout:
     'Chooses between the classic results modal and a results dock below the viewport. Split view applies to the desktop layout; mobile keeps the classic layout.',
   panelMode:
-    'Controls how many charts appear in the desktop results dock. Auto chooses one or two from the available dock space.',
+    'Controls how many charts appear in the desktop results dock. Auto chooses one or two from the available dock space. The + and × buttons on the dock switch this too.',
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
   meshValidationMode:

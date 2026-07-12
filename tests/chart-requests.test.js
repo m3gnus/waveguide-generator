@@ -261,6 +261,9 @@ test('directivity chart-key helpers map panel keys to plane filters', () => {
   assert.deepEqual(directivityPlanesForChartKey('directivity_map_h'), ['horizontal']);
   assert.deepEqual(directivityPlanesForChartKey('directivity_map_v'), ['vertical']);
   assert.equal(directivityPlanesForChartKey('directivity_map'), null);
+
+  assert.equal(isDirectivityChartKey('summary'), false);
+  assert.equal(directivityPlanesForChartKey('summary'), null);
 });
 
 test('requestLineCharts posts the exact JSON body and normalizes a successful response', async () => {

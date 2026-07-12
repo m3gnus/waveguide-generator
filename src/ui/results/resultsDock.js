@@ -4,7 +4,9 @@ import {
   getCurrentLayoutSettings,
   getPanelCharts,
   setPanelChart,
+  setPanelMode,
 } from '../settings/layoutSettings.js';
+import { renderResultDiagnostics, renderSolveStatsSummary } from '../simulation/results.js';
 import {
   PANEL_CHART_TYPES,
   buildDirectivityPayload,
@@ -131,6 +133,10 @@ export function buildResultsDockRequest({
   theme,
   reference = null,
 } = {}) {
+  if (chartKey === 'summary') {
+    return { kind: 'summary', chartKey };
+  }
+
   if (isDirectivityChartKey(chartKey)) {
     return {
       kind: 'directivity',
@@ -187,6 +193,22 @@ function renderPanelImage(state, chartKey, image) {
   img.src = image;
   img.alt = chart?.label || 'Simulation result chart';
   state.body.appendChild(img);
+}
+
+function renderPanelSummary(state, results, job) {
+  if (!state.body) return;
+  const markup = [renderSolveStatsSummary(results, job), renderResultDiagnostics(results)]
+    .filter(Boolean)
+    .join('');
+  if (!markup.trim()) {
+    renderPanelStatus(state, 'No summary available');
+    return;
+  }
+  clearElement(state.body);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'results-panel-summary';
+  wrapper.innerHTML = markup;
+  state.body.appendChild(wrapper);
 }
 
 function completedComparisonJobs(panel, displayedJobId) {
@@ -372,6 +394,23 @@ export function setupResultsDock(app) {
         if (states[index].chartSelect) {
           states[index].chartSelect.value = panelCharts[index];
         }
+        this._syncPanelControlState(states[index]);
+      }
+    },
+
+    _syncPanelControlState(state) {
+      if (!state?.compareSelect) return;
+      const isSummary = state.chartKey === 'summary';
+      state.compareSelect.disabled = isSummary;
+      if (isSummary) {
+        state.compareSelect.title = 'Comparison is not available for the summary view';
+      }
+    },
+
+    _setPanelMode(mode) {
+      setPanelMode(mode);
+      if (this._updatePanelCount(mode)) {
+        void this.refresh();
       }
     },
 
@@ -402,6 +441,7 @@ export function setupResultsDock(app) {
         chartSelect.addEventListener('change', (event) => {
           state.chartKey = event.target.value;
           setPanelChart(index, state.chartKey);
+          this._syncPanelControlState(state);
           void this._refreshPanel(index);
         });
 
@@ -429,6 +469,16 @@ export function setupResultsDock(app) {
         header.appendChild(chartSelect);
         header.appendChild(compareSelect);
         header.appendChild(openButton);
+        if (index === 1) {
+          const closeButton = document.createElement('button');
+          closeButton.type = 'button';
+          closeButton.className = 'results-panel-close';
+          closeButton.textContent = '×';
+          closeButton.title = 'Close this panel';
+          closeButton.setAttribute('aria-label', 'Close this panel');
+          closeButton.addEventListener('click', () => this._setPanelMode('1'));
+          header.appendChild(closeButton);
+        }
         root.appendChild(header);
         root.appendChild(body);
         this.element.appendChild(root);
@@ -440,6 +490,18 @@ export function setupResultsDock(app) {
           compareSelect,
           compareOptionsSignature: null,
         });
+        this._syncPanelControlState(state);
+      }
+
+      if (this.panelCount === 1) {
+        const addButton = document.createElement('button');
+        addButton.type = 'button';
+        addButton.className = 'results-dock-add';
+        addButton.textContent = '+';
+        addButton.title = 'Add a second results panel';
+        addButton.setAttribute('aria-label', 'Add a second results panel');
+        addButton.addEventListener('click', () => this._setPanelMode('2'));
+        this.element.appendChild(addButton);
       }
 
       for (let index = this.panelCount; index < states.length; index += 1) {
@@ -490,6 +552,7 @@ export function setupResultsDock(app) {
         select.value = state.compareJobId || '';
         select.title = select.selectedOptions[0]?.textContent || '';
         state.compareOptionsSignature = optionsSignature;
+        this._syncPanelControlState(state);
       }
       return comparisonChanged;
     },
@@ -582,6 +645,11 @@ export function setupResultsDock(app) {
 
       if (!this.latestResults) {
         renderPanelStatus(state, 'Run a simulation to see results here');
+        return null;
+      }
+
+      if (state.chartKey === 'summary') {
+        renderPanelSummary(state, this.latestResults, this.latestJob);
         return null;
       }
 
