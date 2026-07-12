@@ -1,6 +1,7 @@
-export function displayResults(panel, results = null) {
+export function displayResults(panel, results = null, job = null) {
   if (results) {
     panel.lastResults = results;
+    panel.app?.resultsDock?.onResults(results, job);
   }
 }
 

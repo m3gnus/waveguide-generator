@@ -273,6 +273,19 @@ test('ensureSimulationControllerJobResults handles missing, incomplete, cached, 
   assert.equal(controller.activeJobId, 'job-complete');
   assert.equal(controller.currentJobId, 'job-complete');
   assert.equal(controller.resultCache.has('job-complete'), true);
+
+  const activeBeforePassiveRead = controller.activeJobId;
+  const lastResultsBeforePassiveRead = controller.lastResults;
+  const displayedCountBeforePassiveRead = displayed.length;
+  const passive = await ensureSimulationControllerJobResults(controller, 'job-cached', {
+    display: false,
+    activate: false,
+    updateLastResults: false,
+  });
+  assert.equal(passive.reason, 'cached');
+  assert.equal(controller.activeJobId, activeBeforePassiveRead);
+  assert.equal(controller.lastResults, lastResultsBeforePassiveRead);
+  assert.equal(displayed.length, displayedCountBeforePassiveRead);
 });
 
 test('reconcileSimulationControllerRemoteJobs updates active jobs via per-job status check', async () => {

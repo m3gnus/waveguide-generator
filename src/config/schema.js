@@ -791,8 +791,7 @@ export const PARAM_SCHEMA = {
       label: 'Solver Mode',
       default: 'auto',
       controlId: 'solver-mode',
-      tooltip:
-        'Auto selects CircSym for circular Metal jobs when valid, otherwise full 3D.',
+      tooltip: 'Auto selects CircSym for circular Metal jobs when valid, otherwise full 3D.',
       options: [
         { value: 'auto', label: 'Auto — CircSym when circular' },
         { value: 'full_3d', label: 'Full 3D' },

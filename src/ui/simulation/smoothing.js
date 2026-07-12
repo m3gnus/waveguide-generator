@@ -1,5 +1,6 @@
 export function applySmoothingSelection(panel, smoothingType) {
   panel.currentSmoothing = smoothingType;
+  panel.app?.resultsDock?.markStaleAndRefresh();
 }
 
 export function setupSmoothingListener(_panel) {

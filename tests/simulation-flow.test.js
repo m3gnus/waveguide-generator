@@ -1300,6 +1300,67 @@ test('renderJobList skips identical feed updates and refreshes when a job change
   }
 });
 
+test('renderJobList re-renders after a skeleton overwrote the memoized list', () => {
+  const originalDocument = global.document;
+  let assignments = 0;
+  let markup = '';
+  const list = {
+    querySelector(selector) {
+      return selector === '.skeleton-job-item' && markup.includes('skeleton-job-item') ? {} : null;
+    },
+  };
+  Object.defineProperty(list, 'innerHTML', {
+    get() {
+      return markup;
+    },
+    set(value) {
+      assignments += 1;
+      markup = value;
+    },
+  });
+  const sourceLabel = { textContent: '' };
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    },
+  };
+
+  try {
+    const panel = {
+      jobSourceMode: 'backend',
+      activeJobId: 'job-signature',
+      jobs: new Map([
+        [
+          'job-signature',
+          {
+            id: 'job-signature',
+            label: 'signature-task',
+            status: 'running',
+            progress: 0.2,
+            createdAt: '2026-03-11T09:00:00.000Z',
+          },
+        ],
+      ]),
+    };
+
+    renderJobList(panel);
+    assert.equal(assignments, 1);
+
+    // A jobs refresh draws the loading skeleton directly, bypassing the memo.
+    list.innerHTML = '<div class="skeleton-job-item"></div>';
+    assert.equal(assignments, 2);
+
+    // Identical signature must still replace the skeleton with real rows.
+    renderJobList(panel);
+    assert.equal(assignments, 3);
+    assert.ok(!markup.includes('skeleton-job-item'));
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
 test('clearPollTimer from polling.js resets isPolling and clears timer refs', () => {
   const clearedIds = [];
   const origClearTimeout = global.clearTimeout;

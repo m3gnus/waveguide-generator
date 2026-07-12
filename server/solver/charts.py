@@ -460,7 +460,8 @@ def render_all_charts(payload, dpi=150):
     Args:
         payload: Dict with keys: frequencies, spl, di, di_frequencies,
                  impedance_frequencies, impedance_real, impedance_imaginary,
-                 directivity
+                 directivity. Reference overlays require ``hornlab_plots``;
+                 this legacy fallback ignores a reference payload.
         dpi: Image resolution
 
     Returns:

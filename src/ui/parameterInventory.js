@@ -184,12 +184,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       groups: Object.freeze([
         Object.freeze({
           group: 'SOURCE',
-          keys: Object.freeze([
-            'sourceShape',
-            'sourceRadius',
-            'sourceCurv',
-            'sourceVelocity',
-          ]),
+          keys: Object.freeze(['sourceShape', 'sourceRadius', 'sourceCurv', 'sourceVelocity']),
         }),
       ]),
     }),

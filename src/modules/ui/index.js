@@ -11,6 +11,8 @@ import {
   setInvertWheelZoom,
   getCurrentViewerSettings,
 } from '../../ui/settings/viewerSettings.js';
+import { getResultsLayout, setSplitFraction } from '../../ui/settings/layoutSettings.js';
+import { setupResultsDock } from '../../ui/results/resultsDock.js';
 
 const UI_MODULE_ID = 'ui';
 const UI_IMPORT_STAGE = 'import';
@@ -187,8 +189,20 @@ function buildAppCoordinator(input) {
       return getDisplayMode();
     },
 
+    readResultsLayoutSetting() {
+      return getResultsLayout();
+    },
+
+    setSplitFractionSetting(fraction) {
+      return setSplitFraction(fraction);
+    },
+
+    setupResultsDock() {
+      return setupResultsDock(app);
+    },
+
     openSettings(options = {}) {
-      return openSettingsModal(options);
+      return openSettingsModal({ ...options, app });
     },
 
     loadViewerSettings() {

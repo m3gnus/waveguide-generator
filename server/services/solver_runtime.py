@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import logging
+from typing import Any, Dict, List, Optional
 
 from solver.contract import normalize_mesh_validation_mode
 from solver.bempp_solver import (
@@ -34,6 +35,8 @@ from solver.theme_preview import (
     list_available_themes,
     resolve_chart_theme,
 )
+
+logger = logging.getLogger(__name__)
 
 try:
     from solver.mesher_adapter import (
@@ -94,7 +97,9 @@ def render_all_charts(payload: Dict[str, Any]) -> Dict[str, Any]:
     (falling back to :data:`DEFAULT_CHART_THEME`) selects the theme. When the
     sibling package is not installed the in-repo legacy ``solver.charts``
     renderer is used instead — it ignores the theme and reproduces the former
-    hardcoded-dark look.
+    hardcoded-dark look. The payload carries ``reference`` unchanged; older
+    ``hornlab_plots`` versions and the legacy renderer safely ignore that
+    unknown key, while reference overlays require a supporting version.
     """
     theme = resolve_chart_theme(payload.get("theme"))
     try:
@@ -115,6 +120,9 @@ def render_directivity_plot(
     *,
     reference_level: Optional[float] = None,
     theme: Optional[str] = None,
+    reference_frequencies: Optional[List[float]] = None,
+    reference_directivity: Optional[Dict[str, Any]] = None,
+    reference_label: Optional[str] = None,
 ) -> Optional[str]:
     """Render the directivity heatmap, theme-aware, via ``hornlab_plots``.
 
@@ -138,9 +146,33 @@ def render_directivity_plot(
             reference_level=ref,
         )
 
-    return hornlab_plots.directivity_heatmap_from_legacy_dict(
-        frequencies,
-        directivity,
-        reference_level=ref,
-        theme=resolved_theme,
-    )
+    reference_kwargs: Dict[str, Any] = {}
+    if reference_directivity is not None:
+        reference_kwargs = {
+            "reference_frequencies": reference_frequencies,
+            "reference_directivity": reference_directivity,
+            "reference_label": reference_label,
+        }
+
+    try:
+        return hornlab_plots.directivity_heatmap_from_legacy_dict(
+            frequencies,
+            directivity,
+            reference_level=ref,
+            theme=resolved_theme,
+            **reference_kwargs,
+        )
+    except TypeError as exc:
+        if not reference_kwargs:
+            raise
+        logger.warning(
+            "hornlab_plots rejected directivity reference arguments; "
+            "retrying without reference overlays: %s",
+            exc,
+        )
+        return hornlab_plots.directivity_heatmap_from_legacy_dict(
+            frequencies,
+            directivity,
+            reference_level=ref,
+            theme=resolved_theme,
+        )

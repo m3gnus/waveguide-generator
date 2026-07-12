@@ -225,11 +225,19 @@ body {
   }
 }
 
+#viewport-stack {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 #canvas-container {
-  flex-grow: 1;
+  flex: 1 1 auto;
   position: relative;
   background: var(--scene-bg);
   min-width: 0;
+  min-height: 0;
   box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.08);
 }
 
@@ -2057,6 +2065,140 @@ details.section > details.simulation-mesh-diagnostics-window {
   margin-bottom: var(--sp-2);
 }
 
+/* ── 17A. Results Dock ────────────────────────────────────── */
+
+#viewport-results-resizer {
+  height: 4px;
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background var(--t-fast);
+}
+
+#viewport-results-resizer:hover {
+  background: var(--accent);
+}
+
+#results-dock {
+  --results-dock-height: 38%;
+  flex: 0 0 var(--results-dock-height);
+  height: var(--results-dock-height);
+  min-height: 180px;
+  max-height: 70%;
+  min-width: 0;
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.results-panel {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.results-panel-header {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.results-panel-header select {
+  min-width: 0;
+  max-width: 42%;
+  height: 28px;
+  padding: 2px 22px 2px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+.results-panel-open {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.results-panel-open:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--input-bg);
+}
+
+.results-panel-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: hidden;
+  background: var(--input-bg);
+}
+
+.results-panel-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.results-panel-status {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.results-panel-status--loading {
+  color: var(--text-muted);
+}
+
+.results-panel-status--error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+@media (pointer: coarse) {
+  #viewport-results-resizer {
+    height: 20px;
+    flex-basis: 20px;
+  }
+}
+
 /* ── 18. View Results Modal ───────────────────────────────── */
 
 .view-results-dialog {
@@ -2877,10 +3019,21 @@ details.section > details.simulation-mesh-diagnostics-window {
     display: none;
   }
 
+  #viewport-stack {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+  }
+
   #canvas-container {
     width: 100%;
     height: 100vh;
     height: 100dvh;
+  }
+
+  #viewport-results-resizer,
+  #results-dock {
+    display: none !important;
   }
 
   .mobile-panel-toggle {

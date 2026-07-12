@@ -322,6 +322,11 @@ export function allJobs(panel, options = {}) {
   return sortJobs(filtered, { sortBy: options.sortBy || 'completed_desc' });
 }
 
+export function formatJobListLabel(job) {
+  const jobId = String(job?.id || '');
+  return String(job?.label || jobId.slice(0, 8));
+}
+
 export function persistPanelJobs(panel) {
   const jobs = allJobs(panel);
   void syncSimulationWorkspaceIndex(jobs);

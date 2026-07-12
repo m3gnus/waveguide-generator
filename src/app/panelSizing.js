@@ -131,3 +131,49 @@ export function setupRightPanelSizing(app) {
   app.actionsPanelResizer.addEventListener('pointerup', stopRightResize);
   app.actionsPanelResizer.addEventListener('pointercancel', stopRightResize);
 }
+
+export function setupViewportSplitSizing(app) {
+  app.viewportStack = document.getElementById('viewport-stack');
+  app.viewportResultsResizer = document.getElementById('viewport-results-resizer');
+  if (!app.viewportStack || !app.viewportResultsResizer || !app.resultsDock) return;
+
+  if (window.matchMedia('(max-width: 768px)').matches) {
+    return;
+  }
+
+  let dragFraction = null;
+
+  app.viewportResultsResizer.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    app.isResizingViewportSplit = true;
+    app.viewportSplitStartY = event.clientY;
+    app.viewportSplitStartHeight = app.resultsDock.element.getBoundingClientRect().height;
+    app.viewportSplitStackHeight = app.viewportStack.getBoundingClientRect().height;
+    dragFraction = null;
+    app.viewportResultsResizer.setPointerCapture(event.pointerId);
+    document.body.style.cursor = 'row-resize';
+  });
+
+  app.viewportResultsResizer.addEventListener('pointermove', (event) => {
+    if (!app.isResizingViewportSplit || app.viewportSplitStackHeight <= 0) return;
+    const delta = app.viewportSplitStartY - event.clientY;
+    const fraction = (app.viewportSplitStartHeight + delta) / app.viewportSplitStackHeight;
+    dragFraction = app.resultsDock.setFraction(fraction);
+  });
+
+  const stopResize = (event, persist) => {
+    if (!app.isResizingViewportSplit) return;
+    app.isResizingViewportSplit = false;
+    if (event?.pointerId !== undefined) {
+      app.viewportResultsResizer.releasePointerCapture(event.pointerId);
+    }
+    document.body.style.cursor = '';
+    if (persist && dragFraction !== null) {
+      app.uiCoordinator.setSplitFractionSetting(dragFraction);
+    }
+    dragFraction = null;
+  };
+
+  app.viewportResultsResizer.addEventListener('pointerup', (event) => stopResize(event, true));
+  app.viewportResultsResizer.addEventListener('pointercancel', (event) => stopResize(event, false));
+}

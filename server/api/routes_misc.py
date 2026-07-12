@@ -225,6 +225,9 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
         render_inputs = {
             "frequencies": request.frequencies,
             "directivity": request.directivity,
+            "reference_frequencies": request.reference_frequencies,
+            "reference_directivity": request.reference_directivity,
+            "reference_label": request.reference_label,
             "reference_level": request.reference_level,
             "theme": request.theme,
         }
@@ -240,6 +243,9 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
             request.directivity,
             reference_level=request.reference_level,
             theme=request.theme,
+            reference_frequencies=request.reference_frequencies,
+            reference_directivity=request.reference_directivity,
+            reference_label=request.reference_label,
         )
         if image_b64 is None:
             raise HTTPException(status_code=400, detail="No directivity patterns to render")

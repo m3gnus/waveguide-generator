@@ -438,6 +438,19 @@ class WaveguideParamsRequest(BaseModel):
     step_body: str = "inner_surface"
 
 
+class ChartsReferencePayload(BaseModel):
+    label: Optional[str] = None
+    frequencies: List[float] = []
+    spl: List[Optional[float]] = []
+    di: Union[List[Optional[float]], Dict[str, Any]] = []
+    di_frequencies: List[float] = []
+    impedance_frequencies: List[float] = []
+    impedance_real: List[Optional[float]] = []
+    impedance_imaginary: List[Optional[float]] = []
+    impedance_units: Optional[str] = None
+    impedance_normalization: Optional[str] = None
+
+
 class ChartsRenderRequest(BaseModel):
     frequencies: List[float] = []
     spl: List[Optional[float]] = []
@@ -453,6 +466,7 @@ class ChartsRenderRequest(BaseModel):
     impedance_units: Optional[str] = None
     impedance_normalization: Optional[str] = None
     directivity: Dict[str, Any] = {}
+    reference: Optional[ChartsReferencePayload] = None
     # Optional hornlab-plots theme name; None uses the backend default theme.
     theme: Optional[str] = None
 
@@ -465,6 +479,9 @@ class ChartsRenderRequest(BaseModel):
 class DirectivityRenderRequest(BaseModel):
     frequencies: List[float]
     directivity: Dict[str, Any]
+    reference_frequencies: Optional[List[float]] = None
+    reference_directivity: Optional[Dict[str, Any]] = None
+    reference_label: Optional[str] = None
     reference_level: float = -6.0
     # Optional hornlab-plots theme name; None uses the backend default theme.
     theme: Optional[str] = None
@@ -478,6 +495,7 @@ class DirectivityRenderRequest(BaseModel):
 __all__ = [
     "AdvancedSimulationSettings",
     "BoundaryCondition",
+    "ChartsReferencePayload",
     "ChartsRenderRequest",
     "DirectivityRenderRequest",
     "JobStatus",

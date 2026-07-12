@@ -285,18 +285,22 @@ export function disposeSimulationPanelRuntime(runtime) {
 export async function ensureSimulationControllerJobResults(
   controller,
   jobId,
-  { display = true, displayResults = null } = {}
+  { display = true, displayResults = null, activate = true, updateLastResults = true } = {}
 ) {
   const job = controller?.jobs?.get(jobId);
   if (!job) {
     return { ok: false, reason: 'missing_job', results: null, job: null };
   }
 
-  setActiveJob(controller, jobId);
+  if (activate) {
+    setActiveJob(controller, jobId);
+  }
 
   if (controller.resultCache?.has(jobId)) {
     const cached = controller.resultCache.get(jobId);
-    controller.lastResults = cached;
+    if (updateLastResults) {
+      controller.lastResults = cached;
+    }
     if (display && typeof displayResults === 'function') {
       displayResults(cached);
     }
@@ -309,7 +313,9 @@ export async function ensureSimulationControllerJobResults(
 
   const results = await controller.solver.getResults(jobId);
   controller.resultCache.set(jobId, results);
-  controller.lastResults = results;
+  if (updateLastResults) {
+    controller.lastResults = results;
+  }
   if (display && typeof displayResults === 'function') {
     displayResults(results);
   }

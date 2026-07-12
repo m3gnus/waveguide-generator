@@ -327,6 +327,15 @@ export function setupScene(app) {
     resizeTimeout = setTimeout(() => onResize(app), 100);
   });
 
+  if (typeof ResizeObserver !== 'undefined') {
+    let containerResizeTimeout;
+    app.containerResizeObserver = new ResizeObserver(() => {
+      clearTimeout(containerResizeTimeout);
+      containerResizeTimeout = setTimeout(() => onResize(app), 80);
+    });
+    app.containerResizeObserver.observe(app.container);
+  }
+
   // Update scene background when OS color scheme changes
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
   darkQuery.addEventListener('change', () => {

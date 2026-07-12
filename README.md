@@ -73,7 +73,7 @@ Waveguide Generator supports two solve backends. The Settings solver dropdown of
 - hornlab-waveguide-mesher: pinned git commit `ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
 - hornlab-metal-bem: pinned git commit `09f3b0b0e99b23936cac31531b1f82c6e369ea44` (fast Metal solve backend; Apple Silicon macOS)
 - hornlab-bempp-bem: pinned git commit `5c0b751eb3bf80e30040c6e19685568b874e89a8` (Bempp cross-platform solve backend; installed when Metal is unavailable)
-- hornlab-plots: pinned git commit `916ed784bb026838f47a380c542638da32080fa3` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
+- hornlab-plots: pinned git commit `f8282c2361cc99c0f630d264dd94303dec14d8c9` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
 - gmsh: `>=4.11.1,<5.0` (required by the HornLab mesher)
 
 OpenCL is a Bempp speed-up, not a hard requirement. Without OpenCL, Bempp runs through its numba CPU backend. On Linux, install `pocl` from your package manager for an OpenCL CPU runtime; on Windows, use up-to-date GPU drivers or install Intel's OpenCL runtime; on macOS x86_64, numba is fine.

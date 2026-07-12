@@ -45,6 +45,13 @@ import {
 } from '../workspace/folderWorkspace.js';
 
 import { getChartTheme, setChartTheme, resetAppearanceSettings } from './appearanceSettings.js';
+import {
+  RECOMMENDED_DEFAULTS as LAYOUT_DEFAULTS,
+  getCurrentLayoutSettings,
+  resetLayoutSettings,
+  setPanelMode,
+  setResultsLayout,
+} from './layoutSettings.js';
 
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 
@@ -82,6 +89,10 @@ const VIEWER_HELP = Object.freeze({
   invertWheelZoom: 'Reverses the mouse-wheel zoom direction for viewport navigation.',
   keyboardPanEnabled:
     'Enables arrow-key style camera panning shortcuts while the viewport is focused.',
+  resultsLayout:
+    'Chooses between the classic results modal and a results dock below the viewport. Split view applies to the desktop layout; mobile keeps the classic layout.',
+  panelMode:
+    'Controls how many charts appear in the desktop results dock. Auto chooses one or two from the available dock space.',
 });
 const SIMULATION_BASIC_HELP = Object.freeze({
   meshValidationMode:
@@ -172,7 +183,7 @@ export function openSettingsModal(options = {}) {
     return existing;
   }
 
-  const { backdrop, cleanup } = _buildModal(viewerRuntime);
+  const { backdrop, cleanup } = _buildModal(viewerRuntime, options.app);
   document.body.appendChild(backdrop);
 
   const dialog = backdrop.querySelector('[role="dialog"]');
@@ -195,7 +206,7 @@ function _resolveViewerRuntime(runtime = {}) {
   };
 }
 
-function _buildModal(viewerRuntime) {
+function _buildModal(viewerRuntime, app = null) {
   const backdrop = document.createElement('div');
   backdrop.id = 'settings-modal-backdrop';
   backdrop.className = 'settings-modal-backdrop';
@@ -232,7 +243,7 @@ function _buildModal(viewerRuntime) {
   body.className = 'settings-modal-body';
 
   const nav = _buildNav(SETTINGS_SECTION_ITEMS);
-  const content = _buildContent(viewerRuntime, cleanupFns);
+  const content = _buildContent(viewerRuntime, cleanupFns, app);
 
   body.appendChild(nav);
   body.appendChild(content);
@@ -331,12 +342,12 @@ function _buildNav(items = SETTINGS_SECTION_ITEMS) {
   return nav;
 }
 
-function _buildContent(viewerRuntime, cleanupFns = []) {
+function _buildContent(viewerRuntime, cleanupFns = [], app = null) {
   const content = document.createElement('div');
   content.className = 'settings-modal-content';
 
-  content.appendChild(_buildViewerSection(viewerRuntime));
-  content.appendChild(_buildAppearanceSection(cleanupFns));
+  content.appendChild(_buildViewerSection(viewerRuntime, app));
+  content.appendChild(_buildAppearanceSection(cleanupFns, app));
   content.appendChild(_buildSimulationSection());
   content.appendChild(_buildTaskExportsSection());
   content.appendChild(_buildWorkspaceSection(cleanupFns));
@@ -345,7 +356,7 @@ function _buildContent(viewerRuntime, cleanupFns = []) {
   return content;
 }
 
-function _buildAppearanceSection(cleanupFns = []) {
+function _buildAppearanceSection(cleanupFns = [], app = null) {
   const sec = document.createElement('div');
   sec.id = 'settings-section-appearance';
   sec.className = 'settings-section';
@@ -459,6 +470,7 @@ function _buildAppearanceSection(cleanupFns = []) {
     }
     select.value = theme;
     if (persist) setChartTheme(theme);
+    app?.resultsDock?.markStaleAndRefresh();
     highlightCards();
     loadPreview(theme);
   }
@@ -500,6 +512,7 @@ function _buildAppearanceSection(cleanupFns = []) {
       const fallback = themes.find((theme) => theme.default) || themes[0];
       selectedTheme = fallback.name;
       setChartTheme(selectedTheme);
+      app?.resultsDock?.markStaleAndRefresh();
     }
     select.value = selectedTheme;
 
@@ -537,7 +550,7 @@ function _buildAppearanceSection(cleanupFns = []) {
 // Section builders — controls are the actual interactive elements
 // ---------------------------------------------------------------------------
 
-function _buildViewerSection(viewerRuntime) {
+function _buildViewerSection(viewerRuntime, app = null) {
   const sec = document.createElement('div');
   sec.id = 'settings-section-viewer';
   sec.className = 'settings-section';
@@ -552,6 +565,59 @@ function _buildViewerSection(viewerRuntime) {
     helpText: VIEWER_HELP.liveUpdate,
     controlHtml: `<input type="checkbox" id="live-update"${_state.liveUpdate ? ' checked' : ''}>`,
   });
+
+  // ---------- SUB-SECTION: Layout ----------
+  let _layoutState = getCurrentLayoutSettings();
+  const layoutHeader = _buildSubSectionHeader('Layout', onResetLayout);
+  sec.appendChild(layoutHeader);
+
+  const resultsLayoutResult = _buildSimBasicSelectRow(
+    'Results layout',
+    'layout-resultsLayout',
+    [
+      { value: 'classic', label: 'Classic (results in modal)' },
+      { value: 'split', label: 'Split view (results below viewport)' },
+    ],
+    _layoutState.resultsLayout,
+    LAYOUT_DEFAULTS.resultsLayout,
+    VIEWER_HELP.resultsLayout
+  );
+  sec.appendChild(resultsLayoutResult.row);
+
+  const panelModeResult = _buildSimBasicSelectRow(
+    'Split view panels',
+    'layout-panelMode',
+    [
+      { value: 'auto', label: 'Auto' },
+      { value: '1', label: '1' },
+      { value: '2', label: '2' },
+    ],
+    _layoutState.panelMode,
+    LAYOUT_DEFAULTS.panelMode,
+    VIEWER_HELP.panelMode
+  );
+  panelModeResult.select.disabled = _layoutState.resultsLayout === 'classic';
+  sec.appendChild(panelModeResult.row);
+
+  resultsLayoutResult.select.addEventListener('change', () => {
+    _layoutState = setResultsLayout(resultsLayoutResult.select.value);
+    panelModeResult.select.disabled = _layoutState.resultsLayout === 'classic';
+    app?.applyResultsLayout?.();
+  });
+  panelModeResult.select.addEventListener('change', () => {
+    _layoutState = setPanelMode(panelModeResult.select.value);
+    app?.applyResultsLayout?.();
+  });
+
+  function onResetLayout() {
+    _layoutState = resetLayoutSettings();
+    resultsLayoutResult.select.value = _layoutState.resultsLayout;
+    panelModeResult.select.value = _layoutState.panelMode;
+    resultsLayoutResult.badge.hidden = _layoutState.resultsLayout === LAYOUT_DEFAULTS.resultsLayout;
+    panelModeResult.badge.hidden = _layoutState.panelMode === LAYOUT_DEFAULTS.panelMode;
+    panelModeResult.select.disabled = _layoutState.resultsLayout === 'classic';
+    app?.applyResultsLayout?.();
+  }
 
   // --- Viewer sub-sections (Orbit Controls, Camera, Input) ---
   const currentSettings = getCurrentViewerSettings();

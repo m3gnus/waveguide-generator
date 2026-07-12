@@ -5,7 +5,12 @@ import { appUiFeedback, appUiFileOps } from './uiAdapters.js';
 import { initializeLogging } from './logging.js';
 import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } from './scene.js';
 import { setupEventListeners } from './events.js';
-import { setupPanelSizing, schedulePanelAutoSize, setupRightPanelSizing } from './panelSizing.js';
+import {
+  setupPanelSizing,
+  schedulePanelAutoSize,
+  setupRightPanelSizing,
+  setupViewportSplitSizing,
+} from './panelSizing.js';
 import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
@@ -51,6 +56,8 @@ export class App {
     this.setupEventListeners();
     this.setupPanelSizing();
     this.setupRightPanelSizing();
+    this.setupResultsDock();
+    this.setupViewportSplitSizing();
 
     // Initial render — viewport always uses formula-based mesh
     this.onStateUpdate(GlobalState.get());
@@ -82,6 +89,18 @@ export class App {
 
   setupRightPanelSizing() {
     return setupRightPanelSizing(this);
+  }
+
+  setupResultsDock() {
+    return this.uiCoordinator.setupResultsDock();
+  }
+
+  setupViewportSplitSizing() {
+    return setupViewportSplitSizing(this);
+  }
+
+  applyResultsLayout() {
+    return this.resultsDock?.applyLayout();
   }
 
   schedulePanelAutoSize() {
