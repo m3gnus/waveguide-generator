@@ -9,6 +9,8 @@ const RESULTS_LAYOUTS = new Set(['classic', 'split']);
 const PANEL_MODES = new Set(['auto', '1', '2']);
 export const CHART_KEYS = [
   'directivity_map',
+  'directivity_map_h',
+  'directivity_map_v',
   'impedance',
   'directivity_index',
   'frequency_response',
@@ -18,10 +20,10 @@ const MIN_SPLIT_FRACTION = 0.15;
 const MAX_SPLIT_FRACTION = 0.7;
 
 export const RECOMMENDED_DEFAULTS = {
-  resultsLayout: 'classic',
+  resultsLayout: 'split',
   panelMode: 'auto',
   splitFraction: 0.38,
-  panelCharts: ['directivity_map', 'frequency_response'],
+  panelCharts: ['directivity_map_h', 'frequency_response'],
 };
 
 let _current = null;

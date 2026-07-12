@@ -13,6 +13,35 @@ export const CHART_TYPES = Object.freeze([
   Object.freeze({ key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' }),
 ]);
 
+// Panel-selectable chart list: the modal shows CHART_TYPES as-is (all planes
+// in one directivity render); dock panels can additionally show a single
+// directivity plane. `planes` filters the directivity payload client-side —
+// the render endpoints are unchanged.
+export const PANEL_CHART_TYPES = Object.freeze([
+  Object.freeze({ key: 'directivity_map_h', label: 'Directivity Map (H)', planes: ['horizontal'] }),
+  Object.freeze({ key: 'directivity_map_v', label: 'Directivity Map (V)', planes: ['vertical'] }),
+  Object.freeze({ key: 'directivity_map', label: 'Directivity Map (All planes)' }),
+  Object.freeze({ key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' }),
+  Object.freeze({ key: 'directivity_index', label: 'Directivity Index' }),
+  Object.freeze({ key: 'impedance', label: 'Acoustic Impedance' }),
+]);
+
+export function isDirectivityChartKey(chartKey) {
+  return chartKey === 'directivity_map' || String(chartKey || '').startsWith('directivity_map_');
+}
+
+export function directivityPlanesForChartKey(chartKey) {
+  const chart = PANEL_CHART_TYPES.find((item) => item.key === chartKey);
+  return chart?.planes || null;
+}
+
+function filterDirectivityPlanes(directivity, planes) {
+  if (!planes) return directivity;
+  return Object.fromEntries(
+    Object.entries(directivity).filter(([plane]) => planes.includes(plane))
+  );
+}
+
 const DIRECTIVITY_PLANE_ORDER = ['horizontal', 'vertical', 'diagonal'];
 
 function normalizeDirectivityPayload(directivity) {
@@ -145,11 +174,14 @@ export function buildLineChartsPayload(
   return payload;
 }
 
-export function buildDirectivityPayload(results, { referenceLevel, theme, reference = null } = {}) {
+export function buildDirectivityPayload(
+  results,
+  { referenceLevel, theme, reference = null, planes = null } = {}
+) {
   const splData = results?.spl_on_axis || {};
   const payload = {
     frequencies: splData.frequencies || [],
-    directivity: normalizeDirectivityPayload(results?.directivity),
+    directivity: filterDirectivityPlanes(normalizeDirectivityPayload(results?.directivity), planes),
     reference_level: referenceLevel,
     theme,
   };
@@ -158,8 +190,9 @@ export function buildDirectivityPayload(results, { referenceLevel, theme, refere
   if (resolvedReference) {
     const referenceSpl = resolvedReference.results?.spl_on_axis || {};
     payload.reference_frequencies = referenceSpl.frequencies || [];
-    payload.reference_directivity = normalizeDirectivityPayload(
-      resolvedReference.results?.directivity
+    payload.reference_directivity = filterDirectivityPlanes(
+      normalizeDirectivityPayload(resolvedReference.results?.directivity),
+      planes
     );
     payload.reference_label = resolvedReference.label ?? null;
   }

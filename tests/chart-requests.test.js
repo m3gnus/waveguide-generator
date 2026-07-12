@@ -6,6 +6,8 @@ import {
   CHART_TYPES,
   buildDirectivityPayload,
   buildLineChartsPayload,
+  directivityPlanesForChartKey,
+  isDirectivityChartKey,
   requestDirectivityMap,
   requestLineCharts,
 } from '../src/ui/simulation/chartRequests.js';
@@ -228,6 +230,37 @@ test('buildDirectivityPayload normalizes plane dictionaries and maps reference f
   assert.equal(Object.hasOwn(withoutReference, 'reference_frequencies'), false);
   assert.equal(Object.hasOwn(withoutReference, 'reference_directivity'), false);
   assert.equal(Object.hasOwn(withoutReference, 'reference_label'), false);
+
+  const horizontalOnly = buildDirectivityPayload(results, {
+    referenceLevel: -6,
+    theme: 'light',
+    reference: { results: referenceResults, label: 'Baseline' },
+    planes: ['horizontal'],
+  });
+  assert.deepEqual(Object.keys(horizontalOnly.directivity), ['horizontal']);
+  assert.deepEqual(Object.keys(horizontalOnly.reference_directivity), ['horizontal']);
+
+  const verticalOnly = buildDirectivityPayload(results, {
+    referenceLevel: -6,
+    theme: 'light',
+    reference: { results: referenceResults, label: 'Baseline' },
+    planes: ['vertical'],
+  });
+  assert.deepEqual(Object.keys(verticalOnly.directivity), ['vertical']);
+  // The reference has no vertical plane, so its filtered dict is empty.
+  assert.deepEqual(Object.keys(verticalOnly.reference_directivity), []);
+});
+
+test('directivity chart-key helpers map panel keys to plane filters', () => {
+  assert.equal(isDirectivityChartKey('directivity_map'), true);
+  assert.equal(isDirectivityChartKey('directivity_map_h'), true);
+  assert.equal(isDirectivityChartKey('directivity_map_v'), true);
+  assert.equal(isDirectivityChartKey('frequency_response'), false);
+  assert.equal(isDirectivityChartKey(null), false);
+
+  assert.deepEqual(directivityPlanesForChartKey('directivity_map_h'), ['horizontal']);
+  assert.deepEqual(directivityPlanesForChartKey('directivity_map_v'), ['vertical']);
+  assert.equal(directivityPlanesForChartKey('directivity_map'), null);
 });
 
 test('requestLineCharts posts the exact JSON body and normalizes a successful response', async () => {

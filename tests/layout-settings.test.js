@@ -120,13 +120,17 @@ describe('loadLayoutSettings', () => {
 
   test('repairs panel chart arrays per slot', () => {
     const cases = [
-      [null, ['directivity_map', 'frequency_response']],
-      ['impedance', ['directivity_map', 'frequency_response']],
-      [[], ['directivity_map', 'frequency_response']],
+      [null, ['directivity_map_h', 'frequency_response']],
+      ['impedance', ['directivity_map_h', 'frequency_response']],
+      [[], ['directivity_map_h', 'frequency_response']],
       [['impedance'], ['impedance', 'frequency_response']],
       [
         ['invalid', 'directivity_index'],
-        ['directivity_map', 'directivity_index'],
+        ['directivity_map_h', 'directivity_index'],
+      ],
+      [
+        ['directivity_map_v', 'directivity_map'],
+        ['directivity_map_v', 'directivity_map'],
       ],
       [
         ['frequency_response', null],
@@ -186,7 +190,7 @@ describe('layout field helpers', () => {
     setResultsLayout('split');
     setPanelMode('1');
 
-    assert.equal(setResultsLayout('unsupported').resultsLayout, 'classic');
+    assert.equal(setResultsLayout('unsupported').resultsLayout, 'split');
     assert.equal(setPanelMode('3').panelMode, 'auto');
     assert.equal(setSplitFraction(0.01).splitFraction, 0.15);
     assert.equal(setSplitFraction(0.99).splitFraction, 0.7);
@@ -205,11 +209,11 @@ describe('layout field helpers', () => {
     assert.deepEqual(getPanelCharts(), ['impedance', 'frequency_response']);
 
     setPanelChart(0, 'invalid');
-    assert.deepEqual(getPanelCharts(), ['directivity_map', 'frequency_response']);
+    assert.deepEqual(getPanelCharts(), ['directivity_map_h', 'frequency_response']);
 
     const charts = getPanelCharts();
     charts[0] = 'directivity_index';
-    assert.equal(getPanelChart(0), 'directivity_map');
+    assert.equal(getPanelChart(0), 'directivity_map_h');
   });
 
   test('setPanelChart ignores indexes outside the two persisted slots', () => {

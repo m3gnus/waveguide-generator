@@ -372,6 +372,7 @@ export class ParamPanel {
     const typeSelect = document.createElement('select');
     typeSelect.id = 'model-type';
     typeSelect.setAttribute('data-param-key', 'model-type');
+    typeSelect.setAttribute('aria-label', 'Model type');
 
     const currentType = GlobalState.get().type;
     ['R-OSSE', 'OSSE', 'ICW'].forEach((type) => {

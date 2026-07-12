@@ -6,10 +6,12 @@ import {
   setPanelChart,
 } from '../settings/layoutSettings.js';
 import {
-  CHART_TYPES,
+  PANEL_CHART_TYPES,
   buildDirectivityPayload,
   buildLineChartsPayload,
+  directivityPlanesForChartKey,
   hasDirectivityPatterns,
+  isDirectivityChartKey,
   requestDirectivityMap,
   requestLineCharts,
 } from '../simulation/chartRequests.js';
@@ -50,6 +52,16 @@ export function resolveResultsDockPanelCount({
 }
 
 export const resolveAutoPanelCount = resolveResultsDockPanelCount;
+
+export function resolveResultsDockStacked({ width, height, panelCount } = {}) {
+  if (panelCount !== 2) return false;
+  const dockWidth = Number(width);
+  const dockHeight = Number(height);
+  if (!Number.isFinite(dockWidth) || !Number.isFinite(dockHeight)) return false;
+  // Two panels side by side need the same room the auto rule demands; when a
+  // forced two-panel dock is narrower than that, stack them vertically.
+  return dockWidth < Math.max(AUTO_MIN_WIDTH, dockHeight * AUTO_MIN_ASPECT);
+}
 
 export function buildResultsDockCacheKey({
   jobId,
@@ -119,7 +131,7 @@ export function buildResultsDockRequest({
   theme,
   reference = null,
 } = {}) {
-  if (chartKey === 'directivity_map') {
+  if (isDirectivityChartKey(chartKey)) {
     return {
       kind: 'directivity',
       chartKey,
@@ -127,6 +139,7 @@ export function buildResultsDockRequest({
         referenceLevel,
         theme,
         reference,
+        planes: directivityPlanesForChartKey(chartKey),
       }),
     };
   }
@@ -168,7 +181,7 @@ function renderPanelImage(state, chartKey, image) {
     return;
   }
 
-  const chart = CHART_TYPES.find((item) => item.key === chartKey);
+  const chart = PANEL_CHART_TYPES.find((item) => item.key === chartKey);
   const img = document.createElement('img');
   img.className = 'results-panel-img';
   img.src = image;
@@ -332,12 +345,24 @@ export function setupResultsDock(app) {
       if (mode === 'auto') this.previousAutoPanelCount = nextCount;
       if (nextCount === this.panelCount) {
         this._syncPanelChartSelections();
+        this._updateStackedLayout();
         return false;
       }
 
       this.panelCount = nextCount;
       this._buildPanels();
+      this._updateStackedLayout();
       return true;
+    },
+
+    _updateStackedLayout() {
+      const rect = this.element.getBoundingClientRect();
+      const stacked = resolveResultsDockStacked({
+        width: rect.width || this.element.clientWidth,
+        height: rect.height || this.element.clientHeight,
+        panelCount: this.panelCount,
+      });
+      this.element.classList.toggle('results-dock--stacked', stacked);
     },
 
     _syncPanelChartSelections() {
@@ -367,7 +392,7 @@ export function setupResultsDock(app) {
 
         const chartSelect = document.createElement('select');
         chartSelect.setAttribute('aria-label', `Panel ${index + 1} chart type`);
-        for (const chart of CHART_TYPES) {
+        for (const chart of PANEL_CHART_TYPES) {
           const option = document.createElement('option');
           option.value = chart.key;
           option.textContent = chart.label;
@@ -384,6 +409,7 @@ export function setupResultsDock(app) {
         compareSelect.setAttribute('aria-label', `Panel ${index + 1} comparison`);
         compareSelect.addEventListener('change', (event) => {
           state.compareJobId = event.target.value || null;
+          compareSelect.title = event.target.selectedOptions[0]?.textContent || '';
           void this._refreshPanel(index);
         });
 
@@ -458,9 +484,11 @@ export function setupResultsDock(app) {
           const option = document.createElement('option');
           option.value = String(job.id);
           option.textContent = `Compare: ${formatJobListLabel(job)}`;
+          option.title = formatJobListLabel(job);
           select.appendChild(option);
         }
         select.value = state.compareJobId || '';
+        select.title = select.selectedOptions[0]?.textContent || '';
         state.compareOptionsSignature = optionsSignature;
       }
       return comparisonChanged;
@@ -641,7 +669,12 @@ export function setupResultsDock(app) {
 
   if (typeof ResizeObserver !== 'undefined') {
     dock.resizeObserver = new ResizeObserver(() => {
-      if (!dock.visible || getCurrentLayoutSettings().panelMode !== 'auto') return;
+      if (!dock.visible) return;
+      const mode = getCurrentLayoutSettings().panelMode;
+      if (mode !== 'auto') {
+        dock._updateStackedLayout();
+        return;
+      }
       if (dock._updatePanelCount('auto')) void dock.refresh();
     });
     dock.resizeObserver.observe(element);
