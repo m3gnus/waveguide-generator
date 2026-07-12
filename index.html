@@ -123,38 +123,47 @@
     </div>
     <div id="ui-panel-resizer" aria-hidden="true"></div>
 
-    <div id="canvas-container">
-      <div id="webgl-fallback" class="webgl-fallback" style="display: none">
-        <p><strong>WebGL Not Available</strong></p>
-        <p>This application requires WebGL to display the 3D model.</p>
-        <p>Please try a different browser or enable WebGL.</p>
+    <div id="viewport-stack">
+      <div id="canvas-container">
+        <div id="webgl-fallback" class="webgl-fallback" style="display: none">
+          <p><strong>WebGL Not Available</strong></p>
+          <p>This application requires WebGL to display the 3D model.</p>
+          <p>Please try a different browser or enable WebGL.</p>
+        </div>
+        <div class="viewer-controls">
+          <button id="zoom-in" title="Zoom In" aria-label="Zoom in">+</button>
+          <button id="zoom-out" title="Zoom Out" aria-label="Zoom out">−</button>
+          <button
+            id="focus-horn"
+            title="Focus on Model"
+            aria-label="Focus on model"
+          >
+            ⊙
+          </button>
+          <button
+            id="camera-toggle"
+            title="Toggle Camera"
+            aria-label="Toggle camera"
+          >
+            ⬚
+          </button>
+          <hr class="viewer-controls-sep" aria-hidden="true" />
+          <button
+            id="display-mode-toggle"
+            title="Display: Clay"
+            aria-label="Cycle display mode"
+          >
+            ◼
+          </button>
+        </div>
       </div>
-      <div class="viewer-controls">
-        <button id="zoom-in" title="Zoom In" aria-label="Zoom in">+</button>
-        <button id="zoom-out" title="Zoom Out" aria-label="Zoom out">−</button>
-        <button
-          id="focus-horn"
-          title="Focus on Model"
-          aria-label="Focus on model"
-        >
-          ⊙
-        </button>
-        <button
-          id="camera-toggle"
-          title="Toggle Camera"
-          aria-label="Toggle camera"
-        >
-          ⬚
-        </button>
-        <hr class="viewer-controls-sep" aria-hidden="true" />
-        <button
-          id="display-mode-toggle"
-          title="Display: Clay"
-          aria-label="Cycle display mode"
-        >
-          ◼
-        </button>
-      </div>
+      <div id="viewport-results-resizer" class="is-hidden" aria-hidden="true"></div>
+      <div
+        id="results-dock"
+        class="is-hidden"
+        role="region"
+        aria-label="Simulation results"
+      ></div>
     </div>
 
     <div id="actions-panel-resizer" aria-hidden="true"></div>

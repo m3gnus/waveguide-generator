@@ -26,6 +26,7 @@ import {
   createSimulationPanelRuntime,
   restoreSimulationPanelRuntime,
   disposeSimulationPanelRuntime,
+  ensureSimulationControllerJobResults,
 } from './controller.js';
 import { displayResults } from './results.js';
 import { exportResults } from './exports.js';
@@ -127,12 +128,22 @@ export class SimulationPanel {
     return this.uiCoordinator.emitTabChanged(tabName);
   }
 
-  displayResults(results = null) {
-    return displayResults(this, results);
+  displayResults(results = null, job = null) {
+    return displayResults(this, results, job);
   }
 
-  openViewResults() {
-    return openViewResultsModal(this);
+  ensureResultsForJob(jobId, { display = true, activate = true, updateLastResults = true } = {}) {
+    const job = this.jobs?.get(jobId) || null;
+    return ensureSimulationControllerJobResults(this, jobId, {
+      display,
+      activate,
+      updateLastResults,
+      displayResults: (results) => this.displayResults(results, job),
+    });
+  }
+
+  openViewResults(jobId = null) {
+    return openViewResultsModal(this, jobId);
   }
 
   exportResults(options = {}) {

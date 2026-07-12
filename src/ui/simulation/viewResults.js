@@ -1,14 +1,16 @@
-import { applySmoothing } from '../../results/smoothing.js';
-import {
-  isRhoCNormalizedImpedance,
-  resolvePhaseReferenceDistance,
-  resolvePhaseTimeConvention,
-} from '../../results/conventions.js';
-import { extractPerPlaneDI } from './diHelpers.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
 import { renderResultDiagnostics, renderSolveStatsSummary } from './results.js';
 import { trapFocus } from '../focusTrap.js';
 import { getChartTheme } from '../settings/appearanceSettings.js';
+import { applySmoothingSelection } from './smoothing.js';
+import {
+  CHART_TYPES,
+  buildDirectivityPayload,
+  buildLineChartsPayload,
+  hasDirectivityPatterns,
+  requestDirectivityMap,
+  requestLineCharts,
+} from './chartRequests.js';
 
 const DEFAULT_DIRECTIVITY_REFERENCE_LEVEL = -6;
 const DIRECTIVITY_REFERENCE_OPTIONS = [
@@ -17,43 +19,12 @@ const DIRECTIVITY_REFERENCE_OPTIONS = [
   [-9, '-9 dB'],
   [-12, '-12 dB'],
 ];
-const DIRECTIVITY_PLANE_ORDER = ['horizontal', 'vertical', 'diagonal'];
-
-function normalizeDirectivityPayload(directivity) {
-  if (!directivity || typeof directivity !== 'object' || Array.isArray(directivity)) {
-    return {};
-  }
-
-  const entries = Object.entries(directivity).filter(([, patterns]) => Array.isArray(patterns));
-  entries.sort(([a], [b]) => {
-    const aKey = String(a || '')
-      .trim()
-      .toLowerCase();
-    const bKey = String(b || '')
-      .trim()
-      .toLowerCase();
-    const aIndex = DIRECTIVITY_PLANE_ORDER.indexOf(aKey);
-    const bIndex = DIRECTIVITY_PLANE_ORDER.indexOf(bKey);
-    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-    if (aIndex !== -1) return -1;
-    if (bIndex !== -1) return 1;
-    return aKey.localeCompare(bKey);
-  });
-  return Object.fromEntries(entries);
-}
-
-function hasDirectivityPatterns(directivity) {
-  return Object.values(directivity).some(
-    (patterns) => Array.isArray(patterns) && patterns.length > 0
-  );
-}
-
 /**
  * Open a modal dialog displaying all result charts rendered server-side
  * by Matplotlib as high-quality PNG images.
  */
-export async function openViewResultsModal(panel) {
-  const preferredJobId = panel.activeJobId || panel.currentJobId;
+export async function openViewResultsModal(panel, requestedJobId = null) {
+  const preferredJobId = requestedJobId || panel.activeJobId || panel.currentJobId;
   const job = preferredJobId ? panel.jobs?.get(preferredJobId) || null : null;
   const results =
     preferredJobId && panel.resultCache?.has(preferredJobId)
@@ -165,12 +136,7 @@ export async function openViewResultsModal(panel) {
   }
 
   // Chart containers with loading placeholders
-  const chartNames = [
-    { key: 'directivity_map', label: 'Polar Directivity Map' },
-    { key: 'impedance', label: 'Acoustic Impedance' },
-    { key: 'directivity_index', label: 'Directivity Index' },
-    { key: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
-  ];
+  const chartNames = CHART_TYPES;
 
   for (const chart of chartNames) {
     const container = document.createElement('div');
@@ -271,81 +237,45 @@ export async function openViewResultsModal(panel) {
 
     setChartLoading(chart.key);
 
-    const directivity = normalizeDirectivityPayload(results.directivity);
-    const splData = results.spl_on_axis || {};
-    const frequencies = splData.frequencies || [];
+    const payload = buildDirectivityPayload(results, {
+      referenceLevel: resolveDirectivityReferenceLevel(panel?.currentDirectivityReferenceLevel),
+      theme: getChartTheme(),
+    });
 
-    if (!frequencies.length || !hasDirectivityPatterns(directivity)) {
+    if (!payload.frequencies.length || !hasDirectivityPatterns(payload.directivity)) {
       setChartImage(chart.key, chart.label, null);
       return;
     }
 
-    try {
-      const response = await fetch(`${backendUrl}/api/render-directivity`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          frequencies,
-          directivity,
-          reference_level: resolveDirectivityReferenceLevel(
-            panel?.currentDirectivityReferenceLevel
-          ),
-          theme: getChartTheme(),
-        }),
-      });
+    const response = await requestDirectivityMap(backendUrl, payload);
+    if (response.ok) {
+      setChartImage(chart.key, chart.label, response.image);
+      return;
+    }
 
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        console.warn(`[view-results] Directivity render returned ${response.status}: ${detail}`);
-        if (response.status === 503) {
-          showMatplotlibRequiredForCharts([chart.key]);
-        } else {
-          showChartRenderError([chart.key], chartFailureMessage(detail, response.status));
-        }
-        return;
-      }
-
-      const data = await response.json();
-      setChartImage(chart.key, chart.label, data.image || null);
-    } catch (err) {
-      console.warn('[view-results] Directivity render failed:', err.message);
+    if (response.kind === 'network') {
+      console.warn('[view-results] Directivity render failed:', response.detail);
       showChartRenderError(
         [chart.key],
         'Chart rendering failed: backend is unreachable. Check that the backend is running.'
       );
+      return;
+    }
+
+    console.warn(
+      `[view-results] Directivity render returned ${response.status}: ${response.detail}`
+    );
+    if (response.kind === 'matplotlib-missing') {
+      showMatplotlibRequiredForCharts([chart.key]);
+    } else {
+      showChartRenderError([chart.key], chartFailureMessage(response.detail, response.status));
     }
   }
 
   async function fetchCharts({ includeDirectivityMap = true } = {}) {
-    const splData = results.spl_on_axis || {};
-    const frequencies = splData.frequencies || [];
-    let spl = splData.spl || [];
-    const phaseDegrees = splData.phase_degrees || [];
-    const diData = results.di || {};
-    const diFrequencies = diData.frequencies || frequencies;
-    let di = extractPerPlaneDI(diData);
-    const impedanceData = results.impedance || {};
-    const impedanceFrequencies = impedanceData.frequencies || frequencies;
-    let impedanceReal = impedanceData.real || [];
-    let impedanceImag = impedanceData.imaginary || [];
     const renderedChartKeys = chartNames
       .filter((chart) => chart.key !== 'directivity_map')
       .map((chart) => chart.key);
-
-    if (panel.currentSmoothing !== 'none') {
-      spl = applySmoothing(frequencies, spl, panel.currentSmoothing);
-      if (Array.isArray(di)) {
-        di = applySmoothing(diFrequencies, di, panel.currentSmoothing);
-      } else if (di && typeof di === 'object') {
-        const smoothedDi = {};
-        for (const [plane, vals] of Object.entries(di)) {
-          smoothedDi[plane] = applySmoothing(diFrequencies, vals, panel.currentSmoothing);
-        }
-        di = smoothedDi;
-      }
-      impedanceReal = applySmoothing(impedanceFrequencies, impedanceReal, panel.currentSmoothing);
-      impedanceImag = applySmoothing(impedanceFrequencies, impedanceImag, panel.currentSmoothing);
-    }
 
     // Show loading state
     for (const chart of chartNames) {
@@ -356,57 +286,39 @@ export async function openViewResultsModal(panel) {
       if (container) container.innerHTML = '<div class="view-results-loading">Rendering...</div>';
     }
 
-    const payload = {
-      frequencies,
-      spl,
-      phase_degrees: phaseDegrees,
-      phase_reference_distance_m: resolvePhaseReferenceDistance(results),
-      phase_time_convention: resolvePhaseTimeConvention(results),
-      di,
-      di_frequencies: diFrequencies,
-      impedance_frequencies: impedanceFrequencies,
-      impedance_real: impedanceReal,
-      impedance_imaginary: impedanceImag,
+    const payload = buildLineChartsPayload(results, {
+      smoothing: panel.currentSmoothing,
       theme: getChartTheme(),
-    };
-    if (isRhoCNormalizedImpedance(results)) {
-      payload.impedance_units = 'Z/(rho*c)';
-      payload.impedance_normalization = 'rho_c';
-    }
+    });
 
     const chartsRenderPromise = (async () => {
-      try {
-        const response = await fetch(`${backendUrl}/api/render-charts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-
-        if (!response.ok) {
-          const detail = await response.text().catch(() => '');
-          console.warn(`[view-results] Server returned ${response.status}: ${detail}`);
-          if (response.status === 503) {
-            showMatplotlibRequiredForCharts(renderedChartKeys);
-          } else {
-            showChartRenderError(renderedChartKeys, chartFailureMessage(detail, response.status));
-          }
-          return;
-        }
-
-        const data = await response.json();
-        const charts = data.charts || {};
-
+      const response = await requestLineCharts(backendUrl, payload);
+      if (response.ok) {
         for (const chart of chartNames) {
           if (chart.key === 'directivity_map') {
             continue;
           }
-          setChartImage(chart.key, chart.label, charts[chart.key] || null);
+          setChartImage(chart.key, chart.label, response.charts[chart.key] || null);
         }
-      } catch (err) {
-        console.warn('[view-results] Fetch failed:', err.message);
+        return;
+      }
+
+      if (response.kind === 'network') {
+        console.warn('[view-results] Fetch failed:', response.detail);
         showChartRenderError(
           renderedChartKeys,
           'Chart rendering failed: backend is unreachable. Check that the backend is running.'
+        );
+        return;
+      }
+
+      console.warn(`[view-results] Server returned ${response.status}: ${response.detail}`);
+      if (response.kind === 'matplotlib-missing') {
+        showMatplotlibRequiredForCharts(renderedChartKeys);
+      } else {
+        showChartRenderError(
+          renderedChartKeys,
+          chartFailureMessage(response.detail, response.status)
         );
       }
     })();
@@ -419,12 +331,13 @@ export async function openViewResultsModal(panel) {
 
   // Re-fetch charts when smoothing changes
   smoothingSelect.addEventListener('change', (e) => {
-    panel.currentSmoothing = e.target.value;
+    applySmoothingSelection(panel, e.target.value);
     fetchCharts({ includeDirectivityMap: false });
   });
 
   directivitySelect.addEventListener('change', (e) => {
     panel.currentDirectivityReferenceLevel = resolveDirectivityReferenceLevel(e.target.value);
+    panel.app?.resultsDock?.markStaleAndRefresh();
     renderDirectivityMap();
   });
 

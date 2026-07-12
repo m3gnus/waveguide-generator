@@ -12,7 +12,7 @@ import {
   getTaskListSortPreference,
 } from '../settings/simulationManagementSettings.js';
 import { buildPolarStatePatchFromConfig, readPolarStateSettings } from './polarSettings.js';
-import { allJobs, hasActiveJobs } from './jobTracker.js';
+import { allJobs, formatJobListLabel, hasActiveJobs } from './jobTracker.js';
 import {
   updateStageUi,
   setProgressVisible,
@@ -463,10 +463,11 @@ function setSimulationInputsFromScript(script = {}) {
 }
 
 async function ensureJobResults(panel, jobId, { display = true } = {}) {
+  const job = panel.jobs?.get(jobId) || null;
   const result = await ensureSimulationControllerJobResults(panel, jobId, {
     display,
     displayResults: (results) => {
-      panel.displayResults(results);
+      panel.displayResults(results, job);
     },
   });
 
@@ -488,6 +489,7 @@ export function renderJobList(panel) {
 
   const list = document.getElementById('simulation-jobs-list');
   if (!list) return;
+  panel.app?.resultsDock?.onJobsUpdated();
 
   const sourceEl = document.getElementById('simulation-jobs-source-label');
   const source = describeJobFeedSource(panel);
@@ -503,7 +505,15 @@ export function renderJobList(panel) {
     minRating,
   });
   const signature = buildJobListSignature(panel, source, jobs, sortBy, minRating);
-  if (panel._jobListElement === list && panel._jobListSignature === signature) {
+  // A skeleton write (restoreJobs/refresh) replaces the list content without
+  // touching the memo, so the memo may only skip when no skeleton is showing.
+  const listShowsSkeleton =
+    typeof list.querySelector === 'function' && Boolean(list.querySelector('.skeleton-job-item'));
+  if (
+    panel._jobListElement === list &&
+    panel._jobListSignature === signature &&
+    !listShowsSkeleton
+  ) {
     return;
   }
   const interactionState = captureJobListInteractionState(list);
@@ -536,7 +546,7 @@ export function renderJobList(panel) {
     <div class="simulation-job-item ${isActive ? 'is-active' : ''} ${statusClass}" data-job-id="${jobIdAttr}">
       <div class="simulation-job-header">
         <div class="simulation-job-title" title="${escapeHtml(formatTimestampTooltip(job))}">
-          <span>${escapeHtml(job.label || jobId.slice(0, 8))}</span>
+          <span>${escapeHtml(formatJobListLabel(job))}</span>
         </div>
         <button type="button" class="simulation-job-remove" data-job-action="remove" data-job-id="${jobIdAttr}" aria-label="Remove" title="Remove">&#x2715;</button>
       </div>

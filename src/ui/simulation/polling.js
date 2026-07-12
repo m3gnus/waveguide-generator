@@ -155,7 +155,7 @@ export function pollSimulationStatus(panel) {
           const result = await ensureSimulationControllerJobResults(panel, activeJob.id, {
             display: true,
             displayResults: (results) => {
-              panel.displayResults(results);
+              panel.displayResults(results, activeJob);
             },
           });
           if (result.ok) {

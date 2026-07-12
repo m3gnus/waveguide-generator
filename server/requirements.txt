@@ -19,7 +19,7 @@ git+https://github.com/m3gnus/hornlab-metal-bem.git@09f3b0b0e99b23936cac31531b1f
 # absent the backend falls back to the in-repo server/solver charts renderer,
 # so it is not hard-required. Local dev may `pip install -e ../hornlab-plots`
 # to pick up sibling edits.
-git+https://github.com/m3gnus/hornlab-plots.git@916ed784bb026838f47a380c542638da32080fa3
+git+https://github.com/m3gnus/hornlab-plots.git@f8282c2361cc99c0f630d264dd94303dec14d8c9
 
 # Optional non-Metal fallback backend lives in server/requirements-bempp.txt.
 
