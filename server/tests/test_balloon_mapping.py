@@ -86,6 +86,9 @@ def _config():
 
 
 class ObservationConfigSphereTest(unittest.TestCase):
+    def test_spherical_sampling_is_opt_in_by_default(self):
+        self.assertFalse(PolarConfig().spherical_sampling)
+
     def test_disabled_spherical_passes_no_sphere_kwargs(self):
         cfg = observation_config(_request(), _FakeObservationConfig, _Unavailable, "pkg")
         self.assertNotIn("sphere_grid", cfg.kwargs)
