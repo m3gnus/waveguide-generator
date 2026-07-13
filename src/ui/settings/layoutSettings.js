@@ -19,6 +19,9 @@ export const CHART_KEYS = [
   'impedance',
   'directivity_index',
   'frequency_response',
+  'beam_shape',
+  'beam_map',
+  'balloon',
   'summary',
 ];
 const VALID_CHART_KEYS = new Set(CHART_KEYS);

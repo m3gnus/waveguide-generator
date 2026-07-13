@@ -622,7 +622,7 @@ export function renderPolarSettingsSection(doc = document) {
     {
       id: SPHERICAL_CHECKBOX_ID,
       label: '3D Balloon Sampling',
-      help: 'Sample a full sphere of observation points for the 3D balloon viewer and the Forward Beam Shape chart. Adds solve time and result size.',
+      help: 'Sample a full sphere of observation points for the 3D balloon viewer, the Forward Beam Shape chart, and the front-facing Forward Beam Map. Adds solve time and result size.',
       defaultValue: DEFAULT_POLAR_UI_STATE.sphericalSampling,
     },
     doc

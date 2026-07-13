@@ -20,6 +20,11 @@ import {
   requestLineCharts,
 } from '../simulation/chartRequests.js';
 import { disposeBalloonPanel, isBalloonChartKey, renderBalloonPanel } from './balloonPanel.js';
+import {
+  disposeForwardBeamPanel,
+  isForwardBeamChartKey,
+  renderForwardBeamPanel,
+} from './forwardBeamPanel.js';
 import { allJobs, formatJobListLabel } from '../simulation/jobTracker.js';
 
 const MIN_SPLIT_FRACTION = 0.15;
@@ -163,6 +168,10 @@ export function buildResultsDockRequest({
     return { kind: 'balloon', chartKey };
   }
 
+  if (isForwardBeamChartKey(chartKey)) {
+    return { kind: 'forward_beam', chartKey };
+  }
+
   if (isDirectivityChartKey(chartKey)) {
     return {
       kind: 'directivity',
@@ -194,6 +203,30 @@ function setHidden(element, hidden) {
 
 function clearElement(element) {
   element.textContent = '';
+}
+
+const ENABLE_SPHERE_HINT =
+  'Enable "3D Balloon Sampling" under Directivity Map settings and run a new simulation.';
+const RESTART_BACKEND_HINT = 'Restart or update the backend, then run a new simulation.';
+
+/**
+ * Explain why a sphere-backed panel has nothing to draw. The server says why in
+ * `metadata.balloon_sampling.status`; backends predating that field fall back to
+ * echoing what the job asked for, which cannot tell "unsupported" from "empty".
+ */
+export function sphereDataStatusMessage(results, job, label) {
+  const status = results?.metadata?.balloon_sampling?.status;
+  if (status === 'backend_unsupported') {
+    return `${label} needs sphere sampling, but this backend did not configure a sphere grid. ${RESTART_BACKEND_HINT}`;
+  }
+  const requested =
+    status === undefined
+      ? job?.script?.polarConfig?.spherical_sampling === true
+      : status !== 'disabled';
+  if (requested) {
+    return `${label} was requested, but the backend returned no sphere data. ${RESTART_BACKEND_HINT}`;
+  }
+  return `No ${label.toLowerCase()} data. ${ENABLE_SPHERE_HINT}`;
 }
 
 function renderPanelStatus(state, message, kind = '') {
@@ -440,11 +473,14 @@ export function setupResultsDock(app) {
       if (!state?.compareSelect) return;
       const isSummary = state.chartKey === 'summary';
       const isBalloon = isBalloonChartKey(state.chartKey);
-      state.compareSelect.disabled = isSummary || isBalloon;
+      const isForwardBeam = isForwardBeamChartKey(state.chartKey);
+      state.compareSelect.disabled = isSummary || isBalloon || isForwardBeam;
       if (isSummary) {
         state.compareSelect.title = 'Comparison is not available for the summary view';
       } else if (isBalloon) {
         state.compareSelect.title = 'Comparison is not available for the 3D balloon view';
+      } else if (isForwardBeam) {
+        state.compareSelect.title = 'Comparison is not available for the Forward Beam Map';
       }
     },
 
@@ -452,6 +488,7 @@ export function setupResultsDock(app) {
       requestGuard.invalidateAll();
       for (const state of states) {
         disposeBalloonPanel(state);
+        disposeForwardBeamPanel(state);
       }
       clearElement(this.element);
       const panelCharts = getPanelCharts();
@@ -684,6 +721,9 @@ export function setupResultsDock(app) {
       if (!isBalloonChartKey(state.chartKey)) {
         disposeBalloonPanel(state);
       }
+      if (!isForwardBeamChartKey(state.chartKey)) {
+        disposeForwardBeamPanel(state);
+      }
 
       if (!this.latestResults) {
         renderPanelStatus(state, 'Run a simulation to see results here');
@@ -699,7 +739,17 @@ export function setupResultsDock(app) {
         if (!renderBalloonPanel(state, this.latestResults)) {
           renderPanelStatus(
             state,
-            'No balloon data. Enable "3D Balloon Sampling" under Directivity Map settings and run a new simulation.'
+            sphereDataStatusMessage(this.latestResults, this.latestJob, 'Balloon sampling')
+          );
+        }
+        return null;
+      }
+
+      if (isForwardBeamChartKey(state.chartKey)) {
+        if (!renderForwardBeamPanel(state, this.latestResults)) {
+          renderPanelStatus(
+            state,
+            sphereDataStatusMessage(this.latestResults, this.latestJob, 'Forward beam map')
           );
         }
         return null;

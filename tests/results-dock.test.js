@@ -9,6 +9,7 @@ import {
   resolveResultsDockColumns,
   resolveResultsDockPanelCount,
   setupResultsDock,
+  sphereDataStatusMessage,
 } from '../src/ui/results/resultsDock.js';
 import { resetLayoutSettings, setResultsLayout } from '../src/ui/settings/layoutSettings.js';
 import { displayResults } from '../src/ui/simulation/results.js';
@@ -401,4 +402,51 @@ test('balloon panels build a client-rendered request with no payload', () => {
   });
 
   assert.deepEqual(request, { kind: 'balloon', chartKey: 'balloon' });
+});
+
+test('forward beam panels build a client-rendered request with no payload', () => {
+  const request = buildResultsDockRequest({
+    results: { balloon: { theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0]]] } },
+    chartKey: 'beam_map',
+  });
+
+  assert.deepEqual(request, { kind: 'forward_beam', chartKey: 'beam_map' });
+});
+
+describe('sphere data status messages', () => {
+  const withStatus = (status) => ({ metadata: { balloon_sampling: { status } } });
+
+  test('disabled sampling points at the setting that turns it on', () => {
+    const message = sphereDataStatusMessage(withStatus('disabled'), null, 'Balloon sampling');
+    assert.match(message, /Enable "3D Balloon Sampling"/);
+  });
+
+  test('an unsupported backend is named as the cause, not the setting', () => {
+    const message = sphereDataStatusMessage(
+      withStatus('backend_unsupported'),
+      null,
+      'Balloon sampling'
+    );
+    assert.match(message, /did not configure a sphere grid/);
+    assert.doesNotMatch(message, /Enable "3D Balloon Sampling"/);
+  });
+
+  test('a requested-but-empty result is distinguished from an unsupported backend', () => {
+    const message = sphereDataStatusMessage(withStatus('missing_result'), null, 'Balloon sampling');
+    assert.match(message, /returned no sphere data/);
+    assert.doesNotMatch(message, /did not configure a sphere grid/);
+  });
+
+  test('the label distinguishes the two sphere-backed panels', () => {
+    const balloon = sphereDataStatusMessage(withStatus('missing_result'), null, 'Balloon sampling');
+    const beamMap = sphereDataStatusMessage(withStatus('missing_result'), null, 'Forward beam map');
+    assert.match(balloon, /^Balloon sampling/);
+    assert.match(beamMap, /^Forward beam map/);
+  });
+
+  test('a backend with no balloon_sampling field falls back to what the job requested', () => {
+    const requested = { script: { polarConfig: { spherical_sampling: true } } };
+    assert.match(sphereDataStatusMessage({}, requested, 'Balloon sampling'), /returned no sphere/);
+    assert.match(sphereDataStatusMessage({}, null, 'Balloon sampling'), /Enable "3D Balloon/);
+  });
 });
