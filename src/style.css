@@ -2296,6 +2296,21 @@ details.section > details.simulation-mesh-diagnostics-window {
   white-space: nowrap;
 }
 
+.forward-beam-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.forward-beam-panel-canvas {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
 @media (pointer: coarse) {
   #viewport-results-resizer {
     height: 20px;

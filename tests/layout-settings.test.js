@@ -143,6 +143,7 @@ describe('loadLayoutSettings', () => {
       ],
       [['summary', 'directivity_map_h'], withSlots({ 0: 'summary', 1: 'directivity_map_h' })],
       [['frequency_response', null], withSlots({ 0: 'frequency_response' })],
+      [['beam_map', 'balloon'], withSlots({ 0: 'beam_map', 1: 'balloon' })],
       [
         [
           'impedance',
@@ -241,8 +242,11 @@ describe('layout field helpers', () => {
     setPanelChart(1, 'frequency_response');
     assert.deepEqual(getPanelCharts().slice(0, 2), ['impedance', 'frequency_response']);
 
+    setPanelCharts(['beam_map', 'balloon']);
+    assert.deepEqual(getPanelCharts().slice(0, 2), ['beam_map', 'balloon']);
+
     setPanelChart(0, 'invalid');
-    assert.deepEqual(getPanelCharts().slice(0, 2), ['directivity_map_h', 'frequency_response']);
+    assert.deepEqual(getPanelCharts().slice(0, 2), ['directivity_map_h', 'balloon']);
 
     const charts = getPanelCharts();
     charts[0] = 'directivity_index';

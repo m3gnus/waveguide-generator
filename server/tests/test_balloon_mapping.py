@@ -81,7 +81,7 @@ def _fake_result(with_sphere=True, theta_max=180.0):
 
 def _config():
     return SimpleNamespace(
-        observation=SimpleNamespace(distance_m=2.0, origin="mouth")
+        observation=SimpleNamespace(distance_m=2.0, origin="mouth", sphere_grid=(5, 8))
     )
 
 
@@ -162,6 +162,7 @@ class BalloonResponseTest(unittest.TestCase):
         response = self._response(_fake_result(with_sphere=False))
         self.assertNotIn("balloon", response)
         self.assertNotIn("beam_shape", response)
+        self.assertEqual(response["metadata"]["balloon_sampling"]["status"], "missing_result")
 
 
 if __name__ == "__main__":

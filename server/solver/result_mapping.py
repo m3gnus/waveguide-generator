@@ -353,6 +353,22 @@ def build_solver_response(
     }
 
     balloon = _balloon_grid_from_result(result)
+    sampling_requested = bool(polar.get("spherical_sampling"))
+    sampling_configured = getattr(config.observation, "sphere_grid", None) is not None
+    metadata["balloon_sampling"] = {
+        "requested": sampling_requested,
+        "configured": sampling_configured,
+        "available": balloon is not None,
+        "status": (
+            "available"
+            if balloon is not None
+            else "backend_unsupported"
+            if sampling_requested and not sampling_configured
+            else "missing_result"
+            if sampling_requested
+            else "disabled"
+        ),
+    }
     if balloon is not None:
         response["balloon"] = {
             "frequencies": frequencies,
