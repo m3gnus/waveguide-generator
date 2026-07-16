@@ -432,6 +432,8 @@ class WaveguideParamsRequest(BaseModel):
     mouth_res: float = 15.0
     rear_res: float = 40.0
     aperture_resolution_scale: float = 1.5
+    max_triangles: int = 18_000
+    allow_large_mesh: bool = False
     wall_thickness: float = 6.0
 
     enc_depth: float = 0.0

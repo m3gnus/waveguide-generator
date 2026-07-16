@@ -469,7 +469,7 @@ class MetalSolverAdapterTest(unittest.TestCase):
         self.assertIsInstance(seen["meridian"], FakeMeridianMesh)
         self.assertEqual(seen["config"].source_motion, "axial")
         self.assertEqual(seen["config"].circsym_baffle_z, 0.0)
-        self.assertEqual(build_meridian_mock.call_args.kwargs["freq_max_hz"], 2000.0)
+        self.assertNotIn("freq_max_hz", build_meridian_mock.call_args.kwargs)
 
     def test_circsym_infinite_baffle_reports_coupled_metadata(self):
         seen = {}

@@ -19,6 +19,8 @@ const BACKEND_MESH_DEFAULTS = Object.freeze({
   mouthResolution: 15,
   rearResolution: 40,
   apertureResolutionScale: 1.5,
+  maxTriangles: 18000,
+  allowLargeMesh: false,
   encFrontResolution: '25,25,25,25',
   encBackResolution: '40,40,40,40',
   wallThickness: 6,
@@ -196,6 +198,11 @@ export function prepareBackendMeshSimulationParams(preparedParams = {}) {
       base.apertureResolutionScale,
       BACKEND_MESH_DEFAULTS.apertureResolutionScale
     ),
+    maxTriangles: Math.max(
+      1,
+      Math.round(toFiniteNumber(base.maxTriangles, BACKEND_MESH_DEFAULTS.maxTriangles))
+    ),
+    allowLargeMesh: base.allowLargeMesh === true || Number(base.allowLargeMesh) === 1,
     wallThickness: toFiniteNumber(base.wallThickness, BACKEND_MESH_DEFAULTS.wallThickness),
     encFrontResolution: normalizeResolutionValue(
       base.encFrontResolution != null

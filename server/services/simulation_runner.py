@@ -330,11 +330,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
         validated = WaveguideParamsRequest(**waveguide_params)
         validated_payload = validated.model_dump()
         _validate_infinite_baffle_enclosure_conflict(request, validated_payload)
-        try:
-            freq_max_hz = float(request.frequency_range[1])
-        except (TypeError, ValueError, IndexError):
-            freq_max_hz = None
-
         requested_solver_mode = solver_mode_from_request(request)
         # 'auto' may fall back to the gmsh full-3D path, so require the full mesher
         # runtime unless the caller pinned CircSym explicitly.
@@ -351,7 +346,6 @@ async def run_simulation(job_id: str, request: SimulationRequest) -> None:
             requested_solver_mode,
             validated_payload,
             solver_backend=solver_backend,
-            freq_max_hz=freq_max_hz,
         )
         if requested_solver_mode == "auto":
             if solver_mode == "circsym":

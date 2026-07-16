@@ -37,7 +37,6 @@ def solver_mode_from_request(request: Any) -> str:
 
 def _circsym_rejection_reasons_for_payload(
     waveguide_params: Mapping[str, Any] | None,
-    freq_max_hz: float | None,
 ) -> list[str]:
     """Mesher-authoritative CircSym-eligibility reasons for a WG payload.
 
@@ -51,7 +50,7 @@ def _circsym_rejection_reasons_for_payload(
         from solver.mesher_adapter import waveguide_payload_to_mesher_config
 
         config = waveguide_payload_to_mesher_config(dict(waveguide_params or {}))
-        return list(circsym_rejection_reasons(config, freq_max_hz=freq_max_hz))
+        return list(circsym_rejection_reasons(config))
     except Exception as exc:  # noqa: BLE001 - be conservative, fall back to full_3d
         return [f"CircSym eligibility probe failed: {exc}"]
 
@@ -61,7 +60,6 @@ def resolve_effective_solver_mode(
     waveguide_params: Mapping[str, Any] | None,
     *,
     solver_backend: str,
-    freq_max_hz: float | None = None,
 ) -> tuple[str, str | None]:
     """Resolve a requested solver mode (possibly "auto") to "full_3d"|"circsym".
 
@@ -79,7 +77,7 @@ def resolve_effective_solver_mode(
             "full_3d",
             f"CircSym needs the Metal backend (solver_backend={solver_backend!r})",
         )
-    reasons = _circsym_rejection_reasons_for_payload(waveguide_params, freq_max_hz)
+    reasons = _circsym_rejection_reasons_for_payload(waveguide_params)
     if reasons:
         return "full_3d", "; ".join(reasons)
     return "circsym", None

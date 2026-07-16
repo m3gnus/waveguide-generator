@@ -614,6 +614,26 @@ export const PARAM_SCHEMA = {
       tooltip:
         'Multiplies infinite-baffle aperture-cap mesh size relative to the local horn mesh. Higher values coarsen the aperture cap.',
     },
+    maxTriangles: {
+      type: 'number',
+      label: 'Full-Domain Triangle Budget',
+      default: 18000,
+      min: 1,
+      step: 1000,
+      tooltip:
+        'Maximum full-domain-equivalent solve mesh size. Symmetry-reduced meshes receive the corresponding fraction. The mesher refuses larger output without explicit approval.',
+    },
+    allowLargeMesh: {
+      type: 'select',
+      label: 'Large Mesh Approval',
+      default: 0,
+      tooltip:
+        'Explicitly approve meshes above the triangle budget. Large dense-BEM meshes may require substantially more memory and solve time.',
+      options: [
+        { value: 0, label: 'Block over budget' },
+        { value: 1, label: 'Approve over budget' },
+      ],
+    },
     quadrants: {
       type: 'select',
       label: 'Quadrants',

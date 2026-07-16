@@ -497,6 +497,8 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
                 "n_angular": 100,
                 "n_length": 32,
                 "aperture_resolution_scale": 2.25,
+                "max_triangles": 24_000,
+                "allow_large_mesh": True,
                 "sampling_mode": "ath-default-zmap",
                 "sim_type": 1,
                 "enc_depth": 0,
@@ -507,6 +509,8 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
         self.assertEqual(config["mode"], "infinite-baffle")
         self.assertEqual(config["mesh"]["samplingMode"], "ath-default-zmap")
         self.assertEqual(config["mesh"]["apertureResolutionScale"], 2.25)
+        self.assertEqual(config["mesh"]["maxTriangles"], 24_000)
+        self.assertIs(config["mesh"]["allowLargeMesh"], True)
         self.assertEqual(config["mesh"]["wallThickness"], 0)
 
     def test_payload_forwards_vertical_offset_to_mesher_mesh_config(self):
@@ -705,10 +709,9 @@ class ViewportGeometryAdapterTest(unittest.TestCase):
         inner = np.asarray(grid["inner_points"], dtype=float).reshape(n_phi, n_length + 1, 3)
         mouth = inner[:, -1, :]
 
-        # Current ATH keeps AngularSegments as the fixed profile budget.
-        # CornerSegments redistributes those profiles around the rounded
-        # corner instead of increasing 100 to 104.
-        self.assertEqual((n_phi, n_length), (100, 32))
+        # ATH adds CornerSegments to the angular profile budget and rounds the
+        # total up to a whole number of points per quadrant (100 + 4 -> 104).
+        self.assertEqual((n_phi, n_length), (104, 32))
         self.assertLess(abs(float(np.max(np.abs(mouth[:, 0]))) - 229.0), 1.0e-6)
         self.assertLess(abs(float(np.max(np.abs(mouth[:, 1]))) - 204.0), 1.0e-6)
         self.assertLess(abs(float(np.max(mouth[:, 2])) - 150.0), 1.0e-6)

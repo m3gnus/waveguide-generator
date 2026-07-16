@@ -164,33 +164,35 @@ test('parameter inventory exposes throat extension and scopes OSSE-only guiding 
   );
 
   const throatSection = osseSections.find((section) => section.id === 'throat-extension');
-  assert.deepEqual(throatSection.groups.flatMap((group) => group.keys), [
-    'throatExtAngle',
-    'throatExtLength',
-    'slotLength',
-  ]);
+  assert.deepEqual(
+    throatSection.groups.flatMap((group) => group.keys),
+    ['throatExtAngle', 'throatExtLength', 'slotLength']
+  );
 
   const guidingSection = osseSections.find((section) => section.id === 'guiding-curve');
-  assert.deepEqual(guidingSection.groups.flatMap((group) => group.keys), [
-    'throatProfile',
-    'rot',
-    'gcurveType',
-    'gcurveDist',
-    'gcurveWidth',
-    'gcurveAspectRatio',
-    'gcurveSeN',
-    'gcurveSf',
-    'gcurveSfA',
-    'gcurveSfB',
-    'gcurveSfM1',
-    'gcurveSfM2',
-    'gcurveSfN1',
-    'gcurveSfN2',
-    'gcurveSfN3',
-    'gcurveRot',
-    'circArcTermAngle',
-    'circArcRadius',
-  ]);
+  assert.deepEqual(
+    guidingSection.groups.flatMap((group) => group.keys),
+    [
+      'throatProfile',
+      'rot',
+      'gcurveType',
+      'gcurveDist',
+      'gcurveWidth',
+      'gcurveAspectRatio',
+      'gcurveSeN',
+      'gcurveSf',
+      'gcurveSfA',
+      'gcurveSfB',
+      'gcurveSfM1',
+      'gcurveSfM2',
+      'gcurveSfN1',
+      'gcurveSfN2',
+      'gcurveSfN3',
+      'gcurveRot',
+      'circArcTermAngle',
+      'circArcRadius',
+    ]
+  );
 
   const rosseSections = getParameterSections('geometry', 'R-OSSE');
   assert.deepEqual(
@@ -212,28 +214,31 @@ test('parameter inventory exposes throat extension and scopes OSSE-only guiding 
   const sourceSection = getParameterSections('simulation', 'R-OSSE').find(
     (section) => section.id === 'source-definition'
   );
-  assert.deepEqual(sourceSection.groups.flatMap((group) => group.keys), [
-    'sourceShape',
-    'sourceRadius',
-    'sourceCurv',
-    'sourceVelocity',
-  ]);
+  assert.deepEqual(
+    sourceSection.groups.flatMap((group) => group.keys),
+    ['sourceShape', 'sourceRadius', 'sourceCurv', 'sourceVelocity']
+  );
 
   const meshSection = getParameterSections('simulation', 'R-OSSE').find(
     (section) => section.id === 'solve-export-mesh'
   );
-  assert.deepEqual(meshSection.groups.flatMap((group) => group.keys), [
-    'simType',
-    'solverMode',
-    'throatResolution',
-    'mouthResolution',
-    'rearResolution',
-    'apertureResolutionScale',
-    'verticalOffset',
-    'quadrants',
-    'encFrontResolution',
-    'encBackResolution',
-  ]);
+  assert.deepEqual(
+    meshSection.groups.flatMap((group) => group.keys),
+    [
+      'simType',
+      'solverMode',
+      'throatResolution',
+      'mouthResolution',
+      'rearResolution',
+      'apertureResolutionScale',
+      'maxTriangles',
+      'allowLargeMesh',
+      'verticalOffset',
+      'quadrants',
+      'encFrontResolution',
+      'encBackResolution',
+    ]
+  );
 });
 
 test('ParamPanel renders row-level formula buttons and removes the section-header affordance', () => {
