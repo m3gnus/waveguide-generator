@@ -6,7 +6,7 @@ function read(path) {
   return fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
-const MESHER_PIN = 'ce576fa78bdd2a3f5b5f073e4e55c7228bbe16f8';
+const MESHER_PIN = 'c79da68a5c3ac94f22f7e18877d1d1154e6e187c';
 const METAL_BEM_PIN = 'c1da8881dc2ee1e8931c4a11bd49cbf055d88de5';
 const BEMPP_BEM_PIN = '5c0b751eb3bf80e30040c6e19685568b874e89a8';
 

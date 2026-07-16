@@ -88,7 +88,9 @@ def test_solve_circsym_from_params_unmocked_tiny_round_waveguide(sim_type: int):
     assert result["frequencies"] == [500.0]
     assert result["metadata"]["solver_mode"] == "circsym"
     assert result["metadata"]["metal"]["solver_mode"] == "circsym"
-    assert result["metadata"]["metal"]["meridian"]["freqMaxHz"] == 500.0
+    meridian_metadata = result["metadata"]["metal"]["meridian"]
+    assert "freqMaxHz" not in meridian_metadata
+    assert meridian_metadata["throatTargetSegmentM"] > 0.0
     assert len(result["spl_on_axis"]["spl"]) == 1
     spl_on_axis = result["spl_on_axis"]["spl"][0]
     assert spl_on_axis is not None

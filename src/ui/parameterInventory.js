@@ -206,6 +206,8 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'mouthResolution',
             'rearResolution',
             'apertureResolutionScale',
+            'maxTriangles',
+            'allowLargeMesh',
             'verticalOffset',
             'quadrants',
           ]),

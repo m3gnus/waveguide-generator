@@ -165,6 +165,8 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
       'apertureResolutionScale',
       preparedParams.apertureResolutionScale
     ),
+    max_triangles: toFiniteNumber(preparedParams.maxTriangles, 18000),
+    allow_large_mesh: preparedParams.allowLargeMesh === true,
     wall_thickness: requireFiniteNumber('wallThickness', preparedParams.wallThickness),
 
     // Enclosure

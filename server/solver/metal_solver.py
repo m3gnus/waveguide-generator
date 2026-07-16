@@ -460,10 +460,7 @@ def solve_circsym_from_params(
             cancellation_callback()
         return True
 
-    meridian_build = build_meridian(
-        waveguide_payload_to_mesher_config(waveguide_params),
-        freq_max_hz=float(request.frequency_range[1]),
-    )
+    meridian_build = build_meridian(waveguide_payload_to_mesher_config(waveguide_params))
     meridian = meridian_build.as_metal_meridian(MeridianMesh)
 
     config_kwargs = {

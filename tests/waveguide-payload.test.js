@@ -13,6 +13,8 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
       mouthResolution: 9,
       rearResolution: 12,
       apertureResolutionScale: 2.25,
+      maxTriangles: 24000,
+      allowLargeMesh: true,
       encFrontResolution: '6,7,8,9',
       encBackResolution: '11,12,13,14',
       quadrants: '1234'
@@ -25,6 +27,8 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   assert.equal(payload.mouth_res, 9);
   assert.equal(payload.rear_res, 12);
   assert.equal(payload.aperture_resolution_scale, 2.25);
+  assert.equal(payload.max_triangles, 24000);
+  assert.equal(payload.allow_large_mesh, true);
   assert.equal(payload.enc_front_resolution, '6,7,8,9');
   assert.equal(payload.enc_back_resolution, '11,12,13,14');
   assert.equal(payload.subdomain_slices, undefined);
@@ -50,6 +54,8 @@ test('buildWaveguidePayload uses DesignModule backend mesh defaults when fields 
   assert.equal(payload.mouth_res, 15);
   assert.equal(payload.rear_res, 40);
   assert.equal(payload.aperture_resolution_scale, 1.5);
+  assert.equal(payload.max_triangles, 18000);
+  assert.equal(payload.allow_large_mesh, false);
   assert.equal(payload.enc_front_resolution, '25,25,25,25');
   assert.equal(payload.enc_back_resolution, '40,40,40,40');
 });
