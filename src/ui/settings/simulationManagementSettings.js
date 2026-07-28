@@ -21,19 +21,23 @@ const TASK_LIST_MIN_RATING_CONTROL_IDS = Object.freeze([
   'simulation-jobs-min-rating',
 ]);
 
-export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze([
-  'mwg_config',
-  'step',
-  'png',
-  'csv',
-  'json',
-  'txt',
-  'polar_csv',
-  'impedance_csv',
-  'vacs',
-  'stl',
-  'fusion_csv',
-]);
+export const SIMULATION_EXPORT_FORMAT_LABELS = Object.freeze({
+  mwg_config: 'Parameter Config (.txt)',
+  step: 'Waveguide STEP',
+  png: 'Chart Images (PNG)',
+  csv: 'Frequency Data CSV',
+  json: 'Full Results JSON',
+  txt: 'Summary Text Report',
+  polar_csv: 'Polar Directivity CSV',
+  impedance_csv: 'Impedance CSV',
+  vacs: 'ABEC Spectrum (VACS)',
+  stl: 'Waveguide STL',
+  fusion_csv: 'Fusion 360 CSV Curves',
+});
+
+export const SIMULATION_EXPORT_FORMAT_IDS = Object.freeze(
+  Object.keys(SIMULATION_EXPORT_FORMAT_LABELS)
+);
 
 export const RECOMMENDED_DEFAULTS = Object.freeze({
   autoExportOnComplete: false,

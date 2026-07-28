@@ -31,6 +31,7 @@ import {
 } from './simAdvancedSettings.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
+  SIMULATION_EXPORT_FORMAT_LABELS,
   getCurrentSimulationManagementSettings,
   resetSimulationManagementSettings,
   saveSimulationManagementSettings,
@@ -1448,20 +1449,6 @@ function _buildSimulationExportFormatsRow(managementSettings) {
     'display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px 12px;align-items:start;'
   );
 
-  const exportFormatLabels = new Map([
-    ['mwg_config', 'Parameter Config (.txt)'],
-    ['step', 'Waveguide STEP'],
-    ['png', 'Chart Images (PNG)'],
-    ['csv', 'Frequency Data CSV'],
-    ['json', 'Full Results JSON'],
-    ['txt', 'Summary Text Report'],
-    ['polar_csv', 'Polar Directivity CSV'],
-    ['impedance_csv', 'Impedance CSV'],
-    ['vacs', 'ABEC Spectrum (VACS)'],
-    ['stl', 'Waveguide STL'],
-    ['fusion_csv', 'Fusion 360 CSV Curves'],
-  ]);
-
   SIMULATION_EXPORT_FORMAT_IDS.forEach((formatId) => {
     const option = document.createElement('label');
     option.setAttribute('style', 'display:flex;align-items:center;gap:8px;');
@@ -1472,7 +1459,7 @@ function _buildSimulationExportFormatsRow(managementSettings) {
     checkbox.checked = managementSettings.selectedFormats.includes(formatId);
     option.appendChild(checkbox);
     const text = document.createElement('span');
-    text.textContent = exportFormatLabels.get(formatId) || formatId;
+    text.textContent = SIMULATION_EXPORT_FORMAT_LABELS[formatId] || formatId;
     option.appendChild(text);
     exportFormatsValue.appendChild(option);
   });
