@@ -190,3 +190,26 @@ test('updateTaskManifestForJob writes deterministic script snapshot and project 
     { formatId: 'json', fileName: 'horn_8_results.json' }
   ]);
 });
+
+test('updateTaskManifestForJob carries exported files from the job it is given', async () => {
+  const { writeFile } = createMockWriteFile();
+
+  const first = await updateTaskManifestForJob(
+    { id: 'job-7', status: 'queued', exportedFiles: ['first.csv'] },
+    {},
+    { fallbackWriteFile: writeFile }
+  );
+  assert.deepEqual(first.manifest.exportedFiles, ['first.csv']);
+
+  const migrated = await updateTaskManifestForJob(
+    { id: 'job-7', label: 'horn_7', status: 'complete' },
+    {},
+    { fallbackWriteFile: writeFile }
+  );
+
+  assert.equal(migrated.manifest.id, 'job-7');
+  assert.equal(migrated.manifest.label, 'horn_7');
+  // Each call builds its manifest from the job it is handed; there is no shared
+  // directory state carrying exportedFiles between calls.
+  assert.deepEqual(migrated.manifest.exportedFiles, []);
+});

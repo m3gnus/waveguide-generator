@@ -187,6 +187,23 @@ test('upsertJob preserves lifecycle timestamps from sparse polling updates', () 
   );
 });
 
+test('allJobs returns every job beyond the local-index cap', () => {
+  const panel = { jobs: new Map() };
+  const total = JOB_TRACKER_CONSTANTS.MAX_LOCAL_ITEMS + 10;
+
+  for (let i = 0; i < total; i += 1) {
+    panel.jobs.set(`job-${i}`, {
+      id: `job-${i}`,
+      status: 'complete',
+      progress: 1,
+      createdAt: new Date(Date.UTC(2026, 1, 1, 0, i, 0)).toISOString(),
+    });
+  }
+
+  // MAX_LOCAL_ITEMS caps the persisted local index only; allJobs must not truncate.
+  assert.equal(allJobs(panel).length, total);
+});
+
 test('removeJob removes job and result cache entry', () => {
   const panel = {
     jobs: new Map([['job-1', { id: 'job-1', status: 'complete' }]]),
