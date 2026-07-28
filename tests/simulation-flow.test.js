@@ -783,6 +783,143 @@ test('submitSimulation maps backend 422 responses to typed validation ApiError',
   }
 });
 
+test('solver maps malformed success JSON to a typed unexpected ApiError', async () => {
+  const originalFetch = global.fetch;
+  const parseFailure = new SyntaxError('Unexpected end of JSON input');
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      throw parseFailure;
+    },
+  });
+
+  try {
+    const solver = new BemSolver();
+    await assert.rejects(
+      () => solver.getHealthStatus(),
+      (error) => {
+        assert.equal(error.name, 'ApiError');
+        assert.equal(error.category, 'unexpected');
+        assert.equal(error.status, 200);
+        assert.equal(error.cause, parseFailure);
+        assert.match(error.message, /health check failed \(200\): backend returned invalid JSON/i);
+        return true;
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('solver rejects malformed success payloads before lifecycle state can consume them', async () => {
+  const originalFetch = global.fetch;
+  let payload = {};
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return payload;
+    },
+  });
+
+  try {
+    const solver = new BemSolver();
+    const mesh = {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      surfaceTags: [2],
+      format: 'msh',
+      boundaryConditions: {},
+      metadata: {},
+    };
+
+    await assert.rejects(
+      () =>
+        solver.submitSimulation(
+          {
+            frequencyStart: 100,
+            frequencyEnd: 1000,
+            numFrequencies: 3,
+            simulationType: '2',
+          },
+          mesh
+        ),
+      (error) => {
+        assert.equal(error.name, 'ApiError');
+        assert.equal(error.category, 'unexpected');
+        assert.match(error.message, /missing a valid job_id/i);
+        return true;
+      }
+    );
+
+    payload = { status: 'running', progress: '0.5' };
+    await assert.rejects(
+      () => solver.getJobStatus('job-1'),
+      (error) => {
+        assert.equal(error.name, 'ApiError');
+        assert.match(error.message, /invalid progress/i);
+        return true;
+      }
+    );
+
+    payload = { items: 'not-an-array', total: 0 };
+    await assert.rejects(
+      () => solver.listJobs(),
+      (error) => {
+        assert.equal(error.name, 'ApiError');
+        assert.match(error.message, /job list response contains invalid items/i);
+        return true;
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('solver accepts valid lifecycle response payloads', async () => {
+  const originalFetch = global.fetch;
+  const responses = {
+    '/health': { solverReady: true, mesherReady: true },
+    '/api/status/job-1': { status: 'running', progress: 0.5 },
+    '/api/results/job-1': { frequencies: [100, 200] },
+    '/api/jobs?limit=50&offset=0': { items: [{ id: 'job-1' }], total: 1 },
+    '/api/stop/job-1': { status: 'cancelling', message: 'Cancellation requested' },
+    '/api/jobs/job-1': { deleted: true, job_id: 'job-1' },
+    '/api/jobs/clear-failed': {
+      deleted: true,
+      deleted_count: 1,
+      deleted_ids: ['job-failed'],
+    },
+  };
+
+  global.fetch = async (url) => {
+    const path = new URL(url).pathname + new URL(url).search;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return responses[path];
+      },
+    };
+  };
+
+  try {
+    const solver = new BemSolver();
+    assert.deepEqual(await solver.getHealthStatus(), responses['/health']);
+    assert.deepEqual(await solver.getJobStatus('job-1'), responses['/api/status/job-1']);
+    assert.deepEqual(await solver.getResults('job-1'), responses['/api/results/job-1']);
+    assert.deepEqual(await solver.listJobs(), responses['/api/jobs?limit=50&offset=0']);
+    assert.deepEqual(await solver.stopJob('job-1'), responses['/api/stop/job-1']);
+    assert.deepEqual(await solver.deleteJob('job-1'), responses['/api/jobs/job-1']);
+    assert.deepEqual(await solver.clearFailedJobs(), responses['/api/jobs/clear-failed']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 // --- Check 5: mesh artifact download ---
 
 test('downloadMeshArtifact fetches mesh and triggers download', async () => {

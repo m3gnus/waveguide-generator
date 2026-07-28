@@ -17,10 +17,12 @@
  */
 
 import { DEFAULT_BACKEND_URL } from '../config/backendUrl.js';
-import { createNetworkApiError, parseApiErrorResponse } from './apiErrors.js';
+import { createNetworkApiError, parseApiErrorResponse, parseApiJsonResponse } from './apiErrors.js';
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const HEALTH_CHECK_TIMEOUT_MS = 5000;
+const VALID_JOB_STATUSES = new Set(['queued', 'running', 'complete', 'error', 'cancelled']);
+const VALID_STOP_STATUSES = new Set(['cancelled', 'cancelling']);
 
 function createAbortController(timeoutMs) {
   const controller = new AbortController();
@@ -188,6 +190,90 @@ function assignBooleanSetting(payload, key, value) {
   }
 }
 
+function validateObjectResponse(payload, responseName) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return `Backend returned an invalid ${responseName} response.`;
+  }
+  return '';
+}
+
+function validateSubmitResponse(payload) {
+  const objectError = validateObjectResponse(payload, 'simulation submission');
+  if (objectError) return objectError;
+  if (typeof payload.job_id !== 'string' || !payload.job_id.trim()) {
+    return 'Backend simulation submission response is missing a valid job_id.';
+  }
+  return '';
+}
+
+function validateJobStatusResponse(payload) {
+  const objectError = validateObjectResponse(payload, 'simulation status');
+  if (objectError) return objectError;
+  if (!VALID_JOB_STATUSES.has(payload.status)) {
+    return 'Backend simulation status response contains an invalid status.';
+  }
+  if (!Number.isFinite(payload.progress) || payload.progress < 0 || payload.progress > 1) {
+    return 'Backend simulation status response contains invalid progress.';
+  }
+  return '';
+}
+
+function validateJobListResponse(payload) {
+  const objectError = validateObjectResponse(payload, 'simulation job list');
+  if (objectError) return objectError;
+  if (
+    !Array.isArray(payload.items) ||
+    payload.items.some(
+      (item) =>
+        !item ||
+        typeof item !== 'object' ||
+        Array.isArray(item) ||
+        typeof item.id !== 'string' ||
+        !item.id.trim()
+    )
+  ) {
+    return 'Backend simulation job list response contains invalid items.';
+  }
+  if (!Number.isInteger(payload.total) || payload.total < 0) {
+    return 'Backend simulation job list response contains an invalid total.';
+  }
+  return '';
+}
+
+function validateStopResponse(payload) {
+  const objectError = validateObjectResponse(payload, 'simulation stop');
+  if (objectError) return objectError;
+  if (!VALID_STOP_STATUSES.has(payload.status)) {
+    return 'Backend simulation stop response contains an invalid status.';
+  }
+  return '';
+}
+
+function validateDeleteResponse(payload, jobId) {
+  const objectError = validateObjectResponse(payload, 'simulation deletion');
+  if (objectError) return objectError;
+  if (payload.deleted !== true || payload.job_id !== jobId) {
+    return 'Backend simulation deletion response does not confirm the requested job.';
+  }
+  return '';
+}
+
+function validateClearFailedResponse(payload) {
+  const objectError = validateObjectResponse(payload, 'failed-job deletion');
+  if (objectError) return objectError;
+  if (
+    typeof payload.deleted !== 'boolean' ||
+    !Number.isInteger(payload.deleted_count) ||
+    payload.deleted_count < 0 ||
+    !Array.isArray(payload.deleted_ids) ||
+    payload.deleted_ids.some((jobId) => typeof jobId !== 'string' || !jobId.trim()) ||
+    payload.deleted_ids.length !== payload.deleted_count
+  ) {
+    return 'Backend failed-job deletion response contains invalid deletion details.';
+  }
+  return '';
+}
+
 export class BemSolver {
   constructor() {
     /** @type {string} */
@@ -206,7 +292,10 @@ export class BemSolver {
       'Health check',
       HEALTH_CHECK_TIMEOUT_MS
     );
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'Health check',
+      validate: (payload) => validateObjectResponse(payload, 'health check'),
+    });
   }
 
   /**
@@ -278,7 +367,10 @@ export class BemSolver {
       'Submit simulation'
     );
 
-    const result = await response.json();
+    const result = await parseApiJsonResponse(response, {
+      operation: 'Submit simulation',
+      validate: validateSubmitResponse,
+    });
     return result.job_id;
   }
 
@@ -293,7 +385,10 @@ export class BemSolver {
       'Fetch simulation status'
     );
 
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'Fetch simulation status',
+      validate: validateJobStatusResponse,
+    });
   }
 
   /**
@@ -307,7 +402,10 @@ export class BemSolver {
       'Fetch simulation results'
     );
 
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'Fetch simulation results',
+      validate: (payload) => validateObjectResponse(payload, 'simulation results'),
+    });
   }
 
   /**
@@ -341,7 +439,10 @@ export class BemSolver {
       undefined,
       'List simulation jobs'
     );
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'List simulation jobs',
+      validate: validateJobListResponse,
+    });
   }
 
   /**
@@ -357,7 +458,10 @@ export class BemSolver {
       },
       'Stop simulation'
     );
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'Stop simulation',
+      validate: validateStopResponse,
+    });
   }
 
   /**
@@ -373,7 +477,10 @@ export class BemSolver {
       },
       'Delete simulation job'
     );
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'Delete simulation job',
+      validate: (payload) => validateDeleteResponse(payload, jobId),
+    });
   }
 
   /**
@@ -388,6 +495,9 @@ export class BemSolver {
       },
       'Clear failed simulation jobs'
     );
-    return await response.json();
+    return await parseApiJsonResponse(response, {
+      operation: 'Clear failed simulation jobs',
+      validate: validateClearFailedResponse,
+    });
   }
 }
