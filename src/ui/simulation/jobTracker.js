@@ -1,5 +1,3 @@
-import { syncSimulationWorkspaceIndex } from './workspaceTasks.js';
-
 const STORAGE_KEY = 'ath_simulation_jobs:v1';
 const STORAGE_VERSION = 1;
 const MAX_LOCAL_ITEMS = 50;
@@ -353,11 +351,6 @@ export function allJobs(panel, options = {}) {
 export function formatJobListLabel(job) {
   const jobId = String(job?.id || '');
   return String(job?.label || jobId.slice(0, 8));
-}
-
-export function persistPanelJobs(panel) {
-  const jobs = allJobs(panel);
-  void syncSimulationWorkspaceIndex(jobs);
 }
 
 export function removeJob(panel, jobId) {

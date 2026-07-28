@@ -67,7 +67,6 @@ node scripts/run-backend-python.js --cwd server -m unittest tests.<module_name> 
 - `tests/simulation-reconciliation.test.js`
 - `tests/simulation-settings.test.js`
 - `tests/startup-messaging.test.js`
-- `tests/task-index-rebuild.test.js`
 - `tests/task-manifest.test.js`
 - `tests/ui-behavior.test.js`
 - `tests/ui-module.test.js`

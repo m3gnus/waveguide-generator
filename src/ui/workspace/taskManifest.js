@@ -7,8 +7,8 @@ import {
 } from './generationArtifacts.js';
 
 export const TASK_MANIFEST_FILE_NAME = 'task.manifest.json';
-export const TASK_MANIFEST_VERSION = 1;
-export const TASK_SCRIPT_SCHEMA_VERSION = 1;
+const TASK_MANIFEST_VERSION = 1;
+const TASK_SCRIPT_SCHEMA_VERSION = 1;
 
 function nowIso() {
   return new Date().toISOString();
@@ -25,12 +25,7 @@ function normalizeExportedFiles(value) {
   return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
-function normalizeDirectoryName(value) {
-  const text = String(value ?? '').trim();
-  return text || null;
-}
-
-function normalizeArtifactFileName(value) {
+function normalizeOptionalName(value) {
   const text = String(value ?? '').trim();
   return text || null;
 }
@@ -59,7 +54,7 @@ function deriveGenerationFolderNameFromScript(scriptSnapshot, { timestamp = null
     return null;
   }
 
-  const outputName = normalizeDirectoryName(scriptSnapshot.outputName);
+  const outputName = normalizeOptionalName(scriptSnapshot.outputName);
   if (!outputName) {
     return null;
   }
@@ -71,7 +66,7 @@ function deriveGenerationFolderNameFromScript(scriptSnapshot, { timestamp = null
   return timestamp ? ensureDatedSolveLabel(outputName, timestamp) : outputName;
 }
 
-export function buildScriptSnapshotExportState(scriptSnapshot) {
+function buildScriptSnapshotExportState(scriptSnapshot) {
   if (!isObject(scriptSnapshot)) {
     return null;
   }
@@ -158,7 +153,7 @@ async function writeGenerationProjectManifest({
 
 export function resolveTaskWorkspaceDirectoryName(job = {}, { fallbackId = null } = {}) {
   const timestamp = resolveJobTimestamp(job);
-  const label = normalizeDirectoryName(job?.label);
+  const label = normalizeOptionalName(job?.label);
   if (label) {
     return ensureDatedSolveLabel(label, timestamp ?? new Date());
   }
@@ -170,7 +165,7 @@ export function resolveTaskWorkspaceDirectoryName(job = {}, { fallbackId = null 
     return scriptName;
   }
 
-  return normalizeDirectoryName(fallbackId ?? job?.id) || '';
+  return normalizeOptionalName(fallbackId ?? job?.id) || '';
 }
 
 export function normalizeTaskManifest(raw = {}, fallback = {}) {
@@ -193,10 +188,10 @@ export function normalizeTaskManifest(raw = {}, fallback = {}) {
     fallback.scriptSnapshot ??
     fallback.script ??
     null;
-  const rawResultsFile = normalizeArtifactFileName(
+  const rawResultsFile = normalizeOptionalName(
     raw.rawResultsFile ?? raw.raw_results_file ?? fallback.rawResultsFile
   );
-  const meshArtifactFile = normalizeArtifactFileName(
+  const meshArtifactFile = normalizeOptionalName(
     raw.meshArtifactFile ?? raw.mesh_artifact_file ?? fallback.meshArtifactFile
   );
 
@@ -249,16 +244,7 @@ export function createTaskManifestFromJob(job = {}) {
   });
 }
 
-export async function readTaskManifest() {
-  return { manifest: null, warning: null };
-}
-
-export async function writeTaskManifest(taskDirectoryHandle, manifestInput) {
-  return normalizeTaskManifest(manifestInput);
-}
-
 export async function updateTaskManifestForJob(
-  rootDirectoryHandle,
   job,
   updates = {},
   { fallbackWriteFile = null } = {}
@@ -276,14 +262,12 @@ export async function updateTaskManifestForJob(
     const preferredDirectoryName = resolveTaskWorkspaceDirectoryName(job, { fallbackId: jobId });
 
     const base = createTaskManifestFromJob(job);
-    const hasJobExportedFiles = Array.isArray(job?.exportedFiles);
     const next = normalizeTaskManifest(
       {
         ...base,
         ...updates,
         autoExportCompletedAt: updates.autoExportCompletedAt ?? base.autoExportCompletedAt,
-        exportedFiles:
-          updates.exportedFiles ?? (hasJobExportedFiles ? base.exportedFiles : base.exportedFiles),
+        exportedFiles: updates.exportedFiles ?? base.exportedFiles,
         scriptSnapshot: updates.scriptSnapshot ?? base.scriptSnapshot ?? null,
         rawResultsFile: updates.rawResultsFile ?? base.rawResultsFile ?? null,
         meshArtifactFile: updates.meshArtifactFile ?? base.meshArtifactFile ?? null,

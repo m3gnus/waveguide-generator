@@ -126,9 +126,9 @@ flowchart LR
 
 4. Frontend polls `GET /api/status/{job_id}` and reads `GET /api/results/{job_id}` on completion.
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
-   - Completed-task history uses explicit source modes: folder workspace selected = folder manifests/index only, otherwise backend jobs/local cache.
+   - Completed-task history is restored from backend jobs; local job metadata is folded into refreshed entries while backend updates are in flight.
    - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Task Exports settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
-   - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and folder manifests/index when available.
+   - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and workspace manifests.
 5. If backend solver/HornLab mesher runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow
@@ -138,8 +138,8 @@ flowchart LR
 3. STEP export uses `exportSTEP(...)`, which normalizes export params through `DesignModule` and requests `POST /api/mesh/step`.
 4. If `/api/mesh/build` or `/api/mesh/step` returns `503`, the export path fails explicitly and does not fall back to a legacy frontend mesher.
 5. Completed-task exports now run through a bundle coordinator in `src/ui/simulation/exports.js`, driven by persisted Task Exports settings (`autoExportOnComplete`, `selectedFormats`).
-6. When a folder workspace is active, manual exports (STL/profile/config and other direct save-file flows) write into the selected folder root, while completed-task bundle files write into the task subfolder (`<workspace>/<jobId>/...`). Folder manifests/index still persist there for task-history restore, but the workspace is not a catch-all redirect for every generated artifact.
-7. If direct folder writes fail or permission is lost, the app clears the selected workspace and falls back to the standard file-save/download behavior for the affected export.
+6. Manual and completed-task exports write through the backend workspace API into dated generation subfolders (`<workspace>/<YYMMDD>_<jobLabel>/...`); task and project manifests persist alongside their generation artifacts.
+7. If a backend workspace write fails, the app falls back to standard browser save/download behavior for the affected export.
 8. ABEC bundle generation is not part of the active runtime; remaining ABEC compatibility is limited to config/result text conventions used by import/export helpers.
 
 ## 4. Mesh Pipelines

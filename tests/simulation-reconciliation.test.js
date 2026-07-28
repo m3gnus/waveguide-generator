@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import {
   mergeJobs,
   hasActiveJobs,
-  persistPanelJobs,
-  allJobs,
   JOB_TRACKER_CONSTANTS
 } from '../src/ui/simulation/jobTracker.js';
 
@@ -31,31 +29,6 @@ test('hasActiveJobs checks queued/running states', () => {
   assert.equal(hasActiveJobs(panel), true);
   panel.jobs.set('b', { id: 'b', status: 'complete' });
   assert.equal(hasActiveJobs(panel), false);
-});
-
-test('persistPanelJobs completes without error when workspace sync is unavailable', async () => {
-  const panel = {
-    jobs: new Map()
-  };
-
-  for (let i = 0; i < 60; i += 1) {
-    panel.jobs.set(`job-${i}`, {
-      id: `job-${i}`,
-      status: 'complete',
-      progress: 1,
-      createdAt: new Date(2026, 1, 1, 0, i, 0).toISOString()
-    });
-  }
-
-  // persistPanelJobs delegates to syncSimulationWorkspaceIndex (fire-and-forget)
-  // syncSimulationWorkspaceIndex now always returns { synced: false, available: false }
-  persistPanelJobs(panel);
-
-  // Allow the async workspace sync to complete
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // Jobs are still accessible via allJobs even though workspace sync is unavailable
-  assert.equal(allJobs(panel).length, 60);
 });
 
 test('mergeJobs preserves manifest metadata when backend omits fields', () => {

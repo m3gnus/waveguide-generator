@@ -68,7 +68,6 @@ test('restoreSimulationControllerJobs initializes with backend source mode', asy
     },
   });
 
-  // readSimulationWorkspaceJobs always returns empty items (backend-only mode)
   assert.equal(controller.jobs.size, 0);
   assert.equal(controller.jobSourceMode, 'backend');
   assert.equal(jobsUpdatedCalls >= 1, true);
