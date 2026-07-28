@@ -47,7 +47,6 @@
 
 **Folder workspace behavior**:
 - Backend workspace root is the canonical export target (`/api/export-file` + optional `workspace_subdir`)
-- On supporting browsers, a selected folder handle is an in-browser direct-write optimization
 - Bundle exports use a dated job label/base name as subdirectory (`<workspace>/<YYMMDD>_<jobLabel>/`) for backend-write paths
 - Bundle artifact names are deterministic within each generation folder:
   - `csv` → `<jobLabel>_results.csv`
@@ -59,9 +58,9 @@
   - `png` → `<jobLabel>_<chartKey>.png`
   - `stl` → `<jobLabel>.stl`
   - `fusion_csv` → `<jobLabel>_profiles.csv` and `<jobLabel>_slices.csv`
-- Folder task manifests/index entries now persist against the same generation folder naming contract (job identity stays in manifest/index `id`)
+- Folder task manifests use the same generation folder naming contract (job identity stays in manifest `id`)
 - Generation folders also include `waveguide.project.v1.json` as a user-facing artifact index for selected exports and script snapshots (plus simulation-owned raw-results/mesh entries written at completion)
-- If direct-write or backend-write fails: app falls back to browser save/download
+- If a backend workspace write fails, the app falls back to browser save/download
 - Workspace contract covers manual + auto-bundles ONLY (not unrelated generated artifacts)
 
 ## Test Coverage

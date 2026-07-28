@@ -23,23 +23,6 @@ function resolveGenerationFileBaseName(job, fallbackId) {
   return String(fallbackId || '').trim() || 'generation';
 }
 
-export async function readSimulationWorkspaceJobs() {
-  return {
-    items: [],
-    available: false,
-    repaired: false,
-    warnings: [],
-  };
-}
-
-export function syncSimulationWorkspaceIndex(_jobEntries = []) {
-  return Promise.resolve({
-    synced: false,
-    available: false,
-    items: [],
-  });
-}
-
 export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   if (!job?.id) {
     return null;
@@ -57,15 +40,11 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
     });
   };
 
-  const result = await updateTaskManifestForJob(null, job, nextUpdates, { fallbackWriteFile });
+  const result = await updateTaskManifestForJob(job, nextUpdates, { fallbackWriteFile });
   if (result.warning) {
     console.warn(result.warning);
   }
   return result.manifest;
-}
-
-export async function deleteTaskWorkspaceDirectory(_job) {
-  return false;
 }
 
 export async function writeSimulationTaskBundleFile(

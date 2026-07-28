@@ -25,11 +25,7 @@ import {
   buildCancelledSimulationJob,
   resolveClearedFailedJobIds
 } from '../src/modules/simulation/jobs.js';
-import {
-  readSimulationWorkspaceJobs,
-  syncSimulationWorkspaceIndex,
-  syncSimulationWorkspaceJobManifest
-} from '../src/ui/simulation/workspaceTasks.js';
+import { syncSimulationWorkspaceJobManifest } from '../src/ui/simulation/workspaceTasks.js';
 function makeRawParams(overrides = {}) {
   return {
     ...getDefaults('OSSE'),
@@ -380,34 +376,9 @@ test('simulation workspace service writes job manifest via backend', async () =>
     assert.ok(fetchCalls.length >= 1);
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
 
-    // readSimulationWorkspaceJobs always returns empty in backend-only mode
-    const restored = await readSimulationWorkspaceJobs();
-    assert.equal(restored.available, false);
-    assert.equal(restored.items.length, 0);
   } finally {
     global.fetch = originalFetch;
   }
-});
-
-test('simulation workspace service index sync is unavailable in backend-only mode', async () => {
-  const result = await syncSimulationWorkspaceIndex([
-    {
-      id: 'job-folder-2',
-      status: 'complete',
-      exportedFiles: ['result.csv'],
-      scriptSnapshot: { outputName: 'horn' }
-    }
-  ]);
-
-  // syncSimulationWorkspaceIndex always returns not-synced in backend-only mode
-  assert.equal(result.synced, false);
-  assert.equal(result.available, false);
-  assert.deepEqual(result.items, []);
-
-  // readSimulationWorkspaceJobs always returns empty
-  const restored = await readSimulationWorkspaceJobs();
-  assert.equal(restored.available, false);
-  assert.equal(restored.items.length, 0);
 });
 
 test('simulation use case builds cancelled job state and resolves failed cleanup IDs', () => {

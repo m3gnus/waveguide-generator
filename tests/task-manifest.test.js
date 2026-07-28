@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   TASK_MANIFEST_FILE_NAME,
-  TASK_SCRIPT_SCHEMA_VERSION,
   createTaskManifestFromJob,
   normalizeTaskManifest,
   resolveTaskWorkspaceDirectoryName,
@@ -32,7 +31,7 @@ test('normalizeTaskManifest enforces required defaults', () => {
   assert.equal(normalized.version, 1);
   assert.equal(normalized.rating, null);
   assert.deepEqual(normalized.exportedFiles, []);
-  assert.equal(normalized.scriptSchemaVersion, TASK_SCRIPT_SCHEMA_VERSION);
+  assert.equal(normalized.scriptSchemaVersion, 1);
 });
 
 test('createTaskManifestFromJob maps script and metadata fields', () => {
@@ -99,7 +98,7 @@ test('resolveTaskWorkspaceDirectoryName prefers dated label, then dated script, 
 test('updateTaskManifestForJob writes task.manifest.json via fallbackWriteFile', async () => {
   const { writeFile, files } = createMockWriteFile();
 
-  const updated = await updateTaskManifestForJob(null, {
+  const updated = await updateTaskManifestForJob({
     id: 'job-5',
     label: 'horn_5',
     status: 'queued',
@@ -125,7 +124,7 @@ test('updateTaskManifestForJob writes task.manifest.json via fallbackWriteFile',
 });
 
 test('updateTaskManifestForJob returns warning when no fallbackWriteFile is provided', async () => {
-  const result = await updateTaskManifestForJob(null, {
+  const result = await updateTaskManifestForJob({
     id: 'job-6',
     status: 'queued',
     exportedFiles: []
@@ -135,33 +134,10 @@ test('updateTaskManifestForJob returns warning when no fallbackWriteFile is prov
   assert.match(result.warning, /unavailable/i);
 });
 
-test('updateTaskManifestForJob preserves exported files across updates', async () => {
-  const { writeFile, files } = createMockWriteFile();
-
-  await updateTaskManifestForJob(null, {
-    id: 'job-7',
-    status: 'queued',
-    exportedFiles: ['first.csv']
-  }, {}, { fallbackWriteFile: writeFile });
-
-  const migrated = await updateTaskManifestForJob(null, {
-    id: 'job-7',
-    label: 'horn_7',
-    status: 'complete'
-  }, {}, { fallbackWriteFile: writeFile });
-
-  assert.equal(migrated.manifest.id, 'job-7');
-  assert.equal(migrated.manifest.label, 'horn_7');
-  // Note: without a shared directory handle, the function creates manifests
-  // independently from the job data passed in. exportedFiles comes from
-  // the job object, which does not have exportedFiles in the second call.
-  assert.deepEqual(migrated.manifest.exportedFiles, []);
-});
-
 test('updateTaskManifestForJob writes deterministic script snapshot and project artifact metadata', async () => {
   const { writeFile, files } = createMockWriteFile();
 
-  await updateTaskManifestForJob(null, {
+  await updateTaskManifestForJob({
     id: 'job-8',
     label: 'horn_8',
     status: 'complete',

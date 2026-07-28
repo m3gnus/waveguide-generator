@@ -4,10 +4,7 @@ import {
 } from '../../modules/simulation/domain.js';
 import { readSimulationState } from '../../modules/simulation/state.js';
 import { DEFAULT_BACKEND_URL } from '../../config/backendUrl.js';
-import {
-  readSimulationWorkspaceJobs,
-  syncSimulationWorkspaceJobManifest,
-} from './workspaceTasks.js';
+import { syncSimulationWorkspaceJobManifest } from './workspaceTasks.js';
 import { UiModule } from '../../modules/ui/index.js';
 import {
   buildCancellationRequestedSimulationJob,
@@ -19,7 +16,6 @@ import {
   foldLocalJobMetadataIntoRemote,
   removeJob,
   setJobsFromEntries,
-  persistPanelJobs,
   toUiJob,
   upsertJob,
 } from './jobTracker.js';
@@ -116,10 +112,6 @@ function setJobSourceMode(controller, mode) {
   controller.jobSourceMode = nextMode;
   controller.jobSourceLabel =
     nextMode === JOB_SOURCE_MODES.FOLDER ? 'Folder Tasks' : 'Backend Jobs';
-}
-
-function persistControllerJobs(controller) {
-  persistPanelJobs(controller);
 }
 
 function cloneSimulationParamBindings() {
@@ -345,7 +337,6 @@ export async function recordSimulationControllerExport(controller, jobId, export
     rawResultsFile: normalizedPatch.rawResultsFile ?? current.rawResultsFile ?? null,
     meshArtifactFile: normalizedPatch.meshArtifactFile ?? current.meshArtifactFile ?? null,
   });
-  persistControllerJobs(controller);
   if (next) {
     await syncSimulationWorkspaceJobManifest(next, {
       exportedFiles: next.exportedFiles,
@@ -374,7 +365,6 @@ export async function recordSimulationControllerRating(controller, jobId, rating
     id: current.id,
     rating: normalizedRating,
   });
-  persistControllerJobs(controller);
   if (next) {
     await syncSimulationWorkspaceJobManifest(next, { rating: next.rating });
     await persistJobMetadataToBackend(controller, next);
@@ -494,7 +484,6 @@ async function persistJobMetadataToBackend(controller, job) {
 export async function queueSimulationControllerJob(controller, jobInput) {
   const createdJob = upsertJob(controller, buildQueuedSimulationJob(jobInput));
   setActiveJob(controller, jobInput?.jobId);
-  persistControllerJobs(controller);
   if (createdJob) {
     await syncSimulationWorkspaceJobManifest(createdJob);
     // Persist label and script snapshot to backend so they survive page reloads.
@@ -507,9 +496,6 @@ export async function queueSimulationControllerJob(controller, jobInput) {
 
 export function removeSimulationControllerJob(controller, jobId) {
   const removed = removeJob(controller, jobId);
-  if (removed) {
-    persistControllerJobs(controller);
-  }
   return removed;
 }
 
@@ -542,13 +528,11 @@ export function clearSimulationControllerJobs(controller, jobIds = []) {
       removed += 1;
     }
   }
-  persistControllerJobs(controller);
   return removed;
 }
 
 export function cancelSimulationControllerJob(controller, jobId) {
   if (!jobId || !controller?.jobs?.has(jobId)) {
-    persistControllerJobs(controller);
     return null;
   }
 
@@ -556,7 +540,6 @@ export function cancelSimulationControllerJob(controller, jobId) {
   if (cancelledJob) {
     upsertJob(controller, cancelledJob);
   }
-  persistControllerJobs(controller);
   return cancelledJob;
 }
 
@@ -566,7 +549,6 @@ export function requestSimulationControllerJobCancellation(
   { message = 'Cancellation requested. Waiting for backend worker to stop.' } = {}
 ) {
   if (!jobId || !controller?.jobs?.has(jobId)) {
-    persistControllerJobs(controller);
     return null;
   }
 
@@ -576,7 +558,6 @@ export function requestSimulationControllerJobCancellation(
   if (pendingJob) {
     upsertJob(controller, pendingJob);
   }
-  persistControllerJobs(controller);
   return pendingJob;
 }
 
@@ -632,7 +613,6 @@ export async function reconcileSimulationControllerRemoteJobs(
   }
 
   const activeJob = resolveActiveJobSelection(controller);
-  persistControllerJobs(controller);
 
   return {
     activeJob,
@@ -642,7 +622,7 @@ export async function reconcileSimulationControllerRemoteJobs(
 
 export async function restoreSimulationControllerJobs(
   controller,
-  { onJobsUpdated = () => {}, onStartPolling = () => {}, onRecoverFromManifests = () => {} } = {}
+  { onJobsUpdated = () => {}, onStartPolling = () => {} } = {}
 ) {
   if (controller.pollTimer) {
     clearTimeout(controller.pollTimer);
@@ -661,7 +641,6 @@ export async function restoreSimulationControllerJobs(
 
   // Restore all jobs from the backend database (survives page reloads).
   setJobSourceMode(controller, JOB_SOURCE_MODES.BACKEND);
-  let backendRequestSucceeded = false;
 
   if (typeof controller.solver?.listJobs === 'function') {
     try {
@@ -691,24 +670,9 @@ export async function restoreSimulationControllerJobs(
         controller,
         foldLocalJobMetadataIntoRemote(Array.from(controller.jobs.values()), items)
       );
-      setJobSourceMode(controller, JOB_SOURCE_MODES.BACKEND);
-      backendRequestSucceeded = true;
     } catch (error) {
       console.warn('[SimController] Failed to restore jobs from backend:', error);
     }
-  }
-
-  // Fall back to workspace manifests only when the backend could not be queried.
-  if (!backendRequestSucceeded) {
-    const workspace = await readSimulationWorkspaceJobs();
-    if (workspace.repaired || workspace.warnings.length > 0) {
-      onRecoverFromManifests();
-    }
-    setJobsFromEntries(controller, workspace.items);
-    setJobSourceMode(
-      controller,
-      workspace.available ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND
-    );
   }
 
   syncCurrentJobId(controller);

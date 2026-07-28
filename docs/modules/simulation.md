@@ -12,7 +12,7 @@
 **UI coordination files**:
 - `src/ui/simulation/controller.js` — job lifecycle and UI polling
 - `src/ui/simulation/workspaceTasks.js` — folder workspace task management
-- `src/ui/workspace/taskManifest.js`, `taskIndex.js` — folder-backed task persistence
+- `src/ui/workspace/taskManifest.js` — folder-backed task persistence
 
 ## Core Responsibilities
 
@@ -38,9 +38,9 @@
 - View Results re-renders the directivity heatmap through `/api/render-directivity` for display-only reference-level changes without requesting a new solve
 
 **History & source selection**:
-- **One source mode at a time**: either folder workspace (manifests only) OR backend jobs + local cache (never mixed)
-- Folder workspace: completed-task bundles write to `<workspace>/<jobLabel>/`; when File System Access is unavailable, exports use backend workspace root + `workspace_subdir`
-- If task-folder/direct writes fail, app falls back through backend workspace writes and finally browser download/save
+- Backend jobs and local cache provide task history; workspace manifests persist export metadata and generation artifacts.
+- Completed-task bundles write through the backend workspace root to `<workspace>/<jobLabel>/`.
+- If a backend workspace write fails, the app falls back to browser download/save.
 
 **Task metadata persistence**:
 - Ratings: stored locally and in folder task manifests when workspace active
@@ -50,7 +50,7 @@
   - raw results: `<jobLabel>_raw.results.json` (from `/api/results/{jobId}`)
   - mesh artifact mirror: `<jobLabel>_solver.mesh.msh` (from `/api/mesh-artifact/{jobId}` when available)
 - User-facing project manifest: `waveguide.project.v1.json` in each generation folder records script snapshots, selected exports, raw-results snapshot, and mesh-artifact metadata
-- Manifest/index folders use generation naming (`<workspace>/<jobLabel>/`) when available, but manifest/index `id` remains the stable backend job identity
+- Manifest folders use generation naming (`<workspace>/<jobLabel>/`), while manifest `id` remains the stable backend job identity
 
 **Settings** (persisted):
 - `autoExportOnComplete` — auto-run exports on job completion
@@ -67,5 +67,5 @@ Contract validation tests:
 - `tests/simulation-job-tracker.test.js` — job state management
 - `tests/simulation-export-bundle.test.js` — bundle coordination
 - `tests/simulation-management-settings.test.js` — settings persistence
-- `tests/task-manifest.test.js`, `task-index-rebuild.test.js` — folder workspace persistence
+- `tests/task-manifest.test.js` — folder workspace persistence
 - `tests/generation-artifacts.test.js` — generation project manifest and deterministic artifact naming

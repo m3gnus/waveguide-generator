@@ -9,7 +9,6 @@
  * - Progress tracking
  * - Results display coordination
  */
-import { showMessage } from '../feedback.js';
 import { setupEventListeners } from './events.js';
 import { setupMeshListener, prepareMeshForSimulation } from './mesh.js';
 import { setupSmoothingListener, setupKeyboardShortcuts } from './smoothing.js';
@@ -64,12 +63,6 @@ export class SimulationPanel {
       },
       onStartPolling: () => {
         this.pollSimulationStatus();
-      },
-      onRecoverFromManifests: () => {
-        showMessage('Recovered folder task history from manifests.', {
-          type: 'warning',
-          duration: 2800,
-        });
       },
     });
   }
