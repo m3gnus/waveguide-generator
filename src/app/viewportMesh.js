@@ -115,6 +115,7 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
     creaseVertices.add(v1);
   }
 
+  const pendingRemaps = [];
   for (const v of creaseVertices) {
     const tris = vertexToTris.get(v);
     if (!tris || tris.length < 2) continue;
@@ -170,22 +171,24 @@ export function detachCreaseVertices(mesh = {}, thresholdDeg = 30) {
         normals.push(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
       }
 
-      for (const t of islands[islandIdx]) {
-        const b = t * 3;
-        for (let j = 0; j < 3; j += 1) {
-          if (indices[b + j] === v) {
-            indices[b + j] = newIndex;
-          }
-        }
-      }
+      pendingRemaps.push({
+        sourceIndex: v,
+        targetIndex: newIndex,
+        triangles: islands[islandIdx],
+      });
+    }
+  }
 
-      let newVertexTris = vertexToTris.get(newIndex);
-      if (!newVertexTris) {
-        newVertexTris = [];
-        vertexToTris.set(newIndex, newVertexTris);
-      }
-      for (const t of islands[islandIdx]) {
-        newVertexTris.push(t);
+  // Keep the original topology intact until every vertex's smooth islands have
+  // been found. Earlier remaps can otherwise hide a shared smooth edge from a
+  // neighboring crease vertex and introduce an order-dependent shading seam.
+  for (const { sourceIndex, targetIndex, triangles } of pendingRemaps) {
+    for (const t of triangles) {
+      const b = t * 3;
+      for (let j = 0; j < 3; j += 1) {
+        if (indices[b + j] === sourceIndex) {
+          indices[b + j] = targetIndex;
+        }
       }
     }
   }
