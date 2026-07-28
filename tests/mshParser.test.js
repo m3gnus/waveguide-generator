@@ -54,7 +54,7 @@ test('mshParser: physical tags preserved through round-trip', () => {
   const tags = [1, 2];
   const names = [
     { id: 1, name: 'SD1G0' },
-    { id: 2, name: 'SD1D1001' }
+    { id: 2, name: 'SD1D1001' },
   ];
   const msh = buildSimpleMSH(vertices, indices, tags, names);
   const result = parseMSH(msh);
@@ -67,16 +67,13 @@ test('mshParser: physical tags preserved through round-trip', () => {
 });
 
 test('mshParser: multiple physical groups including enclosure tag 3', () => {
-  const vertices = [
-    0, 0, 0,  1, 0, 0,  0, 1, 0,
-    1, 1, 0,  2, 0, 0,  2, 1, 0
-  ];
+  const vertices = [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 2, 0, 0, 2, 1, 0];
   const indices = [0, 1, 2, 1, 3, 2, 3, 4, 5];
   const tags = [1, 2, 3];
   const names = [
     { id: 1, name: 'SD1G0' },
     { id: 2, name: 'SD1D1001' },
-    { id: 3, name: 'SD2G0' }
+    { id: 3, name: 'SD2G0' },
   ];
   const msh = buildSimpleMSH(vertices, indices, tags, names);
   const result = parseMSH(msh);
@@ -89,9 +86,48 @@ test('mshParser: multiple physical groups including enclosure tag 3', () => {
   assert.equal(result.physicalNames.get(3), 'SD2G0');
 });
 
+test('mshParser: ignores non-surface physical names that reuse a triangle tag', () => {
+  const msh = buildSimpleMSH(
+    [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    [0, 1, 2],
+    [1],
+    [{ id: 1, name: 'surface' }]
+  ).replace(
+    '$PhysicalNames\n1\n2 1 "surface"\n',
+    '$PhysicalNames\n2\n2 1 "surface"\n3 1 "volume"\n'
+  );
+
+  const result = parseMSH(msh);
+
+  assert.equal(result.physicalNames.get(1), 'surface');
+});
+
 test('mshParser: throws on missing $Nodes section', () => {
   const badMsh = '$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Elements\n0\n$EndElements\n';
   assert.throws(() => parseMSH(badMsh), /Missing \$Nodes section/);
+});
+
+test('mshParser: rejects binary meshes before parsing binary data as text', () => {
+  const binaryHeader = '$MeshFormat\n2.2 1 8\n$EndMeshFormat\n';
+  assert.throws(() => parseMSH(binaryHeader), /Only ASCII Gmsh 2\.2 meshes are supported/);
+});
+
+test('mshParser: rejects invalid node coordinates', () => {
+  const msh = buildSimpleMSH([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 2]).replace(
+    '2 1 0 0',
+    '2 invalid 0 0'
+  );
+
+  assert.throws(() => parseMSH(msh), /Invalid node coordinates for node 2/);
+});
+
+test('mshParser: rejects triangles that reference unknown node ids', () => {
+  const msh = buildSimpleMSH([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 2]).replace(
+    '1 2 2 1 1 1 2 3',
+    '1 2 2 1 1 1 2 99'
+  );
+
+  assert.throws(() => parseMSH(msh), /Unknown node id 99 in triangle element 1/);
 });
 
 test('mshParser: skips non-triangle elements', () => {
@@ -105,9 +141,9 @@ test('mshParser: skips non-triangle elements', () => {
   s += '$EndNodes\n';
   // 3 elements: one line (type 1), one triangle (type 2), one point (type 15)
   s += '$Elements\n3\n';
-  s += '1 1 2 1 1 1 2\n';       // line element (type 1, 2 nodes)
-  s += '2 2 2 1 1 1 2 3\n';     // triangle (type 2, 3 nodes)
-  s += '3 15 2 1 1 1\n';        // point element (type 15, 1 node)
+  s += '1 1 2 1 1 1 2\n'; // line element (type 1, 2 nodes)
+  s += '2 2 2 1 1 1 2 3\n'; // triangle (type 2, 3 nodes)
+  s += '3 15 2 1 1 1\n'; // point element (type 15, 1 node)
   s += '$EndElements\n';
 
   const result = parseMSH(s);
