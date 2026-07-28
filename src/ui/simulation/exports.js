@@ -308,6 +308,12 @@ function readResultSeries(panel) {
   };
 }
 
+function readBundleResultSeries(panel, options = {}) {
+  return typeof options.getResultSeries === 'function'
+    ? options.getResultSeries()
+    : readResultSeries(panel);
+}
+
 function finiteSeriesValues(values = []) {
   return values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
 }
@@ -321,7 +327,8 @@ function formatCsvCell(value) {
   return value ?? '';
 }
 
-async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
+async function buildMatplotlibPngFiles(panel, options = {}) {
+  const { baseName } = options;
   requireSimulationResults(panel);
 
   const cachedHealth = getCachedRuntimeHealth();
@@ -343,7 +350,7 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
     impedanceReal,
     impedanceImaginary,
     directivity,
-  } = readResultSeries(panel);
+  } = readBundleResultSeries(panel, options);
 
   const payload = {
     frequencies,
@@ -411,8 +418,12 @@ async function buildMatplotlibPngFiles(panel, { baseName } = {}) {
   });
 }
 
-function buildCsvFile(panel, { baseName } = {}) {
-  const { frequencies, spl, di, impedanceReal, impedanceImaginary } = readResultSeries(panel);
+function buildCsvFile(panel, options = {}) {
+  const { baseName } = options;
+  const { frequencies, spl, di, impedanceReal, impedanceImaginary } = readBundleResultSeries(
+    panel,
+    options
+  );
 
   let csv =
     'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))\n';
@@ -458,8 +469,12 @@ function buildJsonFile(panel, { baseName } = {}) {
   });
 }
 
-function buildTextFile(panel, { baseName } = {}) {
-  const { frequencies, spl, di, impedanceReal, impedanceImaginary } = readResultSeries(panel);
+function buildTextFile(panel, options = {}) {
+  const { baseName } = options;
+  const { frequencies, spl, di, impedanceReal, impedanceImaginary } = readBundleResultSeries(
+    panel,
+    options
+  );
 
   const { dateStamp, timeStamp } = localTimestampParts();
 
@@ -763,13 +778,13 @@ async function runExportFormat(panel, formatId, options = {}) {
         options
       );
     case 'png':
-      return writeExportFiles(await buildMatplotlibPngFiles(panel, { baseName }), options);
+      return writeExportFiles(await buildMatplotlibPngFiles(panel, options), options);
     case 'csv':
-      return writeExportFiles([buildCsvFile(panel, { baseName })], options);
+      return writeExportFiles([buildCsvFile(panel, options)], options);
     case 'json':
       return writeExportFiles([buildJsonFile(panel, { baseName })], options);
     case 'txt':
-      return writeExportFiles([buildTextFile(panel, { baseName })], options);
+      return writeExportFiles([buildTextFile(panel, options)], options);
     case 'polar_csv':
       return writeExportFiles([buildPolarCsvFile(panel, { baseName })], options);
     case 'impedance_csv':
@@ -856,6 +871,11 @@ export async function exportResults(
   const failures = [];
   const baseName = resolveExportBaseName(job);
   const writer = createTaskExportWriter(job, baseName);
+  let resultSeries = null;
+  const getResultSeries = () => {
+    resultSeries ??= readResultSeries(panel);
+    return resultSeries;
+  };
 
   for (const formatId of normalizedFormats) {
     if (RESULT_EXPORT_FORMAT_IDS.includes(formatId) && !panel.lastResults) {
@@ -871,6 +891,7 @@ export async function exportResults(
         job,
         writer,
         baseName,
+        getResultSeries,
       });
       exportedFiles.push(...savedFiles.map((fileName) => `${formatId}:${fileName}`));
     } catch (error) {
