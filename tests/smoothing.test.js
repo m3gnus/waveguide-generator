@@ -22,3 +22,16 @@ test('applySmoothing preserves nullable samples when no finite neighbor is in ra
 
   assert.equal(smoothed[1], null);
 });
+
+test('applySmoothing smooths a two-sample fractional-octave response', () => {
+  const smoothed = applySmoothing([100, 110], [0, 10], '1/1');
+
+  assert.ok(smoothed[0] > 0 && smoothed[0] < 5);
+  assert.ok(smoothed[1] > 5 && smoothed[1] < 10);
+});
+
+test('applySmoothing keeps ERB smoothing inside the linear-Hz bandwidth', () => {
+  const smoothed = applySmoothing([100, 119, 200], [0, 100, 0], 'erb');
+
+  assert.equal(smoothed[0], 0);
+});

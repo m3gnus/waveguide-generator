@@ -7,9 +7,8 @@
  * - Psychoacoustic smoothing (perception-based)
  * - ERB (Equivalent Rectangular Bandwidth) smoothing
  *
- * Based on REW (Room EQ Wizard) smoothing implementation using
- * multiple forward/backward passes of first-order IIR filters to
- * implement a Gaussian smoothing kernel.
+ * Each kernel applies direct Gaussian weighting over its documented
+ * frequency window.
  */
 
 function finiteValue(value) {
@@ -58,8 +57,6 @@ export function fractionalOctaveSmoothing(frequencies, values, fractionOctave) {
   }
 
   const n = frequencies.length;
-  if (n < 3) return values.slice();
-
   const smoothed = new Array(n);
 
   // Half-bandwidth in log2 space for the fractional octave
@@ -108,7 +105,7 @@ export function fractionalOctaveSmoothing(frequencies, values, fractionOctave) {
  * Uses:
  * - 1/48 octave below 100 Hz
  * - Varies from 1/48 to 1/3 octave between 100 Hz and 10 kHz
- * - Reaches 1/6 octave at 1 kHz
+ * - Reaches 1/12 octave at 1 kHz
  * - 1/3 octave above 10 kHz
  *
  * Recommended for responses to be equalized.
@@ -274,37 +271,35 @@ export function erbSmoothing(frequencies, values) {
   const n = frequencies.length;
   const smoothed = new Array(n);
 
-  // Pre-compute log2 frequencies
-  const logFreqs = new Float64Array(n);
+  // Pre-compute positive numeric frequencies
+  const numericFrequencies = new Float64Array(n);
   for (let i = 0; i < n; i++) {
-    logFreqs[i] = log2Frequency(frequencies[i]);
+    const frequency = Number(frequencies[i]);
+    numericFrequencies[i] = Number.isFinite(frequency) && frequency > 0 ? frequency : Number.NaN;
   }
 
   for (let i = 0; i < n; i++) {
-    const fc = frequencies[i];
-    const logFc = logFreqs[i];
-    if (!Number.isFinite(logFc)) {
+    const fc = numericFrequencies[i];
+    if (!Number.isFinite(fc)) {
       smoothed[i] = values[i];
       continue;
     }
 
     // ERB bandwidth: 107.77 * f_kHz + 24.673 Hz
     const erbHz = 107.77 * (fc / 1000) + 24.673;
-
-    // Convert ERB bandwidth to log2 space (clamp lower bound above 0)
-    const logF1 = Math.log2(Math.max(1, fc - erbHz / 2));
-    const logF2 = Math.log2(fc + erbHz / 2);
-    const logHalfBW = (logF2 - logF1) / 2;
-    const logSigma = logHalfBW / 2;
-    const twoSigmaSq = 2 * logSigma * logSigma;
+    const halfBW = erbHz / 2;
+    const sigma = erbHz / 4;
+    const twoSigmaSq = 2 * sigma * sigma;
+    const frequencyLow = fc - halfBW;
+    const frequencyHigh = fc + halfBW;
 
     const acc = { weightedSum: 0, weightSum: 0 };
 
     for (let j = 0; j < n; j++) {
-      const logF = logFreqs[j];
+      const frequency = numericFrequencies[j];
 
-      if (Number.isFinite(logF) && logF >= logFc - logHalfBW && logF <= logFc + logHalfBW) {
-        const distance = logF - logFc;
+      if (Number.isFinite(frequency) && frequency >= frequencyLow && frequency <= frequencyHigh) {
+        const distance = frequency - fc;
         const weight = Math.exp(-(distance * distance) / twoSigmaSq);
 
         addWeightedSample(acc, values[j], weight);
