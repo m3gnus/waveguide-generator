@@ -91,6 +91,22 @@ test('crease detachment splits hard edges without relying on group metadata', ()
   );
 });
 
+test('crease detachment preserves smooth edges after neighboring vertices split', () => {
+  const mesh = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 1],
+    indices: [0, 1, 4, 0, 2, 1, 0, 3, 2, 2, 3, 5],
+    groups: {},
+  };
+
+  const detached = detachCreaseVertices(mesh, 30);
+  const firstSmoothTriangle = detached.indices.slice(3, 6);
+  const secondSmoothTriangle = detached.indices.slice(6, 9);
+
+  assert.equal(detached.vertices.length / 3, 10);
+  assert.equal(firstSmoothTriangle[0], secondSmoothTriangle[0]);
+  assert.equal(firstSmoothTriangle[1], secondSmoothTriangle[2]);
+});
+
 test('horn ring assembly reuses mouth profiles across axial slices', () => {
   let fixedEvaluations = 0;
   const fixedRingCount = 8;
