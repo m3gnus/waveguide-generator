@@ -40,17 +40,47 @@ export function parseMSH(text) {
     return false;
   };
 
+  const parseCount = (line, label) => {
+    if (!/^\d+$/.test(line || '')) {
+      throw new Error(`Invalid ${label}: ${line}`);
+    }
+    const count = Number(line);
+    if (!Number.isSafeInteger(count)) {
+      throw new Error(`Invalid ${label}: ${line}`);
+    }
+    return count;
+  };
+
+  const parseInteger = (value, label, minimum = 0) => {
+    if (!/^[+-]?\d+$/.test(value || '')) {
+      throw new Error(`Invalid ${label}: ${value}`);
+    }
+    const result = Number(value);
+    if (!Number.isSafeInteger(result) || result < minimum) {
+      throw new Error(`Invalid ${label}: ${value}`);
+    }
+    return result;
+  };
+
+  const expectEnd = (marker) => {
+    if (nextLine() !== marker) {
+      throw new Error(`Missing ${marker}`);
+    }
+  };
+
   // --- $MeshFormat ---
   if (!advanceTo('$MeshFormat')) {
     throw new Error('Missing $MeshFormat section');
   }
   const formatLine = nextLine();
-  if (!formatLine || !formatLine.startsWith('2.2')) {
+  const formatParts = formatLine ? formatLine.split(/\s+/) : [];
+  if (formatParts[0] !== '2.2') {
     throw new Error(`Unsupported or missing mesh format version: ${formatLine}`);
   }
-  if (!advanceTo('$EndMeshFormat')) {
-    throw new Error('Missing $EndMeshFormat');
+  if (formatParts[1] !== '0') {
+    throw new Error('Only ASCII Gmsh 2.2 meshes are supported');
   }
+  expectEnd('$EndMeshFormat');
   perf.mark('mesh-format');
 
   // --- $PhysicalNames (optional) ---
@@ -58,19 +88,17 @@ export function parseMSH(text) {
   const savedCursor = cursor;
   if (advanceTo('$PhysicalNames')) {
     const countLine = nextLine();
-    const count = parseInt(countLine, 10);
+    const count = parseCount(countLine, 'physical name count');
     for (let i = 0; i < count; i++) {
       const pline = nextLine();
       if (!pline) throw new Error('Unexpected end in $PhysicalNames');
       // format: <dim> <id> "<name>"
       const match = pline.match(/^\s*(\d+)\s+(\d+)\s+"([^"]*)"\s*$/);
-      if (match) {
-        physicalNames.set(parseInt(match[2], 10), match[3]);
+      if (match && match[1] === '2') {
+        physicalNames.set(Number(match[2]), match[3]);
       }
     }
-    if (!advanceTo('$EndPhysicalNames')) {
-      throw new Error('Missing $EndPhysicalNames');
-    }
+    expectEnd('$EndPhysicalNames');
   } else {
     // Rewind if $PhysicalNames not found — it's optional
     cursor = savedCursor;
@@ -82,10 +110,7 @@ export function parseMSH(text) {
     throw new Error('Missing $Nodes section');
   }
   const nodeCountLine = nextLine();
-  const nodeCount = parseInt(nodeCountLine, 10);
-  if (!Number.isFinite(nodeCount) || nodeCount < 0) {
-    throw new Error(`Invalid node count: ${nodeCountLine}`);
-  }
+  const nodeCount = parseCount(nodeCountLine, 'node count');
 
   const vertices = new Float32Array(nodeCount * 3);
   const idToIndex = new Map();
@@ -94,19 +119,25 @@ export function parseMSH(text) {
     const nline = nextLine();
     if (!nline) throw new Error('Unexpected end in $Nodes');
     const parts = nline.split(/\s+/);
-    const id = parseInt(parts[0], 10);
-    const x = parseFloat(parts[1]);
-    const y = parseFloat(parts[2]);
-    const z = parseFloat(parts[3]);
+    const id = parseInteger(parts[0], 'node id', 1);
+    if (idToIndex.has(id)) {
+      throw new Error(`Duplicate node id: ${id}`);
+    }
+    const coordinates = parts.slice(1, 4).map(Number);
+    if (
+      coordinates.length !== 3 ||
+      coordinates.some((coordinate) => !Number.isFinite(coordinate))
+    ) {
+      throw new Error(`Invalid node coordinates for node ${id}`);
+    }
+    const [x, y, z] = coordinates;
     vertices[i * 3] = x;
     vertices[i * 3 + 1] = y;
     vertices[i * 3 + 2] = z;
     idToIndex.set(id, i);
     if (id > maxNodeId) maxNodeId = id;
   }
-  if (!advanceTo('$EndNodes')) {
-    throw new Error('Missing $EndNodes');
-  }
+  expectEnd('$EndNodes');
   perf.mark('nodes-read', { nodeCount, maxNodeId });
   perf.mark('vertices-built', { vertexCount: nodeCount });
 
@@ -115,10 +146,7 @@ export function parseMSH(text) {
     throw new Error('Missing $Elements section');
   }
   const elemCountLine = nextLine();
-  const elemCount = parseInt(elemCountLine, 10);
-  if (!Number.isFinite(elemCount) || elemCount < 0) {
-    throw new Error(`Invalid element count: ${elemCountLine}`);
-  }
+  const elemCount = parseCount(elemCountLine, 'element count');
 
   const triIndices = new Uint32Array(elemCount * 3);
   const triTags = new Uint32Array(elemCount);
@@ -129,28 +157,41 @@ export function parseMSH(text) {
     if (!eline) throw new Error('Unexpected end in $Elements');
     const parts = eline.split(/\s+/);
     // parts: [id, type, num-tags, tag1, tag2, ..., n1, n2, n3]
-    const elemType = parseInt(parts[1], 10);
+    const elementId = parseInteger(parts[0], 'element id', 1);
+    const elemType = parseInteger(parts[1], `element type for element ${elementId}`, 1);
+    const numTags = parseInteger(parts[2], `tag count for element ${elementId}`);
+    if (parts.length < 3 + numTags) {
+      throw new Error(`Invalid tag data for element ${elementId}`);
+    }
     if (elemType !== 2) continue; // skip non-triangle elements
 
-    const numTags = parseInt(parts[2], 10);
-    const physicalTag = numTags > 0 ? parseInt(parts[3], 10) : 0;
+    const physicalTag =
+      numTags > 0 ? parseInteger(parts[3], `physical tag for element ${elementId}`) : 0;
     const nodeOffset = 3 + numTags;
-    const n1 = parseInt(parts[nodeOffset], 10);
-    const n2 = parseInt(parts[nodeOffset + 1], 10);
-    const n3 = parseInt(parts[nodeOffset + 2], 10);
+    const nodeIds = parts
+      .slice(nodeOffset, nodeOffset + 3)
+      .map((value) => parseInteger(value, `node id for element ${elementId}`, 1));
+    if (nodeIds.length !== 3) {
+      throw new Error(`Missing node ids for triangle element ${elementId}`);
+    }
+    const nodeIndices = nodeIds.map((nodeId) => {
+      const nodeIndex = idToIndex.get(nodeId);
+      if (nodeIndex === undefined) {
+        throw new Error(`Unknown node id ${nodeId} in triangle element ${elementId}`);
+      }
+      return nodeIndex;
+    });
 
     const triOffset = triCount * 3;
-    triIndices[triOffset] = idToIndex.get(n1);
-    triIndices[triOffset + 1] = idToIndex.get(n2);
-    triIndices[triOffset + 2] = idToIndex.get(n3);
+    triIndices[triOffset] = nodeIndices[0];
+    triIndices[triOffset + 1] = nodeIndices[1];
+    triIndices[triOffset + 2] = nodeIndices[2];
     triTags[triCount] = physicalTag;
     triCount++;
   }
   perf.mark('elements-read', { elementCount: elemCount, triangleCount: triCount });
 
-  if (!advanceTo('$EndElements')) {
-    throw new Error('Missing $EndElements');
-  }
+  expectEnd('$EndElements');
 
   const result = {
     vertices,
