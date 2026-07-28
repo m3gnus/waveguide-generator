@@ -11,15 +11,15 @@
 
 **UI coordination files**:
 - `src/ui/simulation/controller.js` — job lifecycle and UI polling
-- `src/ui/simulation/workspaceTasks.js` — folder workspace task management
-- `src/ui/workspace/taskManifest.js` — folder-backed task persistence
+- `src/ui/simulation/workspaceTasks.js` — backend workspace manifest and artifact writes
+- `src/ui/workspace/taskManifest.js` — generation manifest construction
 
 ## Core Responsibilities
 
 - **Payload preparation**: Build canonical simulation payloads and HornLab mesher submit options
 - **Job submission**: Route jobs to backend `/api/solve` with correct request shape
 - **Result handling**: Poll backend, fetch results, extract runtime metadata (performance, observation/directivity settings, failures)
-- **History management**: Track backend jobs and folder-workspace task manifests
+- **History management**: Track backend jobs and cache fetched results
 - **Metadata persistence**: Save task ratings, export status, auto-export markers, and script snapshots
 
 ## Runtime Contract
@@ -37,13 +37,13 @@
 - Backend solve metadata includes `metadata.observation` and `metadata.directivity` for effective observation distance and persisted directivity-map settings
 - View Results re-renders the directivity heatmap through `/api/render-directivity` for display-only reference-level changes without requesting a new solve
 
-**History & source selection**:
+**History & workspace**:
 - Backend jobs and local cache provide task history; workspace manifests persist export metadata and generation artifacts.
 - Completed-task bundles write through the backend workspace root to `<workspace>/<jobLabel>/`.
 - If a backend workspace write fails, the app falls back to browser download/save.
 
 **Task metadata persistence**:
-- Ratings: stored locally and in folder task manifests when workspace active
+- Ratings: mirrored to backend job metadata and workspace manifests
 - Exports: tracked via `exportedFiles` list and `autoExportCompletedAt` timestamp
 - Script snapshots: stored with task manifest and mirrored to deterministic generation artifact `script.snapshot.mwg`
 - Completion artifacts: first completion pass persists deterministic runtime snapshots in generation folder:

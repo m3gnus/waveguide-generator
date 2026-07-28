@@ -11,7 +11,6 @@ import {
 import { renderJobList } from './jobActions.js';
 import { updateTaskListPreferences } from '../settings/simulationManagementSettings.js';
 import { openAutoExportPopup } from './autoExportPopup.js';
-import { openWorkspaceInFinder } from '../workspace/folderWorkspace.js';
 
 export function setupEventListeners(panel) {
   // Auto Export button
@@ -129,11 +128,6 @@ export function setupEventListeners(panel) {
 
       if (action === 'remove') {
         await removeJobFromFeed(panel, jobId);
-      }
-
-      if (action === 'open-folder') {
-        const job = panel.jobs?.get(jobId);
-        await openWorkspaceInFinder({ job });
       }
     });
   }

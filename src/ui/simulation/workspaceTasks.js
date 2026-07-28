@@ -47,21 +47,6 @@ export async function syncSimulationWorkspaceJobManifest(job, updates = null) {
   return result.manifest;
 }
 
-export async function writeSimulationTaskBundleFile(
-  _job,
-  file,
-  { fallbackWrite = null, dirName: _dirName = null, subDir: _subDir = null } = {}
-) {
-  if (typeof fallbackWrite === 'function') {
-    await fallbackWrite(file);
-  }
-
-  return {
-    fileName: file.fileName,
-    wroteToTaskFolder: false,
-  };
-}
-
 async function writeGenerationArtifact({
   fileName,
   content,

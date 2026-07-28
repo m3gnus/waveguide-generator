@@ -32,8 +32,6 @@ test('createSimulationControllerStore initializes expected controller state', ()
   assert.equal(controller.pollDelayMs, 1000);
   assert.equal(controller.pollBackoffMs, 1000);
   assert.equal(controller.isPolling, false);
-  assert.equal(controller.jobSourceMode, 'backend');
-  assert.equal(controller.jobSourceLabel, 'Backend Jobs');
   assert.ok(controller.jobs instanceof Map);
   assert.ok(controller.resultCache instanceof Map);
   assert.equal(Array.isArray(controller.simulationParamBindings), true);
@@ -57,7 +55,7 @@ test('bindSimulationControllerState creates live field proxies on panel adapter'
   assert.equal(panelAdapter.pollDelayMs, 2500);
 });
 
-test('restoreSimulationControllerJobs initializes with backend source mode', async () => {
+test('restoreSimulationControllerJobs initializes an empty backend job list', async () => {
   const controller = createSimulationControllerStore({ solver: {} });
 
   let jobsUpdatedCalls = 0;
@@ -69,7 +67,6 @@ test('restoreSimulationControllerJobs initializes with backend source mode', asy
   });
 
   assert.equal(controller.jobs.size, 0);
-  assert.equal(controller.jobSourceMode, 'backend');
   assert.equal(jobsUpdatedCalls >= 1, true);
 });
 
@@ -78,13 +75,12 @@ test('restoreSimulationControllerJobs returns empty jobs with no stale localStor
 
   await restoreSimulationControllerJobs(controller);
 
-  // Workspace always returns empty (backend-only); no stale localStorage items loaded
+  // Backend-only history does not load stale localStorage items.
   assert.equal(controller.jobs.has('job-stale-complete'), false);
   assert.equal(controller.jobs.size, 0);
-  assert.equal(controller.jobSourceMode, 'backend');
 });
 
-test('restoreSimulationControllerJobs sets backend source mode and calls solver listJobs when available', async () => {
+test('restoreSimulationControllerJobs calls solver listJobs when available', async () => {
   let listJobsCalls = 0;
   const controller = createSimulationControllerStore({
     solver: {
@@ -108,10 +104,7 @@ test('restoreSimulationControllerJobs sets backend source mode and calls solver 
 
   await restoreSimulationControllerJobs(controller);
 
-  // Restore now calls solver.listJobs to restore jobs from the backend database
   assert.equal(listJobsCalls, 1);
-  assert.equal(controller.jobSourceMode, 'backend');
-  assert.equal(controller.jobSourceLabel, 'Backend Jobs');
   assert.deepEqual(Array.from(controller.jobs.keys()), ['job-backend-1']);
   assert.equal(controller.jobs.get('job-backend-1')?.rating, 4);
   assert.deepEqual(controller.jobs.get('job-backend-1')?.exportedFiles, ['csv:results.csv']);
@@ -141,7 +134,6 @@ test('restoreSimulationControllerJobs paginates through all backend jobs', async
   assert.deepEqual(offsets, [0, 200, 400]);
   assert.equal(controller.jobs.size, 450);
   assert.equal(controller.jobs.has('job-449'), true);
-  assert.equal(controller.jobSourceMode, 'backend');
 });
 
 test('createSimulationPanelRuntime binds a controller store and injected ui coordinator', () => {
@@ -186,9 +178,7 @@ test('restoreSimulationPanelRuntime delegates to controller restore using runtim
 
   await restoreSimulationPanelRuntime(runtime);
 
-  // Backend-only mode stays the active source when workspace manifests are unavailable.
   assert.equal(runtime.controller.jobs.size, 0);
-  assert.equal(runtime.controller.jobSourceMode, 'backend');
 });
 
 test('disposeSimulationPanelRuntime clears timers and disposes ui coordinator', () => {
