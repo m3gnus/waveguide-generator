@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { detachCreaseVertices } from '../src/app/viewportMesh.js';
+import {
+  createAdaptiveRingVertices,
+  createRingVertices,
+} from '../src/geometry/engine/mesh/horn.js';
 import { prepareViewportMesh, validateViewportMesh } from '../src/modules/geometry/useCases.js';
 
 function makeState(overrides = {}) {
@@ -85,4 +89,62 @@ test('crease detachment splits hard edges without relying on group metadata', ()
     [detached.indices[3], detached.indices[5]],
     'the shared edge vertices should be duplicated across the hard crease'
   );
+});
+
+test('horn ring assembly reuses mouth profiles across axial slices', () => {
+  let fixedEvaluations = 0;
+  const fixedRingCount = 8;
+  const fixedLengthSteps = 5;
+  const fixedParams = {
+    ...getDefaults('R-OSSE'),
+    type: 'R-OSSE',
+    morphTarget: 0,
+    tmax: () => {
+      fixedEvaluations += 1;
+      return 1;
+    },
+  };
+  const fixedAngles = Array.from(
+    { length: fixedRingCount },
+    (_, index) => (index / fixedRingCount) * Math.PI * 2
+  );
+
+  const fixedVertices = createRingVertices(
+    fixedParams,
+    null,
+    fixedAngles,
+    null,
+    fixedRingCount,
+    fixedLengthSteps,
+    null
+  );
+
+  assert.equal(fixedVertices.length, (fixedLengthSteps + 1) * fixedRingCount * 3);
+  // R-OSSE reads tmax once while validating and once while evaluating each
+  // profile. There is one profile per vertex plus one cached mouth profile per angle.
+  assert.equal(fixedEvaluations, (fixedLengthSteps + 2) * fixedRingCount * 2);
+
+  let adaptiveEvaluations = 0;
+  const adaptiveCounts = [8, 8, 12, 12, 12, 12];
+  const adaptiveParams = {
+    ...fixedParams,
+    tmax: () => {
+      adaptiveEvaluations += 1;
+      return 1;
+    },
+  };
+
+  const adaptiveVertices = createAdaptiveRingVertices(
+    adaptiveParams,
+    null,
+    null,
+    adaptiveCounts,
+    adaptiveCounts.length - 1,
+    null
+  );
+
+  const adaptiveVertexCount = adaptiveCounts.reduce((sum, count) => sum + count, 0);
+  const uniqueMouthSamples = 8 + 12;
+  assert.equal(adaptiveVertices.length, adaptiveVertexCount * 3);
+  assert.equal(adaptiveEvaluations, (adaptiveVertexCount + uniqueMouthSamples) * 2);
 });

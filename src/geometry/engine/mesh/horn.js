@@ -174,22 +174,41 @@ export function createRingVertices(
   lengthSteps,
   context
 ) {
-  const vertices = [];
+  const vertices = new Array((lengthSteps + 1) * ringCount * 3);
+  const cosines = new Float64Array(ringCount);
+  const sines = new Float64Array(ringCount);
+  const mouthRadii = new Float64Array(ringCount);
+  const mouthRadiusReady = new Uint8Array(ringCount);
+  let vertexOffset = 0;
+
+  for (let i = 0; i < ringCount; i += 1) {
+    cosines[i] = Math.cos(angleList[i]);
+    sines[i] = Math.sin(angleList[i]);
+  }
 
   for (let j = 0; j <= lengthSteps; j += 1) {
     const t = sliceMap ? sliceMap[j] : j / lengthSteps;
+    const morphTargetInfo = morphTargets?.[j] || null;
+    const morphT = resolveMorphProgress(t);
 
     for (let i = 0; i < ringCount; i += 1) {
       const p = angleList[i];
       const profile = evaluateInnerProfileAt(t, p, params, context);
-      const mouthProfile =
-        j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
+      let mouthRadius = profile.y;
+      if (j !== lengthSteps) {
+        if (mouthRadiusReady[i] === 0) {
+          mouthRadii[i] = evaluateInnerProfileAt(1, p, params, context).y;
+          mouthRadiusReady[i] = 1;
+        }
+        mouthRadius = mouthRadii[i];
+      }
 
-      const morphTargetInfo = morphTargets?.[j] || null;
-      const morphT = resolveMorphProgress(t);
-      const r = applyMorphing(profile.y, mouthProfile.y, morphT, p, params, morphTargetInfo);
+      const r = applyMorphing(profile.y, mouthRadius, morphT, p, params, morphTargetInfo);
 
-      vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
+      vertices[vertexOffset] = r * cosines[i];
+      vertices[vertexOffset + 1] = profile.x;
+      vertices[vertexOffset + 2] = r * sines[i];
+      vertexOffset += 3;
     }
   }
 
@@ -304,23 +323,59 @@ export function createAdaptiveRingVertices(
   lengthSteps,
   context
 ) {
-  const vertices = [];
+  let vertexCount = 0;
+  for (let j = 0; j <= lengthSteps; j += 1) {
+    vertexCount += phiCounts[j];
+  }
+  const vertices = new Array(vertexCount * 3);
+  const samplingByCount = new Map();
+  let vertexOffset = 0;
 
   for (let j = 0; j <= lengthSteps; j += 1) {
     const t = sliceMap ? sliceMap[j] : j / lengthSteps;
     const N = phiCounts[j];
+    const morphTargetInfo = morphTargets?.[j] || null;
+    const morphT = resolveMorphProgress(t);
+
+    let sampling = samplingByCount.get(N);
+    if (!sampling) {
+      const angles = new Float64Array(N);
+      const cosines = new Float64Array(N);
+      const sines = new Float64Array(N);
+      for (let i = 0; i < N; i += 1) {
+        const p = (i / N) * Math.PI * 2;
+        angles[i] = p;
+        cosines[i] = Math.cos(p);
+        sines[i] = Math.sin(p);
+      }
+      sampling = {
+        angles,
+        cosines,
+        sines,
+        mouthRadii: new Float64Array(N),
+        mouthRadiusReady: new Uint8Array(N),
+      };
+      samplingByCount.set(N, sampling);
+    }
 
     for (let i = 0; i < N; i += 1) {
-      const p = (i / N) * Math.PI * 2;
+      const p = sampling.angles[i];
       const profile = evaluateInnerProfileAt(t, p, params, context);
-      const mouthProfile =
-        j === lengthSteps ? profile : evaluateInnerProfileAt(1, p, params, context);
+      let mouthRadius = profile.y;
+      if (j !== lengthSteps) {
+        if (sampling.mouthRadiusReady[i] === 0) {
+          sampling.mouthRadii[i] = evaluateInnerProfileAt(1, p, params, context).y;
+          sampling.mouthRadiusReady[i] = 1;
+        }
+        mouthRadius = sampling.mouthRadii[i];
+      }
 
-      const morphTargetInfo = morphTargets?.[j] || null;
-      const morphT = resolveMorphProgress(t);
-      const r = applyMorphing(profile.y, mouthProfile.y, morphT, p, params, morphTargetInfo);
+      const r = applyMorphing(profile.y, mouthRadius, morphT, p, params, morphTargetInfo);
 
-      vertices.push(r * Math.cos(p), profile.x, r * Math.sin(p));
+      vertices[vertexOffset] = r * sampling.cosines[i];
+      vertices[vertexOffset + 1] = profile.x;
+      vertices[vertexOffset + 2] = r * sampling.sines[i];
+      vertexOffset += 3;
     }
   }
 
