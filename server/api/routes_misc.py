@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
 
 from contracts import ChartsRenderRequest, DirectivityRenderRequest
 from services.runtime_preflight import collect_runtime_doctor_report
@@ -77,10 +76,6 @@ def _render_cache_put(key: str, value: Any) -> None:
 def _render_with_matplotlib_lock(render_function: Any, *args: Any, **kwargs: Any) -> Any:
     with _MATPLOTLIB_RENDER_LOCK:
         return render_function(*args, **kwargs)
-
-
-def _coerce_form_string(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
 
 
 @router.get("/")
@@ -262,7 +257,6 @@ async def render_directivity(request: DirectivityRenderRequest) -> Dict[str, str
 async def export_file(
     file: UploadFile = File(...),
     workspace_subdir: str = Form(""),
-    folder_path: Optional[str] = Form(None),
 ) -> Dict[str, str]:
     """
     Save an exported file to the backend-managed workspace root.
@@ -270,10 +264,7 @@ async def export_file(
     """
     workspace_root = _get_default_output_path()
 
-    # Backward-compatible alias while frontend migrates fully.
-    requested_subdir = _coerce_form_string(workspace_subdir)
-    if not requested_subdir:
-        requested_subdir = _coerce_form_string(folder_path)
+    requested_subdir = workspace_subdir.strip()
 
     if requested_subdir.startswith("/") or requested_subdir.startswith("\\"):
         raise HTTPException(status_code=400, detail="workspace_subdir must be relative to workspace root")
@@ -360,7 +351,7 @@ def _load_workspace_path_preference() -> None:
         logger.warning("Persisted workspace path is unavailable: %s", resolved)
 
 
-def _persist_workspace_path_preference(path: Optional[Path]) -> None:
+def _persist_workspace_path_preference(path: Path) -> None:
     """Persist the selected output folder so backend restarts keep the same workspace."""
     try:
         _WORKSPACE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -368,7 +359,7 @@ def _persist_workspace_path_preference(path: Optional[Path]) -> None:
             json.dump(
                 {
                     "schemaVersion": 1,
-                    "workspacePath": str(path) if path is not None else None,
+                    "workspacePath": str(path),
                 },
                 f,
                 indent=2,
@@ -378,7 +369,7 @@ def _persist_workspace_path_preference(path: Optional[Path]) -> None:
         logger.warning("Could not persist workspace settings: %s", exc)
 
 
-def _set_custom_workspace_path(path: Optional[Path]) -> None:
+def _set_custom_workspace_path(path: Path) -> None:
     global _custom_workspace_path, _workspace_path_loaded
     _workspace_path_loaded = True
     _custom_workspace_path = path
@@ -396,38 +387,11 @@ def _get_default_output_path() -> Path:
     return output_path
 
 
-@router.post("/api/workspace/reset")
-async def workspace_reset() -> Dict[str, Any]:
-    """Reset the workspace path back to the default."""
-    _set_custom_workspace_path(None)
-    default_path = _get_default_output_path()
-    logger.info("Workspace path reset to default: %s", default_path)
-    return {"path": str(default_path), "custom": False}
-
-
 @router.get("/api/workspace/path")
 async def workspace_path() -> Dict[str, str]:
     """Return the absolute path of the current output folder."""
     output_path = _get_default_output_path()
     return {"path": str(output_path)}
-
-
-@router.post("/api/workspace/path")
-async def set_workspace_path(path: str = Form(...)) -> Dict[str, str]:
-    """Set a custom output folder path."""
-    raw = path.strip()
-    if not raw:
-        _set_custom_workspace_path(None)
-        logger.info("Workspace path reset to default: %s", _REPO_OUTPUT_PATH)
-        return {"path": str(_REPO_OUTPUT_PATH), "custom": False}
-
-    resolved = Path(raw).expanduser().resolve()
-    if not resolved.is_dir():
-        raise HTTPException(status_code=400, detail=f"Directory does not exist: {resolved}")
-
-    _set_custom_workspace_path(resolved)
-    logger.info("Workspace path set to: %s", resolved)
-    return {"path": str(resolved), "custom": True}
 
 
 def _select_workspace_folder() -> Optional[str]:
@@ -515,29 +479,16 @@ async def workspace_select() -> Dict[str, Any]:
     return {"selected": True, "path": str(resolved)}
 
 
-class _WorkspaceOpenRequest(BaseModel):
-    subdir: Optional[str] = None
-
-
 @router.post("/api/workspace/open")
-async def workspace_open(body: _WorkspaceOpenRequest = _WorkspaceOpenRequest()) -> Dict[str, str]:
-    """Open the output folder (or a task subfolder) in the OS file manager."""
+async def workspace_open() -> Dict[str, str]:
+    """Open the output folder in the OS file manager."""
     output_path = _get_default_output_path()
-
-    # If a task subfolder was requested, resolve it safely within the workspace
-    if body.subdir:
-        safe_name = Path(body.subdir).name  # prevent path traversal
-        if safe_name:
-            output_path = output_path / safe_name
 
     # Ensure the folder exists so the file manager can open it
     try:
         output_path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Cannot create output folder: {exc}") from exc
-
-    if not output_path.exists():
-        raise HTTPException(status_code=404, detail=f"Output folder not found: {output_path}")
 
     system = platform.system()
     try:
