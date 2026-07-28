@@ -146,33 +146,18 @@ export function deriveExportFieldsFromFileName(fileName, options = {}) {
 
   const stem = rawName.replace(/\.[^./\\]+$/, '').trim();
   const normalizedStem = normalizeOutputName(stem, fallbackOutputName);
-  const suffixMatch = normalizedStem.match(/^(.*)_([0-9]+)$/);
+  const counterMatch = normalizedStem.match(/^(.*?)_?([0-9]+)$/);
 
-  if (!suffixMatch) {
-    const trailingDigitsMatch = normalizedStem.match(/^(.*?)([0-9]+)$/);
-    if (!trailingDigitsMatch) {
-      return { outputName: normalizedStem, counter: fallbackCounter };
-    }
-
-    const parsedCounter = Number(trailingDigitsMatch[2]);
-    if (!Number.isInteger(parsedCounter) || parsedCounter < 1) {
-      return { outputName: normalizedStem, counter: fallbackCounter };
-    }
-
-    const parsedOutputName = trailingDigitsMatch[1].trim();
-    if (!parsedOutputName) {
-      return { outputName: normalizedStem, counter: fallbackCounter };
-    }
-
-    return { outputName: parsedOutputName, counter: parsedCounter };
+  if (!counterMatch) {
+    return { outputName: normalizedStem, counter: fallbackCounter };
   }
 
-  const parsedCounter = Number(suffixMatch[2]);
+  const parsedCounter = Number(counterMatch[2]);
   if (!Number.isInteger(parsedCounter) || parsedCounter < 1) {
     return { outputName: normalizedStem, counter: fallbackCounter };
   }
 
-  const parsedOutputName = suffixMatch[1].trim();
+  const parsedOutputName = counterMatch[1].trim();
   if (!parsedOutputName) {
     return { outputName: normalizedStem, counter: fallbackCounter };
   }
@@ -257,14 +242,10 @@ export function resetParameterChangeTracking({ skipNext = false } = {}) {
   skipNextParameterChange = Boolean(skipNext);
 }
 
-function shouldIncrementCounter(options = {}) {
-  if (options.incrementCounter === false) return false;
-  return hasPendingParameterChanges;
-}
-
 function finalizeExportCounter(options = {}) {
-  if (!shouldIncrementCounter(options)) return;
-  hasPendingParameterChanges = false;
+  if (options.incrementCounter !== false) {
+    hasPendingParameterChanges = false;
+  }
 }
 
 function showWorkspaceSaveSuccess(fileName, result) {
