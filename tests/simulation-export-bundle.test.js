@@ -112,6 +112,74 @@ test('exportResults preserves zero-valued result cells in CSV bundle files', asy
   }
 });
 
+test('exportResults prepares smoothed result series once for a multi-format bundle', async () => {
+  const originalFetch = global.fetch;
+  let splReads = 0;
+
+  const results = {
+    get spl_on_axis() {
+      splReads += 1;
+      return {
+        frequencies: [100, 200, 400],
+        spl: [90, 92, 91],
+        phase_degrees: [10, 20, 30],
+      };
+    },
+    di: { frequencies: [100, 200, 400], di: [6, 8, 7] },
+    impedance: {
+      frequencies: [100, 200, 400],
+      real: [1, 1.2, 1.1],
+      imaginary: [0.1, 0.2, 0.15],
+    },
+    directivity: {},
+  };
+
+  global.fetch = async (url) => {
+    if (String(url).endsWith('/api/render-charts')) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            charts: {
+              frequency_response: 'data:image/png;base64,AA==',
+            },
+          };
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  try {
+    const bundle = await exportResults(
+      {
+        currentSmoothing: '1/3',
+        lastResults: results,
+      },
+      {
+        job: {
+          id: 'job-smoothed-bundle',
+          label: 'horn_smoothed',
+          createdAt: '2026-03-11T10:00:00.000Z',
+        },
+        selectedFormats: ['png', 'csv', 'txt'],
+      }
+    );
+
+    assert.deepEqual(bundle.failures, []);
+    assert.equal(splReads, 1);
+  } finally {
+    global.fetch = originalFetch;
+    resetSelectedFolder();
+  }
+});
+
 test('exportResults labels and normalizes legacy impedance values in text exports', async () => {
   const originalFetch = global.fetch;
 
@@ -238,10 +306,7 @@ test('exportResults does not renormalize backend Z over rho c impedance metadata
     assert.equal(fetchCalls.length, 1);
     const file = fetchCalls[0].options.body.get('file');
     const impedanceCsv = await file.text();
-    assert.equal(
-      impedanceCsv.trim(),
-      'Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c\n100,32,-4'
-    );
+    assert.equal(impedanceCsv.trim(), 'Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c\n100,32,-4');
   } finally {
     global.fetch = originalFetch;
     resetSelectedFolder();
