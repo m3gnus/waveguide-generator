@@ -90,6 +90,36 @@ export async function parseApiErrorResponse(response, { operation = 'Request' } 
   });
 }
 
+export async function parseApiJsonResponse(
+  response,
+  { operation = 'Request', validate = null } = {}
+) {
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw createApiError({
+      operation,
+      status: response.status,
+      category: 'unexpected',
+      detail: 'Backend returned invalid JSON.',
+      cause,
+    });
+  }
+
+  const detail = typeof validate === 'function' ? validate(payload) : '';
+  if (detail) {
+    throw createApiError({
+      operation,
+      status: response.status,
+      category: 'unexpected',
+      detail,
+    });
+  }
+
+  return payload;
+}
+
 export function createNetworkApiError(operation, cause) {
   const message =
     cause?.name === 'AbortError'
