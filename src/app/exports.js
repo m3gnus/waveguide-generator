@@ -5,17 +5,8 @@ import { GlobalState } from '../state.js';
 import { showError } from '../ui/feedback.js';
 import { getExportBaseName, saveFile } from '../ui/fileOps.js';
 
-let exportUseCasesPromise = null;
-
 function loadExportUseCases() {
-  if (!exportUseCasesPromise) {
-    exportUseCasesPromise = import('../modules/export/useCases.js');
-  }
-  return exportUseCasesPromise;
-}
-
-function readExportState() {
-  return GlobalState.get();
+  return import('../modules/export/useCases.js');
 }
 
 function createBrowserExportWriter(baseName) {
@@ -29,15 +20,11 @@ function createBrowserExportWriter(baseName) {
   };
 }
 
-function readExportBaseName() {
-  return getExportBaseName();
-}
-
 export async function exportStlFromApp() {
   const { exportSTL } = await loadExportUseCases();
-  const baseName = readExportBaseName();
+  const baseName = getExportBaseName();
   return exportSTL({
-    state: readExportState(),
+    state: GlobalState.get(),
     baseName,
     writeFile: createBrowserExportWriter(baseName),
   });
@@ -45,9 +32,9 @@ export async function exportStlFromApp() {
 
 export async function exportStepFromApp() {
   const { exportSTEP } = await loadExportUseCases();
-  const baseName = readExportBaseName();
+  const baseName = getExportBaseName();
   return exportSTEP({
-    state: readExportState(),
+    state: GlobalState.get(),
     baseName,
     backendUrl: DEFAULT_BACKEND_URL,
     writeFile: createBrowserExportWriter(baseName),
@@ -56,9 +43,9 @@ export async function exportStepFromApp() {
 
 export async function exportMwgConfigFromApp() {
   const { exportMWGConfig } = await loadExportUseCases();
-  const baseName = readExportBaseName();
+  const baseName = getExportBaseName();
   return exportMWGConfig({
-    state: readExportState(),
+    state: GlobalState.get(),
     baseName,
     writeFile: createBrowserExportWriter(baseName),
   });
@@ -66,9 +53,9 @@ export async function exportMwgConfigFromApp() {
 
 export async function exportProfileCsvFromApp(vertices) {
   const { exportProfileCSV } = await loadExportUseCases();
-  const baseName = readExportBaseName();
+  const baseName = getExportBaseName();
   return exportProfileCSV(vertices, {
-    state: readExportState(),
+    state: GlobalState.get(),
     baseName,
     writeFile: createBrowserExportWriter(baseName),
     onMissingMesh: showError,
