@@ -1140,49 +1140,10 @@ test('renderJobList no-ops when document has no getElementById', () => {
   try {
     assert.doesNotThrow(() => {
       renderJobList({
-        jobSourceMode: 'backend',
         activeJobId: null,
         jobs: new Map(),
       });
     });
-  } finally {
-    global.document = originalDocument;
-  }
-});
-
-test('renderJobList exposes folder source mode in the header and rows', () => {
-  const originalDocument = global.document;
-  const list = { innerHTML: '' };
-  const sourceLabel = { textContent: '' };
-
-  global.document = {
-    getElementById(id) {
-      if (id === 'simulation-jobs-list') return list;
-      if (id === 'simulation-jobs-source-label') return sourceLabel;
-      return null;
-    },
-  };
-
-  try {
-    renderJobList({
-      jobSourceMode: 'folder',
-      activeJobId: null,
-      jobs: new Map([
-        [
-          'job-folder-1',
-          {
-            id: 'job-folder-1',
-            label: 'folder-task',
-            status: 'complete',
-            createdAt: '2026-03-11T09:00:00.000Z',
-            completedAt: '2026-03-11T09:10:00.000Z',
-          },
-        ],
-      ]),
-    });
-
-    assert.equal(sourceLabel.textContent, 'Folder Tasks');
-    assert.match(list.innerHTML, /folder-task/);
   } finally {
     global.document = originalDocument;
   }
@@ -1203,7 +1164,6 @@ test('renderJobList keeps backend-only feeds free of redundant row source badges
 
   try {
     renderJobList({
-      jobSourceMode: 'backend',
       activeJobId: null,
       jobs: new Map([
         [
@@ -1242,7 +1202,6 @@ test('renderJobList labels completed job results action as Results with view too
 
   try {
     renderJobList({
-      jobSourceMode: 'backend',
       activeJobId: null,
       jobs: new Map([
         [
@@ -1284,7 +1243,6 @@ test('renderJobList escapes job ids in action data attributes', () => {
 
   try {
     renderJobList({
-      jobSourceMode: 'backend',
       activeJobId: jobId,
       jobs: new Map([
         [
@@ -1345,7 +1303,6 @@ test('renderJobList applies rating filter and renders rating controls', () => {
 
   try {
     renderJobList({
-      jobSourceMode: 'backend',
       activeJobId: null,
       jobs: new Map([
         [
@@ -1409,7 +1366,6 @@ test('renderJobList skips identical feed updates and refreshes when a job change
 
   try {
     const panel = {
-      jobSourceMode: 'backend',
       activeJobId: 'job-signature',
       jobs: new Map([
         [
@@ -1466,7 +1422,6 @@ test('renderJobList re-renders after a skeleton overwrote the memoized list', ()
 
   try {
     const panel = {
-      jobSourceMode: 'backend',
       activeJobId: 'job-signature',
       jobs: new Map([
         [
@@ -1614,7 +1569,6 @@ test('pollSimulationStatus persists and auto-exports once on a running-to-comple
       consecutivePollFailures: 0,
       activeJobId: 'job-complete-once',
       currentJobId: 'job-complete-once',
-      jobSourceMode: 'backend',
       jobs: new Map([
         [
           'job-complete-once',
@@ -1720,7 +1674,6 @@ test('pollSimulationStatus recovers after a transient result-fetch failure', asy
       consecutivePollFailures: 0,
       activeJobId: 'job-recover',
       currentJobId: 'job-recover',
-      jobSourceMode: 'backend',
       jobs: new Map([
         [
           'job-recover',
@@ -1808,7 +1761,6 @@ test('pollSimulationStatus publishes backend simulation mesh stats to the app wi
       consecutivePollFailures: 0,
       activeJobId: 'job-mesh-stats',
       currentJobId: 'job-mesh-stats',
-      jobSourceMode: 'backend',
       jobs: new Map([
         [
           'job-mesh-stats',
@@ -1946,7 +1898,6 @@ test('pollSimulationStatus clears early mesh persistence marker after terminal f
     consecutivePollFailures: 0,
     activeJobId: 'job-retry-mesh',
     currentJobId: 'job-retry-mesh',
-    jobSourceMode: 'backend',
     jobs: new Map([
       [
         'job-retry-mesh',
@@ -2084,7 +2035,6 @@ test('pollSimulationStatus auto-downloads exactly once after mesh artifact becom
     consecutivePollFailures: 0,
     activeJobId: 'job-auto-download-ready',
     currentJobId: 'job-auto-download-ready',
-    jobSourceMode: 'backend',
     jobs: new Map([
       [
         'job-auto-download-ready',

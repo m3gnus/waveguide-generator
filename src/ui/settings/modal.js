@@ -38,7 +38,7 @@ import {
 
 import {
   getSelectedFolderLabel,
-  requestBackendFolderSelection,
+  selectOutputFolder,
   subscribeFolderWorkspace,
   fetchWorkspacePath,
   openWorkspaceInFinder,
@@ -1317,7 +1317,7 @@ function _buildWorkspaceSection(cleanupFns = []) {
   chooseBtn.addEventListener('click', async () => {
     chooseBtn.disabled = true;
     chooseHelp.textContent = 'Waiting for folder selection…';
-    const selectedPath = await requestBackendFolderSelection();
+    const selectedPath = await selectOutputFolder();
     chooseBtn.disabled = false;
     if (selectedPath) {
       pathValueBox.textContent = selectedPath;

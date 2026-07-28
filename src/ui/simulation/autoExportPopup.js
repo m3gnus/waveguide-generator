@@ -6,6 +6,7 @@ import {
 } from '../settings/simulationManagementSettings.js';
 import {
   fetchWorkspacePath,
+  getSelectedFolderLabel,
   getSelectedFolderPath,
   selectOutputFolder,
   subscribeFolderWorkspace,
@@ -130,19 +131,11 @@ export function openAutoExportPopup() {
   let releaseFocus;
   let closed = false;
 
-  const labelFromPath = (path) => {
-    const normalized = String(path || '')
-      .trim()
-      .replace(/\\/g, '/')
-      .replace(/\/+$/, '');
-    return normalized ? normalized.split('/').pop() || normalized : '';
-  };
-
   const updateFolderDisplay = ({ label, path } = {}) => {
     const effectivePath = path || getSelectedFolderPath();
-    folderName.textContent = label || labelFromPath(effectivePath) || 'No folder selected';
+    folderName.textContent = label || getSelectedFolderLabel();
     folderPath.textContent = effectivePath || 'No output folder selected.';
-    const hasSelection = Boolean(effectivePath) || (label && label !== 'No folder selected');
+    const hasSelection = Boolean(effectivePath);
     chooseFolderBtn.textContent = hasSelection ? 'Change Folder' : 'Choose Folder';
   };
 

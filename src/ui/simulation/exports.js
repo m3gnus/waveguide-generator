@@ -13,7 +13,6 @@ import {
   buildStlExportFiles,
 } from '../../modules/export/useCases.js';
 import { readSimulationState } from '../../modules/simulation/state.js';
-import { writeSimulationTaskBundleFile } from './workspaceTasks.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   getSelectedExportFormats,
@@ -839,17 +838,12 @@ function formatBundleMessage({ exportedFiles, failures, selectedFormats, auto = 
 function createTaskExportWriter(job, baseName) {
   const workspaceSubdir = resolveExportDirectoryName(job, baseName);
   return async (file) => {
-    const result = await writeSimulationTaskBundleFile(job, file, {
-      dirName: workspaceSubdir,
-      fallbackWrite: async (nextFile) => {
-        await saveFile(nextFile.content, nextFile.fileName, {
-          ...nextFile.saveOptions,
-          workspaceSubdir,
-          incrementCounter: false,
-        });
-      },
+    await saveFile(file.content, file.fileName, {
+      ...file.saveOptions,
+      workspaceSubdir,
+      incrementCounter: false,
     });
-    return result.fileName;
+    return file.fileName;
   };
 }
 

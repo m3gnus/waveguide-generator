@@ -24,10 +24,6 @@ import { getCachedRuntimeHealth } from '../runtimeCapabilities.js';
 import { getFeatureBlockedReason } from '../dependencyStatus.js';
 
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
-const JOB_SOURCE_MODES = Object.freeze({
-  BACKEND: 'backend',
-  FOLDER: 'folder',
-});
 
 const DEFAULT_SIMULATION_PARAM_BINDINGS = Object.freeze([
   { id: 'freq-start', key: 'freqStart', parse: (value) => parseFloat(value) },
@@ -57,8 +53,6 @@ export const SIMULATION_CONTROLLER_FIELDS = Object.freeze([
   'currentSmoothing',
   'currentDirectivityReferenceLevel',
   'simulationParamBindings',
-  'jobSourceMode',
-  'jobSourceLabel',
 ]);
 
 function isActiveJobStatus(status) {
@@ -104,14 +98,6 @@ function resolveActiveJobSelection(controller) {
 
   setActiveJob(controller, current.id);
   return current;
-}
-
-function setJobSourceMode(controller, mode) {
-  const nextMode =
-    mode === JOB_SOURCE_MODES.FOLDER ? JOB_SOURCE_MODES.FOLDER : JOB_SOURCE_MODES.BACKEND;
-  controller.jobSourceMode = nextMode;
-  controller.jobSourceLabel =
-    nextMode === JOB_SOURCE_MODES.FOLDER ? 'Folder Tasks' : 'Backend Jobs';
 }
 
 function cloneSimulationParamBindings() {
@@ -210,8 +196,6 @@ export function createSimulationControllerStore({ solver = createSimulationClien
     currentSmoothing: 'none',
     currentDirectivityReferenceLevel: -6,
     simulationParamBindings: cloneSimulationParamBindings(),
-    jobSourceMode: JOB_SOURCE_MODES.BACKEND,
-    jobSourceLabel: 'Backend Jobs',
   };
 }
 
@@ -638,9 +622,6 @@ export async function restoreSimulationControllerJobs(
   controller.consecutivePollFailures = Number(tracker.consecutivePollFailures) || 0;
   controller.isPolling = tracker.isPolling;
   syncCurrentJobId(controller);
-
-  // Restore all jobs from the backend database (survives page reloads).
-  setJobSourceMode(controller, JOB_SOURCE_MODES.BACKEND);
 
   if (typeof controller.solver?.listJobs === 'function') {
     try {

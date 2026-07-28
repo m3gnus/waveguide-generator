@@ -227,14 +227,6 @@ function formatTimestampTooltip(job) {
   return `Started: ${formatted}`;
 }
 
-function describeJobFeedSource(panel) {
-  const mode = panel?.jobSourceMode === 'folder' ? 'folder' : 'backend';
-  return {
-    mode,
-    label: mode === 'folder' ? 'Folder Tasks' : 'Backend Jobs',
-  };
-}
-
 function renderRatingStars(job) {
   const jobId = readJobId(job);
   const jobIdAttr = escapeHtml(jobId);
@@ -317,9 +309,8 @@ function syncJobListPreferenceControls() {
   }
 }
 
-function buildJobListSignature(panel, source, jobs, sortBy, minRating) {
+function buildJobListSignature(panel, jobs, sortBy, minRating) {
   return JSON.stringify({
-    source: source.mode,
     activeJobId: String(panel.activeJobId ?? ''),
     sortBy,
     minRating,
@@ -491,9 +482,8 @@ export function renderJobList(panel) {
   panel.app?.resultsDock?.onJobsUpdated();
 
   const sourceEl = document.getElementById('simulation-jobs-source-label');
-  const source = describeJobFeedSource(panel);
   if (sourceEl) {
-    sourceEl.textContent = source.label;
+    sourceEl.textContent = 'Backend Jobs';
   }
 
   syncJobListPreferenceControls();
@@ -503,7 +493,7 @@ export function renderJobList(panel) {
     sortBy,
     minRating,
   });
-  const signature = buildJobListSignature(panel, source, jobs, sortBy, minRating);
+  const signature = buildJobListSignature(panel, jobs, sortBy, minRating);
   // A skeleton write (restoreJobs/refresh) replaces the list content without
   // touching the memo, so the memo may only skip when no skeleton is showing.
   const listShowsSkeleton =
@@ -518,7 +508,7 @@ export function renderJobList(panel) {
   const interactionState = captureJobListInteractionState(list);
 
   if (jobs.length === 0) {
-    list.innerHTML = `<div class="simulation-job-meta">No ${source.mode === 'folder' ? 'folder tasks' : 'backend jobs'} yet.</div>`;
+    list.innerHTML = '<div class="simulation-job-meta">No backend jobs yet.</div>';
     panel._jobListElement = list;
     panel._jobListSignature = signature;
     return;
@@ -556,7 +546,6 @@ export function renderJobList(panel) {
       <div class="simulation-job-actions">
         ${job.status === 'complete' ? renderJobActionButton({ action: 'view', jobIdAttr, label: 'Results', title: 'View results' }) : ''}
         ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr) : ''}
-        ${job.status === 'complete' && source.mode === 'folder' ? renderJobActionButton({ action: 'open-folder', jobIdAttr, label: 'View Output', title: 'Open output folder' }) : ''}
         ${job.script ? renderJobActionButton({ action: 'load-script', jobIdAttr, label: 'Load', title: 'Load parameters' }) : ''}
         ${canRerun ? renderJobActionButton({ action: 'redo', jobIdAttr, label: 'Rerun', title: 'Rerun' }) : ''}
         ${canStop ? renderJobActionButton({ action: 'stop', jobIdAttr, label: 'Stop', title: 'Stop', className: 'btn-tertiary button-compact' }) : ''}

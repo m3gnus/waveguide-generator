@@ -42,7 +42,7 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 1. UI submission → `SimulationModule` (payload + HornLab mesher params)
 2. `POST /api/solve` → backend job queue
 3. Frontend polls `GET /api/status/{job_id}` + `GET /api/results/{job_id}`
-4. Results cached in `GlobalState` + folder manifests (if workspace active)
+4. Results are cached in `GlobalState`; workspace manifests describe persisted artifacts
 
 **Export pipeline**:
 - **Local exports**: STL/CSV/config via `ExportModule.useCases.js`
@@ -62,7 +62,7 @@ Waveguide Generator is a browser-based horn design tool with a FastAPI backend. 
 - `/api/solve` accepts `solver_backend` values `auto`, `bempp`, and `metal`; Auto uses the Metal BEM release-helper fast path on Apple Silicon and otherwise uses Bempp when available
 - Stable `/api/solve` numerics are fixed to single precision with no warm-up or GMRES strong-form auto-enable path
 - Live job-stage reporting is collapsed to `initializing`, `mesh_prepare`, `bem_solve`, and `finalizing` (plus terminal/cancellation states)
-- History uses one source mode: folder workspace (manifests only) OR backend jobs + cache (never mixed)
+- History comes from backend jobs and the local result cache; workspace manifests describe exported artifacts
 - Job metadata: `rating`, `exportedFiles`, `autoExportCompletedAt`
 
 **Export**:

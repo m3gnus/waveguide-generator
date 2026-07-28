@@ -3,10 +3,8 @@ import assert from 'node:assert/strict';
 
 import { saveFile } from '../src/ui/fileOps.js';
 import {
-  getSelectedFolderHandle,
   getSelectedFolderLabel,
   getSelectedFolderPath,
-  resetSelectedFolder,
   selectOutputFolder,
   fetchWorkspacePath,
   writeWorkspaceFile
@@ -50,7 +48,6 @@ test('saveFile falls back to showSaveFilePicker when backend write fails', async
       contentType: 'text/plain'
     });
 
-    assert.equal(getSelectedFolderHandle(), null);
     assert.deepEqual(saved, [
       {
         fileName: 'horn_design.txt',
@@ -58,7 +55,6 @@ test('saveFile falls back to showSaveFilePicker when backend write fails', async
       }
     ]);
   } finally {
-    resetSelectedFolder();
     global.document = originalDocument;
     global.window = originalWindow;
     global.fetch = originalFetch;
@@ -109,7 +105,6 @@ test('saveFile backend fallback does not write normal-runtime console warnings',
       contentType: 'text/plain'
     });
   } finally {
-    resetSelectedFolder();
     console.warn = originalWarn;
     global.document = originalDocument;
     global.window = originalWindow;
@@ -149,11 +144,9 @@ test('selectOutputFolder calls backend and updates workspace label', async () =>
     const result = await selectOutputFolder();
 
     assert.equal(result, '/Users/test/exports');
-    assert.equal(getSelectedFolderHandle(), null);
     assert.equal(getSelectedFolderLabel(), 'exports');
     assert.equal(getSelectedFolderPath(), '/Users/test/exports');
   } finally {
-    resetSelectedFolder();
     global.fetch = originalFetch;
   }
 });
@@ -180,7 +173,6 @@ test('fetchWorkspacePath syncs backend workspace label and path', async () => {
     assert.equal(getSelectedFolderLabel(), 'output');
     assert.equal(getSelectedFolderPath(), '/Users/test/Waveguide Exports/output');
   } finally {
-    resetSelectedFolder();
     global.fetch = originalFetch;
   }
 });
@@ -226,7 +218,6 @@ test('saveFile writes to backend workspace when folder picker support is unavail
     assert.equal(getSelectedFolderLabel(), 'exports');
     assert.equal(getSelectedFolderPath(), '/Users/test/exports');
   } finally {
-    resetSelectedFolder();
     global.document = originalDocument;
     global.window = originalWindow;
     global.fetch = originalFetch;
@@ -271,7 +262,7 @@ test('saveFile sends workspace_subdir for backend workspace writes', async () =>
   }
 });
 
-test('saveFile uses backend workspace when no folder is selected', async () => {
+test('saveFile uses backend workspace without a task subdirectory', async () => {
   const originalDocument = global.document;
   const originalWindow = global.window;
   const originalFetch = global.fetch;

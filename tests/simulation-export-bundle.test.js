@@ -2,15 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { exportResults } from '../src/ui/simulation/exports.js';
-import {
-  persistSimulationGenerationArtifacts,
-  writeSimulationTaskBundleFile,
-} from '../src/ui/simulation/workspaceTasks.js';
-import {
-  getSelectedFolderHandle,
-  resetSelectedFolder,
-  setSelectedFolderHandle,
-} from '../src/ui/workspace/folderWorkspace.js';
+import { persistSimulationGenerationArtifacts } from '../src/ui/simulation/workspaceTasks.js';
 
 test('exportResults writes selected bundle files into the task folder workspace', async () => {
   const originalFetch = global.fetch;
@@ -60,7 +52,6 @@ test('exportResults writes selected bundle files into the task folder workspace'
     assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_12');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -108,7 +99,6 @@ test('exportResults preserves zero-valued result cells in CSV bundle files', asy
     assert.match(csv, /100,0,0,0,0\n200,91,8,6,-1\n$/);
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -176,7 +166,6 @@ test('exportResults prepares smoothed result series once for a multi-format bund
     assert.equal(splReads, 1);
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -257,7 +246,6 @@ test('exportResults labels and normalizes legacy impedance values in text export
     assert.match(vacs, /^100\s+1\s+0$/m);
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -309,7 +297,6 @@ test('exportResults does not renormalize backend Z over rho c impedance metadata
     assert.equal(impedanceCsv.trim(), 'Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c\n100,32,-4');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -378,7 +365,6 @@ test('exportResults forwards Metal phase convention for rendered PNG charts', as
     assert.equal(chartPayloads[0].impedance_normalization, 'rho_c');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -469,46 +455,6 @@ test('exportResults distinguishes restored Bempp metadata from legacy Bempp phas
     assert.equal(chartPayloads[1].phase_time_convention, 'bempp');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
-  }
-});
-
-test('writeSimulationTaskBundleFile clears the selected workspace and falls back when task-folder writes fail', async () => {
-  setSelectedFolderHandle(
-    {
-      name: 'workspace',
-      async queryPermission() {
-        return 'granted';
-      },
-      async getDirectoryHandle() {
-        throw new Error('write failed');
-      },
-    },
-    { label: 'workspace' }
-  );
-
-  const fallbackCalls = [];
-
-  try {
-    const result = await writeSimulationTaskBundleFile(
-      { id: 'job-2' },
-      {
-        fileName: 'job-2_results.json',
-        content: '{"ok":true}',
-        saveOptions: { contentType: 'application/json' },
-      },
-      {
-        fallbackWrite: async (file) => {
-          fallbackCalls.push(file.fileName);
-        },
-      }
-    );
-
-    assert.equal(result.wroteToTaskFolder, false);
-    assert.deepEqual(fallbackCalls, ['job-2_results.json']);
-    assert.equal(getSelectedFolderHandle(), null);
-  } finally {
-    resetSelectedFolder();
   }
 });
 
@@ -553,7 +499,6 @@ test('exportResults routes fallback bundle writes through backend workspace subd
     assert.equal(body.get('workspace_subdir'), '260311_horn_34');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -596,7 +541,6 @@ test('persistSimulationGenerationArtifacts writes raw results and mesh artifacts
     assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_56');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -644,7 +588,6 @@ test('persistSimulationGenerationArtifacts keeps writing later artifacts after a
     assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_partial');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });
 
@@ -683,6 +626,5 @@ test('persistSimulationGenerationArtifacts falls back to backend workspace subdi
     assert.equal(fetchCalls[1].options.body.get('workspace_subdir'), '260311_horn_57');
   } finally {
     global.fetch = originalFetch;
-    resetSelectedFolder();
   }
 });

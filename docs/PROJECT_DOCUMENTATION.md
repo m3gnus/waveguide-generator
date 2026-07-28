@@ -128,7 +128,7 @@ flowchart LR
    - Frontend also reconciles against `GET /api/jobs` to restore queued/running/history state after reload.
    - Completed-task history is restored from backend jobs; local job metadata is folded into refreshed entries while backend updates are in flight.
    - Completion polling marks a job as `justCompleted` only on the transition into `complete`; when Task Exports settings have auto-export enabled, the configured export bundle runs once for that completion and persists an `autoExportCompletedAt` marker with exported file tokens.
-   - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync back into local job storage and workspace manifests.
+   - Task-list UI preferences persist through simulation-management settings and stay mirrored between the Simulation Jobs toolbar and the Settings modal: `defaultSort` drives stable job ordering and `minRatingFilter` gates visible rows, while per-task star ratings sync to backend job metadata and workspace manifests.
 5. If backend solver/HornLab mesher runtime is unavailable, simulation start fails with an explicit runtime error (no mock fallback).
 
 ### 3.3 Export flow
