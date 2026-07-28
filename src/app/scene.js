@@ -511,29 +511,56 @@ function applyMeshToScene(app, vertices, indices, preparedParams, normals, mode,
   perf.end();
 }
 
-function curvatureJetColor(t) {
-  // Multi-stop jet colormap: dark blue → blue → cyan → green → yellow → red → dark red
-  const stops = [
-    [0.0, [0.0, 0.0, 0.5]],
-    [0.125, [0.0, 0.0, 1.0]],
-    [0.375, [0.0, 1.0, 1.0]],
-    [0.625, [1.0, 1.0, 0.0]],
-    [0.875, [1.0, 0.0, 0.0]],
-    [1.0, [0.5, 0.0, 0.0]],
-  ];
-  for (let i = 0; i < stops.length - 1; i++) {
-    const [t0, c0] = stops[i];
-    const [t1, c1] = stops[i + 1];
-    if (t >= t0 && t <= t1) {
-      const f = (t - t0) / (t1 - t0);
-      return [
-        c0[0] + f * (c1[0] - c0[0]),
-        c0[1] + f * (c1[1] - c0[1]),
-        c0[2] + f * (c1[2] - c0[2]),
-      ];
-    }
+function accumulateCurvaturePair(normals, rawCurvature, neighborCount, vi, vj) {
+  const ni = vi * 3;
+  const nj = vj * 3;
+  const dot = Math.max(
+    -1,
+    Math.min(
+      1,
+      normals[ni] * normals[nj] +
+        normals[ni + 1] * normals[nj + 1] +
+        normals[ni + 2] * normals[nj + 2]
+    )
+  );
+  const difference = 1.0 - dot;
+  rawCurvature[vi] += difference;
+  neighborCount[vi]++;
+  rawCurvature[vj] += difference;
+  neighborCount[vj]++;
+}
+
+function writeCurvatureJetColor(colors, offset, t) {
+  // Multi-stop jet colormap: dark blue → blue → cyan → green → yellow → red → dark red.
+  // Write directly into the output buffer because this runs once per vertex.
+  let red = 0.5;
+  let green = 0;
+  let blue = 0;
+  if (t >= 0 && t <= 0.125) {
+    const f = t / 0.125;
+    red = 0;
+    blue = 0.5 + f * 0.5;
+  } else if (t >= 0.125 && t <= 0.375) {
+    const f = (t - 0.125) / 0.25;
+    red = 0;
+    green = f;
+    blue = 1;
+  } else if (t >= 0.375 && t <= 0.625) {
+    const f = (t - 0.375) / 0.25;
+    red = f;
+    green = 1;
+    blue = 1 + f * -1;
+  } else if (t >= 0.625 && t <= 0.875) {
+    const f = (t - 0.625) / 0.25;
+    red = 1;
+    green = 1 + f * -1;
+  } else if (t >= 0.875 && t <= 1) {
+    const f = (t - 0.875) / 0.125;
+    red = 1 + f * -0.5;
   }
-  return stops[stops.length - 1][1];
+  colors[offset] = red;
+  colors[offset + 1] = green;
+  colors[offset + 2] = blue;
 }
 
 export function calculateCurvatureColors(geometry) {
@@ -548,32 +575,13 @@ export function calculateCurvatureColors(geometry) {
     const idx = indexAttr.array;
     const triCount = idx.length / 3;
     for (let t = 0; t < triCount; t++) {
-      const a = idx[t * 3];
-      const b = idx[t * 3 + 1];
-      const c = idx[t * 3 + 2];
-      const pairs = [
-        [a, b],
-        [b, c],
-        [a, c],
-      ];
-      for (const [vi, vj] of pairs) {
-        const ni = vi * 3,
-          nj = vj * 3;
-        const dot = Math.max(
-          -1,
-          Math.min(
-            1,
-            normals[ni] * normals[nj] +
-              normals[ni + 1] * normals[nj + 1] +
-              normals[ni + 2] * normals[nj + 2]
-          )
-        );
-        const d = 1.0 - dot;
-        rawCurvature[vi] += d;
-        neighborCount[vi]++;
-        rawCurvature[vj] += d;
-        neighborCount[vj]++;
-      }
+      const offset = t * 3;
+      const a = idx[offset];
+      const b = idx[offset + 1];
+      const c = idx[offset + 2];
+      accumulateCurvaturePair(normals, rawCurvature, neighborCount, a, b);
+      accumulateCurvaturePair(normals, rawCurvature, neighborCount, b, c);
+      accumulateCurvaturePair(normals, rawCurvature, neighborCount, a, c);
     }
   }
 
@@ -595,10 +603,7 @@ export function calculateCurvatureColors(geometry) {
   for (let v = 0; v < count; v++) {
     // Mild power curve to spread mid-range values
     const c = Math.min(1.0, Math.pow(rawCurvature[v] * scale, 0.6));
-    const rgb = curvatureJetColor(c);
-    colors[v * 3] = rgb[0];
-    colors[v * 3 + 1] = rgb[1];
-    colors[v * 3 + 2] = rgb[2];
+    writeCurvatureJetColor(colors, v * 3, c);
   }
   return colors;
 }
