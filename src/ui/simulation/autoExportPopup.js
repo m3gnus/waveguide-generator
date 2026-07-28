@@ -1,7 +1,9 @@
 import { trapFocus } from '../focusTrap.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
+  SIMULATION_EXPORT_FORMAT_LABELS,
   getCurrentSimulationManagementSettings,
+  getSelectedExportFormats,
   saveSimulationManagementSettings,
 } from '../settings/simulationManagementSettings.js';
 import {
@@ -11,20 +13,6 @@ import {
   selectOutputFolder,
   subscribeFolderWorkspace,
 } from '../workspace/folderWorkspace.js';
-
-const FORMAT_LABELS = new Map([
-  ['mwg_config', 'Parameter Config (.txt)'],
-  ['step', 'Waveguide STEP'],
-  ['png', 'Chart Images (PNG)'],
-  ['csv', 'Frequency Data CSV'],
-  ['json', 'Full Results JSON'],
-  ['txt', 'Summary Text Report'],
-  ['polar_csv', 'Polar Directivity CSV'],
-  ['impedance_csv', 'Impedance CSV'],
-  ['vacs', 'ABEC Spectrum (VACS)'],
-  ['stl', 'Waveguide STL'],
-  ['fusion_csv', 'Fusion 360 CSV Curves'],
-]);
 
 export function openAutoExportPopup() {
   const settings = getCurrentSimulationManagementSettings();
@@ -92,7 +80,7 @@ export function openAutoExportPopup() {
     checkbox.checked = settings.selectedFormats.includes(formatId);
     option.appendChild(checkbox);
     const text = document.createElement('span');
-    text.textContent = FORMAT_LABELS.get(formatId) || formatId;
+    text.textContent = SIMULATION_EXPORT_FORMAT_LABELS[formatId] || formatId;
     option.appendChild(text);
     formatsGrid.appendChild(option);
   }
@@ -190,16 +178,10 @@ export function openAutoExportPopup() {
 function persistState() {
   const current = getCurrentSimulationManagementSettings();
   const autoExportEl = document.getElementById('simmanage-auto-export');
-  const formatEls = Array.from(document.querySelectorAll('input[data-sim-management-format]'));
-
-  const selectedFormats = formatEls
-    .filter((el) => el.checked)
-    .map((el) => el.getAttribute('data-sim-management-format'))
-    .filter(Boolean);
 
   saveSimulationManagementSettings({
     ...current,
     autoExportOnComplete: autoExportEl ? autoExportEl.checked : current.autoExportOnComplete,
-    selectedFormats,
+    selectedFormats: getSelectedExportFormats(),
   });
 }

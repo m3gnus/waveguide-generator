@@ -15,6 +15,7 @@ import {
 import { readSimulationState } from '../../modules/simulation/state.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
+  SIMULATION_EXPORT_FORMAT_LABELS,
   getSelectedExportFormats,
 } from '../settings/simulationManagementSettings.js';
 import { getChartTheme } from '../settings/appearanceSettings.js';
@@ -25,19 +26,6 @@ import { resolveTaskWorkspaceDirectoryName } from '../workspace/taskManifest.js'
 import { getCachedRuntimeHealth } from '../runtimeCapabilities.js';
 import { getFeatureBlockedReason } from '../dependencyStatus.js';
 
-const EXPORT_FORMAT_LABELS = Object.freeze({
-  mwg_config: 'Parameter Config (.txt)',
-  step: 'Waveguide STEP',
-  png: 'Chart Images (PNG)',
-  csv: 'Frequency Data CSV',
-  json: 'Full Results JSON',
-  txt: 'Summary Text Report',
-  polar_csv: 'Polar Directivity CSV',
-  impedance_csv: 'Impedance CSV',
-  vacs: 'ABEC Spectrum (VACS)',
-  stl: 'Waveguide STL',
-  fusion_csv: 'Fusion 360 CSV Curves',
-});
 const RESULT_EXPORT_FORMAT_IDS = Object.freeze([
   'png',
   'csv',
@@ -827,7 +815,10 @@ function formatBundleMessage({ exportedFiles, failures, selectedFormats, auto = 
   }
 
   const failureSummary = failures
-    .map(({ formatId, message }) => `${EXPORT_FORMAT_LABELS[formatId] || formatId}: ${message}`)
+    .map(
+      ({ formatId, message }) =>
+        `${SIMULATION_EXPORT_FORMAT_LABELS[formatId] || formatId}: ${message}`
+    )
     .join(' | ');
 
   return auto
