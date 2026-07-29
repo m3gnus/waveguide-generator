@@ -1,7 +1,7 @@
 """Shared Pydantic API contracts for backend routes and services."""
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 VALID_DEVICE_MODES = {"auto", "opencl_cpu", "opencl_gpu"}
 VALID_SOLVER_BACKENDS = {"auto", "metal", "bempp"}
@@ -293,7 +293,7 @@ class SimulationRequest(BaseModel):
     # A client mesh remains accepted for compatibility but is not required.
     mesh: Optional[MeshData] = None
     frequency_range: List[float]
-    num_frequencies: int
+    num_frequencies: int = Field(ge=1)
     sim_type: str
     options: Optional[Dict[str, Any]] = {}
     polar_config: Optional[PolarConfig] = None
