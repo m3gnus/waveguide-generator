@@ -87,6 +87,7 @@ test('DesignModule backend mesh normalization outputs centralize simulation/expo
     makeRawParams({
       angularSegments: 21.2,
       lengthSegments: 9.1,
+      cornerSegments: 4.5,
       quadrants: '1',
       scale: 2,
       throatResolution: 3,
@@ -109,6 +110,7 @@ test('DesignModule backend mesh normalization outputs centralize simulation/expo
 
   assert.equal(backendMeshSimulation.angularSegments, 21);
   assert.equal(backendMeshSimulation.lengthSegments, 10);
+  assert.equal(backendMeshSimulation.cornerSegments, 5);
   assert.equal(backendMeshSimulation.quadrants, 1);
   assert.equal(backendMeshSimulation.throatResolution, 6);
   assert.equal(backendMeshSimulation.mouthResolution, 10);

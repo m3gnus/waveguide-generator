@@ -15,6 +15,7 @@ const DESIGN_INPUT_KINDS = Object.freeze({
 const BACKEND_MESH_DEFAULTS = Object.freeze({
   angularSegments: 100,
   lengthSegments: 20,
+  cornerSegments: 4,
   throatResolution: 6,
   mouthResolution: 15,
   rearResolution: 40,
@@ -186,6 +187,10 @@ export function prepareBackendMeshSimulationParams(preparedParams = {}) {
     lengthSegments: Math.max(
       BACKEND_MESH_MIN_LENGTH_SEGMENTS,
       Math.round(toFiniteNumber(base.lengthSegments, BACKEND_MESH_DEFAULTS.lengthSegments))
+    ),
+    cornerSegments: Math.max(
+      0,
+      Math.round(toFiniteNumber(base.cornerSegments, BACKEND_MESH_DEFAULTS.cornerSegments))
     ),
     quadrants,
     throatResolution:

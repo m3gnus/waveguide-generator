@@ -146,6 +146,9 @@ function validateNumericValue(input, def) {
       ? { valid: false, error: `Enter a value between ${def.min} and ${def.max}.` }
       : { valid: false, error: `Enter a value of at most ${def.max}.` };
   }
+  if (def?.integer === true && !Number.isInteger(numeric)) {
+    return { valid: false, error: 'Enter a whole number.' };
+  }
 
   return { valid: true };
 }

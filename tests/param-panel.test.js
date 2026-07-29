@@ -587,6 +587,19 @@ test('ParamPanel rejects invalid numeric commits using schema limits', () => {
     frequencyStart.onchange({ target: frequencyStart });
     assert.equal(GlobalState.get().params.freqStart, 25);
 
+    const cornerSegments = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'INPUT' && node.attributes['data-param-key'] === 'cornerSegments'
+    )[0];
+    const originalCornerSegments = GlobalState.get().params.cornerSegments;
+    cornerSegments.value = '4.5';
+    cornerSegments.onchange({ target: cornerSegments });
+    assert.equal(GlobalState.get().params.cornerSegments, originalCornerSegments);
+    assert.equal(
+      cornerSegments.parentElement.querySelector('.input-error-message').textContent,
+      'Enter a whole number.'
+    );
+
     const terminationSmoothness = collectNodes(
       paramContainer,
       (node) => node.tagName === 'INPUT' && node.attributes['data-param-key'] === 'q'

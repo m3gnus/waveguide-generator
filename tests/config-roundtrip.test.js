@@ -74,6 +74,16 @@ test('legacy Mesh.RearShape config input is tolerated but not exported', () => {
   assert.equal(regenerated.includes('Mesh.WallThickness = 6'), true);
 });
 
+test('config export rounds fractional corner sample counts to an integer', () => {
+  const content = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    morphTarget: 1,
+    cornerSegments: 4.5,
+  });
+
+  assert.match(content, /^Mesh\.CornerSegments = 5$/m);
+});
+
 test('mixed OSSE flat and internal keys normalize independently', () => {
   const source = [
     'a = 51',
