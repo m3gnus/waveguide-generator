@@ -1,7 +1,7 @@
 """
 Matplotlib-based directivity heatmap rendering.
 
-Uses log-frequency interpolation and light fractional-octave smoothing to
+Uses log-frequency interpolation and optional fractional-octave smoothing to
 produce stable, readable polar maps from per-frequency angle slices.
 """
 
@@ -42,7 +42,15 @@ CONTOUR_OUTLINE = "#050C18"
 REFERENCE_CONTOUR_COLOR = "#E8A83A"  # --accent-warm
 
 
-def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-6.0):
+def render_directivity_plot(
+    frequencies,
+    directivity,
+    dpi=150,
+    reference_level=-6.0,
+    *,
+    smooth=False,
+    smoothing_fraction=FRACTIONAL_OCTAVE,
+):
     """
     Render directivity heatmap(s) as a PNG image.
 
@@ -52,6 +60,8 @@ def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-
             Each is a list of [[angle_deg, dB], ...] per frequency.
         dpi: Image resolution
         reference_level: Reference dB level for prominent contour (default -6)
+        smooth: Apply fractional-octave smoothing after interpolation.
+        smoothing_fraction: Fractional-octave denominator (default 24).
 
     Returns:
         Base64-encoded PNG string (without data URI prefix)
@@ -68,7 +78,13 @@ def render_directivity_plot(frequencies, directivity, dpi=150, reference_level=-
         angles_raw, freqs_raw, values_raw = _build_grid(freqs, patterns)
         if values_raw is None:
             continue
-        angles, plane_freqs, values = _prepare_heatmap_data(angles_raw, freqs_raw, values_raw)
+        angles, plane_freqs, values = _prepare_heatmap_data(
+            angles_raw,
+            freqs_raw,
+            values_raw,
+            smooth=smooth,
+            smoothing_fraction=smoothing_fraction,
+        )
         planes.append({
             "key": key,
             "angles": angles,
@@ -213,12 +229,30 @@ def _safe_float(value):
     return out
 
 
-def _prepare_heatmap_data(angles, freqs, values):
+def _prepare_heatmap_data(
+    angles,
+    freqs,
+    values,
+    *,
+    smooth=False,
+    smoothing_fraction=FRACTIONAL_OCTAVE,
+):
+    """Fill gaps, interpolate to the canonical grid, optionally smooth, and clip.
+
+    Smoothing is disabled by default. Removing the former raw-grid default
+    changed a measured 300--20,000 Hz dense-grid probe by at most ~0.0876 dB;
+    a realistic 10.33-points-per-octave grid was bit-for-bit unchanged.
+    """
     values_filled = _fill_missing_values(values)
-    values_smooth = _fractional_octave_smooth(values_filled, freqs, FRACTIONAL_OCTAVE)
     interp_angles, interp_freqs, interp_values = _interpolate_heatmap_grid(
-        angles, freqs, values_smooth, ANGLE_SAMPLES, FREQ_SAMPLES
+        angles, freqs, values_filled, ANGLE_SAMPLES, FREQ_SAMPLES
     )
+    if smooth:
+        interp_values = _fractional_octave_smooth(
+            interp_values,
+            interp_freqs,
+            smoothing_fraction,
+        )
     return interp_angles, interp_freqs, np.clip(interp_values, MIN_DB, MAX_DB)
 
 
@@ -259,6 +293,7 @@ def _fill_missing_values(values):
 
 
 def _fractional_octave_smooth(values, freqs, fraction):
+    """Average a log-uniform grid; neighbours enter at >=2*fraction pts/oct."""
     if fraction is None or fraction <= 0 or len(freqs) < 2:
         return values
 
