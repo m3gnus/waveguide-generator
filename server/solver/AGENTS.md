@@ -50,6 +50,9 @@ Scope: applies to `server/solver/*`.
 - For API contract changes touching solver integration:
   - `server/tests/test_api_validation.py`
   - `server/tests/test_dependency_runtime.py`
+- For chart-rendering contract changes:
+  - `server/tests/test_render_routes.py`
+  - `server/tests/test_charts.py`
 - Always run full server suite before merge (from repo root): `npm run test:server`
 
 ## Known Pitfalls

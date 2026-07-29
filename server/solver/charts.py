@@ -16,6 +16,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
+from contracts import normalize_phase_time_convention
+
 from .directivity_plot import _log_grid_lines, _freq_formatter, _preferred_frequency_ticks
 
 
@@ -94,63 +96,27 @@ def _wrap_radians(values):
     return (np.asarray(values, dtype=float) + np.pi) % (2.0 * np.pi) - np.pi
 
 
-_PHASE_TIME_CONVENTION_ALIASES = {
-    "": "exp(-ikr)",
-    "auto": "exp(-ikr)",
-    "default": "exp(-ikr)",
-    "legacy": "exp(-ikr)",
-    "bempp": "exp(-ikr)",
-    "bempp-cl": "exp(-ikr)",
-    "bemppcl": "exp(-ikr)",
-    "exp(-ikr)": "exp(-ikr)",
-    "e(-ikr)": "exp(-ikr)",
-    "-ikr": "exp(-ikr)",
-    "negative": "exp(-ikr)",
-    "negative-spatial": "exp(-ikr)",
-    "metal": "exp(+ikr)",
-    "hornlab-metal": "exp(+ikr)",
-    "metal-bem": "exp(+ikr)",
-    "hornlab-metal-bem": "exp(+ikr)",
-    "exp(+ikr)": "exp(+ikr)",
-    "e(+ikr)": "exp(+ikr)",
-    "+ikr": "exp(+ikr)",
-    "positive": "exp(+ikr)",
-    "positive-spatial": "exp(+ikr)",
-}
-
-
-def _normalize_phase_time_convention(value):
-    """Normalize chart phase propagation convention labels."""
-    raw = str(value or "").strip().lower().replace(" ", "").replace("_", "-")
-    normalized = _PHASE_TIME_CONVENTION_ALIASES.get(raw)
-    if normalized is None:
-        raise ValueError(
-            "phase_time_convention must be one of: exp(-ikr), exp(+ikr), bempp, metal."
-        )
-    return normalized
-
-
 def _phase_time_convention_from_payload(payload):
     """Resolve explicit chart phase convention, falling back to identifiable solver metadata."""
     explicit = payload.get('phase_time_convention')
     if explicit is not None:
-        return _normalize_phase_time_convention(explicit)
+        return normalize_phase_time_convention(explicit)
 
     solver_backend = str(payload.get('solver_backend') or "").strip().lower().replace("_", "-")
     if solver_backend:
-        return _normalize_phase_time_convention(solver_backend)
+        return normalize_phase_time_convention(solver_backend)
 
     metadata = payload.get('metadata')
     if not isinstance(metadata, dict):
-        return _normalize_phase_time_convention(None)
+        return normalize_phase_time_convention(None)
 
     metadata_phase = metadata.get('phase_time_convention')
     if metadata_phase is not None:
-        return _normalize_phase_time_convention(metadata_phase)
+        return normalize_phase_time_convention(metadata_phase)
 
     metadata_backend = str(metadata.get('solver_backend') or "").strip().lower().replace("_", "-")
     if metadata_backend:
-        return _normalize_phase_time_convention(metadata_backend)
+        return normalize_phase_time_convention(metadata_backend)
     if isinstance(metadata.get('metal'), dict):
         return "exp(+ikr)"
 
@@ -160,7 +126,7 @@ def _phase_time_convention_from_payload(payload):
         if selected == "metal":
             return "exp(+ikr)"
 
-    return _normalize_phase_time_convention(None)
+    return normalize_phase_time_convention(None)
 
 
 def _time_referenced_phase_degrees(
@@ -175,7 +141,7 @@ def _time_referenced_phase_degrees(
     vals = np.asarray(values, dtype=float)
     if vals.size == 0:
         return vals
-    convention = _normalize_phase_time_convention(phase_time_convention)
+    convention = normalize_phase_time_convention(phase_time_convention)
     radians = np.deg2rad(vals)
     distance = float(reference_distance_m) if reference_distance_m is not None else np.nan
     speed = float(sound_speed) if sound_speed is not None else np.nan
