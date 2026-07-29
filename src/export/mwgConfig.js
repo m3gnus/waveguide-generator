@@ -155,7 +155,7 @@ export function generateMWGConfigContent(params) {
 
   content += `Mesh.AngularSegments = ${params.angularSegments}\n`;
   if (params.morphTarget === 1 && params.cornerSegments !== undefined) {
-    content += `Mesh.CornerSegments = ${params.cornerSegments}\n`;
+    content += `Mesh.CornerSegments = ${Math.max(0, Math.round(Number(params.cornerSegments)))}\n`;
   }
   if (isNonZero(params.throatSegments))
     content += `Mesh.ThroatSegments = ${formatValue(params.throatSegments)}\n`;
