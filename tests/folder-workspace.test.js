@@ -3,9 +3,32 @@ import assert from 'node:assert/strict';
 
 import {
   getSelectedFolderLabel,
+  getSelectedFolderPath,
+  resetSelectedFolderForTests,
   selectOutputFolder,
   subscribeFolderWorkspace,
 } from '../src/ui/workspace/folderWorkspace.js';
+
+test.beforeEach(resetSelectedFolderForTests);
+
+test('selected folder path tracks a successful backend selection', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { selected: true, path: '/Users/test/exports' };
+    },
+  });
+
+  try {
+    const selected = await selectOutputFolder();
+
+    assert.equal(selected, '/Users/test/exports');
+    assert.equal(getSelectedFolderPath(), '/Users/test/exports');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
 
 test('selectOutputFolder uses backend folder selection', async () => {
   const originalFetch = global.fetch;

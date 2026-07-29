@@ -49,6 +49,13 @@ export function getSelectedFolderPath() {
   return selectedFolderPath;
 }
 
+// Test-support only: no production caller by design — the selected path lives for the
+// app's lifetime. Removing this re-breaks tests/file-ops.test.js and
+// tests/folder-workspace.test.js, which assume a null path at entry.
+export function resetSelectedFolderForTests() {
+  updateSelectedWorkspacePath(null);
+}
+
 export function subscribeFolderWorkspace(listener) {
   if (typeof listener !== 'function') {
     return () => {};
