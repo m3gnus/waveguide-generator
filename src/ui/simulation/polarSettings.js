@@ -522,7 +522,6 @@ function appendPolarCheckboxRow(section, { id, label, help, defaultValue }, doc)
   section.appendChild(row);
 }
 
-
 function appendPolarAxisRow(section, doc) {
   const row = doc.createElement('div');
   row.className = 'input-row';
@@ -770,9 +769,9 @@ export function readPolarStateSettings(params = {}) {
 export function isPolarControlId(id) {
   return Boolean(
     getNumericFieldById(id) ||
-      isPolarAxisControlId(id) ||
-      id === OBSERVATION_ORIGIN_SELECT_ID ||
-      id === SPHERICAL_CHECKBOX_ID
+    isPolarAxisControlId(id) ||
+    id === OBSERVATION_ORIGIN_SELECT_ID ||
+    id === SPHERICAL_CHECKBOX_ID
   );
 }
 
