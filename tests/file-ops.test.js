@@ -7,8 +7,11 @@ import {
   getSelectedFolderPath,
   selectOutputFolder,
   fetchWorkspacePath,
+  resetSelectedFolderForTests,
   writeWorkspaceFile
 } from '../src/ui/workspace/folderWorkspace.js';
+
+test.beforeEach(resetSelectedFolderForTests);
 
 test('saveFile falls back to showSaveFilePicker when backend write fails', async () => {
   const originalDocument = global.document;
@@ -196,8 +199,8 @@ test('saveFile writes to backend workspace when folder picker support is unavail
       async json() {
         return {
           status: 'success',
-          path: '/Users/test/exports/horn_design.txt',
-          workspaceRoot: '/Users/test/exports',
+          path: '/Users/test/exports-backend/horn_design.txt',
+          workspaceRoot: '/Users/test/exports-backend',
           workspaceSubdir: ''
         };
       }
@@ -215,8 +218,8 @@ test('saveFile writes to backend workspace when folder picker support is unavail
     assert.equal(body.get('workspace_subdir'), null);
     const fileBlob = body.get('file');
     assert.equal(fileBlob?.name, 'horn_design.txt');
-    assert.equal(getSelectedFolderLabel(), 'exports');
-    assert.equal(getSelectedFolderPath(), '/Users/test/exports');
+    assert.equal(getSelectedFolderLabel(), 'exports-backend');
+    assert.equal(getSelectedFolderPath(), '/Users/test/exports-backend');
   } finally {
     global.document = originalDocument;
     global.window = originalWindow;
