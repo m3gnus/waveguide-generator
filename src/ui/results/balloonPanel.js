@@ -42,11 +42,7 @@ function colorForLevel(normalized) {
   const f = t - index;
   const a = COLOR_STOPS[index];
   const b = COLOR_STOPS[index + 1];
-  return [
-    a[0] + (b[0] - a[0]) * f,
-    a[1] + (b[1] - a[1]) * f,
-    a[2] + (b[2] - a[2]) * f,
-  ];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
 function formatFrequencyHz(value) {
@@ -67,12 +63,12 @@ export function hasBalloonData(results) {
   const balloon = results?.balloon;
   return Boolean(
     balloon &&
-      Array.isArray(balloon.theta_deg) &&
-      balloon.theta_deg.length >= 2 &&
-      Array.isArray(balloon.phi_deg) &&
-      balloon.phi_deg.length >= 3 &&
-      Array.isArray(balloon.spl_norm_db) &&
-      balloon.spl_norm_db.length > 0
+    Array.isArray(balloon.theta_deg) &&
+    balloon.theta_deg.length >= 2 &&
+    Array.isArray(balloon.phi_deg) &&
+    balloon.phi_deg.length >= 3 &&
+    Array.isArray(balloon.spl_norm_db) &&
+    balloon.spl_norm_db.length > 0
   );
 }
 
@@ -165,18 +161,10 @@ function axisGuides() {
     );
   };
   group.add(
-    makeLine(
-      new THREE.Vector3(-1.25, 0, 0),
-      new THREE.Vector3(1.25, 0, 0),
-      HORIZONTAL_AXIS_COLOR
-    )
+    makeLine(new THREE.Vector3(-1.25, 0, 0), new THREE.Vector3(1.25, 0, 0), HORIZONTAL_AXIS_COLOR)
   );
   group.add(
-    makeLine(
-      new THREE.Vector3(0, -1.25, 0),
-      new THREE.Vector3(0, 1.25, 0),
-      VERTICAL_AXIS_COLOR
-    )
+    makeLine(new THREE.Vector3(0, -1.25, 0), new THREE.Vector3(0, 1.25, 0), VERTICAL_AXIS_COLOR)
   );
   return group;
 }

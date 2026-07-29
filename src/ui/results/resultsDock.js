@@ -19,11 +19,7 @@ import {
   requestDirectivityMap,
   requestLineCharts,
 } from '../simulation/chartRequests.js';
-import {
-  disposeBalloonPanel,
-  isBalloonChartKey,
-  renderBalloonPanel,
-} from './balloonPanel.js';
+import { disposeBalloonPanel, isBalloonChartKey, renderBalloonPanel } from './balloonPanel.js';
 import { allJobs, formatJobListLabel } from '../simulation/jobTracker.js';
 
 const MIN_SPLIT_FRACTION = 0.15;
