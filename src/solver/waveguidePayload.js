@@ -177,7 +177,7 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     enc_space_b: toFiniteNumber(preparedParams.encSpaceB, 25),
     enc_edge: toFiniteNumber(preparedParams.encEdge, 18),
     enc_edge_type: toFiniteNumber(preparedParams.encEdgeType, 1),
-    corner_segments: toFiniteNumber(preparedParams.cornerSegments, 4),
+    corner_segments: requireIntegerNumber('cornerSegments', preparedParams.cornerSegments),
     enc_front_resolution: requireStringValue(
       'encFrontResolution',
       preparedParams.encFrontResolution
