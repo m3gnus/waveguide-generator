@@ -1,4 +1,5 @@
 import asyncio
+import json
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from api.routes_simulation import (
     get_job_status,
     get_mesh_artifact,
     get_results,
+    router as simulation_router,
     stop_simulation,
     submit_simulation,
 )
@@ -64,6 +66,80 @@ class NormalizeWaveguideParamsTest(unittest.TestCase):
 
 
 class ApiValidationTest(unittest.TestCase):
+    def test_empty_frequency_sweeps_return_422_at_api_boundary(self):
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(simulation_router)
+
+        for num_frequencies in (0, -1):
+            with self.subTest(num_frequencies=num_frequencies):
+                request_body = json.dumps(
+                    {
+                        "frequency_range": [100.0, 1000.0],
+                        "num_frequencies": num_frequencies,
+                        "sim_type": "2",
+                    }
+                ).encode("utf-8")
+                messages = []
+
+                async def call_api():
+                    request_pending = True
+
+                    async def receive():
+                        nonlocal request_pending
+                        if request_pending:
+                            request_pending = False
+                            return {
+                                "type": "http.request",
+                                "body": request_body,
+                                "more_body": False,
+                            }
+                        return {"type": "http.disconnect"}
+
+                    async def send(message):
+                        messages.append(message)
+
+                    await app(
+                        {
+                            "type": "http",
+                            "asgi": {"version": "3.0"},
+                            "http_version": "1.1",
+                            "method": "POST",
+                            "scheme": "http",
+                            "path": "/api/solve",
+                            "raw_path": b"/api/solve",
+                            "query_string": b"",
+                            "root_path": "",
+                            "headers": [(b"content-type", b"application/json")],
+                            "client": ("test", 50000),
+                            "server": ("test", 80),
+                        },
+                        receive,
+                        send,
+                    )
+
+                asyncio.run(call_api())
+                status_code = next(
+                    message["status"]
+                    for message in messages
+                    if message["type"] == "http.response.start"
+                )
+                response_body = b"".join(
+                    message.get("body", b"")
+                    for message in messages
+                    if message["type"] == "http.response.body"
+                )
+                detail = json.loads(response_body)["detail"]
+
+                self.assertEqual(status_code, 422)
+                field_error = next(
+                    error
+                    for error in detail
+                    if error["loc"] == ["body", "num_frequencies"]
+                )
+                self.assertEqual(field_error["msg"], "Input should be greater than or equal to 1")
+
     def test_surface_tags_length_validation_runs_before_solver_check(self):
         request = SimulationRequest(
             mesh=MeshData(

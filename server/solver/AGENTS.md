@@ -18,6 +18,8 @@ Scope: applies to `server/solver/*`.
   - `1 = SD1G0 (wall)`, `2 = SD1D1001 (source)`, `3 = SD2G0`, `4 = I1-2`.
 - Source excitation contract must remain tag-2 driven; the simulation
   runner rejects canonical meshes without tag-2 elements before solve.
+- `SimulationRequest.num_frequencies` must be at least 1 so empty sweeps fail
+  with an API validation error before solver setup.
 - `/api/mesh/build` supports only:
   - `formula_type in {"R-OSSE","OSSE"}`
   - `msh_version in {"2.2","4.1"}`
