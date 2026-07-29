@@ -33,6 +33,44 @@ def normalize_contract_chart_theme(value: Any) -> Optional[str]:
         valid = ", ".join(sorted(BUILTIN_THEMES))
         raise ValueError(f"theme must be one of: {valid}.")
     return name
+
+
+PHASE_TIME_CONVENTION_ALIASES = {
+    "": "exp(-ikr)",
+    "auto": "exp(-ikr)",
+    "default": "exp(-ikr)",
+    "legacy": "exp(-ikr)",
+    "bempp": "exp(-ikr)",
+    "bempp-cl": "exp(-ikr)",
+    "bemppcl": "exp(-ikr)",
+    "exp(-ikr)": "exp(-ikr)",
+    "e(-ikr)": "exp(-ikr)",
+    "-ikr": "exp(-ikr)",
+    "negative": "exp(-ikr)",
+    "negative-spatial": "exp(-ikr)",
+    "metal": "exp(+ikr)",
+    "hornlab-metal": "exp(+ikr)",
+    "metal-bem": "exp(+ikr)",
+    "hornlab-metal-bem": "exp(+ikr)",
+    "exp(+ikr)": "exp(+ikr)",
+    "e(+ikr)": "exp(+ikr)",
+    "+ikr": "exp(+ikr)",
+    "positive": "exp(+ikr)",
+    "positive-spatial": "exp(+ikr)",
+}
+
+
+def normalize_phase_time_convention(value: Any) -> str:
+    """Normalize accepted phase propagation labels to a canonical wire value."""
+    raw = str(value or "").strip().lower().replace(" ", "").replace("_", "-")
+    normalized = PHASE_TIME_CONVENTION_ALIASES.get(raw)
+    if normalized is None:
+        raise ValueError(
+            "phase_time_convention must be one of: exp(-ikr), exp(+ikr), bempp, metal."
+        )
+    return normalized
+
+
 DEVICE_MODE_ALIASES = {
     "opencl": "opencl_cpu",
     "cpu_opencl": "opencl_cpu",
@@ -499,6 +537,13 @@ class ChartsRenderRequest(BaseModel):
     def validate_theme(cls, value: Optional[str]) -> Optional[str]:
         return normalize_contract_chart_theme(value)
 
+    @field_validator("phase_time_convention")
+    @classmethod
+    def validate_phase_time_convention(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return normalize_phase_time_convention(value)
+
 
 class DirectivityRenderRequest(BaseModel):
     frequencies: List[float]
@@ -524,6 +569,7 @@ __all__ = [
     "DirectivityRenderRequest",
     "JobStatus",
     "MeshData",
+    "PHASE_TIME_CONVENTION_ALIASES",
     "PolarConfig",
     "SimulationRequest",
     "SimulationResults",
@@ -536,4 +582,5 @@ __all__ = [
     "normalize_contract_device_mode",
     "normalize_contract_solver_backend",
     "normalize_contract_solver_mode",
+    "normalize_phase_time_convention",
 ]

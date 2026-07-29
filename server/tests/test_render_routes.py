@@ -86,6 +86,41 @@ class RenderReferenceContractsTest(unittest.TestCase):
                         **fields,
                     )
 
+    def test_phase_time_convention_aliases_normalize_at_contract_boundary(self):
+        expected_by_marker = {
+            "metal": "exp(+ikr)",
+            "hornlab-metal": "exp(+ikr)",
+            "metal-bem": "exp(+ikr)",
+            "hornlab-metal-bem": "exp(+ikr)",
+            "exp(+ikr)": "exp(+ikr)",
+            "e(+ikr)": "exp(+ikr)",
+            "+ikr": "exp(+ikr)",
+            "positive": "exp(+ikr)",
+            "positive-spatial": "exp(+ikr)",
+            "positive_spatial": "exp(+ikr)",
+            "bempp": "exp(-ikr)",
+            "bempp-cl": "exp(-ikr)",
+            "bemppcl": "exp(-ikr)",
+            "exp(-ikr)": "exp(-ikr)",
+            "e(-ikr)": "exp(-ikr)",
+            "-ikr": "exp(-ikr)",
+            "negative": "exp(-ikr)",
+            "negative-spatial": "exp(-ikr)",
+            "legacy": "exp(-ikr)",
+            "auto": "exp(-ikr)",
+            "default": "exp(-ikr)",
+            "": "exp(-ikr)",
+        }
+
+        for marker, expected in expected_by_marker.items():
+            with self.subTest(marker=marker):
+                request = ChartsRenderRequest(phase_time_convention=marker)
+                self.assertEqual(request.phase_time_convention, expected)
+
+        self.assertIsNone(ChartsRenderRequest(phase_time_convention=None).phase_time_convention)
+        with self.assertRaises(ValidationError):
+            ChartsRenderRequest(phase_time_convention="unknown-marker")
+
 
 class RenderRoutesTest(unittest.TestCase):
     def setUp(self):
