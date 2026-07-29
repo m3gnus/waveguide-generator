@@ -177,13 +177,24 @@ test('buildWaveguidePayload receives rounded backend mesh segments from DesignMo
     prepareBackendMeshSimulationParams({
       type: 'OSSE',
       angularSegments: 21.2,
-      lengthSegments: 9.7
+      lengthSegments: 9.7,
+      cornerSegments: 4.5
     }),
     '2.2'
   );
 
   assert.equal(payload.n_angular, 21);
   assert.equal(payload.n_length, 10);
+  assert.equal(payload.corner_segments, 5);
+});
+
+test('buildWaveguidePayload rejects fractional corner segments on the direct path', () => {
+  const prepared = prepareBackendMeshSimulationParams({ type: 'OSSE' });
+
+  assert.throws(
+    () => buildWaveguidePayload({ ...prepared, cornerSegments: 4.5 }, '2.2'),
+    /requires integer "cornerSegments"/
+  );
 });
 
 test('buildWaveguidePayload preserves valid reduced-domain quadrants from DesignModule normalization', () => {
