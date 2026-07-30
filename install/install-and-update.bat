@@ -26,6 +26,13 @@ if not exist "%WG_ROOT%\install\install.bat" (
     exit /b 1
 )
 
+:: Keep a log. Double-clicking a .bat gives a console that closes on exit, so
+:: without this the failure a user needs to report is simply gone.
+if not exist "%WG_ROOT%\.waveguide\logs" mkdir "%WG_ROOT%\.waveguide\logs" >nul 2>&1
+set "WG_LOG=%WG_ROOT%\.waveguide\logs\install.log"
+echo Logging to: %WG_LOG%
+echo.
+
 call :run_installer
 set "RESULT=%ERRORLEVEL%"
 
@@ -41,6 +48,24 @@ if "%RESULT%"=="10" (
     )
 )
 
+echo.
+if "%RESULT%"=="0" (
+    echo Install log: %WG_LOG%
+) else (
+    echo ===============================================================
+    echo Install failed with error code %RESULT%.
+    echo Full log: %WG_LOG%
+    echo ===============================================================
+    echo Include that log when reporting the problem. It contains no
+    echo credentials; it does contain the project path.
+)
+
+:: Only pause when launched by double-click. When a console was already
+:: attached, cmdcmdline contains the script path with /c and pausing would
+:: block scripted or CI runs.
+echo %CMDCMDLINE% | find /i "%~nx0" >nul 2>&1
+if not errorlevel 1 pause
+
 exit /b %RESULT%
 
 :run_installer
@@ -51,7 +76,13 @@ if errorlevel 1 (
     echo        Check that %TEMP% is writable.
     exit /b 1
 )
-call "%WG_TMP_INSTALLER%" --root "%WG_ROOT%" %*
+:: Show progress live AND keep a full transcript. A plain cmd pipe would set
+:: ERRORLEVEL from the right-hand side of the pipe, destroying the installer's
+:: exit code -- which the exit-10 relaunch depends on. PowerShell's Tee-Object
+:: keeps $LASTEXITCODE from the called script. PowerShell ships with Windows,
+:: so this adds no dependency.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "& '%WG_TMP_INSTALLER%' --root '%WG_ROOT%' %* 2>&1 | Tee-Object -FilePath '%WG_LOG%' -Append; exit $LASTEXITCODE"
 set "RUN_RESULT=%ERRORLEVEL%"
 del "%WG_TMP_INSTALLER%" >nul 2>&1
 exit /b %RUN_RESULT%
