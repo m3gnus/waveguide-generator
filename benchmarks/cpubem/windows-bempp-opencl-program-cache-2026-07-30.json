@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "generator": "scripts/diagnostics/bench-opencl-program-cache.py",
+  "host": "WIN-AVFOP9H3DIL",
+  "cpu_count": 12,
+  "python": "3.13.3",
+  "blas_threads": "default",
+  "note": "Seconds are host- and load-dependent; the speedup ratios and the parity fields are the result. BLAS threads are limited around the dense solve by hornlab_bempp_bem._blas_threads, not globally.",
+  "frequencies_hz": [
+    500.0,
+    750.0,
+    1000.0,
+    1500.0,
+    2000.0
+  ],
+  "cases": {
+    "full": {
+      "mesh": "test_reference_horn.msh",
+      "symmetry": null,
+      "n_vertices": 898,
+      "n_triangles": 1792,
+      "repeats": 3,
+      "uncached_s_per_frequency": 0.43504395999989354,
+      "cached_s_per_frequency": 0.23791765999994824,
+      "uncached_median_s": 2.2082556999994267,
+      "cached_median_s": 1.294828599999164,
+      "speedup": 1.82854841460692,
+      "distinct_programs_cached": 9,
+      "max_spl_diff_db": 0.0,
+      "max_pressure_diff_pa": 0.0,
+      "max_relative_impedance_diff": 0.0,
+      "bitwise_identical": true
+    },
+    "half": {
+      "mesh": "test_reference_horn_q14.msh",
+      "symmetry": "yz",
+      "n_vertices": 479,
+      "n_triangles": 896,
+      "repeats": 3,
+      "uncached_s_per_frequency": 0.35035012000007554,
+      "cached_s_per_frequency": 0.19347692000010283,
+      "uncached_median_s": 1.882222099997307,
+      "cached_median_s": 0.9737177999995765,
+      "speedup": 1.810810922563215,
+      "distinct_programs_cached": 9,
+      "max_spl_diff_db": 0.0,
+      "max_pressure_diff_pa": 0.0,
+      "max_relative_impedance_diff": 0.0,
+      "bitwise_identical": true
+    },
+    "quarter": {
+      "mesh": "test_reference_horn_q1.msh",
+      "symmetry": "yz+xz",
+      "n_vertices": 260,
+      "n_triangles": 458,
+      "repeats": 3,
+      "uncached_s_per_frequency": 0.3244060599994555,
+      "cached_s_per_frequency": 0.1162186000001384,
+      "uncached_median_s": 1.6373916000011377,
+      "cached_median_s": 0.582710999999108,
+      "speedup": 2.791343726383463,
+      "distinct_programs_cached": 10,
+      "max_spl_diff_db": 0.0,
+      "max_pressure_diff_pa": 0.0,
+      "max_relative_impedance_diff": 0.0,
+      "bitwise_identical": true
+    }
+  }
+}

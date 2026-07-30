@@ -1,0 +1,400 @@
+{
+  "comparisons": {},
+  "configuration": {
+    "air_density": 1.2041,
+    "backends": [
+      "bempp-opencl"
+    ],
+    "bempp_formulation": "standard",
+    "bempp_gmres_restart": 100,
+    "bempp_gmres_tol": 1e-05,
+    "bempp_quadrature": 4,
+    "bempp_restrict_neumann_space": true,
+    "bempp_singular_quadrature": 4,
+    "bempp_solver": "gmres",
+    "bempp_symmetry": "none",
+    "cache_directory": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\server\\.benchmark-cache",
+    "frequencies_hz": [
+      500.0,
+      750.0,
+      1000.0,
+      1500.0,
+      2000.0
+    ],
+    "observation_count_per_plane": 74,
+    "observation_distance_m": 2.0,
+    "observation_planes": [
+      "horizontal",
+      "vertical"
+    ],
+    "precision": "single",
+    "repeats": 2,
+    "speed_of_sound": 343.0,
+    "threads": 4
+  },
+  "created_at_utc": "2026-07-30T14:28:07.166402+00:00",
+  "errors": [],
+  "host": {
+    "hostname": "WIN-AVFOP9H3DIL",
+    "logical_cpus": 12,
+    "machine": "AMD64",
+    "numpy": "2.4.6",
+    "platform": "Windows-11-10.0.26100-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "python": "3.13.3",
+    "scipy": "1.18.0"
+  },
+  "mesh": {
+    "path": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\scripts\\diagnostics\\out\\test_reference_horn.msh",
+    "physical_tag_counts": {
+      "1": 1744,
+      "2": 48
+    },
+    "sha256": "8cd0002d00e46d07576f406fe13e6bde186a77618ab87b390318467f9d79f66f",
+    "triangles": 1792,
+    "vertices": 898
+  },
+  "runs": [
+    {
+      "backend": "bempp-opencl",
+      "frequency_runs": [
+        {
+          "converged": true,
+          "frequency_hz": 500.0,
+          "iterations": 27,
+          "phase_timings": {
+            "backend_setup_s": 0.0003224000001864624,
+            "dlp_assembly_s": 0.30599849999998696,
+            "function_spaces_s": 3.0000046535860747e-07,
+            "impedance_s": 0.0001875000007203198,
+            "lhs_materialization_s": 11.698098299999401,
+            "linear_solve_s": 0.05068059999939578,
+            "neumann_data_s": 9.219999992637895e-05,
+            "neumann_restriction_s": 0.0012034999999741558,
+            "operator_construction_s": 0.0051678999998330255,
+            "rhs_apply_s": 0.0009006999998746323,
+            "slp_assembly_s": 0.16647889999967447,
+            "total_s": 12.229702099999486
+          },
+          "solve_seconds": 12.229702099999486
+        },
+        {
+          "converged": true,
+          "frequency_hz": 750.0,
+          "iterations": 29,
+          "phase_timings": {
+            "backend_setup_s": 3.999999989900971e-05,
+            "dlp_assembly_s": 0.3908387000001312,
+            "function_spaces_s": 6.000000212225132e-07,
+            "impedance_s": 0.00020910000057483558,
+            "lhs_materialization_s": 0.0026526000001467764,
+            "linear_solve_s": 0.05196859999978187,
+            "neumann_data_s": 6.84000006003771e-05,
+            "neumann_restriction_s": 0.0013854999997420236,
+            "operator_construction_s": 8.890000026440248e-05,
+            "rhs_apply_s": 0.000649600000542705,
+            "slp_assembly_s": 0.10587179999947693,
+            "total_s": 0.5543134999998074
+          },
+          "solve_seconds": 0.5543134999998074
+        },
+        {
+          "converged": true,
+          "frequency_hz": 1000.0,
+          "iterations": 31,
+          "phase_timings": {
+            "backend_setup_s": 4.549999994196696e-05,
+            "dlp_assembly_s": 0.3200516000006246,
+            "function_spaces_s": 4.000003173132427e-07,
+            "impedance_s": 0.00018660000023373868,
+            "lhs_materialization_s": 0.003036699999938719,
+            "linear_solve_s": 0.05921500000022206,
+            "neumann_data_s": 0.00010490000022400636,
+            "neumann_restriction_s": 0.00148559999979625,
+            "operator_construction_s": 8.790000083536142e-05,
+            "rhs_apply_s": 0.0007534999995186809,
+            "slp_assembly_s": 0.09167170000000624,
+            "total_s": 0.4771547999998802
+          },
+          "solve_seconds": 0.4771547999998802
+        },
+        {
+          "converged": true,
+          "frequency_hz": 1500.0,
+          "iterations": 33,
+          "phase_timings": {
+            "backend_setup_s": 3.529999958118424e-05,
+            "dlp_assembly_s": 0.3096793999993679,
+            "function_spaces_s": 3.9999940781854093e-07,
+            "impedance_s": 0.0001512000008005998,
+            "lhs_materialization_s": 0.002530299999307317,
+            "linear_solve_s": 0.054292200000418234,
+            "neumann_data_s": 6.630000007135095e-05,
+            "neumann_restriction_s": 0.0014212999994924758,
+            "operator_construction_s": 8.820000039122533e-05,
+            "rhs_apply_s": 0.0008383000003959751,
+            "slp_assembly_s": 0.09562609999920824,
+            "total_s": 0.46524460000000545
+          },
+          "solve_seconds": 0.46524460000000545
+        },
+        {
+          "converged": true,
+          "frequency_hz": 2000.0,
+          "iterations": 37,
+          "phase_timings": {
+            "backend_setup_s": 3.2699999792384915e-05,
+            "dlp_assembly_s": 0.35192540000025474,
+            "function_spaces_s": 4.999992597731762e-07,
+            "impedance_s": 0.0001691999996182858,
+            "lhs_materialization_s": 0.0029541000003519002,
+            "linear_solve_s": 0.05862170000000333,
+            "neumann_data_s": 8.269999943877338e-05,
+            "neumann_restriction_s": 0.001123600000028091,
+            "operator_construction_s": 7.77000004745787e-05,
+            "rhs_apply_s": 0.0006604999998671701,
+            "slp_assembly_s": 0.09427460000006249,
+            "total_s": 0.5104596999999558
+          },
+          "solve_seconds": 0.5104596999999558
+        }
+      ],
+      "mesh_seconds": 10.421705299999303,
+      "module_path": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\hornlab-bempp-bem\\hornlab_bempp_bem\\__init__.py",
+      "native_timings": {
+        "directivity_s": 0.32300734519958496,
+        "solve_s": 17.432194709777832,
+        "total_s": 17.755245447158813
+      },
+      "on_axis_pressure": [
+        [
+          3.7031037209089845e-05,
+          3.102119080722332e-06
+        ],
+        [
+          -5.294484435580671e-05,
+          -1.7394448150298558e-05
+        ],
+        [
+          4.7523280954919755e-05,
+          2.3732947738608345e-05
+        ],
+        [
+          8.404521940974519e-05,
+          -2.052675699815154e-05
+        ],
+        [
+          0.0001524686231277883,
+          -7.390593236777931e-05
+        ]
+      ],
+      "opencl_workarounds": {
+        "applied": true,
+        "cacheEnvDefaulted": true,
+        "includePathQuoted": true,
+        "reason": "Quoted bempp-cl include path for clBuildProgram."
+      },
+      "pressure_sha256": "524d846727c7ac716a4070d56307da7bb90b7d24d2cb6c030806b0b838eed86c",
+      "public_solve_seconds": 17.77159500000016,
+      "repeat": 1,
+      "source_impedance": [
+        [
+          0.021318912148608277,
+          -0.0005691121368891157
+        ],
+        [
+          0.022012413156681378,
+          -0.0010214664302919663
+        ],
+        [
+          0.022955892541023294,
+          -0.0010324029669272995
+        ],
+        [
+          0.024640096529896863,
+          -0.0018998503978540006
+        ],
+        [
+          0.02996466041713229,
+          -0.005723981396555984
+        ]
+      ],
+      "total_seconds": 28.193373999999494
+    },
+    {
+      "backend": "bempp-opencl",
+      "frequency_runs": [
+        {
+          "converged": true,
+          "frequency_hz": 500.0,
+          "iterations": 27,
+          "phase_timings": {
+            "backend_setup_s": 2.919999951700447e-05,
+            "dlp_assembly_s": 0.2771038999999291,
+            "function_spaces_s": 1.9999970390927047e-07,
+            "impedance_s": 0.00023150000015448313,
+            "lhs_materialization_s": 0.00244360000033339,
+            "linear_solve_s": 0.04635920000055194,
+            "neumann_data_s": 6.73000004098867e-05,
+            "neumann_restriction_s": 0.0009711000002425862,
+            "operator_construction_s": 8.190000062313629e-05,
+            "rhs_apply_s": 0.0006221000003279187,
+            "slp_assembly_s": 0.13654390000010608,
+            "total_s": 0.46499390000008134
+          },
+          "solve_seconds": 0.46499390000008134
+        },
+        {
+          "converged": true,
+          "frequency_hz": 750.0,
+          "iterations": 29,
+          "phase_timings": {
+            "backend_setup_s": 3.279999964433955e-05,
+            "dlp_assembly_s": 0.33389919999990525,
+            "function_spaces_s": 3.0000046535860747e-07,
+            "impedance_s": 0.00014709999959450215,
+            "lhs_materialization_s": 0.004669599999942875,
+            "linear_solve_s": 0.0445478000001458,
+            "neumann_data_s": 5.830000009154901e-05,
+            "neumann_restriction_s": 0.001246299999365874,
+            "operator_construction_s": 7.749999986117473e-05,
+            "rhs_apply_s": 0.0006508999995276099,
+            "slp_assembly_s": 0.08737740000015037,
+            "total_s": 0.4732088000000658
+          },
+          "solve_seconds": 0.4732088000000658
+        },
+        {
+          "converged": true,
+          "frequency_hz": 1000.0,
+          "iterations": 31,
+          "phase_timings": {
+            "backend_setup_s": 3.099999958067201e-05,
+            "dlp_assembly_s": 0.27708469999925,
+            "function_spaces_s": 3.0000046535860747e-07,
+            "impedance_s": 0.00016540000069653615,
+            "lhs_materialization_s": 0.0026502000000618864,
+            "linear_solve_s": 0.05262510000011389,
+            "neumann_data_s": 5.510000028152717e-05,
+            "neumann_restriction_s": 0.0011502999996082508,
+            "operator_construction_s": 7.929999992484227e-05,
+            "rhs_apply_s": 0.0005996999998387764,
+            "slp_assembly_s": 0.08404150000023947,
+            "total_s": 0.4190164999999979
+          },
+          "solve_seconds": 0.4190164999999979
+        },
+        {
+          "converged": true,
+          "frequency_hz": 1500.0,
+          "iterations": 33,
+          "phase_timings": {
+            "backend_setup_s": 3.3799999982875306e-05,
+            "dlp_assembly_s": 0.2927331000000777,
+            "function_spaces_s": 3.0000046535860747e-07,
+            "impedance_s": 0.00015279999934136868,
+            "lhs_materialization_s": 0.002455799999552255,
+            "linear_solve_s": 0.04841190000024653,
+            "neumann_data_s": 6.169999960548012e-05,
+            "neumann_restriction_s": 0.0012708000003840425,
+            "operator_construction_s": 8.460000026389025e-05,
+            "rhs_apply_s": 0.0006003000007694936,
+            "slp_assembly_s": 0.09020330000021204,
+            "total_s": 0.43654549999973824
+          },
+          "solve_seconds": 0.43654549999973824
+        },
+        {
+          "converged": true,
+          "frequency_hz": 2000.0,
+          "iterations": 37,
+          "phase_timings": {
+            "backend_setup_s": 3.1399999897985253e-05,
+            "dlp_assembly_s": 0.2903777000001355,
+            "function_spaces_s": 2.999995558639057e-07,
+            "impedance_s": 0.00016740000046411296,
+            "lhs_materialization_s": 0.0023960999997143517,
+            "linear_solve_s": 0.05681129999993573,
+            "neumann_data_s": 5.6400000175926834e-05,
+            "neumann_restriction_s": 0.0012139000000388478,
+            "operator_construction_s": 7.880000066506909e-05,
+            "rhs_apply_s": 0.0006800999999541091,
+            "slp_assembly_s": 0.09565479999946547,
+            "total_s": 0.4481375000004846
+          },
+          "solve_seconds": 0.4481375000004846
+        }
+      ],
+      "mesh_seconds": 0.0616026999996393,
+      "module_path": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\hornlab-bempp-bem\\hornlab_bempp_bem\\__init__.py",
+      "native_timings": {
+        "directivity_s": 0.24719524383544922,
+        "solve_s": 2.2526464462280273,
+        "total_s": 2.4998762607574463
+      },
+      "on_axis_pressure": [
+        [
+          3.7031037209089845e-05,
+          3.102119080722332e-06
+        ],
+        [
+          -5.294484435580671e-05,
+          -1.7394448150298558e-05
+        ],
+        [
+          4.7523280954919755e-05,
+          2.3732947738608345e-05
+        ],
+        [
+          8.404521940974519e-05,
+          -2.052675699815154e-05
+        ],
+        [
+          0.0001524686231277883,
+          -7.390593236777931e-05
+        ]
+      ],
+      "opencl_workarounds": {
+        "applied": true,
+        "cacheEnvDefaulted": true,
+        "includePathQuoted": true,
+        "reason": "Quoted bempp-cl include path for clBuildProgram."
+      },
+      "pressure_sha256": "524d846727c7ac716a4070d56307da7bb90b7d24d2cb6c030806b0b838eed86c",
+      "public_solve_seconds": 2.5005506999996214,
+      "repeat": 2,
+      "source_impedance": [
+        [
+          0.021318912148608277,
+          -0.0005691121368891157
+        ],
+        [
+          0.022012413156681378,
+          -0.0010214664302919663
+        ],
+        [
+          0.022955892541023294,
+          -0.0010324029669272995
+        ],
+        [
+          0.024640096529896863,
+          -0.0018998503978540006
+        ],
+        [
+          0.02996466041713229,
+          -0.005723981396555984
+        ]
+      ],
+      "total_seconds": 2.5622174999998606
+    }
+  ],
+  "schema_version": 1,
+  "success": true,
+  "summary": {
+    "bempp-opencl": {
+      "median_seconds_per_frequency": 3.0755591499999357,
+      "median_total_seconds": 15.377795749999677,
+      "repeats": 2
+    }
+  }
+}
