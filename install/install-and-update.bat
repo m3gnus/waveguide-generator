@@ -22,7 +22,7 @@ for %%i in ("%WG_ROOT%") do set "WG_ROOT=%%~fi"
 
 if not exist "%WG_ROOT%\install\install.bat" (
     echo ERROR: Could not find install\install.bat next to this script.
-    echo Expected project folder: %WG_ROOT%
+    echo Expected project folder: !WG_ROOT!
     exit /b 1
 )
 
@@ -43,18 +43,18 @@ if "%RESULT%"=="10" (
         echo.
         echo ERROR: The installer reported a second code update immediately
         echo        after updating. Stopping to avoid an update loop.
-        echo        Run "git status" in %WG_ROOT% and re-run this script.
+        echo        Run "git status" in !WG_ROOT! and re-run this script.
         set "RESULT=1"
     )
 )
 
 echo.
 if "%RESULT%"=="0" (
-    echo Install log: %WG_LOG%
+    echo Install log: !WG_LOG!
 ) else (
     echo ===============================================================
-    echo Install failed with error code %RESULT%.
-    echo Full log: %WG_LOG%
+    echo Install failed with error code !RESULT!.
+    echo Full log: !WG_LOG!
     echo ===============================================================
     echo Include that log when reporting the problem. It contains no
     echo credentials; it does contain the project path.
@@ -72,8 +72,8 @@ exit /b %RESULT%
 set "WG_TMP_INSTALLER=%TEMP%\wg-install-%RANDOM%%RANDOM%.bat"
 copy /y "%WG_ROOT%\install\install.bat" "%WG_TMP_INSTALLER%" >nul
 if errorlevel 1 (
-    echo ERROR: Could not stage the installer in %TEMP%.
-    echo        Check that %TEMP% is writable.
+    echo ERROR: Could not stage the installer in !TEMP!.
+    echo        Check that !TEMP! is writable.
     exit /b 1
 )
 :: Show progress live AND keep a full transcript. A plain cmd pipe would set

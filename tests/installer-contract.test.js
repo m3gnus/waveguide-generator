@@ -130,6 +130,39 @@ test('windows installer skips Microsoft Store python execution aliases', () => {
   );
 });
 
+test('windows installers never expand a path variable inside a block', () => {
+  // cmd.exe expands %VAR% when it PARSES a parenthesised block, before running
+  // it. A path containing ')' therefore closes the block early. Verified with a
+  // real install into "C:\...\Hörnlab – Wörkspace (tëst)\wg": the installer died
+  // in 1.2s with "\wg was unexpected at this time." before printing anything.
+  // Delayed expansion (!VAR!) defers substitution to execution time and is
+  // immune. Quoted "%VAR%" is also safe, because the quotes survive parsing.
+  const pathVars = ['WG_ROOT', 'WG_LOG', 'CD', 'TEMP', 'WG_TMP_INSTALLER'];
+
+  for (const [name, source] of [
+    ['install.bat', windowsInstaller],
+    ['install-and-update.bat', fs.readFileSync(
+      new URL('../install/install-and-update.bat', import.meta.url), 'utf8')],
+  ]) {
+    for (const line of source.split(/\r?\n/)) {
+      if (!/^\s+/.test(line)) continue;          // only indented (in-block) lines
+      if (/^\s*(rem|::)/i.test(line)) continue;  // comments are inert
+      for (const v of pathVars) {
+        // Safe forms: "%VAR%" (cmd quoting survives the parse) and '%VAR%'
+        // (PowerShell single-quoting, used for the Tee-Object invocation).
+        // Unsafe: a bare %VAR% that the parser expands before the block runs.
+        const bare = new RegExp(`(^|[^"'%])%${v}%([^"']|$)`);
+        assert.equal(
+          bare.test(line),
+          false,
+          `${name}: unquoted %${v}% inside a block breaks on paths containing `
+            + `')'. Use !${v}! or quote it.\n  ${line.trim()}`
+        );
+      }
+    }
+  }
+});
+
 test('windows launcher calls npm.cmd so failures stay visible', () => {
   const launcher = fs.readFileSync(
     new URL('../launch/windows.bat', import.meta.url),

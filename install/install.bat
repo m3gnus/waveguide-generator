@@ -54,7 +54,7 @@ for %%f in (package.json package-lock.json install\install.bat server\requiremen
 if defined ROOT_INVALID (
     echo.
     echo ERROR: This does not look like the full Waveguide Generator project folder.
-    echo Current folder: %CD%
+    echo Current folder: !CD!
     echo.
     echo Fix steps:
     echo   1. Download the full project ZIP from GitHub.
