@@ -22,6 +22,7 @@ never raise, and any failure is reported as a structured ``reason`` string.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -99,6 +100,93 @@ def _load_configure_opencl() -> tuple[Any | None, str | None]:
             f"({_describe_exception(exc)})."
         )
     return configure_opencl, None
+
+
+def opencl_kernel_build_probe(device_type: str) -> dict[str, Any]:
+    """Compile a kernel the way bempp-cl does, and report whether it works.
+
+    Creating an OpenCL context is not sufficient evidence that a solve can run.
+    bempp-cl passes its source include directory to ``clBuildProgram`` as an
+    unquoted ``-I`` option. When the install path contains a space -- which is
+    ordinary on Windows -- the option splits and the build fails with
+    ``INVALID_BUILD_OPTIONS``, even though ``configure_opencl`` succeeded and
+    every device query looked healthy.
+
+    Two failure modes get normalized here:
+
+    * ``clBuildProgram ... INVALID_BUILD_OPTIONS`` caused by a space in the
+      include path. Reported with the actionable cause rather than the raw
+      compiler dump.
+    * ``KeyError: 'PYOPENCL_CACHE_FAILURE_FATAL'``. pyopencl's cache error
+      handler reads that variable without a default, so its own error path
+      raises and masks the real compiler error entirely.
+
+    Never raises.
+    """
+    module, reason = _import_pyopencl()
+    if module is None:
+        return {"ok": False, "reason": reason or "pyopencl is not importable."}
+
+    try:
+        from bempp_cl.core.opencl_kernels import default_context  # type: ignore
+    except Exception as exc:
+        return {
+            "ok": False,
+            "reason": f"bempp-cl OpenCL kernels are unavailable ({_describe_exception(exc)}).",
+        }
+
+    include_dir = None
+    try:
+        import bempp_cl.core as _bempp_core  # type: ignore
+
+        base = os.path.dirname(os.path.abspath(_bempp_core.__file__))
+        candidate = os.path.join(base, "sources", "include")
+        if os.path.isdir(candidate):
+            include_dir = candidate
+    except Exception:
+        include_dir = None
+
+    # Mirror bempp-cl: pass -I unquoted. If that is going to break, it must
+    # break here, during readiness, not midway through a user's sweep.
+    options = [f"-I {include_dir}"] if include_dir else []
+    source = "__kernel void wg_probe(__global float *o){ o[get_global_id(0)] = 1.0f; }"
+
+    try:
+        context = default_context(device_type)
+        module.Program(context, source).build(options=options)
+    except KeyError as exc:
+        if "PYOPENCL_CACHE_FAILURE_FATAL" in str(exc):
+            return {
+                "ok": False,
+                "reason": (
+                    "OpenCL kernel build failed and pyopencl's cache error handler "
+                    "raised KeyError('PYOPENCL_CACHE_FAILURE_FATAL'), hiding the real "
+                    "compiler error. Set PYOPENCL_CACHE_FAILURE_FATAL=0 to surface it."
+                ),
+            }
+        return {"ok": False, "reason": f"OpenCL kernel build failed ({_describe_exception(exc)})."}
+    except Exception as exc:
+        text = str(exc)
+        if "INVALID_BUILD_OPTIONS" in text:
+            spaced = bool(include_dir and " " in include_dir)
+            detail = (
+                " The bempp-cl include path contains a space and bempp-cl does not "
+                "quote its -I option, so the compiler splits it. Reinstall the "
+                "project under a path with no spaces, or use the numba assembly "
+                "backend."
+                if spaced
+                else ""
+            )
+            return {
+                "ok": False,
+                "reason": f"OpenCL kernel build failed with INVALID_BUILD_OPTIONS.{detail}",
+            }
+        return {
+            "ok": False,
+            "reason": f"OpenCL kernel build failed ({_describe_exception(exc)}).",
+        }
+
+    return {"ok": True, "reason": "OpenCL kernel compiled successfully."}
 
 
 def _numba_runtime() -> dict[str, Any]:
@@ -383,11 +471,25 @@ def device_mode_readiness(device_mode: str) -> dict[str, Any]:
             )
             return result
 
+        # A context is not a solve. bempp-cl must also be able to COMPILE its
+        # assembly kernel on this device; that step fails independently of
+        # device initialization (see opencl_kernel_build_probe).
+        build = opencl_kernel_build_probe(resolved)
+        if not build.get("ok"):
+            result["deviceName"] = _sanitize(device_name) if device_name else None
+            result["reason"] = (
+                f"OpenCL {resolved.upper()} device initialized "
+                f"({result['deviceName'] or 'unnamed device'}) but the assembly "
+                f"kernel cannot be compiled: {build.get('reason')}"
+            )
+            return result
+
         result["ready"] = True
         result["deviceName"] = _sanitize(device_name) if device_name else None
         result["reason"] = (
-            f"OpenCL {resolved.upper()} device initialized for "
-            f"device_mode={normalized!r}: {result['deviceName'] or 'unnamed device'}."
+            f"OpenCL {resolved.upper()} device initialized and assembly kernel "
+            f"compiled for device_mode={normalized!r}: "
+            f"{result['deviceName'] or 'unnamed device'}."
         )
         return result
     except Exception as exc:  # pragma: no cover - defensive: must never raise

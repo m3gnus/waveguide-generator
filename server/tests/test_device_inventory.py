@@ -1,3 +1,4 @@
+import contextlib
 import unittest
 from unittest.mock import patch
 
@@ -93,9 +94,15 @@ def _patch_runtime(
     configure=None,
     configure_reason="hornlab_bempp_bem.device.configure_opencl is unavailable.",
     numba=None,
+    kernel_build=None,
 ):
-    """Patch the three guarded optional-import helpers of the module."""
+    """Patch the guarded optional-import helpers and the kernel-build probe.
+
+    ``kernel_build`` defaults to success so that tests about device enumeration
+    stay about device enumeration. The probe has its own dedicated tests.
+    """
     numba = numba or {"available": True, "reason": "numba 0.61.0 is available."}
+    kernel_build = kernel_build or {"ok": True, "reason": "OpenCL kernel compiled successfully."}
     return (
         patch(
             f"{MODULE}._import_pyopencl",
@@ -106,6 +113,7 @@ def _patch_runtime(
             return_value=(configure, None if configure is not None else configure_reason),
         ),
         patch(f"{MODULE}._numba_runtime", return_value=numba),
+        patch(f"{MODULE}.opencl_kernel_build_probe", return_value=kernel_build),
     )
 
 
@@ -128,9 +136,53 @@ class _ConfigureOpenCLStub:
 
 class DeviceInventoryTest(unittest.TestCase):
     def _run(self, func, **kwargs):
-        binding_patch, configure_patch, numba_patch = _patch_runtime(**kwargs)
-        with binding_patch, configure_patch, numba_patch:
+        patches = _patch_runtime(**kwargs)
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
             return func()
+
+    def test_initialized_device_with_unbuildable_kernel_is_not_ready(self):
+        """A working OpenCL context is not evidence that a solve can run.
+
+        Regression test for a real failure: on an install path containing a
+        space, configure_opencl("cpu") succeeds and every device query looks
+        healthy, but bempp-cl's clBuildProgram call fails with
+        INVALID_BUILD_OPTIONS because it passes its -I include path unquoted.
+        Readiness must reflect that, and the effective backend must fall back
+        to numba rather than reporting an OpenCL device it cannot use.
+        """
+        readiness = self._run(
+            lambda: device_mode_readiness("opencl_cpu"),
+            binding=_FakePyOpenCL(platforms=[_FakePlatform(devices=[_cpu_device()])]),
+            configure=_ConfigureOpenCLStub(names={"cpu": "Fake CPU"}),
+            kernel_build={
+                "ok": False,
+                "reason": (
+                    "OpenCL kernel build failed with INVALID_BUILD_OPTIONS. The "
+                    "bempp-cl include path contains a space and bempp-cl does not "
+                    "quote its -I option, so the compiler splits it."
+                ),
+            },
+        )
+
+        self.assertFalse(readiness["ready"])
+        self.assertEqual(readiness["resolvedDeviceType"], "cpu")
+        # The device name is still reported: it initialized, so a "device not
+        # found" message would misdirect the user.
+        self.assertEqual(readiness["deviceName"], "Fake CPU")
+        self.assertIn("assembly kernel cannot be compiled", readiness["reason"])
+        self.assertIn("INVALID_BUILD_OPTIONS", readiness["reason"])
+
+        summary = self._run(
+            acceleration_summary,
+            binding=_FakePyOpenCL(platforms=[_FakePlatform(devices=[_cpu_device()])]),
+            configure=_ConfigureOpenCLStub(names={"cpu": "Fake CPU"}),
+            kernel_build={"ok": False, "reason": "INVALID_BUILD_OPTIONS"},
+        )
+        self.assertFalse(summary["openclCpu"]["available"])
+        self.assertFalse(summary["acceleratedByGpu"])
+        self.assertEqual(summary["effectiveBackend"], "numba")
 
     # 1. pyopencl missing entirely.
     def test_inventory_reports_binding_missing_without_pyopencl(self):
