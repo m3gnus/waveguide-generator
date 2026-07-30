@@ -22,8 +22,19 @@ test('installers enforce the runtime prerequisites they consume', () => {
 test('installers preserve and replace an invalid virtual environment', () => {
   assert.match(shellInstaller, /\.venv\.incompatible/);
   assert.match(windowsInstaller, /\.venv\.incompatible/);
+
+  // The shell installer still probes inline; POSIX shells parse it correctly.
   assert.match(shellInstaller, /sys\.prefix != sys\.base_prefix/);
-  assert.match(windowsInstaller, /sys\.prefix != sys\.base_prefix/);
+
+  // The Windows installer delegates to install\check_venv.py, because cmd.exe
+  // mis-parsed the inline form inside a parenthesised block. The check itself
+  // must still be the same one, so assert it lives in the script.
+  const checkVenv = fs.readFileSync(
+    new URL('../install/check_venv.py', import.meta.url),
+    'utf8'
+  );
+  assert.match(checkVenv, /sys\.prefix != sys\.base_prefix/);
+  assert.match(windowsInstaller, /check_venv\.py/);
 });
 
 test('Metal helper build runs before solve-backend selection', () => {
@@ -70,6 +81,65 @@ test('updated code restarts through the freshly pulled installer', () => {
     /--after-pull/,
     'install.bat must still accept --after-pull when relaunched.'
   );
+});
+
+test('windows installer probes the venv with a script, not an inline -c', () => {
+  // A `python -c "...(3,10) <= sys.version_info[:2] < (3,15)..."` probe inside a
+  // parenthesised cmd block was mis-parsed: it reported failure while the same
+  // command exited 0 at the prompt. The installer then discarded a healthy
+  // .venv on every run, rebuilt it (~3 min), and left a backup behind each
+  // time. Reruns went from 195s to 58s once this moved into a file.
+  assert.match(
+    windowsInstaller,
+    /check_venv\.py/,
+    'install.bat must validate .venv via install\\check_venv.py'
+  );
+  assert.doesNotMatch(
+    windowsInstaller,
+    /python\.exe -c "import sys; sys\.exit\(0 if sys\.prefix/,
+    'the inline venv probe is mis-parsed by cmd inside a block; use the script'
+  );
+});
+
+test('windows installer keeps at most one incompatible venv backup', () => {
+  // The old scheme appended !RANDOM!!RANDOM! and never cleaned up, so repeated
+  // runs accumulated multi-hundred-MB directories. Four had piled up.
+  assert.doesNotMatch(
+    windowsInstaller,
+    /\.venv\.incompatible\.!RANDOM!/,
+    'do not create a uniquely-named backup on every run'
+  );
+  assert.match(windowsInstaller, /rd \/s \/q "\.venv\.incompatible"/);
+  assert.match(
+    windowsInstaller,
+    /for \/d %%d in \("\.venv\.incompatible\.\*"\)/,
+    'stale backups from the old naming scheme should be swept up'
+  );
+});
+
+test('windows installer skips Microsoft Store python execution aliases', () => {
+  assert.match(
+    windowsInstaller,
+    /WindowsApps/,
+    'install.bat must recognise Store execution aliases'
+  );
+  assert.match(
+    windowsInstaller,
+    /STORE_ALIAS_SEEN/,
+    'install.bat should tell the user when it skipped a Store alias'
+  );
+});
+
+test('windows launcher calls npm.cmd so failures stay visible', () => {
+  const launcher = fs.readFileSync(
+    new URL('../launch/windows.bat', import.meta.url),
+    'utf8'
+  );
+
+  // Without `call`, control transfers to npm.cmd permanently and the `pause`
+  // below never runs, so a double-clicked launcher closes instantly on error.
+  assert.match(launcher, /call npm\.cmd start/);
+  assert.match(launcher, /pause/);
 });
 
 test('windows entry point runs the installer from a copy outside the repo', () => {

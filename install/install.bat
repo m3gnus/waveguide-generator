@@ -108,31 +108,42 @@ set "FIRST_PYTHON_CMD="
 set "FIRST_PYTHON_VERSION="
 set "FIRST_PYTHON_PATH="
 
+rem Consider EVERY match from `where`, not just the first. On Windows the first
+rem hit is frequently the Microsoft Store execution alias in
+rem %LOCALAPPDATA%\Microsoft\WindowsApps: a zero-byte stub that opens the Store
+rem instead of running Python. Taking it produces either a Store popup or a
+rem baffling spawn failure much later, so skip aliases and keep looking.
+set "STORE_ALIAS_SEEN="
+
 for %%p in (py python3 python) do (
     if not defined WG_SETUP_PYTHON (
-        where %%p >nul 2>&1
-        if not errorlevel 1 (
-            set "CANDIDATE_PATH="
-            for /f "delims=" %%w in ('where %%p 2^>nul') do (
-                if not defined CANDIDATE_PATH set "CANDIDATE_PATH=%%w"
-            )
+        for /f "delims=" %%w in ('where %%p 2^>nul') do (
+            if not defined WG_SETUP_PYTHON (
+                set "IS_STORE_ALIAS="
+                echo %%w| find /i "\WindowsApps\" >nul 2>&1
+                if not errorlevel 1 set "IS_STORE_ALIAS=1"
 
-            set "CANDIDATE_VERSION="
-            for /f "delims=" %%v in ('%%p -c "import sys; print('{}.{}.{}'.format(*sys.version_info[:3]))" 2^>nul') do (
-                if not defined CANDIDATE_VERSION set "CANDIDATE_VERSION=%%v"
-            )
+                if defined IS_STORE_ALIAS (
+                    set "STORE_ALIAS_SEEN=1"
+                ) else (
+                    set "CANDIDATE_VERSION="
+                    for /f "delims=" %%v in ('"%%w" -c "import sys; print('{}.{}.{}'.format(*sys.version_info[:3]))" 2^>nul') do (
+                        if not defined CANDIDATE_VERSION set "CANDIDATE_VERSION=%%v"
+                    )
 
-            if not defined FIRST_PYTHON_CMD (
-                set "FIRST_PYTHON_CMD=%%p"
-                set "FIRST_PYTHON_PATH=!CANDIDATE_PATH!"
-                set "FIRST_PYTHON_VERSION=!CANDIDATE_VERSION!"
-            )
+                    if not defined FIRST_PYTHON_CMD (
+                        set "FIRST_PYTHON_CMD=%%p"
+                        set "FIRST_PYTHON_PATH=%%w"
+                        set "FIRST_PYTHON_VERSION=!CANDIDATE_VERSION!"
+                    )
 
-            %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
-            if not errorlevel 1 (
-                set "WG_SETUP_PYTHON=%%p"
-                set "PYTHON_PATH=!CANDIDATE_PATH!"
-                set "PYTHON_VERSION=!CANDIDATE_VERSION!"
+                    "%%w" -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
+                    if not errorlevel 1 (
+                        set "WG_SETUP_PYTHON=%%w"
+                        set "PYTHON_PATH=%%w"
+                        set "PYTHON_VERSION=!CANDIDATE_VERSION!"
+                    )
+                )
             )
         )
     )
@@ -148,7 +159,15 @@ if not defined WG_SETUP_PYTHON (
             echo        This version is outside the supported range.
         )
     ) else (
-        echo        No Python command was detected in PATH.
+        echo        No usable Python was detected in PATH.
+    )
+    if defined STORE_ALIAS_SEEN (
+        echo.
+        echo        A Microsoft Store "App execution alias" for Python was found in
+        echo        %%LOCALAPPDATA%%\Microsoft\WindowsApps and skipped. That entry is a
+        echo        stub that opens the Store; it is not a Python installation.
+        echo        Turn it off in: Settings ^> Apps ^> Advanced app settings ^>
+        echo        App execution aliases ^> switch off "python.exe" and "python3.exe".
     )
     echo.
     echo Recommended checks:
@@ -157,36 +176,35 @@ if not defined WG_SETUP_PYTHON (
     echo      and tick "Add python.exe to PATH"
     exit /b 1
 )
+if defined STORE_ALIAS_SEEN (
+    echo   Note: skipped a Microsoft Store Python execution alias in WindowsApps.
+)
 
-echo   Python command: %WG_SETUP_PYTHON%
+echo   Python interpreter: %WG_SETUP_PYTHON%
 if defined PYTHON_VERSION echo   Python version: %PYTHON_VERSION%
 if defined PYTHON_PATH echo   Python path: %PYTHON_PATH%
 echo.
 
 echo Creating Python virtual environment (.venv)...
+rem The validity probe MUST NOT be inlined into a parenthesised block. Its
+rem Python expression contains parentheses inside a quoted argument, which
+rem cmd.exe's block parser mishandles: the probe reported failure even when the
+rem identical command exited 0 at the prompt. The installer then discarded a
+rem perfectly good .venv on every run, rebuilt it from scratch (~3 minutes), and
+rem left a numbered backup directory behind each time. Keep it in a subroutine.
 if exist ".venv\" (
-    set "VENV_VALID="
-    if exist ".venv\Scripts\python.exe" (
-        .venv\Scripts\python.exe -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix and (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
-        if not errorlevel 1 set "VENV_VALID=1"
-    )
-    if defined VENV_VALID (
-        echo   Existing .venv is valid; reusing it.
+    call :validate_venv
+    if errorlevel 1 (
+        call :preserve_incompatible_venv
+        if errorlevel 1 exit /b 1
     ) else (
-        set "VENV_BACKUP=.venv.incompatible.!RANDOM!!RANDOM!"
-        echo   Existing .venv is broken or uses an unsupported Python.
-        echo   Preserving it as !VENV_BACKUP!
-        move ".venv" "!VENV_BACKUP!" >nul
-        if errorlevel 1 (
-            echo ERROR: Could not preserve the incompatible .venv.
-            exit /b 1
-        )
+        echo   Existing .venv is valid; reusing it.
     )
 )
 if not exist ".venv\" (
-    %WG_SETUP_PYTHON% -m venv .venv
+    "%WG_SETUP_PYTHON%" -m venv .venv
     if errorlevel 1 (
-        echo ERROR: Failed to create .venv using %WG_SETUP_PYTHON%.
+        echo ERROR: Failed to create .venv using "%WG_SETUP_PYTHON%".
         exit /b 1
     )
     echo   Created.
@@ -372,6 +390,35 @@ if /I not "!BEFORE_COMMIT!"=="!AFTER_COMMIT!" (
     set "CODE_UPDATED=1"
 )
 echo.
+exit /b 0
+
+:validate_venv
+rem Exit 0 when .venv is a usable virtual environment on a supported Python.
+rem The check lives in install\check_venv.py rather than a `python -c` one-liner
+rem so that no parentheses or comparison operators reach cmd.exe's parser.
+if not exist ".venv\Scripts\python.exe" exit /b 1
+if not exist "install\check_venv.py" exit /b 1
+.venv\Scripts\python.exe "install\check_venv.py" >nul 2>&1
+exit /b %ERRORLEVEL%
+
+:preserve_incompatible_venv
+rem Keep exactly one backup. The previous scheme appended !RANDOM!!RANDOM! and
+rem never cleaned up, so repeated runs accumulated multi-hundred-MB directories
+rem indefinitely. Also sweep up any backups left by that older scheme.
+echo   Existing .venv is broken or uses an unsupported Python.
+if exist ".venv.incompatible\" rd /s /q ".venv.incompatible" >nul 2>&1
+for /d %%d in (".venv.incompatible.*") do (
+    echo   Removing stale backup %%~nxd
+    rd /s /q "%%d" >nul 2>&1
+)
+echo   Preserving the current one as .venv.incompatible
+move ".venv" ".venv.incompatible" >nul
+if errorlevel 1 (
+    echo ERROR: Could not preserve the incompatible .venv.
+    echo        Close any program using it ^(editor, terminal, antivirus scan^)
+    echo        and run the installer again.
+    exit /b 1
+)
 exit /b 0
 
 :ensure_git_for_dependencies
