@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'path';
 
 import { runBackendRuntimePreflight } from '../scripts/preflight-backend-runtime.js';
 
 test('runBackendRuntimePreflight invokes selected interpreter with preflight script', () => {
   const spawnCalls = [];
+  const rootDir = path.sep === '\\' ? 'C:\\repo' : '/repo';
   const exitCode = runBackendRuntimePreflight({
-    rootDir: '/repo',
+    rootDir,
     args: ['--strict'],
     env: {},
     resolveBackendPythonFn() {
@@ -23,7 +25,7 @@ test('runBackendRuntimePreflight invokes selected interpreter with preflight scr
   assert.equal(spawnCalls[0].python, '/repo/.venv/bin/python');
   assert.deepEqual(
     spawnCalls[0].pythonArgs,
-    ['/repo/server/scripts/runtime_preflight.py', '--strict']
+    [path.join(rootDir, 'server', 'scripts', 'runtime_preflight.py'), '--strict']
   );
   assert.equal(
     spawnCalls[0].options.env.WG_BACKEND_PYTHON_SOURCE,

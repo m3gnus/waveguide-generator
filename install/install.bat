@@ -67,7 +67,7 @@ echo   Frontend dependencies installed.
 echo.
 
 echo Checking Python 3...
-set "PYTHON_BIN="
+set "WG_SETUP_PYTHON="
 set "PYTHON_VERSION="
 set "PYTHON_PATH="
 set "FIRST_PYTHON_CMD="
@@ -75,7 +75,7 @@ set "FIRST_PYTHON_VERSION="
 set "FIRST_PYTHON_PATH="
 
 for %%p in (py python3 python) do (
-    if not defined PYTHON_BIN (
+    if not defined WG_SETUP_PYTHON (
         where %%p >nul 2>&1
         if not errorlevel 1 (
             set "CANDIDATE_PATH="
@@ -96,7 +96,7 @@ for %%p in (py python3 python) do (
 
             %%p -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
             if not errorlevel 1 (
-                set "PYTHON_BIN=%%p"
+                set "WG_SETUP_PYTHON=%%p"
                 set "PYTHON_PATH=!CANDIDATE_PATH!"
                 set "PYTHON_VERSION=!CANDIDATE_VERSION!"
             )
@@ -104,7 +104,7 @@ for %%p in (py python3 python) do (
     )
 )
 
-if not defined PYTHON_BIN (
+if not defined WG_SETUP_PYTHON (
     echo ERROR: Python 3.10 through 3.14 is required.
     if defined FIRST_PYTHON_CMD (
         echo        Detected command: !FIRST_PYTHON_CMD!
@@ -124,7 +124,7 @@ if not defined PYTHON_BIN (
     exit /b 1
 )
 
-echo   Python command: %PYTHON_BIN%
+echo   Python command: %WG_SETUP_PYTHON%
 if defined PYTHON_VERSION echo   Python version: %PYTHON_VERSION%
 if defined PYTHON_PATH echo   Python path: %PYTHON_PATH%
 echo.
@@ -150,9 +150,9 @@ if exist ".venv\" (
     )
 )
 if not exist ".venv\" (
-    %PYTHON_BIN% -m venv .venv
+    %WG_SETUP_PYTHON% -m venv .venv
     if errorlevel 1 (
-        echo ERROR: Failed to create .venv using %PYTHON_BIN%.
+        echo ERROR: Failed to create .venv using %WG_SETUP_PYTHON%.
         exit /b 1
     )
     echo   Created.
