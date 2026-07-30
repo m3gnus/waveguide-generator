@@ -61,6 +61,14 @@ EXPECTED_TAG_COUNTS = {1: 1744, 2: 48}
 PARITY_FREQUENCY_HZ = 1000.0
 
 
+def setUpModule():
+    """Keep the multi-minute reference suite out of the default server tests."""
+    if os.environ.get("CPUBEM_SLOW_TESTS") != "1":
+        raise unittest.SkipTest(
+            "cpubem parity tests are opt-in; set CPUBEM_SLOW_TESTS=1"
+        )
+
+
 def _require_reference_mesh():
     if not REFERENCE_MSH.exists():
         raise unittest.SkipTest(

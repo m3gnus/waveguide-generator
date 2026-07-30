@@ -27,10 +27,11 @@ Scope: applies to `server/solver/*`.
 - Gmsh Python calls must stay thread-safe and avoid unsafe worker-thread initialization patterns.
 - `solver_backend` accepts `auto`/`metal`/`bempp`. Auto prefers Metal when
   ready and falls back to Bempp when Metal is unavailable.
-- Native symmetry/reduced-domain solves are Metal-only. Bempp `/api/solve`
-  requests must be normalized to `quadrants=1234` before HornLab mesher
-  generation; `bempp_solver.py` may keep a defensive guard against reduced
-  meshes reaching the adapter directly.
+- Native transverse symmetry/reduced-domain solves are supported by both
+  Metal and Bempp for free-standing rigid-Neumann models. Preserve
+  `quadrants=1/12/14` through HornLab mesher generation and map them to
+  `native_symmetry_plane="yz+xz"/"xz"/"yz"` respectively. Bempp still rejects
+  coupled infinite-baffle symmetry, Robin symmetry, and CircSym requests.
 
 ## Required Tests Before Merge
 

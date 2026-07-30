@@ -266,7 +266,7 @@ Validation behavior:
 Runtime metadata behavior:
 
 - If mesh unit metadata is missing, backend auto-detects scale with heuristic fallback.
-- Imported ATH `Mesh.Quadrants` populates the solve/export symmetry domain. `/api/solve` preserves validated `quadrants` for Metal solves and normalizes Bempp solves to full-domain `quadrants=1234`; STEP and viewport preview routes may still force full-domain output.
+- Imported ATH `Mesh.Quadrants` populates the solve/export symmetry domain. `/api/solve` preserves validated `quadrants` for Metal and Bempp solves; Bempp supports free-standing rigid-Neumann half/quarter symmetry. STEP and viewport preview routes may still force full-domain output.
 - `/api/results/{job_id}` includes:
   - `metadata.failures`
   - `metadata.failure_count`
