@@ -26,6 +26,7 @@ node scripts/run-backend-python.js --cwd server -m unittest tests.<module_name> 
 ## JS test suites (`tests/`)
 
 - `tests/app-mesh-integration.test.js`
+- `tests/app-updates.test.js`
 - `tests/architecture-boundaries.test.js`
 - `tests/ath-fixtures.test.js`
 - `tests/backend-python-resolver.test.js`
@@ -50,6 +51,7 @@ node scripts/run-backend-python.js --cwd server -m unittest tests.<module_name> 
 - `tests/geometry-params.test.js`
 - `tests/geometry-parity.test.js`
 - `tests/geometry-quality.test.js`
+- `tests/installer-contract.test.js`
 - `tests/mesh-payload.test.js`
 - `tests/morph-implicit-target.test.js`
 - `tests/mshParser.test.js`

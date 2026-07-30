@@ -27,6 +27,12 @@ print_project_folder_help() {
 }
 
 update_from_git() {
+    if [[ "${WAVEGUIDE_INSTALL_AFTER_PULL:-0}" == "1" ]]; then
+        echo "Code update already applied; continuing with the updated installer."
+        echo ""
+        return 0
+    fi
+
     if [[ ! -d ".git" ]]; then
         echo "Code update skipped: this folder is not a Git clone."
         echo "ZIP downloads can be repaired by this script, but updating requires downloading a fresh ZIP."
@@ -42,6 +48,7 @@ update_from_git() {
 
     echo "  $(git --version)"
     echo "Checking for code updates..."
+    before_commit="$(git rev-parse HEAD)"
     if ! git pull --ff-only; then
         echo ""
         echo "ERROR: Code update failed."
@@ -49,13 +56,20 @@ update_from_git() {
         echo "       If you have local changes, commit or stash them before updating."
         exit 1
     fi
+    after_commit="$(git rev-parse HEAD)"
+    if [[ "$before_commit" != "$after_commit" ]]; then
+        echo "  Updated ${before_commit:0:7} -> ${after_commit:0:7}."
+        echo "Restarting with the updated installer..."
+        echo ""
+        WAVEGUIDE_INSTALL_AFTER_PULL=1 exec bash "$ROOT/install/install.sh"
+    fi
     echo ""
 }
 
 # ── Project folder sanity check ───────────────────────────────────
 echo "Verifying project folder..."
 missing=0
-for file in package.json install/install.sh server/requirements.txt server/requirements-gmsh.txt launch/mac.command launch/linux.sh; do
+for file in package.json package-lock.json install/install.sh server/requirements.txt server/requirements-gmsh.txt server/requirements-bempp.txt launch/mac.command launch/linux.sh; do
     if [[ ! -f "$file" ]]; then
         echo "  - Missing: $file"
         missing=1
@@ -71,6 +85,14 @@ echo ""
 
 update_from_git
 
+# ── Git dependency transport ──────────────────────────────────────
+if ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: Git is required to install pinned backend dependencies."
+    echo "       This also applies when the project was downloaded as a ZIP."
+    echo "       Install Git from https://git-scm.com/ and re-run this script."
+    exit 1
+fi
+
 # ── Node.js ────────────────────────────────────────────────────────
 echo "Checking Node.js..."
 if ! command -v node >/dev/null 2>&1; then
@@ -79,6 +101,12 @@ if ! command -v node >/dev/null 2>&1; then
     exit 1
 fi
 echo "  Node.js: $(node --version)"
+
+if ! node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit(major > 20 || (major === 20 && minor >= 19) ? 0 : 1)"; then
+    echo "ERROR: Node.js 20.19 or newer is required."
+    echo "       Install a current LTS version from https://nodejs.org/ and re-run this script."
+    exit 1
+fi
 
 if ! command -v npm >/dev/null 2>&1; then
     echo "ERROR: npm is not installed (should come with Node.js)."
@@ -95,14 +123,7 @@ if [[ ! -f "package.json" ]]; then
 fi
 
 echo "Installing frontend dependencies..."
-if [[ -f "package-lock.json" ]]; then
-    npm ci
-else
-    echo "WARNING: package-lock.json was not found."
-    echo "         This usually means the project was not downloaded or extracted completely."
-    echo "         Falling back to npm install..."
-    npm install
-fi
+npm ci
 echo "  Done."
 echo ""
 
@@ -159,27 +180,41 @@ echo ""
 # ── Virtual environment ────────────────────────────────────────────
 echo "Creating Python virtual environment (.venv)..."
 if [[ -d ".venv" ]]; then
-    echo "  .venv already exists, skipping creation."
-else
+    if [[ -x ".venv/bin/python" ]] &&
+        .venv/bin/python -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix and (3,10) <= sys.version_info[:2] < (3,15) else 1)" >/dev/null 2>&1; then
+        echo "  Existing .venv is valid; reusing it."
+    else
+        backup_path=".venv.incompatible.$(date +%Y%m%d%H%M%S)"
+        backup_suffix=0
+        while [[ -e "$backup_path" ]]; do
+            backup_suffix=$((backup_suffix + 1))
+            backup_path=".venv.incompatible.$(date +%Y%m%d%H%M%S).$backup_suffix"
+        done
+        echo "  Existing .venv is broken or uses an unsupported Python."
+        echo "  Preserving it as $backup_path"
+        mv ".venv" "$backup_path"
+    fi
+fi
+if [[ ! -d ".venv" ]]; then
     "$PYTHON_BIN" -m venv .venv
     echo "  Created."
 fi
 
 echo "Installing backend dependencies..."
-.venv/bin/pip install --quiet --upgrade pip
-.venv/bin/pip install --quiet -r server/requirements.txt
+.venv/bin/python -m pip install --quiet --upgrade pip
+.venv/bin/python -m pip install --quiet -r server/requirements.txt
 echo "  Core backend requirements installed."
 
 echo "Installing gmsh Python package (required for /api/mesh/build)..."
-if .venv/bin/pip install --quiet -r server/requirements-gmsh.txt; then
+if .venv/bin/python -m pip install --quiet -r server/requirements-gmsh.txt; then
     echo "  gmsh Python package installed from default index."
 else
     echo "  Default gmsh install failed. Retrying with gmsh.info snapshot index..."
-    if [[ "$(uname -s)" == "Linux" ]] && .venv/bin/pip install --quiet --pre --force-reinstall --no-cache-dir \
+    if [[ "$(uname -s)" == "Linux" ]] && .venv/bin/python -m pip install --quiet --pre --force-reinstall --no-cache-dir \
         --extra-index-url https://gmsh.info/python-packages-dev-nox \
         -r server/requirements-gmsh.txt; then
         echo "  gmsh Python package installed from gmsh.info headless Linux snapshot index."
-    elif .venv/bin/pip install --quiet --pre --force-reinstall --no-cache-dir \
+    elif .venv/bin/python -m pip install --quiet --pre --force-reinstall --no-cache-dir \
         --extra-index-url https://gmsh.info/python-packages-dev \
         -r server/requirements-gmsh.txt; then
         echo "  gmsh Python package installed from gmsh.info snapshot index."
@@ -200,6 +235,17 @@ if ! .venv/bin/python -c "import gmsh; print(gmsh.__version__)" >/dev/null 2>&1;
     exit 1
 fi
 echo "  gmsh Python version: $(.venv/bin/python -c "import gmsh; print(gmsh.__version__)")"
+echo ""
+
+echo "Building Metal native release helper when available..."
+if node scripts/run-backend-python.js server/scripts/build_metal_native_release.py; then
+    echo "  Metal native helper check complete."
+else
+    echo "ERROR: Metal native release helper build failed."
+    echo "       Apple Silicon installs require this for the fast Metal BEM solve path."
+    echo "       Re-run after fixing the issue above, or run: npm run build:metal-helper"
+    exit 1
+fi
 echo ""
 
 echo "Checking Metal BEM backend..."
@@ -231,7 +277,7 @@ if [[ "$METAL_READY" -eq 1 ]]; then
     SOLVER_BACKEND_SUMMARY="Metal or Bempp solve backend: Metal BEM ready (Bempp install skipped)"
 else
     echo "Installing Bempp cross-platform backend..."
-    if .venv/bin/pip install --quiet -r server/requirements-bempp.txt; then
+    if .venv/bin/python -m pip install --quiet -r server/requirements-bempp.txt; then
         if _BEMPP_STATUS_OUTPUT="$(PYTHONPATH="$ROOT/server" .venv/bin/python - <<'BEMPPPROBE' 2>&1
 import sys
 
@@ -265,15 +311,17 @@ BEMPPPROBE
             echo "  $_BEMPP_STATUS_OUTPUT"
             SOLVER_BACKEND_SUMMARY="Metal or Bempp solve backend: Bempp ready"
         else
-            echo "  bempp install failed."
+            echo "ERROR: Bempp installed but is not importable."
             [[ -n "$_BEMPP_STATUS_OUTPUT" ]] && echo "  $_BEMPP_STATUS_OUTPUT"
             echo "  Manual command:"
-            echo "    .venv/bin/pip install -r server/requirements-bempp.txt"
+            echo "    .venv/bin/python -m pip install -r server/requirements-bempp.txt"
+            exit 1
         fi
     else
-        echo "  bempp install failed."
+        echo "ERROR: Bempp install failed and no Metal solve backend is ready."
         echo "  Manual command:"
-        echo "    .venv/bin/pip install -r server/requirements-bempp.txt"
+        echo "    .venv/bin/python -m pip install -r server/requirements-bempp.txt"
+        exit 1
     fi
 fi
 echo ""
@@ -288,24 +336,14 @@ echo "  Preferred backend interpreter: $_BACKEND_PYTHON"
 echo "  Marker file: $PREFERRED_PYTHON_FILE"
 echo ""
 
-echo "Building Metal native release helper when available..."
-if node scripts/run-backend-python.js server/scripts/build_metal_native_release.py; then
-    echo "  Metal native helper check complete."
-else
-    echo "ERROR: Metal native release helper build failed."
-    echo "       Apple Silicon installs require this for the fast Metal BEM solve path."
-    echo "       Re-run after fixing the issue above, or run: npm run build:metal-helper"
-    exit 1
-fi
-echo ""
-
 echo "Running backend dependency preflight..."
 if node scripts/preflight-backend-runtime.js --strict; then
     echo "  Backend preflight: required checks ready."
 else
-    echo "  WARNING: Backend preflight detected missing/unsupported required checks."
-    echo "           Fix the reported items, then re-run:"
-    echo "             npm run preflight:backend:strict"
+    echo "ERROR: Backend preflight detected missing/unsupported required checks."
+    echo "       Fix the reported items, then re-run:"
+    echo "         npm run preflight:backend:strict"
+    exit 1
 fi
 echo ""
 

@@ -4,6 +4,8 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0\.."
 
 set "NODEJS_HINT=C:\Program Files\nodejs"
+set "INSTALL_AFTER_PULL="
+if /I "%~1"=="--after-pull" set "INSTALL_AFTER_PULL=1"
 
 echo ===============================================================
 echo WG - Waveguide Generator Install / Update
@@ -12,7 +14,7 @@ echo.
 
 echo Verifying project folder...
 set "ROOT_INVALID="
-for %%f in (package.json install\install.bat server\requirements.txt server\requirements-gmsh.txt launch\windows.bat) do (
+for %%f in (package.json package-lock.json install\install.bat server\requirements.txt server\requirements-gmsh.txt server\requirements-bempp.txt launch\windows.bat) do (
     if not exist "%%f" (
         echo   - Missing: %%f
         set "ROOT_INVALID=1"
@@ -35,27 +37,31 @@ if defined ROOT_INVALID (
 echo   Project folder looks good.
 echo.
 
-call :update_from_git
+if defined INSTALL_AFTER_PULL (
+    echo Code update already applied; continuing with the updated installer.
+    echo.
+) else (
+    call :update_from_git
+    if errorlevel 1 exit /b 1
+    if defined CODE_UPDATED (
+        echo Restarting with the updated installer...
+        echo.
+        call install\install.bat --after-pull
+        exit /b !errorlevel!
+    )
+)
+
+call :ensure_git_for_dependencies
 if errorlevel 1 exit /b 1
 
 call :ensure_node
 if errorlevel 1 exit /b 1
 
 echo Installing frontend dependencies...
-if exist "package-lock.json" (
-    call npm.cmd ci
-    if errorlevel 1 (
-        echo ERROR: npm ci failed.
-        exit /b 1
-    )
-) else (
-    echo WARNING: package-lock.json was not found.
-    echo          Falling back to npm install...
-    call npm.cmd install
-    if errorlevel 1 (
-        echo ERROR: npm install failed.
-        exit /b 1
-    )
+call npm.cmd ci
+if errorlevel 1 (
+    echo ERROR: npm ci failed.
+    exit /b 1
 )
 echo   Frontend dependencies installed.
 echo.
@@ -125,8 +131,25 @@ echo.
 
 echo Creating Python virtual environment (.venv)...
 if exist ".venv\" (
-    echo   .venv already exists, skipping creation.
-) else (
+    set "VENV_VALID="
+    if exist ".venv\Scripts\python.exe" (
+        .venv\Scripts\python.exe -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix and (3,10) <= sys.version_info[:2] < (3,15) else 1)" >nul 2>&1
+        if not errorlevel 1 set "VENV_VALID=1"
+    )
+    if defined VENV_VALID (
+        echo   Existing .venv is valid; reusing it.
+    ) else (
+        set "VENV_BACKUP=.venv.incompatible.!RANDOM!!RANDOM!"
+        echo   Existing .venv is broken or uses an unsupported Python.
+        echo   Preserving it as !VENV_BACKUP!
+        move ".venv" "!VENV_BACKUP!" >nul
+        if errorlevel 1 (
+            echo ERROR: Could not preserve the incompatible .venv.
+            exit /b 1
+        )
+    )
+)
+if not exist ".venv\" (
     %PYTHON_BIN% -m venv .venv
     if errorlevel 1 (
         echo ERROR: Failed to create .venv using %PYTHON_BIN%.
@@ -171,6 +194,18 @@ if errorlevel 1 (
 for /f "tokens=*" %%v in ('.venv\Scripts\python.exe -c "import gmsh; print(gmsh.__version__)"') do echo   gmsh Python version: %%v
 echo.
 
+echo Building Metal native release helper when available...
+node scripts\run-backend-python.js server\scripts\build_metal_native_release.py
+if errorlevel 1 (
+    echo ERROR: Metal native release helper build failed.
+    echo        Apple Silicon installs require this for the fast Metal BEM solve path.
+    echo        Re-run after fixing the issue above, or run: npm run build:metal-helper
+    exit /b 1
+) else (
+    echo   Metal native helper check complete.
+)
+echo.
+
 echo Checking Metal BEM backend...
 set "PYTHONPATH=%CD%\server;%PYTHONPATH%"
 .venv\Scripts\python.exe -c "import sys; from solver.metal_solver import metal_backend_status; status = metal_backend_status(); print((status.get('reason') or 'Metal BEM backend is ready.') if status.get('available') else (status.get('reason') or 'Metal BEM backend is not available on this host.')); sys.exit(0 if status.get('available') else 1)"
@@ -191,15 +226,17 @@ if "%METAL_READY%"=="1" (
     echo Installing Bempp cross-platform backend...
     .venv\Scripts\python.exe -m pip install --quiet -r server\requirements-bempp.txt
     if errorlevel 1 (
-        echo   bempp install failed.
+        echo ERROR: Bempp install failed and no Metal solve backend is ready.
         echo   Manual command:
         echo     .venv\Scripts\python.exe -m pip install -r server\requirements-bempp.txt
+        exit /b 1
     ) else (
         .venv\Scripts\python.exe -c "import hornlab_bempp_bem" >nul 2>&1
         if errorlevel 1 (
-            echo   bempp install failed.
+            echo ERROR: Bempp installed but is not importable.
             echo   Manual command:
             echo     .venv\Scripts\python.exe -m pip install -r server\requirements-bempp.txt
+            exit /b 1
         ) else (
             .venv\Scripts\python.exe -c "import sys; import pyopencl as cl; platforms=cl.get_platforms(); device_count=0; [globals().__setitem__('device_count', device_count + len(p.get_devices())) for p in platforms]; sys.exit(0 if platforms and device_count else 1)" >nul 2>&1
             if errorlevel 1 (
@@ -221,24 +258,13 @@ echo   Preferred backend interpreter: %CD%\.venv\Scripts\python.exe
 echo   Marker file: %PREFERRED_PYTHON_FILE%
 echo.
 
-echo Building Metal native release helper when available...
-node scripts\run-backend-python.js server\scripts\build_metal_native_release.py
-if errorlevel 1 (
-    echo ERROR: Metal native release helper build failed.
-    echo        Apple Silicon installs require this for the fast Metal BEM solve path.
-    echo        Re-run after fixing the issue above, or run: npm run build:metal-helper
-    exit /b 1
-) else (
-    echo   Metal native helper check complete.
-)
-echo.
-
 echo Running backend dependency preflight...
 node scripts\preflight-backend-runtime.js --strict
 if errorlevel 1 (
-    echo   WARNING: Backend preflight detected missing/unsupported required checks.
-    echo            Fix the reported items, then re-run:
-    echo              npm.cmd run preflight:backend:strict
+    echo ERROR: Backend preflight detected missing/unsupported required checks.
+    echo        Fix the reported items, then re-run:
+    echo          npm.cmd run preflight:backend:strict
+    exit /b 1
 ) else (
     echo   Backend preflight: required checks ready.
 )
@@ -272,6 +298,9 @@ if errorlevel 1 (
 
 for /f "tokens=*" %%v in ('git --version') do echo   %%v
 echo Checking for code updates...
+set "BEFORE_COMMIT="
+set "AFTER_COMMIT="
+for /f "tokens=*" %%h in ('git rev-parse HEAD') do set "BEFORE_COMMIT=%%h"
 git pull --ff-only
 if errorlevel 1 (
     echo.
@@ -280,7 +309,22 @@ if errorlevel 1 (
     echo        If you have local changes, commit or stash them before updating.
     exit /b 1
 )
+for /f "tokens=*" %%h in ('git rev-parse HEAD') do set "AFTER_COMMIT=%%h"
+if /I not "!BEFORE_COMMIT!"=="!AFTER_COMMIT!" (
+    echo   Code updated.
+    set "CODE_UPDATED=1"
+)
 echo.
+exit /b 0
+
+:ensure_git_for_dependencies
+where git >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Git is required to install pinned backend dependencies.
+    echo        This also applies when the project was downloaded as a ZIP.
+    echo        Install Git from https://git-scm.com/ and run this installer again.
+    exit /b 1
+)
 exit /b 0
 
 :ensure_node
@@ -299,6 +343,13 @@ if errorlevel 1 (
     exit /b 1
 )
 for /f "tokens=*" %%v in ('node --version') do echo   Node.js: %%v
+
+node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit(major > 20 || (major === 20 && minor >= 19) ? 0 : 1)"
+if errorlevel 1 (
+    echo ERROR: Node.js 20.19 or newer is required.
+    echo        Install a current LTS version from https://nodejs.org/ and run this installer again.
+    exit /b 1
+)
 
 where npm.cmd >nul 2>&1
 if errorlevel 1 (

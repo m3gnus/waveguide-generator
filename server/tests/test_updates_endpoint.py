@@ -13,11 +13,12 @@ class UpdatesEndpointTest(unittest.TestCase):
     @patch("services.update_service._run_git")
     def test_get_update_status_reports_behind_remote(self, mock_run_git):
         mock_run_git.side_effect = [
-            "git@github.com:m3gnus/waveguide-generator.git",
-            "",
             "1111111111111111111111111111111111111111",
             "feature/check-updates",
-            "refs/remotes/origin/main",
+            "origin/feature/check-updates",
+            "origin",
+            "git@github.com:m3gnus/waveguide-generator.git",
+            "",
             "2222222222222222222222222222222222222222",
             "0 3"
         ]
@@ -26,25 +27,39 @@ class UpdatesEndpointTest(unittest.TestCase):
         self.assertTrue(status["updateAvailable"])
         self.assertEqual(status["behindCount"], 3)
         self.assertEqual(status["aheadCount"], 0)
-        self.assertEqual(status["defaultBranch"], "main")
+        self.assertEqual(status["currentBranch"], "feature/check-updates")
+        self.assertEqual(status["upstreamRef"], "origin/feature/check-updates")
+        self.assertEqual(status["upstreamBranch"], "feature/check-updates")
 
     @patch("services.update_service._run_git")
-    def test_get_update_status_uses_main_when_origin_head_missing(self, mock_run_git):
+    def test_get_update_status_uses_current_branch_upstream(self, mock_run_git):
         def run_git_side_effect(_repo_root, *args):
             command = tuple(args)
-            if command == ("remote", "get-url", "origin"):
-                return "git@github.com:m3gnus/waveguide-generator.git"
-            if command == ("fetch", "origin", "--quiet"):
-                return ""
             if command == ("rev-parse", "HEAD"):
                 return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             if command == ("rev-parse", "--abbrev-ref", "HEAD"):
-                return "main"
-            if command == ("symbolic-ref", "refs/remotes/origin/HEAD"):
-                raise RuntimeError("missing symbolic-ref")
-            if command == ("rev-parse", "refs/remotes/origin/main"):
+                return "release/1.1"
+            if command == (
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ):
+                return "upstream/release/1.1"
+            if command == ("config", "branch.release/1.1.remote"):
+                return "upstream"
+            if command == ("remote", "get-url", "upstream"):
+                return "https://github.com/m3gnus/waveguide-generator.git"
+            if command == ("fetch", "upstream", "--quiet"):
+                return ""
+            if command == ("rev-parse", "upstream/release/1.1"):
                 return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            if command == ("rev-list", "--left-right", "--count", "HEAD...refs/remotes/origin/main"):
+            if command == (
+                "rev-list",
+                "--left-right",
+                "--count",
+                "HEAD...upstream/release/1.1",
+            ):
                 return "0 0"
             raise AssertionError(f"Unexpected git command: {command}")
 
@@ -52,9 +67,31 @@ class UpdatesEndpointTest(unittest.TestCase):
 
         status = get_update_status()
         self.assertFalse(status["updateAvailable"])
-        self.assertEqual(status["defaultBranch"], "main")
+        self.assertEqual(status["upstreamRemote"], "upstream")
+        self.assertEqual(status["upstreamBranch"], "release/1.1")
         self.assertEqual(status["behindCount"], 0)
         self.assertEqual(status["aheadCount"], 0)
+
+    @patch("services.update_service._run_git")
+    def test_get_update_status_rejects_detached_head(self, mock_run_git):
+        mock_run_git.side_effect = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "HEAD",
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "detached HEAD"):
+            get_update_status()
+
+    @patch("services.update_service._run_git")
+    def test_get_update_status_rejects_branch_without_upstream(self, mock_run_git):
+        mock_run_git.side_effect = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "local-work",
+            RuntimeError("no upstream configured"),
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "has no upstream branch"):
+            get_update_status()
 
     def test_check_updates_maps_runtime_error_to_http_503(self):
         with patch("api.routes_misc.get_update_status", side_effect=RuntimeError("network unavailable")):
@@ -77,11 +114,12 @@ class UpdatesEndpointTest(unittest.TestCase):
     def test_git_version_probe_has_a_timeout(self, mock_run, mock_run_git):
         mock_run.return_value = None
         mock_run_git.side_effect = [
-            "git@github.com:m3gnus/waveguide-generator.git",
-            "",
             "1111111111111111111111111111111111111111",
             "main",
-            "refs/remotes/origin/main",
+            "origin/main",
+            "origin",
+            "git@github.com:m3gnus/waveguide-generator.git",
+            "",
             "1111111111111111111111111111111111111111",
             "0 0",
         ]

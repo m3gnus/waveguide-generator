@@ -298,10 +298,9 @@ def solve_bempp_from_msh(
                 "update the pinned hornlab-bempp-bem (>= 4638578)."
             )
         config.source_motion = str(source_motion).lower()
-    # hornlab-bempp-bem newer than the 8c112bb pin validates surface closure
-    # at load (a closed-mode mesh with open edges is a leaking model this
-    # backend would otherwise solve silently). Feature-detect so the current
-    # public pin keeps working until the requirements bump.
+    # Newer hornlab-bempp-bem releases validate surface closure at load (a
+    # closed-mode mesh with open edges is a leaking model this backend would
+    # otherwise solve silently). Keep feature detection for older environments.
     if hasattr(config, "require_closed_mesh"):
         config.require_closed_mesh = _require_closed_mesh(request)
     result = bempp_solve(str(msh_path), config)

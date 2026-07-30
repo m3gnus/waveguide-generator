@@ -153,9 +153,9 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "gmsh_python",
             },
         )
-        self.assertIn("715365f", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
-        self.assertIn("93ba809", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
-        self.assertIn("8c112bb", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
+        self.assertIn("60301db", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
+        self.assertIn("c1da888", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
+        self.assertIn("5c0b751", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
         self.assertEqual(
             SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["required_for"],
             "/api/solve fallback backend (non-Apple-Silicon)",
@@ -174,6 +174,24 @@ class DependencyRuntimeTest(unittest.TestCase):
         )
         self.assertIn("hornlab_bempp_bem", status["runtime"])
         self.assertIn("hornlab_bempp_bem", status["supportedMatrix"])
+
+    def test_dependency_matrix_matches_installed_requirement_pins(self):
+        server_dir = Path(__file__).resolve().parents[1]
+        core_requirements = (server_dir / "requirements.txt").read_text()
+        bempp_requirements = (server_dir / "requirements-bempp.txt").read_text()
+
+        self.assertIn(
+            SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"].rsplit(" ", 1)[-1],
+            core_requirements,
+        )
+        self.assertIn(
+            SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"].rsplit(" ", 1)[-1],
+            core_requirements,
+        )
+        self.assertIn(
+            SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"].rsplit(" ", 1)[-1],
+            bempp_requirements,
+        )
 
     def test_health_reports_dependency_payload(self):
         dependency_status = _dependency_status(metal_bem_ready=False)
