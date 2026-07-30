@@ -1,11 +1,42 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-cd /d "%~dp0\.."
+rem This script may be executed from a copy outside the repository. cmd.exe
+rem tracks its position in a batch file by byte offset and re-reads the file as
+rem it goes, so a script that git-pulls over itself resumes at a garbage offset
+rem and executes fragments of unrelated lines. install-and-update.bat therefore
+rem copies this file to a temporary location and passes the repository root in
+rem --root. Never assume %~dp0 is inside the repository.
+set "WG_ROOT="
+set "INSTALL_AFTER_PULL="
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="--after-pull" (
+    set "INSTALL_AFTER_PULL=1"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--root" (
+    set "WG_ROOT=%~2"
+    shift
+    shift
+    goto parse_args
+)
+shift
+goto parse_args
+:args_done
+
+if defined WG_ROOT (
+    cd /d "%WG_ROOT%"
+) else (
+    cd /d "%~dp0\.."
+)
+if errorlevel 1 (
+    echo ERROR: Could not enter the project folder.
+    exit /b 1
+)
 
 set "NODEJS_HINT=C:\Program Files\nodejs"
-set "INSTALL_AFTER_PULL="
-if /I "%~1"=="--after-pull" set "INSTALL_AFTER_PULL=1"
 
 echo ===============================================================
 echo WG - Waveguide Generator Install / Update
@@ -44,10 +75,13 @@ if defined INSTALL_AFTER_PULL (
     call :update_from_git
     if errorlevel 1 exit /b 1
     if defined CODE_UPDATED (
-        echo Restarting with the updated installer...
+        rem The pull just rewrote the files on disk, possibly including this
+        rem script. Do not call the updated installer from here: this process is
+        rem still reading the old byte offsets. Hand control back to
+        rem install-and-update.bat, which re-copies and re-launches.
+        echo   Code updated. Relaunching with the updated installer...
         echo.
-        call install\install.bat --after-pull
-        exit /b !errorlevel!
+        exit /b 10
     )
 )
 
