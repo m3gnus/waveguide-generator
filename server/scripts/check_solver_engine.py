@@ -22,9 +22,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import sys
 from typing import Any
+
+# Importable both as `server/scripts/check_solver_engine.py` from the repo root
+# (how install.bat calls it) and via scripts/run-backend-python.js.
+_SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SERVER_DIR not in sys.path:
+    sys.path.insert(0, _SERVER_DIR)
+
+try:
+    from solver.device_inventory import acceleration_summary
+except Exception:  # pragma: no cover - reporting must survive a missing module
+    acceleration_summary = None  # type: ignore[assignment]
 
 # Compiled-extension runtime DLLs that Windows does not ship by default. numba,
 # llvmlite and many other binary wheels link against these.
@@ -110,14 +122,55 @@ def collect_status() -> dict[str, Any]:
                 f"bempp-cl engine import failed: {engine['error']}"
             )
 
+    acceleration: dict[str, Any] | None = None
+    if acceleration_summary is not None:
+        acceleration = acceleration_summary()
+
     return {
         "usable": usable,
         "wrapper": wrapper,
         "engine": engine,
         "assemblyBackends": backends,
         "missingWindowsRuntimeDlls": missing_dlls,
+        "acceleration": acceleration,
         "guidance": guidance,
     }
+
+
+def _print_acceleration(acceleration: dict[str, Any] | None) -> None:
+    """Print OpenCL CPU, OpenCL GPU and numba as three independent facts.
+
+    Deliberately does not collapse these into one "OpenCL acceleration" line.
+    A CPU OpenCL device is not GPU acceleration, and reporting it as such is
+    how a CPU-only host ends up advertising an accelerator it does not have.
+    """
+    if not acceleration:
+        return
+
+    print()
+    cpu = acceleration.get("openclCpu") or {}
+    gpu = acceleration.get("openclGpu") or {}
+    numba = acceleration.get("numba") or {}
+
+    def line(label: str, entry: dict[str, Any]) -> None:
+        state = "available" if entry.get("available") else "unavailable"
+        name = entry.get("deviceName")
+        print(f"  {label:<26}: {state}" + (f"  [{name}]" if name else ""))
+
+    line("OpenCL CPU device", cpu)
+    line("OpenCL GPU device", gpu)
+    print(
+        f"  {'numba CPU fallback':<26}: "
+        f"{'available' if numba.get('available') else 'unavailable'}"
+    )
+    print(f"  {'effective backend':<26}: {acceleration.get('effectiveBackend')}")
+    print(
+        f"  {'GPU accelerated':<26}: "
+        f"{'yes' if acceleration.get('acceleratedByGpu') else 'no'}"
+    )
+
+    if not gpu.get("available") and gpu.get("reason"):
+        print(f"    GPU: {gpu['reason']}")
 
 
 def _print_human(status: dict[str, Any]) -> None:
@@ -134,6 +187,8 @@ def _print_human(status: dict[str, Any]) -> None:
     )
     for name, ok in status["assemblyBackends"].items():
         print(f"  assembly backend {name:<8} : {'available' if ok else 'unavailable'}")
+
+    _print_acceleration(status.get("acceleration"))
 
     if status["usable"]:
         print("  Result: a solve can run on this host.")
