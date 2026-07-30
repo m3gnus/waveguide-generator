@@ -10,6 +10,7 @@ coverage/
 
 # Test artifacts
 .pytest_cache/
+.benchmark-cache/
 playwright-report/
 test-results/
 

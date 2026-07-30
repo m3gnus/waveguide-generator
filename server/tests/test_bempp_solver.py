@@ -211,13 +211,35 @@ class BemppSolverAdapterTest(unittest.TestCase):
 
         self.assertEqual(cancellation_checks, ["checked"])
 
-    def test_reduced_domain_request_is_rejected_before_bempp_config(self):
-        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file:
-            with self.assertRaises(ValueError) as ctx:
-                bempp_solver.solve_bempp_from_msh(msh_file.name, self._request(quadrants=1))
+    def test_reduced_domain_request_sets_quarter_symmetry(self):
+        seen_configs = []
 
-        self.assertIn("full-domain mesh", str(ctx.exception))
-        self.assertIn("Mesh.Quadrants=1", str(ctx.exception))
+        def fake_solve(_mesh_path, config):
+            seen_configs.append(config)
+            return self._fake_result()
+
+        with tempfile.NamedTemporaryFile(suffix=".msh") as msh_file, patch(
+            "solver.bempp_solver._load_bempp_api", return_value=True
+        ), patch(
+            "solver.bempp_solver.ObservationConfig", FakeObservationConfig
+        ), patch(
+            "solver.bempp_solver.SolveConfig", FakeSolveConfig
+        ), patch(
+            "solver.bempp_solver.bempp_solve", side_effect=fake_solve
+        ), patch(
+            "solver.bempp_solver.bempp_backend_status",
+            return_value={"available": True, "assemblyBackend": "numba"},
+        ):
+            result = bempp_solver.solve_bempp_from_msh(
+                msh_file.name, self._request(quadrants=1),
+            )
+
+        self.assertEqual(
+            seen_configs[0].native_symmetry_plane, "yz+xz",
+        )
+        self.assertEqual(
+            result["metadata"]["bempp"]["native_symmetry_plane"], "yz+xz",
+        )
 
     def test_infinite_baffle_request_gets_ib_specific_error(self):
         request = self._request(quadrants=1234).model_copy(

@@ -28,7 +28,11 @@
 - Real simulation requires backend `/api/solve` path; no mock/fallback solver supported
 - Payload submission includes a minimal source-tagged contract mesh plus required HornLab mesher parameters
 - `solver_backend` supports `auto`, `bempp`, and `metal`; `auto` prefers a ready Metal backend when available, otherwise BEMPP
-- Active BEM solves use HornLab mesher parameters; `quadrants` may reduce the solve/export mesh domain when manually selected or auto-resolved, except the BEMPP backend forces full-domain quadrants for compatibility
+- Active BEM solves use HornLab mesher parameters; `quadrants` may reduce the
+  solve/export mesh domain when manually selected or auto-resolved. Bempp and
+  Metal both support transverse half/quarter symmetry for free-standing rigid
+  Neumann models; unsupported coupled-IB/Robin symmetry requests fail
+  explicitly.
 - `solver_mode="auto"` is the default; on the Metal backend it selects CircSym automatically for eligible circular waveguides, including circular infinite-baffle jobs, otherwise it uses full 3D. `solver_mode="circsym"` selects the Metal-only axisymmetric meridian solver. Use it for round, circular waveguides when sweep speed matters. Use `solver_mode="full_3d"` for non-round or morphed geometry, enclosure models, forced full-surface parity, and any infinite-baffle job that is not CircSym-eligible.
 
 **Results handling**:
