@@ -81,6 +81,13 @@ def _load_bempp_api() -> bool:
 
 
 def opencl_runtime_status() -> dict[str, Any]:
+    # bempp-cl cannot build its OpenCL kernels on an install path containing a
+    # space without this; see solver.bempp_compat. Applied before any probe or
+    # solve so readiness and execution see identical behavior.
+    from .bempp_compat import apply_bempp_opencl_workarounds
+
+    apply_bempp_opencl_workarounds()
+
     try:
         import pyopencl as cl  # type: ignore
     except Exception as exc:

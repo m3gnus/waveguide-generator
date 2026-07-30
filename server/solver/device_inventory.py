@@ -135,19 +135,28 @@ def opencl_kernel_build_probe(device_type: str) -> dict[str, Any]:
             "reason": f"bempp-cl OpenCL kernels are unavailable ({_describe_exception(exc)}).",
         }
 
+    # Apply the upstream workarounds first, then read back the include path
+    # bempp-cl will actually use, so this probe reflects reality rather than a
+    # guess. See solver.bempp_compat for what is patched and why.
+    try:
+        from .bempp_compat import apply_bempp_opencl_workarounds
+
+        apply_bempp_opencl_workarounds()
+    except Exception:
+        pass
+
     include_dir = None
     try:
-        import bempp_cl.core as _bempp_core  # type: ignore
+        from bempp_cl.core import opencl_kernels as _bempp_kernels  # type: ignore
 
-        base = os.path.dirname(os.path.abspath(_bempp_core.__file__))
-        candidate = os.path.join(base, "sources", "include")
-        if os.path.isdir(candidate):
+        candidate = getattr(_bempp_kernels, "_INCLUDE_PATH", None)
+        if isinstance(candidate, str) and candidate:
             include_dir = candidate
     except Exception:
         include_dir = None
 
-    # Mirror bempp-cl: pass -I unquoted. If that is going to break, it must
-    # break here, during readiness, not midway through a user's sweep.
+    # Use the exact -I string bempp-cl will pass. If that is going to break, it
+    # must break here, during readiness, not midway through a user's sweep.
     options = [f"-I {include_dir}"] if include_dir else []
     source = "__kernel void wg_probe(__global float *o){ o[get_global_id(0)] = 1.0f; }"
 
