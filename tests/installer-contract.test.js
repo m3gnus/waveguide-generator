@@ -48,5 +48,40 @@ test('strict preflight failures are fatal before the completion banner', () => {
 
 test('updated code restarts through the freshly pulled installer', () => {
   assert.match(shellInstaller, /WAVEGUIDE_INSTALL_AFTER_PULL=1 exec bash/);
-  assert.match(windowsInstaller, /call install\\install\.bat --after-pull/);
+
+  // The Windows installer must NOT re-exec itself in place. `git pull` rewrites
+  // install.bat, and cmd.exe re-reads a running batch file by byte offset, so
+  // the old `call install\install.bat --after-pull` resumed at a meaningless
+  // offset and executed fragments of unrelated lines. install.bat now exits 10
+  // and install-and-update.bat relaunches from a fresh %TEMP% copy.
+  assert.doesNotMatch(
+    windowsInstaller,
+    /call install\\install\.bat --after-pull/,
+    'install.bat must not call itself after a pull; it has already been '
+      + 'overwritten and cmd.exe has lost its place in the file.'
+  );
+  assert.match(
+    windowsInstaller,
+    /exit \/b 10/,
+    'install.bat should exit 10 to request a relaunch by install-and-update.bat.'
+  );
+  assert.match(
+    windowsInstaller,
+    /--after-pull/,
+    'install.bat must still accept --after-pull when relaunched.'
+  );
+});
+
+test('windows entry point runs the installer from a copy outside the repo', () => {
+  const entryPoint = fs.readFileSync(
+    new URL('../install/install-and-update.bat', import.meta.url),
+    'utf8'
+  );
+
+  // Staging into %TEMP% is what makes the update safe: git may then rewrite
+  // install.bat freely, because the executing file is not inside the repo.
+  assert.match(entryPoint, /%TEMP%/, 'entry point must stage the installer in %TEMP%');
+  assert.match(entryPoint, /copy \/y/i, 'entry point must copy the installer before running it');
+  assert.match(entryPoint, /--root/, 'the staged copy needs the repository root passed explicitly');
+  assert.match(entryPoint, /"10"/, 'entry point must handle the relaunch exit code');
 });
