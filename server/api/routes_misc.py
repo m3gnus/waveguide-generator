@@ -128,7 +128,7 @@ async def health_check() -> Dict[str, Any]:
     }
 
 
-@router.get("/api/updates/check")
+@router.post("/api/updates/check")
 async def check_updates() -> Dict[str, Any]:
     try:
         return await asyncio.to_thread(get_update_status)

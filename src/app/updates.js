@@ -12,6 +12,17 @@ function parseErrorDetail(payload) {
   return '';
 }
 
+export function getInstallUpdateCommand(platform = '') {
+  const normalized = String(platform || '').toLowerCase();
+  return normalized.includes('win')
+    ? 'install\\install-and-update.bat'
+    : 'bash install/install-and-update.sh';
+}
+
+function clientPlatform() {
+  return globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || '';
+}
+
 /**
  * Check for available application updates via the backend `/api/updates/check` endpoint.
  *
@@ -20,7 +31,7 @@ function parseErrorDetail(payload) {
  *   Falls back to `document.getElementById('check-updates-btn')` for backwards compatibility.
  */
 export async function checkForUpdates(buttonEl, ui = {}) {
-  const button = buttonEl ?? document.getElementById('check-updates-btn');
+  const button = buttonEl ?? globalThis.document?.getElementById('check-updates-btn') ?? null;
   const originalLabel = button?.textContent || 'Check for App Updates';
 
   if (button) {
@@ -29,7 +40,7 @@ export async function checkForUpdates(buttonEl, ui = {}) {
   }
 
   try {
-    const response = await fetch(`${DEFAULT_BACKEND_URL}/api/updates/check`);
+    const response = await fetch(`${DEFAULT_BACKEND_URL}/api/updates/check`, { method: 'POST' });
     let payload = null;
 
     try {
@@ -45,34 +56,48 @@ export async function checkForUpdates(buttonEl, ui = {}) {
 
     const behind = Number(payload?.behindCount || 0);
     const ahead = Number(payload?.aheadCount || 0);
-    const branch = String(payload?.defaultBranch || 'main');
+    const upstreamRef = String(payload?.upstreamRef || 'upstream');
     const localSha = shortCommit(payload?.currentCommit);
     const remoteSha = shortCommit(payload?.remoteCommit);
 
+    if (behind > 0 && ahead > 0) {
+      ui.showMessage?.(
+        `This checkout has diverged from ${upstreamRef} (${ahead} ahead, ${behind} behind). ` +
+          'Resolve the Git branch manually before updating.',
+        { type: 'warning', duration: 8000 }
+      );
+      return;
+    }
+
     if (behind > 0) {
-      const pullCommand = `git pull --ff-only origin ${branch}`;
+      const updateCommand = getInstallUpdateCommand(clientPlatform());
       const copied =
         (await ui.showCommandSuggestion?.({
           title: 'Update Available',
-          subtitle: `${behind} commit(s) behind origin/${branch} (${localSha} -> ${remoteSha}).`,
-          command: pullCommand,
+          subtitle:
+            `${behind} commit(s) behind ${upstreamRef} (${localSha} -> ${remoteSha}). ` +
+            'Stop the running app, then run the full updater.',
+          command: updateCommand,
         })) ?? false;
 
       if (!copied) {
-        ui.showMessage?.(`Run in terminal: ${pullCommand}`, { type: 'info', duration: 7000 });
+        ui.showMessage?.(`Stop the app, then run: ${updateCommand}`, {
+          type: 'info',
+          duration: 8000,
+        });
       }
       return;
     }
 
     if (ahead > 0) {
       ui.showMessage?.(
-        `Local branch is ${ahead} commit(s) ahead of origin/${branch} (${localSha}).`,
+        `Local branch is ${ahead} commit(s) ahead of ${upstreamRef} (${localSha}).`,
         { type: 'info', duration: 4200 }
       );
       return;
     }
 
-    ui.showSuccess?.(`Up to date with origin/${branch} (${localSha}).`);
+    ui.showSuccess?.(`Up to date with ${upstreamRef} (${localSha}).`);
   } catch (error) {
     ui.showError?.(`Update check failed: ${error?.message || 'Unknown error'}`);
   } finally {

@@ -218,9 +218,10 @@ Includes:
   - `components`
   - `solveReadiness`
 
-### `GET /api/updates/check`
+### `POST /api/updates/check`
 
-Checks local repository state against `origin` and reports whether updates are available.
+Fetches and compares the current Git branch with its configured upstream. The mutating method
+keeps the network and `.git` side effect behind the backend origin guard.
 
 ### `POST /api/solve`
 

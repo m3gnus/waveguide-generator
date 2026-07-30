@@ -41,6 +41,9 @@
     "type": "git",
     "url": "https://github.com/m3gnus/waveguide-generator.git"
   },
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "dependencies": {
     "three": "^0.160.0"
   },

@@ -25,8 +25,9 @@ A browser-based tool for designing acoustic waveguides and horns: live 3D previe
 
 ### 1. Prerequisites
 
-- **[Node.js 18+](https://nodejs.org/)**: install the LTS version
+- **[Node.js 20.19+](https://nodejs.org/)**: install a current LTS version
 - **[Python 3.10-3.14](https://www.python.org/downloads/)**: on Windows, tick "Add python.exe to PATH" during install
+- **[Git](https://git-scm.com/)**: required by the pinned backend packages, including ZIP installs
 
 ### 2. Get the project
 
@@ -46,9 +47,9 @@ Run from the project folder, the folder containing `package.json`. Use the same 
 | macOS / Linux | `bash install/install-and-update.sh` |
 | Windows       | double-click `install\install-and-update.bat` |
 
-The setup scripts validate that you are in the full project folder, pull the latest code when the folder is a Git clone, install JavaScript and Python dependencies, and write the preferred backend interpreter to `.waveguide/backend-python.path`.
+The setup scripts validate that you are in the full project folder, pull the current branch's configured upstream when the folder is a Git clone, restart into the newly downloaded installer when code changes, install JavaScript and Python dependencies, and write the preferred backend interpreter to `.waveguide/backend-python.path`. A broken or unsupported existing `.venv` is preserved under `.venv.incompatible.*` before a clean environment is created.
 
-Installer verification runs backend preflight and prints required runtime readiness for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, and a solve backend. On Apple Silicon, install/update also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper. When Metal is not ready, the installer installs the Bempp cross-platform backend from `server/requirements-bempp.txt`; OpenCL is optional, and Bempp uses its numba CPU backend when no OpenCL runtime is available.
+Installer verification runs strict backend preflight for `fastapi`, `gmsh`, `hornlab-waveguide-mesher`, and a solve backend. Setup exits with an error instead of reporting success when a required check is not ready. On Apple Silicon, install/update also builds and requires the HornLab Metal BEM native helper in Swift release mode so simulations use the fast Metal path instead of a debug helper. When Metal is not ready, the installer installs the Bempp cross-platform backend from `server/requirements-bempp.txt`; OpenCL is optional, and Bempp uses its numba CPU backend when no OpenCL runtime is available.
 
 Network note: backend setup installs `hornlab-waveguide-mesher`, `hornlab-metal-bem`, and conditionally `hornlab-bempp-bem` from GitHub using pinned commit SHAs for reproducible installs.
 
