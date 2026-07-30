@@ -58,6 +58,13 @@ node scripts/run-backend-python.js server/scripts/check_solver_engine.py
 | First install, before fixes | **exit 1** at 261 s — strict preflight audited the system Python because `PYTHON_BIN` leaked from cmd.exe |
 | After interpreter fix, VC++ still missing | **exit 1** at 165 s — engine check correctly names the missing `msvcp140.dll` |
 | After VC++ redistributable installed | **exit 0** at 170 s, preflight READY, solve genuinely works |
+| Rerun, before the venv-probe fix | **exit 0** at 195 s — rebuilt a healthy `.venv` every time |
+| Rerun, after the venv-probe fix | **exit 0** at **58 s** — `.venv` reused |
+
+Update path, verified by fast-forwarding a clone three commits behind: exit 0,
+relaunch clean, no corruption. Before the fix this failed, because `git pull`
+rewrote `install.bat` while cmd.exe was executing it and cmd resumed at a stale
+byte offset, landing mid-URL and trying to run `ttps:` as a command.
 
 ## Test suites
 
@@ -88,18 +95,52 @@ Mesh: reference R-OSSE horn from `npm run diag:mesher:reference-horn`.
 | Tag counts | `1` (wall) 1744, `2` (source) 48, `3` 0, `4` 0 |
 | Units | m |
 
-Backend: `hornlab-bempp-bem` / bempp-cl, assembly backend **numba**.
-`pyopencl` is not installed, so the OpenCL-CPU path was not exercised.
+Backend: `hornlab-bempp-bem` / bempp-cl. Both assembly backends measured on the
+identical mesh, frequencies and precision. numba was forced by stubbing
+`opencl_runtime_status`, so the comparison is like-for-like.
 
-| Measurement | Wall time |
-|---|---|
-| Cold, 1 frequency (numba JIT + import) | **62.81 s** |
-| Warm, 1 frequency | 2.71 / 2.77 / 2.92 s — **median 2.77 s** |
-| Warm, 5 frequencies (1000–2000 Hz, log) | **13.76 s** = **2.75 s/frequency** |
+| Backend | Cold 1 freq | Warm 1 freq (median) | Warm 5 freq | Per frequency |
+|---|---|---|---|---|
+| numba | 62.74 s | 2.592 s | 12.91 s | 2.582 s |
+| **OpenCL CPU** | **0.78 s** | **0.758 s** | **3.56 s** | **0.711 s** |
 
-The 5-frequency sweep costs essentially 5x the single-frequency solve. There is
-no measurable amortization across frequencies today, so per-frequency setup is
-fully repeated. That is the clearest available optimization target.
+- OpenCL-CPU is **3.63x** faster than numba on a warm 5-frequency sweep, and
+  **80x** faster cold.
+- Agreement between the two backends: **max |ΔSPL| = 1.433e-05 dB**.
+
+**The Windows baseline any new backend must beat is 0.711 s/frequency.** An
+earlier revision of this document recorded 2.75 s/frequency; that figure was
+measuring numba, which was running only because bempp-cl's OpenCL path was
+silently broken (see below). It was never the intended configuration.
+
+OpenCL-CPU here is the Intel CPU OpenCL runtime driving the AMD CPU. It is not
+GPU acceleration; there is no OpenCL GPU device on this host.
+
+The 5-frequency sweep still costs essentially 5x the single-frequency solve on
+both backends, so per-frequency setup is fully repeated and there is no
+amortization across a sweep. That remains the clearest optimization target.
+
+### Why OpenCL was silently disabled
+
+bempp-cl passes its kernel include directory to `clBuildProgram` unquoted:
+
+```python
+compile_options += ["-I", _INCLUDE_PATH]
+```
+
+pyopencl joins that option list on spaces, so an install path containing a
+space — such as `...\Hornlab - Workspace\...` — splits the option and the build
+fails with `INVALID_BUILD_OPTIONS`. pyopencl quotes its own `-I`, which is why
+only bempp-cl's was affected.
+
+The failure was invisible for a second reason: pyopencl's cache error handler
+reads `os.environ["PYOPENCL_CACHE_FAILURE_FATAL"]` with no default, so on a
+failed build the handler itself raised `KeyError` and destroyed the real
+compiler diagnostic. The user-visible error named an environment variable and
+never mentioned OpenCL.
+
+Both are worked around in `server/solver/bempp_compat.py`. Neither changes any
+numerics.
 
 Returned result contract (unchanged): `frequencies`, `spl_on_axis`,
 `directivity` (`horizontal`/`vertical`), `impedance`, `di`, `metadata`.
