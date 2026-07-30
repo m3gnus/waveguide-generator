@@ -238,11 +238,16 @@ if "%METAL_READY%"=="1" (
             echo     .venv\Scripts\python.exe -m pip install -r server\requirements-bempp.txt
             exit /b 1
         ) else (
-            .venv\Scripts\python.exe -c "import sys; import pyopencl as cl; platforms=cl.get_platforms(); device_count=0; [globals().__setitem__('device_count', device_count + len(p.get_devices())) for p in platforms]; sys.exit(0 if platforms and device_count else 1)" >nul 2>&1
+            rem Importing the hornlab_bempp_bem wrapper proves nothing about
+            rem whether a solve can run: the wrapper is pure Python and imports
+            rem fine even when the bempp-cl engine cannot load. Verify the
+            rem engine the solve path actually uses.
+            .venv\Scripts\python.exe server\scripts\check_solver_engine.py
             if errorlevel 1 (
-                echo   bempp ready using the numba CPU backend ^(works everywhere, slower; speed-up hint: install an OpenCL runtime - Windows: up-to-date GPU drivers or winget install Intel.OpenCLRuntimeForIntel^)
-            ) else (
-                echo   bempp ready with OpenCL acceleration
+                echo.
+                echo ERROR: Bempp is installed but no solve can run on this host.
+                echo        Fix the issue reported above, then re-run this installer.
+                exit /b 1
             )
             set "SOLVER_BACKEND_SUMMARY=Metal or Bempp solve backend: Bempp ready"
         )
@@ -298,6 +303,20 @@ if errorlevel 1 (
 
 for /f "tokens=*" %%v in ('git --version') do echo   %%v
 echo Checking for code updates...
+
+rem A branch with no upstream cannot be pulled. That is a normal state for a
+rem local working branch, so skip the update instead of aborting the install
+rem with a misleading "you have local changes" message.
+git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >nul 2>&1
+if errorlevel 1 (
+    for /f "tokens=*" %%b in ('git rev-parse --abbrev-ref HEAD') do (
+        echo   Code update skipped: branch %%b has no upstream configured.
+    )
+    echo   Dependencies below are still installed and verified.
+    echo.
+    exit /b 0
+)
+
 set "BEFORE_COMMIT="
 set "AFTER_COMMIT="
 for /f "tokens=*" %%h in ('git rev-parse HEAD') do set "BEFORE_COMMIT=%%h"
@@ -306,7 +325,11 @@ if errorlevel 1 (
     echo.
     echo ERROR: Code update failed.
     echo        This installer only performs safe fast-forward updates.
-    echo        If you have local changes, commit or stash them before updating.
+    echo        Common causes:
+    echo          - Uncommitted local changes: commit or stash them, then retry.
+    echo          - The branch has diverged from its upstream and cannot
+    echo            fast-forward. Reconcile it manually, then retry.
+    echo        Diagnose with: git status  and  git log --oneline -5
     exit /b 1
 )
 for /f "tokens=*" %%h in ('git rev-parse HEAD') do set "AFTER_COMMIT=%%h"
