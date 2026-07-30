@@ -1,0 +1,153 @@
+{
+  "comparisons": {
+    "cpubem_vs_bempp-opencl": {
+      "impedance_max_abs_error": 7.837154485123126e-17,
+      "impedance_max_phase_error_rad": 6.22172584603264e-16,
+      "impedance_max_rel_error": 3.4105453589515694e-15,
+      "pressure_max_abs_error": 1.1995517794374219e-18,
+      "pressure_max_phase_error_rad": 6.221549070183588e-14,
+      "pressure_max_rel_error": 2.2584085266851323e-14
+    }
+  },
+  "configuration": {
+    "air_density": 1.2041,
+    "backends": [
+      "cpubem",
+      "bempp-opencl"
+    ],
+    "bempp_restrict_neumann_space": true,
+    "cache_directory": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\server\\.benchmark-cache",
+    "frequencies_hz": [
+      1000.0
+    ],
+    "observation_count_per_plane": 37,
+    "observation_distance_m": 2.0,
+    "observation_planes": [
+      "horizontal",
+      "vertical"
+    ],
+    "precision": "double",
+    "repeats": 1,
+    "speed_of_sound": 343.0,
+    "threads": 4
+  },
+  "created_at_utc": "2026-07-30T13:40:14.872766+00:00",
+  "errors": [],
+  "host": {
+    "hostname": "WIN-AVFOP9H3DIL",
+    "logical_cpus": 12,
+    "machine": "AMD64",
+    "numpy": "2.4.6",
+    "platform": "Windows-11-10.0.26100-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "python": "3.13.3",
+    "scipy": "1.18.0"
+  },
+  "mesh": {
+    "path": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\scripts\\diagnostics\\out\\test_reference_horn.msh",
+    "physical_tag_counts": {
+      "1": 1744,
+      "2": 48
+    },
+    "sha256": "8cd0002d00e46d07576f406fe13e6bde186a77618ab87b390318467f9d79f66f",
+    "triangles": 1792,
+    "vertices": 898
+  },
+  "runs": [
+    {
+      "backend": "cpubem",
+      "frequency_runs": [
+        {
+          "assembly_seconds": 17.072665799999868,
+          "factorization_seconds": 0.6887003000001641,
+          "field_seconds": 0.12049239999987549,
+          "frequency_hz": 1000.0,
+          "frequency_total_seconds": 17.8818925999999,
+          "source_seconds": 3.409999999348656e-05
+        }
+      ],
+      "mesh_seconds": 0.013851400000021385,
+      "on_axis_pressure": [
+        [
+          4.751753253028356e-05,
+          2.3733485739924497e-05
+        ]
+      ],
+      "pressure_sha256": "7044806ed76c22ec86ffdbcbf40ce9459f913d7db60dfdaf02f64b61aa537021",
+      "repeat": 1,
+      "source_impedance": [
+        [
+          0.02295597914878727,
+          -0.001032404033647945
+        ]
+      ],
+      "total_seconds": 17.895977899999707
+    },
+    {
+      "backend": "bempp-opencl",
+      "frequency_runs": [
+        {
+          "frequency_hz": 1000.0,
+          "phase_timings": {
+            "backend_setup_s": 0.00026889999980994617,
+            "dlp_assembly_s": 0.41383459999997285,
+            "function_spaces_s": 1.0000030670198612e-07,
+            "impedance_s": 0.000215099999877566,
+            "lhs_materialization_s": 9.882759500000247,
+            "linear_solve_s": 0.1618702000000667,
+            "neumann_data_s": 7.830000004105386e-05,
+            "neumann_restriction_s": 0.0009862000001703564,
+            "operator_construction_s": 0.004242100000283244,
+            "rhs_apply_s": 0.0010280999999849882,
+            "slp_assembly_s": 0.17424750000009226,
+            "total_s": 10.640329700000166
+          },
+          "solve_seconds": 10.640329700000166
+        }
+      ],
+      "mesh_seconds": 9.728316499999892,
+      "module_path": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\hornlab-bempp-bem\\hornlab_bempp_bem\\__init__.py",
+      "native_timings": {
+        "directivity_s": 0.05470013618469238,
+        "solve_s": 13.804996013641357,
+        "total_s": 13.859720468521118
+      },
+      "on_axis_pressure": [
+        [
+          4.751753253028369e-05,
+          2.373348573992569e-05
+        ]
+      ],
+      "opencl_workarounds": {
+        "applied": true,
+        "cacheEnvDefaulted": true,
+        "includePathQuoted": true,
+        "reason": "Quoted bempp-cl include path for clBuildProgram."
+      },
+      "pressure_sha256": "0e445cd257369aa54234cb947ecfa1d88f997d081d9cde9ad7d45a3053be4826",
+      "public_solve_seconds": 13.876623799999834,
+      "repeat": 1,
+      "source_impedance": [
+        [
+          0.022955979148787345,
+          -0.0010324040336479627
+        ]
+      ],
+      "total_seconds": 23.60499350000009
+    }
+  ],
+  "schema_version": 1,
+  "success": true,
+  "summary": {
+    "bempp-opencl": {
+      "median_seconds_per_frequency": 23.60499350000009,
+      "median_total_seconds": 23.60499350000009,
+      "repeats": 1
+    },
+    "cpubem": {
+      "median_seconds_per_frequency": 17.895977899999707,
+      "median_total_seconds": 17.895977899999707,
+      "repeats": 1
+    }
+  }
+}
