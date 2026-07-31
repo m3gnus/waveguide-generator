@@ -1,0 +1,49 @@
+; asro68 geometry, unchanged. Mesh density raised for the 11-20 kHz band.
+; ABEC.MeshFrequency stays at 1000 deliberately: it is a subdivision trigger
+; (EdgeLength = 0.5*c/f = 171.5 mm), so leaving it low guarantees ABEC solves
+; the elements ATH wrote and both codes see an identical mesh.
+ABEC.Abscissa = 1
+ABEC.MeshFrequency = 1000
+ABEC.NumFrequencies = 40
+ABEC.Polars:SPL_D = {
+Distance = 2
+Inclination = 45
+MapAngleRange = 0,180,37
+NormAngle = 0
+}
+ABEC.Polars:SPL_H = {
+Distance = 2
+MapAngleRange = 0,180,37
+NormAngle = 0
+}
+ABEC.Polars:SPL_V = {
+Distance = 2
+Inclination = 90
+MapAngleRange = 0,180,37
+NormAngle = 0
+}
+ABEC.SimType = 2
+ABEC.f1 = 100
+ABEC.f2 = 20000
+Mesh.AngularSegments = 100
+Mesh.LengthSegments = 40
+Mesh.MouthResolution = 4
+Mesh.Quadrants = 1
+Mesh.RearResolution = 5
+Mesh.SubdomainSlices =
+Mesh.ThroatResolution = 3
+Mesh.WallThickness = 6
+Output.ABECProject = 1
+Output.STL = 0
+Output.SubDir = FINE1
+R-OSSE = {
+R = 160 * (abs(cos(p)/1.8)^3 + abs(sin(p)/1)^4)^(-1/7)
+a = 22 * (abs(cos(p)/1.2)^8 + abs(sin(p)/1)^4)^(-1/4)
+a0 = 15.5
+b = 0.4
+k = 4 * (abs(cos(p)/1.2)^8 + abs(sin(p)/1)^4)^(-1/4)
+m = 0.84
+q = 4
+r = 0.35
+r0 = 12.7
+}

@@ -490,26 +490,75 @@ acceleration drive.
 Two setup facts had to be established first. ABEC measures the 2 m polar from
 the **throat**, not the mouth: `origin="throat"` agrees to `0.055 dB` at 100 Hz
 where `origin="mouth"` is out by `1.415 dB`. And `Sym=xy` in ABEC's
-`solving.txt` is the bi-symmetry of the horn, written for both the full and
-quarter exports, not an infinite baffle.
+`solving.txt` means *"I have given you only part of the model, mirror it"* —
+`Sym=x` names the plane whose **normal** is x, so `Sym=xy` is a quarter-space
+reduction, not an infinite baffle. That matters, because the shipped project
+pairs it with the **full** mesh (see below).
 
-| Band | Max deviation from ABEC3, worst of three planes |
-|---|---:|
-| 100 Hz - 879 Hz | **≤ 0.22 dB** |
-| 1007 Hz | 0.68 dB |
-| 1.2 - 3.4 kHz | 1 - 6 dB |
-| above 4 kHz | 2 - 35 dB |
+### Read the main lobe, not the worst angle
 
-Below 1 kHz the agreement is excellent, which validates the whole chain:
-geometry, units, driver definition, drive type, observation origin and
-distance, angle convention, normalisation, and the symmetry reduction.
+These polars are normalised on axis. The worst angle on such a polar is almost
+always a deep rear null, where a fraction of a dB of absolute pressure appears
+as tens of dB relative and *neither* code is converged — ABEC disagrees with
+itself by up to 33 dB back there. Worst-of-all-angles is therefore close to
+meaningless as an accuracy metric, and an earlier revision of this section
+reported it, which made a validated solver look unvalidated.
 
-Above 1 kHz there is a real, unexplained divergence. It is **not**:
+Gating on ABEC's own normalised level > -20 dB, rms deviation, on matched
+mesh pairs (identical `.msh` file solved by both codes):
+
+| Band | ours full vs ABEC full | ours quarter vs ABEC quarter |
+|---|---:|---:|
+| 100 Hz - 1 kHz | **0.077 dB** | **0.079 dB** |
+| 1 - 4 kHz | **0.182 dB** | **0.180 dB** |
+| 4 - 11 kHz | **0.230 dB** | **0.228 dB** |
+| 11 - 20 kHz | 2.185 dB | 1.893 dB |
+
+Inside the -6 dB main lobe the two codes agree to 0.01 - 0.25 dB at every
+frequency to 13 kHz, and -6 dB beamwidths agree to +0.2 - +1.7 deg. The two
+matched pairs landing within 0.002 dB of each other says the residual is a
+reproducible discretisation difference — ABEC uses constant elements collocated
+at triangle centroids, we use P1-continuous on vertices — and not scatter.
+
+For contrast, our own full-vs-quarter self-consistency is `0.001 dB` through
+4 kHz against ABEC's `0.013 - 0.027 dB`, so the symmetry reduction is the
+better-behaved of the two.
+
+Reproduce with `benchmarks/abec-validation/compare_abec.py`; that directory also
+holds both ABEC exports and both of our polar sets.
+
+### The shipped reference project was misconfigured
+
+`solving.txt` declares `Sym=xy` next to the full 4-quadrant mesh, so ABEC solved
+four superimposed copies of the horn — a pitfall ABEC's own manual names
+("if two elements occupy the same spot in space and belong to the same
+sub-domain then the solver cannot yield exact results because of ambiguity").
+
+**ATH is not at fault.** Sweeping `Mesh.Quadrants` through the same `ath.exe`
+build emits `Sym=xy` for `1`, `Sym=y` for `12`, `Sym=x` for `14`, and **no
+`Sym` clause** for `1234`. The shipped file is a stale leftover from an earlier
+quarter-mesh run: regenerating gives a byte-identical mesh and a `solving.txt`
+differing only by the absent clause.
+
+Re-running ABEC with that one line removed puts the cost at 0.021 dB below
+1 kHz, 0.052 dB at 1 - 4 kHz, 0.111 dB at 4 - 11 kHz and 0.636 dB above — small,
+because the images landed back on the same bi-symmetric surface and on-axis
+normalisation divides out the level error. Correcting it does tighten ABEC's own
+full-vs-quarter agreement by 2 - 4x, which identifies the stale clause as the
+source of ABEC's internal inconsistency.
+
+### What the earlier divergence hunt ruled out
+
+Before the angle-resolved comparison above existed, the 1 - 6 dB worst-angle
+figures at 1.2 - 3.4 kHz looked like a real divergence and were chased hard.
+All of it came back negative, and the eliminations remain useful evidence that
+the solver is sound. It is **not**:
 
 - **mesh resolution.** Uniform 1-to-4 subdivision of the same surface (2275 ->
   9100 quarter triangles, four times ABEC's own density) moves our answer by
-  only 0.03 - 0.71 dB while the gap to ABEC stays at 6 - 9 dB. Our solve is
-  converged; refining does not move it toward ABEC.
+  only 0.03 - 0.71 dB while the worst-angle gap to ABEC stays at 6 - 9 dB. Our
+  solve is converged; refining does not move it toward ABEC. (That gap is now
+  known to be rear-null placement — see the main-lobe table above.)
 - **formulation, including the standard BIE's interior-resonance
   non-uniqueness.** This was the leading suspect: the horn is a closed shell
   (`WallThickness = 6`) with a real interior, and the standard exterior BIE is
@@ -523,9 +572,10 @@ Above 1 kHz there is a real, unexplained divergence. It is **not**:
   by damping real physics. Caveat: Burton-Miller failed to converge at 2275 Hz,
   so that one frequency is not a clean comparison; the other three are.
 - **the symmetry reduction.** The quarter and the full domain agree with each
-  other to about `0.01 dB` through 1.5 kHz, where they diverge from ABEC by
-  6 dB. (They do separate from each other higher up, once neither mesh resolves
-  the field.)
+  other to about `0.01 dB` through 1.5 kHz (main-lobe rms is tighter still,
+  `0.001 dB` through 4 kHz), while the worst-angle figure against ABEC was 6 dB.
+  (They do separate from each other higher up, once neither mesh resolves the
+  field.)
 - **the driver velocity model.** `source_motion="axial"` (rigid piston) and
   `"normal"` (breathing cap) agree to within `0.4 dB` of each other; the cap is
   nearly flat.
@@ -550,34 +600,78 @@ Above 1 kHz there is a real, unexplained divergence. It is **not**:
   `f` gives no sharp minimum: rms deviation is 0.68 dB at 340, 0.78 at 341, 0.68
   at 342, 0.71 at 343, 0.77 at 344, rising to 1.17 at 350. The scan is
   non-monotonic around 343 and shallow, which is what noise looks like rather
-  than a mis-set constant. **Not confirmed.**
+  than a mis-set constant. **Not confirmed.** ABEC's documented default is
+  `c = 343.32 m/s`, `rho = 1.205` — a 0.09% difference in `c`, well inside the
+  scatter of that scan, and `rho` cancels under normalisation.
+- **a polar convention mismatch.** Tested by transforming the reference and
+  re-differencing: swapping the H and V planes makes rms *worse* (8.99 -> 11.09
+  dB), reading the grid as 0 - 90 deg in 2.5 deg steps far worse (17.93), and
+  shifting the frequency index by ±1 worse (10.93 - 11.50). ABEC's abscissa is
+  `logspace(100, 20000, 40)` to 3.8e-15 and its angle grid is stated in its own
+  header as `0,5,…,180`. Fitting the off-axis phase gives apparent phase centres
+  agreeing to `0.01 mm` at 510 Hz, so there is no arc-centre offset either. The
+  identity mapping is correct. (It also surfaced a harmless convention
+  difference: ABEC uses `e^-jkr`, Bempp `e^+ikr`, so phases are conjugated.)
+- **an interior mode or non-uniqueness.** ABEC's radiation impedance rises
+  smoothly, never exceeds 1, and shows no ripple — no enclosed-volume signature.
+  ABEC also applies non-uniqueness compensation (Dual Surface Method) by default
+  when `NUC=` is unspecified, so it was never exposed to the failure mode
+  Burton-Miller was tried against.
 
-The mesh does become genuinely marginal at the top — `ABEC.MeshFrequency = 1000`
-gives 1.9 elements per wavelength at 20 kHz, below what any BEM code can
-represent — so the very high band is meaningless for both solvers. But that does
-not explain the 1.5 - 3.4 kHz range, where the mesh is still adequate and our
-answer is converged.
+The one thing that *is* real: `ABEC.MeshFrequency = 1000` sized this mesh for
+1 kHz and nothing more. Worst element is 30.6 mm — 11.2 per wavelength at 1 kHz,
+3.3 at 3.4 kHz, **0.56 at 20 kHz**. Above roughly 11 kHz the mesh has run out of
+elements for *both* codes, and the cross-code figures there (1.9 - 2.2 dB) sit
+alongside ABEC disagreeing with itself by 0.64 dB and us with ourselves by
+0.40 dB. Nothing in that band is a reference for anything; it needs a finer
+export, not a better solver.
+
+### Where our own answer is converged, measured
+
+The 11 kHz boundary is not inferred from the ABEC comparison. A second ATH
+export of the same horn at 4.4x the density — `Mesh.AngularSegments` 50 -> 104,
+`LengthSegments` 20 -> 40, `Rear/Mouth/ThroatResolution` 25/8/5 -> 5/4/3 mm,
+giving 11650 quarter triangles against 2275 and a worst element of 6.95 mm
+against 30.63 — moves our own answer by, main-lobe rms:
+
+| Band | our coarse-vs-fine movement |
+|---|---:|
+| 100 Hz - 1 kHz | 0.017 dB |
+| 1 - 4 kHz | 0.014 dB |
+| 4 - 11 kHz | **0.065 dB** |
+| 11 - 20 kHz | **2.198 dB** |
+
+Per frequency the transition is sharp: 0.217 dB at 8852 Hz, 0.416 at 10140,
+0.678 at 11615, 1.086 at 13305, 15.271 at 20000. So our solution is
+h-converged to `0.065 dB` through 11 kHz and not converged above it,
+independently of ABEC.
+
+Two things follow. The cross-code residual below 11 kHz (0.08 - 0.23 dB) is
+comfortably *larger* than our own discretisation error (0.014 - 0.065 dB), which
+is what makes it attributable to the basis difference rather than to our mesh.
+And our refined solve disagrees with ABEC's coarse result *more* than our coarse
+solve does above 11 kHz (3.62 vs 1.89 dB) — the expected sign when moving toward
+convergence and away from an unconverged reference.
+
+The refined ATH config is `benchmarks/abec-validation/ath-fine1-config.txt`; the
+mesh it generates is the one used by ABEC project `C_fine_quarter_sym`. Note
+`ABEC.MeshFrequency` is deliberately left at 1000 there: it is a subdivision
+trigger (`EdgeLength = 0.5*c/f` = 171.5 mm), so keeping it low guarantees ABEC
+solves the elements ATH wrote instead of subdividing them, which is what keeps
+both codes on an identical mesh.
 
 What the eliminations add up to is worth stating plainly. Our solution is
 **mesh-converged** (4x refinement moves it ≤0.71 dB) and
 **formulation-independent** (standard, complex-k and Burton-Miller agree with
-each other to ~0.03 dB rms while all three sit 6 dB from ABEC). A converged P1
-solution and a converged solution of a *different integral equation* agreeing
-with each other is strong evidence that the numerics are sound: discretization
-differences vanish at convergence, and Burton-Miller shares none of the standard
-BIE's failure modes. The disagreement is therefore not in how we are solving the
-problem.
+each other to ~0.03 dB rms). A converged P1 solution and a converged solution of
+a *different integral equation* agreeing with each other is strong evidence that
+the numerics are sound: discretization differences vanish at convergence, and
+Burton-Miller shares none of the standard BIE's failure modes.
 
-That leaves the problem definition itself, or ABEC's own result. The untested
-candidates are that ABEC models something we do not (a coupled interior
-subdomain, a different driver idealisation) or that its polar-plane conventions
-differ in a way that only bites once the pattern develops lobes — the error is
-strongly plane-dependent and swaps between planes with frequency (1321 Hz: H
-1.45, V 6.02, D 3.33 dB; 1734 Hz: H 5.93, V 5.90, D 1.40), which looks like
-lobes landing at slightly different angles rather than a level error.
-
-Treat Bempp results above roughly 1 kHz on this geometry as not yet validated
-against ABEC — while noting that nothing found so far impugns the solver.
+**Bempp is validated against ABEC3 on this geometry from 100 Hz to 11 kHz**, to
+0.08 - 0.23 dB rms in the main lobe. Above 11 kHz neither code is resolved on
+this mesh. Deep rear nulls disagree at any frequency, in both codes, and should
+not be read as an accuracy figure.
 
 ### Nothing here changed the physics
 
