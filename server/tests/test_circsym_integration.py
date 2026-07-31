@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import math
-
-import pytest
+import unittest
 
 from contracts import MeshData, PolarConfig, SimulationRequest
 from solver.metal_solver import metal_backend_status, solve_circsym_from_params
@@ -77,36 +76,50 @@ def _request(payload: dict) -> SimulationRequest:
     )
 
 
-@pytest.mark.skipif(not _metal_runtime_ready(), reason="Metal runtime not available")
-@pytest.mark.parametrize("sim_type", [1, 2])
-def test_solve_circsym_from_params_unmocked_tiny_round_waveguide(sim_type: int):
-    payload = _payload(sim_type=sim_type)
-    request = _request(payload)
+# This module used pytest marks, but the project's runner is `unittest
+# discover` (npm run test:server) and pytest is not a declared dependency, so
+# the module failed to import on every machine without pytest. That surfaced as
+# a collection ERROR rather than the intended skip. Expressed with unittest it
+# runs under the harness that actually exists, and skips cleanly off Metal.
+class CircsymIntegrationTest(unittest.TestCase):
+    @unittest.skipUnless(_metal_runtime_ready(), "Metal runtime not available")
+    def test_solve_circsym_from_params_unmocked_tiny_round_waveguide(self):
+        for sim_type in (1, 2):
+            with self.subTest(sim_type=sim_type):
+                self._check_sim_type(sim_type)
 
-    result = solve_circsym_from_params(payload, request)
+    def _check_sim_type(self, sim_type: int) -> None:
+        payload = _payload(sim_type=sim_type)
+        request = _request(payload)
 
-    assert result["frequencies"] == [500.0]
-    assert result["metadata"]["solver_mode"] == "circsym"
-    assert result["metadata"]["metal"]["solver_mode"] == "circsym"
-    meridian_metadata = result["metadata"]["metal"]["meridian"]
-    assert "freqMaxHz" not in meridian_metadata
-    assert meridian_metadata["throatTargetSegmentM"] > 0.0
-    assert len(result["spl_on_axis"]["spl"]) == 1
-    spl_on_axis = result["spl_on_axis"]["spl"][0]
-    assert spl_on_axis is not None
-    assert math.isfinite(float(spl_on_axis))
-    assert math.isfinite(float(result["impedance"]["real"][0]))
-    assert "horizontal" in result["directivity"]
-    assert len(result["directivity"]["horizontal"][0]) == 5
+        result = solve_circsym_from_params(payload, request)
 
-    if sim_type == 1:
-        native_diagnostics = result["metadata"]["metal"]["native_diagnostics"]
-        diagnostic_entries = [
-            entry for entry in native_diagnostics if isinstance(entry, dict)
-        ]
-        assert any(entry.get("coupled_ib") is True for entry in diagnostic_entries)
-        assert any(
-            int(entry.get("aperture_tag")) == 12
-            for entry in diagnostic_entries
-            if entry.get("aperture_tag") is not None
-        )
+        self.assertEqual(result["frequencies"], [500.0])
+        self.assertEqual(result["metadata"]["solver_mode"], "circsym")
+        self.assertEqual(result["metadata"]["metal"]["solver_mode"], "circsym")
+        meridian_metadata = result["metadata"]["metal"]["meridian"]
+        self.assertNotIn("freqMaxHz", meridian_metadata)
+        self.assertGreater(meridian_metadata["throatTargetSegmentM"], 0.0)
+        self.assertEqual(len(result["spl_on_axis"]["spl"]), 1)
+        spl_on_axis = result["spl_on_axis"]["spl"][0]
+        self.assertIsNotNone(spl_on_axis)
+        self.assertTrue(math.isfinite(float(spl_on_axis)))
+        self.assertTrue(math.isfinite(float(result["impedance"]["real"][0])))
+        self.assertIn("horizontal", result["directivity"])
+        self.assertEqual(len(result["directivity"]["horizontal"][0]), 5)
+
+        if sim_type == 1:
+            native_diagnostics = result["metadata"]["metal"]["native_diagnostics"]
+            diagnostic_entries = [
+                entry for entry in native_diagnostics if isinstance(entry, dict)
+            ]
+            self.assertTrue(
+                any(entry.get("coupled_ib") is True for entry in diagnostic_entries)
+            )
+            self.assertTrue(
+                any(
+                    int(entry.get("aperture_tag")) == 12
+                    for entry in diagnostic_entries
+                    if entry.get("aperture_tag") is not None
+                )
+            )

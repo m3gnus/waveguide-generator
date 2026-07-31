@@ -1680,10 +1680,17 @@ class JobPersistenceFailureSafetyTest(unittest.TestCase):
         )
 
         try:
+            # This payload routes to the circular-symmetric solver, not
+            # solve_metal_from_msh. Patching only the latter left the real
+            # Metal path running, so off macOS the job failed with
+            # MetalBemUnavailable and this test never reached the artifact
+            # persistence behaviour it exists to check. Patch both entry
+            # points so the test is solver- and platform-independent.
             with patch("services.simulation_runner.HORNLAB_MESHER_AVAILABLE", True), \
                  patch("services.simulation_runner.HORNLAB_MESHER_RUNTIME_READY", True), \
                  patch("services.simulation_runner.build_waveguide_mesh", return_value=fake_mesher_result), \
                  patch("services.simulation_runner.solve_metal_from_msh", side_effect=fake_metal_solve), \
+                 patch("services.simulation_runner.solve_circsym_from_params", side_effect=fake_metal_solve), \
                  patch.object(_sim_runner.db, "store_mesh_artifact", side_effect=OSError("disk full")):
                 asyncio.run(_sim_runner.run_simulation(job_id, request))
 

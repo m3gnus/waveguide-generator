@@ -22,8 +22,19 @@ test('installers enforce the runtime prerequisites they consume', () => {
 test('installers preserve and replace an invalid virtual environment', () => {
   assert.match(shellInstaller, /\.venv\.incompatible/);
   assert.match(windowsInstaller, /\.venv\.incompatible/);
+
+  // The shell installer still probes inline; POSIX shells parse it correctly.
   assert.match(shellInstaller, /sys\.prefix != sys\.base_prefix/);
-  assert.match(windowsInstaller, /sys\.prefix != sys\.base_prefix/);
+
+  // The Windows installer delegates to install\check_venv.py, because cmd.exe
+  // mis-parsed the inline form inside a parenthesised block. The check itself
+  // must still be the same one, so assert it lives in the script.
+  const checkVenv = fs.readFileSync(
+    new URL('../install/check_venv.py', import.meta.url),
+    'utf8'
+  );
+  assert.match(checkVenv, /sys\.prefix != sys\.base_prefix/);
+  assert.match(windowsInstaller, /check_venv\.py/);
 });
 
 test('Metal helper build runs before solve-backend selection', () => {
@@ -48,5 +59,132 @@ test('strict preflight failures are fatal before the completion banner', () => {
 
 test('updated code restarts through the freshly pulled installer', () => {
   assert.match(shellInstaller, /WAVEGUIDE_INSTALL_AFTER_PULL=1 exec bash/);
-  assert.match(windowsInstaller, /call install\\install\.bat --after-pull/);
+
+  // The Windows installer must NOT re-exec itself in place. `git pull` rewrites
+  // install.bat, and cmd.exe re-reads a running batch file by byte offset, so
+  // the old `call install\install.bat --after-pull` resumed at a meaningless
+  // offset and executed fragments of unrelated lines. install.bat now exits 10
+  // and install-and-update.bat relaunches from a fresh %TEMP% copy.
+  assert.doesNotMatch(
+    windowsInstaller,
+    /call install\\install\.bat --after-pull/,
+    'install.bat must not call itself after a pull; it has already been '
+      + 'overwritten and cmd.exe has lost its place in the file.'
+  );
+  assert.match(
+    windowsInstaller,
+    /exit \/b 10/,
+    'install.bat should exit 10 to request a relaunch by install-and-update.bat.'
+  );
+  assert.match(
+    windowsInstaller,
+    /--after-pull/,
+    'install.bat must still accept --after-pull when relaunched.'
+  );
+});
+
+test('windows installer probes the venv with a script, not an inline -c', () => {
+  // A `python -c "...(3,10) <= sys.version_info[:2] < (3,15)..."` probe inside a
+  // parenthesised cmd block was mis-parsed: it reported failure while the same
+  // command exited 0 at the prompt. The installer then discarded a healthy
+  // .venv on every run, rebuilt it (~3 min), and left a backup behind each
+  // time. Reruns went from 195s to 58s once this moved into a file.
+  assert.match(
+    windowsInstaller,
+    /check_venv\.py/,
+    'install.bat must validate .venv via install\\check_venv.py'
+  );
+  assert.doesNotMatch(
+    windowsInstaller,
+    /python\.exe -c "import sys; sys\.exit\(0 if sys\.prefix/,
+    'the inline venv probe is mis-parsed by cmd inside a block; use the script'
+  );
+});
+
+test('windows installer keeps at most one incompatible venv backup', () => {
+  // The old scheme appended !RANDOM!!RANDOM! and never cleaned up, so repeated
+  // runs accumulated multi-hundred-MB directories. Four had piled up.
+  assert.doesNotMatch(
+    windowsInstaller,
+    /\.venv\.incompatible\.!RANDOM!/,
+    'do not create a uniquely-named backup on every run'
+  );
+  assert.match(windowsInstaller, /rd \/s \/q "\.venv\.incompatible"/);
+  assert.match(
+    windowsInstaller,
+    /for \/d %%d in \("\.venv\.incompatible\.\*"\)/,
+    'stale backups from the old naming scheme should be swept up'
+  );
+});
+
+test('windows installer skips Microsoft Store python execution aliases', () => {
+  assert.match(
+    windowsInstaller,
+    /WindowsApps/,
+    'install.bat must recognise Store execution aliases'
+  );
+  assert.match(
+    windowsInstaller,
+    /STORE_ALIAS_SEEN/,
+    'install.bat should tell the user when it skipped a Store alias'
+  );
+});
+
+test('windows installers never expand a path variable inside a block', () => {
+  // cmd.exe expands %VAR% when it PARSES a parenthesised block, before running
+  // it. A path containing ')' therefore closes the block early. Verified with a
+  // real install into "C:\...\Hörnlab – Wörkspace (tëst)\wg": the installer died
+  // in 1.2s with "\wg was unexpected at this time." before printing anything.
+  // Delayed expansion (!VAR!) defers substitution to execution time and is
+  // immune. Quoted "%VAR%" is also safe, because the quotes survive parsing.
+  const pathVars = ['WG_ROOT', 'WG_LOG', 'CD', 'TEMP', 'WG_TMP_INSTALLER'];
+
+  for (const [name, source] of [
+    ['install.bat', windowsInstaller],
+    ['install-and-update.bat', fs.readFileSync(
+      new URL('../install/install-and-update.bat', import.meta.url), 'utf8')],
+  ]) {
+    for (const line of source.split(/\r?\n/)) {
+      if (!/^\s+/.test(line)) continue;          // only indented (in-block) lines
+      if (/^\s*(rem|::)/i.test(line)) continue;  // comments are inert
+      for (const v of pathVars) {
+        // Safe forms: "%VAR%" (cmd quoting survives the parse) and '%VAR%'
+        // (PowerShell single-quoting, used for the Tee-Object invocation).
+        // Unsafe: a bare %VAR% that the parser expands before the block runs.
+        const bare = new RegExp(`(^|[^"'%])%${v}%([^"']|$)`);
+        assert.equal(
+          bare.test(line),
+          false,
+          `${name}: unquoted %${v}% inside a block breaks on paths containing `
+            + `')'. Use !${v}! or quote it.\n  ${line.trim()}`
+        );
+      }
+    }
+  }
+});
+
+test('windows launcher calls npm.cmd so failures stay visible', () => {
+  const launcher = fs.readFileSync(
+    new URL('../launch/windows.bat', import.meta.url),
+    'utf8'
+  );
+
+  // Without `call`, control transfers to npm.cmd permanently and the `pause`
+  // below never runs, so a double-clicked launcher closes instantly on error.
+  assert.match(launcher, /call npm\.cmd start/);
+  assert.match(launcher, /pause/);
+});
+
+test('windows entry point runs the installer from a copy outside the repo', () => {
+  const entryPoint = fs.readFileSync(
+    new URL('../install/install-and-update.bat', import.meta.url),
+    'utf8'
+  );
+
+  // Staging into %TEMP% is what makes the update safe: git may then rewrite
+  // install.bat freely, because the executing file is not inside the repo.
+  assert.match(entryPoint, /%TEMP%/, 'entry point must stage the installer in %TEMP%');
+  assert.match(entryPoint, /copy \/y/i, 'entry point must copy the installer before running it');
+  assert.match(entryPoint, /--root/, 'the staged copy needs the repository root passed explicitly');
+  assert.match(entryPoint, /"10"/, 'entry point must handle the relaunch exit code');
 });

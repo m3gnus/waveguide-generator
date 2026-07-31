@@ -152,7 +152,9 @@ test('runBackendPython forwards commands through resolved backend interpreter', 
   assert.equal(exitCode, 0);
   assert.equal(spawnCall.python, markerPython);
   assert.deepEqual(spawnCall.args, ['-m', 'unittest', 'discover', '-s', 'tests']);
-  assert.equal(spawnCall.options.cwd, path.join(rootDir, 'server'));
+  // runBackendPython resolves --cwd with path.resolve, so the expectation must
+  // use the same call. path.join would produce a drive-less path on Windows.
+  assert.equal(spawnCall.options.cwd, path.resolve(rootDir, 'server'));
   assert.match(spawnCall.options.env.WG_BACKEND_PYTHON_SOURCE, /^marker:/);
 });
 

@@ -111,8 +111,20 @@ class UpdatesEndpointTest(unittest.TestCase):
 
     @patch("services.update_service._run_git")
     @patch("services.update_service.subprocess.run")
-    def test_git_version_probe_has_a_timeout(self, mock_run, mock_run_git):
-        mock_run.return_value = None
+    def test_git_availability_probe_spawns_no_subprocess(self, mock_run, mock_run_git):
+        """The availability probe must not spawn a process, so it cannot hang.
+
+        This replaces a pair of tests that asserted the probe passed
+        timeout=10 to `subprocess.run(["git", "--version"])`. That guarded
+        against a hang, but the spawn had a worse failure mode: CreateProcess
+        raises FileNotFoundError([WinError 2]) when the *current working
+        directory* has been deleted, not only when the executable is missing.
+        A sibling test that chdir'd into a since-removed temporary directory
+        made this report "Git is not installed" on a machine with git plainly
+        on PATH. shutil.which needs no child process and no valid cwd, so the
+        hang is now impossible by construction rather than bounded by a
+        timeout. Pin that: nothing may be spawned.
+        """
         mock_run_git.side_effect = [
             "1111111111111111111111111111111111111111",
             "main",
@@ -124,18 +136,15 @@ class UpdatesEndpointTest(unittest.TestCase):
             "0 0",
         ]
 
-        get_update_status()
-
-        mock_run.assert_called_once_with(
-            ["git", "--version"], check=True, capture_output=True, timeout=10
-        )
-
-    @patch("services.update_service.subprocess.run")
-    def test_git_version_probe_timeout_maps_to_runtime_error(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(["git", "--version"], 10)
-
-        with self.assertRaisesRegex(RuntimeError, "Git version check timed out"):
+        with patch("services.update_service.shutil.which", return_value="C:\\git.exe"):
             get_update_status()
+
+        mock_run.assert_not_called()
+
+    def test_missing_git_maps_to_runtime_error(self):
+        with patch("services.update_service.shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Git is not installed"):
+                get_update_status()
 
 
 if __name__ == "__main__":
