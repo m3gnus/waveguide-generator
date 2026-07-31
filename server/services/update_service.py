@@ -2,6 +2,7 @@
 Git-based update checking service.
 """
 
+import shutil
 import subprocess
 import threading
 from datetime import datetime
@@ -44,11 +45,15 @@ def _get_update_status_unlocked() -> Dict[str, Any]:
             "clone from https://github.com/m3gnus/waveguide-generator"
         )
 
-    try:
-        subprocess.run(["git", "--version"], check=True, capture_output=True, timeout=10)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("Git version check timed out.") from exc
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    # Resolve git on PATH rather than spawning `git --version`. Spawning was
+    # both slower and fragile: it bypassed the _run_git seam the tests mock, and
+    # CreateProcess raises FileNotFoundError([WinError 2]) when the *current
+    # working directory* no longer exists -- not only when the executable is
+    # missing. A sibling test that chdir'd into a since-deleted temporary
+    # directory therefore made this report "Git is not installed" on a machine
+    # where git was plainly installed. shutil.which needs no valid cwd and no
+    # child process.
+    if shutil.which("git") is None:
         raise RuntimeError("Git is not installed or not in system PATH.")
 
     current_commit = _run_git(repo_root, "rev-parse", "HEAD")

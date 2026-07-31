@@ -81,6 +81,13 @@ def _load_bempp_api() -> bool:
 
 
 def opencl_runtime_status() -> dict[str, Any]:
+    # bempp-cl cannot build its OpenCL kernels on an install path containing a
+    # space without this; see solver.bempp_compat. Applied before any probe or
+    # solve so readiness and execution see identical behavior.
+    from .bempp_compat import apply_bempp_opencl_workarounds
+
+    apply_bempp_opencl_workarounds()
+
     try:
         import pyopencl as cl  # type: ignore
     except Exception as exc:
@@ -122,13 +129,32 @@ def opencl_runtime_status() -> dict[str, Any]:
                 "platforms": platform_names,
                 "reason": f"OpenCL device initialization failed: {exc}",
             }
+
+    # An initialized device still is not a solve. bempp-cl must be able to
+    # compile its assembly kernel, and that fails independently -- notably when
+    # the install path contains a space, because bempp-cl passes its source
+    # include directory to clBuildProgram as an unquoted -I option. Without this
+    # probe the backend reports ready and every solve dies mid-sweep.
+    from .device_inventory import opencl_kernel_build_probe
+
+    build = opencl_kernel_build_probe("cpu")
+    if not build.get("ok"):
+        return {
+            "available": False,
+            "platformCount": len(platforms),
+            "deviceCount": device_count,
+            "platforms": platform_names,
+            "device": device_name,
+            "reason": f"OpenCL assembly kernel is unusable: {build.get('reason')}",
+        }
+
     return {
         "available": True,
         "platformCount": len(platforms),
         "deviceCount": device_count,
         "platforms": platform_names,
         "device": device_name,
-        "reason": "OpenCL runtime detected.",
+        "reason": "OpenCL runtime detected and assembly kernel compiled.",
     }
 
 

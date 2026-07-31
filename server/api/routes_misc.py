@@ -307,7 +307,12 @@ async def export_file(
             "path": str(file_path),
             "filename": raw_filename,
             "workspaceRoot": str(workspace_root),
-            "workspaceSubdir": str(Path(*normalized_parts)) if normalized_parts else ""
+            # Relative sub-path in a JSON response: always POSIX-style. str() on
+            # a Path yields "jobs\\horn_12" on Windows and "jobs/horn_12"
+            # elsewhere, so the same request returned a different value
+            # depending on the server OS. Absolute local paths above stay
+            # native, because those are for the local filesystem.
+            "workspaceSubdir": Path(*normalized_parts).as_posix() if normalized_parts else ""
         }
     except Exception as exc:
         logger.error(f"Export failed: {exc}")
