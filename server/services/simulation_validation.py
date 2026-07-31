@@ -26,11 +26,7 @@ def normalize_waveguide_params_for_solver_backend(
 ) -> Optional[Dict[str, Any]]:
     if waveguide_params is None:
         return None
-    normalized = dict(waveguide_params)
-
-    if str(solver_backend or "").strip().lower() == "bempp":
-        normalized["quadrants"] = 1234
-    return normalized
+    return dict(waveguide_params)
 
 
 def is_hornlab_mesher_strategy(mesh_strategy: str) -> bool:

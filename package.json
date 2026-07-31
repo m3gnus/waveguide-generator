@@ -20,6 +20,7 @@
     "diag:geometry": "node scripts/diagnostics/check-reference-horn-geometry-artifacts.js",
     "diag:mesher:reference-horn": "node scripts/run-backend-python.js scripts/diagnostics/build-occ-mesh-reference-horn.py",
     "diag:mesher:closed": "node scripts/run-backend-python.js scripts/diagnostics/check-occ-closed-mesh.py",
+    "bench:cpubem": "node scripts/run-backend-python.js --cwd server -m solver.cpubem.benchmark",
     "build:metal-helper": "node scripts/run-backend-python.js server/scripts/build_metal_native_release.py",
     "deps:bump-pins": "node scripts/run-backend-python.js scripts/bump_module_pins.py",
     "deps:check-pins": "node scripts/run-backend-python.js scripts/bump_module_pins.py --check",

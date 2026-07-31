@@ -12,7 +12,6 @@ from .result_mapping import (
     native_symmetry_plane,
     observation_config,
     response_solver_log,
-    waveguide_quadrants,
     waveguide_sim_type,
 )
 from .formulation import complex_k_shift_from_request, formulation_from_request
@@ -35,18 +34,6 @@ except ImportError:  # pragma: no cover - exercised through runtime status
 
 class BemppBemUnavailable(RuntimeError):
     """Raised when the BEMPP fallback solver dependency is unavailable."""
-
-
-def _reject_reduced_domain_request(request) -> None:
-    symmetry_plane = native_symmetry_plane(request)
-    if symmetry_plane is None:
-        return
-    raise ValueError(
-        "BEMPP fallback solves require a full-domain mesh. "
-        f"Got Mesh.Quadrants={waveguide_quadrants(request)!r}, which maps to "
-        f"native_symmetry_plane={symmetry_plane!r}. Use Mesh.Quadrants=1234, "
-        "or select the Metal backend for native symmetry solves."
-    )
 
 
 def _reject_infinite_baffle_request(request) -> None:
@@ -242,10 +229,10 @@ def _opencl_device_from_request(request) -> str:
 def _require_closed_mesh(request) -> bool:
     """Closed-mode meshes (enclosure / thickened wall) must arrive sealed.
 
-    Mirrors the bare-shell derivation in metal_solver._native_check_open_edges
-    minus the symmetry precondition: bempp always solves the full domain, so
-    the only legitimately open mesh is a bare wall-less horn. Unknown payloads
-    (imported meshes without waveguide_params) stay permissive.
+    Mirrors the bare-shell derivation in metal_solver._native_check_open_edges.
+    Native symmetry is validated after the reduced mesh is expanded, so a cut
+    plane may be open while the reconstructed enclosure must still be sealed.
+    Unknown payloads (imported meshes without waveguide_params) stay permissive.
     """
     params = _waveguide_params(request)
     if not params:
@@ -267,7 +254,6 @@ def solve_bempp_from_msh(
 ) -> dict[str, Any]:
     _reject_infinite_baffle_request(request)
     reject_bempp_circsym_request(request)
-    _reject_reduced_domain_request(request)
 
     if not _load_bempp_api():
         raise BemppBemUnavailable(
