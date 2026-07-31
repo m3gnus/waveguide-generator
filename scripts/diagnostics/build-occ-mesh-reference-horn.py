@@ -1,10 +1,10 @@
 import sys
 import os
+import argparse
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
 OUTPUT_DIR = os.path.join(THIS_DIR, 'out')
-OUTPUT_PATH = os.path.join(OUTPUT_DIR, 'test_reference_horn.msh')
 
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, 'server'))
@@ -35,6 +35,19 @@ payload_data = {
     "rear_res": 40.0,
 }
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--quadrants", type=int, default=1234)
+parser.add_argument("--output")
+args = parser.parse_args()
+payload_data["quadrants"] = args.quadrants
+output_path = args.output or os.path.join(
+    OUTPUT_DIR,
+    (
+        "test_reference_horn.msh"
+        if args.quadrants == 1234
+        else f"test_reference_horn_q{args.quadrants}.msh"
+    ),
+)
 request = WaveguideParamsRequest(**payload_data)
 
 try:
@@ -44,9 +57,9 @@ try:
     print("Stats:", result["stats"])
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(OUTPUT_PATH, 'w') as f:
+    with open(output_path, 'w') as f:
         f.write(result["msh_text"])
-    print(f"Saved to {OUTPUT_PATH}")
+    print(f"Saved to {output_path}")
 
 except Exception as e:
     print("Failed!")

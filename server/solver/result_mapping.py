@@ -11,6 +11,11 @@ import numpy as np
 from .beam_shape import beam_shape_summary
 from .contract import build_directivity_metadata
 from .directivity_index import calculate_di_from_polar_patterns
+from .quadrants import (
+    FULL_DOMAIN_QUADRANTS,
+    native_symmetry_plane_for_quadrants,
+    normalise_quadrants,
+)
 
 REFERENCE_PRESSURE_PA = 20e-6
 REFERENCE_RHO_C = 1.21 * 343.0
@@ -61,6 +66,12 @@ def response_solver_log(solver_log) -> list:
 
 
 def waveguide_quadrants(request) -> int:
+    """Quadrant coverage the mesher will actually build for this request.
+
+    Normalised through the shared Ath rules so the mesh that gets built and the
+    symmetry the solver is told about cannot disagree; see
+    :mod:`server.solver.quadrants`.
+    """
     options = request.options if isinstance(getattr(request, "options", None), dict) else {}
     mesh_opts = options.get("mesh", {}) if isinstance(options.get("mesh", {}), dict) else {}
     waveguide_params = (
@@ -68,10 +79,9 @@ def waveguide_quadrants(request) -> int:
         if isinstance(mesh_opts.get("waveguide_params"), dict)
         else {}
     )
-    try:
-        return int(waveguide_params.get("quadrants", 1234))
-    except (TypeError, ValueError):
-        return 1234
+    if "quadrants" not in waveguide_params:
+        return FULL_DOMAIN_QUADRANTS
+    return normalise_quadrants(waveguide_params.get("quadrants"))
 
 
 def waveguide_sim_type(request) -> int:
@@ -82,15 +92,7 @@ def waveguide_sim_type(request) -> int:
 
 
 def native_symmetry_plane(request) -> str | None:
-    # HornLab/WG quadrants are in the transverse X/Y plane after mesher export.
-    # 14: X >= 0 -> mirror across YZ. 12: Y >= 0 -> mirror across XZ.
-    quadrants = waveguide_quadrants(request)
-    return {
-        1: "yz+xz",
-        12: "xz",
-        14: "yz",
-        1234: None,
-    }.get(quadrants)
+    return native_symmetry_plane_for_quadrants(waveguide_quadrants(request))
 
 
 def observation_config(request, observation_config_cls, unavailable_error, package_name: str):

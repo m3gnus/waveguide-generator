@@ -51,15 +51,14 @@ class NormalizeWaveguideParamsTest(unittest.TestCase):
             self.assertEqual(result["sim_type"], 1, f"q={q!r}")
             self.assertEqual(str(result["quadrants"]), str(q), f"q={q!r}")
 
-    def test_bempp_still_forces_full_azimuth_for_ib_half_models(self):
-        # Bempp has no reduced-symmetry path, so every Bempp solve is normalized
-        # to full azimuth. sim_type remains truthful; the Bempp adapter rejects
-        # coupled infinite-baffle requests later.
+    def test_bempp_preserves_half_model_quadrants(self):
+        # Native Bempp symmetry now consumes the reduced mesh. Coupled
+        # infinite-baffle requests remain a separate unsupported feature.
         result = normalize_waveguide_params_for_solver_backend(
             {"sim_type": 1, "quadrants": "12"}, "bempp"
         )
         self.assertEqual(result["sim_type"], 1)
-        self.assertEqual(result["quadrants"], 1234)
+        self.assertEqual(result["quadrants"], "12")
 
     def test_none_params_pass_through(self):
         self.assertIsNone(normalize_waveguide_params_for_solver_backend(None, "metal"))
@@ -505,7 +504,7 @@ class ApiValidationTest(unittest.TestCase):
         # Queued payload preserves the validated symmetry-reduction domain.
         self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
 
-    def test_hornlab_mesher_submission_forces_full_domain_for_bempp_without_mutating_input(self):
+    def test_hornlab_mesher_submission_preserves_bempp_quarter_domain(self):
         request = SimulationRequest(
             mesh=MeshData(
                 vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -542,7 +541,7 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(request.options["mesh"]["waveguide_params"]["quadrants"], 1)
         submitted_request = create_simulation_job.call_args.args[0].model_dump()
         self.assertEqual(submitted_request["solver_backend"], "bempp")
-        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1234)
+        self.assertEqual(submitted_request["options"]["mesh"]["waveguide_params"]["quadrants"], 1)
 
     def test_auto_metal_submission_allows_bare_horn_without_closed_shell(self):
         request = SimulationRequest(
@@ -910,7 +909,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
         finally:
             _jrt.jobs.pop(job_id, None)
 
-    def test_hornlab_mesher_forces_full_domain_quadrants_for_bempp_build_call(self):
+    def test_hornlab_mesher_preserves_quadrants_for_bempp_build_call(self):
         request = self._make_hornlab_mesher_request({"quadrants": 14})
         request.solver_backend = "bempp"
 
@@ -928,7 +927,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
         def fake_bempp_solve(*_args, **_kwargs):
             return {"frequencies": [100.0], "directivity": {}}
 
-        job_id = "test-hornlab-bempp-full-domain"
+        job_id = "test-hornlab-bempp-quarter-domain"
         _jrt.jobs[job_id] = {
             "status": "queued", "progress": 0.0, "stage": "queued",
             "stage_message": "", "results": None, "error": None,
@@ -951,7 +950,7 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
 
             build_mesh.assert_called_once()
             forwarded_params = build_mesh.call_args.args[0]
-            self.assertEqual(forwarded_params.get("quadrants"), 1234)
+            self.assertEqual(forwarded_params.get("quadrants"), 14)
             self.assertEqual(_jrt.jobs[job_id].get("status"), "complete")
         finally:
             _jrt.jobs.pop(job_id, None)

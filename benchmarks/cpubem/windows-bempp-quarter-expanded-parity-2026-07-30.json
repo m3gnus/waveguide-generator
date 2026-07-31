@@ -1,0 +1,77 @@
+{
+  "expanded_mesh": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\scripts\\diagnostics\\out\\test_reference_horn_q1_expanded.msh",
+  "expanded_solver_log": [
+    {
+      "converged": true,
+      "frequency_hz": 1000.0,
+      "iterations": 34,
+      "phase_timings": {
+        "backend_setup_s": 0.00027129999944008887,
+        "dlp_assembly_s": 0.9492631000002802,
+        "function_spaces_s": 2.999995558639057e-07,
+        "impedance_s": 0.00018449999970471254,
+        "lhs_materialization_s": 10.58350689999952,
+        "linear_solve_s": 0.06226200000037352,
+        "neumann_data_s": 8.909999996831175e-05,
+        "neumann_restriction_s": 0.0009981000002881046,
+        "operator_construction_s": 0.00552129999960016,
+        "rhs_apply_s": 0.0007623999999850639,
+        "slp_assembly_s": 0.9125044000002163,
+        "total_s": 12.516004600000088
+      },
+      "timing_s": 12.516004600000088
+    }
+  ],
+  "expanded_timings": {
+    "directivity_s": 0.095184326171875,
+    "solve_s": 15.944731950759888,
+    "total_s": 16.039950847625732
+  },
+  "frequencies_hz": [
+    1000.0
+  ],
+  "gmres_tol": 1e-05,
+  "metrics": {
+    "impedance_max_abs_error": 3.630701042747451e-07,
+    "impedance_max_magnitude_db_error": 0.00011049121590659899,
+    "impedance_max_phase_error_rad": 7.7411353805432e-06,
+    "impedance_max_rel_error": 1.4891139010837148e-05,
+    "pressure_max_abs_error": 1.0166364810435416e-08,
+    "pressure_max_magnitude_db_error": 0.01580186773682372,
+    "pressure_max_normalized_db_error": 0.013003349922783514,
+    "pressure_max_phase_error_rad": 0.002011849415580785,
+    "pressure_max_rel_error": 0.0002549545660672668
+  },
+  "precision": "single",
+  "reduced_mesh": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\scripts\\diagnostics\\out\\test_reference_horn_q1.msh",
+  "reduced_solver_log": [
+    {
+      "converged": true,
+      "frequency_hz": 1000.0,
+      "iterations": 34,
+      "phase_timings": {
+        "backend_setup_s": 5.5900000006658956e-05,
+        "dlp_assembly_s": 0.23131130000001576,
+        "function_spaces_s": 6.999998731771484e-07,
+        "identity_assembly_s": 0.002736400000685535,
+        "impedance_s": 0.00020679999943240546,
+        "linear_solve_s": 0.04617040000084671,
+        "neumann_data_s": 8.81000005392707e-05,
+        "neumann_expansion_s": 0.0011212999997951556,
+        "neumann_restriction_s": 0.0008249000002251705,
+        "operator_construction_s": 0.00012140000035287812,
+        "slp_assembly_s": 0.10797809999985475,
+        "solution_wrapping_s": 0.00020290000065870117,
+        "symmetry_reduction_s": 0.009128300000156742,
+        "total_s": 0.4008819999999105
+      },
+      "timing_s": 0.4008819999999105
+    }
+  ],
+  "reduced_timings": {
+    "directivity_s": 0.10038447380065918,
+    "solve_s": 0.5319314002990723,
+    "total_s": 0.6323468685150146
+  },
+  "symmetry_plane": "yz+xz"
+}

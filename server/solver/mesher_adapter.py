@@ -9,6 +9,8 @@ from typing import Any, Mapping
 import meshio
 import numpy as np
 
+from .quadrants import normalise_quadrants, quadrants_leading_int
+
 try:
     from hornlab_mesher.config_builder import build_from_config
     from hornlab_mesher.viewport import build_viewport_geometry_from_config
@@ -131,29 +133,11 @@ def _reject_unsupported_source_payload(payload: Mapping[str, Any]) -> None:
     source_motion_from_payload(payload)
 
 
-def _quadrants_leading_int(value: Any) -> int:
-    if value is None or isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    text = str(value).strip()
-    sign = 1
-    if text.startswith(("+", "-")):
-        sign = -1 if text[0] == "-" else 1
-        text = text[1:]
-    digits = []
-    for char in text:
-        if not char.isdigit():
-            break
-        digits.append(char)
-    return sign * int("".join(digits)) if digits else 0
-
-
-def _normalise_quadrants(value: Any) -> int:
-    leading = _quadrants_leading_int(value)
-    return leading if leading in {12, 14, 1234} else 1
+# Kept as module-local names so existing call sites and tests are unchanged;
+# the rules live in server.solver.quadrants so the solver adapters read
+# Mesh.Quadrants exactly the same way this adapter does.
+_quadrants_leading_int = quadrants_leading_int
+_normalise_quadrants = normalise_quadrants
 
 
 def _solver_safe_vertical_offset(payload: Mapping[str, Any]) -> Any:

@@ -372,7 +372,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Python              | `>=3.10,<3.15`  | backend runtime   |
 | HornLab mesher      | `60301db22a8d8e618969b536a65d81997ad9835a` | `/api/mesh/build` |
 | HornLab Metal BEM   | `c1da8881dc2ee1e8931c4a11bd49cbf055d88de5` | `/api/solve` (Apple Silicon macOS) |
-| HornLab Bempp BEM   | `5c0b751eb3bf80e30040c6e19685568b874e89a8` | `/api/solve` (cross-platform fallback) |
+| HornLab Bempp BEM   | `c6f40771f9d7c49ef0a6e2ae02744cacf5c53315` | `/api/solve` (cross-platform fallback) |
 | HornLab plots       | `8664719d7be98279d7ce5283a557687ede26643d` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |
 
@@ -474,8 +474,10 @@ Runtime behavior by pipeline:
 - HornLab mesh build output (`/api/mesh/build`) emits tags `1`, `2`, and optional `3` when exterior surfaces exist.
 - Neither active JS runtime nor active HornLab mesh build emits tag `4`.
 - HornLab mesher `/api/solve` preserves selected symmetry-reduced `quadrants`
-  for Metal solves, normalizes Bempp solves to full-domain `quadrants=1234`,
-  and passes canonical `surfaceTags` through to solver mesh preparation unchanged.
+  for Metal and Bempp solves and passes canonical `surfaceTags` through to
+  solver mesh preparation unchanged. Bempp maps `1`, `12`, and `14` to native
+  transverse quarter/half symmetry for supported free-standing rigid-Neumann
+  models.
 
 Required invariants:
 
@@ -514,12 +516,12 @@ Required invariants:
 - Frontend backend-mesh request normalization (`src/modules/design/index.js`) accepts canonical values `1`, `12`, `14`, `1234`; otherwise it attempts numeric coercion and falls back to `1234`.
 - A UI Auto action samples prepared angular parameters and enclosure/offset constraints to choose `1`, `12`, `14`, or `1234` conservatively.
 - Waveguide payload mapping (`src/solver/waveguidePayload.js`) expects normalized integer `quadrants` and maps it directly.
-- `/api/solve` validates the HornLab mesher request, preserves normalized
-  `quadrants` for Metal solve requests, and normalizes Bempp solve requests to
-  `quadrants=1234` before queuing.
-- Simulation runner forwards Metal backend mesh `quadrants` to HornLab mesh
-  generation and defensively normalizes Bempp build parameters to
-  `quadrants=1234`.
+- `/api/solve` validates the HornLab mesher request and preserves normalized
+  `quadrants` for Metal and Bempp solve requests before queuing.
+- Simulation runner forwards backend mesh `quadrants` to HornLab mesh
+  generation. Bempp maps `1` to `native_symmetry_plane="yz+xz"`, `12` to
+  `"xz"`, and `14` to `"yz"`; unsupported coupled infinite-baffle/Robin
+  symmetry requests fail explicitly.
 
 #### Enclosure resolution fields
 

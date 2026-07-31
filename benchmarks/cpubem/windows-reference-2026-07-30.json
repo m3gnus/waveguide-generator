@@ -1,0 +1,269 @@
+{
+  "comparisons": {
+    "cpubem_vs_bempp-opencl": {
+      "impedance_max_abs_error": 7.837154485123126e-17,
+      "impedance_max_phase_error_rad": 6.22172584603264e-16,
+      "impedance_max_rel_error": 3.4105453589515694e-15,
+      "pressure_max_abs_error": 1.1995517794374219e-18,
+      "pressure_max_phase_error_rad": 6.221549070183588e-14,
+      "pressure_max_rel_error": 2.2584085266851323e-14
+    }
+  },
+  "configuration": {
+    "air_density": 1.2041,
+    "backends": [
+      "cpubem",
+      "bempp-opencl"
+    ],
+    "cache_directory": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\server\\.benchmark-cache",
+    "frequencies_hz": [
+      1000.0
+    ],
+    "observation_count_per_plane": 37,
+    "observation_distance_m": 2.0,
+    "observation_planes": [
+      "horizontal",
+      "vertical"
+    ],
+    "precision": "double",
+    "repeats": 3,
+    "speed_of_sound": 343.0,
+    "threads": 4
+  },
+  "created_at_utc": "2026-07-30T13:16:21.807863+00:00",
+  "errors": [],
+  "host": {
+    "hostname": "WIN-AVFOP9H3DIL",
+    "logical_cpus": 12,
+    "machine": "AMD64",
+    "numpy": "2.4.6",
+    "platform": "Windows-11-10.0.26100-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "python": "3.13.3",
+    "scipy": "1.18.0"
+  },
+  "mesh": {
+    "path": "C:\\Users\\Docker\\Desktop\\Hornlab - Workspace\\waveguide-generator\\scripts\\diagnostics\\out\\test_reference_horn.msh",
+    "physical_tag_counts": {
+      "1": 1744,
+      "2": 48
+    },
+    "sha256": "8cd0002d00e46d07576f406fe13e6bde186a77618ab87b390318467f9d79f66f",
+    "triangles": 1792,
+    "vertices": 898
+  },
+  "runs": [
+    {
+      "backend": "cpubem",
+      "frequency_runs": [
+        {
+          "assembly_seconds": 16.018257800000015,
+          "factorization_seconds": 0.32435290000000805,
+          "field_seconds": 0.110263400000008,
+          "frequency_hz": 1000.0,
+          "frequency_total_seconds": 16.452914400000054,
+          "source_seconds": 4.03000000233078e-05
+        }
+      ],
+      "mesh_seconds": 0.016101400000025023,
+      "on_axis_pressure": [
+        [
+          4.751753253028356e-05,
+          2.3733485739924497e-05
+        ]
+      ],
+      "pressure_sha256": "7044806ed76c22ec86ffdbcbf40ce9459f913d7db60dfdaf02f64b61aa537021",
+      "repeat": 1,
+      "source_impedance": [
+        [
+          0.02295597914878727,
+          -0.001032404033647945
+        ]
+      ],
+      "total_seconds": 16.469328299999916
+    },
+    {
+      "backend": "bempp-opencl",
+      "frequency_runs": [
+        {
+          "frequency_hz": 1000.0,
+          "solve_seconds": 11.466779708862305
+        }
+      ],
+      "mesh_seconds": 9.499857499999962,
+      "native_timings": {
+        "directivity_s": 0.13197946548461914,
+        "solve_s": 14.514702081680298,
+        "total_s": 14.646711826324463
+      },
+      "on_axis_pressure": [
+        [
+          4.751753253028369e-05,
+          2.373348573992569e-05
+        ]
+      ],
+      "opencl_workarounds": {
+        "applied": true,
+        "cacheEnvDefaulted": true,
+        "includePathQuoted": true,
+        "reason": "Quoted bempp-cl include path for clBuildProgram."
+      },
+      "pressure_sha256": "0e445cd257369aa54234cb947ecfa1d88f997d081d9cde9ad7d45a3053be4826",
+      "public_solve_seconds": 14.669163099999992,
+      "repeat": 1,
+      "source_impedance": [
+        [
+          0.022955979148787345,
+          -0.0010324040336479627
+        ]
+      ],
+      "total_seconds": 24.16906019999999
+    },
+    {
+      "backend": "cpubem",
+      "frequency_runs": [
+        {
+          "assembly_seconds": 16.121919599999956,
+          "factorization_seconds": 0.3290058999999701,
+          "field_seconds": 0.11042270000007193,
+          "frequency_hz": 1000.0,
+          "frequency_total_seconds": 16.561389400000053,
+          "source_seconds": 4.120000005514157e-05
+        }
+      ],
+      "mesh_seconds": 0.03442789999996876,
+      "on_axis_pressure": [
+        [
+          4.751753253028356e-05,
+          2.3733485739924497e-05
+        ]
+      ],
+      "pressure_sha256": "7044806ed76c22ec86ffdbcbf40ce9459f913d7db60dfdaf02f64b61aa537021",
+      "repeat": 2,
+      "source_impedance": [
+        [
+          0.02295597914878727,
+          -0.001032404033647945
+        ]
+      ],
+      "total_seconds": 16.596050600000012
+    },
+    {
+      "backend": "bempp-opencl",
+      "frequency_runs": [
+        {
+          "frequency_hz": 1000.0,
+          "solve_seconds": 1.0920605659484863
+        }
+      ],
+      "mesh_seconds": 0.04177530000004026,
+      "native_timings": {
+        "directivity_s": 0.10994458198547363,
+        "solve_s": 1.103823184967041,
+        "total_s": 1.2137949466705322
+      },
+      "on_axis_pressure": [
+        [
+          4.751753253028369e-05,
+          2.373348573992569e-05
+        ]
+      ],
+      "opencl_workarounds": {
+        "applied": true,
+        "cacheEnvDefaulted": true,
+        "includePathQuoted": true,
+        "reason": "Quoted bempp-cl include path for clBuildProgram."
+      },
+      "pressure_sha256": "0e445cd257369aa54234cb947ecfa1d88f997d081d9cde9ad7d45a3053be4826",
+      "public_solve_seconds": 1.2143194999999878,
+      "repeat": 2,
+      "source_impedance": [
+        [
+          0.022955979148787345,
+          -0.0010324040336479627
+        ]
+      ],
+      "total_seconds": 1.2561359000000039
+    },
+    {
+      "backend": "cpubem",
+      "frequency_runs": [
+        {
+          "assembly_seconds": 16.287944999999922,
+          "factorization_seconds": 0.2870085999999219,
+          "field_seconds": 0.11464780000005703,
+          "frequency_hz": 1000.0,
+          "frequency_total_seconds": 16.68963409999992,
+          "source_seconds": 3.270000001975859e-05
+        }
+      ],
+      "mesh_seconds": 0.03015990000005786,
+      "on_axis_pressure": [
+        [
+          4.751753253028356e-05,
+          2.3733485739924497e-05
+        ]
+      ],
+      "pressure_sha256": "7044806ed76c22ec86ffdbcbf40ce9459f913d7db60dfdaf02f64b61aa537021",
+      "repeat": 3,
+      "source_impedance": [
+        [
+          0.02295597914878727,
+          -0.001032404033647945
+        ]
+      ],
+      "total_seconds": 16.71998789999998
+    },
+    {
+      "backend": "bempp-opencl",
+      "frequency_runs": [
+        {
+          "frequency_hz": 1000.0,
+          "solve_seconds": 1.379331350326538
+        }
+      ],
+      "mesh_seconds": 0.043861900000024434,
+      "native_timings": {
+        "directivity_s": 0.1167452335357666,
+        "solve_s": 1.3920280933380127,
+        "total_s": 1.5087945461273193
+      },
+      "on_axis_pressure": [
+        [
+          4.751753253028369e-05,
+          2.373348573992569e-05
+        ]
+      ],
+      "opencl_workarounds": {
+        "applied": true,
+        "cacheEnvDefaulted": true,
+        "includePathQuoted": true,
+        "reason": "Quoted bempp-cl include path for clBuildProgram."
+      },
+      "pressure_sha256": "0e445cd257369aa54234cb947ecfa1d88f997d081d9cde9ad7d45a3053be4826",
+      "public_solve_seconds": 1.5094338000000107,
+      "repeat": 3,
+      "source_impedance": [
+        [
+          0.022955979148787345,
+          -0.0010324040336479627
+        ]
+      ],
+      "total_seconds": 1.5533286999999518
+    }
+  ],
+  "schema_version": 1,
+  "success": true,
+  "summary": {
+    "bempp-opencl": {
+      "median_seconds_per_frequency": 1.5533286999999518,
+      "median_total_seconds": 1.5533286999999518,
+      "repeats": 3
+    },
+    "cpubem": {
+      "median_seconds_per_frequency": 16.596050600000012,
+      "median_total_seconds": 16.596050600000012,
+      "repeats": 3
+    }
+  }
+}
