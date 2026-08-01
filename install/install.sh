@@ -48,12 +48,27 @@ update_from_git() {
 
     echo "  $(git --version)"
     echo "Checking for code updates..."
+
+    # A branch with no upstream cannot be pulled. That is a normal state for a
+    # local working branch, so skip the update instead of aborting the install
+    # with a misleading "you have local changes" message.
+    if ! git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        echo "  Code update skipped: branch $(git rev-parse --abbrev-ref HEAD) has no upstream configured."
+        echo "  Dependencies below are still installed and verified."
+        echo ""
+        return 0
+    fi
+
     before_commit="$(git rev-parse HEAD)"
     if ! git pull --ff-only; then
         echo ""
         echo "ERROR: Code update failed."
         echo "       This installer only performs safe fast-forward updates."
-        echo "       If you have local changes, commit or stash them before updating."
+        echo "       Common causes:"
+        echo "         - Uncommitted local changes: commit or stash them, then retry."
+        echo "         - The branch has diverged from its upstream and cannot"
+        echo "           fast-forward. Reconcile it manually, then retry."
+        echo "       Diagnose with: git status  and  git log --oneline -5"
         exit 1
     fi
     after_commit="$(git rev-parse HEAD)"
@@ -179,20 +194,32 @@ echo ""
 
 # ── Virtual environment ────────────────────────────────────────────
 echo "Creating Python virtual environment (.venv)..."
+# The supported-Python rule lives in install/check_venv.py, shared with
+# install.bat, so the two installers cannot drift apart.
 if [[ -d ".venv" ]]; then
-    if [[ -x ".venv/bin/python" ]] &&
-        .venv/bin/python -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix and (3,10) <= sys.version_info[:2] < (3,15) else 1)" >/dev/null 2>&1; then
+    if [[ -x ".venv/bin/python" ]] && [[ -f "install/check_venv.py" ]] &&
+        .venv/bin/python install/check_venv.py >/dev/null 2>&1; then
         echo "  Existing .venv is valid; reusing it."
     else
-        backup_path=".venv.incompatible.$(date +%Y%m%d%H%M%S)"
-        backup_suffix=0
-        while [[ -e "$backup_path" ]]; do
-            backup_suffix=$((backup_suffix + 1))
-            backup_path=".venv.incompatible.$(date +%Y%m%d%H%M%S).$backup_suffix"
-        done
+        # Keep exactly one backup. Appending a timestamp never cleaned up, so
+        # repeated runs accumulated multi-hundred-MB directories indefinitely.
+        # Also sweep up any backups left by that older scheme.
         echo "  Existing .venv is broken or uses an unsupported Python."
-        echo "  Preserving it as $backup_path"
-        mv ".venv" "$backup_path"
+        # Directories only. install.bat sweeps with `for /d`; matching every
+        # filesystem object here would let `rm -rf` delete an unrelated file
+        # that merely shares the prefix (.venv.incompatible.notes).
+        [[ -d ".venv.incompatible" ]] && rm -rf ".venv.incompatible"
+        for stale in .venv.incompatible.*; do
+            [[ -d "$stale" ]] || continue
+            echo "  Removing stale backup $stale"
+            rm -rf "$stale"
+        done
+        echo "  Preserving the current one as .venv.incompatible"
+        if ! mv ".venv" ".venv.incompatible"; then
+            echo "ERROR: Could not preserve the incompatible .venv."
+            echo "       Close any program using it (editor, terminal) and re-run."
+            exit 1
+        fi
     fi
 fi
 if [[ ! -d ".venv" ]]; then
@@ -278,41 +305,19 @@ if [[ "$METAL_READY" -eq 1 ]]; then
 else
     echo "Installing Bempp cross-platform backend..."
     if .venv/bin/python -m pip install --quiet -r server/requirements-bempp.txt; then
-        if _BEMPP_STATUS_OUTPUT="$(PYTHONPATH="$ROOT/server" .venv/bin/python - <<'BEMPPPROBE' 2>&1
-import sys
-
-try:
-    import hornlab_bempp_bem  # noqa: F401
-except Exception as exc:
-    print(f"Bempp import failed: {exc}")
-    sys.exit(1)
-
-try:
-    import pyopencl as cl  # type: ignore
-    platforms = cl.get_platforms()
-    device_count = 0
-    for platform in platforms:
-        try:
-            device_count += len(platform.get_devices())
-        except Exception:
-            pass
-    if platforms and device_count:
-        print("bempp ready with OpenCL acceleration")
-    else:
-        raise RuntimeError("no OpenCL platforms/devices found")
-except Exception:
-    print(
-        "bempp ready using the numba CPU backend "
-        "(works everywhere, slower; speed-up hint: install an OpenCL runtime - "
-        "Linux: pocl from your package manager; macOS x86_64: none needed, numba is fine)"
-    )
-BEMPPPROBE
-)"; then
-            echo "  $_BEMPP_STATUS_OUTPUT"
+        # Importing the hornlab_bempp_bem wrapper proves nothing about whether a
+        # solve can run: the wrapper is pure Python and imports fine even when
+        # the bempp-cl engine cannot load. Counting OpenCL devices proves even
+        # less -- a device that initializes can still fail to compile the
+        # assembly kernel. check_solver_engine.py verifies the engine the solve
+        # path actually uses, and reports OpenCL CPU, OpenCL GPU and numba as
+        # three separate facts rather than one "accelerated" boolean.
+        if PYTHONPATH="$ROOT/server" .venv/bin/python server/scripts/check_solver_engine.py; then
             SOLVER_BACKEND_SUMMARY="Metal or Bempp solve backend: Bempp ready"
         else
-            echo "ERROR: Bempp installed but is not importable."
-            [[ -n "$_BEMPP_STATUS_OUTPUT" ]] && echo "  $_BEMPP_STATUS_OUTPUT"
+            echo ""
+            echo "ERROR: Bempp is installed but no solve can run on this host."
+            echo "       Fix the issue reported above, then re-run this script."
             echo "  Manual command:"
             echo "    .venv/bin/python -m pip install -r server/requirements-bempp.txt"
             exit 1
