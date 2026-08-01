@@ -74,6 +74,46 @@ test('persisted FREEFORM interior rows migrate to the object anchor model', () =
   assert.deepEqual(normalized.params.interiorV, [{ z: 70, r: 75, angleDeg: -8, strength: null }]);
 });
 
+test('FREEFORM length updates clamp, sort, and collapse interior anchors in state', () => {
+  const state = new AppState();
+  state.current = {
+    type: 'FREEFORM',
+    params: {
+      ...getDefaults('FREEFORM'),
+      length: 120,
+      interiorH: [
+        { z: 60, r: 60, angleDeg: 20, strength: 1.2 },
+        { z: 10, r: 30, angleDeg: null, strength: null },
+        { z: 70, r: 70, angleDeg: null, strength: null },
+      ],
+      interiorV: [{ z: -5, r: 40, angleDeg: null, strength: null }],
+    },
+  };
+
+  assert.equal(state.update({ length: 40 }), true);
+  assert.deepEqual(state.get().params.interiorH, [
+    { z: 10, r: 30, angleDeg: null, strength: null },
+    { z: 39, r: 60, angleDeg: 20, strength: 1.2 },
+  ]);
+  assert.deepEqual(state.get().params.interiorV, [
+    { z: 1, r: 40, angleDeg: null, strength: null },
+  ]);
+});
+
+test('persisted FREEFORM anchors are clamped to the normalized length', () => {
+  const normalized = normalizePersistedState({
+    type: 'FREEFORM',
+    params: {
+      length: 40,
+      interiorH: [[60, 60]],
+      interiorV: [[0, 40]],
+    },
+  });
+
+  assert.equal(normalized.params.interiorH[0].z, 39);
+  assert.equal(normalized.params.interiorV[0].z, 1);
+});
+
 test('AppState.loadState migrates legacy FREEFORM params on direct state replacement', () => {
   const state = new AppState();
   state.loadState({

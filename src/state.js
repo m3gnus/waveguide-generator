@@ -115,11 +115,30 @@ export class AppState {
 
   update(newParams, modelType = null) {
     const paramsPatch = newParams && typeof newParams === 'object' ? newParams : {};
+    const nextType = modelType || this.current.type;
+    let nextParams = modelType
+      ? { ...getDefaults(modelType), ...paramsPatch }
+      : { ...this.current.params, ...paramsPatch };
+    const lengthChanged =
+      Object.hasOwn(paramsPatch, 'length') &&
+      !Object.is(Number(nextParams.length), Number(this.current.params?.length));
+    const freeformProfileChanged = [
+      'interiorH',
+      'interiorV',
+      'profileH',
+      'profileV',
+      'throatAngleH',
+      'throatAngleV',
+    ].some((key) => Object.hasOwn(paramsPatch, key));
+    if (
+      nextType === 'FREEFORM' &&
+      (modelType !== null || lengthChanged || freeformProfileChanged)
+    ) {
+      nextParams = migrateLegacyFreeformParams(nextParams);
+    }
     const nextState = {
-      type: modelType || this.current.type,
-      params: modelType
-        ? { ...getDefaults(modelType), ...paramsPatch }
-        : { ...this.current.params, ...paramsPatch },
+      type: nextType,
+      params: nextParams,
     };
     if (stateEqual(this.current, nextState)) {
       return false;

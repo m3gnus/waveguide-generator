@@ -1,13 +1,15 @@
 import asyncio
+import json
 import unittest
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 from api.routes_mesh import (
     build_mesh_from_params,
     build_step_from_params,
     build_viewport_geometry_from_params,
+    router as mesh_router,
 )
 from api.routes_simulation import submit_simulation
 from contracts import SimulationRequest, WaveguideParamsRequest
@@ -131,6 +133,80 @@ class FreeformContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "2-4"):
             WaveguideParamsRequest(**payload)
 
+    def test_unknown_nested_freeform_fields_return_422(self):
+        app = FastAPI()
+        app.include_router(mesh_router)
+
+        async def post_payload(payload):
+            request_body = json.dumps(payload).encode("utf-8")
+            messages = []
+            request_pending = True
+
+            async def receive():
+                nonlocal request_pending
+                if request_pending:
+                    request_pending = False
+                    return {
+                        "type": "http.request",
+                        "body": request_body,
+                        "more_body": False,
+                    }
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                messages.append(message)
+
+            await app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "POST",
+                    "scheme": "http",
+                    "path": "/api/mesh/build",
+                    "raw_path": b"/api/mesh/build",
+                    "query_string": b"",
+                    "root_path": "",
+                    "headers": [(b"content-type", b"application/json")],
+                    "client": ("test", 50000),
+                    "server": ("test", 80),
+                },
+                receive,
+                send,
+            )
+            status = next(
+                message["status"]
+                for message in messages
+                if message["type"] == "http.response.start"
+            )
+            body = b"".join(
+                message.get("body", b"")
+                for message in messages
+                if message["type"] == "http.response.body"
+            )
+            return status, json.loads(body)["detail"]
+
+        cases = (
+            ("profile_h", "mouth_angl_deg"),
+            ("cross_sections", "corner_radus_mm"),
+        )
+        for block, unknown_key in cases:
+            with self.subTest(block=block):
+                payload = _freeform_payload()
+                if block == "profile_h":
+                    payload[block][unknown_key] = 30.0
+                else:
+                    payload[block][1][unknown_key] = 8.0
+                status, detail = asyncio.run(post_payload(payload))
+                self.assertEqual(status, 422)
+                self.assertTrue(
+                    any(
+                        unknown_key in error["loc"]
+                        and error["type"] == "extra_forbidden"
+                        for error in detail
+                    )
+                )
+
 
 class FreeformFormulaGateTest(unittest.TestCase):
     def test_freeform_is_accepted_by_all_mesh_route_gates(self):
@@ -249,19 +325,28 @@ class FreeformAdapterTest(unittest.TestCase):
 
     def test_explicit_circsym_requires_degenerate_circular_freeform(self):
         unequal = _freeform_payload()
-        with self.assertRaisesRegex(ValueError, "horizontal and vertical profile points differ"):
+        with self.assertRaisesRegex(ValueError, "horizontal and vertical profiles differ"):
             validate_circsym_axisymmetric(unequal)
 
         shared = [[0.0, 12.7], [60.0, 70.0], [120.0, 120.0]]
         circular = _freeform_payload()
         circular["profile_h"]["points"] = shared
-        circular["profile_v"]["points"] = list(shared)
+        circular["profile_v"] = {
+            **circular["profile_h"],
+            "points": list(shared),
+        }
         circular["cross_sections"] = [
             {"t": 0.0, "shape": "circle"},
             {"t": 0.5, "shape": "ellipse"},
             {"t": 1.0, "shape": "ellipse"},
         ]
         self.assertIsNone(validate_circsym_axisymmetric(circular))
+
+        circular["profile_h"]["mouth_angle_deg"] = 30.0
+        circular["profile_v"]["mouth_angle_deg"] = 60.0
+        with self.assertRaisesRegex(ValueError, "horizontal and vertical profiles differ"):
+            validate_circsym_axisymmetric(circular)
+        circular["profile_v"]["mouth_angle_deg"] = 30.0
 
         circular["cross_sections"][1] = {
             "t": 0.5,

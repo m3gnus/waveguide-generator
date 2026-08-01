@@ -189,8 +189,7 @@ function normalizeInteriorPoints(value) {
 
 function clampInteriorZ(value, length, fallback) {
   if (!Number.isFinite(value)) return fallback;
-  const inset = Math.min(0.001, length / 1000);
-  return Math.min(length - inset, Math.max(inset, value));
+  return Math.min(length - 1, Math.max(1, value));
 }
 
 function flashClampedPoint(input) {
@@ -263,6 +262,7 @@ export class ParamPanel {
       this.profileErrorStateVersion = null;
     }
     const focusedControl = this.captureFocusedControl();
+    const previousFreeformParams = this.freeformEditor?.params;
     this.freeformEditor?.destroy();
     this.freeformEditor = null;
     this.container.innerHTML = '';
@@ -304,6 +304,7 @@ export class ParamPanel {
 
     this.restoreFocusedControl(focusedControl);
     this.renderProfileErrorStrip();
+    this.freeformEditor?.flashClampedAnchors(previousFreeformParams);
   }
 
   captureFocusedControl() {
@@ -682,8 +683,8 @@ export class ParamPanel {
       const zInput = document.createElement('input');
       zInput.type = 'number';
       zInput.id = index === 0 ? controlId : `${controlId}-z-${index}`;
-      zInput.min = '0';
-      zInput.max = String(safeLength);
+      zInput.min = '1';
+      zInput.max = String(safeLength - 1);
       zInput.step = '0.1';
       zInput.value = point.z;
       zInput.title = columns[0][1];

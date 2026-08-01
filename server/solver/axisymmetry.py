@@ -101,10 +101,12 @@ def circsym_axisymmetric_rejection_reasons(
     if formula == "FREEFORM":
         profile_h = params.get("profile_h")
         profile_v = params.get("profile_v")
-        points_h = profile_h.get("points") if isinstance(profile_h, Mapping) else None
-        points_v = profile_v.get("points") if isinstance(profile_v, Mapping) else None
-        if points_h is None or points_v is None or points_h != points_v:
-            reasons.append("FREEFORM horizontal and vertical profile points differ")
+        if (
+            not isinstance(profile_h, Mapping)
+            or not isinstance(profile_v, Mapping)
+            or profile_h != profile_v
+        ):
+            reasons.append("FREEFORM horizontal and vertical profiles differ")
 
         stations = params.get("cross_sections")
         if not isinstance(stations, (list, tuple)):

@@ -1023,11 +1023,24 @@ select.freeform-profile-linked-highlight {
   animation: freeform-point-clamp-flash 450ms ease-out;
 }
 
+.freeform-profile-handle.freeform-point-clamped {
+  animation: freeform-profile-anchor-clamp-flash 450ms ease-out;
+}
+
 @keyframes freeform-point-clamp-flash {
   0%,
   45% {
     border-color: var(--error);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 22%, transparent);
+  }
+}
+
+@keyframes freeform-profile-anchor-clamp-flash {
+  0%,
+  45% {
+    stroke: var(--error);
+    stroke-width: 4;
+    filter: drop-shadow(0 0 4px color-mix(in srgb, var(--error) 75%, transparent));
   }
 }
 

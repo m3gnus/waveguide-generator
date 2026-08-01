@@ -90,13 +90,17 @@ function buildFreeformPayloadFields(preparedParams) {
                 ? null
                 : Number(source.strength);
             if (!Number.isFinite(z) || !Number.isFinite(radius)) return null;
+            if (z <= 0 || z >= length) {
+              throw new Error(
+                `buildWaveguidePayload requires FREEFORM interior anchor z=${z} to be within (0, ${length}).`
+              );
+            }
             if (!Number.isFinite(angleDeg)) return [z, radius];
             return Number.isFinite(strength)
               ? [z, radius, angleDeg, strength]
               : [z, radius, angleDeg];
           })
           .filter(Boolean)
-          .filter(([z, radius]) => Number.isFinite(radius) && z > 0 && z < length)
           .sort((a, b) => a[0] - b[0])
       : [];
     return [[0, throatRadius], ...validInterior, [length, toFiniteNumber(mouthRadius, 140)]];

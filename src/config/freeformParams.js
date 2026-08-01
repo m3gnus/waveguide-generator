@@ -46,9 +46,25 @@ function finiteProfilePoints(value) {
     .filter(({ interior }) => interior !== null);
 }
 
-function normalizeInteriorCollection(value) {
+function normalizeInteriorCollection(value, length) {
   if (!Array.isArray(value)) return value;
-  return value.map(normalizedInteriorPoint).filter(Boolean);
+  const maximumZ = length - 1;
+  const normalized = value
+    .map(normalizedInteriorPoint)
+    .filter(Boolean)
+    .sort((left, right) => left.z - right.z);
+  if (!Number.isFinite(maximumZ) || maximumZ < 1) return normalized;
+
+  const clamped = [];
+  for (const point of normalized) {
+    const nextPoint = {
+      ...point,
+      z: Math.min(maximumZ, Math.max(1, point.z)),
+    };
+    if (clamped.at(-1)?.z === nextPoint.z) continue;
+    clamped.push(nextPoint);
+  }
+  return clamped;
 }
 
 /**
@@ -86,9 +102,10 @@ export function migrateLegacyFreeformParams(params = {}) {
     migrated.interiorV = verticalProfile.slice(1, -1).map(({ interior }) => interior);
   }
 
+  const normalizedLength = positiveNumber(migrated.length, 120);
   for (const key of ['interiorH', 'interiorV']) {
     if (Object.prototype.hasOwnProperty.call(migrated, key)) {
-      migrated[key] = normalizeInteriorCollection(migrated[key]);
+      migrated[key] = normalizeInteriorCollection(migrated[key], normalizedLength);
     }
   }
 
