@@ -96,7 +96,9 @@ test('mesh control labels separate surface sampling from solve mesh sizing', () 
   assert.equal(PARAM_SCHEMA.MESH.mouthResolution.label, 'Mouth Mesh Resolution');
   assert.equal(PARAM_SCHEMA.MESH.rearResolution.label, 'Rear Mesh Resolution');
   assert.equal(PARAM_SCHEMA.MESH.apertureResolutionScale.label, 'Aperture Mesh Scale');
-  assert.equal(PARAM_SCHEMA.MESH.maxTriangles.label, 'Full-Domain Triangle Budget');
+  assert.equal(PARAM_SCHEMA.MESH.maxTriangles.label, 'Hard Triangle Limit');
+  assert.equal(PARAM_SCHEMA.MESH.maxTriangles.default, 50000);
+  assert.match(PARAM_SCHEMA.MESH.maxTriangles.tooltip, /above 18,000.*warning/i);
   assert.equal(PARAM_SCHEMA.MESH.allowLargeMesh.label, 'Large Mesh Approval');
   assert.match(PARAM_SCHEMA.MESH.allowLargeMesh.tooltip, /explicitly approve/i);
   assert.equal(PARAM_SCHEMA.ENCLOSURE.encFrontResolution.label, 'Front Baffle Mesh Resolution');

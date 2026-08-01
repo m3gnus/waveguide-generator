@@ -4,6 +4,8 @@ import { PARAM_SCHEMA } from './config/schema.js';
 import { debugWarn } from './logging/debug.js';
 
 const STORAGE_KEY = 'ath_state';
+const LEGACY_DEFAULT_MAX_TRIANGLES = 18_000;
+const DEFAULT_MAX_TRIANGLES = 50_000;
 const SHARED_SCHEMA_GROUPS = new Set([
   'GEOMETRY',
   'MORPH',
@@ -69,9 +71,17 @@ export function normalizePersistedState(candidate) {
     return null;
   }
 
+  const normalizedParams = { ...defaults, ...params };
+  if (
+    Number(normalizedParams.maxTriangles) === LEGACY_DEFAULT_MAX_TRIANGLES &&
+    Number(normalizedParams.allowLargeMesh) === 0
+  ) {
+    normalizedParams.maxTriangles = DEFAULT_MAX_TRIANGLES;
+  }
+
   return {
     type: modelType,
-    params: { ...defaults, ...params },
+    params: normalizedParams,
   };
 }
 

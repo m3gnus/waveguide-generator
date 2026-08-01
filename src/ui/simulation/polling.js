@@ -1,7 +1,7 @@
 // @ts-check
 
 import { updateStageUi, setProgressVisible, restoreConnectionStatus } from './progressUi.js';
-import { showError } from '../feedback.js';
+import { showError, showMessage } from '../feedback.js';
 import { getAutoExportOnComplete } from '../settings/simulationManagementSettings.js';
 import { getDownloadSimMeshEnabled } from '../settings/modal.js';
 import { persistSimulationGenerationArtifacts } from './workspaceTasks.js';
@@ -27,6 +27,20 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 /** Track jobs whose mesh artifact has already been persisted early (before completion). */
 const _earlyMeshPersisted = new Set();
 const _autoDownloadedMeshes = new Set();
+const _largeMeshWarningsShown = new Set();
+
+function showLargeMeshWarningOnce(job) {
+  if (!job?.id || _largeMeshWarningsShown.has(job.id)) {
+    return;
+  }
+  const warnings = Array.isArray(job.meshStats?.warnings) ? job.meshStats.warnings : [];
+  const warning = warnings.find((item) => /large solve mesh/i.test(String(item || '')));
+  if (!warning) {
+    return;
+  }
+  _largeMeshWarningsShown.add(job.id);
+  showMessage(String(warning), { type: 'warning', duration: 10_000 });
+}
 
 /**
  * @typedef {Object} SolverPollingApi
@@ -92,6 +106,7 @@ export function pollSimulationStatus(panel) {
           panel.app.setSimulationMeshStats(activeJob.meshStats);
           renderBackendSimulationMeshDiagnostics(activeJob.meshStats);
         }
+        showLargeMeshWarningOnce(activeJob);
 
         if (
           activeJob.hasMeshArtifact &&

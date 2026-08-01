@@ -51,6 +51,7 @@ INFINITE_BAFFLE_ENCLOSURE_ERROR = (
     "Infinite baffle cannot be combined with an enclosure (enc_depth>0); "
     "set enc_depth=0 for infinite baffle, or use Free-standing/Enclosure mode."
 )
+LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
 
 
 class SimulationCancelled(RuntimeError):
@@ -184,6 +185,27 @@ def _build_mesh_stats(
         mesh_stats["identity_triangle_counts"] = json.loads(
             json.dumps(metadata_identity_counts)
         )
+    domain_multiplier = _finite_float(
+        metadata.get("meshDomainMultiplier") if isinstance(metadata, dict) else None,
+        1.0,
+    )
+    if domain_multiplier <= 0.0:
+        domain_multiplier = 1.0
+    full_domain_triangle_count = int(round(mesh_stats["triangle_count"] * domain_multiplier))
+    mesh_stats["domain_multiplier"] = domain_multiplier
+    mesh_stats["full_domain_triangle_count"] = full_domain_triangle_count
+    mesh_stats["soft_warning_full_domain_triangle_limit"] = (
+        LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES
+    )
+    warnings: list[str] = []
+    if full_domain_triangle_count > LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES:
+        warnings.append(
+            "Large solve mesh: "
+            f"{mesh_stats['triangle_count']:,} triangles "
+            f"({full_domain_triangle_count:,} full-domain equivalent). "
+            "The solve may take significantly longer and use more memory."
+        )
+    mesh_stats["warnings"] = warnings
     return mesh_stats
 
 
