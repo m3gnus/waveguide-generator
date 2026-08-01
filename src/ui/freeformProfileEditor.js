@@ -72,11 +72,42 @@ function adaptiveGridStep(span) {
 function normalizedInterior(value) {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((point) => Array.isArray(point) && point.length >= 2)
-    .map((point) => [Number(point[0]), Number(point[1])])
-    .filter((point) => point.every(Number.isFinite))
-    .sort((left, right) => left[0] - right[0])
+    .map((point) => {
+      const source = Array.isArray(point)
+        ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
+        : point;
+      if (!source || typeof source !== 'object') return null;
+      const z = Number(source.z);
+      const r = Number(source.r);
+      if (!Number.isFinite(z) || !Number.isFinite(r)) return null;
+      const angleValue = source.angleDeg;
+      const angleDeg =
+        angleValue === null || angleValue === undefined || angleValue === ''
+          ? null
+          : Number(angleValue);
+      const strengthValue = source.strength;
+      const strength =
+        strengthValue === null || strengthValue === undefined || strengthValue === ''
+          ? null
+          : Number(strengthValue);
+      return {
+        z,
+        r,
+        angleDeg: Number.isFinite(angleDeg) ? angleDeg : null,
+        strength: Number.isFinite(angleDeg) && Number.isFinite(strength) ? strength : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.z - right.z)
     .slice(0, 62);
+}
+
+function compactInteriorPoint(point) {
+  const row = [point.z, point.r];
+  if (point.angleDeg === null) return row;
+  row.push(point.angleDeg);
+  if (point.strength !== null) row.push(point.strength);
+  return row;
 }
 
 function shapeLabel(shape) {
@@ -200,7 +231,11 @@ export class FreeformProfileEditor {
       const suffix = plane;
       const interior = normalizedInterior(this.params[`interior${suffix}`]);
       const mouthRadius = finite(this.params[`mouthRadius${suffix}`], 140);
-      const anchors = [[0, throatRadius], ...interior, [length, mouthRadius]];
+      const anchors = [
+        [0, throatRadius],
+        ...interior.map(compactInteriorPoint),
+        [length, mouthRadius],
+      ];
       const curve = buildFreeformDisplayCurve({
         points: anchors,
         throatAngleDeg: finite(this.params.throatAngle, 15.5),
@@ -320,13 +355,13 @@ export class FreeformProfileEditor {
       y: VIEW_HEIGHT - 2,
       'text-anchor': 'end',
     });
-    zLabel.textContent = 'z (mm)';
+    zLabel.textContent = 'Depth from throat (mm)';
     const radiusLabel = this.appendSvg('text', {
       class: 'freeform-profile-axis-label',
       x: 4,
       y: MARGIN.top + 4,
     });
-    radiusLabel.textContent = 'r (mm)';
+    radiusLabel.textContent = 'Half-width / half-height (mm)';
   }
 
   drawStations(geometry, transforms) {
@@ -414,6 +449,65 @@ export class FreeformProfileEditor {
     if (this.highlightedParams.has(param)) addClass(node, 'freeform-profile-linked-highlight');
   }
 
+  tangentAngleAtAnchor(curve, anchor) {
+    if (!Array.isArray(curve) || curve.length < 2) return 0;
+    let anchorIndex = 0;
+    let bestDistance = Infinity;
+    curve.forEach((point, index) => {
+      const distance = Math.hypot(point[0] - anchor[0], point[1] - anchor[1]);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        anchorIndex = index;
+      }
+    });
+    const before = curve[Math.max(0, anchorIndex - 1)];
+    const after = curve[Math.min(curve.length - 1, anchorIndex + 1)];
+    return (Math.atan2(after[1] - before[1], after[0] - before[0]) * 180) / Math.PI;
+  }
+
+  tangentBaseArmLength(geometry) {
+    return Math.max(8, Math.min(geometry.length, geometry.radiusMax) * 0.18);
+  }
+
+  interiorTangentKnob(plane, index, point, planeGeometry, geometry, transforms) {
+    const anchor = [point.z, point.r];
+    const automaticAngle = this.tangentAngleAtAnchor(planeGeometry.curve, anchor);
+    const angleDeg = point.angleDeg === null ? automaticAngle : point.angleDeg;
+    const strength = point.angleDeg === null ? 1 : (point.strength ?? 1);
+    const baseArmLength = this.tangentBaseArmLength(geometry);
+    const armLength = baseArmLength * strength;
+    const radians = (angleDeg * Math.PI) / 180;
+    const direction = [Math.cos(radians), Math.sin(radians)];
+    const knob = [anchor[0] + armLength * direction[0], anchor[1] + armLength * direction[1]];
+    const back = [anchor[0] - armLength * direction[0], anchor[1] - armLength * direction[1]];
+    const classes = `freeform-profile-tangent freeform-plane-${plane.toLowerCase()}`;
+    this.appendSvg('line', {
+      class: `${classes} freeform-profile-tangent-arm freeform-profile-interior-tangent-arm`,
+      x1: transforms.x(back[0]),
+      y1: transforms.y(back[1]),
+      x2: transforms.x(knob[0]),
+      y2: transforms.y(knob[1]),
+      'data-param': `interior${plane}`,
+    });
+    const label = `${plane} interior tangent ${index + 1}${point.angleDeg === null ? ' (automatic)' : ''}`;
+    const node = this.appendSvg('circle', {
+      class: `${classes} freeform-profile-tangent-knob freeform-profile-interior-tangent-knob`,
+      cx: transforms.x(knob[0]),
+      cy: transforms.y(knob[1]),
+      r: 5,
+      tabindex: 0,
+      title: label,
+      'aria-label': label,
+      'data-handle': 'interior-tangent',
+      'data-param': `interior${plane}`,
+      'data-plane': plane,
+      'data-index': index,
+      'data-base-arm-length': baseArmLength,
+    });
+    const title = this.appendSvg('title', {}, node);
+    title.textContent = `${label}; drag for angle and strength, double-click to reset`;
+  }
+
   drawTangentHandles(geometry, transforms) {
     const throat = [0, geometry.throatRadius];
     this.tangentKnob(
@@ -438,6 +532,21 @@ export class FreeformProfileEditor {
         geometry,
         transforms
       );
+    }
+    const selected = this.selectedAnchor;
+    if (selected && this.visibility[selected.plane] !== false) {
+      const planeGeometry = geometry.planes[selected.plane];
+      const point = planeGeometry?.interior?.[selected.index];
+      if (point) {
+        this.interiorTangentKnob(
+          selected.plane,
+          selected.index,
+          point,
+          planeGeometry,
+          geometry,
+          transforms
+        );
+      }
     }
   }
 
@@ -501,7 +610,7 @@ export class FreeformProfileEditor {
       );
       planeGeometry.interior.forEach((point, index) => {
         const node = this.anchorHandle(
-          point,
+          [point.z, point.r],
           {
             kind: 'interior',
             plane,
@@ -515,8 +624,8 @@ export class FreeformProfileEditor {
           addClass(node, 'freeform-profile-anchor-selected');
           const remove = this.appendSvg('text', {
             class: 'freeform-profile-anchor-delete',
-            x: transforms.x(point[0]) + 9,
-            y: transforms.y(point[1]) - 8,
+            x: transforms.x(point.z) + 9,
+            y: transforms.y(point.r) - 8,
             tabindex: 0,
             role: 'button',
             'aria-label': `Delete ${plane} interior anchor ${index + 1}`,
@@ -551,9 +660,14 @@ export class FreeformProfileEditor {
     });
     const bubble = this.appendSvg('g', { class: 'freeform-profile-readout' });
     const isAngle = this.drag.kind === 'angle';
+    const isInteriorTangent = this.drag.kind === 'interior-tangent';
+    const radiusTerm =
+      this.drag.plane === 'H' ? 'half-width' : this.drag.plane === 'V' ? 'half-height' : 'radius';
     const textValue = isAngle
       ? `${Math.round(this.drag.value)} deg`
-      : `z ${guide[0].toFixed(1)} · r ${guide[1].toFixed(1)} mm`;
+      : isInteriorTangent
+        ? `${Math.round(this.drag.value.angleDeg)} deg · strength ${this.drag.value.strength.toFixed(2)}`
+        : `depth ${guide[0].toFixed(1)} · ${radiusTerm} ${guide[1].toFixed(1)} mm`;
     const bubbleWidth = Math.max(58, textValue.length * 6.1 + 12);
     const bubbleX = clamp(x + 9, MARGIN.left, VIEW_WIDTH - MARGIN.right - bubbleWidth);
     const bubbleY = clamp(y - 27, MARGIN.top, VIEW_HEIGHT - MARGIN.bottom - 22);
@@ -608,6 +722,7 @@ export class FreeformProfileEditor {
       plane,
       index,
       angleDirection: Number(node.getAttribute('data-angle-direction')) || 1,
+      baseArmLength: Number(node.getAttribute('data-base-arm-length')) || null,
       pointerId: event.pointerId,
       params: cloneParams(this.params),
       guide: null,
@@ -633,14 +748,35 @@ export class FreeformProfileEditor {
       this.drag.guide = [fixedZ, nextRadius];
       this.drag.value = nextRadius;
     } else if (this.drag.kind === 'interior') {
-      const nextPoint = [
-        Math.round(clamp(z, 0.5, Math.max(0.5, length - 0.5)) * 10) / 10,
-        Math.round(Math.max(1, radius) * 10) / 10,
-      ];
       const key = `interior${plane}`;
-      this.drag.params[key][this.drag.index] = nextPoint;
-      this.drag.guide = nextPoint;
+      const points = normalizedInterior(this.drag.params[key]);
+      const nextPoint = {
+        ...points[this.drag.index],
+        z: Math.round(clamp(z, 0.5, Math.max(0.5, length - 0.5)) * 10) / 10,
+        r: Math.round(Math.max(1, radius) * 10) / 10,
+      };
+      points[this.drag.index] = nextPoint;
+      this.drag.params[key] = points;
+      this.drag.guide = [nextPoint.z, nextPoint.r];
       this.drag.value = nextPoint;
+    } else if (this.drag.kind === 'interior-tangent') {
+      const key = `interior${plane}`;
+      const points = normalizedInterior(this.drag.params[key]);
+      const point = points[this.drag.index];
+      if (!point) return;
+      const vectorZ = z - point.z;
+      const vectorRadius = radius - point.r;
+      const angleDeg = Math.round(
+        clamp((Math.atan2(vectorRadius, vectorZ) * 180) / Math.PI, -89, 89)
+      );
+      const baseArmLength = this.drag.baseArmLength || this.tangentBaseArmLength(this.geometry);
+      const strength =
+        Math.round(clamp(Math.hypot(vectorZ, vectorRadius) / baseArmLength, 0.1, 3) * 100) / 100;
+      const nextPoint = { ...point, angleDeg, strength };
+      points[this.drag.index] = nextPoint;
+      this.drag.params[key] = points;
+      this.drag.guide = [z, radius];
+      this.drag.value = { angleDeg, strength };
     } else if (this.drag.kind === 'angle') {
       const endpoint =
         this.drag.param === 'throatAngle'
@@ -713,6 +849,15 @@ export class FreeformProfileEditor {
   }
 
   onDoubleClick(event) {
+    const handle = this.targetData(event, 'data-handle');
+    if (handle?.value === 'interior-tangent') {
+      event.preventDefault?.();
+      this.resetInteriorTangent(
+        handle.node.getAttribute('data-plane'),
+        Number(handle.node.getAttribute('data-index'))
+      );
+      return;
+    }
     const [screenX, screenY] = this.eventPosition(event);
     const z = clamp(this.transforms.z(screenX), 0.5, Math.max(0.5, this.geometry.length - 0.5));
     const targetPlane = this.targetData(event, 'data-plane')?.value;
@@ -737,12 +882,22 @@ export class FreeformProfileEditor {
       Math.round(clamp(finite(z, length / 2), 0.5, Math.max(0.5, length - 0.5)) * 10) / 10;
     const nextRadius =
       Math.round(Math.max(1, finite(radius, this.radiusAtZ(plane, nextZ))) * 10) / 10;
-    const nextPoints = [...points, [nextZ, nextRadius]].sort((left, right) => left[0] - right[0]);
+    const inserted = { z: nextZ, r: nextRadius, angleDeg: null, strength: null };
+    const nextPoints = [...points, inserted].sort((left, right) => left.z - right.z);
     this.selectedAnchor = {
       plane,
-      index: nextPoints.findIndex((point) => point[0] === nextZ && point[1] === nextRadius),
+      index: nextPoints.indexOf(inserted),
     };
     return this.commitParam(key, nextPoints);
+  }
+
+  resetInteriorTangent(plane, index) {
+    if (!PLANES.includes(plane)) return false;
+    const key = `interior${plane}`;
+    const points = normalizedInterior(this.params[key]);
+    if (!Number.isInteger(index) || index < 0 || index >= points.length) return false;
+    points[index] = { ...points[index], angleDeg: null, strength: null };
+    return this.commitParam(key, points);
   }
 
   deleteAnchor(plane, index) {

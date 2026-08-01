@@ -18,7 +18,7 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
       allowLargeMesh: true,
       encFrontResolution: '6,7,8,9',
       encBackResolution: '11,12,13,14',
-      quadrants: '1234'
+      quadrants: '1234',
     }),
     '2.2'
   );
@@ -43,7 +43,7 @@ test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
 test('buildWaveguidePayload uses DesignModule backend mesh defaults when fields are omitted', () => {
   const payload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
-      type: 'OSSE'
+      type: 'OSSE',
     }),
     '2.2'
   );
@@ -70,7 +70,7 @@ test('buildWaveguidePayload preserves R-OSSE b expression strings', () => {
       type: 'R-OSSE',
       R: '140',
       a: '45',
-      b: bExpr
+      b: bExpr,
     }),
     '2.2'
   );
@@ -85,7 +85,7 @@ test('buildWaveguidePayload preserves angular slot-length expression strings', (
   const payload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
       type: 'OSSE',
-      slotLength
+      slotLength,
     }),
     '2.2'
   );
@@ -97,7 +97,7 @@ test('buildWaveguidePayload preserves ATH total-length mode', () => {
   const payload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
       type: 'OSSE',
-      _athLengthMode: 'total'
+      _athLengthMode: 'total',
     }),
     '2.2'
   );
@@ -112,7 +112,7 @@ test('buildWaveguidePayload emits ICW coverage controls when enabled', () => {
       type: 'ICW',
       coverage_angle: 50,
       hold_start: 0.3,
-      hold_end: 0.7
+      hold_end: 0.7,
     }),
     '2.2'
   );
@@ -127,7 +127,7 @@ test('buildWaveguidePayload keeps ICW coverage off by default and OSSE/R-OSSE JS
   const icwPayload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
       ...getDefaults('ICW'),
-      type: 'ICW'
+      type: 'ICW',
     }),
     '2.2'
   );
@@ -139,7 +139,7 @@ test('buildWaveguidePayload keeps ICW coverage off by default and OSSE/R-OSSE JS
 
   const ossePayload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
-      type: 'OSSE'
+      type: 'OSSE',
     }),
     '2.2'
   );
@@ -150,7 +150,7 @@ test('buildWaveguidePayload keeps ICW coverage off by default and OSSE/R-OSSE JS
 
   const rossePayload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
-      type: 'R-OSSE'
+      type: 'R-OSSE',
     }),
     '2.2'
   );
@@ -170,8 +170,8 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
       throatAngle: 16,
       mouthRadiusH: 160,
       mouthRadiusV: 110,
-      interiorH: [[130, 999], [60, 80], [-2, 999]],
-      interiorV: [[90, 85], [60, 60]],
+      interiorH: [[130, 999], { z: 60, r: 80, angleDeg: 25, strength: 1.4 }, [-2, 999]],
+      interiorV: [{ z: 90, r: 85, angleDeg: null, strength: 2 }, [60, 60, -10]],
       mouthAngleH: 70,
       throatTangentScaleH: 1.1,
       mouthTangentScaleH: 0.9,
@@ -181,7 +181,7 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
       crossSections: [
         { t: 0, shape: 'circle' },
         { t: 0.4, shape: 'superellipse', exponent: 4 },
-        { t: 1, shape: 'rounded_rectangle', cornerRatio: 0.12 },
+        { t: 1, shape: 'rounded_rectangle', cornerRadiusMm: 10 },
       ],
       overshootPolicy: 'allow',
     }),
@@ -190,14 +190,23 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
 
   assert.equal(payload.formula_type, 'FREEFORM');
   assert.deepEqual(payload.profile_h, {
-    points: [[0, 12.7], [60, 80], [120, 160]],
+    points: [
+      [0, 12.7],
+      [60, 80, 25, 1.4],
+      [120, 160],
+    ],
     throat_angle_deg: 16,
     mouth_angle_deg: 70,
     throat_tangent_scale: 1.1,
     mouth_tangent_scale: 0.9,
   });
   assert.deepEqual(payload.profile_v, {
-    points: [[0, 12.7], [60, 60], [90, 85], [120, 110]],
+    points: [
+      [0, 12.7],
+      [60, 60, -10],
+      [90, 85],
+      [120, 110],
+    ],
     throat_angle_deg: 16,
     mouth_angle_deg: 60,
     throat_tangent_scale: 1.2,
@@ -206,25 +215,10 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
   assert.deepEqual(payload.cross_sections, [
     { t: 0, shape: 'circle' },
     { t: 0.4, shape: 'superellipse', exponent: 4 },
-    { t: 1, shape: 'rounded_rectangle', corner_ratio: 0.12 },
+    { t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 },
   ]);
   assert.equal(payload.overshoot_policy, 'allow');
-  for (const key of [
-    'R',
-    'r',
-    'b',
-    'm',
-    'tmax',
-    'L',
-    's',
-    'n',
-    'h',
-    'a',
-    'a0',
-    'r0',
-    'k',
-    'q',
-  ]) {
+  for (const key of ['R', 'r', 'b', 'm', 'tmax', 'L', 's', 'n', 'h', 'a', 'a0', 'r0', 'k', 'q']) {
     assert.equal(Object.hasOwn(payload, key), false, `${key} must not leak into FREEFORM`);
   }
   assert.equal(payload.source_radius, getDefaults('FREEFORM').sourceRadius);
@@ -234,8 +228,16 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
 test('legacy FREEFORM profiles migrate to the new model without changing their wire payload', () => {
   const prepared = prepareGeometryParams({
     type: 'FREEFORM',
-    profileH: [[0, 12.7], [40, 55], [120, 160]],
-    profileV: [[0, 12.7], [70, 68], [120, 110]],
+    profileH: [
+      [0, 12.7],
+      [40, 55],
+      [120, 160],
+    ],
+    profileV: [
+      [0, 12.7],
+      [70, 68],
+      [120, 110],
+    ],
     throatAngleH: 16,
     throatAngleV: 16,
     mouthAngleH: 70,
@@ -252,21 +254,29 @@ test('legacy FREEFORM profiles migrate to the new model without changing their w
   assert.equal(prepared.throatAngle, 16);
   assert.equal(prepared.mouthRadiusH, 160);
   assert.equal(prepared.mouthRadiusV, 110);
-  assert.deepEqual(prepared.interiorH, [[40, 55]]);
-  assert.deepEqual(prepared.interiorV, [[70, 68]]);
+  assert.deepEqual(prepared.interiorH, [{ z: 40, r: 55, angleDeg: null, strength: null }]);
+  assert.deepEqual(prepared.interiorV, [{ z: 70, r: 68, angleDeg: null, strength: null }]);
   assert.equal(Object.hasOwn(prepared, 'profileH'), false);
   assert.equal(Object.hasOwn(prepared, 'profileV'), false);
   assert.equal(Object.hasOwn(prepared, 'throatAngleH'), false);
   assert.equal(Object.hasOwn(prepared, 'throatAngleV'), false);
   assert.deepEqual(payload.profile_h, {
-    points: [[0, 12.7], [40, 55], [120, 160]],
+    points: [
+      [0, 12.7],
+      [40, 55],
+      [120, 160],
+    ],
     throat_angle_deg: 16,
     mouth_angle_deg: 70,
     throat_tangent_scale: 1.1,
     mouth_tangent_scale: 0.9,
   });
   assert.deepEqual(payload.profile_v, {
-    points: [[0, 12.7], [70, 68], [120, 110]],
+    points: [
+      [0, 12.7],
+      [70, 68],
+      [120, 110],
+    ],
     throat_angle_deg: 16,
     mouth_angle_deg: 60,
     throat_tangent_scale: 1.2,
@@ -276,13 +286,14 @@ test('legacy FREEFORM profiles migrate to the new model without changing their w
 
 test('buildWaveguidePayload rejects unprepared backend mesh payload fields', () => {
   assert.throws(
-    () => buildWaveguidePayload(
-      {
-        type: 'OSSE',
-        angularSegments: 20
-      },
-      '2.2'
-    ),
+    () =>
+      buildWaveguidePayload(
+        {
+          type: 'OSSE',
+          angularSegments: 20,
+        },
+        '2.2'
+      ),
     /requires finite "lengthSegments"/
   );
 });
@@ -293,7 +304,7 @@ test('buildWaveguidePayload receives rounded backend mesh segments from DesignMo
       type: 'OSSE',
       angularSegments: 21.2,
       lengthSegments: 9.7,
-      cornerSegments: 4.5
+      cornerSegments: 4.5,
     }),
     '2.2'
   );
@@ -366,7 +377,7 @@ test('buildWaveguidePayload includes source definition fields', () => {
       sourceCurv: -1,
       sourceVelocity: 2,
       sourceContours: 'custom-contours',
-      verticalOffset: 3.5
+      verticalOffset: 3.5,
     }),
     '2.2'
   );
@@ -397,7 +408,7 @@ test('buildWaveguidePayload includes solver mode', () => {
   const payload = buildWaveguidePayload(
     prepareBackendMeshSimulationParams({
       type: 'OSSE',
-      solverMode: 'circsym'
+      solverMode: 'circsym',
     }),
     '2.2'
   );
@@ -410,7 +421,7 @@ test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
     prepareBackendMeshSimulationParams({
       type: 'OSSE',
       encFrontResolution: [7, 8, 9, 10],
-      encBackResolution: [11, 12, 13, 14]
+      encBackResolution: [11, 12, 13, 14],
     }),
     '2.2'
   );

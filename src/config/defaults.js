@@ -3,7 +3,9 @@ import { PARAM_SCHEMA } from './schema.js';
 function cloneDefault(value) {
   if (Array.isArray(value)) return value.map(cloneDefault);
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDefault(item)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, cloneDefault(item)])
+    );
   }
   return value;
 }
@@ -35,6 +37,10 @@ export function getDefaults(modelType) {
   // otherwise conflict with their native geometry.
   if (modelType === 'ICW' || modelType === 'FREEFORM') {
     defaults.morphTarget = 0;
+  }
+  if (modelType === 'FREEFORM') {
+    defaults.angularSegments = 96;
+    defaults.lengthSegments = 48;
   }
 
   return defaults;

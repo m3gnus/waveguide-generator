@@ -15,12 +15,40 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
 }
 
-function finitePoints(value) {
+function normalizedInteriorPoint(point) {
+  const source = Array.isArray(point)
+    ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
+    : point;
+  if (!source || typeof source !== 'object') return null;
+  const z = Number(source.z);
+  const r = Number(source.r);
+  if (!Number.isFinite(z) || !Number.isFinite(r)) return null;
+  const angle = source.angleDeg;
+  const angleDeg = angle === null || angle === undefined || angle === '' ? null : Number(angle);
+  const rawStrength = source.strength;
+  const strength =
+    rawStrength === null || rawStrength === undefined || rawStrength === ''
+      ? null
+      : Number(rawStrength);
+  return {
+    z,
+    r,
+    angleDeg: Number.isFinite(angleDeg) ? angleDeg : null,
+    strength: Number.isFinite(strength) && Number.isFinite(angleDeg) ? strength : null,
+  };
+}
+
+function finiteProfilePoints(value) {
   if (!Array.isArray(value)) return [];
   return value
     .filter((point) => Array.isArray(point) && point.length >= 2)
-    .map((point) => [Number(point[0]), Number(point[1])])
-    .filter((point) => point.every(Number.isFinite));
+    .map((point) => ({ row: point, interior: normalizedInteriorPoint(point) }))
+    .filter(({ interior }) => interior !== null);
+}
+
+function normalizeInteriorCollection(value) {
+  if (!Array.isArray(value)) return value;
+  return value.map(normalizedInteriorPoint).filter(Boolean);
 }
 
 /**
@@ -37,8 +65,8 @@ export function migrateLegacyFreeformParams(params = {}) {
     Object.prototype.hasOwnProperty.call(source, 'profileV');
 
   if (!hasLength && hasLegacyProfile) {
-    const horizontal = finitePoints(source.profileH);
-    const vertical = finitePoints(source.profileV);
+    const horizontal = finiteProfilePoints(source.profileH);
+    const vertical = finiteProfilePoints(source.profileV);
     const horizontalProfile = horizontal.length >= 2 ? horizontal : [];
     const verticalProfile = vertical.length >= 2 ? vertical : [];
     const lengthPoint = horizontalProfile.at(-1) || verticalProfile.at(-1);
@@ -46,16 +74,22 @@ export function migrateLegacyFreeformParams(params = {}) {
     const horizontalMouth = horizontalProfile.at(-1) || verticalProfile.at(-1);
     const verticalMouth = verticalProfile.at(-1) || horizontalProfile.at(-1);
 
-    migrated.length = positiveNumber(lengthPoint?.[0], 120);
-    migrated.throatRadius = finiteNumber(throatPoint?.[1], 12.7);
+    migrated.length = positiveNumber(lengthPoint?.interior.z, 120);
+    migrated.throatRadius = finiteNumber(throatPoint?.interior.r, 12.7);
     migrated.throatAngle = finiteNumber(
       source.throatAngle,
       finiteNumber(source.throatAngleH, finiteNumber(source.throatAngleV, 15.5))
     );
-    migrated.mouthRadiusH = finiteNumber(horizontalMouth?.[1], 140);
-    migrated.mouthRadiusV = finiteNumber(verticalMouth?.[1], migrated.mouthRadiusH);
-    migrated.interiorH = horizontalProfile.slice(1, -1);
-    migrated.interiorV = verticalProfile.slice(1, -1);
+    migrated.mouthRadiusH = finiteNumber(horizontalMouth?.interior.r, 140);
+    migrated.mouthRadiusV = finiteNumber(verticalMouth?.interior.r, migrated.mouthRadiusH);
+    migrated.interiorH = horizontalProfile.slice(1, -1).map(({ interior }) => interior);
+    migrated.interiorV = verticalProfile.slice(1, -1).map(({ interior }) => interior);
+  }
+
+  for (const key of ['interiorH', 'interiorV']) {
+    if (Object.prototype.hasOwnProperty.call(migrated, key)) {
+      migrated[key] = normalizeInteriorCollection(migrated[key]);
+    }
   }
 
   for (const key of LEGACY_FREEFORM_KEYS) {

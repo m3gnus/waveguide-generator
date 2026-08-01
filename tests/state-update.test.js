@@ -13,6 +13,8 @@ test('FREEFORM is a supported model with independent valid collection defaults',
   assert.equal(defaults.throatAngle, 15.5);
   assert.equal(defaults.mouthRadiusH, 140);
   assert.equal(defaults.mouthRadiusV, 140);
+  assert.equal(defaults.angularSegments, 96);
+  assert.equal(defaults.lengthSegments, 48);
   assert.deepEqual(defaults.interiorH, []);
   assert.deepEqual(defaults.interiorV, []);
   assert.deepEqual(defaults.crossSections, [
@@ -31,8 +33,16 @@ test('persisted legacy FREEFORM profiles migrate before defaults are merged', ()
   const normalized = normalizePersistedState({
     type: 'FREEFORM',
     params: {
-      profileH: [[0, 13], [40, 60], [150, 170]],
-      profileV: [[0, 13], [80, 75], [150, 120]],
+      profileH: [
+        [0, 13],
+        [40, 60],
+        [150, 170],
+      ],
+      profileV: [
+        [0, 13],
+        [80, 75],
+        [150, 120],
+      ],
       throatAngleH: 17,
       throatAngleV: 17,
       mouthAngleH: 65,
@@ -45,10 +55,23 @@ test('persisted legacy FREEFORM profiles migrate before defaults are merged', ()
   assert.equal(normalized.params.throatAngle, 17);
   assert.equal(normalized.params.mouthRadiusH, 170);
   assert.equal(normalized.params.mouthRadiusV, 120);
-  assert.deepEqual(normalized.params.interiorH, [[40, 60]]);
-  assert.deepEqual(normalized.params.interiorV, [[80, 75]]);
+  assert.deepEqual(normalized.params.interiorH, [{ z: 40, r: 60, angleDeg: null, strength: null }]);
+  assert.deepEqual(normalized.params.interiorV, [{ z: 80, r: 75, angleDeg: null, strength: null }]);
   assert.equal(Object.hasOwn(normalized.params, 'profileH'), false);
   assert.equal(Object.hasOwn(normalized.params, 'throatAngleV'), false);
+});
+
+test('persisted FREEFORM interior rows migrate to the object anchor model', () => {
+  const normalized = normalizePersistedState({
+    type: 'FREEFORM',
+    params: {
+      interiorH: [[40, 60, 22, 1.7]],
+      interiorV: [[70, 75, -8]],
+    },
+  });
+
+  assert.deepEqual(normalized.params.interiorH, [{ z: 40, r: 60, angleDeg: 22, strength: 1.7 }]);
+  assert.deepEqual(normalized.params.interiorV, [{ z: 70, r: 75, angleDeg: -8, strength: null }]);
 });
 
 test('AppState.loadState migrates legacy FREEFORM params on direct state replacement', () => {
@@ -56,8 +79,14 @@ test('AppState.loadState migrates legacy FREEFORM params on direct state replace
   state.loadState({
     type: 'FREEFORM',
     params: {
-      profileH: [[0, 12.7], [120, 155]],
-      profileV: [[0, 12.7], [120, 105]],
+      profileH: [
+        [0, 12.7],
+        [120, 155],
+      ],
+      profileV: [
+        [0, 12.7],
+        [120, 105],
+      ],
       throatAngleH: 14,
       throatAngleV: 14,
       mouthAngleH: 62,

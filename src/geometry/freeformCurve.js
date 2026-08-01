@@ -68,9 +68,14 @@ function hermite(value0, value1, slope0, slope1, span, fraction) {
 }
 
 function sanitizePoints(points) {
-  const valid = (Array.isArray(points) ? points : [])
-    .filter(finitePoint)
-    .map((point) => [Number(point[0]), Number(point[1])]);
+  const valid = (Array.isArray(points) ? points : []).filter(finitePoint).map((point) => {
+    const row = [Number(point[0]), Number(point[1])];
+    const angleDeg = Number(point[2]);
+    if (point.length >= 3 && Number.isFinite(angleDeg)) row.push(angleDeg);
+    const strength = Number(point[3]);
+    if (row.length === 3 && point.length >= 4 && Number.isFinite(strength)) row.push(strength);
+    return row;
+  });
   if (valid.length < 2) return [];
 
   const unique = [];
@@ -85,8 +90,9 @@ function sanitizePoints(points) {
 
 /**
  * Build a display-only mirror of the FREEFORM mesher's chord-parameterized
- * PCHIP/Hermite meridian. End directions replace the automatic PCHIP
- * directions while retaining and scaling their automatic speeds.
+ * PCHIP/Hermite meridian. Per-anchor directions replace the automatic PCHIP
+ * directions while retaining their automatic speeds and applying strength.
+ * Endpoint rows take precedence over the block-level endpoint controls.
  */
 export function buildFreeformDisplayCurve({
   points,
@@ -129,8 +135,18 @@ export function buildFreeformDisplayCurve({
     zSlopes[index] = speed * Math.cos(radians);
     radiusSlopes[index] = speed * Math.sin(radians);
   };
-  overrideEndpoint(0, throatAngleDeg, throatTangentScale);
-  overrideEndpoint(anchors.length - 1, mouthAngleDeg, mouthTangentScale);
+  if (anchors[0].length < 3) overrideEndpoint(0, throatAngleDeg, throatTangentScale);
+  if (anchors.at(-1).length < 3) {
+    overrideEndpoint(anchors.length - 1, mouthAngleDeg, mouthTangentScale);
+  }
+  anchors.forEach((anchor, index) => {
+    if (anchor.length < 3) return;
+    const automaticSpeed = Math.hypot(zSlopes[index], radiusSlopes[index]);
+    const strength = anchor.length >= 4 ? anchor[3] : 1;
+    const radians = (anchor[2] * Math.PI) / 180;
+    zSlopes[index] = automaticSpeed * strength * Math.cos(radians);
+    radiusSlopes[index] = automaticSpeed * strength * Math.sin(radians);
+  });
 
   const totalLength = parameters.at(-1);
   const targetSamples = Math.max(
@@ -163,6 +179,6 @@ export function buildFreeformDisplayCurve({
       ]);
     }
   }
-  samples.push([...anchors.at(-1)]);
+  samples.push(anchors.at(-1).slice(0, 2));
   return samples;
 }

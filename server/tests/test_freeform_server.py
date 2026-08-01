@@ -25,14 +25,14 @@ def _freeform_payload() -> dict:
         "formula_type": "FREEFORM",
         "a0": 15.5,
         "profile_h": {
-            "points": [[0.0, 12.7], [60.0, 80.0], [120.0, 160.0]],
+            "points": [[0.0, 12.7], [60.0, 80.0, 25.0, 1.4], [120.0, 160.0]],
             "throat_angle_deg": 15.5,
             "mouth_angle_deg": 70.0,
             "throat_tangent_scale": 1.1,
             "mouth_tangent_scale": 0.9,
         },
         "profile_v": {
-            "points": [[0.0, 12.7], [60.0, 60.0], [120.0, 110.0]],
+            "points": [[0.0, 12.7], [60.0, 60.0, -10.0], [120.0, 110.0]],
             "throat_angle_deg": 15.5,
             "mouth_angle_deg": 60.0,
             "throat_tangent_scale": 1.2,
@@ -48,7 +48,7 @@ def _freeform_payload() -> dict:
             {
                 "t": 1.0,
                 "shape": "rounded_rectangle",
-                "corner_ratio": 0.12,
+                "corner_radius_mm": 10.0,
             },
         ],
         "overshoot_policy": "allow",
@@ -100,6 +100,11 @@ class FreeformContractTest(unittest.TestCase):
         payload = _freeform_payload()
         payload["cross_sections"] = [{"t": 0.0, "shape": "circle"}]
         with self.assertRaisesRegex(ValueError, "2-32"):
+            WaveguideParamsRequest(**payload)
+
+        payload = _freeform_payload()
+        payload["profile_h"]["points"][1] = [60.0]
+        with self.assertRaisesRegex(ValueError, "2-4"):
             WaveguideParamsRequest(**payload)
 
 
@@ -195,9 +200,13 @@ class FreeformAdapterTest(unittest.TestCase):
         )
         self.assertEqual(profile["profileH"]["throatAngleDeg"], 15.5)
         self.assertEqual(profile["profileH"]["throatTangentScale"], 1.1)
+        self.assertEqual(profile["profileH"]["points"][1], [60.0, 80.0, 25.0, 1.4])
+        self.assertEqual(profile["profileV"]["points"][1], [60.0, 60.0, -10.0])
         self.assertEqual(profile["profileV"]["mouthTangentScale"], 0.8)
         self.assertEqual(profile["crossSections"][1]["cornerRatio"], 0.12)
         self.assertNotIn("corner_ratio", profile["crossSections"][1])
+        self.assertEqual(profile["crossSections"][2]["cornerRadiusMm"], 10.0)
+        self.assertNotIn("corner_radius_mm", profile["crossSections"][2])
 
         params, formula, _mode = build_geometry_params(config)
         self.assertEqual(formula, "FREEFORM")
@@ -247,6 +256,8 @@ class FreeformAdapterTest(unittest.TestCase):
         self.assertEqual(report["throatRadiusMm"], 12.7)
         self.assertEqual(report["tangentAnglesDeg"]["H"]["mouth"], 70.0)
         self.assertEqual(report["tangentAnglesDeg"]["V"]["mouth"], 60.0)
+        self.assertEqual(report["anchorTangents"]["H"][1]["angleDeg"], 25.0)
+        self.assertEqual(report["anchorTangents"]["H"][1]["strength"], 1.4)
 
 
 if __name__ == "__main__":

@@ -221,9 +221,7 @@ export function prepareGeometryParams(
 ) {
   const resolvedType = type || rawParams.type;
   const preparedParams =
-    resolvedType === 'FREEFORM'
-      ? migrateLegacyFreeformParams(rawParams)
-      : { ...rawParams };
+    resolvedType === 'FREEFORM' ? migrateLegacyFreeformParams(rawParams) : { ...rawParams };
 
   if (resolvedType) {
     applySchemaToParams(preparedParams, PARAM_SCHEMA[resolvedType] || {});
@@ -261,9 +259,33 @@ export function prepareGeometryParams(
     if (resolvedType === 'FREEFORM') {
       for (const key of ['interiorH', 'interiorV']) {
         if (!Array.isArray(preparedParams[key])) continue;
-        preparedParams[key] = preparedParams[key].map((point) =>
-          Array.isArray(point) ? point.map((coordinate) => Number(coordinate) * scale) : point
-        );
+        preparedParams[key] = preparedParams[key].map((point) => {
+          if (Array.isArray(point)) {
+            return point.map((coordinate, index) =>
+              index < 2 ? Number(coordinate) * scale : coordinate
+            );
+          }
+          if (point && typeof point === 'object') {
+            return {
+              ...point,
+              z: Number(point.z) * scale,
+              r: Number(point.r) * scale,
+            };
+          }
+          return point;
+        });
+      }
+      if (Array.isArray(preparedParams.crossSections)) {
+        preparedParams.crossSections = preparedParams.crossSections.map((station) => {
+          if (
+            !station ||
+            typeof station !== 'object' ||
+            !Number.isFinite(Number(station.cornerRadiusMm))
+          ) {
+            return station;
+          }
+          return { ...station, cornerRadiusMm: Number(station.cornerRadiusMm) * scale };
+        });
       }
     }
   }

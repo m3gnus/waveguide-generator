@@ -74,12 +74,29 @@ function buildFreeformPayloadFields(preparedParams) {
   const assemblePoints = (interior, mouthRadius) => {
     const validInterior = Array.isArray(interior)
       ? interior
-          .filter((point) => Array.isArray(point) && point.length >= 2)
-          .map((point) => [Number(point[0]), Number(point[1])])
-          .filter(
-            ([z, radius]) =>
-              Number.isFinite(z) && Number.isFinite(radius) && z > 0 && z < length
-          )
+          .map((point) => {
+            const source = Array.isArray(point)
+              ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
+              : point;
+            if (!source || typeof source !== 'object') return null;
+            const z = Number(source.z);
+            const radius = Number(source.r);
+            const angleDeg =
+              source.angleDeg === null || source.angleDeg === undefined || source.angleDeg === ''
+                ? null
+                : Number(source.angleDeg);
+            const strength =
+              source.strength === null || source.strength === undefined || source.strength === ''
+                ? null
+                : Number(source.strength);
+            if (!Number.isFinite(z) || !Number.isFinite(radius)) return null;
+            if (!Number.isFinite(angleDeg)) return [z, radius];
+            return Number.isFinite(strength)
+              ? [z, radius, angleDeg, strength]
+              : [z, radius, angleDeg];
+          })
+          .filter(Boolean)
+          .filter(([z, radius]) => Number.isFinite(radius) && z > 0 && z < length)
           .sort((a, b) => a[0] - b[0])
       : [];
     return [[0, throatRadius], ...validInterior, [length, toFiniteNumber(mouthRadius, 140)]];
@@ -103,6 +120,9 @@ function buildFreeformPayloadFields(preparedParams) {
         if (station?.cornerRatio != null) {
           translated.corner_ratio = toFiniteNumber(station.cornerRatio, undefined);
         }
+        if (station?.cornerRadiusMm != null) {
+          translated.corner_radius_mm = toFiniteNumber(station.cornerRadiusMm, undefined);
+        }
         return translated;
       })
     : preparedParams.crossSections;
@@ -124,9 +144,7 @@ function buildFreeformPayloadFields(preparedParams) {
     ),
     cross_sections: crossSections,
     overshoot_policy:
-      preparedParams.overshootPolicy != null
-        ? String(preparedParams.overshootPolicy)
-        : 'reject',
+      preparedParams.overshootPolicy != null ? String(preparedParams.overshootPolicy) : 'reject',
   };
 }
 

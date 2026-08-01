@@ -929,7 +929,9 @@ select.freeform-profile-linked-highlight {
 .freeform-point-header,
 .freeform-point-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px;
+  grid-template-columns:
+    minmax(74px, 1.1fr) minmax(88px, 1.2fr) minmax(72px, 0.9fr) minmax(64px, 0.8fr)
+    30px;
   align-items: center;
   gap: var(--sp-1);
 }
@@ -966,6 +968,12 @@ select.freeform-profile-linked-highlight {
 .freeform-station-row input,
 .freeform-station-row select {
   width: 100%;
+}
+
+.freeform-station-legacy-ratio {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 .freeform-point-remove,
