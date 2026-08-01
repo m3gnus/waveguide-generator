@@ -676,21 +676,34 @@ details.section[open] > summary {
   cursor: pointer;
 }
 
-.freeform-points-wrapper {
-  align-items: stretch;
+.freeform-points-editor {
+  display: flex;
   flex-direction: column;
+  gap: var(--sp-1);
 }
 
-.freeform-points-input {
+.freeform-point-header,
+.freeform-point-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.freeform-point-header {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.freeform-point-row input {
   width: 100%;
-  resize: vertical;
-  padding: var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--input-bg);
-  color: var(--text);
-  font: var(--text-sm) var(--font-mono);
-  line-height: 1.45;
+}
+
+.freeform-points-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 .freeform-stations-editor {
@@ -711,6 +724,8 @@ details.section[open] > summary {
   width: 100%;
 }
 
+.freeform-point-remove,
+.freeform-point-add,
 .freeform-station-remove,
 .freeform-station-add {
   min-height: 30px;
@@ -721,14 +736,38 @@ details.section[open] > summary {
   cursor: pointer;
 }
 
+.freeform-point-remove,
 .freeform-station-remove {
   width: 30px;
   padding: 0;
 }
 
+.freeform-point-add,
 .freeform-station-add {
   align-self: flex-start;
   padding: var(--sp-1) var(--sp-2);
+}
+
+.freeform-point-clamped {
+  animation: freeform-point-clamp-flash 450ms ease-out;
+}
+
+@keyframes freeform-point-clamp-flash {
+  0%, 45% {
+    border-color: var(--error);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 22%, transparent);
+  }
+}
+
+.freeform-profile-error {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--error);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--error);
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 select {

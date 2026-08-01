@@ -153,27 +153,26 @@ function validateNumericValue(input, def) {
   return { valid: true };
 }
 
-function formatPointPairs(value) {
-  if (!Array.isArray(value)) return '';
+function normalizeInteriorPoints(value) {
+  if (!Array.isArray(value)) return [];
   return value
     .filter((point) => Array.isArray(point) && point.length >= 2)
-    .map(([z, r]) => `${z} ${r}`)
-    .join('\n');
+    .map((point) => [Number(point[0]), Number(point[1])])
+    .filter((point) => point.every(Number.isFinite))
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, 62);
 }
 
-function parsePointPairs(value) {
-  const lines = String(value ?? '').split(/\r?\n/);
-  const points = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const parts = trimmed.split(/[\s,]+/);
-    if (parts.length !== 2) return null;
-    const point = parts.map(Number);
-    if (!point.every(Number.isFinite)) return null;
-    points.push(point);
-  }
-  return points.length >= 2 && points.length <= 64 ? points : null;
+function clampInteriorZ(value, length, fallback) {
+  if (!Number.isFinite(value)) return fallback;
+  const inset = Math.min(0.001, length / 1000);
+  return Math.min(length - inset, Math.max(inset, value));
+}
+
+function flashClampedPoint(input) {
+  input.classList.add('freeform-point-clamped');
+  const timer = setTimeout(() => input.classList.remove('freeform-point-clamped'), 450);
+  timer?.unref?.();
 }
 
 function normalizeStations(value) {
@@ -206,6 +205,8 @@ export class ParamPanel {
     this.simulationSettingsContainer = document.getElementById('simulation-settings-container');
     this.simulationContainer = document.getElementById('simulation-param-container');
     this.formulaInfoVisible = false;
+    this.profileError = '';
+    this.profileErrorStateVersion = null;
     this.controlIdCounter = 0;
     this.init();
   }
@@ -231,6 +232,13 @@ export class ParamPanel {
 
   // Create the full UI structure
   createFullPanel() {
+    if (
+      this.profileError &&
+      this.profileErrorStateVersion !== GlobalState.getVersion()
+    ) {
+      this.profileError = '';
+      this.profileErrorStateVersion = null;
+    }
     const focusedControl = this.captureFocusedControl();
     this.container.innerHTML = '';
     if (this.simulationSettingsContainer) {
@@ -270,6 +278,7 @@ export class ParamPanel {
     }
 
     this.restoreFocusedControl(focusedControl);
+    this.renderProfileErrorStrip();
   }
 
   captureFocusedControl() {
@@ -558,26 +567,120 @@ export class ParamPanel {
 
   createPointsControl(key, currentValue, controlId) {
     const wrapper = document.createElement('div');
-    wrapper.className = 'param-input-wrapper freeform-points-wrapper';
-    const textarea = document.createElement('textarea');
-    textarea.id = controlId;
-    textarea.className = 'freeform-points-input';
-    textarea.rows = Math.max(2, Math.min(8, Array.isArray(currentValue) ? currentValue.length : 2));
-    textarea.spellcheck = false;
-    textarea.value = formatPointPairs(currentValue);
-    textarea.placeholder = '0 12.7\n120 140';
-    textarea.setAttribute('data-param-key', key);
-    textarea.setAttribute('aria-label', `${key} point pairs`);
-    textarea.onchange = (event) => {
-      const points = parsePointPairs(event.target.value);
-      if (!points) {
-        showInputError(event.target, 'Enter 2 to 64 lines, each containing exactly two numbers: z r.');
-        return;
-      }
-      hideInputError(event.target, true);
-      this.updateParam(key, points);
+    wrapper.className = 'freeform-points-editor';
+    const points = normalizeInteriorPoints(currentValue);
+    const stateParams = GlobalState.get().params || {};
+    const length = Number(stateParams.length);
+    const safeLength = Number.isFinite(length) && length > 0 ? length : 120;
+    const throatRadius = Number(stateParams.throatRadius);
+    const mouthRadius = Number(key === 'interiorH' ? stateParams.mouthRadiusH : stateParams.mouthRadiusV);
+    const startRadius = Number.isFinite(throatRadius) ? throatRadius : 12.7;
+    const endRadius = Number.isFinite(mouthRadius) ? mouthRadius : 140;
+    const commitPoints = (nextPoints) => {
+      this.updateParam(key, normalizeInteriorPoints(nextPoints));
     };
-    wrapper.appendChild(textarea);
+
+    const header = document.createElement('div');
+    header.className = 'freeform-point-header';
+    for (const text of ['z (mm)', 'r (mm)', '']) {
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      header.appendChild(cell);
+    }
+    wrapper.appendChild(header);
+
+    if (points.length === 0) {
+      const hint = document.createElement('p');
+      hint.className = 'freeform-points-empty';
+      hint.textContent = 'No interior points — throat and mouth define a 2-anchor curve';
+      wrapper.appendChild(hint);
+    }
+
+    points.forEach((point, index) => {
+      const pointRow = document.createElement('div');
+      pointRow.className = 'freeform-point-row';
+
+      const zInput = document.createElement('input');
+      zInput.type = 'number';
+      zInput.id = index === 0 ? controlId : `${controlId}-z-${index}`;
+      zInput.min = '0';
+      zInput.max = String(safeLength);
+      zInput.step = '0.1';
+      zInput.value = point[0];
+      zInput.setAttribute('data-param-key', key);
+      zInput.setAttribute('aria-label', `${key} point ${index + 1} z`);
+      zInput.onchange = (event) => {
+        const requested = Number(event.target.value);
+        const z = clampInteriorZ(requested, safeLength, point[0]);
+        event.target.value = z;
+        if (!Number.isFinite(requested) || z !== requested) {
+          flashClampedPoint(event.target);
+        }
+        commitPoints(points.map((item, itemIndex) => (itemIndex === index ? [z, item[1]] : item)));
+      };
+      pointRow.appendChild(zInput);
+
+      const radiusInput = document.createElement('input');
+      radiusInput.type = 'number';
+      radiusInput.step = '0.1';
+      radiusInput.value = point[1];
+      radiusInput.setAttribute('data-param-key', key);
+      radiusInput.setAttribute('aria-label', `${key} point ${index + 1} radius`);
+      radiusInput.onchange = (event) => {
+        const radius = Number(event.target.value);
+        if (!Number.isFinite(radius)) {
+          showInputError(event.target, 'Enter a finite radius.');
+          return;
+        }
+        hideInputError(event.target, true);
+        commitPoints(
+          points.map((item, itemIndex) => (itemIndex === index ? [item[0], radius] : item))
+        );
+      };
+      pointRow.appendChild(radiusInput);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'freeform-point-remove';
+      remove.textContent = '−';
+      remove.title = 'Remove point';
+      remove.setAttribute('aria-label', `Remove ${key} point ${index + 1}`);
+      remove.setAttribute('data-param-key', key);
+      remove.onclick = (event) => {
+        event.preventDefault();
+        commitPoints(points.filter((_item, itemIndex) => itemIndex !== index));
+      };
+      pointRow.appendChild(remove);
+      wrapper.appendChild(pointRow);
+    });
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'freeform-point-add';
+    add.textContent = 'Add point';
+    add.disabled = points.length >= 62;
+    add.setAttribute('data-param-key', key);
+    add.onclick = (event) => {
+      event.preventDefault();
+      if (points.length >= 62) return;
+      const anchors = [[0, startRadius], ...points, [safeLength, endRadius]];
+      let insertAfter = 0;
+      let widestGap = -1;
+      for (let index = 0; index < anchors.length - 1; index += 1) {
+        const gap = anchors[index + 1][0] - anchors[index][0];
+        if (gap > widestGap) {
+          widestGap = gap;
+          insertAfter = index;
+        }
+      }
+      const [z0, r0] = anchors[insertAfter];
+      const [z1, r1] = anchors[insertAfter + 1];
+      const z = (z0 + z1) / 2;
+      const ratio = z1 === z0 ? 0.5 : (z - z0) / (z1 - z0);
+      const radius = Math.round((r0 + ratio * (r1 - r0)) * 1e6) / 1e6;
+      commitPoints([...points, [z, radius]]);
+    };
+    wrapper.appendChild(add);
     return wrapper;
   }
 
@@ -862,7 +965,28 @@ export class ParamPanel {
   }
 
   updateParam(key, value) {
+    this.setProfileError(null);
     GlobalState.update({ [key]: value });
+  }
+
+  setProfileError(message) {
+    this.profileError = String(message || '').trim();
+    this.profileErrorStateVersion = this.profileError ? GlobalState.getVersion() : null;
+    this.renderProfileErrorStrip();
+  }
+
+  renderProfileErrorStrip() {
+    const existing = document.getElementById('freeform-profile-error');
+    if (existing) existing.remove();
+    if (!this.profileError || GlobalState.get().type !== 'FREEFORM') return;
+    const section = document.getElementById('core-profile');
+    if (!section) return;
+    const strip = document.createElement('div');
+    strip.id = 'freeform-profile-error';
+    strip.className = 'freeform-profile-error';
+    strip.setAttribute('role', 'alert');
+    strip.textContent = this.profileError;
+    section.appendChild(strip);
   }
 
   validateInputOnChange(input, key, def = null) {

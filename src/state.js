@@ -1,6 +1,7 @@
 import { AppEvents } from './events.js';
 import { getDefaults } from './config/defaults.js';
 import { PARAM_SCHEMA } from './config/schema.js';
+import { migrateLegacyFreeformParams } from './config/freeformParams.js';
 import { debugWarn } from './logging/debug.js';
 
 const STORAGE_KEY = 'ath_state';
@@ -71,7 +72,8 @@ export function normalizePersistedState(candidate) {
     return null;
   }
 
-  const normalizedParams = { ...defaults, ...params };
+  const loadedParams = modelType === 'FREEFORM' ? migrateLegacyFreeformParams(params) : params;
+  const normalizedParams = { ...defaults, ...loadedParams };
   if (
     Number(normalizedParams.maxTriangles) === LEGACY_DEFAULT_MAX_TRIANGLES &&
     Number(normalizedParams.allowLargeMesh) === 0
@@ -144,14 +146,18 @@ export class AppState {
 
   // Replace entire state (e.g. loading config file)
   loadState(newState, source = 'config-load') {
-    if (stateEqual(this.current, newState)) {
+    const normalizedState =
+      newState?.type === 'FREEFORM' && newState?.params && typeof newState.params === 'object'
+        ? { ...newState, params: migrateLegacyFreeformParams(newState.params) }
+        : newState;
+    if (stateEqual(this.current, normalizedState)) {
       return false;
     }
 
     const previousState = JSON.parse(JSON.stringify(this.current));
     this.pushHistory(previousState);
 
-    this.current = JSON.parse(JSON.stringify(newState));
+    this.current = JSON.parse(JSON.stringify(normalizedState));
     this._stateVersion++;
     this.saveToStorage();
     AppEvents.emit('state:updated', this.current, {

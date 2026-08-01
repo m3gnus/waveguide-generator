@@ -184,6 +184,9 @@ function startBackendViewportBuild(app, variant) {
       invalidateMeshCacheIfStale(app);
       if (app._meshCache.stateKey !== stateKey) return;
       app._meshCache[variant] = built;
+      if (app.currentState?.type === 'FREEFORM') {
+        app.paramPanel?.setProfileError?.(null);
+      }
       applyVariantIfCurrent(app, stateKey, variant, built);
     })
     .catch((error) => {
@@ -234,6 +237,9 @@ function reportMeshBuildFailure(app, error) {
   // ICW infeasibility hint); prefer it over the wrapped HTTP message.
   const detail = error?.backendDetail || error?.message || error;
   console.error('[Viewport] Mesh build failed:', detail);
+  if (app.currentState?.type === 'FREEFORM') {
+    app.paramPanel?.setProfileError?.(detail);
+  }
   if (typeof app.uiCoordinator?.showError === 'function') {
     try {
       app.uiCoordinator.showError(`Mesh build failed: ${detail}`);
