@@ -1,5 +1,13 @@
 import { PARAM_SCHEMA } from './schema.js';
 
+function cloneDefault(value) {
+  if (Array.isArray(value)) return value.map(cloneDefault);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDefault(item)]));
+  }
+  return value;
+}
+
 export function getDefaults(modelType) {
   const defaults = {};
 
@@ -7,7 +15,7 @@ export function getDefaults(modelType) {
   const core = PARAM_SCHEMA[modelType];
   if (core) {
     for (const [key, def] of Object.entries(core)) {
-      defaults[key] = def.default;
+      defaults[key] = cloneDefault(def.default);
     }
   }
 
@@ -17,15 +25,15 @@ export function getDefaults(modelType) {
     const groupSchema = PARAM_SCHEMA[group];
     if (groupSchema) {
       for (const [key, def] of Object.entries(groupSchema)) {
-        defaults[key] = def.default;
+        defaults[key] = cloneDefault(def.default);
       }
     }
   }
 
-  // ICW is phi-independent (a body of revolution), so its natural mouth is
-  // already circular. Default it to no morph rather than the shared Rectangle
-  // default, which would otherwise make a fresh ICW horn non-circular.
-  if (modelType === 'ICW') {
+  // Server-only profile families define their own cross-section shape. Default
+  // them to no morph rather than the shared Rectangle target, which would
+  // otherwise conflict with their native geometry.
+  if (modelType === 'ICW' || modelType === 'FREEFORM') {
     defaults.morphTarget = 0;
   }
 

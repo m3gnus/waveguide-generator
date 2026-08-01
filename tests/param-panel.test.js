@@ -241,6 +241,104 @@ test('parameter inventory exposes throat extension and scopes OSSE-only guiding 
   );
 });
 
+test('FREEFORM inventory hides morph and keeps source controls available', () => {
+  const geometrySections = getParameterSections('geometry', 'FREEFORM');
+  const sectionIds = geometrySections.map((section) => section.id);
+  assert.ok(sectionIds.includes('core-profile'));
+  assert.ok(!sectionIds.includes('morph-target'));
+  assert.ok(!sectionIds.includes('guiding-curve'));
+  const core = geometrySections.find((section) => section.id === 'core-profile');
+  assert.deepEqual(core.groups.flatMap((group) => group.keys), [
+    'scale',
+    'profileH',
+    'profileV',
+    'throatAngleH',
+    'mouthAngleH',
+    'throatTangentScaleH',
+    'mouthTangentScaleH',
+    'throatAngleV',
+    'mouthAngleV',
+    'throatTangentScaleV',
+    'mouthTangentScaleV',
+    'crossSections',
+    'overshootPolicy',
+  ]);
+  const source = getParameterSections('simulation', 'FREEFORM').find(
+    (section) => section.id === 'source-definition'
+  );
+  assert.ok(source.groups[0].keys.includes('sourceRadius'));
+  assert.ok(source.groups[0].keys.includes('sourceCurv'));
+});
+
+test('ParamPanel FREEFORM point and station editors validate and commit structured state', () => {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement('div');
+  paramContainer.id = 'param-container';
+  fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement('div');
+  simulationSettingsContainer.id = 'simulation-settings-container';
+  fakeDocument.body.appendChild(simulationSettingsContainer);
+  const simulationContainer = fakeDocument.createElement('div');
+  simulationContainer.id = 'simulation-param-container';
+  fakeDocument.body.appendChild(simulationContainer);
+  global.document = fakeDocument;
+
+  try {
+    GlobalState.loadState(
+      { type: 'FREEFORM', params: getDefaults('FREEFORM') },
+      'param-panel-freeform-test'
+    );
+    const panel = new ParamPanel('param-container');
+    panel.createFullPanel();
+
+    const typeSelect = fakeDocument.getElementById('model-type');
+    assert.ok(typeSelect.children.some((option) => option.value === 'FREEFORM'));
+    const pointInputs = collectNodes(paramContainer, (node) => node.tagName === 'TEXTAREA');
+    assert.equal(pointInputs.length, 2);
+    assert.equal(pointInputs[0].value, '0 12.7\n120 140');
+
+    const previousPoints = GlobalState.get().params.profileH;
+    pointInputs[0].value = '0 12.7\nbad line';
+    pointInputs[0].onchange({ target: pointInputs[0] });
+    assert.equal(GlobalState.get().params.profileH, previousPoints);
+    assert.equal(pointInputs[0].attributes['aria-invalid'], 'true');
+
+    pointInputs[0].value = '0, 12.7\n60 80\n120,140';
+    pointInputs[0].onchange({ target: pointInputs[0] });
+    assert.deepEqual(GlobalState.get().params.profileH, [[0, 12.7], [60, 80], [120, 140]]);
+
+    const stationRows = collectNodes(
+      paramContainer,
+      (node) => node.className === 'freeform-station-row'
+    );
+    assert.equal(stationRows.length, 2);
+    assert.equal(stationRows[0].children[0].disabled, true);
+    assert.equal(stationRows[1].children[0].disabled, true);
+    assert.deepEqual(stationRows[0].children[1].children.map((option) => option.value), ['circle']);
+    assert.deepEqual(stationRows[1].children[1].children.map((option) => option.value), [
+      'ellipse',
+      'superellipse',
+      'rounded_rectangle',
+    ]);
+
+    const addStation = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'BUTTON' && node.textContent === 'Add station'
+    )[0];
+    addStation.onclick({ preventDefault() {} });
+    assert.deepEqual(GlobalState.get().params.crossSections, [
+      { t: 0, shape: 'circle' },
+      { t: 0.5, shape: 'ellipse' },
+      { t: 1, shape: 'ellipse' },
+    ]);
+  } finally {
+    GlobalState.loadState(previousState, 'param-panel-freeform-test-restore');
+    global.document = originalDocument;
+  }
+});
+
 test('ParamPanel renders row-level formula buttons and removes the section-header affordance', () => {
   const originalDocument = global.document;
   const previousState = JSON.parse(JSON.stringify(GlobalState.get()));

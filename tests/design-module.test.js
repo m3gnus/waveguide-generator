@@ -175,6 +175,13 @@ test('DesignModule auto quadrants chooses quarter, half, or full from symmetry',
   assert.equal(prepareBackendMeshSimulationParams(full).quadrants, 1234);
 });
 
+test('FREEFORM auto quadrants uses profile symmetry then applies vertical offset reduction', () => {
+  const defaults = { ...getDefaults('FREEFORM'), type: 'FREEFORM' };
+
+  assert.equal(resolveAutoQuadrants(defaults), 1);
+  assert.equal(resolveAutoQuadrants({ ...defaults, verticalOffset: 12 }), 14);
+});
+
 test('DesignModule normalizes explicit quadrants with ATH leading-integer fallback', () => {
   assert.equal(prepareBackendMeshSimulationParams({ type: 'OSSE' }).quadrants, 1234);
   assert.equal(

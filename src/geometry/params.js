@@ -249,6 +249,15 @@ export function prepareGeometryParams(
         preparedParams[key] = Number(value) * scale;
       }
     });
+
+    if (resolvedType === 'FREEFORM') {
+      for (const key of ['profileH', 'profileV']) {
+        if (!Array.isArray(preparedParams[key])) continue;
+        preparedParams[key] = preparedParams[key].map((point) =>
+          Array.isArray(point) ? point.map((coordinate) => Number(coordinate) * scale) : point
+        );
+      }
+    }
   }
 
   if (!applyVerticalOffset) {

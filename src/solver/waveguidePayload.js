@@ -67,11 +67,58 @@ function normalizeSolverMode(value) {
   return 'auto';
 }
 
+function buildFreeformPayloadFields(preparedParams) {
+  const translateProfile = (points, throatAngle, mouthAngle, throatScale, mouthScale) => ({
+    points: Array.isArray(points) ? points.map((point) => [...point]) : points,
+    throat_angle_deg: toFiniteNumber(throatAngle, 15.5),
+    mouth_angle_deg: toFiniteNumber(mouthAngle, 60),
+    throat_tangent_scale: toFiniteNumber(throatScale, 1),
+    mouth_tangent_scale: toFiniteNumber(mouthScale, 1),
+  });
+  const crossSections = Array.isArray(preparedParams.crossSections)
+    ? preparedParams.crossSections.map((station) => {
+        const translated = {
+          t: toFiniteNumber(station?.t, undefined),
+          shape: station?.shape != null ? String(station.shape) : undefined,
+        };
+        if (station?.exponent != null) {
+          translated.exponent = toFiniteNumber(station.exponent, undefined);
+        }
+        if (station?.cornerRatio != null) {
+          translated.corner_ratio = toFiniteNumber(station.cornerRatio, undefined);
+        }
+        return translated;
+      })
+    : preparedParams.crossSections;
+
+  return {
+    profile_h: translateProfile(
+      preparedParams.profileH,
+      preparedParams.throatAngleH,
+      preparedParams.mouthAngleH,
+      preparedParams.throatTangentScaleH,
+      preparedParams.mouthTangentScaleH
+    ),
+    profile_v: translateProfile(
+      preparedParams.profileV,
+      preparedParams.throatAngleV,
+      preparedParams.mouthAngleV,
+      preparedParams.throatTangentScaleV,
+      preparedParams.mouthTangentScaleV
+    ),
+    cross_sections: crossSections,
+    overshoot_policy:
+      preparedParams.overshootPolicy != null
+        ? String(preparedParams.overshootPolicy)
+        : 'reject',
+  };
+}
+
 export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
   const type = preparedParams.type || 'R-OSSE';
   const lengthMode =
     preparedParams._athLengthMode ?? preparedParams.athLengthMode ?? preparedParams.lengthMode;
-  return {
+  const payload = {
     formula_type: type,
     length_mode:
       lengthMode != null && String(lengthMode).trim() ? String(lengthMode).trim() : undefined,
@@ -202,4 +249,35 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     solver_mode: normalizeSolverMode(preparedParams.solverMode),
     msh_version: mshVersion,
   };
+
+  if (type === 'FREEFORM') {
+    Object.assign(payload, buildFreeformPayloadFields(preparedParams));
+    for (const key of [
+      'R',
+      'r',
+      'b',
+      'm',
+      'tmax',
+      'L',
+      's',
+      'n',
+      'h',
+      'termination',
+      'n_coeff',
+      'theta1_deg',
+      'depth',
+      'coverage_angle',
+      'hold_start',
+      'hold_end',
+      'a',
+      'a0',
+      'r0',
+      'k',
+      'q',
+    ]) {
+      delete payload[key];
+    }
+  }
+
+  return payload;
 }

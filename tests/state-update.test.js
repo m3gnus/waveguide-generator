@@ -1,8 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AppState, normalizePersistedState } from '../src/state.js';
+import { AppState, SUPPORTED_MODEL_TYPES, normalizePersistedState } from '../src/state.js';
 import { getDefaults } from '../src/config/defaults.js';
+
+test('FREEFORM is a supported model with independent valid collection defaults', () => {
+  assert.equal(SUPPORTED_MODEL_TYPES.has('FREEFORM'), true);
+  const defaults = getDefaults('FREEFORM');
+  assert.equal(defaults.morphTarget, 0);
+  assert.deepEqual(defaults.profileH, [
+    [0, 12.7],
+    [120, 140],
+  ]);
+  assert.deepEqual(defaults.profileV, defaults.profileH);
+  assert.deepEqual(defaults.crossSections, [
+    { t: 0, shape: 'circle' },
+    { t: 1, shape: 'ellipse' },
+  ]);
+
+  defaults.profileH[0][0] = 99;
+  defaults.crossSections[0].shape = 'ellipse';
+  const freshDefaults = getDefaults('FREEFORM');
+  assert.equal(freshDefaults.profileH[0][0], 0);
+  assert.equal(freshDefaults.crossSections[0].shape, 'circle');
+});
 
 test('AppState.update skips exact no-op updates without version or history churn', () => {
   const state = new AppState();
