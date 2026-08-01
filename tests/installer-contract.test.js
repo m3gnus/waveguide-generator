@@ -23,18 +23,45 @@ test('installers preserve and replace an invalid virtual environment', () => {
   assert.match(shellInstaller, /\.venv\.incompatible/);
   assert.match(windowsInstaller, /\.venv\.incompatible/);
 
-  // The shell installer still probes inline; POSIX shells parse it correctly.
-  assert.match(shellInstaller, /sys\.prefix != sys\.base_prefix/);
-
-  // The Windows installer delegates to install\check_venv.py, because cmd.exe
-  // mis-parsed the inline form inside a parenthesised block. The check itself
-  // must still be the same one, so assert it lives in the script.
+  // Both installers delegate to install/check_venv.py. Windows must, because
+  // cmd.exe mis-parsed the inline form inside a parenthesised block; the shell
+  // installer does too so the supported-Python rule has one definition rather
+  // than drifting between the two scripts.
   const checkVenv = fs.readFileSync(
     new URL('../install/check_venv.py', import.meta.url),
     'utf8'
   );
   assert.match(checkVenv, /sys\.prefix != sys\.base_prefix/);
   assert.match(windowsInstaller, /check_venv\.py/);
+  assert.match(shellInstaller, /check_venv\.py/);
+  assert.doesNotMatch(shellInstaller, /sys\.prefix != sys\.base_prefix/);
+});
+
+test('both installers keep at most one incompatible venv backup', () => {
+  // A timestamped backup name accumulated multi-hundred-MB directories on every
+  // run. Both installers now reuse one name and sweep the old scheme's leftovers.
+  for (const installer of [shellInstaller, windowsInstaller]) {
+    assert.match(installer, /\.venv\.incompatible\.\*/);
+    assert.doesNotMatch(installer, /venv\.incompatible\.\$\(date/);
+    assert.doesNotMatch(installer, /venv\.incompatible\.!RANDOM!/);
+  }
+});
+
+test('both installers verify a solve can run, not just that imports succeed', () => {
+  // Counting OpenCL devices reported "bempp ready with OpenCL acceleration" on
+  // hosts where every solve then failed. check_solver_engine.py imports the
+  // engine the solve path actually uses.
+  for (const installer of [shellInstaller, windowsInstaller]) {
+    assert.match(installer, /check_solver_engine\.py/);
+    assert.doesNotMatch(installer, /bempp ready with OpenCL acceleration/);
+  }
+});
+
+test('a solver readiness check is reachable without an installer run', () => {
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')
+  );
+  assert.match(pkg.scripts['check:solver'], /check_solver_engine\.py/);
 });
 
 test('Metal helper build runs before solve-backend selection', () => {

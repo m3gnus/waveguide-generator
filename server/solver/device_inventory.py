@@ -107,8 +107,9 @@ def opencl_kernel_build_probe(device_type: str) -> dict[str, Any]:
 
     Creating an OpenCL context is not sufficient evidence that a solve can run.
     bempp-cl passes its source include directory to ``clBuildProgram`` as an
-    unquoted ``-I`` option. When the install path contains a space -- which is
-    ordinary on Windows -- the option splits and the build fails with
+    unquoted ``-I`` option. When the install path contains a space -- ordinary
+    on Windows, and true of this project's own default folder name on every
+    platform -- the option splits and the build fails with
     ``INVALID_BUILD_OPTIONS``, even though ``configure_opencl`` succeeded and
     every device query looked healthy.
 
@@ -454,7 +455,9 @@ def device_mode_readiness(device_mode: str) -> dict[str, Any]:
             else:
                 hint = (
                     "Install a CPU OpenCL runtime (pocl on Linux, the Intel CPU runtime "
-                    "on Windows), or keep the numba assembly fallback."
+                    "on Windows, pocl via Homebrew on macOS -- though Apple Silicon "
+                    "normally uses the Metal backend instead), or keep the numba "
+                    "assembly fallback."
                 )
             result["reason"] = (
                 f"device_mode={normalized!r} resolves to an OpenCL {resolved.upper()} "

@@ -26,6 +26,7 @@
     "deps:check-pins": "node scripts/run-backend-python.js scripts/bump_module_pins.py --check",
     "preflight:backend": "node scripts/preflight-backend-runtime.js",
     "preflight:backend:strict": "node scripts/preflight-backend-runtime.js --strict",
+    "check:solver": "node scripts/run-backend-python.js server/scripts/check_solver_engine.py",
     "doctor:backend": "node scripts/doctor-backend-runtime.js",
     "doctor:backend:json": "node scripts/doctor-backend-runtime.js --json",
     "doctor:backend:strict": "node scripts/doctor-backend-runtime.js --strict"

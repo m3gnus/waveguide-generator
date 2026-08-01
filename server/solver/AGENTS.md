@@ -45,6 +45,13 @@ Scope: applies to `server/solver/*`.
 - For `bempp_solver.py` changes:
   - `server/tests/test_bempp_solver.py`
   - `server/tests/test_solver_backend_selection.py`
+- For changes to either backend's solve numerics (directivity, observation
+  frame, symmetry expansion, assembly):
+  - `server/tests/test_cross_backend_asro2_parity.py` — solves a pinned ATH
+    export and compares against a stored directivity. Opt-in: needs
+    `ATH_REFERENCE_ROOT`. It exercises ONE backend per run (whichever the host
+    uses); set `WG_PARITY_BACKEND=bempp` or `=metal` to force the other, which
+    is the only way to make it a genuine cross-backend check on one machine.
 - For `deps.py` / preflight changes:
   - `server/tests/test_dependency_runtime.py`
   - `server/tests/test_runtime_preflight.py`
