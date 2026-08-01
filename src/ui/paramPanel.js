@@ -157,10 +157,33 @@ function validateNumericValue(input, def) {
 function normalizeInteriorPoints(value) {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((point) => Array.isArray(point) && point.length >= 2)
-    .map((point) => [Number(point[0]), Number(point[1])])
-    .filter((point) => point.every(Number.isFinite))
-    .sort((a, b) => a[0] - b[0])
+    .map((point) => {
+      const source = Array.isArray(point)
+        ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
+        : point;
+      if (!source || typeof source !== 'object') return null;
+      const z = Number(source.z);
+      const r = Number(source.r);
+      if (!Number.isFinite(z) || !Number.isFinite(r)) return null;
+      const angleValue = source.angleDeg;
+      const angleDeg =
+        angleValue === null || angleValue === undefined || angleValue === ''
+          ? null
+          : Number(angleValue);
+      const strengthValue = source.strength;
+      const strength =
+        strengthValue === null || strengthValue === undefined || strengthValue === ''
+          ? null
+          : Number(strengthValue);
+      return {
+        z,
+        r,
+        angleDeg: Number.isFinite(angleDeg) ? angleDeg : null,
+        strength: Number.isFinite(angleDeg) && Number.isFinite(strength) ? strength : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.z - b.z)
     .slice(0, 62);
 }
 
@@ -623,9 +646,24 @@ export class ParamPanel {
 
     const header = document.createElement('div');
     header.className = 'freeform-point-header';
-    for (const text of ['z (mm)', 'r (mm)', '']) {
+    const radiusLabel = key === 'interiorH' ? 'Half-width (mm)' : 'Half-height (mm)';
+    const columns = [
+      ['Depth (mm)', 'Distance from the throat along the waveguide axis.'],
+      [
+        radiusLabel,
+        `Profile ${key === 'interiorH' ? 'horizontal half-width' : 'vertical half-height'} at this depth.`,
+      ],
+      [
+        'Angle (deg)',
+        'Spline tangent direction at this point. Leave blank for an automatic direction.',
+      ],
+      ['Strength', 'Scales the automatic tangent length from 0.1 to 3. Leave blank for 1.'],
+      ['', ''],
+    ];
+    for (const [text, tooltip] of columns) {
       const cell = document.createElement('span');
       cell.textContent = text;
+      if (tooltip) cell.title = tooltip;
       header.appendChild(cell);
     }
     wrapper.appendChild(header);
@@ -647,25 +685,29 @@ export class ParamPanel {
       zInput.min = '0';
       zInput.max = String(safeLength);
       zInput.step = '0.1';
-      zInput.value = point[0];
+      zInput.value = point.z;
+      zInput.title = columns[0][1];
       zInput.setAttribute('data-param-key', key);
       zInput.setAttribute('data-param', key);
       zInput.setAttribute('aria-label', `${key} point ${index + 1} z`);
       zInput.onchange = (event) => {
         const requested = Number(event.target.value);
-        const z = clampInteriorZ(requested, safeLength, point[0]);
+        const z = clampInteriorZ(requested, safeLength, point.z);
         event.target.value = z;
         if (!Number.isFinite(requested) || z !== requested) {
           flashClampedPoint(event.target);
         }
-        commitPoints(points.map((item, itemIndex) => (itemIndex === index ? [z, item[1]] : item)));
+        commitPoints(
+          points.map((item, itemIndex) => (itemIndex === index ? { ...item, z } : item))
+        );
       };
       pointRow.appendChild(zInput);
 
       const radiusInput = document.createElement('input');
       radiusInput.type = 'number';
       radiusInput.step = '0.1';
-      radiusInput.value = point[1];
+      radiusInput.value = point.r;
+      radiusInput.title = columns[1][1];
       radiusInput.setAttribute('data-param-key', key);
       radiusInput.setAttribute('data-param', key);
       radiusInput.setAttribute('aria-label', `${key} point ${index + 1} radius`);
@@ -677,10 +719,81 @@ export class ParamPanel {
         }
         hideInputError(event.target, true);
         commitPoints(
-          points.map((item, itemIndex) => (itemIndex === index ? [item[0], radius] : item))
+          points.map((item, itemIndex) => (itemIndex === index ? { ...item, r: radius } : item))
         );
       };
       pointRow.appendChild(radiusInput);
+
+      const angleInput = document.createElement('input');
+      angleInput.type = 'number';
+      angleInput.min = '-89';
+      angleInput.max = '89';
+      angleInput.step = '1';
+      angleInput.value = point.angleDeg ?? '';
+      angleInput.placeholder = 'auto';
+      angleInput.title = columns[2][1];
+      angleInput.setAttribute('data-param-key', key);
+      angleInput.setAttribute('data-param', key);
+      angleInput.setAttribute('aria-label', `${key} point ${index + 1} tangent angle`);
+      angleInput.onchange = (event) => {
+        const raw = String(event.target.value ?? '').trim();
+        if (!raw) {
+          hideInputError(event.target, true);
+          commitPoints(
+            points.map((item, itemIndex) =>
+              itemIndex === index ? { ...item, angleDeg: null, strength: null } : item
+            )
+          );
+          return;
+        }
+        const angleDeg = Number(raw);
+        if (!Number.isFinite(angleDeg) || angleDeg <= -90 || angleDeg >= 90) {
+          showInputError(event.target, 'Angle must be greater than -90 and less than 90 degrees.');
+          return;
+        }
+        hideInputError(event.target, true);
+        commitPoints(
+          points.map((item, itemIndex) =>
+            itemIndex === index ? { ...item, angleDeg: Math.round(angleDeg) } : item
+          )
+        );
+      };
+      pointRow.appendChild(angleInput);
+
+      const strengthInput = document.createElement('input');
+      strengthInput.type = 'number';
+      strengthInput.min = '0.1';
+      strengthInput.max = '3';
+      strengthInput.step = '0.1';
+      strengthInput.value = point.strength ?? '';
+      strengthInput.placeholder = '1';
+      strengthInput.disabled = point.angleDeg === null;
+      strengthInput.title = columns[3][1];
+      strengthInput.setAttribute('data-param-key', key);
+      strengthInput.setAttribute('data-param', key);
+      strengthInput.setAttribute('aria-label', `${key} point ${index + 1} tangent strength`);
+      strengthInput.onchange = (event) => {
+        const raw = String(event.target.value ?? '').trim();
+        if (!raw) {
+          hideInputError(event.target, true);
+          commitPoints(
+            points.map((item, itemIndex) =>
+              itemIndex === index ? { ...item, strength: null } : item
+            )
+          );
+          return;
+        }
+        const strength = Number(raw);
+        if (!Number.isFinite(strength) || strength < 0.1 || strength > 3) {
+          showInputError(event.target, 'Strength must be between 0.1 and 3.');
+          return;
+        }
+        hideInputError(event.target, true);
+        commitPoints(
+          points.map((item, itemIndex) => (itemIndex === index ? { ...item, strength } : item))
+        );
+      };
+      pointRow.appendChild(strengthInput);
 
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -706,22 +819,22 @@ export class ParamPanel {
     add.onclick = (event) => {
       event.preventDefault();
       if (points.length >= 62) return;
-      const anchors = [[0, startRadius], ...points, [safeLength, endRadius]];
+      const anchors = [{ z: 0, r: startRadius }, ...points, { z: safeLength, r: endRadius }];
       let insertAfter = 0;
       let widestGap = -1;
       for (let index = 0; index < anchors.length - 1; index += 1) {
-        const gap = anchors[index + 1][0] - anchors[index][0];
+        const gap = anchors[index + 1].z - anchors[index].z;
         if (gap > widestGap) {
           widestGap = gap;
           insertAfter = index;
         }
       }
-      const [z0, r0] = anchors[insertAfter];
-      const [z1, r1] = anchors[insertAfter + 1];
+      const { z: z0, r: r0 } = anchors[insertAfter];
+      const { z: z1, r: r1 } = anchors[insertAfter + 1];
       const z = (z0 + z1) / 2;
       const ratio = z1 === z0 ? 0.5 : (z - z0) / (z1 - z0);
       const radius = Math.round((r0 + ratio * (r1 - r0)) * 1e6) / 1e6;
-      commitPoints([...points, [z, radius]]);
+      commitPoints([...points, { z, r: radius, angleDeg: null, strength: null }]);
     };
     wrapper.appendChild(add);
     return wrapper;
@@ -797,9 +910,9 @@ export class ParamPanel {
             ? Number(station.exponent)
             : 4;
         } else if (nextShape === 'rounded_rectangle') {
-          nextStation.cornerRatio = Number.isFinite(Number(station.cornerRatio))
-            ? Number(station.cornerRatio)
-            : 0.12;
+          nextStation.cornerRadiusMm = Number.isFinite(Number(station.cornerRadiusMm))
+            ? Number(station.cornerRadiusMm)
+            : 10;
         }
         commitStations(
           stations.map((item, itemIndex) => (itemIndex === index ? nextStation : item))
@@ -812,19 +925,18 @@ export class ParamPanel {
           ? { key: 'exponent', min: 2, max: 16, step: 0.1, fallback: 4, label: 'Exponent' }
           : station.shape === 'rounded_rectangle'
             ? {
-                key: 'cornerRatio',
-                min: 0.02,
-                max: 1,
-                step: 0.01,
-                fallback: 0.12,
-                label: 'Corner ratio',
+                key: 'cornerRadiusMm',
+                min: 1,
+                step: 1,
+                fallback: '',
+                label: 'Corner radius (mm)',
               }
             : null;
       if (parameterDef) {
         const parameter = document.createElement('input');
         parameter.type = 'number';
         parameter.min = String(parameterDef.min);
-        parameter.max = String(parameterDef.max);
+        if (parameterDef.max !== undefined) parameter.max = String(parameterDef.max);
         parameter.step = String(parameterDef.step);
         parameter.value = station[parameterDef.key] ?? parameterDef.fallback;
         parameter.setAttribute('data-param-key', key);
@@ -834,22 +946,42 @@ export class ParamPanel {
           if (
             !Number.isFinite(numeric) ||
             numeric < parameterDef.min ||
-            numeric > parameterDef.max
+            (parameterDef.max !== undefined && numeric > parameterDef.max)
           ) {
             showInputError(
               event.target,
-              `${parameterDef.label} must be between ${parameterDef.min} and ${parameterDef.max}.`
+              parameterDef.max !== undefined
+                ? `${parameterDef.label} must be between ${parameterDef.min} and ${parameterDef.max}.`
+                : `${parameterDef.label} must be at least ${parameterDef.min}.`
             );
             return;
           }
           hideInputError(event.target, true);
           commitStations(
             stations.map((item, itemIndex) =>
-              itemIndex === index ? { ...item, [parameterDef.key]: numeric } : item
+              itemIndex === index
+                ? (() => {
+                    const next = { ...item, [parameterDef.key]: numeric };
+                    if (parameterDef.key === 'cornerRadiusMm') delete next.cornerRatio;
+                    return next;
+                  })()
+                : item
             )
           );
         };
         stationRow.appendChild(parameter);
+        if (
+          station.shape === 'rounded_rectangle' &&
+          station.cornerRadiusMm == null &&
+          Number.isFinite(Number(station.cornerRatio))
+        ) {
+          const legacyHint = document.createElement('span');
+          legacyHint.className = 'freeform-station-legacy-ratio';
+          legacyHint.textContent = `(ratio ${Number(station.cornerRatio)})`;
+          legacyHint.title =
+            'Legacy ratio remains active until a corner radius in millimetres is entered.';
+          stationRow.appendChild(legacyHint);
+        }
       }
 
       if (!isFirst && !isLast) {

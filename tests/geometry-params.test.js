@@ -1,59 +1,59 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
-import { getDefaults } from "../src/config/defaults.js";
+import { getDefaults } from '../src/config/defaults.js';
 import {
   parseExpression,
   validateExpression,
   prepareGeometryParams,
   coerceConfigParams,
   applyAthImportDefaults,
-} from "../src/geometry/index.js";
+} from '../src/geometry/index.js';
 
-test("prepareGeometryParams parses values and applies normalization options", () => {
+test('prepareGeometryParams parses values and applies normalization options', () => {
   const raw = {
-    ...getDefaults("OSSE"),
-    type: "OSSE",
-    L: "120",
-    a: "30 + p",
-    scale: "2",
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    L: '120',
+    a: '30 + p',
+    scale: '2',
     verticalOffset: 17,
-    gcurveSf: "1,2,3,4",
+    gcurveSf: '1,2,3,4',
   };
 
   const prepared = prepareGeometryParams(raw, {
-    type: "OSSE",
+    type: 'OSSE',
     applyVerticalOffset: false,
   });
 
   assert.equal(prepared.L, 240);
-  assert.equal(typeof prepared.a, "function");
+  assert.equal(typeof prepared.a, 'function');
   assert.equal(prepared.a(0), 30);
   assert.equal(prepared.verticalOffset, 0);
-  assert.equal(prepared.gcurveSf, "1,2,3,4");
-  assert.equal(prepared.type, "OSSE");
+  assert.equal(prepared.gcurveSf, '1,2,3,4');
+  assert.equal(prepared.type, 'OSSE');
 });
 
-test("prepareGeometryParams parses arithmetic-only formulas for range and number fields", () => {
+test('prepareGeometryParams parses arithmetic-only formulas for range and number fields', () => {
   const raw = {
-    ...getDefaults("OSSE"),
-    type: "OSSE",
-    k: "5.7*1.1",
-    n: "(2+2)^2/4",
-    morphRate: "9/3",
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    k: '5.7*1.1',
+    n: '(2+2)^2/4',
+    morphRate: '9/3',
   };
 
-  const prepared = prepareGeometryParams(raw, { type: "OSSE" });
+  const prepared = prepareGeometryParams(raw, { type: 'OSSE' });
 
-  assert.equal(typeof prepared.k, "function");
-  assert.equal(typeof prepared.n, "function");
-  assert.equal(typeof prepared.morphRate, "function");
+  assert.equal(typeof prepared.k, 'function');
+  assert.equal(typeof prepared.n, 'function');
+  assert.equal(typeof prepared.morphRate, 'function');
   assert.ok(Math.abs(prepared.k(0) - 6.27) < 1e-12);
   assert.equal(prepared.n(0), 4);
   assert.equal(prepared.morphRate(0), 3);
 });
 
-test("parseExpression falls back without normal-runtime console warnings", () => {
+test('parseExpression falls back without normal-runtime console warnings', () => {
   const originalDebug = globalThis.__WAVEGUIDE_DEBUG__;
   const originalWarn = console.warn;
   const warnings = [];
@@ -64,11 +64,11 @@ test("parseExpression falls back without normal-runtime console warnings", () =>
   };
 
   try {
-    const fn = parseExpression("1 + * 2");
+    const fn = parseExpression('1 + * 2');
     assert.equal(fn(0), 0);
   } finally {
     console.warn = originalWarn;
-    if (typeof originalDebug === "undefined") {
+    if (typeof originalDebug === 'undefined') {
       delete globalThis.__WAVEGUIDE_DEBUG__;
     } else {
       globalThis.__WAVEGUIDE_DEBUG__ = originalDebug;
@@ -78,15 +78,15 @@ test("parseExpression falls back without normal-runtime console warnings", () =>
   assert.deepEqual(warnings, []);
 });
 
-test("parseExpression evaluates documented formulas without compiling JavaScript", () => {
+test('parseExpression evaluates documented formulas without compiling JavaScript', () => {
   const p = Math.PI / 3;
-  const formula = parseExpression("2sin(p) + .5p + pi + fma(2, 3, 4) + log(100)");
+  const formula = parseExpression('2sin(p) + .5p + pi + fma(2, 3, 4) + log(100)');
 
   assert.ok(Math.abs(formula(p) - (2 * Math.sin(p) + 0.5 * p + Math.PI + 10 + 2)) < 1e-12);
-  assert.equal(formula._rawExpr, "2sin(p) + .5p + pi + fma(2, 3, 4) + log(100)");
+  assert.equal(formula._rawExpr, '2sin(p) + .5p + pi + fma(2, 3, 4) + log(100)');
 });
 
-test("parseExpression keeps scientific notation atomic and rejects hostile source", () => {
+test('parseExpression keeps scientific notation atomic and rejects hostile source', () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
   globalThis.fetch = () => {
@@ -94,31 +94,31 @@ test("parseExpression keeps scientific notation atomic and rejects hostile sourc
   };
 
   try {
-    const scientific = parseExpression("1e-3*cos(p)");
+    const scientific = parseExpression('1e-3*cos(p)');
     assert.ok(Math.abs(scientific(0) - 0.001) < 1e-15);
     assert.ok(Math.abs(scientific(Math.PI / 2)) < 1e-15);
 
-    const hostile = parseExpression("fetch(1) || 1");
+    const hostile = parseExpression('fetch(1) || 1');
     assert.equal(hostile(0), 0);
     assert.equal(hostile._rawExpr, undefined);
     assert.equal(fetchCalls, 0);
-    assert.equal(validateExpression("fetch(1) || 1").valid, false);
-    assert.equal(validateExpression("1e-").valid, false);
+    assert.equal(validateExpression('fetch(1) || 1').valid, false);
+    assert.equal(validateExpression('1e-').valid, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("coerceConfigParams and applyAthImportDefaults preserve ATH compatibility defaults", () => {
+test('coerceConfigParams and applyAthImportDefaults preserve ATH compatibility defaults', () => {
   const typed = coerceConfigParams({
-    L: "120",
-    label: "expr + p",
+    L: '120',
+    label: 'expr + p',
   });
 
   assert.equal(typed.L, 120);
-  assert.equal(typed.label, "expr + p");
+  assert.equal(typed.label, 'expr + p');
 
-  const parsed = { type: "OSSE", blocks: {} };
+  const parsed = { type: 'OSSE', blocks: {} };
   applyAthImportDefaults(parsed, typed);
 
   assert.equal(typed.morphTarget, 0);
@@ -127,10 +127,10 @@ test("coerceConfigParams and applyAthImportDefaults preserve ATH compatibility d
   assert.equal(typed.h, 0);
 });
 
-test("scale does not affect enclosure fields", () => {
+test('scale does not affect enclosure fields', () => {
   const raw = {
-    ...getDefaults("OSSE"),
-    type: "OSSE",
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
     L: 100,
     encDepth: 50,
     encEdge: 10,
@@ -141,54 +141,61 @@ test("scale does not affect enclosure fields", () => {
     scale: 2,
   };
 
-  const prepared = prepareGeometryParams(raw, { type: "OSSE" });
+  const prepared = prepareGeometryParams(raw, { type: 'OSSE' });
 
-  assert.equal(prepared.L, 200, "L should be scaled");
-  assert.equal(prepared.encDepth, 50, "encDepth should NOT be scaled");
-  assert.equal(prepared.encEdge, 10, "encEdge should NOT be scaled");
-  assert.equal(prepared.encSpaceL, 5, "encSpaceL should NOT be scaled");
-  assert.equal(prepared.encSpaceT, 5, "encSpaceT should NOT be scaled");
-  assert.equal(prepared.encSpaceR, 5, "encSpaceR should NOT be scaled");
-  assert.equal(prepared.encSpaceB, 5, "encSpaceB should NOT be scaled");
+  assert.equal(prepared.L, 200, 'L should be scaled');
+  assert.equal(prepared.encDepth, 50, 'encDepth should NOT be scaled');
+  assert.equal(prepared.encEdge, 10, 'encEdge should NOT be scaled');
+  assert.equal(prepared.encSpaceL, 5, 'encSpaceL should NOT be scaled');
+  assert.equal(prepared.encSpaceT, 5, 'encSpaceT should NOT be scaled');
+  assert.equal(prepared.encSpaceR, 5, 'encSpaceR should NOT be scaled');
+  assert.equal(prepared.encSpaceB, 5, 'encSpaceB should NOT be scaled');
 });
 
-test("FREEFORM scale covers endpoint scalars and both coordinates of interior points", () => {
+test('FREEFORM scale covers endpoint scalars and only z/r of every interior row shape', () => {
   const prepared = prepareGeometryParams(
     {
-      ...getDefaults("FREEFORM"),
-      type: "FREEFORM",
+      ...getDefaults('FREEFORM'),
+      type: 'FREEFORM',
       scale: 2,
       length: 120,
       throatRadius: 12.7,
       mouthRadiusH: 140,
       mouthRadiusV: 100,
-      interiorH: [[50, 60]],
-      interiorV: [[60, 45]],
+      interiorH: [[50, 60, 25, 1.5]],
+      interiorV: [{ z: 60, r: 45, angleDeg: -10, strength: 0.8 }],
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.5, shape: 'rounded_rectangle', cornerRatio: 0.12 },
+        { t: 1, shape: 'rounded_rectangle', cornerRadiusMm: 10 },
+      ],
     },
-    { type: "FREEFORM" }
+    { type: 'FREEFORM' }
   );
 
   assert.equal(prepared.length, 240);
   assert.equal(prepared.throatRadius, 25.4);
   assert.equal(prepared.mouthRadiusH, 280);
   assert.equal(prepared.mouthRadiusV, 200);
-  assert.deepEqual(prepared.interiorH, [[100, 120]]);
-  assert.deepEqual(prepared.interiorV, [[120, 90]]);
+  assert.deepEqual(prepared.interiorH, [{ z: 100, r: 120, angleDeg: 25, strength: 1.5 }]);
+  assert.deepEqual(prepared.interiorV, [{ z: 120, r: 90, angleDeg: -10, strength: 0.8 }]);
+  assert.equal(prepared.crossSections[1].cornerRatio, 0.12);
+  assert.equal(prepared.crossSections[2].cornerRadiusMm, 20);
   assert.equal(prepared.throatAngle, 15.5);
   assert.equal(prepared.mouthAngleV, 60);
 });
 
-test("FREEFORM legacy migration tolerates malformed profile collections", () => {
+test('FREEFORM legacy migration tolerates malformed profile collections', () => {
   let prepared;
   assert.doesNotThrow(() => {
     prepared = prepareGeometryParams(
       {
-        type: "FREEFORM",
-        profileH: "not-an-array",
-        profileV: [null, {}, ["bad", "point"]],
+        type: 'FREEFORM',
+        profileH: 'not-an-array',
+        profileV: [null, {}, ['bad', 'point']],
         throatAngleH: { invalid: true },
       },
-      { type: "FREEFORM" }
+      { type: 'FREEFORM' }
     );
   });
 

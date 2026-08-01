@@ -1,4 +1,5 @@
 """Shared Pydantic API contracts for backend routes and services."""
+import math
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -398,8 +399,10 @@ class FreeformProfileRequest(BaseModel):
     def validate_points(cls, value: List[List[float]]) -> List[List[float]]:
         if not 2 <= len(value) <= 64:
             raise ValueError("FREEFORM profile points must contain 2-64 anchors.")
-        if any(len(point) != 2 for point in value):
-            raise ValueError("Each FREEFORM profile point must contain exactly [z_mm, r_mm].")
+        if any(len(point) < 2 or len(point) > 4 for point in value):
+            raise ValueError("Each FREEFORM profile point must contain 2-4 numbers.")
+        if any(not math.isfinite(number) for point in value for number in point):
+            raise ValueError("Each FREEFORM profile point must contain only finite numbers.")
         return value
 
 
@@ -408,6 +411,7 @@ class FreeformStationRequest(BaseModel):
     shape: str
     exponent: Optional[float] = None
     corner_ratio: Optional[float] = None
+    corner_radius_mm: Optional[float] = None
 
 
 class WaveguideParamsRequest(BaseModel):

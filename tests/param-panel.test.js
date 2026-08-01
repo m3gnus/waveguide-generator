@@ -353,7 +353,9 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     );
     assert.equal(addPoints.length, 2);
     addPoints[0].onclick({ preventDefault() {} });
-    assert.deepEqual(GlobalState.get().params.interiorH, [[60, 76.35]]);
+    assert.deepEqual(GlobalState.get().params.interiorH, [
+      { z: 60, r: 76.35, angleDeg: null, strength: null },
+    ]);
 
     panel.createFullPanel();
     addPoints = collectNodes(
@@ -362,8 +364,8 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     );
     addPoints[0].onclick({ preventDefault() {} });
     assert.deepEqual(GlobalState.get().params.interiorH, [
-      [30, 44.525],
-      [60, 76.35],
+      { z: 30, r: 44.525, angleDeg: null, strength: null },
+      { z: 60, r: 76.35, angleDeg: null, strength: null },
     ]);
 
     panel.createFullPanel();
@@ -372,13 +374,25 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
       (node) => node.className === 'freeform-point-row'
     ).slice(0, 2);
     assert.equal(horizontalRows.length, 2);
+    const horizontalHeader = collectNodes(
+      paramContainer,
+      (node) => node.className === 'freeform-point-header'
+    )[0];
+    assert.deepEqual(
+      horizontalHeader.children.map((node) => node.textContent),
+      ['Depth (mm)', 'Half-width (mm)', 'Angle (deg)', 'Strength', '']
+    );
     assert.equal(Number(horizontalRows[0].children[0].value), 30);
+    assert.equal(horizontalRows[0].children[2].value, '');
+    assert.equal(horizontalRows[0].children[3].disabled, true);
     horizontalRows[0].children[0].value = 999;
     horizontalRows[0].children[0].onchange({ target: horizontalRows[0].children[0] });
-    assert.equal(GlobalState.get().params.interiorH[1][0], 119.999);
+    assert.equal(GlobalState.get().params.interiorH[1].z, 119.999);
     assert.match(horizontalRows[0].children[0].className, /freeform-point-clamped/);
-    horizontalRows[0].children[2].onclick({ preventDefault() {} });
-    assert.deepEqual(GlobalState.get().params.interiorH, [[60, 76.35]]);
+    horizontalRows[0].children[4].onclick({ preventDefault() {} });
+    assert.deepEqual(GlobalState.get().params.interiorH, [
+      { z: 60, r: 76.35, angleDeg: null, strength: null },
+    ]);
 
     const stationRows = collectNodes(
       paramContainer,
@@ -450,16 +464,129 @@ test('FREEFORM profile editor commits drag results through GlobalState update se
   });
 });
 
+test('FREEFORM selected-anchor tangent handle commits angle/strength and double-click resets', () => {
+  withFreeformPanel({ interiorH: [[40, 55]] }, ({ paramContainer, editor }) => {
+    editor.selectedAnchor = { plane: 'H', index: 0 };
+    editor.draw();
+    let knob = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-handle'] === 'interior-tangent'
+    )[0];
+    assert.ok(knob);
+    assert.match(knob.attributes['aria-label'], /automatic/);
+
+    const baseArmLength = Number(knob.attributes['data-base-arm-length']);
+    const targetAngle = 30;
+    const targetStrength = 2;
+    const radians = (targetAngle * Math.PI) / 180;
+    const targetZ = 40 + baseArmLength * targetStrength * Math.cos(radians);
+    const targetRadius = 55 + baseArmLength * targetStrength * Math.sin(radians);
+    editor.onPointerDown({
+      target: knob,
+      pointerId: 7,
+      clientX: Number(knob.attributes.cx),
+      clientY: Number(knob.attributes.cy),
+      preventDefault() {},
+    });
+    editor.onPointerMove({
+      pointerId: 7,
+      clientX: editor.transforms.x(targetZ),
+      clientY: editor.transforms.y(targetRadius),
+      preventDefault() {},
+    });
+    assert.equal(
+      collectNodes(paramContainer, (node) => /strength 2\.00/.test(node.textContent)).length,
+      1
+    );
+    editor.onPointerUp({ pointerId: 7, preventDefault() {} });
+    assert.equal(GlobalState.get().params.interiorH[0].angleDeg, 30);
+    assert.equal(GlobalState.get().params.interiorH[0].strength, 2);
+
+    knob = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-handle'] === 'interior-tangent'
+    )[0];
+    editor.onDoubleClick({ target: knob, preventDefault() {} });
+    assert.equal(GlobalState.get().params.interiorH[0].angleDeg, null);
+    assert.equal(GlobalState.get().params.interiorH[0].strength, null);
+  });
+});
+
 test('FREEFORM profile editor inserts and deletes plane anchors', () => {
   withFreeformPanel({}, ({ editor }) => {
     editor.insertAnchor('H', 61.25, 78.75);
-    assert.deepEqual(GlobalState.get().params.interiorH, [[61.3, 78.8]]);
+    assert.deepEqual(GlobalState.get().params.interiorH, [
+      { z: 61.3, r: 78.8, angleDeg: null, strength: null },
+    ]);
     editor.deleteAnchor('H', 0);
     assert.deepEqual(GlobalState.get().params.interiorH, []);
 
     editor.insertAnchor('V', 44, 53);
-    assert.deepEqual(GlobalState.get().params.interiorV, [[44, 53]]);
+    assert.deepEqual(GlobalState.get().params.interiorV, [
+      { z: 44, r: 53, angleDeg: null, strength: null },
+    ]);
   });
+});
+
+test('FREEFORM point fields commit CAD angle and strength controls', () => {
+  withFreeformPanel({ interiorH: [[40, 55]] }, ({ paramContainer, panel }) => {
+    let row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];
+    row.children[2].value = '27.4';
+    row.children[2].onchange({ target: row.children[2] });
+    assert.deepEqual(GlobalState.get().params.interiorH[0], {
+      z: 40,
+      r: 55,
+      angleDeg: 27,
+      strength: null,
+    });
+
+    panel.createFullPanel();
+    row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];
+    assert.equal(row.children[3].disabled, false);
+    row.children[3].value = '1.8';
+    row.children[3].onchange({ target: row.children[3] });
+    assert.equal(GlobalState.get().params.interiorH[0].strength, 1.8);
+
+    panel.createFullPanel();
+    row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];
+    row.children[2].value = '';
+    row.children[2].onchange({ target: row.children[2] });
+    assert.equal(GlobalState.get().params.interiorH[0].angleDeg, null);
+    assert.equal(GlobalState.get().params.interiorH[0].strength, null);
+  });
+});
+
+test('FREEFORM station editor uses millimetre corner radius and identifies legacy ratios', () => {
+  withFreeformPanel(
+    {
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 1, shape: 'rounded_rectangle', cornerRatio: 0.12 },
+      ],
+    },
+    ({ paramContainer }) => {
+      const cornerInput = collectNodes(
+        paramContainer,
+        (node) => node.attributes['aria-label'] === 'Station 2 Corner radius (mm)'
+      )[0];
+      assert.ok(cornerInput);
+      assert.equal(cornerInput.min, '1');
+      assert.equal(cornerInput.step, '1');
+      assert.equal(cornerInput.value, '');
+      assert.equal(
+        collectNodes(paramContainer, (node) => node.textContent === '(ratio 0.12)').length,
+        1
+      );
+
+      cornerInput.value = '11';
+      cornerInput.onchange({ target: cornerInput });
+      assert.deepEqual(GlobalState.get().params.crossSections[1], {
+        t: 1,
+        shape: 'rounded_rectangle',
+        cornerRadiusMm: 11,
+      });
+    }
+  );
 });
 
 test('FREEFORM profile editor legend chips toggle each plane without changing params', () => {

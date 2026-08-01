@@ -58,3 +58,69 @@ test('FREEFORM display curve passes exactly through interior anchors', () => {
   assert.ok(Math.abs(derivativeAngle(curve) + 12) < 1e-6);
   assert.ok(Math.abs(derivativeAngle(curve, true) - 42) < 1e-6);
 });
+
+test('FREEFORM display curve honors an interior per-anchor tangent direction', () => {
+  const curve = buildFreeformDisplayCurve({
+    points: [
+      [0, 12.7],
+      [50, 30, 35],
+      [100, 50],
+    ],
+    throatAngleDeg: 15.5,
+    mouthAngleDeg: 30,
+    sampleCount: 10_001,
+  });
+  const anchorIndex = curve.findIndex(([z, radius]) => z === 50 && radius === 30);
+  const before = curve[anchorIndex - 1];
+  const after = curve[anchorIndex + 1];
+  const sampledAngle = (Math.atan2(after[1] - before[1], after[0] - before[0]) * 180) / Math.PI;
+
+  assert.ok(Math.abs(sampledAngle - 35) < 0.01);
+});
+
+test('FREEFORM display curve strength scales the automatic tangent speed', () => {
+  const maximumChordDeviation = (strength) => {
+    const curve = buildFreeformDisplayCurve({
+      points: [
+        [0, 12.7],
+        [50, 30, 0, strength],
+        [100, 50],
+      ],
+      throatAngleDeg: 15.5,
+      mouthAngleDeg: 30,
+      sampleCount: 1001,
+    });
+    return Math.max(
+      ...curve.map((point) => {
+        const start = point[0] <= 50 ? [0, 12.7] : [50, 30];
+        const end = point[0] <= 50 ? [50, 30] : [100, 50];
+        const dz = end[0] - start[0];
+        const dr = end[1] - start[1];
+        return (
+          Math.abs((point[0] - start[0]) * dr - (point[1] - start[1]) * dz) / Math.hypot(dz, dr)
+        );
+      })
+    );
+  };
+
+  const deviations = [0.5, 1, 2].map(maximumChordDeviation);
+  assert.ok(deviations[0] < deviations[1]);
+  assert.ok(deviations[1] < deviations[2]);
+});
+
+test('FREEFORM endpoint rows override block angles and tangent scales', () => {
+  const curve = buildFreeformDisplayCurve({
+    points: [
+      [0, 12.7, 10],
+      [50, 30],
+      [100, 50, 25, 0.5],
+    ],
+    throatAngleDeg: -20,
+    mouthAngleDeg: -40,
+    throatTangentScale: 3,
+    mouthTangentScale: 3,
+  });
+
+  assert.ok(Math.abs(derivativeAngle(curve) - 10) < 1e-6);
+  assert.ok(Math.abs(derivativeAngle(curve, true) - 25) < 1e-6);
+});

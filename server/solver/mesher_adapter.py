@@ -232,6 +232,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                         "shape": station.get("shape"),
                         "exponent": station.get("exponent"),
                         "cornerRatio": station.get("corner_ratio"),
+                        "cornerRadiusMm": station.get("corner_radius_mm"),
                     }
                 )
             )
