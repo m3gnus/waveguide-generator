@@ -24,7 +24,7 @@ SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
         "required_for": "/api/mesh/build",
     },
     "hornlab_metal_bem": {
-        "range": "pinned git commit c1da888",
+        "range": "pinned git commit c89086e",
         "required_for": "/api/solve backend",
     },
     "hornlab_bempp_bem": {

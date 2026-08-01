@@ -118,8 +118,8 @@ class BareHalfModelMeshTest(unittest.TestCase):
         self.assertGreater(int(tag_counts["1"]), 0)
         self.assertGreater(int(tag_counts["2"]), 0)
         metadata = result["stats"]["metadata"]
-        self.assertEqual(metadata["meshTriangleLimit"], 18_000)
-        self.assertEqual(metadata["meshEffectiveTriangleLimit"], 9_000)
+        self.assertEqual(metadata["meshTriangleLimit"], 50_000)
+        self.assertEqual(metadata["meshEffectiveTriangleLimit"], 25_000)
         self.assertEqual(metadata["meshDomainMultiplier"], 2.0)
         self.assertFalse(metadata["meshTriangleLimitExceeded"])
         self.assertEqual(

@@ -628,13 +628,13 @@ export const PARAM_SCHEMA = {
     },
     maxTriangles: {
       type: 'number',
-      label: 'Full-Domain Triangle Budget',
-      default: 18000,
+      label: 'Hard Triangle Limit',
+      default: 50000,
       min: 1,
       step: 1000,
       integer: true,
       tooltip:
-        'Maximum full-domain-equivalent solve mesh size. Symmetry-reduced meshes receive the corresponding fraction. The mesher refuses larger output without explicit approval.',
+        'Hard full-domain-equivalent mesh ceiling. Solves above 18,000 triangles are allowed but show a warning because they may use substantially more memory and time. Symmetry-reduced meshes receive the corresponding fraction.',
     },
     allowLargeMesh: {
       type: 'select',

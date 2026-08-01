@@ -6,6 +6,7 @@ const DESIGN_IMPORT_STAGE = 'import';
 const DESIGN_TASK_STAGE = 'task';
 const BACKEND_MESH_MIN_ANGULAR_SEGMENTS = 20;
 const BACKEND_MESH_MIN_LENGTH_SEGMENTS = 10;
+const DEFAULT_MAX_TRIANGLES = 50_000;
 
 const DESIGN_INPUT_KINDS = Object.freeze({
   RAW: 'raw',
@@ -20,7 +21,7 @@ const BACKEND_MESH_DEFAULTS = Object.freeze({
   mouthResolution: 15,
   rearResolution: 40,
   apertureResolutionScale: 1.5,
-  maxTriangles: 18000,
+  maxTriangles: DEFAULT_MAX_TRIANGLES,
   allowLargeMesh: false,
   encFrontResolution: '25,25,25,25',
   encBackResolution: '40,40,40,40',
