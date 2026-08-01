@@ -53,6 +53,14 @@ Scope: applies to `server/solver/*`.
 - For API contract changes touching solver integration:
   - `server/tests/test_api_validation.py`
   - `server/tests/test_dependency_runtime.py`
+- For mesh-size limits and the solve-mesh soft warning:
+  - `server/tests/test_api_validation.py` —
+    `test_hornlab_mesher_publishes_mesh_stats_after_canonical_mesh_build`
+    pins the published `mesh_stats` contract: `domain_multiplier`,
+    `full_domain_triangle_count`, `soft_warning_full_domain_triangle_limit`
+    (18,000) and `warnings`. The hard ceiling is `maxTriangles` (default
+    50,000); exceeding 18,000 warns but does not refuse, so a change that
+    turns the warning back into a refusal must update this test and this note.
 - For chart-rendering contract changes:
   - `server/tests/test_render_routes.py`
   - `server/tests/test_charts.py`
