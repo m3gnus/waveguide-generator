@@ -1,8 +1,17 @@
-"""Workarounds for upstream bugs that break bempp-cl OpenCL on Windows.
+"""Workarounds for upstream bugs that break bempp-cl OpenCL on spaced paths.
 
-Two independent upstream defects make the OpenCL assembly path unusable on an
-ordinary Windows install whose path contains a space -- which includes any
-install under a folder like ``C:\\Users\\me\\My Projects\\``.
+NOT Windows-only. The trigger is a space anywhere in the install path, and this
+project's own default folder name -- ``Waveguide Generator`` -- contains one. A
+checkout at ``/Users/me/Code/Waveguide Generator`` on macOS or
+``/home/me/Waveguide Generator`` on Linux hits defect 1 exactly as
+``C:\\Users\\me\\My Projects\\`` does. Windows is only where it was first
+diagnosed, because spaced install paths are the norm there.
+
+Do not delete this module as Windows-specific cruft. On Apple Silicon it merely
+looks inert because Metal short-circuits the installer and bempp is never
+installed; on an Intel Mac or a Linux host it is load-bearing.
+
+Two independent upstream defects are involved.
 
 1. bempp-cl passes its kernel include directory to ``clBuildProgram`` unquoted::
 
