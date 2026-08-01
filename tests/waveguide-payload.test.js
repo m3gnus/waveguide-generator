@@ -170,7 +170,7 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
       throatAngle: 16,
       mouthRadiusH: 160,
       mouthRadiusV: 110,
-      interiorH: [[130, 999], { z: 60, r: 80, angleDeg: 25, strength: 1.4 }, [-2, 999]],
+      interiorH: [{ z: 60, r: 80, angleDeg: 25, strength: 1.4 }],
       interiorV: [{ z: 90, r: 85, angleDeg: null, strength: 2 }, [60, 60, -10]],
       mouthAngleH: 70,
       throatTangentScaleH: 1.1,
@@ -225,6 +225,23 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
   }
   assert.equal(payload.source_radius, getDefaults('FREEFORM').sourceRadius);
   assert.equal(payload.enc_depth, getDefaults('FREEFORM').encDepth);
+});
+
+test('buildWaveguidePayload rejects out-of-range FREEFORM anchors instead of dropping them', () => {
+  const prepared = prepareBackendMeshSimulationParams({
+    ...getDefaults('FREEFORM'),
+    type: 'FREEFORM',
+    length: 40,
+  });
+  const invalidPrepared = {
+    ...prepared,
+    interiorH: [{ z: 60, r: 80, angleDeg: null, strength: null }],
+  };
+
+  assert.throws(
+    () => buildWaveguidePayload(invalidPrepared, '2.2'),
+    /FREEFORM interior anchor z=60 to be within \(0, 40\)/
+  );
 });
 
 test('legacy FREEFORM profiles migrate to the new model without changing their wire payload', () => {

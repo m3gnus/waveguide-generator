@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { PARAM_SCHEMA } from '../src/config/schema.js';
+import { AppEvents } from '../src/events.js';
 import { GlobalState } from '../src/state.js';
 import { getParameterSections } from '../src/ui/parameterInventory.js';
 import { getControlInputMode, ParamPanel } from '../src/ui/paramPanel.js';
@@ -394,7 +395,7 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     assert.equal(horizontalRows[0].children[3].disabled, true);
     horizontalRows[0].children[0].value = 999;
     horizontalRows[0].children[0].onchange({ target: horizontalRows[0].children[0] });
-    assert.equal(GlobalState.get().params.interiorH[1].z, 119.999);
+    assert.equal(GlobalState.get().params.interiorH[1].z, 119);
     assert.match(horizontalRows[0].children[0].className, /freeform-point-clamped/);
     horizontalRows[0].children[4].onclick({ preventDefault() {} });
     assert.deepEqual(GlobalState.get().params.interiorH, [
@@ -468,6 +469,28 @@ test('FREEFORM profile editor commits drag results through GlobalState update se
     editor.commitParam('mouthRadiusH', 157.5);
     assert.equal(GlobalState.get().params.mouthRadiusH, 157.5);
     assert.equal(editor.params.mouthRadiusH, 157.5);
+  });
+});
+
+test('FREEFORM profile editor flashes anchors clamped by a length update once', () => {
+  withFreeformPanel({ interiorH: [[60, 55]] }, ({ paramContainer, panel, editor }) => {
+    AppEvents.off('state:updated', editor._onStateUpdated);
+    GlobalState.update({ length: 40 });
+    panel.createFullPanel();
+
+    assert.equal(GlobalState.get().params.interiorH[0].z, 39);
+    const handle = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-handle'] === 'interior'
+    )[0];
+    assert.match(handle.className, /freeform-point-clamped/);
+
+    panel.freeformEditor.draw();
+    const redrawnHandle = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-handle'] === 'interior'
+    )[0];
+    assert.doesNotMatch(redrawnHandle.className, /freeform-point-clamped/);
   });
 });
 

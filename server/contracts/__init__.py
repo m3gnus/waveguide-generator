@@ -388,6 +388,8 @@ class SimulationResults(BaseModel):
 
 
 class FreeformProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     points: List[List[float]]
     throat_angle_deg: Optional[float] = None
     mouth_angle_deg: Optional[float] = None
@@ -407,6 +409,8 @@ class FreeformProfileRequest(BaseModel):
 
 
 class FreeformStationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     t: float
     shape: str
     exponent: Optional[float] = None

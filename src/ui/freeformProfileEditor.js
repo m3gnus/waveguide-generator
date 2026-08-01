@@ -105,6 +105,28 @@ function normalizedInterior(value) {
     .slice(0, 62);
 }
 
+function clampedAnchorFlashKeys(previousParams, nextParams) {
+  const previousLength = finite(previousParams?.length, 120);
+  const nextLength = finite(nextParams?.length, 120);
+  if (previousLength === nextLength || nextLength < 2) return new Set();
+
+  const maximumZ = nextLength - 1;
+  const flashes = new Set();
+  for (const plane of PLANES) {
+    const key = `interior${plane}`;
+    const previous = normalizedInterior(previousParams?.[key]);
+    const next = normalizedInterior(nextParams?.[key]);
+    next.forEach((point, index) => {
+      const wasClampedHere = previous.some((oldPoint) => {
+        const clampedZ = clamp(oldPoint.z, 1, maximumZ);
+        return clampedZ === point.z && oldPoint.z !== clampedZ;
+      });
+      if (wasClampedHere) flashes.add(`${plane}:${index}`);
+    });
+  }
+  return flashes;
+}
+
 function compactInteriorPoint(point) {
   const row = [point.z, point.r];
   if (point.angleDeg === null) return row;
@@ -131,11 +153,13 @@ export class FreeformProfileEditor {
     this.selectedAnchor = null;
     this.drag = null;
     this.highlightedParams = new Set();
+    this.pendingClampFlashes = new Set();
     this.destroyed = false;
     this._onStateUpdated = (nextState) => {
       if (this.destroyed || nextState?.type !== 'FREEFORM') return;
+      const previousParams = this.params;
       this.params = cloneParams(nextState.params);
-      this.draw();
+      if (!this.flashClampedAnchors(previousParams)) this.draw();
     };
     this.mount();
     AppEvents.on('state:updated', this._onStateUpdated);
@@ -209,6 +233,13 @@ export class FreeformProfileEditor {
 
   commitParam(key, value) {
     return this.commit({ [key]: value });
+  }
+
+  flashClampedAnchors(previousParams) {
+    this.pendingClampFlashes = clampedAnchorFlashKeys(previousParams, this.params);
+    if (this.pendingClampFlashes.size === 0) return false;
+    this.draw();
+    return true;
   }
 
   togglePlane(plane) {
@@ -694,6 +725,12 @@ export class FreeformProfileEditor {
             'data-index': index,
           });
           remove.textContent = '×';
+        }
+        const flashKey = `${plane}:${index}`;
+        if (this.pendingClampFlashes.delete(flashKey)) {
+          addClass(node, 'freeform-point-clamped');
+          const timer = setTimeout(() => removeClass(node, 'freeform-point-clamped'), 450);
+          timer?.unref?.();
         }
       });
     }
