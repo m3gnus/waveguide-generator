@@ -1,8 +1,20 @@
 # Cross-backend directivity reference, ASRO2 quarter mesh
 
-One stored answer that both solve backends must reproduce. `server/tests/test_cross_backend_asro2_parity.py`
-solves whichever backend the host has and compares against it, so Apple Silicon
-gates Metal and everything else gates Bempp — against the same numbers.
+One stored answer that both solve backends must reproduce.
+`server/tests/test_cross_backend_asro2_parity.py` solves with **one** backend per
+run — whichever the host would actually use — and compares against it.
+
+Be precise about what a single run proves. On Apple Silicon that is Metal against
+a Metal-generated reference: a golden regression test, not a cross-backend
+comparison. It becomes cross-backend only when the other backend runs it, which
+on one machine means forcing it:
+
+```bash
+WG_PARITY_BACKEND=bempp   # or 'metal'
+```
+
+Until this repo has a non-Mac runner, nothing re-checks the Bempp side
+automatically. Run it by hand after changing either backend's numerics.
 
 | | |
 |---|---|

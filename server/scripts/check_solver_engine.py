@@ -38,6 +38,19 @@ try:
 except Exception:  # pragma: no cover - reporting must survive a missing module
     acceleration_summary = None  # type: ignore[assignment]
 
+try:
+    from solver.metal_solver import is_metal_fast_solve_ready, metal_backend_status
+except Exception:  # pragma: no cover - reporting must survive a missing module
+    is_metal_fast_solve_ready = None  # type: ignore[assignment]
+    metal_backend_status = None  # type: ignore[assignment]
+
+# The venv interpreter differs by platform, and this text is shown to users who
+# are being asked to run a command. Getting it wrong sends a macOS user a
+# backslash path that cannot exist on their machine.
+_VENV_PYTHON = (
+    r".venv\Scripts\python.exe" if platform.system() == "Windows" else ".venv/bin/python"
+)
+
 # Compiled-extension runtime DLLs that Windows does not ship by default. numba,
 # llvmlite and many other binary wheels link against these.
 _WINDOWS_RUNTIME_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
@@ -78,8 +91,29 @@ def _probe(module: str) -> dict[str, Any]:
     return {"importable": True, "error": None}
 
 
+def _metal_status() -> dict[str, Any]:
+    """Report the Metal backend, which is the default wherever it exists.
+
+    Without this the check is Bempp-only, and on an ordinary Apple Silicon
+    install -- where the installer deliberately skips Bempp because Metal is
+    ready -- it reports "NO solve can run" on a host that solves in seconds.
+    """
+    if is_metal_fast_solve_ready is None or metal_backend_status is None:
+        return {"ready": False, "reason": "solver.metal_solver is unavailable."}
+    try:
+        status = metal_backend_status()
+        ready = bool(is_metal_fast_solve_ready(status))
+    except Exception as exc:  # pragma: no cover - reporting must never raise
+        return {"ready": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {
+        "ready": ready,
+        "reason": status.get("reason") or ("Metal BEM backend is ready." if ready else ""),
+    }
+
+
 def collect_status() -> dict[str, Any]:
     """Report what can actually assemble and solve on this host."""
+    metal = _metal_status()
     wrapper = _probe("hornlab_bempp_bem")
     # The real engine. bempp-cl >=0.4 exposes `bempp_cl.api`; older builds used
     # `bempp.api`. Accept either so this check does not become the thing that
@@ -99,7 +133,10 @@ def collect_status() -> dict[str, Any]:
         "numba": numba["importable"],
         "opencl": pyopencl["importable"],
     }
-    usable = engine["importable"] and any(backends.values())
+    bempp_usable = engine["importable"] and any(backends.values())
+    # Either backend is a solve. A host with Metal ready and Bempp absent is the
+    # normal, fully working Apple Silicon install, not a broken one.
+    usable = bool(metal["ready"]) or bempp_usable
 
     guidance: list[str] = []
     if not usable:
@@ -114,13 +151,14 @@ def collect_status() -> dict[str, Any]:
             guidance.append(
                 "Neither numba nor pyopencl can be imported, so bempp-cl has no "
                 "assembly backend. Reinstall backend requirements:\n"
-                "    .venv\\Scripts\\python.exe -m pip install -r "
-                "server/requirements-bempp.txt"
+                f"    {_VENV_PYTHON} -m pip install -r server/requirements-bempp.txt"
             )
         if not engine["importable"] and not missing_dlls:
             guidance.append(
                 f"bempp-cl engine import failed: {engine['error']}"
             )
+        if metal["reason"]:
+            guidance.append(f"Metal backend is not usable either: {metal['reason']}")
 
     acceleration: dict[str, Any] | None = None
     if acceleration_summary is not None:
@@ -128,6 +166,8 @@ def collect_status() -> dict[str, Any]:
 
     return {
         "usable": usable,
+        "metal": metal,
+        "bemppUsable": bempp_usable,
         "wrapper": wrapper,
         "engine": engine,
         "assemblyBackends": backends,
@@ -175,6 +215,12 @@ def _print_acceleration(acceleration: dict[str, Any] | None) -> None:
 
 def _print_human(status: dict[str, Any]) -> None:
     print("Solver engine check")
+    metal = status.get("metal") or {}
+    print(
+        f"  Metal BEM backend         : "
+        f"{'ready' if metal.get('ready') else 'not available'}"
+        + (f"  ({metal['reason']})" if metal.get("reason") and not metal.get("ready") else "")
+    )
     print(
         f"  hornlab_bempp_bem wrapper : "
         f"{'OK' if status['wrapper']['importable'] else 'FAILED'}"
