@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFreeformDisplayCurve } from '../src/geometry/freeformCurve.js';
+import {
+  buildFreeformDisplayCurve,
+  computeInflectionSpans,
+} from '../src/geometry/freeformCurve.js';
 
 function derivativeAngle(points, atEnd = false) {
   const selected = atEnd ? points.slice(-4) : points.slice(0, 4);
@@ -123,4 +126,37 @@ test('FREEFORM endpoint rows override block angles and tangent scales', () => {
 
   assert.ok(Math.abs(derivativeAngle(curve) - 10) < 1e-6);
   assert.ok(Math.abs(derivativeAngle(curve, true) - 25) < 1e-6);
+});
+
+test('FREEFORM inflection spans report a significant sampled S-curve', () => {
+  const curve = buildFreeformDisplayCurve({
+    points: [
+      [0, 12.7],
+      [50, 35, 40],
+      [100, 55],
+    ],
+    throatAngleDeg: 15.5,
+    mouthAngleDeg: 25,
+  });
+
+  const spans = computeInflectionSpans(curve);
+
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].zStartMm, 50);
+  assert.ok(spans[0].zEndMm > 75 && spans[0].zEndMm < 85);
+  assert.ok(spans[0].tangentDropDeg > 20 && spans[0].tangentDropDeg < 30);
+});
+
+test('FREEFORM inflection spans ignore a clean one-way cone', () => {
+  const angleDeg = 20;
+  const curve = buildFreeformDisplayCurve({
+    points: [
+      [0, 12.7],
+      [100, 12.7 + 100 * Math.tan((angleDeg * Math.PI) / 180)],
+    ],
+    throatAngleDeg: angleDeg,
+    mouthAngleDeg: angleDeg,
+  });
+
+  assert.deepEqual(computeInflectionSpans(curve), []);
 });

@@ -145,6 +145,8 @@ function buildFreeformPayloadFields(preparedParams) {
     cross_sections: crossSections,
     overshoot_policy:
       preparedParams.overshootPolicy != null ? String(preparedParams.overshootPolicy) : 'reject',
+    inflection_policy:
+      preparedParams.inflectionPolicy != null ? String(preparedParams.inflectionPolicy) : 'warn',
   };
 }
 

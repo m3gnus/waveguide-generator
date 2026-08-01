@@ -248,6 +248,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                 "profileV": translate_profile(profile_v),
                 "crossSections": translated_stations,
                 "overshootPolicy": payload.get("overshoot_policy"),
+                "inflectionPolicy": payload.get("inflection_policy"),
             }
         )
     else:

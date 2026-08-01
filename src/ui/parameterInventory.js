@@ -61,6 +61,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'mouthTangentScaleV',
             'crossSections',
             'overshootPolicy',
+            'inflectionPolicy',
           ]),
         }),
       ]),

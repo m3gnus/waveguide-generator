@@ -453,6 +453,7 @@ class WaveguideParamsRequest(BaseModel):
     profile_v: Optional[FreeformProfileRequest] = None
     cross_sections: Optional[List[FreeformStationRequest]] = None
     overshoot_policy: Optional[str] = None
+    inflection_policy: Optional[str] = None
 
     a: Optional[str] = None
     r0: Union[float, str] = 12.7
@@ -540,6 +541,18 @@ class WaveguideParamsRequest(BaseModel):
         if value is not None and not 2 <= len(value) <= 32:
             raise ValueError("FREEFORM cross_sections must contain 2-32 stations.")
         return value
+
+    @field_validator("inflection_policy")
+    @classmethod
+    def validate_inflection_policy(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in {"warn", "reject", "allow"}:
+            raise ValueError(
+                "FREEFORM inflection_policy must be one of: warn, reject, allow."
+            )
+        return normalized
 
 
 class ChartsReferencePayload(BaseModel):

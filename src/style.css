@@ -709,6 +709,16 @@ details.section[open] > summary {
   font-weight: 650;
 }
 
+.freeform-profile-inflection-badge {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--error) 62%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
+  font: 650 var(--text-xs) var(--font-ui);
+  white-space: nowrap;
+}
+
 .freeform-profile-legend {
   display: flex;
   align-items: center;
@@ -811,6 +821,15 @@ details.section[open] > summary {
   stroke-linejoin: round;
   pointer-events: stroke;
   cursor: crosshair;
+}
+
+.freeform-profile-inflection-overlay {
+  vector-effect: non-scaling-stroke;
+  stroke: var(--error);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .freeform-profile-curve.freeform-plane-h,

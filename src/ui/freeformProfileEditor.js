@@ -1,5 +1,8 @@
 import { AppEvents } from '../events.js';
-import { buildFreeformDisplayCurve } from '../modules/design/freeformCurve.js';
+import {
+  buildFreeformDisplayCurve,
+  computeInflectionSpans,
+} from '../modules/design/freeformCurve.js';
 import { GlobalState } from '../state.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -145,6 +148,7 @@ export class FreeformProfileEditor {
 
     const toolbar = this.document.createElement('div');
     toolbar.className = 'freeform-profile-toolbar';
+    this.toolbar = toolbar;
     const title = this.document.createElement('span');
     title.className = 'freeform-profile-editor-title';
     title.textContent = '2-D meridian profile';
@@ -243,7 +247,14 @@ export class FreeformProfileEditor {
         throatTangentScale: finite(this.params[`throatTangentScale${suffix}`], 1),
         mouthTangentScale: finite(this.params[`mouthTangentScale${suffix}`], 1),
       });
-      return { plane, interior, mouthRadius, anchors, curve };
+      return {
+        plane,
+        interior,
+        mouthRadius,
+        anchors,
+        curve,
+        inflectionSpans: computeInflectionSpans(curve),
+      };
     };
     const planes = { H: buildPlane('H'), V: buildPlane('V') };
     const radii = [1, throatRadius];
@@ -287,6 +298,7 @@ export class FreeformProfileEditor {
     const transforms = this.getTransforms(geometry);
     this.geometry = geometry;
     this.transforms = transforms;
+    this.updateInflectionBadge(geometry);
 
     this.appendSvg('rect', {
       class: 'freeform-profile-background',
@@ -395,6 +407,43 @@ export class FreeformProfileEditor {
       .join(' ');
   }
 
+  updateInflectionBadge(geometry) {
+    const warnings = PLANES.flatMap((plane) =>
+      geometry.planes[plane].inflectionSpans.map((span) => ({ plane, span }))
+    ).sort((left, right) => right.span.tangentDropDeg - left.span.tangentDropDeg);
+    if (warnings.length === 0) {
+      this.inflectionBadge?.remove?.();
+      this.inflectionBadge = null;
+      return;
+    }
+
+    if (!this.inflectionBadge) {
+      this.inflectionBadge = this.document.createElement('span');
+      this.inflectionBadge.className = 'freeform-profile-inflection-badge';
+      this.inflectionBadge.setAttribute('data-inflection-warning', '');
+      this.toolbar.appendChild(this.inflectionBadge);
+    }
+    const { plane, span } = warnings[0];
+    const extraCount = warnings.length - 1;
+    this.inflectionBadge.textContent = `S-curve in ${plane}: ${span.tangentDropDeg.toFixed(1)} deg${
+      extraCount ? ` (+${extraCount})` : ''
+    }`;
+    const tooltip =
+      "The tangent turns backward here. Adjust the point's tangent handle, add a point, or change Curve Direction.";
+    this.inflectionBadge.title = tooltip;
+    this.inflectionBadge.setAttribute(
+      'aria-label',
+      `${this.inflectionBadge.textContent}. ${tooltip}`
+    );
+  }
+
+  inflectionCurvePortion(curve, span) {
+    const start = Math.min(span.zStartMm, span.zEndMm);
+    const end = Math.max(span.zStartMm, span.zEndMm);
+    const tolerance = Math.max(1, Math.abs(end - start)) * 1e-9;
+    return curve.filter((point) => point[0] >= start - tolerance && point[0] <= end + tolerance);
+  }
+
   drawCurves(geometry, transforms) {
     for (const plane of PLANES) {
       if (this.visibility[plane] === false) continue;
@@ -411,6 +460,17 @@ export class FreeformProfileEditor {
       });
       if (params.split(' ').some((key) => this.highlightedParams.has(key))) {
         addClass(path, 'freeform-profile-linked-highlight');
+      }
+      for (const span of geometry.planes[plane].inflectionSpans) {
+        const portion = this.inflectionCurvePortion(geometry.planes[plane].curve, span);
+        if (portion.length < 2) continue;
+        this.appendSvg('path', {
+          class: `freeform-profile-inflection-overlay freeform-plane-${plane.toLowerCase()}`,
+          d: this.curvePath(portion, transforms),
+          fill: 'none',
+          'data-inflection-plane': plane,
+          'aria-label': `S-curve in ${plane}: ${span.tangentDropDeg.toFixed(1)} degrees`,
+        });
       }
     }
   }
