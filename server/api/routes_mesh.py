@@ -56,12 +56,12 @@ async def build_mesh_from_params(request: WaveguideParamsRequest) -> Dict[str, A
     if request.msh_version not in ("2.2", "4.1"):
         raise HTTPException(status_code=422, detail="msh_version must be '2.2' or '4.1'.")
 
-    if request.formula_type not in ("R-OSSE", "OSSE", "ICW"):
+    if request.formula_type not in ("R-OSSE", "OSSE", "ICW", "FREEFORM"):
         raise HTTPException(
             status_code=422,
             detail=(
                 f"formula_type '{request.formula_type}' is not supported. "
-                "Supported types: 'R-OSSE', 'OSSE', 'ICW'."
+                "Supported types: 'R-OSSE', 'OSSE', 'ICW', 'FREEFORM'."
             ),
         )
 
@@ -124,12 +124,12 @@ async def build_step_from_params(request: WaveguideParamsRequest) -> Dict[str, A
             ),
         )
 
-    if request.formula_type not in ("R-OSSE", "OSSE", "ICW"):
+    if request.formula_type not in ("R-OSSE", "OSSE", "ICW", "FREEFORM"):
         raise HTTPException(
             status_code=422,
             detail=(
                 f"formula_type '{request.formula_type}' is not supported. "
-                "Supported types: 'R-OSSE', 'OSSE', 'ICW'."
+                "Supported types: 'R-OSSE', 'OSSE', 'ICW', 'FREEFORM'."
             ),
         )
     if request.step_body != "inner_surface":
@@ -184,12 +184,12 @@ async def build_viewport_geometry_from_params(request: WaveguideParamsRequest) -
             ),
         )
 
-    if request.formula_type not in ("R-OSSE", "OSSE", "ICW"):
+    if request.formula_type not in ("R-OSSE", "OSSE", "ICW", "FREEFORM"):
         raise HTTPException(
             status_code=422,
             detail=(
                 f"formula_type '{request.formula_type}' is not supported. "
-                "Supported types: 'R-OSSE', 'OSSE', 'ICW'."
+                "Supported types: 'R-OSSE', 'OSSE', 'ICW', 'FREEFORM'."
             ),
         )
 
