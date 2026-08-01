@@ -14,7 +14,7 @@ const SHARED_SCHEMA_GROUPS = new Set([
   'SIMULATION',
   'ENCLOSURE',
 ]);
-const SUPPORTED_MODEL_TYPES = new Set(
+export const SUPPORTED_MODEL_TYPES = new Set(
   Object.keys(PARAM_SCHEMA).filter((key) => !SHARED_SCHEMA_GROUPS.has(key))
 );
 

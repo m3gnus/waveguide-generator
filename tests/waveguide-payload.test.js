@@ -159,6 +159,74 @@ test('buildWaveguidePayload keeps ICW coverage off by default and OSSE/R-OSSE JS
   assert.equal(rosseJson.includes('hold_end'), false);
 });
 
+test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case fields', () => {
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      ...getDefaults('FREEFORM'),
+      type: 'FREEFORM',
+      profileH: [[0, 12.7], [60, 80], [120, 160]],
+      profileV: [[0, 12.7], [60, 60], [120, 110]],
+      throatAngleH: 16,
+      mouthAngleH: 70,
+      throatTangentScaleH: 1.1,
+      mouthTangentScaleH: 0.9,
+      throatAngleV: 15,
+      mouthAngleV: 60,
+      throatTangentScaleV: 1.2,
+      mouthTangentScaleV: 0.8,
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.4, shape: 'superellipse', exponent: 4 },
+        { t: 1, shape: 'rounded_rectangle', cornerRatio: 0.12 },
+      ],
+      overshootPolicy: 'allow',
+    }),
+    '2.2'
+  );
+
+  assert.equal(payload.formula_type, 'FREEFORM');
+  assert.deepEqual(payload.profile_h, {
+    points: [[0, 12.7], [60, 80], [120, 160]],
+    throat_angle_deg: 16,
+    mouth_angle_deg: 70,
+    throat_tangent_scale: 1.1,
+    mouth_tangent_scale: 0.9,
+  });
+  assert.deepEqual(payload.profile_v, {
+    points: [[0, 12.7], [60, 60], [120, 110]],
+    throat_angle_deg: 15,
+    mouth_angle_deg: 60,
+    throat_tangent_scale: 1.2,
+    mouth_tangent_scale: 0.8,
+  });
+  assert.deepEqual(payload.cross_sections, [
+    { t: 0, shape: 'circle' },
+    { t: 0.4, shape: 'superellipse', exponent: 4 },
+    { t: 1, shape: 'rounded_rectangle', corner_ratio: 0.12 },
+  ]);
+  assert.equal(payload.overshoot_policy, 'allow');
+  for (const key of [
+    'R',
+    'r',
+    'b',
+    'm',
+    'tmax',
+    'L',
+    's',
+    'n',
+    'h',
+    'a',
+    'a0',
+    'r0',
+    'k',
+    'q',
+  ]) {
+    assert.equal(Object.hasOwn(payload, key), false, `${key} must not leak into FREEFORM`);
+  }
+  assert.equal(payload.source_radius, getDefaults('FREEFORM').sourceRadius);
+  assert.equal(payload.enc_depth, getDefaults('FREEFORM').encDepth);
+});
+
 test('buildWaveguidePayload rejects unprepared backend mesh payload fields', () => {
   assert.throws(
     () => buildWaveguidePayload(

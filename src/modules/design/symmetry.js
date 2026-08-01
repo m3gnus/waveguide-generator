@@ -153,11 +153,13 @@ export function resolveAutoQuadrants(params = {}) {
 
   let xSymmetric = true;
   let zSymmetric = true;
-  for (const key of ANGULAR_SYMMETRY_KEYS) {
-    const value = params[key];
-    xSymmetric = xSymmetric && valueKeepsMirror(value, (p) => Math.PI - p);
-    zSymmetric = zSymmetric && valueKeepsMirror(value, (p) => -p);
-    if (!xSymmetric && !zSymmetric) return FULL_QUADRANTS;
+  if (params.type !== 'FREEFORM') {
+    for (const key of ANGULAR_SYMMETRY_KEYS) {
+      const value = params[key];
+      xSymmetric = xSymmetric && valueKeepsMirror(value, (p) => Math.PI - p);
+      zSymmetric = zSymmetric && valueKeepsMirror(value, (p) => -p);
+      if (!xSymmetric && !zSymmetric) return FULL_QUADRANTS;
+    }
   }
 
   const enclosure = enclosureSymmetry(params);

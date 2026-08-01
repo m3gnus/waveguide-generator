@@ -153,6 +153,52 @@ function validateNumericValue(input, def) {
   return { valid: true };
 }
 
+function formatPointPairs(value) {
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((point) => Array.isArray(point) && point.length >= 2)
+    .map(([z, r]) => `${z} ${r}`)
+    .join('\n');
+}
+
+function parsePointPairs(value) {
+  const lines = String(value ?? '').split(/\r?\n/);
+  const points = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/[\s,]+/);
+    if (parts.length !== 2) return null;
+    const point = parts.map(Number);
+    if (!point.every(Number.isFinite)) return null;
+    points.push(point);
+  }
+  return points.length >= 2 && points.length <= 64 ? points : null;
+}
+
+function normalizeStations(value) {
+  if (!Array.isArray(value) || value.length < 2) {
+    return [
+      { t: 0, shape: 'circle' },
+      { t: 1, shape: 'ellipse' },
+    ];
+  }
+  let stations = value
+    .map((station) => ({ ...station, t: Number(station?.t) }))
+    .sort((a, b) => a.t - b.t);
+  if (stations.length > 32) {
+    stations = [...stations.slice(0, 31), stations[stations.length - 1]];
+  }
+  stations[0] = { t: 0, shape: 'circle' };
+  for (let index = 1; index < stations.length; index += 1) {
+    if (!['ellipse', 'superellipse', 'rounded_rectangle'].includes(stations[index].shape)) {
+      stations[index] = { t: stations[index].t, shape: 'ellipse' };
+    }
+  }
+  stations[stations.length - 1] = { ...stations[stations.length - 1], t: 1 };
+  return stations;
+}
+
 export class ParamPanel {
   constructor(containerId) {
     this.container = document.getElementById(containerId);
@@ -378,7 +424,7 @@ export class ParamPanel {
     typeSelect.setAttribute('aria-label', 'Model type');
 
     const currentType = GlobalState.get().type;
-    ['R-OSSE', 'OSSE', 'ICW'].forEach((type) => {
+    ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'].forEach((type) => {
       const option = document.createElement('option');
       option.value = type;
       option.textContent = type;
@@ -430,7 +476,11 @@ export class ParamPanel {
 
     row.appendChild(labelRow);
 
-    if (inputMode === 'formula' || inputMode === 'number' || inputMode === 'text') {
+    if (def.type === 'points') {
+      row.appendChild(this.createPointsControl(key, currentValue, controlId));
+    } else if (def.type === 'stations') {
+      row.appendChild(this.createStationsControl(key, currentValue, controlId));
+    } else if (inputMode === 'formula' || inputMode === 'number' || inputMode === 'text') {
       const wrapper = document.createElement('div');
       wrapper.className = isFormulaField ? 'formula-input-wrapper' : 'param-input-wrapper';
 
@@ -504,6 +554,194 @@ export class ParamPanel {
     }
 
     return row;
+  }
+
+  createPointsControl(key, currentValue, controlId) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'param-input-wrapper freeform-points-wrapper';
+    const textarea = document.createElement('textarea');
+    textarea.id = controlId;
+    textarea.className = 'freeform-points-input';
+    textarea.rows = Math.max(2, Math.min(8, Array.isArray(currentValue) ? currentValue.length : 2));
+    textarea.spellcheck = false;
+    textarea.value = formatPointPairs(currentValue);
+    textarea.placeholder = '0 12.7\n120 140';
+    textarea.setAttribute('data-param-key', key);
+    textarea.setAttribute('aria-label', `${key} point pairs`);
+    textarea.onchange = (event) => {
+      const points = parsePointPairs(event.target.value);
+      if (!points) {
+        showInputError(event.target, 'Enter 2 to 64 lines, each containing exactly two numbers: z r.');
+        return;
+      }
+      hideInputError(event.target, true);
+      this.updateParam(key, points);
+    };
+    wrapper.appendChild(textarea);
+    return wrapper;
+  }
+
+  createStationsControl(key, currentValue, controlId) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'freeform-stations-editor';
+    const stations = normalizeStations(currentValue);
+    const commitStations = (nextStations) => {
+      const sorted = normalizeStations(nextStations).slice(0, 32);
+      this.updateParam(key, sorted);
+    };
+
+    stations.forEach((station, index) => {
+      const isFirst = index === 0;
+      const isLast = index === stations.length - 1;
+      const stationRow = document.createElement('div');
+      stationRow.className = 'freeform-station-row';
+
+      const position = document.createElement('input');
+      position.type = 'number';
+      position.id = index === 0 ? controlId : `${controlId}-t-${index}`;
+      position.min = '0';
+      position.max = '1';
+      position.step = '0.01';
+      position.value = isFirst ? 0 : isLast ? 1 : station.t;
+      position.disabled = isFirst || isLast;
+      position.setAttribute('data-param-key', key);
+      position.setAttribute('aria-label', `Station ${index + 1} position`);
+      position.onchange = (event) => {
+        const t = Number(event.target.value);
+        const duplicate = stations.some(
+          (candidate, candidateIndex) => candidateIndex !== index && Math.abs(candidate.t - t) < 1e-9
+        );
+        if (!Number.isFinite(t) || t <= 0 || t >= 1 || duplicate) {
+          showInputError(event.target, 'Station positions must be unique numbers between 0 and 1.');
+          return;
+        }
+        hideInputError(event.target, true);
+        commitStations(stations.map((item, itemIndex) => (itemIndex === index ? { ...item, t } : item)));
+      };
+      stationRow.appendChild(position);
+
+      const shape = document.createElement('select');
+      shape.setAttribute('data-param-key', key);
+      shape.setAttribute('aria-label', `Station ${index + 1} shape`);
+      const shapeOptions = isFirst
+        ? [{ value: 'circle', label: 'Circle' }]
+        : [
+            { value: 'ellipse', label: 'Ellipse' },
+            { value: 'superellipse', label: 'Superellipse' },
+            { value: 'rounded_rectangle', label: 'Rounded rectangle' },
+          ];
+      shapeOptions.forEach((optionDef) => {
+        const option = document.createElement('option');
+        option.value = optionDef.value;
+        option.textContent = optionDef.label;
+        option.selected = optionDef.value === station.shape;
+        shape.appendChild(option);
+      });
+      shape.value = isFirst ? 'circle' : station.shape;
+      shape.onchange = (event) => {
+        const nextShape = event.target.value;
+        const nextStation = { t: station.t, shape: nextShape };
+        if (nextShape === 'superellipse') {
+          nextStation.exponent = Number.isFinite(Number(station.exponent))
+            ? Number(station.exponent)
+            : 4;
+        } else if (nextShape === 'rounded_rectangle') {
+          nextStation.cornerRatio = Number.isFinite(Number(station.cornerRatio))
+            ? Number(station.cornerRatio)
+            : 0.12;
+        }
+        commitStations(
+          stations.map((item, itemIndex) => (itemIndex === index ? nextStation : item))
+        );
+      };
+      stationRow.appendChild(shape);
+
+      const parameterDef =
+        station.shape === 'superellipse'
+          ? { key: 'exponent', min: 2, max: 16, step: 0.1, fallback: 4, label: 'Exponent' }
+          : station.shape === 'rounded_rectangle'
+            ? {
+                key: 'cornerRatio',
+                min: 0.02,
+                max: 1,
+                step: 0.01,
+                fallback: 0.12,
+                label: 'Corner ratio',
+              }
+            : null;
+      if (parameterDef) {
+        const parameter = document.createElement('input');
+        parameter.type = 'number';
+        parameter.min = String(parameterDef.min);
+        parameter.max = String(parameterDef.max);
+        parameter.step = String(parameterDef.step);
+        parameter.value = station[parameterDef.key] ?? parameterDef.fallback;
+        parameter.setAttribute('data-param-key', key);
+        parameter.setAttribute('aria-label', `Station ${index + 1} ${parameterDef.label}`);
+        parameter.onchange = (event) => {
+          const numeric = Number(event.target.value);
+          if (
+            !Number.isFinite(numeric) ||
+            numeric < parameterDef.min ||
+            numeric > parameterDef.max
+          ) {
+            showInputError(
+              event.target,
+              `${parameterDef.label} must be between ${parameterDef.min} and ${parameterDef.max}.`
+            );
+            return;
+          }
+          hideInputError(event.target, true);
+          commitStations(
+            stations.map((item, itemIndex) =>
+              itemIndex === index ? { ...item, [parameterDef.key]: numeric } : item
+            )
+          );
+        };
+        stationRow.appendChild(parameter);
+      }
+
+      if (!isFirst && !isLast) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'freeform-station-remove';
+        remove.textContent = '−';
+        remove.title = 'Remove station';
+        remove.setAttribute('aria-label', `Remove station ${index + 1}`);
+        remove.setAttribute('data-param-key', key);
+        remove.onclick = (event) => {
+          event.preventDefault();
+          commitStations(stations.filter((_item, itemIndex) => itemIndex !== index));
+        };
+        stationRow.appendChild(remove);
+      }
+
+      wrapper.appendChild(stationRow);
+    });
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'freeform-station-add';
+    add.textContent = 'Add station';
+    add.disabled = stations.length >= 32;
+    add.setAttribute('data-param-key', key);
+    add.onclick = (event) => {
+      event.preventDefault();
+      if (stations.length >= 32) return;
+      let insertAfter = 0;
+      let widestGap = -1;
+      for (let index = 0; index < stations.length - 1; index += 1) {
+        const gap = stations[index + 1].t - stations[index].t;
+        if (gap > widestGap) {
+          widestGap = gap;
+          insertAfter = index;
+        }
+      }
+      const t = (stations[insertAfter].t + stations[insertAfter + 1].t) / 2;
+      commitStations([...stations, { t, shape: 'ellipse' }]);
+    };
+    wrapper.appendChild(add);
+    return wrapper;
   }
 
   applyAutoQuadrants() {

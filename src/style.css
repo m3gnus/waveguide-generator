@@ -676,6 +676,61 @@ details.section[open] > summary {
   cursor: pointer;
 }
 
+.freeform-points-wrapper {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.freeform-points-input {
+  width: 100%;
+  resize: vertical;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--input-bg);
+  color: var(--text);
+  font: var(--text-sm) var(--font-mono);
+  line-height: 1.45;
+}
+
+.freeform-stations-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.freeform-station-row {
+  display: grid;
+  grid-template-columns: minmax(52px, 0.6fr) minmax(105px, 1.4fr) minmax(62px, 0.8fr) auto;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.freeform-station-row input,
+.freeform-station-row select {
+  width: 100%;
+}
+
+.freeform-station-remove,
+.freeform-station-add {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.freeform-station-remove {
+  width: 30px;
+  padding: 0;
+}
+
+.freeform-station-add {
+  align-self: flex-start;
+  padding: var(--sp-1) var(--sp-2);
+}
+
 select {
   width: 100%;
   background: var(--input-bg);

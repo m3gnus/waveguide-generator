@@ -48,6 +48,18 @@ test('viewport mesh variants use render-only tessellation instead of sparse mesh
   );
 });
 
+test('FREEFORM viewport is server-only and never falls into the local OSSE engine', () => {
+  const mesh = prepareViewportMesh({
+    type: 'FREEFORM',
+    params: { ...getDefaults('FREEFORM'), type: 'FREEFORM' },
+  });
+
+  assert.equal(mesh.serverOnly, true);
+  assert.deepEqual(mesh.vertices, []);
+  assert.deepEqual(mesh.indices, []);
+  assert.equal(mesh.preparedParams.type, 'FREEFORM');
+});
+
 test('crease detach and viewport validation accept render-only smooth meshes', () => {
   const mesh = prepareViewportMesh(makeState(), { variant: 'smooth' });
   const detached = detachCreaseVertices(mesh);

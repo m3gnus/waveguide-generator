@@ -151,3 +151,21 @@ test("scale does not affect enclosure fields", () => {
   assert.equal(prepared.encSpaceR, 5, "encSpaceR should NOT be scaled");
   assert.equal(prepared.encSpaceB, 5, "encSpaceB should NOT be scaled");
 });
+
+test("FREEFORM scale doubles both coordinates in both profile point arrays", () => {
+  const prepared = prepareGeometryParams(
+    {
+      ...getDefaults("FREEFORM"),
+      type: "FREEFORM",
+      scale: 2,
+      profileH: [[0, 12.7], [50, 60], [120, 140]],
+      profileV: [[0, 12.7], [60, 45], [120, 100]],
+    },
+    { type: "FREEFORM" }
+  );
+
+  assert.deepEqual(prepared.profileH, [[0, 25.4], [100, 120], [240, 280]]);
+  assert.deepEqual(prepared.profileV, [[0, 25.4], [120, 90], [240, 200]]);
+  assert.equal(prepared.throatAngleH, 15.5);
+  assert.equal(prepared.mouthAngleV, 60);
+});

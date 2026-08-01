@@ -41,6 +41,25 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
             'depth',
           ]),
         }),
+        Object.freeze({
+          group: 'FREEFORM',
+          whenTypes: Object.freeze(['FREEFORM']),
+          keys: Object.freeze([
+            'scale',
+            'profileH',
+            'profileV',
+            'throatAngleH',
+            'mouthAngleH',
+            'throatTangentScaleH',
+            'mouthTangentScaleH',
+            'throatAngleV',
+            'mouthAngleV',
+            'throatTangentScaleV',
+            'mouthTangentScaleV',
+            'crossSections',
+            'overshootPolicy',
+          ]),
+        }),
       ]),
     }),
     Object.freeze({
@@ -62,6 +81,7 @@ const PARAMETER_SECTION_INVENTORY = Object.freeze({
       title: 'Morph Target',
       description: 'Post-profile shaping used to transition the mouth toward another target shape.',
       owner: 'paramPanel',
+      whenTypes: Object.freeze(['R-OSSE', 'OSSE', 'ICW']),
       groups: Object.freeze([
         Object.freeze({
           group: 'MORPH',
