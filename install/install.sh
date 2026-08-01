@@ -205,9 +205,12 @@ if [[ -d ".venv" ]]; then
         # repeated runs accumulated multi-hundred-MB directories indefinitely.
         # Also sweep up any backups left by that older scheme.
         echo "  Existing .venv is broken or uses an unsupported Python."
-        rm -rf ".venv.incompatible"
+        # Directories only. install.bat sweeps with `for /d`; matching every
+        # filesystem object here would let `rm -rf` delete an unrelated file
+        # that merely shares the prefix (.venv.incompatible.notes).
+        [[ -d ".venv.incompatible" ]] && rm -rf ".venv.incompatible"
         for stale in .venv.incompatible.*; do
-            [[ -e "$stale" ]] || continue
+            [[ -d "$stale" ]] || continue
             echo "  Removing stale backup $stale"
             rm -rf "$stale"
         done
