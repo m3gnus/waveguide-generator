@@ -1,4 +1,5 @@
 import { PARAM_SCHEMA } from '../config/schema.js';
+import { migrateLegacyFreeformParams } from '../config/freeformParams.js';
 import { parseExpression, validateExpression } from './expression.js';
 
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
@@ -22,6 +23,10 @@ const SCALE_LENGTH_KEYS = [
   'L',
   'R',
   'r0',
+  'length',
+  'throatRadius',
+  'mouthRadiusH',
+  'mouthRadiusV',
   'depth', // ICW rollback axial depth (mm) — scale with geometry like L/R/r0
   'throatExtLength',
   'slotLength',
@@ -214,8 +219,11 @@ export function prepareGeometryParams(
   rawParams = {},
   { type = rawParams.type, applyVerticalOffset = true } = {}
 ) {
-  const preparedParams = { ...rawParams };
-  const resolvedType = type || preparedParams.type;
+  const resolvedType = type || rawParams.type;
+  const preparedParams =
+    resolvedType === 'FREEFORM'
+      ? migrateLegacyFreeformParams(rawParams)
+      : { ...rawParams };
 
   if (resolvedType) {
     applySchemaToParams(preparedParams, PARAM_SCHEMA[resolvedType] || {});
@@ -251,7 +259,7 @@ export function prepareGeometryParams(
     });
 
     if (resolvedType === 'FREEFORM') {
-      for (const key of ['profileH', 'profileV']) {
+      for (const key of ['interiorH', 'interiorV']) {
         if (!Array.isArray(preparedParams[key])) continue;
         preparedParams[key] = preparedParams[key].map((point) =>
           Array.isArray(point) ? point.map((coordinate) => Number(coordinate) * scale) : point

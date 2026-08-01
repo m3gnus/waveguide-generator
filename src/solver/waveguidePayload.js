@@ -68,9 +68,25 @@ function normalizeSolverMode(value) {
 }
 
 function buildFreeformPayloadFields(preparedParams) {
-  const translateProfile = (points, throatAngle, mouthAngle, throatScale, mouthScale) => ({
-    points: Array.isArray(points) ? points.map((point) => [...point]) : points,
-    throat_angle_deg: toFiniteNumber(throatAngle, 15.5),
+  const length = toFiniteNumber(preparedParams.length, 120);
+  const throatRadius = toFiniteNumber(preparedParams.throatRadius, 12.7);
+  const throatAngle = toFiniteNumber(preparedParams.throatAngle, 15.5);
+  const assemblePoints = (interior, mouthRadius) => {
+    const validInterior = Array.isArray(interior)
+      ? interior
+          .filter((point) => Array.isArray(point) && point.length >= 2)
+          .map((point) => [Number(point[0]), Number(point[1])])
+          .filter(
+            ([z, radius]) =>
+              Number.isFinite(z) && Number.isFinite(radius) && z > 0 && z < length
+          )
+          .sort((a, b) => a[0] - b[0])
+      : [];
+    return [[0, throatRadius], ...validInterior, [length, toFiniteNumber(mouthRadius, 140)]];
+  };
+  const translateProfile = (interior, mouthRadius, mouthAngle, throatScale, mouthScale) => ({
+    points: assemblePoints(interior, mouthRadius),
+    throat_angle_deg: throatAngle,
     mouth_angle_deg: toFiniteNumber(mouthAngle, 60),
     throat_tangent_scale: toFiniteNumber(throatScale, 1),
     mouth_tangent_scale: toFiniteNumber(mouthScale, 1),
@@ -93,15 +109,15 @@ function buildFreeformPayloadFields(preparedParams) {
 
   return {
     profile_h: translateProfile(
-      preparedParams.profileH,
-      preparedParams.throatAngleH,
+      preparedParams.interiorH,
+      preparedParams.mouthRadiusH,
       preparedParams.mouthAngleH,
       preparedParams.throatTangentScaleH,
       preparedParams.mouthTangentScaleH
     ),
     profile_v: translateProfile(
-      preparedParams.profileV,
-      preparedParams.throatAngleV,
+      preparedParams.interiorV,
+      preparedParams.mouthRadiusV,
       preparedParams.mouthAngleV,
       preparedParams.throatTangentScaleV,
       preparedParams.mouthTangentScaleV

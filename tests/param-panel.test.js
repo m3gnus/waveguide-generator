@@ -250,14 +250,17 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
   const core = geometrySections.find((section) => section.id === 'core-profile');
   assert.deepEqual(core.groups.flatMap((group) => group.keys), [
     'scale',
-    'profileH',
-    'profileV',
-    'throatAngleH',
+    'length',
+    'throatRadius',
+    'throatAngle',
+    'mouthRadiusH',
     'mouthAngleH',
+    'interiorH',
     'throatTangentScaleH',
     'mouthTangentScaleH',
-    'throatAngleV',
+    'mouthRadiusV',
     'mouthAngleV',
+    'interiorV',
     'throatTangentScaleV',
     'mouthTangentScaleV',
     'crossSections',
@@ -270,7 +273,7 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
   assert.ok(source.groups[0].keys.includes('sourceCurv'));
 });
 
-test('ParamPanel FREEFORM point and station editors validate and commit structured state', () => {
+test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their empty state', () => {
   const originalDocument = global.document;
   const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
   const fakeDocument = new FakeDocument();
@@ -295,19 +298,47 @@ test('ParamPanel FREEFORM point and station editors validate and commit structur
 
     const typeSelect = fakeDocument.getElementById('model-type');
     assert.ok(typeSelect.children.some((option) => option.value === 'FREEFORM'));
-    const pointInputs = collectNodes(paramContainer, (node) => node.tagName === 'TEXTAREA');
-    assert.equal(pointInputs.length, 2);
-    assert.equal(pointInputs[0].value, '0 12.7\n120 140');
+    panel.setProfileError('Mesher rejected the profile');
+    const profileError = fakeDocument.getElementById('freeform-profile-error');
+    assert.equal(profileError.textContent, 'Mesher rejected the profile');
+    assert.equal(profileError.parentNode.id, 'core-profile');
+    panel.setProfileError(null);
+    assert.equal(profileError.parentNode, null);
+    assert.equal(collectNodes(paramContainer, (node) => node.tagName === 'TEXTAREA').length, 0);
+    const emptyHints = collectNodes(
+      paramContainer,
+      (node) => node.textContent === 'No interior points — throat and mouth define a 2-anchor curve'
+    );
+    assert.equal(emptyHints.length, 2);
+    let addPoints = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'BUTTON' && node.textContent === 'Add point'
+    );
+    assert.equal(addPoints.length, 2);
+    addPoints[0].onclick({ preventDefault() {} });
+    assert.deepEqual(GlobalState.get().params.interiorH, [[60, 76.35]]);
 
-    const previousPoints = GlobalState.get().params.profileH;
-    pointInputs[0].value = '0 12.7\nbad line';
-    pointInputs[0].onchange({ target: pointInputs[0] });
-    assert.equal(GlobalState.get().params.profileH, previousPoints);
-    assert.equal(pointInputs[0].attributes['aria-invalid'], 'true');
+    panel.createFullPanel();
+    addPoints = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'BUTTON' && node.textContent === 'Add point'
+    );
+    addPoints[0].onclick({ preventDefault() {} });
+    assert.deepEqual(GlobalState.get().params.interiorH, [[30, 44.525], [60, 76.35]]);
 
-    pointInputs[0].value = '0, 12.7\n60 80\n120,140';
-    pointInputs[0].onchange({ target: pointInputs[0] });
-    assert.deepEqual(GlobalState.get().params.profileH, [[0, 12.7], [60, 80], [120, 140]]);
+    panel.createFullPanel();
+    const horizontalRows = collectNodes(
+      paramContainer,
+      (node) => node.className === 'freeform-point-row'
+    ).slice(0, 2);
+    assert.equal(horizontalRows.length, 2);
+    assert.equal(Number(horizontalRows[0].children[0].value), 30);
+    horizontalRows[0].children[0].value = 999;
+    horizontalRows[0].children[0].onchange({ target: horizontalRows[0].children[0] });
+    assert.equal(GlobalState.get().params.interiorH[1][0], 119.999);
+    assert.match(horizontalRows[0].children[0].className, /freeform-point-clamped/);
+    horizontalRows[0].children[2].onclick({ preventDefault() {} });
+    assert.deepEqual(GlobalState.get().params.interiorH, [[60, 76.35]]);
 
     const stationRows = collectNodes(
       paramContainer,

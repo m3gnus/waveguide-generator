@@ -152,20 +152,51 @@ test("scale does not affect enclosure fields", () => {
   assert.equal(prepared.encSpaceB, 5, "encSpaceB should NOT be scaled");
 });
 
-test("FREEFORM scale doubles both coordinates in both profile point arrays", () => {
+test("FREEFORM scale covers endpoint scalars and both coordinates of interior points", () => {
   const prepared = prepareGeometryParams(
     {
       ...getDefaults("FREEFORM"),
       type: "FREEFORM",
       scale: 2,
-      profileH: [[0, 12.7], [50, 60], [120, 140]],
-      profileV: [[0, 12.7], [60, 45], [120, 100]],
+      length: 120,
+      throatRadius: 12.7,
+      mouthRadiusH: 140,
+      mouthRadiusV: 100,
+      interiorH: [[50, 60]],
+      interiorV: [[60, 45]],
     },
     { type: "FREEFORM" }
   );
 
-  assert.deepEqual(prepared.profileH, [[0, 25.4], [100, 120], [240, 280]]);
-  assert.deepEqual(prepared.profileV, [[0, 25.4], [120, 90], [240, 200]]);
-  assert.equal(prepared.throatAngleH, 15.5);
+  assert.equal(prepared.length, 240);
+  assert.equal(prepared.throatRadius, 25.4);
+  assert.equal(prepared.mouthRadiusH, 280);
+  assert.equal(prepared.mouthRadiusV, 200);
+  assert.deepEqual(prepared.interiorH, [[100, 120]]);
+  assert.deepEqual(prepared.interiorV, [[120, 90]]);
+  assert.equal(prepared.throatAngle, 15.5);
   assert.equal(prepared.mouthAngleV, 60);
+});
+
+test("FREEFORM legacy migration tolerates malformed profile collections", () => {
+  let prepared;
+  assert.doesNotThrow(() => {
+    prepared = prepareGeometryParams(
+      {
+        type: "FREEFORM",
+        profileH: "not-an-array",
+        profileV: [null, {}, ["bad", "point"]],
+        throatAngleH: { invalid: true },
+      },
+      { type: "FREEFORM" }
+    );
+  });
+
+  assert.equal(prepared.length, 120);
+  assert.equal(prepared.throatRadius, 12.7);
+  assert.equal(prepared.throatAngle, 15.5);
+  assert.equal(prepared.mouthRadiusH, 140);
+  assert.equal(prepared.mouthRadiusV, 140);
+  assert.deepEqual(prepared.interiorH, []);
+  assert.deepEqual(prepared.interiorV, []);
 });

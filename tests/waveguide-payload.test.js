@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { getDefaults } from '../src/config/defaults.js';
 import { buildWaveguidePayload } from '../src/solver/waveguidePayload.js';
 import { prepareBackendMeshSimulationParams } from '../src/modules/design/index.js';
+import { prepareGeometryParams } from '../src/geometry/params.js';
 
 test('buildWaveguidePayload maps adaptive mesh resolution fields', () => {
   const payload = buildWaveguidePayload(
@@ -164,13 +165,16 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
     prepareBackendMeshSimulationParams({
       ...getDefaults('FREEFORM'),
       type: 'FREEFORM',
-      profileH: [[0, 12.7], [60, 80], [120, 160]],
-      profileV: [[0, 12.7], [60, 60], [120, 110]],
-      throatAngleH: 16,
+      length: 120,
+      throatRadius: 12.7,
+      throatAngle: 16,
+      mouthRadiusH: 160,
+      mouthRadiusV: 110,
+      interiorH: [[130, 999], [60, 80], [-2, 999]],
+      interiorV: [[90, 85], [60, 60]],
       mouthAngleH: 70,
       throatTangentScaleH: 1.1,
       mouthTangentScaleH: 0.9,
-      throatAngleV: 15,
       mouthAngleV: 60,
       throatTangentScaleV: 1.2,
       mouthTangentScaleV: 0.8,
@@ -193,8 +197,8 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
     mouth_tangent_scale: 0.9,
   });
   assert.deepEqual(payload.profile_v, {
-    points: [[0, 12.7], [60, 60], [120, 110]],
-    throat_angle_deg: 15,
+    points: [[0, 12.7], [60, 60], [90, 85], [120, 110]],
+    throat_angle_deg: 16,
     mouth_angle_deg: 60,
     throat_tangent_scale: 1.2,
     mouth_tangent_scale: 0.8,
@@ -225,6 +229,49 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
   }
   assert.equal(payload.source_radius, getDefaults('FREEFORM').sourceRadius);
   assert.equal(payload.enc_depth, getDefaults('FREEFORM').encDepth);
+});
+
+test('legacy FREEFORM profiles migrate to the new model without changing their wire payload', () => {
+  const prepared = prepareGeometryParams({
+    type: 'FREEFORM',
+    profileH: [[0, 12.7], [40, 55], [120, 160]],
+    profileV: [[0, 12.7], [70, 68], [120, 110]],
+    throatAngleH: 16,
+    throatAngleV: 16,
+    mouthAngleH: 70,
+    mouthAngleV: 60,
+    throatTangentScaleH: 1.1,
+    mouthTangentScaleH: 0.9,
+    throatTangentScaleV: 1.2,
+    mouthTangentScaleV: 0.8,
+  });
+  const payload = buildWaveguidePayload(prepareBackendMeshSimulationParams(prepared), '2.2');
+
+  assert.equal(prepared.length, 120);
+  assert.equal(prepared.throatRadius, 12.7);
+  assert.equal(prepared.throatAngle, 16);
+  assert.equal(prepared.mouthRadiusH, 160);
+  assert.equal(prepared.mouthRadiusV, 110);
+  assert.deepEqual(prepared.interiorH, [[40, 55]]);
+  assert.deepEqual(prepared.interiorV, [[70, 68]]);
+  assert.equal(Object.hasOwn(prepared, 'profileH'), false);
+  assert.equal(Object.hasOwn(prepared, 'profileV'), false);
+  assert.equal(Object.hasOwn(prepared, 'throatAngleH'), false);
+  assert.equal(Object.hasOwn(prepared, 'throatAngleV'), false);
+  assert.deepEqual(payload.profile_h, {
+    points: [[0, 12.7], [40, 55], [120, 160]],
+    throat_angle_deg: 16,
+    mouth_angle_deg: 70,
+    throat_tangent_scale: 1.1,
+    mouth_tangent_scale: 0.9,
+  });
+  assert.deepEqual(payload.profile_v, {
+    points: [[0, 12.7], [70, 68], [120, 110]],
+    throat_angle_deg: 16,
+    mouth_angle_deg: 60,
+    throat_tangent_scale: 1.2,
+    mouth_tangent_scale: 0.8,
+  });
 });
 
 test('buildWaveguidePayload rejects unprepared backend mesh payload fields', () => {
