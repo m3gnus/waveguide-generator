@@ -238,6 +238,7 @@ UI control mapping:
 
 - Surface sample controls affect live JS viewport/local export tessellation and the HornLab mesher sampling input.
 - `Throat/Mouth/Rear Mesh Resolution`, `Front/Rear Baffle Mesh Resolution`, and `Export Vertical Offset` affect HornLab mesher solve/export mesh density or coordinates; they do not change the active JS viewport triangle count.
+- The default hard solve-mesh limit is 50,000 full-domain-equivalent triangles. Meshes above 18,000 are allowed but show a persistent performance warning because dense BEM solves can require substantially more memory and time.
 - `Auto-download solve mesh artifact (.msh)` is persisted with the other simulation-management
   settings and downloads the artifact once the backend reports `has_mesh_artifact`; it does not
   use a fixed post-submit delay.
@@ -371,9 +372,9 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
 | HornLab mesher      | `60301db22a8d8e618969b536a65d81997ad9835a` | `/api/mesh/build` |
-| HornLab Metal BEM   | `c1da8881dc2ee1e8931c4a11bd49cbf055d88de5` | `/api/solve` (Apple Silicon macOS) |
+| HornLab Metal BEM   | `c89086ea19c1237a556db23c71be10955a20676b` | `/api/solve` (Apple Silicon macOS) |
 | HornLab Bempp BEM   | `c6f40771f9d7c49ef0a6e2ae02744cacf5c53315` | `/api/solve` (cross-platform fallback) |
-| HornLab plots       | `8664719d7be98279d7ce5283a557687ede26643d` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
+| HornLab plots       | `ea123b05a4670b9bfe10aacf4dfb2dd440943bfc` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |
 | gmsh Python package | `>=4.11.1,<5.0`   | `/api/mesh/build` |
 
 Notes:

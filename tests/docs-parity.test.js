@@ -7,8 +7,9 @@ function read(path) {
 }
 
 const MESHER_PIN = '60301db22a8d8e618969b536a65d81997ad9835a';
-const METAL_BEM_PIN = 'c1da8881dc2ee1e8931c4a11bd49cbf055d88de5';
+const METAL_BEM_PIN = 'c89086ea19c1237a556db23c71be10955a20676b';
 const BEMPP_BEM_PIN = 'c6f40771f9d7c49ef0a6e2ae02744cacf5c53315';
+const PLOTS_PIN = 'ea123b05a4670b9bfe10aacf4dfb2dd440943bfc';
 
 test('maintained docs stay aligned with the Metal-or-Bempp solver/runtime contract', () => {
   const readme = read('../README.md');
@@ -41,6 +42,11 @@ test('maintained docs stay aligned with the Metal-or-Bempp solver/runtime contra
       text,
       new RegExp(BEMPP_BEM_PIN),
       `${label} should keep the pinned hornlab-bempp-bem commit`
+    );
+    assert.match(
+      text,
+      new RegExp(PLOTS_PIN),
+      `${label} should keep the pinned hornlab-plots commit`
     );
     assert.doesNotMatch(
       text,

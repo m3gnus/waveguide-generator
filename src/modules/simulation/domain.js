@@ -150,7 +150,9 @@ export function summarizeCanonicalSimulationMesh(meshData = {}) {
 }
 
 export function summarizePersistedSimulationMeshStats(meshStats = {}) {
-  const warnings = [];
+  const warnings = Array.isArray(meshStats?.warnings)
+    ? meshStats.warnings.map((warning) => String(warning || '').trim()).filter(Boolean)
+    : [];
   const rawVertexCount = Number(meshStats?.vertexCount ?? meshStats?.vertex_count);
   const rawTriangleCount = Number(meshStats?.triangleCount ?? meshStats?.triangle_count);
   const vertexCount =
