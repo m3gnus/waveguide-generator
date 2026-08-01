@@ -136,6 +136,40 @@ function collectNodes(node, predicate, matches = []) {
   return matches;
 }
 
+function withFreeformPanel(paramsPatch, callback) {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement('div');
+  paramContainer.id = 'param-container';
+  fakeDocument.body.appendChild(paramContainer);
+  const simulationSettingsContainer = fakeDocument.createElement('div');
+  simulationSettingsContainer.id = 'simulation-settings-container';
+  fakeDocument.body.appendChild(simulationSettingsContainer);
+  const simulationContainer = fakeDocument.createElement('div');
+  simulationContainer.id = 'simulation-param-container';
+  fakeDocument.body.appendChild(simulationContainer);
+  global.document = fakeDocument;
+  let panel = null;
+
+  try {
+    GlobalState.loadState(
+      {
+        type: 'FREEFORM',
+        params: { ...getDefaults('FREEFORM'), ...paramsPatch },
+      },
+      'param-panel-freeform-editor-test'
+    );
+    panel = new ParamPanel('param-container');
+    panel.createFullPanel();
+    callback({ fakeDocument, paramContainer, panel, editor: panel.freeformEditor });
+  } finally {
+    panel?.freeformEditor?.destroy();
+    GlobalState.loadState(previousState, 'param-panel-freeform-editor-test-restore');
+    global.document = originalDocument;
+  }
+}
+
 test('formula allowlist limits per-row formula controls to audited fields', () => {
   assert.equal(getControlInputMode(PARAM_SCHEMA['R-OSSE'].R), 'formula');
   assert.equal(getControlInputMode(PARAM_SCHEMA['OSSE'].scale), 'number');
@@ -248,24 +282,27 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
   assert.ok(!sectionIds.includes('morph-target'));
   assert.ok(!sectionIds.includes('guiding-curve'));
   const core = geometrySections.find((section) => section.id === 'core-profile');
-  assert.deepEqual(core.groups.flatMap((group) => group.keys), [
-    'scale',
-    'length',
-    'throatRadius',
-    'throatAngle',
-    'mouthRadiusH',
-    'mouthAngleH',
-    'interiorH',
-    'throatTangentScaleH',
-    'mouthTangentScaleH',
-    'mouthRadiusV',
-    'mouthAngleV',
-    'interiorV',
-    'throatTangentScaleV',
-    'mouthTangentScaleV',
-    'crossSections',
-    'overshootPolicy',
-  ]);
+  assert.deepEqual(
+    core.groups.flatMap((group) => group.keys),
+    [
+      'scale',
+      'length',
+      'throatRadius',
+      'throatAngle',
+      'mouthRadiusH',
+      'mouthAngleH',
+      'interiorH',
+      'throatTangentScaleH',
+      'mouthTangentScaleH',
+      'mouthRadiusV',
+      'mouthAngleV',
+      'interiorV',
+      'throatTangentScaleV',
+      'mouthTangentScaleV',
+      'crossSections',
+      'overshootPolicy',
+    ]
+  );
   const source = getParameterSections('simulation', 'FREEFORM').find(
     (section) => section.id === 'source-definition'
   );
@@ -324,7 +361,10 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
       (node) => node.tagName === 'BUTTON' && node.textContent === 'Add point'
     );
     addPoints[0].onclick({ preventDefault() {} });
-    assert.deepEqual(GlobalState.get().params.interiorH, [[30, 44.525], [60, 76.35]]);
+    assert.deepEqual(GlobalState.get().params.interiorH, [
+      [30, 44.525],
+      [60, 76.35],
+    ]);
 
     panel.createFullPanel();
     const horizontalRows = collectNodes(
@@ -347,12 +387,14 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     assert.equal(stationRows.length, 2);
     assert.equal(stationRows[0].children[0].disabled, true);
     assert.equal(stationRows[1].children[0].disabled, true);
-    assert.deepEqual(stationRows[0].children[1].children.map((option) => option.value), ['circle']);
-    assert.deepEqual(stationRows[1].children[1].children.map((option) => option.value), [
-      'ellipse',
-      'superellipse',
-      'rounded_rectangle',
-    ]);
+    assert.deepEqual(
+      stationRows[0].children[1].children.map((option) => option.value),
+      ['circle']
+    );
+    assert.deepEqual(
+      stationRows[1].children[1].children.map((option) => option.value),
+      ['ellipse', 'superellipse', 'rounded_rectangle']
+    );
 
     const addStation = collectNodes(
       paramContainer,
@@ -368,6 +410,74 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     GlobalState.loadState(previousState, 'param-panel-freeform-test-restore');
     global.document = originalDocument;
   }
+});
+
+test('FREEFORM profile editor renders endpoint, tangent, and interior handles from params', () => {
+  withFreeformPanel(
+    {
+      interiorH: [
+        [30, 40],
+        [70, 90],
+      ],
+      interiorV: [[55, 68]],
+    },
+    ({ paramContainer, editor }) => {
+      assert.ok(editor);
+      const handles = collectNodes(
+        paramContainer,
+        (node) => node.attributes['data-handle'] !== undefined
+      );
+      assert.equal(handles.filter((node) => node.attributes['data-handle'] === 'radius').length, 3);
+      assert.equal(handles.filter((node) => node.attributes['data-handle'] === 'angle').length, 3);
+      assert.equal(
+        handles.filter((node) => node.attributes['data-handle'] === 'interior').length,
+        3
+      );
+      assert.equal(
+        collectNodes(paramContainer, (node) => node.attributes['data-param'] === 'mouthRadiusH')
+          .length > 1,
+        true
+      );
+    }
+  );
+});
+
+test('FREEFORM profile editor commits drag results through GlobalState update semantics', () => {
+  withFreeformPanel({}, ({ editor }) => {
+    editor.commitParam('mouthRadiusH', 157.5);
+    assert.equal(GlobalState.get().params.mouthRadiusH, 157.5);
+    assert.equal(editor.params.mouthRadiusH, 157.5);
+  });
+});
+
+test('FREEFORM profile editor inserts and deletes plane anchors', () => {
+  withFreeformPanel({}, ({ editor }) => {
+    editor.insertAnchor('H', 61.25, 78.75);
+    assert.deepEqual(GlobalState.get().params.interiorH, [[61.3, 78.8]]);
+    editor.deleteAnchor('H', 0);
+    assert.deepEqual(GlobalState.get().params.interiorH, []);
+
+    editor.insertAnchor('V', 44, 53);
+    assert.deepEqual(GlobalState.get().params.interiorV, [[44, 53]]);
+  });
+});
+
+test('FREEFORM profile editor legend chips toggle each plane without changing params', () => {
+  withFreeformPanel({}, ({ editor }) => {
+    const before = JSON.parse(JSON.stringify(GlobalState.get().params));
+    editor.togglePlane('V');
+    assert.equal(editor.visibility.V, false);
+    assert.equal(
+      editor.findByAttribute('data-plane-toggle', 'V').getAttribute('aria-pressed'),
+      'false'
+    );
+    assert.equal(editor.findByAttribute('data-plane', 'V'), null);
+    assert.deepEqual(GlobalState.get().params, before);
+
+    editor.togglePlane('V');
+    assert.equal(editor.visibility.V, true);
+    assert.ok(editor.findByAttribute('data-plane', 'V'));
+  });
 });
 
 test('ParamPanel renders row-level formula buttons and removes the section-header affordance', () => {

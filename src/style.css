@@ -682,6 +682,250 @@ details.section[open] > summary {
   gap: var(--sp-1);
 }
 
+.freeform-profile-editor {
+  --freeform-h: var(--accent);
+  --freeform-v: var(--accent-warm);
+  margin-top: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.freeform-profile-toolbar {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.freeform-profile-editor-title {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.freeform-profile-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.freeform-legend-chip {
+  min-height: 23px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, currentColor 45%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  color: var(--text-muted);
+  font: 600 var(--text-xs) var(--font-ui);
+  cursor: pointer;
+  transition:
+    opacity var(--t-fast),
+    box-shadow var(--t-fast),
+    background var(--t-fast);
+}
+
+.freeform-legend-chip.freeform-plane-h {
+  color: var(--freeform-h);
+}
+
+.freeform-legend-chip.freeform-plane-v {
+  color: var(--freeform-v);
+  border-style: dashed;
+}
+
+.freeform-legend-chip[aria-pressed='false'] {
+  opacity: 0.42;
+  background: transparent;
+}
+
+.freeform-legend-chip:hover,
+.freeform-legend-chip:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent);
+  outline: none;
+}
+
+.freeform-profile-svg {
+  display: block;
+  width: 100%;
+  height: 240px;
+  overflow: visible;
+  touch-action: none;
+  user-select: none;
+}
+
+.freeform-profile-background {
+  fill: var(--input-bg);
+}
+
+.freeform-profile-grid,
+.freeform-profile-station,
+.freeform-profile-drag-guide,
+.freeform-profile-tangent-arm {
+  vector-effect: non-scaling-stroke;
+}
+
+.freeform-profile-grid {
+  stroke: color-mix(in srgb, var(--border) 72%, transparent);
+  stroke-width: 1;
+}
+
+.freeform-profile-tick,
+.freeform-profile-axis-label,
+.freeform-profile-station-label {
+  fill: var(--text-muted);
+  font-family: var(--font-ui);
+  pointer-events: none;
+}
+
+.freeform-profile-tick,
+.freeform-profile-station-label {
+  font-size: 8px;
+}
+
+.freeform-profile-axis-label {
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.freeform-profile-station {
+  stroke: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  pointer-events: none;
+}
+
+.freeform-profile-station-label {
+  opacity: 0.78;
+}
+
+.freeform-profile-curve {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: stroke;
+  cursor: crosshair;
+}
+
+.freeform-profile-curve.freeform-plane-h,
+.freeform-profile-tangent.freeform-plane-h {
+  stroke: var(--freeform-h);
+}
+
+.freeform-profile-curve.freeform-plane-v,
+.freeform-profile-tangent.freeform-plane-v {
+  stroke: var(--freeform-v);
+}
+
+.freeform-profile-curve.freeform-plane-v {
+  stroke-dasharray: 6 4;
+}
+
+.freeform-profile-tangent.freeform-plane-shared {
+  stroke: color-mix(in srgb, var(--freeform-h) 55%, var(--freeform-v));
+}
+
+.freeform-profile-tangent-arm {
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  opacity: 0.78;
+}
+
+.freeform-profile-tangent-knob,
+.freeform-profile-handle {
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+  outline: none;
+  transition:
+    filter var(--t-fast),
+    stroke-width var(--t-fast);
+}
+
+.freeform-profile-tangent-knob:active,
+.freeform-profile-handle:active {
+  cursor: grabbing;
+}
+
+.freeform-profile-tangent-knob {
+  fill: var(--panel);
+  stroke-width: 2;
+}
+
+.freeform-profile-handle {
+  fill: var(--panel);
+  stroke-width: 2;
+}
+
+.freeform-profile-handle.freeform-plane-h {
+  stroke: var(--freeform-h);
+}
+
+.freeform-profile-handle.freeform-plane-v {
+  stroke: var(--freeform-v);
+}
+
+.freeform-profile-handle.freeform-plane-shared {
+  stroke: color-mix(in srgb, var(--freeform-h) 55%, var(--freeform-v));
+}
+
+.freeform-profile-tangent-knob:hover,
+.freeform-profile-tangent-knob:focus-visible,
+.freeform-profile-handle:hover,
+.freeform-profile-handle:focus-visible,
+.freeform-profile-anchor-selected,
+.freeform-profile-linked-highlight {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 75%, transparent));
+}
+
+.freeform-profile-anchor-selected {
+  stroke-width: 3;
+}
+
+.freeform-profile-anchor-delete {
+  fill: var(--error);
+  stroke: var(--panel);
+  stroke-width: 2px;
+  paint-order: stroke fill;
+  font: 700 18px var(--font-ui);
+  cursor: pointer;
+}
+
+.freeform-profile-drag-guide {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
+.freeform-profile-readout {
+  pointer-events: none;
+}
+
+.freeform-profile-readout rect {
+  fill: var(--panel);
+  stroke: var(--border);
+  vector-effect: non-scaling-stroke;
+}
+
+.freeform-profile-readout text {
+  fill: var(--text);
+  font: 9px var(--font-mono);
+}
+
+.input-row.freeform-profile-linked-highlight input,
+.input-row.freeform-profile-linked-highlight select,
+input.freeform-profile-linked-highlight,
+select.freeform-profile-linked-highlight {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .freeform-point-header,
 .freeform-point-row {
   display: grid;
@@ -753,7 +997,8 @@ details.section[open] > summary {
 }
 
 @keyframes freeform-point-clamp-flash {
-  0%, 45% {
+  0%,
+  45% {
     border-color: var(--error);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 22%, transparent);
   }
