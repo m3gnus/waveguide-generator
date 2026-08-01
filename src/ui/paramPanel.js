@@ -5,6 +5,7 @@ import { normalizeParamInput } from './paramInput.js';
 import { appendSectionNote, createLabelRow } from './helpAffordance.js';
 import { getParameterSections } from './parameterInventory.js';
 import { trapFocus } from './focusTrap.js';
+import { mountFreeformProfileEditor } from './freeformProfileEditor.js';
 import {
   validateOutputName,
   validateCounter,
@@ -208,6 +209,8 @@ export class ParamPanel {
     this.profileError = '';
     this.profileErrorStateVersion = null;
     this.controlIdCounter = 0;
+    this.freeformEditor = null;
+    this.freeformVisibility = { H: true, V: true };
     this.init();
   }
 
@@ -232,14 +235,13 @@ export class ParamPanel {
 
   // Create the full UI structure
   createFullPanel() {
-    if (
-      this.profileError &&
-      this.profileErrorStateVersion !== GlobalState.getVersion()
-    ) {
+    if (this.profileError && this.profileErrorStateVersion !== GlobalState.getVersion()) {
       this.profileError = '';
       this.profileErrorStateVersion = null;
     }
     const focusedControl = this.captureFocusedControl();
+    this.freeformEditor?.destroy();
+    this.freeformEditor = null;
     this.container.innerHTML = '';
     if (this.simulationSettingsContainer) {
       this.simulationSettingsContainer.innerHTML = '';
@@ -383,6 +385,17 @@ export class ParamPanel {
       }
 
       const sectionNode = this.createDetailsSection(section.title, section.id);
+      if (GlobalState.get().type === 'FREEFORM' && section.id === 'core-profile') {
+        this.freeformEditor = mountFreeformProfileEditor(sectionNode, {
+          params,
+          visibility: this.freeformVisibility,
+          onCommit: (patch) => {
+            this.setProfileError(null);
+            return GlobalState.update(patch);
+          },
+        });
+        this.bindFreeformParamHighlighting(sectionNode);
+      }
       appendSectionNote(sectionNode, document, section.description);
       (section.groups || []).forEach(({ group, keys }) => {
         const schemaGroup = PARAM_SCHEMA[group] || {};
@@ -395,6 +408,29 @@ export class ParamPanel {
       });
       target.appendChild(sectionNode);
     });
+  }
+
+  bindFreeformParamHighlighting(sectionNode) {
+    const findParam = (target) => {
+      let node = target;
+      while (node && node !== sectionNode) {
+        const param = node.getAttribute?.('data-param');
+        if (param) return param;
+        node = node.parentNode;
+      }
+      return null;
+    };
+    const setHighlight = (event, active) => {
+      const param = findParam(event.target);
+      if (param) this.freeformEditor?.highlightHandle(param, active);
+    };
+    if (typeof sectionNode.addEventListener === 'function') {
+      sectionNode.addEventListener('mouseover', (event) => setHighlight(event, true));
+      sectionNode.addEventListener('mouseout', (event) => setHighlight(event, false));
+    } else {
+      sectionNode.onmouseover = (event) => setHighlight(event, true);
+      sectionNode.onmouseout = (event) => setHighlight(event, false);
+    }
   }
 
   shouldRenderControl(key, params = {}) {
@@ -456,6 +492,7 @@ export class ParamPanel {
     const row = document.createElement('div');
     row.className = 'input-row';
     row.setAttribute('data-param-key', key);
+    row.setAttribute('data-param', key);
 
     const controlId = def.controlId || `param-${key}-${this.controlIdCounter++}`;
     const labelText = def.unit ? `${def.label} (${def.unit})` : def.label;
@@ -498,6 +535,7 @@ export class ParamPanel {
       input.id = controlId;
       input.value = currentValue ?? '';
       input.setAttribute('data-param-key', key);
+      input.setAttribute('data-param', key);
       if (isFormulaField) {
         input.className = 'formula-input';
         input.placeholder = 'e.g., 45 + 10*cos(p)';
@@ -533,6 +571,7 @@ export class ParamPanel {
       const select = document.createElement('select');
       select.id = controlId;
       select.setAttribute('data-param-key', key);
+      select.setAttribute('data-param', key);
       def.options.forEach((opt) => {
         const option = document.createElement('option');
         option.value = opt.value;
@@ -573,7 +612,9 @@ export class ParamPanel {
     const length = Number(stateParams.length);
     const safeLength = Number.isFinite(length) && length > 0 ? length : 120;
     const throatRadius = Number(stateParams.throatRadius);
-    const mouthRadius = Number(key === 'interiorH' ? stateParams.mouthRadiusH : stateParams.mouthRadiusV);
+    const mouthRadius = Number(
+      key === 'interiorH' ? stateParams.mouthRadiusH : stateParams.mouthRadiusV
+    );
     const startRadius = Number.isFinite(throatRadius) ? throatRadius : 12.7;
     const endRadius = Number.isFinite(mouthRadius) ? mouthRadius : 140;
     const commitPoints = (nextPoints) => {
@@ -608,6 +649,7 @@ export class ParamPanel {
       zInput.step = '0.1';
       zInput.value = point[0];
       zInput.setAttribute('data-param-key', key);
+      zInput.setAttribute('data-param', key);
       zInput.setAttribute('aria-label', `${key} point ${index + 1} z`);
       zInput.onchange = (event) => {
         const requested = Number(event.target.value);
@@ -625,6 +667,7 @@ export class ParamPanel {
       radiusInput.step = '0.1';
       radiusInput.value = point[1];
       radiusInput.setAttribute('data-param-key', key);
+      radiusInput.setAttribute('data-param', key);
       radiusInput.setAttribute('aria-label', `${key} point ${index + 1} radius`);
       radiusInput.onchange = (event) => {
         const radius = Number(event.target.value);
@@ -708,23 +751,28 @@ export class ParamPanel {
       position.value = isFirst ? 0 : isLast ? 1 : station.t;
       position.disabled = isFirst || isLast;
       position.setAttribute('data-param-key', key);
+      position.setAttribute('data-param', key);
       position.setAttribute('aria-label', `Station ${index + 1} position`);
       position.onchange = (event) => {
         const t = Number(event.target.value);
         const duplicate = stations.some(
-          (candidate, candidateIndex) => candidateIndex !== index && Math.abs(candidate.t - t) < 1e-9
+          (candidate, candidateIndex) =>
+            candidateIndex !== index && Math.abs(candidate.t - t) < 1e-9
         );
         if (!Number.isFinite(t) || t <= 0 || t >= 1 || duplicate) {
           showInputError(event.target, 'Station positions must be unique numbers between 0 and 1.');
           return;
         }
         hideInputError(event.target, true);
-        commitStations(stations.map((item, itemIndex) => (itemIndex === index ? { ...item, t } : item)));
+        commitStations(
+          stations.map((item, itemIndex) => (itemIndex === index ? { ...item, t } : item))
+        );
       };
       stationRow.appendChild(position);
 
       const shape = document.createElement('select');
       shape.setAttribute('data-param-key', key);
+      shape.setAttribute('data-param', key);
       shape.setAttribute('aria-label', `Station ${index + 1} shape`);
       const shapeOptions = isFirst
         ? [{ value: 'circle', label: 'Circle' }]
