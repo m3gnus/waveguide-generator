@@ -33,6 +33,7 @@
   Metal both support transverse half/quarter symmetry for free-standing rigid
   Neumann models; unsupported coupled-IB/Robin symmetry requests fail
   explicitly.
+- The default hard mesh ceiling is 50,000 full-domain-equivalent triangles. Realized meshes above 18,000 are allowed and publish a soft performance warning in the live UI and persisted mesh diagnostics.
 - `solver_mode="auto"` is the default; on the Metal backend it selects CircSym automatically for eligible circular waveguides, including circular infinite-baffle jobs, otherwise it uses full 3D. `solver_mode="circsym"` selects the Metal-only axisymmetric meridian solver. Use it for round, circular waveguides when sweep speed matters. Use `solver_mode="full_3d"` for non-round or morphed geometry, enclosure models, forced full-surface parity, and any infinite-baffle job that is not CircSym-eligible.
 
 **Results handling**:

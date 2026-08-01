@@ -756,6 +756,20 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
     the canonical mesh tags must pass through to solver mesh preparation unchanged.
     """
 
+    def test_large_realized_mesh_adds_soft_performance_warning(self):
+        triangle_count = 4_501
+        stats = _sim_runner._build_mesh_stats(
+            [],
+            [0] * (triangle_count * 3),
+            source="hornlab_waveguide_mesher",
+            metadata={"meshDomainMultiplier": 4.0},
+        )
+
+        self.assertEqual(stats["full_domain_triangle_count"], 18_004)
+        self.assertEqual(stats["soft_warning_full_domain_triangle_limit"], 18_000)
+        self.assertEqual(len(stats["warnings"]), 1)
+        self.assertIn("may take significantly longer", stats["warnings"][0])
+
     def _make_hornlab_mesher_request(self, extra_params=None):
         wp = {
             "formula_type": "R-OSSE",
@@ -1115,6 +1129,10 @@ class HornLabMesherBemMeshContractTest(unittest.TestCase):
                         "enc_rear": 0,
                         "enc_edge": 0,
                     },
+                    "domain_multiplier": 1.0,
+                    "full_domain_triangle_count": 4,
+                    "soft_warning_full_domain_triangle_limit": 18_000,
+                    "warnings": [],
                 },
             )
         finally:

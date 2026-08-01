@@ -348,6 +348,25 @@ test('simulation use case normalizes persisted backend mesh diagnostics', () => 
   assert.equal(summary.ok, true);
 });
 
+test('simulation use case preserves a large-mesh performance warning', () => {
+  const summary = summarizePersistedSimulationMeshStats({
+    vertex_count: 6000,
+    triangle_count: 9659,
+    tag_counts: { 1: 9658, 2: 1 },
+    identity_triangle_counts: {
+      inner_wall: 9658,
+      throat_disc: 1
+    },
+    warnings: [
+      'Large solve mesh: 9,659 triangles (38,636 full-domain equivalent). The solve may take significantly longer and use more memory.'
+    ]
+  });
+
+  assert.equal(summary.ok, false);
+  assert.equal(summary.warnings.length, 1);
+  assert.match(summary.warnings[0], /solve may take significantly longer/i);
+});
+
 test('simulation workspace service writes job manifest via backend', async () => {
   const originalFetch = global.fetch;
   const fetchCalls = [];

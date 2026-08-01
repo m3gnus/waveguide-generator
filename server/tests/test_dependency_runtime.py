@@ -154,7 +154,7 @@ class DependencyRuntimeTest(unittest.TestCase):
             },
         )
         self.assertIn("60301db", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
-        self.assertIn("c1da888", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
+        self.assertIn("c89086e", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
         self.assertIn("c6f4077", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
         self.assertEqual(
             SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["required_for"],

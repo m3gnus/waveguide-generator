@@ -54,7 +54,7 @@ test('buildWaveguidePayload uses DesignModule backend mesh defaults when fields 
   assert.equal(payload.mouth_res, 15);
   assert.equal(payload.rear_res, 40);
   assert.equal(payload.aperture_resolution_scale, 1.5);
-  assert.equal(payload.max_triangles, 18000);
+  assert.equal(payload.max_triangles, 50000);
   assert.equal(payload.allow_large_mesh, false);
   assert.equal(payload.enc_front_resolution, '25,25,25,25');
   assert.equal(payload.enc_back_resolution, '40,40,40,40');

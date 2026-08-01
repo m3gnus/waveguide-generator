@@ -2,10 +2,10 @@
 """Bump the pinned HornLab module dependencies to each repo's latest ``main``.
 
 Waveguide-Generator pins its own modules — ``hornlab-waveguide-mesher``,
-``hornlab-metal-bem`` and ``hornlab-bempp-bem`` — to exact commits in
-``server/requirements*.txt`` (``git+https://…@<sha>``). The pins keep a public
-``pip install -r`` reproducible: a fresh clone gets a known-good mesher +
-solver + WG combination instead of whatever the module ``main`` happens to be
+``hornlab-metal-bem``, ``hornlab-plots`` and ``hornlab-bempp-bem`` — to exact
+commits in ``server/requirements*.txt`` (``git+https://…@<sha>``). The pins keep
+a public ``pip install -r`` reproducible: a fresh clone gets a known-good mesher
++ solver + WG combination instead of whatever the module ``main`` happens to be
 that minute. The price is that advancing a module means re-pinning by hand.
 
 This script removes that chore. It resolves the current tip of each module's
@@ -37,12 +37,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_OWNER = "m3gnus"
 
-# Each module and the requirements file that pins it. The mesher and the Metal
-# backend ship in the default install; the bempp backend is the optional
-# non-Metal fallback in its own file.
+# Each module and the requirements file that pins it. The mesher, the Metal
+# backend and the chart renderer ship in the default install; the bempp backend
+# is the optional non-Metal fallback in its own file.
 MODULES: tuple[tuple[str, str], ...] = (
     ("hornlab-waveguide-mesher", "server/requirements.txt"),
     ("hornlab-metal-bem", "server/requirements.txt"),
+    ("hornlab-plots", "server/requirements.txt"),
     ("hornlab-bempp-bem", "server/requirements-bempp.txt"),
 )
 

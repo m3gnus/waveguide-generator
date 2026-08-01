@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AppState } from '../src/state.js';
+import { AppState, normalizePersistedState } from '../src/state.js';
 import { getDefaults } from '../src/config/defaults.js';
 
 test('AppState.update skips exact no-op updates without version or history churn', () => {
@@ -37,4 +37,28 @@ test('AppState.loadState skips exact no-op replacements', () => {
   assert.equal(state.loadState(snapshot, 'noop-test'), false);
   assert.equal(state.getVersion(), 0);
   assert.equal(state.undoStack.length, 0);
+});
+
+test('persisted states migrate the untouched legacy mesh budget to the larger hard limit', () => {
+  const normalized = normalizePersistedState({
+    type: 'R-OSSE',
+    params: {
+      maxTriangles: 18000,
+      allowLargeMesh: 0,
+    },
+  });
+
+  assert.equal(normalized.params.maxTriangles, 50000);
+});
+
+test('persisted states preserve a customized mesh budget', () => {
+  const normalized = normalizePersistedState({
+    type: 'R-OSSE',
+    params: {
+      maxTriangles: 24000,
+      allowLargeMesh: 0,
+    },
+  });
+
+  assert.equal(normalized.params.maxTriangles, 24000);
 });
