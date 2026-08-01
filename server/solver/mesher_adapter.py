@@ -54,9 +54,10 @@ def _normalize_formula(value: Any) -> str:
     raw = str(value or "R-OSSE").strip().upper().replace("_", "-")
     if raw == "ROSSE":
         return "R-OSSE"
-    if raw not in {"OSSE", "R-OSSE", "ICW"}:
+    if raw not in {"OSSE", "R-OSSE", "ICW", "FREEFORM"}:
         raise ValueError(
-            f"formula_type '{value}' is not supported. Supported types: 'R-OSSE', 'OSSE', 'ICW'."
+            f"formula_type '{value}' is not supported. "
+            "Supported types: 'R-OSSE', 'OSSE', 'ICW', 'FREEFORM'."
         )
     return raw
 
@@ -189,20 +190,81 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
     _reject_unsupported_source_payload(payload)
 
     formula = _normalize_formula(payload.get("formula_type") or payload.get("formula"))
-    profile: dict[str, Any] = _clean_dict(
-        {
-            "formula": formula,
-            "r0": payload.get("r0"),
-            "a": payload.get("a"),
-            "a0": payload.get("a0"),
-            "k": payload.get("k"),
-            "q": payload.get("q"),
-            "throatExtLength": payload.get("throat_ext_length"),
-            "throatExtAngle": payload.get("throat_ext_angle"),
-            "slotLength": payload.get("slot_length"),
-            "_athLengthMode": payload.get("length_mode"),
-        }
-    )
+    if formula == "FREEFORM":
+        missing = [
+            name
+            for name in ("profile_h", "profile_v", "cross_sections")
+            if payload.get(name) is None
+        ]
+        if missing:
+            raise ValueError(
+                "FREEFORM requires profile_h, profile_v, and cross_sections; "
+                f"missing: {', '.join(missing)}."
+            )
+
+        profile_h = payload["profile_h"]
+        profile_v = payload["profile_v"]
+        cross_sections = payload["cross_sections"]
+        if not isinstance(profile_h, Mapping) or not isinstance(profile_v, Mapping):
+            raise ValueError("FREEFORM profile_h and profile_v must be objects.")
+        if not isinstance(cross_sections, (list, tuple)):
+            raise ValueError("FREEFORM cross_sections must be a list.")
+
+        def translate_profile(value: Mapping[str, Any]) -> dict[str, Any]:
+            return _clean_dict(
+                {
+                    "points": value.get("points"),
+                    "throatAngleDeg": value.get("throat_angle_deg"),
+                    "mouthAngleDeg": value.get("mouth_angle_deg"),
+                    "throatTangentScale": value.get("throat_tangent_scale"),
+                    "mouthTangentScale": value.get("mouth_tangent_scale"),
+                }
+            )
+
+        translated_stations: list[dict[str, Any]] = []
+        for index, station in enumerate(cross_sections):
+            if not isinstance(station, Mapping):
+                raise ValueError(f"FREEFORM cross_sections[{index}] must be an object.")
+            translated_stations.append(
+                _clean_dict(
+                    {
+                        "t": station.get("t"),
+                        "shape": station.get("shape"),
+                        "exponent": station.get("exponent"),
+                        "cornerRatio": station.get("corner_ratio"),
+                    }
+                )
+            )
+
+        # FREEFORM is deliberately isolated from every analytic-family
+        # coefficient. The mesher rejects cross-family keys to prevent stale
+        # OSSE/R-OSSE/ICW values from silently changing geometry.
+        profile = _clean_dict(
+            {
+                "formula": formula,
+                "a0": payload.get("a0"),
+                "profileH": translate_profile(profile_h),
+                "profileV": translate_profile(profile_v),
+                "crossSections": translated_stations,
+                "overshootPolicy": payload.get("overshoot_policy"),
+            }
+        )
+    else:
+        profile = _clean_dict(
+            {
+                "formula": formula,
+                "r0": payload.get("r0"),
+                "a": payload.get("a"),
+                "a0": payload.get("a0"),
+                "k": payload.get("k"),
+                "q": payload.get("q"),
+                "throatExtLength": payload.get("throat_ext_length"),
+                "throatExtAngle": payload.get("throat_ext_angle"),
+                "slotLength": payload.get("slot_length"),
+                "_athLengthMode": payload.get("length_mode"),
+            }
+        )
+
     if formula == "OSSE":
         profile.update(
             _clean_dict(
@@ -249,7 +311,7 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                 }
             )
         )
-    else:
+    elif formula == "R-OSSE":
         profile.update(
             _clean_dict(
                 {
@@ -646,6 +708,23 @@ def build_viewport_geometry(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     result = build_viewport_geometry_from_config(config)
     grid = _rounded_viewport_grid(result.get("grid") or {})
+    metadata = {
+        "generatedBy": "hornlab-waveguide-mesher",
+        "source": "hornlab_waveguide_mesher_point_grid",
+        "units": "mm",
+        "gridNPhi": int(grid.get("grid_n_phi") or 0),
+        "gridNLength": int(grid.get("grid_n_length") or 0),
+        "samplingMode": grid.get("sampling_mode"),
+    }
+    if config.get("formula") == "FREEFORM":
+        try:
+            from hornlab_mesher.freeform import build_freeform_geometry
+
+            metadata["freeform"] = _json_safe_metadata(
+                build_freeform_geometry(config["profile"]).report()
+            )
+        except Exception:  # noqa: BLE001 - viewport metadata is best-effort only
+            pass
 
     return {
         "formula": result.get("formula"),
@@ -653,14 +732,7 @@ def build_viewport_geometry(payload: Mapping[str, Any]) -> dict[str, Any]:
         "params": result.get("params"),
         "grid": grid,
         "enclosure": _rounded_viewport_enclosure(result.get("enclosure")),
-        "metadata": {
-            "generatedBy": "hornlab-waveguide-mesher",
-            "source": "hornlab_waveguide_mesher_point_grid",
-            "units": "mm",
-            "gridNPhi": int(grid.get("grid_n_phi") or 0),
-            "gridNLength": int(grid.get("grid_n_length") or 0),
-            "samplingMode": grid.get("sampling_mode"),
-        },
+        "metadata": metadata,
     }
 
 

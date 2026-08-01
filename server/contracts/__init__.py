@@ -386,6 +386,30 @@ class SimulationResults(BaseModel):
     di: Optional[Dict[str, List[float]]] = None
 
 
+class FreeformProfileRequest(BaseModel):
+    points: List[List[float]]
+    throat_angle_deg: Optional[float] = None
+    mouth_angle_deg: Optional[float] = None
+    throat_tangent_scale: float = 1.0
+    mouth_tangent_scale: float = 1.0
+
+    @field_validator("points")
+    @classmethod
+    def validate_points(cls, value: List[List[float]]) -> List[List[float]]:
+        if not 2 <= len(value) <= 64:
+            raise ValueError("FREEFORM profile points must contain 2-64 anchors.")
+        if any(len(point) != 2 for point in value):
+            raise ValueError("Each FREEFORM profile point must contain exactly [z_mm, r_mm].")
+        return value
+
+
+class FreeformStationRequest(BaseModel):
+    t: float
+    shape: str
+    exponent: Optional[float] = None
+    corner_ratio: Optional[float] = None
+
+
 class WaveguideParamsRequest(BaseModel):
     """ATH-format waveguide parameters for backend mesh builders.
 
@@ -418,6 +442,13 @@ class WaveguideParamsRequest(BaseModel):
     hold_end: Optional[float] = None
     # Rollback axial-depth target (mm). Distinct from the enclosure `enc_depth`.
     depth: Optional[float] = None
+
+    # FREEFORM H/V spline profiles and axial cross-section shape stations.
+    # Deep geometry validation remains authoritative in hornlab_mesher.freeform.
+    profile_h: Optional[FreeformProfileRequest] = None
+    profile_v: Optional[FreeformProfileRequest] = None
+    cross_sections: Optional[List[FreeformStationRequest]] = None
+    overshoot_policy: Optional[str] = None
 
     a: Optional[str] = None
     r0: Union[float, str] = 12.7
@@ -496,6 +527,15 @@ class WaveguideParamsRequest(BaseModel):
     sim_type: int = 2
     msh_version: str = "2.2"
     step_body: str = "inner_surface"
+
+    @field_validator("cross_sections")
+    @classmethod
+    def validate_cross_sections(
+        cls, value: Optional[List[FreeformStationRequest]]
+    ) -> Optional[List[FreeformStationRequest]]:
+        if value is not None and not 2 <= len(value) <= 32:
+            raise ValueError("FREEFORM cross_sections must contain 2-32 stations.")
+        return value
 
 
 class ChartsReferencePayload(BaseModel):

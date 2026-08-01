@@ -90,6 +90,12 @@ def validate_submit_simulation_request(
             f"Invalid options.mesh.waveguide_params: {exc.errors()}"
         ) from exc
 
+    if validated_waveguide.formula_type not in ("R-OSSE", "OSSE", "ICW", "FREEFORM"):
+        raise ValueError(
+            f"formula_type '{validated_waveguide.formula_type}' is not supported. "
+            "Supported types: 'R-OSSE', 'OSSE', 'ICW', 'FREEFORM'."
+        )
+
     normalized_waveguide_params = validated_waveguide.model_dump()
 
     return SimulationRequestValidation(
