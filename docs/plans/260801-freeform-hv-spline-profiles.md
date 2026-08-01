@@ -1,6 +1,10 @@
 # Freeform H/V spline profiles — implementation plan
 
-*2026-08-01. Status: PLAN — nothing implemented. Local doc, not yet committed/pushed.*
+*2026-08-01. Status: Phases 1a + 1b-core IMPLEMENTED on local `freeform` branches
+(mesher 7baf134..4084a84, WG 2e84482 + fee8a8d — unpushed). Remaining from
+Phase 1b: convert-from-design UI, `.mwg` round-trip, export carve-outs (W3);
+then 1c sharp corners, Phase 2 editor, Phase 3 optimizer. All suites green;
+OSSE-reproduction acceptance PASSED (0.33 dB max to 10 kHz).*
 *Grounded against mesher `60301db` / WG `6ac96f1`. Review provenance in §9: three
 Claude verifier passes + two codex passes (review + design research), all
 findings re-verified before folding in. Rev 3: cross-section **shape stations**
