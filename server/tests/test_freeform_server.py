@@ -52,6 +52,7 @@ def _freeform_payload() -> dict:
             },
         ],
         "overshoot_policy": "allow",
+        "inflection_policy": "allow",
         "n_angular": 16,
         "n_length": 8,
         "wall_thickness": 0.0,
@@ -80,7 +81,13 @@ class FreeformContractTest(unittest.TestCase):
         payload = _freeform_payload()
         dumped = WaveguideParamsRequest(**payload).model_dump()
 
-        for key in ("profile_h", "profile_v", "cross_sections", "overshoot_policy"):
+        for key in (
+            "profile_h",
+            "profile_v",
+            "cross_sections",
+            "overshoot_policy",
+            "inflection_policy",
+        ):
             self.assertIn(key, dumped)
         self.assertEqual(dumped["profile_h"], payload["profile_h"])
         self.assertEqual(dumped["profile_v"], payload["profile_v"])
@@ -90,6 +97,23 @@ class FreeformContractTest(unittest.TestCase):
             for key, value in payload_station.items():
                 self.assertEqual(dumped_station[key], value)
         self.assertEqual(dumped["overshoot_policy"], payload["overshoot_policy"])
+        self.assertEqual(dumped["inflection_policy"], payload["inflection_policy"])
+
+    def test_inflection_policy_is_normalized_and_validated(self):
+        payload = _freeform_payload()
+        payload["inflection_policy"] = " WARN "
+        self.assertEqual(
+            WaveguideParamsRequest(**payload).model_dump()["inflection_policy"],
+            "warn",
+        )
+
+        for invalid in ("ignore", "", "enforce"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "inflection_policy"
+            ):
+                WaveguideParamsRequest(
+                    **{**_freeform_payload(), "inflection_policy": invalid}
+                )
 
     def test_light_collection_bounds_are_enforced(self):
         payload = _freeform_payload()
@@ -196,8 +220,10 @@ class FreeformAdapterTest(unittest.TestCase):
                 "profileV",
                 "crossSections",
                 "overshootPolicy",
+                "inflectionPolicy",
             },
         )
+        self.assertEqual(profile["inflectionPolicy"], "allow")
         self.assertEqual(profile["profileH"]["throatAngleDeg"], 15.5)
         self.assertEqual(profile["profileH"]["throatTangentScale"], 1.1)
         self.assertEqual(profile["profileH"]["points"][1], [60.0, 80.0, 25.0, 1.4])
@@ -213,6 +239,7 @@ class FreeformAdapterTest(unittest.TestCase):
         self.assertEqual(params["profileH"], profile["profileH"])
         self.assertEqual(params["profileV"], profile["profileV"])
         self.assertEqual(params["crossSections"], profile["crossSections"])
+        self.assertEqual(params["inflectionPolicy"], "allow")
 
     def test_adapter_rejects_missing_required_freeform_blocks(self):
         with self.assertRaisesRegex(

@@ -301,8 +301,15 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
       'mouthTangentScaleV',
       'crossSections',
       'overshootPolicy',
+      'inflectionPolicy',
     ]
   );
+  assert.equal(PARAM_SCHEMA.FREEFORM.inflectionPolicy.label, 'Curve Direction');
+  assert.deepEqual(PARAM_SCHEMA.FREEFORM.inflectionPolicy.options, [
+    { value: 'warn', label: 'Warn on S-curves' },
+    { value: 'reject', label: 'Enforce one-way' },
+    { value: 'allow', label: 'Free' },
+  ]);
   const source = getParameterSections('simulation', 'FREEFORM').find(
     (section) => section.id === 'source-definition'
   );
@@ -605,6 +612,68 @@ test('FREEFORM profile editor legend chips toggle each plane without changing pa
     assert.equal(editor.visibility.V, true);
     assert.ok(editor.findByAttribute('data-plane', 'V'));
   });
+});
+
+test('FREEFORM profile editor renders live S-curve overlays and warning badge only when needed', () => {
+  withFreeformPanel(
+    {
+      length: 100,
+      throatRadius: 12.7,
+      throatAngle: 15.5,
+      mouthRadiusH: 55,
+      mouthAngleH: 25,
+      interiorH: [[50, 35, 40]],
+      mouthRadiusV: 12.7 + 100 * Math.tan((15.5 * Math.PI) / 180),
+      mouthAngleV: 15.5,
+      interiorV: [],
+      inflectionPolicy: 'reject',
+    },
+    ({ paramContainer }) => {
+      const overlays = collectNodes(paramContainer, (node) =>
+        (node.attributes.class || '').includes('freeform-profile-inflection-overlay')
+      );
+      const badges = collectNodes(
+        paramContainer,
+        (node) => node.className === 'freeform-profile-inflection-badge'
+      );
+      assert.equal(overlays.length, 1);
+      assert.equal(overlays[0].attributes['data-inflection-plane'], 'H');
+      assert.equal(badges.length, 1);
+      assert.match(badges[0].textContent, /^S-curve in H: \d+\.\d deg$/);
+      assert.match(badges[0].title, /tangent handle.*add a point.*Curve Direction/);
+    }
+  );
+
+  const angleDeg = 20;
+  const mouthRadius = 12.7 + 100 * Math.tan((angleDeg * Math.PI) / 180);
+  withFreeformPanel(
+    {
+      length: 100,
+      throatRadius: 12.7,
+      throatAngle: angleDeg,
+      mouthRadiusH: mouthRadius,
+      mouthAngleH: angleDeg,
+      interiorH: [],
+      mouthRadiusV: mouthRadius,
+      mouthAngleV: angleDeg,
+      interiorV: [],
+    },
+    ({ paramContainer }) => {
+      assert.equal(
+        collectNodes(paramContainer, (node) =>
+          (node.attributes.class || '').includes('freeform-profile-inflection-overlay')
+        ).length,
+        0
+      );
+      assert.equal(
+        collectNodes(
+          paramContainer,
+          (node) => node.className === 'freeform-profile-inflection-badge'
+        ).length,
+        0
+      );
+    }
+  );
 });
 
 test('ParamPanel renders row-level formula buttons and removes the section-header affordance', () => {

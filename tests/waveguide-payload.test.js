@@ -184,6 +184,7 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
         { t: 1, shape: 'rounded_rectangle', cornerRadiusMm: 10 },
       ],
       overshootPolicy: 'allow',
+      inflectionPolicy: 'reject',
     }),
     '2.2'
   );
@@ -218,6 +219,7 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
     { t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 },
   ]);
   assert.equal(payload.overshoot_policy, 'allow');
+  assert.equal(payload.inflection_policy, 'reject');
   for (const key of ['R', 'r', 'b', 'm', 'tmax', 'L', 's', 'n', 'h', 'a', 'a0', 'r0', 'k', 'q']) {
     assert.equal(Object.hasOwn(payload, key), false, `${key} must not leak into FREEFORM`);
   }

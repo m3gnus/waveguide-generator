@@ -469,6 +469,18 @@ export const PARAM_SCHEMA = {
       default: 'reject',
       tooltip: 'Reject spline fits that overshoot their anchor bounds, or allow them explicitly.',
     },
+    inflectionPolicy: {
+      type: 'select',
+      label: 'Curve Direction',
+      options: [
+        { value: 'warn', label: 'Warn on S-curves' },
+        { value: 'reject', label: 'Enforce one-way' },
+        { value: 'allow', label: 'Free' },
+      ],
+      default: 'warn',
+      tooltip:
+        "An S-curve is a section where the wall's outward angle turns backward before opening again. Warn highlights it; Enforce one-way rejects it; Free allows it.",
+    },
   },
   GEOMETRY: {
     throatProfile: {
