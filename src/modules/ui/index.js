@@ -222,7 +222,15 @@ function buildAppCoordinator(input) {
     },
 
     createParamPanel(containerId = 'param-container') {
-      return new ParamPanel(containerId);
+      return new ParamPanel(containerId, {
+        getCachedViewportMesh: () => {
+          const smooth = app._meshCache?.smooth;
+          const grid = app._meshCache?.grid;
+          if (smooth?.source === 'backend' && smooth.grid) return smooth;
+          if (grid?.source === 'backend' && grid.grid) return grid;
+          return null;
+        },
+      });
     },
 
     dispose() {

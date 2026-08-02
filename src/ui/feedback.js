@@ -194,6 +194,131 @@ export function showAlertDialog({
   });
 }
 
+/**
+ * Confirm a model switch to FREEFORM. Conversion is prepared inside the
+ * dialog so its measured loss/rollback report is visible before state changes.
+ */
+export function showFreeformConversionDialog({ convertCurrentDesign } = {}) {
+  if (!hasDom() || typeof convertCurrentDesign !== 'function') {
+    return Promise.resolve({ action: 'cancel' });
+  }
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'ui-choice-backdrop';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'ui-choice-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', 'Switch to FREEFORM');
+
+    const title = document.createElement('h4');
+    title.className = 'ui-choice-title';
+    title.textContent = 'Switch to FREEFORM';
+    dialog.appendChild(title);
+
+    const subtitle = document.createElement('p');
+    subtitle.className = 'ui-choice-subtitle';
+    subtitle.textContent = 'Start blank or convert the current design into editable profiles.';
+    dialog.appendChild(subtitle);
+
+    const message = document.createElement('div');
+    message.className = 'ui-choice-message';
+    message.hidden = true;
+    dialog.appendChild(message);
+
+    const actions = document.createElement('div');
+    actions.className = 'ui-choice-actions';
+    dialog.appendChild(actions);
+
+    let releaseFocus;
+    let settled = false;
+    let busy = false;
+    const windowTarget = typeof window !== 'undefined' ? window : null;
+    const finalize = (result) => {
+      if (settled) return;
+      settled = true;
+      windowTarget?.removeEventListener?.('keydown', onKeyDown);
+      releaseFocus?.();
+      backdrop.remove();
+      resolve(result);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !busy) {
+        event.preventDefault();
+        finalize({ action: 'cancel' });
+      }
+    };
+
+    const makeButton = (label, help, className = '') => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `ui-choice-btn ${className}`.trim();
+      const labelEl = document.createElement('span');
+      labelEl.className = 'ui-choice-btn-label';
+      labelEl.textContent = label;
+      button.appendChild(labelEl);
+      if (help) {
+        const helpEl = document.createElement('span');
+        helpEl.className = 'ui-choice-btn-help';
+        helpEl.textContent = help;
+        button.appendChild(helpEl);
+      }
+      return button;
+    };
+
+    const blankButton = makeButton('Start blank', 'Use the current FREEFORM defaults.');
+    const convertButton = makeButton(
+      'Convert current design',
+      'Sample the current built surface and create editable H/V anchors.'
+    );
+    const cancelButton = makeButton('Cancel', '', 'secondary');
+    actions.appendChild(blankButton);
+    actions.appendChild(convertButton);
+    actions.appendChild(cancelButton);
+
+    blankButton.onclick = () => finalize({ action: 'blank' });
+    cancelButton.onclick = () => finalize({ action: 'cancel' });
+    convertButton.onclick = async () => {
+      busy = true;
+      for (const button of actions.children) button.disabled = true;
+      message.hidden = false;
+      message.className = 'ui-choice-message';
+      message.textContent = 'Sampling current design…';
+      try {
+        const conversion = await convertCurrentDesign();
+        message.textContent = conversion.summary;
+        actions.innerHTML = '';
+        const applyButton = makeButton(
+          'Use converted design',
+          'Replace the current design; Undo restores it.'
+        );
+        const backButton = makeButton('Cancel', '', 'secondary');
+        applyButton.onclick = () => finalize({ action: 'convert', conversion });
+        backButton.onclick = () => finalize({ action: 'cancel' });
+        actions.appendChild(applyButton);
+        actions.appendChild(backButton);
+        busy = false;
+        applyButton.focus?.();
+      } catch (error) {
+        message.className = 'ui-choice-message ui-choice-message-warning';
+        message.textContent = error?.message || 'Could not convert the current design.';
+        for (const button of actions.children) button.disabled = false;
+        busy = false;
+      }
+    };
+
+    backdrop.onclick = (event) => {
+      if (event.target === backdrop && !busy) finalize({ action: 'cancel' });
+    };
+    windowTarget?.addEventListener?.('keydown', onKeyDown);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    releaseFocus = trapFocus(dialog, { initialFocus: convertButton });
+  });
+}
+
 export function showCommandSuggestion({
   title = 'Command Suggestion',
   subtitle = '',

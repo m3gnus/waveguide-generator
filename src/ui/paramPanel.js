@@ -6,6 +6,8 @@ import { appendSectionNote, createLabelRow } from './helpAffordance.js';
 import { getParameterSections } from './parameterInventory.js';
 import { trapFocus } from './focusTrap.js';
 import { mountFreeformProfileEditor } from './freeformProfileEditor.js';
+import { convertToFreeform, formatConversionReport } from '../modules/design/convertToFreeform.js';
+import { showFreeformConversionDialog } from './feedback.js';
 import {
   validateOutputName,
   validateCounter,
@@ -222,7 +224,14 @@ function normalizeStations(value) {
 }
 
 export class ParamPanel {
-  constructor(containerId) {
+  constructor(
+    containerId,
+    {
+      convertCurrentDesign = convertToFreeform,
+      showConversionDialog = showFreeformConversionDialog,
+      getCachedViewportMesh = null,
+    } = {}
+  ) {
     this.container = document.getElementById(containerId);
     if (!this.container) throw new Error(`Container ${containerId} not found`);
     this.simulationSettingsContainer = document.getElementById('simulation-settings-container');
@@ -233,6 +242,10 @@ export class ParamPanel {
     this.controlIdCounter = 0;
     this.freeformEditor = null;
     this.freeformVisibility = { H: true, V: true };
+    this.convertCurrentDesign = convertCurrentDesign;
+    this.showConversionDialog = showConversionDialog;
+    this.getCachedViewportMesh = getCachedViewportMesh;
+    this.freeformSwitchPending = false;
     this.init();
   }
 
@@ -503,13 +516,53 @@ export class ParamPanel {
       typeSelect.appendChild(option);
     });
 
-    typeSelect.onchange = (e) => {
-      GlobalState.update({}, e.target.value);
+    typeSelect.onchange = async (e) => {
+      const nextType = e.target.value;
+      if (nextType === 'FREEFORM' && GlobalState.get().type !== 'FREEFORM') {
+        await this.requestFreeformSwitch(typeSelect);
+        return;
+      }
+      GlobalState.update({}, nextType);
     };
 
     typeRow.appendChild(typeSelect);
+    if (currentType !== 'FREEFORM') {
+      const convertButton = document.createElement('button');
+      convertButton.type = 'button';
+      convertButton.className = 'secondary model-convert-freeform';
+      convertButton.textContent = 'Convert to FREEFORM';
+      convertButton.onclick = () => this.requestFreeformSwitch(typeSelect);
+      typeRow.appendChild(convertButton);
+    }
     typeSection.appendChild(typeRow);
     return typeSection;
+  }
+
+  async requestFreeformSwitch(typeSelect) {
+    if (this.freeformSwitchPending) return;
+    const sourceState = GlobalState.get();
+    if (sourceState.type === 'FREEFORM') return;
+    this.freeformSwitchPending = true;
+    try {
+      const choice = await this.showConversionDialog({
+        convertCurrentDesign: async () => {
+          const conversion = await this.convertCurrentDesign(sourceState, {
+            viewportMesh: this.getCachedViewportMesh?.() || null,
+          });
+          return { ...conversion, summary: formatConversionReport(conversion.report) };
+        },
+      });
+      if (choice?.action === 'blank') {
+        GlobalState.update({}, 'FREEFORM');
+      } else if (choice?.action === 'convert' && choice.conversion?.params) {
+        // One state write means one undo entry for the complete conversion.
+        GlobalState.update(choice.conversion.params, 'FREEFORM');
+      } else if (typeSelect) {
+        typeSelect.value = sourceState.type;
+      }
+    } finally {
+      this.freeformSwitchPending = false;
+    }
   }
 
   createControlRow(key, def, currentValue) {

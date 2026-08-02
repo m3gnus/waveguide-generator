@@ -571,6 +571,13 @@ details.section[open] > summary {
   font-weight: 500;
 }
 
+.model-convert-freeform {
+  align-self: flex-start;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--text-xs);
+}
+
 .input-label-row {
   display: flex;
   align-items: center;
