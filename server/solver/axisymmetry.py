@@ -99,34 +99,7 @@ def circsym_axisymmetric_rejection_reasons(
 
     formula = str(params.get("formula_type") or params.get("formula") or "").strip().upper()
     if formula == "FREEFORM":
-        profile_h = params.get("profile_h")
-        profile_v = params.get("profile_v")
-        if (
-            not isinstance(profile_h, Mapping)
-            or not isinstance(profile_v, Mapping)
-            or profile_h != profile_v
-        ):
-            reasons.append("FREEFORM horizontal and vertical profiles differ")
-
-        stations = params.get("cross_sections")
-        if not isinstance(stations, (list, tuple)):
-            reasons.append("FREEFORM cross-section stations are missing")
-        else:
-            for index, station in enumerate(stations):
-                if not isinstance(station, Mapping):
-                    reasons.append(f"FREEFORM cross-section station {index} is invalid")
-                    continue
-                shape = str(station.get("shape") or "").strip().lower()
-                exponent = _finite_number(station.get("exponent"), 2.0)
-                is_circular_family = shape in {"circle", "ellipse"} or (
-                    shape == "superellipse"
-                    and exponent is not None
-                    and math.isclose(exponent, 2.0, rel_tol=0.0, abs_tol=1.0e-9)
-                )
-                if not is_circular_family:
-                    reasons.append(
-                        f"FREEFORM cross-section station {index} shape is not circular"
-                    )
+        reasons.extend(_circsym_rejection_reasons_for_payload(params))
 
     morph_target = _finite_number(params.get("morph_target", 0), None)
     if morph_target is None or not math.isclose(morph_target, 0.0, rel_tol=0.0, abs_tol=1.0e-9):
@@ -145,7 +118,10 @@ def validate_circsym_axisymmetric(waveguide_params: Mapping[str, Any] | None) ->
     # builds the aperture meridian. Only non-circular geometry is rejected here.
     reasons = circsym_axisymmetric_rejection_reasons(waveguide_params)
     if reasons:
-        raise ValueError("CircSym requires a circular waveguide: " + "; ".join(reasons))
+        detail = "; ".join(reasons)
+        if not detail.startswith("CircSym requires a circular waveguide:"):
+            detail = "CircSym requires a circular waveguide: " + detail
+        raise ValueError(detail)
 
 
 def reject_bempp_circsym_request(request: Any) -> None:

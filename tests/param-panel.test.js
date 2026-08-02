@@ -33,27 +33,41 @@ function syntheticInsetGrid({ radiusH = 80, radiusV = 55, length = 120 } = {}) {
 }
 
 class FakeElement {
-  constructor(tagName, ownerDocument) {
+  constructor(tagName, ownerDocument, namespaceURI = null) {
     this.tagName = String(tagName || '').toUpperCase();
     this.ownerDocument = ownerDocument;
+    this.namespaceURI = namespaceURI;
     this.children = [];
     this.attributes = {};
     this.style = {};
-    this.className = '';
+    this._className = '';
+    Object.defineProperty(this, 'className', {
+      configurable: true,
+      get: () => this._className,
+      set: (value) => {
+        if (this.namespaceURI) {
+          throw new TypeError('SVGElement.className is an SVGAnimatedString.');
+        }
+        this._className = String(value || '');
+      },
+    });
     this.classList = {
       add: (...tokens) => {
-        const existing = new Set(this.className.split(/\s+/).filter(Boolean));
+        const existing = new Set(this._className.split(/\s+/).filter(Boolean));
         for (const token of tokens) {
           existing.add(token);
         }
-        this.className = Array.from(existing).join(' ');
+        this.setAttribute('class', Array.from(existing).join(' '));
       },
       remove: (...tokens) => {
         const removed = new Set(tokens);
-        this.className = this.className
-          .split(/\s+/)
-          .filter((token) => token && !removed.has(token))
-          .join(' ');
+        this.setAttribute(
+          'class',
+          this._className
+            .split(/\s+/)
+            .filter((token) => token && !removed.has(token))
+            .join(' ')
+        );
       },
     };
     this.textContent = '';
@@ -97,6 +111,7 @@ class FakeElement {
 
   setAttribute(name, value) {
     this.attributes[name] = String(value);
+    if (name === 'class') this._className = String(value);
   }
 
   getAttribute(name) {
@@ -143,6 +158,10 @@ class FakeDocument {
 
   createElement(tagName) {
     return new FakeElement(tagName, this);
+  }
+
+  createElementNS(namespaceURI, tagName) {
+    return new FakeElement(tagName, this, namespaceURI);
   }
 
   getElementById(id) {
@@ -195,6 +214,17 @@ function withFreeformPanel(paramsPatch, callback) {
     global.document = originalDocument;
   }
 }
+
+test('FakeDocument models SVG namespace className semantics', () => {
+  const fakeDocument = new FakeDocument();
+  const svg = fakeDocument.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  assert.equal(svg.namespaceURI, 'http://www.w3.org/2000/svg');
+  assert.throws(() => {
+    svg.className = 'invalid-svg-assignment';
+  }, /SVGAnimatedString/);
+  svg.setAttribute('class', 'valid-svg-class');
+  assert.equal(svg.className, 'valid-svg-class');
+});
 
 test('formula allowlist limits per-row formula controls to audited fields', () => {
   assert.equal(getControlInputMode(PARAM_SCHEMA['R-OSSE'].R), 'formula');
@@ -573,6 +603,119 @@ test('FREEFORM profile editor commits drag results through GlobalState update se
   });
 });
 
+test('FREEFORM anchor drag keeps its identity while crossing another anchor', () => {
+  withFreeformPanel(
+    {
+      interiorH: [
+        [30, 20],
+        [60, 40],
+      ],
+    },
+    ({ paramContainer, editor }) => {
+      const handle = collectNodes(
+        paramContainer,
+        (node) =>
+          node.attributes['data-handle'] === 'interior' && node.attributes['data-index'] === '0'
+      )[0];
+      editor.onPointerDown({
+        target: handle,
+        pointerId: 21,
+        clientX: editor.transforms.x(30),
+        clientY: editor.transforms.y(20),
+        preventDefault() {},
+      });
+      editor.onPointerMove({
+        pointerId: 21,
+        clientX: editor.transforms.x(70),
+        clientY: editor.transforms.y(25),
+        preventDefault() {},
+      });
+      editor.onPointerMove({
+        pointerId: 21,
+        clientX: editor.transforms.x(80),
+        clientY: editor.transforms.y(30),
+        preventDefault() {},
+      });
+      editor.onPointerUp({ pointerId: 21, preventDefault() {} });
+
+      assert.deepEqual(GlobalState.get().params.interiorH, [
+        { z: 60, r: 40, angleDeg: null, strength: null },
+        { z: 80, r: 30, angleDeg: null, strength: null },
+      ]);
+    }
+  );
+});
+
+test('FREEFORM anchor drag nudges an exact z collision instead of deleting an anchor', () => {
+  withFreeformPanel(
+    {
+      interiorH: [
+        [30, 20],
+        [60, 40],
+      ],
+    },
+    ({ paramContainer, editor }) => {
+      const handle = collectNodes(
+        paramContainer,
+        (node) =>
+          node.attributes['data-handle'] === 'interior' && node.attributes['data-index'] === '0'
+      )[0];
+      editor.onPointerDown({
+        target: handle,
+        pointerId: 22,
+        clientX: editor.transforms.x(30),
+        clientY: editor.transforms.y(20),
+        preventDefault() {},
+      });
+      editor.onPointerMove({
+        pointerId: 22,
+        clientX: editor.transforms.x(60),
+        clientY: editor.transforms.y(25),
+        preventDefault() {},
+      });
+      editor.onPointerUp({ pointerId: 22, preventDefault() {} });
+
+      assert.equal(GlobalState.get().params.interiorH.length, 2);
+      assert.deepEqual(
+        GlobalState.get().params.interiorH.map((point) => point.z),
+        [60, 60.1]
+      );
+    }
+  );
+});
+
+test('FREEFORM pointercancel discards an anchor drag without committing', () => {
+  withFreeformPanel({ interiorH: [[30, 20]] }, ({ paramContainer, editor }) => {
+    const before = JSON.parse(JSON.stringify(GlobalState.get().params.interiorH));
+    const version = GlobalState.getVersion();
+    const historyLength = GlobalState.undoStack.length;
+    const handle = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-handle'] === 'interior'
+    )[0];
+
+    editor.onPointerDown({
+      target: handle,
+      pointerId: 23,
+      clientX: editor.transforms.x(30),
+      clientY: editor.transforms.y(20),
+      preventDefault() {},
+    });
+    editor.onPointerMove({
+      pointerId: 23,
+      clientX: editor.transforms.x(70),
+      clientY: editor.transforms.y(45),
+      preventDefault() {},
+    });
+    editor.onPointerCancel({ pointerId: 23, preventDefault() {} });
+
+    assert.deepEqual(editor.params.interiorH, before);
+    assert.deepEqual(GlobalState.get().params.interiorH, before);
+    assert.equal(GlobalState.getVersion(), version);
+    assert.equal(GlobalState.undoStack.length, historyLength);
+  });
+});
+
 test('FREEFORM profile editor flashes anchors clamped by a length update once', () => {
   withFreeformPanel({ interiorH: [[60, 55]] }, ({ paramContainer, panel, editor }) => {
     AppEvents.off('state:updated', editor._onStateUpdated);
@@ -643,6 +786,69 @@ test('FREEFORM selected-anchor tangent handle commits angle/strength and double-
   });
 });
 
+test('FREEFORM interior tangent pointer press without movement stays automatic', () => {
+  withFreeformPanel({ interiorH: [[40, 55]] }, ({ paramContainer, editor }) => {
+    editor.selectedAnchor = { plane: 'H', index: 0 };
+    editor.draw();
+    const knob = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-handle'] === 'interior-tangent'
+    )[0];
+    const version = GlobalState.getVersion();
+    editor.onPointerDown({
+      target: knob,
+      pointerId: 8,
+      clientX: Number(knob.attributes.cx),
+      clientY: Number(knob.attributes.cy),
+      preventDefault() {},
+    });
+    editor.onPointerUp({ pointerId: 8, preventDefault() {} });
+
+    assert.equal(GlobalState.get().params.interiorH[0].angleDeg, null);
+    assert.equal(GlobalState.get().params.interiorH[0].strength, null);
+    assert.equal(GlobalState.getVersion(), version);
+  });
+});
+
+test('FREEFORM double-click inserts only on empty curve area, not handles', () => {
+  withFreeformPanel(
+    {
+      interiorH: [[40, 55]],
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.5, shape: 'ellipse' },
+        { t: 1, shape: 'ellipse' },
+      ],
+    },
+    ({ paramContainer, editor }) => {
+      const handles = ['interior', 'radius', 'angle', 'station'].map(
+        (kind) => collectNodes(paramContainer, (node) => node.attributes['data-handle'] === kind)[0]
+      );
+      for (const handle of handles) {
+        assert.ok(handle);
+        editor.onDoubleClick({ target: handle, preventDefault() {} });
+        assert.equal(GlobalState.get().params.interiorH.length, 1);
+      }
+
+      const curve = collectNodes(
+        paramContainer,
+        (node) =>
+          node.attributes['data-curve-source'] !== undefined &&
+          node.attributes['data-plane'] === 'H'
+      )[0];
+      const z = 80;
+      const radius = editor.radiusAtZ('H', z);
+      editor.onDoubleClick({
+        target: curve,
+        clientX: editor.transforms.x(z),
+        clientY: editor.transforms.y(radius),
+        preventDefault() {},
+      });
+      assert.equal(GlobalState.get().params.interiorH.length, 2);
+    }
+  );
+});
+
 test('FREEFORM profile editor inserts and deletes plane anchors', () => {
   withFreeformPanel({}, ({ editor }) => {
     editor.insertAnchor('H', 61.25, 78.75);
@@ -684,6 +890,90 @@ test('FREEFORM point fields commit CAD angle and strength controls', () => {
     row.children[2].onchange({ target: row.children[2] });
     assert.equal(GlobalState.get().params.interiorH[0].angleDeg, null);
     assert.equal(GlobalState.get().params.interiorH[0].strength, null);
+  });
+});
+
+test('FREEFORM point table refuses non-positive radii', () => {
+  withFreeformPanel({ interiorH: [[40, 55]] }, ({ paramContainer }) => {
+    const row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];
+    row.children[1].value = '-5';
+    row.children[1].onchange({ target: row.children[1] });
+
+    assert.equal(GlobalState.get().params.interiorH[0].r, 55);
+    assert.match(
+      collectNodes(row.parentNode, (node) => node.className === 'input-error-message')[0]
+        .textContent,
+      /greater than 0/
+    );
+  });
+});
+
+test('FREEFORM panel restores focus to the same point field after a rebuild', () => {
+  withFreeformPanel(
+    {
+      interiorH: [
+        [30, 40],
+        [70, 90],
+      ],
+    },
+    ({ fakeDocument, paramContainer, panel }) => {
+      const radius = collectNodes(
+        paramContainer,
+        (node) => node.attributes['aria-label'] === 'interiorH point 2 radius'
+      )[0];
+      radius.focus();
+      radius.value = '92';
+      radius.onchange({ target: radius });
+      panel.createFullPanel();
+
+      assert.equal(fakeDocument.activeElement.attributes['aria-label'], 'interiorH point 2 radius');
+      assert.equal(fakeDocument.activeElement.value, '92');
+    }
+  );
+});
+
+test('FREEFORM panel restores focus to the same station depth field after a rebuild', () => {
+  withFreeformPanel(
+    {
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.4, shape: 'ellipse' },
+        { t: 1, shape: 'ellipse' },
+      ],
+    },
+    ({ fakeDocument, paramContainer, panel }) => {
+      const depth = collectNodes(
+        paramContainer,
+        (node) => node.attributes['aria-label'] === 'Station 2 Depth (mm)'
+      )[0];
+      depth.focus();
+      depth.value = '60';
+      depth.onchange({ target: depth });
+      panel.createFullPanel();
+
+      assert.equal(fakeDocument.activeElement.attributes['aria-label'], 'Station 2 Depth (mm)');
+      assert.equal(fakeDocument.activeElement.value, '60');
+    }
+  );
+});
+
+test('FREEFORM panel preserves uncommitted focused text across an unrelated rebuild', () => {
+  withFreeformPanel({ interiorH: [[40, 55]] }, ({ fakeDocument, paramContainer, panel }) => {
+    const angle = collectNodes(
+      paramContainer,
+      (node) => node.attributes['aria-label'] === 'interiorH point 1 tangent angle'
+    )[0];
+    angle.focus();
+    angle.value = '37';
+    GlobalState.update({ mouthRadiusV: 155 });
+    panel.createFullPanel();
+
+    assert.equal(
+      fakeDocument.activeElement.attributes['aria-label'],
+      'interiorH point 1 tangent angle'
+    );
+    assert.equal(fakeDocument.activeElement.value, '37');
+    assert.equal(GlobalState.get().params.interiorH[0].angleDeg, null);
   });
 });
 

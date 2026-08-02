@@ -38,6 +38,7 @@ import {
 } from '../../modules/simulation/state.js';
 import { resolveAvailableSolveCounter } from '../../modules/simulation/naming.js';
 import { resolveClearedFailedJobIds } from '../../modules/simulation/jobs.js';
+import { getExportCapability } from '../../modules/export/capabilities.js';
 import {
   clearSimulationControllerJobs,
   ensureSimulationControllerJobResults,
@@ -265,19 +266,22 @@ function renderJobActionButton({
   return `<button type="button" class="${className}" data-job-action="${action}" data-job-id="${jobIdAttr}" title="${title}">${label}</button>`;
 }
 
-function renderJobExportMenu(jobIdAttr) {
-  const items = JOB_EXPORT_MENU_ITEMS.map(
-    ([formatId, label, title]) => `
+function renderJobExportMenu(jobIdAttr, formula) {
+  const items = JOB_EXPORT_MENU_ITEMS.map(([formatId, label, title]) => {
+    const capability = getExportCapability(formula, formatId);
+    const itemTitle = capability.available ? title : capability.reason;
+    return `
       <button
         type="button"
         role="menuitem"
         data-job-action="export-format"
         data-job-id="${jobIdAttr}"
         data-export-format="${escapeHtml(formatId)}"
-        title="${escapeHtml(title)}"
+        title="${escapeHtml(itemTitle)}"
+        ${capability.available ? '' : 'disabled aria-disabled="true"'}
       >${escapeHtml(label)}</button>
-    `
-  ).join('');
+    `;
+  }).join('');
 
   return `
     <div class="export-menu export-menu--job">
@@ -309,9 +313,10 @@ function syncJobListPreferenceControls() {
   }
 }
 
-function buildJobListSignature(panel, jobs, sortBy, minRating) {
+function buildJobListSignature(panel, jobs, sortBy, minRating, formula) {
   return JSON.stringify({
     activeJobId: String(panel.activeJobId ?? ''),
+    formula,
     sortBy,
     minRating,
     jobs: jobs.map((job) => ({
@@ -493,7 +498,8 @@ export function renderJobList(panel) {
     sortBy,
     minRating,
   });
-  const signature = buildJobListSignature(panel, jobs, sortBy, minRating);
+  const formula = readSimulationState()?.type || '';
+  const signature = buildJobListSignature(panel, jobs, sortBy, minRating, formula);
   // A skeleton write (restoreJobs/refresh) replaces the list content without
   // touching the memo, so the memo may only skip when no skeleton is showing.
   const listShowsSkeleton =
@@ -545,7 +551,7 @@ export function renderJobList(panel) {
       </div>
       <div class="simulation-job-actions">
         ${job.status === 'complete' ? renderJobActionButton({ action: 'view', jobIdAttr, label: 'Results', title: 'View results' }) : ''}
-        ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr) : ''}
+        ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr, formula) : ''}
         ${job.script ? renderJobActionButton({ action: 'load-script', jobIdAttr, label: 'Load', title: 'Load parameters' }) : ''}
         ${canRerun ? renderJobActionButton({ action: 'redo', jobIdAttr, label: 'Rerun', title: 'Rerun' }) : ''}
         ${canStop ? renderJobActionButton({ action: 'stop', jobIdAttr, label: 'Stop', title: 'Stop', className: 'btn-tertiary button-compact' }) : ''}
@@ -567,8 +573,16 @@ export async function viewJobResults(panel, jobId) {
 }
 
 export async function exportJobResults(panel, jobId, selectedFormats = null) {
+  const formula = readSimulationState()?.type || '';
+  for (const format of Array.isArray(selectedFormats) ? selectedFormats : []) {
+    const capability = getExportCapability(formula, format);
+    if (!capability.available) {
+      showError(capability.reason);
+      return false;
+    }
+  }
   const results = await ensureJobResults(panel, jobId, { display: true });
-  if (!results) return;
+  if (!results) return false;
   const job = panel.jobs?.get(jobId) || null;
   const bundle = await panel.exportResults({ job, selectedFormats });
   if (bundle && (bundle.exportedFiles.length > 0 || bundle.failures.length > 0)) {
@@ -578,6 +592,7 @@ export async function exportJobResults(panel, jobId, selectedFormats = null) {
     });
   }
   panel.pollSimulationStatus();
+  return true;
 }
 
 export function loadJobScript(panel, jobId) {

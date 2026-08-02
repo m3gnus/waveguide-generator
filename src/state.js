@@ -36,12 +36,33 @@ function getStorage() {
   return storage;
 }
 
+function paramValueEqual(a, b) {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => paramValueEqual(value, b[index]))
+    );
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    return (
+      aKeys.length === bKeys.length &&
+      aKeys.every((key) => Object.hasOwn(b, key) && paramValueEqual(a[key], b[key]))
+    );
+  }
+  return false;
+}
+
 function paramsEqual(a = {}, b = {}) {
   const aKeys = Object.keys(a || {});
   const bKeys = Object.keys(b || {});
   if (aKeys.length !== bKeys.length) return false;
   for (const key of aKeys) {
-    if (!Object.hasOwn(b, key) || !Object.is(a[key], b[key])) {
+    if (!Object.hasOwn(b, key) || !paramValueEqual(a[key], b[key])) {
       return false;
     }
   }

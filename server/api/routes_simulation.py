@@ -24,6 +24,7 @@ from services.simulation_validation import (
 from services.solver_runtime import (
     BEMPP_SOLVER_READY,
     HORNLAB_MESHER_AVAILABLE,
+    HORNLAB_MESHER_FREEFORM_SUPPORTED,
     HORNLAB_MESHER_RUNTIME_READY,
     bempp_backend_status,
     build_waveguide_mesh,
@@ -55,9 +56,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _raw_request_uses_freeform(request: SimulationRequest) -> bool:
+    options = request.options if isinstance(request.options, dict) else {}
+    mesh = options.get("mesh") if isinstance(options.get("mesh"), dict) else {}
+    params = mesh.get("waveguide_params")
+    if not isinstance(params, dict):
+        return False
+    formula = params.get("formula_type") or params.get("formula")
+    return str(formula or "").strip().upper() == "FREEFORM"
+
+
 @router.post("/api/solve")
 async def submit_simulation(request: SimulationRequest) -> Dict[str, str]:
     """Submit a new BEM simulation job. Returns a job ID for tracking progress."""
+    if _raw_request_uses_freeform(request):
+        if not HORNLAB_MESHER_AVAILABLE:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "hornlab-waveguide-mesher is unavailable. "
+                    "Install server requirements to enable backend mesh generation."
+                ),
+            )
+        if not HORNLAB_MESHER_FREEFORM_SUPPORTED:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Installed hornlab-waveguide-mesher does not support FREEFORM; "
+                    "reinstall server requirements."
+                ),
+            )
+
     try:
         validation = validate_submit_simulation_request(request)
     except ValueError as exc:

@@ -545,6 +545,18 @@ class WaveguideParamsRequest(BaseModel):
             raise ValueError("FREEFORM cross_sections must contain 2-32 stations.")
         return value
 
+    @field_validator("overshoot_policy")
+    @classmethod
+    def validate_overshoot_policy(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in {"reject", "allow"}:
+            raise ValueError(
+                "FREEFORM overshoot_policy must be one of: reject, allow."
+            )
+        return normalized
+
     @field_validator("inflection_policy")
     @classmethod
     def validate_inflection_policy(cls, value: Optional[str]) -> Optional[str]:

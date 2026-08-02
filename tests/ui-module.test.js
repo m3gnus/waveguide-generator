@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { AppEvents } from '../src/events.js';
 import { UiModule } from '../src/modules/ui/index.js';
+import { getViewportStateCacheKey } from '../src/app/viewportCacheKey.js';
+import { getDefaults } from '../src/config/defaults.js';
 
 function makeMeshPayload(overrides = {}) {
   return {
@@ -203,6 +205,50 @@ test('UiModule app coordinator exposes file operation helpers through the app ed
     ['reset', { skipNext: true }],
     ['choose']
   ]);
+});
+
+test('UiModule exposes only backend viewport meshes matching the current state cache key', () => {
+  const originalDocument = global.document;
+  global.document = {
+    getElementById: (id) => (id === 'param-container' ? {} : null),
+  };
+  try {
+    const currentState = { type: 'OSSE', params: getDefaults('OSSE') };
+    const cachedMesh = { source: 'backend', grid: { marker: 'current' } };
+    const app = {
+      currentState,
+      _meshCache: {
+        stateKey: getViewportStateCacheKey(currentState),
+        smooth: cachedMesh,
+        grid: null,
+      },
+      simulationPanel: null,
+      onStateUpdate() {},
+      provideMeshForSimulation() {},
+      schedulePanelAutoSize() {},
+    };
+    const coordinator = UiModule.output.app(
+      UiModule.task(
+        UiModule.importApp(app, {
+          loadSimulationPanel: async () => ({ SimulationPanel: class {} }),
+          fileOps: makeFileOps(),
+        })
+      )
+    );
+    const panel = coordinator.createParamPanel();
+
+    assert.deepEqual(panel.getCachedViewportMesh(), {
+      ...cachedMesh,
+      stateKey: app._meshCache.stateKey,
+    });
+    app.currentState = {
+      ...currentState,
+      params: { ...currentState.params, L: Number(currentState.params.L) + 10 },
+    };
+    assert.equal(panel.getCachedViewportMesh(), null);
+  } finally {
+    global.document = originalDocument;
+  }
 });
 
 test('UiModule simulation-panel coordinator resolves mesh requests and syncs state updates', async () => {

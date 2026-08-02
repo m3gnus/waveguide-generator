@@ -124,9 +124,7 @@ test('FREEFORM length updates clamp, sort, and collapse interior anchors in stat
     { z: 10, r: 30, angleDeg: null, strength: null },
     { z: 39, r: 60, angleDeg: 20, strength: 1.2 },
   ]);
-  assert.deepEqual(state.get().params.interiorV, [
-    { z: 1, r: 40, angleDeg: null, strength: null },
-  ]);
+  assert.deepEqual(state.get().params.interiorV, [{ z: 1, r: 40, angleDeg: null, strength: null }]);
 });
 
 test('persisted FREEFORM anchors are clamped to the normalized length', () => {
@@ -191,6 +189,42 @@ test('AppState.update skips exact no-op updates without version or history churn
   assert.equal(state.undoStack.length, 0);
 
   assert.equal(state.update({ freqStart: state.current.params.freqStart + 10 }), true);
+  assert.equal(state.getVersion(), 1);
+  assert.equal(state.undoStack.length, 1);
+});
+
+test('AppState.update structurally compares normalized FREEFORM arrays', () => {
+  const state = new AppState();
+  state.current = {
+    type: 'FREEFORM',
+    params: {
+      ...getDefaults('FREEFORM'),
+      interiorH: [{ z: 40, r: 55, angleDeg: null, strength: null }],
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 1, shape: 'ellipse' },
+      ],
+    },
+  };
+  state.undoStack = [];
+  state.redoStack = [];
+  state._stateVersion = 0;
+
+  assert.equal(
+    state.update({ interiorH: [{ z: 40, r: 55, angleDeg: null, strength: null }] }),
+    false
+  );
+  assert.equal(
+    state.update({ crossSections: state.current.params.crossSections.map((row) => ({ ...row })) }),
+    false
+  );
+  assert.equal(state.getVersion(), 0);
+  assert.equal(state.undoStack.length, 0);
+
+  assert.equal(
+    state.update({ interiorH: [{ z: 40, r: 56, angleDeg: null, strength: null }] }),
+    true
+  );
   assert.equal(state.getVersion(), 1);
   assert.equal(state.undoStack.length, 1);
 });

@@ -101,12 +101,20 @@ GMSH_SUPPORTED = GMSH_AVAILABLE and PYTHON_SUPPORTED and _in_supported_range(
 )
 
 HORNLAB_MESHER_VERSION = None
+HORNLAB_MESHER_FREEFORM_SUPPORTED = False
 try:
     from hornlab_mesher.config_builder import build_from_config as _hornlab_mesher_build_from_config  # type: ignore  # noqa: F401
     HORNLAB_MESHER_VERSION = _distribution_version("hornlab-waveguide-mesher")
     HORNLAB_MESHER_AVAILABLE = HORNLAB_MESHER_VERSION is not None
 except ImportError:
     HORNLAB_MESHER_AVAILABLE = False
+
+if HORNLAB_MESHER_AVAILABLE:
+    try:
+        from hornlab_mesher.freeform import build_freeform_geometry as _build_freeform_geometry  # type: ignore  # noqa: F401
+        HORNLAB_MESHER_FREEFORM_SUPPORTED = True
+    except ImportError:
+        pass
 
 HORNLAB_MESHER_RUNTIME_READY = HORNLAB_MESHER_AVAILABLE and GMSH_SUPPORTED
 
@@ -140,6 +148,11 @@ if not HORNLAB_MESHER_AVAILABLE:
     logger.warning(
         "hornlab-waveguide-mesher runtime not available or wrong hornlab_mesher package is installed."
     )
+elif not HORNLAB_MESHER_FREEFORM_SUPPORTED:
+    logger.warning(
+        "Installed hornlab-waveguide-mesher does not support FREEFORM; "
+        "reinstall server requirements."
+    )
 if not HORNLAB_METAL_BEM_AVAILABLE:
     logger.warning("hornlab-metal-bem runtime not available.")
 if not HORNLAB_BEMPP_BEM_AVAILABLE:
@@ -165,6 +178,10 @@ def get_dependency_status() -> Dict[str, Dict[str, object]]:
                 "version": HORNLAB_MESHER_VERSION,
                 "supported": HORNLAB_MESHER_AVAILABLE,
                 "ready": HORNLAB_MESHER_AVAILABLE,
+                "freeformSupported": HORNLAB_MESHER_FREEFORM_SUPPORTED,
+                "freeformReady": (
+                    HORNLAB_MESHER_AVAILABLE and HORNLAB_MESHER_FREEFORM_SUPPORTED
+                ),
             },
             "hornlab_metal_bem": {
                 "available": HORNLAB_METAL_BEM_AVAILABLE,

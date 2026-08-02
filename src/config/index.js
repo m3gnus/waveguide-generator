@@ -1,5 +1,27 @@
 import { fromWireFreeform } from './freeformModel.js';
 
+const FREEFORM_PROFILE_ITEMS = new Set([
+  'MouthRadius',
+  'MouthAngle',
+  'ThroatTangentScale',
+  'MouthTangentScale',
+]);
+const FREEFORM_FLAT_ITEMS = new Set([
+  'Freeform.Length',
+  'Freeform.ThroatRadius',
+  'Freeform.ThroatAngle',
+  'Freeform.OvershootPolicy',
+  'Freeform.InflectionPolicy',
+]);
+const FREEFORM_BLOCKS = new Set([
+  'Freeform.H',
+  'Freeform.V',
+  'Freeform.H.Points',
+  'Freeform.V.Points',
+  'Freeform.CrossSections',
+]);
+const FREEFORM_STATION_SHAPES = new Set(['circle', 'ellipse', 'superellipse', 'rounded_rectangle']);
+
 const SHARED_FLAT_KEY_MAP = Object.freeze({
   'Morph.TargetShape': 'morphTarget',
   'Morph.TargetWidth': 'morphWidth',
@@ -54,21 +76,168 @@ function normalizeSharedFlatKeys(params) {
   }
 }
 
-function parseFreeformRows(block) {
-  return (block?._lines || []).map((line) => line.trim().split(/\s+/));
+function rowError(blockName, block, index, message) {
+  const sourceLine = block?._lineNumbers?.[index];
+  const location = `${blockName} row ${index + 1}${sourceLine ? ` (line ${sourceLine})` : ''}`;
+  return new Error(`${location}: ${message}`);
+}
+
+function validateBlockItems(blockName, block, allowedItems) {
+  for (const itemName of Object.keys(block?._items || {})) {
+    if (!allowedItems.has(itemName)) {
+      const sourceLine = block?._itemLineNumbers?.[itemName];
+      throw new Error(
+        `${blockName} item ${itemName}${sourceLine ? ` (line ${sourceLine})` : ''}: unknown item name.`
+      );
+    }
+  }
+}
+
+function parseFreeformPointRows(block, blockName, length) {
+  validateBlockItems(blockName, block, new Set());
+  const rows = (block?._lines || []).map((line, index) => {
+    const tokens = line.trim().split(/\s+/);
+    if (![2, 3, 4].includes(tokens.length)) {
+      throw rowError(blockName, block, index, 'expected exactly 2, 3, or 4 numeric values.');
+    }
+    const values = tokens.map(Number);
+    const invalidColumn = values.findIndex((value) => !Number.isFinite(value));
+    if (invalidColumn >= 0) {
+      throw rowError(
+        blockName,
+        block,
+        index,
+        `column ${invalidColumn + 1} must be a finite number.`
+      );
+    }
+    if (!(values[0] > 0 && values[0] < length)) {
+      throw rowError(blockName, block, index, `z must be strictly between 0 and ${length}.`);
+    }
+    if (!(values[1] > 0)) {
+      throw rowError(blockName, block, index, 'radius must be greater than 0.');
+    }
+    if (values.length >= 3 && !(values[2] > -90 && values[2] < 90)) {
+      throw rowError(blockName, block, index, 'angle must be greater than -90 and less than 90.');
+    }
+    if (values.length === 4 && !(values[3] > 0 && values[3] <= 3)) {
+      throw rowError(blockName, block, index, 'strength must be greater than 0 and at most 3.');
+    }
+    return values;
+  });
+  if (rows.length > 62) {
+    throw rowError(
+      blockName,
+      block,
+      62,
+      `contains ${rows.length} interior anchors; the maximum is 62.`
+    );
+  }
+  for (let index = 1; index < rows.length; index += 1) {
+    if (!(rows[index][0] > rows[index - 1][0])) {
+      throw rowError(blockName, block, index, 'z values must be strictly increasing.');
+    }
+  }
+  return rows;
+}
+
+function parseFreeformStations(block) {
+  const blockName = 'Freeform.CrossSections';
+  validateBlockItems(blockName, block, new Set());
+  const stations = (block?._lines || []).map((line, index) => {
+    const tokens = line.trim().split(/\s+/);
+    if (![2, 3].includes(tokens.length)) {
+      throw rowError(blockName, block, index, 'expected exactly 2 or 3 values.');
+    }
+    const t = Number(tokens[0]);
+    if (!Number.isFinite(t)) {
+      throw rowError(blockName, block, index, 'column 1 must be a finite number.');
+    }
+    if (t < 0 || t > 1) {
+      throw rowError(blockName, block, index, 't must be between 0 and 1.');
+    }
+    const shape = tokens[1];
+    if (!FREEFORM_STATION_SHAPES.has(shape)) {
+      throw rowError(blockName, block, index, `unknown shape "${shape}".`);
+    }
+    const optional = tokens[2];
+    if (optional?.startsWith('ratio:')) {
+      throw rowError(
+        blockName,
+        block,
+        index,
+        'corner ratios were removed; use cornerRadiusMm (mm).'
+      );
+    }
+    if (optional !== undefined && !Number.isFinite(Number(optional))) {
+      throw rowError(blockName, block, index, 'column 3 must be a finite number.');
+    }
+    if (optional !== undefined && !['superellipse', 'rounded_rectangle'].includes(shape)) {
+      throw rowError(blockName, block, index, `${shape} rows must contain exactly 2 values.`);
+    }
+    return { t, shape, optional };
+  });
+  if (stations.length > 32) {
+    throw rowError(
+      blockName,
+      block,
+      32,
+      `contains ${stations.length} stations; the maximum is 32.`
+    );
+  }
+  for (let index = 1; index < stations.length; index += 1) {
+    if (!(stations[index].t > stations[index - 1].t)) {
+      throw rowError(blockName, block, index, 't values must be strictly increasing.');
+    }
+  }
+  if (stations.length < 2) {
+    throw new Error('Freeform.CrossSections requires at least two station rows.');
+  }
+  if (stations[0].t !== 0 || stations[0].shape !== 'circle') {
+    throw rowError(blockName, block, 0, 'the first station must be "0 circle".');
+  }
+  if (stations.at(-1).t !== 1) {
+    throw rowError(blockName, block, stations.length - 1, 'the last station must have t = 1.');
+  }
+  return stations.map(({ t, shape, optional }) => {
+    const station = { t, shape };
+    if (shape === 'superellipse' && optional !== undefined) station.exponent = Number(optional);
+    if (shape === 'rounded_rectangle' && optional !== undefined) {
+      station.corner_radius_mm = Number(optional);
+    }
+    return station;
+  });
 }
 
 function consumeFreeformSection(result) {
   const p = result.params;
+  for (const key of Object.keys(p)) {
+    if (key.startsWith('Freeform.') && !FREEFORM_FLAT_ITEMS.has(key)) {
+      throw new Error(`FREEFORM item ${key}: unknown item name.`);
+    }
+  }
+  for (const blockName of Object.keys(result.blocks)) {
+    if (blockName.startsWith('Freeform.') && !FREEFORM_BLOCKS.has(blockName)) {
+      throw new Error(`FREEFORM block ${blockName}: unknown block name.`);
+    }
+  }
   const horizontalBlock = result.blocks['Freeform.H'];
   const verticalBlock = result.blocks['Freeform.V'];
-  const length = p['Freeform.Length'];
+  validateBlockItems('Freeform.H', horizontalBlock, FREEFORM_PROFILE_ITEMS);
+  validateBlockItems('Freeform.V', verticalBlock, FREEFORM_PROFILE_ITEMS);
+  const length = Number(p['Freeform.Length']);
+  if (!Number.isFinite(length) || length <= 0) {
+    throw new Error('Freeform.Length must be a positive finite number.');
+  }
   const throatRadius = p['Freeform.ThroatRadius'];
   const throatAngle = p['Freeform.ThroatAngle'];
   const profile = (name, block) => ({
     points: [
       [0, throatRadius],
-      ...parseFreeformRows(result.blocks[`Freeform.${name}.Points`]),
+      ...parseFreeformPointRows(
+        result.blocks[`Freeform.${name}.Points`],
+        `Freeform.${name}.Points`,
+        length
+      ),
       [length, block?._items?.MouthRadius],
     ],
     throat_angle_deg: throatAngle,
@@ -76,21 +245,7 @@ function consumeFreeformSection(result) {
     throat_tangent_scale: block?._items?.ThroatTangentScale,
     mouth_tangent_scale: block?._items?.MouthTangentScale,
   });
-  const crossSections = parseFreeformRows(result.blocks['Freeform.CrossSections']).map(
-    ([t, shape, optional]) => {
-      const station = { t, shape };
-      if (shape === 'superellipse' && optional !== undefined) station.exponent = optional;
-      if (shape === 'rounded_rectangle' && optional !== undefined) {
-        if (optional.startsWith('ratio:')) {
-          throw new Error(
-            'Freeform.CrossSections corner ratios were removed; use cornerRadiusMm (mm).'
-          );
-        }
-        station.corner_radius_mm = optional;
-      }
-      return station;
-    }
-  );
+  const crossSections = parseFreeformStations(result.blocks['Freeform.CrossSections']);
   const canonical = fromWireFreeform({
     profile_h: profile('H', horizontalBlock),
     profile_v: profile('V', verticalBlock),
@@ -113,14 +268,17 @@ export class MWGConfigParser {
     const result = { type: null, params: {}, blocks: {} };
     const lines = content
       .split('\n')
-      .map((line) => {
+      .map((line, index) => {
         const commentIdx = line.indexOf(';');
-        return (commentIdx !== -1 ? line.substring(0, commentIdx) : line).trim();
+        return {
+          text: (commentIdx !== -1 ? line.substring(0, commentIdx) : line).trim(),
+          lineNumber: index + 1,
+        };
       })
-      .filter((line) => line.length > 0);
+      .filter(({ text }) => text.length > 0);
 
     let currentBlock = null;
-    for (const line of lines) {
+    for (const { text: line, lineNumber } of lines) {
       // Block start: "Name = {" or "Name:Sub = {"
       const blockStartMatch = line.match(/^([\w.:-]+)\s*=\s*\{/);
       if (blockStartMatch) {
@@ -128,7 +286,12 @@ export class MWGConfigParser {
         if (currentBlockName.startsWith('Freeform.')) {
           result.type = 'FREEFORM';
           currentBlock = currentBlockName;
-          result.blocks[currentBlockName] = { _items: {}, _lines: [] };
+          result.blocks[currentBlockName] = {
+            _items: {},
+            _lines: [],
+            _lineNumbers: [],
+            _itemLineNumbers: {},
+          };
         } else if (currentBlockName === 'R-OSSE') {
           result.type = 'R-OSSE';
           currentBlock = 'R-OSSE';
@@ -137,7 +300,12 @@ export class MWGConfigParser {
           currentBlock = 'OSSE';
         } else {
           currentBlock = currentBlockName;
-          result.blocks[currentBlockName] = { _items: {}, _lines: [] };
+          result.blocks[currentBlockName] = {
+            _items: {},
+            _lines: [],
+            _lineNumbers: [],
+            _itemLineNumbers: {},
+          };
         }
         continue;
       }
@@ -158,12 +326,14 @@ export class MWGConfigParser {
           result.params[key] = value;
         } else if (currentBlock && result.blocks[currentBlock]) {
           result.blocks[currentBlock]._items[key] = value;
+          result.blocks[currentBlock]._itemLineNumbers[key] = lineNumber;
         } else {
           // Flat top-level key — detect OSSE by known flat keys
           result.params[key] = value;
         }
       } else if (currentBlock && result.blocks[currentBlock]) {
         result.blocks[currentBlock]._lines.push(line);
+        result.blocks[currentBlock]._lineNumbers.push(lineNumber);
       }
     }
 

@@ -53,6 +53,61 @@ function gridPoint(grid, phiIndex, axialIndex, nLength) {
   return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null;
 }
 
+function validSliceMap(grid, nLength) {
+  const values = grid?.slice_map;
+  if (!Array.isArray(values) || values.length !== nLength + 1) return null;
+  const numeric = values.map(Number);
+  if (numeric.some((value) => !Number.isFinite(value))) return null;
+  for (let index = 1; index < numeric.length; index += 1) {
+    if (!(numeric[index] > numeric[index - 1])) return null;
+  }
+  if (numeric[0] > 0 || numeric.at(-1) < 1) return null;
+  return numeric;
+}
+
+function axialSample(grid, nLength, requestedT) {
+  const sliceMap = validSliceMap(grid, nLength);
+  if (!sliceMap) {
+    const axialPosition = requestedT * nLength;
+    const lowerIndex = Math.min(nLength, Math.floor(axialPosition));
+    const upperIndex = Math.min(nLength, lowerIndex + 1);
+    return {
+      lowerIndex,
+      upperIndex,
+      mix: axialPosition - lowerIndex,
+      sampledT: requestedT,
+    };
+  }
+
+  if (requestedT <= sliceMap[0]) {
+    return { lowerIndex: 0, upperIndex: 0, mix: 0, sampledT: sliceMap[0] };
+  }
+  if (requestedT >= sliceMap.at(-1)) {
+    return {
+      lowerIndex: nLength,
+      upperIndex: nLength,
+      mix: 0,
+      sampledT: sliceMap.at(-1),
+    };
+  }
+
+  let low = 0;
+  let high = nLength;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (sliceMap[middle] <= requestedT) low = middle;
+    else high = middle;
+  }
+  const span = sliceMap[high] - sliceMap[low];
+  const mix = span > 0 ? (requestedT - sliceMap[low]) / span : 0;
+  return {
+    lowerIndex: low,
+    upperIndex: high,
+    mix,
+    sampledT: sliceMap[low] + span * mix,
+  };
+}
+
 function dedupeAndSort(points) {
   const unique = new Map();
   for (const [x, y] of points) {
@@ -103,10 +158,7 @@ export function sampleFreeformGridRing(grid, t) {
   }
 
   const normalizedT = clamp(finite(t, 0), 0, 1);
-  const axialPosition = normalizedT * nLength;
-  const lowerIndex = Math.min(nLength, Math.floor(axialPosition));
-  const upperIndex = Math.min(nLength, lowerIndex + 1);
-  const mix = axialPosition - lowerIndex;
+  const { lowerIndex, upperIndex, mix, sampledT } = axialSample(grid, nLength, normalizedT);
   const sampled = [];
   let depthTotal = 0;
   for (let phiIndex = 0; phiIndex < nPhi; phiIndex += 1) {
@@ -128,7 +180,7 @@ export function sampleFreeformGridRing(grid, t) {
   return {
     points,
     depthMm: depthTotal / nPhi,
-    t: normalizedT,
+    t: sampledT,
     lowerIndex,
     upperIndex,
     mix,

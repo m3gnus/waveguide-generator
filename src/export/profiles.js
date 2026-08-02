@@ -33,7 +33,7 @@ export function exportProfilesCSV(vertices, params) {
  */
 export function exportSlicesCSV(vertices, params) {
   const { angularSegments, lengthSegments } = params;
-  let csv = '# x_cm;y_cm;z_cm\r\n';
+  let csv = '# slices: x_cm;y_cm;z_cm\r\n';
   const scale = 0.1;
 
   for (let j = 0; j <= lengthSegments; j++) {

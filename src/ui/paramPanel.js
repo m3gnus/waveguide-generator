@@ -109,15 +109,37 @@ function isDescendantOf(element, root) {
   return false;
 }
 
-function findControlByParamKey(root, key, tagName) {
+function closestAttribute(element, name) {
+  let current = element;
+  while (current) {
+    const value = current.getAttribute?.(name) ?? current.attributes?.[name];
+    if (value !== null && value !== undefined) return String(value);
+    current = current.parentNode || current.parentElement || null;
+  }
+  return null;
+}
+
+function findControlByParamKey(root, identity) {
   if (!root) return null;
 
   const matches =
-    getParamKey(root) === key && String(root.tagName || '').toUpperCase() === String(tagName || '');
+    getParamKey(root) === identity.paramKey &&
+    String(root.tagName || '').toUpperCase() === identity.tagName &&
+    (!identity.id || root.id === identity.id) &&
+    (!identity.anchorPlane ||
+      closestAttribute(root, 'data-freeform-anchor-plane') === identity.anchorPlane) &&
+    (!identity.anchorIndex ||
+      closestAttribute(root, 'data-freeform-anchor-index') === identity.anchorIndex) &&
+    (!identity.anchorField ||
+      closestAttribute(root, 'data-freeform-anchor-field') === identity.anchorField) &&
+    (!identity.stationIndex ||
+      closestAttribute(root, 'data-freeform-station-index') === identity.stationIndex) &&
+    (!identity.stationField ||
+      closestAttribute(root, 'data-station-field') === identity.stationField);
   if (matches) return root;
 
   for (const child of root.children || []) {
-    const match = findControlByParamKey(child, key, tagName);
+    const match = findControlByParamKey(child, identity);
     if (match) return match;
   }
   return null;
@@ -307,6 +329,14 @@ export class ParamPanel {
     return {
       paramKey,
       tagName: String(activeElement.tagName || '').toUpperCase(),
+      id: activeElement.id || null,
+      anchorPlane: closestAttribute(activeElement, 'data-freeform-anchor-plane'),
+      anchorIndex: closestAttribute(activeElement, 'data-freeform-anchor-index'),
+      anchorField: closestAttribute(activeElement, 'data-freeform-anchor-field'),
+      stationIndex: closestAttribute(activeElement, 'data-freeform-station-index'),
+      stationField: closestAttribute(activeElement, 'data-station-field'),
+      value: 'value' in activeElement ? activeElement.value : undefined,
+      checked: 'checked' in activeElement ? activeElement.checked : undefined,
       selection:
         typeof selectionStart === 'number' && typeof selectionEnd === 'number'
           ? {
@@ -323,9 +353,16 @@ export class ParamPanel {
 
     const roots = [this.container, this.simulationSettingsContainer, this.simulationContainer];
     const replacement = roots
-      .map((root) => findControlByParamKey(root, focusedControl.paramKey, focusedControl.tagName))
+      .map((root) => findControlByParamKey(root, focusedControl))
       .find(Boolean);
     if (!replacement || typeof replacement.focus !== 'function') return;
+
+    if (focusedControl.value !== undefined && 'value' in replacement) {
+      replacement.value = focusedControl.value;
+    }
+    if (focusedControl.checked !== undefined && 'checked' in replacement) {
+      replacement.checked = focusedControl.checked;
+    }
 
     try {
       replacement.focus({ preventScroll: true });
@@ -724,6 +761,7 @@ export class ParamPanel {
       zInput.title = columns[0][1];
       zInput.setAttribute('data-param-key', key);
       zInput.setAttribute('data-param', key);
+      zInput.setAttribute('data-freeform-anchor-field', 'z');
       zInput.setAttribute('aria-label', `${key} point ${index + 1} z`);
       zInput.onchange = (event) => {
         const requested = Number(event.target.value);
@@ -740,16 +778,18 @@ export class ParamPanel {
 
       const radiusInput = document.createElement('input');
       radiusInput.type = 'number';
+      radiusInput.min = '0.1';
       radiusInput.step = '0.1';
       radiusInput.value = point.r;
       radiusInput.title = columns[1][1];
       radiusInput.setAttribute('data-param-key', key);
       radiusInput.setAttribute('data-param', key);
+      radiusInput.setAttribute('data-freeform-anchor-field', 'radius');
       radiusInput.setAttribute('aria-label', `${key} point ${index + 1} radius`);
       radiusInput.onchange = (event) => {
         const radius = Number(event.target.value);
-        if (!Number.isFinite(radius)) {
-          showInputError(event.target, 'Enter a finite radius.');
+        if (!Number.isFinite(radius) || radius <= 0) {
+          showInputError(event.target, 'Radius must be greater than 0.');
           return;
         }
         hideInputError(event.target, true);
@@ -769,6 +809,7 @@ export class ParamPanel {
       angleInput.title = columns[2][1];
       angleInput.setAttribute('data-param-key', key);
       angleInput.setAttribute('data-param', key);
+      angleInput.setAttribute('data-freeform-anchor-field', 'angle');
       angleInput.setAttribute('aria-label', `${key} point ${index + 1} tangent angle`);
       angleInput.onchange = (event) => {
         const raw = String(event.target.value ?? '').trim();
@@ -797,7 +838,7 @@ export class ParamPanel {
 
       const strengthInput = document.createElement('input');
       strengthInput.type = 'number';
-      strengthInput.min = '0.1';
+      strengthInput.min = '0.001';
       strengthInput.max = '3';
       strengthInput.step = '0.1';
       strengthInput.value = point.strength ?? '';
@@ -806,6 +847,7 @@ export class ParamPanel {
       strengthInput.title = columns[3][1];
       strengthInput.setAttribute('data-param-key', key);
       strengthInput.setAttribute('data-param', key);
+      strengthInput.setAttribute('data-freeform-anchor-field', 'strength');
       strengthInput.setAttribute('aria-label', `${key} point ${index + 1} tangent strength`);
       strengthInput.onchange = (event) => {
         const raw = String(event.target.value ?? '').trim();
@@ -819,8 +861,8 @@ export class ParamPanel {
           return;
         }
         const strength = Number(raw);
-        if (!Number.isFinite(strength) || strength < 0.1 || strength > 3) {
-          showInputError(event.target, 'Strength must be between 0.1 and 3.');
+        if (!Number.isFinite(strength) || strength <= 0 || strength > 3) {
+          showInputError(event.target, 'Strength must be greater than 0 and at most 3.');
           return;
         }
         hideInputError(event.target, true);
@@ -922,11 +964,17 @@ export class ParamPanel {
     apply.className = 'freeform-point-paste-apply';
     apply.textContent = 'Apply';
     apply.disabled = true;
+    const keepLength = document.createElement('button');
+    keepLength.type = 'button';
+    keepLength.className = 'freeform-point-paste-keep-length secondary';
+    keepLength.textContent = 'Keep length; import as anchors';
+    keepLength.hidden = true;
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'freeform-point-paste-cancel';
     cancel.textContent = 'Cancel';
     pasteActions.appendChild(apply);
+    pasteActions.appendChild(keepLength);
     pasteActions.appendChild(cancel);
     pastePanel.appendChild(pasteActions);
     wrapper.appendChild(pastePanel);
@@ -937,6 +985,8 @@ export class ParamPanel {
       const parsed = parseFreeformPointPaste(textarea.value, { plane });
       bothLabel.hidden = !parsed.supportsBoth;
       preparedPaste = null;
+      keepLength.hidden = true;
+      apply.textContent = 'Apply';
       if (!parsed.ok) {
         preview.className = 'freeform-point-paste-preview freeform-point-paste-error';
         preview.textContent = `${parsed.rowCount} valid row${parsed.rowCount === 1 ? '' : 's'} · ${
@@ -946,17 +996,40 @@ export class ParamPanel {
         return;
       }
       try {
-        preparedPaste = prepareFreeformPointPastePatch(parsed, GlobalState.get().params, {
+        let decisionMessage = '';
+        const options = {
           plane,
           applyBoth: bothCheckbox.checked,
-        });
+        };
+        preparedPaste = prepareFreeformPointPastePatch(parsed, GlobalState.get().params, options);
+        if (preparedPaste.decision?.type === 'length-mismatch') {
+          const { suggestedLength } = preparedPaste.decision;
+          decisionMessage = preparedPaste.message;
+          preparedPaste = prepareFreeformPointPastePatch(parsed, GlobalState.get().params, {
+            ...options,
+            adjustLength: true,
+          });
+          apply.textContent = `Set length to ${suggestedLength} mm & apply`;
+          keepLength.hidden = false;
+          keepLength.onclick = (event) => {
+            event.preventDefault();
+            const keepPrepared = prepareFreeformPointPastePatch(parsed, GlobalState.get().params, {
+              ...options,
+              adjustLength: false,
+            });
+            this.setProfileError(null);
+            GlobalState.update(keepPrepared.patch);
+          };
+        }
         const format =
           parsed.format === 'profile-csv'
             ? '3-column CSV (cm → mm)'
             : `${parsed.format === 'four-column' ? '4' : '2'}-column points (mm)`;
         preview.className = 'freeform-point-paste-preview';
         preview.textContent = `${parsed.rowCount} row${parsed.rowCount === 1 ? '' : 's'} · ${format}${
-          preparedPaste.message ? ` · ${preparedPaste.message}` : ''
+          decisionMessage || preparedPaste.message
+            ? ` · ${decisionMessage || preparedPaste.message}`
+            : ''
         }`;
         apply.disabled = false;
       } catch (error) {

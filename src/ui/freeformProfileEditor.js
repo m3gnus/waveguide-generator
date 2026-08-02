@@ -231,7 +231,7 @@ export class FreeformProfileEditor {
     listen(this.svg, 'pointerdown', (event) => this.onPointerDown(event));
     listen(this.svg, 'pointermove', (event) => this.onPointerMove(event));
     listen(this.svg, 'pointerup', (event) => this.onPointerUp(event));
-    listen(this.svg, 'pointercancel', (event) => this.onPointerUp(event));
+    listen(this.svg, 'pointercancel', (event) => this.onPointerCancel(event));
     listen(this.svg, 'click', (event) => this.onClick(event));
     listen(this.svg, 'dblclick', (event) => this.onDoubleClick(event));
     listen(this.svg, 'mouseover', (event) => this.onHandleHover(event, true));
@@ -957,6 +957,11 @@ export class FreeformProfileEditor {
       const stations = normalizeStations(this.params.crossSections);
       if (index <= 0 || index >= stations.length - 1) return;
     }
+    const dragParams = cloneParams(this.params);
+    const interiorKey = handle.value === 'interior' ? `interior${plane}` : null;
+    const interiorPoints = interiorKey
+      ? normalizeAnchorList(dragParams[interiorKey], { length: this.geometry.length })
+      : null;
     this.drag = {
       kind: handle.value,
       param,
@@ -965,7 +970,13 @@ export class FreeformProfileEditor {
       angleDirection: Number(node.getAttribute('data-angle-direction')) || 1,
       baseArmLength: Number(node.getAttribute('data-base-arm-length')) || null,
       pointerId: event.pointerId,
-      params: cloneParams(this.params),
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      originalParams: cloneParams(this.params),
+      originalSelectedAnchor: this.selectedAnchor ? { ...this.selectedAnchor } : null,
+      params: dragParams,
+      interiorAnchor: interiorPoints?.[index] || null,
+      interiorOthers: interiorPoints?.filter((_, pointIndex) => pointIndex !== index) || null,
       guide: null,
       value: null,
     };
@@ -977,6 +988,14 @@ export class FreeformProfileEditor {
     if (!this.drag || (this.drag.pointerId != null && event.pointerId !== this.drag.pointerId))
       return;
     event.preventDefault?.();
+    if (
+      this.drag.kind === 'interior-tangent' &&
+      event.clientX === this.drag.startClientX &&
+      event.clientY === this.drag.startClientY
+    ) {
+      this.draw();
+      return;
+    }
     const [screenX, screenY] = this.eventPosition(event);
     const z = this.transforms.z(screenX);
     const radius = this.transforms.radius(screenY);
@@ -990,13 +1009,35 @@ export class FreeformProfileEditor {
       this.drag.value = nextRadius;
     } else if (this.drag.kind === 'interior') {
       const key = `interior${plane}`;
-      const points = normalizeAnchorList(this.drag.params[key], { length });
+      if (!this.drag.interiorAnchor || !this.drag.interiorOthers) return;
+      const previousZ = this.drag.interiorAnchor.z;
+      let nextZ = Math.round(clamp(z, 1, Math.max(1, length - 1)) * 10) / 10;
+      const collision = this.drag.interiorOthers.find((point) => point.z === nextZ);
+      if (collision) {
+        const direction = nextZ >= previousZ ? 1 : -1;
+        const candidates = [
+          Math.round((collision.z + direction * 0.1) * 10) / 10,
+          Math.round((collision.z - direction * 0.1) * 10) / 10,
+        ];
+        nextZ =
+          candidates.find(
+            (candidate) =>
+              candidate >= 1 &&
+              candidate <= length - 1 &&
+              !this.drag.interiorOthers.some((point) => point.z === candidate)
+          ) ?? previousZ;
+      }
       const nextPoint = {
-        ...points[this.drag.index],
-        z: Math.round(clamp(z, 0.5, Math.max(0.5, length - 0.5)) * 10) / 10,
+        ...this.drag.interiorAnchor,
+        z: nextZ,
         r: Math.round(Math.max(1, radius) * 10) / 10,
       };
-      points[this.drag.index] = nextPoint;
+      this.drag.interiorAnchor = nextPoint;
+      const points = [...this.drag.interiorOthers, nextPoint].sort(
+        (left, right) => left.z - right.z
+      );
+      this.drag.index = points.indexOf(nextPoint);
+      this.selectedAnchor = { plane, index: this.drag.index };
       this.drag.params[key] = points;
       this.drag.guide = [nextPoint.z, nextPoint.r];
       this.drag.value = nextPoint;
@@ -1063,6 +1104,18 @@ export class FreeformProfileEditor {
     if (!this.commitParam(activeDrag.param, value)) this.draw();
   }
 
+  onPointerCancel(event) {
+    if (!this.drag || (this.drag.pointerId != null && event.pointerId !== this.drag.pointerId))
+      return;
+    event.preventDefault?.();
+    const activeDrag = this.drag;
+    this.drag = null;
+    this.params = cloneParams(activeDrag.originalParams);
+    this.selectedAnchor = activeDrag.originalSelectedAnchor;
+    this.svg.releasePointerCapture?.(event.pointerId);
+    this.draw();
+  }
+
   onClick(event) {
     const remove = this.targetData(event, 'data-action');
     if (remove?.value === 'delete-anchor') {
@@ -1117,6 +1170,7 @@ export class FreeformProfileEditor {
       );
       return;
     }
+    if (handle) return;
     const [screenX, screenY] = this.eventPosition(event);
     const z = clamp(this.transforms.z(screenX), 0.5, Math.max(0.5, this.geometry.length - 0.5));
     const targetPlane = this.targetData(event, 'data-plane')?.value;
