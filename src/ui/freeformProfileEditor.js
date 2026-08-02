@@ -162,6 +162,7 @@ export class FreeformProfileEditor {
     this.drag = null;
     this.highlightedParams = new Set();
     this.pendingClampFlashes = new Set();
+    this.errorTarget = null;
     this.authoritative = null;
     this.scrubState = options.scrubState || null;
     this.scrubT = clamp(finite(this.scrubState?.get?.(), 0), 0, 1);
@@ -256,6 +257,11 @@ export class FreeformProfileEditor {
     this.authoritative = authoritative;
     this.draw();
     return true;
+  }
+
+  setErrorMapping(mapping) {
+    this.errorTarget = mapping?.target || null;
+    this.draw();
   }
 
   commit(patch) {
@@ -452,8 +458,9 @@ export class FreeformProfileEditor {
       const t = clamp(finite(station?.t, 0), 0, 1);
       const x = transforms.x(t * geometry.length);
       const locked = index === 0 || index === stations.length - 1;
+      const hasError = this.errorTarget?.kind === 'station' && this.errorTarget.index === index;
       this.appendSvg('line', {
-        class: `freeform-profile-station${locked ? ' freeform-profile-station-locked' : ''}`,
+        class: `freeform-profile-station${locked ? ' freeform-profile-station-locked' : ''}${hasError ? ' freeform-profile-element-error' : ''}`,
         x1: x,
         y1: MARGIN.top,
         x2: x,
@@ -462,7 +469,7 @@ export class FreeformProfileEditor {
         'aria-disabled': locked ? 'true' : null,
       });
       const label = this.appendSvg('text', {
-        class: `freeform-profile-station-label${locked ? ' freeform-profile-station-locked' : ''}`,
+        class: `freeform-profile-station-label${locked ? ' freeform-profile-station-locked' : ''}${hasError ? ' freeform-profile-element-error' : ''}`,
         x: x + 3,
         y: MARGIN.top + 9 + (index % 2) * 10,
       });
@@ -475,8 +482,9 @@ export class FreeformProfileEditor {
     stations.forEach((station, index) => {
       if (index === 0 || index === stations.length - 1) return;
       const x = transforms.x(clamp(finite(station?.t, 0), 0, 1) * geometry.length);
+      const hasError = this.errorTarget?.kind === 'station' && this.errorTarget.index === index;
       this.appendSvg('rect', {
-        class: 'freeform-profile-station-hit',
+        class: `freeform-profile-station-hit${hasError ? ' freeform-profile-element-error' : ''}`,
         x: x - 6,
         y: MARGIN.top,
         width: 12,
@@ -791,15 +799,18 @@ export class FreeformProfileEditor {
   }
 
   drawAnchorHandles(geometry, transforms) {
-    this.anchorHandle(
+    const throat = this.anchorHandle(
       [0, geometry.throatRadius],
       { kind: 'radius', param: 'throatRadius', label: 'Throat Radius' },
       transforms
     );
+    if (this.errorTarget?.kind === 'anchor' && this.errorTarget.anchorIndex === 0) {
+      addClass(throat, 'freeform-profile-element-error');
+    }
     for (const plane of PLANES) {
       if (this.visibility[plane] === false) continue;
       const planeGeometry = geometry.planes[plane];
-      this.anchorHandle(
+      const mouth = this.anchorHandle(
         [geometry.length, planeGeometry.mouthRadius],
         {
           kind: 'radius',
@@ -809,6 +820,13 @@ export class FreeformProfileEditor {
         },
         transforms
       );
+      if (
+        this.errorTarget?.kind === 'anchor' &&
+        this.errorTarget.plane === plane &&
+        this.errorTarget.anchorIndex === planeGeometry.interior.length + 1
+      ) {
+        addClass(mouth, 'freeform-profile-element-error');
+      }
       planeGeometry.interior.forEach((point, index) => {
         const node = this.anchorHandle(
           [point.z, point.r],
@@ -821,6 +839,13 @@ export class FreeformProfileEditor {
           },
           transforms
         );
+        if (
+          this.errorTarget?.kind === 'anchor' &&
+          this.errorTarget.plane === plane &&
+          this.errorTarget.anchorIndex === index + 1
+        ) {
+          addClass(node, 'freeform-profile-element-error');
+        }
         if (this.selectedAnchor?.plane === plane && this.selectedAnchor?.index === index) {
           addClass(node, 'freeform-profile-anchor-selected');
           const remove = this.appendSvg('text', {

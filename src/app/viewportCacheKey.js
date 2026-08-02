@@ -19,3 +19,8 @@ export function getViewportStateCacheKey(state = {}) {
   }
   return keyParts.join('|');
 }
+
+export function isViewportCacheCurrent(cache, state = {}, rejectedStateKey = null) {
+  const stateKey = getViewportStateCacheKey(state);
+  return cache?.stateKey === stateKey && rejectedStateKey !== stateKey;
+}

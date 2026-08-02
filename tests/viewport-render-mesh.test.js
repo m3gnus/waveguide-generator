@@ -5,8 +5,11 @@ import * as THREE from 'three';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { detachCreaseVertices } from '../src/app/viewportMesh.js';
-import { renderModel } from '../src/app/scene.js';
-import { getViewportStateCacheKey } from '../src/app/viewportCacheKey.js';
+import { handleViewportStateChange, renderModel } from '../src/app/scene.js';
+import {
+  getViewportStateCacheKey,
+  isViewportCacheCurrent,
+} from '../src/app/viewportCacheKey.js';
 import { AppEvents } from '../src/events.js';
 import {
   createAdaptiveRingVertices,
@@ -220,6 +223,143 @@ test('changed FREEFORM state refetches immediately after a backend failure', asy
     clearTimeout(app._viewportCooldownRetryTimer);
     globalThis.fetch = originalFetch;
   }
+});
+
+test('invalid FREEFORM edits keep the last valid viewport mesh visibly stale until rebuild', async () => {
+  const validState = {
+    type: 'FREEFORM',
+    params: { ...getDefaults('FREEFORM'), ...authoritativeFixture.params, type: 'FREEFORM' },
+  };
+  const invalidState = {
+    type: 'FREEFORM',
+    params: { ...validState.params, mouthRadiusH: validState.params.mouthRadiusH + 1 },
+  };
+  const correctedState = {
+    type: 'FREEFORM',
+    params: { ...validState.params, mouthRadiusH: validState.params.mouthRadiusH + 2 },
+  };
+  const freeform = authoritativeFixture.freeform;
+  const grid = syntheticViewportGrid({
+    H: [freeform.curveSamples.H[0], freeform.curveSamples.H.at(-1)],
+    V: [freeform.curveSamples.V[0], freeform.curveSamples.V.at(-1)],
+  });
+  const classes = new Set();
+  const badges = [];
+  const container = {
+    classList: {
+      add: (value) => classes.add(value),
+      remove: (value) => classes.delete(value),
+    },
+    ownerDocument: {
+      createElement() {
+        return {
+          setAttribute() {},
+          remove() {
+            const index = badges.indexOf(this);
+            if (index >= 0) badges.splice(index, 1);
+          },
+        };
+      },
+    },
+    appendChild(child) {
+      badges.push(child);
+    },
+  };
+  const profileErrors = [];
+  const app = {
+    scene: new THREE.Scene(),
+    renderer: {},
+    container,
+    currentState: validState,
+    uiCoordinator: {
+      readDisplayModeSetting: () => 'wireframe',
+      showError: () => {},
+    },
+    paramPanel: { setProfileError: (detail) => profileErrors.push(detail) },
+    stats: { innerText: '' },
+  };
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    if (fetchCount === 2) {
+      return {
+        ok: false,
+        status: 422,
+        text: async () =>
+          'FREEFORM crossSections span 0..1 produces a non-convex outline near t=0.75',
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        formula: 'FREEFORM',
+        mode: 'bare',
+        params: app.currentState.params,
+        grid,
+        enclosure: null,
+        metadata: { freeform },
+      }),
+    };
+  };
+
+  try {
+    renderModel(app);
+    await waitFor(() => app.hornMesh, 'initial valid FREEFORM mesh did not render');
+    const lastValidMesh = app.hornMesh;
+
+    app.currentState = invalidState;
+    renderModel(app);
+    await waitFor(() => app._viewportFetch === null, 'invalid FREEFORM request did not settle');
+
+    assert.equal(app.hornMesh, lastValidMesh);
+    assert.equal(app._viewportStale, true);
+    assert.equal(classes.has('viewport-mesh-stale'), true);
+    assert.equal(badges[0].textContent, 'Stale — fix errors to rebuild');
+    assert.equal(app._meshCache.grid, null);
+    assert.equal(
+      isViewportCacheCurrent(app._meshCache, invalidState, app._viewportStaleStateKey),
+      false
+    );
+    assert.match(profileErrors.at(-1), /non-convex outline/);
+
+    app.currentState = correctedState;
+    renderModel(app);
+    await waitFor(() => fetchCount === 3 && app._viewportFetch === null, 'corrected rebuild failed');
+    assert.notEqual(app.hornMesh, lastValidMesh);
+    assert.equal(app._viewportStale, false);
+    assert.equal(classes.has('viewport-mesh-stale'), false);
+    assert.equal(badges.length, 0);
+  } finally {
+    app._viewportFetch?.controller?.abort();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('formula switches clear a stale viewport mesh before the next build', () => {
+  const geometry = new THREE.BufferGeometry();
+  const material = new THREE.MeshBasicMaterial();
+  const hornMesh = new THREE.Mesh(geometry, material);
+  const scene = new THREE.Scene();
+  scene.add(hornMesh);
+  const app = {
+    scene,
+    hornMesh,
+    currentState: { type: 'FREEFORM', params: getDefaults('FREEFORM') },
+    _viewportStale: true,
+    _viewportStaleStateKey: 'rejected-freeform',
+  };
+
+  const cleared = handleViewportStateChange(app, {
+    type: 'OSSE',
+    params: getDefaults('OSSE'),
+  });
+
+  assert.equal(cleared, true);
+  assert.equal(app.hornMesh, null);
+  assert.equal(scene.children.includes(hornMesh), false);
+  assert.equal(app._viewportStale, false);
+  assert.equal(app._meshCache.stateKey, null);
 });
 
 test('crease detach and viewport validation accept render-only smooth meshes', () => {

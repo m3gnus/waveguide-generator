@@ -342,6 +342,46 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
   assert.ok(source.groups[0].keys.includes('sourceCurv'));
 });
 
+test('FREEFORM backend errors decorate the matching panel row and 2-D editor station', () => {
+  withFreeformPanel(
+    {
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.5, shape: 'rounded_rectangle', cornerRadiusMm: 8 },
+        { t: 1, shape: 'ellipse' },
+      ],
+    },
+    ({ fakeDocument, paramContainer, panel, editor }) => {
+      const detail =
+        'FREEFORM crossSections[1].cornerRadiusMm must be in [1.1, 55] mm at station t=0.5, got 1 mm';
+      panel.setProfileError(detail);
+
+      const row = collectNodes(
+        paramContainer,
+        (node) => node.attributes['data-freeform-station-index'] === '1'
+      )[0];
+      assert.match(row.className, /freeform-element-error/);
+      assert.match(
+        row.children.find((child) => child.className === 'freeform-element-error-message')
+          .textContent,
+        /^Station 2:/
+      );
+      const stationLine = collectNodes(
+        editor.svg,
+        (node) =>
+          node.attributes['data-station-index'] === '1' &&
+          String(node.attributes.class).includes('freeform-profile-station')
+      )[0];
+      assert.match(stationLine.attributes.class, /freeform-profile-element-error/);
+      assert.equal(fakeDocument.getElementById('freeform-profile-error').textContent, detail);
+
+      panel.setProfileError(null);
+      assert.doesNotMatch(row.className, /freeform-element-error/);
+      assert.equal(fakeDocument.getElementById('freeform-profile-error').parentNode, null);
+    }
+  );
+});
+
 test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their empty state', () => {
   const originalDocument = global.document;
   const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
