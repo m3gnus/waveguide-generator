@@ -14,7 +14,8 @@
 
 **What it does**:
 
-- Parametric horn geometry (OSSE / R-OSSE) with real-time Three.js viewport
+- Parametric horn geometry (OSSE / R-OSSE / ICW / FREEFORM) with a real-time Three.js viewport
+  - FREEFORM provides independent H/V spline meridians, an integrated 2-D editor, axial cross-section stations, and conversion of the current built design into editable anchors.
 - BEM simulation via backend solver (frequency-domain acoustic FEM/BEM coupling)
 - HornLab mesher `.msh` and STEP generation (Gmsh-backed, server-side)
 - Export to STL, single-layer STEP surface, CSV, MWG config, and result bundles (PNG, CSV, JSON, polar data, VACS, etc.)
@@ -211,7 +212,7 @@ Response shape:
 
 Validation/gating:
 
-- `formula_type` must be `"R-OSSE"` or `"OSSE"` (`422` otherwise)
+- `formula_type` must be `"R-OSSE"`, `"OSSE"`, `"ICW"`, or `"FREEFORM"` (`422` otherwise)
 - `msh_version` must be `"2.2"` or `"4.1"` (`422` otherwise)
 - Returns `503` when Python/gmsh runtime matrix is unsupported or HornLab mesher unavailable
 
