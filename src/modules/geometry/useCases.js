@@ -19,7 +19,7 @@ function requireViewportState(state) {
 // the local JS engine). The JS engine's evaluateInnerProfileAt only knows
 // OSSE/R-OSSE, so running it for these would silently emit a wrong (OSSE-shaped)
 // profile. They render exclusively via the backend viewport route.
-const SERVER_ONLY_FORMULAS = new Set(['ICW', 'FREEFORM']);
+const SERVER_ONLY_FORMULAS = new Set(['ICW', 'LOOKUP', 'FREEFORM']);
 
 export function isServerOnlyViewportFormula(state = {}) {
   return SERVER_ONLY_FORMULAS.has(state?.type);

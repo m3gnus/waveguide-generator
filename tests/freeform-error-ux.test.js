@@ -166,6 +166,14 @@ test('FREEFORM export capability map disables local geometry menu items with vis
   }
   assert.equal(getExportCapability('FREEFORM', 'step').available, true);
 
+  syncAppExportMenuCapabilities(root, { type: 'ICW', params: getDefaults('ICW') });
+  for (const format of ['stl', 'fusion_csv']) {
+    assert.equal(byFormat[format].disabled, true);
+    assert.match(byFormat[format].title, /local geometry engine cannot build it.*STEP export/i);
+    assert.match(byFormat[format].children[0].textContent, /Not available for ICW yet/);
+  }
+  assert.equal(getExportCapability('LOOKUP', 'stl').available, false);
+
   syncAppExportMenuCapabilities(root, { type: 'OSSE', params: getDefaults('OSSE') });
   assert.equal(byFormat.stl.disabled, false);
   assert.equal(byFormat.stl.children.length, 0);

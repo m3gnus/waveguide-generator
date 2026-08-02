@@ -1316,6 +1316,28 @@ test('renderJobList gates design exports by the job design snapshot', () => {
       /data-export-format="step"[^>]*title="Export waveguide STEP surface"/
     );
     assert.doesNotMatch(freeformSnapshot, /data-export-format="step"[^>]*disabled/);
+
+    const icwSnapshot = renderSingleJob({
+      id: 'job-icw-snapshot',
+      label: 'icw-task',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z',
+      completedAt: '2026-03-11T09:10:00.000Z',
+      script: {
+        outputName: 'icw-task',
+        counter: 1,
+        stateSnapshot: { type: 'ICW', params: getDefaults('ICW') },
+      },
+    });
+    for (const format of ['stl', 'fusion_csv']) {
+      assert.match(
+        icwSnapshot,
+        new RegExp(
+          `data-export-format="${format}"[^>]*title="Not available for ICW yet[^\"]*"[^>]*\\sdisabled aria-disabled="true"`
+        )
+      );
+    }
+    assert.doesNotMatch(icwSnapshot, /data-export-format="step"[^>]*disabled/);
   } finally {
     GlobalState.current = originalState;
     global.document = originalDocument;

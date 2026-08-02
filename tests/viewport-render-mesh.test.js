@@ -398,6 +398,49 @@ test('changed FREEFORM state refetches immediately after a backend failure', asy
   }
 });
 
+test('failed ICW backend build clears the viewport mesh and requests a render', async () => {
+  const geometry = new THREE.BufferGeometry();
+  const material = new THREE.MeshBasicMaterial();
+  const hornMesh = new THREE.Mesh(geometry, material);
+  const scene = new THREE.Scene();
+  scene.add(hornMesh);
+  const app = {
+    scene,
+    renderer: {},
+    hornMesh,
+    needsRender: false,
+    currentState: { type: 'ICW', params: getDefaults('ICW') },
+    uiCoordinator: {
+      readDisplayModeSetting: () => 'wireframe',
+      showError: () => {},
+    },
+    stats: { innerText: '' },
+  };
+  const originalFetch = globalThis.fetch;
+  const originalConsoleWarn = console.warn;
+  const originalConsoleError = console.error;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 422,
+    text: async () => 'ICW profile is infeasible',
+  });
+  console.warn = () => {};
+  console.error = () => {};
+
+  try {
+    renderModel(app);
+    await waitFor(() => app._viewportFetch === null, 'failed ICW viewport request did not settle');
+    assert.equal(app.hornMesh, null);
+    assert.equal(scene.children.includes(hornMesh), false);
+    assert.equal(app.needsRender, true);
+  } finally {
+    app._viewportFetch?.controller?.abort();
+    globalThis.fetch = originalFetch;
+    console.warn = originalConsoleWarn;
+    console.error = originalConsoleError;
+  }
+});
+
 test('invalid FREEFORM edits keep the last valid viewport mesh visibly stale until rebuild', async () => {
   const validState = {
     type: 'FREEFORM',

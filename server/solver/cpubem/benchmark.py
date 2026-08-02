@@ -49,8 +49,6 @@ SCHEMA_VERSION = 1
 
 def configure_benchmark_cache() -> Path:
     """Point compiler/runtime caches at a workspace-writable directory."""
-    import platformdirs
-
     cache_root = REPO_ROOT / "server" / ".benchmark-cache"
     local_app_data = cache_root / "localappdata"
     numba_cache = cache_root / "numba"
@@ -60,6 +58,14 @@ def configure_benchmark_cache() -> Path:
     # artifacts and pytools' generated-invoker database.
     os.environ["LOCALAPPDATA"] = str(local_app_data)
     os.environ["NUMBA_CACHE_DIR"] = str(numba_cache)
+
+    try:
+        import platformdirs
+    except ImportError:
+        # platformdirs is optional for a cpubem-only install. The environment
+        # fallbacks above still protect numba and consumers that honor
+        # LOCALAPPDATA; only the Windows Known Folder monkeypatch is skipped.
+        return cache_root
 
     def workspace_user_cache_dir(
         appname: str | None = None, *_args: Any, **_kwargs: Any
@@ -397,6 +403,27 @@ def summarize_runs(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return summaries
 
 
+def build_comparisons(
+    latest_outputs: dict[str, dict[str, np.ndarray]], bempp_symmetry: str
+) -> dict[str, Any]:
+    """Compare like-for-like domains, recording why symmetry runs are skipped."""
+    comparisons: dict[str, Any] = {}
+    if "cpubem" not in latest_outputs:
+        return comparisons
+    for backend, outputs in latest_outputs.items():
+        if backend == "cpubem":
+            continue
+        key = f"cpubem_vs_{backend}"
+        if bempp_symmetry != "none":
+            comparisons[key] = {
+                "skipped": True,
+                "reason": "bempp symmetry mirrors the reduced mesh; domains differ",
+            }
+        else:
+            comparisons[key] = compare_outputs(latest_outputs["cpubem"], outputs)
+    return comparisons
+
+
 def _host_metadata() -> dict[str, Any]:
     return {
         "hostname": socket.gethostname(),
@@ -481,13 +508,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             runs.append(record)
             latest_outputs[backend] = outputs
 
-    comparisons: dict[str, Any] = {}
-    if "cpubem" in latest_outputs:
-        for backend, outputs in latest_outputs.items():
-            if backend != "cpubem":
-                comparisons[f"cpubem_vs_{backend}"] = compare_outputs(
-                    latest_outputs["cpubem"], outputs
-                )
+    comparisons = build_comparisons(latest_outputs, args.bempp_symmetry)
 
     return {
         "schema_version": SCHEMA_VERSION,

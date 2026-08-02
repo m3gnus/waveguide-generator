@@ -257,6 +257,48 @@ test('persisted states migrate the untouched legacy mesh budget to the larger ha
   assert.equal(normalized.params.maxTriangles, 50000);
 });
 
+test('schema-version 2 preserves an explicit 18,000 triangle mesh budget', () => {
+  const normalized = normalizePersistedState({
+    schemaVersion: 2,
+    type: 'R-OSSE',
+    params: {
+      maxTriangles: 18000,
+      allowLargeMesh: 0,
+    },
+  });
+
+  assert.equal(normalized.params.maxTriangles, 18000);
+});
+
+test('persisted state round trips with the current schema version', () => {
+  const originalStorage = global.localStorage;
+  let saved = JSON.stringify({
+    type: 'R-OSSE',
+    params: { maxTriangles: 18000, allowLargeMesh: 0 },
+  });
+  global.localStorage = {
+    getItem: (key) => (key === 'ath_state' ? saved : null),
+    setItem: (key, value) => {
+      if (key === 'ath_state') saved = value;
+    },
+  };
+
+  try {
+    const state = new AppState();
+    assert.equal(state.get().params.maxTriangles, 50000);
+    state.saveToStorage();
+    const persisted = JSON.parse(saved);
+    assert.equal(persisted.schemaVersion, 2);
+
+    persisted.params.maxTriangles = 18000;
+    saved = JSON.stringify(persisted);
+    const reloaded = new AppState();
+    assert.equal(reloaded.get().params.maxTriangles, 18000);
+  } finally {
+    global.localStorage = originalStorage;
+  }
+});
+
 test('persisted states preserve a customized mesh budget', () => {
   const normalized = normalizePersistedState({
     type: 'R-OSSE',

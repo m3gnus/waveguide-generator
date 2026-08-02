@@ -1,17 +1,56 @@
 from __future__ import annotations
 
+import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 from solver.cpubem.benchmark import (
+    build_comparisons,
     build_observation_points,
     compare_outputs,
+    configure_benchmark_cache,
     summarize_runs,
 )
 
 
 class TestCpubemBenchmark(unittest.TestCase):
+    def test_cache_configuration_survives_missing_platformdirs(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "solver.cpubem.benchmark.REPO_ROOT", Path(temp_dir)
+        ), patch.dict(os.environ), patch.dict(sys.modules, {"platformdirs": None}):
+            cache_root = configure_benchmark_cache()
+
+            self.assertEqual(cache_root, Path(temp_dir) / "server" / ".benchmark-cache")
+            self.assertEqual(os.environ["LOCALAPPDATA"], str(cache_root / "localappdata"))
+            self.assertEqual(os.environ["NUMBA_CACHE_DIR"], str(cache_root / "numba"))
+
+    def test_symmetry_comparison_is_recorded_as_skipped(self):
+        outputs = {
+            "cpubem": {
+                "pressure": np.ones((1, 1, 1), dtype=np.complex128),
+                "impedance": np.ones(1, dtype=np.complex128),
+            },
+            "bempp-opencl": {
+                "pressure": np.ones((1, 1, 1), dtype=np.complex128),
+                "impedance": np.ones(1, dtype=np.complex128),
+            },
+        }
+
+        comparisons = build_comparisons(outputs, "yz+xz")
+
+        self.assertEqual(
+            comparisons["cpubem_vs_bempp-opencl"],
+            {
+                "skipped": True,
+                "reason": "bempp symmetry mirrors the reduced mesh; domains differ",
+            },
+        )
+
     def test_observation_points_match_two_polar_planes(self):
         planes, points = build_observation_points(3, 2.0)
 

@@ -22,6 +22,11 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLANES = ("PM_SPL_H", "PM_SPL_V", "PM_SPL_D")  # our array's plane order
+NPZ_PLANE_ALIASES = {
+    "horizontal": "PM_SPL_H",
+    "vertical": "PM_SPL_V",
+    "diagonal": "PM_SPL_D",
+}
 BANDS = ((0, 1000), (1000, 4000), (4000, 11000), (11000, 20001))
 MAIN_LOBE_DB = -20.0  # gate: ABEC's own normalised level
 
@@ -60,12 +65,44 @@ def read_abec_spectrum(path: str) -> tuple[np.ndarray, np.ndarray]:
 
 def read_ours(path: str) -> tuple[np.ndarray, np.ndarray]:
     """Load our stored polars, normalising on axis if the file holds complex pressure."""
-    data = np.load(path, allow_pickle=False)
-    freq = data["frequency_hz"]
-    if "spl_db" in data:
-        return freq, data["spl_db"]
-    pressure = data["p"]
-    return freq, 20 * np.log10(np.abs(pressure / pressure[:, :, 0:1]) + 1e-300)
+    with np.load(path, allow_pickle=False) as data:
+        freq = data["frequency_hz"]
+        if "spl_db" in data:
+            polars = data["spl_db"]
+        else:
+            pressure = data["p"]
+            polars = 20 * np.log10(np.abs(pressure / pressure[:, :, 0:1]) + 1e-300)
+
+        if "planes" in data:
+            raw_planes = np.asarray(data["planes"]).reshape(-1)
+            plane_names = []
+            for value in raw_planes:
+                name = value.decode("utf-8") if isinstance(value, bytes) else str(value)
+                plane_names.append(NPZ_PLANE_ALIASES.get(name.lower(), name))
+            if polars.ndim < 2 or len(plane_names) != polars.shape[1]:
+                raise ValueError(
+                    f"{path}: planes metadata count {len(plane_names)} does not match "
+                    f"polar plane axis {polars.shape[1] if polars.ndim >= 2 else 'missing'}"
+                )
+            if len(set(plane_names)) != len(PLANES) or set(plane_names) != set(PLANES):
+                raise ValueError(
+                    f"{path}: planes metadata must be a permutation of {list(PLANES)}, "
+                    f"got {plane_names}"
+                )
+            polars = polars[:, [plane_names.index(plane) for plane in PLANES], ...]
+
+        if "angles_deg" in data:
+            angles = np.asarray(data["angles_deg"], dtype=np.float64).reshape(-1)
+            angle_count = polars.shape[2] if polars.ndim >= 3 else 0
+            expected = np.linspace(0.0, 180.0, angle_count)
+            if angles.size != angle_count or not np.allclose(
+                angles, expected, rtol=0.0, atol=1e-7
+            ):
+                raise ValueError(
+                    f"{path}: angles_deg must match a {angle_count}-point 0..180 linspace"
+                )
+
+    return freq, polars
 
 
 def report(freq: np.ndarray, ours: np.ndarray, ref: np.ndarray, label: str) -> None:
