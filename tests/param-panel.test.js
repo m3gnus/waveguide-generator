@@ -413,7 +413,9 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     assert.equal(profileError.parentNode.id, 'core-profile');
     panel.setProfileError(null);
     assert.equal(profileError.parentNode, null);
-    assert.equal(collectNodes(paramContainer, (node) => node.tagName === 'TEXTAREA').length, 0);
+    const pasteTextareas = collectNodes(paramContainer, (node) => node.tagName === 'TEXTAREA');
+    assert.equal(pasteTextareas.length, 2);
+    assert.ok(pasteTextareas.every((node) => node.parentNode.hidden));
     const emptyHints = collectNodes(
       paramContainer,
       (node) => node.textContent === 'No interior points — throat and mouth define a 2-anchor curve'
@@ -496,6 +498,41 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     GlobalState.loadState(previousState, 'param-panel-freeform-test-restore');
     global.document = originalDocument;
   }
+});
+
+test('FREEFORM point paste preview applies endpoints and interior anchors in one state update', () => {
+  withFreeformPanel({}, ({ paramContainer }) => {
+    const pasteButton = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'BUTTON' && node.textContent === 'Paste points…'
+    )[0];
+    pasteButton.onclick({ preventDefault() {} });
+
+    const textarea = collectNodes(paramContainer, (node) => node.tagName === 'TEXTAREA')[0];
+    assert.equal(textarea.parentNode.hidden, false);
+    textarea.value = '# measured in mm\n0 13\n40 52\n120 151';
+    textarea.oninput();
+
+    const preview = collectNodes(
+      textarea.parentNode,
+      (node) => node.attributes.role === 'status'
+    )[0];
+    assert.match(preview.textContent, /3 rows · 2-column points/);
+    const apply = collectNodes(
+      textarea.parentNode,
+      (node) => node.tagName === 'BUTTON' && node.textContent === 'Apply'
+    )[0];
+    assert.equal(apply.disabled, false);
+    const historyBefore = GlobalState.undoStack.length;
+    apply.onclick({ preventDefault() {} });
+
+    assert.equal(GlobalState.undoStack.length, historyBefore + 1);
+    assert.equal(GlobalState.get().params.throatRadius, 13);
+    assert.equal(GlobalState.get().params.mouthRadiusH, 151);
+    assert.deepEqual(GlobalState.get().params.interiorH, [
+      { z: 40, r: 52, angleDeg: null, strength: null },
+    ]);
+  });
 });
 
 test('FREEFORM profile editor renders endpoint, tangent, and interior handles from params', () => {

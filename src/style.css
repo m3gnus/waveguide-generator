@@ -1031,6 +1031,63 @@ select.freeform-profile-linked-highlight {
   line-height: 1.4;
 }
 
+.freeform-point-actions,
+.freeform-point-paste-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.freeform-point-paste-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--input-bg);
+}
+
+.freeform-point-paste-panel[hidden] {
+  display: none;
+}
+
+.freeform-point-paste-panel textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.freeform-point-paste-both {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.freeform-point-paste-both[hidden] {
+  display: none;
+}
+
+.freeform-point-paste-preview {
+  min-height: 1.4em;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.freeform-point-paste-error {
+  color: var(--error);
+}
+
 .freeform-stations-editor {
   display: flex;
   flex-direction: column;
@@ -1190,6 +1247,9 @@ select.freeform-profile-linked-highlight {
 
 .freeform-point-remove,
 .freeform-point-add,
+.freeform-point-paste,
+.freeform-point-paste-apply,
+.freeform-point-paste-cancel,
 .freeform-station-remove,
 .freeform-station-add {
   min-height: 30px;
@@ -1207,6 +1267,9 @@ select.freeform-profile-linked-highlight {
 }
 
 .freeform-point-add,
+.freeform-point-paste,
+.freeform-point-paste-apply,
+.freeform-point-paste-cancel,
 .freeform-station-add {
   align-self: flex-start;
   padding: var(--sp-1) var(--sp-2);

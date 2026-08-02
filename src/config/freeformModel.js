@@ -1,6 +1,6 @@
 import { buildFreeformDisplayCurve } from '../geometry/freeformCurve.js';
 
-const MAX_INTERIOR_ANCHORS = 62;
+export const MAX_INTERIOR_ANCHORS = 62;
 const MAX_CROSS_SECTION_STATIONS = 32;
 const VALID_STATION_SHAPES = new Set(['ellipse', 'superellipse', 'rounded_rectangle']);
 const LEGACY_FREEFORM_KEYS = Object.freeze([
@@ -49,12 +49,17 @@ export function normalizeAnchor(anchor) {
 /**
  * Canonical interior-anchor policy: accept object or row input, discard malformed
  * rows, sort by z, clamp z into [1, length - 1], deduplicate clamped z values,
- * and retain at most 62 anchors. The first row at a duplicated z wins.
+ * and retain at most maxAnchors (62 by default). The first row at a duplicated z wins.
  */
-export function normalizeAnchorList(list, { length = 120 } = {}) {
+export function normalizeAnchorList(
+  list,
+  { length = 120, maxAnchors = MAX_INTERIOR_ANCHORS } = {}
+) {
   if (!Array.isArray(list)) return [];
   const normalizedLength = positiveNumber(length, 120);
   const maximumZ = Math.max(1, normalizedLength - 1);
+  const limit = Math.max(0, Math.floor(finiteNumber(maxAnchors, MAX_INTERIOR_ANCHORS)));
+  if (limit === 0) return [];
   const anchors = list
     .map(normalizeAnchor)
     .filter(Boolean)
@@ -64,7 +69,7 @@ export function normalizeAnchorList(list, { length = 120 } = {}) {
     const clamped = { ...anchor, z: Math.min(maximumZ, Math.max(1, anchor.z)) };
     if (result.at(-1)?.z === clamped.z) continue;
     result.push(clamped);
-    if (result.length === MAX_INTERIOR_ANCHORS) break;
+    if (result.length === limit) break;
   }
   return result;
 }

@@ -5,15 +5,14 @@ import { exportProfilesCSV, exportSlicesCSV } from '../src/export/profiles.js';
 
 test('CSV slices export closes each loop and applies 1/10 scale', () => {
   const params = { angularSegments: 4, lengthSegments: 0 };
-  const vertices = [
-    10, 0, 0,
-    0, 0, 10,
-    -10, 0, 0,
-    0, 0, -10
-  ];
+  const vertices = [10, 0, 0, 0, 0, 10, -10, 0, 0, 0, 0, -10];
 
   const csv = exportSlicesCSV(vertices, params);
-  const lines = csv.trim().split('\r\n');
+  const lines = csv
+    .trim()
+    .split('\r\n')
+    .filter((line) => !line.startsWith('#'));
+  assert.equal(csv.split('\r\n')[0], '# x_cm;y_cm;z_cm');
   assert.equal(lines.length, 5);
   assert.equal(lines[0], '1.000000;0.000000;0.000000');
   assert.equal(lines[4], lines[0]);
@@ -24,15 +23,22 @@ test('CSV profiles export iterates along length for each angular position', () =
   // 2 angular segments x 2 length slices = 4 vertices
   const vertices = [
     // j=0: i=0, i=1
-    10, 0, 0,
-    0, 0, 10,
+    10, 0, 0, 0, 0, 10,
     // j=1: i=0, i=1
-    20, 0, 0,
-    0, 0, 20
+    20, 0, 0, 0, 0, 20,
   ];
 
   const csv = exportProfilesCSV(vertices, params);
-  const sections = csv.trim().split('\r\n\r\n');
+  assert.equal(csv.split('\r\n')[0], '# x_cm;y_cm;z_cm');
+  const sections = csv
+    .trim()
+    .split('\r\n\r\n')
+    .map((section) =>
+      section
+        .split('\r\n')
+        .filter((line) => !line.startsWith('#'))
+        .join('\r\n')
+    );
   assert.equal(sections.length, 2, 'should have 2 angular profiles');
 
   // Profile i=0: j=0 then j=1

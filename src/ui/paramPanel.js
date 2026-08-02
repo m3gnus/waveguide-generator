@@ -11,6 +11,10 @@ import {
   mountFreeformCrossSectionInset,
 } from './freeformCrossSectionInset.js';
 import { convertToFreeform, formatConversionReport } from '../modules/design/convertToFreeform.js';
+import {
+  parseFreeformPointPaste,
+  prepareFreeformPointPastePatch,
+} from '../modules/design/freeformPointPaste.js';
 import { showFreeformConversionDialog } from './feedback.js';
 import { mapFreeformError } from './freeformErrorMapping.js';
 import { normalizeAnchorList, normalizeStations } from '../config/freeformModel.js';
@@ -841,6 +845,9 @@ export class ParamPanel {
       wrapper.appendChild(pointRow);
     });
 
+    const actions = document.createElement('div');
+    actions.className = 'freeform-point-actions';
+
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'freeform-point-add';
@@ -867,7 +874,119 @@ export class ParamPanel {
       const radius = Math.round((r0 + ratio * (r1 - r0)) * 1e6) / 1e6;
       commitPoints([...points, { z, r: radius, angleDeg: null, strength: null }]);
     };
-    wrapper.appendChild(add);
+    actions.appendChild(add);
+
+    const pasteButton = document.createElement('button');
+    pasteButton.type = 'button';
+    pasteButton.className = 'freeform-point-paste';
+    pasteButton.textContent = 'Paste points…';
+    pasteButton.setAttribute('data-param-key', key);
+    actions.appendChild(pasteButton);
+    wrapper.appendChild(actions);
+
+    const pastePanel = document.createElement('div');
+    pastePanel.className = 'freeform-point-paste-panel';
+    pastePanel.hidden = true;
+
+    const textarea = document.createElement('textarea');
+    textarea.rows = 7;
+    textarea.placeholder = 'z r\n…or z r angleDeg strength\n…or # z_cm;r_h_cm;r_v_cm';
+    textarea.setAttribute(
+      'aria-label',
+      `Paste ${key === 'interiorH' ? 'horizontal' : 'vertical'} FREEFORM points`
+    );
+    pastePanel.appendChild(textarea);
+
+    const bothLabel = document.createElement('label');
+    bothLabel.className = 'freeform-point-paste-both';
+    bothLabel.hidden = true;
+    const bothCheckbox = document.createElement('input');
+    bothCheckbox.type = 'checkbox';
+    bothCheckbox.checked = true;
+    bothLabel.appendChild(bothCheckbox);
+    const bothText = document.createElement('span');
+    bothText.textContent = 'Apply CSV to both H and V';
+    bothLabel.appendChild(bothText);
+    pastePanel.appendChild(bothLabel);
+
+    const preview = document.createElement('div');
+    preview.className = 'freeform-point-paste-preview';
+    preview.setAttribute('role', 'status');
+    preview.setAttribute('aria-live', 'polite');
+    pastePanel.appendChild(preview);
+
+    const pasteActions = document.createElement('div');
+    pasteActions.className = 'freeform-point-paste-actions';
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.className = 'freeform-point-paste-apply';
+    apply.textContent = 'Apply';
+    apply.disabled = true;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'freeform-point-paste-cancel';
+    cancel.textContent = 'Cancel';
+    pasteActions.appendChild(apply);
+    pasteActions.appendChild(cancel);
+    pastePanel.appendChild(pasteActions);
+    wrapper.appendChild(pastePanel);
+
+    const plane = key === 'interiorH' ? 'H' : 'V';
+    let preparedPaste = null;
+    const updatePastePreview = () => {
+      const parsed = parseFreeformPointPaste(textarea.value, { plane });
+      bothLabel.hidden = !parsed.supportsBoth;
+      preparedPaste = null;
+      if (!parsed.ok) {
+        preview.className = 'freeform-point-paste-preview freeform-point-paste-error';
+        preview.textContent = `${parsed.rowCount} valid row${parsed.rowCount === 1 ? '' : 's'} · ${
+          parsed.error
+        }`;
+        apply.disabled = true;
+        return;
+      }
+      try {
+        preparedPaste = prepareFreeformPointPastePatch(parsed, GlobalState.get().params, {
+          plane,
+          applyBoth: bothCheckbox.checked,
+        });
+        const format =
+          parsed.format === 'profile-csv'
+            ? '3-column CSV (cm → mm)'
+            : `${parsed.format === 'four-column' ? '4' : '2'}-column points (mm)`;
+        preview.className = 'freeform-point-paste-preview';
+        preview.textContent = `${parsed.rowCount} row${parsed.rowCount === 1 ? '' : 's'} · ${format}${
+          preparedPaste.message ? ` · ${preparedPaste.message}` : ''
+        }`;
+        apply.disabled = false;
+      } catch (error) {
+        preview.className = 'freeform-point-paste-preview freeform-point-paste-error';
+        preview.textContent = error?.message || 'Could not prepare these points.';
+        apply.disabled = true;
+      }
+    };
+
+    pasteButton.onclick = (event) => {
+      event.preventDefault();
+      pastePanel.hidden = false;
+      textarea.focus?.();
+      updatePastePreview();
+    };
+    textarea.oninput = updatePastePreview;
+    bothCheckbox.onchange = updatePastePreview;
+    cancel.onclick = (event) => {
+      event.preventDefault();
+      pastePanel.hidden = true;
+      textarea.value = '';
+      updatePastePreview();
+      pasteButton.focus?.();
+    };
+    apply.onclick = (event) => {
+      event.preventDefault();
+      if (!preparedPaste) return;
+      this.setProfileError(null);
+      GlobalState.update(preparedPaste.patch);
+    };
     return wrapper;
   }
 

@@ -47,7 +47,7 @@ function farthestPoint(points, startIndex, endIndex) {
  * anchor budget. Splitting the currently worst segment first is equivalent to
  * the recursive algorithm while making the cap deterministic.
  */
-function decimateMeridian(points, toleranceMm, maxInteriorAnchors) {
+export function decimateMeridian(points, toleranceMm, maxInteriorAnchors) {
   if (points.length <= 2) return points.slice();
   const kept = new Set([0, points.length - 1]);
   const segments = [
