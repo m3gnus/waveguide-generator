@@ -218,6 +218,22 @@ test("ExportModule rejects server-only ICW geometry for STL and profile-CSV inst
   );
 });
 
+test('ExportModule allows FREEFORM config while keeping local geometry exports rejected', () => {
+  const freeform = { ...getDefaults('FREEFORM'), type: 'FREEFORM' };
+  const [config] = ExportModule.output.files(
+    ExportModule.task(ExportModule.importConfig({ params: freeform, baseName: 'freeform' }))
+  );
+  assert.match(config.content, /^Freeform\.Length = 120$/m);
+  assert.throws(
+    () => ExportModule.task(ExportModule.importStl(freeform, { baseName: 'freeform' })),
+    /solved server-side/
+  );
+  assert.throws(
+    () => ExportModule.task(ExportModule.importProfileCsv(freeform, { vertices: [] })),
+    /solved server-side/
+  );
+});
+
 test("ExportModule STL task exports only waveguide skin without wall or throat plate", () => {
   const prepared = makePreparedParams({
     encDepth: 180,

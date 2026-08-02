@@ -1,7 +1,7 @@
 import { AppEvents } from './events.js';
 import { getDefaults } from './config/defaults.js';
 import { PARAM_SCHEMA } from './config/schema.js';
-import { migrateLegacyFreeformParams } from './config/freeformParams.js';
+import { normalizeFreeformParams } from './config/freeformModel.js';
 import { debugWarn } from './logging/debug.js';
 
 const STORAGE_KEY = 'ath_state';
@@ -72,7 +72,7 @@ export function normalizePersistedState(candidate) {
     return null;
   }
 
-  const loadedParams = modelType === 'FREEFORM' ? migrateLegacyFreeformParams(params) : params;
+  const loadedParams = modelType === 'FREEFORM' ? normalizeFreeformParams(params) : params;
   const normalizedParams = { ...defaults, ...loadedParams };
   if (
     Number(normalizedParams.maxTriangles) === LEGACY_DEFAULT_MAX_TRIANGLES &&
@@ -129,12 +129,13 @@ export class AppState {
       'profileV',
       'throatAngleH',
       'throatAngleV',
+      'crossSections',
     ].some((key) => Object.hasOwn(paramsPatch, key));
     if (
       nextType === 'FREEFORM' &&
       (modelType !== null || lengthChanged || freeformProfileChanged)
     ) {
-      nextParams = migrateLegacyFreeformParams(nextParams);
+      nextParams = normalizeFreeformParams(nextParams);
     }
     const nextState = {
       type: nextType,
@@ -167,7 +168,7 @@ export class AppState {
   loadState(newState, source = 'config-load') {
     const normalizedState =
       newState?.type === 'FREEFORM' && newState?.params && typeof newState.params === 'object'
-        ? { ...newState, params: migrateLegacyFreeformParams(newState.params) }
+        ? { ...newState, params: normalizeFreeformParams(newState.params) }
         : newState;
     if (stateEqual(this.current, normalizedState)) {
       return false;

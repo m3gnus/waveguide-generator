@@ -1,3 +1,5 @@
+import { toWireFreeform } from '../config/freeformModel.js';
+
 function toExprString(value) {
   if (value == null) return undefined;
   if (typeof value === 'function') {
@@ -65,93 +67,6 @@ function normalizeSolverMode(value) {
     return 'circsym';
   }
   return 'auto';
-}
-
-function buildFreeformPayloadFields(preparedParams) {
-  const length = toFiniteNumber(preparedParams.length, 120);
-  const throatRadius = toFiniteNumber(preparedParams.throatRadius, 12.7);
-  const throatAngle = toFiniteNumber(preparedParams.throatAngle, 15.5);
-  const assemblePoints = (interior, mouthRadius) => {
-    const validInterior = Array.isArray(interior)
-      ? interior
-          .map((point) => {
-            const source = Array.isArray(point)
-              ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
-              : point;
-            if (!source || typeof source !== 'object') return null;
-            const z = Number(source.z);
-            const radius = Number(source.r);
-            const angleDeg =
-              source.angleDeg === null || source.angleDeg === undefined || source.angleDeg === ''
-                ? null
-                : Number(source.angleDeg);
-            const strength =
-              source.strength === null || source.strength === undefined || source.strength === ''
-                ? null
-                : Number(source.strength);
-            if (!Number.isFinite(z) || !Number.isFinite(radius)) return null;
-            if (z <= 0 || z >= length) {
-              throw new Error(
-                `buildWaveguidePayload requires FREEFORM interior anchor z=${z} to be within (0, ${length}).`
-              );
-            }
-            if (!Number.isFinite(angleDeg)) return [z, radius];
-            return Number.isFinite(strength)
-              ? [z, radius, angleDeg, strength]
-              : [z, radius, angleDeg];
-          })
-          .filter(Boolean)
-          .sort((a, b) => a[0] - b[0])
-      : [];
-    return [[0, throatRadius], ...validInterior, [length, toFiniteNumber(mouthRadius, 140)]];
-  };
-  const translateProfile = (interior, mouthRadius, mouthAngle, throatScale, mouthScale) => ({
-    points: assemblePoints(interior, mouthRadius),
-    throat_angle_deg: throatAngle,
-    mouth_angle_deg: toFiniteNumber(mouthAngle, 60),
-    throat_tangent_scale: toFiniteNumber(throatScale, 1),
-    mouth_tangent_scale: toFiniteNumber(mouthScale, 1),
-  });
-  const crossSections = Array.isArray(preparedParams.crossSections)
-    ? preparedParams.crossSections.map((station) => {
-        const translated = {
-          t: toFiniteNumber(station?.t, undefined),
-          shape: station?.shape != null ? String(station.shape) : undefined,
-        };
-        if (station?.exponent != null) {
-          translated.exponent = toFiniteNumber(station.exponent, undefined);
-        }
-        if (station?.cornerRatio != null) {
-          translated.corner_ratio = toFiniteNumber(station.cornerRatio, undefined);
-        }
-        if (station?.cornerRadiusMm != null) {
-          translated.corner_radius_mm = toFiniteNumber(station.cornerRadiusMm, undefined);
-        }
-        return translated;
-      })
-    : preparedParams.crossSections;
-
-  return {
-    profile_h: translateProfile(
-      preparedParams.interiorH,
-      preparedParams.mouthRadiusH,
-      preparedParams.mouthAngleH,
-      preparedParams.throatTangentScaleH,
-      preparedParams.mouthTangentScaleH
-    ),
-    profile_v: translateProfile(
-      preparedParams.interiorV,
-      preparedParams.mouthRadiusV,
-      preparedParams.mouthAngleV,
-      preparedParams.throatTangentScaleV,
-      preparedParams.mouthTangentScaleV
-    ),
-    cross_sections: crossSections,
-    overshoot_policy:
-      preparedParams.overshootPolicy != null ? String(preparedParams.overshootPolicy) : 'reject',
-    inflection_policy:
-      preparedParams.inflectionPolicy != null ? String(preparedParams.inflectionPolicy) : 'warn',
-  };
 }
 
 export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
@@ -291,7 +206,7 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
   };
 
   if (type === 'FREEFORM') {
-    Object.assign(payload, buildFreeformPayloadFields(preparedParams));
+    Object.assign(payload, toWireFreeform(preparedParams));
     for (const key of [
       'R',
       'r',

@@ -1,5 +1,5 @@
 import { PARAM_SCHEMA } from '../config/schema.js';
-import { migrateLegacyFreeformParams } from '../config/freeformParams.js';
+import { normalizeFreeformParams } from '../config/freeformModel.js';
 import { parseExpression, validateExpression } from './expression.js';
 
 const NUMERIC_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
@@ -68,11 +68,24 @@ export function isMWGConfig(content) {
 }
 
 export function coerceConfigParams(params = {}) {
+  const coerceValue = (value) => {
+    if (value === undefined || value === null) return value;
+    if (Array.isArray(value)) return value.map(coerceValue);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value).map(([nestedKey, nestedValue]) => [
+          nestedKey,
+          coerceValue(nestedValue),
+        ])
+      );
+    }
+    const stringValue = String(value).trim();
+    return isNumericString(stringValue) ? Number(stringValue) : stringValue;
+  };
   const typedParams = {};
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null) continue;
-    const stringValue = String(value).trim();
-    typedParams[key] = isNumericString(stringValue) ? Number(stringValue) : stringValue;
+    typedParams[key] = coerceValue(value);
   }
   return typedParams;
 }
@@ -221,7 +234,7 @@ export function prepareGeometryParams(
 ) {
   const resolvedType = type || rawParams.type;
   const preparedParams =
-    resolvedType === 'FREEFORM' ? migrateLegacyFreeformParams(rawParams) : { ...rawParams };
+    resolvedType === 'FREEFORM' ? normalizeFreeformParams(rawParams) : { ...rawParams };
 
   if (resolvedType) {
     applySchemaToParams(preparedParams, PARAM_SCHEMA[resolvedType] || {});

@@ -4,6 +4,7 @@ import {
   computeInflectionSpans,
 } from '../modules/design/freeformCurve.js';
 import { GlobalState } from '../state.js';
+import { normalizeAnchorList } from '../config/freeformModel.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const VIEW_WIDTH = 720;
@@ -72,39 +73,6 @@ function adaptiveGridStep(span) {
   return 50;
 }
 
-function normalizedInterior(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((point) => {
-      const source = Array.isArray(point)
-        ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
-        : point;
-      if (!source || typeof source !== 'object') return null;
-      const z = Number(source.z);
-      const r = Number(source.r);
-      if (!Number.isFinite(z) || !Number.isFinite(r)) return null;
-      const angleValue = source.angleDeg;
-      const angleDeg =
-        angleValue === null || angleValue === undefined || angleValue === ''
-          ? null
-          : Number(angleValue);
-      const strengthValue = source.strength;
-      const strength =
-        strengthValue === null || strengthValue === undefined || strengthValue === ''
-          ? null
-          : Number(strengthValue);
-      return {
-        z,
-        r,
-        angleDeg: Number.isFinite(angleDeg) ? angleDeg : null,
-        strength: Number.isFinite(angleDeg) && Number.isFinite(strength) ? strength : null,
-      };
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.z - right.z)
-    .slice(0, 62);
-}
-
 function clampedAnchorFlashKeys(previousParams, nextParams) {
   const previousLength = finite(previousParams?.length, 120);
   const nextLength = finite(nextParams?.length, 120);
@@ -114,8 +82,8 @@ function clampedAnchorFlashKeys(previousParams, nextParams) {
   const flashes = new Set();
   for (const plane of PLANES) {
     const key = `interior${plane}`;
-    const previous = normalizedInterior(previousParams?.[key]);
-    const next = normalizedInterior(nextParams?.[key]);
+    const previous = normalizeAnchorList(previousParams?.[key], { length: previousLength });
+    const next = normalizeAnchorList(nextParams?.[key], { length: nextLength });
     next.forEach((point, index) => {
       const wasClampedHere = previous.some((oldPoint) => {
         const clampedZ = clamp(oldPoint.z, 1, maximumZ);
@@ -264,7 +232,7 @@ export class FreeformProfileEditor {
     const throatRadius = finite(this.params.throatRadius, 12.7);
     const buildPlane = (plane) => {
       const suffix = plane;
-      const interior = normalizedInterior(this.params[`interior${suffix}`]);
+      const interior = normalizeAnchorList(this.params[`interior${suffix}`], { length });
       const mouthRadius = finite(this.params[`mouthRadius${suffix}`], 140);
       const anchors = [
         [0, throatRadius],
@@ -846,7 +814,7 @@ export class FreeformProfileEditor {
       this.drag.value = nextRadius;
     } else if (this.drag.kind === 'interior') {
       const key = `interior${plane}`;
-      const points = normalizedInterior(this.drag.params[key]);
+      const points = normalizeAnchorList(this.drag.params[key], { length });
       const nextPoint = {
         ...points[this.drag.index],
         z: Math.round(clamp(z, 0.5, Math.max(0.5, length - 0.5)) * 10) / 10,
@@ -858,7 +826,7 @@ export class FreeformProfileEditor {
       this.drag.value = nextPoint;
     } else if (this.drag.kind === 'interior-tangent') {
       const key = `interior${plane}`;
-      const points = normalizedInterior(this.drag.params[key]);
+      const points = normalizeAnchorList(this.drag.params[key], { length });
       const point = points[this.drag.index];
       if (!point) return;
       const vectorZ = z - point.z;
@@ -972,9 +940,9 @@ export class FreeformProfileEditor {
   insertAnchor(plane, z, radius = null) {
     if (!PLANES.includes(plane)) return false;
     const key = `interior${plane}`;
-    const points = normalizedInterior(this.params[key]);
-    if (points.length >= 62) return false;
     const length = Math.max(1, finite(this.params.length, 120));
+    const points = normalizeAnchorList(this.params[key], { length });
+    if (points.length >= 62) return false;
     const nextZ =
       Math.round(clamp(finite(z, length / 2), 0.5, Math.max(0.5, length - 0.5)) * 10) / 10;
     const nextRadius =
@@ -991,7 +959,8 @@ export class FreeformProfileEditor {
   resetInteriorTangent(plane, index) {
     if (!PLANES.includes(plane)) return false;
     const key = `interior${plane}`;
-    const points = normalizedInterior(this.params[key]);
+    const length = Math.max(1, finite(this.params.length, 120));
+    const points = normalizeAnchorList(this.params[key], { length });
     if (!Number.isInteger(index) || index < 0 || index >= points.length) return false;
     points[index] = { ...points[index], angleDeg: null, strength: null };
     return this.commitParam(key, points);
@@ -1000,7 +969,8 @@ export class FreeformProfileEditor {
   deleteAnchor(plane, index) {
     if (!PLANES.includes(plane)) return false;
     const key = `interior${plane}`;
-    const points = normalizedInterior(this.params[key]);
+    const length = Math.max(1, finite(this.params.length, 120));
+    const points = normalizeAnchorList(this.params[key], { length });
     if (!Number.isInteger(index) || index < 0 || index >= points.length) return false;
     this.selectedAnchor = null;
     return this.commitParam(

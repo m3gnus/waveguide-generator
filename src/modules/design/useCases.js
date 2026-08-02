@@ -18,7 +18,10 @@ export function importMWGConfig(content, fileName) {
   try {
     const parsed = MWGConfigParser.parse(content);
     if (!parsed.type) {
-      return { success: false, error: 'Could not find OSSE or R-OSSE block in config file.' };
+      return {
+        success: false,
+        error: 'Could not find OSSE or R-OSSE block in config file. No FREEFORM parameters found.',
+      };
     }
 
     const typedParams = coerceConfigParams(parsed.params);

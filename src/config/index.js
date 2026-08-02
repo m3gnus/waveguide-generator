@@ -1,3 +1,109 @@
+import { fromWireFreeform } from './freeformModel.js';
+
+const SHARED_FLAT_KEY_MAP = Object.freeze({
+  'Morph.TargetShape': 'morphTarget',
+  'Morph.TargetWidth': 'morphWidth',
+  'Morph.TargetHeight': 'morphHeight',
+  'Morph.CornerRadius': 'morphCorner',
+  'Morph.Rate': 'morphRate',
+  'Morph.FixedPart': 'morphFixed',
+  'Mesh.AngularSegments': 'angularSegments',
+  'Mesh.LengthSegments': 'lengthSegments',
+  'Mesh.CornerSegments': 'cornerSegments',
+  'Mesh.ThroatSegments': 'throatSegments',
+  'Mesh.ThroatResolution': 'throatResolution',
+  'Mesh.MouthResolution': 'mouthResolution',
+  'Mesh.ThroatSliceDensity': 'throatSliceDensity',
+  'Mesh.SamplingMode': 'samplingMode',
+  'Mesh.VerticalOffset': 'verticalOffset',
+  'Mesh.Quadrants': 'quadrants',
+  'Mesh.WallThickness': 'wallThickness',
+  'Mesh.RearResolution': 'rearResolution',
+  'Mesh.ApertureResolutionScale': 'apertureResolutionScale',
+  'Mesh.MaxTriangles': 'maxTriangles',
+  'Mesh.AllowLargeMesh': 'allowLargeMesh',
+  'Source.Shape': 'sourceShape',
+  'Source.Radius': 'sourceRadius',
+  'Source.Curv': 'sourceCurv',
+  'Source.Velocity': 'sourceVelocity',
+  'Source.Contours': 'sourceContours',
+  'ABEC.NumFrequencies': 'numFreqs',
+  'ABEC.SimType': 'simType',
+  'Simulation.F1': 'freqStart',
+  'Simulation.F2': 'freqEnd',
+  'Simulation.NumFrequencies': 'numFreqs',
+  'Simulation.SimType': 'simType',
+  'Simulation.SolverMode': 'solverMode',
+  'Output.STL': 'outputSTL',
+  'Output.MSH': 'outputMSH',
+});
+
+function normalizeSharedFlatKeys(params) {
+  for (const [sourceKey, targetKey] of Object.entries(SHARED_FLAT_KEY_MAP)) {
+    if (params[sourceKey] !== undefined) params[targetKey] = params[sourceKey];
+  }
+  if (params['Mesh.ZMapPoints'] !== undefined) params.zMapPoints = params['Mesh.ZMapPoints'];
+  if (params['Mesh.ZMap'] !== undefined) params.zMapPoints = params['Mesh.ZMap'];
+  if (params['ABEC.f1'] !== undefined) params.freqStart = params['ABEC.f1'];
+  if (params['ABEC.F1'] !== undefined) params.freqStart = params['ABEC.F1'];
+  if (params['ABEC.f2'] !== undefined) params.freqEnd = params['ABEC.f2'];
+  if (params['ABEC.F2'] !== undefined) params.freqEnd = params['ABEC.F2'];
+  if (params['Morph.AllowShrinkage'] !== undefined) {
+    params.morphAllowShrinkage =
+      params['Morph.AllowShrinkage'] === '1' || params['Morph.AllowShrinkage'] === 1;
+  }
+}
+
+function parseFreeformRows(block) {
+  return (block?._lines || []).map((line) => line.trim().split(/\s+/));
+}
+
+function consumeFreeformSection(result) {
+  const p = result.params;
+  const horizontalBlock = result.blocks['Freeform.H'];
+  const verticalBlock = result.blocks['Freeform.V'];
+  const length = p['Freeform.Length'];
+  const throatRadius = p['Freeform.ThroatRadius'];
+  const throatAngle = p['Freeform.ThroatAngle'];
+  const profile = (name, block) => ({
+    points: [
+      [0, throatRadius],
+      ...parseFreeformRows(result.blocks[`Freeform.${name}.Points`]),
+      [length, block?._items?.MouthRadius],
+    ],
+    throat_angle_deg: throatAngle,
+    mouth_angle_deg: block?._items?.MouthAngle,
+    throat_tangent_scale: block?._items?.ThroatTangentScale,
+    mouth_tangent_scale: block?._items?.MouthTangentScale,
+  });
+  const crossSections = parseFreeformRows(result.blocks['Freeform.CrossSections']).map(
+    ([t, shape, optional]) => {
+      const station = { t, shape };
+      if (shape === 'superellipse' && optional !== undefined) station.exponent = optional;
+      if (shape === 'rounded_rectangle' && optional !== undefined) {
+        if (optional.startsWith('ratio:')) station.corner_ratio = optional.slice(6);
+        else station.corner_radius_mm = optional;
+      }
+      return station;
+    }
+  );
+  const canonical = fromWireFreeform({
+    profile_h: profile('H', horizontalBlock),
+    profile_v: profile('V', verticalBlock),
+    cross_sections: crossSections,
+    overshoot_policy: p['Freeform.OvershootPolicy'],
+    inflection_policy: p['Freeform.InflectionPolicy'],
+  });
+
+  for (const key of Object.keys(p)) {
+    if (key.startsWith('Freeform.')) delete p[key];
+  }
+  for (const key of Object.keys(result.blocks)) {
+    if (key.startsWith('Freeform.')) delete result.blocks[key];
+  }
+  Object.assign(p, canonical);
+}
+
 export class MWGConfigParser {
   static parse(content) {
     const result = { type: null, params: {}, blocks: {} };
@@ -15,7 +121,11 @@ export class MWGConfigParser {
       const blockStartMatch = line.match(/^([\w.:-]+)\s*=\s*\{/);
       if (blockStartMatch) {
         const currentBlockName = blockStartMatch[1];
-        if (currentBlockName === 'R-OSSE') {
+        if (currentBlockName.startsWith('Freeform.')) {
+          result.type = 'FREEFORM';
+          currentBlock = currentBlockName;
+          result.blocks[currentBlockName] = { _items: {}, _lines: [] };
+        } else if (currentBlockName === 'R-OSSE') {
           result.type = 'R-OSSE';
           currentBlock = 'R-OSSE';
         } else if (currentBlockName === 'OSSE') {
@@ -55,10 +165,21 @@ export class MWGConfigParser {
 
     // Auto-detect OSSE from flat-key format (no OSSE = { } block)
     if (!result.type) {
-      if (result.params['Coverage.Angle'] || result.params['Length'] || result.params['Term.n']) {
+      if (
+        result.params['Freeform.Length'] !== undefined ||
+        Object.keys(result.blocks).some((key) => key.startsWith('Freeform.'))
+      ) {
+        result.type = 'FREEFORM';
+      } else if (
+        result.params['Coverage.Angle'] ||
+        result.params['Length'] ||
+        result.params['Term.n']
+      ) {
         result.type = 'OSSE';
       }
     }
+
+    if (result.type === 'FREEFORM') consumeFreeformSection(result);
 
     // Normalize OSSE flat-key names to internal parameter names
     if (result.type === 'OSSE') {
@@ -144,242 +265,10 @@ export class MWGConfigParser {
       if (p['GCurve.Rot']) {
         p.gcurveRot = p['GCurve.Rot'];
       }
-
-      if (p['Morph.TargetShape']) {
-        p.morphTarget = p['Morph.TargetShape'];
-      }
-      if (p['Morph.TargetWidth']) {
-        p.morphWidth = p['Morph.TargetWidth'];
-      }
-      if (p['Morph.TargetHeight']) {
-        p.morphHeight = p['Morph.TargetHeight'];
-      }
-      if (p['Morph.CornerRadius']) {
-        p.morphCorner = p['Morph.CornerRadius'];
-      }
-      if (p['Morph.Rate']) {
-        p.morphRate = p['Morph.Rate'];
-      }
-      if (p['Morph.FixedPart']) {
-        p.morphFixed = p['Morph.FixedPart'];
-      }
-      if (p['Morph.AllowShrinkage'] !== undefined) {
-        p.morphAllowShrinkage =
-          p['Morph.AllowShrinkage'] === '1' || p['Morph.AllowShrinkage'] === 1;
-      }
-
-      if (p['Mesh.AngularSegments']) {
-        p.angularSegments = p['Mesh.AngularSegments'];
-      }
-      if (p['Mesh.LengthSegments']) {
-        p.lengthSegments = p['Mesh.LengthSegments'];
-      }
-      if (p['Mesh.CornerSegments']) {
-        p.cornerSegments = p['Mesh.CornerSegments'];
-      }
-      if (p['Mesh.ThroatSegments']) {
-        p.throatSegments = p['Mesh.ThroatSegments'];
-      }
-      if (p['Mesh.ThroatResolution']) {
-        p.throatResolution = p['Mesh.ThroatResolution'];
-      }
-      if (p['Mesh.MouthResolution']) {
-        p.mouthResolution = p['Mesh.MouthResolution'];
-      }
-      if (p['Mesh.SamplingMode']) {
-        p.samplingMode = p['Mesh.SamplingMode'];
-      }
-      if (p['Mesh.ZMapPoints']) {
-        p.zMapPoints = p['Mesh.ZMapPoints'];
-      }
-      if (p['Mesh.ZMap']) {
-        p.zMapPoints = p['Mesh.ZMap'];
-      }
-      if (p['Mesh.VerticalOffset']) {
-        p.verticalOffset = p['Mesh.VerticalOffset'];
-      }
-      if (p['Mesh.Quadrants']) {
-        p.quadrants = p['Mesh.Quadrants'];
-      }
-      if (p['Mesh.WallThickness']) {
-        p.wallThickness = p['Mesh.WallThickness'];
-      }
-      if (p['Mesh.RearResolution']) {
-        p.rearResolution = p['Mesh.RearResolution'];
-      }
-      if (p['Mesh.ApertureResolutionScale']) {
-        p.apertureResolutionScale = p['Mesh.ApertureResolutionScale'];
-      }
-
-      if (p['Source.Shape']) {
-        p.sourceShape = p['Source.Shape'];
-      }
-      if (p['Source.Radius']) {
-        p.sourceRadius = p['Source.Radius'];
-      }
-      if (p['Source.Curv']) {
-        p.sourceCurv = p['Source.Curv'];
-      }
-      if (p['Source.Velocity']) {
-        p.sourceVelocity = p['Source.Velocity'];
-      }
-      if (p['Source.Contours']) {
-        p.sourceContours = p['Source.Contours'];
-      }
-      if (p['ABEC.f1']) {
-        p.freqStart = p['ABEC.f1'];
-      }
-      if (p['ABEC.F1']) {
-        p.freqStart = p['ABEC.F1'];
-      }
-      if (p['ABEC.f2']) {
-        p.freqEnd = p['ABEC.f2'];
-      }
-      if (p['ABEC.F2']) {
-        p.freqEnd = p['ABEC.F2'];
-      }
-      if (p['ABEC.NumFrequencies']) {
-        p.numFreqs = p['ABEC.NumFrequencies'];
-      }
-      if (p['ABEC.SimType']) {
-        p.simType = p['ABEC.SimType'];
-      }
-      if (p['Simulation.F1']) {
-        p.freqStart = p['Simulation.F1'];
-      }
-      if (p['Simulation.F2']) {
-        p.freqEnd = p['Simulation.F2'];
-      }
-      if (p['Simulation.NumFrequencies']) {
-        p.numFreqs = p['Simulation.NumFrequencies'];
-      }
-
-      if (p['Output.STL'] !== undefined) {
-        p.outputSTL = p['Output.STL'];
-      }
-      if (p['Output.MSH'] !== undefined) {
-        p.outputMSH = p['Output.MSH'];
-      }
     }
 
-    // Normalize R-OSSE mesh/source/simulation params too
-    if (result.type === 'R-OSSE') {
-      const p = result.params;
-      if (p['Morph.TargetShape']) {
-        p.morphTarget = p['Morph.TargetShape'];
-      }
-      if (p['Morph.TargetWidth']) {
-        p.morphWidth = p['Morph.TargetWidth'];
-      }
-      if (p['Morph.TargetHeight']) {
-        p.morphHeight = p['Morph.TargetHeight'];
-      }
-      if (p['Morph.CornerRadius']) {
-        p.morphCorner = p['Morph.CornerRadius'];
-      }
-      if (p['Morph.Rate']) {
-        p.morphRate = p['Morph.Rate'];
-      }
-      if (p['Morph.FixedPart']) {
-        p.morphFixed = p['Morph.FixedPart'];
-      }
-      if (p['Morph.AllowShrinkage'] !== undefined) {
-        p.morphAllowShrinkage =
-          p['Morph.AllowShrinkage'] === '1' || p['Morph.AllowShrinkage'] === 1;
-      }
-      if (p['Mesh.AngularSegments']) {
-        p.angularSegments = p['Mesh.AngularSegments'];
-      }
-      if (p['Mesh.LengthSegments']) {
-        p.lengthSegments = p['Mesh.LengthSegments'];
-      }
-      if (p['Mesh.CornerSegments']) {
-        p.cornerSegments = p['Mesh.CornerSegments'];
-      }
-      if (p['Mesh.ThroatSegments']) {
-        p.throatSegments = p['Mesh.ThroatSegments'];
-      }
-      if (p['Mesh.ThroatResolution']) {
-        p.throatResolution = p['Mesh.ThroatResolution'];
-      }
-      if (p['Mesh.MouthResolution']) {
-        p.mouthResolution = p['Mesh.MouthResolution'];
-      }
-      if (p['Mesh.SamplingMode']) {
-        p.samplingMode = p['Mesh.SamplingMode'];
-      }
-      if (p['Mesh.ZMapPoints']) {
-        p.zMapPoints = p['Mesh.ZMapPoints'];
-      }
-      if (p['Mesh.ZMap']) {
-        p.zMapPoints = p['Mesh.ZMap'];
-      }
-      if (p['Mesh.VerticalOffset']) {
-        p.verticalOffset = p['Mesh.VerticalOffset'];
-      }
-      if (p['Mesh.WallThickness']) {
-        p.wallThickness = p['Mesh.WallThickness'];
-      }
-      if (p['Mesh.Quadrants']) {
-        p.quadrants = p['Mesh.Quadrants'];
-      }
-      if (p['Mesh.RearResolution']) {
-        p.rearResolution = p['Mesh.RearResolution'];
-      }
-      if (p['Mesh.ApertureResolutionScale']) {
-        p.apertureResolutionScale = p['Mesh.ApertureResolutionScale'];
-      }
-      if (p['Source.Shape']) {
-        p.sourceShape = p['Source.Shape'];
-      }
-      if (p['Source.Radius']) {
-        p.sourceRadius = p['Source.Radius'];
-      }
-      if (p['Source.Curv']) {
-        p.sourceCurv = p['Source.Curv'];
-      }
-      if (p['Source.Velocity']) {
-        p.sourceVelocity = p['Source.Velocity'];
-      }
-      if (p['Source.Contours']) {
-        p.sourceContours = p['Source.Contours'];
-      }
-      if (p['ABEC.f1']) {
-        p.freqStart = p['ABEC.f1'];
-      }
-      if (p['ABEC.F1']) {
-        p.freqStart = p['ABEC.F1'];
-      }
-      if (p['ABEC.f2']) {
-        p.freqEnd = p['ABEC.f2'];
-      }
-      if (p['ABEC.F2']) {
-        p.freqEnd = p['ABEC.F2'];
-      }
-      if (p['ABEC.NumFrequencies']) {
-        p.numFreqs = p['ABEC.NumFrequencies'];
-      }
-      if (p['ABEC.SimType']) {
-        p.simType = p['ABEC.SimType'];
-      }
-      if (p['Simulation.F1']) {
-        p.freqStart = p['Simulation.F1'];
-      }
-      if (p['Simulation.F2']) {
-        p.freqEnd = p['Simulation.F2'];
-      }
-      if (p['Simulation.NumFrequencies']) {
-        p.numFreqs = p['Simulation.NumFrequencies'];
-      }
-
-      // Output
-      if (p['Output.STL'] !== undefined) {
-        p.outputSTL = p['Output.STL'];
-      }
-      if (p['Output.MSH'] !== undefined) {
-        p.outputMSH = p['Output.MSH'];
-      }
-    }
+    // OSSE, R-OSSE, and FREEFORM share one flat-key normalization path.
+    normalizeSharedFlatKeys(result.params);
 
     // Normalize params (both types, flat keys)
     {
