@@ -5,6 +5,7 @@ import { MWGConfigParser } from '../src/config/index.js';
 import { getDefaults } from '../src/config/defaults.js';
 import { generateMWGConfigContent } from '../src/export/mwgConfig.js';
 import { importMWGConfig } from '../src/modules/design/useCases.js';
+import { applyAthImportDefaults, coerceConfigParams } from '../src/geometry/params.js';
 
 test('legacy ABEC frequency keys round-trip to simulation frequency keys and unknown blocks are preserved', () => {
   const source = [
@@ -111,6 +112,133 @@ test('mixed OSSE flat and internal keys normalize independently', () => {
   assert.equal(parsed.params.s, '0.6');
   assert.equal(parsed.params.k, '7');
   assert.equal(parsed.params.h, '0.2');
+});
+
+test('zmap sampling survives an export/import round trip', () => {
+  const source = [
+    'Coverage.Angle = 45',
+    'Length = 120',
+    'Term.n = 4',
+    'Term.q = 1',
+    'Term.s = 0.6',
+    'Throat.Angle = 15.5',
+    'Throat.Diameter = 25.4',
+    'OS.k = 7',
+    'Mesh.SamplingMode = zmap',
+    'Mesh.ZMap = 0,20,40'
+  ].join('\n');
+
+  const parsed = MWGConfigParser.parse(source);
+  assert.equal(parsed.type, 'OSSE');
+  assert.equal(parsed.params.samplingMode, 'zmap');
+  assert.equal(parsed.params.zMapPoints, '0,20,40');
+
+  const params = {
+    ...getDefaults('OSSE'),
+    ...parsed.params,
+    type: 'OSSE'
+  };
+  const regenerated = generateMWGConfigContent(params);
+  assert.match(regenerated, /^Mesh\.ZMapPoints = 0,20,40$/m);
+
+  const reparsed = MWGConfigParser.parse(regenerated);
+  assert.equal(reparsed.params.zMapPoints, '0,20,40');
+
+  const typedParams = coerceConfigParams(reparsed.params);
+  applyAthImportDefaults(reparsed, typedParams);
+  assert.equal(typedParams.samplingMode, 'zmap');
+  assert.equal(typedParams.zMapPoints, '0,20,40');
+});
+
+test('R-OSSE zmap sampling survives an export/import round trip', () => {
+  const source = [
+    'R-OSSE = {',
+    'R = 140',
+    'a = 25',
+    'a0 = 15.5',
+    'b = 0.2',
+    'k = 2',
+    'm = 0.85',
+    'q = 3.4',
+    'r = 0.4',
+    'r0 = 12.7',
+    '}',
+    'Mesh.SamplingMode = zmap',
+    'Mesh.ZMapPoints = 0,0.5,1'
+  ].join('\n');
+
+  const parsed = MWGConfigParser.parse(source);
+  assert.equal(parsed.type, 'R-OSSE');
+  assert.equal(parsed.params.zMapPoints, '0,0.5,1');
+
+  const params = {
+    ...getDefaults('R-OSSE'),
+    ...parsed.params,
+    type: 'R-OSSE'
+  };
+  const regenerated = generateMWGConfigContent(params);
+  assert.match(regenerated, /^Mesh\.ZMapPoints = 0,0.5,1$/m);
+
+  const reparsed = MWGConfigParser.parse(regenerated);
+  assert.equal(reparsed.params.zMapPoints, '0,0.5,1');
+
+  const typedParams = coerceConfigParams(reparsed.params);
+  applyAthImportDefaults(reparsed, typedParams);
+  assert.equal(typedParams.samplingMode, 'zmap');
+});
+
+test('a non-derivable Mesh.SamplingMode is preserved on export', () => {
+  const params = {
+    ...getDefaults('OSSE'),
+    samplingMode: 'uniform',
+    type: 'OSSE'
+  };
+  const regenerated = generateMWGConfigContent(params);
+  assert.match(regenerated, /^Mesh\.SamplingMode = uniform$/m);
+
+  const reparsed = MWGConfigParser.parse(regenerated);
+  assert.equal(reparsed.params.samplingMode, 'uniform');
+});
+
+test('derivable sampling defaults add no sampling lines to exports', () => {
+  const regenerated = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    samplingMode: 'ath-default-zmap',
+    type: 'OSSE'
+  });
+
+  assert.doesNotMatch(regenerated, /^Mesh\.SamplingMode/m);
+  assert.doesNotMatch(regenerated, /^Mesh\.ZMapPoints/m);
+});
+
+test('ABEC.SimType survives a round trip when the enclosure cannot derive it', () => {
+  const freeStanding = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    simType: '2',
+    encDepth: 0
+  });
+  assert.match(freeStanding, /^ABEC\.SimType = 2$/m);
+  const reparsedFree = MWGConfigParser.parse(freeStanding);
+  assert.equal(reparsedFree.params.simType, '2');
+
+  const baffled = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    simType: '1',
+    encDepth: 280
+  });
+  assert.match(baffled, /^ABEC\.SimType = 1$/m);
+  const reparsedBaffled = MWGConfigParser.parse(baffled);
+  assert.equal(reparsedBaffled.params.simType, '1');
+
+  const derivable = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    simType: '2',
+    encDepth: 280
+  });
+  assert.doesNotMatch(derivable, /^ABEC\.SimType/m);
 });
 
 test('zero-angle Slot.Length imports as throat extension length', () => {
