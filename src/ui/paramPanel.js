@@ -12,6 +12,7 @@ import {
 } from './freeformCrossSectionInset.js';
 import { convertToFreeform, formatConversionReport } from '../modules/design/convertToFreeform.js';
 import { showFreeformConversionDialog } from './feedback.js';
+import { mapFreeformError } from './freeformErrorMapping.js';
 import { normalizeAnchorList, normalizeStations } from '../config/freeformModel.js';
 import {
   validateOutputName,
@@ -118,6 +119,20 @@ function findControlByParamKey(root, key, tagName) {
   return null;
 }
 
+function walkElements(root, callback) {
+  if (!root) return;
+  callback(root);
+  for (const child of [...(root.children || [])]) walkElements(child, callback);
+}
+
+function findElement(root, predicate) {
+  let result = null;
+  walkElements(root, (node) => {
+    if (!result && predicate(node)) result = node;
+  });
+  return result;
+}
+
 function isNumericLiteral(value) {
   return (
     /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(value) ||
@@ -187,6 +202,7 @@ export class ParamPanel {
     this.simulationContainer = document.getElementById('simulation-param-container');
     this.formulaInfoVisible = false;
     this.profileError = '';
+    this.profileErrorMapping = null;
     this.profileErrorStateVersion = null;
     this.controlIdCounter = 0;
     this.freeformEditor = null;
@@ -223,6 +239,7 @@ export class ParamPanel {
   createFullPanel() {
     if (this.profileError && this.profileErrorStateVersion !== GlobalState.getVersion()) {
       this.profileError = '';
+      this.profileErrorMapping = null;
       this.profileErrorStateVersion = null;
     }
     const focusedControl = this.captureFocusedControl();
@@ -690,6 +707,8 @@ export class ParamPanel {
     points.forEach((point, index) => {
       const pointRow = document.createElement('div');
       pointRow.className = 'freeform-point-row';
+      pointRow.setAttribute('data-freeform-anchor-plane', key === 'interiorH' ? 'H' : 'V');
+      pointRow.setAttribute('data-freeform-anchor-index', String(index + 1));
 
       const zInput = document.createElement('input');
       zInput.type = 'number';
@@ -867,6 +886,7 @@ export class ParamPanel {
       const isLast = index === stations.length - 1;
       const stationRow = document.createElement('div');
       stationRow.className = 'freeform-station-row';
+      stationRow.setAttribute('data-freeform-station-index', String(index));
 
       const position = document.createElement('input');
       position.type = 'number';
@@ -1186,16 +1206,86 @@ export class ParamPanel {
 
   setProfileError(message) {
     this.profileError = String(message || '').trim();
+    this.profileErrorMapping = this.profileError
+      ? mapFreeformError(this.profileError, GlobalState.get()?.params)
+      : null;
     this.profileErrorStateVersion = this.profileError ? GlobalState.getVersion() : null;
     this.renderProfileErrorStrip();
+  }
+
+  clearProfileErrorDecorations(section) {
+    walkElements(section, (node) => {
+      if (node.getAttribute?.('data-freeform-backend-error') !== null) {
+        node.classList?.remove?.('freeform-element-error');
+        node.removeAttribute?.('data-freeform-backend-error');
+        node.removeAttribute?.('title');
+      }
+      if (node.className === 'freeform-element-error-message') node.remove?.();
+    });
+    this.freeformEditor?.setErrorMapping?.(null);
+  }
+
+  findProfileErrorElement(section, target) {
+    if (!target) return null;
+    if (target.kind === 'station') {
+      return findElement(
+        section,
+        (node) => node.getAttribute?.('data-freeform-station-index') === String(target.index)
+      );
+    }
+    if (target.kind !== 'anchor') return null;
+
+    const length = Number(GlobalState.get()?.params?.length) || 120;
+    const interior = normalizeAnchorList(GlobalState.get()?.params?.[`interior${target.plane}`], {
+      length,
+    });
+    if (target.anchorIndex > 0 && target.anchorIndex <= interior.length) {
+      return findElement(
+        section,
+        (node) =>
+          node.getAttribute?.('data-freeform-anchor-plane') === target.plane &&
+          node.getAttribute?.('data-freeform-anchor-index') === String(target.anchorIndex)
+      );
+    }
+
+    const key =
+      target.anchorIndex === 0
+        ? 'throatRadius'
+        : target.anchorIndex === interior.length + 1
+          ? `mouthRadius${target.plane}`
+          : null;
+    if (!key) return null;
+    return findElement(
+      section,
+      (node) =>
+        String(node.className || '')
+          .split(/\s+/)
+          .includes('input-row') && getParamKey(node) === key
+    );
   }
 
   renderProfileErrorStrip() {
     const existing = document.getElementById('freeform-profile-error');
     if (existing) existing.remove();
-    if (!this.profileError || GlobalState.get().type !== 'FREEFORM') return;
     const section = document.getElementById('core-profile');
     if (!section) return;
+    this.clearProfileErrorDecorations(section);
+    if (!this.profileError || GlobalState.get().type !== 'FREEFORM') return;
+
+    const mapping = this.profileErrorMapping;
+    const target = this.findProfileErrorElement(section, mapping?.target);
+    if (target && mapping) {
+      target.classList?.add?.('freeform-element-error');
+      target.setAttribute('data-freeform-backend-error', '');
+      target.title = mapping.detail;
+      const adjacent = document.createElement('div');
+      adjacent.className = 'freeform-element-error-message';
+      adjacent.textContent = mapping.message;
+      adjacent.title = mapping.detail;
+      target.appendChild(adjacent);
+      this.freeformEditor?.setErrorMapping?.(mapping);
+    }
+
     const strip = document.createElement('div');
     strip.id = 'freeform-profile-error';
     strip.className = 'freeform-profile-error';

@@ -91,8 +91,8 @@ function buildAppCoordinator(input) {
   let simulationPanelInitPromise = null;
   let eventsBound = false;
 
-  const onStateUpdated = (state) => {
-    app.onStateUpdate(state);
+  const onStateUpdated = (state, context) => {
+    app.onStateUpdate(state, context);
     fileOps.markParametersChanged?.();
   };
   const onMeshRequested = () => {

@@ -3,8 +3,16 @@ import { UiModule } from '../modules/ui/index.js';
 import { appUiFeedback, appUiFileOps } from './uiAdapters.js';
 
 import { initializeLogging } from './logging.js';
-import { setupScene, onResize, renderModel, focusOnModel, zoom, toggleCamera } from './scene.js';
-import { setupEventListeners } from './events.js';
+import {
+  setupScene,
+  onResize,
+  renderModel,
+  focusOnModel,
+  zoom,
+  toggleCamera,
+  handleViewportStateChange,
+} from './scene.js';
+import { setupEventListeners, syncAppExportMenuCapabilities } from './events.js';
 import {
   setupPanelSizing,
   schedulePanelAutoSize,
@@ -108,8 +116,10 @@ export class App {
     return schedulePanelAutoSize(this);
   }
 
-  onStateUpdate(state) {
+  onStateUpdate(state, context = {}) {
+    handleViewportStateChange(this, state, context);
     this.currentState = state;
+    syncAppExportMenuCapabilities(document, state);
     // 1. Rebuild Param UI
     this.paramPanel.createFullPanel();
     this.schedulePanelAutoSize();

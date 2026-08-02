@@ -18,7 +18,7 @@ import { detachCreaseVertices } from './viewportMesh.js';
 import { ImportedMeshState } from '../state.js';
 import { AppEvents } from '../events.js';
 import { createPerfTimer, measurePerf } from '../logging/performance.js';
-import { getViewportStateCacheKey } from './viewportCacheKey.js';
+import { getViewportStateCacheKey, isViewportCacheCurrent } from './viewportCacheKey.js';
 
 const GRID_DISPLAY_MODES = new Set(['wireframe', 'solidwire']);
 // After a failed backend viewport fetch, render with the local JS engine and
@@ -38,11 +38,39 @@ function resetMeshCache(app) {
 function invalidateMeshCacheIfStale(app) {
   if (!app._meshCache) resetMeshCache(app);
   const versionKey = getViewportStateCacheKey(app.currentState || {});
-  if (app._meshCache.stateKey !== versionKey) {
+  if (!isViewportCacheCurrent(app._meshCache, app.currentState, app._viewportStaleStateKey)) {
     app._meshCache.grid = null;
     app._meshCache.smooth = null;
     app._meshCache.stateKey = versionKey;
   }
+}
+
+function clearViewportStaleState(app) {
+  app._viewportStale = false;
+  app._viewportStaleStateKey = null;
+  app.container?.classList?.remove?.('viewport-mesh-stale');
+  app._viewportStaleBadge?.remove?.();
+  app._viewportStaleBadge = null;
+}
+
+function markViewportMeshStale(app, stateKey, detail) {
+  if (!app.hornMesh) return false;
+  app._viewportStale = true;
+  app._viewportStaleStateKey = stateKey;
+  app.container?.classList?.add?.('viewport-mesh-stale');
+
+  const documentRef = app.container?.ownerDocument || globalThis.document;
+  if (!app._viewportStaleBadge && documentRef?.createElement && app.container?.appendChild) {
+    const badge = documentRef.createElement('div');
+    badge.className = 'viewport-stale-badge';
+    badge.setAttribute('role', 'status');
+    badge.textContent = 'Stale — fix errors to rebuild';
+    app.container.appendChild(badge);
+    app._viewportStaleBadge = badge;
+  }
+  if (app._viewportStaleBadge) app._viewportStaleBadge.title = String(detail || '');
+  app.needsRender = true;
+  return true;
 }
 
 function toRenderMesh(viewportMesh, variant, perf) {
@@ -142,6 +170,7 @@ function scheduleServerOnlyCooldownRetry(app) {
 }
 
 function applyVariantToScene(app, variant, mesh, cacheKey = app._meshCache?.stateKey) {
+  clearViewportStaleState(app);
   applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals);
   app._currentMeshVariant = variant;
   app.needsRender = true;
@@ -187,6 +216,7 @@ function startBackendViewportBuild(app, variant) {
       if (fetchRecord.superseded) return;
       const built = { ...toRenderMesh(viewportMesh, variant), source: 'backend' };
       clearBackendViewportFailure(app);
+      clearViewportStaleState(app);
       invalidateMeshCacheIfStale(app);
       if (app._meshCache.stateKey !== stateKey) return;
       app._meshCache[variant] = built;
@@ -215,13 +245,21 @@ function startBackendViewportBuild(app, variant) {
       // instead of silently leaving the prior frame on screen, so an infeasible
       // or invalid solve reads as an error rather than a frozen viewport.
       if (isServerOnlyViewportFormula(app.currentState)) {
-        // The backend build failed (e.g. an infeasible ICW solve -> 422); no mesh is coming, so
-        // clear the stale prior frame instead of leaving it on screen under the error toast.
-        clearViewportMesh(app);
-        reportMeshBuildFailure(
-          app,
-          isAbort ? new Error('Backend geometry request timed out.') : error
-        );
+        const reportedError = isAbort ? new Error('Backend geometry request timed out.') : error;
+        // FREEFORM editing is intentionally optimistic: keep the last valid
+        // mesh visible but unmistakably stale while the rejected state remains
+        // outside the current-key cache. Other server-only formulas retain the
+        // previous clear-on-failure behaviour.
+        if (app.currentState?.type === 'FREEFORM') {
+          markViewportMeshStale(
+            app,
+            stateKey,
+            reportedError?.backendDetail || reportedError?.message || reportedError
+          );
+        } else {
+          clearViewportMesh(app);
+        }
+        reportMeshBuildFailure(app, reportedError);
         return;
       }
       try {
@@ -464,6 +502,27 @@ function clearViewportMesh(app) {
     app._importedMeshRenderCache = null;
   }
   removeOverlays(app);
+  clearViewportStaleState(app);
+}
+
+/** Clear geometry that must not survive a formula switch or full design replacement. */
+export function handleViewportStateChange(app, nextState, context = {}) {
+  const previousState = app.currentState;
+  const formulaChanged = Boolean(previousState && previousState.type !== nextState?.type);
+  const designReset = context?.fullReplace === true || context?.designReset === true;
+  if (!formulaChanged && !designReset) return false;
+
+  if (app._viewportFetch) {
+    app._viewportFetch.superseded = true;
+    app._viewportFetch.controller?.abort?.();
+    app._viewportFetch = null;
+  }
+  clearBackendViewportFailure(app);
+  clearViewportMesh(app);
+  resetMeshCache(app);
+  app._currentMeshVariant = null;
+  app.needsRender = true;
+  return true;
 }
 
 /**

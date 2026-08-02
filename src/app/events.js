@@ -6,6 +6,7 @@ import { DISPLAY_MODES } from '../viewer/index.js';
 import { applyDisplayMode } from './scene.js';
 import { getDisplayMode, setDisplayMode } from '../ui/settings/modal.js';
 import { debugLog, debugWarn } from '../logging/debug.js';
+import { getExportCapability } from '../modules/export/capabilities.js';
 
 export function setupEventListeners(app) {
   bindButtonEvents(app);
@@ -25,6 +26,41 @@ export function setupEventListeners(app) {
 
   // Undo/Redo keys
   document.addEventListener('keydown', handleUndoRedoShortcut);
+}
+
+export function syncAppExportMenuCapabilities(root, state) {
+  if (typeof root?.querySelectorAll !== 'function') return;
+  const formula = state?.type || state?.params?.type || '';
+  root.querySelectorAll('[data-app-export-format]').forEach((item) => {
+    const format = item.dataset?.appExportFormat || item.getAttribute?.('data-app-export-format');
+    const capability = getExportCapability(formula, format);
+    item.disabled = !capability.available;
+    item.setAttribute?.('aria-disabled', capability.available ? 'false' : 'true');
+
+    const existingReason = item.querySelector?.('.export-menu-item-reason');
+    if (capability.available) {
+      existingReason?.remove?.();
+      if (item.getAttribute?.('data-export-capability-reason') !== null) {
+        item.removeAttribute?.('title');
+        item.removeAttribute?.('data-export-capability-reason');
+      }
+      return;
+    }
+
+    item.title = capability.reason;
+    item.setAttribute?.('data-export-capability-reason', capability.reason);
+    if (!existingReason) {
+      const documentRef = item.ownerDocument || root.ownerDocument || globalThis.document;
+      const reason = documentRef?.createElement?.('span');
+      if (reason) {
+        reason.className = 'export-menu-item-reason';
+        reason.textContent = capability.reason;
+        item.appendChild(reason);
+      }
+    } else {
+      existingReason.textContent = capability.reason;
+    }
+  });
 }
 
 function isEditableTarget(target) {
@@ -232,6 +268,7 @@ function setupExportMenuInteractions(app) {
     const exportItem = target.closest('[data-app-export-format]');
     if (exportItem instanceof HTMLElement) {
       event.preventDefault();
+      if (exportItem.disabled) return;
       closeExportMenus();
       try {
         await app.exportFormat(exportItem.dataset.appExportFormat);
