@@ -6,11 +6,16 @@ A browser-based tool for designing acoustic waveguides and horns: live 3D previe
 
 ## Features
 
-- **Horn Profiles**: R-OSSE and OSSE geometry with live parameter controls
+- **Horn Profiles**: R-OSSE, OSSE, ICW, and FREEFORM geometry with live parameter controls
 - **3D Preview**: real-time viewport with standard, zebra, wireframe, and curvature shading
 - **BEM Simulation**: HornLab mesher-backed jobs with progress tracking and directivity plots
 - **Exports**: STL, single-layer STEP surface, CSV profiles, MWG config, simulation mesh (.msh), and VACS-style results
 - **Task Management**: folder workspaces, task history with ratings, and auto-export on completion
+
+FREEFORM provides independent horizontal and vertical spline meridians plus an
+integrated 2-D profile editor and axial cross-section controls. Start from
+scratch or switch an existing design to FREEFORM to convert its built geometry
+into editable anchors.
 
 ## Docs
 
