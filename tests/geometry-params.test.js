@@ -166,7 +166,7 @@ test('FREEFORM scale covers endpoint scalars and only z/r of every interior row 
       interiorV: [{ z: 60, r: 45, angleDeg: -10, strength: 0.8 }],
       crossSections: [
         { t: 0, shape: 'circle' },
-        { t: 0.5, shape: 'rounded_rectangle', cornerRatio: 0.12 },
+        { t: 0.5, shape: 'rounded_rectangle', cornerRadiusMm: 12 },
         { t: 1, shape: 'rounded_rectangle', cornerRadiusMm: 10 },
       ],
     },
@@ -179,7 +179,7 @@ test('FREEFORM scale covers endpoint scalars and only z/r of every interior row 
   assert.equal(prepared.mouthRadiusV, 200);
   assert.deepEqual(prepared.interiorH, [{ z: 100, r: 120, angleDeg: 25, strength: 1.5 }]);
   assert.deepEqual(prepared.interiorV, [{ z: 120, r: 90, angleDeg: -10, strength: 0.8 }]);
-  assert.equal(prepared.crossSections[1].cornerRatio, 0.12);
+  assert.equal(prepared.crossSections[1].cornerRadiusMm, 24);
   assert.equal(prepared.crossSections[2].cornerRadiusMm, 20);
   assert.equal(prepared.throatAngle, 15.5);
   assert.equal(prepared.mouthAngleV, 60);

@@ -284,3 +284,39 @@ test('FREEFORM parser consumes its blocks so re-export emits every section once'
     assert.equal(second.split(section).length - 1, 1, section);
   }
 });
+
+test('FREEFORM .mwg rejects removed ratio-tagged corner stations', () => {
+  const imported = importMWGConfig(
+    `; Parameter config
+Freeform.Length = 100
+Freeform.ThroatRadius = 12.7
+Freeform.ThroatAngle = 15.5
+Freeform.OvershootPolicy = reject
+Freeform.InflectionPolicy = warn
+Freeform.H = {
+MouthRadius = 50
+MouthAngle = 45
+ThroatTangentScale = 1
+MouthTangentScale = 1
+}
+Freeform.H.Points = {
+}
+Freeform.V = {
+MouthRadius = 40
+MouthAngle = 45
+ThroatTangentScale = 1
+MouthTangentScale = 1
+}
+Freeform.V.Points = {
+}
+Freeform.CrossSections = {
+0 circle
+1 rounded_rectangle ratio:0.2
+}
+`,
+    'removed-ratio.mwg'
+  );
+
+  assert.equal(imported.success, false);
+  assert.match(imported.error, /corner ratios were removed; use cornerRadiusMm \(mm\)/);
+});

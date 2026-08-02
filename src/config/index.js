@@ -81,8 +81,12 @@ function consumeFreeformSection(result) {
       const station = { t, shape };
       if (shape === 'superellipse' && optional !== undefined) station.exponent = optional;
       if (shape === 'rounded_rectangle' && optional !== undefined) {
-        if (optional.startsWith('ratio:')) station.corner_ratio = optional.slice(6);
-        else station.corner_radius_mm = optional;
+        if (optional.startsWith('ratio:')) {
+          throw new Error(
+            'Freeform.CrossSections corner ratios were removed; use cornerRadiusMm (mm).'
+          );
+        }
+        station.corner_radius_mm = optional;
       }
       return station;
     }

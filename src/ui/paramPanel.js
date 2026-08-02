@@ -1012,29 +1012,11 @@ export class ParamPanel {
           hideInputError(event.target, true);
           commitStations(
             stations.map((item, itemIndex) =>
-              itemIndex === index
-                ? (() => {
-                    const next = { ...item, [parameterDef.key]: numeric };
-                    if (parameterDef.key === 'cornerRadiusMm') delete next.cornerRatio;
-                    return next;
-                  })()
-                : item
+              itemIndex === index ? { ...item, [parameterDef.key]: numeric } : item
             )
           );
         };
         stationRow.appendChild(parameter);
-        if (
-          station.shape === 'rounded_rectangle' &&
-          station.cornerRadiusMm == null &&
-          Number.isFinite(Number(station.cornerRatio))
-        ) {
-          const legacyHint = document.createElement('span');
-          legacyHint.className = 'freeform-station-legacy-ratio';
-          legacyHint.textContent = `(ratio ${Number(station.cornerRatio)})`;
-          legacyHint.title =
-            'Legacy ratio remains active until a corner radius in millimetres is entered.';
-          stationRow.appendChild(legacyHint);
-        }
       }
 
       if (!isFirst && !isLast) {

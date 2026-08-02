@@ -414,7 +414,6 @@ class FreeformStationRequest(BaseModel):
     t: float
     shape: str
     exponent: Optional[float] = None
-    corner_ratio: Optional[float] = None
     corner_radius_mm: Optional[float] = None
 
 
@@ -552,9 +551,9 @@ class WaveguideParamsRequest(BaseModel):
         if value is None:
             return None
         normalized = value.strip().lower()
-        if normalized not in {"warn", "reject", "allow"}:
+        if normalized not in {"warn", "reject"}:
             raise ValueError(
-                "FREEFORM inflection_policy must be one of: warn, reject, allow."
+                "FREEFORM inflection_policy must be one of: warn, reject."
             )
         return normalized
 

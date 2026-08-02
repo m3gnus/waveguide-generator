@@ -45,7 +45,7 @@ def _freeform_payload() -> dict:
             {
                 "t": 0.4,
                 "shape": "rounded_rectangle",
-                "corner_ratio": 0.12,
+                "corner_radius_mm": 5.9,
             },
             {
                 "t": 1.0,
@@ -54,7 +54,7 @@ def _freeform_payload() -> dict:
             },
         ],
         "overshoot_policy": "allow",
-        "inflection_policy": "allow",
+        "inflection_policy": "warn",
         "n_angular": 16,
         "n_length": 8,
         "wall_thickness": 0.0,
@@ -109,7 +109,7 @@ class FreeformContractTest(unittest.TestCase):
             "warn",
         )
 
-        for invalid in ("ignore", "", "enforce"):
+        for invalid in ("allow", "ignore", "", "enforce"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
                 ValueError, "inflection_policy"
             ):
@@ -189,6 +189,7 @@ class FreeformContractTest(unittest.TestCase):
         cases = (
             ("profile_h", "mouth_angl_deg"),
             ("cross_sections", "corner_radus_mm"),
+            ("cross_sections", "corner_ratio"),
         )
         for block, unknown_key in cases:
             with self.subTest(block=block):
@@ -299,14 +300,14 @@ class FreeformAdapterTest(unittest.TestCase):
                 "inflectionPolicy",
             },
         )
-        self.assertEqual(profile["inflectionPolicy"], "allow")
+        self.assertEqual(profile["inflectionPolicy"], "warn")
         self.assertEqual(profile["profileH"]["throatAngleDeg"], 15.5)
         self.assertEqual(profile["profileH"]["throatTangentScale"], 1.1)
         self.assertEqual(profile["profileH"]["points"][1], [60.0, 80.0, 25.0, 1.4])
         self.assertEqual(profile["profileV"]["points"][1], [60.0, 60.0, -10.0])
         self.assertEqual(profile["profileV"]["mouthTangentScale"], 0.8)
-        self.assertEqual(profile["crossSections"][1]["cornerRatio"], 0.12)
-        self.assertNotIn("corner_ratio", profile["crossSections"][1])
+        self.assertEqual(profile["crossSections"][1]["cornerRadiusMm"], 5.9)
+        self.assertNotIn("corner_radius_mm", profile["crossSections"][1])
         self.assertEqual(profile["crossSections"][2]["cornerRadiusMm"], 10.0)
         self.assertNotIn("corner_radius_mm", profile["crossSections"][2])
 
@@ -315,7 +316,7 @@ class FreeformAdapterTest(unittest.TestCase):
         self.assertEqual(params["profileH"], profile["profileH"])
         self.assertEqual(params["profileV"], profile["profileV"])
         self.assertEqual(params["crossSections"], profile["crossSections"])
-        self.assertEqual(params["inflectionPolicy"], "allow")
+        self.assertEqual(params["inflectionPolicy"], "warn")
 
     def test_adapter_rejects_missing_required_freeform_blocks(self):
         with self.assertRaisesRegex(
