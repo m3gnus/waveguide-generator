@@ -141,7 +141,7 @@ test('backend FREEFORM build publishes authoritative metadata with its viewport 
     renderModel(app);
     await waitFor(() => received !== null, 'authoritative viewport event timed out');
     assert.equal(fetchCount, 1);
-    assert.deepEqual(received, { cacheKey, freeform });
+    assert.deepEqual(received, { cacheKey, freeform, grid });
     assert.equal(app._meshCache.grid.source, 'backend');
     assert.equal(app._currentMeshVariant, 'grid');
   } finally {

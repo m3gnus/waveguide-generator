@@ -1,7 +1,7 @@
 import { AppEvents } from '../events.js';
 import { buildFreeformDisplayCurve } from '../modules/design/freeformCurve.js';
 import { GlobalState } from '../state.js';
-import { normalizeAnchorList } from '../config/freeformModel.js';
+import { normalizeAnchorList, normalizeStations } from '../config/freeformModel.js';
 import { getViewportStateCacheKey } from '../app/viewportCacheKey.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -163,6 +163,12 @@ export class FreeformProfileEditor {
     this.highlightedParams = new Set();
     this.pendingClampFlashes = new Set();
     this.authoritative = null;
+    this.scrubState = options.scrubState || null;
+    this.scrubT = clamp(finite(this.scrubState?.get?.(), 0), 0, 1);
+    this._unsubscribeScrub = this.scrubState?.subscribe?.((t, source) => {
+      this.scrubT = clamp(finite(t, this.scrubT), 0, 1);
+      if (source !== this) this.draw();
+    });
     this.cacheKey = getViewportStateCacheKey({ type: 'FREEFORM', params: this.params });
     this.destroyed = false;
     this._onStateUpdated = (nextState) => {
@@ -237,6 +243,7 @@ export class FreeformProfileEditor {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this._unsubscribeScrub?.();
     AppEvents.off('state:updated', this._onStateUpdated);
     AppEvents.off('freeform:authoritative', this._onAuthoritative);
     this.root?.remove?.();
@@ -369,8 +376,10 @@ export class FreeformProfileEditor {
       height: transforms.plotHeight,
     });
     this.drawGrid(geometry, transforms);
+    this.drawScrubCursor(geometry, transforms);
     this.drawStations(geometry, transforms);
     this.drawCurves(geometry, transforms);
+    this.drawStationHitTargets(geometry, transforms);
     this.drawTangentHandles(geometry, transforms);
     this.drawAnchorHandles(geometry, transforms);
     if (this.drag) this.drawDragGuides(transforms);
@@ -438,24 +447,62 @@ export class FreeformProfileEditor {
   }
 
   drawStations(geometry, transforms) {
-    const stations = Array.isArray(this.params.crossSections) ? this.params.crossSections : [];
+    const stations = normalizeStations(this.params.crossSections);
     stations.forEach((station, index) => {
       const t = clamp(finite(station?.t, 0), 0, 1);
       const x = transforms.x(t * geometry.length);
+      const locked = index === 0 || index === stations.length - 1;
       this.appendSvg('line', {
-        class: 'freeform-profile-station',
+        class: `freeform-profile-station${locked ? ' freeform-profile-station-locked' : ''}`,
         x1: x,
         y1: MARGIN.top,
         x2: x,
         y2: MARGIN.top + transforms.plotHeight,
         'data-station-index': index,
+        'aria-disabled': locked ? 'true' : null,
       });
       const label = this.appendSvg('text', {
-        class: 'freeform-profile-station-label',
+        class: `freeform-profile-station-label${locked ? ' freeform-profile-station-locked' : ''}`,
         x: x + 3,
         y: MARGIN.top + 9 + (index % 2) * 10,
       });
-      label.textContent = shapeLabel(station?.shape);
+      label.textContent = `${shapeLabel(station?.shape)} · ${(t * geometry.length).toFixed(1)} mm`;
+    });
+  }
+
+  drawStationHitTargets(geometry, transforms) {
+    const stations = normalizeStations(this.params.crossSections);
+    stations.forEach((station, index) => {
+      if (index === 0 || index === stations.length - 1) return;
+      const x = transforms.x(clamp(finite(station?.t, 0), 0, 1) * geometry.length);
+      this.appendSvg('rect', {
+        class: 'freeform-profile-station-hit',
+        x: x - 6,
+        y: MARGIN.top,
+        width: 12,
+        height: transforms.plotHeight,
+        tabindex: 0,
+        role: 'slider',
+        'aria-label': `Station ${index + 1} depth`,
+        'data-handle': 'station',
+        'data-param': 'crossSections',
+        'data-index': index,
+      });
+    });
+  }
+
+  drawScrubCursor(geometry, transforms) {
+    const t = clamp(finite(this.scrubState?.get?.(), this.scrubT), 0, 1);
+    this.scrubT = t;
+    const x = transforms.x(t * geometry.length);
+    this.appendSvg('line', {
+      class: 'freeform-profile-scrub-cursor',
+      x1: x,
+      y1: MARGIN.top,
+      x2: x,
+      y2: MARGIN.top + transforms.plotHeight,
+      'data-scrub-cursor': '',
+      'data-scrub-t': t.toFixed(3),
     });
   }
 
@@ -803,14 +850,17 @@ export class FreeformProfileEditor {
     const guide = this.drag.guide;
     if (!guide) return;
     const x = transforms.x(guide[0]);
-    const y = transforms.y(guide[1]);
-    this.appendSvg('line', {
-      class: 'freeform-profile-drag-guide',
-      x1: MARGIN.left,
-      y1: y,
-      x2: x,
-      y2: y,
-    });
+    const isStation = this.drag.kind === 'station';
+    const y = isStation ? MARGIN.top + 22 : transforms.y(guide[1]);
+    if (!isStation) {
+      this.appendSvg('line', {
+        class: 'freeform-profile-drag-guide',
+        x1: MARGIN.left,
+        y1: y,
+        x2: x,
+        y2: y,
+      });
+    }
     this.appendSvg('line', {
       class: 'freeform-profile-drag-guide',
       x1: x,
@@ -823,11 +873,13 @@ export class FreeformProfileEditor {
     const isInteriorTangent = this.drag.kind === 'interior-tangent';
     const radiusTerm =
       this.drag.plane === 'H' ? 'half-width' : this.drag.plane === 'V' ? 'half-height' : 'radius';
-    const textValue = isAngle
-      ? `${Math.round(this.drag.value)} deg`
-      : isInteriorTangent
-        ? `${Math.round(this.drag.value.angleDeg)} deg · strength ${this.drag.value.strength.toFixed(2)}`
-        : `depth ${guide[0].toFixed(1)} · ${radiusTerm} ${guide[1].toFixed(1)} mm`;
+    const textValue = isStation
+      ? `${guide[0].toFixed(1)} mm · t=${this.drag.value.toFixed(3)}`
+      : isAngle
+        ? `${Math.round(this.drag.value)} deg`
+        : isInteriorTangent
+          ? `${Math.round(this.drag.value.angleDeg)} deg · strength ${this.drag.value.strength.toFixed(2)}`
+          : `depth ${guide[0].toFixed(1)} · ${radiusTerm} ${guide[1].toFixed(1)} mm`;
     const bubbleWidth = Math.max(58, textValue.length * 6.1 + 12);
     const bubbleX = clamp(x + 9, MARGIN.left, VIEW_WIDTH - MARGIN.right - bubbleWidth);
     const bubbleY = clamp(y - 27, MARGIN.top, VIEW_HEIGHT - MARGIN.bottom - 22);
@@ -875,6 +927,10 @@ export class FreeformProfileEditor {
     const param = node.getAttribute('data-param');
     if (handle.value === 'interior') {
       this.selectedAnchor = { plane, index };
+    }
+    if (handle.value === 'station') {
+      const stations = normalizeStations(this.params.crossSections);
+      if (index <= 0 || index >= stations.length - 1) return;
     }
     this.drag = {
       kind: handle.value,
@@ -948,6 +1004,24 @@ export class FreeformProfileEditor {
       this.drag.params[this.drag.param] = angle;
       this.drag.guide = [z, radius];
       this.drag.value = angle;
+    } else if (this.drag.kind === 'station') {
+      const stations = normalizeStations(this.drag.params.crossSections);
+      const previous = stations[this.drag.index - 1];
+      const next = stations[this.drag.index + 1];
+      if (!previous || !next) return;
+      const minimumT = previous.t + 0.01;
+      const maximumT = next.t - 0.01;
+      const available = minimumT <= maximumT;
+      const unclampedT = available
+        ? clamp(z / length, minimumT, maximumT)
+        : (previous.t + next.t) / 2;
+      const roundedT = Math.round(unclampedT * 1000) / 1000;
+      const t = available ? clamp(roundedT, minimumT, maximumT) : roundedT;
+      stations[this.drag.index] = { ...stations[this.drag.index], t };
+      this.drag.params.crossSections = stations;
+      this.drag.guide = [t * length, null];
+      this.drag.value = t;
+      this.scrubT = this.scrubState?.set?.(t, this) ?? t;
     }
     this.params = cloneParams(this.drag.params);
     this.draw();

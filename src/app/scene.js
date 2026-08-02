@@ -147,7 +147,7 @@ function applyVariantToScene(app, variant, mesh, cacheKey = app._meshCache?.stat
   app.needsRender = true;
   const freeform = mesh.metadata?.freeform;
   if (app.currentState?.type === 'FREEFORM' && cacheKey && freeform) {
-    AppEvents.emit('freeform:authoritative', { cacheKey, freeform });
+    AppEvents.emit('freeform:authoritative', { cacheKey, freeform, grid: mesh.grid });
   }
 }
 
