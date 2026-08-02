@@ -225,7 +225,14 @@ export function generateMWGConfigContent(params) {
     content += `Mesh.MouthResolution = ${formatValue(params.mouthResolution)}\n`;
   if (params.throatSliceDensity !== undefined && params.throatSliceDensity !== null)
     content += `Mesh.ThroatSliceDensity = ${formatValue(params.throatSliceDensity)}\n`;
-  if (params.samplingMode) content += `Mesh.SamplingMode = ${formatValue(params.samplingMode)}\n`;
+  const samplingMode = formatValue(params.samplingMode).trim();
+  const zMapPoints = formatValue(params.zMapPoints).trim();
+  // Import derives samplingMode from Mesh.ZMapPoints presence (applyAthImportDefaults),
+  // so only a mode that differs from that derivation needs an explicit line.
+  if (samplingMode && samplingMode !== (zMapPoints ? 'zmap' : 'ath-default-zmap')) {
+    content += `Mesh.SamplingMode = ${samplingMode}\n`;
+  }
+  if (zMapPoints) content += `Mesh.ZMapPoints = ${zMapPoints}\n`;
   if (isNonZero(params.verticalOffset))
     content += `Mesh.VerticalOffset = ${formatValue(params.verticalOffset)}\n`;
   if (params.quadrants !== undefined)
@@ -257,6 +264,13 @@ export function generateMWGConfigContent(params) {
     content += `Source.Velocity = ${params.sourceVelocity}\n`;
   if (params.sourceContours) content += `Source.Contours = ${formatValue(params.sourceContours)}\n`;
 
+  const simType = formatValue(params.simType).trim();
+  // Import derives simType from Mesh.Enclosure presence (applyAthImportDefaults); the
+  // enclosure block is only exported for non-R-OSSE designs with encDepth > 0.
+  const derivedSimType = params.type !== 'R-OSSE' && params.encDepth > 0 ? '2' : '1';
+  if (simType && simType !== derivedSimType) {
+    content += `ABEC.SimType = ${simType}\n`;
+  }
   if (params.freqStart !== undefined) content += `Simulation.F1 = ${params.freqStart}\n`;
   if (params.freqEnd !== undefined) content += `Simulation.F2 = ${params.freqEnd}\n`;
   if (params.numFreqs !== undefined) content += `Simulation.NumFrequencies = ${params.numFreqs}\n`;
