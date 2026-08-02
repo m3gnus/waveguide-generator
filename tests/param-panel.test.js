@@ -14,6 +14,24 @@ const authoritativeFixture = JSON.parse(
   readFileSync(new URL('./fixtures/freeform-authoritative.json', import.meta.url), 'utf8')
 );
 
+function syntheticInsetGrid({ radiusH = 80, radiusV = 55, length = 120 } = {}) {
+  const angles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+  const innerPoints = [];
+  for (const angle of angles) {
+    for (const z of [0, length]) {
+      innerPoints.push(radiusH * Math.cos(angle), radiusV * Math.sin(angle), z);
+    }
+  }
+  return {
+    angle_list: angles,
+    grid_n_phi: angles.length,
+    grid_n_length: 1,
+    inner_points: innerPoints,
+    full_circle: true,
+    quadrants: 1234,
+  };
+}
+
 class FakeElement {
   constructor(tagName, ownerDocument) {
     this.tagName = String(tagName || '').toUpperCase();
@@ -172,6 +190,7 @@ function withFreeformPanel(paramsPatch, callback) {
     callback({ fakeDocument, paramContainer, panel, editor: panel.freeformEditor });
   } finally {
     panel?.freeformEditor?.destroy();
+    panel?.freeformInset?.destroy();
     GlobalState.loadState(previousState, 'param-panel-freeform-editor-test-restore');
     global.document = originalDocument;
   }
@@ -416,11 +435,11 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     assert.equal(stationRows[0].children[0].disabled, true);
     assert.equal(stationRows[1].children[0].disabled, true);
     assert.deepEqual(
-      stationRows[0].children[1].children.map((option) => option.value),
+      stationRows[0].children[2].children.map((option) => option.value),
       ['circle']
     );
     assert.deepEqual(
-      stationRows[1].children[1].children.map((option) => option.value),
+      stationRows[1].children[2].children.map((option) => option.value),
       ['ellipse', 'superellipse', 'rounded_rectangle']
     );
 
@@ -623,6 +642,160 @@ test('FREEFORM station editor uses millimetre corner radius and identifies legac
       });
     }
   );
+});
+
+test('FREEFORM station rows commit normalized and millimetre depth bidirectionally', () => {
+  withFreeformPanel(
+    {
+      length: 120,
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.4, shape: 'ellipse' },
+        { t: 1, shape: 'ellipse' },
+      ],
+    },
+    ({ paramContainer, panel }) => {
+      const findInput = (label) =>
+        collectNodes(paramContainer, (node) => node.attributes['aria-label'] === label)[0];
+
+      let position = findInput('Station 2 position t');
+      let depth = findInput('Station 2 Depth (mm)');
+      assert.equal(Number(position.value), 0.4);
+      assert.equal(depth.value, '48.0');
+
+      depth.value = '60';
+      depth.onchange({ target: depth });
+      assert.equal(GlobalState.get().params.crossSections[1].t, 0.5);
+
+      panel.createFullPanel();
+      position = findInput('Station 2 position t');
+      position.value = '0.25';
+      position.onchange({ target: position });
+      assert.equal(GlobalState.get().params.crossSections[1].t, 0.25);
+
+      panel.createFullPanel();
+      depth = findInput('Station 2 Depth (mm)');
+      assert.equal(depth.value, '30.0');
+    }
+  );
+});
+
+test('FREEFORM station drag clamps between neighbours, shows mm, and moves the scrubber', () => {
+  withFreeformPanel(
+    {
+      length: 120,
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.4, shape: 'ellipse' },
+        { t: 0.6, shape: 'superellipse', exponent: 4 },
+        { t: 1, shape: 'ellipse' },
+      ],
+    },
+    ({ paramContainer, editor }) => {
+      const stationHit = collectNodes(
+        paramContainer,
+        (node) =>
+          node.attributes['data-handle'] === 'station' && node.attributes['data-index'] === '1'
+      )[0];
+      assert.ok(stationHit);
+      assert.equal(
+        collectNodes(paramContainer, (node) => node.attributes['data-handle'] === 'station').length,
+        2
+      );
+      assert.ok(
+        collectNodes(paramContainer, (node) => node.textContent === 'ellipse · 48.0 mm').length >= 1
+      );
+
+      editor.onPointerDown({
+        target: stationHit,
+        pointerId: 12,
+        clientX: editor.transforms.x(48),
+        clientY: 40,
+        preventDefault() {},
+      });
+      assert.equal(
+        collectNodes(paramContainer, (node) => node.textContent === '48.0 mm · t=0.400').length,
+        1
+      );
+
+      editor.onPointerMove({
+        pointerId: 12,
+        clientX: editor.transforms.x(108),
+        clientY: 40,
+        preventDefault() {},
+      });
+      const scrubber = collectNodes(
+        paramContainer,
+        (node) => node.attributes['data-freeform-scrubber'] !== undefined
+      )[0];
+      assert.equal(Number(scrubber.value), 0.59);
+      assert.equal(
+        collectNodes(
+          paramContainer,
+          (node) => node.attributes['data-scrub-cursor'] !== undefined
+        )[0].attributes['data-scrub-t'],
+        '0.590'
+      );
+
+      editor.onPointerUp({ pointerId: 12, preventDefault() {} });
+      assert.equal(GlobalState.get().params.crossSections[1].t, 0.59);
+      assert.equal(GlobalState.get().params.crossSections[2].t, 0.6);
+    }
+  );
+});
+
+test('FREEFORM inset scrubber drives the profile editor cursor', () => {
+  withFreeformPanel({}, ({ paramContainer }) => {
+    const scrubber = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-freeform-scrubber'] !== undefined
+    )[0];
+    scrubber.value = '0.4';
+    scrubber.oninput({ target: scrubber });
+
+    const cursor = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-scrub-cursor'] !== undefined
+    )[0];
+    assert.equal(cursor.attributes['data-scrub-t'], '0.400');
+  });
+});
+
+test('FREEFORM inset renders the sampled grid outline and dimension readout', () => {
+  withFreeformPanel(authoritativeFixture.params, ({ paramContainer }) => {
+    assert.equal(
+      collectNodes(
+        paramContainer,
+        (node) => node.textContent === 'outline appears after the first build'
+      ).length,
+      1
+    );
+    const scrubber = collectNodes(
+      paramContainer,
+      (node) => node.attributes['data-freeform-scrubber'] !== undefined
+    )[0];
+    scrubber.value = '0.4';
+    scrubber.oninput({ target: scrubber });
+    AppEvents.emit('freeform:authoritative', {
+      cacheKey: getViewportStateCacheKey(GlobalState.get()),
+      freeform: authoritativeFixture.freeform,
+      grid: syntheticInsetGrid(),
+    });
+
+    assert.equal(
+      collectNodes(
+        paramContainer,
+        (node) => node.textContent === 'depth 48.0 mm · t 0.40 · 160.0 x 110.0 mm'
+      ).length,
+      1
+    );
+    assert.equal(
+      collectNodes(paramContainer, (node) =>
+        (node.attributes.class || '').includes('freeform-cross-section-outline')
+      ).length,
+      1
+    );
+  });
 });
 
 test('FREEFORM profile editor legend chips toggle each plane without changing params', () => {
@@ -911,7 +1084,7 @@ test('ParamPanel conversion dialog commits converted FREEFORM params in one upda
     assert.equal(GlobalState.get().type, 'FREEFORM');
     assert.equal(GlobalState.get().params.length, 88);
     assert.equal(GlobalState.get().params.throatRadius, 11);
-    assert.equal(GlobalState.undoStack.length, historyBefore + 1);
+    assert.equal(GlobalState.undoStack.length, Math.min(50, historyBefore + 1));
     assert.equal(summary, 'max deviation H 0.08 mm, V 0.11 mm; rollback lip 34.9 mm dropped');
   } finally {
     GlobalState.loadState(previousState, 'param-panel-convert-test-restore');

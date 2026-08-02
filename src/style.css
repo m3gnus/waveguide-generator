@@ -823,8 +823,30 @@ details.section[open] > summary {
   pointer-events: none;
 }
 
+.freeform-profile-station-locked {
+  opacity: 0.42;
+}
+
+.freeform-profile-station-hit {
+  fill: transparent;
+  pointer-events: all;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.freeform-profile-station-hit:active {
+  cursor: grabbing;
+}
+
 .freeform-profile-station-label {
   opacity: 0.78;
+}
+
+.freeform-profile-scrub-cursor {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .freeform-profile-curve {
@@ -996,7 +1018,9 @@ select.freeform-profile-linked-highlight {
 
 .freeform-station-row {
   display: grid;
-  grid-template-columns: minmax(52px, 0.6fr) minmax(105px, 1.4fr) minmax(62px, 0.8fr) auto;
+  grid-template-columns:
+    minmax(48px, 0.55fr) minmax(64px, 0.7fr) minmax(100px, 1.3fr) minmax(62px, 0.8fr)
+    auto;
   align-items: center;
   gap: var(--sp-1);
 }
@@ -1010,6 +1034,97 @@ select.freeform-profile-linked-highlight {
   color: var(--text-muted);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+.freeform-cross-section-inset {
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.freeform-cross-section-header {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.freeform-cross-section-readout {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.freeform-cross-section-svg {
+  display: block;
+  width: min(100%, 240px);
+  aspect-ratio: 1;
+  margin: var(--sp-2) auto 0;
+  background: var(--input-bg);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  touch-action: none;
+}
+
+.freeform-cross-section-outline {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.freeform-cross-section-axis {
+  stroke: color-mix(in srgb, var(--text-muted) 58%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.freeform-cross-section-tick {
+  fill: var(--text-muted);
+  font: 9px var(--font-mono);
+  pointer-events: none;
+}
+
+.freeform-cross-section-message {
+  margin: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.freeform-cross-section-message[hidden] {
+  display: none;
+}
+
+.freeform-cross-section-scrubber-row {
+  position: relative;
+  display: block;
+  padding: var(--sp-2) 3.333% var(--sp-3) 6.667%;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.freeform-cross-section-scrubber-row span {
+  position: absolute;
+  left: var(--sp-2);
+  top: 0;
+}
+
+.freeform-cross-section-scrubber-row input {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: ew-resize;
 }
 
 .freeform-point-remove,

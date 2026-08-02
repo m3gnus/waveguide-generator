@@ -6,6 +6,10 @@ import { appendSectionNote, createLabelRow } from './helpAffordance.js';
 import { getParameterSections } from './parameterInventory.js';
 import { trapFocus } from './focusTrap.js';
 import { mountFreeformProfileEditor } from './freeformProfileEditor.js';
+import {
+  createFreeformScrubState,
+  mountFreeformCrossSectionInset,
+} from './freeformCrossSectionInset.js';
 import { convertToFreeform, formatConversionReport } from '../modules/design/convertToFreeform.js';
 import { showFreeformConversionDialog } from './feedback.js';
 import { normalizeAnchorList, normalizeStations } from '../config/freeformModel.js';
@@ -186,6 +190,8 @@ export class ParamPanel {
     this.profileErrorStateVersion = null;
     this.controlIdCounter = 0;
     this.freeformEditor = null;
+    this.freeformInset = null;
+    this.freeformScrubState = createFreeformScrubState(0);
     this.freeformVisibility = { H: true, V: true };
     this.convertCurrentDesign = convertCurrentDesign;
     this.showConversionDialog = showConversionDialog;
@@ -222,7 +228,9 @@ export class ParamPanel {
     const focusedControl = this.captureFocusedControl();
     const previousFreeformParams = this.freeformEditor?.params;
     this.freeformEditor?.destroy();
+    this.freeformInset?.destroy();
     this.freeformEditor = null;
+    this.freeformInset = null;
     this.container.innerHTML = '';
     if (this.simulationSettingsContainer) {
       this.simulationSettingsContainer.innerHTML = '';
@@ -371,10 +379,15 @@ export class ParamPanel {
         this.freeformEditor = mountFreeformProfileEditor(sectionNode, {
           params,
           visibility: this.freeformVisibility,
+          scrubState: this.freeformScrubState,
           onCommit: (patch) => {
             this.setProfileError(null);
             return GlobalState.update(patch);
           },
+        });
+        this.freeformInset = mountFreeformCrossSectionInset(sectionNode, {
+          params,
+          scrubState: this.freeformScrubState,
         });
         this.bindFreeformParamHighlighting(sectionNode);
       }
@@ -843,6 +856,8 @@ export class ParamPanel {
     const wrapper = document.createElement('div');
     wrapper.className = 'freeform-stations-editor';
     const stations = normalizeStations(currentValue);
+    const lengthValue = Number(GlobalState.get()?.params?.length);
+    const length = Number.isFinite(lengthValue) && lengthValue > 0 ? lengthValue : 120;
     const commitStations = (nextStations) => {
       this.updateParam(key, normalizeStations(nextStations));
     };
@@ -861,9 +876,11 @@ export class ParamPanel {
       position.step = '0.01';
       position.value = isFirst ? 0 : isLast ? 1 : station.t;
       position.disabled = isFirst || isLast;
+      position.title = 'Normalized depth (t)';
       position.setAttribute('data-param-key', key);
       position.setAttribute('data-param', key);
-      position.setAttribute('aria-label', `Station ${index + 1} position`);
+      position.setAttribute('data-station-field', 't');
+      position.setAttribute('aria-label', `Station ${index + 1} position t`);
       position.onchange = (event) => {
         const t = Number(event.target.value);
         const duplicate = stations.some(
@@ -880,6 +897,44 @@ export class ParamPanel {
         );
       };
       stationRow.appendChild(position);
+
+      const depth = document.createElement('input');
+      depth.type = 'number';
+      depth.min = '0';
+      depth.max = String(length);
+      depth.step = '0.1';
+      depth.value = ((isFirst ? 0 : isLast ? 1 : station.t) * length).toFixed(1);
+      depth.disabled = isFirst || isLast;
+      depth.title = 'Depth (mm)';
+      depth.setAttribute('data-param-key', key);
+      depth.setAttribute('data-param', key);
+      depth.setAttribute('data-station-field', 'depth-mm');
+      depth.setAttribute('aria-label', `Station ${index + 1} Depth (mm)`);
+      depth.onchange = (event) => {
+        const millimetres = Number(event.target.value);
+        const t = millimetres / length;
+        const duplicate = stations.some(
+          (candidate, candidateIndex) =>
+            candidateIndex !== index && Math.abs(candidate.t - t) < 1e-9
+        );
+        if (
+          !Number.isFinite(millimetres) ||
+          millimetres <= 0 ||
+          millimetres >= length ||
+          duplicate
+        ) {
+          showInputError(
+            event.target,
+            `Station depth must be a unique number between 0 and ${length} mm.`
+          );
+          return;
+        }
+        hideInputError(event.target, true);
+        commitStations(
+          stations.map((item, itemIndex) => (itemIndex === index ? { ...item, t } : item))
+        );
+      };
+      stationRow.appendChild(depth);
 
       const shape = document.createElement('select');
       shape.setAttribute('data-param-key', key);
