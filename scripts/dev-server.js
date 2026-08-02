@@ -87,6 +87,9 @@ function sendFile(res, filePath, method) {
 
   res.statusCode = 200;
   res.setHeader('Content-Type', contentType);
+  // Source is served unbundled as native ES modules; without this the
+  // browser's heuristic cache can keep stale modules across edits.
+  res.setHeader('Cache-Control', 'no-store');
   if (method === 'HEAD') {
     res.end();
     return;

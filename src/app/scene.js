@@ -17,21 +17,14 @@ import {
 import { detachCreaseVertices } from './viewportMesh.js';
 import { ImportedMeshState } from '../state.js';
 import { AppEvents } from '../events.js';
-import { PARAM_SCHEMA } from '../config/schema.js';
 import { createPerfTimer, measurePerf } from '../logging/performance.js';
+import { getViewportStateCacheKey } from './viewportCacheKey.js';
 
 const GRID_DISPLAY_MODES = new Set(['wireframe', 'solidwire']);
 // After a failed backend viewport fetch, render with the local JS engine and
 // only retry the backend once this cooldown has elapsed.
 const BACKEND_VIEWPORT_RETRY_MS = 15000;
 const BACKEND_VIEWPORT_TIMEOUT_MS = 5000;
-const VIEWPORT_CACHE_SCHEMA_GROUPS = ['GEOMETRY', 'MORPH', 'MESH', 'ENCLOSURE', 'SOURCE'];
-const VIEWPORT_CACHE_PARAM_KEYS = new Set();
-for (const group of VIEWPORT_CACHE_SCHEMA_GROUPS) {
-  for (const key of Object.keys(PARAM_SCHEMA[group] || {})) {
-    VIEWPORT_CACHE_PARAM_KEYS.add(key);
-  }
-}
 
 function variantForDisplayMode(mode) {
   return GRID_DISPLAY_MODES.has(mode) ? 'grid' : 'smooth';
@@ -40,18 +33,6 @@ function variantForDisplayMode(mode) {
 function resetMeshCache(app) {
   app._meshCache = { grid: null, smooth: null, stateKey: null };
   app._currentMeshVariant = null;
-}
-
-function getViewportStateCacheKey(state = {}) {
-  const type = state.type || '';
-  const params = state.params || {};
-  const modelKeys = Object.keys(PARAM_SCHEMA[type] || {});
-  const keyParts = [`type:${type}`];
-
-  for (const key of [...modelKeys, ...VIEWPORT_CACHE_PARAM_KEYS].sort()) {
-    keyParts.push(`${key}:${JSON.stringify(params[key])}`);
-  }
-  return keyParts.join('|');
 }
 
 function invalidateMeshCacheIfStale(app) {
@@ -115,10 +96,29 @@ function getOrBuildVariant(app, variant) {
 }
 
 function isBackendViewportInCooldown(app) {
-  return (
+  const active =
     Number.isFinite(app._viewportBackendDownAt) &&
-    Date.now() - app._viewportBackendDownAt < BACKEND_VIEWPORT_RETRY_MS
-  );
+    Date.now() - app._viewportBackendDownAt < BACKEND_VIEWPORT_RETRY_MS;
+  if (!active) return false;
+  // A server-only formula has no local renderer. Keep repeated renders of the
+  // failed state on cooldown, but let a changed profile make one fresh attempt
+  // immediately instead of leaving the viewport inert for the full interval.
+  if (isServerOnlyViewportFormula(app.currentState)) {
+    return (
+      app._viewportBackendDownStateKey == null ||
+      app._viewportBackendDownStateKey === app._meshCache?.stateKey
+    );
+  }
+  return true;
+}
+
+function clearBackendViewportFailure(app) {
+  app._viewportBackendDownAt = null;
+  app._viewportBackendDownStateKey = null;
+  if (app._viewportCooldownRetryTimer) {
+    clearTimeout(app._viewportCooldownRetryTimer);
+    app._viewportCooldownRetryTimer = null;
+  }
 }
 
 function scheduleServerOnlyCooldownRetry(app) {
@@ -141,10 +141,14 @@ function scheduleServerOnlyCooldownRetry(app) {
   }, delay);
 }
 
-function applyVariantToScene(app, variant, mesh) {
+function applyVariantToScene(app, variant, mesh, cacheKey = app._meshCache?.stateKey) {
   applyMeshToScene(app, mesh.vertices, mesh.indices, mesh.preparedParams, mesh.normals);
   app._currentMeshVariant = variant;
   app.needsRender = true;
+  const freeform = mesh.metadata?.freeform;
+  if (app.currentState?.type === 'FREEFORM' && cacheKey && freeform) {
+    AppEvents.emit('freeform:authoritative', { cacheKey, freeform });
+  }
 }
 
 /** Apply `mesh` only if the app still wants this state + variant. */
@@ -153,7 +157,7 @@ function applyVariantIfCurrent(app, stateKey, variant, mesh) {
   if (!app._meshCache || app._meshCache.stateKey !== stateKey) return;
   const mode = app.uiCoordinator.readDisplayModeSetting();
   if (variantForDisplayMode(mode) !== variant) return;
-  applyVariantToScene(app, variant, mesh);
+  applyVariantToScene(app, variant, mesh, stateKey);
 }
 
 /**
@@ -182,7 +186,7 @@ function startBackendViewportBuild(app, variant) {
     .then((viewportMesh) => {
       if (fetchRecord.superseded) return;
       const built = { ...toRenderMesh(viewportMesh, variant), source: 'backend' };
-      app._viewportBackendDownAt = null;
+      clearBackendViewportFailure(app);
       invalidateMeshCacheIfStale(app);
       if (app._meshCache.stateKey !== stateKey) return;
       app._meshCache[variant] = built;
@@ -201,6 +205,7 @@ function startBackendViewportBuild(app, variant) {
       const isAbort = error?.name === 'AbortError';
       if (!isValidationError) {
         app._viewportBackendDownAt = Date.now();
+        app._viewportBackendDownStateKey = stateKey;
         scheduleServerOnlyCooldownRetry(app);
       }
       console.warn('[Viewport] Backend viewport geometry unavailable:', error?.message || error);
