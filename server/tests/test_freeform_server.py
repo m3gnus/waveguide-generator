@@ -17,6 +17,7 @@ from hornlab_mesher.config_builder import build_geometry_params
 from services.simulation_validation import validate_submit_simulation_request
 from solver.axisymmetry import validate_circsym_axisymmetric
 from solver.mesher_adapter import (
+    build_inner_surface_step,
     build_viewport_geometry,
     waveguide_payload_to_mesher_config,
 )
@@ -45,12 +46,12 @@ def _freeform_payload() -> dict:
             {
                 "t": 0.4,
                 "shape": "rounded_rectangle",
-                "corner_radius_mm": 5.9,
+                "corner_radius_mm": 20.0,
             },
             {
                 "t": 1.0,
                 "shape": "rounded_rectangle",
-                "corner_radius_mm": 10.0,
+                "corner_radius_mm": 35.0,
             },
         ],
         "overshoot_policy": "allow",
@@ -115,6 +116,22 @@ class FreeformContractTest(unittest.TestCase):
             ):
                 WaveguideParamsRequest(
                     **{**_freeform_payload(), "inflection_policy": invalid}
+                )
+
+    def test_overshoot_policy_is_normalized_and_validated(self):
+        payload = _freeform_payload()
+        payload["overshoot_policy"] = " ALLOW "
+        self.assertEqual(
+            WaveguideParamsRequest(**payload).model_dump()["overshoot_policy"],
+            "allow",
+        )
+
+        for invalid in ("maybe", "typo", "", "enforce"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "overshoot_policy"
+            ):
+                WaveguideParamsRequest(
+                    **{**_freeform_payload(), "overshoot_policy": invalid}
                 )
 
     def test_light_collection_bounds_are_enforced(self):
@@ -257,6 +274,74 @@ class FreeformFormulaGateTest(unittest.TestCase):
             _freeform_payload()["profile_h"]["points"],
         )
 
+        osse_validation = validate_submit_simulation_request(_solve_request("OSSE"))
+        self.assertEqual(osse_validation.waveguide_params["formula_type"], "OSSE")
+
+    def test_freeform_solve_preflight_rejects_invalid_geometry_at_admission(self):
+        strength = _freeform_payload()
+        strength["profile_h"]["points"][1][3] = 0.0
+
+        shape = _freeform_payload()
+        shape["cross_sections"][1]["shape"] = "banana"
+
+        station_t = _freeform_payload()
+        station_t["cross_sections"][1]["t"] = 2.0
+
+        overshoot = _freeform_payload()
+        overshoot["overshoot_policy"] = "maybe"
+
+        convexity = {
+            "formula_type": "FREEFORM",
+            "profile_h": {"points": [[0, 12.7], [60, 34], [120, 70]]},
+            "profile_v": {"points": [[0, 12.7], [60, 30], [120, 50]]},
+            "cross_sections": [
+                {"t": 0, "shape": "circle"},
+                {
+                    "t": 1,
+                    "shape": "rounded_rectangle",
+                    "corner_radius_mm": 3,
+                },
+            ],
+        }
+        corner_radius = {
+            "formula_type": "FREEFORM",
+            "profile_h": {
+                "points": [[0, 12.7], [35, 20], [60, 4], [100, 30]]
+            },
+            "profile_v": {
+                "points": [[0, 12.7], [35, 20], [60, 4], [100, 30]]
+            },
+            "overshoot_policy": "allow",
+            "cross_sections": [
+                {"t": 0, "shape": "circle"},
+                {
+                    "t": 0.35,
+                    "shape": "rounded_rectangle",
+                    "corner_radius_mm": 10,
+                },
+                {
+                    "t": 1,
+                    "shape": "rounded_rectangle",
+                    "corner_radius_mm": 10,
+                },
+            ],
+        }
+
+        cases = (
+            ({"formula_type": "FREEFORM"}, "missing: profile_h, profile_v, cross_sections"),
+            (strength, "strength must be in (0, 3]"),
+            (shape, "shape must be"),
+            (station_t, "t must be in [0, 1]"),
+            (overshoot, "overshoot_policy"),
+            (convexity, "non-convex outline"),
+            (corner_radius, "exceeds the weight-aware local limit"),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message), self.assertRaises(HTTPException) as raised:
+                asyncio.run(submit_simulation(_solve_request("FREEFORM", payload)))
+            self.assertEqual(raised.exception.status_code, 422)
+            self.assertIn(message, str(raised.exception.detail))
+
     def test_unknown_formula_is_422_everywhere_and_names_freeform(self):
         unknown = WaveguideParamsRequest(formula_type="UNKNOWN")
 
@@ -306,9 +391,9 @@ class FreeformAdapterTest(unittest.TestCase):
         self.assertEqual(profile["profileH"]["points"][1], [60.0, 80.0, 25.0, 1.4])
         self.assertEqual(profile["profileV"]["points"][1], [60.0, 60.0, -10.0])
         self.assertEqual(profile["profileV"]["mouthTangentScale"], 0.8)
-        self.assertEqual(profile["crossSections"][1]["cornerRadiusMm"], 5.9)
+        self.assertEqual(profile["crossSections"][1]["cornerRadiusMm"], 20.0)
         self.assertNotIn("corner_radius_mm", profile["crossSections"][1])
-        self.assertEqual(profile["crossSections"][2]["cornerRadiusMm"], 10.0)
+        self.assertEqual(profile["crossSections"][2]["cornerRadiusMm"], 35.0)
         self.assertNotIn("corner_radius_mm", profile["crossSections"][2])
 
         params, formula, _mode = build_geometry_params(config)
@@ -326,7 +411,7 @@ class FreeformAdapterTest(unittest.TestCase):
 
     def test_explicit_circsym_requires_degenerate_circular_freeform(self):
         unequal = _freeform_payload()
-        with self.assertRaisesRegex(ValueError, "horizontal and vertical profiles differ"):
+        with self.assertRaisesRegex(ValueError, "inner profile varies with azimuth"):
             validate_circsym_axisymmetric(unequal)
 
         shared = [[0.0, 12.7], [60.0, 70.0], [120.0, 120.0]]
@@ -345,7 +430,7 @@ class FreeformAdapterTest(unittest.TestCase):
 
         circular["profile_h"]["mouth_angle_deg"] = 30.0
         circular["profile_v"]["mouth_angle_deg"] = 60.0
-        with self.assertRaisesRegex(ValueError, "horizontal and vertical profiles differ"):
+        with self.assertRaisesRegex(ValueError, "inner profile varies with azimuth"):
             validate_circsym_axisymmetric(circular)
         circular["profile_v"]["mouth_angle_deg"] = 30.0
 
@@ -355,6 +440,18 @@ class FreeformAdapterTest(unittest.TestCase):
             "exponent": 2.0,
         }
         self.assertIsNone(validate_circsym_axisymmetric(circular))
+
+        circular["profile_h"]["throat_tangent_scale"] = 1.0
+        circular["profile_v"]["throat_tangent_scale"] = 1.0
+        circular["profile_h"]["points"] = [list(point) for point in shared]
+        circular["profile_v"]["points"] = [list(point) for point in shared]
+        circular["profile_h"]["points"][0] = [0.0, 12.7, 15.5]
+        self.assertIsNone(validate_circsym_axisymmetric(circular))
+
+        circular["profile_h"]["points"][0] = [0.0, 12.7]
+        circular["cross_sections"][-1] = {"t": 1.0, "shape": "circle"}
+        with self.assertRaisesRegex(ValueError, r"crossSections\[0\]"):
+            validate_circsym_axisymmetric(circular)
 
     def test_owner_viewport_smoke_returns_grid_and_freeform_metadata(self):
         dumped = WaveguideParamsRequest(**_freeform_payload()).model_dump()
@@ -371,6 +468,48 @@ class FreeformAdapterTest(unittest.TestCase):
         self.assertEqual(report["tangentAnglesDeg"]["V"]["mouth"], 60.0)
         self.assertEqual(report["anchorTangents"]["H"][1]["angleDeg"], 25.0)
         self.assertEqual(report["anchorTangents"]["H"][1]["strength"], 1.4)
+        self.assertEqual(len(report["curveSamples"]["H"]), 192)
+        self.assertEqual(len(report["curveSamples"]["V"]), 192)
+        self.assertTrue(report["inflectionSpans"]["H"])
+        self.assertEqual(
+            set(report["inflectionSpans"]["H"][0]),
+            {"zStartMm", "zEndMm", "tangentDropDeg"},
+        )
+
+    def test_viewport_diagnostics_use_normalized_params_for_blank_a0(self):
+        payload = _freeform_payload()
+        payload["a0"] = ""
+        dumped = WaveguideParamsRequest(**payload).model_dump()
+        result = build_viewport_geometry(dumped)
+
+        self.assertEqual(result["params"]["a0"], 15.5)
+        self.assertIn("freeform", result["metadata"])
+
+    def test_viewport_diagnostics_failure_is_logged(self):
+        dumped = WaveguideParamsRequest(**_freeform_payload()).model_dump()
+        with patch(
+            "solver.mesher_adapter._json_safe_metadata",
+            side_effect=RuntimeError("diagnostics exploded"),
+        ), self.assertLogs("solver.mesher_adapter", level="WARNING") as logs:
+            result = build_viewport_geometry(dumped)
+
+        self.assertNotIn("freeform", result["metadata"])
+        self.assertIn("Failed to build FREEFORM viewport diagnostics", "\n".join(logs.output))
+
+    def test_real_freeform_inner_surface_step_smoke(self):
+        dumped = WaveguideParamsRequest(**_freeform_payload()).model_dump()
+        result = build_inner_surface_step(dumped)
+
+        step = result["step_text"]
+        stats = result["stats"]
+        self.assertTrue(step.startswith("ISO-10303-21;"))
+        self.assertTrue(step.rstrip().endswith("END-ISO-10303-21;"))
+        self.assertIn("B_SPLINE_SURFACE", step)
+        self.assertEqual(stats["stepBody"], "inner_surface")
+        self.assertFalse(stats["hasWallThickness"])
+        self.assertFalse(stats["hasEnclosure"])
+        self.assertGreater(stats["ringCount"], 0)
+        self.assertGreater(stats["lengthSteps"], 0)
 
 
 if __name__ == "__main__":

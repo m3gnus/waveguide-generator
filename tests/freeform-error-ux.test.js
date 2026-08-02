@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { getDefaults } from '../src/config/defaults.js';
 import { syncAppExportMenuCapabilities } from '../src/app/events.js';
 import { getExportCapability } from '../src/modules/export/capabilities.js';
-import { mapFreeformError } from '../src/ui/freeformErrorMapping.js';
+import { FREEFORM_NUMERIC_TOKEN, mapFreeformError } from '../src/ui/freeformErrorMapping.js';
 
 const params = {
   ...getDefaults('FREEFORM'),
@@ -49,20 +49,41 @@ test('FREEFORM mesher segment locators choose an editable anchor on that plane',
   assert.match(mapping.message, /^V curve near anchor 2:/);
 });
 
-test('FREEFORM near-t convexity errors choose the nearest station in the named active span', () => {
-  const detail =
-    'FREEFORM crossSections span 1..2 produces a non-convex outline near t=0.75; adjust its shape, aspect, or corner setting';
-  const mapping = mapFreeformError(detail, params);
+test('FREEFORM near-t convexity errors map t-valued spans to their active station', () => {
+  const spanParams = {
+    ...params,
+    crossSections: [
+      { t: 0, shape: 'circle' },
+      { t: 0.2, shape: 'ellipse' },
+      { t: 1, shape: 'ellipse' },
+    ],
+  };
+  const first = mapFreeformError(
+    'FREEFORM crossSections span 0..0.2 produces a non-convex outline near t=0.1',
+    spanParams
+  );
+  const second = mapFreeformError(
+    'FREEFORM crossSections span 0.2..1 produces a non-convex outline near t=0.35',
+    spanParams
+  );
 
-  // Equal-distance ties deliberately prefer the earlier station.
-  assert.deepEqual(mapping.target, { kind: 'station', index: 1 });
-  assert.match(mapping.message, /^Station 2:/);
+  assert.deepEqual(first.target, { kind: 'station', index: 1 });
+  assert.deepEqual(second.target, { kind: 'station', index: 2 });
+  assert.match(first.message, /^Station 2:/);
+  assert.match(second.message, /^Station 3:/);
+});
+
+test('FREEFORM numeric diagnostics capture decimals, exponents, and signs in full', () => {
+  const pattern = new RegExp(`^(${FREEFORM_NUMERIC_TOKEN})$`, 'i');
+  for (const token of ['0.2', '1e-06', '-0.5']) {
+    assert.equal(token.match(pattern)?.[1], token);
+  }
 });
 
 test('FREEFORM t locators outside the active station span and unmatched detail stay generic', () => {
   assert.equal(
     mapFreeformError(
-      'FREEFORM crossSections span 1..2 produces a non-convex outline near t=0.25',
+      'FREEFORM crossSections span 0.5..1 produces a non-convex outline near t=0.25',
       params
     ),
     null

@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 
 from solver.deps import (
     HORNLAB_MESHER_AVAILABLE as HORNLAB_MESHER_PACKAGE_AVAILABLE,
+    HORNLAB_MESHER_FREEFORM_SUPPORTED,
     HORNLAB_MESHER_RUNTIME_READY,
     get_dependency_status,
 )

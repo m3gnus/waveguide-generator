@@ -10,6 +10,7 @@ from contracts import WaveguideParamsRequest
 from services.gmsh_worker import run_on_gmsh_worker
 from services.solver_runtime import (
     HORNLAB_MESHER_AVAILABLE,
+    HORNLAB_MESHER_FREEFORM_SUPPORTED,
     HORNLAB_MESHER_RUNTIME_READY,
     build_inner_surface_step,
     build_viewport_geometry,
@@ -20,6 +21,17 @@ from services.solver_runtime import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_freeform_mesher_support(request: WaveguideParamsRequest) -> None:
+    if request.formula_type == "FREEFORM" and not HORNLAB_MESHER_FREEFORM_SUPPORTED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Installed hornlab-waveguide-mesher does not support FREEFORM; "
+                "reinstall server requirements."
+            ),
+        )
 
 
 @router.post("/api/mesh/build")
@@ -36,6 +48,8 @@ async def build_mesh_from_params(request: WaveguideParamsRequest) -> Dict[str, A
                 "Install server requirements to enable backend mesh generation."
             ),
         )
+
+    _require_freeform_mesher_support(request)
 
     if not HORNLAB_MESHER_RUNTIME_READY:
         dep = get_dependency_status()
@@ -107,6 +121,8 @@ async def build_step_from_params(request: WaveguideParamsRequest) -> Dict[str, A
                 "Install server requirements to enable backend STEP generation."
             ),
         )
+
+    _require_freeform_mesher_support(request)
 
     if not HORNLAB_MESHER_RUNTIME_READY:
         dep = get_dependency_status()
@@ -183,6 +199,8 @@ async def build_viewport_geometry_from_params(request: WaveguideParamsRequest) -
                 "Install server requirements to enable backend viewport geometry."
             ),
         )
+
+    _require_freeform_mesher_support(request)
 
     if request.formula_type not in ("R-OSSE", "OSSE", "ICW", "FREEFORM"):
         raise HTTPException(

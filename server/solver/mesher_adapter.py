@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -10,6 +11,8 @@ import meshio
 import numpy as np
 
 from .quadrants import normalise_quadrants, quadrants_leading_int
+
+logger = logging.getLogger(__name__)
 
 try:
     from hornlab_mesher.config_builder import build_from_config
@@ -722,10 +725,13 @@ def build_viewport_geometry(payload: Mapping[str, Any]) -> dict[str, Any]:
             from hornlab_mesher.freeform import build_freeform_geometry
 
             metadata["freeform"] = _json_safe_metadata(
-                build_freeform_geometry(config["profile"]).report()
+                build_freeform_geometry(result["params"]).report()
             )
         except Exception:  # noqa: BLE001 - viewport metadata is best-effort only
-            pass
+            logger.warning(
+                "Failed to build FREEFORM viewport diagnostics.",
+                exc_info=True,
+            )
 
     return {
         "formula": result.get("formula"),

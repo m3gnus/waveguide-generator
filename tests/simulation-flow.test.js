@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import * as solverApi from '../src/solver/index.js';
 import { applySmoothingSelection } from '../src/ui/simulation/smoothing.js';
 import { downloadMeshArtifact } from '../src/ui/simulation/meshDownload.js';
-import { renderJobList, formatJobSummary } from '../src/ui/simulation/jobActions.js';
+import {
+  exportJobResults,
+  renderJobList,
+  formatJobSummary,
+} from '../src/ui/simulation/jobActions.js';
 import { pollSimulationStatus, clearPollTimer } from '../src/ui/simulation/polling.js';
 import { openViewResultsModal } from '../src/ui/simulation/viewResults.js';
 import {
@@ -12,6 +16,8 @@ import {
   scheduleProgressHide,
 } from '../src/ui/simulation/jobOrchestration.js';
 import { AppEvents } from '../src/events.js';
+import { getDefaults } from '../src/config/defaults.js';
+import { GlobalState } from '../src/state.js';
 import { getDownloadSimMeshEnabled } from '../src/ui/settings/modal.js';
 import {
   RECOMMENDED_DEFAULTS as SIM_MANAGEMENT_DEFAULTS,
@@ -1227,6 +1233,90 @@ test('renderJobList labels completed job results action as Results with view too
   }
 });
 
+test('completed job export menus use the current formula capability map', () => {
+  const originalDocument = global.document;
+  const originalState = GlobalState.current;
+  const list = { innerHTML: '' };
+  const sourceLabel = { textContent: '' };
+  global.document = {
+    getElementById(id) {
+      if (id === 'simulation-jobs-list') return list;
+      if (id === 'simulation-jobs-source-label') return sourceLabel;
+      return null;
+    },
+  };
+  const panel = {
+    activeJobId: null,
+    jobs: new Map([
+      [
+        'job-export-capability',
+        {
+          id: 'job-export-capability',
+          status: 'complete',
+          createdAt: '2026-03-11T09:00:00.000Z',
+          completedAt: '2026-03-11T09:10:00.000Z',
+        },
+      ],
+    ]),
+  };
+
+  try {
+    GlobalState.current = { type: 'FREEFORM', params: getDefaults('FREEFORM') };
+    renderJobList(panel);
+    for (const format of ['stl', 'fusion_csv']) {
+      assert.match(
+        list.innerHTML,
+        new RegExp(
+          `data-export-format="${format}"[\\s\\S]*title="Not available for FREEFORM yet[^\"]*"[\\s\\S]*disabled aria-disabled="true"`
+        )
+      );
+    }
+    assert.match(
+      list.innerHTML,
+      /data-export-format="step"[\s\S]*title="Export waveguide STEP surface"/
+    );
+
+    GlobalState.current = { type: 'OSSE', params: getDefaults('OSSE') };
+    renderJobList(panel);
+    assert.doesNotMatch(list.innerHTML, /data-export-format="stl"[\s\S]*aria-disabled="true"/);
+    assert.doesNotMatch(
+      list.innerHTML,
+      /data-export-format="fusion_csv"[\s\S]*aria-disabled="true"/
+    );
+  } finally {
+    GlobalState.current = originalState;
+    global.document = originalDocument;
+  }
+});
+
+test('task export rejects stale-menu FREEFORM formats with the capability reason', async () => {
+  const originalDocument = global.document;
+  const originalState = GlobalState.current;
+  const originalConsoleError = console.error;
+  const errors = [];
+  global.document = undefined;
+  console.error = (message) => errors.push(String(message));
+  GlobalState.current = { type: 'FREEFORM', params: getDefaults('FREEFORM') };
+  let exportCalls = 0;
+  const panel = {
+    jobs: new Map([['job-stale-menu', { id: 'job-stale-menu', status: 'complete' }]]),
+    exportResults: async () => {
+      exportCalls += 1;
+      throw new Error('runtime guard should not be reached');
+    },
+  };
+
+  try {
+    assert.equal(await exportJobResults(panel, 'job-stale-menu', ['stl']), false);
+    assert.equal(exportCalls, 0);
+    assert.match(errors[0], /Not available for FREEFORM yet.*STEP export.*\.mwg config/);
+  } finally {
+    GlobalState.current = originalState;
+    console.error = originalConsoleError;
+    global.document = originalDocument;
+  }
+});
+
 test('renderJobList escapes job ids in action data attributes', () => {
   const originalDocument = global.document;
   const list = { innerHTML: '' };
@@ -1496,9 +1586,13 @@ test('progress hide callbacks from an earlier run cannot affect a newer run', ()
   try {
     const panel = { progressHideTimer: null };
     let hidden = 0;
-    scheduleProgressHide(panel, () => {
-      hidden += 1;
-    }, 3000);
+    scheduleProgressHide(
+      panel,
+      () => {
+        hidden += 1;
+      },
+      3000
+    );
     const stale = scheduled[0];
 
     // runSimulation/pollSimulationStatus clears this handle before a new run begins.
@@ -1506,9 +1600,13 @@ test('progress hide callbacks from an earlier run cannot affect a newer run', ()
     stale.callback();
     assert.equal(hidden, 0);
 
-    scheduleProgressHide(panel, () => {
-      hidden += 1;
-    }, 3000);
+    scheduleProgressHide(
+      panel,
+      () => {
+        hidden += 1;
+      },
+      3000
+    );
     scheduled[1].callback();
     assert.equal(hidden, 1);
     assert.ok(cleared.includes(stale));
@@ -1611,7 +1709,10 @@ test('pollSimulationStatus persists and auto-exports once on a running-to-comple
 
     assert.equal(autoExportCalls, 1);
     assert.equal(panel.jobs.get('job-complete-once')?.justCompleted, false);
-    assert.equal(panel.jobs.get('job-complete-once')?.rawResultsFile, 'complete_once_raw.results.json');
+    assert.equal(
+      panel.jobs.get('job-complete-once')?.rawResultsFile,
+      'complete_once_raw.results.json'
+    );
     const rawResultsWrite = fetchCalls.find(
       ({ options }) => options.body?.get?.('file')?.name === 'complete_once_raw.results.json'
     );
@@ -1675,10 +1776,7 @@ test('pollSimulationStatus recovers after a transient result-fetch failure', asy
       activeJobId: 'job-recover',
       currentJobId: 'job-recover',
       jobs: new Map([
-        [
-          'job-recover',
-          { id: 'job-recover', status: 'running', progress: 0.5, label: 'recover' },
-        ],
+        ['job-recover', { id: 'job-recover', status: 'running', progress: 0.5, label: 'recover' }],
       ]),
       resultCache: new Map(),
       solver: {

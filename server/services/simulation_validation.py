@@ -97,6 +97,13 @@ def validate_submit_simulation_request(
         )
 
     normalized_waveguide_params = validated_waveguide.model_dump()
+    if validated_waveguide.formula_type == "FREEFORM":
+        from hornlab_mesher.config_builder import build_geometry_params
+        from solver.mesher_adapter import waveguide_payload_to_mesher_config
+
+        build_geometry_params(
+            waveguide_payload_to_mesher_config(normalized_waveguide_params)
+        )
 
     return SimulationRequestValidation(
         mesh_strategy=mesh_strategy,

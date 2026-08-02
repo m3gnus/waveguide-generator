@@ -6,10 +6,7 @@ import * as THREE from 'three';
 import { getDefaults } from '../src/config/defaults.js';
 import { detachCreaseVertices } from '../src/app/viewportMesh.js';
 import { handleViewportStateChange, renderModel } from '../src/app/scene.js';
-import {
-  getViewportStateCacheKey,
-  isViewportCacheCurrent,
-} from '../src/app/viewportCacheKey.js';
+import { getViewportStateCacheKey, isViewportCacheCurrent } from '../src/app/viewportCacheKey.js';
 import { AppEvents } from '../src/events.js';
 import {
   createAdaptiveRingVertices,
@@ -66,6 +63,46 @@ function makeState(overrides = {}) {
     },
   };
 }
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function viewportResponse(state, grid, freeform) {
+  return {
+    ok: true,
+    json: async () => ({
+      formula: state.type,
+      mode: 'bare',
+      params: state.params,
+      grid,
+      enclosure: null,
+      metadata: { freeform },
+    }),
+  };
+}
+
+test('viewport cache key includes simType but excludes solve-only settings', () => {
+  const state = makeState({ simType: 1, freqStart: 100, numFreqs: 10, solverMode: 'auto' });
+  const base = getViewportStateCacheKey(state);
+  assert.notEqual(
+    getViewportStateCacheKey({ ...state, params: { ...state.params, simType: 2 } }),
+    base
+  );
+  assert.equal(
+    getViewportStateCacheKey({
+      ...state,
+      params: { ...state.params, freqStart: 500, numFreqs: 40, solverMode: 'full_3d' },
+    }),
+    base
+  );
+});
 
 test('viewport mesh variants use render-only tessellation instead of sparse mesh controls', () => {
   const state = makeState();
@@ -149,6 +186,142 @@ test('backend FREEFORM build publishes authoritative metadata with its viewport 
     assert.equal(app._currentMeshVariant, 'grid');
   } finally {
     AppEvents.off('freeform:authoritative', onAuthoritative);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('overlapping FREEFORM viewport requests apply only the newest response and metadata', async () => {
+  const stateA = {
+    type: 'FREEFORM',
+    params: { ...getDefaults('FREEFORM'), mouthRadiusH: 140 },
+  };
+  const stateB = {
+    type: 'FREEFORM',
+    params: { ...stateA.params, mouthRadiusH: 150 },
+  };
+  const gridA = syntheticViewportGrid({
+    H: [
+      [0, 12.7],
+      [120, 140],
+    ],
+    V: [
+      [0, 12.7],
+      [120, 100],
+    ],
+  });
+  const gridB = syntheticViewportGrid({
+    H: [
+      [0, 12.7],
+      [120, 150],
+    ],
+    V: [
+      [0, 12.7],
+      [120, 105],
+    ],
+  });
+  const requestA = deferred();
+  const requestB = deferred();
+  const app = {
+    scene: new THREE.Scene(),
+    renderer: {},
+    currentState: stateA,
+    uiCoordinator: { readDisplayModeSetting: () => 'wireframe' },
+    paramPanel: { setProfileError() {} },
+    stats: { innerText: '' },
+  };
+  const originalFetch = globalThis.fetch;
+  const requests = [requestA, requestB];
+  globalThis.fetch = async () => requests.shift().promise;
+  const authoritative = [];
+  const listener = (payload) => authoritative.push(payload);
+  AppEvents.on('freeform:authoritative', listener);
+
+  try {
+    renderModel(app);
+    app.currentState = stateB;
+    renderModel(app);
+
+    requestB.resolve(viewportResponse(stateB, gridB, { marker: 'B' }));
+    await waitFor(() => authoritative.length === 1, 'newest viewport response was not applied');
+    requestA.resolve(viewportResponse(stateA, gridA, { marker: 'A' }));
+    await waitFor(
+      () => app._viewportFetch === null,
+      'overlapping viewport requests did not settle'
+    );
+
+    assert.equal(app._meshCache.stateKey, getViewportStateCacheKey(stateB));
+    assert.equal(app._meshCache.grid.grid, gridB);
+    assert.deepEqual(authoritative, [
+      {
+        cacheKey: getViewportStateCacheKey(stateB),
+        freeform: { marker: 'B' },
+        grid: gridB,
+      },
+    ]);
+  } finally {
+    AppEvents.off('freeform:authoritative', listener);
+    app._viewportFetch?.controller?.abort();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('obsolete FREEFORM response cannot clear a stale marker before a new request starts', async () => {
+  const stateA = { type: 'FREEFORM', params: getDefaults('FREEFORM') };
+  const stateB = {
+    type: 'FREEFORM',
+    params: { ...stateA.params, mouthRadiusV: stateA.params.mouthRadiusV + 1 },
+  };
+  const gridA = syntheticViewportGrid({
+    H: [
+      [0, 12.7],
+      [120, 140],
+    ],
+    V: [
+      [0, 12.7],
+      [120, 140],
+    ],
+  });
+  const requestA = deferred();
+  const classes = new Set(['viewport-mesh-stale']);
+  let badgeRemoved = false;
+  const app = {
+    scene: new THREE.Scene(),
+    renderer: {},
+    currentState: stateA,
+    container: {
+      classList: {
+        add: (value) => classes.add(value),
+        remove: (value) => classes.delete(value),
+      },
+    },
+    _viewportStale: true,
+    _viewportStaleStateKey: 'rejected-state',
+    _viewportStaleBadge: { remove: () => (badgeRemoved = true) },
+    uiCoordinator: { readDisplayModeSetting: () => 'wireframe' },
+    paramPanel: { setProfileError() {} },
+    stats: { innerText: '' },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => requestA.promise;
+
+  try {
+    renderModel(app);
+    app._viewportStale = true;
+    app._viewportStaleStateKey = 'rejected-state';
+    app._viewportStaleBadge = { remove: () => (badgeRemoved = true) };
+    classes.add('viewport-mesh-stale');
+    app.currentState = stateB;
+    requestA.resolve(viewportResponse(stateA, gridA, { marker: 'A' }));
+    await waitFor(() => app._viewportFetch === null, 'obsolete viewport request did not settle');
+
+    assert.equal(app._viewportStale, true);
+    assert.equal(classes.has('viewport-mesh-stale'), true);
+    assert.equal(badgeRemoved, false);
+    assert.equal(app._meshCache.stateKey, getViewportStateCacheKey(stateB));
+    assert.equal(app._meshCache.grid, null);
+    assert.equal(app._currentMeshVariant, null);
+  } finally {
+    app._viewportFetch?.controller?.abort();
     globalThis.fetch = originalFetch;
   }
 });
@@ -287,7 +460,9 @@ test('invalid FREEFORM edits keep the last valid viewport mesh visibly stale unt
         ok: false,
         status: 422,
         text: async () =>
-          'FREEFORM crossSections span 0..1 produces a non-convex outline near t=0.75',
+          JSON.stringify({
+            detail: 'FREEFORM crossSections span 0..1 produces a non-convex outline near t=0.75',
+          }),
       };
     }
     return {
@@ -322,10 +497,14 @@ test('invalid FREEFORM edits keep the last valid viewport mesh visibly stale unt
       false
     );
     assert.match(profileErrors.at(-1), /non-convex outline/);
+    assert.doesNotMatch(profileErrors.at(-1), /^\s*\{/);
 
     app.currentState = correctedState;
     renderModel(app);
-    await waitFor(() => fetchCount === 3 && app._viewportFetch === null, 'corrected rebuild failed');
+    await waitFor(
+      () => fetchCount === 3 && app._viewportFetch === null,
+      'corrected rebuild failed'
+    );
     assert.notEqual(app.hornMesh, lastValidMesh);
     assert.equal(app._viewportStale, false);
     assert.equal(classes.has('viewport-mesh-stale'), false);

@@ -320,3 +320,82 @@ Freeform.CrossSections = {
   assert.equal(imported.success, false);
   assert.match(imported.error, /corner ratios were removed; use cornerRadiusMm \(mm\)/);
 });
+
+function strictFreeformConfig({ length = 120, hItems = '', hPoints = '', stations = '' } = {}) {
+  return `Freeform.Length = ${length}
+Freeform.ThroatRadius = 12.7
+Freeform.ThroatAngle = 15.5
+Freeform.OvershootPolicy = reject
+Freeform.InflectionPolicy = warn
+Freeform.H = {
+MouthRadius = 50
+MouthAngle = 45
+ThroatTangentScale = 1
+MouthTangentScale = 1
+${hItems}
+}
+Freeform.H.Points = {
+${hPoints}
+}
+Freeform.V = {
+MouthRadius = 40
+MouthAngle = 45
+ThroatTangentScale = 1
+MouthTangentScale = 1
+}
+Freeform.V.Points = {
+}
+Freeform.CrossSections = {
+${stations || '0 circle\n1 ellipse'}
+}`;
+}
+
+test('FREEFORM .mwg rejects malformed point rows with block and row locations', () => {
+  for (const [points, reason] of [
+    ['BOGUS', /expected exactly 2, 3, or 4 numeric values/],
+    ['40 banana', /column 2 must be a finite number/],
+    ['60 55 12 1.5 99 77', /expected exactly 2, 3, or 4 numeric values/],
+    ['80 40\n60 35', /z values must be strictly increasing/],
+  ]) {
+    const imported = importMWGConfig(strictFreeformConfig({ hPoints: points }), 'invalid.mwg');
+    assert.equal(imported.success, false, points);
+    assert.match(imported.error, /Freeform\.H\.Points row \d+/);
+    assert.match(imported.error, reason);
+  }
+});
+
+test('FREEFORM .mwg rejects unknown block item names instead of defaulting them', () => {
+  const imported = importMWGConfig(
+    strictFreeformConfig({ hItems: 'MouthAngel = 25' }),
+    'unknown-item.mwg'
+  );
+  assert.equal(imported.success, false);
+  assert.match(imported.error, /Freeform\.H item MouthAngel.*unknown item name/);
+});
+
+test('FREEFORM .mwg refuses profiles over the 62-interior-anchor budget', () => {
+  const hPoints = Array.from({ length: 63 }, (_, index) => `${index + 1} ${20 + index}`).join(
+    '\n'
+  );
+  const imported = importMWGConfig(
+    strictFreeformConfig({ length: 100, hPoints }),
+    'too-many-anchors.mwg'
+  );
+  assert.equal(imported.success, false);
+  assert.match(imported.error, /Freeform\.H\.Points row 63/);
+  assert.match(imported.error, /contains 63 interior anchors; the maximum is 62/);
+});
+
+test('FREEFORM .mwg rejects station corruption without normalizing it', () => {
+  for (const [stations, reason] of [
+    ['0 circle\n0.5 banana\n1 ellipse', /unknown shape/],
+    ['0 circle\n1.7 ellipse\n1 ellipse', /t must be between 0 and 1/],
+    ['0 circle\n0.5 ellipse\n0.5 superellipse 4\n1 ellipse', /strictly increasing/],
+    ['0 circle\n0.5 banana-token\n1 ellipse', /unknown shape/],
+  ]) {
+    const imported = importMWGConfig(strictFreeformConfig({ stations }), 'bad-station.mwg');
+    assert.equal(imported.success, false, stations);
+    assert.match(imported.error, /Freeform\.CrossSections row \d+/);
+    assert.match(imported.error, reason);
+  }
+});

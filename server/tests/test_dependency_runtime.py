@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from api.routes_mesh import build_mesh_from_params
+from api.routes_mesh import build_mesh_from_params, build_viewport_geometry_from_params
 from api.routes_misc import health_check
 from api.routes_simulation import submit_simulation
 from contracts import MeshData, SimulationRequest, WaveguideParamsRequest
@@ -23,6 +23,7 @@ def _dependency_status(
     gmsh_supported=True,
     gmsh_version="4.15.0",
     mesher_ready=True,
+    freeform_supported=True,
     metal_bem_ready=True,
     metal_bem_version="0.2.0",
     bempp_bem_ready=False,
@@ -58,6 +59,8 @@ def _dependency_status(
                 "version": "0.1.0" if mesher_ready else None,
                 "supported": mesher_ready,
                 "ready": mesher_ready,
+                "freeformSupported": freeform_supported,
+                "freeformReady": mesher_ready and freeform_supported,
             },
             "hornlab_metal_bem": {
                 "available": metal_bem_ready,
@@ -82,6 +85,7 @@ class DependencyRuntimeTest(unittest.TestCase):
         fake_solver.__path__ = []
         fake_deps = types.ModuleType("solver.deps")
         fake_deps.HORNLAB_MESHER_AVAILABLE = False
+        fake_deps.HORNLAB_MESHER_FREEFORM_SUPPORTED = False
         fake_deps.HORNLAB_MESHER_RUNTIME_READY = False
         fake_deps.get_dependency_status = lambda: {}
         fake_metal = types.ModuleType("solver.metal_solver")
@@ -141,6 +145,40 @@ class DependencyRuntimeTest(unittest.TestCase):
 
         self.assertFalse(module.HORNLAB_MESHER_AVAILABLE)
         self.assertIsNone(module.HORNLAB_MESHER_VERSION)
+
+    def test_solver_deps_detects_installed_mesher_without_freeform(self):
+        module_path = Path(__file__).resolve().parents[1] / "solver" / "deps.py"
+        fake_package = types.ModuleType("hornlab_mesher")
+        fake_package.__path__ = []
+        fake_config_builder = types.ModuleType("hornlab_mesher.config_builder")
+        fake_config_builder.build_from_config = lambda *_args, **_kwargs: None
+
+        def fake_version(name):
+            if name == "hornlab-waveguide-mesher":
+                return "0.1.0"
+            raise metadata.PackageNotFoundError(name)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "hornlab_mesher": fake_package,
+                "hornlab_mesher.config_builder": fake_config_builder,
+                "hornlab_mesher.freeform": None,
+            },
+        ), patch("importlib.metadata.version", side_effect=fake_version):
+            spec = importlib.util.spec_from_file_location("_isolated_solver_deps", module_path)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+        self.assertTrue(module.HORNLAB_MESHER_AVAILABLE)
+        self.assertFalse(module.HORNLAB_MESHER_FREEFORM_SUPPORTED)
+        mesher_status = module.get_dependency_status()["runtime"][
+            "hornlab_waveguide_mesher"
+        ]
+        self.assertFalse(mesher_status["freeformSupported"])
+        self.assertFalse(mesher_status["freeformReady"])
 
     def test_dependency_matrix_pins_solve_backends_and_mesher(self):
         self.assertEqual(
@@ -285,6 +323,63 @@ class DependencyRuntimeTest(unittest.TestCase):
         self.assertIn("gmsh=5.1.0 supported=False", detail)
         self.assertIn("python >=3.10,<3.15", detail)
         self.assertIn("gmsh >=4.11.1,<5.0", detail)
+
+    def test_stale_mesher_returns_honest_503_only_for_freeform(self):
+        freeform = WaveguideParamsRequest(formula_type="FREEFORM")
+        osse = WaveguideParamsRequest(formula_type="OSSE")
+
+        with patch("api.routes_mesh.HORNLAB_MESHER_AVAILABLE", True), patch(
+            "api.routes_mesh.HORNLAB_MESHER_FREEFORM_SUPPORTED", False
+        ), patch(
+            "api.routes_mesh.build_viewport_geometry",
+            return_value={"formula": "OSSE", "grid": {}, "metadata": {}},
+        ) as viewport_builder:
+            with self.assertRaises(HTTPException) as viewport_error:
+                asyncio.run(build_viewport_geometry_from_params(freeform))
+            osse_result = asyncio.run(build_viewport_geometry_from_params(osse))
+
+        self.assertEqual(viewport_error.exception.status_code, 503)
+        self.assertIn("FREEFORM", str(viewport_error.exception.detail))
+        self.assertEqual(osse_result["formula"], "OSSE")
+        viewport_builder.assert_called_once()
+
+        solve = SimulationRequest(
+            frequency_range=[100.0, 1000.0],
+            num_frequencies=2,
+            sim_type="2",
+            solver_backend="metal",
+            options={
+                "mesh": {
+                    "strategy": "hornlab_mesher",
+                    "waveguide_params": {"formula_type": "FREEFORM"},
+                }
+            },
+        )
+        with patch("api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_FREEFORM_SUPPORTED", False
+        ):
+            with self.assertRaises(HTTPException) as solve_error:
+                asyncio.run(submit_simulation(solve))
+
+        self.assertEqual(solve_error.exception.status_code, 503)
+        self.assertIn("FREEFORM", str(solve_error.exception.detail))
+
+        osse_solve = solve.model_copy(deep=True)
+        osse_solve.options["mesh"]["waveguide_params"] = {"formula_type": "OSSE"}
+        with patch("api.routes_simulation.HORNLAB_MESHER_AVAILABLE", True), patch(
+            "api.routes_simulation.HORNLAB_MESHER_FREEFORM_SUPPORTED", False
+        ), patch(
+            "api.routes_simulation.HORNLAB_MESHER_RUNTIME_READY", True
+        ), patch(
+            "api.routes_simulation.build_waveguide_mesh", MagicMock()
+        ), patch(
+            "api.routes_simulation.is_metal_fast_solve_ready", return_value=True
+        ), patch(
+            "api.routes_simulation.create_simulation_job", return_value="osse-job"
+        ):
+            osse_solve_result = asyncio.run(submit_simulation(osse_solve))
+
+        self.assertEqual(osse_solve_result, {"job_id": "osse-job"})
 
     def test_health_solver_ready_requires_fast_metal_helper(self):
         """The doctor's summary is informational; Metal readiness requires the release helper."""

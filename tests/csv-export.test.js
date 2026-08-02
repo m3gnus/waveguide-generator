@@ -12,7 +12,7 @@ test('CSV slices export closes each loop and applies 1/10 scale', () => {
     .trim()
     .split('\r\n')
     .filter((line) => !line.startsWith('#'));
-  assert.equal(csv.split('\r\n')[0], '# x_cm;y_cm;z_cm');
+  assert.equal(csv.split('\r\n')[0], '# slices: x_cm;y_cm;z_cm');
   assert.equal(lines.length, 5);
   assert.equal(lines[0], '1.000000;0.000000;0.000000');
   assert.equal(lines[4], lines[0]);

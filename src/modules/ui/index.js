@@ -13,6 +13,7 @@ import {
 } from '../../ui/settings/viewerSettings.js';
 import { getResultsLayout, setSplitFraction } from '../../ui/settings/layoutSettings.js';
 import { setupResultsDock } from '../../ui/results/resultsDock.js';
+import { getViewportStateCacheKey } from '../geometry/viewportCacheKey.js';
 
 const UI_MODULE_ID = 'ui';
 const UI_IMPORT_STAGE = 'import';
@@ -224,10 +225,12 @@ function buildAppCoordinator(input) {
     createParamPanel(containerId = 'param-container') {
       return new ParamPanel(containerId, {
         getCachedViewportMesh: () => {
+          const stateKey = getViewportStateCacheKey(app.currentState || {});
+          if (app._meshCache?.stateKey !== stateKey) return null;
           const smooth = app._meshCache?.smooth;
           const grid = app._meshCache?.grid;
-          if (smooth?.source === 'backend' && smooth.grid) return smooth;
-          if (grid?.source === 'backend' && grid.grid) return grid;
+          if (smooth?.source === 'backend' && smooth.grid) return { ...smooth, stateKey };
+          if (grid?.source === 'backend' && grid.grid) return { ...grid, stateKey };
           return null;
         },
       });

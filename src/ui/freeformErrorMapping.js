@@ -1,5 +1,11 @@
 import { normalizeAnchorList, normalizeStations } from '../config/freeformModel.js';
 
+export const FREEFORM_NUMERIC_TOKEN = '[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?';
+
+function numericCapture(prefix) {
+  return new RegExp(`${prefix}(${FREEFORM_NUMERIC_TOKEN})(?![\\w.])`, 'i');
+}
+
 function finiteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -8,7 +14,7 @@ function finiteNumber(value) {
 function compactReason(detail, locator) {
   const lowerDetail = String(detail || '').toLowerCase();
   const lowerLocator = String(locator || '').toLowerCase();
-  const tMatch = String(detail || '').match(/near\s+t=([+-]?(?:\d+\.?\d*|\.\d+))/i);
+  const tMatch = String(detail || '').match(numericCapture('near\\s+t='));
   if (lowerDetail.includes('non-convex outline')) {
     return `Non-convex outline${tMatch ? ` near t=${tMatch[1]}.` : '.'}`;
   }
@@ -52,13 +58,15 @@ function nearestStationForT(detail, params, t) {
   const stations = normalizeStations(params?.crossSections);
   if (stations.length < 2 || t < stations[0].t || t > stations.at(-1).t) return null;
 
-  const spanMatch = detail.match(/crossSections span\s+(\d+)\.\.(\d+)/i);
-  let candidates = stations.map((station, index) => ({ station, index }));
+  const spanMatch = detail.match(
+    new RegExp(
+      `crossSections span\\s+(${FREEFORM_NUMERIC_TOKEN})\\.\\.(${FREEFORM_NUMERIC_TOKEN})(?![\\w.])`,
+      'i'
+    )
+  );
   if (spanMatch) {
-    const first = Number(spanMatch[1]);
-    const second = Number(spanMatch[2]);
-    const spanStart = stations[first]?.t;
-    const spanEnd = stations[second]?.t;
+    const spanStart = Number(spanMatch[1]);
+    const spanEnd = Number(spanMatch[2]);
     if (
       !Number.isFinite(spanStart) ||
       !Number.isFinite(spanEnd) ||
@@ -67,13 +75,21 @@ function nearestStationForT(detail, params, t) {
     ) {
       return null;
     }
-    candidates = candidates.filter(({ index }) => index === first || index === second);
+    const epsilon = 1e-9;
+    const firstIndex = stations.findIndex((station) => Math.abs(station.t - spanStart) <= epsilon);
+    const secondIndex = stations.findIndex((station) => Math.abs(station.t - spanEnd) <= epsilon);
+    if (firstIndex < 0 || secondIndex < 0 || Math.abs(secondIndex - firstIndex) !== 1) return null;
+    // A station defines the transition from the preceding station, so span
+    // diagnostics belong to the station at the mouth-side end of the span.
+    return spanEnd >= spanStart ? secondIndex : firstIndex;
   }
 
-  return candidates.reduce((nearest, candidate) => {
-    const distance = Math.abs(candidate.station.t - t);
-    return !nearest || distance < nearest.distance ? { ...candidate, distance } : nearest;
-  }, null)?.index;
+  return stations
+    .map((station, index) => ({ station, index }))
+    .reduce((nearest, candidate) => {
+      const distance = Math.abs(candidate.station.t - t);
+      return !nearest || distance < nearest.distance ? { ...candidate, distance } : nearest;
+    }, null)?.index;
 }
 
 /**
@@ -107,9 +123,7 @@ export function mapFreeformError(detailValue, params = {}) {
     return anchorTarget(plane, anchorIndex, detail, segmentMatch[0], 'curve near anchor');
   }
 
-  const nearTMatch = detail.match(
-    /(?:near|binding|at(?: station)?)\s+t=([+-]?(?:\d+\.?\d*|\.\d+))/i
-  );
+  const nearTMatch = detail.match(numericCapture('(?:near|binding|at(?: station)?)\\s+t='));
   if (nearTMatch) {
     const t = finiteNumber(nearTMatch[1]);
     const index = t === null ? null : nearestStationForT(detail, params, t);

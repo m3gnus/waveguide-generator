@@ -285,9 +285,25 @@ function requireWireProfile(wire, key) {
   if (!profile || typeof profile !== 'object' || !Array.isArray(profile.points)) {
     throw new Error(`FREEFORM wire model requires ${key}.points.`);
   }
-  const points = profile.points.map(normalizeAnchor).filter(Boolean);
+  const points = profile.points.map((row, index) => {
+    const point = normalizeAnchor(row);
+    if (!point) throw new Error(`FREEFORM ${key}.points row ${index + 1} must be finite.`);
+    return point;
+  });
   if (points.length < 2) {
     throw new Error(`FREEFORM wire model requires at least two finite ${key}.points rows.`);
+  }
+  for (let index = 1; index < points.length; index += 1) {
+    if (!(points[index].z > points[index - 1].z)) {
+      throw new Error(
+        `FREEFORM ${key}.points row ${index + 1} z must be strictly greater than the previous row.`
+      );
+    }
+  }
+  if (points.length - 2 > MAX_INTERIOR_ANCHORS) {
+    throw new Error(
+      `FREEFORM ${key}.points row ${MAX_INTERIOR_ANCHORS + 2} exceeds the ${MAX_INTERIOR_ANCHORS}-anchor interior budget.`
+    );
   }
   return { profile, points };
 }

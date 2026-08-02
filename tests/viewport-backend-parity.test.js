@@ -28,6 +28,7 @@ import {
 } from '../src/geometry/engine/morphing.js';
 import { tessellateViewportGeometry } from '../src/geometry/viewportTessellator.js';
 import { analyzeBemMeshIntegrity } from '../src/geometry/meshIntegrity.js';
+import { buildFreeformDisplayCurve } from '../src/geometry/freeformCurve.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EVAL_SCRIPT = join(__dirname, '..', 'scripts', 'eval_profiles.py');
@@ -108,6 +109,34 @@ const ROSSE_BASE = {
   encDepth: 0, enc_depth: 0,
 };
 
+const FREEFORM_BASE = {
+  formula_type: 'FREEFORM',
+  a0: 15.5,
+  profile_h: {
+    points: [[0, 12.7], [50, 35, 40, 1.25], [100, 55]],
+    throat_angle_deg: 15.5,
+    mouth_angle_deg: 25,
+    throat_tangent_scale: 1,
+    mouth_tangent_scale: 1,
+  },
+  profile_v: {
+    points: [[0, 12.7], [40, 26, -5, 0.8], [100, 48]],
+    throat_angle_deg: 15.5,
+    mouth_angle_deg: 35,
+    throat_tangent_scale: 1,
+    mouth_tangent_scale: 1,
+  },
+  cross_sections: [
+    { t: 0, shape: 'circle' },
+    { t: 1, shape: 'ellipse' },
+  ],
+  overshoot_policy: 'allow',
+  inflection_policy: 'warn',
+  n_angular: 16,
+  n_length: 8,
+  wall_thickness: 0,
+};
+
 const RECT_MORPH = {
   morphTarget: 1, morph_target: 1,
   morphWidth: 320, morph_width: 320,
@@ -185,6 +214,44 @@ function assertBoxesClose(actual, expected, tolerance, label) {
     );
   }
 }
+
+function interpolateCurveRadius(curve, z) {
+  for (let index = 0; index < curve.length - 1; index += 1) {
+    const left = curve[index];
+    const right = curve[index + 1];
+    if (z < left[0] || z > right[0]) continue;
+    const fraction = (z - left[0]) / (right[0] - left[0]);
+    return left[1] + fraction * (right[1] - left[1]);
+  }
+  return curve.at(-1)[1];
+}
+
+test('live FREEFORM display curves match mesher diagnostics', {
+  skip: !hasBackend && 'Python backend not available',
+}, () => {
+  const geometry = callPython({ mode: 'viewport_geometry', payload: FREEFORM_BASE });
+  const exactCurves = geometry.metadata.freeform.curveSamples;
+
+  for (const [plane, profile] of Object.entries({
+    H: FREEFORM_BASE.profile_h,
+    V: FREEFORM_BASE.profile_v,
+  })) {
+    const preview = buildFreeformDisplayCurve({
+      points: profile.points,
+      throatAngleDeg: profile.throat_angle_deg,
+      mouthAngleDeg: profile.mouth_angle_deg,
+      throatTangentScale: profile.throat_tangent_scale,
+      mouthTangentScale: profile.mouth_tangent_scale,
+      sampleCount: 192,
+    });
+    const exact = exactCurves[plane];
+    assert.equal(exact.length, 192, `${plane} authoritative sample count`);
+    const maxRadiusErrorMm = Math.max(
+      ...preview.map(([z, radius]) => Math.abs(radius - interpolateCurveRadius(exact, z)))
+    );
+    assert.ok(maxRadiusErrorMm < 0.1, `${plane} max |dr| was ${maxRadiusErrorMm} mm`);
+  }
+});
 
 /**
  * Evaluate the JS engine profile + morph math at the backend grid's own

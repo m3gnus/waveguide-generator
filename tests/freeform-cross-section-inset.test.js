@@ -10,7 +10,14 @@ function point(radiusH, radiusV, angle, z) {
   return [radiusH * Math.cos(angle), radiusV * Math.sin(angle), z];
 }
 
-function syntheticGrid({ angles, rings, quadrants = 1234, fullCircle = true, nested = false }) {
+function syntheticGrid({
+  angles,
+  rings,
+  quadrants = 1234,
+  fullCircle = true,
+  nested = false,
+  sliceMap,
+}) {
   const rows = angles.map((angle) => rings.map((ring) => point(ring.h, ring.v, angle, ring.z)));
   return {
     angle_list: angles,
@@ -19,6 +26,7 @@ function syntheticGrid({ angles, rings, quadrants = 1234, fullCircle = true, nes
     inner_points: nested ? rows : rows.flat(2),
     quadrants,
     full_circle: fullCircle,
+    ...(sliceMap ? { slice_map: sliceMap } : {}),
   };
 }
 
@@ -41,6 +49,38 @@ test('sampleFreeformGridRing selects and interpolates authoritative axial rings'
   assert.equal(ring.radiusH, 20);
   assert.equal(ring.radiusV, 10);
   assert.equal(ring.points.length, 4);
+});
+
+test('sampleFreeformGridRing interpolates non-uniform authoritative slice maps', () => {
+  const grid = syntheticGrid({
+    angles: [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2],
+    rings: [0, 5, 50, 95, 100].map((z) => ({ h: 10 + z, v: 5 + z / 2, z })),
+    sliceMap: [0, 0.05, 0.5, 0.95, 1],
+  });
+
+  const quarter = sampleFreeformGridRing(grid, 0.25);
+  const threeQuarter = sampleFreeformGridRing(grid, 0.75);
+  assert.ok(Math.abs(quarter.depthMm - 25) < 1e-9);
+  assert.ok(Math.abs(threeQuarter.depthMm - 75) < 1e-9);
+  assert.equal(quarter.lowerIndex, 1);
+  assert.equal(quarter.upperIndex, 2);
+  assert.equal(threeQuarter.lowerIndex, 2);
+  assert.equal(threeQuarter.upperIndex, 3);
+  assert.equal(quarter.t, 0.25);
+  assert.equal(threeQuarter.t, 0.75);
+});
+
+test('sampleFreeformGridRing falls back to uniform indexing for malformed slice maps', () => {
+  const grid = syntheticGrid({
+    angles: [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2],
+    rings: [
+      { h: 10, v: 5, z: 0 },
+      { h: 30, v: 15, z: 40 },
+      { h: 50, v: 25, z: 80 },
+    ],
+    sliceMap: [0, 0.5],
+  });
+  assert.equal(sampleFreeformGridRing(grid, 0.25).depthMm, 20);
 });
 
 test('sampleFreeformGridRing mirrors a quadrant-reduced sampled outline', () => {

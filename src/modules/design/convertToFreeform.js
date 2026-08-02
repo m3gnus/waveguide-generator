@@ -2,10 +2,13 @@ import { getDefaults } from '../../config/defaults.js';
 import { PARAM_SCHEMA } from '../../config/schema.js';
 import { prepareBackendViewportMesh } from '../geometry/useCases.js';
 import { normalizeAnchorList, normalizeFreeformParams } from '../../config/freeformModel.js';
+import { getViewportStateCacheKey } from '../geometry/viewportCacheKey.js';
+import { buildFreeformDisplayCurve } from './freeformCurve.js';
 
 const DEFAULT_TOLERANCE_MM = 0.15;
 const DEFAULT_MAX_INTERIOR_ANCHORS = 62;
-const SHARED_PARAM_GROUPS = ['GEOMETRY', 'MESH', 'SOURCE', 'SIMULATION', 'ENCLOSURE'];
+const FREEFORM_PARAM_GROUPS = ['FREEFORM', 'MESH', 'SOURCE', 'SIMULATION', 'ENCLOSURE'];
+const DROPPED_PARAM_GROUPS = ['GEOMETRY'];
 
 function finiteNumber(value, label) {
   const numeric = Number(value);
@@ -82,19 +85,44 @@ export function decimateMeridian(points, toleranceMm, maxInteriorAnchors) {
   return [...kept].sort((left, right) => left - right).map((index) => points[index]);
 }
 
-function maximumDeviation(dense, anchors) {
+function maximumCurveDeviation(dense, curve) {
   let maximum = 0;
-  let segment = 0;
   for (const point of dense) {
-    while (segment < anchors.length - 2 && point.z > anchors[segment + 1].z) {
-      segment += 1;
+    let minimum = Infinity;
+    for (let segment = 0; segment < curve.length - 1; segment += 1) {
+      minimum = Math.min(
+        minimum,
+        pointSegmentDistance(
+          point,
+          { z: curve[segment][0], r: curve[segment][1] },
+          { z: curve[segment + 1][0], r: curve[segment + 1][1] }
+        )
+      );
     }
-    maximum = Math.max(
-      maximum,
-      pointSegmentDistance(point, anchors[segment], anchors[segment + 1])
-    );
+    maximum = Math.max(maximum, minimum);
   }
   return maximum;
+}
+
+function displayCurveForPlane(params, plane, denseCount) {
+  const points = [
+    [0, params.throatRadius],
+    ...params[`interior${plane}`].map((point) => {
+      const row = [point.z, point.r];
+      if (point.angleDeg !== null && point.angleDeg !== undefined) row.push(point.angleDeg);
+      if (point.strength !== null && point.strength !== undefined) row.push(point.strength);
+      return row;
+    }),
+    [params.length, params[`mouthRadius${plane}`]],
+  ];
+  return buildFreeformDisplayCurve({
+    points,
+    throatAngleDeg: params.throatAngle,
+    mouthAngleDeg: params[`mouthAngle${plane}`],
+    throatTangentScale: params[`throatTangentScale${plane}`],
+    mouthTangentScale: params[`mouthTangentScale${plane}`],
+    sampleCount: Math.max(192, denseCount * 4),
+  });
 }
 
 function isMonotoneByZ(points) {
@@ -148,32 +176,71 @@ function slopeAngleDeg(points, atMouth = false) {
   return Math.max(-90, Math.min(90, angle));
 }
 
-function reshapeMeridian(grid, rowIndex, scale) {
+function hasValidGridShape(grid) {
   const nPhi = Math.round(finiteNumber(grid.grid_n_phi, 'grid_n_phi'));
   const nLength = Math.round(finiteNumber(grid.grid_n_length, 'grid_n_length'));
-  if (rowIndex < 0 || rowIndex >= nPhi || nLength < 1) {
-    throw new Error('Cannot convert design: viewport grid dimensions are invalid.');
-  }
   const points = grid.inner_points;
   const expectedFlatLength = nPhi * (nLength + 1) * 3;
   const nested = Array.isArray(points?.[0]);
-  if (!Array.isArray(points) || (!nested && points.length !== expectedFlatLength)) {
-    throw new Error('Cannot convert design: viewport grid inner_points has an invalid shape.');
+  return (
+    nPhi > 0 &&
+    nLength >= 1 &&
+    Array.isArray(grid.angle_list) &&
+    grid.angle_list.length === nPhi &&
+    Array.isArray(points) &&
+    (nested
+      ? points.length === nPhi &&
+        points.every(
+          (row) =>
+            Array.isArray(row) &&
+            row.length === nLength + 1 &&
+            row.every((point) => Array.isArray(point) && point.length === 3)
+        )
+      : points.length === expectedFlatLength)
+  );
+}
+
+function isReusableViewportMesh(viewportMesh, sourceState) {
+  if (!viewportMesh || typeof viewportMesh !== 'object' || !viewportMesh.preparedParams)
+    return false;
+  const grid = viewportMesh.grid;
+  if (!grid || typeof grid !== 'object') return false;
+  try {
+    if (!hasValidGridShape(grid)) return false;
+  } catch {
+    return false;
   }
+  if (grid.full_circle !== true || Number(grid.quadrants) !== 1234) return false;
+  return viewportMesh.stateKey === getViewportStateCacheKey(sourceState);
+}
+
+function reshapeMeridian(grid, rowIndex, scale, verticalOffsetMm) {
+  const nPhi = Math.round(finiteNumber(grid.grid_n_phi, 'grid_n_phi'));
+  const nLength = Math.round(finiteNumber(grid.grid_n_length, 'grid_n_length'));
+  if (rowIndex < 0 || rowIndex >= nPhi || nLength < 1 || !hasValidGridShape(grid)) {
+    throw new Error(
+      'Cannot convert design: viewport grid dimensions or inner_points shape are invalid.'
+    );
+  }
+  const points = grid.inner_points;
+  const nested = Array.isArray(points?.[0]);
 
   const row = [];
   for (let j = 0; j <= nLength; j += 1) {
     const point = nested ? points[rowIndex]?.[j] : null;
     const base = (rowIndex * (nLength + 1) + j) * 3;
     const x = finiteNumber(nested ? point?.[0] : points[base], 'grid x') / scale;
-    const y = finiteNumber(nested ? point?.[1] : points[base + 1], 'grid y') / scale;
+    const y =
+      (finiteNumber(nested ? point?.[1] : points[base + 1], 'grid y') - verticalOffsetMm) / scale;
     const z = finiteNumber(nested ? point?.[2] : points[base + 2], 'grid z') / scale;
     row.push({ z, r: Math.hypot(x, y) });
   }
   return row;
 }
 
-function seedCrossSections(sourceParams, mouthRadiusH, mouthRadiusV) {
+function seedCrossSections(sourceParams, denseH, denseV) {
+  const mouthRadiusH = denseH.at(-1).r;
+  const mouthRadiusV = denseV.at(-1).r;
   const target = Math.round(Number(sourceParams.morphTarget) || 0);
   const throat = { t: 0, shape: 'circle' };
   if (target === 1) {
@@ -181,12 +248,17 @@ function seedCrossSections(sourceParams, mouthRadiusH, mouthRadiusV) {
     // (sharp creases are a deferred feature), so a source design with
     // morphCorner 0 must seed a valid minimum radius, not 0.
     const minCorner = Math.max(1, 0.02 * Math.min(mouthRadiusH, mouthRadiusV));
+    const minimumActiveRadius = Math.min(
+      ...denseH.map((point) => point.r),
+      ...denseV.map((point) => point.r)
+    );
     const corner = Math.max(
       minCorner,
       Math.min(
         Number.isFinite(Number(sourceParams.morphCorner)) ? Number(sourceParams.morphCorner) : 0,
         mouthRadiusH,
-        mouthRadiusV
+        mouthRadiusV,
+        minimumActiveRadius
       )
     );
     return [throat, { t: 1, shape: 'rounded_rectangle', cornerRadiusMm: corner }];
@@ -196,12 +268,35 @@ function seedCrossSections(sourceParams, mouthRadiusH, mouthRadiusV) {
 
 function preserveSharedParams(sourceParams) {
   const preserved = {};
-  for (const group of SHARED_PARAM_GROUPS) {
+  for (const group of FREEFORM_PARAM_GROUPS) {
     for (const key of Object.keys(PARAM_SCHEMA[group] || {})) {
       if (Object.hasOwn(sourceParams, key)) preserved[key] = sourceParams[key];
     }
   }
   return preserved;
+}
+
+function equivalentParamValues(left, right) {
+  if (Object.is(left, right)) return true;
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  return Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber === rightNumber;
+}
+
+function droppedSourceParams(sourceParams) {
+  const defaults = getDefaults('FREEFORM');
+  const dropped = [];
+  for (const group of DROPPED_PARAM_GROUPS) {
+    for (const key of Object.keys(PARAM_SCHEMA[group] || {})) {
+      if (
+        Object.hasOwn(sourceParams, key) &&
+        !equivalentParamValues(sourceParams[key], defaults[key])
+      ) {
+        dropped.push(key);
+      }
+    }
+  }
+  return dropped;
 }
 
 /**
@@ -213,6 +308,7 @@ export async function convertToFreeform(
   {
     viewportMesh = null,
     prepareViewportMesh = prepareBackendViewportMesh,
+    validateCandidate = true,
     toleranceMm = DEFAULT_TOLERANCE_MM,
     maxInteriorAnchors = DEFAULT_MAX_INTERIOR_ANCHORS,
   } = {}
@@ -228,10 +324,9 @@ export async function convertToFreeform(
     ...state,
     params: { ...state.params, quadrants: 1234 },
   };
-  const sampled =
-    viewportMesh?.grid && viewportMesh?.preparedParams
-      ? viewportMesh
-      : await prepareViewportMesh(sourceState, { variant: 'smooth' });
+  const sampled = isReusableViewportMesh(viewportMesh, sourceState)
+    ? viewportMesh
+    : await prepareViewportMesh(sourceState, { variant: 'smooth' });
   const grid = sampled?.grid;
   const angles = grid?.angle_list;
   if (!grid || !Array.isArray(angles)) {
@@ -245,8 +340,19 @@ export async function convertToFreeform(
 
   const scaleValue = Number(sampled.preparedParams?.scale);
   const scale = Number.isFinite(scaleValue) && scaleValue > 0 ? scaleValue : 1;
-  const horizontalRollback = truncateRollback(reshapeMeridian(grid, horizontalIndex, scale));
-  const verticalRollback = truncateRollback(reshapeMeridian(grid, verticalIndex, scale));
+  const gridOffset = Number(grid.vertical_offset_mm);
+  const preparedOffset = Number(sampled.preparedParams?.verticalOffset);
+  const verticalOffsetMm = Number.isFinite(gridOffset)
+    ? gridOffset
+    : Number.isFinite(preparedOffset)
+      ? preparedOffset
+      : 0;
+  const horizontalRollback = truncateRollback(
+    reshapeMeridian(grid, horizontalIndex, scale, verticalOffsetMm)
+  );
+  const verticalRollback = truncateRollback(
+    reshapeMeridian(grid, verticalIndex, scale, verticalOffsetMm)
+  );
   const length = Math.min(horizontalRollback.points.at(-1).z, verticalRollback.points.at(-1).z);
   if (!Number.isFinite(length) || length <= 0) {
     throw new Error('Cannot convert design: sampled meridians have no positive shared length.');
@@ -274,18 +380,29 @@ export async function convertToFreeform(
     mouthRadiusV,
     mouthAngleV: slopeAngleDeg(denseV, true),
     interiorV: normalizeAnchorList(anchorsV.slice(1, -1), { length }),
-    crossSections: seedCrossSections(state.params, mouthRadiusH, mouthRadiusV),
+    crossSections: seedCrossSections(state.params, denseH, denseV),
     morphTarget: 0,
   });
+
+  if (validateCandidate) {
+    const validate =
+      typeof validateCandidate === 'function' ? validateCandidate : prepareViewportMesh;
+    await validate({ type: 'FREEFORM', params }, { variant: 'smooth' });
+  }
+
+  const displayCurveH = displayCurveForPlane(params, 'H', denseH.length);
+  const displayCurveV = displayCurveForPlane(params, 'V', denseV.length);
 
   return {
     params,
     report: {
-      maxDeviationMmH: maximumDeviation(denseH, anchorsH),
-      maxDeviationMmV: maximumDeviation(denseV, anchorsV),
+      maxDeviationMmH: maximumCurveDeviation(denseH, displayCurveH),
+      maxDeviationMmV: maximumCurveDeviation(denseV, displayCurveV),
       truncatedMm: Math.max(horizontalRollback.truncatedMm, verticalRollback.truncatedMm),
       anchorCountH: params.interiorH.length,
       anchorCountV: params.interiorV.length,
+      droppedParams: droppedSourceParams(state.params),
+      offAxisMayDiffer: Math.round(Number(state.params.morphTarget) || 0) === 1,
     },
   };
 }
@@ -295,5 +412,10 @@ export function formatConversionReport(report = {}) {
   const v = Number(report.maxDeviationMmV || 0).toFixed(2);
   const rollback = Number(report.truncatedMm || 0);
   const suffix = rollback > 0 ? `; rollback lip ${rollback.toFixed(1)} mm dropped` : '';
-  return `max deviation H ${h} mm, V ${v} mm${suffix}`;
+  const dropped = Array.isArray(report.droppedParams) ? report.droppedParams : [];
+  const droppedSuffix = dropped.length > 0 ? `; dropped ${dropped.join(', ')}` : '';
+  const offAxisSuffix = report.offAxisMayDiffer
+    ? '; H/V meridians only; off-axis cross-sections may differ'
+    : '';
+  return `max deviation H ${h} mm, V ${v} mm${suffix}${droppedSuffix}${offAxisSuffix}`;
 }

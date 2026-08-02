@@ -215,10 +215,10 @@ function startBackendViewportBuild(app, variant) {
     .then((viewportMesh) => {
       if (fetchRecord.superseded) return;
       const built = { ...toRenderMesh(viewportMesh, variant), source: 'backend' };
-      clearBackendViewportFailure(app);
-      clearViewportStaleState(app);
       invalidateMeshCacheIfStale(app);
       if (app._meshCache.stateKey !== stateKey) return;
+      clearBackendViewportFailure(app);
+      clearViewportStaleState(app);
       app._meshCache[variant] = built;
       if (app.currentState?.type === 'FREEFORM') {
         app.paramPanel?.setProfileError?.(null);
