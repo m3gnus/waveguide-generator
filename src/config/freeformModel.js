@@ -1,3 +1,5 @@
+import { buildFreeformDisplayCurve } from '../geometry/freeformCurve.js';
+
 const MAX_INTERIOR_ANCHORS = 62;
 const MAX_CROSS_SECTION_STATIONS = 32;
 const VALID_STATION_SHAPES = new Set(['ellipse', 'superellipse', 'rounded_rectangle']);
@@ -67,7 +69,59 @@ export function normalizeAnchorList(list, { length = 120 } = {}) {
   return result;
 }
 
-function normalizeStation(station) {
+function interpolateCurveRadius(curve, z) {
+  if (!Array.isArray(curve) || curve.length === 0 || !Number.isFinite(z)) return null;
+  for (let index = 0; index < curve.length - 1; index += 1) {
+    const [z0, r0] = curve[index] || [];
+    const [z1, r1] = curve[index + 1] || [];
+    if (![z0, r0, z1, r1].every(Number.isFinite)) continue;
+    if (z < Math.min(z0, z1) || z > Math.max(z0, z1)) continue;
+    if (Math.abs(z1 - z0) <= Number.EPSILON) return r0;
+    return r0 + ((z - z0) / (z1 - z0)) * (r1 - r0);
+  }
+  return null;
+}
+
+function cornerMigrationDimensions(params, t) {
+  const length = positiveNumber(params?.length, 120);
+  const throatRadius = positiveNumber(params?.throatRadius, 12.7);
+  const radiusAt = (plane) => {
+    try {
+      const interior = normalizeAnchorList(params?.[`interior${plane}`], { length });
+      const points = [
+        [0, throatRadius],
+        ...interior.map((anchor) => {
+          const row = [anchor.z, anchor.r];
+          if (anchor.angleDeg !== null) row.push(anchor.angleDeg);
+          if (anchor.strength !== null) row.push(anchor.strength);
+          return row;
+        }),
+        [length, positiveNumber(params?.[`mouthRadius${plane}`], throatRadius)],
+      ];
+      return interpolateCurveRadius(
+        buildFreeformDisplayCurve({
+          points,
+          throatAngleDeg: finiteNumber(params?.throatAngle, 15.5),
+          mouthAngleDeg: finiteNumber(params?.[`mouthAngle${plane}`], 60),
+          throatTangentScale: finiteNumber(params?.[`throatTangentScale${plane}`], 1),
+          mouthTangentScale: finiteNumber(params?.[`mouthTangentScale${plane}`], 1),
+          sampleCount: 256,
+        }),
+        t * length
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  const fallback = (plane) => {
+    const mouthRadius = positiveNumber(params?.[`mouthRadius${plane}`], throatRadius);
+    return throatRadius + t * (mouthRadius - throatRadius);
+  };
+  return [radiusAt('H') ?? fallback('H'), radiusAt('V') ?? fallback('V')];
+}
+
+function normalizeStation(station, params) {
   if (!station || typeof station !== 'object' || Array.isArray(station)) return null;
   const t = Number(station.t);
   if (!Number.isFinite(t)) return null;
@@ -76,12 +130,16 @@ function normalizeStation(station) {
   const cornerRatio = optionalFiniteNumber(station.cornerRatio ?? station.corner_ratio);
   const cornerRadiusMm = optionalFiniteNumber(station.cornerRadiusMm ?? station.corner_radius_mm);
   if (exponent !== null) normalized.exponent = exponent;
-  if (cornerRatio !== null) normalized.cornerRatio = cornerRatio;
-  if (cornerRadiusMm !== null) normalized.cornerRadiusMm = cornerRadiusMm;
+  if (cornerRadiusMm !== null) {
+    normalized.cornerRadiusMm = cornerRadiusMm;
+  } else if (cornerRatio !== null) {
+    const [radiusH, radiusV] = cornerMigrationDimensions(params, normalized.t);
+    normalized.cornerRadiusMm = Math.round(cornerRatio * Math.min(radiusH, radiusV) * 10) / 10;
+  }
   return normalized;
 }
 
-export function normalizeStations(value) {
+export function normalizeStations(value, { params = {} } = {}) {
   if (!Array.isArray(value) || value.length < 2) {
     return [
       { t: 0, shape: 'circle' },
@@ -90,7 +148,7 @@ export function normalizeStations(value) {
   }
 
   const sorted = value
-    .map(normalizeStation)
+    .map((station) => normalizeStation(station, params))
     .filter(Boolean)
     .sort((a, b) => a.t - b.t);
   if (sorted.length < 2) {
@@ -166,7 +224,10 @@ export function normalizeFreeformParams(params = {}) {
     normalized.interiorV = normalizeAnchorList(normalized.interiorV, { length });
   }
   if (Object.hasOwn(normalized, 'crossSections')) {
-    normalized.crossSections = normalizeStations(normalized.crossSections);
+    normalized.crossSections = normalizeStations(normalized.crossSections, { params: normalized });
+  }
+  if (String(normalized.inflectionPolicy).trim().toLowerCase() === 'allow') {
+    normalized.inflectionPolicy = 'warn';
   }
 
   for (const key of LEGACY_FREEFORM_KEYS) delete normalized[key];
@@ -184,7 +245,6 @@ function compactAnchor(anchor) {
 function wireStation(station) {
   const result = { t: station.t, shape: station.shape };
   if (station.exponent !== undefined) result.exponent = station.exponent;
-  if (station.cornerRatio !== undefined) result.corner_ratio = station.cornerRatio;
   if (station.cornerRadiusMm !== undefined) result.corner_radius_mm = station.cornerRadiusMm;
   return result;
 }

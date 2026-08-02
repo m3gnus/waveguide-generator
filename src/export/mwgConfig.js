@@ -72,7 +72,7 @@ export function generateMWGConfigContent(params) {
     //   Freeform.H.Points rows: z r [angleDeg [strength]]
     //   Freeform.CrossSections rows: t shape [exponent|cornerRadiusMm]
     // The optional station value is an exponent for superellipse and an absolute
-    // corner radius for rounded_rectangle. Legacy ratios use the tagged ratio:<n> form.
+    // corner radius for rounded_rectangle.
     content += '; FREEFORM point rows: z r [angleDeg [strength]]\n';
     content += '; FREEFORM station rows: t shape [exponent|cornerRadiusMm]\n';
     content += `Freeform.Length = ${horizontal.points.at(-1)[0]}\n`;
@@ -89,8 +89,6 @@ export function generateMWGConfigContent(params) {
         row.push(station.exponent);
       } else if (station.shape === 'rounded_rectangle' && station.corner_radius_mm !== undefined) {
         row.push(station.corner_radius_mm);
-      } else if (station.shape === 'rounded_rectangle' && station.corner_ratio !== undefined) {
-        row.push(`ratio:${station.corner_ratio}`);
       }
       content += `${row.join(' ')}\n`;
     }

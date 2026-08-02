@@ -334,7 +334,6 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
   assert.deepEqual(PARAM_SCHEMA.FREEFORM.inflectionPolicy.options, [
     { value: 'warn', label: 'Warn on S-curves' },
     { value: 'reject', label: 'Enforce one-way' },
-    { value: 'allow', label: 'Free' },
   ]);
   const source = getParameterSections('simulation', 'FREEFORM').find(
     (section) => section.id === 'source-definition'
@@ -611,12 +610,12 @@ test('FREEFORM point fields commit CAD angle and strength controls', () => {
   });
 });
 
-test('FREEFORM station editor uses millimetre corner radius and identifies legacy ratios', () => {
+test('FREEFORM station editor uses millimetre corner radius', () => {
   withFreeformPanel(
     {
       crossSections: [
         { t: 0, shape: 'circle' },
-        { t: 1, shape: 'rounded_rectangle', cornerRatio: 0.12 },
+        { t: 1, shape: 'rounded_rectangle', cornerRadiusMm: 10 },
       ],
     },
     ({ paramContainer }) => {
@@ -627,11 +626,7 @@ test('FREEFORM station editor uses millimetre corner radius and identifies legac
       assert.ok(cornerInput);
       assert.equal(cornerInput.min, '1');
       assert.equal(cornerInput.step, '1');
-      assert.equal(cornerInput.value, '');
-      assert.equal(
-        collectNodes(paramContainer, (node) => node.textContent === '(ratio 0.12)').length,
-        1
-      );
+      assert.equal(cornerInput.value, 10);
 
       cornerInput.value = '11';
       cornerInput.onchange({ target: cornerInput });

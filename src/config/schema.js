@@ -475,11 +475,10 @@ export const PARAM_SCHEMA = {
       options: [
         { value: 'warn', label: 'Warn on S-curves' },
         { value: 'reject', label: 'Enforce one-way' },
-        { value: 'allow', label: 'Free' },
       ],
       default: 'warn',
       tooltip:
-        "An S-curve is a section where the wall's outward angle turns backward before opening again. Warn highlights it; Enforce one-way rejects it; Free allows it.",
+        "An S-curve is a section where the wall's outward angle turns backward before opening again. Warn highlights it; Enforce one-way rejects it.",
     },
   },
   GEOMETRY: {

@@ -74,6 +74,35 @@ test('persisted FREEFORM interior rows migrate to the object anchor model', () =
   assert.deepEqual(normalized.params.interiorV, [{ z: 70, r: 75, angleDeg: -8, strength: null }]);
 });
 
+test('persisted FREEFORM aliases migrate to warn and a local millimetre corner radius', () => {
+  const slopeAngle = (Math.atan(0.4) * 180) / Math.PI;
+  const normalized = normalizePersistedState({
+    type: 'FREEFORM',
+    params: {
+      length: 100,
+      throatRadius: 10,
+      throatAngle: slopeAngle,
+      mouthRadiusH: 50,
+      mouthRadiusV: 50,
+      mouthAngleH: slopeAngle,
+      mouthAngleV: slopeAngle,
+      crossSections: [
+        { t: 0, shape: 'circle' },
+        { t: 0.5, shape: 'rounded_rectangle', cornerRatio: 0.2 },
+        { t: 1, shape: 'ellipse' },
+      ],
+      inflectionPolicy: 'allow',
+    },
+  });
+
+  assert.equal(normalized.params.inflectionPolicy, 'warn');
+  assert.deepEqual(normalized.params.crossSections[1], {
+    t: 0.5,
+    shape: 'rounded_rectangle',
+    cornerRadiusMm: 6,
+  });
+});
+
 test('FREEFORM length updates clamp, sort, and collapse interior anchors in state', () => {
   const state = new AppState();
   state.current = {
