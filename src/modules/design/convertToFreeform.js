@@ -1,6 +1,7 @@
 import { getDefaults } from '../../config/defaults.js';
 import { PARAM_SCHEMA } from '../../config/schema.js';
 import { prepareBackendViewportMesh } from '../geometry/useCases.js';
+import { normalizeAnchorList, normalizeFreeformParams } from '../../config/freeformModel.js';
 
 const DEFAULT_TOLERANCE_MM = 0.15;
 const DEFAULT_MAX_INTERIOR_ANCHORS = 62;
@@ -203,15 +204,6 @@ function preserveSharedParams(sourceParams) {
   return preserved;
 }
 
-function formatInterior(points) {
-  return points.slice(1, -1).map(({ z, r }) => ({
-    z,
-    r,
-    angleDeg: null,
-    strength: null,
-  }));
-}
-
 /**
  * Convert the current parametric family into an editable FREEFORM design by
  * sampling the canonical full-domain backend viewport grid.
@@ -269,7 +261,7 @@ export async function convertToFreeform(
   const mouthRadiusH = denseH.at(-1).r;
   const mouthRadiusV = denseV.at(-1).r;
 
-  const params = {
+  const params = normalizeFreeformParams({
     ...getDefaults('FREEFORM'),
     ...preserveSharedParams(state.params),
     scale: Number.isFinite(Number(state.params.scale)) ? Number(state.params.scale) : scale,
@@ -278,13 +270,13 @@ export async function convertToFreeform(
     throatAngle: slopeAngleDeg(denseH),
     mouthRadiusH,
     mouthAngleH: slopeAngleDeg(denseH, true),
-    interiorH: formatInterior(anchorsH),
+    interiorH: normalizeAnchorList(anchorsH.slice(1, -1), { length }),
     mouthRadiusV,
     mouthAngleV: slopeAngleDeg(denseV, true),
-    interiorV: formatInterior(anchorsV),
+    interiorV: normalizeAnchorList(anchorsV.slice(1, -1), { length }),
     crossSections: seedCrossSections(state.params, mouthRadiusH, mouthRadiusV),
     morphTarget: 0,
-  };
+  });
 
   return {
     params,

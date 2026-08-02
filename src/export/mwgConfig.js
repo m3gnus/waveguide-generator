@@ -1,3 +1,5 @@
+import { toWireFreeform } from '../config/freeformModel.js';
+
 /**
  * Generate parameter config file content from parameters.
  * @param {Object} params - The parameter object.
@@ -50,7 +52,63 @@ export function generateMWGConfigContent(params) {
     }
   }
 
-  if (params.type === 'R-OSSE') {
+  if (params.type === 'FREEFORM') {
+    const wire = toWireFreeform(params);
+    const horizontal = wire.profile_h;
+    const vertical = wire.profile_v;
+    const writeProfile = (name, profile) => {
+      content += `Freeform.${name} = {\n`;
+      content += `MouthRadius = ${profile.points.at(-1)[1]}\n`;
+      content += `MouthAngle = ${profile.mouth_angle_deg}\n`;
+      content += `ThroatTangentScale = ${profile.throat_tangent_scale}\n`;
+      content += `MouthTangentScale = ${profile.mouth_tangent_scale}\n`;
+      content += '}\n';
+      content += `Freeform.${name}.Points = {\n`;
+      for (const row of profile.points.slice(1, -1)) content += `${row.join(' ')}\n`;
+      content += '}\n';
+    };
+
+    // FREEFORM .mwg syntax (all numeric values are millimetres/degrees as named):
+    //   Freeform.H.Points rows: z r [angleDeg [strength]]
+    //   Freeform.CrossSections rows: t shape [exponent|cornerRadiusMm]
+    // The optional station value is an exponent for superellipse and an absolute
+    // corner radius for rounded_rectangle. Legacy ratios use the tagged ratio:<n> form.
+    content += '; FREEFORM point rows: z r [angleDeg [strength]]\n';
+    content += '; FREEFORM station rows: t shape [exponent|cornerRadiusMm]\n';
+    content += `Freeform.Length = ${horizontal.points.at(-1)[0]}\n`;
+    content += `Freeform.ThroatRadius = ${horizontal.points[0][1]}\n`;
+    content += `Freeform.ThroatAngle = ${horizontal.throat_angle_deg}\n`;
+    content += `Freeform.OvershootPolicy = ${wire.overshoot_policy}\n`;
+    content += `Freeform.InflectionPolicy = ${wire.inflection_policy}\n`;
+    writeProfile('H', horizontal);
+    writeProfile('V', vertical);
+    content += 'Freeform.CrossSections = {\n';
+    for (const station of wire.cross_sections) {
+      const row = [station.t, station.shape];
+      if (station.shape === 'superellipse' && station.exponent !== undefined) {
+        row.push(station.exponent);
+      } else if (station.shape === 'rounded_rectangle' && station.corner_radius_mm !== undefined) {
+        row.push(station.corner_radius_mm);
+      } else if (station.shape === 'rounded_rectangle' && station.corner_ratio !== undefined) {
+        row.push(`ratio:${station.corner_ratio}`);
+      }
+      content += `${row.join(' ')}\n`;
+    }
+    content += '}\n';
+
+    if (params.encDepth > 0) {
+      content += 'Mesh.Enclosure = {\n';
+      content += `Depth = ${params.encDepth}\n`;
+      content += `EdgeRadius = ${params.encEdge}\n`;
+      content += `EdgeType = ${params.encEdgeType}\n`;
+      content += `Spacing = ${params.encSpaceL || 25},${params.encSpaceT || 25},${params.encSpaceR || 25},${params.encSpaceB || 25}\n`;
+      if (isNonZero(params.encFrontResolution))
+        content += `FrontResolution = ${formatValue(params.encFrontResolution)}\n`;
+      if (isNonZero(params.encBackResolution))
+        content += `BackResolution = ${formatValue(params.encBackResolution)}\n`;
+      content += '}\n';
+    }
+  } else if (params.type === 'R-OSSE') {
     content += 'R-OSSE = {\n';
     content += `R = ${params.R}\n`;
     content += `a = ${params.a}\n`;
@@ -154,7 +212,10 @@ export function generateMWGConfigContent(params) {
   }
 
   content += `Mesh.AngularSegments = ${params.angularSegments}\n`;
-  if (params.morphTarget === 1 && params.cornerSegments !== undefined) {
+  if (
+    params.cornerSegments !== undefined &&
+    (params.type === 'FREEFORM' || params.morphTarget === 1)
+  ) {
     content += `Mesh.CornerSegments = ${Math.max(0, Math.round(Number(params.cornerSegments)))}\n`;
   }
   if (isNonZero(params.throatSegments))
@@ -164,6 +225,9 @@ export function generateMWGConfigContent(params) {
     content += `Mesh.ThroatResolution = ${formatValue(params.throatResolution)}\n`;
   if (isNonZero(params.mouthResolution))
     content += `Mesh.MouthResolution = ${formatValue(params.mouthResolution)}\n`;
+  if (params.throatSliceDensity !== undefined && params.throatSliceDensity !== null)
+    content += `Mesh.ThroatSliceDensity = ${formatValue(params.throatSliceDensity)}\n`;
+  if (params.samplingMode) content += `Mesh.SamplingMode = ${formatValue(params.samplingMode)}\n`;
   if (isNonZero(params.verticalOffset))
     content += `Mesh.VerticalOffset = ${formatValue(params.verticalOffset)}\n`;
   if (params.quadrants !== undefined)
@@ -173,6 +237,10 @@ export function generateMWGConfigContent(params) {
     content += `Mesh.RearResolution = ${formatValue(params.rearResolution)}\n`;
   if (isNonZero(params.apertureResolutionScale))
     content += `Mesh.ApertureResolutionScale = ${formatValue(params.apertureResolutionScale)}\n`;
+  if (params.maxTriangles !== undefined)
+    content += `Mesh.MaxTriangles = ${formatValue(params.maxTriangles)}\n`;
+  if (params.allowLargeMesh !== undefined)
+    content += `Mesh.AllowLargeMesh = ${formatValue(params.allowLargeMesh)}\n`;
 
   if (params.outputSTL !== undefined) {
     content += `Output.STL = ${formatValue(params.outputSTL)}\n`;
@@ -194,10 +262,14 @@ export function generateMWGConfigContent(params) {
   if (params.freqStart !== undefined) content += `Simulation.F1 = ${params.freqStart}\n`;
   if (params.freqEnd !== undefined) content += `Simulation.F2 = ${params.freqEnd}\n`;
   if (params.numFreqs !== undefined) content += `Simulation.NumFrequencies = ${params.numFreqs}\n`;
+  if (params.simType !== undefined)
+    content += `Simulation.SimType = ${formatValue(params.simType)}\n`;
+  if (params.solverMode !== undefined)
+    content += `Simulation.SolverMode = ${formatValue(params.solverMode)}\n`;
 
   const blocks = params._blocks || {};
   for (const [blockName, block] of Object.entries(blocks)) {
-    if (blockName === 'Mesh.Enclosure') continue;
+    if (blockName === 'Mesh.Enclosure' || blockName.startsWith('Freeform.')) continue;
     if (!block) continue;
     content += `${blockName} = {\n`;
     if (block._lines && block._lines.length > 0) {

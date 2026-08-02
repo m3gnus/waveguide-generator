@@ -462,7 +462,7 @@ function runProfileCsvExportTask(input) {
 
 function runConfigExportTask(input) {
   assertExportImportEnvelope(input, EXPORT_KINDS.CONFIG);
-  if (isServerOnlyViewportFormula(input?.params)) {
+  if (isServerOnlyViewportFormula(input?.params) && input?.params?.type !== 'FREEFORM') {
     const type = input?.params?.type;
     throw new Error(
       `${type} config export is not supported: the .mwg/ATH parameter config format has no ` +

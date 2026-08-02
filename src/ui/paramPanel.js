@@ -8,6 +8,7 @@ import { trapFocus } from './focusTrap.js';
 import { mountFreeformProfileEditor } from './freeformProfileEditor.js';
 import { convertToFreeform, formatConversionReport } from '../modules/design/convertToFreeform.js';
 import { showFreeformConversionDialog } from './feedback.js';
+import { normalizeAnchorList, normalizeStations } from '../config/freeformModel.js';
 import {
   validateOutputName,
   validateCounter,
@@ -156,39 +157,6 @@ function validateNumericValue(input, def) {
   return { valid: true };
 }
 
-function normalizeInteriorPoints(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((point) => {
-      const source = Array.isArray(point)
-        ? { z: point[0], r: point[1], angleDeg: point[2], strength: point[3] }
-        : point;
-      if (!source || typeof source !== 'object') return null;
-      const z = Number(source.z);
-      const r = Number(source.r);
-      if (!Number.isFinite(z) || !Number.isFinite(r)) return null;
-      const angleValue = source.angleDeg;
-      const angleDeg =
-        angleValue === null || angleValue === undefined || angleValue === ''
-          ? null
-          : Number(angleValue);
-      const strengthValue = source.strength;
-      const strength =
-        strengthValue === null || strengthValue === undefined || strengthValue === ''
-          ? null
-          : Number(strengthValue);
-      return {
-        z,
-        r,
-        angleDeg: Number.isFinite(angleDeg) ? angleDeg : null,
-        strength: Number.isFinite(angleDeg) && Number.isFinite(strength) ? strength : null,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.z - b.z)
-    .slice(0, 62);
-}
-
 function clampInteriorZ(value, length, fallback) {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(length - 1, Math.max(1, value));
@@ -198,29 +166,6 @@ function flashClampedPoint(input) {
   input.classList.add('freeform-point-clamped');
   const timer = setTimeout(() => input.classList.remove('freeform-point-clamped'), 450);
   timer?.unref?.();
-}
-
-function normalizeStations(value) {
-  if (!Array.isArray(value) || value.length < 2) {
-    return [
-      { t: 0, shape: 'circle' },
-      { t: 1, shape: 'ellipse' },
-    ];
-  }
-  let stations = value
-    .map((station) => ({ ...station, t: Number(station?.t) }))
-    .sort((a, b) => a.t - b.t);
-  if (stations.length > 32) {
-    stations = [...stations.slice(0, 31), stations[stations.length - 1]];
-  }
-  stations[0] = { t: 0, shape: 'circle' };
-  for (let index = 1; index < stations.length; index += 1) {
-    if (!['ellipse', 'superellipse', 'rounded_rectangle'].includes(stations[index].shape)) {
-      stations[index] = { t: stations[index].t, shape: 'ellipse' };
-    }
-  }
-  stations[stations.length - 1] = { ...stations[stations.length - 1], t: 1 };
-  return stations;
 }
 
 export class ParamPanel {
@@ -684,10 +629,10 @@ export class ParamPanel {
   createPointsControl(key, currentValue, controlId) {
     const wrapper = document.createElement('div');
     wrapper.className = 'freeform-points-editor';
-    const points = normalizeInteriorPoints(currentValue);
     const stateParams = GlobalState.get().params || {};
     const length = Number(stateParams.length);
     const safeLength = Number.isFinite(length) && length > 0 ? length : 120;
+    const points = normalizeAnchorList(currentValue, { length: safeLength });
     const throatRadius = Number(stateParams.throatRadius);
     const mouthRadius = Number(
       key === 'interiorH' ? stateParams.mouthRadiusH : stateParams.mouthRadiusV
@@ -695,7 +640,7 @@ export class ParamPanel {
     const startRadius = Number.isFinite(throatRadius) ? throatRadius : 12.7;
     const endRadius = Number.isFinite(mouthRadius) ? mouthRadius : 140;
     const commitPoints = (nextPoints) => {
-      this.updateParam(key, normalizeInteriorPoints(nextPoints));
+      this.updateParam(key, normalizeAnchorList(nextPoints, { length: safeLength }));
     };
 
     const header = document.createElement('div');
@@ -899,8 +844,7 @@ export class ParamPanel {
     wrapper.className = 'freeform-stations-editor';
     const stations = normalizeStations(currentValue);
     const commitStations = (nextStations) => {
-      const sorted = normalizeStations(nextStations).slice(0, 32);
-      this.updateParam(key, sorted);
+      this.updateParam(key, normalizeStations(nextStations));
     };
 
     stations.forEach((station, index) => {
