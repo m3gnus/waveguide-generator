@@ -25,7 +25,12 @@ function makePreparedParams(overrides = {}) {
 }
 
 function splitCsvSections(content) {
-  return content.trim().split("\r\n\r\n").map((section) => section.split("\r\n"));
+  return content
+    .trim()
+    .split("\r\n\r\n")
+    .map((section) =>
+      section.split("\r\n").filter((line) => !line.startsWith("#")),
+    );
 }
 
 test("ExportModule HornLab mesh task requests backend mesh build and returns canonical payload", async () => {
