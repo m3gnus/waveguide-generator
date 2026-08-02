@@ -20,7 +20,7 @@ SUPPORTED_GMSH_MAX_EXCLUSIVE = (5, 0, 0)
 SUPPORTED_DEPENDENCY_MATRIX: Dict[str, Dict[str, str]] = {
     "python": {"range": ">=3.10,<3.15"},
     "hornlab_waveguide_mesher": {
-        "range": "pinned git commit 5c342dc",
+        "range": "pinned git commit e4933f3",
         "required_for": "/api/mesh/build",
     },
     "hornlab_metal_bem": {

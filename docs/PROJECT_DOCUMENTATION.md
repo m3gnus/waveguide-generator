@@ -372,7 +372,7 @@ Runtime-gated matrix in `server/solver/deps.py`:
 | Component           | Supported range | Required for      |
 | ------------------- | --------------- | ----------------- |
 | Python              | `>=3.10,<3.15`  | backend runtime   |
-| HornLab mesher      | `5c342dc6f9c1683d4c2ca4f034d2cddd66497192` | `/api/mesh/build` |
+| HornLab mesher      | `e4933f38e44306337811600fb56f07d076e513bd` | `/api/mesh/build` |
 | HornLab Metal BEM   | `c89086ea19c1237a556db23c71be10955a20676b` | `/api/solve` (Apple Silicon macOS) |
 | HornLab Bempp BEM   | `c6f40771f9d7c49ef0a6e2ae02744cacf5c53315` | `/api/solve` (cross-platform fallback) |
 | HornLab plots       | `ea123b05a4670b9bfe10aacf4dfb2dd440943bfc` | `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview` (in-repo fallback if absent) |

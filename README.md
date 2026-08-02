@@ -76,7 +76,7 @@ backend.
 Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `5c342dc6f9c1683d4c2ca4f034d2cddd66497192` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-waveguide-mesher: pinned git commit `e4933f38e44306337811600fb56f07d076e513bd` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
 - hornlab-metal-bem: pinned git commit `c89086ea19c1237a556db23c71be10955a20676b` (fast Metal solve backend; Apple Silicon macOS)
 - hornlab-bempp-bem: pinned git commit `c6f40771f9d7c49ef0a6e2ae02744cacf5c53315` (Bempp cross-platform solve backend; installed when Metal is unavailable)
 - hornlab-plots: pinned git commit `ea123b05a4670b9bfe10aacf4dfb2dd440943bfc` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
