@@ -82,7 +82,7 @@ if errorlevel 1 (
 :: keeps $LASTEXITCODE from the called script. PowerShell ships with Windows,
 :: so this adds no dependency.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "& '%WG_TMP_INSTALLER%' --root '%WG_ROOT%' %* 2>&1 | Tee-Object -FilePath '%WG_LOG%' -Append; exit $LASTEXITCODE"
+  "& $env:WG_TMP_INSTALLER --root $env:WG_ROOT %* 2>&1 | Tee-Object -FilePath $env:WG_LOG -Append; exit $LASTEXITCODE"
 set "RUN_RESULT=%ERRORLEVEL%"
 del "%WG_TMP_INSTALLER%" >nul 2>&1
 exit /b %RUN_RESULT%

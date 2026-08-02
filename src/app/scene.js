@@ -503,6 +503,7 @@ function clearViewportMesh(app) {
   }
   removeOverlays(app);
   clearViewportStaleState(app);
+  app.needsRender = true;
 }
 
 /** Clear geometry that must not survive a formula switch or full design replacement. */

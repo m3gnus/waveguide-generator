@@ -641,10 +641,15 @@ against 30.63 — moves our own answer by, main-lobe rms:
 | 4 - 11 kHz | **0.065 dB** |
 | 11 - 20 kHz | **2.198 dB** |
 
-Per frequency the transition is sharp: 0.217 dB at 8852 Hz, 0.416 at 10140,
-0.678 at 11615, 1.086 at 13305, 15.271 at 20000. So our solution is
-h-converged to `0.065 dB` through 11 kHz and not converged above it,
-independently of ABEC.
+Per frequency the transition is sharp (these are maximum absolute deviations,
+not the main-lobe RMS of the table above): 0.217 dB at 8852 Hz, 0.416 at
+10140, 0.678 at 11615, 1.086 at 13305, 15.271 at 20000. So our solution is
+h-converged to `0.065 dB` through 11 kHz and not converged above it. One
+caveat on provenance: the sample set for these figures is still selected by
+the ABEC main-lobe gate (reference > −20 dB), so the *magnitudes* depend on
+that gating choice — gating by our own coarse or fine solution instead puts
+the 11–20 kHz movement at roughly 0.5 dB rather than 2.2 dB. The *location*
+of the convergence boundary (≈11 kHz) is the same under either gate.
 
 Two things follow. The cross-code residual below 11 kHz (0.08 - 0.23 dB) is
 comfortably *larger* than our own discretisation error (0.014 - 0.065 dB), which

@@ -111,6 +111,18 @@ def _metal_status() -> dict[str, Any]:
     }
 
 
+def _bempp_runtime_ready(
+    engine_importable: bool, acceleration: dict[str, Any] | None
+) -> bool:
+    """Return whether Bempp has an assembly path a solve can actually use."""
+    if not engine_importable or not acceleration:
+        return False
+    return any(
+        bool((acceleration.get(name) or {}).get("available"))
+        for name in ("openclCpu", "openclGpu", "numba")
+    )
+
+
 def collect_status() -> dict[str, Any]:
     """Report what can actually assemble and solve on this host."""
     metal = _metal_status()
@@ -133,7 +145,11 @@ def collect_status() -> dict[str, Any]:
         "numba": numba["importable"],
         "opencl": pyopencl["importable"],
     }
-    bempp_usable = engine["importable"] and any(backends.values())
+    acceleration: dict[str, Any] | None = None
+    if acceleration_summary is not None:
+        acceleration = acceleration_summary()
+
+    bempp_usable = _bempp_runtime_ready(engine["importable"], acceleration)
     # Either backend is a solve. A host with Metal ready and Bempp absent is the
     # normal, fully working Apple Silicon install, not a broken one.
     usable = bool(metal["ready"]) or bempp_usable
@@ -153,16 +169,26 @@ def collect_status() -> dict[str, Any]:
                 "assembly backend. Reinstall backend requirements:\n"
                 f"    {_VENV_PYTHON} -m pip install -r server/requirements-bempp.txt"
             )
+        if engine["importable"] and not bempp_usable:
+            runtime_reasons = [
+                str(entry.get("reason"))
+                for name in ("openclCpu", "openclGpu", "numba")
+                if (entry := (acceleration or {}).get(name))
+                and not entry.get("available")
+                and entry.get("reason")
+            ]
+            detail = f" Details: {'; '.join(runtime_reasons)}" if runtime_reasons else ""
+            guidance.append(
+                "bempp-cl imports, but no assembly backend is runtime-ready "
+                "(OpenCL requires a usable device and compiled kernel; numba "
+                f"must load successfully).{detail}"
+            )
         if not engine["importable"] and not missing_dlls:
             guidance.append(
                 f"bempp-cl engine import failed: {engine['error']}"
             )
         if metal["reason"]:
             guidance.append(f"Metal backend is not usable either: {metal['reason']}")
-
-    acceleration: dict[str, Any] | None = None
-    if acceleration_summary is not None:
-        acceleration = acceleration_summary()
 
     return {
         "usable": usable,

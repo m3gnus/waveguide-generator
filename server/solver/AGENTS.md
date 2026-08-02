@@ -60,6 +60,8 @@ Scope: applies to `server/solver/*`.
 - For API contract changes touching solver integration:
   - `server/tests/test_api_validation.py`
   - `server/tests/test_dependency_runtime.py`
+- For solver-readiness reporting (`device_inventory.py`, `check_solver_engine.py`):
+  - `server/tests/test_device_inventory.py`
 - For mesh-size limits and the solve-mesh soft warning:
   - `server/tests/test_api_validation.py` —
     `test_hornlab_mesher_publishes_mesh_stats_after_canonical_mesh_build`

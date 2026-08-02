@@ -110,6 +110,18 @@ test('updated code restarts through the freshly pulled installer', () => {
   );
 });
 
+test('windows relauncher passes paths to PowerShell through the environment', () => {
+  const relauncher = fs.readFileSync(
+    path.join(rootDir, 'install', 'install-and-update.bat'),
+    'utf8'
+  );
+  for (const name of ['WG_TMP_INSTALLER', 'WG_ROOT', 'WG_LOG']) {
+    assert.match(relauncher, new RegExp(`\\$env:${name}`));
+    assert.doesNotMatch(relauncher, new RegExp(`'%${name}%'`));
+  }
+  assert.match(relauncher, /Tee-Object[\s\S]*exit \$LASTEXITCODE/);
+});
+
 test('windows installer probes the venv with a script, not an inline -c', () => {
   // A `python -c "...(3,10) <= sys.version_info[:2] < (3,15)..."` probe inside a
   // parenthesised cmd block was mis-parsed: it reported failure while the same
@@ -175,8 +187,8 @@ test('windows installers never expand a path variable inside a block', () => {
       if (!/^\s+/.test(line)) continue;          // only indented (in-block) lines
       if (/^\s*(rem|::)/i.test(line)) continue;  // comments are inert
       for (const v of pathVars) {
-        // Safe forms: "%VAR%" (cmd quoting survives the parse) and '%VAR%'
-        // (PowerShell single-quoting, used for the Tee-Object invocation).
+        // Safe forms: "%VAR%" (cmd quoting survives the parse) and PowerShell's
+        // $env:VAR form, which prevents cmd from expanding the path at all.
         // Unsafe: a bare %VAR% that the parser expands before the block runs.
         const bare = new RegExp(`(^|[^"'%])%${v}%([^"']|$)`);
         assert.equal(

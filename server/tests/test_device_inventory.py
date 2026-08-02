@@ -2,6 +2,7 @@ import contextlib
 import unittest
 from unittest.mock import patch
 
+from scripts import check_solver_engine
 from solver.device_inventory import (
     acceleration_summary,
     device_mode_readiness,
@@ -447,6 +448,69 @@ class DeviceInventoryTest(unittest.TestCase):
             summary["effectiveBackend"], {"opencl_gpu", "opencl_cpu", "numba"}
         )
         self.assertIsInstance(summary["acceleratedByGpu"], bool)
+
+
+class SolverEngineReadinessTest(unittest.TestCase):
+    def test_importable_opencl_without_device_and_unusable_numba_is_not_usable(self):
+        def probe(module):
+            importable = module in {"hornlab_bempp_bem", "bempp_cl.api", "pyopencl"}
+            return {"importable": importable, "error": None if importable else "missing"}
+
+        acceleration = {
+            "openclCpu": {"available": False, "reason": "No OpenCL CPU device."},
+            "openclGpu": {"available": False, "reason": "No OpenCL GPU device."},
+            "numba": {"available": False, "reason": "Numba runtime failed."},
+            "effectiveBackend": "numba",
+            "acceleratedByGpu": False,
+        }
+        with patch.object(check_solver_engine, "_probe", side_effect=probe), patch.object(
+            check_solver_engine,
+            "_metal_status",
+            return_value={"ready": False, "reason": "Metal unavailable."},
+        ), patch.object(
+            check_solver_engine, "_missing_windows_runtime_dlls", return_value=[]
+        ), patch.object(
+            check_solver_engine, "acceleration_summary", return_value=acceleration
+        ):
+            status = check_solver_engine.collect_status()
+
+        self.assertFalse(status["bemppUsable"])
+        self.assertFalse(status["usable"])
+        self.assertTrue(
+            any("no assembly backend is runtime-ready" in line for line in status["guidance"])
+        )
+
+    def test_runtime_ready_bempp_or_metal_is_usable(self):
+        ready_numba = {
+            "openclCpu": {"available": False},
+            "openclGpu": {"available": False},
+            "numba": {"available": True},
+        }
+        self.assertTrue(check_solver_engine._bempp_runtime_ready(True, ready_numba))
+        self.assertFalse(check_solver_engine._bempp_runtime_ready(False, ready_numba))
+
+        unavailable = {
+            "openclCpu": {"available": False},
+            "openclGpu": {"available": False},
+            "numba": {"available": False},
+        }
+        with patch.object(
+            check_solver_engine,
+            "_probe",
+            return_value={"importable": False, "error": "missing"},
+        ), patch.object(
+            check_solver_engine,
+            "_metal_status",
+            return_value={"ready": True, "reason": "Metal BEM backend is ready."},
+        ), patch.object(
+            check_solver_engine, "_missing_windows_runtime_dlls", return_value=[]
+        ), patch.object(
+            check_solver_engine, "acceleration_summary", return_value=unavailable
+        ):
+            status = check_solver_engine.collect_status()
+
+        self.assertFalse(status["bemppUsable"])
+        self.assertTrue(status["usable"])
 
 
 if __name__ == "__main__":

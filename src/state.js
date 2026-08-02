@@ -5,6 +5,7 @@ import { normalizeFreeformParams } from './config/freeformModel.js';
 import { debugWarn } from './logging/debug.js';
 
 const STORAGE_KEY = 'ath_state';
+const PERSISTED_STATE_SCHEMA_VERSION = 2;
 const LEGACY_DEFAULT_MAX_TRIANGLES = 18_000;
 const DEFAULT_MAX_TRIANGLES = 50_000;
 const SHARED_SCHEMA_GROUPS = new Set([
@@ -96,6 +97,8 @@ export function normalizePersistedState(candidate) {
   const loadedParams = modelType === 'FREEFORM' ? normalizeFreeformParams(params) : params;
   const normalizedParams = { ...defaults, ...loadedParams };
   if (
+    (!Number.isInteger(candidate.schemaVersion) ||
+      candidate.schemaVersion < PERSISTED_STATE_SCHEMA_VERSION) &&
     Number(normalizedParams.maxTriangles) === LEGACY_DEFAULT_MAX_TRIANGLES &&
     Number(normalizedParams.allowLargeMesh) === 0
   ) {
@@ -253,7 +256,10 @@ export class AppState {
     const storage = getStorage();
     if (!storage) return;
     try {
-      storage.setItem(STORAGE_KEY, JSON.stringify(this.current));
+      storage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ ...this.current, schemaVersion: PERSISTED_STATE_SCHEMA_VERSION })
+      );
     } catch (e) {
       reportStorageWarning('LocalStorage save failed', e);
     }
