@@ -24,7 +24,10 @@ const GRID_DISPLAY_MODES = new Set(['wireframe', 'solidwire']);
 // After a failed backend viewport fetch, render with the local JS engine and
 // only retry the backend once this cooldown has elapsed.
 const BACKEND_VIEWPORT_RETRY_MS = 15000;
-const BACKEND_VIEWPORT_TIMEOUT_MS = 5000;
+// FREEFORM curvature validation can take several seconds on the first request
+// while Python/SciPy is cold. Superseded edits are aborted immediately, so a
+// longer hard deadline improves reliability without making editing feel stale.
+const BACKEND_VIEWPORT_TIMEOUT_MS = 15000;
 
 function variantForDisplayMode(mode) {
   return GRID_DISPLAY_MODES.has(mode) ? 'grid' : 'smooth';
