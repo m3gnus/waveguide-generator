@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { PARAM_SCHEMA } from '../src/config/schema.js';
@@ -7,6 +8,11 @@ import { AppEvents } from '../src/events.js';
 import { GlobalState } from '../src/state.js';
 import { getParameterSections } from '../src/ui/parameterInventory.js';
 import { getControlInputMode, ParamPanel } from '../src/ui/paramPanel.js';
+import { getViewportStateCacheKey } from '../src/app/viewportCacheKey.js';
+
+const authoritativeFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/freeform-authoritative.json', import.meta.url), 'utf8')
+);
 
 class FakeElement {
   constructor(tagName, ownerDocument) {
@@ -637,66 +643,81 @@ test('FREEFORM profile editor legend chips toggle each plane without changing pa
   });
 });
 
-test('FREEFORM profile editor renders live S-curve overlays and warning badge only when needed', () => {
-  withFreeformPanel(
-    {
-      length: 100,
-      throatRadius: 12.7,
-      throatAngle: 15.5,
-      mouthRadiusH: 55,
-      mouthAngleH: 25,
-      interiorH: [[50, 35, 40]],
-      mouthRadiusV: 12.7 + 100 * Math.tan((15.5 * Math.PI) / 180),
-      mouthAngleV: 15.5,
-      interiorV: [],
-      inflectionPolicy: 'reject',
-    },
-    ({ paramContainer }) => {
-      const overlays = collectNodes(paramContainer, (node) =>
-        (node.attributes.class || '').includes('freeform-profile-inflection-overlay')
-      );
-      const badges = collectNodes(
-        paramContainer,
-        (node) => node.className === 'freeform-profile-inflection-badge'
-      );
-      assert.equal(overlays.length, 1);
-      assert.equal(overlays[0].attributes['data-inflection-plane'], 'H');
-      assert.equal(badges.length, 1);
-      assert.match(badges[0].textContent, /^S-curve in H: \d+\.\d deg$/);
-      assert.match(badges[0].title, /tangent handle.*add a point.*Curve Direction/);
-    }
-  );
+test('FREEFORM profile editor consumes authoritative curves, spans, and deviation diagnostics', () => {
+  withFreeformPanel(authoritativeFixture.params, ({ paramContainer, editor }) => {
+    const curves = () =>
+      collectNodes(paramContainer, (node) => node.attributes['data-curve-source']);
+    assert.deepEqual(
+      curves().map((node) => node.attributes['data-curve-source']),
+      ['preview', 'preview']
+    );
 
-  const angleDeg = 20;
-  const mouthRadius = 12.7 + 100 * Math.tan((angleDeg * Math.PI) / 180);
-  withFreeformPanel(
-    {
-      length: 100,
-      throatRadius: 12.7,
-      throatAngle: angleDeg,
-      mouthRadiusH: mouthRadius,
-      mouthAngleH: angleDeg,
-      interiorH: [],
-      mouthRadiusV: mouthRadius,
-      mouthAngleV: angleDeg,
-      interiorV: [],
-    },
-    ({ paramContainer }) => {
-      assert.equal(
-        collectNodes(paramContainer, (node) =>
-          (node.attributes.class || '').includes('freeform-profile-inflection-overlay')
-        ).length,
-        0
-      );
-      assert.equal(
-        collectNodes(
-          paramContainer,
-          (node) => node.className === 'freeform-profile-inflection-badge'
-        ).length,
-        0
-      );
-    }
-  );
+    AppEvents.emit('freeform:authoritative', {
+      cacheKey: getViewportStateCacheKey(GlobalState.get()),
+      freeform: authoritativeFixture.freeform,
+    });
+
+    assert.deepEqual(
+      curves().map((node) => node.attributes['data-curve-source']),
+      ['authoritative', 'authoritative']
+    );
+    editor.drag = { guide: null };
+    editor.draw();
+    assert.deepEqual(
+      curves().map((node) => node.attributes['data-curve-source']),
+      ['preview', 'preview']
+    );
+    assert.ok(curves().every((node) => node.className.includes('freeform-profile-curve-pending')));
+    editor.drag = null;
+    editor.draw();
+    assert.equal(
+      curves()[0].attributes.d,
+      editor.curvePath(authoritativeFixture.freeform.curveSamples.H, editor.transforms)
+    );
+    const overlays = collectNodes(paramContainer, (node) =>
+      (node.attributes.class || '').includes('freeform-profile-inflection-overlay')
+    );
+    assert.equal(overlays.length, 2);
+    assert.deepEqual(
+      overlays.map((node) => node.attributes['data-inflection-plane']),
+      ['H', 'V']
+    );
+    const badge = collectNodes(
+      paramContainer,
+      (node) => node.className === 'freeform-profile-inflection-badge'
+    )[0];
+    assert.equal(badge.textContent, 'S-curve H 24.2° · V 4.2°');
+    assert.match(badge.title, /H curve bellies 3\.0 mm from the polyline/);
+    const deviation = collectNodes(
+      paramContainer,
+      (node) => node.className === 'freeform-profile-deviation-readout'
+    )[0];
+    assert.equal(deviation.textContent, 'Belly H 3.0 · V 2.5 mm');
+    assert.match(deviation.title, /V curve bellies 2\.5 mm from the polyline/);
+  });
+});
+
+test('FREEFORM profile editor ignores authoritative payloads with stale viewport cache keys', () => {
+  withFreeformPanel(authoritativeFixture.params, ({ paramContainer, editor }) => {
+    AppEvents.emit('freeform:authoritative', {
+      cacheKey: `${getViewportStateCacheKey(GlobalState.get())}:stale`,
+      freeform: authoritativeFixture.freeform,
+    });
+
+    assert.equal(editor.authoritative, null);
+    assert.deepEqual(
+      collectNodes(paramContainer, (node) => node.attributes['data-curve-source']).map(
+        (node) => node.attributes['data-curve-source']
+      ),
+      ['preview', 'preview']
+    );
+    assert.equal(
+      collectNodes(paramContainer, (node) =>
+        (node.attributes.class || '').includes('freeform-profile-inflection-overlay')
+      ).length,
+      0
+    );
+  });
 });
 
 test('ParamPanel renders row-level formula buttons and removes the section-header affordance', () => {

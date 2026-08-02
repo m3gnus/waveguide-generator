@@ -43,6 +43,11 @@ test('dev server serves UI assets but returns 404 for sensitive paths', async (t
   for (const requestPath of ['/', '/src/main.js', '/node_modules/three/build/three.module.js']) {
     const response = await fetch(`${baseUrl}${requestPath}`);
     assert.equal(response.status, 200, requestPath);
+    assert.equal(
+      response.headers.get('cache-control'),
+      'no-store',
+      `${requestPath} must not leave native ES modules stale during development`
+    );
   }
   for (const requestPath of [
     '/.git/config',

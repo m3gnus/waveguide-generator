@@ -1,13 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import * as THREE from 'three';
 
 import { getDefaults } from '../src/config/defaults.js';
 import { detachCreaseVertices } from '../src/app/viewportMesh.js';
+import { renderModel } from '../src/app/scene.js';
+import { getViewportStateCacheKey } from '../src/app/viewportCacheKey.js';
+import { AppEvents } from '../src/events.js';
 import {
   createAdaptiveRingVertices,
   createRingVertices,
 } from '../src/geometry/engine/mesh/horn.js';
 import { prepareViewportMesh, validateViewportMesh } from '../src/modules/geometry/useCases.js';
+
+const authoritativeFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/freeform-authoritative.json', import.meta.url), 'utf8')
+);
+
+function syntheticViewportGrid(rows) {
+  const angles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+  const innerPoints = [];
+  for (let index = 0; index < angles.length; index += 1) {
+    const angle = angles[index];
+    const source = index === 1 ? rows.V : rows.H;
+    for (const [z, radius] of source) {
+      innerPoints.push(radius * Math.cos(angle), radius * Math.sin(angle), z);
+    }
+  }
+  return {
+    angle_list: angles,
+    grid_n_phi: angles.length,
+    grid_n_length: rows.H.length - 1,
+    inner_points: innerPoints,
+    full_circle: true,
+    quadrants: 1234,
+    slice_map: Array.from({ length: rows.H.length }, (_, index) => index),
+  };
+}
+
+async function waitFor(predicate, message, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 function makeState(overrides = {}) {
   return {
@@ -58,6 +96,130 @@ test('FREEFORM viewport is server-only and never falls into the local OSSE engin
   assert.deepEqual(mesh.vertices, []);
   assert.deepEqual(mesh.indices, []);
   assert.equal(mesh.preparedParams.type, 'FREEFORM');
+});
+
+test('backend FREEFORM build publishes authoritative metadata with its viewport cache key', async () => {
+  const currentState = {
+    type: 'FREEFORM',
+    params: { ...getDefaults('FREEFORM'), ...authoritativeFixture.params, type: 'FREEFORM' },
+  };
+  const cacheKey = getViewportStateCacheKey(currentState);
+  const freeform = authoritativeFixture.freeform;
+  const grid = syntheticViewportGrid({
+    H: [freeform.curveSamples.H[0], freeform.curveSamples.H.at(-1)],
+    V: [freeform.curveSamples.V[0], freeform.curveSamples.V.at(-1)],
+  });
+  const app = {
+    scene: new THREE.Scene(),
+    renderer: {},
+    currentState,
+    uiCoordinator: { readDisplayModeSetting: () => 'wireframe' },
+    stats: { innerText: '' },
+  };
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        formula: 'FREEFORM',
+        mode: 'bare',
+        params: currentState.params,
+        grid,
+        enclosure: null,
+        metadata: { freeform },
+      }),
+    };
+  };
+  let received = null;
+  const onAuthoritative = (payload) => {
+    received = payload;
+  };
+  AppEvents.on('freeform:authoritative', onAuthoritative);
+  try {
+    renderModel(app);
+    await waitFor(() => received !== null, 'authoritative viewport event timed out');
+    assert.equal(fetchCount, 1);
+    assert.deepEqual(received, { cacheKey, freeform });
+    assert.equal(app._meshCache.grid.source, 'backend');
+    assert.equal(app._currentMeshVariant, 'grid');
+  } finally {
+    AppEvents.off('freeform:authoritative', onAuthoritative);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('changed FREEFORM state refetches immediately after a backend failure', async () => {
+  const firstState = {
+    type: 'FREEFORM',
+    params: { ...getDefaults('FREEFORM'), ...authoritativeFixture.params, type: 'FREEFORM' },
+  };
+  const secondState = {
+    type: 'FREEFORM',
+    params: { ...firstState.params, mouthRadiusH: firstState.params.mouthRadiusH + 1 },
+  };
+  const freeform = authoritativeFixture.freeform;
+  const grid = syntheticViewportGrid({
+    H: [freeform.curveSamples.H[0], freeform.curveSamples.H.at(-1)],
+    V: [freeform.curveSamples.V[0], freeform.curveSamples.V.at(-1)],
+  });
+  const app = {
+    scene: new THREE.Scene(),
+    renderer: {},
+    currentState: firstState,
+    uiCoordinator: {
+      readDisplayModeSetting: () => 'wireframe',
+      showError: () => {},
+    },
+    paramPanel: { setProfileError: () => {} },
+    stats: { innerText: '' },
+  };
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return {
+        ok: false,
+        status: 503,
+        text: async () => 'temporary backend failure',
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        formula: 'FREEFORM',
+        mode: 'bare',
+        params: secondState.params,
+        grid,
+        enclosure: null,
+        metadata: { freeform },
+      }),
+    };
+  };
+  let received = null;
+  const onAuthoritative = (payload) => {
+    received = payload;
+  };
+  AppEvents.on('freeform:authoritative', onAuthoritative);
+  try {
+    renderModel(app);
+    await waitFor(() => app._viewportFetch === null, 'failed viewport request did not settle');
+    assert.equal(fetchCount, 1);
+
+    app.currentState = secondState;
+    renderModel(app);
+    await waitFor(() => fetchCount === 2, 'changed FREEFORM state did not refetch');
+    await waitFor(() => received !== null, 'refetched FREEFORM metadata was not published');
+    assert.equal(received.cacheKey, getViewportStateCacheKey(secondState));
+    assert.equal(received.freeform, freeform);
+  } finally {
+    AppEvents.off('freeform:authoritative', onAuthoritative);
+    app._viewportFetch?.controller?.abort();
+    clearTimeout(app._viewportCooldownRetryTimer);
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('crease detach and viewport validation accept render-only smooth meshes', () => {

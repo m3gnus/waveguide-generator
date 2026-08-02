@@ -1,10 +1,8 @@
 import { AppEvents } from '../events.js';
-import {
-  buildFreeformDisplayCurve,
-  computeInflectionSpans,
-} from '../modules/design/freeformCurve.js';
+import { buildFreeformDisplayCurve } from '../modules/design/freeformCurve.js';
 import { GlobalState } from '../state.js';
 import { normalizeAnchorList } from '../config/freeformModel.js';
+import { getViewportStateCacheKey } from '../app/viewportCacheKey.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const VIEW_WIDTH = 720;
@@ -108,6 +106,48 @@ function shapeLabel(shape) {
   return String(shape || 'ellipse').replaceAll('_', ' ');
 }
 
+function normalizedCurveSamples(value) {
+  return (Array.isArray(value) ? value : [])
+    .filter(
+      (point) =>
+        Array.isArray(point) &&
+        point.length >= 2 &&
+        Number.isFinite(Number(point[0])) &&
+        Number.isFinite(Number(point[1]))
+    )
+    .map((point) => [Number(point[0]), Number(point[1])]);
+}
+
+function normalizedInflectionSpans(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((span) => ({
+      zStartMm: Number(span?.zStartMm),
+      zEndMm: Number(span?.zEndMm),
+      tangentDropDeg: Number(span?.tangentDropDeg),
+    }))
+    .filter(
+      (span) =>
+        Number.isFinite(span.zStartMm) &&
+        Number.isFinite(span.zEndMm) &&
+        Number.isFinite(span.tangentDropDeg)
+    );
+}
+
+function normalizeAuthoritativeFreeform(freeform) {
+  if (!freeform || typeof freeform !== 'object') return null;
+  const planes = {};
+  for (const plane of PLANES) {
+    const curve = normalizedCurveSamples(freeform.curveSamples?.[plane]);
+    if (curve.length < 2) return null;
+    planes[plane] = {
+      curve,
+      inflectionSpans: normalizedInflectionSpans(freeform.inflectionSpans?.[plane]),
+      maxNormalDeviationMm: Number(freeform.maxNormalDeviationMm?.[plane]),
+    };
+  }
+  return { planes };
+}
+
 export class FreeformProfileEditor {
   constructor(container, options = {}) {
     if (!container) throw new Error('FREEFORM profile editor requires a container.');
@@ -122,15 +162,22 @@ export class FreeformProfileEditor {
     this.drag = null;
     this.highlightedParams = new Set();
     this.pendingClampFlashes = new Set();
+    this.authoritative = null;
+    this.cacheKey = getViewportStateCacheKey({ type: 'FREEFORM', params: this.params });
     this.destroyed = false;
     this._onStateUpdated = (nextState) => {
       if (this.destroyed || nextState?.type !== 'FREEFORM') return;
       const previousParams = this.params;
       this.params = cloneParams(nextState.params);
+      const nextCacheKey = getViewportStateCacheKey(nextState);
+      if (nextCacheKey !== this.cacheKey) this.authoritative = null;
+      this.cacheKey = nextCacheKey;
       if (!this.flashClampedAnchors(previousParams)) this.draw();
     };
+    this._onAuthoritative = (payload) => this.setAuthoritative(payload);
     this.mount();
     AppEvents.on('state:updated', this._onStateUpdated);
+    AppEvents.on('freeform:authoritative', this._onAuthoritative);
   }
 
   mount() {
@@ -191,7 +238,17 @@ export class FreeformProfileEditor {
     if (this.destroyed) return;
     this.destroyed = true;
     AppEvents.off('state:updated', this._onStateUpdated);
+    AppEvents.off('freeform:authoritative', this._onAuthoritative);
     this.root?.remove?.();
+  }
+
+  setAuthoritative(payload) {
+    if (this.destroyed || payload?.cacheKey !== this.cacheKey) return false;
+    const authoritative = normalizeAuthoritativeFreeform(payload.freeform);
+    if (!authoritative) return false;
+    this.authoritative = authoritative;
+    this.draw();
+    return true;
   }
 
   commit(patch) {
@@ -239,20 +296,24 @@ export class FreeformProfileEditor {
         ...interior.map(compactInteriorPoint),
         [length, mouthRadius],
       ];
-      const curve = buildFreeformDisplayCurve({
+      const previewCurve = buildFreeformDisplayCurve({
         points: anchors,
         throatAngleDeg: finite(this.params.throatAngle, 15.5),
         mouthAngleDeg: finite(this.params[`mouthAngle${suffix}`], 60),
         throatTangentScale: finite(this.params[`throatTangentScale${suffix}`], 1),
         mouthTangentScale: finite(this.params[`mouthTangentScale${suffix}`], 1),
       });
+      const authoritative = this.drag ? null : this.authoritative?.planes?.[plane];
       return {
         plane,
         interior,
         mouthRadius,
         anchors,
-        curve,
-        inflectionSpans: computeInflectionSpans(curve),
+        curve: authoritative?.curve || previewCurve,
+        previewCurve,
+        pending: !authoritative,
+        inflectionSpans: authoritative?.inflectionSpans || [],
+        maxNormalDeviationMm: authoritative?.maxNormalDeviationMm,
       };
     };
     const planes = { H: buildPlane('H'), V: buildPlane('V') };
@@ -298,6 +359,7 @@ export class FreeformProfileEditor {
     this.geometry = geometry;
     this.transforms = transforms;
     this.updateInflectionBadge(geometry);
+    this.updateDeviationReadout(geometry);
 
     this.appendSvg('rect', {
       class: 'freeform-profile-background',
@@ -422,11 +484,9 @@ export class FreeformProfileEditor {
       this.inflectionBadge.setAttribute('data-inflection-warning', '');
       this.toolbar.appendChild(this.inflectionBadge);
     }
-    const { plane, span } = warnings[0];
-    const extraCount = warnings.length - 1;
-    this.inflectionBadge.textContent = `S-curve in ${plane}: ${span.tangentDropDeg.toFixed(1)} deg${
-      extraCount ? ` (+${extraCount})` : ''
-    }`;
+    this.inflectionBadge.textContent = `S-curve ${warnings
+      .map(({ plane, span }) => `${plane} ${span.tangentDropDeg.toFixed(1)}°`)
+      .join(' · ')}`;
     const tooltip =
       "The tangent turns backward here. Adjust the point's tangent handle, add a point, or change Curve Direction.";
     this.inflectionBadge.title = tooltip;
@@ -434,6 +494,39 @@ export class FreeformProfileEditor {
       'aria-label',
       `${this.inflectionBadge.textContent}. ${tooltip}`
     );
+  }
+
+  updateDeviationReadout(geometry) {
+    const deviations = PLANES.map((plane) => ({
+      plane,
+      value: geometry.planes[plane].maxNormalDeviationMm,
+    })).filter(({ value }) => Number.isFinite(value));
+    if (deviations.length === 0) {
+      this.deviationReadout?.remove?.();
+      this.deviationReadout = null;
+      return;
+    }
+    if (!this.deviationReadout) {
+      this.deviationReadout = this.document.createElement('span');
+      this.deviationReadout.className = 'freeform-profile-deviation-readout';
+      this.deviationReadout.setAttribute('data-curve-deviation', '');
+      this.toolbar.appendChild(this.deviationReadout);
+    }
+    this.deviationReadout.textContent = `Belly ${deviations
+      .map(({ plane, value }) => `${plane} ${value.toFixed(1)}`)
+      .join(' · ')} mm`;
+    const tooltip = deviations
+      .map(({ plane, value }) => `${plane} curve bellies ${value.toFixed(1)} mm from the polyline.`)
+      .join(' ');
+    this.deviationReadout.title = tooltip;
+    this.deviationReadout.setAttribute('aria-label', tooltip);
+    if (this.inflectionBadge) {
+      this.inflectionBadge.title = `${this.inflectionBadge.title} ${tooltip}`;
+      this.inflectionBadge.setAttribute(
+        'aria-label',
+        `${this.inflectionBadge.getAttribute('aria-label')} ${tooltip}`
+      );
+    }
   }
 
   inflectionCurvePortion(curve, span) {
@@ -455,8 +548,10 @@ export class FreeformProfileEditor {
         d: this.curvePath(geometry.planes[plane].curve, transforms),
         fill: 'none',
         'data-plane': plane,
+        'data-curve-source': geometry.planes[plane].pending ? 'preview' : 'authoritative',
         'data-params': params,
       });
+      if (geometry.planes[plane].pending) addClass(path, 'freeform-profile-curve-pending');
       if (params.split(' ').some((key) => this.highlightedParams.has(key))) {
         addClass(path, 'freeform-profile-linked-highlight');
       }
@@ -866,7 +961,7 @@ export class FreeformProfileEditor {
     this.drag = null;
     this.svg.releasePointerCapture?.(event.pointerId);
     const value = activeDrag.params[activeDrag.param];
-    this.commitParam(activeDrag.param, value);
+    if (!this.commitParam(activeDrag.param, value)) this.draw();
   }
 
   onClick(event) {

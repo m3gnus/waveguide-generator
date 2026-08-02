@@ -14,6 +14,7 @@ import {
 import { handleFileUpload } from './configImport.js';
 import { provideMeshForSimulation } from './mesh.js';
 import { checkForUpdates } from './updates.js';
+import { isServerOnlyViewportFormula } from '../modules/geometry/useCases.js';
 import {
   exportMwgConfigFromApp,
   exportProfileCsvFromApp,
@@ -113,8 +114,13 @@ export class App {
     this.paramPanel.createFullPanel();
     this.schedulePanelAutoSize();
 
-    // 2. Render
-    if (this.uiCoordinator.readLiveUpdateSetting()) {
+    // 2. Render. Server-only formulas must schedule their backend build even
+    // when the ordinary live-update preference would suppress a local rebuild;
+    // otherwise both boot and later state updates leave the viewport inert.
+    if (
+      this.uiCoordinator.readLiveUpdateSetting() ||
+      isServerOnlyViewportFormula(this.currentState)
+    ) {
       this.requestRender();
     }
   }
@@ -131,10 +137,14 @@ export class App {
       this._lastModelRenderAt = now;
       if (!this.renderRequested) {
         this.renderRequested = true;
-        requestAnimationFrame(() => {
+        // setTimeout, not requestAnimationFrame: rAF is suspended entirely in
+        // hidden/occluded tabs, which would starve model rebuilds (and the
+        // backend viewport fetch for server-only formulas) until the tab is
+        // refocused. The paint loop stays on rAF; scheduling work must not.
+        setTimeout(() => {
           this.renderModel();
           this.renderRequested = false;
-        });
+        }, 0);
       }
       return;
     }

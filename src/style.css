@@ -726,6 +726,12 @@ details.section[open] > summary {
   white-space: nowrap;
 }
 
+.freeform-profile-deviation-readout {
+  color: var(--text-muted);
+  font: 600 var(--text-xs) var(--font-ui);
+  white-space: nowrap;
+}
+
 .freeform-profile-legend {
   display: flex;
   align-items: center;
@@ -828,6 +834,10 @@ details.section[open] > summary {
   stroke-linejoin: round;
   pointer-events: stroke;
   cursor: crosshair;
+}
+
+.freeform-profile-curve-pending {
+  opacity: 0.52;
 }
 
 .freeform-profile-inflection-overlay {

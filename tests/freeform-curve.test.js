@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
-import {
-  buildFreeformDisplayCurve,
-  computeInflectionSpans,
-} from '../src/geometry/freeformCurve.js';
+import { buildFreeformDisplayCurve } from '../src/geometry/freeformCurve.js';
+
+const authoritativeFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/freeform-authoritative.json', import.meta.url), 'utf8')
+);
 
 function derivativeAngle(points, atEnd = false) {
   const selected = atEnd ? points.slice(-4) : points.slice(0, 4);
@@ -128,35 +130,36 @@ test('FREEFORM endpoint rows override block angles and tangent scales', () => {
   assert.ok(Math.abs(derivativeAngle(curve, true) - 25) < 1e-6);
 });
 
-test('FREEFORM inflection spans report a significant sampled S-curve', () => {
-  const curve = buildFreeformDisplayCurve({
-    points: [
-      [0, 12.7],
-      [50, 35, 40],
-      [100, 55],
-    ],
-    throatAngleDeg: 15.5,
-    mouthAngleDeg: 25,
-  });
+test('FREEFORM optimistic preview stays within 0.1 mm of mesher curveSamples fixture', () => {
+  const { params, freeform } = authoritativeFixture;
+  const interpolateRadius = (curve, z) => {
+    for (let index = 0; index < curve.length - 1; index += 1) {
+      const left = curve[index];
+      const right = curve[index + 1];
+      if (z < left[0] || z > right[0]) continue;
+      const fraction = (z - left[0]) / (right[0] - left[0]);
+      return left[1] + fraction * (right[1] - left[1]);
+    }
+    return curve.at(-1)[1];
+  };
 
-  const spans = computeInflectionSpans(curve);
-
-  assert.equal(spans.length, 1);
-  assert.equal(spans[0].zStartMm, 50);
-  assert.ok(spans[0].zEndMm > 75 && spans[0].zEndMm < 85);
-  assert.ok(spans[0].tangentDropDeg > 20 && spans[0].tangentDropDeg < 30);
-});
-
-test('FREEFORM inflection spans ignore a clean one-way cone', () => {
-  const angleDeg = 20;
-  const curve = buildFreeformDisplayCurve({
-    points: [
-      [0, 12.7],
-      [100, 12.7 + 100 * Math.tan((angleDeg * Math.PI) / 180)],
-    ],
-    throatAngleDeg: angleDeg,
-    mouthAngleDeg: angleDeg,
-  });
-
-  assert.deepEqual(computeInflectionSpans(curve), []);
+  for (const plane of ['H', 'V']) {
+    const preview = buildFreeformDisplayCurve({
+      points: [
+        [0, params.throatRadius],
+        ...params[`interior${plane}`],
+        [params.length, params[`mouthRadius${plane}`]],
+      ],
+      throatAngleDeg: params.throatAngle,
+      mouthAngleDeg: params[`mouthAngle${plane}`],
+      throatTangentScale: params[`throatTangentScale${plane}`],
+      mouthTangentScale: params[`mouthTangentScale${plane}`],
+      sampleCount: 192,
+    });
+    const exact = freeform.curveSamples[plane];
+    const maxRadiusErrorMm = Math.max(
+      ...preview.map(([z, radius]) => Math.abs(radius - interpolateRadius(exact, z)))
+    );
+    assert.ok(maxRadiusErrorMm < 0.1, `${plane} max |dr| was ${maxRadiusErrorMm} mm`);
+  }
 });
