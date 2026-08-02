@@ -37,7 +37,10 @@ import {
   updateSimulationStateParams,
 } from '../../modules/simulation/state.js';
 import { resolveAvailableSolveCounter } from '../../modules/simulation/naming.js';
-import { resolveClearedFailedJobIds } from '../../modules/simulation/jobs.js';
+import {
+  resolveClearedFailedJobIds,
+  resolveJobDesignStateSnapshot,
+} from '../../modules/simulation/jobs.js';
 import { getExportCapability } from '../../modules/export/capabilities.js';
 import {
   clearSimulationControllerJobs,
@@ -64,6 +67,11 @@ const GEOMETRY_DIAGNOSTIC_ROWS = Object.freeze([
   ['enc_rear', 'Enclosure Rear'],
   ['enc_edge', 'Enclosure Edge'],
 ]);
+const DESIGN_EXPORT_FORMAT_IDS = Object.freeze(
+  new Set(['mwg_config', 'step', 'stl', 'fusion_csv'])
+);
+const MISSING_DESIGN_SNAPSHOT_TITLE =
+  'Unavailable: this task has no stored design snapshot, so its original geometry cannot be reproduced.';
 const JOB_EXPORT_MENU_ITEMS = Object.freeze([
   ['selected', 'Selected Formats', 'Export formats enabled in Export Settings'],
   ['mwg_config', 'Config (.txt)', 'Export task parameter config'],
@@ -266,10 +274,17 @@ function renderJobActionButton({
   return `<button type="button" class="${className}" data-job-action="${action}" data-job-id="${jobIdAttr}" title="${title}">${label}</button>`;
 }
 
-function renderJobExportMenu(jobIdAttr, formula) {
+function renderJobExportMenu(jobIdAttr, job) {
+  const designSnapshot = resolveJobDesignStateSnapshot(job);
   const items = JOB_EXPORT_MENU_ITEMS.map(([formatId, label, title]) => {
-    const capability = getExportCapability(formula, formatId);
-    const itemTitle = capability.available ? title : capability.reason;
+    const missingSnapshot = DESIGN_EXPORT_FORMAT_IDS.has(formatId) && !designSnapshot;
+    const capability = designSnapshot ? getExportCapability(designSnapshot.type, formatId) : null;
+    const disabled = missingSnapshot || (capability !== null && !capability.available);
+    const itemTitle = missingSnapshot
+      ? MISSING_DESIGN_SNAPSHOT_TITLE
+      : capability && !capability.available
+        ? capability.reason
+        : title;
     return `
       <button
         type="button"
@@ -278,7 +293,7 @@ function renderJobExportMenu(jobIdAttr, formula) {
         data-job-id="${jobIdAttr}"
         data-export-format="${escapeHtml(formatId)}"
         title="${escapeHtml(itemTitle)}"
-        ${capability.available ? '' : 'disabled aria-disabled="true"'}
+        ${disabled ? 'disabled aria-disabled="true"' : ''}
       >${escapeHtml(label)}</button>
     `;
   }).join('');
@@ -334,6 +349,7 @@ function buildJobListSignature(panel, jobs, sortBy, minRating, formula) {
       startedAt: job.startedAt,
       completedAt: job.completedAt,
       hasScript: Boolean(job.script),
+      hasDesignSnapshot: Boolean(resolveJobDesignStateSnapshot(job)),
     })),
   });
 }
@@ -551,7 +567,7 @@ export function renderJobList(panel) {
       </div>
       <div class="simulation-job-actions">
         ${job.status === 'complete' ? renderJobActionButton({ action: 'view', jobIdAttr, label: 'Results', title: 'View results' }) : ''}
-        ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr, formula) : ''}
+        ${job.status === 'complete' ? renderJobExportMenu(jobIdAttr, job) : ''}
         ${job.script ? renderJobActionButton({ action: 'load-script', jobIdAttr, label: 'Load', title: 'Load parameters' }) : ''}
         ${canRerun ? renderJobActionButton({ action: 'redo', jobIdAttr, label: 'Rerun', title: 'Rerun' }) : ''}
         ${canStop ? renderJobActionButton({ action: 'stop', jobIdAttr, label: 'Stop', title: 'Stop', className: 'btn-tertiary button-compact' }) : ''}
@@ -573,7 +589,9 @@ export async function viewJobResults(panel, jobId) {
 }
 
 export async function exportJobResults(panel, jobId, selectedFormats = null) {
-  const formula = readSimulationState()?.type || '';
+  const job = panel.jobs?.get(jobId) || null;
+  const designSnapshot = job ? resolveJobDesignStateSnapshot(job) : null;
+  const formula = designSnapshot?.type || readSimulationState()?.type || '';
   for (const format of Array.isArray(selectedFormats) ? selectedFormats : []) {
     const capability = getExportCapability(formula, format);
     if (!capability.available) {
@@ -583,7 +601,6 @@ export async function exportJobResults(panel, jobId, selectedFormats = null) {
   }
   const results = await ensureJobResults(panel, jobId, { display: true });
   if (!results) return false;
-  const job = panel.jobs?.get(jobId) || null;
   const bundle = await panel.exportResults({ job, selectedFormats });
   if (bundle && (bundle.exportedFiles.length > 0 || bundle.failures.length > 0)) {
     await recordSimulationControllerExport(panel, jobId, {

@@ -1233,7 +1233,7 @@ test('renderJobList labels completed job results action as Results with view too
   }
 });
 
-test('completed job export menus use the current formula capability map', () => {
+test('renderJobList gates design exports by the job design snapshot', () => {
   const originalDocument = global.document;
   const originalState = GlobalState.current;
   const list = { innerHTML: '' };
@@ -1245,44 +1245,77 @@ test('completed job export menus use the current formula capability map', () => 
       return null;
     },
   };
-  const panel = {
-    activeJobId: null,
-    jobs: new Map([
-      [
-        'job-export-capability',
-        {
-          id: 'job-export-capability',
-          status: 'complete',
-          createdAt: '2026-03-11T09:00:00.000Z',
-          completedAt: '2026-03-11T09:10:00.000Z',
-        },
-      ],
-    ]),
+  const renderSingleJob = (job) => {
+    list.innerHTML = '';
+    renderJobList({
+      activeJobId: null,
+      jobs: new Map([[job.id, job]]),
+    });
+    return list.innerHTML;
   };
 
   try {
-    GlobalState.current = { type: 'FREEFORM', params: getDefaults('FREEFORM') };
-    renderJobList(panel);
+    const withoutSnapshot = renderSingleJob({
+      id: 'job-no-snapshot',
+      label: 'legacy-task',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z',
+      completedAt: '2026-03-11T09:10:00.000Z',
+      script: { outputName: 'legacy-task', counter: 1, params: { r0: 12.7 } },
+    });
+
+    for (const formatId of ['mwg_config', 'step', 'stl', 'fusion_csv']) {
+      assert.match(
+        withoutSnapshot,
+        new RegExp(`data-export-format="${formatId}"[^>]*\\sdisabled aria-disabled="true"`)
+      );
+    }
+    assert.match(withoutSnapshot, /data-export-format="stl"[^>]*no stored design snapshot/);
+    assert.doesNotMatch(withoutSnapshot, /data-export-format="selected"[^>]*disabled/);
+    assert.doesNotMatch(withoutSnapshot, /data-export-format="csv"[^>]*disabled/);
+
+    const withSnapshot = renderSingleJob({
+      id: 'job-with-snapshot',
+      label: 'snapshot-task',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z',
+      completedAt: '2026-03-11T09:10:00.000Z',
+      script: {
+        outputName: 'snapshot-task',
+        counter: 1,
+        stateSnapshot: { type: 'R-OSSE', params: { R: 150 } },
+      },
+    });
+
+    assert.doesNotMatch(withSnapshot, /data-export-format="[^"]*"[^>]*disabled/);
+
+    // Capability gating keys off the job's own snapshot formula, not the editor state.
+    GlobalState.current = { type: 'OSSE', params: getDefaults('OSSE') };
+    const freeformSnapshot = renderSingleJob({
+      id: 'job-freeform-snapshot',
+      label: 'freeform-task',
+      status: 'complete',
+      createdAt: '2026-03-11T09:00:00.000Z',
+      completedAt: '2026-03-11T09:10:00.000Z',
+      script: {
+        outputName: 'freeform-task',
+        counter: 1,
+        stateSnapshot: { type: 'FREEFORM', params: getDefaults('FREEFORM') },
+      },
+    });
     for (const format of ['stl', 'fusion_csv']) {
       assert.match(
-        list.innerHTML,
+        freeformSnapshot,
         new RegExp(
-          `data-export-format="${format}"[\\s\\S]*title="Not available for FREEFORM yet[^\"]*"[\\s\\S]*disabled aria-disabled="true"`
+          `data-export-format="${format}"[^>]*title="Not available for FREEFORM yet[^"]*"[^>]*\\sdisabled aria-disabled="true"`
         )
       );
     }
     assert.match(
-      list.innerHTML,
-      /data-export-format="step"[\s\S]*title="Export waveguide STEP surface"/
+      freeformSnapshot,
+      /data-export-format="step"[^>]*title="Export waveguide STEP surface"/
     );
-
-    GlobalState.current = { type: 'OSSE', params: getDefaults('OSSE') };
-    renderJobList(panel);
-    assert.doesNotMatch(list.innerHTML, /data-export-format="stl"[\s\S]*aria-disabled="true"/);
-    assert.doesNotMatch(
-      list.innerHTML,
-      /data-export-format="fusion_csv"[\s\S]*aria-disabled="true"/
-    );
+    assert.doesNotMatch(freeformSnapshot, /data-export-format="step"[^>]*disabled/);
   } finally {
     GlobalState.current = originalState;
     global.document = originalDocument;

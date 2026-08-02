@@ -13,6 +13,7 @@ import {
   buildStlExportFiles,
 } from '../../modules/export/useCases.js';
 import { readSimulationState } from '../../modules/simulation/state.js';
+import { resolveJobDesignStateSnapshot } from '../../modules/simulation/jobs.js';
 import {
   SIMULATION_EXPORT_FORMAT_IDS,
   SIMULATION_EXPORT_FORMAT_LABELS,
@@ -68,8 +69,23 @@ function resolveExportDirectoryName(job = null, baseName = null) {
   return resolveTaskWorkspaceDirectoryName({ label: fallback }, { fallbackId: fallback });
 }
 
-function readExportState() {
-  return readSimulationState();
+export const MISSING_JOB_DESIGN_SNAPSHOT_MESSAGE =
+  'This task has no stored design snapshot, so exports cannot reproduce its original geometry.';
+
+// Design-derived exports for a job must use the design state the job was
+// built from, never the current editor state — the user may have edited or
+// switched designs since the job ran, and the file is saved under the job's
+// name. A job without a snapshot fails loudly instead of silently exporting
+// the wrong geometry.
+function resolveExportState(options = {}) {
+  if (!options.job) {
+    return readSimulationState();
+  }
+  const snapshot = resolveJobDesignStateSnapshot(options.job);
+  if (!snapshot) {
+    throw new Error(MISSING_JOB_DESIGN_SNAPSHOT_MESSAGE);
+  }
+  return JSON.parse(JSON.stringify(snapshot));
 }
 
 async function writeExportFile(file, options = {}) {
@@ -746,7 +762,7 @@ async function runExportFormat(panel, formatId, options = {}) {
     case 'mwg_config':
       return writeExportFiles(
         normalizeGenerationExportFiles(
-          buildMwgConfigExportFiles(readExportState(), { baseName }),
+          buildMwgConfigExportFiles(resolveExportState(options), { baseName }),
           'mwg_config',
           baseName
         ),
@@ -755,7 +771,7 @@ async function runExportFormat(panel, formatId, options = {}) {
     case 'step':
       return writeExportFiles(
         normalizeGenerationExportFiles(
-          await buildStepExportFiles(readExportState(), {
+          await buildStepExportFiles(resolveExportState(options), {
             baseName,
             backendUrl: DEFAULT_BACKEND_URL,
           }),
@@ -781,7 +797,7 @@ async function runExportFormat(panel, formatId, options = {}) {
     case 'stl':
       return writeExportFiles(
         normalizeGenerationExportFiles(
-          buildStlExportFiles(readExportState(), { baseName }),
+          buildStlExportFiles(resolveExportState(options), { baseName }),
           'stl',
           baseName
         ),
@@ -789,7 +805,7 @@ async function runExportFormat(panel, formatId, options = {}) {
       );
     case 'fusion_csv': {
       const files = buildProfileCsvExportFiles(null, {
-        state: readExportState(),
+        state: resolveExportState(options),
         baseName,
       });
       return writeExportFiles(

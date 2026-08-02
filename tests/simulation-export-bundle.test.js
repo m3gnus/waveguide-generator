@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 import { exportResults } from '../src/ui/simulation/exports.js';
 import { persistSimulationGenerationArtifacts } from '../src/ui/simulation/workspaceTasks.js';
+import { GlobalState } from '../src/state.js';
+import { getDefaults } from '../src/config/defaults.js';
+import {
+  buildMwgConfigExportFiles,
+  buildStlExportFiles,
+} from '../src/modules/export/useCases.js';
 
 test('exportResults writes selected bundle files into the task folder workspace', async () => {
   const originalFetch = global.fetch;
@@ -497,6 +504,139 @@ test('exportResults routes fallback bundle writes through backend workspace subd
     assert.equal(fetchCalls[0].url, 'http://localhost:8000/api/export-file');
     const body = fetchCalls[0].options.body;
     assert.equal(body.get('workspace_subdir'), '260311_horn_34');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('exportResults builds job geometry exports from the stored design snapshot, not the editor design', async () => {
+  const originalFetch = global.fetch;
+  const originalState = JSON.parse(JSON.stringify(GlobalState.get()));
+
+  const baseDefaults = getDefaults('R-OSSE');
+  const editorDesign = {
+    type: 'R-OSSE',
+    params: { ...baseDefaults, R: Number(baseDefaults.R) * 1.5 },
+  };
+  const jobDesign = {
+    type: 'R-OSSE',
+    params: { ...baseDefaults },
+  };
+
+  // Compare STL payloads by digest: byte-level assert.deepEqual on large
+  // binary buffers takes minutes to render a diff when it fails.
+  const stlDigest = (content) => createHash('sha256').update(Buffer.from(content)).digest('hex');
+
+  // Fixture self-check: the two designs must actually produce different STL
+  // bytes, otherwise the assertions below cannot detect a fallback to the
+  // editor design.
+  const [expectedJobStl] = buildStlExportFiles(jobDesign, { baseName: 'horn_snapshot' });
+  const [editorStl] = buildStlExportFiles(editorDesign, { baseName: 'horn_snapshot' });
+  assert.notEqual(stlDigest(expectedJobStl.content), stlDigest(editorStl.content));
+  const [expectedJobConfig] = buildMwgConfigExportFiles(jobDesign, { baseName: 'horn_snapshot' });
+
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  try {
+    GlobalState.loadState(editorDesign, 'test-editor-design');
+
+    const bundle = await exportResults(
+      { currentSmoothing: 'none', lastResults: null },
+      {
+        job: {
+          id: 'job-snapshot-geometry',
+          label: 'horn_snapshot',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          script: {
+            outputName: 'horn_snapshot',
+            counter: 1,
+            stateSnapshot: jobDesign,
+          },
+        },
+        selectedFormats: ['stl', 'mwg_config'],
+      }
+    );
+
+    assert.deepEqual(bundle.failures, []);
+    assert.deepEqual(bundle.exportedFiles, [
+      'stl:horn_snapshot.stl',
+      'mwg_config:horn_snapshot.txt',
+    ]);
+
+    const filesByName = new Map();
+    for (const call of fetchCalls) {
+      const file = call.options.body.get('file');
+      filesByName.set(file.name, file);
+    }
+
+    const exportedStl = await filesByName.get('horn_snapshot.stl').arrayBuffer();
+    assert.equal(stlDigest(exportedStl), stlDigest(expectedJobStl.content));
+    assert.notEqual(stlDigest(exportedStl), stlDigest(editorStl.content));
+
+    const exportedConfig = await filesByName.get('horn_snapshot.txt').text();
+    assert.equal(exportedConfig, expectedJobConfig.content);
+  } finally {
+    global.fetch = originalFetch;
+    GlobalState.loadState(originalState, 'test-restore');
+  }
+});
+
+test('exportResults fails job geometry exports without a design snapshot instead of using the editor design', async () => {
+  const originalFetch = global.fetch;
+
+  const fetchCalls = [];
+  global.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { status: 'success' };
+      },
+    };
+  };
+
+  const panel = {
+    currentSmoothing: 'none',
+    lastResults: {
+      spl_on_axis: { frequencies: [100], spl: [90] },
+      di: { di: [8] },
+      impedance: { frequencies: [100], real: [6], imaginary: [1] },
+      directivity: {},
+    },
+  };
+
+  try {
+    const bundle = await exportResults(panel, {
+      job: {
+        id: 'job-legacy-no-snapshot',
+        label: 'horn_legacy_geom',
+        createdAt: '2026-03-11T10:00:00.000Z',
+        // Legacy job shape: prepared mesher params were saved, but no full
+        // design state snapshot. Geometry exports must refuse rather than
+        // silently exporting whatever design the editor holds.
+        script: { outputName: 'horn_legacy_geom', counter: 2, params: { r0: 12.7 } },
+      },
+      selectedFormats: ['stl', 'csv'],
+    });
+
+    assert.equal(bundle.failures.length, 1);
+    assert.equal(bundle.failures[0].formatId, 'stl');
+    assert.match(bundle.failures[0].message, /design snapshot/);
+    assert.deepEqual(bundle.exportedFiles, ['csv:horn_legacy_geom_results.csv']);
+
+    // Only the result CSV may be written — nothing derived from the editor
+    // design is allowed to reach the job's workspace folder.
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0].options.body.get('file').name, 'horn_legacy_geom_results.csv');
   } finally {
     global.fetch = originalFetch;
   }

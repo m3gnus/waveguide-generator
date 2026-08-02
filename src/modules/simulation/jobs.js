@@ -1,5 +1,26 @@
 import { resolveDatedSolveLabel } from './naming.js';
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// The full design state captured at submit time. Geometry exports for a job
+// must come from this snapshot — the editor state may have diverged since the
+// job ran, so it is never an acceptable substitute. `script.params` (prepared
+// mesher params) is a derived form and is not equivalent either.
+export function resolveJobDesignStateSnapshot(job) {
+  const script = job?.script ?? job?.scriptSnapshot ?? null;
+  const snapshot = script?.stateSnapshot;
+  if (
+    !isPlainObject(snapshot) ||
+    typeof snapshot.type !== 'string' ||
+    !isPlainObject(snapshot.params)
+  ) {
+    return null;
+  }
+  return snapshot;
+}
+
 export function buildQueuedSimulationJob({
   jobId,
   startedIso,
