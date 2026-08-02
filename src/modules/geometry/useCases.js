@@ -190,6 +190,7 @@ export async function prepareBackendViewportMesh(
     vertices,
     indices,
     groups,
+    grid: payload.grid,
     metadata: payload.metadata || {},
     preparedParams,
     variant,

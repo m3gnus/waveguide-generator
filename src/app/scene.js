@@ -87,6 +87,8 @@ function toRenderMesh(viewportMesh, variant, perf) {
     vertices: renderMesh.vertices,
     indices: renderMesh.indices,
     normals: renderMesh.normals,
+    grid: viewportMesh.grid,
+    metadata: viewportMesh.metadata,
     preparedParams: viewportMesh.preparedParams,
   };
 }

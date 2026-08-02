@@ -832,6 +832,72 @@ test('ParamPanel renders row-level formula buttons and removes the section-heade
   }
 });
 
+test('ParamPanel conversion dialog commits converted FREEFORM params in one update', async () => {
+  const originalDocument = global.document;
+  const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
+  const fakeDocument = new FakeDocument();
+  const paramContainer = fakeDocument.createElement('div');
+  paramContainer.id = 'param-container';
+  fakeDocument.body.appendChild(paramContainer);
+  global.document = fakeDocument;
+
+  let summary = '';
+  const cachedViewportMesh = { grid: { marker: 'cached' }, preparedParams: { scale: 1 } };
+  try {
+    GlobalState.loadState(
+      { type: 'OSSE', params: getDefaults('OSSE') },
+      'param-panel-convert-test'
+    );
+    const historyBefore = GlobalState.undoStack.length;
+    const panel = new ParamPanel('param-container', {
+      getCachedViewportMesh: () => cachedViewportMesh,
+      convertCurrentDesign: async (state, options) => {
+        assert.equal(state.type, 'OSSE');
+        assert.equal(options.viewportMesh, cachedViewportMesh);
+        return {
+          params: {
+            ...getDefaults('FREEFORM'),
+            length: 88,
+            throatRadius: 11,
+            interiorH: [{ z: 44, r: 30, angleDeg: null, strength: null }],
+          },
+          report: {
+            maxDeviationMmH: 0.08,
+            maxDeviationMmV: 0.11,
+            truncatedMm: 34.9,
+            anchorCountH: 1,
+            anchorCountV: 0,
+          },
+        };
+      },
+      showConversionDialog: async ({ convertCurrentDesign }) => {
+        const conversion = await convertCurrentDesign();
+        summary = conversion.summary;
+        return { action: 'convert', conversion };
+      },
+    });
+    panel.createFullPanel();
+
+    const convertButtons = collectNodes(
+      paramContainer,
+      (node) => node.tagName === 'BUTTON' && node.textContent === 'Convert to FREEFORM'
+    );
+    assert.equal(convertButtons.length, 1);
+    const typeSelect = fakeDocument.getElementById('model-type');
+    typeSelect.value = 'FREEFORM';
+    await typeSelect.onchange({ target: typeSelect });
+
+    assert.equal(GlobalState.get().type, 'FREEFORM');
+    assert.equal(GlobalState.get().params.length, 88);
+    assert.equal(GlobalState.get().params.throatRadius, 11);
+    assert.equal(GlobalState.undoStack.length, historyBefore + 1);
+    assert.equal(summary, 'max deviation H 0.08 mm, V 0.11 mm; rollback lip 34.9 mm dropped');
+  } finally {
+    GlobalState.loadState(previousState, 'param-panel-convert-test-restore');
+    global.document = originalDocument;
+  }
+});
+
 test('ParamPanel hides inactive straight slot row but keeps active slot values visible', () => {
   const originalDocument = global.document;
   const previousState = JSON.parse(JSON.stringify(GlobalState.get()));
