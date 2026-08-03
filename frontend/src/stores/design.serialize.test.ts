@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from 'vitest';
-import { designForFamily, encodeQuadrants, resetDesignStore, serializeDesign } from './design';
+import { designForFamily, encodeQuadrants, resetDesignStore, serializeDesign, useDesignStore } from './design';
 
 beforeEach(() => resetDesignStore());
 
@@ -48,4 +48,36 @@ test('preserves every authoritative enclosure field and drops only the UI mirror
     space_l: 11, space_t: 12, space_r: 13, space_b: 14,
     front_resolution: 7, back_resolution: 9,
   });
+});
+
+test('serializes raw ATH expressions and four-value enclosure tuples without leaking the sidecar', () => {
+  useDesignStore.getState().updateExpression('R', { value: null, raw: '70 * (1 + cos(p))' });
+  useDesignStore.getState().updateExpression('enclosure.front_resolution', { value: null, raw: '25,25,20,20' });
+  const payload = serializeDesign(useDesignStore.getState().design);
+  expect(payload.R).toEqual({ value: null, raw: '70 * (1 + cos(p))' });
+  expect((payload.enclosure as Record<string, unknown>).front_resolution).toEqual({ value: null, raw: '25,25,20,20' });
+  expect(payload).not.toHaveProperty('_expressions');
+});
+
+test('FREEFORM length and mouth radius edits target the last imported point', () => {
+  useDesignStore.getState().setFamily('FREEFORM');
+  useDesignStore.getState().updateValue('profile_h.points', [{ z: 0, r: 12 }, { z: 40, r: 50 }, { z: 120, r: 140 }]);
+  useDesignStore.getState().updateValue('profile_h.points.$last.z', 180);
+  useDesignStore.getState().updateValue('profile_h.points.$last.r', 170);
+  expect(useDesignStore.getState().design.profile_h!.points).toEqual([{ z: 0, r: 12 }, { z: 40, r: 50 }, { z: 180, r: 170 }]);
+});
+
+test('structured and quadrant edits clear stale imported expression sidecars', () => {
+  const design = designForFamily('FREEFORM');
+  design._expressions = {
+    'profile_h.points.1.r': { value: 140, raw: 'mouthRadius()' },
+    'mesh.quadrants': { value: 14, raw: '14' },
+  };
+  useDesignStore.getState().loadDesign(design);
+  useDesignStore.getState().updateValue('profile_h.points', [{ z: 0, r: 12.7 }, { z: 120, r: 150 }]);
+  useDesignStore.getState().setQuadrants([1, 2]);
+  expect(useDesignStore.getState().design._expressions).toBeUndefined();
+  const payload = serializeDesign(useDesignStore.getState().design);
+  expect(((payload.profile_h as { points: { r: number }[] }).points[1].r)).toBe(150);
+  expect((payload.mesh as Record<string, unknown>).quadrants).toBe(12);
 });

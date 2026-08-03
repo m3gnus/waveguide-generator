@@ -85,4 +85,19 @@ describe('NumberField', () => {
     expect(end).toHaveBeenCalledTimes(2);
     root = createRoot(host);
   });
+
+  it('commits a non-numeric ATH expression verbatim and shows a known evaluated value', () => {
+    const commitExpression = vi.fn();
+    act(() => root.render(<NumberField label="Radius" value={140} expression={{ raw: 'mouth(p) * 2', value: 280 }} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
+    expect(host.querySelector<HTMLInputElement>('input')!.value).toBe('mouth(p) * 2');
+    expect(host.textContent).toContain('= 280');
+    const input = host.querySelector<HTMLInputElement>('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '140 + p');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.blur();
+    });
+    expect(commitExpression).toHaveBeenCalledWith({ raw: '140 + p', value: null });
+  });
 });

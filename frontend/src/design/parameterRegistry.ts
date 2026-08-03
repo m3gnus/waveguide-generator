@@ -84,7 +84,7 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('rosse.tmax', 'tmax', 'tmax', profile, 'Truncation limit', { families: ['R-OSSE'], min: .5, max: 1, step: .01 }),
 
   number('osse.L', 'L', 'L', profile, 'Horn length', { families: ['OSSE'], unit: 'mm', min: .1, max: 1_000 }),
-  number('osse.a', 'a', 'a', profile, 'Mouth coverage angle', { families: ['OSSE'], unit: '°', min: -180, max: 180, disabledWhen: (design) => design.guiding_curve.curve_type === 0 ? undefined : 'Derived by the active guiding-curve mode.' }),
+  number('osse.a', 'a', 'a', profile, 'Mouth coverage angle', { families: ['OSSE'], unit: '°', min: -180, max: 180 }),
   number('osse.a0', 'a0', 'a0', profile, 'Throat coverage angle', { families: ['OSSE'], unit: '°', min: -90, max: 90 }),
   number('osse.r0', 'r0', 'r0', profile, 'Throat radius', { families: ['OSSE'], unit: 'mm', min: .1, max: 200 }),
   number('osse.k', 'k', 'k', profile, 'Flare constant', { families: ['OSSE'], min: .1, max: 15 }),
@@ -95,11 +95,11 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
 
   number('icw.r0', 'r0', 'r0', profile, 'Throat radius', { families: ['ICW'], unit: 'mm', min: .1, max: 200 }),
   number('icw.a0', 'a0', 'a0', profile, 'Throat half-angle', { families: ['ICW'], unit: '°', min: -90, max: 90 }),
-  number('icw.L', 'L', 'L', profile, 'Horn length', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000 }),
+  number('icw.L', 'L', 'L', profile, 'Horn length', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, visibleWhen: (design) => design.termination !== 'rollback' }),
   number('icw.R', 'R', 'R', profile, 'Mouth radius', { families: ['ICW'], unit: 'mm', min: .1, max: 1_000, disabledWhen: (design) => (design.coverage_angle ?? 0) > 0 ? 'Emergent while coverage hold is enabled.' : undefined }),
   number('icw.coverage_angle', 'coverage_angle', 'coverage_angle', geometry, 'Coverage angle', { families: ['ICW'], unit: '°', min: 0, max: 80, step: 1, precision: 0, disabledWhen: (design) => design.termination === 'rollback' ? 'Coverage hold applies to flat-baffle termination only.' : undefined }),
-  number('icw.hold_start', 'hold_start', 'hold_start', geometry, 'Coverage hold start', { families: ['ICW'], unit: 'σ', min: .05, max: .9, step: .01, visibleWhen: (design) => (design.coverage_angle ?? 0) > 0 && design.termination !== 'rollback' }),
-  number('icw.hold_end', 'hold_end', 'hold_end', geometry, 'Coverage hold end', { families: ['ICW'], unit: 'σ', min: .1, max: .95, step: .01, visibleWhen: (design) => (design.coverage_angle ?? 0) > 0 && design.termination !== 'rollback' }),
+  number('icw.hold_start', 'hold_start', 'hold_start', geometry, 'Coverage hold start', { families: ['ICW'], unit: 'σ', min: .05, max: .9, step: .01, visibleWhen: (design) => design.termination !== 'rollback' }),
+  number('icw.hold_end', 'hold_end', 'hold_end', geometry, 'Coverage hold end', { families: ['ICW'], unit: 'σ', min: .1, max: .95, step: .01, visibleWhen: (design) => design.termination !== 'rollback' }),
   number('icw.n_coeff', 'n_coeff', 'n_coeff', profile, 'Curvature coefficients', { families: ['ICW'], min: 5, max: 24, step: 1, precision: 0 }),
   select('icw.termination', 'termination', 'termination', geometry, 'Termination', [{ value: 'flat_baffle', label: 'Flat baffle' }, { value: 'rollback', label: 'Rollback' }], { families: ['ICW'] }),
   number('icw.theta1_deg', 'theta1_deg', 'theta1_deg', geometry, 'Rollback curl angle', { families: ['ICW'], unit: '°', min: 91, max: 179, step: 1, precision: 0, visibleWhen: (design) => design.termination === 'rollback' }),
@@ -110,15 +110,15 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('icw.q', 'q', 'q', profile, 'Legacy smoothness coefficient', { families: ['ICW'], min: -100, max: 100 }),
   number('icw.curl', 'curl', 'curl', profile, 'Curl', { families: ['ICW'], min: -100, max: 100 }),
 
-  number('freeform.length', 'length', 'profile_h.points.1.z', profile, 'Length', { families: ['FREEFORM'], mirrorPaths: ['profile_v.points.1.z'], unit: 'mm', min: 20, max: 1_000, step: 1 }),
+  number('freeform.length', 'length', 'profile_h.points.$last.z', profile, 'Length', { families: ['FREEFORM'], mirrorPaths: ['profile_v.points.$last.z'], unit: 'mm', min: 20, max: 1_000, step: 1 }),
   number('freeform.throatRadius', 'throatRadius', 'profile_h.points.0.r', profile, 'Throat radius', { families: ['FREEFORM'], mirrorPaths: ['profile_v.points.0.r'], unit: 'mm', min: .1, max: 200 }),
   number('freeform.throatAngle', 'throatAngle', 'profile_h.throat_angle_deg', profile, 'Throat angle', { families: ['FREEFORM'], mirrorPaths: ['profile_v.throat_angle_deg'], unit: '°', min: -90, max: 90 }),
-  number('freeform.mouthRadiusH', 'mouthRadiusH', 'profile_h.points.1.r', profile, 'Horizontal mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),
+  number('freeform.mouthRadiusH', 'mouthRadiusH', 'profile_h.points.$last.r', profile, 'Horizontal mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),
   number('freeform.mouthAngleH', 'mouthAngleH', 'profile_h.mouth_angle_deg', profile, 'Horizontal mouth angle', { families: ['FREEFORM'], unit: '°', min: -90, max: 90 }),
   { id: 'freeform.interiorH', legacyKey: 'interiorH', path: 'profile_h.points', section: profile, label: 'Horizontal spline points', kind: 'table', families: ['FREEFORM'] },
   number('freeform.throatTangentScaleH', 'throatTangentScaleH', 'profile_h.throat_tangent_scale', profile, 'Horizontal throat tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
   number('freeform.mouthTangentScaleH', 'mouthTangentScaleH', 'profile_h.mouth_tangent_scale', profile, 'Horizontal mouth tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
-  number('freeform.mouthRadiusV', 'mouthRadiusV', 'profile_v.points.1.r', profile, 'Vertical mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),
+  number('freeform.mouthRadiusV', 'mouthRadiusV', 'profile_v.points.$last.r', profile, 'Vertical mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),
   number('freeform.mouthAngleV', 'mouthAngleV', 'profile_v.mouth_angle_deg', profile, 'Vertical mouth angle', { families: ['FREEFORM'], unit: '°', min: -90, max: 90 }),
   { id: 'freeform.interiorV', legacyKey: 'interiorV', path: 'profile_v.points', section: profile, label: 'Vertical spline points', kind: 'table', families: ['FREEFORM'] },
   number('freeform.throatTangentScaleV', 'throatTangentScaleV', 'profile_v.throat_tangent_scale', profile, 'Vertical throat tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
@@ -134,31 +134,31 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   select('common.length_mode', 'lengthMode', 'length_mode', geometry, 'Length mode', [{ value: 'profile', label: 'Profile length' }, { value: 'total', label: 'Total length' }], { families: osseFamilies }),
   { id: 'common.coverage_mode', legacyKey: 'coverageMode', path: 'coverage_mode', section: geometry, label: 'Coverage mode', kind: 'text', families: ['ICW'] },
   select('morph.target_shape', 'morphTarget', 'morph.target_shape', geometry, 'Morph target', [{ value: 0, label: 'None' }, { value: 1, label: 'Rectangle' }, { value: 2, label: 'Circle' }], { families: ['R-OSSE', 'OSSE', 'ICW'] }),
-  number('morph.target_width', 'morphWidth', 'morph.target_width', geometry, 'Target width', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000, visibleWhen: (design) => design.morph.target_shape !== 0 }),
-  number('morph.target_height', 'morphHeight', 'morph.target_height', geometry, 'Target height', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000, visibleWhen: (design) => design.morph.target_shape === 1 }),
-  number('morph.corner_radius', 'morphCorner', 'morph.corner_radius', geometry, 'Corner radius', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 100, step: 1, visibleWhen: (design) => design.morph.target_shape === 1 }),
-  number('morph.rate', 'morphRate', 'morph.rate', geometry, 'Morph rate', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 100, visibleWhen: (design) => design.morph.target_shape !== 0 }),
-  number('morph.fixed_part', 'morphFixed', 'morph.fixed_part', geometry, 'Fixed part', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 1, step: .01, visibleWhen: (design) => design.morph.target_shape !== 0 }),
-  select('morph.allow_shrinkage', 'morphAllowShrinkage', 'morph.allow_shrinkage', geometry, 'Allow shrinkage', yesNo, { families: ['R-OSSE', 'OSSE', 'ICW'], visibleWhen: (design) => design.morph.target_shape !== 0 }),
+  number('morph.target_width', 'morphWidth', 'morph.target_width', geometry, 'Target width', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
+  number('morph.target_height', 'morphHeight', 'morph.target_height', geometry, 'Target height', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
+  number('morph.corner_radius', 'morphCorner', 'morph.corner_radius', geometry, 'Corner radius', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 100, step: 1 }),
+  number('morph.rate', 'morphRate', 'morph.rate', geometry, 'Morph rate', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 100 }),
+  number('morph.fixed_part', 'morphFixed', 'morph.fixed_part', geometry, 'Fixed part', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 1, step: .01 }),
+  select('morph.allow_shrinkage', 'morphAllowShrinkage', 'morph.allow_shrinkage', geometry, 'Allow shrinkage', yesNo, { families: ['R-OSSE', 'OSSE', 'ICW'] }),
   select('osse.throat_profile', 'throatProfile', 'throat_profile', geometry, 'Throat profile', [{ value: 1, label: 'OS-SE' }, { value: 3, label: 'Circular arc' }], { families: ['OSSE'] }),
   number('osse.rotation', 'rot', 'rotation', geometry, 'Profile rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360 }),
   select('guide.curve_type', 'gcurveType', 'guiding_curve.curve_type', geometry, 'Guiding curve mode', [{ value: 0, label: 'Explicit coverage' }, { value: 1, label: 'Superellipse' }, { value: 2, label: 'Superformula' }], { families: ['OSSE'] }),
-  number('guide.distance', 'gcurveDist', 'guiding_curve.distance', geometry, 'Guiding curve distance', { families: ['OSSE'], min: 0, max: 10_000, visibleWhen: (design) => design.guiding_curve.curve_type !== 0 }),
-  number('guide.width', 'gcurveWidth', 'guiding_curve.width', geometry, 'Guiding curve width', { families: ['OSSE'], unit: 'mm', min: 0, max: 2_000, visibleWhen: (design) => design.guiding_curve.curve_type !== 0 }),
-  number('guide.aspect_ratio', 'gcurveAspectRatio', 'guiding_curve.aspect_ratio', geometry, 'Guiding curve aspect ratio', { families: ['OSSE'], min: .01, max: 100, visibleWhen: (design) => design.guiding_curve.curve_type !== 0 }),
+  number('guide.distance', 'gcurveDist', 'guiding_curve.distance', geometry, 'Guiding curve distance', { families: ['OSSE'], min: 0, max: 10_000 }),
+  number('guide.width', 'gcurveWidth', 'guiding_curve.width', geometry, 'Guiding curve width', { families: ['OSSE'], unit: 'mm', min: 0, max: 2_000 }),
+  number('guide.aspect_ratio', 'gcurveAspectRatio', 'guiding_curve.aspect_ratio', geometry, 'Guiding curve aspect ratio', { families: ['OSSE'], min: .01, max: 100 }),
   number('guide.superellipse_n', 'gcurveSeN', 'guiding_curve.superellipse_n', geometry, 'Guiding superellipse exponent', { families: ['OSSE'], min: .01, max: 100, visibleWhen: (design) => design.guiding_curve.curve_type === 1 }),
   number('guide.superformula', 'gcurveSf', 'guiding_curve.superformula', geometry, 'Superformula tuple', { families: ['OSSE'], min: -1_000, max: 1_000, visibleWhen: (design) => design.guiding_curve.curve_type === 2 }),
   ...(['sf_a', 'sf_b', 'sf_m1', 'sf_m2', 'sf_n1', 'sf_n2', 'sf_n3'] as const).map((key) => number(`guide.${key}`, `gcurveSf${key.slice(3).toUpperCase()}`, `guiding_curve.${key}`, geometry, `Superformula ${key.slice(3)}`, { families: ['OSSE'], min: -1_000, max: 1_000, visibleWhen: (design) => design.guiding_curve.curve_type === 2 })),
-  number('guide.rotation', 'gcurveRot', 'guiding_curve.rotation', geometry, 'Guiding curve rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360, visibleWhen: (design) => design.guiding_curve.curve_type !== 0 }),
+  number('guide.rotation', 'gcurveRot', 'guiding_curve.rotation', geometry, 'Guiding curve rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360 }),
   number('osse.circ_arc_term_angle', 'circArcTermAngle', 'circ_arc_term_angle', geometry, 'Circular arc terminal angle', { families: ['OSSE'], unit: '°', min: -180, max: 180, visibleWhen: (design) => design.throat_profile === 3 }),
   number('osse.circ_arc_radius', 'circArcRadius', 'circ_arc_radius', geometry, 'Circular arc radius override', { families: ['OSSE'], unit: 'mm', min: 0, max: 10_000, visibleWhen: (design) => design.throat_profile === 3 }),
 
   // Source including schema-carried contours and explicit velocity convention.
   select('source.shape', 'sourceShape', 'source.shape', 'Source', 'Source surface', [{ value: 1, label: 'Spherical cap' }, { value: 2, label: 'Flat disc' }]),
   number('source.radius', 'sourceRadius', 'source.radius', 'Source', 'Source radius', { unit: 'mm', min: -1, max: 2_000 }),
-  select('source.curvature', 'sourceCurv', 'source.curvature', 'Source', 'Source curvature', [{ value: 0, label: 'Auto' }, { value: 1, label: 'Convex' }, { value: -1, label: 'Concave' }], { visibleWhen: (design) => design.source.shape === 1 }),
-  number('source.velocity', 'sourceVelocity', 'source.velocity', 'Source', 'Source amplitude', { unit: 'm/s', min: 0, max: 100, step: .01, precision: 3 }),
-  select('source.velocity_convention', 'sourceVelocityConvention', 'source.velocity_convention', 'Source', 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }]),
+  select('source.curvature', 'sourceCurv', 'source.curvature', 'Source', 'Source curvature', [{ value: 0, label: 'Auto' }, { value: 1, label: 'Convex' }, { value: -1, label: 'Concave' }]),
+  number('source.velocity', 'sourceAmplitude', 'source.velocity', 'Source', 'Source amplitude', { unit: 'm/s', min: 0, max: 100, step: .01, precision: 3 }),
+  select('source.velocity_convention', 'sourceVelocity', 'source.velocity_convention', 'Source', 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }]),
   { id: 'source.contours', legacyKey: 'sourceContours', path: 'source.contours', section: 'Source', label: 'Source contours', kind: 'text', description: 'File path or inline-script expression; preserved verbatim.' },
 
   // Symmetry is custom-rendered as quadrants but registered against schema mesh.quadrants.
@@ -168,9 +168,9 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('enclosure.depth', 'encDepth', 'enclosure.depth', 'Enclosure', 'Enclosure depth', { unit: 'mm', min: 0, max: 2_000, step: 1 }),
   number('enclosure.edge_radius', 'encEdge', 'enclosure.edge_radius', 'Enclosure', 'Edge radius', { unit: 'mm', min: 0, max: 1_000 }),
   select('enclosure.edge_type', 'encEdgeType', 'enclosure.edge_type', 'Enclosure', 'Edge finish', [{ value: 1, label: 'Rounded' }, { value: 2, label: 'Chamfered' }]),
-  ...([['space_l', 'encSpaceL', 'Left margin'], ['space_t', 'encSpaceT', 'Top margin'], ['space_r', 'encSpaceR', 'Right margin'], ['space_b', 'encSpaceB', 'Bottom margin']] as const).map(([path, key, label]) => number(`enclosure.${path}`, key, `enclosure.${path}`, 'Enclosure', label, { unit: 'mm', min: 0, max: 2_000, disabledWhen: (design) => design.enclosure.depth <= 0 ? 'Enable an enclosure by setting depth above zero.' : undefined })),
-  number('enclosure.front_resolution', 'encFrontResolution', 'enclosure.front_resolution', 'Enclosure', 'Front baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, disabledWhen: (design) => design.enclosure.depth <= 0 ? 'No enclosure is active.' : undefined }),
-  number('enclosure.back_resolution', 'encBackResolution', 'enclosure.back_resolution', 'Enclosure', 'Rear baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, disabledWhen: (design) => design.enclosure.depth <= 0 ? 'No enclosure is active.' : undefined }),
+  ...([['space_l', 'encSpaceL', 'Left margin'], ['space_t', 'encSpaceT', 'Top margin'], ['space_r', 'encSpaceR', 'Right margin'], ['space_b', 'encSpaceB', 'Bottom margin']] as const).map(([path, key, label]) => number(`enclosure.${path}`, key, `enclosure.${path}`, 'Enclosure', label, { unit: 'mm', min: 0, max: 2_000 })),
+  number('enclosure.front_resolution', 'encFrontResolution', 'enclosure.front_resolution', 'Enclosure', 'Front baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
+  number('enclosure.back_resolution', 'encBackResolution', 'enclosure.back_resolution', 'Enclosure', 'Rear baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
 
   // Viewport sampling and solve/export mesh are deliberately kept together but labelled distinctly.
   number('mesh.angular_segments', 'angularSegments', 'mesh.angular_segments', mesh, 'Surface angular samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
@@ -183,20 +183,18 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('mesh.throat_resolution', 'throatResolution', 'mesh.throat_resolution', mesh, 'Throat mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
   number('mesh.mouth_resolution', 'mouthResolution', 'mesh.mouth_resolution', mesh, 'Mouth mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'For 20 kHz, λ/6 is approximately 2.86 mm.' }),
   { id: 'schema-gap.max_edge', legacyKey: 'maxEdge', section: mesh, label: 'Maximum edge guard', kind: 'number', unit: 'mm', disabledReason: 'Not present in server DesignConfig; use the regional resolution controls until the server schema adds it.' },
-  number('mesh.rear_resolution', 'rearResolution', 'mesh.rear_resolution', mesh, 'Rear mesh resolution', { unit: 'mm', min: .01, max: 1_000, disabledWhen: (design) => design.mesh.wall_thickness <= 0 ? 'Only used by freestanding thick-wall geometry.' : undefined }),
+  number('mesh.rear_resolution', 'rearResolution', 'mesh.rear_resolution', mesh, 'Rear mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
   number('mesh.aperture_resolution_scale', 'apertureResolutionScale', 'mesh.aperture_resolution_scale', mesh, 'Aperture mesh scale', { min: .01, max: 100 }),
   number('mesh.max_triangles', 'maxTriangles', 'mesh.max_triangles', mesh, 'Hard triangle limit', { min: 1, max: 10_000_000, step: 1_000, precision: 0 }),
   select('mesh.allow_large_mesh', 'allowLargeMesh', 'mesh.allow_large_mesh', mesh, 'Large mesh approval', [{ value: 0, label: 'Block over budget' }, { value: 1, label: 'Approve over budget' }]),
   number('mesh.vertical_offset', 'verticalOffset', 'mesh.vertical_offset', mesh, 'Export vertical offset', { unit: 'mm', min: -10_000, max: 10_000 }),
-  number('mesh.wall_thickness', 'wallThickness', 'mesh.wall_thickness', mesh, 'Wall thickness', { unit: 'mm', min: 0, max: 1_000, disabledWhen: (design) => design.simulation.sim_type !== 'freestanding' || design.enclosure.depth > 0 ? 'Only applies to freestanding horns without an enclosure.' : undefined }),
+  number('mesh.wall_thickness', 'wallThickness', 'mesh.wall_thickness', mesh, 'Wall thickness', { unit: 'mm', min: 0, max: 1_000 }),
 
   number('simulation.f1', 'freqStart', 'simulation.f1', simulation, 'Sweep start', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
   number('simulation.f2', 'freqEnd', 'simulation.f2', simulation, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
   number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', simulation, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0 }),
-  { id: 'schema-gap.frequency_spacing', legacyKey: 'frequencySpacing', section: simulation, label: 'Frequency spacing', kind: 'select', disabledReason: 'Job options support spacing, but server DesignConfig has no field for it.' },
   select('simulation.sim_type', 'simType', 'simulation.sim_type', simulation, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle' }]),
   select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', simulation, 'Solver mode', [{ value: 'auto', label: 'Auto' }, { value: 'full_3d', label: 'Full 3D' }, { value: 'circsym', label: 'CircSym' }]),
-  { id: 'schema-gap.spherical_sampling', legacyKey: 'sphericalSampling', section: simulation, label: 'Spherical sampling', kind: 'toggle', disabledReason: 'Off by default. Job options support it, but server DesignConfig has no field for it.' },
 
   select('output.stl', 'outputSTL', 'output.stl', 'Output & Passthrough', 'STL output flag', yesNo),
   select('output.msh', 'outputMSH', 'output.msh', 'Output & Passthrough', 'MSH output flag', yesNo),
@@ -235,6 +233,22 @@ export const PARAMETER_SECTIONS: ParameterSection[] = [
   'Profile', 'Source', 'Symmetry / Quadrants', 'Geometry extras', 'Enclosure',
   'Mesh & Sampling', 'Simulation', 'Output & Passthrough',
 ];
+
+/** The 43 daggered v1 fields, plus the two legacy four-value baffle tuples. */
+export const EXPRESSION_PARAMETER_IDS = new Set([
+  'rosse.R', 'rosse.a', 'rosse.a0', 'rosse.r0', 'rosse.k', 'rosse.m', 'rosse.b', 'rosse.r', 'rosse.q', 'rosse.tmax',
+  'osse.L', 'osse.a', 'osse.a0', 'osse.r0', 'osse.k', 'osse.s', 'osse.n', 'osse.q', 'osse.h',
+  'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length',
+  'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part',
+  'osse.rotation', 'guide.distance', 'guide.width', 'guide.aspect_ratio', 'guide.superellipse_n', 'guide.superformula',
+  'guide.sf_a', 'guide.sf_b', 'guide.sf_m1', 'guide.sf_m2', 'guide.sf_n1', 'guide.sf_n2', 'guide.sf_n3',
+  'guide.rotation', 'osse.circ_arc_term_angle', 'osse.circ_arc_radius',
+  'enclosure.front_resolution', 'enclosure.back_resolution',
+]);
+
+export function fieldAcceptsExpression(field: ParameterDefinition): boolean {
+  return EXPRESSION_PARAMETER_IDS.has(field.id);
+}
 
 export function fieldAppliesToFamily(field: ParameterDefinition, family: DesignFamily): boolean {
   return !field.families || field.families.includes(family);

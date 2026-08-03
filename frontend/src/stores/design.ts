@@ -3,7 +3,7 @@ import { temporal } from 'zundo';
 
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
-export type DesignValue = number | string | boolean | null;
+export type DesignValue = number | string | boolean | null | FreeformPoint[] | CrossSectionStation[];
 
 export interface ExprNumber {
   value: number | null;
@@ -47,11 +47,10 @@ export interface CornerGrid {
 /**
  * Evaluated client representation of server/design/schema.py's DesignConfig.
  *
- * Pydantic's Expr accepts finite numbers directly, so editable expressions are
- * held as their evaluated numeric value here. `quadrants` and `baffle_margin`
- * are temporary, non-serialized preview compatibility mirrors used by the
- * existing preview adapter; their schema values remain authoritative in
- * `mesh.quadrants` and the four `enclosure.space_*` fields.
+ * Numeric values stay scalar so preview/result consumers remain simple. Exact
+ * ATH spelling and any server-evaluated value live in `_expressions`; the
+ * serializer overlays those Expr objects on the wire and strips the sidecar.
+ * `quadrants` and `baffle_margin` are non-serialized compatibility mirrors.
  */
 export interface DesignDocument {
   formula: DesignFamily;
@@ -170,6 +169,8 @@ export interface DesignDocument {
   overshoot_policy?: string;
   inflection_policy?: string;
   corner_grids?: CornerGrid[];
+  /** UI sidecar for lossless ATH expression spelling; stripped on the wire. */
+  _expressions?: Record<string, ExprNumber>;
 }
 
 const common = {
@@ -293,6 +294,7 @@ interface DesignStore {
   updateField: (path: string, value: number) => void;
   updateValue: (path: string, value: DesignValue) => void;
   updateValues: (updates: Record<string, DesignValue>) => void;
+  updateExpression: (path: string, expression: ExprNumber) => void;
   setQuadrants: (quadrants: number[]) => void;
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
   setFamily: (family: DesignFamily) => void;
@@ -306,15 +308,38 @@ interface DesignStore {
 function setAtPath(design: DesignDocument, path: string, value: DesignValue): DesignDocument {
   const next = structuredClone(design);
   const parts = path.split('.');
-  let cursor: Record<string, unknown> = next as unknown as Record<string, unknown>;
+  let cursor: Record<string, unknown> | unknown[] = next as unknown as Record<string, unknown>;
   for (let index = 0; index < parts.length - 1; index += 1) {
-    const child = cursor[parts[index]];
+    const part = parts[index] === '$last' && Array.isArray(cursor) ? String(cursor.length - 1) : parts[index];
+    const child = cursor[part as keyof typeof cursor];
     if (typeof child !== 'object' || child === null) throw new Error(`Unknown design path: ${path}`);
-    cursor = child as Record<string, unknown>;
+    cursor = child as Record<string, unknown> | unknown[];
   }
-  cursor[parts.at(-1)!] = value;
+  const last = parts.at(-1) === '$last' && Array.isArray(cursor) ? String(cursor.length - 1) : parts.at(-1)!;
+  (cursor as Record<string, unknown>)[last] = value;
   if (path.startsWith('enclosure.space_')) next.enclosure.baffle_margin = Number(value);
   return next;
+}
+
+function withoutExpression(design: DesignDocument, path: string): DesignDocument {
+  const concretePath = resolveConcretePath(design, path);
+  const matches = Object.keys(design._expressions ?? {}).filter((key) => key === path || key.startsWith(`${path}.`) || key === concretePath || key.startsWith(`${concretePath}.`));
+  if (!matches.length) return design;
+  const next = structuredClone(design);
+  matches.forEach((key) => { delete next._expressions?.[key]; });
+  if (next._expressions && Object.keys(next._expressions).length === 0) delete next._expressions;
+  return next;
+}
+
+function resolveConcretePath(design: DesignDocument, path: string): string {
+  const resolved: string[] = [];
+  let cursor: unknown = design;
+  path.split('.').forEach((part) => {
+    const key = part === '$last' && Array.isArray(cursor) ? String(cursor.length - 1) : part;
+    resolved.push(key);
+    cursor = typeof cursor === 'object' && cursor !== null ? (cursor as Record<string, unknown>)[key] : undefined;
+  });
+  return resolved.join('.');
 }
 
 function setMany(design: DesignDocument, updates: Record<string, DesignValue>): DesignDocument {
@@ -335,24 +360,42 @@ export const useDesignStore = create<DesignStore>()(
       updateField: (path, value) => get().updateValue(path, value),
       updateValue: (path, value) => {
         set((state) => ({
-          design: setAtPath(state.design, path, value),
+          design: withoutExpression(setAtPath(state.design, path, value), path),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
       updateValues: (updates) => {
         set((state) => ({
-          design: setMany(state.design, updates),
+          design: Object.keys(updates).reduce((next, path) => withoutExpression(next, path), setMany(state.design, updates)),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
+      updateExpression: (path, expression) => {
+        set((state) => {
+          let design = structuredClone(state.design);
+          if (expression.value !== null) design = setAtPath(design, path, expression.value);
+          design._expressions = { ...design._expressions, [path]: structuredClone(expression) };
+          return { design, designRevision: state.designRevision + 1 };
+        });
+        bump('edit', false);
+      },
       setQuadrants: (quadrants) => {
         const sorted = [...quadrants].sort();
-        set((state) => ({
-          design: { ...state.design, quadrants: sorted, mesh: { ...state.design.mesh, quadrants: encodeQuadrants(sorted) } },
-          designRevision: state.designRevision + 1,
-        }));
+        set((state) => {
+          const expressions = { ...state.design._expressions };
+          delete expressions['mesh.quadrants'];
+          return {
+            design: {
+              ...state.design,
+              quadrants: sorted,
+              mesh: { ...state.design.mesh, quadrants: encodeQuadrants(sorted) },
+              ...(Object.keys(expressions).length ? { _expressions: expressions } : { _expressions: undefined }),
+            },
+            designRevision: state.designRevision + 1,
+          };
+        });
         bump('edit', false);
       },
       setSourceConvention: (velocity_convention) => {
@@ -437,7 +480,7 @@ export function resetDesignStore(): void {
  *   FreeformConfig forbid it) and is dropped for every other family.
  */
 export function serializeDesign(design: DesignDocument): Record<string, unknown> {
-  const { quadrants, enclosure, mesh, ...root } = structuredClone(design);
+  const { quadrants, enclosure, mesh, _expressions, ...root } = structuredClone(design);
   const wireEnclosure = {
     depth: enclosure.depth,
     edge_radius: enclosure.edge_radius,
@@ -458,7 +501,23 @@ export function serializeDesign(design: DesignDocument): Record<string, unknown>
     enclosure: wireEnclosure,
   };
   if (design.formula !== 'OSSE') delete payload.guiding_curve;
+  Object.entries(_expressions ?? {}).forEach(([path, expression]) => {
+    setWirePath(payload, path, expression);
+  });
   return payload;
+}
+
+function setWirePath(root: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = path.split('.');
+  let cursor: Record<string, unknown> | unknown[] = root;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index] === '$last' && Array.isArray(cursor) ? String(cursor.length - 1) : parts[index];
+    const child = cursor[part as keyof typeof cursor];
+    if (!child || typeof child !== 'object') return;
+    cursor = child as Record<string, unknown> | unknown[];
+  }
+  const last = parts.at(-1) === '$last' && Array.isArray(cursor) ? String(cursor.length - 1) : parts.at(-1)!;
+  (cursor as Record<string, unknown>)[last] = structuredClone(value);
 }
 
 /** ATH represents domains as concatenated quadrant digits, never bit flags. */

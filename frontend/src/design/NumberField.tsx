@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import type { ExprNumber } from '../stores/design';
 
 interface NumberFieldProps {
   label: string;
@@ -15,6 +16,9 @@ interface NumberFieldProps {
   invalidMessage?: string;
   validate?: (value: number) => string | undefined;
   onCommit: (value: number) => void;
+  expression?: ExprNumber;
+  allowExpression?: boolean;
+  onCommitExpression?: (value: ExprNumber) => void;
   onBeginDrag?: () => void;
   onEndDrag?: () => void;
 }
@@ -34,11 +38,15 @@ export function NumberField({
   invalidMessage,
   validate,
   onCommit,
+  expression,
+  allowExpression = false,
+  onCommitExpression,
   onBeginDrag,
   onEndDrag,
 }: NumberFieldProps) {
   const id = useId();
-  const [draft, setDraft] = useState(value.toFixed(precision));
+  const displayed = expression?.raw ?? value.toFixed(precision);
+  const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const drag = useRef<{ x: number; value: number } | null>(null);
@@ -47,21 +55,28 @@ export function NumberField({
   endDragCallback.current = onEndDrag;
   const parsed = Number(draft);
   const draftMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
-  const invalid = draft.trim() === '' || !Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage);
+  const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
+  const invalid = draft.trim() === '' || (!isExpression && (!Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage)));
 
   useEffect(() => {
-    if (!editing && !drag.current) setDraft(value.toFixed(precision));
-  }, [editing, precision, value]);
+    if (!editing && !drag.current) setDraft(displayed);
+  }, [displayed, editing]);
 
   const commit = () => {
     setEditing(false);
     if (cancelBlur.current) {
       cancelBlur.current = false;
-      setDraft(value.toFixed(precision));
+      setDraft(displayed);
       return;
     }
     if (invalid) {
-      setDraft(value.toFixed(precision));
+      setDraft(displayed);
+      return;
+    }
+    if (isExpression) {
+      const raw = draft.trim();
+      setDraft(raw);
+      onCommitExpression?.({ value: null, raw });
       return;
     }
     const rounded = Number(parsed.toFixed(precision));
@@ -74,7 +89,7 @@ export function NumberField({
       event.currentTarget.blur();
     } else if (event.key === 'Escape') {
       cancelBlur.current = true;
-      setDraft(value.toFixed(precision));
+      setDraft(displayed);
       setEditing(false);
       event.currentTarget.blur();
     }
@@ -127,7 +142,7 @@ export function NumberField({
       >
         {label}{symbol && <span className="field-symbol">{symbol}</span>}
       </label>
-      <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}`}>
+      <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${expression?.raw ? ' expression' : ''}`}>
         {dragDelta !== null && (
           <span className="scrub-tip">drag <b>{dragDelta >= 0 ? '+' : ''}{dragDelta.toFixed(precision)}{unit}</b></span>
         )}
@@ -147,6 +162,7 @@ export function NumberField({
         {unit && <span className="unit">{unit}</span>}
         <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />
       </div>
+      {expression?.raw && expression.value !== null && <span className="expr-value" title="Evaluated value">= {Number(expression.value.toPrecision(8))}</span>}
       {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="sr-only">{draftMessage ?? invalidMessage}</span>}
     </div>
   );

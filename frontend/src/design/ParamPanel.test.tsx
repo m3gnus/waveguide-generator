@@ -67,4 +67,15 @@ describe('ParamPanel inventory UX', () => {
     act(() => input.blur());
     expect(useDesignStore.getState().design.source.velocity).toBe(1);
   });
+
+  it('renders the solve/directivity contracts and editable FREEFORM tables', () => {
+    expect(host.querySelector('[data-section="Solve options"]')).not.toBeNull();
+    expect(host.querySelector('[data-section="Directivity Map"]')).not.toBeNull();
+    for (const id of ['solve-engine', 'mesh-validation-mode', 'frequency-spacing', 'solve-verbose', 'polar-angle-start', 'polar-angle-end', 'polar-angle-step', 'polar-distance', 'polar-norm-angle', 'polar-diagonal-angle', 'polar-observation-origin', 'polar-spherical-sampling']) {
+      expect(host.querySelector(`#${id}`), id).not.toBeNull();
+    }
+    act(() => useDesignStore.getState().setFamily('FREEFORM'));
+    expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
+    expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(2);
+  });
 });

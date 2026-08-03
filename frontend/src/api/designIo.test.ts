@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from './designIo';
+import { serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
   it('decodes ATH quadrant digits and derives custom zmap sampling', () => {
@@ -22,5 +23,13 @@ describe('design hydration', () => {
     expect(design.source.radius).toBe(-1);
     expect(design.source.velocity).toBe(1);
     expect(design.simulation.f1).toBe(400);
+  });
+
+  it('preserves raw and evaluated expression forms through hydrate/serialize', () => {
+    const design = hydrateDesignDocument({ formula: 'R-OSSE', R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
+    expect(design.R).toBe(280);
+    expect(design.a).toBe(25);
+    expect(design._expressions).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
+    expect(serializeDesign(design)).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
   });
 });

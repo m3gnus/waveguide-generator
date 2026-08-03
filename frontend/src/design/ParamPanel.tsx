@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { convertDesignToFreeform } from '../api/designIo';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
+import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { NumberField } from './NumberField';
 import {
   PARAMETER_REGISTRY,
   PARAMETER_SECTIONS,
   fieldAppliesToFamily,
+  fieldAcceptsExpression,
   fieldIsVisible,
   fieldMatchesQuery,
   type ParameterDefinition,
-  type ParameterSection,
 } from './parameterRegistry';
 import './paramPanel.css';
 
 interface SectionProps {
-  title: ParameterSection;
+  title: string;
   summary: string;
   children: ReactNode;
   forceOpen: boolean;
@@ -53,7 +56,8 @@ function getAtPath(design: DesignDocument, path: string | undefined): unknown {
   if (!path) return undefined;
   return path.split('.').reduce<unknown>((value, part) => {
     if (typeof value !== 'object' || value === null) return undefined;
-    return (value as Record<string, unknown>)[part];
+    const key = part === '$last' && Array.isArray(value) ? String(value.length - 1) : part;
+    return (value as Record<string, unknown>)[key];
   }, design);
 }
 
@@ -76,20 +80,6 @@ function TextField({ field, value, disabled, onCommit }: {
       onBlur={() => { if (draft !== value) onCommit(draft); }}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     />
-  </div>;
-}
-
-function ReadOnlyTable({ field, value }: { field: ParameterDefinition; value: unknown }) {
-  const rows = Array.isArray(value) ? value : [];
-  return <div className="readonly-parameter-table" aria-label={field.label}>
-    <div className="readonly-table-head"><b>{field.label}</b><span>{rows.length} rows</span></div>
-    <table><thead><tr><th>#</th><th>Position</th><th>Value / shape</th></tr></thead>
-      <tbody>{rows.map((row, index) => {
-        const item = row as Record<string, unknown>;
-        return <tr key={index}><td>{index + 1}</td><td>{String(item.z ?? item.t ?? '—')}</td><td>{String(item.r ?? item.shape ?? '—')}</td></tr>;
-      })}</tbody>
-    </table>
-    <p>Structured read-only view — the spline-point editor arrives in a later phase.</p>
   </div>;
 }
 
@@ -125,6 +115,7 @@ function prospectiveValidation(field: ParameterDefinition, design: DesignDocumen
 function FieldControl({ field, design }: { field: ParameterDefinition; design: DesignDocument }) {
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
+  const updateExpression = useDesignStore((state) => state.updateExpression);
   const beginDrag = useDesignStore((state) => state.beginDrag);
   const endDrag = useDesignStore((state) => state.endDrag);
   const value = getAtPath(design, field.path);
@@ -143,7 +134,10 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
   if (field.kind === 'indicator') {
     return <div className="passthrough-row"><span>{field.label}</span><b>{passthroughStatus(field, design)}</b></div>;
   }
-  if (field.kind === 'table') return <ReadOnlyTable field={field} value={value} />;
+  if (field.kind === 'table') {
+    if (field.id === 'freeform.crossSections') return <EditableStationTable field={field} stations={Array.isArray(value) ? value : []} />;
+    return <EditablePointTable field={field} points={Array.isArray(value) ? value : []} />;
+  }
   if (field.disabledReason && !field.path) {
     return <div className="schema-gap" title={field.disabledReason}>
       <span>{field.label}</span><button disabled>{field.kind === 'toggle' ? 'Off' : 'Unavailable'}</button><small>{field.disabledReason}</small>
@@ -167,6 +161,8 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
       label={field.label}
       symbol={field.symbol}
       value={typeof value === 'number' ? value : 0}
+      expression={field.path ? design._expressions?.[field.path] : undefined}
+      allowExpression={fieldAcceptsExpression(field)}
       unit={field.unit}
       min={field.min}
       max={field.max}
@@ -177,6 +173,7 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
       invalidMessage={error}
       validate={(next) => prospectiveValidation(field, design, next)}
       onCommit={(next) => commit(next)}
+      onCommitExpression={(expression) => { if (field.path && !disabled) updateExpression(field.path, expression); }}
       onBeginDrag={beginDrag}
       onEndDrag={endDrag}
     />
@@ -199,7 +196,11 @@ function QuadrantControl({ design }: { design: DesignDocument }) {
 export function ParamPanel() {
   const design = useDesignStore((state) => state.design);
   const setFamily = useDesignStore((state) => state.setFamily);
+  const loadDesign = useDesignStore((state) => state.loadDesign);
   const [query, setQuery] = useState('');
+  const [freeformChoice, setFreeformChoice] = useState(false);
+  const [conversionError, setConversionError] = useState<string | null>(null);
+  const [converting, setConverting] = useState(false);
   const fieldsBySection = useMemo(() => new Map(PARAMETER_SECTIONS.map((section) => {
     const fields = PARAMETER_REGISTRY.filter((field) => field.section === section)
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
@@ -221,9 +222,21 @@ export function ParamPanel() {
         return <Section key={section} title={section} summary={`${fields.length} ${fields.length === 1 ? 'field' : 'fields'}`} forceOpen={Boolean(query.trim())}>
           {section === 'Profile' && <div className="select-row family-row">
             <label htmlFor="family">Family</label>
-            <select id="family" value={design.formula} onChange={(event) => setFamily(event.target.value as DesignFamily)}>
+            <select id="family" value={design.formula} onChange={(event) => {
+              const family = event.target.value as DesignFamily;
+              if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
+              else setFamily(family);
+            }}>
               <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
             </select>
+          </div>}
+          {section === 'Profile' && freeformChoice && <div className="family-switch-choice" role="group" aria-label="Switch to FREEFORM">
+            <b>Switch to FREEFORM</b><span>Choose how to initialize the editable profiles.</span>
+            <div><button onClick={() => { setFamily('FREEFORM'); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
+              setConverting(true); setConversionError(null);
+              void convertDesignToFreeform(design).then((converted) => { loadDesign(converted); setFreeformChoice(false); }).catch((error) => setConversionError(error instanceof Error ? error.message : String(error))).finally(() => setConverting(false));
+            }}>{converting ? 'Converting…' : 'Convert current design'}</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
+            {conversionError && <div className="field-error" role="alert">{conversionError}</div>}
           </div>}
           {fields.map((field) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} key={field.id}>
             {field.id === 'mesh.quadrants' ? <QuadrantControl design={design} /> : <FieldControl field={field} design={design} />}
@@ -231,6 +244,8 @@ export function ParamPanel() {
           {query.trim() && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}
         </Section>;
       })}
+      {!query.trim() && <Section title="Solve options" summary="4 options" forceOpen={false}><SolveOptionsControls /></Section>}
+      {!query.trim() && <Section title="Directivity Map" summary="11 controls" forceOpen={false}><DirectivityMapControls /></Section>}
       {query.trim() && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
   );

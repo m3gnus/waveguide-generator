@@ -10,6 +10,8 @@
 .disabled-reason, .lambda-hint { margin: -1px 0 3px; color: var(--fg4); font-size: 8.5px; line-height: 1.3; }
 .lambda-hint.warning { color: var(--amber); }
 .param-text-row > input { width: 132px; height: 21px; padding: 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: 10.5px var(--mono); }
+.number-control.expression { width: 132px; border-color: rgba(var(--acc-rgb), .25); }
+.expr-value { position: absolute; right: 0; top: 21px; z-index: 2; color: var(--green); font: 8.5px var(--mono); }
 .readonly-parameter-table { margin: 5px 0 8px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .readonly-table-head { display: flex; justify-content: space-between; padding: 5px 6px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); font-size: 10px; }
 .readonly-table-head b { color: var(--fg1); font-weight: 560; }
@@ -24,3 +26,23 @@
 .passthrough-row { display: flex; justify-content: space-between; min-height: 23px; align-items: center; gap: 8px; color: var(--fg1); font-size: 11.5px; }
 .passthrough-row b { color: var(--green); font: 9.5px var(--mono); font-weight: 500; }
 .parameter-empty { margin: 12px 9px; padding: 12px; border: 1px dashed var(--hair); border-radius: var(--r2); color: var(--fg3); font-size: 10.5px; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; min-height: 24px; color: var(--fg1); font-size: 11.5px; }
+.toggle-row input, .axis-toggles input, .point-paste input { accent-color: var(--acc); }
+.axis-toggles { display: flex; flex-wrap: wrap; gap: 5px 10px; margin: 5px 0; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); color: var(--fg2); font-size: 10px; text-transform: capitalize; }
+.section-note, .paste-meta { margin: 5px 0; color: var(--fg4); font-size: 9px; line-height: 1.35; }
+.polar-number .number-control { width: 132px; }
+.family-switch-choice { margin: 3px 0 7px; padding: 7px; border: 1px solid rgba(var(--acc-rgb), .3); border-radius: var(--r3); background: rgba(var(--acc-rgb), .06); }
+.family-switch-choice > b, .family-switch-choice > span { display: block; }
+.family-switch-choice > b { color: var(--fg1); font-size: 11px; }
+.family-switch-choice > span { margin: 2px 0 6px; color: var(--fg3); font-size: 9px; }
+.family-switch-choice button, .editable-parameter-table > button, .point-paste button { margin: 2px 3px 2px 0; padding: 3px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: 9px; }
+.editable-parameter-table { margin: 5px 0 9px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
+.editable-parameter-table table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.editable-parameter-table th { padding: 3px 2px; color: var(--fg4); font: 8px var(--mono); text-align: left; text-transform: uppercase; }
+.editable-parameter-table td { padding: 2px; border-top: 1px solid var(--hair-soft); color: var(--fg3); font: 9px var(--mono); }
+.editable-parameter-table th:last-child, .editable-parameter-table td:last-child { width: 20px; }
+.editable-parameter-table input, .editable-parameter-table select { width: 100%; min-width: 0; height: 20px; padding: 0 3px; border: 1px solid var(--hair); border-radius: 2px; background: var(--ctl-grad); color: var(--fg); font: 8.5px var(--mono); }
+.editable-parameter-table td button { width: 18px; height: 18px; border: 0; border-radius: 2px; background: var(--ov3); color: var(--red); }
+.point-paste { margin-top: 4px; padding: 5px; border-top: 1px solid var(--hair-soft); }
+.point-paste textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg); font: 9px var(--mono); }
+.point-paste label { display: block; margin: 3px 0; color: var(--fg2); font-size: 9px; }

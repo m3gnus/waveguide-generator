@@ -3,6 +3,7 @@ import { designForFamily } from '../stores/design';
 import {
   PARAMETER_REGISTRY,
   TRACEABILITY_PARAMETER_INVENTORY,
+  EXPRESSION_PARAMETER_IDS,
   fieldIsVisible,
   traceEntryIsRegistered,
 } from './parameterRegistry';
@@ -60,11 +61,12 @@ describe('complete parameter registry', () => {
   it('mirrors ICW rollback, coverage, OSSE guide, and Z-map mode visibility', () => {
     const icw = designForFamily('ICW');
     const visible = (id: string, design = icw) => fieldIsVisible(PARAMETER_REGISTRY.find((field) => field.id === id)!, design);
-    expect(visible('icw.hold_start')).toBe(false);
+    expect(visible('icw.hold_start')).toBe(true);
     icw.coverage_angle = 40;
     expect(visible('icw.hold_start')).toBe(true);
     icw.termination = 'rollback';
     expect(visible('icw.hold_start')).toBe(false);
+    expect(visible('icw.L')).toBe(false);
     expect(visible('icw.theta1_deg')).toBe(true);
 
     const osse = designForFamily('OSSE');
@@ -75,9 +77,28 @@ describe('complete parameter registry', () => {
     expect(visible('mesh.z_map_points', osse)).toBe(true);
   });
 
-  it('offers only supported sampling modes and maps legacy Source.Velocity to the numeric field', () => {
+  it('offers only supported sampling modes and maps legacy Source.Velocity to its enum', () => {
     const sampling = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.sampling_mode')!;
     expect(sampling.options?.map((option) => option.value)).toEqual(['uniform', 'ath-default-zmap', 'zmap']);
-    expect(PARAMETER_REGISTRY.find((field) => field.legacyKey === 'sourceVelocity')?.id).toBe('source.velocity');
+    expect(PARAMETER_REGISTRY.find((field) => field.legacyKey === 'sourceVelocity')?.id).toBe('source.velocity_convention');
+  });
+
+  it('marks all 43 daggered rows expression-capable, with tuple support for both enclosure resolutions', () => {
+    const tupleIds = new Set(['enclosure.front_resolution', 'enclosure.back_resolution']);
+    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(43);
+    expect([...tupleIds].every((id) => EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
+  });
+
+  it('keeps v1-preconfigurable values editable before their dependent mode is active', () => {
+    const osse = designForFamily('OSSE');
+    osse.guiding_curve.curve_type = 1;
+    osse.morph.target_shape = 0;
+    osse.enclosure.depth = 0;
+    osse.mesh.wall_thickness = 0;
+    for (const id of ['osse.a', 'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'enclosure.space_l', 'enclosure.front_resolution', 'mesh.wall_thickness', 'mesh.rear_resolution']) {
+      const field = PARAMETER_REGISTRY.find((item) => item.id === id)!;
+      expect(fieldIsVisible(field, osse), id).toBe(true);
+      expect(field.disabledWhen?.(osse), id).toBeUndefined();
+    }
   });
 });
