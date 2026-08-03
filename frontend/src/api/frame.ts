@@ -10,6 +10,8 @@ export interface FrameSurface {
   shading: 'smooth' | 'flat';
   normalMethod: 'analytic-parametric' | 'analytic-spline' | 'exact-planar';
   closedPhi?: boolean;
+  curvatureMean?: string;
+  curvaturePrincipal?: string;
 }
 
 export interface FrameHeader {
