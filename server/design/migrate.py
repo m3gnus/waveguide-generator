@@ -10,7 +10,18 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import math
-from typing import Any, Callable, Mapping
+from types import UnionType
+from typing import Annotated, Any, Callable, Mapping, Union, get_args, get_origin
+
+from pydantic import BaseModel
+
+from .schema import (
+    Expr,
+    FreeformConfig,
+    ICWConfig,
+    OSSEConfig,
+    ROSSEConfig,
+)
 
 
 Payload = dict[str, Any]
@@ -38,9 +49,22 @@ def _number(value: Any, fallback: float = 0.0) -> float:
     if isinstance(value, Mapping):
         value = value.get("value", value.get("raw"))
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
         return fallback
+    return number if math.isfinite(number) else fallback
+
+
+def _finite_number(value: Any, location: str) -> float:
+    if isinstance(value, Mapping):
+        value = value.get("value", value.get("raw"))
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(f"{location} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{location} must be a finite number")
+    return number
 
 
 def _point_row(point: Any) -> list[float] | None:
@@ -212,12 +236,18 @@ def _migrate_corner_ratio(payload: Payload) -> None:
         legacy = station.pop("cornerRatio", station.pop("corner_ratio", None))
         if legacy is None or "corner_radius_mm" in station or "cornerRadiusMm" in station:
             continue
+        ratio = _finite_number(legacy, "FREEFORM corner ratio")
         t = min(1.0, max(0.0, _number(station.get("t"))))
         radius_h = _radius_at(horizontal, t)
         radius_v = _radius_at(vertical, t)
         # V1 rounds the absolute millimetre radius to one decimal place.
-        millimetres = _number(legacy) * min(radius_h, radius_v)
-        station["corner_radius_mm"] = math.floor(millimetres * 10 + 0.5) / 10
+        millimetres = ratio * min(radius_h, radius_v)
+        if not math.isfinite(millimetres):
+            raise ValueError("FREEFORM corner ratio produces a non-finite radius")
+        tenths = millimetres * 10
+        if not math.isfinite(tenths):
+            raise ValueError("FREEFORM corner ratio is too large to round safely")
+        station["corner_radius_mm"] = math.floor(tenths + 0.5) / 10
 
 
 def _has_inflection_allow(payload: Payload) -> bool:
@@ -235,6 +265,40 @@ def _migrate_inflection_allow(payload: Payload) -> None:
 _JS_ARTIFACT_TOKENS = frozenset({"undefined", "NaN"})
 
 
+def _numeric_paths_for_annotation(
+    annotation: Any, prefix: tuple[str, ...]
+) -> set[tuple[str, ...]]:
+    if annotation is Expr:
+        return {prefix}
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        result: set[tuple[str, ...]] = set()
+        for name, field_info in annotation.model_fields.items():
+            result.update(
+                _numeric_paths_for_annotation(field_info.annotation, (*prefix, name))
+            )
+        return result
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _numeric_paths_for_annotation(get_args(annotation)[0], prefix)
+    if origin is list:
+        return _numeric_paths_for_annotation(get_args(annotation)[0], (*prefix, "*"))
+    if origin in {Union, UnionType}:
+        result: set[tuple[str, ...]] = set()
+        for choice in get_args(annotation):
+            result.update(_numeric_paths_for_annotation(choice, prefix))
+        return result
+    return set()
+
+
+# Migration 003 is intentionally derived from the typed schema. Unknown keys,
+# passthrough mappings, and string-valued known fields are outside this set.
+_KNOWN_NUMERIC_PATHS = frozenset(
+    path
+    for root_model in (OSSEConfig, ROSSEConfig, ICWConfig, FreeformConfig)
+    for path in _numeric_paths_for_annotation(root_model, ())
+)
+
+
 def _is_js_undefined(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip() in _JS_ARTIFACT_TOKENS
@@ -244,11 +308,23 @@ def _is_js_undefined(value: Any) -> bool:
     return False
 
 
-def _walk_has_js_undefined(node: Any) -> bool:
+def _is_known_numeric_path(path: tuple[str, ...]) -> bool:
+    return any(
+        len(candidate) == len(path)
+        and all(expected == "*" or expected == actual for expected, actual in zip(candidate, path))
+        for candidate in _KNOWN_NUMERIC_PATHS
+    )
+
+
+def _walk_has_js_undefined(node: Any, path: tuple[str, ...] = ()) -> bool:
     if isinstance(node, Mapping):
-        return any(_is_js_undefined(v) or _walk_has_js_undefined(v) for v in node.values())
+        return any(
+            (_is_known_numeric_path((*path, str(key))) and _is_js_undefined(value))
+            or _walk_has_js_undefined(value, (*path, str(key)))
+            for key, value in node.items()
+        )
     if isinstance(node, (list, tuple)):
-        return any(_walk_has_js_undefined(item) for item in node)
+        return any(_walk_has_js_undefined(item, (*path, "*")) for item in node)
     return False
 
 
@@ -256,15 +332,19 @@ def _has_js_undefined(payload: Payload) -> bool:
     return _walk_has_js_undefined(payload)
 
 
-def _strip_js_undefined(node: Any) -> None:
+def _strip_js_undefined(node: Any, path: tuple[str, ...] = ()) -> None:
     if isinstance(node, dict):
-        for key in [k for k, v in node.items() if _is_js_undefined(v)]:
+        for key in [
+            key
+            for key, value in node.items()
+            if _is_known_numeric_path((*path, str(key))) and _is_js_undefined(value)
+        ]:
             del node[key]
-        for value in node.values():
-            _strip_js_undefined(value)
+        for key, value in node.items():
+            _strip_js_undefined(value, (*path, str(key)))
     elif isinstance(node, list):
         for item in node:
-            _strip_js_undefined(item)
+            _strip_js_undefined(item, (*path, "*"))
 
 
 def _migrate_js_undefined(payload: Payload) -> None:

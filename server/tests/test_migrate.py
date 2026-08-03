@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from server.design.migrate import MIGRATIONS, apply_migrations
 from server.design.textcfg import parse
 
@@ -98,3 +100,35 @@ def test_js_undefined_lines_dropped() -> None:
     assert "angular_segments" not in migrated["mesh"]
     assert migrated["mesh"]["length_segments"] == 40
     assert any(item.name == "003_js_undefined_lines_dropped" for item in applied)
+
+
+def test_js_artifacts_are_dropped_only_for_schema_numeric_paths() -> None:
+    payload = {
+        "formula": "OSSE",
+        "L": "NaN",
+        "coverage_mode": "NaN",
+        "Future": "undefined",
+        "source": {"contours": "NaN"},
+        "extra_keys": {"L": "NaN", "Future": "undefined"},
+    }
+    migrated, applied = apply_migrations(payload)
+    assert "L" not in migrated
+    assert migrated["coverage_mode"] == "NaN"
+    assert migrated["Future"] == "undefined"
+    assert migrated["source"]["contours"] == "NaN"
+    assert migrated["extra_keys"] == {"L": "NaN", "Future": "undefined"}
+    assert [item.name for item in applied] == ["003_js_undefined_lines_dropped"]
+
+
+@pytest.mark.parametrize(
+    "ratio",
+    ["NaN", "Infinity", 10**10000],
+    ids=["nan", "infinity", "integer-overflow"],
+)
+def test_corner_ratio_non_finite_or_overflow_is_a_migration_error(ratio: object) -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "cross_sections": [{"t": 0.5, "shape": "rounded_rectangle", "corner_ratio": ratio}],
+    }
+    with pytest.raises(ValueError, match="finite"):
+        apply_migrations(payload)

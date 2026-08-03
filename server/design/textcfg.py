@@ -40,6 +40,7 @@ class _RawBlock:
     items: dict[str, str] = field(default_factory=dict)
     lines: list[str] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
+    entries: list[str] = field(default_factory=list)
 
 
 def _semantic_fingerprint(design: DesignConfig) -> str:
@@ -100,6 +101,8 @@ def _collect_function(lines: list[str], index: int, first_value: str) -> tuple[s
         index += 1
         if opened and depth <= 0:
             break
+    if not opened or depth > 0:
+        raise TextConfigError("unterminated function expression at end of file")
     return "\n".join(raw), index
 
 
@@ -124,19 +127,29 @@ def _lex(text: str) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], di
         line = _without_comment(original)
         index += 1
         if not line:
+            if current is not None and stripped:
+                blocks[current].entries.append(stripped)
             continue
         match = _BLOCK_START.fullmatch(line)
         if match:
+            if current is not None:
+                raise TextConfigError(f"nested block {match.group(1)!r} inside {current!r}")
             current = match.group(1)
             blocks[current] = _RawBlock()
             continue
         if line == "}":
+            if current is None:
+                raise TextConfigError("unexpected block terminator")
             current = None
             continue
+        if current is not None:
+            blocks[current].entries.append(stripped)
         if "=" in line:
             key, value = (part.strip() for part in line.split("=", 1))
             if value.startswith("function anonymous("):
                 value, index = _collect_function(lines, index - 1, value)
+                if current is not None:
+                    blocks[current].entries.extend(value.splitlines()[1:])
             qualified = f"{current}.{key}" if current else key
             raw_values[qualified] = value
             if current is None:
@@ -146,6 +159,8 @@ def _lex(text: str) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], di
             continue
         if current is not None:
             blocks[current].lines.append(line)
+    if current is not None:
+        raise TextConfigError(f"unterminated block {current!r} at end of file")
     return flat, blocks, comments, raw_values
 
 
@@ -297,10 +312,61 @@ def _enclosure(blocks: Mapping[str, _RawBlock]) -> dict[str, Any] | None:
     return result
 
 
-def _point(raw: str, block_name: str, row: int) -> dict[str, Any]:
+_FREEFORM_FLAT_ITEMS = frozenset(
+    {
+        "Freeform.Length",
+        "Freeform.ThroatRadius",
+        "Freeform.ThroatAngle",
+        "Freeform.OvershootPolicy",
+        "Freeform.InflectionPolicy",
+    }
+)
+_FREEFORM_BLOCKS = frozenset(
+    {
+        "Freeform.H",
+        "Freeform.V",
+        "Freeform.H.Points",
+        "Freeform.V.Points",
+        "Freeform.CrossSections",
+    }
+)
+_FREEFORM_PROFILE_ITEMS = frozenset(
+    {"MouthRadius", "MouthAngle", "ThroatTangentScale", "MouthTangentScale"}
+)
+_FREEFORM_STATION_SHAPES = frozenset(
+    {"circle", "ellipse", "superellipse", "rounded_rectangle"}
+)
+
+
+def _finite(raw: str, location: str) -> float:
+    try:
+        value = float(raw)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise TextConfigError(f"{location} must be a finite number") from exc
+    if not math.isfinite(value):
+        raise TextConfigError(f"{location} must be a finite number")
+    return value
+
+
+def _validate_block_items(block_name: str, block: _RawBlock, allowed: frozenset[str]) -> None:
+    unknown = next((key for key in block.items if key not in allowed), None)
+    if unknown is not None:
+        raise TextConfigError(f"{block_name} item {unknown}: unknown item name")
+
+
+def _point(raw: str, block_name: str, row: int, length: float) -> dict[str, Any]:
     parts = raw.split()
     if len(parts) not in (2, 3, 4):
         raise TextConfigError(f"{block_name} row {row}: expected 2, 3, or 4 numeric values")
+    values = [_finite(part, f"{block_name} row {row} column {index + 1}") for index, part in enumerate(parts)]
+    if not 0 < values[0] < length:
+        raise TextConfigError(f"{block_name} row {row}: z must be strictly between 0 and {length:g}")
+    if values[1] <= 0:
+        raise TextConfigError(f"{block_name} row {row}: radius must be greater than 0")
+    if len(values) >= 3 and not -90 < values[2] < 90:
+        raise TextConfigError(f"{block_name} row {row}: angle must be between -90 and 90")
+    if len(values) == 4 and not 0 < values[3] <= 3:
+        raise TextConfigError(f"{block_name} row {row}: strength must be greater than 0 and at most 3")
     result = {"z": parts[0], "r": parts[1]}
     if len(parts) >= 3:
         result["angle_deg"] = parts[2]
@@ -314,13 +380,38 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
     throat_radius = flat.get("Freeform.ThroatRadius")
     if length is None or throat_radius is None:
         raise TextConfigError("FREEFORM requires Freeform.Length and Freeform.ThroatRadius")
+    length_value = _finite(length, "Freeform.Length")
+    throat_radius_value = _finite(throat_radius, "Freeform.ThroatRadius")
+    if length_value <= 0:
+        raise TextConfigError("Freeform.Length must be greater than 0")
+    if throat_radius_value <= 0:
+        raise TextConfigError("Freeform.ThroatRadius must be greater than 0")
 
     def profile(axis: str) -> dict[str, Any]:
-        info = blocks.get(f"Freeform.{axis}", _RawBlock())
-        rows = blocks.get(f"Freeform.{axis}.Points", _RawBlock()).lines
+        block_name = f"Freeform.{axis}"
+        info = blocks.get(block_name)
+        if info is None or "MouthRadius" not in info.items:
+            raise TextConfigError(f"{block_name} requires MouthRadius")
+        _validate_block_items(block_name, info, _FREEFORM_PROFILE_ITEMS)
+        mouth_radius = _finite(info.items["MouthRadius"], f"{block_name}.MouthRadius")
+        if mouth_radius <= 0:
+            raise TextConfigError(f"{block_name}.MouthRadius must be greater than 0")
+        points_block_name = f"{block_name}.Points"
+        points_block = blocks.get(points_block_name, _RawBlock())
+        _validate_block_items(points_block_name, points_block, frozenset())
+        rows = points_block.lines
+        if len(rows) > 62:
+            raise TextConfigError(f"{points_block_name} contains more than 62 interior anchors")
+        interior = [
+            _point(row, points_block_name, index + 1, length_value)
+            for index, row in enumerate(rows)
+        ]
+        z_values = [float(point["z"]) for point in interior]
+        if any(right <= left for left, right in zip(z_values, z_values[1:])):
+            raise TextConfigError(f"{points_block_name} z values must be strictly increasing")
         points = [{"z": "0", "r": throat_radius}]
-        points.extend(_point(row, f"Freeform.{axis}.Points", index + 1) for index, row in enumerate(rows))
-        points.append({"z": length, "r": info.items.get("MouthRadius", throat_radius)})
+        points.extend(interior)
+        points.append({"z": length, "r": info.items["MouthRadius"]})
         return {
             "points": points,
             "throat_angle_deg": flat.get("Freeform.ThroatAngle"),
@@ -330,19 +421,52 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         }
 
     stations: list[dict[str, Any]] = []
-    for index, row in enumerate(blocks.get("Freeform.CrossSections", _RawBlock()).lines):
+    station_block = blocks.get("Freeform.CrossSections")
+    if station_block is None:
+        raise TextConfigError("FREEFORM requires a Freeform.CrossSections block")
+    _validate_block_items("Freeform.CrossSections", station_block, frozenset())
+    station_t: list[float] = []
+    for index, row in enumerate(station_block.lines):
         parts = row.split()
         if len(parts) not in (2, 3):
             raise TextConfigError(f"Freeform.CrossSections row {index + 1}: expected 2 or 3 values")
+        t_value = _finite(parts[0], f"Freeform.CrossSections row {index + 1} column 1")
+        if not 0 <= t_value <= 1:
+            raise TextConfigError(f"Freeform.CrossSections row {index + 1}: t must be between 0 and 1")
+        if parts[1] not in _FREEFORM_STATION_SHAPES:
+            raise TextConfigError(
+                f"Freeform.CrossSections row {index + 1}: unknown shape {parts[1]!r}"
+            )
         station: dict[str, Any] = {"t": parts[0], "shape": parts[1]}
         if len(parts) == 3:
             if parts[2].startswith("ratio:"):
+                _finite(
+                    parts[2].split(":", 1)[1],
+                    f"Freeform.CrossSections row {index + 1} corner ratio",
+                )
                 station["corner_ratio"] = parts[2].split(":", 1)[1]
             elif parts[1] == "superellipse":
+                _finite(parts[2], f"Freeform.CrossSections row {index + 1} exponent")
                 station["exponent"] = parts[2]
             elif parts[1] == "rounded_rectangle":
+                _finite(parts[2], f"Freeform.CrossSections row {index + 1} corner radius")
                 station["corner_radius_mm"] = parts[2]
+            else:
+                raise TextConfigError(
+                    f"Freeform.CrossSections row {index + 1}: {parts[1]} rows must contain exactly 2 values"
+                )
+        station_t.append(t_value)
         stations.append(station)
+    if len(stations) < 2:
+        raise TextConfigError("Freeform.CrossSections requires at least two station rows")
+    if len(stations) > 32:
+        raise TextConfigError("Freeform.CrossSections permits at most 32 station rows")
+    if any(right <= left for left, right in zip(station_t, station_t[1:])):
+        raise TextConfigError("Freeform.CrossSections t values must be strictly increasing")
+    if station_t[0] != 0 or stations[0]["shape"] != "circle":
+        raise TextConfigError('the first Freeform.CrossSections station must be "0 circle"')
+    if station_t[-1] != 1:
+        raise TextConfigError("the last Freeform.CrossSections station must have t = 1")
     return {
         "formula": "FREEFORM",
         "profile_h": profile("H"),
@@ -360,8 +484,8 @@ def _build_payload(flat_source: Mapping[str, str], blocks: Mapping[str, _RawBloc
     consumed_keys: set[str] = set()
     if formula == "FREEFORM":
         payload = _freeform_payload(flat, blocks)
-        consumed_keys.update(key for key in flat if key.startswith("Freeform."))
-        consumed_blocks.update(key for key in blocks if key.startswith("Freeform."))
+        consumed_keys.update(key for key in flat if key in _FREEFORM_FLAT_ITEMS)
+        consumed_blocks.update(key for key in blocks if key in _FREEFORM_BLOCKS)
     else:
         payload = {"formula": formula}
         formula_block = blocks.get(formula)
@@ -394,7 +518,12 @@ def _build_payload(flat_source: Mapping[str, str], blocks: Mapping[str, _RawBloc
 
     payload["extra_keys"] = {key: value for key, value in flat.items() if key not in consumed_keys}
     payload["extra_blocks"] = {
-        name: ConfigBlock(items=block.items, lines=block.lines, comments=block.comments).model_dump()
+        name: ConfigBlock(
+            items=block.items,
+            lines=block.lines,
+            comments=block.comments,
+            entries=block.entries,
+        ).model_dump()
         for name, block in blocks.items()
         if name not in consumed_blocks
     }
@@ -414,7 +543,10 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     payload = _build_payload(flat, blocks)
     applications: list[MigrationApplication] = []
     if migrate:
-        payload, applications = apply_migrations(payload)
+        try:
+            payload, applications = apply_migrations(payload)
+        except (OverflowError, ValueError) as exc:
+            raise TextConfigError(str(exc)) from exc
     try:
         design = DesignConfig.model_validate(payload)
     except ValidationError as exc:
@@ -660,10 +792,13 @@ def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None
         _line(lines, key, value)
     for name, block in config.extra_blocks.items():
         lines.append(f"{name} = {{")
-        lines.extend(block.comments)
-        lines.extend(block.lines)
-        for key, value in block.items.items():
-            lines.append(f"{key} = {value}")
+        if block.entries:
+            lines.extend(block.entries)
+        else:
+            lines.extend(block.comments)
+            lines.extend(block.lines)
+            for key, value in block.items.items():
+                lines.append(f"{key} = {value}")
         lines.append("}")
     return "\n".join(lines) + "\n"
 

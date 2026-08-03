@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from itertools import count
 import json
 import math
@@ -13,6 +14,7 @@ from typing import Any, Literal, Protocol
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from server.design.migrate import apply_migrations
 from server.design.schema import DesignConfig
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
 from server.preview.translate import design_to_mesher_config
@@ -27,6 +29,7 @@ CLOSE_TOO_LARGE = 4413
 CLOSE_RESTARTING = 1012
 
 _EPOCHS = count(1)
+_PREVIEW_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wg-preview")
 
 
 class PreviewTransport(Protocol):
@@ -46,9 +49,9 @@ class _Message(BaseModel):
 
     v: Literal[1]
     kind: str
-    epoch: int = Field(ge=1)
-    seq: int = Field(ge=0)
-    design_revision: int = Field(alias="designRevision", ge=0)
+    epoch: int = Field(ge=1, strict=True)
+    seq: int = Field(ge=0, strict=True)
+    design_revision: int = Field(alias="designRevision", ge=0, strict=True)
 
 
 class _PreviewMessage(_Message):
@@ -276,6 +279,19 @@ class PreviewProtocol:
         self._pending: _Request | None = None
         self._send_lock = asyncio.Lock()
         self._closed = False
+        self._background_failure = asyncio.Event()
+
+    def _supervise(self, task: asyncio.Task[Any]) -> None:
+        """Wake the receive loop when a background transport operation fails."""
+
+        if task.cancelled():
+            return
+        try:
+            exception = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exception is not None:
+            self._background_failure.set()
 
     def is_current_epoch(self, epoch: object) -> bool:
         """Return whether an incoming or decoded response belongs to this socket."""
@@ -299,9 +315,20 @@ class PreviewProtocol:
             }
         )
         heartbeat = asyncio.create_task(self._heartbeat())
+        heartbeat.add_done_callback(self._supervise)
+        background_failure = asyncio.create_task(self._background_failure.wait())
         try:
             while not self._closed:
-                message = await transport.receive()
+                receive = asyncio.create_task(transport.receive())
+                done, _ = await asyncio.wait(
+                    {receive, background_failure},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if background_failure in done:
+                    receive.cancel()
+                    await asyncio.gather(receive, return_exceptions=True)
+                    break
+                message = receive.result()
                 if message is None:
                     break
                 if not await self._receive_message(message):
@@ -314,10 +341,12 @@ class PreviewProtocol:
         finally:
             self._closed = True
             heartbeat.cancel()
+            background_failure.cancel()
             if self._worker is not None:
                 self._worker.cancel()
             await asyncio.gather(
                 heartbeat,
+                background_failure,
                 *(task for task in (self._worker,) if task is not None),
                 return_exceptions=True,
             )
@@ -348,7 +377,11 @@ class PreviewProtocol:
             await self._error(None, None, "validation", fields={"message": "must be an object"})
             return True
         version = value.get("v")
-        if version != PROTOCOL_VERSION or isinstance(version, bool):
+        if (
+            not isinstance(version, int)
+            or isinstance(version, bool)
+            or version != PROTOCOL_VERSION
+        ):
             await self._close(CLOSE_UNSUPPORTED_VERSION)
             return False
         incoming_epoch = value.get("epoch")
@@ -366,23 +399,34 @@ class PreviewProtocol:
             return True
 
         kind = value.get("kind")
-        seq = value.get("seq") if isinstance(value.get("seq"), int) else None
+        seq = (
+            value.get("seq")
+            if isinstance(value.get("seq"), int) and not isinstance(value.get("seq"), bool)
+            else None
+        )
         revision = (
             value.get("designRevision")
             if isinstance(value.get("designRevision"), int)
+            and not isinstance(value.get("designRevision"), bool)
             else None
         )
         try:
             if kind == "preview":
                 parsed = _PreviewMessage.model_validate(value)
                 try:
-                    design = DesignConfig.model_validate(parsed.design)
-                except ValidationError as exc:
+                    migrated, _applications = apply_migrations(parsed.design)
+                    design = DesignConfig.model_validate(migrated)
+                except (ValidationError, ValueError) as exc:
+                    fields = (
+                        _validation_fields(exc, prefix="design")
+                        if isinstance(exc, ValidationError)
+                        else {"design": str(exc)}
+                    )
                     await self._error(
                         parsed.seq,
                         parsed.design_revision,
                         "validation",
-                        fields=_validation_fields(exc, prefix="design"),
+                        fields=fields,
                     )
                     return True
                 request = _Request(
@@ -416,6 +460,7 @@ class PreviewProtocol:
     async def _enqueue(self, request: _Request) -> None:
         if self._worker is None:
             self._worker = asyncio.create_task(self._work(request))
+            self._worker.add_done_callback(self._supervise)
             return
         if self._pending is not None:
             await self._send_json({"kind": "dropped", "seq": self._pending.seq})
@@ -425,11 +470,10 @@ class PreviewProtocol:
         current: _Request | None = request
         while current is not None and not self._closed:
             try:
-                frame = await asyncio.to_thread(self._compute_frame, current)
-                if len(frame) > self.max_frame_bytes:
-                    await self._close(CLOSE_TOO_LARGE)
-                    return
-                await self._send_bytes(frame)
+                loop = asyncio.get_running_loop()
+                frame = await loop.run_in_executor(
+                    _PREVIEW_EXECUTOR, self._compute_frame, current
+                )
             except FrameError as exc:
                 if exc.rule == "frame-too-large":
                     await self._close(CLOSE_TOO_LARGE)
@@ -454,6 +498,13 @@ class PreviewProtocol:
                     "internal",
                     message=str(exc),
                 )
+            else:
+                if len(frame) > self.max_frame_bytes:
+                    await self._close(CLOSE_TOO_LARGE)
+                    return
+                # Transport failures must escape the compute-error handlers so
+                # task supervision can terminate a receive() blocked forever.
+                await self._send_bytes(frame)
             current = self._pending
             self._pending = None
         self._worker = None

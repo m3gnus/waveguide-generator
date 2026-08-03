@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import math
 import re
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
@@ -111,13 +112,35 @@ class Expr(StrictModel):
         if isinstance(value, bool):
             return {"value": float(value), "raw": "1" if value else "0"}
         if isinstance(value, (int, float)):
-            number = float(value)
+            try:
+                number = float(value)
+            except OverflowError as exc:
+                raise ValueError("numeric design values must be representable as floats") from exc
             if not math.isfinite(number):
                 raise ValueError("numeric design values must be finite")
             return {"value": number, "raw": None}
         if isinstance(value, str):
             return {"value": _constant_expression_value(value), "raw": value}
+        if isinstance(value, Mapping):
+            result = dict(value)
+            raw = result.get("raw")
+            if result.get("value") is None and isinstance(raw, str):
+                result["value"] = _constant_expression_value(raw)
+            return result
         return value
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _finite_value(cls, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("numeric design values must be representable as finite floats") from exc
+        if not math.isfinite(number):
+            raise ValueError("numeric design values must be finite")
+        return number
 
     def text(self) -> str:
         """Return the v1-readable spelling, preferring the preserved source."""
@@ -135,6 +158,9 @@ class ConfigBlock(StrictModel):
     items: dict[str, str] = Field(default_factory=dict)
     lines: list[str] = Field(default_factory=list)
     comments: list[str] = Field(default_factory=list)
+    # Exact block-body tokens preserve duplicate assignments and the relative
+    # ordering of assignments, rows, and comments after an unrelated edit.
+    entries: list[str] = Field(default_factory=list)
 
 
 class MorphConfig(StrictModel):
@@ -290,7 +316,7 @@ class ICWConfig(DesignCommon):
     hold_start: Expr | None = None
     hold_end: Expr | None = None
     n_coeff: Expr | None = None
-    termination: Literal["flat_baffle", "rollback"] | str | None = None
+    termination: Literal["flat_baffle", "rollback"] | None = None
     theta1_deg: Expr | None = None
     depth: Expr | None = None
     curl: Expr | None = None
@@ -301,6 +327,12 @@ class FreeformPoint(StrictModel):
     r: Expr
     angle_deg: Expr | None = None
     strength: Expr | None = None
+
+    @model_validator(mode="after")
+    def _strength_requires_angle(self) -> FreeformPoint:
+        if self.strength is not None and self.angle_deg is None:
+            raise ValueError("strength requires angle_deg")
+        return self
 
 
 class FreeformProfile(StrictModel):
@@ -330,10 +362,29 @@ class FreeformConfig(DesignCommon):
     formula: Literal["FREEFORM"]
     profile_h: FreeformProfile
     profile_v: FreeformProfile
-    cross_sections: list[CrossSectionStation]
-    overshoot_policy: Literal["reject", "allow"] | str | None = None
-    inflection_policy: Literal["reject", "warn"] | str | None = None
+    cross_sections: list[CrossSectionStation] = Field(min_length=2, max_length=32)
+    overshoot_policy: Literal["reject", "allow"] | None = None
+    inflection_policy: Literal["reject", "warn"] | None = None
     corner_grids: list[CornerGrid] = Field(default_factory=list)
+
+    @field_validator("cross_sections")
+    @classmethod
+    def _valid_cross_section_domain(
+        cls, stations: list[CrossSectionStation]
+    ) -> list[CrossSectionStation]:
+        values = [station.t.value for station in stations]
+        if any(value is None for value in values):
+            raise ValueError("cross-section station t values must be scalar")
+        scalars = [float(value) for value in values if value is not None]
+        if any(value < 0 or value > 1 for value in scalars):
+            raise ValueError("cross-section station t values must be between 0 and 1")
+        if any(right <= left for left, right in zip(scalars, scalars[1:])):
+            raise ValueError("cross-section station t values must be strictly increasing")
+        if scalars[0] != 0 or stations[0].shape != "circle":
+            raise ValueError('the first cross-section station must be "0 circle"')
+        if scalars[-1] != 1:
+            raise ValueError("the last cross-section station must have t = 1")
+        return stations
 
 
 DesignVariant = Annotated[
@@ -344,6 +395,18 @@ DesignVariant = Annotated[
 
 class DesignConfig(RootModel[DesignVariant]):
     """Root discriminated design union, serialized as a flat API object."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_payload(cls, value: Any) -> Any:
+        if isinstance(value, cls) or not isinstance(value, Mapping):
+            return value
+        # Lazy import avoids a schema/migration import cycle while ensuring
+        # every API path validates the post-migration strict Literal schema.
+        from .migrate import apply_migrations
+
+        migrated, _applications = apply_migrations(value)
+        return migrated
 
     @property
     def formula(self) -> str:

@@ -17,6 +17,8 @@ SUPPORTED_VERSION = 1
 MAX_HEADER_BYTES = 64 * 1024
 DEFAULT_MAX_FRAME_BYTES = 32 * 1024 * 1024
 MAX_SECTION_ELEMENTS = 1 << 28
+MAX_SECTION_RANK = 64
+MAX_SAFE_INTEGER = (1 << 53) - 1
 NORMAL_LENGTH_TOLERANCE = 1e-3
 
 _DTYPES: dict[str, np.dtype[Any]] = {
@@ -51,8 +53,29 @@ def _align8(value: int) -> int:
     return (value + 7) & ~7
 
 
+def _safe_integer(value: object) -> int | None:
+    """Return the normalized JSON safe integer shared with the JS decoder."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        return None
+    if abs(value) > MAX_SAFE_INTEGER:
+        return None
+    return int(value)
+
+
 def _is_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return _safe_integer(value) is not None
+
+
+def _is_finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _json_object(raw: bytes) -> Header:
@@ -61,7 +84,7 @@ def _json_object(raw: bytes) -> Header:
             raw.decode("utf-8"),
             parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
         _fail("header-json", str(exc))
     if not isinstance(value, dict):
         _fail("header-json", "header must be a JSON object")
@@ -91,24 +114,34 @@ def _section_descriptors(
         names.add(name)
 
         dtype_name = raw.get("dtype")
-        if dtype_name not in _DTYPES:
+        if not isinstance(dtype_name, str) or dtype_name not in _DTYPES:
             _fail("section-dtype", f"{name}: {dtype_name!r}")
         dtype = _DTYPES[dtype_name]
 
         raw_shape = raw.get("shape")
-        if not isinstance(raw_shape, list) or any(not _is_int(dim) or dim < 0 for dim in raw_shape):
+        if not isinstance(raw_shape, list) or len(raw_shape) > MAX_SECTION_RANK:
+            _fail("section-shape", name)
+        shape_values = [_safe_integer(dim) for dim in raw_shape]
+        if any(dim is None or dim < 0 for dim in shape_values):
             _fail("section-shape", name)
         element_count = 1
-        for dim in raw_shape:
+        for dimension in shape_values:
+            assert dimension is not None
+            if dimension > MAX_SECTION_ELEMENTS:
+                _fail("section-elements", name)
+            dim = dimension
             element_count *= dim
             if element_count > MAX_SECTION_ELEMENTS:
                 _fail("section-elements", name)
-        shape = tuple(raw_shape)
+        shape = tuple(dimension for dimension in shape_values if dimension is not None)
+        raw["shape"] = list(shape)
 
-        byte_offset = raw.get("byteOffset")
-        byte_length = raw.get("byteLength")
-        if not _is_int(byte_offset) or not _is_int(byte_length) or byte_offset < 0 or byte_length < 0:
+        byte_offset = _safe_integer(raw.get("byteOffset"))
+        byte_length = _safe_integer(raw.get("byteLength"))
+        if byte_offset is None or byte_length is None or byte_offset < 0 or byte_length < 0:
             _fail("section-range", name)
+        raw["byteOffset"] = byte_offset
+        raw["byteLength"] = byte_length
         if byte_length != element_count * dtype.itemsize:
             _fail("section-length", name)
         if byte_offset > payload_length or byte_length > payload_length - byte_offset:
@@ -162,7 +195,7 @@ def _validate_fidelity(header: Header) -> None:
     int_fields = ("minSilhouetteSegmentsRequested", "minSilhouetteSegmentsAchieved")
     for field in float_fields:
         value = fidelity.get(field)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        if not _is_finite_number(value) or value < 0:
             _fail("fidelity-invalid", field)
     for field in int_fields:
         value = fidelity.get(field)
@@ -194,9 +227,11 @@ def _validate_preview(header: Header, arrays: Mapping[str, np.ndarray]) -> None:
         role = surface.get("role")
         if not isinstance(role, str) or not role:
             _fail("surface-role", str(surface_index))
-        if surface.get("shading") not in {"smooth", "flat"}:
+        shading = surface.get("shading")
+        if not isinstance(shading, str) or shading not in {"smooth", "flat"}:
             _fail("surface-shading", role)
-        if surface.get("normalMethod") not in {
+        normal_method = surface.get("normalMethod")
+        if not isinstance(normal_method, str) or normal_method not in {
             "analytic-parametric",
             "analytic-spline",
             "exact-planar",
@@ -266,14 +301,20 @@ def decode(
         _fail("header-truncated", "payload alignment padding missing")
 
     header = _json_object(bytes(view[8:header_end]))
-    version = header.get("v")
-    if not _is_int(version) or version != SUPPORTED_VERSION:
+    version = _safe_integer(header.get("v"))
+    if version != SUPPORTED_VERSION:
         _fail("unsupported-version", repr(version))
+    header["v"] = version
     descriptors = _section_descriptors(header, len(view) - payload_base)
 
     arrays: dict[str, np.ndarray] = {}
     for name, dtype, shape, byte_offset, _byte_length in descriptors:
-        arrays[name] = np.ndarray(shape, dtype=dtype, buffer=view, offset=payload_base + byte_offset)
+        try:
+            arrays[name] = np.ndarray(
+                shape, dtype=dtype, buffer=view, offset=payload_base + byte_offset
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            _fail("section-shape", f"{name}: {exc}")
     if header.get("kind") == "preview":
         _validate_preview(header, arrays)
     return header, arrays
@@ -325,7 +366,7 @@ def encode(header_fields: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -
         header_bytes = json.dumps(
             header, ensure_ascii=False, allow_nan=False, separators=(",", ":")
         ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+    except (RecursionError, TypeError, ValueError) as exc:
         _fail("header-json", str(exc))
     if len(header_bytes) > MAX_HEADER_BYTES:
         _fail("header-too-large", str(len(header_bytes)))

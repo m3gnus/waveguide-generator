@@ -13,6 +13,7 @@ import threading
 from typing import Any
 
 import numpy as np
+import pytest
 
 from server.preview.core import (
     CLOSE_TOO_LARGE,
@@ -308,5 +309,126 @@ def test_runtime_error_carries_revision_and_internal_message() -> None:
             "designRevision": 27,
             "message": "mesher unavailable",
         }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("field", "value"), [("seq", "1"), ("seq", True), ("designRevision", "2")])
+def test_sequence_and_revision_fields_are_strict_integers(field: str, value: object) -> None:
+    async def scenario() -> None:
+        calls: list[object] = []
+        transport = FakeTransport()
+        protocol = PreviewProtocol(
+            epoch=41,
+            preview_builder=lambda *_args: calls.append(object()),
+        )
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        message = _request(41, 1)
+        message[field] = value
+        await transport.incoming.put(message)
+        await _wait_until(lambda: len(transport.json) >= 2)
+        await transport.incoming.put(None)
+        await task
+        assert transport.json[1]["kind"] == "error"
+        assert transport.json[1]["code"] == "validation"
+        assert not calls
+
+    asyncio.run(scenario())
+
+
+def test_preview_applies_legacy_migrations_before_translation() -> None:
+    async def scenario() -> None:
+        configs: list[Mapping[str, Any]] = []
+
+        def builder(config: Mapping[str, Any], _options: Any):
+            configs.append(config)
+            return _small_geometry()
+
+        design = {
+            "formula": "FREEFORM",
+            "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
+            "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
+            "cross_sections": [{"t": 0, "shape": "circle"}, {"t": 1, "shape": "ellipse"}],
+            "inflection_policy": "allow",
+        }
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=42, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(_request(42, 1, design=design))
+        await _wait_until(lambda: bool(transport.binary))
+        await transport.incoming.put(None)
+        await task
+        assert configs[0]["profile"]["inflectionPolicy"] == "warn"
+
+    asyncio.run(scenario())
+
+
+def test_in_flight_native_preview_work_is_abandoned_with_a_global_concurrency_cap() -> None:
+    async def scenario() -> None:
+        release = threading.Event()
+        lock = threading.Lock()
+        started = 0
+
+        def builder(_config: Mapping[str, Any], _options: Any):
+            nonlocal started
+            with lock:
+                started += 1
+            assert release.wait(2)
+            return _small_geometry()
+
+        transports = [FakeTransport() for _ in range(5)]
+        protocols = [PreviewProtocol(epoch=50 + index, preview_builder=builder) for index in range(5)]
+        tasks = [
+            asyncio.create_task(protocol.run(transport))
+            for protocol, transport in zip(protocols, transports)
+        ]
+        try:
+            await _wait_until(lambda: all(transport.json for transport in transports))
+            for index, transport in enumerate(transports):
+                await transport.incoming.put(_request(50 + index, 1))
+            await _wait_until(lambda: started == 4)
+            await asyncio.sleep(0.03)
+            assert started == 4
+            for transport in transports:
+                await transport.incoming.put(None)
+            await asyncio.wait_for(asyncio.gather(*tasks), 0.5)
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["heartbeat", "worker"])
+def test_background_send_failure_ends_blocked_receive_loop(failure: str) -> None:
+    class FailingTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hello_sent = False
+
+        async def send_json(self, message: Mapping[str, Any]) -> None:
+            if not self.hello_sent:
+                self.hello_sent = True
+                await super().send_json(message)
+                return
+            raise RuntimeError("transport unavailable")
+
+        async def send_bytes(self, data: bytes) -> None:
+            raise RuntimeError("transport unavailable")
+
+    async def scenario() -> None:
+        transport = FailingTransport()
+        protocol = PreviewProtocol(
+            epoch=60,
+            heartbeat_seconds=0.01 if failure == "heartbeat" else 10,
+            preview_builder=lambda *_args: _small_geometry(),
+        )
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: transport.hello_sent)
+        if failure == "worker":
+            await transport.incoming.put(_request(60, 1))
+        await asyncio.wait_for(task, 0.5)
 
     asyncio.run(scenario())

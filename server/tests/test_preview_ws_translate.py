@@ -165,6 +165,84 @@ def test_blank_zmap_points_key_is_omitted() -> None:
     from server.design.schema import DesignConfig
     from server.preview.translate import design_to_mesher_config
 
-    design = DesignConfig.model_validate({"formula": "OSSE", "L": 120, "a": 45, "r0": 12.7, "a0": 10})
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 45,
+            "r0": 12.7,
+            "a0": 10,
+            "mesh": {"z_map_points": " \t\n "},
+        }
+    )
     config = design_to_mesher_config(design)
     assert "zMapPoints" not in config.get("mesh", {})
+
+
+def test_scale_applies_once_to_v1_waveguide_lengths_but_not_enclosure() -> None:
+    config = _translate(
+        {
+            "formula": "OSSE",
+            "scale": 2,
+            "L": "100 + 20",
+            "r0": 10,
+            "circ_arc_radius": 30,
+            "mesh": {
+                "wall_thickness": 3,
+                "throat_resolution": 4,
+                "vertical_offset": 5,
+            },
+            "morph": {"target_width": 80},
+            "source": {"radius": 12},
+            "enclosure": {"depth": 70, "space_l": 15},
+        }
+    )
+    assert config["profile"]["L"] == "(100 + 20) * 2"
+    assert config["profile"]["r0"] == 20
+    assert config["profile"]["circArcRadius"] == 60
+    assert config["mesh"]["wallThickness"] == 6
+    assert config["mesh"]["throatResolution"] == 8
+    assert config["mesh"]["verticalOffset"] == 10
+    assert config["morph"]["morphWidth"] == 160
+    assert config["source"]["sourceRadius"] == 24
+    assert config["enclosure"]["depth"] == 70
+    assert config["enclosure"]["space_l"] == 15
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"formula": "OSSE", "enclosure": {"depth": "80*p"}},
+        {"formula": "OSSE", "mesh": {"quadrants": "1 + p"}},
+    ],
+)
+def test_non_scalar_structural_controls_are_rejected(payload: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="scalar"):
+        _translate(payload)
+
+
+def test_corner_grid_is_explicitly_rejected_when_mesher_cannot_translate_it() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
+        "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
+        "cross_sections": [
+            {"t": 0, "shape": "circle", "corner_grid": [[0, 1]]},
+            {"t": 1, "shape": "ellipse"},
+        ],
+    }
+    with pytest.raises(ValueError, match="corner_grid"):
+        _translate(payload)
+
+
+def test_freeform_strength_without_angle_is_rejected() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "profile_h": {
+            "points": [{"z": 0, "r": 10, "strength": 2}, {"z": 100, "r": 50}]
+        },
+        "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "circle"}, {"t": 1, "shape": "ellipse"}],
+    }
+    with pytest.raises(ValueError, match="strength requires angle"):
+        _translate(payload)

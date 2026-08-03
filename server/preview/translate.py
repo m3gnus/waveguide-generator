@@ -34,6 +34,42 @@ def _number(value: Expr | None, fallback: float = 0.0) -> float:
     return float(value.value)
 
 
+def _structural_number(value: Expr | None, field: str, fallback: float = 0.0) -> float:
+    if value is None:
+        return fallback
+    if value.value is None:
+        raise ValueError(f"{field} must be a scalar expression")
+    return float(value.value)
+
+
+def _scale_factor(value: Expr | None) -> float:
+    scale = _structural_number(value, "scale", 1.0)
+    if scale <= 0:
+        raise ValueError("scale must be greater than zero")
+    return scale
+
+
+def _scaled_expr(value: Expr | None, scale: float) -> str | float | None:
+    """Apply v1's waveguide-only Scale transform to one physical length."""
+
+    translated = _expr(value)
+    if translated is None or scale == 1.0:
+        return translated
+    if value is not None and value.raw is not None:
+        try:
+            numeric = float(value.raw.strip())
+        except (OverflowError, ValueError):
+            return f"({value.raw}) * {scale:.15g}"
+        if math.isfinite(numeric):
+            return numeric * scale
+        raise ValueError("scaled length must be finite")
+    assert isinstance(translated, (int, float))
+    result = float(translated) * scale
+    if not math.isfinite(result):
+        raise ValueError("scaled length must be finite")
+    return result
+
+
 def _first_number(value: Expr | None) -> float | None:
     if value is None:
         return None
@@ -50,6 +86,8 @@ def _first_number(value: Expr | None) -> float | None:
 
 
 def _source_shape(value: Expr | None) -> str | float | None:
+    if value is not None and value.value is None:
+        raise ValueError("source.shape must be a scalar expression")
     translated = _expr(value)
     numeric = value.value if value is not None else None
     if numeric is not None and numeric.is_integer() and int(numeric) == 2:
@@ -58,10 +96,10 @@ def _source_shape(value: Expr | None) -> str | float | None:
     return translated
 
 
-def _profile_points(profile: FreeformProfile) -> list[list[str | float]]:
+def _profile_points(profile: FreeformProfile, scale: float) -> list[list[str | float]]:
     rows: list[list[str | float]] = []
     for point in profile.points:
-        row = [_expr(point.z), _expr(point.r)]
+        row = [_scaled_expr(point.z, scale), _scaled_expr(point.r, scale)]
         if point.angle_deg is not None:
             row.append(_expr(point.angle_deg))
             if point.strength is not None:
@@ -70,10 +108,10 @@ def _profile_points(profile: FreeformProfile) -> list[list[str | float]]:
     return rows  # type: ignore[return-value]
 
 
-def _freeform_profile(profile: FreeformProfile) -> dict[str, Any]:
+def _freeform_profile(profile: FreeformProfile, scale: float) -> dict[str, Any]:
     return _clean(
         {
-            "points": _profile_points(profile),
+            "points": _profile_points(profile, scale),
             "throatAngleDeg": _expr(profile.throat_angle_deg),
             "mouthAngleDeg": _expr(profile.mouth_angle_deg),
             "throatTangentScale": _expr(profile.throat_tangent_scale),
@@ -82,17 +120,23 @@ def _freeform_profile(profile: FreeformProfile) -> dict[str, Any]:
     )
 
 
-def _profile(design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig) -> dict[str, Any]:
+def _profile(
+    design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig, scale: float
+) -> dict[str, Any]:
     """Port v1 ``mesher_adapter.py:200-310`` from typed v2 fields."""
 
     if isinstance(design, FreeformConfig):
+        if design.corner_grids or any(
+            station.corner_grid is not None for station in design.cross_sections
+        ):
+            raise ValueError("FREEFORM corner_grid data cannot be translated by the HornLab mesher")
         stations = [
             _clean(
                 {
                     "t": _expr(station.t),
                     "shape": station.shape,
                     "exponent": _expr(station.exponent),
-                    "cornerRadiusMm": _expr(station.corner_radius_mm),
+                    "cornerRadiusMm": _scaled_expr(station.corner_radius_mm, scale),
                 }
             )
             for station in design.cross_sections
@@ -100,8 +144,8 @@ def _profile(design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig) -> d
         return _clean(
             {
                 "formula": "FREEFORM",
-                "profileH": _freeform_profile(design.profile_h),
-                "profileV": _freeform_profile(design.profile_v),
+                "profileH": _freeform_profile(design.profile_h, scale),
+                "profileV": _freeform_profile(design.profile_v, scale),
                 "crossSections": stations,
                 "overshootPolicy": design.overshoot_policy,
                 "inflectionPolicy": design.inflection_policy,
@@ -111,14 +155,14 @@ def _profile(design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig) -> d
     profile = _clean(
         {
             "formula": design.formula,
-            "r0": _expr(design.r0),
+            "r0": _scaled_expr(design.r0, scale),
             "a": _expr(design.a),
             "a0": _expr(design.a0),
             "k": _expr(design.k),
             "q": _expr(design.q),
-            "throatExtLength": _expr(design.throat_ext_length),
+            "throatExtLength": _scaled_expr(design.throat_ext_length, scale),
             "throatExtAngle": _expr(design.throat_ext_angle),
-            "slotLength": _expr(design.slot_length),
+            "slotLength": _scaled_expr(design.slot_length, scale),
             "_athLengthMode": design.length_mode,
         }
     )
@@ -126,13 +170,13 @@ def _profile(design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig) -> d
         profile.update(
             _clean(
                 {
-                    "L": _expr(design.L),
+                    "L": _scaled_expr(design.L, scale),
                     "n": _expr(design.n),
                     "s": _expr(design.s),
                     "h": _expr(design.h),
                     "rot": _expr(design.rotation),
                     "throatProfile": _expr(design.throat_profile),
-                    "circArcRadius": _expr(design.circ_arc_radius),
+                    "circArcRadius": _scaled_expr(design.circ_arc_radius, scale),
                     "circArcTermAngle": _expr(design.circ_arc_term_angle),
                 }
             )
@@ -141,7 +185,7 @@ def _profile(design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig) -> d
         profile.update(
             _clean(
                 {
-                    "R": _expr(design.R),
+                    "R": _scaled_expr(design.R, scale),
                     "r": _expr(design.r),
                     "b": _expr(design.b),
                     "m": _expr(design.m),
@@ -150,16 +194,16 @@ def _profile(design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig) -> d
             )
         )
     else:
-        coverage = _number(design.coverage_angle)
+        coverage = _structural_number(design.coverage_angle, "coverage_angle")
         profile.update(
             _clean(
                 {
-                    "L": _expr(design.L),
-                    "R": _expr(design.R),
+                    "L": _scaled_expr(design.L, scale),
+                    "R": _scaled_expr(design.R, scale),
                     "termination": design.termination,
                     "n_coeff": _expr(design.n_coeff),
                     "theta1_deg": _expr(design.theta1_deg),
-                    "depth": _expr(design.depth),
+                    "depth": _scaled_expr(design.depth, scale),
                     "coverage_angle": _expr(design.coverage_angle) if coverage > 0 else None,
                     "hold_start": _expr(design.hold_start) if coverage > 0 else None,
                     "hold_end": _expr(design.hold_end) if coverage > 0 else None,
@@ -184,8 +228,15 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     if root.source.contours is not None and root.source.contours.strip():
         raise ValueError("source.contours is not supported by the HornLab mesher preview")
 
-    enclosure_depth = _number(root.enclosure.depth) if root.enclosure is not None else 0.0
-    wall_thickness = _number(root.mesh.wall_thickness)
+    scale = _scale_factor(root.scale)
+    enclosure_depth = (
+        _structural_number(root.enclosure.depth, "enclosure.depth")
+        if root.enclosure is not None
+        else 0.0
+    )
+    wall_thickness = _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness")
+    if root.mesh.quadrants is not None:
+        _structural_number(root.mesh.quadrants, "mesh.quadrants")
     if enclosure_depth > 0.0:
         mode = "enclosure"
     elif root.simulation.sim_type == "infinite-baffle":
@@ -200,7 +251,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     config: dict[str, Any] = {
         "formula": root.formula,
         "mode": mode,
-        "profile": _profile(root),
+        "profile": _profile(root, scale),
         "mesh": _clean(
             {
                 "angularSegments": _expr(mesh.angular_segments),
@@ -210,12 +261,12 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 # The mesher's config parser treats a PRESENT ZMapPoints key as
                 # "zmap mode requested" (hornlab_mesher/config_parser.py:289-292)
                 # and rejects empty points — so a blank value must OMIT the key.
-                "zMapPoints": mesh.z_map_points or None,
+                "zMapPoints": mesh.z_map_points.strip() or None if mesh.z_map_points is not None else None,
                 "quadrants": 1234,
-                "wallThickness": _expr(mesh.wall_thickness),
-                "throatResolution": _expr(mesh.throat_resolution),
-                "mouthResolution": _expr(mesh.mouth_resolution),
-                "rearResolution": _expr(mesh.rear_resolution),
+                "wallThickness": _scaled_expr(mesh.wall_thickness, scale),
+                "throatResolution": _scaled_expr(mesh.throat_resolution, scale),
+                "mouthResolution": _scaled_expr(mesh.mouth_resolution, scale),
+                "rearResolution": _scaled_expr(mesh.rear_resolution, scale),
                 "apertureResolutionScale": _expr(mesh.aperture_resolution_scale),
                 "maxTriangles": _expr(mesh.max_triangles),
                 "allowLargeMesh": _expr(mesh.allow_large_mesh),
@@ -229,7 +280,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                     if root.enclosure is not None
                     else None
                 ),
-                "verticalOffset": _expr(mesh.vertical_offset),
+                "verticalOffset": _scaled_expr(mesh.vertical_offset, scale),
                 "scaleToMetres": True,
             }
         ),
@@ -237,9 +288,9 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         "morph": _clean(
             {
                 "morphTarget": _expr(morph.target_shape),
-                "morphWidth": _expr(morph.target_width),
-                "morphHeight": _expr(morph.target_height),
-                "morphCorner": _expr(morph.corner_radius),
+                "morphWidth": _scaled_expr(morph.target_width, scale),
+                "morphHeight": _scaled_expr(morph.target_height, scale),
+                "morphCorner": _scaled_expr(morph.corner_radius, scale),
                 "morphRate": _expr(morph.rate),
                 "morphFixed": _expr(morph.fixed_part),
                 "morphAllowShrinkage": _expr(morph.allow_shrinkage),
@@ -249,7 +300,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         "source": _clean(
             {
                 "sourceShape": _source_shape(root.source.shape),
-                "sourceRadius": _expr(root.source.radius),
+                "sourceRadius": _scaled_expr(root.source.radius, scale),
                 "sourceCurv": _expr(root.source.curvature),
             }
         ),
@@ -259,7 +310,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         config["gcurve"] = _clean(
             {
                 "gcurveType": _expr(curve.curve_type),
-                "gcurveWidth": _expr(curve.width),
+                "gcurveWidth": _scaled_expr(curve.width, scale),
                 "gcurveAspectRatio": _expr(curve.aspect_ratio),
                 "gcurveDist": _expr(curve.distance),
                 "gcurveRot": _expr(curve.rotation),

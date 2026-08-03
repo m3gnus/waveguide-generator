@@ -3,6 +3,7 @@ import ruleIds from "../frame-rules.json" with { type: "json" };
 export const DEFAULT_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 export const MAX_HEADER_BYTES = 64 * 1024;
 export const MAX_SECTION_ELEMENTS = 2 ** 28;
+export const MAX_SECTION_RANK = 64;
 export const NORMAL_LENGTH_TOLERANCE = 1e-3;
 
 const RULE_IDS = new Set(ruleIds);
@@ -43,6 +44,10 @@ function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function asSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
 function descriptors(header, payloadLength) {
   if (!Array.isArray(header.sections)) fail("sections-invalid", "sections must be a list");
   const result = [];
@@ -57,19 +62,22 @@ function descriptors(header, payloadLength) {
     if (names.has(name)) fail("section-duplicate", name);
     names.add(name);
 
-    const dtype = DTYPES[raw.dtype];
+    const dtype = typeof raw.dtype === "string" ? DTYPES[raw.dtype] : undefined;
     if (!dtype) fail("section-dtype", `${name}: ${String(raw.dtype)}`);
-    if (!Array.isArray(raw.shape) || raw.shape.some((dim) => !Number.isSafeInteger(dim) || dim < 0)) {
+    if (!Array.isArray(raw.shape) || raw.shape.length > MAX_SECTION_RANK) {
       fail("section-shape", name);
     }
+    const shape = raw.shape.map(asSafeInteger);
+    if (shape.some((dim) => dim === null || dim < 0)) fail("section-shape", name);
     let count = 1;
-    for (const dim of raw.shape) {
+    for (const dim of shape) {
+      if (dim > MAX_SECTION_ELEMENTS) fail("section-elements", name);
       count *= dim;
       if (count > MAX_SECTION_ELEMENTS) fail("section-elements", name);
     }
-    const offset = raw.byteOffset;
-    const length = raw.byteLength;
-    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0) {
+    const offset = asSafeInteger(raw.byteOffset);
+    const length = asSafeInteger(raw.byteLength);
+    if (offset === null || length === null || offset < 0 || length < 0) {
       fail("section-range", name);
     }
     if (length !== count * dtype.bytes) fail("section-length", name);
@@ -80,7 +88,7 @@ function descriptors(header, payloadLength) {
       fail("section-order", name);
     }
     expectedOffset = align8(offset + length);
-    result.push({ name, dtypeName: raw.dtype, dtype, shape: raw.shape, offset, length, count });
+    result.push({ name, dtypeName: raw.dtype, dtype, shape, offset, length, count });
   }
   if (payloadLength !== expectedOffset) fail("section-range", "payload has missing or trailing bytes");
   return result;
@@ -210,7 +218,7 @@ export function decodeFrame(data, { maxFrameBytes = DEFAULT_MAX_FRAME_BYTES } = 
     fail("header-json", error instanceof Error ? error.message : String(error));
   }
   if (!isObject(header)) fail("header-json", "header must be a JSON object");
-  if (header.v !== 1) fail("unsupported-version", String(header.v));
+  if (asSafeInteger(header.v) !== 1) fail("unsupported-version", String(header.v));
   const descriptorList = descriptors(header, bytes.byteLength - payloadBase);
   const sections = Object.create(null);
   for (const item of descriptorList) {
