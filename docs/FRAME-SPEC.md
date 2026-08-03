@@ -1,6 +1,6 @@
-# FRAME-SPEC v1 — binary geometry/array frames
+# FRAME-SPEC v1.1 — binary geometry/array frames
 
-Status: Phase 1 contract (implements plan §4.3/§4.5; supersedes spike `WGF0`).
+Status: Phase 1 contract (implements plan §4.3/§4.5; supersedes spike `WGF0`). v1.1 adds the fidelity/normals contract from the tessellation review (`../../wg-rebuild-reviews/tessellation-review-260803.md`).
 Used by: `/ws/preview` geometry frames; later by measured-large HTTP result fields (balloon chunks). `.msh` artifacts are NOT frames — they stay original streamed text files.
 
 ## Layout (little-endian throughout)
@@ -36,6 +36,17 @@ Payload base = `8 + headerLength` rounded up to 8. Sections are contiguous, in h
 - `dtype` ∈ `f32 | f64 | u32 | u16 | u8 | i32`. Preview geometry is always `f32` positions + `u32` indices.
 - Section names for `preview`: `positions`, `indices`, optional `outerPositions`, `outerIndices`, optional `sectionCurves` (f32, [n,3] polyline concat) + `sectionCurveOffsets` (u32). Unknown extra sections MUST be ignored by decoders (forward compatibility).
 - `kind:"result-chunk"` adds `"jobId"`, `"field"` (e.g. `balloon`), `"chunk"` (e.g. frequency index) — spec'd now, implemented when measurement justifies (plan §4.5).
+
+## Preview surfaces, normals, and fidelity (v1.1 — REQUIRED for `kind:"preview"`)
+
+Adopted verbatim in intent from the tessellation review (P0.1/P0.3/P1.3; full JSON sketch there):
+
+1. The header gains a `surfaces` array — each rendered surface declares `role` (`horn.inner`, `horn.outer`, `mouth_rim`, `source_cap`, `enclosure.front|roundover|side|rear`, `wall.rear_cap`, …), its named position/index/**normal** sections, `shading: smooth|flat`, `normalMethod: analytic-parametric|analytic-spline|exact-planar` (triangle-averaged normals may never be labeled analytic), and `closedPhi` where applicable.
+2. **`normals` is a required `f32[V,3]` section for every rendered surface**, row-aligned with positions, finite, unit length within `|‖n‖−1| ≤ 1e-3`. Server-computed from surface derivatives (`normalize(∂P/∂φ × ∂P/∂t)`) or exact planar normals — never triangle-averaged client-side for smooth surfaces.
+3. Hard boundaries (mouth rim, throat seam, chamfers, intended enclosure edges) are separate surfaces or duplicated position rows with independent normals — never inferred from dihedral angles client-side.
+4. The header carries `fidelity` metadata: requested and **achieved** `maxChordErrorMm`, `maxNormalStepDeg`, `minSilhouetteSegments`; the encoder must report when a vertex cap prevented the requested tolerance.
+5. Optional `curvatureMean`/`curvaturePrincipal` `f32[V]` sections (units + sign documented) for the curvature display mode — replacing v1's density-dependent neighbor-normal heuristic.
+6. Clients MUST size-check and replace/delete every geometry attribute when vertex counts change between frames (the spike's stale-normal bug is the canonical failure; see spike/RESULTS.md §5.1).
 
 ## Validation rules (both languages, enforced, fuzz-tested)
 
