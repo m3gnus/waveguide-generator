@@ -27,11 +27,14 @@ class ExportRequest(BaseModel):
 
 router = APIRouter(prefix="/api/export", tags=["exports"])
 _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_KNOWN_DESIGN_EXTENSIONS = frozenset({".cfg", ".txt", ".mwg"})
 
 
 def _base_name(value: str) -> str:
     leaf = Path(value.replace("\\", "/")).name
-    stem = Path(leaf).stem or "waveguide"
+    path = Path(leaf)
+    stem = path.stem if path.suffix.lower() in _KNOWN_DESIGN_EXTENSIONS else leaf
+    stem = stem or "waveguide"
     return _UNSAFE_FILENAME.sub("_", stem).strip("._") or "waveguide"
 
 

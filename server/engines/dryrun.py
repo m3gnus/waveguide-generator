@@ -15,6 +15,19 @@ def _canonical_seed(design: Mapping[str, Any]) -> tuple[str, float]:
 
 
 def _frequency_axis(start: float, stop: float, count: int, spacing: str) -> list[float]:
+    try:
+        start = float(start)
+        stop = float(stop)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("dry-run frequency bounds must be finite numbers") from exc
+    if not math.isfinite(start) or not math.isfinite(stop):
+        raise ValueError("dry-run frequency bounds must be finite")
+    if start <= 0.0 or stop <= start:
+        raise ValueError("dry-run frequency bounds must be positive and increasing")
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 401:
+        raise ValueError("dry-run frequency count must be an integer from 1 to 401")
+    if spacing not in {"linear", "log"}:
+        raise ValueError("dry-run frequency spacing must be 'linear' or 'log'")
     if count == 1:
         return [round(float(start), 6)]
     if spacing == "linear":

@@ -22,7 +22,13 @@ if str(REPO_ROOT) not in sys.path:
 import uvicorn
 
 from server.app import create_app
-from server.platform.instance import InstanceAlreadyRunning, InstanceLock, acquire_port
+from server.platform.instance import (
+    InstanceAlreadyRunning,
+    InstanceLock,
+    InstanceLockError,
+    requested_port,
+    reserve_port,
+)
 from server.platform.logging_setup import flush_logs, setup_logging
 from server.platform.paths import ensure_data_layout
 
@@ -84,23 +90,38 @@ def main(argv: list[str] | None = None) -> int:
     if args.data_dir is not None:
         os.environ["WG2_DATA_DIR"] = str(args.data_dir)
 
+    lock: InstanceLock | None = None
+    listener: socket.socket | None = None
     try:
         paths = ensure_data_layout()
         setup_logging(paths)
-        port = acquire_port(args.port, host=HOST)
+        preferred_port = requested_port(args.port)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
         return 1
 
     lock = InstanceLock(paths.locks)
     try:
-        lock.acquire(port)
+        # The process lock is authoritative and must be checked before any port
+        # scan so an existing instance always produces the documented exit 2.
+        lock.acquire(preferred_port)
     except InstanceAlreadyRunning as exc:
         print(str(exc), file=sys.stderr)
         flush_logs()
         return 2
-    except RuntimeError as exc:
+    except InstanceLockError as exc:
         print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
+        flush_logs()
+        return 1
+
+    try:
+        # Keep the selected socket bound through Uvicorn startup. Binding itself
+        # is the retry loop, eliminating the probe-then-bind TOCTOU window.
+        listener, port = reserve_port(preferred_port, host=HOST)
+        lock.update_port(port)
+    except (OSError, InstanceLockError) as exc:
+        print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
+        lock.release()
         flush_logs()
         return 1
 
@@ -126,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             port,
             os.getpid(),
         )
-        server.run()
+        server.run(sockets=[listener])
         return 0
     except Exception:
         logging.getLogger("wg2.launch").exception(
@@ -138,7 +159,10 @@ def main(argv: list[str] | None = None) -> int:
         stop_browser.set()
         if previous_handlers:
             _restore_signal_handlers(previous_handlers)
-        lock.release()
+        if listener is not None:
+            listener.close()
+        if lock is not None:
+            lock.release()
         logging.getLogger("wg2.launch").info("Shutdown complete; instance lock released")
         flush_logs()
 

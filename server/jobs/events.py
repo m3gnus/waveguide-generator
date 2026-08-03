@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from itertools import count
 import json
+import math
 from typing import Any, Protocol
 
 from server.jobs.runtime import JobRuntime
@@ -47,7 +48,13 @@ class JobsProtocol:
         self.runtime = runtime
         self.epoch = next(_EPOCHS) if epoch is None else int(epoch)
         self.heartbeat_seconds = float(heartbeat_seconds)
-        self.max_message_bytes = int(max_message_bytes)
+        if not math.isfinite(self.heartbeat_seconds) or self.heartbeat_seconds <= 0.0:
+            raise ValueError("heartbeat_seconds must be finite and positive")
+        if isinstance(max_message_bytes, bool) or not isinstance(max_message_bytes, int):
+            raise ValueError("max_message_bytes must be a positive integer")
+        self.max_message_bytes = max_message_bytes
+        if self.max_message_bytes <= 0:
+            raise ValueError("max_message_bytes must be a positive integer")
         self._closed = False
         self._transport: JobsTransport | None = None
 
@@ -96,7 +103,9 @@ class JobsProtocol:
                     raw = receive_task.result()
                     if raw is None:
                         break
-                    keep_open = await self._handle_message(transport, raw)
+                    keep_open, response_cursor = await self._handle_message(transport, raw)
+                    if response_cursor is not None:
+                        last_live_cursor = max(last_live_cursor, response_cursor)
                     if not keep_open:
                         break
                     receive_task = asyncio.create_task(transport.receive())
@@ -124,57 +133,70 @@ class JobsProtocol:
         if self._transport is not None:
             await self._transport.close(code=CLOSE_RESTARTING)
 
-    async def _handle_message(self, transport: JobsTransport, raw: Any) -> bool:
+    async def _handle_message(
+        self, transport: JobsTransport, raw: Any
+    ) -> tuple[bool, int | None]:
         if isinstance(raw, bytes):
             size = len(raw)
             try:
                 raw = raw.decode("utf-8")
             except UnicodeDecodeError:
                 await transport.close(code=CLOSE_UNSUPPORTED_VERSION)
-                return False
+                return False, None
         elif isinstance(raw, str):
             size = len(raw.encode("utf-8"))
         elif isinstance(raw, Mapping):
-            size = len(json.dumps(dict(raw), separators=(",", ":")).encode("utf-8"))
+            try:
+                size = len(json.dumps(dict(raw), separators=(",", ":")).encode("utf-8"))
+            except (RecursionError, TypeError, ValueError):
+                await transport.close(code=CLOSE_UNSUPPORTED_VERSION)
+                return False, None
         else:
             await transport.close(code=CLOSE_UNSUPPORTED_VERSION)
-            return False
+            return False, None
         if size > self.max_message_bytes:
             await transport.close(code=CLOSE_TOO_LARGE)
-            return False
+            return False, None
         if isinstance(raw, str):
             try:
                 value = json.loads(raw)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
                 await transport.close(code=CLOSE_UNSUPPORTED_VERSION)
-                return False
+                return False, None
         else:
             value = dict(raw)
-        if value.get("v") != PROTOCOL_VERSION:
+        if not isinstance(value, dict):
             await transport.close(code=CLOSE_UNSUPPORTED_VERSION)
-            return False
+            return False, None
+        version = value.get("v")
+        if type(version) is not int or version != PROTOCOL_VERSION:
+            await transport.close(code=CLOSE_UNSUPPORTED_VERSION)
+            return False, None
         epoch = value.get("epoch")
         if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch != self.epoch:
-            return True
+            return True, None
         if value.get("kind") != "resume":
-            return True
+            return True, None
         cursor = value.get("cursor")
         if not isinstance(cursor, int) or isinstance(cursor, bool):
             snapshot = self.runtime.snapshot()
             snapshot["epoch"] = self.epoch
             await transport.send_json(snapshot)
-            return True
+            return True, int(snapshot["cursor"])
         payload = self.resume_payload(cursor)
         if isinstance(payload, dict):
             payload = dict(payload)
             payload["epoch"] = self.epoch
             await transport.send_json(payload)
+            response_cursor = int(payload["cursor"])
         else:
+            response_cursor = cursor
             for event in payload:
                 message = dict(event)
                 message["epoch"] = self.epoch
                 await transport.send_json(message)
-        return True
+                response_cursor = max(response_cursor, int(message["cursor"]))
+        return True, response_cursor
 
 
 __all__ = [

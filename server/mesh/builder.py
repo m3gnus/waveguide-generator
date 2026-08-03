@@ -45,6 +45,14 @@ def _number(value: Expr | None, fallback: float = 0.0) -> float:
     return parsed if math.isfinite(parsed) else fallback
 
 
+def _strict_scalar(value: Expr | None, fallback: float, field: str) -> float:
+    if value is None:
+        return fallback
+    if value.value is None or not math.isfinite(value.value):
+        raise ValueError(f"{field} must be a finite scalar expression")
+    return float(value.value)
+
+
 def _option(options: Any, name: str, fallback: Any = None) -> Any:
     if isinstance(options, Mapping):
         return options.get(name, fallback)
@@ -87,7 +95,11 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
         if raw_velocity not in {1.0, 2.0}:
             raise ValueError("source.velocity must be 1 (normal) or 2 (axial)")
 
-    enclosure_depth = _number(root.enclosure.depth) if root.enclosure is not None else 0.0
+    enclosure_depth = (
+        _strict_scalar(root.enclosure.depth, 0.0, "enclosure.depth")
+        if root.enclosure is not None
+        else 0.0
+    )
     if root.simulation.sim_type == "infinite-baffle" and enclosure_depth > 0.0:
         raise ValueError(
             "Infinite baffle cannot be combined with an enclosure; set enclosure.depth=0 "
@@ -96,7 +108,9 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
 
     config = copy.deepcopy(design_to_mesher_config(design))
     mesh = config.setdefault("mesh", {})
-    quadrants = normalise_quadrants(_number(root.mesh.quadrants, 1234.0))
+    quadrants = normalise_quadrants(
+        _strict_scalar(root.mesh.quadrants, 1234.0, "mesh.quadrants")
+    )
     mesh["quadrants"] = quadrants
 
     # A y-offset moves the y-cut rim away from its native symmetry plane.  V1
@@ -183,6 +197,8 @@ def _build_sync(
 
     if triangles.size == 0:
         raise RuntimeError("hornlab-waveguide-mesher produced no triangular solver elements")
+    if vertices.ndim != 2 or vertices.shape[1:] != (3,) or not np.isfinite(vertices).all():
+        raise RuntimeError("hornlab-waveguide-mesher produced invalid or non-finite vertices")
     tag_values = [int(value) for value in tags.tolist()]
     invalid_tags = sorted(set(tag_values) - CANONICAL_SURFACE_TAGS)
     if invalid_tags:

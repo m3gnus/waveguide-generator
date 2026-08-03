@@ -171,8 +171,17 @@ def _spherical_di_db(theta_grid_deg: np.ndarray, spl_grid_db: np.ndarray) -> flo
     total = float(np.sum(weights) * spl_grid_db.shape[1])
     if total <= 0.0 or not np.all(np.isfinite(spl_grid_db)):
         return None
-    mean_energy = float(np.sum(np.power(10.0, spl_grid_db / 10.0) * weights[:, None]) / total)
-    return float(-10.0 * math.log10(mean_energy)) if mean_energy > 0.0 else None
+    shift_db = float(np.max(spl_grid_db))
+    scaled_sum = float(
+        np.sum(np.power(10.0, (spl_grid_db - shift_db) / 10.0) * weights[:, None])
+    )
+    if scaled_sum <= 0.0 or not math.isfinite(scaled_sum):
+        return None
+    log_mean_energy = (
+        shift_db * math.log(10.0) / 10.0 + math.log(scaled_sum) - math.log(total)
+    )
+    di = -10.0 / math.log(10.0) * log_mean_energy
+    return di if math.isfinite(di) else None
 
 
 def beam_shape_summary(
@@ -210,7 +219,9 @@ def beam_shape_summary(
     for index in range(frequencies.size):
         grid = spl[index]
         wrapped_phi, wrapped_grid = _wrap_phi_columns(phi, grid)
-        fit = _fit_frequency(theta, wrapped_phi, wrapped_grid, level_db=level_db) if np.all(np.isfinite(grid)) else None
+        # Each ray rejects only the invalid interpolated cells it crosses; a
+        # single bad spherical cell must not disable all 144 beam-fit rays.
+        fit = _fit_frequency(theta, wrapped_phi, wrapped_grid, level_db=level_db)
         if fit is None:
             for key in list(fields)[:5]:
                 fields[key].append(None)

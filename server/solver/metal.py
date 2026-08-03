@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import logging
 import tempfile
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ try:
     from hornlab_metal_bem import ObservationConfig, native_config, solve as native_solve
     from hornlab_metal_bem.backends import discover_metal_backend
     from hornlab_metal_bem.metal.native import discover_native_runtime
-except ImportError:  # clean capability absence
+except (ImportError, OSError):  # clean capability absence or native loader failure
     ObservationConfig = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     native_solve = None  # type: ignore[assignment]
@@ -44,6 +45,9 @@ except ImportError:  # clean capability absence
 
 class MetalUnavailable(RuntimeError):
     """The package or loadable release helper required by Metal is absent."""
+
+
+logger = logging.getLogger(__name__)
 
 
 def _version() -> str | None:
@@ -150,6 +154,7 @@ def solve_metal_from_msh_text(
 ) -> dict[str, Any]:
     """Run native Metal from an original Gmsh 2.2 text artifact."""
 
+    context.validate()
     if native_config is None or native_solve is None:
         raise MetalUnavailable("hornlab-metal-bem is not installed.")
     status = metal_status()
@@ -198,6 +203,10 @@ def solve_metal_from_msh_text(
             raise MetalUnavailable("Installed hornlab-metal-bem does not support axial source motion.") from exc
         if "aperture_tag" in feature:
             raise MetalUnavailable("Installed hornlab-metal-bem does not support coupled infinite-baffle aperture tags.") from exc
+        if "formulation" in feature:
+            raise MetalUnavailable("Installed hornlab-metal-bem does not support the required BEM formulation option.") from exc
+        if "complex_k_shift" in feature:
+            raise MetalUnavailable("Installed hornlab-metal-bem does not support the required complex-k shift option.") from exc
         raise
 
     path: Path | None = None
@@ -205,12 +214,15 @@ def solve_metal_from_msh_text(
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8"
         ) as handle:
-            handle.write(msh_text)
             path = Path(handle.name)
+            handle.write(msh_text)
         result = native_solve(str(path), config)
     finally:
         if path is not None:
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove temporary Metal mesh %s: %s", path, exc)
     if cancellation_callback:
         cancellation_callback()
     if stage_callback:

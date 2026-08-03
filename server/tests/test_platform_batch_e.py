@@ -56,7 +56,12 @@ def test_instance_lock_acquire_conflict_and_release(tmp_path: Path) -> None:
         assert captured.value.info.port == 3100
     finally:
         first.release()
-    assert not (tmp_path / "server.pid").exists()
+    # Advisory locks retain the metadata inode after release; a new process
+    # locks and overwrites that same file instead of racing an unlink/recreate.
+    assert (tmp_path / "server.pid").exists()
+    replacement = InstanceLock(tmp_path)
+    replacement.acquire(3101)
+    replacement.release()
 
 
 def test_instance_lock_replaces_stale_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,4 +113,3 @@ def test_logging_rotates_five_megabyte_file(tmp_path: Path) -> None:
     setup_logging(paths)
     logging.shutdown()
     assert (paths.logs / "server.log.1").stat().st_size == MAX_LOG_BYTES
-

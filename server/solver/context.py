@@ -8,6 +8,7 @@ v1 ``server/solver/result_mapping.py:98-130``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any
 
 from server.design.schema import DesignConfig, Expr
@@ -43,6 +44,20 @@ class SolverContext:
         }
     )
 
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate mutable context fields at every native adapter boundary."""
+
+        start, end = self.frequency_range
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise ValueError("solver frequency bounds must be finite")
+        if start <= 0.0 or end <= start:
+            raise ValueError("solver frequency bounds must be positive and increasing")
+        if isinstance(self.num_frequencies, bool) or not 1 <= int(self.num_frequencies) <= 401:
+            raise ValueError("solver frequency count must be between 1 and 401")
+
     @classmethod
     def from_request(cls, request: SolveRequest, *, solver_mode: str) -> "SolverContext":
         root = request.design.root
@@ -52,6 +67,8 @@ class SolverContext:
         else:
             start = _number(simulation.f1, 200.0)
             end = _number(simulation.f2, 20_000.0)
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise ValueError("solver frequency bounds must be finite")
         if start <= 0.0 or end <= start:
             start, end = 200.0, 20_000.0
         count = request.options.num_frequencies

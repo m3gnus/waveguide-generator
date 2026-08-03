@@ -18,6 +18,9 @@ from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
 
 
+MAX_EXPORT_SEGMENT_INPUT = 1_000_000.0
+
+
 def _number(value: Expr | None, fallback: float) -> float:
     if value is not None and value.value is not None and math.isfinite(value.value):
         return float(value.value)
@@ -32,14 +35,27 @@ def _number(value: Expr | None, fallback: float) -> float:
     return fallback
 
 
+def _segment_number(value: Expr | None, fallback: float, field: str) -> float:
+    number = _number(value, fallback)
+    if abs(number) > MAX_EXPORT_SEGMENT_INPUT:
+        raise ValueError(
+            f"{field} is outside the supported export range of "
+            f"±{int(MAX_EXPORT_SEGMENT_INPUT)}"
+        )
+    return number
+
+
 def smooth_segments(design: DesignConfig) -> tuple[int, int, int]:
     """Apply v1's smooth-export segment clamps and four-way angular snap."""
 
     mesh = design.root.mesh
-    length = min(160, max(60, int(math.floor(max(3 * _number(mesh.length_segments, 0), 60) + 0.5))))
-    angular_raw = max(2 * _number(mesh.angular_segments, 0), 100)
+    length_raw = _segment_number(mesh.length_segments, 0, "mesh.length_segments")
+    angular_input = _segment_number(mesh.angular_segments, 0, "mesh.angular_segments")
+    corner_input = _segment_number(mesh.corner_segments, 0, "mesh.corner_segments")
+    length = min(160, max(60, int(math.floor(max(3 * length_raw, 60) + 0.5))))
+    angular_raw = max(2 * angular_input, 100)
     angular = min(240, max(100, int(math.ceil(angular_raw / 4.0) * 4)))
-    corner = min(12, max(4, int(math.floor(max(2 * _number(mesh.corner_segments, 0), 4) + 0.5))))
+    corner = min(12, max(4, int(math.floor(max(2 * corner_input, 4) + 0.5))))
     return length, angular, corner
 
 
@@ -58,9 +74,10 @@ def _prepared_design(
 ) -> DesignConfig:
     payload = copy.deepcopy(design.model_dump(mode="json"))
     root = payload
-    original_length = _number(
+    original_length = _segment_number(
         design.root.mesh.length_segments,
         40 if profile_sampling else 20,
+        "mesh.length_segments",
     )
     length, angular, corner = smooth_segments(design)
     if profile_sampling:
@@ -69,7 +86,7 @@ def _prepared_design(
             _number(design.root.mesh.angular_segments, 40)
         )
     else:
-        root["mesh"]["length_segments"] = max(1, int(math.floor(original_length + 0.5))) if restore_length else length
+        root["mesh"]["length_segments"] = max(10, int(math.floor(original_length + 0.5))) if restore_length else length
         root["mesh"]["angular_segments"] = angular
         root["mesh"]["corner_segments"] = corner
     root["mesh"]["quadrants"] = 1234
@@ -219,6 +236,8 @@ def binary_stl(
     points = np.asarray(vertices_m, dtype=float).reshape(-1, 3)
     triangles = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
     tags = np.asarray(surface_tags, dtype=np.int64).reshape(-1)
+    if not np.isfinite(points).all():
+        raise ValueError("STL vertex coordinates must all be finite")
     if len(tags) != len(triangles):
         raise ValueError("surface tag count does not match triangle count")
     triangles = triangles[tags == 1]
@@ -234,6 +253,9 @@ def binary_stl(
     transformed = np.column_stack(
         (points[:, 0] * 1000.0, -points[:, 1] * 1000.0, points[:, 2] * 1000.0)
     )
+    float32_limit = np.finfo(np.float32).max
+    if not np.isfinite(transformed).all() or np.any(np.abs(transformed) > float32_limit):
+        raise ValueError("STL vertex coordinates exceed the finite binary STL range")
     output = bytearray(84 + len(triangles) * 50)
     header = model_name.encode("utf-8")[:79]
     output[: len(header)] = header
@@ -279,6 +301,8 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, list[Any]]:
         parsed = meshio.read(mesh_path)
         triangles, tags = _triangles_and_tags(parsed)
         vertices = np.asarray(parsed.points, dtype=float)
+        if vertices.ndim != 2 or vertices.shape[1:] != (3,) or not np.isfinite(vertices).all():
+            raise ValueError("parsed STL mesh contains invalid or non-finite coordinates")
     return {
         "vertices": vertices.reshape(-1).tolist(),
         "indices": triangles.reshape(-1).astype(int).tolist(),

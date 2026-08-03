@@ -32,12 +32,16 @@ def mesh_integrity_report(vertices: Any, triangles: Any) -> dict[str, Any]:
             "nonmanifold_edge_count": 0,
             "degenerate_triangle_count": 0,
             "invalid_index_triangle_count": 0,
+            "duplicate_triangle_count": 0,
             "open_edges_sample": [],
         }
 
     edge_counts: Counter[tuple[int, int]] = Counter()
     degenerate = 0
     invalid = 0
+    duplicate = 0
+    seen_index_faces: set[tuple[int, int, int]] = set()
+    seen_geometric_faces: set[tuple[tuple[float, float, float], ...]] = set()
     for face in faces:
         a, b, c = (int(face[0]), int(face[1]), int(face[2]))
         if min(a, b, c) < 0 or max(a, b, c) >= len(points):
@@ -46,6 +50,14 @@ def mesh_integrity_report(vertices: Any, triangles: Any) -> dict[str, Any]:
         if len({a, b, c}) < 3:
             degenerate += 1
             continue
+        index_key = tuple(sorted((a, b, c)))
+        geometric_key = tuple(
+            sorted(tuple(float(value) for value in points[index]) for index in (a, b, c))
+        )
+        if index_key in seen_index_faces or geometric_key in seen_geometric_faces:
+            duplicate += 1
+        seen_index_faces.add(index_key)
+        seen_geometric_faces.add(geometric_key)
         cross = np.cross(points[b] - points[a], points[c] - points[a])
         if not np.all(np.isfinite(cross)) or float(np.linalg.norm(cross)) <= 1.0e-15:
             degenerate += 1
@@ -54,7 +66,7 @@ def mesh_integrity_report(vertices: Any, triangles: Any) -> dict[str, Any]:
 
     open_edges = sorted(edge for edge, count in edge_counts.items() if count == 1)
     nonmanifold = sum(1 for count in edge_counts.values() if count > 2)
-    valid = invalid == 0 and degenerate == 0 and nonmanifold == 0
+    valid = len(faces) > 0 and invalid == 0 and degenerate == 0 and nonmanifold == 0 and duplicate == 0
     return {
         "valid": valid,
         "is_watertight": valid and not open_edges,
@@ -62,6 +74,7 @@ def mesh_integrity_report(vertices: Any, triangles: Any) -> dict[str, Any]:
         "nonmanifold_edge_count": nonmanifold,
         "degenerate_triangle_count": degenerate,
         "invalid_index_triangle_count": invalid,
+        "duplicate_triangle_count": duplicate,
         "open_edges_sample": [list(edge) for edge in open_edges[:20]],
     }
 

@@ -17,7 +17,7 @@ import numpy as np
 
 from .beam_shape import beam_shape_summary
 from .context import SolverContext
-from .contract import build_directivity_metadata
+from .contract import build_directivity_metadata, frequency_failure
 from .directivity_index import calculate_di_from_polar_patterns
 from .quadrants import native_symmetry_plane_for_quadrants
 
@@ -114,22 +114,35 @@ def observation_config(
 def directivity(result: Any) -> dict[str, list[list[list[float | None]]]]:
     """Map engine dB patterns, preserving unavailable cells as null."""
 
-    angles = np.asarray(result.observation_angles_deg, dtype=float)
-    values = np.asarray(result.directivity_db, dtype=float)
+    try:
+        angles = np.asarray(result.observation_angles_deg, dtype=float)
+        values = np.asarray(result.directivity_db, dtype=float)
+        frequency_count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    except (TypeError, ValueError):
+        return {}
     if angles.ndim != 1 or values.ndim != 3:
         return {}
+    finite_angle_indices = [
+        index for index, angle in enumerate(angles) if math.isfinite(float(angle))
+    ]
     output: dict[str, list[list[list[float | None]]]] = {}
     for plane_index, plane_name in enumerate(result.observation_planes):
         if plane_index >= values.shape[1]:
             break
-        output[str(plane_name)] = [
-            [
-                [float(angle), _finite(values[freq_index, plane_index, angle_index])]
-                for angle_index, angle in enumerate(angles)
-                if angle_index < values.shape[2]
-            ]
-            for freq_index in range(values.shape[0])
-        ]
+        plane_rows: list[list[list[float | None]]] = []
+        for frequency_index in range(frequency_count):
+            row: list[list[float | None]] = []
+            for angle_index in finite_angle_indices:
+                if angle_index >= values.shape[2]:
+                    continue
+                level = (
+                    _finite(values[frequency_index, plane_index, angle_index])
+                    if frequency_index < values.shape[0]
+                    else None
+                )
+                row.append([float(angles[angle_index]), level])
+            plane_rows.append(row)
+        output[str(plane_name)] = plane_rows
     return output
 
 
@@ -138,7 +151,11 @@ def _on_axis_pressure(result: Any) -> np.ndarray | None:
     pressure = np.asarray(result.pressure_complex, dtype=np.complex128)
     if angles.ndim != 1 or angles.size == 0 or pressure.ndim != 3 or pressure.shape[1] == 0:
         return None
-    angle_index = int(np.argmin(np.abs(angles)))
+    usable = np.flatnonzero(np.isfinite(angles))
+    usable = usable[usable < pressure.shape[2]]
+    if usable.size == 0:
+        return None
+    angle_index = int(usable[np.argmin(np.abs(angles[usable]))])
     if angle_index >= pressure.shape[2]:
         return None
     return pressure[:, 0, angle_index]
@@ -152,12 +169,13 @@ def spl_on_axis(result: Any) -> list[float | None]:
     output: list[float | None] = []
     for value in values:
         amplitude = _finite(np.abs(value))
-        output.append(
-            float(20.0 * np.log10(amplitude / REFERENCE_PRESSURE_PA))
-            if amplitude is not None and amplitude > 0.0
-            else None
-        )
-    return output
+        if amplitude is None or amplitude <= 0.0:
+            output.append(None)
+            continue
+        spl = 20.0 * (math.log10(amplitude) - math.log10(REFERENCE_PRESSURE_PA))
+        output.append(spl if math.isfinite(spl) else None)
+    count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    return (output + [None] * count)[:count]
 
 
 def phase_on_axis(result: Any) -> list[float | None]:
@@ -171,10 +189,11 @@ def phase_on_axis(result: Any) -> list[float | None]:
     for value in values:
         amplitude = _finite(np.abs(value))
         output.append(float(np.angle(value, deg=True)) if amplitude is not None and amplitude > 0 else None)
-    return output
+    count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    return (output + [None] * count)[:count]
 
 
-def specific_impedance_z_over_rho_c(result: Any) -> np.ndarray:
+def specific_impedance_z_over_rho_c(result: Any) -> list[complex | None]:
     """Convert unit-acceleration pressure using v=a/(-iω), then conjugate.
 
     This is the sign/drive convention from v1
@@ -182,10 +201,19 @@ def specific_impedance_z_over_rho_c(result: Any) -> np.ndarray:
     """
 
     frequencies = np.asarray(result.frequencies_hz, dtype=float)
-    raw_pressure = np.asarray(result.impedance, dtype=np.complex128)
-    if raw_pressure.shape != frequencies.shape:
-        raw_pressure = np.reshape(raw_pressure, frequencies.shape)
-    return np.conjugate(-1j * 2.0 * np.pi * frequencies * raw_pressure) / REFERENCE_RHO_C
+    raw_pressure = np.asarray(result.impedance, dtype=np.complex128).reshape(-1)
+    output: list[complex | None] = []
+    for index, frequency in enumerate(frequencies.reshape(-1)):
+        if index >= raw_pressure.size:
+            output.append(None)
+            continue
+        mapped = np.conjugate(-1j * 2.0 * np.pi * frequency * raw_pressure[index]) / REFERENCE_RHO_C
+        output.append(
+            complex(mapped)
+            if math.isfinite(float(mapped.real)) and math.isfinite(float(mapped.imag))
+            else None
+        )
+    return output
 
 
 def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
@@ -235,21 +263,51 @@ def _balloon_grid_from_result(result: Any) -> dict[str, Any] | None:
     phi_deg = getattr(result, "sphere_phi_deg", None)
     if pressure is None or theta_deg is None or phi_deg is None:
         return None
-    pressure = np.asarray(pressure, dtype=np.complex128)
-    theta_flat, phi_flat = np.asarray(theta_deg, dtype=float), np.asarray(phi_deg, dtype=float)
-    if pressure.ndim != 2 or theta_flat.ndim != 1 or theta_flat.size != pressure.shape[1]:
+    try:
+        pressure = np.asarray(pressure, dtype=np.complex128)
+        theta_flat = np.asarray(theta_deg, dtype=float)
+        phi_flat = np.asarray(phi_deg, dtype=float)
+        frequency_count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    except (TypeError, ValueError):
+        return None
+    if (
+        pressure.ndim != 2
+        or pressure.shape[0] != frequency_count
+        or theta_flat.ndim != 1
+        or phi_flat.ndim != 1
+        or theta_flat.size != pressure.shape[1]
+        or phi_flat.size != pressure.shape[1]
+        or not np.isfinite(theta_flat).all()
+        or not np.isfinite(phi_flat).all()
+        or not np.isfinite(pressure.real).all()
+        or not np.isfinite(pressure.imag).all()
+    ):
         return None
     theta_axis = np.unique(theta_flat)
     if theta_axis.size < 2 or theta_flat.size % theta_axis.size != 0:
         return None
     phi_count = theta_flat.size // theta_axis.size
-    if not np.allclose(theta_flat.reshape(theta_axis.size, phi_count), theta_axis[:, None]):
+    if phi_count < 3:
         return None
-    spl = 20.0 * np.log10(np.maximum(np.abs(pressure), _BALLOON_FLOOR_AMPLITUDE) / REFERENCE_PRESSURE_PA)
+    theta_grid = theta_flat.reshape(theta_axis.size, phi_count)
+    phi_grid = phi_flat.reshape(theta_axis.size, phi_count)
+    phi_axis = phi_grid[0]
+    if (
+        not np.all(np.diff(theta_axis) > 0.0)
+        or not np.all(np.diff(phi_axis) > 0.0)
+        or not np.allclose(theta_grid, theta_axis[:, None])
+        or not np.allclose(phi_grid, phi_axis[None, :])
+    ):
+        return None
+    amplitude = np.maximum(np.abs(pressure), _BALLOON_FLOOR_AMPLITUDE)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        spl = 20.0 * (np.log10(amplitude) - math.log10(REFERENCE_PRESSURE_PA))
     normalized = spl - spl[:, 0][:, None]
+    if not np.isfinite(normalized).all():
+        return None
     return {
         "theta_deg": theta_axis,
-        "phi_deg": phi_flat[:phi_count],
+        "phi_deg": phi_axis,
         "spl_norm_db": normalized.reshape(pressure.shape[0], theta_axis.size, phi_count),
         "hemisphere": bool(theta_axis[-1] <= 90.0 + 1.0e-9),
     }
@@ -283,6 +341,34 @@ def build_solver_response(
     metadata.setdefault("failures", [])
     metadata.setdefault("failure_count", len(metadata["failures"]))
     metadata.setdefault("partial_success", False)
+    failures = metadata["failures"]
+    expected = len(frequency_values)
+    raw_counts = {
+        "pressure": (
+            int(np.asarray(getattr(result, "pressure_complex", [])).shape[0])
+            if np.asarray(getattr(result, "pressure_complex", [])).ndim >= 1
+            else 0
+        ),
+        "directivity": (
+            int(np.asarray(getattr(result, "directivity_db", [])).shape[0])
+            if np.asarray(getattr(result, "directivity_db", [])).ndim >= 1
+            else 0
+        ),
+        "impedance": int(np.asarray(getattr(result, "impedance", [])).size),
+    }
+    for quantity, actual in raw_counts.items():
+        if actual != expected:
+            failures.append(
+                frequency_failure(
+                    frequency_values[min(actual, expected - 1)] if expected else 0.0,
+                    "postprocess",
+                    "native_axis_mismatch",
+                    f"{quantity} returned {actual} samples for {expected} frequencies; unavailable samples were padded with null",
+                )
+            )
+    if any(actual != expected for actual in raw_counts.values()):
+        metadata["partial_success"] = True
+    metadata["failure_count"] = len(failures)
     _apply_solver_log_warnings(metadata)
     metadata.setdefault("performance", {})
     metadata["performance"].setdefault("total_time_seconds", time.time() - start_time)
@@ -318,8 +404,8 @@ def build_solver_response(
         },
         "impedance": {
             "frequencies": frequency_values,
-            "real": [_finite(value.real) for value in impedance],
-            "imaginary": [_finite(value.imag) for value in impedance],
+            "real": [_finite(value.real) if value is not None else None for value in impedance],
+            "imaginary": [_finite(value.imag) if value is not None else None for value in impedance],
         },
         "di": {
             "frequencies": frequency_values,

@@ -20,6 +20,8 @@ T = TypeVar("T")
 
 _executor: concurrent.futures.ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
+_executor_condition = threading.Condition(_executor_lock)
+_shutting_down = False
 
 
 def _gmsh_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -27,6 +29,8 @@ def _gmsh_executor() -> concurrent.futures.ThreadPoolExecutor:
 
     global _executor
     with _executor_lock:
+        if _shutting_down:
+            raise RuntimeError("gmsh worker is shutting down; submission rejected")
         if _executor is None:
             _executor = concurrent.futures.ThreadPoolExecutor(
                 max_workers=1,
@@ -80,11 +84,33 @@ async def prewarm_gmsh_worker() -> None:
 async def shutdown_gmsh_worker() -> None:
     """Finalize the executor without moving gmsh work onto another thread."""
 
-    global _executor
-    with _executor_lock:
-        executor, _executor = _executor, None
-    if executor is not None:
-        await asyncio.to_thread(executor.shutdown, True, cancel_futures=False)
+    global _executor, _shutting_down
+
+    def wait_for_other_shutdown() -> None:
+        with _executor_condition:
+            while _shutting_down:
+                _executor_condition.wait()
+
+    with _executor_condition:
+        if _shutting_down:
+            wait_for_existing = True
+            executor = None
+        else:
+            wait_for_existing = False
+            _shutting_down = True
+            executor = _executor
+    if wait_for_existing:
+        await asyncio.to_thread(wait_for_other_shutdown)
+        return
+    try:
+        if executor is not None:
+            await asyncio.to_thread(executor.shutdown, True, cancel_futures=False)
+    finally:
+        with _executor_condition:
+            if _executor is executor:
+                _executor = None
+            _shutting_down = False
+            _executor_condition.notify_all()
 
 
 __all__ = [

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import PlainTextResponse
@@ -33,19 +31,10 @@ from server.jobs.runtime import (
     UnknownEngineError,
 )
 from server.jobs.store import JobStore
+from server.platform.origin import local_origin
 
 
-def _local_origin(origin: str) -> bool:
-    try:
-        parsed = urlsplit(origin)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return False
-        if parsed.username is not None or parsed.password is not None:
-            return False
-        host = parsed.hostname.rstrip(".").lower()
-        return host == "localhost" or ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+_local_origin = local_origin
 
 
 class _FastAPIJobsTransport:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import errno
+import fcntl
 import json
 import logging
 import os
@@ -36,11 +37,18 @@ class InstanceAlreadyRunning(InstanceLockError):
     def __init__(self, info: InstanceInfo, path: Path):
         self.info = info
         self.path = path
-        super().__init__(
-            f"Waveguide Generator v2 is already running (pid {info.pid}, "
-            f"port {info.port}; lock {path}). Close that instance or use it at "
-            f"http://127.0.0.1:{info.port}/."
-        )
+        if info.pid > 0 and info.port > 0:
+            message = (
+                f"Waveguide Generator v2 is already running (pid {info.pid}, "
+                f"port {info.port}; lock {path}). Close that instance or use it at "
+                f"http://127.0.0.1:{info.port}/."
+            )
+        else:
+            message = (
+                f"Waveguide Generator v2 is already starting or running (lock {path}); "
+                "owner metadata is not available yet."
+            )
+        super().__init__(message)
 
 
 # A concise alias is convenient for callers and older launcher prototypes.
@@ -67,76 +75,87 @@ def read_lock_info(path: Path) -> InstanceInfo | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return InstanceInfo(pid=int(payload["pid"]), port=int(payload["port"]))
-    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except FileNotFoundError:
         return None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    except OSError as exc:
+        raise InstanceLockError(f"Could not read instance lock {path}: {exc}") from exc
 
 
 class InstanceLock:
-    """An atomic pid-file lock with dead-process staleness detection."""
+    """A process-lifetime advisory lock with human-readable owner metadata."""
 
     def __init__(self, locks_dir: str | os.PathLike[str]):
         self.path = Path(locks_dir) / LOCK_FILENAME
         self._owned = False
         self._pid = os.getpid()
+        self._descriptor: int | None = None
 
     @property
     def owned(self) -> bool:
         return self._owned
 
     def acquire(self, port: int) -> InstanceInfo:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._owned:
+            return self.update_port(port)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError as exc:
+            raise InstanceLockError(
+                f"Could not open instance lock {self.path}: {exc}. Check that the data "
+                "directory is writable, then start again."
+            ) from exc
         info = InstanceInfo(pid=self._pid, port=port)
-        payload = json.dumps({"pid": info.pid, "port": info.port}, sort_keys=True) + "\n"
-
-        for _attempt in range(3):
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(descriptor)
             try:
-                descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
                 owner = read_lock_info(self.path)
-                if owner is not None and _pid_is_running(owner.pid):
-                    raise InstanceAlreadyRunning(owner, self.path) from None
-                try:
-                    self.path.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    raise InstanceLockError(
-                        f"The stale instance lock at {self.path} could not be removed: "
-                        f"{exc}. Remove that file manually, then start again."
-                    ) from exc
-                log.warning("Removed stale instance lock %s; starting a new instance", self.path)
-                continue
-            except OSError as exc:
-                raise InstanceLockError(
-                    f"Could not create instance lock {self.path}: {exc}. Check that "
-                    "the data directory is writable, then start again."
-                ) from exc
-            else:
-                try:
-                    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                        handle.write(payload)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                except BaseException:
-                    self.path.unlink(missing_ok=True)
-                    raise
-                self._owned = True
-                return info
+            except InstanceLockError:
+                owner = None
+            raise InstanceAlreadyRunning(owner or InstanceInfo(pid=0, port=0), self.path) from None
+        except OSError as exc:
+            os.close(descriptor)
+            raise InstanceLockError(f"Could not lock instance file {self.path}: {exc}") from exc
 
-        raise InstanceLockError(
-            f"Instance lock {self.path} kept changing while startup was in progress. "
-            "Wait a moment and start Waveguide Generator v2 again."
-        )
+        self._descriptor = descriptor
+        self._owned = True
+        try:
+            return self.update_port(port)
+        except BaseException:
+            self.release()
+            raise
+
+    def update_port(self, port: int) -> InstanceInfo:
+        """Rewrite metadata while retaining the same locked descriptor."""
+
+        if not self._owned or self._descriptor is None:
+            raise InstanceLockError("Cannot update instance metadata before acquiring the lock")
+        info = InstanceInfo(pid=self._pid, port=requested_port(port, environ={}))
+        payload = (json.dumps({"pid": info.pid, "port": info.port}, sort_keys=True) + "\n").encode()
+        try:
+            os.lseek(self._descriptor, 0, os.SEEK_SET)
+            os.ftruncate(self._descriptor, 0)
+            os.write(self._descriptor, payload)
+            os.fsync(self._descriptor)
+        except OSError as exc:
+            raise InstanceLockError(f"Could not write instance lock metadata {self.path}: {exc}") from exc
+        return info
 
     def release(self) -> None:
         if not self._owned:
             return
-        owner = read_lock_info(self.path)
-        if owner is not None and owner.pid == self._pid:
+        descriptor, self._descriptor = self._descriptor, None
+        if descriptor is not None:
             try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                log.exception("Could not unlock instance file %s", self.path)
+            finally:
+                os.close(descriptor)
         self._owned = False
 
     def __enter__(self) -> "InstanceLock":
@@ -201,6 +220,32 @@ def select_port(
                     candidate,
                 )
             return candidate
+    raise OSError(
+        f"Ports {preferred} through {last} are all busy on {host}. Stop an existing "
+        "server or start with --port PORT using an available port."
+    )
+
+
+def reserve_port(
+    preferred: int,
+    *,
+    host: str = "127.0.0.1",
+    scan_count: int = PORT_SCAN_COUNT,
+) -> tuple[socket.socket, int]:
+    """Bind and retain a local socket, retrying the configured fallback range."""
+
+    last = min(65535, preferred + scan_count)
+    for candidate in range(preferred, last + 1):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((host, candidate))
+        except OSError:
+            listener.close()
+            continue
+        if candidate != preferred:
+            log.warning("Port %d is busy; using port %d instead", preferred, candidate)
+        return listener, candidate
     raise OSError(
         f"Ports {preferred} through {last} are all busy on {host}. Stop an existing "
         "server or start with --port PORT using an available port."

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.metadata
+import logging
 import tempfile
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ from .result_mapping import (
 
 try:
     from hornlab_bempp_bem import BIEFormulation, ObservationConfig, SolveConfig, solve as bempp_solve
-except ImportError:
+except (ImportError, OSError):
     BIEFormulation = None  # type: ignore[assignment]
     ObservationConfig = None  # type: ignore[assignment]
     SolveConfig = None  # type: ignore[assignment]
@@ -43,6 +44,9 @@ except ImportError:
 
 class BemppUnavailable(RuntimeError):
     """The optional BEMPP fallback package is not importable."""
+
+
+logger = logging.getLogger(__name__)
 
 
 def _version() -> str | None:
@@ -62,7 +66,7 @@ def _load_api() -> bool:
         ObservationConfig = getattr(package, "ObservationConfig")
         SolveConfig = getattr(package, "SolveConfig")
         bempp_solve = getattr(package, "solve")
-    except (ImportError, AttributeError):
+    except (ImportError, OSError, AttributeError):
         return False
     return True
 
@@ -111,7 +115,10 @@ def solve_bempp_from_msh_text(
 ) -> dict[str, Any]:
     """Solve one authoritative Gmsh artifact on the guarded CPU backend."""
 
+    context.validate()
     del mesh_metadata
+    if context.solver_mode == "circsym":
+        raise ValueError("BEMPP cannot run solver_mode='circsym'; use full_3d or the Metal CircSym engine")
     reject_bempp_infinite_baffle(context)
     if not _load_api() or SolveConfig is None or bempp_solve is None:
         raise BemppUnavailable("hornlab-bempp-bem is not installed.")
@@ -138,21 +145,29 @@ def solve_bempp_from_msh_text(
     formulation = DEFAULT_BEM_FORMULATION
     if BIEFormulation is not None:
         formulation = getattr(BIEFormulation, "COMPLEX_K", formulation)
-    config = SolveConfig(
-        freq_min_hz=context.frequency_range[0],
-        freq_max_hz=context.frequency_range[1],
-        freq_count=context.num_frequencies,
-        freq_spacing=context.frequency_spacing,
-        formulation=formulation,
-        complex_k_shift=DEFAULT_COMPLEX_K_SHIFT,
-        observation=observation_config(context, ObservationConfig, BemppUnavailable, "hornlab-bempp-bem"),
-        progress_callback=progress,
-        mesh_scale=1.0,
-        native_symmetry_plane=native_symmetry_plane(context),
-        assembly_backend="numba",
-        opencl_device="cpu",
-        precision="single",
-    )
+    try:
+        config = SolveConfig(
+            freq_min_hz=context.frequency_range[0],
+            freq_max_hz=context.frequency_range[1],
+            freq_count=context.num_frequencies,
+            freq_spacing=context.frequency_spacing,
+            formulation=formulation,
+            complex_k_shift=DEFAULT_COMPLEX_K_SHIFT,
+            observation=observation_config(context, ObservationConfig, BemppUnavailable, "hornlab-bempp-bem"),
+            progress_callback=progress,
+            mesh_scale=1.0,
+            native_symmetry_plane=native_symmetry_plane(context),
+            assembly_backend="numba",
+            opencl_device="cpu",
+            precision="single",
+        )
+    except TypeError as exc:
+        message = str(exc)
+        if "formulation" in message:
+            raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required BEM formulation option.") from exc
+        if "complex_k_shift" in message:
+            raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required complex-k shift option.") from exc
+        raise
     if context.source_motion != "normal":
         if not hasattr(config, "source_motion"):
             raise BemppUnavailable("Installed hornlab-bempp-bem does not support axial source motion.")
@@ -165,12 +180,15 @@ def solve_bempp_from_msh_text(
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8"
         ) as handle:
-            handle.write(msh_text)
             path = Path(handle.name)
+            handle.write(msh_text)
         result = bempp_solve(str(path), config)
     finally:
         if path is not None:
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove temporary BEMPP mesh %s: %s", path, exc)
     if cancellation_callback:
         cancellation_callback()
     if stage_callback:
@@ -219,6 +237,8 @@ class BemppEngine:
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
     ) -> EngineRunResult:
+        if (request.design.root.simulation.solver_mode or "").strip().lower() == "circsym":
+            raise ValueError("BEMPP cannot run solver_mode='circsym'; select the CircSym engine")
         context = SolverContext.from_request(request, solver_mode="full_3d")
         reject_bempp_infinite_baffle(context)
         mesh = await build_solver_mesh(

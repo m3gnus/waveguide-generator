@@ -9,7 +9,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
+import logging
 from pathlib import Path
+import re
 import sqlite3
 import threading
 from typing import Any, Iterator, Mapping, Sequence
@@ -37,6 +39,52 @@ ALLOWED_JOB_UPDATE_FIELDS = frozenset(
         "task_metadata_json",
     }
 )
+logger = logging.getLogger(__name__)
+_SAFE_LOG_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+_SCHEMA_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS simulation_jobs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK (status IN ('queued','running','complete','error','cancelled')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      queued_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      progress REAL NOT NULL DEFAULT 0.0,
+      stage TEXT,
+      stage_message TEXT,
+      error_message TEXT,
+      cancellation_requested INTEGER NOT NULL DEFAULT 0,
+      config_json TEXT NOT NULL,
+      config_summary_json TEXT NOT NULL,
+      has_results INTEGER NOT NULL DEFAULT 0,
+      has_mesh_artifact INTEGER NOT NULL DEFAULT 0,
+      mesh_stats_json TEXT,
+      label TEXT,
+      script_snapshot_json TEXT,
+      task_metadata_json TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS simulation_results (
+      job_id TEXT PRIMARY KEY,
+      results_json TEXT NOT NULL,
+      FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
+    )""",
+    """CREATE TABLE IF NOT EXISTS simulation_artifacts (
+      job_id TEXT PRIMARY KEY,
+      msh_text TEXT,
+      FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_status_created
+      ON simulation_jobs(status, created_at DESC)""",
+    """CREATE TABLE IF NOT EXISTS job_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      job_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id)",
+)
 
 
 def _now_iso() -> str:
@@ -51,69 +99,38 @@ class JobStore:
     of its related changes together or rolls them all back.
     """
 
-    def __init__(self, db_path: str | Path, *, event_retention: int = 2048) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        event_retention: int = 2048,
+        job_logs_dir: str | Path | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.event_retention = max(1, int(event_retention))
+        self.job_logs_dir = (
+            Path(job_logs_dir) if job_logs_dir is not None else self.db_path.parent / "job-logs"
+        )
         self._lock = threading.RLock()
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path, **kwargs: Any) -> "JobStore":
         """Place the DB in WG2's namespaced ``db/`` directory."""
 
-        return cls(data_paths(data_dir).db / "simulations.db", **kwargs)
+        paths = data_paths(data_dir)
+        return cls(
+            paths.db / "simulations.db",
+            job_logs_dir=paths.logs / "jobs",
+            **kwargs,
+        )
 
     def initialize(self) -> None:
         """Create the exact v1 migration-target tables plus v2 job events."""
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS simulation_jobs (
-                  id TEXT PRIMARY KEY,
-                  status TEXT NOT NULL CHECK (status IN ('queued','running','complete','error','cancelled')),
-                  created_at TEXT NOT NULL,
-                  updated_at TEXT NOT NULL,
-                  queued_at TEXT NOT NULL,
-                  started_at TEXT,
-                  completed_at TEXT,
-                  progress REAL NOT NULL DEFAULT 0.0,
-                  stage TEXT,
-                  stage_message TEXT,
-                  error_message TEXT,
-                  cancellation_requested INTEGER NOT NULL DEFAULT 0,
-                  config_json TEXT NOT NULL,
-                  config_summary_json TEXT NOT NULL,
-                  has_results INTEGER NOT NULL DEFAULT 0,
-                  has_mesh_artifact INTEGER NOT NULL DEFAULT 0,
-                  mesh_stats_json TEXT,
-                  label TEXT,
-                  script_snapshot_json TEXT,
-                  task_metadata_json TEXT
-                );
-                CREATE TABLE IF NOT EXISTS simulation_results (
-                  job_id TEXT PRIMARY KEY,
-                  results_json TEXT NOT NULL,
-                  FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS simulation_artifacts (
-                  job_id TEXT PRIMARY KEY,
-                  msh_text TEXT,
-                  FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_simulation_jobs_status_created
-                  ON simulation_jobs(status, created_at DESC);
-
-                CREATE TABLE IF NOT EXISTS job_events (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  created_at TEXT NOT NULL,
-                  job_id TEXT NOT NULL,
-                  event_type TEXT NOT NULL,
-                  payload_json TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id);
-                """
-            )
+            for statement in _SCHEMA_STATEMENTS:
+                conn.execute(statement)
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(simulation_jobs)").fetchall()
@@ -201,6 +218,31 @@ class JobStore:
             event = self._append_event(conn, job_id, event_type, payload) if changed else None
             return changed, event
 
+    def request_cancellation(
+        self,
+        job_id: str,
+        fields: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Atomically request cancellation only while a job remains running."""
+
+        values = dict(fields)
+        unsupported = sorted(set(values) - ALLOWED_JOB_UPDATE_FIELDS)
+        if unsupported:
+            raise ValueError(f"Unsupported job update field(s): {', '.join(unsupported)}")
+        values["updated_at"] = _now_iso()
+        assignments = [f"{key} = ?" for key in values]
+        params = [self._db_value(key, value) for key, value in values.items()]
+        with self._lock, self._transaction() as conn:
+            changed = conn.execute(
+                f"""UPDATE simulation_jobs SET {', '.join(assignments)}
+                    WHERE id = ? AND status = 'running' AND cancellation_requested = 0""",
+                [*params, job_id],
+            ).rowcount
+            if changed <= 0:
+                return None
+            return self._append_event(conn, job_id, "stage", payload)
+
     def get_job_row(self, job_id: str) -> dict[str, Any] | None:
         with self._lock, self._connection() as conn:
             row = conn.execute("SELECT * FROM simulation_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -269,12 +311,39 @@ class JobStore:
         """
 
         with self._lock, self._transaction() as conn:
-            if not self._job_exists(conn, job_id):
+            values = {**fields, "has_results": True, "updated_at": _now_iso()}
+            unsupported = sorted(set(values) - ALLOWED_JOB_UPDATE_FIELDS)
+            if unsupported:
+                raise ValueError(f"Unsupported job update field(s): {', '.join(unsupported)}")
+            if "status" in values and values["status"] not in ALLOWED_STATUSES:
+                raise ValueError(f"Unsupported status: {values['status']}")
+            assignments = [f"{key} = ?" for key in values]
+            params = [self._db_value(key, value) for key, value in values.items()]
+            changed = conn.execute(
+                f"""UPDATE simulation_jobs SET {', '.join(assignments)}
+                    WHERE id = ? AND status = 'running' AND cancellation_requested = 0""",
+                [*params, job_id],
+            ).rowcount
+            if changed <= 0:
                 return None
             self._upsert_results(conn, job_id, results)
-            if not self._update_job(conn, job_id, {**fields, "has_results": True}):
-                return None
             return self._append_event(conn, job_id, "completed", payload)
+
+    def append_job_log(self, job_id: str, line: str) -> None:
+        """Append to the complete per-job log kept outside bounded WS metadata."""
+
+        path = self._job_log_path(job_id)
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(str(line).replace("\r", "") + "\n")
+
+    def get_job_log(self, job_id: str) -> str:
+        with self._lock:
+            try:
+                return self._job_log_path(job_id).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return ""
 
     def get_results(self, job_id: str) -> dict[str, Any] | None:
         with self._lock, self._connection() as conn:
@@ -315,7 +384,9 @@ class JobStore:
             cur = conn.execute("DELETE FROM simulation_jobs WHERE id = ?", (job_id,))
             if cur.rowcount <= 0:
                 return False, None
-            return True, self._append_event(conn, job_id, "deleted", {})
+            event = self._append_event(conn, job_id, "deleted", {})
+        self._delete_job_logs([job_id])
+        return True, event
 
     def delete_jobs_by_status_with_events(
         self, statuses: Sequence[str]
@@ -339,7 +410,8 @@ class JobStore:
             id_placeholders = ",".join("?" for _ in ids)
             conn.execute(f"DELETE FROM simulation_jobs WHERE id IN ({id_placeholders})", ids)
             events = [self._append_event(conn, job_id, "deleted", {}) for job_id in ids]
-            return ids, events
+        self._delete_job_logs(ids)
+        return ids, events
 
     def recover_on_startup(
         self, restart_error_message: str
@@ -383,7 +455,15 @@ class JobStore:
         """Apply v1's age/count retention policy (``server/db.py:316-347``)."""
 
         cutoff = (datetime.now() - timedelta(days=int(retention_days))).isoformat()
+        removed_ids: list[str] = []
         with self._lock, self._transaction() as conn:
+            aged = conn.execute(
+                """SELECT id FROM simulation_jobs
+                   WHERE status IN ('complete', 'error', 'cancelled')
+                     AND COALESCE(completed_at, updated_at, created_at) < ?""",
+                (cutoff,),
+            ).fetchall()
+            removed_ids.extend(str(row["id"]) for row in aged)
             cur = conn.execute(
                 """
                 DELETE FROM simulation_jobs
@@ -402,12 +482,14 @@ class JobStore:
             ).fetchall()
             overflow = [row["id"] for row in rows[int(max_terminal_jobs) :]]
             if overflow:
+                removed_ids.extend(str(value) for value in overflow)
                 placeholders = ",".join("?" for _ in overflow)
                 cur = conn.execute(
                     f"DELETE FROM simulation_jobs WHERE id IN ({placeholders})", overflow
                 )
                 deleted += int(cur.rowcount or 0)
-            return deleted
+        self._delete_job_logs(removed_ids)
+        return deleted
 
     def append_event(
         self, job_id: str, event_type: str, payload: Mapping[str, Any]
@@ -516,6 +598,17 @@ class JobStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    def _job_log_path(self, job_id: str) -> Path:
+        safe = _SAFE_LOG_NAME.sub("_", str(job_id)).strip("._") or "job"
+        return self.job_logs_dir / f"{safe}.log"
+
+    def _delete_job_logs(self, job_ids: Sequence[str]) -> None:
+        for job_id in dict.fromkeys(job_ids):
+            try:
+                self._job_log_path(job_id).unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove retained log for job %s: %s", job_id, exc)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import sys
@@ -49,7 +50,12 @@ def setup_logging(
     stderr_handler.setFormatter(formatter)
     stderr_handler._wg2_handler = True  # type: ignore[attr-defined]
 
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=MAX_LOG_BYTES,
+        backupCount=1,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
     file_handler._wg2_handler = True  # type: ignore[attr-defined]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -39,6 +40,8 @@ class SolveOptions(JobModel):
         if len(self.frequency_range) != 2:
             raise ValueError("frequency_range must contain [start_hz, end_hz]")
         start, end = self.frequency_range
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise ValueError("frequency_range values must be finite")
         if start <= 0 or end <= start:
             raise ValueError("frequency_range must be positive and increasing")
         return self
@@ -132,6 +135,21 @@ class JobMetadataPatch(JobModel):
             return None
         value = value.strip()
         return value or None
+
+    @field_validator("exported_files")
+    @classmethod
+    def normalize_exported_files(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @field_validator("auto_export_completed_at", "raw_results_file", "mesh_artifact_file")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 __all__ = [

@@ -14,6 +14,7 @@ from datetime import datetime
 import inspect
 import json
 import logging
+import math
 from typing import Any, Mapping
 import uuid
 
@@ -98,6 +99,7 @@ class JobRuntime:
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._scheduler_task: asyncio.Task[Any] | None = None
         self._started = False
+        self._shutting_down = False
         self._start_lock = asyncio.Lock()
 
     @property
@@ -118,6 +120,7 @@ class JobRuntime:
         async with self._start_lock:
             if self._started:
                 return
+            self._shutting_down = False
             await asyncio.to_thread(self.store.initialize)
             await asyncio.to_thread(
                 self.store.prune_terminal_jobs, retention_days=30, max_terminal_jobs=1000
@@ -134,6 +137,7 @@ class JobRuntime:
     async def shutdown(self) -> None:
         """Stop local tasks without rewriting running rows; startup recovery owns them."""
 
+        self._shutting_down = True
         tasks = tuple(self._background_tasks)
         for task in tasks:
             task.cancel()
@@ -215,16 +219,23 @@ class JobRuntime:
             self.events.publish(event)
             return {"message": f"Job {job_id} has been cancelled", "status": "cancelled"}
 
-        event = self._transition(
+        event = self.store.request_cancellation(
             job_id,
             {
                 "stage": "cancelling",
                 "stage_message": "Cancellation requested; waiting for current stage checkpoint",
                 "cancellation_requested": True,
             },
-            "stage",
             {"stage": "cancelling", "message": "Cancellation requested"},
         )
+        if event is None:
+            current = self._require_job(job_id)
+            if current.get("status") != "running":
+                raise JobConflictError(f"Cannot stop job with status: {current['status']}")
+            return {
+                "message": f"Cancellation already requested for job {job_id}",
+                "status": "cancelling",
+            }
         self.events.publish(event)
         return {
             "message": f"Cancellation requested for job {job_id}",
@@ -263,9 +274,8 @@ class JobRuntime:
 
     async def get_log(self, job_id: str) -> str:
         await self.start()
-        row = self._require_job(job_id)
-        tail = row.get("task_metadata", {}).get("log_tail") or []
-        return "\n".join(str(line) for line in tail)
+        self._require_job(job_id)
+        return await asyncio.to_thread(self.store.get_job_log, job_id)
 
     async def patch_metadata(self, job_id: str, fields: Mapping[str, Any]) -> None:
         await self.start()
@@ -341,7 +351,7 @@ class JobRuntime:
         return self.store.replay_events(cursor)
 
     def _ensure_scheduler(self) -> None:
-        if not self._started or not self._queue:
+        if self._shutting_down or not self._started or not self._queue:
             return
         if self._scheduler_task is not None and not self._scheduler_task.done():
             return
@@ -367,9 +377,17 @@ class JobRuntime:
                     await self._run_job(job_id, row)
                 finally:
                     self._running.discard(job_id)
+                    try:
+                        await asyncio.to_thread(
+                            self.store.prune_terminal_jobs,
+                            retention_days=30,
+                            max_terminal_jobs=1000,
+                        )
+                    except Exception:
+                        logger.exception("Post-job retention pruning failed")
         finally:
             self._scheduler_task = None
-            if self._queue:
+            if self._queue and not self._shutting_down:
                 self._ensure_scheduler()
 
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
@@ -469,6 +487,7 @@ class JobRuntime:
                 )
                 return
             if event is None:
+                self._check_cancelled(job_id)
                 return
             self.events.publish(event)
         except _CancelledAtCheckpoint:
@@ -528,7 +547,6 @@ class JobRuntime:
                     name=f"wg2-stage-{job_id}",
                 )
                 stage_tasks.add(task)
-                task.add_done_callback(stage_tasks.discard)
 
             loop.call_soon_threadsafe(schedule)
 
@@ -558,7 +576,18 @@ class JobRuntime:
             # Drain callbacks queued by the final native frequency/result hook.
             await asyncio.sleep(0)
             if stage_tasks:
-                await asyncio.gather(*tuple(stage_tasks), return_exceptions=True)
+                gathered = await asyncio.gather(*tuple(stage_tasks), return_exceptions=True)
+                for error in gathered:
+                    if isinstance(error, BaseException) and not isinstance(
+                        error, asyncio.CancelledError
+                    ):
+                        logger.error(
+                            "Stage/progress persistence failed for job %s: %s",
+                            job_id,
+                            error,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
+                stage_tasks.clear()
 
         self._check_cancelled(job_id)
         if outcome.msh_text and not artifact_persisted:
@@ -599,6 +628,8 @@ class JobRuntime:
             return
         if event is not None:
             self.events.publish(event)
+        else:
+            self._check_cancelled(job_id)
 
     async def _report_real_stage(
         self,
@@ -648,6 +679,7 @@ class JobRuntime:
         metadata = dict(row.get("task_metadata") or {})
         lines = [str(line) for line in metadata.get("log_tail") or []]
         line = str(message)[-MAX_LOG_EVENT_CHARS:]
+        await asyncio.to_thread(self.store.append_job_log, job_id, str(message))
         lines.append(line)
         lines = lines[-MAX_LOG_LINES:]
         while lines and sum(len(item) + 1 for item in lines) > MAX_LOG_CHARS:
@@ -750,6 +782,8 @@ class JobRuntime:
         else:
             start = numeric(simulation.f1, 200.0)
             end = numeric(simulation.f2, 20_000.0)
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise ValueError("frequency bounds must be finite")
         count = request.options.num_frequencies
         if count is None:
             count = int(round(numeric(simulation.num_frequencies, 24.0)))

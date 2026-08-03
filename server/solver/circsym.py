@@ -30,13 +30,13 @@ from .result_mapping import (
 
 try:
     from hornlab_mesher import build_meridian, circsym_rejection_reasons
-except ImportError:
+except (ImportError, OSError):
     build_meridian = None  # type: ignore[assignment]
     circsym_rejection_reasons = None  # type: ignore[assignment]
 
 try:
     from hornlab_metal_bem import MeridianMesh, ObservationConfig, native_config, solve_circsym
-except ImportError:
+except (ImportError, OSError):
     MeridianMesh = None  # type: ignore[assignment]
     ObservationConfig = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
@@ -45,6 +45,21 @@ except ImportError:
 
 class CircSymUnavailable(RuntimeError):
     """The mesher meridian capability or Metal CircSym runtime is absent."""
+
+
+def _validated_aperture_tag(metadata: Any, sim_type: int) -> int | None:
+    raw = (metadata if isinstance(metadata, dict) else {}).get("apertureTag")
+    if sim_type == 1 and raw is None:
+        raise ValueError("infinite-baffle CircSym solve requires a positive aperture tag")
+    if raw is None:
+        return None
+    try:
+        tag = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("CircSym aperture tag must be a positive integer") from exc
+    if tag <= 0:
+        raise ValueError("CircSym aperture tag must be a positive integer")
+    return tag
 
 
 def circsym_status() -> dict[str, Any]:
@@ -76,6 +91,7 @@ def solve_circsym_design(
 ) -> dict[str, Any]:
     """Build a pure meridian and run the Metal axisymmetric sweep."""
 
+    context.validate()
     if any(value is None for value in (build_meridian, MeridianMesh, ObservationConfig, native_config, solve_circsym)):
         raise CircSymUnavailable("Installed mesher/Metal packages do not provide CircSym.")
     status = circsym_status()
@@ -124,9 +140,11 @@ def solve_circsym_design(
         "progress_callback": progress,
         "circsym_baffle_z": meridian_build.baffle_z,
     }
-    aperture_tag = (getattr(meridian_build, "metadata", None) or {}).get("apertureTag")
+    aperture_tag = _validated_aperture_tag(
+        getattr(meridian_build, "metadata", None), context.sim_type
+    )
     if aperture_tag is not None:
-        kwargs["circsym_aperture_tag"] = int(aperture_tag)
+        kwargs["circsym_aperture_tag"] = aperture_tag
     if cancellation_callback is not None:
         kwargs["on_frequency_result"] = on_frequency_result
     if context.source_motion != "normal":
@@ -141,6 +159,12 @@ def solve_circsym_design(
             raise CircSymUnavailable("Installed Metal helper lacks axial CircSym source motion.") from exc
         if "on_frequency_result" in message:
             raise CircSymUnavailable("Installed Metal helper lacks cancellable CircSym sweeps.") from exc
+        if "circsym_baffle_z" in message:
+            raise CircSymUnavailable("Installed Metal helper lacks the required CircSym baffle position option.") from exc
+        if "formulation" in message:
+            raise CircSymUnavailable("Installed Metal helper lacks the required BEM formulation option.") from exc
+        if "complex_k_shift" in message:
+            raise CircSymUnavailable("Installed Metal helper lacks the required complex-k shift option.") from exc
         raise
     result = solve_circsym(meridian, config)
     if cancellation_callback:
