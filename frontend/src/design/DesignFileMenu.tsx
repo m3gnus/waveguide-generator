@@ -1,0 +1,140 @@
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  downloadGeometryExport,
+  downloadText,
+  hydrateDesignDocument,
+  inspectDesignText,
+  openDesignText,
+  saveDesignDocument,
+  type ImportReport,
+} from '../api/designIo';
+import { useDesignStore } from '../stores/design';
+import { Icon } from '../shell/icons';
+
+const ACCEPT = '.cfg,.txt,.mwg,text/plain';
+
+const menuStyle: CSSProperties = {
+  position: 'absolute', top: 32, left: 0, zIndex: 1000, width: 210, padding: 5,
+  border: '1px solid var(--hair-hi)', borderRadius: 7, background: 'var(--float-bg)',
+  boxShadow: 'var(--float-sh)', color: 'var(--fg)',
+};
+const itemStyle: CSSProperties = {
+  display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between',
+  padding: '6px 8px', borderRadius: 4, background: 'transparent', textAlign: 'left',
+};
+
+function stem(filename: string): string {
+  return filename.replace(/\.(cfg|txt|mwg)$/i, '') || 'waveguide';
+}
+
+function reportText(report: ImportReport): string {
+  const migrations = report.migrationsApplied.length
+    ? report.migrationsApplied.map((item) => item.name).join(', ')
+    : 'none';
+  return `${report.dialect.toUpperCase()} · migrations: ${migrations} · passthrough: ${report.passthrough.blockCount} blocks, ${report.passthrough.keyCount} keys preserved`;
+}
+
+export function DesignFileMenu() {
+  const design = useDesignStore((state) => state.design);
+  const revision = useDesignStore((state) => state.designRevision);
+  const loadDesign = useDesignStore((state) => state.loadDesign);
+  const [savedRevision, setSavedRevision] = useState(() => useDesignStore.getState().designRevision);
+  const [filename, setFilename] = useState('tritonia_mk2.cfg');
+  const [open, setOpen] = useState(false);
+  const [exportsOpen, setExportsOpen] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const openInput = useRef<HTMLInputElement>(null);
+  const reportInput = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const close = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  async function act(operation: () => Promise<void>) {
+    setBusy(true);
+    setMessage(null);
+    try { await operation(); } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  }
+
+  async function readSelected(input: HTMLInputElement, reportOnly: boolean) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    await act(async () => {
+      const text = await file.text();
+      if (reportOnly) {
+        setMessage(reportText(await inspectDesignText(text)));
+        return;
+      }
+      const opened = await openDesignText(text);
+      loadDesign(hydrateDesignDocument(opened.design));
+      setFilename(`${stem(file.name)}.cfg`);
+      setSavedRevision(useDesignStore.getState().designRevision);
+      setMessage(reportText(opened));
+    });
+  }
+
+  async function save() {
+    await act(async () => {
+      const savingRevision = revision;
+      const response = await saveDesignDocument(design, filename);
+      downloadText(response.text, filename || response.suggestedFilename);
+      setFilename(response.suggestedFilename);
+      setSavedRevision(savingRevision);
+      setMessage(`Saved ${response.suggestedFilename}`);
+    });
+  }
+
+  async function exportOne(kind: 'step' | 'stl') {
+    await act(async () => {
+      await downloadGeometryExport(kind, design, revision, stem(filename));
+      setMessage(`Exported ${kind.toUpperCase()} from revision ${revision}`);
+    });
+  }
+
+  async function exportProfiles() {
+    await act(async () => {
+      await downloadGeometryExport('profiles', design, revision, stem(filename), 'profiles');
+      await downloadGeometryExport('profiles', design, revision, stem(filename), 'slices');
+      setMessage(`Exported profiles and slices CSV from revision ${revision}`);
+    });
+  }
+
+  return <div ref={root} style={{ position: 'relative', flex: 'none' }}>
+    <button className="file-chip" title="Design file menu" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <Icon name="folder"/><span>{stem(filename)}<em>.cfg</em></span>
+      {revision !== savedRevision && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
+      <span className="chev">⌄</span>
+    </button>
+    <input ref={openInput} className="sr-only" type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
+    <input ref={reportInput} className="sr-only" type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
+    {open && <div role="menu" aria-label="Design file menu" style={menuStyle}>
+      <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
+      <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void save()}><span>Save</span><kbd>cfg</kbd></button>
+      <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
+      <div style={{ height: 1, margin: '4px 3px', background: 'var(--hair)' }}/>
+      <button role="menuitem" aria-expanded={exportsOpen} style={itemStyle} disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
+      {exportsOpen && <div role="menu" aria-label="Export design" style={{ paddingLeft: 9 }}>
+        <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void exportOne('step')}><span>STEP</span><span>.step</span></button>
+        <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
+        <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
+      </div>}
+    </div>}
+    {message && <div role="status" onClick={() => setMessage(null)} style={{
+      position: 'fixed', right: 12, top: 52, zIndex: 1100, maxWidth: 520, padding: '8px 11px',
+      border: '1px solid var(--hair-hi)', borderRadius: 6, background: 'var(--float-bg)',
+      boxShadow: 'var(--float-sh)', color: 'var(--fg2)', fontSize: 10,
+    }}>{message}</div>}
+  </div>;
+}

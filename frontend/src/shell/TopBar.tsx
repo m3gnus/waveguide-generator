@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DesignFileMenu } from '../design/DesignFileMenu';
 import { useDesignStore } from '../stores/design';
 import { BrandMark, Icon } from './icons';
 
@@ -27,7 +28,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   return <header className="topbar">
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><span className="brand-version">2.4.1 · local</span></div></div>
     <i className="v-separator" />
-    <button className="file-chip" title="Switch design"><Icon name="folder"/><span>tritonia_mk2<em>.cfg</em></span><i className="unsaved-dot"/><span className="chev">⌄</span></button>
+    <DesignFileMenu />
     <div className="button-group">
       <button className="icon-button" disabled={!canUndo} onClick={undo} title="Undo"><Icon name="undo"/></button>
       <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>

@@ -232,6 +232,45 @@ def _migrate_inflection_allow(payload: Payload) -> None:
         payload["inflectionPolicy"] = "warn"
 
 
+_JS_ARTIFACT_TOKENS = frozenset({"undefined", "NaN"})
+
+
+def _is_js_undefined(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip() in _JS_ARTIFACT_TOKENS
+    if isinstance(value, Mapping):
+        raw = value.get("raw")
+        return isinstance(raw, str) and raw.strip() in _JS_ARTIFACT_TOKENS
+    return False
+
+
+def _walk_has_js_undefined(node: Any) -> bool:
+    if isinstance(node, Mapping):
+        return any(_is_js_undefined(v) or _walk_has_js_undefined(v) for v in node.values())
+    if isinstance(node, (list, tuple)):
+        return any(_walk_has_js_undefined(item) for item in node)
+    return False
+
+
+def _has_js_undefined(payload: Payload) -> bool:
+    return _walk_has_js_undefined(payload)
+
+
+def _strip_js_undefined(node: Any) -> None:
+    if isinstance(node, dict):
+        for key in [k for k, v in node.items() if _is_js_undefined(v)]:
+            del node[key]
+        for value in node.values():
+            _strip_js_undefined(value)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_js_undefined(item)
+
+
+def _migrate_js_undefined(payload: Payload) -> None:
+    _strip_js_undefined(payload)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         name="001_corner_ratio_to_corner_grid",
@@ -247,6 +286,18 @@ MIGRATIONS: tuple[Migration, ...] = (
         applies_if=_has_inflection_allow,
         transform=_migrate_inflection_allow,
         note="Renamed the removed FREEFORM inflection policy alias 'allow' to 'warn'.",
+    ),
+    Migration(
+        name="003_js_undefined_lines_dropped",
+        applies_if=_has_js_undefined,
+        transform=_migrate_js_undefined,
+        note=(
+            "Dropped 'key = undefined' and 'key = NaN' assignments (v1 JS exporter "
+            "artifacts in old job snapshots); absent parameters fall back to family "
+            "defaults, matching v1's absent-key behavior. Found live in real corpus "
+            "snapshots (e.g. 260311_simulation_2: Throat.Diameter = NaN broke mesh "
+            "builds with non-finite coordinates)."
+        ),
     ),
 )
 

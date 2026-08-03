@@ -75,3 +75,26 @@ Freeform.CrossSections = {
     ]
     assert parsed.design.root.cross_sections[1].corner_radius_mm.value == 5.3  # type: ignore[union-attr]
     assert parsed.design.root.inflection_policy == "warn"  # type: ignore[union-attr]
+
+
+def test_js_undefined_lines_dropped() -> None:
+    """Real v1 job snapshots contain 'Term.s = undefined' lines (JS exporter
+    artifact); migration 003 drops them so absent params fall back to family
+    defaults instead of breaking expression evaluation (found live via
+    output/260311_simulation_2/script.snapshot.mwg)."""
+    from server.design.migrate import apply_migrations
+
+    payload = {
+        "formula": "OSSE",
+        "a": {"raw": "undefined", "value": None},
+        "s": "undefined",
+        "r0": {"raw": "NaN", "value": None},
+        "mesh": {"angular_segments": {"raw": "undefined"}, "length_segments": 40},
+    }
+    migrated, applied = apply_migrations(payload)
+    assert "a" not in migrated
+    assert "s" not in migrated
+    assert "r0" not in migrated
+    assert "angular_segments" not in migrated["mesh"]
+    assert migrated["mesh"]["length_segments"] == 40
+    assert any(item.name == "003_js_undefined_lines_dropped" for item in applied)
