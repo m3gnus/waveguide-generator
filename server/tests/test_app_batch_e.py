@@ -98,7 +98,10 @@ def test_health_and_placeholder_shell(tmp_path: Path) -> None:
 
     shell = client.get("/")
     assert shell.status_code == 200
-    assert "Waveguide Generator v2 — shell under construction" in shell.text
+    # The dist/ content evolves (placeholder → real shell build); assert it serves
+    # a non-empty HTML document rather than pinning wording.
+    assert "<!doctype html>" in shell.text.lower()
+    assert len(shell.text) > 100
 
 
 def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:

@@ -1,0 +1,558 @@
+"""Transport-independent implementation of WS-PROTOCOL v1 preview state."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable, Mapping
+from itertools import count
+import json
+import math
+import time
+from typing import Any, Literal, Protocol
+
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from server.design.schema import DesignConfig
+from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
+from server.preview.translate import design_to_mesher_config
+
+
+PROTOCOL_VERSION = 1
+HEARTBEAT_SECONDS = 15
+CLOSE_UNSUPPORTED_VERSION = 4400
+CLOSE_ORIGIN_REJECTED = 4401
+CLOSE_HEARTBEAT_TIMEOUT = 4408
+CLOSE_TOO_LARGE = 4413
+CLOSE_RESTARTING = 1012
+
+_EPOCHS = count(1)
+
+
+class PreviewTransport(Protocol):
+    """Minimal transport surface used by the protocol engine and test fakes."""
+
+    async def receive(self) -> str | bytes | Mapping[str, Any] | None: ...
+
+    async def send_json(self, message: Mapping[str, Any]) -> None: ...
+
+    async def send_bytes(self, data: bytes) -> None: ...
+
+    async def close(self, code: int) -> None: ...
+
+
+class _Message(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    v: Literal[1]
+    kind: str
+    epoch: int = Field(ge=1)
+    seq: int = Field(ge=0)
+    design_revision: int = Field(alias="designRevision", ge=0)
+
+
+class _PreviewMessage(_Message):
+    kind: Literal["preview"]
+    design: dict[str, Any]
+    lod: Literal["coarse", "fine"]
+
+
+class _CurveMessage(_Message):
+    kind: Literal["curve"]
+    curve_id: str = Field(alias="curveId", min_length=1)
+    points: list[list[float]]
+
+    @field_validator("points")
+    @classmethod
+    def _finite_2d_points(cls, points: list[list[float]]) -> list[list[float]]:
+        if any(len(point) != 2 for point in points):
+            raise ValueError("every curve point must contain exactly two coordinates")
+        if any(not math.isfinite(value) for point in points for value in point):
+            raise ValueError("curve points must be finite")
+        return points
+
+
+class _Request:
+    def __init__(
+        self,
+        *,
+        kind: Literal["preview", "curve"],
+        seq: int,
+        design_revision: int,
+        lod: str,
+        design: DesignConfig | None = None,
+        curve_id: str | None = None,
+        points: list[list[float]] | None = None,
+    ) -> None:
+        self.kind = kind
+        self.seq = seq
+        self.design_revision = design_revision
+        self.lod = lod
+        self.design = design
+        self.curve_id = curve_id
+        self.points = points
+
+
+def preview_options(lod: Literal["coarse", "fine"]):
+    """Map protocol LOD names onto the mesher's stable preview presets."""
+
+    from hornlab_mesher.preview.api import PreviewOptionsV1
+
+    return PreviewOptionsV1(
+        lod=lod,
+        include_inner=True,
+        include_outer=True,
+        include_enclosure=True,
+        include_source_cap=True,
+        include_rear_cap=True,
+    )
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _fidelity_header(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    per_surface = metadata.get("fidelity")
+    if not isinstance(per_surface, Mapping):
+        per_surface = {}
+    chord_values: list[float] = []
+    normal_values: list[float] = []
+    requested_chord_values: list[float] = []
+    requested_normal_values: list[float] = []
+    requested_silhouette_values: list[int] = []
+    cap_limited = False
+    for measured in per_surface.values():
+        if not isinstance(measured, Mapping):
+            continue
+        chord = measured.get(
+            "max_chord_error_mm_achieved", measured.get("max_chord_error_mm")
+        )
+        normal = measured.get(
+            "max_normal_step_deg_achieved", measured.get("max_normal_step_deg")
+        )
+        if isinstance(chord, (int, float)) and math.isfinite(float(chord)):
+            chord_values.append(max(0.0, float(chord)))
+        if isinstance(normal, (int, float)) and math.isfinite(float(normal)):
+            normal_values.append(max(0.0, float(normal)))
+        requested_chord = measured.get("max_chord_error_mm_requested")
+        requested_normal = measured.get("max_normal_step_deg_requested")
+        requested_silhouette = measured.get("min_silhouette_segments_requested")
+        if isinstance(requested_chord, (int, float)) and math.isfinite(
+            float(requested_chord)
+        ):
+            requested_chord_values.append(max(0.0, float(requested_chord)))
+        if isinstance(requested_normal, (int, float)) and math.isfinite(
+            float(requested_normal)
+        ):
+            requested_normal_values.append(max(0.0, float(requested_normal)))
+        if isinstance(requested_silhouette, int) and not isinstance(
+            requested_silhouette, bool
+        ):
+            requested_silhouette_values.append(max(0, requested_silhouette))
+        cap_limited = cap_limited or measured.get("vertex_cap_limited") is True
+    achieved_chord = max(chord_values, default=0.0)
+    achieved_normal = max(normal_values, default=0.0)
+    counts = metadata.get("actual_segment_counts")
+    silhouette = 0
+    if isinstance(counts, Mapping):
+        raw_silhouette = counts.get("horn_phi", 0)
+        if isinstance(raw_silhouette, int) and not isinstance(raw_silhouette, bool):
+            silhouette = max(0, raw_silhouette)
+    requested_chord = max(requested_chord_values, default=achieved_chord)
+    requested_normal = max(requested_normal_values, default=achieved_normal)
+    requested_silhouette = max(requested_silhouette_values, default=silhouette)
+    missed = (
+        achieved_chord > requested_chord
+        or achieved_normal > requested_normal
+        or silhouette < requested_silhouette
+    )
+    return {
+        "maxChordErrorMmRequested": requested_chord,
+        "maxNormalStepDegRequested": requested_normal,
+        "minSilhouetteSegmentsRequested": requested_silhouette,
+        "maxChordErrorMmAchieved": achieved_chord,
+        "maxNormalStepDegAchieved": achieved_normal,
+        "minSilhouetteSegmentsAchieved": silhouette,
+        "vertexCapLimited": cap_limited or missed,
+        "surfaces": _json_safe(per_surface),
+    }
+
+
+def encode_preview_geometry(
+    geometry: Any,
+    *,
+    epoch: int,
+    seq: int,
+    design_revision: int,
+    lod: str,
+    eval_ms: float,
+) -> bytes:
+    """Convert ``PreviewGeometryV1`` f64 arrays at the FRAME-SPEC boundary."""
+
+    arrays: dict[str, np.ndarray] = {}
+    surfaces: list[dict[str, Any]] = []
+    for index, surface in enumerate(geometry.surfaces):
+        prefix = f"surface{index}"
+        position_name = f"{prefix}.positions"
+        index_name = f"{prefix}.indices"
+        normal_name = f"{prefix}.normals"
+        positions = np.ascontiguousarray(surface.positions, dtype="<f4")
+        indices = np.ascontiguousarray(surface.indices, dtype="<u4").reshape(-1)
+        normals = np.ascontiguousarray(surface.normals, dtype="<f4")
+        if not np.isfinite(positions).all() or not np.isfinite(normals).all():
+            raise ValueError(f"{surface.role}: geometry contains non-finite values")
+        arrays[position_name] = positions
+        arrays[index_name] = indices
+        arrays[normal_name] = normals
+        surfaces.append(
+            {
+                "role": surface.role,
+                "positions": position_name,
+                "indices": index_name,
+                "normals": normal_name,
+                "shading": surface.shading,
+                "normalMethod": surface.normal_method,
+                "closedPhi": bool(surface.closed_phi),
+            }
+        )
+    metadata = _json_safe(geometry.metadata)
+    return encode(
+        {
+            "kind": "preview",
+            "epoch": epoch,
+            "seq": seq,
+            "designRevision": design_revision,
+            "lod": lod,
+            "evalMs": float(eval_ms),
+            "surfaces": surfaces,
+            "fidelity": _fidelity_header(metadata),
+            "previewMetadata": metadata,
+        },
+        arrays,
+    )
+
+
+def _validation_fields(error: ValidationError, *, prefix: str | None = None) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for item in error.errors(include_url=False, include_context=False, include_input=False):
+        location = [str(part) for part in item.get("loc", ())]
+        if prefix is not None:
+            location.insert(0, prefix)
+        path = ".".join(location) or prefix or "message"
+        fields[path] = str(item.get("msg", "Invalid value"))
+    return fields
+
+
+class PreviewProtocol:
+    """One-connection state machine with one worker and one latest-wins slot."""
+
+    def __init__(
+        self,
+        *,
+        epoch: int | None = None,
+        heartbeat_seconds: float = HEARTBEAT_SECONDS,
+        max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
+        preview_builder: Callable[[Mapping[str, Any], Any], Any] | None = None,
+    ) -> None:
+        if heartbeat_seconds <= 0:
+            raise ValueError("heartbeat_seconds must be positive")
+        if max_frame_bytes <= 0:
+            raise ValueError("max_frame_bytes must be positive")
+        self.epoch = next(_EPOCHS) if epoch is None else epoch
+        self.heartbeat_seconds = heartbeat_seconds
+        self.max_frame_bytes = max_frame_bytes
+        self._preview_builder = preview_builder
+        self._transport: PreviewTransport | None = None
+        self._worker: asyncio.Task[None] | None = None
+        self._pending: _Request | None = None
+        self._send_lock = asyncio.Lock()
+        self._closed = False
+
+    def is_current_epoch(self, epoch: object) -> bool:
+        """Return whether an incoming or decoded response belongs to this socket."""
+
+        return isinstance(epoch, int) and not isinstance(epoch, bool) and epoch == self.epoch
+
+    async def close_restarting(self) -> None:
+        """Close an active connection with WS-PROTOCOL's restart code."""
+
+        await self._close(CLOSE_RESTARTING)
+
+    async def run(self, transport: PreviewTransport) -> None:
+        self._transport = transport
+        await transport.send_json(
+            {
+                "v": PROTOCOL_VERSION,
+                "kind": "hello",
+                "epoch": self.epoch,
+                "heartbeatSec": self.heartbeat_seconds,
+                "limits": {"maxFrameBytes": self.max_frame_bytes},
+            }
+        )
+        heartbeat = asyncio.create_task(self._heartbeat())
+        try:
+            while not self._closed:
+                message = await transport.receive()
+                if message is None:
+                    break
+                if not await self._receive_message(message):
+                    break
+        except asyncio.CancelledError:
+            if not self._closed:
+                self._closed = True
+                await transport.close(CLOSE_RESTARTING)
+            raise
+        finally:
+            self._closed = True
+            heartbeat.cancel()
+            if self._worker is not None:
+                self._worker.cancel()
+            await asyncio.gather(
+                heartbeat,
+                *(task for task in (self._worker,) if task is not None),
+                return_exceptions=True,
+            )
+
+    async def _heartbeat(self) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_seconds)
+            await self._send_json({"kind": "ping"})
+
+    async def _receive_message(self, raw: str | bytes | Mapping[str, Any]) -> bool:
+        try:
+            if isinstance(raw, Mapping):
+                wire = json.dumps(raw, allow_nan=False, separators=(",", ":")).encode("utf-8")
+                value: Any = dict(raw)
+            else:
+                wire = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+                if len(wire) > self.max_frame_bytes:
+                    await self._close(CLOSE_TOO_LARGE)
+                    return False
+                value = json.loads(wire)
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            await self._error(None, None, "validation", fields={"message": str(exc)})
+            return True
+        if len(wire) > self.max_frame_bytes:
+            await self._close(CLOSE_TOO_LARGE)
+            return False
+        if not isinstance(value, dict):
+            await self._error(None, None, "validation", fields={"message": "must be an object"})
+            return True
+        version = value.get("v")
+        if version != PROTOCOL_VERSION or isinstance(version, bool):
+            await self._close(CLOSE_UNSUPPORTED_VERSION)
+            return False
+        incoming_epoch = value.get("epoch")
+        if not isinstance(incoming_epoch, int) or isinstance(incoming_epoch, bool):
+            await self._error(
+                seq=None,
+                revision=None,
+                code="validation",
+                fields={"epoch": "must be an integer"},
+            )
+            return True
+        if not self.is_current_epoch(incoming_epoch):
+            # A receive queued before reconnect is stale by definition. It must
+            # not consume the sole pending slot or produce a response.
+            return True
+
+        kind = value.get("kind")
+        seq = value.get("seq") if isinstance(value.get("seq"), int) else None
+        revision = (
+            value.get("designRevision")
+            if isinstance(value.get("designRevision"), int)
+            else None
+        )
+        try:
+            if kind == "preview":
+                parsed = _PreviewMessage.model_validate(value)
+                try:
+                    design = DesignConfig.model_validate(parsed.design)
+                except ValidationError as exc:
+                    await self._error(
+                        parsed.seq,
+                        parsed.design_revision,
+                        "validation",
+                        fields=_validation_fields(exc, prefix="design"),
+                    )
+                    return True
+                request = _Request(
+                    kind="preview",
+                    seq=parsed.seq,
+                    design_revision=parsed.design_revision,
+                    lod=parsed.lod,
+                    design=design,
+                )
+            elif kind == "curve":
+                parsed_curve = _CurveMessage.model_validate(value)
+                request = _Request(
+                    kind="curve",
+                    seq=parsed_curve.seq,
+                    design_revision=parsed_curve.design_revision,
+                    lod="coarse",
+                    curve_id=parsed_curve.curve_id,
+                    points=parsed_curve.points,
+                )
+            else:
+                raise ValueError(f"unsupported message kind {kind!r}")
+        except ValidationError as exc:
+            await self._error(seq, revision, "validation", fields=_validation_fields(exc))
+            return True
+        except ValueError as exc:
+            await self._error(seq, revision, "validation", fields={"kind": str(exc)})
+            return True
+        await self._enqueue(request)
+        return True
+
+    async def _enqueue(self, request: _Request) -> None:
+        if self._worker is None:
+            self._worker = asyncio.create_task(self._work(request))
+            return
+        if self._pending is not None:
+            await self._send_json({"kind": "dropped", "seq": self._pending.seq})
+        self._pending = request
+
+    async def _work(self, request: _Request) -> None:
+        current: _Request | None = request
+        while current is not None and not self._closed:
+            try:
+                frame = await asyncio.to_thread(self._compute_frame, current)
+                if len(frame) > self.max_frame_bytes:
+                    await self._close(CLOSE_TOO_LARGE)
+                    return
+                await self._send_bytes(frame)
+            except FrameError as exc:
+                if exc.rule == "frame-too-large":
+                    await self._close(CLOSE_TOO_LARGE)
+                    return
+                await self._error(
+                    current.seq,
+                    current.design_revision,
+                    "validation",
+                    fields={"design" if current.kind == "preview" else "points": str(exc)},
+                )
+            except ValueError as exc:
+                await self._error(
+                    current.seq,
+                    current.design_revision,
+                    "validation",
+                    fields={"design" if current.kind == "preview" else "points": str(exc)},
+                )
+            except Exception as exc:  # pragma: no cover - exact failures are dependency-specific
+                await self._error(
+                    current.seq,
+                    current.design_revision,
+                    "internal",
+                    message=str(exc),
+                )
+            current = self._pending
+            self._pending = None
+        self._worker = None
+
+    def _compute_frame(self, request: _Request) -> bytes:
+        began = time.perf_counter()
+        if request.kind == "curve":
+            points = np.ascontiguousarray(request.points, dtype="<f4")
+            elapsed = (time.perf_counter() - began) * 1000.0
+            return encode(
+                {
+                    "kind": "curve",
+                    "epoch": self.epoch,
+                    "seq": request.seq,
+                    "designRevision": request.design_revision,
+                    "lod": request.lod,
+                    "evalMs": elapsed,
+                    "curveId": request.curve_id,
+                },
+                {"points": points},
+            )
+        assert request.design is not None
+        config = design_to_mesher_config(request.design)
+        builder = self._preview_builder
+        if builder is None:
+            from hornlab_mesher.preview.api import build_preview_geometry
+
+            builder = build_preview_geometry
+        geometry = builder(config, preview_options(request.lod))
+        elapsed = (time.perf_counter() - began) * 1000.0
+        return encode_preview_geometry(
+            geometry,
+            epoch=self.epoch,
+            seq=request.seq,
+            design_revision=request.design_revision,
+            lod=request.lod,
+            eval_ms=elapsed,
+        )
+
+    async def _error(
+        self,
+        seq: int | None,
+        revision: int | None,
+        code: Literal["validation", "internal"],
+        *,
+        fields: Mapping[str, str] | None = None,
+        message: str | None = None,
+    ) -> None:
+        response: dict[str, Any] = {"kind": "error", "code": code}
+        if seq is not None:
+            response["seq"] = seq
+        if revision is not None:
+            response["designRevision"] = revision
+        if fields is not None:
+            response["fields"] = dict(fields)
+        if message is not None:
+            response["message"] = message
+        await self._send_json(response)
+
+    async def _send_json(self, fields: Mapping[str, Any]) -> None:
+        if self._closed or self._transport is None:
+            return
+        async with self._send_lock:
+            if not self._closed and self._transport is not None:
+                await self._transport.send_json(
+                    {"v": PROTOCOL_VERSION, "epoch": self.epoch, **dict(fields)}
+                )
+
+    async def _send_bytes(self, data: bytes) -> None:
+        if self._closed or self._transport is None:
+            return
+        async with self._send_lock:
+            if not self._closed and self._transport is not None:
+                await self._transport.send_bytes(data)
+
+    async def _close(self, code: int) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._transport is not None:
+            async with self._send_lock:
+                await self._transport.close(code)
+
+
+# Name the role explicitly for users/tests that think in terms of an engine.
+PreviewProtocolEngine = PreviewProtocol
+
+
+__all__ = [
+    "CLOSE_HEARTBEAT_TIMEOUT",
+    "CLOSE_ORIGIN_REJECTED",
+    "CLOSE_RESTARTING",
+    "CLOSE_TOO_LARGE",
+    "CLOSE_UNSUPPORTED_VERSION",
+    "HEARTBEAT_SECONDS",
+    "PROTOCOL_VERSION",
+    "PreviewProtocol",
+    "PreviewProtocolEngine",
+    "PreviewTransport",
+    "encode_preview_geometry",
+    "preview_options",
+]
