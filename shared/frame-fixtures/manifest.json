@@ -1,0 +1,314 @@
+{
+  "format": "FRAME-SPEC",
+  "version": "1.1",
+  "fixtures": [
+    {
+      "file": "good/minimal-preview.bin",
+      "description": "Minimal single planar rendered surface",
+      "outcome": "ok",
+      "kind": "preview",
+      "sectionShapes": {
+        "positions": [
+          3,
+          3
+        ],
+        "indices": [
+          3
+        ],
+        "normals": [
+          3,
+          3
+        ]
+      },
+      "spotChecks": [
+        {
+          "section": "positions",
+          "index": 3,
+          "value": 10.0
+        },
+        {
+          "section": "normals",
+          "index": 2,
+          "value": 1.0
+        }
+      ],
+      "byteExactReencode": true
+    },
+    {
+      "file": "good/multi-surface-preview.bin",
+      "description": "Horn-like inner and outer grids with normals and fidelity metadata",
+      "outcome": "ok",
+      "kind": "preview",
+      "sectionShapes": {
+        "hornPositions": [
+          24,
+          3
+        ],
+        "hornIndices": [
+          96
+        ],
+        "hornNormals": [
+          24,
+          3
+        ],
+        "outerPositions": [
+          24,
+          3
+        ],
+        "outerIndices": [
+          96
+        ],
+        "outerNormals": [
+          24,
+          3
+        ],
+        "temperature": [
+          24
+        ]
+      },
+      "spotChecks": [
+        {
+          "section": "hornPositions",
+          "index": 0,
+          "value": 8.0
+        },
+        {
+          "section": "outerPositions",
+          "index": 0,
+          "value": 10.0
+        }
+      ],
+      "byteExactReencode": true
+    },
+    {
+      "file": "good/curve.bin",
+      "description": "Frequency-response curve frame",
+      "outcome": "ok",
+      "kind": "curve",
+      "sectionShapes": {
+        "frequencyHz": [
+          4
+        ],
+        "magnitudeDb": [
+          4
+        ]
+      },
+      "spotChecks": [
+        {
+          "section": "frequencyHz",
+          "index": 2,
+          "value": 1000.0
+        },
+        {
+          "section": "magnitudeDb",
+          "index": 1,
+          "value": -3.25
+        }
+      ],
+      "byteExactReencode": true
+    },
+    {
+      "file": "good/result-chunk.bin",
+      "description": "Balloon result chunk",
+      "outcome": "ok",
+      "kind": "result-chunk",
+      "sectionShapes": {
+        "thetaDeg": [
+          4
+        ],
+        "splDb": [
+          4,
+          2
+        ]
+      },
+      "spotChecks": [
+        {
+          "section": "thetaDeg",
+          "index": 3,
+          "value": 90.0
+        },
+        {
+          "section": "splDb",
+          "index": 7,
+          "value": -6.0
+        }
+      ],
+      "byteExactReencode": true
+    },
+    {
+      "file": "malformed/bad-magic.bin",
+      "description": "Magic is not WGF1",
+      "outcome": "bad-magic"
+    },
+    {
+      "file": "malformed/unsupported-version.bin",
+      "description": "Header major version is unsupported",
+      "outcome": "unsupported-version"
+    },
+    {
+      "file": "malformed/frame-too-large.bin",
+      "description": "Frame exceeds the default 32 MiB ceiling",
+      "outcome": "frame-too-large"
+    },
+    {
+      "file": "malformed/header-too-large.bin",
+      "description": "Declared JSON header is larger than 64 KiB",
+      "outcome": "header-too-large"
+    },
+    {
+      "file": "malformed/header-truncated.bin",
+      "description": "Declared JSON header extends beyond the message",
+      "outcome": "header-truncated"
+    },
+    {
+      "file": "malformed/header-json.bin",
+      "description": "Header JSON is invalid",
+      "outcome": "header-json"
+    },
+    {
+      "file": "malformed/sections-invalid.bin",
+      "description": "Sections is missing",
+      "outcome": "sections-invalid"
+    },
+    {
+      "file": "malformed/section-name.bin",
+      "description": "A section name is empty",
+      "outcome": "section-name"
+    },
+    {
+      "file": "malformed/section-duplicate.bin",
+      "description": "Two sections use the same name",
+      "outcome": "section-duplicate"
+    },
+    {
+      "file": "malformed/section-dtype.bin",
+      "description": "A section uses an unknown dtype",
+      "outcome": "section-dtype"
+    },
+    {
+      "file": "malformed/section-shape.bin",
+      "description": "A section shape contains a negative dimension",
+      "outcome": "section-shape"
+    },
+    {
+      "file": "malformed/section-elements.bin",
+      "description": "A section shape exceeds the element ceiling",
+      "outcome": "section-elements"
+    },
+    {
+      "file": "malformed/section-length.bin",
+      "description": "Byte length disagrees with dtype and shape",
+      "outcome": "section-length"
+    },
+    {
+      "file": "malformed/section-range.bin",
+      "description": "A section extends beyond the payload",
+      "outcome": "section-range"
+    },
+    {
+      "file": "malformed/section-alignment.bin",
+      "description": "A section offset is not 8-byte aligned",
+      "outcome": "section-alignment"
+    },
+    {
+      "file": "malformed/section-order.bin",
+      "description": "A gap breaks contiguous header-order layout",
+      "outcome": "section-order"
+    },
+    {
+      "file": "malformed/section-overlap.bin",
+      "description": "The index section overlaps the position section",
+      "outcome": "section-overlap"
+    },
+    {
+      "file": "malformed/preview-surfaces.bin",
+      "description": "Preview omits the surfaces model",
+      "outcome": "preview-surfaces"
+    },
+    {
+      "file": "malformed/surface-invalid.bin",
+      "description": "A surface entry is not an object",
+      "outcome": "surface-invalid"
+    },
+    {
+      "file": "malformed/surface-role.bin",
+      "description": "A rendered surface has no role",
+      "outcome": "surface-role"
+    },
+    {
+      "file": "malformed/surface-shading.bin",
+      "description": "Surface shading is not smooth or flat",
+      "outcome": "surface-shading"
+    },
+    {
+      "file": "malformed/surface-normal-method.bin",
+      "description": "Surface normal method is not an allowed analytic/exact method",
+      "outcome": "surface-normal-method"
+    },
+    {
+      "file": "malformed/surface-closed-phi.bin",
+      "description": "closedPhi is present but not boolean",
+      "outcome": "surface-closed-phi"
+    },
+    {
+      "file": "malformed/surface-section-missing.bin",
+      "description": "Surface references a missing position section",
+      "outcome": "surface-section-missing"
+    },
+    {
+      "file": "malformed/surface-position-format.bin",
+      "description": "Surface positions are not f32",
+      "outcome": "surface-position-format"
+    },
+    {
+      "file": "malformed/surface-index-format.bin",
+      "description": "Surface indices are not u32",
+      "outcome": "surface-index-format"
+    },
+    {
+      "file": "malformed/normals-missing.bin",
+      "description": "Rendered surface omits its normal section reference",
+      "outcome": "normals-missing"
+    },
+    {
+      "file": "malformed/normals-format.bin",
+      "description": "Surface normals are not f32",
+      "outcome": "normals-format"
+    },
+    {
+      "file": "malformed/normals-row-mismatch.bin",
+      "description": "Normal and position row counts differ",
+      "outcome": "normals-row-mismatch"
+    },
+    {
+      "file": "malformed/positions-nonfinite.bin",
+      "description": "A rendered position is NaN",
+      "outcome": "positions-nonfinite"
+    },
+    {
+      "file": "malformed/normals-nonfinite.bin",
+      "description": "A rendered normal is infinite",
+      "outcome": "normals-nonfinite"
+    },
+    {
+      "file": "malformed/normals-nonunit.bin",
+      "description": "A rendered normal has zero length",
+      "outcome": "normals-nonunit"
+    },
+    {
+      "file": "malformed/fidelity-invalid.bin",
+      "description": "Required achieved fidelity metadata is absent",
+      "outcome": "fidelity-invalid"
+    },
+    {
+      "file": "malformed/fidelity-cap-unreported.bin",
+      "description": "Missed requested tolerance does not report vertex-cap limitation",
+      "outcome": "fidelity-cap-unreported"
+    },
+    {
+      "file": "malformed/indices-out-of-range.bin",
+      "description": "A sampled index equals the vertex row count",
+      "outcome": "indices-out-of-range"
+    }
+  ]
+}
