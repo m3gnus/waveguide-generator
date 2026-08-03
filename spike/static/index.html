@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Waveguide preview latency spike</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      * { box-sizing: border-box; }
+      body { margin: 0; overflow: hidden; background: #080b10; color: #d8e2ef; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+      #panel {
+        position: fixed; z-index: 2; top: 16px; left: 16px; width: min(620px, calc(100vw - 32px));
+        padding: 14px; border: 1px solid #2a3b50; border-radius: 8px;
+        background: rgba(10, 15, 23, 0.92); box-shadow: 0 10px 30px #0008;
+      }
+      #controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      label { display: flex; align-items: center; gap: 6px; }
+      select, button, input { accent-color: #52b5ff; }
+      select, button {
+        padding: 6px 9px; border: 1px solid #40546d; border-radius: 5px;
+        background: #111a26; color: inherit;
+      }
+      button:disabled { opacity: 0.5; }
+      input[type="range"] { width: 150px; }
+      #stats { margin: 12px 0 0; max-height: 36vh; overflow: auto; white-space: pre-wrap; font-size: 12px; }
+      #status { color: #80c7ff; }
+      a { color: #80c7ff; }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+    <section id="panel">
+      <div id="controls">
+        <label>Family
+          <select id="family">
+            <option value="osse">OSSE</option>
+            <option value="rosse">R-OSSE</option>
+            <option value="icw">ICW</option>
+            <option value="freeform">FREEFORM</option>
+          </select>
+        </label>
+        <label>LOD
+          <select id="lod">
+            <option value="coarse">coarse (8 × 4)</option>
+            <option value="fine">fine (96 × 48)</option>
+          </select>
+        </label>
+        <label>Throat radius ×
+          <input id="param" type="range" min="0.85" max="1.15" step="0.001" value="1">
+          <output id="paramValue">1.000</output>
+        </label>
+        <button id="sweep" type="button">Run 10 s sweep</button>
+        <a href="/static/charts.html">Charts probe</a>
+      </div>
+      <div id="status">connecting…</div>
+      <pre id="stats">Run the sweep to collect latency percentiles.</pre>
+    </section>
+    <script type="module" src="/static/preview.js"></script>
+  </body>
+</html>

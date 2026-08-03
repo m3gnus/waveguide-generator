@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Waveguide chart rendering spike</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 16px; background: #080b10; color: #d8e2ef; }
+      header { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+      button { padding: 7px 12px; border: 1px solid #40546d; border-radius: 5px; background: #111a26; color: inherit; }
+      button:disabled { opacity: 0.5; }
+      a { color: #80c7ff; }
+      #note { color: #a9b8ca; }
+      .chart { width: 100%; height: 440px; margin-top: 18px; border: 1px solid #213044; border-radius: 7px; }
+      #polarControls { margin-top: 18px; display: flex; gap: 10px; align-items: center; }
+      #frequency { width: min(620px, 65vw); }
+      #stats { padding: 12px; min-height: 80px; overflow: auto; background: #0e1520; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Real-result ECharts probe</h1>
+      <button id="measure" type="button" disabled>Measure</button>
+      <a href="/">Preview probe</a>
+      <span id="note">Loading the largest persisted v1 result…</span>
+    </header>
+    <div id="fr" class="chart" aria-label="Frequency response overlay"></div>
+    <div id="heatmap" class="chart" aria-label="Directivity heatmap"></div>
+    <div id="polarControls">
+      <label for="frequency">Polar frequency</label>
+      <input id="frequency" type="range" min="0" max="0" step="1" value="0">
+      <output id="frequencyValue">—</output>
+    </div>
+    <div id="polar" class="chart" aria-label="Polar directivity section"></div>
+    <pre id="stats">Press Measure to run about five seconds of scripted hover, zoom, and slider interactions.</pre>
+    <script type="module" src="./charts.js"></script>
+  </body>
+</html>

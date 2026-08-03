@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-03T12:08:32.846905+00:00",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "python": "3.13.1",
+  "pythonExecutable": "/Users/magnus/Code/hornlab-workspace/Waveguide Generator/.venv/bin/python",
+  "warmRuns": 40,
+  "lods": {
+    "coarse": {
+      "n_angular": 8,
+      "n_length": 4
+    },
+    "fine": {
+      "n_angular": 96,
+      "n_length": 48
+    }
+  },
+  "cases": [
+    {
+      "family": "OSSE",
+      "payload": "osse",
+      "lod": "coarse",
+      "cold": {
+        "importMs": 88.34941699751653,
+        "evalMs": 1.8216250173281878,
+        "gridNPhi": 20,
+        "gridNLength": 4,
+        "processMs": 141.46058398182504,
+        "startupOverheadMs": 51.28954196698032
+      },
+      "warm": {
+        "p50Ms": 0.9405210003023967,
+        "p95Ms": 0.9815666388021782,
+        "maxMs": 1.0056669998448342
+      },
+      "frameEncode": {
+        "p50Ms": 0.053750001825392246,
+        "p95Ms": 0.06402981089195234,
+        "maxMs": 0.10800000745803118,
+        "bytes": 3350
+      },
+      "grid": {
+        "nPhi": 20,
+        "nLength": 4
+      }
+    },
+    {
+      "family": "OSSE",
+      "payload": "osse",
+      "lod": "fine",
+      "cold": {
+        "importMs": 82.81512497342192,
+        "evalMs": 45.515915990108624,
+        "gridNPhi": 100,
+        "gridNLength": 48,
+        "processMs": 179.0063339867629,
+        "startupOverheadMs": 50.67529302323237
+      },
+      "warm": {
+        "p50Ms": 43.90047899505589,
+        "p95Ms": 194.30298778606806,
+        "maxMs": 269.0961670014076
+      },
+      "frameEncode": {
+        "p50Ms": 2.702812504139729,
+        "p95Ms": 3.0104774064966473,
+        "maxMs": 3.142707981169224,
+        "bytes": 174238
+      },
+      "grid": {
+        "nPhi": 100,
+        "nLength": 48
+      }
+    },
+    {
+      "family": "R-OSSE",
+      "payload": "rosse",
+      "lod": "coarse",
+      "cold": {
+        "importMs": 109.76233397377655,
+        "evalMs": 2.0083750132471323,
+        "gridNPhi": 8,
+        "gridNLength": 4,
+        "processMs": 176.7127919883933,
+        "startupOverheadMs": 64.94208300136961
+      },
+      "warm": {
+        "p50Ms": 0.49287550791632384,
+        "p95Ms": 0.7279499972355551,
+        "maxMs": 0.7872499991208315
+      },
+      "frameEncode": {
+        "p50Ms": 0.05899950338061899,
+        "p95Ms": 0.07065270328894255,
+        "maxMs": 0.16195798525586724,
+        "bytes": 2900
+      },
+      "grid": {
+        "nPhi": 8,
+        "nLength": 4
+      }
+    },
+    {
+      "family": "R-OSSE",
+      "payload": "rosse",
+      "lod": "fine",
+      "cold": {
+        "importMs": 98.91629198682494,
+        "evalMs": 42.64254099689424,
+        "gridNPhi": 96,
+        "gridNLength": 48,
+        "processMs": 206.15116698900238,
+        "startupOverheadMs": 64.59233400528319
+      },
+      "warm": {
+        "p50Ms": 33.206041509401985,
+        "p95Ms": 37.643654209387016,
+        "maxMs": 44.286917021963745
+      },
+      "frameEncode": {
+        "p50Ms": 5.121437498019077,
+        "p95Ms": 5.2921336609870195,
+        "maxMs": 5.370792001485825,
+        "bytes": 334507
+      },
+      "grid": {
+        "nPhi": 96,
+        "nLength": 48
+      }
+    },
+    {
+      "family": "ICW",
+      "payload": "icw",
+      "lod": "coarse",
+      "cold": {
+        "importMs": 93.80045800935477,
+        "evalMs": 315.00108301406726,
+        "gridNPhi": 8,
+        "gridNLength": 4,
+        "processMs": 488.5504999838304,
+        "startupOverheadMs": 79.74895896040834
+      },
+      "warm": {
+        "p50Ms": 0.5767499969806522,
+        "p95Ms": 0.6776538328267634,
+        "maxMs": 0.7412080012727529
+      },
+      "frameEncode": {
+        "p50Ms": 0.030520997825078666,
+        "p95Ms": 0.03571603592718019,
+        "maxMs": 0.08279099711216986,
+        "bytes": 1475
+      },
+      "grid": {
+        "nPhi": 8,
+        "nLength": 4
+      }
+    },
+    {
+      "family": "ICW",
+      "payload": "icw",
+      "lod": "fine",
+      "cold": {
+        "importMs": 90.0508750055451,
+        "evalMs": 307.8431249887217,
+        "gridNPhi": 96,
+        "gridNLength": 48,
+        "processMs": 475.0654579838738,
+        "startupOverheadMs": 77.171457989607
+      },
+      "warm": {
+        "p50Ms": 4.540395500953309,
+        "p95Ms": 4.910038941306993,
+        "maxMs": 5.046124977525324
+      },
+      "frameEncode": {
+        "p50Ms": 2.3963534913491458,
+        "p95Ms": 2.580805898469407,
+        "maxMs": 2.662165992660448,
+        "bytes": 167277
+      },
+      "grid": {
+        "nPhi": 96,
+        "nLength": 48
+      }
+    },
+    {
+      "family": "FREEFORM",
+      "payload": "freeform",
+      "lod": "coarse",
+      "cold": {
+        "importMs": 93.3811659924686,
+        "evalMs": 293.21808301028796,
+        "gridNPhi": 20,
+        "gridNLength": 5,
+        "processMs": 460.96033399226144,
+        "startupOverheadMs": 74.36108498950489
+      },
+      "warm": {
+        "p50Ms": 2.833520993590355,
+        "p95Ms": 3.0665847356431186,
+        "maxMs": 3.074707987252623
+      },
+      "frameEncode": {
+        "p50Ms": 0.06358401151373982,
+        "p95Ms": 0.06845624448033048,
+        "maxMs": 0.12612499995157123,
+        "bytes": 4071
+      },
+      "grid": {
+        "nPhi": 20,
+        "nLength": 5
+      }
+    },
+    {
+      "family": "FREEFORM",
+      "payload": "freeform",
+      "lod": "fine",
+      "cold": {
+        "importMs": 94.26854099729098,
+        "evalMs": 298.8699169945903,
+        "gridNPhi": 96,
+        "gridNLength": 49,
+        "processMs": 465.45629101456143,
+        "startupOverheadMs": 72.31783302268013
+      },
+      "warm": {
+        "p50Ms": 13.762875008978881,
+        "p95Ms": 14.327512495219707,
+        "maxMs": 14.49149998370558
+      },
+      "frameEncode": {
+        "p50Ms": 2.591750002466142,
+        "p95Ms": 2.6720333436969668,
+        "maxMs": 2.7037920081056654,
+        "bytes": 170734
+      },
+      "grid": {
+        "nPhi": 96,
+        "nLength": 49
+      }
+    }
+  ]
+}

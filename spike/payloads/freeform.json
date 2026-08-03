@@ -1,0 +1,70 @@
+{
+  "a0": 15.5,
+  "cross_sections": [
+    {
+      "shape": "circle",
+      "t": 0.0
+    },
+    {
+      "corner_radius_mm": 20.0,
+      "shape": "rounded_rectangle",
+      "t": 0.4
+    },
+    {
+      "corner_radius_mm": 35.0,
+      "shape": "rounded_rectangle",
+      "t": 1.0
+    }
+  ],
+  "formula_type": "FREEFORM",
+  "inflection_policy": "warn",
+  "n_angular": 96,
+  "n_length": 48,
+  "overshoot_policy": "allow",
+  "profile_h": {
+    "mouth_angle_deg": 70.0,
+    "mouth_tangent_scale": 0.9,
+    "points": [
+      [
+        0.0,
+        12.7
+      ],
+      [
+        60.0,
+        80.0,
+        25.0,
+        1.4
+      ],
+      [
+        120.0,
+        160.0
+      ]
+    ],
+    "throat_angle_deg": 15.5,
+    "throat_tangent_scale": 1.1
+  },
+  "profile_v": {
+    "mouth_angle_deg": 60.0,
+    "mouth_tangent_scale": 0.8,
+    "points": [
+      [
+        0.0,
+        12.7
+      ],
+      [
+        60.0,
+        60.0,
+        -10.0
+      ],
+      [
+        120.0,
+        110.0
+      ]
+    ],
+    "throat_angle_deg": 15.5,
+    "throat_tangent_scale": 1.2
+  },
+  "quadrants": 1234,
+  "sim_type": 2,
+  "wall_thickness": 0.0
+}
