@@ -1,4 +1,4 @@
-import type { DesignDocument } from '../stores/design';
+import { serializeDesign, type DesignDocument } from '../stores/design';
 
 export interface EngineCapability {
   name: string;
@@ -10,22 +10,7 @@ export interface EngineCapability {
 export interface Capabilities { engines: EngineCapability[] }
 
 export function toSolveDesign(design: DesignDocument): Record<string, unknown> {
-  const { quadrants, enclosure, mesh, ...root } = structuredClone(design);
-  return {
-    ...root,
-    mesh: {
-      ...mesh,
-      quadrants: quadrants.reduce((mask, quadrant) => mask | (1 << (quadrant - 1)), 0),
-    },
-    enclosure: {
-      depth: enclosure.depth,
-      edge_radius: enclosure.edge_radius,
-      space_l: enclosure.baffle_margin,
-      space_t: enclosure.baffle_margin,
-      space_r: enclosure.baffle_margin,
-      space_b: enclosure.baffle_margin,
-    },
-  };
+  return serializeDesign(design);
 }
 
 async function detail(response: Response): Promise<string> {

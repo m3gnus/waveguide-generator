@@ -1,6 +1,7 @@
 import { decodeFrame, type DecodedFrame } from './frame';
 import {
   registerRevisionTimer,
+  serializeDesign,
   subscribeRevision,
   useDesignStore,
   type DesignDocument,
@@ -233,19 +234,7 @@ export class PreviewSocketManager {
   }
 
   private toApiDesign(design: DesignDocument): Record<string, unknown> {
-    const { quadrants, enclosure, mesh, ...root } = design;
-    return {
-      ...root,
-      mesh: { ...mesh, quadrants: quadrants.reduce((mask, quadrant) => mask | (1 << (quadrant - 1)), 0) },
-      enclosure: {
-        depth: enclosure.depth,
-        edge_radius: enclosure.edge_radius,
-        space_l: enclosure.baffle_margin,
-        space_t: enclosure.baffle_margin,
-        space_r: enclosure.baffle_margin,
-        space_b: enclosure.baffle_margin,
-      },
-    };
+    return serializeDesign(design);
   }
 
   private scheduleReconnect(): void {

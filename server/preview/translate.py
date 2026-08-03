@@ -207,7 +207,10 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "lengthSegments": _expr(mesh.length_segments),
                 "cornerSegments": _expr(mesh.corner_segments),
                 "samplingMode": mesh.sampling_mode,
-                "zMapPoints": mesh.z_map_points,
+                # The mesher's config parser treats a PRESENT ZMapPoints key as
+                # "zmap mode requested" (hornlab_mesher/config_parser.py:289-292)
+                # and rejects empty points — so a blank value must OMIT the key.
+                "zMapPoints": mesh.z_map_points or None,
                 "quadrants": 1234,
                 "wallThickness": _expr(mesh.wall_thickness),
                 "throatResolution": _expr(mesh.throat_resolution),

@@ -156,3 +156,15 @@ def test_source_shape_mapping_and_unsupported_contours() -> None:
     assert flat["source"] == {"sourceShape": 0.0, "sourceRadius": 20.0, "sourceCurv": -1.0}
     with pytest.raises(ValueError, match="contours"):
         _translate({"formula": "OSSE", "source": {"contours": "1, 2"}})
+
+
+def test_blank_zmap_points_key_is_omitted() -> None:
+    """A present-but-empty ZMapPoints key would force zmap mode in the mesher
+    (hornlab_mesher/config_parser.py:289-292) and fail on the empty points, so
+    the translator must drop blanks entirely."""
+    from server.design.schema import DesignConfig
+    from server.preview.translate import design_to_mesher_config
+
+    design = DesignConfig.model_validate({"formula": "OSSE", "L": 120, "a": 45, "r0": 12.7, "a0": 10})
+    config = design_to_mesher_config(design)
+    assert "zMapPoints" not in config.get("mesh", {})
