@@ -1,10 +1,11 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Component, useEffect, useMemo, useRef, type ErrorInfo, type ReactNode } from 'react';
-import { Box3, PerspectiveCamera, Plane, Vector3 } from 'three';
-import type { DecodedFrame } from '../api/frame';
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, type ComponentRef, type ErrorInfo, type ReactNode } from 'react';
+import { OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
+import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
+import { calculateCameraFit, zoomedOrthographicValue } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
-import { frameToScene } from './frameScene';
+import type { FrameScene } from './frameScene';
 import { createMaterialLibrary } from './materials';
 import { SurfaceMesh } from './SurfaceMesh';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
@@ -14,12 +15,21 @@ export interface CameraRequest {
   nonce: number;
 }
 
+export interface ZoomRequest {
+  direction: 'in' | 'out';
+  nonce: number;
+}
+
 interface ViewportCanvasProps {
-  frame: DecodedFrame;
+  scene: FrameScene;
+  sceneMarker: string;
   mode: DisplayMode;
   showEnclosure: boolean;
   sectionCut: boolean;
   cameraRequest: CameraRequest;
+  zoomRequest: ZoomRequest;
+  cameraProjection: CameraProjection;
+  preferences: ViewerPreferences;
   frameStartedAt: number | null;
   onClientFrame: (milliseconds: number) => void;
   theme: ViewportTheme;
@@ -48,8 +58,8 @@ export function canRenderWebGL(createCanvas?: () => HTMLCanvasElement): boolean 
   return supported;
 }
 
-export function cameraFitKey(bounds: Box3, nonce: number): string {
-  return `${nonce}:${bounds.min.toArray().join(',')}:${bounds.max.toArray().join(',')}`;
+export function cameraFitKey(bounds: FrameScene['bounds'], nonce: number, projection: CameraProjection = 'perspective', aspect = 1): string {
+  return `${nonce}:${projection}:${aspect}:${bounds.min.toArray().join(',')}:${bounds.max.toArray().join(',')}`;
 }
 
 export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure: (message: string) => void): void {
@@ -59,42 +69,125 @@ export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure:
   }, { once: true });
 }
 
-function CameraRig({ bounds, request, scheduler }: {
-  bounds: Box3;
+export function installWheelZoomInversion(element: HTMLElement, enabled: boolean): () => void {
+  if (!enabled) return () => undefined;
+  const redispatched = new WeakSet<Event>();
+  const invert = (event: WheelEvent) => {
+    if (redispatched.has(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const replacement = new WheelEvent('wheel', {
+      deltaMode: event.deltaMode,
+      deltaX: event.deltaX,
+      deltaY: -event.deltaY,
+      deltaZ: event.deltaZ,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      screenX: event.screenX,
+      screenY: event.screenY,
+      bubbles: true,
+      cancelable: true,
+    });
+    redispatched.add(replacement);
+    element.dispatchEvent(replacement);
+  };
+  element.addEventListener('wheel', invert, { capture: true, passive: false });
+  return () => element.removeEventListener('wheel', invert, { capture: true });
+}
+
+function CameraRig({ bounds, request, zoomRequest, projection, preferences, scheduler }: {
+  bounds: FrameScene['bounds'];
   request: CameraRequest;
+  zoomRequest: ZoomRequest;
+  projection: CameraProjection;
+  preferences: ViewerPreferences;
   scheduler: DemandRenderScheduler;
 }) {
-  const camera = useThree((state) => state.camera);
+  const set = useThree((state) => state.set);
+  const get = useThree((state) => state.get);
+  const canvasSize = useThree((state) => state.size);
+  const gl = useThree((state) => state.gl);
+  const aspect = Math.max(canvasSize.width / Math.max(canvasSize.height, 1), 0.01);
+  const camera = useMemo<PerspectiveCamera | OrthographicCamera>(() => projection === 'orthographic'
+    ? new OrthographicCamera(-1, 1, 1, -1, 0.001, 100_000)
+    : new PerspectiveCamera(34, aspect, 0.001, 100_000), [aspect, projection]);
+  const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   const center = useMemo(() => bounds.getCenter(new Vector3()), [bounds]);
-  const size = useMemo(() => Math.max(bounds.getSize(new Vector3()).length(), 1), [bounds]);
   const appliedRequest = useRef<string | null>(null);
-  const fitKey = cameraFitKey(bounds, request.nonce);
+  const appliedZoom = useRef(zoomRequest.nonce);
+  const fitKey = cameraFitKey(bounds, request.nonce, projection, aspect);
+
+  useLayoutEffect(() => {
+    const previous = get().camera;
+    set({ camera });
+    return () => set({ camera: previous });
+  }, [camera, get, set]);
 
   useEffect(() => {
     if (appliedRequest.current === fitKey) return;
     appliedRequest.current = fitKey;
     return scheduler.schedule(() => {
-      const distance = size * 1.25;
-      const offset = request.preset === 'front'
-        ? new Vector3(0, 0, distance)
-        : request.preset === 'top'
-          ? new Vector3(0, distance, 0.001)
-          : new Vector3(distance * 0.72, distance * 0.52, distance * 0.72);
-      camera.position.copy(center).add(offset);
+      const fit = calculateCameraFit(bounds, request.preset, projection, aspect);
+      camera.position.copy(fit.position);
       camera.up.set(0, request.preset === 'top' ? 0 : 1, request.preset === 'top' ? -1 : 0);
-      camera.lookAt(center);
+      camera.lookAt(fit.center);
       if (camera instanceof PerspectiveCamera) {
-        camera.near = Math.max(0.01, size / 10_000);
-        camera.far = Math.max(2_000, size * 100);
-        camera.updateProjectionMatrix();
+        camera.aspect = aspect;
+      } else if (camera instanceof OrthographicCamera) {
+        camera.left = fit.left;
+        camera.right = fit.right;
+        camera.top = fit.top;
+        camera.bottom = fit.bottom;
+        camera.zoom = 1;
       }
+      camera.near = fit.near;
+      camera.far = fit.far;
+      camera.updateProjectionMatrix();
+      controls.current?.target.copy(fit.center);
+      controls.current?.update();
     });
-  }, [camera, center, fitKey, request.preset, scheduler, size]);
+  }, [aspect, bounds, camera, fitKey, projection, request.preset, scheduler]);
+
+  useEffect(() => {
+    if (appliedZoom.current === zoomRequest.nonce) return;
+    appliedZoom.current = zoomRequest.nonce;
+    return scheduler.schedule(() => {
+      const target = controls.current?.target ?? center;
+      if (camera instanceof OrthographicCamera) {
+        camera.zoom = zoomedOrthographicValue(camera.zoom, zoomRequest.direction);
+        camera.updateProjectionMatrix();
+      } else {
+        const factor = zoomRequest.direction === 'in' ? 0.8 : 1.25;
+        camera.position.sub(target).multiplyScalar(factor).add(target);
+      }
+      controls.current?.update();
+    });
+  }, [camera, center, scheduler, zoomRequest.direction, zoomRequest.nonce]);
+
+  useEffect(() => {
+    const instance = controls.current;
+    if (!instance) return;
+    if (preferences.keyboardPanEnabled) instance.listenToKeyEvents(gl.domElement);
+    else instance.stopListenToKeyEvents();
+    return () => instance.stopListenToKeyEvents();
+  }, [gl.domElement, preferences.keyboardPanEnabled]);
+
+  useEffect(() => installWheelZoomInversion(gl.domElement, preferences.invertWheelZoom), [gl.domElement, preferences.invertWheelZoom]);
 
   return <OrbitControls
+    ref={controls}
+    camera={camera}
     makeDefault
     target={[center.x, center.y, center.z]}
-    enableDamping={false}
+    rotateSpeed={preferences.rotateSpeed}
+    zoomSpeed={preferences.zoomSpeed}
+    panSpeed={preferences.panSpeed}
+    enableDamping={preferences.dampingEnabled}
+    dampingFactor={preferences.dampingFactor}
     zoomToCursor
     onChange={() => scheduler.schedule()}
   />;
@@ -114,15 +207,13 @@ function PaintObserver({ marker, startedAt, onClientFrame }: {
   return null;
 }
 
-function Scene({ frame, mode, showEnclosure, sectionCut, cameraRequest, frameStartedAt, onClientFrame, theme }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
-  const scene = useMemo(() => frameToScene(frame), [frame]);
+function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
   const clipPlane = useMemo(() => sectionCut ? new Plane(new Vector3(1, 0, 0), 0) : null, [sectionCut]);
   const materials = useMemo(() => createMaterialLibrary(mode, clipPlane, theme), [clipPlane, mode, theme]);
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);
   const size = useMemo(() => scene.bounds.getSize(new Vector3()), [scene.bounds]);
-  const marker = `${frame.header.epoch ?? 0}:${frame.header.seq ?? 0}:${frame.header.designRevision ?? 0}:${frame.header.lod ?? ''}`;
 
   useEffect(() => installViewportTestHook(scheduler), [scheduler]);
   useEffect(() => () => scheduler.dispose(), [scheduler]);
@@ -160,8 +251,8 @@ function Scene({ frame, mode, showEnclosure, sectionCut, cameraRequest, frameSta
     >
       <planeGeometry args={[Math.max(size.z * 1.05, 1), Math.max(size.y * 1.05, 1)]} />
     </mesh>}
-    <CameraRig bounds={scene.bounds} request={cameraRequest} scheduler={scheduler} />
-    <PaintObserver marker={marker} startedAt={frameStartedAt} onClientFrame={onClientFrame} />
+    <CameraRig bounds={scene.bounds} request={cameraRequest} zoomRequest={zoomRequest} projection={cameraProjection} preferences={preferences} scheduler={scheduler} />
+    <PaintObserver marker={sceneMarker} startedAt={frameStartedAt} onClientFrame={onClientFrame} />
   </>;
 }
 
@@ -180,6 +271,8 @@ export function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProp
     gl={{ antialias: true, alpha: true, stencil: true }}
     onCreated={({ gl }) => {
       gl.localClippingEnabled = true;
+      gl.domElement.tabIndex = 0;
+      gl.domElement.addEventListener('pointerdown', () => gl.domElement.focus());
       installContextLossFallback(gl.domElement, onRenderFailure);
     }}
   >

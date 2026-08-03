@@ -3,11 +3,15 @@ import type { DecodedFrame } from '../api/frame';
 import { previewSocket } from '../api/previewSocket';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { Icon } from '../shell/icons';
+import { useViewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
+import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces } from './frameScene';
+import { createImportedMeshScene, type ImportedMeshScene } from './importedMesh';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
+import { parseMSH } from './mshParser';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
-import { canRenderWebGL, type CameraRequest, ViewportCanvas } from './ViewportCanvas';
+import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
 
 const modes: Array<{ mode: DisplayMode; title: string; icon: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' }> = [
@@ -39,6 +43,7 @@ export function Viewport() {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const theme = useViewportTheme();
+  const preferences = useViewerPreferences();
   const selectedRef = useRef<DecodedFrame | null>(null);
   const latencyClock = useRef(new ClientLatencyClock());
   const currentEpoch = useRef<number | null>(preview.epoch);
@@ -59,13 +64,45 @@ export function Viewport() {
   const [clientFrameMs, setClientFrameMs] = useState<number | null>(null);
   const [renderFailure, setRenderFailure] = useState<string | null>(null);
   const [cameraRequest, setCameraRequest] = useState<CameraRequest>({ preset: 'three-quarter', nonce: 0 });
+  const [zoomRequest, setZoomRequest] = useState<ZoomRequest>({ direction: 'in', nonce: 0 });
+  const [cameraProjection, setCameraProjection] = useState<CameraProjection>(() => preferences.startupCameraMode);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [importedMesh, setImportedMesh] = useState<ImportedMeshScene | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const meshInput = useRef<HTMLInputElement>(null);
   const setCamera = (preset: CameraPreset) => setCameraRequest((current) => ({ preset, nonce: current.nonce + 1 }));
+  const zoom = (direction: ZoomRequest['direction']) => setZoomRequest((current) => ({ direction, nonce: current.nonce + 1 }));
+  const toggleProjection = () => setCameraProjection((current) => current === 'perspective' ? 'orthographic' : 'perspective');
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
-  const surfaces = selected?.header.surfaces ?? [];
+  const activeScene = importedMesh?.scene ?? scene;
+  const sceneMarker = importedMesh
+    ? `msh:${importedMesh.name}:${importedMesh.triangleCount}`
+    : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}`;
+  const surfaces = activeScene?.surfaces ?? [];
   const webgl = canRenderWebGL() && renderFailure === null;
-  const hasSurfaces = hasRenderableSurfaces(scene);
-  const connectionInterrupted = preview.connection !== 'connected';
-  const badgeLabel = connectionInterrupted ? preview.connection.toUpperCase() : preview.stale ? 'STALE' : 'LIVE';
+  const hasSurfaces = hasRenderableSurfaces(activeScene);
+  const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
+  const badgeLabel = !preferences.liveUpdate ? 'PAUSED' : connectionInterrupted ? preview.connection.toUpperCase() : preview.stale ? 'STALE' : 'LIVE';
+
+  const importMesh = async (file: File | undefined) => {
+    if (!file) return;
+    setImportError(null);
+    try {
+      const imported = createImportedMeshScene(file.name, parseMSH(await file.text()));
+      setImportedMesh(imported);
+      setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (meshInput.current) meshInput.current.value = '';
+    }
+  };
+
+  const clearImportedMesh = () => {
+    setImportedMesh(null);
+    setImportError(null);
+    setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
+  };
 
   useEffect(() => subscribeRevision((event) => {
     const epoch = currentEpoch.current;
@@ -100,53 +137,61 @@ export function Viewport() {
   }, []);
 
   return <div className="viewport-panel wg2-viewport">
-    {selected && hasSurfaces && webgl && <ViewportCanvas
-      frame={selected}
+    {activeScene && hasSurfaces && webgl && <ViewportCanvas
+      scene={activeScene}
+      sceneMarker={sceneMarker}
       mode={mode}
       showEnclosure={showEnclosure}
       sectionCut={sectionCut}
       cameraRequest={cameraRequest}
-      frameStartedAt={latencyClock.current.requestStartedAt(selected.header)}
+      zoomRequest={zoomRequest}
+      cameraProjection={cameraProjection}
+      preferences={preferences}
+      frameStartedAt={importedMesh || !selected ? null : latencyClock.current.requestStartedAt(selected.header)}
       onClientFrame={reportClientFrame}
       theme={theme}
       onRenderFailure={setRenderFailure}
     />}
 
     <div className="viewport-title">
-      <b>tritonia_mk2</b>
-      <span>{design.formula} · 84° × 60° · Ø {((design.R ?? 150) * 2).toFixed(0)} mm · half-sym</span>
+      <b>{importedMesh?.name ?? 'tritonia_mk2'}</b>
+      <span>{importedMesh
+        ? `${importedMesh.triangleCount.toLocaleString()} triangles · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
+        : `${design.formula} · 84° × 60° · Ø ${((design.R ?? 150) * 2).toFixed(0)} mm · half-sym`}</span>
     </div>
     <div className="viewport-live">
-      <span className={connectionInterrupted ? 'reconnect-badge' : preview.stale ? 'stale-badge' : 'live-badge'}><i />{badgeLabel}</span>
+      {importedMesh && <span className="imported-mesh-badge">IMPORTED MESH <button type="button" onClick={clearImportedMesh}>Clear</button></span>}
+      <span className={!preferences.liveUpdate ? 'paused-badge' : connectionInterrupted ? 'reconnect-badge' : preview.stale ? 'stale-badge' : 'live-badge'}><i />{badgeLabel}</span>
       <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> + client <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
     </div>
 
-    {!selected && <div className="viewport-empty" role="status" aria-live="polite">
+    {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
       <i className="viewport-empty-mark"><i /></i>
-      <b>Waiting for geometry</b>
-      <span>{preview.error ?? (connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      <b>{preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
+      <span>{importError ?? preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
-    {selected && connectionInterrupted && <div className="viewport-connection-banner" role="status">
+    {activeScene && connectionInterrupted && !importedMesh && <div className="viewport-connection-banner" role="status">
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
       <b>Last valid geometry retained</b>
     </div>}
-    {selected && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The live geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
-    {selected && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The preview frame is valid but contains no renderable surfaces.</span></div>}
-    {selected && renderFailure && <div className="viewport-empty" role="status"><b>WebGL renderer stopped</b><span>{renderFailure}. Reopen the viewport after checking graphics acceleration.</span></div>}
-    {selected && mode === 'curvature' && !scene?.hasCurvature && <div className="viewport-mode-empty">
+    {activeScene && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
+    {activeScene && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The scene is valid but contains no renderable surfaces.</span></div>}
+    {activeScene && renderFailure && <div className="viewport-empty" role="status"><b>WebGL renderer stopped</b><span>{renderFailure}. Reopen the viewport after checking graphics acceleration.</span></div>}
+    {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <div className="viewport-mode-empty">
       <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
     </div>}
+    {importError && activeScene && <div className="mesh-import-error" role="alert">Import failed: {importError}</div>}
 
     {showStats && <div className="frame-stat-card wg2-stats">
       <span>latest displayed binary frame</span>
       <dl>
-        <div><dt>revision</dt><dd>{selected?.header.designRevision ?? 'waiting'}</dd></div>
-        <div><dt>LOD</dt><dd>{selected?.header.lod ?? '—'}</dd></div>
+        <div><dt>revision</dt><dd>{importedMesh ? 'imported' : selected?.header.designRevision ?? 'waiting'}</dd></div>
+        <div><dt>LOD</dt><dd>{importedMesh ? 'source' : selected?.header.lod ?? '—'}</dd></div>
         <div><dt>eval</dt><dd>{selected?.header.evalMs !== undefined ? `${selected.header.evalMs.toFixed(2)} ms` : '—'}</dd></div>
       </dl>
       <div className="surface-list">{surfaces.length ? surfaces.map((surface, index) => {
-        const descriptor = selected?.header.sections.find((section) => section.name === surface.positions);
-        return <div key={`${index}:${surface.role}`}><span>{surface.role}</span><b>{descriptor?.shape[0]?.toLocaleString() ?? '—'} vertices</b></div>;
+        const vertexCount = surface.positions.length / 3;
+        return <div key={`${index}:${surface.role}`}><span>{surface.role}</span><b>{vertexCount.toLocaleString()} vertices</b></div>;
       }) : <p>No rendered surfaces in this frame.</p>}</div>
     </div>}
 
@@ -163,13 +208,21 @@ export function Viewport() {
       <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
       <button className={showEnclosure ? 'on' : ''} title="Show enclosure" aria-label="Show enclosure" aria-pressed={showEnclosure} onClick={() => setShowEnclosure((value) => !value)}><Icon name="box"/></button>
       <button className={showStats ? 'on' : ''} title="Frame stats" aria-label="Frame stats" aria-pressed={showStats} onClick={() => setShowStats((value) => !value)}><span className="wg2-stats-glyph">Σ</span></button>
+      <i className="wg2-tool-divider" />
+      <input ref={meshInput} className="mesh-file-input" type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh" onChange={(event) => void importMesh(event.target.files?.[0])} />
+      <button type="button" title="Import Gmsh 2.2 mesh" aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
+      <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><span className="wg2-settings-glyph">⚙</span></button>
     </div>
+    {preferencesOpen && <ViewerPreferencesPanel preferences={preferences} onClose={() => setPreferencesOpen(false)} />}
     <div className="axis-gizmo"><i className="axis x">x</i><i className="axis y">y</i><i className="axis z">z</i></div>
     <div className="camera-tools"><div>
       <button className={cameraRequest.preset === 'front' ? 'on' : ''} onClick={() => setCamera('front')}>Front</button>
       <button className={cameraRequest.preset === 'three-quarter' ? 'on' : ''} onClick={() => setCamera('three-quarter')}>¾</button>
       <button className={cameraRequest.preset === 'top' ? 'on' : ''} onClick={() => setCamera('top')}>Top</button>
       <button className={sectionCut ? 'on' : ''} onClick={() => setSectionCut((value) => !value)}>Section</button>
+      <button className="projection-toggle" aria-label={`Switch to ${cameraProjection === 'perspective' ? 'orthographic' : 'perspective'} camera`} onClick={toggleProjection}>{cameraProjection === 'perspective' ? 'Persp' : 'Ortho'}</button>
+      <button aria-label="Zoom out" title="Zoom out" onClick={() => zoom('out')}>−</button>
+      <button aria-label="Zoom in" title="Zoom in" onClick={() => zoom('in')}>+</button>
     </div><span>100 mm<i /></span></div>
   </div>;
 }
