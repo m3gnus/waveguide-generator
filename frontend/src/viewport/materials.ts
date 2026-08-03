@@ -15,23 +15,34 @@ import {
   ReplaceStencilOp,
   ShaderMaterial,
 } from 'three';
-import type { DisplayMode, MaterialLibrary, SurfaceMaterialClass } from './types';
+import type { DisplayMode, MaterialLibrary, SurfaceMaterialClass, ViewportTheme } from './types';
 
 const classes: SurfaceMaterialClass[] = [
   'horn-smooth', 'horn-flat', 'boundary-smooth', 'boundary-flat', 'enclosure-smooth', 'enclosure-flat',
 ];
 
-function classColor(materialClass: SurfaceMaterialClass): Color {
-  if (materialClass.startsWith('enclosure')) return new Color('#4c5964');
-  if (materialClass.startsWith('boundary')) return new Color('#c18b5d');
-  return new Color('#bdc7ce');
+const fallbackColors: Record<ViewportTheme, Record<'horn' | 'boundary' | 'enclosure', string>> = {
+  dark: { horn: '#8eafc6', boundary: '#a7bdc9', enclosure: '#687987' },
+  light: { horn: '#9fb5c5', boundary: '#a5947d', enclosure: '#817b70' },
+};
+
+function tokenColor(token: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;
+}
+
+function classColor(materialClass: SurfaceMaterialClass, theme: ViewportTheme): Color {
+  const family = materialClass.startsWith('enclosure')
+    ? 'enclosure'
+    : materialClass.startsWith('boundary') ? 'boundary' : 'horn';
+  return new Color(tokenColor(`--vp-${family}-material`, fallbackColors[theme][family]));
 }
 
 function zebraMaterial(clippingPlanes: Plane[]): ShaderMaterial {
   return new ShaderMaterial({
     clipping: clippingPlanes.length > 0,
     clippingPlanes,
-    side: DoubleSide,
+    side: FrontSide,
     vertexShader: `
       #include <clipping_planes_pars_vertex>
       varying vec3 vWorldNormal;
@@ -62,10 +73,10 @@ function zebraMaterial(clippingPlanes: Plane[]): ShaderMaterial {
   });
 }
 
-function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass, clippingPlanes: Plane[]) {
-  const color = classColor(materialClass);
+function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass, clippingPlanes: Plane[], theme: ViewportTheme) {
+  const color = classColor(materialClass, theme);
   if (mode === 'wireframe') {
-    return new MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.9, clippingPlanes });
+    return new MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.9, side: FrontSide, clippingPlanes });
   }
   if (mode === 'xray') {
     return new MeshStandardMaterial({
@@ -75,7 +86,7 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
   }
   if (mode === 'zebra') return zebraMaterial(clippingPlanes);
   if (mode === 'curvature') {
-    return new MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.6, side: DoubleSide, clippingPlanes });
+    return new MeshStandardMaterial({ color: '#dce9ef', vertexColors: true, roughness: 0.58, side: FrontSide, clippingPlanes });
   }
   return new MeshStandardMaterial({
     color,
@@ -89,14 +100,17 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
   });
 }
 
-export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null): MaterialLibrary {
+export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null, theme: ViewportTheme = 'dark'): MaterialLibrary {
   const clippingPlanes = clipPlane ? [clipPlane] : [];
   const zebra = mode === 'zebra' ? zebraMaterial(clippingPlanes) : null;
   const surfaces = Object.fromEntries(classes.map((materialClass) => [
     materialClass,
-    zebra ?? surfaceMaterial(mode, materialClass, clippingPlanes),
+    zebra ?? surfaceMaterial(mode, materialClass, clippingPlanes, theme),
   ])) as Record<SurfaceMaterialClass, ReturnType<typeof surfaceMaterial>>;
-  const wire = new MeshBasicMaterial({ color: '#26343d', wireframe: true, transparent: true, opacity: 0.55, clippingPlanes });
+  const wire = new MeshBasicMaterial({
+    color: tokenColor('--vp-wire-material', theme === 'light' ? '#26384a' : '#9ed4f4'),
+    wireframe: true, transparent: true, opacity: theme === 'light' ? 0.42 : 0.34, side: FrontSide, clippingPlanes,
+  });
   const edge = new LineBasicMaterial({ color: '#8fe4ff', transparent: true, opacity: 0.96, clippingPlanes });
   const stencilBack = new MeshBasicMaterial({
     colorWrite: false, depthWrite: false, depthTest: false, side: BackSide, clippingPlanes,
@@ -109,7 +123,7 @@ export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null
     stencilZFail: KeepStencilOp, stencilZPass: DecrementWrapStencilOp,
   });
   const cap = new MeshStandardMaterial({
-    color: '#d18a56', metalness: 0.02, roughness: 0.72, side: DoubleSide,
+    color: '#d18a56', metalness: 0.02, roughness: 0.72, side: FrontSide,
     stencilWrite: true, stencilRef: 0, stencilFunc: NotEqualStencilFunc,
     stencilFail: ReplaceStencilOp, stencilZFail: ReplaceStencilOp, stencilZPass: ReplaceStencilOp,
   });

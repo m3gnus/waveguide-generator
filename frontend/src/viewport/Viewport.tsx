@@ -1,11 +1,12 @@
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { previewSocket } from '../api/previewSocket';
-import { useDesignStore } from '../stores/design';
+import { subscribeRevision, useDesignStore } from '../stores/design';
 import { Icon } from '../shell/icons';
 import { frameToScene } from './frameScene';
+import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
-import type { CameraPreset, DisplayMode } from './types';
+import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, type CameraRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
 
@@ -19,15 +20,36 @@ const modes: Array<{ mode: DisplayMode; title: string; icon: 'clay' | 'wire' | '
   { mode: 'edges', title: 'Hard-boundary edges', icon: 'section' },
 ];
 
+function documentTheme(): ViewportTheme {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+function useViewportTheme(): ViewportTheme {
+  const [theme, setTheme] = useState<ViewportTheme>(documentTheme);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setTheme(documentTheme()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
+
 export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
+  const designRevision = useDesignStore((state) => state.designRevision);
+  const theme = useViewportTheme();
   const selectedRef = useRef<DecodedFrame | null>(null);
-  const selectedStartedAt = useRef(performance.now());
+  const latencyClock = useRef(new ClientLatencyClock());
+  const currentEpoch = useRef<number | null>(preview.epoch);
+  const queuedFineRevision = useRef<number | null>(null);
+  const fineRequestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  currentEpoch.current = preview.epoch;
+  if (preview.epoch === null) latencyClock.current.disconnect();
+  else latencyClock.current.beginEpoch(preview.epoch, designRevision, performance.now());
   const selected = selectPreferredFrame(selectedRef.current, preview.frame);
   if (selected !== selectedRef.current) {
     selectedRef.current = selected;
-    selectedStartedAt.current = performance.now();
   }
   const scene = useMemo(() => selected ? frameToScene(selected) : null, [selected]);
   const [mode, setMode] = useState<DisplayMode>('clay');
@@ -40,6 +62,40 @@ export function Viewport() {
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
   const surfaces = selected?.header.surfaces ?? [];
   const webgl = canRenderWebGL();
+  const connectionInterrupted = preview.connection !== 'connected';
+  const badgeLabel = connectionInterrupted ? preview.connection.toUpperCase() : preview.stale ? 'STALE' : 'LIVE';
+
+  useEffect(() => subscribeRevision((event) => {
+    const epoch = currentEpoch.current;
+    if (epoch === null) return;
+    if (event.immediate) {
+      if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
+      fineRequestTimer.current = null;
+      queuedFineRevision.current = null;
+      latencyClock.current.recordRequest(epoch, event.revision, 'fine', performance.now());
+      return;
+    }
+    queuedFineRevision.current = event.revision;
+    if (fineRequestTimer.current) return;
+    latencyClock.current.recordRequest(epoch, event.revision, 'coarse', performance.now());
+    fineRequestTimer.current = setTimeout(() => {
+      fineRequestTimer.current = null;
+      const revision = queuedFineRevision.current;
+      queuedFineRevision.current = null;
+      const activeEpoch = currentEpoch.current;
+      if (revision !== null && activeEpoch !== null) {
+        latencyClock.current.recordRequest(activeEpoch, revision, 'fine', performance.now());
+      }
+    }, 33);
+  }), []);
+
+  useEffect(() => {
+    setClientFrameMs(null);
+  }, [preview.epoch]);
+
+  useEffect(() => () => {
+    if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
+  }, []);
 
   return <div className="viewport-panel wg2-viewport">
     {selected && webgl && <ViewportCanvas
@@ -48,8 +104,9 @@ export function Viewport() {
       showEnclosure={showEnclosure}
       sectionCut={sectionCut}
       cameraRequest={cameraRequest}
-      frameStartedAt={selectedStartedAt.current}
+      frameStartedAt={latencyClock.current.requestStartedAt(selected.header)}
       onClientFrame={reportClientFrame}
+      theme={theme}
     />}
 
     <div className="viewport-title">
@@ -57,17 +114,22 @@ export function Viewport() {
       <span>{design.formula} · 84° × 60° · Ø {((design.R ?? 150) * 2).toFixed(0)} mm · half-sym</span>
     </div>
     <div className="viewport-live">
-      <span className={preview.stale ? 'stale-badge' : 'live-badge'}><i />{preview.stale ? 'STALE' : 'LIVE'}</span>
-      <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> + client <b>{clientFrameMs?.toFixed(1) ?? '—'}</b> ms</span>
+      <span className={connectionInterrupted ? 'reconnect-badge' : preview.stale ? 'stale-badge' : 'live-badge'}><i />{badgeLabel}</span>
+      <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> + client <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
     </div>
 
-    {!selected && <div className="viewport-empty">
+    {!selected && <div className="viewport-empty" role="status" aria-live="polite">
+      <i className="viewport-empty-mark"><i /></i>
       <b>Waiting for geometry</b>
-      <span>{preview.error ?? 'Connect to the local preview engine to render a live FRAME-SPEC scene.'}</span>
+      <span>{preview.error ?? (connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+    </div>}
+    {selected && connectionInterrupted && <div className="viewport-connection-banner" role="status">
+      <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
+      <b>Last valid geometry retained</b>
     </div>}
     {selected && !webgl && <div className="viewport-empty"><b>WebGL unavailable</b><span>The live geometry is valid, but this environment cannot create a WebGL context.</span></div>}
     {selected && mode === 'curvature' && !scene?.hasCurvature && <div className="viewport-mode-empty">
-      <b>Curvature needs inspection LOD</b><span>This frame has no analytic curvature section. Geometry remains available in every other display mode.</span>
+      <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
     </div>}
 
     {showStats && <div className="frame-stat-card wg2-stats">

@@ -114,6 +114,10 @@
   --h3-spec: #d8f0ff;
   --h3-warm: 232, 168, 58;
   --h3-warm-k: 0;
+  --vp-horn-material: #8eafc6;
+  --vp-boundary-material: #a7bdc9;
+  --vp-enclosure-material: #687987;
+  --vp-wire-material: #9ed4f4;
   --r: 7px;
   --r2: 5px;
   --r3: 3px;
@@ -236,6 +240,10 @@
   --h3-spec: #ffeec4;
   --h3-warm: 236, 166, 52;
   --h3-warm-k: .36;
+  --vp-horn-material: #9fb5c5;
+  --vp-boundary-material: #a5947d;
+  --vp-enclosure-material: #817b70;
+  --vp-wire-material: #26384a;
 }
 
 @theme {

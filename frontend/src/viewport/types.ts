@@ -2,6 +2,7 @@ import type { BufferGeometry, Material } from 'three';
 
 export type DisplayMode = 'clay' | 'solid-wire' | 'wireframe' | 'xray' | 'zebra' | 'curvature' | 'edges';
 export type CameraPreset = 'front' | 'three-quarter' | 'top';
+export type ViewportTheme = 'dark' | 'light';
 export type SurfaceMaterialClass = 'horn-smooth' | 'horn-flat' | 'boundary-smooth' | 'boundary-flat' | 'enclosure-smooth' | 'enclosure-flat';
 
 export interface SceneSurface {

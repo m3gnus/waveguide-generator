@@ -40,7 +40,10 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
   useEffect(() => () => boundary?.dispose(), [boundary]);
 
   const material = materials.surfaces[surface.materialClass];
-  const renderSurface = mode !== 'edges' && (mode !== 'curvature' || colors !== null);
+  // Curvature data is optional even at fine LOD. Keep the neutral material
+  // visible when it is absent so switching inspection modes never blanks the
+  // model; Viewport explains that only the analytic heatmap is unavailable.
+  const renderSurface = mode !== 'edges';
   return <group visible={visible}>
     {renderSurface && <mesh geometry={manager.geometry} material={material} renderOrder={mode === 'xray' ? 10 : 1} />}
     {mode === 'solid-wire' && <mesh geometry={manager.geometry} material={materials.wire} renderOrder={2} />}

@@ -27,4 +27,12 @@ describe('selectPreferredFrame', () => {
     const next = frame(8, 'coarse', 12);
     expect(selectPreferredFrame(fine, next)).toBe(next);
   });
+
+  it('accepts a low sequence frame after the socket epoch changes', () => {
+    const retained = frame(12, 'fine', 900);
+    retained.header.epoch = 7;
+    const reconnected = frame(12, 'fine', 1);
+    reconnected.header.epoch = 8;
+    expect(selectPreferredFrame(retained, reconnected)).toBe(reconnected);
+  });
 });

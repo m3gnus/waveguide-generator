@@ -1,6 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { DockviewComponent, type DockviewApi, type GroupPanelPartInitParameters, type IContentRenderer } from 'dockview';
+import {
+  DockviewComponent,
+  Orientation,
+  type DockviewApi,
+  type GroupPanelPartInitParameters,
+  type IContentRenderer,
+  type SerializedDockview,
+} from 'dockview';
 import { ParamPanel } from '../design/ParamPanel';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
@@ -36,33 +43,55 @@ class ReactPanelRenderer implements IContentRenderer {
   }
 }
 
-function addDefaultLayout(api: DockviewApi): void {
-  api.clear();
-  const parameters = api.addPanel({
-    id: 'parameters', component: 'parameters', title: 'Parameters', initialWidth: 288,
-  });
-  const viewport = api.addPanel({
-    id: 'viewport', component: 'viewport', title: 'Viewport', initialWidth: 720,
-    position: { direction: 'right', referencePanel: parameters },
-  });
-  api.addPanel({
-    id: 'jobs', component: 'jobs', title: 'Jobs', initialWidth: 262,
-    position: { direction: 'right', referencePanel: viewport },
-  });
-  api.addPanel({
-    id: 'results', component: 'results', title: 'Results', initialHeight: 360,
-    position: { direction: 'below', referencePanel: viewport },
-  });
-  // Dockview does not reliably honor initialWidth on the panels that seed the
-  // layout tree (the first group absorbs remaining space), so pin the side
-  // columns explicitly once the tree exists; the viewport keeps the flex space.
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    // Group-level setSize resizes the branch split; panel-level only affects
-    // tabs within a group and is a no-op for our single-panel groups.
-    api.getPanel('parameters')?.group.api.setSize({ width: 300 });
-    api.getPanel('jobs')?.group.api.setSize({ width: 320 });
-    api.getPanel('results')?.group.api.setSize({ height: 340 });
-  }));
+const PARAMETERS_WIDTH = 300;
+const JOBS_WIDTH = 320;
+const RESULTS_HEIGHT = 340;
+const FALLBACK_WIDTH = 1440;
+const FALLBACK_HEIGHT = 900;
+
+export function createDefaultLayout(width: number, height: number): SerializedDockview {
+  const layoutWidth = Math.max(PARAMETERS_WIDTH + JOBS_WIDTH + 1, Math.round(width) || FALLBACK_WIDTH);
+  const layoutHeight = Math.max(RESULTS_HEIGHT + 1, Math.round(height) || FALLBACK_HEIGHT);
+  const viewportWidth = layoutWidth - PARAMETERS_WIDTH - JOBS_WIDTH;
+  const viewportHeight = layoutHeight - RESULTS_HEIGHT;
+  const group = (id: ComponentName) => ({ id: `${id}-group`, views: [id], activeView: id });
+  return {
+    grid: {
+      width: layoutWidth,
+      height: layoutHeight,
+      orientation: Orientation.HORIZONTAL,
+      root: {
+        type: 'branch',
+        size: layoutHeight,
+        data: [
+          { type: 'leaf', size: PARAMETERS_WIDTH, data: group('parameters') },
+          {
+            type: 'branch',
+            size: viewportWidth,
+            data: [
+              { type: 'leaf', size: viewportHeight, data: group('viewport') },
+              { type: 'leaf', size: RESULTS_HEIGHT, data: group('results') },
+            ],
+          },
+          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs') },
+        ],
+      },
+    },
+    panels: {
+      parameters: { id: 'parameters', contentComponent: 'parameters', title: 'Parameters' },
+      viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
+      results: { id: 'results', contentComponent: 'results', title: 'Results' },
+      jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
+    },
+    activeGroup: 'viewport',
+  };
+}
+
+function addDefaultLayout(api: DockviewApi, host: HTMLElement | null): void {
+  const bounds = host?.getBoundingClientRect();
+  const width = host?.clientWidth || bounds?.width || api.width || FALLBACK_WIDTH;
+  const height = host?.clientHeight || bounds?.height || api.height || FALLBACK_HEIGHT;
+  api.fromJSON(createDefaultLayout(width, height));
 }
 
 export function Workspace({ resetKey }: { resetKey: number }) {
@@ -73,7 +102,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
   useEffect(() => {
     if (!apiRef.current || previousReset.current === resetKey) return;
     previousReset.current = resetKey;
-    addDefaultLayout(apiRef.current);
+    addDefaultLayout(apiRef.current, host.current);
   }, [resetKey]);
 
   useEffect(() => {
@@ -90,10 +119,10 @@ export function Workspace({ resetKey }: { resetKey: number }) {
         dockview.api.fromJSON(JSON.parse(stored) as ReturnType<DockviewApi['toJSON']>);
       } catch {
         localStorage.removeItem(LAYOUT_KEY);
-        addDefaultLayout(dockview.api);
+        addDefaultLayout(dockview.api, host.current);
       }
     } else {
-      addDefaultLayout(dockview.api);
+      addDefaultLayout(dockview.api, host.current);
     }
     const subscription = dockview.api.onDidLayoutChange(() => {
       if (dockview.api.totalPanels) localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));

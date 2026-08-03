@@ -62,8 +62,8 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .revision-chip { color: var(--fg4); font: 9px var(--mono); }
 
 /* dockview workspace */
-.workspace { min-width: 0; min-height: 0; padding: 7px; }
-.dockview-host { width: 100%; height: 100%; }
+.workspace { min-width: 0; min-height: 0; overflow: hidden; padding: 7px; }
+.dockview-host { width: 100%; height: 100%; overflow: hidden; }
 .dock-panel-content { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .dockview-host.dv-dockview, .dockview-host .dv-dockview { --dv-group-view-background-color: transparent; --dv-tabs-and-actions-container-background-color: transparent; --dv-activegroup-visiblepanel-tab-background-color: var(--ov3); --dv-activegroup-hiddenpanel-tab-background-color: transparent; --dv-inactivegroup-visiblepanel-tab-background-color: var(--ov2); --dv-inactivegroup-hiddenpanel-tab-background-color: transparent; --dv-tab-divider-color: var(--hair-soft); --dv-separator-border: transparent; --dv-paneview-active-outline-color: var(--acc); --dv-drag-over-background-color: rgba(var(--acc-rgb), .10); --dv-drag-over-border-color: var(--acc); --dv-tabs-container-scrollbar-color: var(--scroll); --dv-icon-hover-background-color: var(--ov3); --dv-floating-box-shadow: var(--float-sh); --dv-overlay-z-index: 999; }
 .dockview-host .dv-grid-view { gap: 7px; }
