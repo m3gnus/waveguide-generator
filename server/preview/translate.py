@@ -13,6 +13,7 @@ from server.design.schema import (
     ICWConfig,
     OSSEConfig,
     ROSSEConfig,
+    ResolutionExpr,
 )
 
 
@@ -70,9 +71,11 @@ def _scaled_expr(value: Expr | None, scale: float) -> str | float | None:
     return result
 
 
-def _first_number(value: Expr | None) -> float | None:
+def _first_number(value: ResolutionExpr | None) -> float | None:
     if value is None:
         return None
+    if isinstance(value, tuple):
+        value = value[0]
     if value.value is not None:
         return float(value.value)
     for item in (value.raw or "").split(","):
@@ -237,10 +240,13 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     wall_thickness = _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness")
     if root.mesh.quadrants is not None:
         _structural_number(root.mesh.quadrants, "mesh.quadrants")
-    if enclosure_depth > 0.0:
-        mode = "enclosure"
-    elif root.simulation.sim_type == "infinite-baffle":
+    # Inactive enclosure values remain valid preconfiguration. Simulation mode
+    # decides whether they are active, matching v1's editable-at-depth-zero and
+    # preconfigured-enclosure behavior.
+    if root.simulation.sim_type == "infinite-baffle":
         mode = "infinite-baffle"
+    elif enclosure_depth > 0.0:
+        mode = "enclosure"
     elif wall_thickness > 0.0:
         mode = "freestanding"
     else:
@@ -270,6 +276,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "apertureResolutionScale": _expr(mesh.aperture_resolution_scale),
                 "maxTriangles": _expr(mesh.max_triangles),
                 "allowLargeMesh": _expr(mesh.allow_large_mesh),
+                "maxEdge": _scaled_expr(mesh.max_edge, scale),
                 "encFrontResolution": (
                     _first_number(root.enclosure.front_resolution)
                     if root.enclosure is not None
@@ -326,7 +333,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
             }
         )
 
-    if enclosure_depth > 0.0 and root.enclosure is not None:
+    if mode == "enclosure" and root.enclosure is not None:
         enclosure = root.enclosure
         config["enclosure"] = _clean(
             {

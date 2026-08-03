@@ -21,6 +21,7 @@ class DataPaths:
     db: Path
     logs: Path
     locks: Path
+    workspace: Path
 
 
 def resolve_data_dir(
@@ -65,7 +66,13 @@ def data_paths(data_dir: str | os.PathLike[str] | None = None, **kwargs: object)
     """Build the v2 path set without touching the filesystem."""
 
     root = resolve_data_dir(data_dir, **kwargs)
-    return DataPaths(root=root, db=root / "db", logs=root / "logs", locks=root / "locks")
+    return DataPaths(
+        root=root,
+        db=root / "db",
+        logs=root / "logs",
+        locks=root / "locks",
+        workspace=root / "workspace",
+    )
 
 
 def ensure_data_layout(
@@ -74,6 +81,6 @@ def ensure_data_layout(
     """Create and return the v2 data layout."""
 
     paths = data_paths(data_dir, **kwargs)
-    for path in (paths.root, paths.db, paths.logs, paths.locks):
+    for path in (paths.root, paths.db, paths.logs, paths.locks, paths.workspace):
         path.mkdir(parents=True, exist_ok=True)
     return paths

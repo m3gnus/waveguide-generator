@@ -9,6 +9,7 @@ plane DI, and the balloon four-state/beam-shape contract.
 from __future__ import annotations
 
 import enum
+import inspect
 import math
 import time
 from typing import Any
@@ -74,11 +75,126 @@ def native_symmetry_plane(context: SolverContext) -> str | None:
     return native_symmetry_plane_for_quadrants(context.quadrants)
 
 
+def _project_to_symmetry(vector: np.ndarray, plane: str | None) -> np.ndarray:
+    projected = np.asarray(vector, dtype=float).copy()
+    if plane == "yz":
+        projected[0] = 0.0
+    elif plane == "xz":
+        projected[1] = 0.0
+    elif plane == "yz+xz":
+        projected[:2] = 0.0
+    return projected
+
+
+def _gmsh22_observation_frame(
+    msh_text: str, *, origin_at: str, symmetry_plane: str | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Infer the native observation frame from the authoritative Gmsh 2.2 artifact."""
+
+    lines = msh_text.splitlines()
+    try:
+        nodes_start = lines.index("$Nodes")
+        elements_start = lines.index("$Elements")
+        node_count = int(lines[nodes_start + 1])
+        element_count = int(lines[elements_start + 1])
+    except (ValueError, IndexError) as exc:
+        raise ValueError(
+            "custom diagonal inclination requires an ASCII Gmsh 2.2 solver artifact"
+        ) from exc
+    node_rows = lines[nodes_start + 2 : nodes_start + 2 + node_count]
+    nodes: dict[int, np.ndarray] = {}
+    for row in node_rows:
+        parts = row.split()
+        if len(parts) >= 4:
+            nodes[int(parts[0])] = np.asarray(parts[1:4], dtype=float)
+    source_triangles: list[list[np.ndarray]] = []
+    for row in lines[elements_start + 2 : elements_start + 2 + element_count]:
+        parts = row.split()
+        if len(parts) < 6 or int(parts[1]) != 2:
+            continue
+        tag_count = int(parts[2])
+        physical_tag = int(parts[3]) if tag_count else 0
+        node_ids = [int(value) for value in parts[3 + tag_count : 6 + tag_count]]
+        if physical_tag == 2 and all(node_id in nodes for node_id in node_ids):
+            source_triangles.append([nodes[node_id] for node_id in node_ids])
+    if not nodes or not source_triangles:
+        raise ValueError(
+            "custom diagonal inclination requires source-tagged triangles (physical tag 2)"
+        )
+    vertices = np.stack(list(nodes.values()))
+    source = np.asarray(source_triangles, dtype=float)
+    normals = np.cross(source[:, 1] - source[:, 0], source[:, 2] - source[:, 0])
+    areas = np.linalg.norm(normals, axis=1)
+    valid = areas > 1.0e-15
+    if not np.any(valid):
+        raise ValueError("source-tagged triangles cannot define an observation axis")
+    normals, areas, source = normals[valid], areas[valid], source[valid]
+    reference = normals[int(np.argmax(areas))]
+    signs = np.sign(normals @ reference)
+    signs[signs == 0.0] = 1.0
+    axis = np.sum(normals * signs[:, None], axis=0)
+    axis /= np.linalg.norm(axis)
+    projected_axis = _project_to_symmetry(axis, symmetry_plane)
+    if np.linalg.norm(projected_axis) > 1.0e-12:
+        axis = projected_axis / np.linalg.norm(projected_axis)
+    centroids = np.mean(source, axis=1)
+    source_center = np.average(centroids, weights=areas, axis=0)
+    projections = vertices @ axis
+    span = float(np.ptp(projections))
+    if span > 1.0e-12:
+        from_min = abs(float(source_center @ axis) - float(np.min(projections))) / span
+        from_max = abs(float(source_center @ axis) - float(np.max(projections))) / span
+        if min(from_min, from_max) <= 0.25 and from_min >= from_max:
+            axis = -axis
+    along_axis = vertices @ axis
+    threshold = float(np.max(along_axis) - 0.02 * np.ptp(along_axis))
+    mouth_center = np.mean(vertices[along_axis >= threshold], axis=0)
+    reference_axis = np.asarray([1.0, 0.0, 0.0])
+    if abs(float(axis @ reference_axis)) >= 0.9:
+        reference_axis = np.asarray([0.0, 1.0, 0.0])
+    horizontal = reference_axis - float(reference_axis @ axis) * axis
+    horizontal /= np.linalg.norm(horizontal)
+    vertical = np.cross(axis, horizontal)
+    origin = mouth_center if origin_at == "mouth" else source_center
+    origin = _project_to_symmetry(origin, symmetry_plane)
+    return axis, origin, horizontal, vertical
+
+
+def _custom_observation_points(
+    context: SolverContext, msh_text: str
+) -> dict[str, np.ndarray]:
+    polar = context.polar_config
+    start, end, count = polar["angle_range"]
+    angles = np.deg2rad(np.linspace(float(start), float(end), int(count)))
+    axis, origin, horizontal, vertical = _gmsh22_observation_frame(
+        msh_text,
+        origin_at=str(polar["observation_origin"]),
+        symmetry_plane=native_symmetry_plane(context),
+    )
+    inclination = math.radians(float(polar["inclination"]))
+    transverse = {
+        "horizontal": horizontal,
+        "vertical": vertical,
+        "diagonal": math.cos(inclination) * horizontal + math.sin(inclination) * vertical,
+    }
+    distance = float(polar["distance"])
+    return {
+        plane: (
+            origin[None, :]
+            + distance * np.cos(angles)[:, None] * axis[None, :]
+            + distance * np.sin(angles)[:, None] * transverse[plane][None, :]
+        )
+        for plane in polar["enabled_axes"]
+    }
+
+
 def observation_config(
     context: SolverContext,
     observation_config_cls: Any,
     unavailable_error: type[Exception],
     package_name: str,
+    *,
+    msh_text: str | None = None,
 ) -> Any:
     """Build native observation config with the v1 sphere-feature fallback."""
 
@@ -94,6 +210,37 @@ def observation_config(
         "angle_count": int(angle_range[2]),
         "origin": str(polar.get("observation_origin") or "mouth"),
     }
+    try:
+        supported = inspect.signature(observation_config_cls).parameters
+    except (TypeError, ValueError):
+        supported = {}
+    accepts_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in supported.values()
+    )
+
+    def supports(name: str) -> bool:
+        return name in supported or accepts_kwargs
+
+    native_inclination = False
+    for field_name in ("inclination_deg", "diagonal_inclination_deg"):
+        if supports(field_name):
+            kwargs[field_name] = float(polar.get("inclination", 45.0))
+            native_inclination = True
+            break
+    if supports("normalization_angle_deg"):
+        kwargs["normalization_angle_deg"] = float(polar.get("norm_angle", 10.0))
+    if (
+        msh_text is not None
+        and not native_inclination
+        and "diagonal" in kwargs["planes"]
+        and not math.isclose(float(polar.get("inclination", 45.0)), 45.0)
+    ):
+        if not supports("custom_points"):
+            raise unavailable_error(
+                f"Installed {package_name} cannot represent a custom diagonal inclination."
+            )
+        kwargs["custom_points"] = _custom_observation_points(context, msh_text)
     if polar.get("spherical_sampling"):
         kwargs["sphere_grid"] = (
             int(polar.get("spherical_theta_count") or 37),
@@ -144,6 +291,33 @@ def directivity(result: Any) -> dict[str, list[list[list[float | None]]]]:
             plane_rows.append(row)
         output[str(plane_name)] = plane_rows
     return output
+
+
+def _renormalize_directivity(
+    patterns: dict[str, list[list[list[float | None]]]], norm_angle: float
+) -> None:
+    """Shift each native polar row so the requested normalization angle is 0 dB."""
+
+    for rows in patterns.values():
+        for row in rows:
+            finite = [
+                (float(angle), float(level))
+                for angle, level in row
+                if level is not None and math.isfinite(float(angle)) and math.isfinite(float(level))
+            ]
+            if not finite:
+                continue
+            finite.sort(key=lambda point: point[0])
+            reference = float(
+                np.interp(
+                    float(norm_angle),
+                    [point[0] for point in finite],
+                    [point[1] for point in finite],
+                )
+            )
+            for point in row:
+                if point[1] is not None:
+                    point[1] = float(point[1]) - reference
 
 
 def _on_axis_pressure(result: Any) -> np.ndarray | None:
@@ -335,6 +509,9 @@ def build_solver_response(
         "observation_origin": str(config.observation.origin),
     }
     patterns = directivity(result)
+    _renormalize_directivity(
+        patterns, float(context.polar_config.get("norm_angle", 10.0))
+    )
 
     metadata.setdefault("warnings", [])
     metadata.setdefault("warning_count", 0)
@@ -391,6 +568,8 @@ def build_solver_response(
             "impedance_drive": "unit_acceleration",
             "source_motion": context.source_motion,
             "quadrants": context.quadrants,
+            "frequency_spacing": context.frequency_spacing,
+            "verbose": context.verbose,
         }
     )
 

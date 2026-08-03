@@ -120,14 +120,24 @@ def metal_status() -> dict[str, Any]:
     }
 
 
-def _observation(context: SolverContext) -> Any:
-    return observation_config(context, ObservationConfig, MetalUnavailable, "hornlab-metal-bem")
+def _observation(context: SolverContext, msh_text: str) -> Any:
+    return observation_config(
+        context,
+        ObservationConfig,
+        MetalUnavailable,
+        "hornlab-metal-bem",
+        msh_text=msh_text,
+    )
 
 
 def _native_check_open_edges(context: SolverContext) -> bool:
     """Retain v1's reduced bare-shell exception (Metal lines 232-252)."""
 
-    if context.sim_type == 1 or native_symmetry_plane(context) is None:
+    if context.sim_type == 1:
+        return True
+    if context.mesh_validation_mode != "strict":
+        return False
+    if native_symmetry_plane(context) is None:
         return True
     root = context.design.root
     enclosure_depth = (
@@ -185,11 +195,12 @@ def solve_metal_from_msh_text(
         "freq_spacing": context.frequency_spacing,
         "formulation": DEFAULT_BEM_FORMULATION,
         "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
-        "observation": _observation(context),
+        "observation": _observation(context, msh_text),
         "progress_callback": progress,
         "mesh_scale": 1.0,
         "native_symmetry_plane": native_symmetry_plane(context),
         "native_check_open_edges": _native_check_open_edges(context),
+        "mesh_validate": context.mesh_validation_mode != "off",
     }
     if aperture_tag is not None:
         kwargs.update({"aperture_tag": aperture_tag, "mesh_validate": True})
@@ -235,6 +246,7 @@ def solve_metal_from_msh_text(
         "engine": "hornlab-metal-bem",
         "phase_time_convention": "exp(+ikr)",
         "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "hornlab-metal-bem"},
+        "verbose": context.verbose,
         "performance": {
             "total_time_seconds": time.time() - started,
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),

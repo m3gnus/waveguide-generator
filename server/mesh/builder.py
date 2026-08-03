@@ -100,12 +100,6 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
         if root.enclosure is not None
         else 0.0
     )
-    if root.simulation.sim_type == "infinite-baffle" and enclosure_depth > 0.0:
-        raise ValueError(
-            "Infinite baffle cannot be combined with an enclosure; set enclosure.depth=0 "
-            "or use freestanding simulation mode."
-        )
-
     config = copy.deepcopy(design_to_mesher_config(design))
     mesh = config.setdefault("mesh", {})
     quadrants = normalise_quadrants(
@@ -215,6 +209,29 @@ def _build_sync(
     if not math.isfinite(domain_multiplier) or domain_multiplier <= 0.0:
         domain_multiplier = 1.0
     triangle_count = int(len(triangles))
+    triangle_points = vertices[triangles]
+    edge_lengths_m = np.concatenate(
+        (
+            np.linalg.norm(triangle_points[:, 1] - triangle_points[:, 0], axis=1),
+            np.linalg.norm(triangle_points[:, 2] - triangle_points[:, 1], axis=1),
+            np.linalg.norm(triangle_points[:, 0] - triangle_points[:, 2], axis=1),
+        )
+    )
+    max_edge_mm = float(np.max(edge_lengths_m) * 1000.0)
+    scale = _strict_scalar(root_scale, 1.0, "scale") if (root_scale := design.root.scale) else 1.0
+    max_edge_guard_mm = (
+        _strict_scalar(design.root.mesh.max_edge, 0.0, "mesh.max_edge") * scale
+        if design.root.mesh.max_edge is not None
+        else None
+    )
+    if max_edge_guard_mm is not None:
+        if max_edge_guard_mm <= 0.0:
+            raise ValueError("mesh.max_edge must be greater than zero")
+        if max_edge_mm > max_edge_guard_mm + 1.0e-9:
+            raise RuntimeError(
+                "Solver mesh exceeded mesh.max_edge guard: "
+                f"{max_edge_mm:.6g} mm > {max_edge_guard_mm:.6g} mm"
+            )
     full_domain_count = int(round(triangle_count * domain_multiplier))
     warnings: list[str] = []
     if full_domain_count > LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES:
@@ -248,6 +265,8 @@ def _build_sync(
         },
         "domain_multiplier": domain_multiplier,
         "full_domain_triangle_count": full_domain_count,
+        "max_edge_mm": max_edge_mm,
+        "max_edge_guard_mm": max_edge_guard_mm,
         "soft_warning_full_domain_triangle_limit": LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES,
         "warnings": warnings,
         "integrity": integrity,
@@ -297,8 +316,15 @@ async def build_solver_mesh(
     _progress(progress_cb, "mesh_validate", 1.0, "Validated HornLab solver mesh")
 
     validation_mode = str(_option(options, "mesh_validation_mode", "warn") or "warn").lower()
+    result["stats"]["mesh_validation_mode"] = validation_mode
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")
+    if validation_mode == "off":
+        result["stats"]["warnings"] = [
+            warning
+            for warning in result["stats"]["warnings"]
+            if not warning.startswith("Solver mesh contains invalid")
+        ]
     return result
 
 

@@ -12,7 +12,7 @@ import math
 from typing import Any
 
 from server.design.schema import DesignConfig, Expr
-from server.jobs.models import SolveRequest
+from server.jobs.models import PolarConfig, SolveRequest
 
 from .quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
@@ -30,18 +30,13 @@ class SolverContext:
     num_frequencies: int
     frequency_spacing: str = "log"
     mesh_validation_mode: str = "warn"
+    verbose: bool = False
     solver_mode: str = "full_3d"
     quadrants: int = FULL_DOMAIN_QUADRANTS
     sim_type: int = 2
     source_motion: str = "normal"
     polar_config: dict[str, Any] = field(
-        default_factory=lambda: {
-            "enabled_axes": ["horizontal", "vertical"],
-            "distance": 2.0,
-            "angle_range": [0.0, 180.0, 37],
-            "observation_origin": "mouth",
-            "spherical_sampling": False,
-        }
+        default_factory=lambda: PolarConfig().model_dump(mode="json")
     )
 
     def __post_init__(self) -> None:
@@ -57,6 +52,12 @@ class SolverContext:
             raise ValueError("solver frequency bounds must be positive and increasing")
         if isinstance(self.num_frequencies, bool) or not 1 <= int(self.num_frequencies) <= 401:
             raise ValueError("solver frequency count must be between 1 and 401")
+        if self.frequency_spacing not in {"log", "linear"}:
+            raise ValueError("solver frequency spacing must be 'log' or 'linear'")
+        if self.mesh_validation_mode not in {"strict", "warn", "off"}:
+            raise ValueError("solver mesh validation mode must be strict, warn, or off")
+        if not self.polar_config.get("enabled_axes"):
+            raise ValueError("solver polar config must enable at least one axis")
 
     @classmethod
     def from_request(cls, request: SolveRequest, *, solver_mode: str) -> "SolverContext":
@@ -92,10 +93,12 @@ class SolverContext:
             num_frequencies=count,
             frequency_spacing=request.options.frequency_spacing,
             mesh_validation_mode=request.options.mesh_validation_mode,
+            verbose=request.options.verbose,
             solver_mode=solver_mode,
             quadrants=quadrants,
             sim_type=1 if simulation.sim_type == "infinite-baffle" else 2,
             source_motion=source_motion,
+            polar_config=request.options.polar_config.model_dump(mode="json"),
         )
 
 

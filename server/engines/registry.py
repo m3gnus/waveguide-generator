@@ -88,3 +88,23 @@ def get_engine(name: str, *, environ: Mapping[str, str] | None = None) -> Any | 
 
         return CircSymEngine()
     return None
+
+
+def resolve_auto_engine(
+    *, solver_mode: str | None = None, environ: Mapping[str, str] | None = None
+) -> str | None:
+    """Resolve AUTO to the best engine this host can actually run.
+
+    Explicit CircSym designs require that specialized adapter. Full-3D and
+    automatic solver modes prefer Metal, then BEMPP. The gated dry-run engine
+    is only a final development fallback when no physical solver is available.
+    """
+
+    available = {item.name for item in detect_engines(environ=environ) if item.available}
+    normalized_mode = str(solver_mode or "auto").strip().lower().replace("-", "_")
+    if normalized_mode in {"circsym", "circ_sym", "axisymmetric", "axisym"}:
+        return "circsym" if "circsym" in available else None
+    for candidate in ("metal", "bempp", "dryrun"):
+        if candidate in available:
+            return candidate
+    return None

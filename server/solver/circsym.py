@@ -19,7 +19,7 @@ from server.mesh.builder import _solver_mesher_config
 from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallback
 from .context import SolverContext
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
-from .metal import MetalUnavailable, metal_status
+from .metal import metal_status
 from .result_mapping import (
     build_solver_response,
     json_safe_native_value,
@@ -180,6 +180,7 @@ def solve_circsym_design(
         "engine": "hornlab-metal-bem",
         "phase_time_convention": "exp(+ikr)",
         "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "hornlab-metal-bem-circsym"},
+        "verbose": context.verbose,
         "performance": {
             "total_time_seconds": time.time() - started,
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),

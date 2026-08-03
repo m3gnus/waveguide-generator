@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.engines.registry import detect_engines
+from server.charts import mount_charts
 from server.design_io import mount_design_io
 from server.exports import mount_exports
 from server.jobs import mount_jobs
@@ -20,6 +21,7 @@ from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.platform.origin import local_origin
 from server.platform.paths import resolve_data_dir
 from server.preview.service import router as preview_router
+from server.workspace import mount_workspace
 
 
 VERSION = "2.0.0"
@@ -99,12 +101,31 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
                 if application.state.capabilities_cache is None:
                     engines = await asyncio.to_thread(detect_engines)
                     application.state.capabilities_cache = [asdict(engine) for engine in engines]
-        return {"engines": application.state.capabilities_cache}
+        available = {
+            item["name"]
+            for item in application.state.capabilities_cache
+            if item.get("available") is True
+        }
+        resolved = next(
+            (name for name in ("metal", "bempp", "dryrun") if name in available),
+            None,
+        )
+        return {
+            "engines": application.state.capabilities_cache,
+            "engineSelection": {
+                "default": "auto",
+                "resolvedDefault": resolved,
+                "full3dOrder": ["metal", "bempp", "dryrun"],
+                "circsymRequires": "circsym",
+            },
+        }
 
     application.include_router(preview_router)
     mount_design_io(application)
     mount_exports(application)
     mount_jobs(application)
+    mount_workspace(application)
+    mount_charts(application)
     # Job tasks stop first; only then may their shared gmsh owner be finalized.
     application.router.add_event_handler("shutdown", shutdown_gmsh_worker)
     application.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")

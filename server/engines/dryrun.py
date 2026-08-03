@@ -7,6 +7,10 @@ import json
 import math
 from typing import Any, Mapping
 
+from server.jobs.models import PolarConfig
+from server.solver.beam_shape import beam_shape_summary
+from server.solver.contract import build_directivity_metadata
+
 
 def _canonical_seed(design: Mapping[str, Any]) -> tuple[str, float]:
     encoded = json.dumps(design, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -70,6 +74,9 @@ class DryRunEngine:
         frequency_end_hz: float,
         num_frequencies: int,
         frequency_spacing: str,
+        polar_config: Mapping[str, Any] | None = None,
+        mesh_validation_mode: str = "warn",
+        verbose: bool = False,
     ) -> dict[str, Any]:
         """Produce the v1 mapper-shaped primary result bundle.
 
@@ -81,21 +88,30 @@ class DryRunEngine:
         frequencies = _frequency_axis(
             frequency_start_hz, frequency_end_hz, num_frequencies, frequency_spacing
         )
-        angles = [float(value) for value in range(-90, 91, 5)]
+        polar = PolarConfig.model_validate(polar_config or {}).model_dump(mode="json")
+        angle_start, angle_end, angle_count = polar["angle_range"]
+        angles = [
+            float(angle_start + (angle_end - angle_start) * index / (angle_count - 1))
+            for index in range(angle_count)
+        ]
         spl: list[float] = []
         phase: list[float] = []
         impedance_real: list[float] = []
         impedance_imaginary: list[float] = []
-        horizontal: list[list[list[float]]] = []
-        vertical: list[list[list[float]]] = []
-        horizontal_di: list[float] = []
-        vertical_di: list[float] = []
+        patterns: dict[str, list[list[list[float]]]] = {
+            axis: [] for axis in polar["enabled_axes"]
+        }
+        directivity_index: dict[str, list[float]] = {
+            axis: [] for axis in polar["enabled_axes"]
+        }
         corner = 700.0 + seed * 900.0
+        distance_gain = -20.0 * math.log10(float(polar["distance"]) / 2.0)
+        origin_gain = 0.125 if polar["observation_origin"] == "throat" else 0.0
 
         for frequency in frequencies:
             octaves = math.log2(max(frequency, 1.0) / 1000.0)
             ripple = 1.6 * math.sin(2.15 * octaves + seed * math.pi)
-            level = 96.0 + seed * 3.0 + 1.25 * octaves + ripple
+            level = 96.0 + seed * 3.0 + 1.25 * octaves + ripple + distance_gain + origin_gain
             spl.append(round(level, 4))
             phase.append(round(((42.0 * octaves + seed * 70.0 + 180.0) % 360.0) - 180.0, 4))
             resonance = math.exp(-((math.log(max(frequency, 1.0) / corner)) ** 2) / 0.42)
@@ -106,20 +122,61 @@ class DryRunEngine:
 
             beam_h = max(18.0, 92.0 / (1.0 + (frequency / (1500.0 + seed * 400.0)) ** 0.72))
             beam_v = max(14.0, beam_h * (0.73 + seed * 0.08))
-            h_pattern = [
-                [angle, round(-12.0 * (abs(angle) / beam_h) ** 1.75, 4)] for angle in angles
-            ]
-            v_pattern = [
-                [angle, round(-12.0 * (abs(angle) / beam_v) ** 1.8, 4)] for angle in angles
-            ]
-            horizontal.append(h_pattern)
-            vertical.append(v_pattern)
-            horizontal_di.append(round(3.0 + 10.0 * math.log10(180.0 / beam_h), 4))
-            vertical_di.append(round(3.0 + 10.0 * math.log10(180.0 / beam_v), 4))
+            inclination = math.radians(float(polar["inclination"]))
+            beam_by_axis = {
+                "horizontal": (beam_h, 1.75),
+                "vertical": (beam_v, 1.8),
+                "diagonal": (
+                    math.sqrt(
+                        (beam_h * math.cos(inclination)) ** 2
+                        + (beam_v * math.sin(inclination)) ** 2
+                    ),
+                    1.775,
+                ),
+            }
+            for axis in polar["enabled_axes"]:
+                beam, exponent = beam_by_axis[axis]
+                reference = -12.0 * (abs(float(polar["norm_angle"])) / beam) ** exponent
+                patterns[axis].append(
+                    [
+                        [
+                            angle,
+                            round(-12.0 * (abs(angle) / beam) ** exponent - reference, 4),
+                        ]
+                        for angle in angles
+                    ]
+                )
+                directivity_index[axis].append(
+                    round(3.0 + 10.0 * math.log10(180.0 / beam), 4)
+                )
 
-        return {
+        observation = {
+            "requested_distance_m": float(polar["distance"]),
+            "effective_distance_m": float(polar["distance"]),
+        }
+        metadata: dict[str, Any] = {
+            "engine": "dryrun",
+            "synthetic": True,
+            "design_sha256": digest,
+            "warnings": ["Dry-run data is synthetic and is not an acoustic prediction."],
+            "warning_count": 1,
+            "failures": [],
+            "failure_count": 0,
+            "partial_success": False,
+            "impedance_units": "Z/(rho*c)",
+            "impedance_quantity": "specific_acoustic_impedance",
+            "frequency_spacing": frequency_spacing,
+            "mesh_validation": {
+                "mode": mesh_validation_mode,
+                "valid": True,
+                "synthetic": True,
+            },
+            "verbose": bool(verbose),
+            "directivity": build_directivity_metadata(polar, observation),
+        }
+        response: dict[str, Any] = {
             "frequencies": frequencies,
-            "directivity": {"horizontal": horizontal, "vertical": vertical},
+            "directivity": patterns,
             "spl_on_axis": {
                 "frequencies": frequencies,
                 "spl": spl,
@@ -130,29 +187,60 @@ class DryRunEngine:
                 "real": impedance_real,
                 "imaginary": impedance_imaginary,
             },
-            "di": {
-                "frequencies": frequencies,
-                "di": {"horizontal": horizontal_di, "vertical": vertical_di},
-            },
-            "metadata": {
-                "engine": "dryrun",
-                "synthetic": True,
-                "design_sha256": digest,
-                "warnings": ["Dry-run data is synthetic and is not an acoustic prediction."],
-                "warning_count": 1,
-                "failures": [],
-                "failure_count": 0,
-                "partial_success": False,
-                "impedance_units": "Z/(rho*c)",
-                "impedance_quantity": "specific_acoustic_impedance",
-                "balloon_sampling": {
-                    "requested": False,
-                    "configured": False,
-                    "available": False,
-                    "status": "disabled",
-                },
-            },
+            "di": {"frequencies": frequencies, "di": directivity_index},
+            "metadata": metadata,
         }
+
+        if polar["spherical_sampling"]:
+            theta_count = int(polar["spherical_theta_count"])
+            phi_count = int(polar["spherical_phi_count"])
+            sim_type = ((design.get("simulation") or {}).get("sim_type") if isinstance(design.get("simulation"), Mapping) else None)
+            theta_max = 90.0 if sim_type == "infinite-baffle" else 180.0
+            theta = [theta_max * index / (theta_count - 1) for index in range(theta_count)]
+            phi = [360.0 * index / phi_count for index in range(phi_count)]
+            grids: list[list[list[float]]] = []
+            for frequency in frequencies:
+                beam_h = max(18.0, 92.0 / (1.0 + (frequency / (1500.0 + seed * 400.0)) ** 0.72))
+                beam_v = max(14.0, beam_h * (0.73 + seed * 0.08))
+                grid: list[list[float]] = []
+                for theta_value in theta:
+                    row = []
+                    for phi_value in phi:
+                        phi_rad = math.radians(phi_value)
+                        inverse_beam_sq = (
+                            math.cos(phi_rad) ** 2 / beam_h**2
+                            + math.sin(phi_rad) ** 2 / beam_v**2
+                        )
+                        row.append(round(-12.0 * theta_value**1.8 * inverse_beam_sq**0.9, 4))
+                    grid.append(row)
+                grids.append(grid)
+            hemisphere = theta_max <= 90.0
+            response["balloon"] = {
+                "frequencies": frequencies,
+                "theta_deg": theta,
+                "phi_deg": phi,
+                "spl_norm_db": grids,
+                "distance_m": float(polar["distance"]),
+                "hemisphere": hemisphere,
+            }
+            summary = beam_shape_summary(theta, phi, grids, frequencies, hemisphere=hemisphere)
+            if summary is not None:
+                response["beam_shape"] = summary
+            metadata["balloon_sampling"] = {
+                "requested": True,
+                "configured": True,
+                "available": True,
+                "status": "available",
+            }
+        else:
+            metadata["balloon_sampling"] = {
+                "requested": False,
+                "configured": False,
+                "available": False,
+                "status": "disabled",
+            }
+
+        return response
 
 
 __all__ = ["DryRunEngine"]

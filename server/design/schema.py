@@ -13,7 +13,15 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
@@ -152,6 +160,22 @@ class Expr(StrictModel):
         return str(int(self.value)) if self.value.is_integer() else format(self.value, ".15g")
 
 
+def _resolution_expression(value: Any) -> Any:
+    """Accept ATH's scalar or exactly-four-value enclosure resolution syntax."""
+
+    if isinstance(value, str) and "," in value:
+        value = [part.strip() for part in value.split(",")]
+    if isinstance(value, list):
+        return tuple(value)
+    return value
+
+
+ResolutionExpr = Annotated[
+    Expr | tuple[Expr, Expr, Expr, Expr],
+    BeforeValidator(_resolution_expression),
+]
+
+
 class ConfigBlock(StrictModel):
     """An unrecognized v1 block retained as ordered rows and item strings."""
 
@@ -181,8 +205,8 @@ class EnclosureConfig(StrictModel):
     space_t: Expr | None = None
     space_r: Expr | None = None
     space_b: Expr | None = None
-    front_resolution: Expr | None = None
-    back_resolution: Expr | None = None
+    front_resolution: ResolutionExpr | None = None
+    back_resolution: ResolutionExpr | None = None
 
 
 class MeshConfig(StrictModel):
@@ -202,6 +226,10 @@ class MeshConfig(StrictModel):
     aperture_resolution_scale: Expr | None = None
     max_triangles: Expr | None = None
     allow_large_mesh: Expr | None = None
+    # Optional post-build safety guard in millimetres. Regional resolution
+    # controls remain authoritative; this rejects a mesh whose realized
+    # longest triangle edge exceeds the configured ceiling.
+    max_edge: Expr | None = None
 
 
 class SourceConfig(StrictModel):
@@ -433,5 +461,6 @@ __all__ = [
     "ICWConfig",
     "MeshConfig",
     "OSSEConfig",
+    "ResolutionExpr",
     "ROSSEConfig",
 ]

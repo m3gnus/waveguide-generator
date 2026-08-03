@@ -18,7 +18,7 @@ import math
 from typing import Any, Mapping
 import uuid
 
-from server.engines.registry import detect_engines, get_engine
+from server.engines.registry import detect_engines, get_engine, resolve_auto_engine
 from server.jobs.models import SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 
@@ -149,9 +149,21 @@ class JobRuntime:
     async def submit(self, request: SolveRequest) -> str:
         await self.start()
         engine_name = request.options.engine
-        known = {"dryrun", "metal", "bempp", "circsym"}
+        known = {"auto", "dryrun", "metal", "bempp", "circsym"}
         if engine_name not in known:
             raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
+        if engine_name == "auto":
+            engine_name = resolve_auto_engine(
+                solver_mode=request.design.root.simulation.solver_mode
+            )
+            if engine_name is None:
+                raise EngineUnavailableError(
+                    "AUTO could not resolve a compatible solve engine from this host's "
+                    "capabilities. Install/enable Metal or BEMPP; explicitly enable dry-run "
+                    "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
+                )
+            request = request.model_copy(deep=True)
+            request.options.engine = engine_name
         if get_engine(engine_name) is None:
             capability = next(
                 (item for item in detect_engines() if item.name == engine_name),
@@ -419,6 +431,14 @@ class JobRuntime:
 
             design = request.design.model_dump(mode="json")
             delay = request.options.stage_delay_ms / 1000.0
+            if request.options.verbose:
+                await self._append_log(
+                    job_id,
+                    "Verbose solve options: "
+                    f"engine={request.options.engine}, spacing={request.options.frequency_spacing}, "
+                    f"mesh_validation={request.options.mesh_validation_mode}, "
+                    f"polar={request.options.polar_config.model_dump(mode='json')}",
+                )
             await self._stage(job_id, "mesh", 0.10, "Building dry-run mesh", delay)
             mesh_text, mesh_stats = await asyncio.to_thread(engine.mesh_artifact, design)
             self._check_cancelled(job_id)
@@ -452,6 +472,9 @@ class JobRuntime:
                 frequency_end_hz=end,
                 num_frequencies=count,
                 frequency_spacing=request.options.frequency_spacing,
+                polar_config=request.options.polar_config.model_dump(mode="json"),
+                mesh_validation_mode=request.options.mesh_validation_mode,
+                verbose=request.options.verbose,
             )
             self._check_cancelled(job_id)
             await self._stage(
@@ -535,6 +558,14 @@ class JobRuntime:
         )
         self.events.publish(event)
         await self._append_log(job_id, f"Initializing {engine.name} solver")
+        if request.options.verbose:
+            await self._append_log(
+                job_id,
+                "Verbose solve options: "
+                f"spacing={request.options.frequency_spacing}, "
+                f"mesh_validation={request.options.mesh_validation_mode}, "
+                f"polar={request.options.polar_config.model_dump(mode='json')}",
+            )
 
         loop = asyncio.get_running_loop()
         stage_tasks: set[asyncio.Task[Any]] = set()

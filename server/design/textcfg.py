@@ -195,6 +195,7 @@ _COMMON_MAP: dict[str, tuple[str, ...]] = {
     "Mesh.ApertureResolutionScale": ("mesh", "aperture_resolution_scale"),
     "Mesh.MaxTriangles": ("mesh", "max_triangles"),
     "Mesh.AllowLargeMesh": ("mesh", "allow_large_mesh"),
+    "Mesh.MaxEdge": ("mesh", "max_edge"),
     "Output.STL": ("output", "stl"),
     "Output.MSH": ("output", "msh"),
     "Source.Shape": ("source", "shape"),
@@ -561,9 +562,11 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     )
 
 
-def _text(value: Expr | str | None) -> str:
+def _text(value: Expr | tuple[Expr, Expr, Expr, Expr] | str | None) -> str:
     if value is None:
         return ""
+    if isinstance(value, tuple):
+        return ",".join(item.text() for item in value)
     return value.text() if isinstance(value, Expr) else str(value)
 
 
@@ -571,12 +574,23 @@ def _sim_type_text(value: str | None) -> str | None:
     return {"infinite-baffle": "1", "freestanding": "2"}.get(value, value)
 
 
-def _line(lines: list[str], key: str, value: Expr | str | None) -> None:
+def _line(
+    lines: list[str],
+    key: str,
+    value: Expr | tuple[Expr, Expr, Expr, Expr] | str | None,
+) -> None:
     if value is not None:
         lines.append(f"{key} = {_text(value)}")
 
 
-def _block(lines: list[str], name: str, items: list[tuple[str, Expr | str | None]], rows: list[str] | None = None) -> None:
+def _block(
+    lines: list[str],
+    name: str,
+    items: list[
+        tuple[str, Expr | tuple[Expr, Expr, Expr, Expr] | str | None]
+    ],
+    rows: list[str] | None = None,
+) -> None:
     if not any(value is not None for _, value in items) and not rows:
         return
     lines.append(f"{name} = {{")
@@ -772,6 +786,7 @@ def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None
         ("Mesh.ApertureResolutionScale", mesh.aperture_resolution_scale),
         ("Mesh.MaxTriangles", mesh.max_triangles),
         ("Mesh.AllowLargeMesh", mesh.allow_large_mesh),
+        ("Mesh.MaxEdge", mesh.max_edge),
         ("Output.STL", config.output.stl),
         ("Output.MSH", config.output.msh),
         ("Source.Shape", config.source.shape),

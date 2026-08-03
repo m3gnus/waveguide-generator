@@ -153,7 +153,13 @@ def solve_bempp_from_msh_text(
             freq_spacing=context.frequency_spacing,
             formulation=formulation,
             complex_k_shift=DEFAULT_COMPLEX_K_SHIFT,
-            observation=observation_config(context, ObservationConfig, BemppUnavailable, "hornlab-bempp-bem"),
+            observation=observation_config(
+                context,
+                ObservationConfig,
+                BemppUnavailable,
+                "hornlab-bempp-bem",
+                msh_text=msh_text,
+            ),
             progress_callback=progress,
             mesh_scale=1.0,
             native_symmetry_plane=native_symmetry_plane(context),
@@ -173,7 +179,9 @@ def solve_bempp_from_msh_text(
             raise BemppUnavailable("Installed hornlab-bempp-bem does not support axial source motion.")
         config.source_motion = context.source_motion
     if hasattr(config, "require_closed_mesh"):
-        config.require_closed_mesh = _closed_mode(context)
+        config.require_closed_mesh = (
+            context.mesh_validation_mode == "strict" and _closed_mode(context)
+        )
 
     path: Path | None = None
     try:
@@ -203,6 +211,7 @@ def solve_bempp_from_msh_text(
         "assemblyBackend": "numba",
         "device_interface": {"selected": "bempp-cl-numba", "bempp-cl-numba": status},
         "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "hornlab-bempp-bem"},
+        "verbose": context.verbose,
         "performance": {
             "total_time_seconds": time.time() - started,
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),
