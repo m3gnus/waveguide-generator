@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.engines.registry import detect_engines
+from server.jobs import mount_jobs
 from server.platform.paths import resolve_data_dir
 from server.preview.service import router as preview_router
 
@@ -101,6 +102,7 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
         return {"engines": [asdict(engine) for engine in detect_engines()]}
 
     application.include_router(preview_router)
+    mount_jobs(application)
     application.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
     return application
 

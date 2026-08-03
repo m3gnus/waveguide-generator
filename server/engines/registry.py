@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import Mapping
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,3 +40,17 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             )
         )
     return engines
+
+
+def get_engine(name: str, *, environ: Mapping[str, str] | None = None) -> Any | None:
+    """Return an enabled engine implementation without probing optional stacks."""
+
+    normalized = str(name).strip().lower()
+    available = {item.name: item.available for item in detect_engines(environ=environ)}
+    if not available.get(normalized, False):
+        return None
+    if normalized == "dryrun":
+        from .dryrun import DryRunEngine
+
+        return DryRunEngine()
+    return None
