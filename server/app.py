@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.engines.registry import detect_engines
 from server.jobs import mount_jobs
+from server.mesh.gmsh_worker import prewarm_gmsh_worker
 from server.platform.paths import resolve_data_dir
 from server.preview.service import router as preview_router
 
@@ -47,6 +48,10 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     application = FastAPI(title="Waveguide Generator v2", version=VERSION)
     application.state.started = started
     application.state.data_dir = resolved_data_dir
+    # One persistent owner thread services every gmsh call.  Prewarming here
+    # retains the v1 off-main-thread ``interruptible=False`` invariant from
+    # ``server/services/gmsh_worker.py:44-84`` and removes the first-build cliff.
+    application.router.add_event_handler("startup", prewarm_gmsh_worker)
 
     @application.middleware("http")
     async def origin_guard(request: Request, call_next):

@@ -11,12 +11,13 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime
+import inspect
 import json
 import logging
 from typing import Any, Mapping
 import uuid
 
-from server.engines.registry import get_engine
+from server.engines.registry import detect_engines, get_engine
 from server.jobs.models import SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 
@@ -148,9 +149,13 @@ class JobRuntime:
         if engine_name not in known:
             raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
         if get_engine(engine_name) is None:
+            capability = next(
+                (item for item in detect_engines() if item.name == engine_name),
+                None,
+            )
             raise EngineUnavailableError(
                 f"Solve engine '{engine_name}' is unavailable. "
-                "Dry-run solves require WG2_ENABLE_DRYRUN=1."
+                f"{capability.reason if capability is not None else 'Dry-run solves require WG2_ENABLE_DRYRUN=1.' if engine_name == 'dryrun' else 'No capability reason was reported.'}"
             )
 
         job_id = str(uuid.uuid4())
@@ -373,6 +378,13 @@ class JobRuntime:
             engine = get_engine(request.options.engine)
             if engine is None:
                 raise EngineUnavailableError(f"Solve engine '{request.options.engine}' became unavailable")
+            # Batch Q extends only this established engine-call seam.  FIFO
+            # scheduling/recovery remains untouched; real adapters own their
+            # gmsh-worker + asyncio.to_thread orchestration, following v1
+            # ``simulation_runner.py:397-427,430-527``.
+            if request.options.engine != "dryrun":
+                await self._run_real_engine(job_id, request, engine)
+                return
             event = self._transition(
                 job_id,
                 {
@@ -480,6 +492,141 @@ class JobRuntime:
         except Exception as exc:
             logger.error("Simulation error for job %s: %s", job_id, exc, exc_info=True)
             await self._fail_job(job_id, str(exc))
+
+    async def _run_real_engine(self, job_id: str, request: SolveRequest, engine: Any) -> None:
+        """Run one real adapter while preserving Batch J's lifecycle seam.
+
+        Native callbacks arrive from solver threads.  They are marshalled back
+        onto the owning event loop before touching WS subscriber queues; stages
+        map to the same overall ranges as v1
+        ``server/services/simulation_runner.py:263-294``.
+        """
+
+        event = self._transition(
+            job_id,
+            {
+                "status": "running",
+                "started_at": _now_iso(),
+                "stage": "initializing",
+                "stage_message": f"Initializing {engine.name} solver",
+                "progress": 0.05,
+            },
+            "started",
+            {"status": "running", "stage": "initializing", "progress": 0.05},
+        )
+        self.events.publish(event)
+        await self._append_log(job_id, f"Initializing {engine.name} solver")
+
+        loop = asyncio.get_running_loop()
+        stage_tasks: set[asyncio.Task[Any]] = set()
+        artifact_persisted = False
+
+        def stage_callback(stage: str, progress: float, message: str) -> None:
+            def schedule() -> None:
+                task = asyncio.create_task(
+                    self._report_real_stage(job_id, stage, progress, message),
+                    name=f"wg2-stage-{job_id}",
+                )
+                stage_tasks.add(task)
+                task.add_done_callback(stage_tasks.discard)
+
+            loop.call_soon_threadsafe(schedule)
+
+        async def artifact_callback(msh_text: str, mesh_stats: dict[str, Any]) -> None:
+            """Persist immediately after meshing, before native solve like v1 lines 451-493."""
+
+            nonlocal artifact_persisted
+            if mesh_stats:
+                self.store.update_job(job_id, mesh_stats_json=json.dumps(mesh_stats))
+            try:
+                await asyncio.to_thread(self.store.store_mesh_artifact, job_id, msh_text)
+            except Exception as exc:
+                logger.warning("Mesh artifact persistence failed for job %s: %s", job_id, exc)
+                self.store.update_job(job_id, has_mesh_artifact=False)
+            else:
+                artifact_persisted = True
+
+        try:
+            run_kwargs: dict[str, Any] = {
+                "cancel_cb": lambda: self._check_cancelled(job_id),
+                "stage_cb": stage_callback,
+            }
+            if "artifact_cb" in inspect.signature(engine.run).parameters:
+                run_kwargs["artifact_cb"] = artifact_callback
+            outcome = await engine.run(request, **run_kwargs)
+        finally:
+            # Drain callbacks queued by the final native frequency/result hook.
+            await asyncio.sleep(0)
+            if stage_tasks:
+                await asyncio.gather(*tuple(stage_tasks), return_exceptions=True)
+
+        self._check_cancelled(job_id)
+        if outcome.msh_text and not artifact_persisted:
+            try:
+                if outcome.mesh_stats is not None:
+                    self.store.update_job(job_id, mesh_stats_json=json.dumps(outcome.mesh_stats))
+                await asyncio.to_thread(self.store.store_mesh_artifact, job_id, outcome.msh_text)
+            except Exception as exc:
+                # V1 makes the downloadable artifact optional
+                # (``simulation_runner.py:451-466``).
+                logger.warning("Mesh artifact persistence failed for job %s: %s", job_id, exc)
+                self.store.update_job(job_id, has_mesh_artifact=False)
+
+        self._check_cancelled(job_id)
+        completed_at = _now_iso()
+        try:
+            event = await asyncio.to_thread(
+                self.store.complete_job,
+                job_id,
+                outcome.results,
+                {
+                    "status": "complete",
+                    "stage": "complete",
+                    "stage_message": "Simulation complete",
+                    "progress": 1.0,
+                    "completed_at": completed_at,
+                    "cancellation_requested": False,
+                    "error_message": None,
+                },
+                {"status": "complete", "progress": 1.0},
+            )
+        except Exception as exc:
+            logger.error("Persistence error for job %s: %s", job_id, exc)
+            await self._fail_job(
+                job_id,
+                "Results could not be saved. The simulation completed but persistence failed.",
+            )
+            return
+        if event is not None:
+            self.events.publish(event)
+
+    async def _report_real_stage(
+        self,
+        job_id: str,
+        stage: str,
+        progress: float,
+        message: str,
+    ) -> None:
+        normalized = max(0.0, min(1.0, float(progress)))
+        if stage in {"mesh_prepare", "mesh_validate"}:
+            public_stage = "mesh"
+            overall = 0.10 + normalized * 0.20
+        elif stage in {"setup", "solver_setup"}:
+            public_stage = "assemble"
+            overall = 0.30 + normalized * 0.05
+        elif stage == "frequency_solve":
+            public_stage = "solve"
+            overall = 0.35 + normalized * 0.50
+        elif stage in {"directivity", "finalizing"}:
+            public_stage = "postprocess"
+            overall = 0.85 + normalized * 0.14
+        else:
+            public_stage = str(stage)
+            overall = normalized
+        try:
+            await self._stage(job_id, public_stage, overall, message, 0.0)
+        except (_CancelledAtCheckpoint, JobNotFoundError):
+            return
 
     async def _stage(
         self, job_id: str, stage: str, progress: float, message: str, delay: float

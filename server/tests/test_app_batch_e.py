@@ -108,9 +108,13 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("WG2_ENABLE_DRYRUN", raising=False)
     client = TestClient(create_app(data_dir=tmp_path))
     engines = client.get("/api/capabilities").json()["engines"]
-    assert [engine["name"] for engine in engines] == ["metal", "bempp", "circsym"]
-    assert all(engine["available"] is False for engine in engines)
+    # Real detection (batch Q) probes THIS machine, so availability values are
+    # environment-dependent; assert the report contract, not the environment.
+    names = [engine["name"] for engine in engines]
+    assert {"metal", "bempp", "circsym"}.issubset(set(names))
+    assert "dryrun" not in names
     assert all(set(engine) == {"name", "available", "reason", "version"} for engine in engines)
+    assert all(engine["reason"] for engine in engines if engine["available"] is False)
 
     monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
     enabled = detect_engines()

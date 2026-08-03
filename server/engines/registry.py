@@ -1,4 +1,10 @@
-"""Report solver engines without importing optional solver stacks."""
+"""Truthful runtime capability detection and adapter construction.
+
+The helper/package probes replace placeholders using the same real layers as
+v1 ``server/solver/metal_solver.py:79-179``,
+``server/solver/bempp_solver.py:153-188``, and
+``server/services/runtime_preflight.py:323-485``.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ class EngineInfo:
 
 
 def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineInfo]:
-    """Return a stable capability report for the current process."""
+    """Return stable, honest reasons without treating optional absence as an error."""
 
     env = os.environ if environ is None else environ
     engines: list[EngineInfo] = []
@@ -30,20 +36,36 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             )
         )
 
-    for name in ("metal", "bempp", "circsym"):
+    from server.solver.bempp import bempp_status
+    from server.solver.circsym import circsym_status
+    from server.solver.metal import metal_status
+
+    for name, probe in (
+        ("metal", metal_status),
+        ("bempp", bempp_status),
+        ("circsym", circsym_status),
+    ):
+        try:
+            status = probe()
+        except Exception as exc:  # a broken optional stack is unavailable, not fatal
+            status = {
+                "available": False,
+                "reason": f"{name} detection failed: {exc}",
+                "version": None,
+            }
         engines.append(
             EngineInfo(
                 name=name,
-                available=False,
-                reason="not detected: real engine detection is deferred to a later batch",
-                version=None,
+                available=bool(status.get("available")),
+                reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
+                version=(str(status["version"]) if status.get("version") is not None else None),
             )
         )
     return engines
 
 
 def get_engine(name: str, *, environ: Mapping[str, str] | None = None) -> Any | None:
-    """Return an enabled engine implementation without probing optional stacks."""
+    """Return a fresh enabled adapter after the same probe exposed by capabilities."""
 
     normalized = str(name).strip().lower()
     available = {item.name: item.available for item in detect_engines(environ=environ)}
@@ -53,4 +75,16 @@ def get_engine(name: str, *, environ: Mapping[str, str] | None = None) -> Any | 
         from .dryrun import DryRunEngine
 
         return DryRunEngine()
+    if normalized == "metal":
+        from server.solver.metal import MetalEngine
+
+        return MetalEngine()
+    if normalized == "bempp":
+        from server.solver.bempp import BemppEngine
+
+        return BemppEngine()
+    if normalized == "circsym":
+        from server.solver.circsym import CircSymEngine
+
+        return CircSymEngine()
     return None
