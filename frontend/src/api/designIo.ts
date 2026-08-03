@@ -1,5 +1,6 @@
 import {
   designForFamily,
+  decodeQuadrants,
   serializeDesign,
   type DesignDocument,
   type DesignFamily,
@@ -86,6 +87,7 @@ function merge<T>(base: T, incoming: unknown): T {
   const output = { ...(base as Record<string, unknown>) };
   Object.entries(incoming as Record<string, unknown>).forEach(([key, value]) => {
     const current = output[key];
+    if (value === null && current !== null && current !== undefined) return;
     output[key] = value !== null && typeof value === 'object' && !Array.isArray(value)
       ? merge(current && typeof current === 'object' ? current : {}, value)
       : value;
@@ -101,10 +103,11 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);
-  const mask = Number(document.mesh.quadrants);
-  document.quadrants = [1, 2, 3, 4].filter((quadrant) => Boolean(mask & (1 << (quadrant - 1))));
+  document.quadrants = decodeQuadrants(document.mesh.quadrants);
+  document.mesh.quadrants = Number(document.quadrants.join(''));
   document.enclosure.baffle_margin = Number(document.enclosure.space_l);
   document.source.contours = document.source.contours ?? '';
+  if (document.mesh.z_map_points.trim()) document.mesh.sampling_mode = 'zmap';
   return document;
 }
 

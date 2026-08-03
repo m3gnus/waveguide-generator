@@ -55,10 +55,9 @@ export class SurfaceBufferManager {
         color.array = buffers.colors;
         color.needsUpdate = true;
       } else {
+        if (color) this.geometry.dispose();
         this.geometry.setAttribute('color', dynamicAttribute(buffers.colors, 3));
       }
-    } else {
-      this.geometry.deleteAttribute('color');
     }
     this.geometry.boundingBox = null;
     this.geometry.boundingSphere = null;

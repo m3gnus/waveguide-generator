@@ -8,6 +8,10 @@ export interface FrameScene {
   hasCurvature: boolean;
 }
 
+export function hasRenderableSurfaces(scene: FrameScene | null): boolean {
+  return Boolean(scene?.surfaces.length);
+}
+
 function section<T extends FrameArray>(frame: DecodedFrame, name: string, constructor: { new (...args: never[]): T }): T {
   const value = frame.sections[name];
   if (!(value instanceof constructor)) throw new Error(`Surface section ${name} has the wrong type`);
@@ -75,11 +79,13 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
 
 export function curvatureColors(values: Float32Array): Float32Array {
   let limit = 0;
-  for (const value of values) limit = Math.max(limit, Math.abs(value));
+  for (const value of values) {
+    if (Number.isFinite(value)) limit = Math.max(limit, Math.abs(value));
+  }
   if (limit === 0) limit = 1;
   const colors = new Float32Array(values.length * 3);
   for (let index = 0; index < values.length; index += 1) {
-    const normalized = Math.max(-1, Math.min(1, values[index] / limit));
+    const normalized = Number.isFinite(values[index]) ? Math.max(-1, Math.min(1, values[index] / limit)) : 0;
     const warm = Math.max(0, normalized);
     const cool = Math.max(0, -normalized);
     const center = 1 - Math.abs(normalized);
@@ -91,14 +97,17 @@ export function curvatureColors(values: Float32Array): Float32Array {
 }
 
 export function surfaceBoundaryPositions(surface: SceneSurface): Float32Array {
-  const edgeCounts = new Map<string, { count: number; a: number; b: number }>();
+  const triangleCount = Math.floor(surface.indices.length / 3);
+  if (triangleCount > MAX_EDGE_TRIANGLES) return new Float32Array();
+  const vertexCount = Math.floor(surface.positions.length / 3);
+  const keys = new BigUint64Array(triangleCount * 3);
+  let edgeCount = 0;
   const add = (a: number, b: number) => {
+    if (a >= vertexCount || b >= vertexCount) return;
     const low = Math.min(a, b);
     const high = Math.max(a, b);
-    const key = `${low}:${high}`;
-    const previous = edgeCounts.get(key);
-    if (previous) previous.count += 1;
-    else edgeCounts.set(key, { count: 1, a, b });
+    keys[edgeCount] = (BigInt(low) << 32n) | BigInt(high);
+    edgeCount += 1;
   };
   for (let offset = 0; offset + 2 < surface.indices.length; offset += 3) {
     const a = surface.indices[offset];
@@ -108,18 +117,37 @@ export function surfaceBoundaryPositions(surface: SceneSurface): Float32Array {
     add(b, c);
     add(c, a);
   }
-  const boundary = [...edgeCounts.values()].filter((edge) => edge.count === 1);
-  const positions = new Float32Array(boundary.length * 6);
-  boundary.forEach((edge, index) => {
-    const target = index * 6;
-    const a = edge.a * 3;
-    const b = edge.b * 3;
+  const sorted = keys.subarray(0, edgeCount);
+  sorted.sort();
+  let boundaryCount = 0;
+  for (let index = 0; index < sorted.length;) {
+    let end = index + 1;
+    while (end < sorted.length && sorted[end] === sorted[index]) end += 1;
+    if (end === index + 1) boundaryCount += 1;
+    index = end;
+  }
+  const positions = new Float32Array(boundaryCount * 6);
+  let target = 0;
+  for (let index = 0; index < sorted.length;) {
+    let end = index + 1;
+    while (end < sorted.length && sorted[end] === sorted[index]) end += 1;
+    if (end !== index + 1) {
+      index = end;
+      continue;
+    }
+    const key = sorted[index];
+    const a = Number(key >> 32n) * 3;
+    const b = Number(key & 0xffff_ffffn) * 3;
     positions[target] = surface.positions[a];
     positions[target + 1] = surface.positions[a + 1];
     positions[target + 2] = surface.positions[a + 2];
     positions[target + 3] = surface.positions[b];
     positions[target + 4] = surface.positions[b + 1];
     positions[target + 5] = surface.positions[b + 2];
-  });
+    target += 6;
+    index = end;
+  }
   return positions;
 }
+
+export const MAX_EDGE_TRIANGLES = 250_000;

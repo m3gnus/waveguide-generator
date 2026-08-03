@@ -32,6 +32,11 @@ function metrics(job: JobItem, now: number): string {
     .filter(Boolean).join(' · ');
 }
 
+export function canLoadDesign(job: Pick<JobItem, 'script_snapshot'>): boolean {
+  const snapshot = job.script_snapshot;
+  return Boolean(snapshot && typeof snapshot.formula === 'string');
+}
+
 function Rating({ job, onError }: { job: JobItem; onError: (message: string) => void }) {
   const rating = job.rating ?? 0;
   return <div className="score" aria-label={`Rating ${rating} of 5`}>
@@ -84,7 +89,7 @@ function JobCard({ job, now, run, onError }: {
     </> : <>
       <p>{metrics(job, now)}</p>
       <Rating job={job} onError={onError}/>
-      <footer><button className="primary" disabled={!snapshot?.formula && !job.has_results} onClick={load}>Load design</button><button onClick={retry}>Rerun</button><button disabled={!job.has_results} onClick={() => compareSelection.setPrimary(job.id)}>Results</button></footer>
+      <footer><button className="primary" disabled={!canLoadDesign(job)} onClick={load}>Load design</button><button onClick={retry}>Rerun</button><button disabled={!job.has_results} onClick={() => compareSelection.setPrimary(job.id)}>Results</button></footer>
     </>}
   </article>;
 }

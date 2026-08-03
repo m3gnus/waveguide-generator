@@ -202,7 +202,7 @@ const common = {
     angular_segments: 40, corner_segments: 4, throat_segments: 0,
     length_segments: 20, throat_resolution: 6, mouth_resolution: 15,
     throat_slice_density: .5, sampling_mode: 'uniform', z_map_points: '',
-    vertical_offset: 0, quadrants: 15, wall_thickness: 0, rear_resolution: 40,
+    vertical_offset: 0, quadrants: 1234, wall_thickness: 0, rear_resolution: 40,
     aperture_resolution_scale: 1.5, max_triangles: 50_000, allow_large_mesh: 0,
   },
   simulation: {
@@ -349,9 +349,8 @@ export const useDesignStore = create<DesignStore>()(
       },
       setQuadrants: (quadrants) => {
         const sorted = [...quadrants].sort();
-        const mask = sorted.reduce((value, quadrant) => value | (1 << (quadrant - 1)), 0);
         set((state) => ({
-          design: { ...state.design, quadrants: sorted, mesh: { ...state.design.mesh, quadrants: mask } },
+          design: { ...state.design, quadrants: sorted, mesh: { ...state.design.mesh, quadrants: encodeQuadrants(sorted) } },
           designRevision: state.designRevision + 1,
         }));
         bump('edit', false);
@@ -365,11 +364,13 @@ export const useDesignStore = create<DesignStore>()(
       },
       setFamily: (family) => {
         cancelRevisionTimers();
+        get().endDrag();
         set((state) => ({ design: designForFamily(family), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
       loadDesign: (design) => {
         cancelRevisionTimers();
+        get().endDrag();
         set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1 }));
         bump('load', true);
       },
@@ -430,28 +431,48 @@ export function resetDesignStore(): void {
  * Serialize a DesignDocument into the exact shape server/design/schema.py's
  * DesignConfig accepts. Owns the mirror-stripping rules so every send path
  * (preview WS, solve submit) stays schema-valid:
- * - top-level `quadrants` mirror -> mesh.quadrants bitmask
- * - `enclosure.baffle_margin` mirror -> the four space_* fields
+ * - top-level `quadrants` mirror -> mesh.quadrants ATH digit list
+ * - `enclosure.baffle_margin` is UI-only; individual space_* fields are authoritative
  * - `guiding_curve` is OSSE-only in the schema (ROSSEConfig/ICWConfig/
  *   FreeformConfig forbid it) and is dropped for every other family.
  */
 export function serializeDesign(design: DesignDocument): Record<string, unknown> {
   const { quadrants, enclosure, mesh, ...root } = structuredClone(design);
+  const wireEnclosure = {
+    depth: enclosure.depth,
+    edge_radius: enclosure.edge_radius,
+    edge_type: enclosure.edge_type,
+    space_l: enclosure.space_l,
+    space_t: enclosure.space_t,
+    space_r: enclosure.space_r,
+    space_b: enclosure.space_b,
+    front_resolution: enclosure.front_resolution,
+    back_resolution: enclosure.back_resolution,
+  };
   const payload: Record<string, unknown> = {
     ...root,
     mesh: {
       ...mesh,
-      quadrants: quadrants.reduce((mask, quadrant) => mask | (1 << (quadrant - 1)), 0),
+      quadrants: encodeQuadrants(quadrants),
     },
-    enclosure: {
-      depth: enclosure.depth,
-      edge_radius: enclosure.edge_radius,
-      space_l: enclosure.baffle_margin,
-      space_t: enclosure.baffle_margin,
-      space_r: enclosure.baffle_margin,
-      space_b: enclosure.baffle_margin,
-    },
+    enclosure: wireEnclosure,
   };
   if (design.formula !== 'OSSE') delete payload.guiding_curve;
   return payload;
+}
+
+/** ATH represents domains as concatenated quadrant digits, never bit flags. */
+export function encodeQuadrants(quadrants: readonly number[]): number {
+  const digits = [...new Set(quadrants)]
+    .filter((quadrant) => Number.isInteger(quadrant) && quadrant >= 1 && quadrant <= 4)
+    .sort((left, right) => left - right);
+  if (!digits.length) throw new Error('At least one quadrant is required');
+  return Number(digits.join(''));
+}
+
+export function decodeQuadrants(value: unknown): number[] {
+  const digits = String(value ?? '').trim().split('').map(Number);
+  const quadrants = [...new Set(digits.filter((digit) => digit >= 1 && digit <= 4))]
+    .sort((left, right) => left - right);
+  return quadrants.length ? quadrants : [1, 2, 3, 4];
 }

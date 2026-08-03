@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Workspace } from './Workspace';
+import { createDefaultLayout, Workspace } from './Workspace';
 
 class ResizeObserverStub {
   observe() {}
@@ -41,5 +41,105 @@ describe('Workspace', () => {
     expect(host.textContent).toContain('Jobs');
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('seeds a pinned JSON layout with a flex viewport branch', () => {
+    expect(createDefaultLayout(1440, 900)).toMatchInlineSnapshot(`
+      {
+        "activeGroup": "viewport",
+        "grid": {
+          "height": 900,
+          "orientation": "HORIZONTAL",
+          "root": {
+            "data": [
+              {
+                "data": {
+                  "activeView": "parameters",
+                  "id": "parameters-group",
+                  "views": [
+                    "parameters",
+                  ],
+                },
+                "size": 300,
+                "type": "leaf",
+              },
+              {
+                "data": [
+                  {
+                    "data": {
+                      "activeView": "viewport",
+                      "id": "viewport-group",
+                      "views": [
+                        "viewport",
+                      ],
+                    },
+                    "size": 560,
+                    "type": "leaf",
+                  },
+                  {
+                    "data": {
+                      "activeView": "results",
+                      "id": "results-group",
+                      "views": [
+                        "results",
+                      ],
+                    },
+                    "size": 340,
+                    "type": "leaf",
+                  },
+                ],
+                "size": 820,
+                "type": "branch",
+              },
+              {
+                "data": {
+                  "activeView": "jobs",
+                  "id": "jobs-group",
+                  "views": [
+                    "jobs",
+                  ],
+                },
+                "size": 320,
+                "type": "leaf",
+              },
+            ],
+            "size": 900,
+            "type": "branch",
+          },
+          "width": 1440,
+        },
+        "panels": {
+          "jobs": {
+            "contentComponent": "jobs",
+            "id": "jobs",
+            "title": "Jobs",
+          },
+          "parameters": {
+            "contentComponent": "parameters",
+            "id": "parameters",
+            "title": "Parameters",
+          },
+          "results": {
+            "contentComponent": "results",
+            "id": "results",
+            "title": "Results",
+          },
+          "viewport": {
+            "contentComponent": "viewport",
+            "id": "viewport",
+            "title": "Viewport",
+          },
+        },
+      }
+    `);
+  });
+
+  it.each([[1440, 900], [1280, 720]])('preserves rail sizes at %d×%d', (width, height) => {
+    const layout = createDefaultLayout(width, height);
+    const columns = layout.grid.root.data as Array<{ size?: number; data: unknown }>;
+    const center = columns[1].data as Array<{ size?: number }>;
+    expect(columns.map((column) => column.size)).toEqual([300, width - 620, 320]);
+    expect(center.map((row) => row.size)).toEqual([height - 340, 340]);
+    expect(layout.grid.width).toBe(width);
   });
 });

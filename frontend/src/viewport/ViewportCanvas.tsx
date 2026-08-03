@@ -1,6 +1,6 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { Component, useEffect, useMemo, useRef, type ErrorInfo, type ReactNode } from 'react';
 import { Box3, PerspectiveCamera, Plane, Vector3 } from 'three';
 import type { DecodedFrame } from '../api/frame';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
@@ -23,10 +23,40 @@ interface ViewportCanvasProps {
   frameStartedAt: number | null;
   onClientFrame: (milliseconds: number) => void;
   theme: ViewportTheme;
+  onRenderFailure: (message: string) => void;
 }
 
-export function canRenderWebGL(): boolean {
-  return typeof WebGLRenderingContext !== 'undefined' || typeof WebGL2RenderingContext !== 'undefined';
+let cachedWebGL2Support: boolean | null = null;
+
+export function resetWebGLProbe(): void { cachedWebGL2Support = null; }
+
+export function canRenderWebGL(createCanvas?: () => HTMLCanvasElement): boolean {
+  if (!createCanvas && cachedWebGL2Support !== null) return cachedWebGL2Support;
+  if (typeof document === 'undefined') return false;
+  if (!createCanvas && typeof WebGL2RenderingContext === 'undefined') {
+    cachedWebGL2Support = false;
+    return false;
+  }
+  let supported = false;
+  try {
+    const canvas = (createCanvas ?? (() => document.createElement('canvas')))();
+    supported = Boolean(canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false }));
+  } catch {
+    supported = false;
+  }
+  if (!createCanvas) cachedWebGL2Support = supported;
+  return supported;
+}
+
+export function cameraFitKey(bounds: Box3, nonce: number): string {
+  return `${nonce}:${bounds.min.toArray().join(',')}:${bounds.max.toArray().join(',')}`;
+}
+
+export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure: (message: string) => void): void {
+  canvas.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    onFailure('WebGL2 context was lost');
+  }, { once: true });
 }
 
 function CameraRig({ bounds, request, scheduler }: {
@@ -37,11 +67,12 @@ function CameraRig({ bounds, request, scheduler }: {
   const camera = useThree((state) => state.camera);
   const center = useMemo(() => bounds.getCenter(new Vector3()), [bounds]);
   const size = useMemo(() => Math.max(bounds.getSize(new Vector3()).length(), 1), [bounds]);
-  const appliedRequest = useRef<number | null>(null);
+  const appliedRequest = useRef<string | null>(null);
+  const fitKey = cameraFitKey(bounds, request.nonce);
 
   useEffect(() => {
-    if (appliedRequest.current === request.nonce) return;
-    appliedRequest.current = request.nonce;
+    if (appliedRequest.current === fitKey) return;
+    appliedRequest.current = fitKey;
     return scheduler.schedule(() => {
       const distance = size * 1.25;
       const offset = request.preset === 'front'
@@ -58,7 +89,7 @@ function CameraRig({ bounds, request, scheduler }: {
         camera.updateProjectionMatrix();
       }
     });
-  }, [camera, center, request.nonce, request.preset, scheduler, size]);
+  }, [camera, center, fitKey, request.preset, scheduler, size]);
 
   return <OrbitControls
     makeDefault
@@ -83,7 +114,7 @@ function PaintObserver({ marker, startedAt, onClientFrame }: {
   return null;
 }
 
-function Scene({ frame, mode, showEnclosure, sectionCut, cameraRequest, frameStartedAt, onClientFrame, theme }: ViewportCanvasProps) {
+function Scene({ frame, mode, showEnclosure, sectionCut, cameraRequest, frameStartedAt, onClientFrame, theme }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const scene = useMemo(() => frameToScene(frame), [frame]);
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
@@ -134,14 +165,24 @@ function Scene({ frame, mode, showEnclosure, sectionCut, cameraRequest, frameSta
   </>;
 }
 
-export function ViewportCanvas(props: ViewportCanvasProps) {
-  return <Canvas
+class CanvasErrorBoundary extends Component<{ children: ReactNode; onError: (message: string) => void }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: Error, _info: ErrorInfo) { this.props.onError(error.message || 'WebGL renderer failed'); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
+
+export function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProps) {
+  return <CanvasErrorBoundary onError={onRenderFailure}><Canvas
     className="wg2-viewport-canvas"
     frameloop="demand"
     camera={{ fov: 34, near: 0.01, far: 100_000 }}
     gl={{ antialias: true, alpha: true, stencil: true }}
-    onCreated={({ gl }) => { gl.localClippingEnabled = true; }}
+    onCreated={({ gl }) => {
+      gl.localClippingEnabled = true;
+      installContextLossFallback(gl.domElement, onRenderFailure);
+    }}
   >
     <Scene {...props} />
-  </Canvas>;
+  </Canvas></CanvasErrorBoundary>;
 }

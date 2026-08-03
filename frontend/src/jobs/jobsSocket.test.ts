@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
+import { compareSelection } from '../api/results';
 
 class MockSocket implements JobsWebSocketLike {
   readyState = 1;
@@ -31,7 +32,7 @@ function json(body: unknown, status = 200): Response {
 async function flush(): Promise<void> { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); }
 
 describe('jobs websocket state machine', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); });
   afterEach(() => vi.useRealTimers());
 
   it('accepts snapshot then contiguous events and tracks live job fields', async () => {
@@ -71,11 +72,53 @@ describe('jobs websocket state machine', () => {
     manager.start();
     socket.message({ v: 1, kind: 'hello', epoch: 9, heartbeatSec: 15 });
     socket.message({ v: 1, kind: 'snapshot', epoch: 9, cursor: 3, jobs: [job()] });
+    compareSelection.setPrimary('job-1');
+    compareSelection.toggleOverlay('orphan');
     socket.message({ v: 1, kind: 'event', epoch: 9, cursor: 8, jobId: 'job-1', type: 'completed', payload: {} });
     await flush();
     expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
-    expect(manager.getSnapshot()).toMatchObject({ cursor: 8, error: null });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 3 });
+    expect(manager.getSnapshot().error).toContain('gap');
     expect(manager.getSnapshot().jobs[0].label).toBe('resynced');
+    expect(compareSelection.getSnapshot()).toEqual({ primary: 'job-1', overlays: [] });
+    socket.message({ v: 1, kind: 'event', epoch: 9, cursor: 9, jobId: 'job-1', type: 'completed', payload: {} });
+    expect(manager.getSnapshot().cursor).toBe(3);
+    socket.message({ v: 1, kind: 'snapshot', epoch: 9, cursor: 9, jobs: [job({ label: 'snapshot' })] });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 9, error: null });
+    manager.stop();
+  });
+
+  it('ignores stale status responses and invalidates an in-flight refresh on deletion', async () => {
+    vi.useRealTimers();
+    let resolveFirst!: (response: Response) => void;
+    let resolveSecond!: (response: Response) => void;
+    const first = new Promise<Response>((resolve) => { resolveFirst = resolve; });
+    const second = new Promise<Response>((resolve) => { resolveSecond = resolve; });
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'progress', payload: { progress: .2 } });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'completed', payload: {} });
+    resolveSecond(json(job({ status: 'complete', progress: 1, has_results: true })));
+    await flush();
+    resolveFirst(json(job({ status: 'running', progress: .2 })));
+    await flush();
+    expect(manager.getSnapshot().jobs[0].status).toBe('complete');
+
+    let resolveDeleted!: (response: Response) => void;
+    fetcher.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveDeleted = resolve; }));
+    compareSelection.setPrimary('job-1');
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 4, jobId: 'job-1', type: 'progress', payload: { progress: .9 } });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 5, jobId: 'job-1', type: 'deleted', payload: {} });
+    resolveDeleted(json(job({ status: 'running' })));
+    await flush();
+    expect(manager.getSnapshot().jobs).toEqual([]);
+    expect(compareSelection.getSnapshot().primary).toBeNull();
     manager.stop();
   });
 });
@@ -98,5 +141,28 @@ describe('rating metadata', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/jobs/job-1/metadata', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ rating: 5 }) }));
     manager.stop();
   });
-});
 
+  it('does not let an older failed mutation roll back a newer rating', async () => {
+    const socket = new MockSocket();
+    let rejectFirst!: (reason: Error) => void;
+    let resolveSecond!: (response: Response) => void;
+    const first = new Promise<Response>((_resolve, reject) => { rejectFirst = reject; });
+    const second = new Promise<Response>((resolve) => { resolveSecond = resolve; });
+    const fetcher = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ rating: 2 })] });
+    const older = manager.patchRating('job-1', 5);
+    const newer = manager.patchRating('job-1', 4);
+    expect(manager.getSnapshot().jobs[0].rating).toBe(4);
+    rejectFirst(new Error('older failed'));
+    await expect(older).rejects.toThrow('older failed');
+    await flush();
+    expect(manager.getSnapshot().jobs[0].rating).toBe(4);
+    resolveSecond(json({}));
+    await newer;
+    expect(manager.getSnapshot().jobs[0].rating).toBe(4);
+    manager.stop();
+  });
+});

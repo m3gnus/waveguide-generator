@@ -30,7 +30,7 @@ export class ResultsLruCache {
   readonly maxEntries: number;
 
   constructor(maxEntries = 15) {
-    this.maxEntries = Math.max(1, Math.min(15, Math.floor(maxEntries)));
+    this.maxEntries = Number.isFinite(maxEntries) ? Math.max(1, Math.min(15, Math.floor(maxEntries))) : 15;
   }
 
   get(jobId: string): JobResults | undefined {
@@ -75,7 +75,7 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   return result;
 }
 
-class CompareStore {
+export class CompareStore {
   private value: CompareSelection = { primary: null, overlays: [] };
   private readonly listeners = new Set<() => void>();
 
@@ -103,6 +103,12 @@ class CompareStore {
     }
   }
   clear(): void { this.set({ primary: null, overlays: [] }); }
+  prune(validJobIds: ReadonlySet<string>): void {
+    const primary = this.value.primary && validJobIds.has(this.value.primary) ? this.value.primary : null;
+    const overlays = this.value.overlays.filter((id) => validJobIds.has(id) && id !== primary);
+    if (primary === this.value.primary && overlays.length === this.value.overlays.length) return;
+    this.set({ primary, overlays });
+  }
   private set(value: CompareSelection): void {
     this.value = value;
     this.listeners.forEach((listener) => listener());
@@ -110,4 +116,3 @@ class CompareStore {
 }
 
 export const compareSelection = new CompareStore();
-

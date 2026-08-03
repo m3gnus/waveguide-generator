@@ -34,6 +34,26 @@ function reportText(report: ImportReport): string {
   return `${report.dialect.toUpperCase()} · migrations: ${migrations} · passthrough: ${report.passthrough.blockCount} blocks, ${report.passthrough.keyCount} keys preserved`;
 }
 
+export async function exportProfileArtifacts(
+  exporter: (kind: 'profiles' | 'slices') => Promise<void>,
+  revision: number,
+): Promise<string> {
+  const kinds = ['profiles', 'slices'] as const;
+  const results = await Promise.allSettled(kinds.map((kind) => exporter(kind)));
+  const completed = kinds.filter((_kind, index) => results[index].status === 'fulfilled');
+  const failed = kinds.flatMap((kind, index) => {
+    const result = results[index];
+    return result.status === 'rejected'
+      ? [`${kind}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
+      : [];
+  });
+  if (failed.length) {
+    const partial = completed.length ? `Exported ${completed.join(' and ')} CSV; ` : '';
+    throw new Error(`${partial}failed ${failed.join('; ')}`);
+  }
+  return `Exported profiles and slices CSV from revision ${revision}`;
+}
+
 export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
@@ -105,9 +125,11 @@ export function DesignFileMenu() {
 
   async function exportProfiles() {
     await act(async () => {
-      await downloadGeometryExport('profiles', design, revision, stem(filename), 'profiles');
-      await downloadGeometryExport('profiles', design, revision, stem(filename), 'slices');
-      setMessage(`Exported profiles and slices CSV from revision ${revision}`);
+      const result = await exportProfileArtifacts(
+        (kind) => downloadGeometryExport('profiles', design, revision, stem(filename), kind),
+        revision,
+      );
+      setMessage(result);
     });
   }
 

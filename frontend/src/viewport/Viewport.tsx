@@ -3,7 +3,7 @@ import type { DecodedFrame } from '../api/frame';
 import { previewSocket } from '../api/previewSocket';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { Icon } from '../shell/icons';
-import { frameToScene } from './frameScene';
+import { frameToScene, hasRenderableSurfaces } from './frameScene';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
@@ -57,11 +57,13 @@ export function Viewport() {
   const [showEnclosure, setShowEnclosure] = useState(true);
   const [showStats, setShowStats] = useState(false);
   const [clientFrameMs, setClientFrameMs] = useState<number | null>(null);
+  const [renderFailure, setRenderFailure] = useState<string | null>(null);
   const [cameraRequest, setCameraRequest] = useState<CameraRequest>({ preset: 'three-quarter', nonce: 0 });
   const setCamera = (preset: CameraPreset) => setCameraRequest((current) => ({ preset, nonce: current.nonce + 1 }));
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
   const surfaces = selected?.header.surfaces ?? [];
-  const webgl = canRenderWebGL();
+  const webgl = canRenderWebGL() && renderFailure === null;
+  const hasSurfaces = hasRenderableSurfaces(scene);
   const connectionInterrupted = preview.connection !== 'connected';
   const badgeLabel = connectionInterrupted ? preview.connection.toUpperCase() : preview.stale ? 'STALE' : 'LIVE';
 
@@ -98,7 +100,7 @@ export function Viewport() {
   }, []);
 
   return <div className="viewport-panel wg2-viewport">
-    {selected && webgl && <ViewportCanvas
+    {selected && hasSurfaces && webgl && <ViewportCanvas
       frame={selected}
       mode={mode}
       showEnclosure={showEnclosure}
@@ -107,6 +109,7 @@ export function Viewport() {
       frameStartedAt={latencyClock.current.requestStartedAt(selected.header)}
       onClientFrame={reportClientFrame}
       theme={theme}
+      onRenderFailure={setRenderFailure}
     />}
 
     <div className="viewport-title">
@@ -127,7 +130,9 @@ export function Viewport() {
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
       <b>Last valid geometry retained</b>
     </div>}
-    {selected && !webgl && <div className="viewport-empty"><b>WebGL unavailable</b><span>The live geometry is valid, but this environment cannot create a WebGL context.</span></div>}
+    {selected && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The live geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
+    {selected && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The preview frame is valid but contains no renderable surfaces.</span></div>}
+    {selected && renderFailure && <div className="viewport-empty" role="status"><b>WebGL renderer stopped</b><span>{renderFailure}. Reopen the viewport after checking graphics acceleration.</span></div>}
     {selected && mode === 'curvature' && !scene?.hasCurvature && <div className="viewport-mode-empty">
       <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
     </div>}

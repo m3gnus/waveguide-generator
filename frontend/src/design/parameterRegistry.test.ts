@@ -71,7 +71,13 @@ describe('complete parameter registry', () => {
     expect(visible('guide.superellipse_n', osse)).toBe(false);
     osse.guiding_curve.curve_type = 1;
     expect(visible('guide.superellipse_n', osse)).toBe(true);
-    osse.mesh.sampling_mode = 'ath-default-zmap';
+    osse.mesh.sampling_mode = 'zmap';
     expect(visible('mesh.z_map_points', osse)).toBe(true);
+  });
+
+  it('offers only supported sampling modes and maps legacy Source.Velocity to the numeric field', () => {
+    const sampling = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.sampling_mode')!;
+    expect(sampling.options?.map((option) => option.value)).toEqual(['uniform', 'ath-default-zmap', 'zmap']);
+    expect(PARAMETER_REGISTRY.find((field) => field.legacyKey === 'sourceVelocity')?.id).toBe('source.velocity');
   });
 });

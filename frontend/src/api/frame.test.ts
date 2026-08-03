@@ -13,5 +13,7 @@ describe('frame wrapper', () => {
     expect(frame.sections.hornPositions).toBeInstanceOf(Float32Array);
     expect(frame.header.sections.find((section) => section.name === 'hornPositions')?.shape).toEqual([24, 3]);
     expect(frame.sections.hornPositions[0]).toBe(8);
+    expect(frame.header.fidelity?.maxChordErrorMmRequested).toBe(0.05);
+    expect(frame.header.fidelity?.vertexCapLimited).toBe(false);
   });
 });

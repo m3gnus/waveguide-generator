@@ -55,4 +55,15 @@ describe('design store revision semantics', () => {
     expect(seen).toEqual([2, 3, 4, 5, 6]);
     unsubscribe();
   });
+
+  it.each(['family', 'load'] as const)('finalizes active drag history before %s replacement', (operation) => {
+    useDesignStore.getState().beginDrag();
+    useDesignStore.getState().updateField('R', 175);
+    if (operation === 'family') useDesignStore.getState().setFamily('OSSE');
+    else useDesignStore.getState().loadDesign({ ...structuredClone(seedDesign), R: 190 });
+
+    expect(useDesignStore.getState().dragSnapshot).toBeNull();
+    expect(useDesignStore.temporal.getState().isTracking).toBe(true);
+    expect(useDesignStore.temporal.getState().pastStates.length).toBeGreaterThanOrEqual(2);
+  });
 });

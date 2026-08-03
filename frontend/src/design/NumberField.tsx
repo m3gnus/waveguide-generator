@@ -13,6 +13,7 @@ interface NumberFieldProps {
   disabled?: boolean;
   disabledReason?: string;
   invalidMessage?: string;
+  validate?: (value: number) => string | undefined;
   onCommit: (value: number) => void;
   onBeginDrag?: () => void;
   onEndDrag?: () => void;
@@ -31,6 +32,7 @@ export function NumberField({
   disabled = false,
   disabledReason,
   invalidMessage,
+  validate,
   onCommit,
   onBeginDrag,
   onEndDrag,
@@ -40,8 +42,12 @@ export function NumberField({
   const [editing, setEditing] = useState(false);
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const drag = useRef<{ x: number; value: number } | null>(null);
+  const cancelBlur = useRef(false);
+  const endDragCallback = useRef(onEndDrag);
+  endDragCallback.current = onEndDrag;
   const parsed = Number(draft);
-  const invalid = !Number.isFinite(parsed) || parsed < min || parsed > max;
+  const draftMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
+  const invalid = draft.trim() === '' || !Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage);
 
   useEffect(() => {
     if (!editing && !drag.current) setDraft(value.toFixed(precision));
@@ -49,7 +55,15 @@ export function NumberField({
 
   const commit = () => {
     setEditing(false);
-    if (invalid) return;
+    if (cancelBlur.current) {
+      cancelBlur.current = false;
+      setDraft(value.toFixed(precision));
+      return;
+    }
+    if (invalid) {
+      setDraft(value.toFixed(precision));
+      return;
+    }
     const rounded = Number(parsed.toFixed(precision));
     setDraft(rounded.toFixed(precision));
     if (rounded !== value) onCommit(rounded);
@@ -59,6 +73,7 @@ export function NumberField({
     if (event.key === 'Enter') {
       event.currentTarget.blur();
     } else if (event.key === 'Escape') {
+      cancelBlur.current = true;
       setDraft(value.toFixed(precision));
       setEditing(false);
       event.currentTarget.blur();
@@ -91,6 +106,12 @@ export function NumberField({
     onEndDrag?.();
   };
 
+  useEffect(() => () => {
+    if (!drag.current) return;
+    drag.current = null;
+    endDragCallback.current?.();
+  }, []);
+
   return (
     <div className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}`} title={disabledReason}>
       <i className="modified-dot" />
@@ -102,6 +123,7 @@ export function NumberField({
         onPointerMove={onLabelPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
       >
         {label}{symbol && <span className="field-symbol">{symbol}</span>}
       </label>
@@ -112,7 +134,7 @@ export function NumberField({
         <input
           id={id}
           aria-invalid={invalid}
-          aria-describedby={invalidMessage ? `${id}-error` : undefined}
+          aria-describedby={(draftMessage ?? invalidMessage) ? `${id}-error` : undefined}
           inputMode="decimal"
           spellCheck={false}
           disabled={disabled}
@@ -125,7 +147,7 @@ export function NumberField({
         {unit && <span className="unit">{unit}</span>}
         <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />
       </div>
-      {invalidMessage && <span id={`${id}-error`} className="sr-only">{invalidMessage}</span>}
+      {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="sr-only">{draftMessage ?? invalidMessage}</span>}
     </div>
   );
 }

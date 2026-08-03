@@ -111,6 +111,14 @@ function passthroughStatus(field: ParameterDefinition, design: DesignDocument): 
 function validationMessage(field: ParameterDefinition, design: DesignDocument): string | undefined {
   if (field.id === 'icw.hold_end' && (design.hold_end ?? 0) <= (design.hold_start ?? 0)) return 'Must exceed coverage hold start.';
   if (field.id === 'simulation.f2' && design.simulation.f2 <= design.simulation.f1) return 'Must exceed sweep start.';
+  if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(design.source.velocity)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
+  return undefined;
+}
+
+function prospectiveValidation(field: ParameterDefinition, design: DesignDocument, value: number): string | undefined {
+  if (field.id === 'simulation.f1' && value >= design.simulation.f2) return 'Must be below sweep end.';
+  if (field.id === 'simulation.f2' && value <= design.simulation.f1) return 'Must exceed sweep start.';
+  if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(value)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
   return undefined;
 }
 
@@ -167,6 +175,7 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
       disabled={disabled}
       disabledReason={disabledReason}
       invalidMessage={error}
+      validate={(next) => prospectiveValidation(field, design, next)}
       onCommit={(next) => commit(next)}
       onBeginDrag={beginDrag}
       onEndDrag={endDrag}

@@ -157,8 +157,8 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   select('source.shape', 'sourceShape', 'source.shape', 'Source', 'Source surface', [{ value: 1, label: 'Spherical cap' }, { value: 2, label: 'Flat disc' }]),
   number('source.radius', 'sourceRadius', 'source.radius', 'Source', 'Source radius', { unit: 'mm', min: -1, max: 2_000 }),
   select('source.curvature', 'sourceCurv', 'source.curvature', 'Source', 'Source curvature', [{ value: 0, label: 'Auto' }, { value: 1, label: 'Convex' }, { value: -1, label: 'Concave' }], { visibleWhen: (design) => design.source.shape === 1 }),
-  number('source.velocity', 'sourceAmplitude', 'source.velocity', 'Source', 'Source amplitude', { unit: 'm/s', min: 0, max: 100, step: .01, precision: 3 }),
-  select('source.velocity_convention', 'sourceVelocity', 'source.velocity_convention', 'Source', 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }]),
+  number('source.velocity', 'sourceVelocity', 'source.velocity', 'Source', 'Source amplitude', { unit: 'm/s', min: 0, max: 100, step: .01, precision: 3 }),
+  select('source.velocity_convention', 'sourceVelocityConvention', 'source.velocity_convention', 'Source', 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }]),
   { id: 'source.contours', legacyKey: 'sourceContours', path: 'source.contours', section: 'Source', label: 'Source contours', kind: 'text', description: 'File path or inline-script expression; preserved verbatim.' },
 
   // Symmetry is custom-rendered as quadrants but registered against schema mesh.quadrants.
@@ -178,8 +178,8 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('mesh.corner_segments', 'cornerSegments', 'mesh.corner_segments', mesh, 'Surface corner samples', { min: 0, max: 1_024, step: 1, precision: 0 }),
   number('mesh.throat_segments', 'throatSegments', 'mesh.throat_segments', mesh, 'Throat slice samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
   number('mesh.throat_slice_density', 'throatSliceDensity', 'mesh.throat_slice_density', mesh, 'Preview slice bias', { min: .01, max: .99, step: .01 }),
-  select('mesh.sampling_mode', 'samplingMode', 'mesh.sampling_mode', mesh, 'Z-map sampling mode', [{ value: 'uniform', label: 'Uniform' }, { value: 'resolution', label: 'Resolution weighted' }, { value: 'ath-default-zmap', label: 'ATH Z-map points' }]),
-  { id: 'mesh.z_map_points', legacyKey: 'zMapPoints', path: 'mesh.z_map_points', section: mesh, label: 'Z-map points', kind: 'text', visibleWhen: (design) => design.mesh.sampling_mode === 'ath-default-zmap', description: 'ATH point expression, preserved verbatim.' },
+  select('mesh.sampling_mode', 'samplingMode', 'mesh.sampling_mode', mesh, 'Z-map sampling mode', [{ value: 'uniform', label: 'Uniform' }, { value: 'ath-default-zmap', label: 'ATH default Z-map' }, { value: 'zmap', label: 'Custom Z-map points' }]),
+  { id: 'mesh.z_map_points', legacyKey: 'zMapPoints', path: 'mesh.z_map_points', section: mesh, label: 'Z-map points', kind: 'text', visibleWhen: (design) => design.mesh.sampling_mode === 'zmap', description: 'ATH point expression, preserved verbatim.' },
   number('mesh.throat_resolution', 'throatResolution', 'mesh.throat_resolution', mesh, 'Throat mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
   number('mesh.mouth_resolution', 'mouthResolution', 'mesh.mouth_resolution', mesh, 'Mouth mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'For 20 kHz, λ/6 is approximately 2.86 mm.' }),
   { id: 'schema-gap.max_edge', legacyKey: 'maxEdge', section: mesh, label: 'Maximum edge guard', kind: 'number', unit: 'mm', disabledReason: 'Not present in server DesignConfig; use the regional resolution controls until the server schema adds it.' },

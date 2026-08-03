@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ResultsLruCache, type JobResults } from '../api/results';
+import { CompareStore, ResultsLruCache, type JobResults } from '../api/results';
 import { complexToDb, directivityGrid, impedanceSeries, polarSeries, splSeries } from './mappers';
 
 function result(offset = 0): JobResults {
@@ -33,6 +33,16 @@ describe('results LRU', () => {
 
   it('clamps oversized cache budgets to 15', () => {
     expect(new ResultsLruCache(100).maxEntries).toBe(15);
+    expect(new ResultsLruCache(Number.NaN).maxEntries).toBe(15);
+  });
+
+  it('prunes deleted primary and overlay job ids', () => {
+    const selection = new CompareStore();
+    selection.setPrimary('primary');
+    selection.toggleOverlay('keep');
+    selection.toggleOverlay('deleted');
+    selection.prune(new Set(['keep']));
+    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'] });
   });
 });
 
@@ -61,4 +71,3 @@ describe('chart data mappers', () => {
     expect(magnitude[1].data[1][1]).toBeCloseTo(90);
   });
 });
-

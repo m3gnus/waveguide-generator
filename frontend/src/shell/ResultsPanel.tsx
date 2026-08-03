@@ -10,6 +10,13 @@ function frequency(value: number | undefined): string {
   return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 1 : 2)} kHz` : `${Math.round(value)} Hz`;
 }
 
+export function splSubtitle(result: JobResults | undefined): string {
+  const observation = result?.metadata?.observation;
+  const record = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
+  const distance = Number(record.effective_distance_m ?? record.requested_distance_m);
+  return Number.isFinite(distance) && distance > 0 ? `absolute · ${Number(distance.toPrecision(4))} m` : 'absolute · distance unspecified';
+}
+
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
   return job?.label || `${String(job?.config_summary.formula_type ?? 'job').toLowerCase()} ${id.slice(0, 6)}`;
@@ -92,6 +99,7 @@ export function ResultsPanel() {
     if (selection.primary && jobs.some((job) => job.id === selection.primary && job.has_results)) return;
     const latest = jobs.find((job) => job.status === 'complete' && job.has_results);
     if (latest) compareSelection.setPrimary(latest.id);
+    else if (selection.primary) compareSelection.setPrimary(null);
   }, [jobs, selection.primary]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
@@ -128,7 +136,7 @@ export function ResultsPanel() {
     </div>
     {error && <div className="job-error" role="alert" style={{ margin: 7 }}>{error}</div>}
     {!primary ? <div className="coming-soon"><b>LOADING RESULTS</b><span>Fetching selected job data…</span></div> : <div className="result-grid">
-      <ChartCard className="result-0" title="SPL / FR" subtitle="normalized · 1 m"><EChart option={splOption(named, tokens)} label="Multi-job sound pressure frequency response"/></ChartCard>
+      <ChartCard className="result-0" title="SPL / FR" subtitle={splSubtitle(primary)}><EChart option={splOption(named, tokens)} label="Multi-job sound pressure frequency response"/></ChartCard>
       <ChartCard className="result-1" title="Directivity" subtitle="horizontal · dB"><EChart option={heatmapOption(primary, tokens)} label="Horizontal directivity heatmap by angle and frequency"/></ChartCard>
       <ChartCard className="result-2" title="Polar" subtitle={frequency(selectedFrequency)}>
         <div style={{ position: 'absolute', zIndex: 2, top: 1, right: 2, display: 'flex', gap: 3 }} className="segments"><button className={polarPlane === 'horizontal' ? 'on' : ''} onClick={() => setPolarPlane('horizontal')}>H</button><button className={polarPlane === 'vertical' ? 'on' : ''} onClick={() => setPolarPlane('vertical')}>V</button></div>

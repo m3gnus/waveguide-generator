@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, useDesignStore } from '../stores/design';
 import { ParamPanel } from './ParamPanel';
 
 describe('ParamPanel inventory UX', () => {
@@ -39,5 +39,32 @@ describe('ParamPanel inventory UX', () => {
     act(() => source.querySelector<HTMLButtonElement>('.section-head')!.click());
     expect(localStorage.getItem('wg-param-section-open:Source')).toBe('false');
     expect(source.classList.contains('closed')).toBe(true);
+  });
+
+  it('rejects prospective inverted frequency bounds before committing', () => {
+    const entry = host.querySelector<HTMLElement>('[data-parameter-id="simulation.f1"]')!;
+    const input = entry.querySelector<HTMLInputElement>('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '18000');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.simulation.f1).toBe(400);
+  });
+
+  it('enforces the legacy Source.Velocity 1/2 domain', () => {
+    act(() => useDesignStore.getState().setSourceConvention('legacy'));
+    const entry = host.querySelector<HTMLElement>('[data-parameter-id="source.velocity"]')!;
+    const input = entry.querySelector<HTMLInputElement>('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '3');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.source.velocity).toBe(1);
   });
 });

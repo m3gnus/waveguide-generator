@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecodedFrame, FrameSurface } from '../api/frame';
-import { frameToScene, materialClassForSurface, surfaceBoundaryPositions } from './frameScene';
+import { curvatureColors, frameToScene, hasRenderableSurfaces, materialClassForSurface, MAX_EDGE_TRIANGLES, surfaceBoundaryPositions } from './frameScene';
 
 function surface(role: string, prefix: string, shading: 'smooth' | 'flat' = 'smooth'): FrameSurface {
   return {
@@ -65,5 +65,23 @@ describe('frameToScene', () => {
       indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     };
     expect(surfaceBoundaryPositions(sceneSurface)).toHaveLength(4 * 2 * 3);
+  });
+
+  it('maps non-finite curvature samples to the finite neutral color', () => {
+    const colors = curvatureColors(new Float32Array([Number.NaN, Number.POSITIVE_INFINITY, -2, 2]));
+    expect([...colors].every(Number.isFinite)).toBe(true);
+    expect([...colors.slice(0, 3)]).toEqual([...curvatureColors(new Float32Array([0])).slice(0, 3)]);
+    expect([...colors.slice(3, 6)]).toEqual([...colors.slice(0, 3)]);
+  });
+
+  it('bounds edge extraction before allocating per-edge storage', () => {
+    const sceneSurface = frameToScene(fixture()).surfaces[0];
+    sceneSurface.indices = new Uint32Array((MAX_EDGE_TRIANGLES + 1) * 3);
+    expect(surfaceBoundaryPositions(sceneSurface)).toHaveLength(0);
+  });
+
+  it('distinguishes valid empty-surface frames from renderable scenes', () => {
+    expect(hasRenderableSurfaces(frameToScene({ ...fixture(), header: { ...fixture().header, surfaces: [] } }))).toBe(false);
+    expect(hasRenderableSurfaces(frameToScene(fixture()))).toBe(true);
   });
 });

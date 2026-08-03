@@ -1,4 +1,4 @@
-import { DoubleSide, FrontSide, MeshStandardMaterial } from 'three';
+import { DoubleSide, FrontSide, MeshStandardMaterial, ShaderMaterial } from 'three';
 import { describe, expect, it } from 'vitest';
 import { createMaterialLibrary } from './materials';
 import type { DisplayMode } from './types';
@@ -24,5 +24,18 @@ describe('viewport material mode matrix', () => {
       expect(enclosure.color.getHexString()).not.toBe(horn.color.getHexString());
       library.all.forEach((material) => material.dispose());
     }
+  });
+
+  it('uses true flat shading for flat classes, including a face-normal zebra shader', () => {
+    const clay = createMaterialLibrary('clay', null);
+    expect((clay.surfaces['horn-smooth'] as MeshStandardMaterial).flatShading).toBe(false);
+    expect((clay.surfaces['horn-flat'] as MeshStandardMaterial).flatShading).toBe(true);
+    clay.all.forEach((material) => material.dispose());
+
+    const zebra = createMaterialLibrary('zebra', null);
+    expect(zebra.surfaces['horn-flat']).not.toBe(zebra.surfaces['horn-smooth']);
+    expect((zebra.surfaces['horn-flat'] as ShaderMaterial).defines.FLAT_SHADED).toBe(1);
+    expect((zebra.surfaces['horn-smooth'] as ShaderMaterial).defines.FLAT_SHADED).toBeUndefined();
+    zebra.all.forEach((material) => material.dispose());
   });
 });

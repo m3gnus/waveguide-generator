@@ -22,6 +22,16 @@ export interface FrameHeader {
   designRevision?: number;
   lod?: 'coarse' | 'fine';
   evalMs?: number;
+  fidelity?: {
+    maxChordErrorMmRequested: number;
+    maxNormalStepDegRequested: number;
+    minSilhouetteSegmentsRequested: number;
+    maxChordErrorMmAchieved: number;
+    maxNormalStepDegAchieved: number;
+    minSilhouetteSegmentsAchieved: number;
+    vertexCapLimited?: boolean;
+    surfaces?: Record<string, unknown>;
+  };
   surfaces?: FrameSurface[];
   sections: Array<{
     name: string;

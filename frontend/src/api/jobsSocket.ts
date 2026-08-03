@@ -1,3 +1,5 @@
+import { compareSelection } from './results';
+
 export type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
 export type JobsConnection = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
@@ -105,6 +107,13 @@ export class JobsSocketManager {
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatMs = 30_000;
   private refetchGeneration = 0;
+  private gapTargetCursor: number | null = null;
+  private readonly jobGenerations = new Map<string, number>();
+  private readonly ratingMutations = new Map<string, {
+    tail: Promise<void>;
+    token: number;
+    confirmed: number | null;
+  }>();
   private readonly listeners = new Set<() => void>();
   private snapshot: JobsSnapshot = {
     connection: 'idle', epoch: null, cursor: null, jobs: [], error: null,
@@ -153,6 +162,7 @@ export class JobsSocketManager {
     if (!response.ok) throw await responseError(response);
     const body = await response.json() as { deleted_ids?: string[] };
     const deleted = new Set(body.deleted_ids ?? []);
+    deleted.forEach((jobId) => this.invalidateJob(jobId));
     this.update({ jobs: this.snapshot.jobs.filter((job) => !deleted.has(job.id)) });
   }
 
@@ -167,12 +177,28 @@ export class JobsSocketManager {
 
   async patchRating(jobId: string, rating: number | null): Promise<void> {
     const previous = this.snapshot.jobs.find((job) => job.id === jobId)?.rating ?? null;
+    const state = this.ratingMutations.get(jobId) ?? {
+      tail: Promise.resolve(), token: 0, confirmed: previous,
+    };
+    const token = state.token + 1;
+    state.token = token;
     this.patchJob(jobId, { rating });
+    const mutation = state.tail.catch(() => undefined).then(async () => {
+      try {
+        await this.patchMetadata(jobId, { rating });
+        state.confirmed = rating;
+      } catch (error) {
+        const current = this.snapshot.jobs.find((job) => job.id === jobId)?.rating ?? null;
+        if (state.token === token && current === rating) this.patchJob(jobId, { rating: state.confirmed });
+        throw error;
+      }
+    });
+    state.tail = mutation;
+    this.ratingMutations.set(jobId, state);
     try {
-      await this.patchMetadata(jobId, { rating });
-    } catch (error) {
-      this.patchJob(jobId, { rating: previous });
-      throw error;
+      await mutation;
+    } finally {
+      if (this.ratingMutations.get(jobId)?.tail === mutation) this.ratingMutations.delete(jobId);
     }
   }
 
@@ -220,6 +246,7 @@ export class JobsSocketManager {
     this.armHeartbeat();
     if (message.kind === 'snapshot') {
       const incoming = message as SnapshotMessage;
+      this.gapTargetCursor = null;
       this.update({ cursor: incoming.cursor, jobs: this.sortJobs(incoming.jobs), error: null });
       return;
     }
@@ -229,13 +256,31 @@ export class JobsSocketManager {
   private onEvent(message: EventMessage): void {
     const cursor = this.snapshot.cursor;
     if (cursor !== null && message.cursor <= cursor) return;
+    if (this.gapTargetCursor !== null) {
+      if (cursor === null || message.cursor !== cursor + 1) return;
+      this.update({ cursor: message.cursor });
+      if (message.type === 'deleted') {
+        this.invalidateJob(message.jobId);
+        this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId) });
+      } else {
+        this.applyDelta(message);
+        void this.refreshJob(message.jobId);
+      }
+      if (message.cursor >= this.gapTargetCursor) {
+        this.gapTargetCursor = null;
+        this.update({ error: null });
+      }
+      return;
+    }
     if (cursor !== null && message.cursor !== cursor + 1) {
-      this.update({ cursor: message.cursor, error: `Jobs event gap (${cursor} → ${message.cursor}); resyncing` });
+      this.gapTargetCursor = message.cursor;
+      this.update({ error: `Jobs event gap (${cursor} → ${message.cursor}); resyncing` });
       void this.refetchJobs();
       return;
     }
     this.update({ cursor: message.cursor });
     if (message.type === 'deleted') {
+      this.invalidateJob(message.jobId);
       this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId) });
       return;
     }
@@ -275,7 +320,9 @@ export class JobsSocketManager {
       if (!response.ok) throw await responseError(response);
       const body = await response.json() as { items: JobItem[] };
       if (generation !== this.refetchGeneration) return;
-      this.update({ jobs: this.sortJobs(body.items), error: null });
+      new Set([...this.snapshot.jobs.map((job) => job.id), ...body.items.map((job) => job.id)])
+        .forEach((jobId) => this.invalidateJob(jobId));
+      this.update({ jobs: this.sortJobs(body.items), error: this.gapTargetCursor === null ? null : this.snapshot.error });
     } catch (error) {
       if (generation !== this.refetchGeneration) return;
       this.update({ error: error instanceof Error ? error.message : String(error) });
@@ -283,19 +330,34 @@ export class JobsSocketManager {
   }
 
   private async refreshJob(jobId: string): Promise<void> {
+    const generation = this.nextJobGeneration(jobId);
     try {
       const response = await this.fetcher(`/api/status/${encodeURIComponent(jobId)}`);
+      if (this.jobGenerations.get(jobId) !== generation) return;
       if (response.status === 404) {
+        this.invalidateJob(jobId);
         this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
         return;
       }
       if (!response.ok) throw await responseError(response);
       const job = await response.json() as JobItem;
+      if (this.jobGenerations.get(jobId) !== generation) return;
       const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
       this.update({ jobs: this.sortJobs([...jobs, job]), error: null });
     } catch (error) {
+      if (this.jobGenerations.get(jobId) !== generation) return;
       this.update({ error: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  private nextJobGeneration(jobId: string): number {
+    const generation = (this.jobGenerations.get(jobId) ?? 0) + 1;
+    this.jobGenerations.set(jobId, generation);
+    return generation;
+  }
+
+  private invalidateJob(jobId: string): void {
+    this.nextJobGeneration(jobId);
   }
 
   private patchJob(jobId: string, patch: Partial<JobItem>): void {
@@ -331,9 +393,9 @@ export class JobsSocketManager {
 
   private update(patch: Partial<JobsSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...patch };
+    if (patch.jobs) compareSelection.prune(new Set(patch.jobs.map((job) => job.id)));
     this.listeners.forEach((listener) => listener());
   }
 }
 
 export const jobsSocket = new JobsSocketManager();
-

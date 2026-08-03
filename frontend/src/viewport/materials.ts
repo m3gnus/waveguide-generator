@@ -38,8 +38,9 @@ function classColor(materialClass: SurfaceMaterialClass, theme: ViewportTheme): 
   return new Color(tokenColor(`--vp-${family}-material`, fallbackColors[theme][family]));
 }
 
-function zebraMaterial(clippingPlanes: Plane[]): ShaderMaterial {
+function zebraMaterial(clippingPlanes: Plane[], flat: boolean): ShaderMaterial {
   return new ShaderMaterial({
+    defines: flat ? { FLAT_SHADED: 1 } : {},
     clipping: clippingPlanes.length > 0,
     clippingPlanes,
     side: FrontSide,
@@ -63,7 +64,12 @@ function zebraMaterial(clippingPlanes: Plane[]): ShaderMaterial {
       void main() {
         #include <clipping_planes_fragment>
         vec3 incident = normalize(vWorldPosition - cameraPosition);
-        vec3 reflected = reflect(incident, normalize(vWorldNormal));
+        vec3 shadingNormal = normalize(vWorldNormal);
+        #ifdef FLAT_SHADED
+          shadingNormal = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+          if (!gl_FrontFacing) shadingNormal = -shadingNormal;
+        #endif
+        vec3 reflected = reflect(incident, shadingNormal);
         float band = smoothstep(0.38, 0.62, 0.5 + 0.5 * sin(reflected.y * 42.0));
         vec3 darkBand = vec3(0.025, 0.035, 0.045);
         vec3 lightBand = vec3(0.88, 0.96, 1.0);
@@ -75,6 +81,7 @@ function zebraMaterial(clippingPlanes: Plane[]): ShaderMaterial {
 
 function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass, clippingPlanes: Plane[], theme: ViewportTheme) {
   const color = classColor(materialClass, theme);
+  const flatShading = materialClass.endsWith('-flat');
   if (mode === 'wireframe') {
     return new MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.9, side: FrontSide, clippingPlanes });
   }
@@ -84,14 +91,15 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
       depthWrite: false, side: DoubleSide, clippingPlanes,
     });
   }
-  if (mode === 'zebra') return zebraMaterial(clippingPlanes);
+  if (mode === 'zebra') return zebraMaterial(clippingPlanes, flatShading);
   if (mode === 'curvature') {
-    return new MeshStandardMaterial({ color: '#dce9ef', vertexColors: true, roughness: 0.58, side: FrontSide, clippingPlanes });
+    return new MeshStandardMaterial({ color: '#dce9ef', vertexColors: true, roughness: 0.58, flatShading, side: FrontSide, clippingPlanes });
   }
   return new MeshStandardMaterial({
     color,
     roughness: mode === 'clay' ? 0.52 : 0.4,
     metalness: mode === 'clay' ? 0.08 : 0.03,
+    flatShading,
     side: FrontSide,
     polygonOffset: mode === 'solid-wire',
     polygonOffsetFactor: 1,
@@ -102,10 +110,9 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
 
 export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null, theme: ViewportTheme = 'dark'): MaterialLibrary {
   const clippingPlanes = clipPlane ? [clipPlane] : [];
-  const zebra = mode === 'zebra' ? zebraMaterial(clippingPlanes) : null;
   const surfaces = Object.fromEntries(classes.map((materialClass) => [
     materialClass,
-    zebra ?? surfaceMaterial(mode, materialClass, clippingPlanes, theme),
+    surfaceMaterial(mode, materialClass, clippingPlanes, theme),
   ])) as Record<SurfaceMaterialClass, ReturnType<typeof surfaceMaterial>>;
   const wire = new MeshBasicMaterial({
     color: tokenColor('--vp-wire-material', theme === 'light' ? '#26384a' : '#9ed4f4'),

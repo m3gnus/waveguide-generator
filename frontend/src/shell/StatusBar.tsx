@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { previewSocket } from '../api/previewSocket';
+import { useDesignStore, type DesignDocument } from '../stores/design';
 import { Icon } from './icons';
 
 interface Engine {
@@ -18,19 +19,28 @@ async function getCapabilities(): Promise<Capabilities> {
   return response.json() as Promise<Capabilities>;
 }
 
+function compactFrequency(value: number): string {
+  return value >= 1_000 ? `${Number((value / 1_000).toPrecision(3))} kHz` : `${value} Hz`;
+}
+
+export function solveSummary(design: DesignDocument): string {
+  return `${compactFrequency(design.simulation.f1)} – ${compactFrequency(design.simulation.f2)} · ${design.simulation.num_frequencies} f · smoothing not configured`;
+}
+
 export function StatusBar() {
   const { data, isError } = useQuery({ queryKey: ['capabilities'], queryFn: getCapabilities, retry: 1, staleTime: 30_000 });
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
+  const design = useDesignStore((state) => state.design);
   const engine = data?.engines.find((item) => item.available) ?? data?.engines[0];
   const engineLabel = engine ? `${engine.name.toUpperCase()} · ${engine.available ? engine.version ?? 'READY' : 'OFFLINE'}` : isError ? 'ENGINE OFFLINE' : 'ENGINE…';
   return <footer className="statusbar">
     <div className="status-item"><span className="engine-badge"><Icon name="chip"/>{engineLabel}</span></div>
     <div className="status-item">local engine · <b>{data?.engines.filter((item) => item.available).length ?? 0}</b> available</div>
-    <div className="status-item"><b>48 312</b> el · <b>24 190</b> nodes · max edge <b>2.41 mm</b></div>
-    <div className="status-item">λ/6 ok to <b>23.7 kHz</b></div>
+    <div className="status-item">preview mesh metrics <b>unavailable</b></div>
+    <div className="status-item">λ/6 limit <b>not calculated</b></div>
     <span className="spacer"/>
-    <div className="status-item right">200 Hz – 20 kHz · 320 f · 1/24 oct</div>
-    <div className="status-item right"><Icon name="folder"/>~/HornLab/designs/tritonia</div>
+    <div className="status-item right">{solveSummary(design)}</div>
+    <div className="status-item right"><Icon name="folder"/>design path not selected</div>
     <div className="status-item right"><i className={`connection-dot ${preview.connection}`}/>{preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</div>
   </footer>;
 }
