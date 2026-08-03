@@ -10,6 +10,8 @@ interface NumberFieldProps {
   step?: number;
   precision?: number;
   modified?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
   invalidMessage?: string;
   onCommit: (value: number) => void;
   onBeginDrag?: () => void;
@@ -26,6 +28,8 @@ export function NumberField({
   step = 1,
   precision = 1,
   modified = false,
+  disabled = false,
+  disabledReason,
   invalidMessage,
   onCommit,
   onBeginDrag,
@@ -62,6 +66,7 @@ export function NumberField({
   };
 
   const onLabelPointerDown = (event: PointerEvent<HTMLLabelElement>) => {
+    if (disabled) return;
     if (event.button !== 0) return;
     event.preventDefault();
     drag.current = { x: event.clientX, value };
@@ -87,7 +92,7 @@ export function NumberField({
   };
 
   return (
-    <div className={`field-row${modified ? ' modified' : ''}`}>
+    <div className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}`} title={disabledReason}>
       <i className="modified-dot" />
       <label
         htmlFor={id}
@@ -110,6 +115,7 @@ export function NumberField({
           aria-describedby={invalidMessage ? `${id}-error` : undefined}
           inputMode="decimal"
           spellCheck={false}
+          disabled={disabled}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onFocus={() => setEditing(true)}
