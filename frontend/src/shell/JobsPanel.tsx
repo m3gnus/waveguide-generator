@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection } from '../api/results';
-import { getCapabilities, submitDesign, type EngineCapability } from '../jobs/actions';
+import { compareSelection, fetchJobResults } from '../api/results';
+import { getCapabilities, resolveEngine, submitDesign, type EngineCapability } from '../jobs/actions';
 import { useDesignStore, type DesignDocument } from '../stores/design';
+import { useSolveOptionsStore } from '../stores/solveOptions';
+import { applyJobPreferences, exportBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
+import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
+import type { ResultPayload } from '../results/types';
+import { JobAutomation } from '../jobs/automation';
 
 function name(job: JobItem): string {
   return job.label || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
@@ -98,7 +104,10 @@ export function JobsPanel() {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const [capability, setCapability] = useState<EngineCapability | null>(null);
+  const selectedEngine = useSolveOptionsStore((state) => state.engine);
+  const preferences = usePreferences();
+  const automation = useRef(new JobAutomation()).current;
+  const [capabilities, setCapabilities] = useState<EngineCapability[]>([]);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -113,31 +122,55 @@ export function JobsPanel() {
     let live = true;
     void getCapabilities().then((value) => {
       if (!live) return;
-      setCapability(value.engines.find((engine) => engine.name.toLowerCase() === 'dryrun') ?? null);
+      setCapabilities(value.engines);
     }).catch((error) => live && setCapabilityError(error instanceof Error ? error.message : String(error)));
     return () => { live = false; };
   }, []);
 
+  let effectiveEngine = selectedEngine;
+  if (selectedEngine === 'auto') {
+    try { effectiveEngine = resolveEngine('auto', { engines: capabilities }, design.simulation.solver_mode); } catch { /* unavailable below */ }
+  }
+  const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
+
   const run = useCallback(async (nextDesign: DesignDocument) => {
-    if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? 'Dry-run engine is unavailable');
+    if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
     setSubmitting(true);
     setActionError(null);
     try {
       const jobId = await submitDesign(nextDesign);
-      await jobsSocket.patchMetadata(jobId, { script_snapshot: structuredClone(nextDesign) });
+      await jobsSocket.patchMetadata(jobId, { script_snapshot: structuredClone(nextDesign), label: exportBaseName(preferences) });
       await jobsSocket.refresh();
     } finally {
       setSubmitting(false);
     }
-  }, [capability, capabilityError]);
+  }, [capability, capabilityError, preferences, selectedEngine]);
+
+  useEffect(() => {
+    void automation.process(snapshot.jobs, preferences, {
+      downloadMesh: (job) => downloadMeshArtifact(job.id),
+      exportCompleted: async (job) => runExportBundle({
+        result: await fetchJobResults(job.id) as ResultPayload,
+        design: job.script_snapshot?.formula ? job.script_snapshot as unknown as DesignDocument : undefined,
+        designRevision: Number(job.config_summary.design_revision ?? 0),
+        preferences,
+      }),
+      markExported: async (job, files, completedAt) => jobsSocket.patchMetadata(job.id, {
+        exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
+        auto_export_completed_at: completedAt,
+      }),
+      incrementCounter: () => preferencesStore.update({ counter: Math.min(999_999, preferencesStore.getSnapshot().counter + 1) }),
+      reportError: setActionError,
+    });
+  }, [automation, preferences, snapshot.jobs]);
 
   // TopBar is outside this batch's write boundary; bridge its existing control here.
   useEffect(() => {
     const button = document.querySelector<HTMLButtonElement>('.solve-button');
     if (!button) return;
-    const unavailable = capability?.reason ?? capabilityError ?? 'Checking dry-run engine capability…';
+    const unavailable = capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
     button.disabled = !capability?.available || submitting;
-    button.title = capability?.available ? (submitting ? 'Submitting solve…' : 'Solve current design with dry-run engine') : unavailable;
+    button.title = capability?.available ? (submitting ? 'Submitting solve…' : `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${capability.name})` : capability.name}`) : unavailable;
     button.setAttribute('aria-busy', String(submitting));
     const solve = () => void run(design).catch((error) => setActionError(error instanceof Error ? error.message : String(error)));
     const shortcut = (event: KeyboardEvent) => {
@@ -154,19 +187,22 @@ export function JobsPanel() {
     };
   }, [capability, capabilityError, design, revision, run, submitting]);
 
+  const visibleJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
   const { cards, earlier } = useMemo(() => {
-    const active = snapshot.jobs.filter((job) => job.status === 'running' || job.status === 'queued');
-    const complete = snapshot.jobs.filter((job) => job.status === 'complete').slice(0, 2);
-    const failed = snapshot.jobs.filter((job) => job.status === 'error').slice(0, 1);
+    const active = visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued');
+    const complete = visibleJobs.filter((job) => job.status === 'complete').slice(0, 2);
+    const failed = visibleJobs.filter((job) => job.status === 'error').slice(0, 1);
     const prominent = new Set([...active, ...complete, ...failed].map((job) => job.id));
-    return { cards: snapshot.jobs.filter((job) => prominent.has(job.id)), earlier: snapshot.jobs.filter((job) => !prominent.has(job.id)) };
-  }, [snapshot.jobs]);
-  const failedCount = snapshot.jobs.filter((job) => job.status === 'error').length;
+    return { cards: visibleJobs.filter((job) => prominent.has(job.id)), earlier: visibleJobs.filter((job) => !prominent.has(job.id)) };
+  }, [visibleJobs]);
+  const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
 
   return <div className="jobs-panel panel-scroll">
-    <div className="panel-meta"><span className="pill">{snapshot.jobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · cursor {snapshot.cursor ?? '—'}</span><span className="spacer"/>{failedCount > 0 && <button onClick={() => void jobsSocket.clearFailed().catch((error) => setActionError(String(error)))} style={{ color: 'var(--red)', background: 'none' }}>clear failed</button>}</div>
+    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button onClick={() => void jobsSocket.clearFailed().catch((error) => setActionError(String(error)))} style={{ color: 'var(--red)', background: 'none' }}>clear failed</button>}</div>
+    <JobsPreferencesSurface/>
     {(actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
+    {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}
     {cards.map((job) => <JobCard key={job.id} job={job} now={now} run={run} onError={setActionError}/>)}
     {earlier.length > 0 && <><div className="earlier"><span>Earlier today</span><i/></div>{earlier.map((job) => <MiniJob key={job.id} job={job}/>)}</>}
   </div>;

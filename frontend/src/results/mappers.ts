@@ -1,4 +1,6 @@
 import type { JobResults, NullableNumber, PolarSample } from '../api/results';
+import { applySmoothing, type SmoothingMode } from './smoothing';
+import type { ResultPayload } from './types';
 
 export interface NamedResult { id: string; label: string; result: JobResults }
 
@@ -21,10 +23,10 @@ function frequencyAxis(result: JobResults, nested?: number[]): number[] {
   return nested?.length ? nested : result.frequencies;
 }
 
-export function splSeries(items: NamedResult[]) {
+export function splSeries(items: NamedResult[], smoothing: SmoothingMode = 'none') {
   return items.map(({ label, result }) => {
     const frequencies = frequencyAxis(result, result.spl_on_axis?.frequencies);
-    const spl = result.spl_on_axis?.spl ?? [];
+    const spl = applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], smoothing);
     return {
       name: label,
       type: 'line' as const,
@@ -43,9 +45,9 @@ export interface DirectivityGrid {
   maxDb: number;
 }
 
-export function directivityGrid(result: JobResults, plane: 'horizontal' | 'vertical' = 'horizontal'): DirectivityGrid {
+export function directivityGrid(result: JobResults, plane = 'horizontal'): DirectivityGrid {
   const frequencies = result.frequencies;
-  const patterns = result.directivity?.[plane] ?? [];
+  const patterns = (result.directivity as Record<string, PolarSample[][]> | undefined)?.[plane] ?? [];
   const angles = [...new Set(patterns.flatMap((row) => row.map((sample) => Number(sample[0]))))]
     .filter(Number.isFinite).sort((a, b) => a - b);
   const data: DirectivityGrid['data'] = [];
@@ -76,10 +78,10 @@ export function polarSeries(result: JobResults, frequencyIndex: number, plane: '
   return row.map(([angle, value]) => [patternDb(value), angle]);
 }
 
-export function impedanceSeries(result: JobResults, mode: 'cartesian' | 'polar') {
+export function impedanceSeries(result: JobResults, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
   const frequencies = frequencyAxis(result, result.impedance?.frequencies);
-  const real = result.impedance?.real ?? [];
-  const imaginary = result.impedance?.imaginary ?? [];
+  const real = applySmoothing(frequencies, result.impedance?.real ?? [], smoothing);
+  const imaginary = applySmoothing(frequencies, result.impedance?.imaginary ?? [], smoothing);
   if (mode === 'cartesian') {
     return [
       { name: 'Re', type: 'line' as const, showSymbol: false, data: frequencies.map((f, i) => [f, real[i] ?? null]) },
@@ -92,3 +94,21 @@ export function impedanceSeries(result: JobResults, mode: 'cartesian' | 'polar')
   ];
 }
 
+export function directivityIndexSeries(result: ResultPayload, smoothing: SmoothingMode = 'none') {
+  const frequencies = result.di?.frequencies?.length ? result.di.frequencies : result.frequencies;
+  const raw = result.di?.di;
+  const entries = Array.isArray(raw) ? [['DI', raw] as const] : Object.entries(raw ?? {});
+  return entries.map(([name, values]) => {
+    const smoothed = applySmoothing(frequencies, values, smoothing);
+    return { name, type: 'line' as const, showSymbol: false, data: frequencies.map((frequency, index) => [frequency, smoothed[index] ?? null]) };
+  });
+}
+
+export function beamShapeSeries(result: ResultPayload) {
+  const beam = result.beam_shape;
+  const frequencies = beam?.frequencies?.length ? beam.frequencies : result.balloon?.frequencies ?? [];
+  return [
+    { name: 'H −6 dB', values: beam?.horizontal_beamwidth_deg ?? [] },
+    { name: 'V −6 dB', values: beam?.vertical_beamwidth_deg ?? [] },
+  ].map(({ name, values }) => ({ name, type: 'line' as const, showSymbol: false, data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]) }));
+}

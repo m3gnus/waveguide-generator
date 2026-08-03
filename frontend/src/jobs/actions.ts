@@ -1,4 +1,5 @@
 import { serializeDesign, type DesignDocument } from '../stores/design';
+import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
 export interface EngineCapability {
   name: string;
@@ -48,11 +49,26 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
   return response.json() as Promise<Capabilities>;
 }
 
-export async function submitDesign(design: DesignDocument, fetcher: typeof fetch = fetch): Promise<string> {
+export function resolveEngine(engine: string, capabilities: Capabilities, solverMode = 'auto'): string {
+  if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
+  const order = solverMode.toLowerCase().replace('-', '_') === 'circsym'
+    ? ['circsym']
+    : ['metal', 'bempp', 'dryrun'];
+  const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
+  if (!available) throw new Error('No solver backend is currently available');
+  return available.name.toLowerCase();
+}
+
+export async function submitDesign(
+  design: DesignDocument,
+  requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  const options = structuredClone(requestedOptions);
   const response = await fetcher('/api/solve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: toSolveDesign(design), options: { engine: 'dryrun' } }),
+    body: JSON.stringify({ design: toSolveDesign(design), options }),
   });
   if (!response.ok) throw new Error(await detail(response));
   return ((await response.json()) as { job_id: string }).job_id;
