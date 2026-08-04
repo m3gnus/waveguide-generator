@@ -12,8 +12,12 @@ This pass re-checked only the twelve rows that asserted an actual gap (`OPEN`). 
 
 - **D027 / N001 — grouped-drag undo transactions.** Implemented; drag history is finalized before a family switch or document load, and a document replacement opens a new undo epoch (`frontend/src/stores/design.ts`, tested in `design.test.ts:59` and `:70`).
 - **N003 — WebSocket job streaming.** Implemented over the snapshot+cursor protocol (`frontend/src/api/jobsSocket.ts`, `frontend/src/jobs/jobsSocket.test.ts`), with gap recovery by resume added in the Sol fix round.
-- **N004 — persisted dockview layout.** Implemented; the layout is serialized to `localStorage` and reseeded on load, with a corrupt-payload reset (`frontend/src/shell/Workspace.tsx:116-128`, tested in `Workspace.test.tsx`).
+- **N004 — persisted dockview layout.** Implemented; the layout is serialized to `localStorage` and restored on load, with a corrupt-payload reset (`frontend/src/shell/Workspace.tsx`, tested in `Workspace.test.tsx`). Note the layout is seeded exactly once and only ever resized afterwards — deserializing destroys every panel's React root, including the viewport's WebGL context.
 - **P011 / Q007 — instance locking.** The v1-evidence question is settled negatively: v1 has no application-level single-instance lock (its only locks are the gmsh worker's and a matplotlib render lock), so there is no v1 contract to match. V2 implements one as new behavior in `server/platform/instance.py` (`fcntl`), tested in `server/tests/test_platform_luna.py`.
+
+A second pass on 2026-08-04 (post-cutover bug sweep) settled one more:
+
+- **D016b — R-OSSE with an enclosure.** v1 throws for this combination (`buildWaveguideMesh.js:41-46`: "R-OSSE enclosure is not supported by the default geometry contract"), and v2 does not. That restriction belonged to v1's own JS geometry engine, which v2 does not use: the HornLab mesher builds R-OSSE + enclosure without complaint, producing the full surface set (`horn.inner`, `mouth_rim`, `enclosure.front/side/rear/roundover`, `source_cap`) over sensible bounds. **The missing guard is correct — do not "restore parity" by adding one.**
 
 Still genuinely open, unchanged by the build:
 
@@ -42,6 +46,7 @@ Still genuinely open, unchanged by the build:
 | D014 | Source velocity enum maps 1 to normal velocity and 2 to axial rigid-piston velocity | `server/solver/mesher_adapter.py:88-100` | design-schema | P1 | science contract unit test | Required | None |
 | D015 | Quadrant selection is part of solve/export mesh controls | `src/ui/parameterInventory.js:227-237` | design-schema | P2 | 1/2/4-quadrant payload fixtures | Required | None |
 | D016 | Wall thickness and enclosure depth/edge/clearance are design controls | `src/ui/parameterInventory.js:104-127` | design-schema | P5 | enclosure topology matrix | Required | None |
+| D016b | v1 refuses R-OSSE + enclosure; v2 deliberately does not | `src/geometry/engine/buildWaveguideMesh.js:41-46` | design-schema | P5 | preview build with R-OSSE + enclosure depth | **Not owed** | Resolved 2026-08-04 |
 | D017 | Infinite-baffle versus free-standing behavior is encoded by simulation type | `src/solver/index.js:62-62` | design-schema | P5 | IB/full-3D/CircSym matrix | Required | None |
 | D018 | CircSym is an explicit/auto solver mode and requires Metal when explicit | `src/config/schema.js:976-991`; `server/api/routes_simulation.py:110-118` | results | P4 | eligibility/backend matrix | Required | None |
 | D019 | Viewport sampling controls are distinct from solve-mesh controls | `src/ui/parameterInventory.js:162-179`; `src/ui/parameterInventory.js:215-243` | design-ui | P2 | control-to-payload unit tests | Required | None |
