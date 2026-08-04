@@ -60,8 +60,6 @@ export function generateMWGConfigContent(params) {
       content += `Freeform.${name} = {\n`;
       content += `MouthRadius = ${profile.points.at(-1)[1]}\n`;
       content += `MouthAngle = ${profile.mouth_angle_deg}\n`;
-      content += `ThroatTangentScale = ${profile.throat_tangent_scale}\n`;
-      content += `MouthTangentScale = ${profile.mouth_tangent_scale}\n`;
       content += '}\n';
       content += `Freeform.${name}.Points = {\n`;
       for (const row of profile.points.slice(1, -1)) content += `${row.join(' ')}\n`;
@@ -69,16 +67,15 @@ export function generateMWGConfigContent(params) {
     };
 
     // FREEFORM .mwg syntax (all numeric values are millimetres/degrees as named):
-    //   Freeform.H.Points rows: z r [angleDeg [strength]]
+    //   Freeform.H.Points rows: z r [angleDeg]
     //   Freeform.CrossSections rows: t shape [exponent|cornerRadiusMm]
     // The optional station value is an exponent for superellipse and an absolute
     // corner radius for rounded_rectangle.
-    content += '; FREEFORM point rows: z r [angleDeg [strength]]\n';
+    content += '; FREEFORM point rows: z r [angleDeg]\n';
     content += '; FREEFORM station rows: t shape [exponent|cornerRadiusMm]\n';
     content += `Freeform.Length = ${horizontal.points.at(-1)[0]}\n`;
     content += `Freeform.ThroatRadius = ${horizontal.points[0][1]}\n`;
     content += `Freeform.ThroatAngle = ${horizontal.throat_angle_deg}\n`;
-    content += `Freeform.OvershootPolicy = ${wire.overshoot_policy}\n`;
     content += `Freeform.InflectionPolicy = ${wire.inflection_policy}\n`;
     writeProfile('H', horizontal);
     writeProfile('V', vertical);

@@ -76,10 +76,10 @@ backend.
 Waveguide Generator supports two solve backends. The Settings solver dropdown offers Auto, Metal BEM, and Bempp (cross-platform). Auto uses the Metal BEM release-helper path on Apple Silicon and falls back to Bempp on Windows, Linux, and Intel Mac hosts.
 
 - Python: `>=3.10,<3.15`
-- hornlab-waveguide-mesher: pinned git commit `e4933f38e44306337811600fb56f07d076e513bd` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
+- hornlab-waveguide-mesher: pinned git commit `d6ac47954ab3bdafa3380d40da32e58ca504c7e9` (required for `/api/mesh/build`, `/api/mesh/step`, and `/api/solve` mesh preparation)
 - hornlab-metal-bem: pinned git commit `c89086ea19c1237a556db23c71be10955a20676b` (fast Metal solve backend; Apple Silicon macOS)
 - hornlab-bempp-bem: pinned git commit `c6f40771f9d7c49ef0a6e2ae02744cacf5c53315` (Bempp cross-platform solve backend; installed when Metal is unavailable)
-- hornlab-plots: pinned git commit `ea123b05a4670b9bfe10aacf4dfb2dd440943bfc` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
+- hornlab-plots: pinned git commit `52cb9c41f1efc67e038c16347088bd0eefee76af` (theme-aware result-chart renderer for `/api/render-charts`, `/api/render-directivity`, `/api/theme-preview`; the in-repo renderer is used as a fallback if absent)
 - gmsh: `>=4.11.1,<5.0` (required by the HornLab mesher)
 
 OpenCL is a Bempp speed-up, not a hard requirement. Without OpenCL, Bempp runs through its numba CPU backend. On Linux, install `pocl` from your package manager for an OpenCL CPU runtime; on Windows, use up-to-date GPU drivers or install Intel's OpenCL runtime; on macOS x86_64, numba is fine.

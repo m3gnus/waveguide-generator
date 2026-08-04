@@ -727,7 +727,6 @@ export class ParamPanel {
         'Angle (deg)',
         'Spline tangent direction at this point. Leave blank for an automatic direction.',
       ],
-      ['Strength', 'Scales the automatic tangent length from 0.1 to 3. Leave blank for 1.'],
       ['', ''],
     ];
     for (const [text, tooltip] of columns) {
@@ -817,7 +816,7 @@ export class ParamPanel {
           hideInputError(event.target, true);
           commitPoints(
             points.map((item, itemIndex) =>
-              itemIndex === index ? { ...item, angleDeg: null, strength: null } : item
+              itemIndex === index ? { ...item, angleDeg: null } : item
             )
           );
           return;
@@ -835,42 +834,6 @@ export class ParamPanel {
         );
       };
       pointRow.appendChild(angleInput);
-
-      const strengthInput = document.createElement('input');
-      strengthInput.type = 'number';
-      strengthInput.min = '0.001';
-      strengthInput.max = '3';
-      strengthInput.step = '0.1';
-      strengthInput.value = point.strength ?? '';
-      strengthInput.placeholder = '1';
-      strengthInput.disabled = point.angleDeg === null;
-      strengthInput.title = columns[3][1];
-      strengthInput.setAttribute('data-param-key', key);
-      strengthInput.setAttribute('data-param', key);
-      strengthInput.setAttribute('data-freeform-anchor-field', 'strength');
-      strengthInput.setAttribute('aria-label', `${key} point ${index + 1} tangent strength`);
-      strengthInput.onchange = (event) => {
-        const raw = String(event.target.value ?? '').trim();
-        if (!raw) {
-          hideInputError(event.target, true);
-          commitPoints(
-            points.map((item, itemIndex) =>
-              itemIndex === index ? { ...item, strength: null } : item
-            )
-          );
-          return;
-        }
-        const strength = Number(raw);
-        if (!Number.isFinite(strength) || strength <= 0 || strength > 3) {
-          showInputError(event.target, 'Strength must be greater than 0 and at most 3.');
-          return;
-        }
-        hideInputError(event.target, true);
-        commitPoints(
-          points.map((item, itemIndex) => (itemIndex === index ? { ...item, strength } : item))
-        );
-      };
-      pointRow.appendChild(strengthInput);
 
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -932,7 +895,7 @@ export class ParamPanel {
 
     const textarea = document.createElement('textarea');
     textarea.rows = 7;
-    textarea.placeholder = 'z r\n…or z r angleDeg strength\n…or # z_cm;r_h_cm;r_v_cm';
+    textarea.placeholder = 'z r\n…or z r angleDeg\n…or # z_cm;r_h_cm;r_v_cm';
     textarea.setAttribute(
       'aria-label',
       `Paste ${key === 'interiorH' ? 'horizontal' : 'vertical'} FREEFORM points`

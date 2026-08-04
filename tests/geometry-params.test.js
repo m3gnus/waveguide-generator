@@ -177,8 +177,8 @@ test('FREEFORM scale covers endpoint scalars and only z/r of every interior row 
   assert.equal(prepared.throatRadius, 25.4);
   assert.equal(prepared.mouthRadiusH, 280);
   assert.equal(prepared.mouthRadiusV, 200);
-  assert.deepEqual(prepared.interiorH, [{ z: 100, r: 120, angleDeg: 25, strength: 1.5 }]);
-  assert.deepEqual(prepared.interiorV, [{ z: 120, r: 90, angleDeg: -10, strength: 0.8 }]);
+  assert.deepEqual(prepared.interiorH, [{ z: 100, r: 120, angleDeg: 25, strength: null }]);
+  assert.deepEqual(prepared.interiorV, [{ z: 120, r: 90, angleDeg: -10, strength: null }]);
   assert.equal(prepared.crossSections[1].cornerRadiusMm, 24);
   assert.equal(prepared.crossSections[2].cornerRadiusMm, 20);
   assert.equal(prepared.throatAngle, 15.5);

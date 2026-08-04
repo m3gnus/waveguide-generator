@@ -366,7 +366,7 @@ test('exportResults forwards Metal phase convention for rendered PNG charts', as
 
     assert.deepEqual(bundle.failures, []);
     assert.equal(chartPayloads.length, 1);
-    assert.equal(chartPayloads[0].phase_time_convention, 'metal');
+    assert.equal(chartPayloads[0].phase_time_convention, 'exp(+ikr)');
     assert.equal(chartPayloads[0].phase_reference_distance_m, 2);
     assert.equal(chartPayloads[0].impedance_units, 'Z/(rho*c)');
     assert.equal(chartPayloads[0].impedance_normalization, 'rho_c');
@@ -375,7 +375,7 @@ test('exportResults forwards Metal phase convention for rendered PNG charts', as
   }
 });
 
-test('exportResults distinguishes restored Bempp metadata from legacy Bempp phase convention', async () => {
+test('exportResults keeps explicit and backend-inferred Bempp propagation positive', async () => {
   const originalFetch = global.fetch;
 
   const chartPayloads = [];
@@ -449,8 +449,8 @@ test('exportResults distinguishes restored Bempp metadata from legacy Bempp phas
       },
       {
         job: {
-          id: 'job-legacy-bempp-phase',
-          label: 'horn_legacy_bempp',
+          id: 'job-inferred-bempp-phase',
+          label: 'horn_inferred_bempp',
           createdAt: '2026-03-11T10:00:00.000Z',
         },
         selectedFormats: ['png'],
@@ -458,8 +458,8 @@ test('exportResults distinguishes restored Bempp metadata from legacy Bempp phas
     );
 
     assert.equal(chartPayloads.length, 2);
-    assert.equal(chartPayloads[0].phase_time_convention, 'metal');
-    assert.equal(chartPayloads[1].phase_time_convention, 'bempp');
+    assert.equal(chartPayloads[0].phase_time_convention, 'exp(+ikr)');
+    assert.equal(chartPayloads[1].phase_time_convention, 'exp(+ikr)');
   } finally {
     global.fetch = originalFetch;
   }

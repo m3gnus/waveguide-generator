@@ -37,18 +37,26 @@ def normalize_contract_chart_theme(value: Any) -> Optional[str]:
 
 
 PHASE_TIME_CONVENTION_ALIASES = {
+    # Missing/legacy labels preserve the historical chart default. Current
+    # solver results always publish an explicit canonical convention.
     "": "exp(-ikr)",
     "auto": "exp(-ikr)",
     "default": "exp(-ikr)",
     "legacy": "exp(-ikr)",
-    "bempp": "exp(-ikr)",
-    "bempp-cl": "exp(-ikr)",
-    "bemppcl": "exp(-ikr)",
     "exp(-ikr)": "exp(-ikr)",
     "e(-ikr)": "exp(-ikr)",
     "-ikr": "exp(-ikr)",
     "negative": "exp(-ikr)",
     "negative-spatial": "exp(-ikr)",
+    # Both HornLab solve backends use the outgoing exp(+ikr) Helmholtz
+    # kernel under the e^{-i*omega*t} time convention. Backend/device names
+    # remain accepted as ingestion aliases, but are not canonical wire values.
+    "bempp": "exp(+ikr)",
+    "bempp-cl": "exp(+ikr)",
+    "bemppcl": "exp(+ikr)",
+    "hornlab-bempp-bem": "exp(+ikr)",
+    "bempp-cl-numba": "exp(+ikr)",
+    "bempp-cl-opencl": "exp(+ikr)",
     "metal": "exp(+ikr)",
     "hornlab-metal": "exp(+ikr)",
     "metal-bem": "exp(+ikr)",
@@ -393,8 +401,10 @@ class FreeformProfileRequest(BaseModel):
     points: List[List[float]]
     throat_angle_deg: Optional[float] = None
     mouth_angle_deg: Optional[float] = None
-    throat_tangent_scale: float = 1.0
-    mouth_tangent_scale: float = 1.0
+    # Read old clients without putting removed tangent scales back onto the
+    # canonical request passed to the mesher.
+    throat_tangent_scale: Optional[float] = Field(default=None, exclude=True)
+    mouth_tangent_scale: Optional[float] = Field(default=None, exclude=True)
 
     @field_validator("points")
     @classmethod
@@ -405,7 +415,9 @@ class FreeformProfileRequest(BaseModel):
             raise ValueError("Each FREEFORM profile point must contain 2-4 numbers.")
         if any(not math.isfinite(number) for point in value for number in point):
             raise ValueError("Each FREEFORM profile point must contain only finite numbers.")
-        return value
+        # Four-column rows are a legacy strength-bearing representation. The
+        # current mesher solves tangent speed and accepts at most three values.
+        return [point[:3] for point in value]
 
 
 class FreeformStationRequest(BaseModel):
@@ -455,7 +467,7 @@ class WaveguideParamsRequest(BaseModel):
     profile_h: Optional[FreeformProfileRequest] = None
     profile_v: Optional[FreeformProfileRequest] = None
     cross_sections: Optional[List[FreeformStationRequest]] = None
-    overshoot_policy: Optional[str] = None
+    overshoot_policy: Optional[str] = Field(default=None, exclude=True)
     inflection_policy: Optional[str] = None
 
     a: Optional[str] = None

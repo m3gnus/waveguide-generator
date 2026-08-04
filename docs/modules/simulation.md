@@ -40,6 +40,11 @@
 - Pre-submit geometry diagnostics report face triangle counts (not just numeric tags)
 - Backend result summaries read the reduced `metadata.performance` payload (`total_time_seconds`, `bem_precision`)
 - Backend solve metadata includes `metadata.observation` and `metadata.directivity` for effective observation distance and persisted directivity-map settings
+- Metal and Bempp results both publish the canonical spatial propagation
+  convention `metadata.phase_time_convention="exp(+ikr)"`, consistent with
+  the `e^{-i*omega*t}` time convention. Chart requests preserve canonical
+  `exp(+ikr)` / `exp(-ikr)` values; backend names are accepted only as legacy
+  ingestion aliases and are never emitted as phase conventions.
 - View Results re-renders the directivity heatmap through `/api/render-directivity` for display-only reference-level changes without requesting a new solve
 
 **History & workspace**:

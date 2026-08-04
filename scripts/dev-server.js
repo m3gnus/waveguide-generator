@@ -1,5 +1,5 @@
 import { createReadStream } from 'fs';
-import { realpath, stat } from 'fs/promises';
+import { readFile, realpath, stat } from 'fs/promises';
 import http from 'http';
 import path from 'path';
 import { pathToFileURL } from 'url';
@@ -7,6 +7,7 @@ import { resolveFrontendPort } from './server-urls.js';
 
 const PORT = resolveFrontendPort();
 const ROOT_DIR = process.cwd();
+const BACKEND_STARTUP_STATUS_PATH = '.waveguide/backend-startup.json';
 
 export function resolveDevServerHost(env = process.env) {
   return String(env?.HOST || '127.0.0.1').trim() || '127.0.0.1';
@@ -106,6 +107,39 @@ function sendFile(res, filePath, method) {
   stream.pipe(res);
 }
 
+async function sendBackendStartupStatus(res, rootDir, method) {
+  let payload = {
+    state: 'unknown',
+    reason: 'No backend startup diagnostic is available yet.',
+  };
+  try {
+    const text = await readFile(path.join(rootDir, BACKEND_STARTUP_STATUS_PATH), 'utf8');
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const allowedStates = new Set(['starting', 'running', 'error', 'stopped', 'unknown']);
+      const state = String(parsed.state || '').toLowerCase();
+      payload = {
+        state: allowedStates.has(state) ? state : 'unknown',
+        reason: String(parsed.reason || 'No backend startup diagnostic is available yet.'),
+      };
+      if (typeof parsed.guidance === 'string' && parsed.guidance.trim()) {
+        payload.guidance = parsed.guidance;
+      }
+    }
+  } catch {
+    // A missing or partially-written diagnostic must not affect the frontend.
+  }
+
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  if (method === 'HEAD') {
+    res.end();
+    return;
+  }
+  res.end(JSON.stringify(payload));
+}
+
 export function createDevServer({ rootDir = ROOT_DIR } = {}) {
   return http.createServer(async (req, res) => {
     const method = String(req.method || 'GET').toUpperCase();
@@ -126,6 +160,11 @@ export function createDevServer({ rootDir = ROOT_DIR } = {}) {
     if (pathname === '/favicon.ico') {
       res.statusCode = 404;
       res.end();
+      return;
+    }
+
+    if (pathname === '/api/backend-startup-status') {
+      await sendBackendStartupStatus(res, rootDir, method);
       return;
     }
 

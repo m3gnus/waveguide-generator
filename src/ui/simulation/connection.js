@@ -8,6 +8,10 @@ import {
   formatDependencyBlockMessage,
   summarizeRuntimeDoctor,
 } from '../../modules/runtime/health.js';
+import {
+  describeBackendStartupStatus,
+  fetchBackendStartupStatus,
+} from '../../modules/runtime/backendStartup.js';
 
 let lastDependencyWarningSignature = null;
 let activeDependencyWarning = null;
@@ -102,13 +106,21 @@ export async function checkSolverConnection(panel) {
       lastDependencyWarningSignature = null;
     }
   } catch {
+    let startupStatus = null;
+    try {
+      startupStatus = await fetchBackendStartupStatus();
+    } catch {
+      // The frontend may be hosted separately from the WG launcher. Fall back
+      // to the ordinary offline message when no launcher diagnostic exists.
+    }
+    const offline = describeBackendStartupStatus(startupStatus);
     statusDot.className = 'status-dot disconnected';
     if (!panel.stageStatusActive) {
       panel.completedStatusMessage = null;
-      statusText.textContent = 'Solver offline';
+      statusText.textContent = offline.label;
       runButton.disabled = true;
       if (statusHelp) {
-        statusHelp.textContent = defaultHelpText;
+        statusHelp.textContent = offline.help || defaultHelpText;
         statusHelp.classList.remove('is-hidden');
       }
     }

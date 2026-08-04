@@ -328,7 +328,7 @@ test('view results modal keeps header controls together and rerenders directivit
 
     assert.equal(appendedChildren.length, 1, 'Expected the backdrop to be mounted');
     assert.equal(chartRenderBodies.length, 1, 'Expected initial chart render fetch');
-    assert.equal(chartRenderBodies[0].phase_time_convention, 'metal');
+    assert.equal(chartRenderBodies[0].phase_time_convention, 'exp(+ikr)');
     assert.equal(directivityBodies.length, 1, 'Expected initial directivity render fetch');
     assert.equal(directivityBodies[0].reference_level, -6);
 

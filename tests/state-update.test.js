@@ -70,7 +70,7 @@ test('persisted FREEFORM interior rows migrate to the object anchor model', () =
     },
   });
 
-  assert.deepEqual(normalized.params.interiorH, [{ z: 40, r: 60, angleDeg: 22, strength: 1.7 }]);
+  assert.deepEqual(normalized.params.interiorH, [{ z: 40, r: 60, angleDeg: 22, strength: null }]);
   assert.deepEqual(normalized.params.interiorV, [{ z: 70, r: 75, angleDeg: -8, strength: null }]);
 });
 
@@ -122,7 +122,7 @@ test('FREEFORM length updates clamp, sort, and collapse interior anchors in stat
   assert.equal(state.update({ length: 40 }), true);
   assert.deepEqual(state.get().params.interiorH, [
     { z: 10, r: 30, angleDeg: null, strength: null },
-    { z: 39, r: 60, angleDeg: 20, strength: 1.2 },
+    { z: 39, r: 60, angleDeg: 20, strength: null },
   ]);
   assert.deepEqual(state.get().params.interiorV, [{ z: 1, r: 40, angleDeg: null, strength: null }]);
 });

@@ -60,6 +60,47 @@ test('dev server serves UI assets but returns 404 for sensitive paths', async (t
   }
 });
 
+test('dev server exposes only the curated backend startup diagnostic', async (t) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'waveguide-dev-status-'));
+  await mkdir(path.join(tempRoot, '.waveguide'), { recursive: true });
+  await writeFile(path.join(tempRoot, 'index.html'), '<!doctype html>');
+  await writeFile(
+    path.join(tempRoot, '.waveguide', 'backend-startup.json'),
+    JSON.stringify({
+      state: 'error',
+      reason: 'FastAPI is missing.',
+      guidance: 'Re-run the installer.',
+      python: '/private/venv/bin/python',
+      details: 'Traceback with local paths and environment details',
+    })
+  );
+
+  const server = createDevServer({ rootDir: tempRoot });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    server.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const response = await fetch(`${baseUrl}/api/backend-startup-status`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    state: 'error',
+    reason: 'FastAPI is missing.',
+    guidance: 'Re-run the installer.',
+  });
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+
+  const rawFile = await fetch(`${baseUrl}/.waveguide/backend-startup.json`);
+  assert.equal(rawFile.status, 404);
+});
+
 test('dev server rejects symlinks from allowed paths to files outside its root', async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'waveguide-dev-server-'));
   const publicRoot = path.join(tempRoot, 'public');

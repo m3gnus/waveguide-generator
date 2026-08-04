@@ -348,15 +348,10 @@ test('FREEFORM inventory hides morph and keeps source controls available', () =>
       'mouthRadiusH',
       'mouthAngleH',
       'interiorH',
-      'throatTangentScaleH',
-      'mouthTangentScaleH',
       'mouthRadiusV',
       'mouthAngleV',
       'interiorV',
-      'throatTangentScaleV',
-      'mouthTangentScaleV',
       'crossSections',
-      'overshootPolicy',
       'inflectionPolicy',
     ]
   );
@@ -484,16 +479,15 @@ test('ParamPanel FREEFORM point tables add, clamp, sort, remove, and show their 
     )[0];
     assert.deepEqual(
       horizontalHeader.children.map((node) => node.textContent),
-      ['Depth (mm)', 'Half-width (mm)', 'Angle (deg)', 'Strength', '']
+      ['Depth (mm)', 'Half-width (mm)', 'Angle (deg)', '']
     );
     assert.equal(Number(horizontalRows[0].children[0].value), 30);
     assert.equal(horizontalRows[0].children[2].value, '');
-    assert.equal(horizontalRows[0].children[3].disabled, true);
     horizontalRows[0].children[0].value = 999;
     horizontalRows[0].children[0].onchange({ target: horizontalRows[0].children[0] });
     assert.equal(GlobalState.get().params.interiorH[1].z, 119);
     assert.match(horizontalRows[0].children[0].className, /freeform-point-clamped/);
-    horizontalRows[0].children[4].onclick({ preventDefault() {} });
+    horizontalRows[0].children[3].onclick({ preventDefault() {} });
     assert.deepEqual(GlobalState.get().params.interiorH, [
       { z: 60, r: 76.35, angleDeg: null, strength: null },
     ]);
@@ -738,7 +732,7 @@ test('FREEFORM profile editor flashes anchors clamped by a length update once', 
   });
 });
 
-test('FREEFORM selected-anchor tangent handle commits angle/strength and double-click resets', () => {
+test('FREEFORM selected-anchor tangent handle commits angle and double-click resets', () => {
   withFreeformPanel({ interiorH: [[40, 55]] }, ({ paramContainer, editor }) => {
     editor.selectedAnchor = { plane: 'H', index: 0 };
     editor.draw();
@@ -751,10 +745,9 @@ test('FREEFORM selected-anchor tangent handle commits angle/strength and double-
 
     const baseArmLength = Number(knob.attributes['data-base-arm-length']);
     const targetAngle = 30;
-    const targetStrength = 2;
     const radians = (targetAngle * Math.PI) / 180;
-    const targetZ = 40 + baseArmLength * targetStrength * Math.cos(radians);
-    const targetRadius = 55 + baseArmLength * targetStrength * Math.sin(radians);
+    const targetZ = 40 + baseArmLength * Math.cos(radians);
+    const targetRadius = 55 + baseArmLength * Math.sin(radians);
     editor.onPointerDown({
       target: knob,
       pointerId: 7,
@@ -768,13 +761,10 @@ test('FREEFORM selected-anchor tangent handle commits angle/strength and double-
       clientY: editor.transforms.y(targetRadius),
       preventDefault() {},
     });
-    assert.equal(
-      collectNodes(paramContainer, (node) => /strength 2\.00/.test(node.textContent)).length,
-      1
-    );
+    assert.equal(collectNodes(paramContainer, (node) => /30 deg/.test(node.textContent)).length, 1);
     editor.onPointerUp({ pointerId: 7, preventDefault() {} });
     assert.equal(GlobalState.get().params.interiorH[0].angleDeg, 30);
-    assert.equal(GlobalState.get().params.interiorH[0].strength, 2);
+    assert.equal(GlobalState.get().params.interiorH[0].strength, null);
 
     knob = collectNodes(
       paramContainer,
@@ -865,7 +855,7 @@ test('FREEFORM profile editor inserts and deletes plane anchors', () => {
   });
 });
 
-test('FREEFORM point fields commit CAD angle and strength controls', () => {
+test('FREEFORM point fields commit CAD angles without a tangent-strength control', () => {
   withFreeformPanel({ interiorH: [[40, 55]] }, ({ paramContainer, panel }) => {
     let row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];
     row.children[2].value = '27.4';
@@ -877,12 +867,7 @@ test('FREEFORM point fields commit CAD angle and strength controls', () => {
       strength: null,
     });
 
-    panel.createFullPanel();
-    row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];
-    assert.equal(row.children[3].disabled, false);
-    row.children[3].value = '1.8';
-    row.children[3].onchange({ target: row.children[3] });
-    assert.equal(GlobalState.get().params.interiorH[0].strength, 1.8);
+    assert.equal(row.children.length, 4);
 
     panel.createFullPanel();
     row = collectNodes(paramContainer, (node) => node.className === 'freeform-point-row')[0];

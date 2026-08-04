@@ -24,13 +24,13 @@ test('FREEFORM point paste parses 2-column whitespace, comma, and tab rows in mm
   }
 });
 
-test('FREEFORM point paste parses 4-column CAD anchor rows', () => {
+test('FREEFORM point paste migrates 4-column CAD rows by dropping legacy strength', () => {
   const parsed = parseFreeformPointPaste('z r angleDeg strength\n20 35 22 1.4\n70,90,-12,0.8');
   assert.equal(parsed.ok, true);
   assert.equal(parsed.format, 'four-column');
   assert.deepEqual(parsed.points, [
-    { z: 20, r: 35, angleDeg: 22, strength: 1.4 },
-    { z: 70, r: 90, angleDeg: -12, strength: 0.8 },
+    { z: 20, r: 35, angleDeg: 22, strength: null },
+    { z: 70, r: 90, angleDeg: -12, strength: null },
   ]);
 });
 
@@ -40,7 +40,7 @@ test('FREEFORM point paste matches mesher numeric domains and 3-column rows', ()
 
   const weak = parseFreeformPointPaste('20 35 22 0.05');
   assert.equal(weak.ok, true);
-  assert.equal(weak.points[0].strength, 0.05);
+  assert.equal(weak.points[0].strength, null);
 
   const three = parseFreeformPointPaste('20 35 22');
   assert.equal(three.ok, true);
@@ -51,15 +51,15 @@ test('FREEFORM point paste matches mesher numeric domains and 3-column rows', ()
   assert.match(parseFreeformPointPaste('50 60 90 1').error, /interior angle/);
 });
 
-test('FREEFORM full-profile endpoint rows preserve tangent overrides', () => {
+test('FREEFORM full-profile endpoint rows preserve angles and drop legacy strengths', () => {
   const parsed = parseFreeformPointPaste('0 13 30 1.2\n50 60 22 0.05\n120 140 45 0.8');
   const prepared = prepareFreeformPointPastePatch(parsed, getDefaults('FREEFORM'), { plane: 'H' });
 
   assert.equal(prepared.patch.throatAngle, 30);
   assert.equal(prepared.patch.mouthAngleH, 45);
-  assert.equal(prepared.patch.throatTangentScaleH, 1.2);
-  assert.equal(prepared.patch.mouthTangentScaleH, 0.8);
-  assert.equal(prepared.patch.interiorH[0].strength, 0.05);
+  assert.equal(Object.hasOwn(prepared.patch, 'throatTangentScaleH'), false);
+  assert.equal(Object.hasOwn(prepared.patch, 'mouthTangentScaleH'), false);
+  assert.equal(prepared.patch.interiorH[0].strength, null);
 });
 
 test('FREEFORM paste normalizes Fusion headers and rejects slices exports', () => {

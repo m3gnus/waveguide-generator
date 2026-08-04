@@ -28,18 +28,14 @@ def _freeform_payload() -> dict:
         "formula_type": "FREEFORM",
         "a0": 15.5,
         "profile_h": {
-            "points": [[0.0, 12.7], [60.0, 80.0, 25.0, 1.4], [120.0, 160.0]],
+            "points": [[0.0, 12.7], [60.0, 80.0, 25.0], [120.0, 160.0]],
             "throat_angle_deg": 15.5,
             "mouth_angle_deg": 70.0,
-            "throat_tangent_scale": 1.1,
-            "mouth_tangent_scale": 0.9,
         },
         "profile_v": {
             "points": [[0.0, 12.7], [60.0, 60.0, -10.0], [120.0, 110.0]],
             "throat_angle_deg": 15.5,
             "mouth_angle_deg": 60.0,
-            "throat_tangent_scale": 1.2,
-            "mouth_tangent_scale": 0.8,
         },
         "cross_sections": [
             {"t": 0.0, "shape": "circle"},
@@ -54,7 +50,6 @@ def _freeform_payload() -> dict:
                 "corner_radius_mm": 35.0,
             },
         ],
-        "overshoot_policy": "allow",
         "inflection_policy": "warn",
         "n_angular": 16,
         "n_length": 8,
@@ -80,7 +75,7 @@ def _solve_request(formula_type: str, waveguide_params: dict | None = None) -> S
 
 
 class FreeformContractTest(unittest.TestCase):
-    def test_all_freeform_fields_survive_model_dump(self):
+    def test_current_freeform_fields_survive_model_dump(self):
         payload = _freeform_payload()
         dumped = WaveguideParamsRequest(**payload).model_dump()
 
@@ -88,7 +83,6 @@ class FreeformContractTest(unittest.TestCase):
             "profile_h",
             "profile_v",
             "cross_sections",
-            "overshoot_policy",
             "inflection_policy",
         ):
             self.assertIn(key, dumped)
@@ -99,7 +93,6 @@ class FreeformContractTest(unittest.TestCase):
         ):
             for key, value in payload_station.items():
                 self.assertEqual(dumped_station[key], value)
-        self.assertEqual(dumped["overshoot_policy"], payload["overshoot_policy"])
         self.assertEqual(dumped["inflection_policy"], payload["inflection_policy"])
 
     def test_inflection_policy_is_normalized_and_validated(self):
@@ -118,13 +111,12 @@ class FreeformContractTest(unittest.TestCase):
                     **{**_freeform_payload(), "inflection_policy": invalid}
                 )
 
-    def test_overshoot_policy_is_normalized_and_validated(self):
+    def test_legacy_overshoot_policy_is_validated_but_not_emitted(self):
         payload = _freeform_payload()
         payload["overshoot_policy"] = " ALLOW "
-        self.assertEqual(
-            WaveguideParamsRequest(**payload).model_dump()["overshoot_policy"],
-            "allow",
-        )
+        request = WaveguideParamsRequest(**payload)
+        self.assertEqual(request.overshoot_policy, "allow")
+        self.assertNotIn("overshoot_policy", request.model_dump())
 
         for invalid in ("maybe", "typo", "", "enforce"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
@@ -133,6 +125,18 @@ class FreeformContractTest(unittest.TestCase):
                 WaveguideParamsRequest(
                     **{**_freeform_payload(), "overshoot_policy": invalid}
                 )
+
+    def test_legacy_tangent_strength_and_scales_are_removed_from_model_dump(self):
+        payload = _freeform_payload()
+        payload["profile_h"]["points"][1].append(1.4)
+        payload["profile_h"]["throat_tangent_scale"] = 1.1
+        payload["profile_h"]["mouth_tangent_scale"] = 0.9
+
+        dumped = WaveguideParamsRequest(**payload).model_dump()
+
+        self.assertEqual(dumped["profile_h"]["points"][1], [60.0, 80.0, 25.0])
+        self.assertNotIn("throat_tangent_scale", dumped["profile_h"])
+        self.assertNotIn("mouth_tangent_scale", dumped["profile_h"])
 
     def test_light_collection_bounds_are_enforced(self):
         payload = _freeform_payload()
@@ -278,17 +282,11 @@ class FreeformFormulaGateTest(unittest.TestCase):
         self.assertEqual(osse_validation.waveguide_params["formula_type"], "OSSE")
 
     def test_freeform_solve_preflight_rejects_invalid_geometry_at_admission(self):
-        strength = _freeform_payload()
-        strength["profile_h"]["points"][1][3] = 0.0
-
         shape = _freeform_payload()
         shape["cross_sections"][1]["shape"] = "banana"
 
         station_t = _freeform_payload()
         station_t["cross_sections"][1]["t"] = 2.0
-
-        overshoot = _freeform_payload()
-        overshoot["overshoot_policy"] = "maybe"
 
         convexity = {
             "formula_type": "FREEFORM",
@@ -311,7 +309,6 @@ class FreeformFormulaGateTest(unittest.TestCase):
             "profile_v": {
                 "points": [[0, 12.7], [35, 20], [60, 4], [100, 30]]
             },
-            "overshoot_policy": "allow",
             "cross_sections": [
                 {"t": 0, "shape": "circle"},
                 {
@@ -329,10 +326,8 @@ class FreeformFormulaGateTest(unittest.TestCase):
 
         cases = (
             ({"formula_type": "FREEFORM"}, "missing: profile_h, profile_v, cross_sections"),
-            (strength, "strength must be in (0, 3]"),
             (shape, "shape must be"),
             (station_t, "t must be in [0, 1]"),
-            (overshoot, "overshoot_policy"),
             (convexity, "non-convex outline"),
             (corner_radius, "exceeds the weight-aware local limit"),
         )
@@ -381,16 +376,13 @@ class FreeformAdapterTest(unittest.TestCase):
                 "profileH",
                 "profileV",
                 "crossSections",
-                "overshootPolicy",
                 "inflectionPolicy",
             },
         )
         self.assertEqual(profile["inflectionPolicy"], "warn")
         self.assertEqual(profile["profileH"]["throatAngleDeg"], 15.5)
-        self.assertEqual(profile["profileH"]["throatTangentScale"], 1.1)
-        self.assertEqual(profile["profileH"]["points"][1], [60.0, 80.0, 25.0, 1.4])
+        self.assertEqual(profile["profileH"]["points"][1], [60.0, 80.0, 25.0])
         self.assertEqual(profile["profileV"]["points"][1], [60.0, 60.0, -10.0])
-        self.assertEqual(profile["profileV"]["mouthTangentScale"], 0.8)
         self.assertEqual(profile["crossSections"][1]["cornerRadiusMm"], 20.0)
         self.assertNotIn("corner_radius_mm", profile["crossSections"][1])
         self.assertEqual(profile["crossSections"][2]["cornerRadiusMm"], 35.0)
@@ -441,8 +433,6 @@ class FreeformAdapterTest(unittest.TestCase):
         }
         self.assertIsNone(validate_circsym_axisymmetric(circular))
 
-        circular["profile_h"]["throat_tangent_scale"] = 1.0
-        circular["profile_v"]["throat_tangent_scale"] = 1.0
         circular["profile_h"]["points"] = [list(point) for point in shared]
         circular["profile_v"]["points"] = [list(point) for point in shared]
         circular["profile_h"]["points"][0] = [0.0, 12.7, 15.5]
@@ -450,8 +440,7 @@ class FreeformAdapterTest(unittest.TestCase):
 
         circular["profile_h"]["points"][0] = [0.0, 12.7]
         circular["cross_sections"][-1] = {"t": 1.0, "shape": "circle"}
-        with self.assertRaisesRegex(ValueError, r"crossSections\[0\]"):
-            validate_circsym_axisymmetric(circular)
+        self.assertIsNone(validate_circsym_axisymmetric(circular))
 
     def test_owner_viewport_smoke_returns_grid_and_freeform_metadata(self):
         dumped = WaveguideParamsRequest(**_freeform_payload()).model_dump()
@@ -467,7 +456,8 @@ class FreeformAdapterTest(unittest.TestCase):
         self.assertEqual(report["tangentAnglesDeg"]["H"]["mouth"], 70.0)
         self.assertEqual(report["tangentAnglesDeg"]["V"]["mouth"], 60.0)
         self.assertEqual(report["anchorTangents"]["H"][1]["angleDeg"], 25.0)
-        self.assertEqual(report["anchorTangents"]["H"][1]["strength"], 1.4)
+        self.assertGreater(report["anchorTangents"]["H"][1]["speedFactor"], 0.0)
+        self.assertLessEqual(report["anchorTangents"]["H"][1]["speedFactor"], 1.0)
         self.assertEqual(len(report["curveSamples"]["H"]), 192)
         self.assertEqual(len(report["curveSamples"]["V"]), 192)
         self.assertTrue(report["inflectionSpans"]["H"])

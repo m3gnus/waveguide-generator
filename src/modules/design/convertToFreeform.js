@@ -110,7 +110,6 @@ function displayCurveForPlane(params, plane, denseCount) {
     ...params[`interior${plane}`].map((point) => {
       const row = [point.z, point.r];
       if (point.angleDeg !== null && point.angleDeg !== undefined) row.push(point.angleDeg);
-      if (point.strength !== null && point.strength !== undefined) row.push(point.strength);
       return row;
     }),
     [params.length, params[`mouthRadius${plane}`]],
@@ -119,8 +118,6 @@ function displayCurveForPlane(params, plane, denseCount) {
     points,
     throatAngleDeg: params.throatAngle,
     mouthAngleDeg: params[`mouthAngle${plane}`],
-    throatTangentScale: params[`throatTangentScale${plane}`],
-    mouthTangentScale: params[`mouthTangentScale${plane}`],
     sampleCount: Math.max(192, denseCount * 4),
   });
 }
