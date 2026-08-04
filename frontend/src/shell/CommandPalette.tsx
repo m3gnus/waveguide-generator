@@ -25,17 +25,21 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const isOpen = useRef(false);
   const previousFocus = useRef<HTMLElement | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const visible = useMemo(() => entries.filter((entry) => entryMatches(entry, query)), [entries, query]);
 
   const openPalette = () => {
+    if (isOpen.current) return;
+    isOpen.current = true;
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery('');
     setActiveIndex(0);
     setOpen(true);
   };
   const closePalette = () => {
+    isOpen.current = false;
     setOpen(false);
     requestAnimationFrame(() => previousFocus.current?.focus());
   };

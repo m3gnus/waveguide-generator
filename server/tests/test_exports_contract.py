@@ -53,11 +53,14 @@ def test_binary_stl_filters_to_horn_and_applies_mm_axis_transform() -> None:
     assert struct.unpack_from("<I", data, 80)[0] == 1
     record = struct.unpack_from("<12fH", data, 84)
     assert record[-1] == 0
+    assert record[:3] == pytest.approx((0.0, 0.0, 1.0))
     # Solver coordinates are (x, vertical, axial); this is v1's named
     # (x, axial, vertical) -> (x, -vertical, axial) compatibility transform.
+    # That reflection reverses handedness, so the exporter must swap the last
+    # two vertices to retain the solver mesh's +Z normal.
     assert record[3:6] == pytest.approx((1.0, -2.0, 3.0))
-    assert record[6:9] == pytest.approx((4.0, -2.0, 3.0))
-    assert record[9:12] == pytest.approx((1.0, -6.0, 3.0))
+    assert record[6:9] == pytest.approx((1.0, -6.0, 3.0))
+    assert record[9:12] == pytest.approx((4.0, -2.0, 3.0))
 
 
 def test_profile_csv_axes_units_rows_and_closed_slices() -> None:

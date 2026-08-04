@@ -10,11 +10,11 @@
     },
     "hornlab-plots": {
       "repo": "https://github.com/m3gnus/hornlab-plots.git",
-      "sha": "ea123b05a4670b9bfe10aacf4dfb2dd440943bfc"
+      "sha": "52cb9c41f1efc67e038c16347088bd0eefee76af"
     },
     "hornlab-waveguide-mesher": {
       "repo": "https://github.com/m3gnus/hornlab-waveguide-mesher.git",
-      "sha": "e4933f38e44306337811600fb56f07d076e513bd"
+      "sha": "d6ac47954ab3bdafa3380d40da32e58ca504c7e9"
     }
   }
 }

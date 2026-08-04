@@ -54,6 +54,7 @@ def test_tiny_osse_freestanding_metal_full_pipeline(tmp_path: Path) -> None:
                     "f2": 1000,
                     "num_frequencies": 2,
                     "sim_type": "freestanding",
+                    "solver_mode": "full_3d",
                 },
             },
             "options": {
@@ -82,7 +83,102 @@ def test_tiny_osse_freestanding_metal_full_pipeline(tmp_path: Path) -> None:
         assert any(value is not None for value in results["spl_on_axis"]["spl"])
         assert all(value is None or math.isfinite(value) for value in results["impedance"]["real"])
         assert results["metadata"]["solver_backend"] == "metal"
+        assert results["metadata"]["solver_mode"] == "full_3d"
+        assert results["metadata"]["solve_path"] == "full-3d"
         assert results["metadata"]["phase_time_convention"] == "exp(+ikr)"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("WG2_RUN_LIVE") != "1",
+    reason="set WG2_RUN_LIVE=1 and select -m live for native Metal qualification",
+)
+def test_auto_axisymmetric_path_matches_explicit_full_3d(tmp_path: Path) -> None:
+    def request_for(mode: str) -> SolveRequest:
+        return SolveRequest.model_validate(
+            {
+                "design": {
+                    "formula": "OSSE",
+                    "L": 80,
+                    "a": 35,
+                    "a0": 0,
+                    "r0": 12.7,
+                    "k": 1,
+                    "n": 4,
+                    "q": 0.995,
+                    "s": 0,
+                    "mesh": {
+                        "angular_segments": 32,
+                        "length_segments": 10,
+                        "throat_resolution": 5,
+                        "mouth_resolution": 10,
+                        "rear_resolution": 10,
+                        "quadrants": 1234,
+                        "wall_thickness": 6,
+                        "max_triangles": 50000,
+                        "allow_large_mesh": 1,
+                    },
+                    "source": {"shape": 2, "velocity": 1},
+                    "simulation": {
+                        "f1": 1000,
+                        "f2": 1001,
+                        "num_frequencies": 1,
+                        "sim_type": "freestanding",
+                        "solver_mode": mode,
+                    },
+                },
+                "options": {
+                    "engine": "metal",
+                    "frequency_range": [1000, 1001],
+                    "num_frequencies": 1,
+                    "frequency_spacing": "linear",
+                    "polar_config": {
+                        "angle_range": [0, 180, 5],
+                        "enabled_axes": ["horizontal"],
+                        "distance": 2,
+                    },
+                    "stage_delay_ms": 0,
+                },
+            }
+        )
+
+    async def scenario() -> None:
+        runtime = JobRuntime(JobStore(tmp_path / "parity-jobs.db"))
+        results = []
+        for mode in ("auto", "full_3d"):
+            job_id = await runtime.submit(request_for(mode))
+            await runtime.wait_idle(timeout=120.0)
+            job = await runtime.get_job(job_id)
+            assert job["status"] == "complete", job["error_message"]
+            results.append(await runtime.get_results(job_id))
+        auto, full = results
+        assert auto["metadata"]["solve_path"] == "axisymmetric-meridian"
+        assert full["metadata"]["solve_path"] == "full-3d"
+
+        auto_spl = auto["spl_on_axis"]["spl"][0]
+        full_spl = full["spl_on_axis"]["spl"][0]
+        assert auto_spl is not None and full_spl is not None
+        assert abs(auto_spl - full_spl) < 1.0
+
+        auto_phase = auto["spl_on_axis"]["phase_degrees"][0]
+        full_phase = full["spl_on_axis"]["phase_degrees"][0]
+        assert auto_phase is not None and full_phase is not None
+        phase_delta = abs((auto_phase - full_phase + 180.0) % 360.0 - 180.0)
+        assert phase_delta < 5.0
+
+        for plane in ("horizontal",):
+            auto_pattern = auto["directivity"][plane][0][0]
+            full_pattern = full["directivity"][plane][0][0]
+            pairs = [
+                (left, right)
+                for left, right in zip(auto_pattern, full_pattern, strict=True)
+                if left is not None and right is not None
+            ]
+            assert pairs
+            assert max(abs(left - right) for left, right in pairs) < 1.0
         await runtime.shutdown()
 
     asyncio.run(scenario())

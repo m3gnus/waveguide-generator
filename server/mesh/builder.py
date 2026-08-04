@@ -23,7 +23,7 @@ from server.preview.translate import design_to_mesher_config
 from server.solver.quadrants import normalise_quadrants
 
 from .gmsh_worker import run_on_gmsh_worker
-from .integrity import mesh_integrity_report
+from .integrity import mesh_integrity_report, mesh_semantic_orientation_report
 
 
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4, 12}
@@ -201,7 +201,21 @@ def _build_sync(
         raise RuntimeError("HornLab mesher returned no source-tagged elements (tag 2)")
 
     metadata = _json_safe(getattr(result, "metadata", None) or {})
-    integrity = mesh_integrity_report(vertices, triangles)
+    integrity = mesh_integrity_report(
+        vertices,
+        triangles,
+        expected_volume_sign=(
+            -1 if str(config.get("mode", "")).strip().lower() == "infinite-baffle" else 1
+        ),
+    )
+    semantic_orientation = mesh_semantic_orientation_report(
+        vertices,
+        triangles,
+        tags,
+        mode=str(config.get("mode", "")),
+    )
+    integrity["semantic_orientation"] = semantic_orientation
+    integrity["valid"] = bool(integrity["valid"] and semantic_orientation["valid"])
     tag_counts = {str(tag): tag_values.count(tag) for tag in sorted(CANONICAL_SURFACE_TAGS)}
     bounds_min = np.min(vertices, axis=0)
     bounds_max = np.max(vertices, axis=0)

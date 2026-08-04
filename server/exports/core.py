@@ -249,7 +249,9 @@ def binary_stl(
     # HornLab's solver tuple is (x, vertical, axial), whereas v1's local
     # geometry tuple is (x, axial, vertical). Applying the binding v1
     # (x, y, z) -> (x, -z, y) mapping therefore yields this solver-boundary
-    # transform: (x, vertical, axial) -> (x, -vertical, axial).
+    # transform: (x, vertical, axial) -> (x, -vertical, axial). This is a
+    # reflection (determinant -1), so reverse every triangle after applying it
+    # to preserve the authoritative mesher's normal side.
     transformed = np.column_stack(
         (points[:, 0] * 1000.0, -points[:, 1] * 1000.0, points[:, 2] * 1000.0)
     )
@@ -262,7 +264,7 @@ def binary_stl(
     struct.pack_into("<I", output, 80, len(triangles))
     offset = 84
     for triangle in triangles:
-        v0, v1, v2 = transformed[triangle]
+        v0, v2, v1 = transformed[triangle]
         normal = np.cross(v1 - v0, v2 - v0)
         magnitude = float(np.linalg.norm(normal))
         if magnitude > 0:

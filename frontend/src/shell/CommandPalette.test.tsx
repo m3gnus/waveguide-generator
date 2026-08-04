@@ -28,6 +28,23 @@ describe('CommandPalette', () => {
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
   });
 
+  it('preserves the original focus target when the shortcut is pressed again', async () => {
+    const before = document.createElement('button');
+    document.body.append(before);
+    before.focus();
+    const shortcut = () => new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true });
+
+    act(() => window.dispatchEvent(shortcut()));
+    await act(async () => { await new Promise(requestAnimationFrame); });
+    expect(document.activeElement).toBe(host.querySelector('[aria-label="Search commands"]'));
+
+    act(() => window.dispatchEvent(shortcut()));
+    act(() => host.querySelector<HTMLElement>('[role="dialog"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    await act(async () => { await new Promise(requestAnimationFrame); });
+    expect(document.activeElement).toBe(before);
+    before.remove();
+  });
+
   it.each([
     ['radius', 'Parameters', 'Mouth radius'],
     ['alpha', 'Jobs', 'Alpha horn'],
