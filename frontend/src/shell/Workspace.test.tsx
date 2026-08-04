@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SerializedDockview } from 'dockview-core';
-import { addDefaultLayout, createDefaultLayout, Workspace } from './Workspace';
+import { addDefaultLayout, createDefaultLayout, nextLayoutAction, Workspace } from './Workspace';
 import { jobsSocket } from '../api/jobsSocket';
 
 class ResizeObserverStub {
@@ -45,10 +45,10 @@ describe('Workspace', () => {
     error.mockRestore();
   });
 
-  it('states the true size when seeding a measured host, and cannot when unmeasured', () => {
-    // Deserializing a layout while dockview still believes it is zero-sized puts
-    // every panel at its 100px minimum and never recovers, which is what a
-    // first-run visitor saw. The explicit layout() call is the fix.
+  it('states the size a seeded layout was built for', () => {
+    // Deserializing a layout leaves dockview believing it is whatever size it
+    // last measured, which puts every panel at its 100px minimum and never
+    // recovers — what a first-run visitor saw. The explicit layout() is the fix.
     const sized = (width: number, height: number) => ({
       getBoundingClientRect: () => ({ width, height }) as DOMRect,
       clientWidth: width,
@@ -64,8 +64,18 @@ describe('Workspace', () => {
 
     const unmeasured = api();
     addDefaultLayout(unmeasured as never, sized(0, 0));
-    expect(unmeasured.fromJSON).toHaveBeenCalled();
-    expect(unmeasured.layout).not.toHaveBeenCalled();
+    expect(unmeasured.layout).toHaveBeenCalledWith(1440, 900);
+  });
+
+  it('corrects the dock when the host reports a size the mount-time read could not', () => {
+    // The host really does measure 10x100 while the surrounding layout resolves:
+    // not zero, so it cannot be rejected as unmeasured, and not real either.
+    expect(nextLayoutAction([1268, 640], [10, 100], false)).toBe('reseed');
+    // A layout the user arranged is re-laid-out, never rebuilt over.
+    expect(nextLayoutAction([1268, 640], [10, 100], true)).toBe('layout');
+    // Unchanged or unmeasurable sizes do nothing, so this cannot loop.
+    expect(nextLayoutAction([1268, 640], [1268, 640], false)).toBe('none');
+    expect(nextLayoutAction([0, 0], [10, 100], false)).toBe('none');
   });
 
   it('can close and reset the Jobs panel without transferring global socket ownership', async () => {
