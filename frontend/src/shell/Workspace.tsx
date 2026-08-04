@@ -87,11 +87,23 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
   };
 }
 
-function addDefaultLayout(api: DockviewApi, host: HTMLElement | null): void {
+export function measureHost(host: HTMLElement | null, api: DockviewApi | null): [number, number] {
   const bounds = host?.getBoundingClientRect();
-  const width = host?.clientWidth || bounds?.width || api.width || FALLBACK_WIDTH;
-  const height = host?.clientHeight || bounds?.height || api.height || FALLBACK_HEIGHT;
+  return [
+    host?.clientWidth || bounds?.width || api?.width || 0,
+    host?.clientHeight || bounds?.height || api?.height || 0,
+  ];
+}
+
+export function addDefaultLayout(api: DockviewApi, host: HTMLElement | null): void {
+  const [measured, measuredHeight] = measureHost(host, api);
+  const width = measured || FALLBACK_WIDTH;
+  const height = measuredHeight || FALLBACK_HEIGHT;
   api.fromJSON(createDefaultLayout(width, height));
+  // A layout deserialized while the component still believes it is zero-sized
+  // collapses every panel to dockview's 100px minimum and never recovers on its
+  // own, so state the true size explicitly once it is known.
+  if (measured && measuredHeight) api.layout(measured, measuredHeight);
 }
 
 export function Workspace({ resetKey }: { resetKey: number }) {
@@ -113,21 +125,42 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       keyboardNavigation: true,
     });
     apiRef.current = dockview.api;
-    const stored = localStorage.getItem(LAYOUT_KEY);
-    if (stored) {
-      try {
-        dockview.api.fromJSON(JSON.parse(stored) as ReturnType<DockviewApi['toJSON']>);
-      } catch {
-        localStorage.removeItem(LAYOUT_KEY);
-        addDefaultLayout(dockview.api, host.current);
+    const seed = () => {
+      const stored = localStorage.getItem(LAYOUT_KEY);
+      if (stored) {
+        try {
+          dockview.api.fromJSON(JSON.parse(stored) as ReturnType<DockviewApi['toJSON']>);
+          const [width, height] = measureHost(host.current, dockview.api);
+          if (width && height) dockview.api.layout(width, height);
+          return;
+        } catch {
+          localStorage.removeItem(LAYOUT_KEY);
+        }
       }
-    } else {
       addDefaultLayout(dockview.api, host.current);
+    };
+    const [initialWidth, initialHeight] = measureHost(host.current, dockview.api);
+    seed();
+    // A layout seeded before the host has been measured puts every panel at
+    // dockview's 100px minimum and never recovers by itself, which is what a
+    // first-run visitor saw. Re-seed at the true size as soon as one exists.
+    let observer: ResizeObserver | undefined;
+    if (!(initialWidth && initialHeight) && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => {
+        const [width, height] = measureHost(host.current, dockview.api);
+        if (!width || !height) return;
+        observer?.disconnect();
+        observer = undefined;
+        if (localStorage.getItem(LAYOUT_KEY)) dockview.api.layout(width, height);
+        else addDefaultLayout(dockview.api, host.current);
+      });
+      observer.observe(host.current);
     }
     const subscription = dockview.api.onDidLayoutChange(() => {
       if (dockview.api.totalPanels) localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));
     });
     return () => {
+      observer?.disconnect();
       subscription.dispose();
       apiRef.current = null;
       dockview.dispose();

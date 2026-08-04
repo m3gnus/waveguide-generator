@@ -1,7 +1,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultLayout, Workspace } from './Workspace';
+import type { SerializedDockview } from 'dockview-core';
+import { addDefaultLayout, createDefaultLayout, Workspace } from './Workspace';
 import { jobsSocket } from '../api/jobsSocket';
 
 class ResizeObserverStub {
@@ -42,6 +43,29 @@ describe('Workspace', () => {
     expect(host.textContent).toContain('Jobs');
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('states the true size when seeding a measured host, and cannot when unmeasured', () => {
+    // Deserializing a layout while dockview still believes it is zero-sized puts
+    // every panel at its 100px minimum and never recovers, which is what a
+    // first-run visitor saw. The explicit layout() call is the fix.
+    const sized = (width: number, height: number) => ({
+      getBoundingClientRect: () => ({ width, height }) as DOMRect,
+      clientWidth: width,
+      clientHeight: height,
+    }) as unknown as HTMLElement;
+    const api = () => ({ fromJSON: vi.fn(), layout: vi.fn(), width: 0, height: 0 });
+
+    const measured = api();
+    addDefaultLayout(measured as never, sized(1200, 800));
+    expect(measured.layout).toHaveBeenCalledWith(1200, 800);
+    const columns = (measured.fromJSON.mock.calls[0][0] as SerializedDockview).grid.root.data as Array<{ size: number }>;
+    expect(columns.map((column) => column.size)).toEqual([300, 580, 320]);
+
+    const unmeasured = api();
+    addDefaultLayout(unmeasured as never, sized(0, 0));
+    expect(unmeasured.fromJSON).toHaveBeenCalled();
+    expect(unmeasured.layout).not.toHaveBeenCalled();
   });
 
   it('can close and reset the Jobs panel without transferring global socket ownership', async () => {
