@@ -193,13 +193,11 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
   assert.deepEqual(payload.profile_h, {
     points: [
       [0, 12.7],
-      [60, 80, 25, 1.4],
+      [60, 80, 25],
       [120, 160],
     ],
     throat_angle_deg: 16,
     mouth_angle_deg: 70,
-    throat_tangent_scale: 1.1,
-    mouth_tangent_scale: 0.9,
   });
   assert.deepEqual(payload.profile_v, {
     points: [
@@ -210,15 +208,13 @@ test('buildWaveguidePayload emits isolated FREEFORM blocks with snake_case field
     ],
     throat_angle_deg: 16,
     mouth_angle_deg: 60,
-    throat_tangent_scale: 1.2,
-    mouth_tangent_scale: 0.8,
   });
   assert.deepEqual(payload.cross_sections, [
     { t: 0, shape: 'circle' },
     { t: 0.4, shape: 'superellipse', exponent: 4 },
     { t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 },
   ]);
-  assert.equal(payload.overshoot_policy, 'allow');
+  assert.equal(Object.hasOwn(payload, 'overshoot_policy'), false);
   assert.equal(payload.inflection_policy, 'reject');
   for (const key of ['R', 'r', 'b', 'm', 'tmax', 'L', 's', 'n', 'h', 'a', 'a0', 'r0', 'k', 'q']) {
     assert.equal(Object.hasOwn(payload, key), false, `${key} must not leak into FREEFORM`);
@@ -246,7 +242,7 @@ test('buildWaveguidePayload applies the canonical clamp policy to out-of-range F
   ]);
 });
 
-test('legacy FREEFORM profiles migrate to the new model without changing their wire payload', () => {
+test('legacy FREEFORM profiles migrate while removed tangent scales stay off the wire', () => {
   const prepared = prepareGeometryParams({
     type: 'FREEFORM',
     profileH: [
@@ -281,6 +277,8 @@ test('legacy FREEFORM profiles migrate to the new model without changing their w
   assert.equal(Object.hasOwn(prepared, 'profileV'), false);
   assert.equal(Object.hasOwn(prepared, 'throatAngleH'), false);
   assert.equal(Object.hasOwn(prepared, 'throatAngleV'), false);
+  assert.equal(Object.hasOwn(prepared, 'throatTangentScaleH'), false);
+  assert.equal(Object.hasOwn(prepared, 'mouthTangentScaleV'), false);
   assert.deepEqual(payload.profile_h, {
     points: [
       [0, 12.7],
@@ -289,8 +287,6 @@ test('legacy FREEFORM profiles migrate to the new model without changing their w
     ],
     throat_angle_deg: 16,
     mouth_angle_deg: 70,
-    throat_tangent_scale: 1.1,
-    mouth_tangent_scale: 0.9,
   });
   assert.deepEqual(payload.profile_v, {
     points: [
@@ -300,8 +296,6 @@ test('legacy FREEFORM profiles migrate to the new model without changing their w
     ],
     throat_angle_deg: 16,
     mouth_angle_deg: 60,
-    throat_tangent_scale: 1.2,
-    mouth_tangent_scale: 0.8,
   });
 });
 

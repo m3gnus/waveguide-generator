@@ -97,7 +97,6 @@ function compactInteriorPoint(point) {
   const row = [point.z, point.r];
   if (point.angleDeg === null) return row;
   row.push(point.angleDeg);
-  if (point.strength !== null) row.push(point.strength);
   return row;
 }
 
@@ -313,8 +312,6 @@ export class FreeformProfileEditor {
         points: anchors,
         throatAngleDeg: finite(this.params.throatAngle, 15.5),
         mouthAngleDeg: finite(this.params[`mouthAngle${suffix}`], 60),
-        throatTangentScale: finite(this.params[`throatTangentScale${suffix}`], 1),
-        mouthTangentScale: finite(this.params[`mouthTangentScale${suffix}`], 1),
       });
       const authoritative = this.drag ? null : this.authoritative?.planes?.[plane];
       return {
@@ -596,8 +593,8 @@ export class FreeformProfileEditor {
       if (this.visibility[plane] === false) continue;
       const params =
         plane === 'H'
-          ? 'length throatRadius throatAngle mouthRadiusH mouthAngleH interiorH throatTangentScaleH mouthTangentScaleH'
-          : 'length throatRadius throatAngle mouthRadiusV mouthAngleV interiorV throatTangentScaleV mouthTangentScaleV';
+          ? 'length throatRadius throatAngle mouthRadiusH mouthAngleH interiorH'
+          : 'length throatRadius throatAngle mouthRadiusV mouthAngleV interiorV';
       const path = this.appendSvg('path', {
         class: `freeform-profile-curve freeform-plane-${plane.toLowerCase()}`,
         d: this.curvePath(geometry.planes[plane].curve, transforms),
@@ -682,9 +679,8 @@ export class FreeformProfileEditor {
     const anchor = [point.z, point.r];
     const automaticAngle = this.tangentAngleAtAnchor(planeGeometry.curve, anchor);
     const angleDeg = point.angleDeg === null ? automaticAngle : point.angleDeg;
-    const strength = point.angleDeg === null ? 1 : (point.strength ?? 1);
     const baseArmLength = this.tangentBaseArmLength(geometry);
-    const armLength = baseArmLength * strength;
+    const armLength = baseArmLength;
     const radians = (angleDeg * Math.PI) / 180;
     const direction = [Math.cos(radians), Math.sin(radians)];
     const knob = [anchor[0] + armLength * direction[0], anchor[1] + armLength * direction[1]];
@@ -714,7 +710,7 @@ export class FreeformProfileEditor {
       'data-base-arm-length': baseArmLength,
     });
     const title = this.appendSvg('title', {}, node);
-    title.textContent = `${label}; drag for angle and strength, double-click to reset`;
+    title.textContent = `${label}; drag for angle, double-click to reset`;
   }
 
   drawTangentHandles(geometry, transforms) {
@@ -903,7 +899,7 @@ export class FreeformProfileEditor {
       : isAngle
         ? `${Math.round(this.drag.value)} deg`
         : isInteriorTangent
-          ? `${Math.round(this.drag.value.angleDeg)} deg · strength ${this.drag.value.strength.toFixed(2)}`
+          ? `${Math.round(this.drag.value.angleDeg)} deg`
           : `depth ${guide[0].toFixed(1)} · ${radiusTerm} ${guide[1].toFixed(1)} mm`;
     const bubbleWidth = Math.max(58, textValue.length * 6.1 + 12);
     const bubbleX = clamp(x + 9, MARGIN.left, VIEW_WIDTH - MARGIN.right - bubbleWidth);
@@ -1051,14 +1047,11 @@ export class FreeformProfileEditor {
       const angleDeg = Math.round(
         clamp((Math.atan2(vectorRadius, vectorZ) * 180) / Math.PI, -89, 89)
       );
-      const baseArmLength = this.drag.baseArmLength || this.tangentBaseArmLength(this.geometry);
-      const strength =
-        Math.round(clamp(Math.hypot(vectorZ, vectorRadius) / baseArmLength, 0.1, 3) * 100) / 100;
-      const nextPoint = { ...point, angleDeg, strength };
+      const nextPoint = { ...point, angleDeg, strength: null };
       points[this.drag.index] = nextPoint;
       this.drag.params[key] = points;
       this.drag.guide = [z, radius];
-      this.drag.value = { angleDeg, strength };
+      this.drag.value = { angleDeg };
     } else if (this.drag.kind === 'angle') {
       const endpoint =
         this.drag.param === 'throatAngle'

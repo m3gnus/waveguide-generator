@@ -14,7 +14,7 @@ test('FREEFORM codec normalizes row/object anchors with one clamp, dedupe, and c
     z: 4,
     r: 8,
     angleDeg: 22,
-    strength: 1.4,
+    strength: null,
   });
   assert.deepEqual(normalizeAnchor({ z: 4, r: 8, strength: 2 }), {
     z: 4,
@@ -58,7 +58,7 @@ test('FREEFORM codec normalizes station endpoints, shapes, ordering, and cap', (
   assert.equal(many.at(-1).t, 1);
 });
 
-test('FREEFORM codec wire conversion round-trips endpoints, tangents, policies, and stations', () => {
+test('FREEFORM codec drops legacy tangent speeds and round-trips current geometry', () => {
   const params = {
     length: 137.25,
     throatRadius: 12.7,
@@ -82,9 +82,36 @@ test('FREEFORM codec wire conversion round-trips endpoints, tangents, policies, 
     inflectionPolicy: 'reject',
   };
 
-  assert.deepEqual(fromWireFreeform(toWireFreeform(params)), {
-    ...params,
-    interiorH: [{ z: 40, r: 58, angleDeg: 21, strength: 1.35 }],
+  const wire = toWireFreeform(params);
+  assert.equal(Object.hasOwn(wire, 'overshoot_policy'), false);
+  assert.equal(Object.hasOwn(wire.profile_h, 'throat_tangent_scale'), false);
+  assert.deepEqual(wire.profile_h.points[1], [40, 58, 21]);
+  assert.deepEqual(fromWireFreeform(wire), {
+    length: params.length,
+    throatRadius: params.throatRadius,
+    throatAngle: params.throatAngle,
+    mouthRadiusH: params.mouthRadiusH,
+    mouthAngleH: params.mouthAngleH,
+    interiorH: [{ z: 40, r: 58, angleDeg: 21, strength: null }],
+    mouthRadiusV: params.mouthRadiusV,
+    mouthAngleV: params.mouthAngleV,
     interiorV: [{ z: 78, r: 67, angleDeg: -7, strength: null }],
+    crossSections: params.crossSections,
+    inflectionPolicy: params.inflectionPolicy,
   });
+
+  const legacyWire = {
+    ...wire,
+    profile_h: {
+      ...wire.profile_h,
+      points: [[0, 12.7], [40, 58, 21, 1.35], [137.25, 164.5]],
+      throat_tangent_scale: 1.1,
+      mouth_tangent_scale: 0.85,
+    },
+    overshoot_policy: 'allow',
+  };
+  const migrated = fromWireFreeform(legacyWire);
+  assert.deepEqual(migrated.interiorH, [{ z: 40, r: 58, angleDeg: 21, strength: null }]);
+  assert.equal(Object.hasOwn(migrated, 'throatTangentScaleH'), false);
+  assert.equal(Object.hasOwn(migrated, 'overshootPolicy'), false);
 });

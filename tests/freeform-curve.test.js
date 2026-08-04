@@ -83,37 +83,21 @@ test('FREEFORM display curve honors an interior per-anchor tangent direction', (
   assert.ok(Math.abs(sampledAngle - 35) < 0.01);
 });
 
-test('FREEFORM display curve strength scales the automatic tangent speed', () => {
-  const maximumChordDeviation = (strength) => {
-    const curve = buildFreeformDisplayCurve({
-      points: [
-        [0, 12.7],
-        [50, 30, 0, strength],
-        [100, 50],
-      ],
-      throatAngleDeg: 15.5,
-      mouthAngleDeg: 30,
-      sampleCount: 1001,
-    });
-    return Math.max(
-      ...curve.map((point) => {
-        const start = point[0] <= 50 ? [0, 12.7] : [50, 30];
-        const end = point[0] <= 50 ? [50, 30] : [100, 50];
-        const dz = end[0] - start[0];
-        const dr = end[1] - start[1];
-        return (
-          Math.abs((point[0] - start[0]) * dr - (point[1] - start[1]) * dz) / Math.hypot(dz, dr)
-        );
-      })
-    );
-  };
-
-  const deviations = [0.5, 1, 2].map(maximumChordDeviation);
-  assert.ok(deviations[0] < deviations[1]);
-  assert.ok(deviations[1] < deviations[2]);
+test('FREEFORM display curve ignores removed per-anchor tangent strength', () => {
+  const base = buildFreeformDisplayCurve({
+    points: [[0, 12.7], [50, 30, 0], [100, 50]],
+    throatAngleDeg: 15.5,
+    mouthAngleDeg: 30,
+  });
+  const legacy = buildFreeformDisplayCurve({
+    points: [[0, 12.7], [50, 30, 0, 2.5], [100, 50]],
+    throatAngleDeg: 15.5,
+    mouthAngleDeg: 30,
+  });
+  assert.deepEqual(legacy, base);
 });
 
-test('FREEFORM endpoint rows override block angles and tangent scales', () => {
+test('FREEFORM endpoint rows override block angles while removed scales are ignored', () => {
   const curve = buildFreeformDisplayCurve({
     points: [
       [0, 12.7, 10],

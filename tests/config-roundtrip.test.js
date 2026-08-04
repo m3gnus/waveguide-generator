@@ -336,18 +336,29 @@ test('FREEFORM .mwg export/import round-trips canonical params and shared design
     'mouthRadiusH',
     'mouthAngleH',
     'interiorH',
-    'throatTangentScaleH',
-    'mouthTangentScaleH',
     'mouthRadiusV',
     'mouthAngleV',
     'interiorV',
-    'throatTangentScaleV',
-    'mouthTangentScaleV',
     'crossSections',
-    'overshootPolicy',
     'inflectionPolicy',
   ];
-  for (const key of freeformKeys) assert.deepEqual(restored[key], source[key], key);
+  for (const key of freeformKeys) {
+    const expected = key.startsWith('interior')
+      ? source[key].map((point) => ({ ...point, strength: null }))
+      : source[key];
+    assert.deepEqual(restored[key], expected, key);
+  }
+  assert.doesNotMatch(content, /TangentScale|OvershootPolicy/);
+  assert.doesNotMatch(content, /^36\.25 52\.5 19\.5 1\.35$/m);
+  for (const removed of [
+    'throatTangentScaleH',
+    'mouthTangentScaleH',
+    'throatTangentScaleV',
+    'mouthTangentScaleV',
+    'overshootPolicy',
+  ]) {
+    assert.equal(Object.hasOwn(imported.params, removed), false, removed);
+  }
 
   const sharedKeys = [
     'scale',

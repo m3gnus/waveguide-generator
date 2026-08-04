@@ -218,7 +218,7 @@ export function parseFreeformPointPaste(text, { plane = 'H' } = {}) {
       }
     }
 
-    const [z, r, angleDeg = null, strength = null] = parsed.values;
+    const [z, r, angleDeg = null] = parsed.values;
     if (z < 0) return errorResult(`Line ${lineNumber}: z must be at least 0.`, rows.length);
     if (!(r > 0)) {
       return errorResult(`Line ${lineNumber}: radius must be greater than 0.`, rows.length);
@@ -229,13 +229,10 @@ export function parseFreeformPointPaste(text, { plane = 'H' } = {}) {
         rows.length
       );
     }
-    if (strength !== null && (strength <= 0 || strength > 3)) {
-      return errorResult(
-        `Line ${lineNumber}: strength must be greater than 0 and at most 3.`,
-        rows.length
-      );
-    }
-    rows.push({ z, r, angleDeg, strength: angleDeg === null ? null : strength, lineNumber });
+    // Four-column rows are accepted as a legacy import format, but the fourth
+    // tangent-strength value is intentionally discarded by the solved-speed
+    // FREEFORM contract.
+    rows.push({ z, r, angleDeg, strength: null, lineNumber });
   }
 
   if (sawFusionHeader) {
@@ -402,16 +399,10 @@ export function prepareFreeformPointPastePatch(
     if (prepared.throat?.angleDeg !== null && prepared.throat?.angleDeg !== undefined) {
       patch.throatAngle = prepared.throat.angleDeg;
     }
-    if (prepared.throat?.strength !== null && prepared.throat?.strength !== undefined) {
-      patch[`throatTangentScale${targetPlane}`] = prepared.throat.strength;
-    }
     if (prepared.mouth) {
       patch[`mouthRadius${targetPlane}`] = prepared.mouth.r;
       if (prepared.mouth.angleDeg !== null && prepared.mouth.angleDeg !== undefined) {
         patch[`mouthAngle${targetPlane}`] = prepared.mouth.angleDeg;
-      }
-      if (prepared.mouth.strength !== null && prepared.mouth.strength !== undefined) {
-        patch[`mouthTangentScale${targetPlane}`] = prepared.mouth.strength;
       }
     }
     reports.push({

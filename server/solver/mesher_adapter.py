@@ -214,13 +214,19 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
             raise ValueError("FREEFORM cross_sections must be a list.")
 
         def translate_profile(value: Mapping[str, Any]) -> dict[str, Any]:
+            points = value.get("points")
+            if isinstance(points, (list, tuple)):
+                # Migrate pre-solved-speed clients by dropping the removed
+                # fourth (strength) element before calling the current mesher.
+                points = [
+                    list(row[:3]) if isinstance(row, (list, tuple)) else row
+                    for row in points
+                ]
             return _clean_dict(
                 {
-                    "points": value.get("points"),
+                    "points": points,
                     "throatAngleDeg": value.get("throat_angle_deg"),
                     "mouthAngleDeg": value.get("mouth_angle_deg"),
-                    "throatTangentScale": value.get("throat_tangent_scale"),
-                    "mouthTangentScale": value.get("mouth_tangent_scale"),
                 }
             )
 
@@ -249,7 +255,6 @@ def waveguide_payload_to_mesher_config(payload: Mapping[str, Any]) -> dict[str, 
                 "profileH": translate_profile(profile_h),
                 "profileV": translate_profile(profile_v),
                 "crossSections": translated_stations,
-                "overshootPolicy": payload.get("overshoot_policy"),
                 "inflectionPolicy": payload.get("inflection_policy"),
             }
         )

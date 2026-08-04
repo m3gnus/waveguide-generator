@@ -65,7 +65,7 @@ test('buildLineChartsPayload preserves the classic no-reference body and convent
     spl: results.spl_on_axis.spl,
     phase_degrees: results.spl_on_axis.phase_degrees,
     phase_reference_distance_m: 2.75,
-    phase_time_convention: 'metal',
+    phase_time_convention: 'exp(+ikr)',
     di: {
       horizontal: results.di.horizontal,
       vertical: results.di.vertical,

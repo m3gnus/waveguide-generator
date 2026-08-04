@@ -23,9 +23,19 @@ export function resolvePhaseTimeConvention(results) {
     explicitPhase === 'e(+ikr)' ||
     explicitPhase === '+ikr' ||
     explicitPhase === 'positive' ||
-    explicitPhase === 'positive-spatial'
+    explicitPhase === 'positive-spatial' ||
+    explicitPhase === 'metal' ||
+    explicitPhase === 'hornlab-metal' ||
+    explicitPhase === 'metal-bem' ||
+    explicitPhase === 'hornlab-metal-bem' ||
+    explicitPhase === 'bempp' ||
+    explicitPhase === 'bempp-cl' ||
+    explicitPhase === 'bemppcl' ||
+    explicitPhase === 'hornlab-bempp-bem' ||
+    explicitPhase === 'bempp-cl-numba' ||
+    explicitPhase === 'bempp-cl-opencl'
   ) {
-    return 'metal';
+    return 'exp(+ikr)';
   }
   if (
     explicitPhase === 'exp(-ikr)' ||
@@ -33,16 +43,18 @@ export function resolvePhaseTimeConvention(results) {
     explicitPhase === '-ikr' ||
     explicitPhase === 'negative' ||
     explicitPhase === 'negative-spatial' ||
-    explicitPhase === 'legacy'
+    explicitPhase === 'legacy' ||
+    explicitPhase === 'auto' ||
+    explicitPhase === 'default'
   ) {
-    return 'bempp';
+    return 'exp(-ikr)';
   }
 
   const engine = String(metadata?.engine || '')
     .trim()
     .toLowerCase();
-  if (engine === 'hornlab-bempp-bem') {
-    return 'metal';
+  if (engine === 'hornlab-bempp-bem' || engine === 'hornlab-metal-bem') {
+    return 'exp(+ikr)';
   }
 
   const selected = String(metadata?.device_interface?.selected || '')
@@ -50,7 +62,7 @@ export function resolvePhaseTimeConvention(results) {
     .toLowerCase()
     .replaceAll('_', '-');
   if (selected === 'metal' || selected === 'bempp-cl-numba' || selected === 'bempp-cl-opencl') {
-    return 'metal';
+    return 'exp(+ikr)';
   }
 
   const backend = String(metadata?.solver_backend || '')
@@ -58,13 +70,17 @@ export function resolvePhaseTimeConvention(results) {
     .toLowerCase()
     .replaceAll('_', '-');
   if (backend === 'metal' || backend === 'hornlab-metal' || backend === 'hornlab-metal-bem') {
-    return 'metal';
+    return 'exp(+ikr)';
   }
   if (backend === 'bempp' || backend === 'bempp-cl' || backend === 'bemppcl') {
-    return 'bempp';
+    // Bempp-cl evaluates the outgoing Helmholtz kernel as exp(+ikr), just
+    // like hornlab-metal-bem. Backend names are only compatibility inputs;
+    // emit the canonical spatial convention so they cannot be mistaken for
+    // a negative-propagation convention downstream.
+    return 'exp(+ikr)';
   }
   if (metadata?.metal && typeof metadata.metal === 'object') {
-    return 'metal';
+    return 'exp(+ikr)';
   }
   return null;
 }

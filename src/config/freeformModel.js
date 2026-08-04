@@ -8,6 +8,11 @@ const LEGACY_FREEFORM_KEYS = Object.freeze([
   'profileV',
   'throatAngleH',
   'throatAngleV',
+  'throatTangentScaleH',
+  'mouthTangentScaleH',
+  'throatTangentScaleV',
+  'mouthTangentScaleV',
+  'overshootPolicy',
 ]);
 
 function finiteNumber(value, fallback) {
@@ -37,12 +42,13 @@ export function normalizeAnchor(anchor) {
   if (!Number.isFinite(z) || !Number.isFinite(r)) return null;
 
   const angleDeg = optionalFiniteNumber(source.angleDeg ?? source.angle_deg);
-  const strength = optionalFiniteNumber(source.strength);
   return {
     z,
     r,
     angleDeg,
-    strength: angleDeg === null ? null : strength,
+    // The current mesher solves tangent speed. Keep the stable object shape for
+    // callers while deliberately discarding legacy per-anchor strength.
+    strength: null,
   };
 }
 
@@ -98,7 +104,6 @@ function cornerMigrationDimensions(params, t) {
         ...interior.map((anchor) => {
           const row = [anchor.z, anchor.r];
           if (anchor.angleDeg !== null) row.push(anchor.angleDeg);
-          if (anchor.strength !== null) row.push(anchor.strength);
           return row;
         }),
         [length, positiveNumber(params?.[`mouthRadius${plane}`], throatRadius)],
@@ -108,8 +113,6 @@ function cornerMigrationDimensions(params, t) {
           points,
           throatAngleDeg: finiteNumber(params?.throatAngle, 15.5),
           mouthAngleDeg: finiteNumber(params?.[`mouthAngle${plane}`], 60),
-          throatTangentScale: finiteNumber(params?.[`throatTangentScale${plane}`], 1),
-          mouthTangentScale: finiteNumber(params?.[`mouthTangentScale${plane}`], 1),
           sampleCount: 256,
         }),
         t * length
@@ -243,7 +246,6 @@ function compactAnchor(anchor) {
   const row = [anchor.z, anchor.r];
   if (anchor.angleDeg === null) return row;
   row.push(anchor.angleDeg);
-  if (anchor.strength !== null) row.push(anchor.strength);
   return row;
 }
 
@@ -267,15 +269,12 @@ export function toWireFreeform(params = {}) {
     ],
     throat_angle_deg: throatAngle,
     mouth_angle_deg: finiteNumber(normalized[`mouthAngle${plane}`], 60),
-    throat_tangent_scale: finiteNumber(normalized[`throatTangentScale${plane}`], 1),
-    mouth_tangent_scale: finiteNumber(normalized[`mouthTangentScale${plane}`], 1),
   });
 
   return {
     profile_h: profile('H'),
     profile_v: profile('V'),
     cross_sections: normalizeStations(normalized.crossSections).map(wireStation),
-    overshoot_policy: String(normalized.overshootPolicy ?? 'reject'),
     inflection_policy: String(normalized.inflectionPolicy ?? 'warn'),
   };
 }
@@ -328,15 +327,10 @@ export function fromWireFreeform(wire = {}) {
     mouthRadiusH: horizontal.points.at(-1).r,
     mouthAngleH: finiteNumber(horizontal.profile.mouth_angle_deg, 60),
     interiorH: horizontal.points.slice(1, -1),
-    throatTangentScaleH: finiteNumber(horizontal.profile.throat_tangent_scale, 1),
-    mouthTangentScaleH: finiteNumber(horizontal.profile.mouth_tangent_scale, 1),
     mouthRadiusV: vertical.points.at(-1).r,
     mouthAngleV: finiteNumber(vertical.profile.mouth_angle_deg, 60),
     interiorV: vertical.points.slice(1, -1),
-    throatTangentScaleV: finiteNumber(vertical.profile.throat_tangent_scale, 1),
-    mouthTangentScaleV: finiteNumber(vertical.profile.mouth_tangent_scale, 1),
     crossSections: wire.cross_sections,
-    overshootPolicy: String(wire.overshoot_policy ?? 'reject'),
     inflectionPolicy: String(wire.inflection_policy ?? 'warn'),
   });
 }

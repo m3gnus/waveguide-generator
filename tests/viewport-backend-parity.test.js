@@ -113,24 +113,19 @@ const FREEFORM_BASE = {
   formula_type: 'FREEFORM',
   a0: 15.5,
   profile_h: {
-    points: [[0, 12.7], [50, 35, 40, 1.25], [100, 55]],
+    points: [[0, 12.7], [50, 35, 40], [100, 55]],
     throat_angle_deg: 15.5,
     mouth_angle_deg: 25,
-    throat_tangent_scale: 1,
-    mouth_tangent_scale: 1,
   },
   profile_v: {
-    points: [[0, 12.7], [40, 26, -5, 0.8], [100, 48]],
+    points: [[0, 12.7], [40, 26, -5], [100, 48]],
     throat_angle_deg: 15.5,
     mouth_angle_deg: 35,
-    throat_tangent_scale: 1,
-    mouth_tangent_scale: 1,
   },
   cross_sections: [
     { t: 0, shape: 'circle' },
     { t: 1, shape: 'ellipse' },
   ],
-  overshoot_policy: 'allow',
   inflection_policy: 'warn',
   n_angular: 16,
   n_length: 8,
@@ -240,8 +235,6 @@ test('live FREEFORM display curves match mesher diagnostics', {
       points: profile.points,
       throatAngleDeg: profile.throat_angle_deg,
       mouthAngleDeg: profile.mouth_angle_deg,
-      throatTangentScale: profile.throat_tangent_scale,
-      mouthTangentScale: profile.mouth_tangent_scale,
       sampleCount: 192,
     });
     const exact = exactCurves[plane];
