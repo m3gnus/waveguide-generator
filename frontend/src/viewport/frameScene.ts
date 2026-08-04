@@ -22,12 +22,17 @@ export function isEnclosureRole(role: string): boolean {
   return role === 'enclosure' || role.startsWith('enclosure.');
 }
 
+/**
+ * The radiating surface gets its own colour; everything structural shares one.
+ * The rim and the rear cap are the same material as the horn wall, so they read
+ * as the horn — only the source cap and the enclosure are visually distinct.
+ */
 export function materialClassForSurface(surface: Pick<FrameSurface, 'role' | 'shading'>): SurfaceMaterialClass {
   const family = isEnclosureRole(surface.role)
     ? 'enclosure'
-    : surface.role === 'horn.inner' || surface.role === 'horn.outer'
-      ? 'horn'
-      : 'boundary';
+    : surface.role === 'source_cap'
+      ? 'source'
+      : 'horn';
   return `${family}-${surface.shading}` as SurfaceMaterialClass;
 }
 

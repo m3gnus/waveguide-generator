@@ -18,12 +18,12 @@ import {
 import type { DisplayMode, MaterialLibrary, SurfaceMaterialClass, ViewportTheme } from './types';
 
 const classes: SurfaceMaterialClass[] = [
-  'horn-smooth', 'horn-flat', 'boundary-smooth', 'boundary-flat', 'enclosure-smooth', 'enclosure-flat',
+  'horn-smooth', 'horn-flat', 'source-smooth', 'source-flat', 'enclosure-smooth', 'enclosure-flat',
 ];
 
-const fallbackColors: Record<ViewportTheme, Record<'horn' | 'boundary' | 'enclosure', string>> = {
-  dark: { horn: '#8eafc6', boundary: '#a7bdc9', enclosure: '#687987' },
-  light: { horn: '#9fb5c5', boundary: '#a5947d', enclosure: '#817b70' },
+const fallbackColors: Record<ViewportTheme, Record<'horn' | 'source' | 'enclosure', string>> = {
+  dark: { horn: '#8eafc6', source: '#cf8a5c', enclosure: '#687987' },
+  light: { horn: '#9fb5c5', source: '#bd6b3d', enclosure: '#817b70' },
 };
 
 function tokenColor(token: string, fallback: string): string {
@@ -34,7 +34,7 @@ function tokenColor(token: string, fallback: string): string {
 function classColor(materialClass: SurfaceMaterialClass, theme: ViewportTheme): Color {
   const family = materialClass.startsWith('enclosure')
     ? 'enclosure'
-    : materialClass.startsWith('boundary') ? 'boundary' : 'horn';
+    : materialClass.startsWith('source') ? 'source' : 'horn';
   return new Color(tokenColor(`--vp-${family}-material`, fallbackColors[theme][family]));
 }
 
@@ -79,6 +79,56 @@ function zebraMaterial(clippingPlanes: Plane[], flat: boolean): ShaderMaterial {
   });
 }
 
+/**
+ * Normal inspection: front faces are tinted by the direction their shipped
+ * normal points, back faces are flat magenta.
+ *
+ * Every other mode culls back faces, which is exactly why an inverted patch
+ * reads as a hole rather than as a fault — the bug that made a rounded mouth
+ * rim invisible. Drawing both sides and colouring them differently turns that
+ * into something you can see and point at.
+ */
+function normalsMaterial(clippingPlanes: Plane[], flat: boolean): ShaderMaterial {
+  return new ShaderMaterial({
+    defines: flat ? { FLAT_SHADED: 1 } : {},
+    clipping: clippingPlanes.length > 0,
+    clippingPlanes,
+    side: DoubleSide,
+    vertexShader: `
+      #include <clipping_planes_pars_vertex>
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vec4 mvPosition = viewMatrix * worldPosition;
+        vWorldPosition = worldPosition.xyz;
+        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <clipping_planes_vertex>
+      }
+    `,
+    fragmentShader: `
+      #include <clipping_planes_pars_fragment>
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPosition;
+      void main() {
+        #include <clipping_planes_fragment>
+        vec3 shadingNormal = normalize(vWorldNormal);
+        #ifdef FLAT_SHADED
+          shadingNormal = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+        #endif
+        if (!gl_FrontFacing) {
+          // Seeing this colour anywhere means a surface is facing away from the
+          // acoustic domain — the geometry is wrong, not the render.
+          gl_FragColor = vec4(0.85, 0.13, 0.52, 1.0);
+          return;
+        }
+        gl_FragColor = vec4(shadingNormal * 0.5 + 0.5, 1.0);
+      }
+    `,
+  });
+}
+
 function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass, clippingPlanes: Plane[], theme: ViewportTheme) {
   const color = classColor(materialClass, theme);
   const flatShading = materialClass.endsWith('-flat');
@@ -92,6 +142,7 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
     });
   }
   if (mode === 'zebra') return zebraMaterial(clippingPlanes, flatShading);
+  if (mode === 'normals') return normalsMaterial(clippingPlanes, flatShading);
   if (mode === 'curvature') {
     return new MeshStandardMaterial({ color: '#dce9ef', vertexColors: true, roughness: 0.58, flatShading, side: FrontSide, clippingPlanes });
   }

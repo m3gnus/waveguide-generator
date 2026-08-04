@@ -40,12 +40,16 @@ const previewSnapshot: PreviewSnapshot = {
   stale: true,
   dropped: 0,
   error: 'ATH expression is unsupported',
+  errorRevision: 0,
 };
+
+const refreshCalls: number[] = [];
 
 vi.mock('../api/previewSocket', () => ({
   previewSocket: {
     subscribe: () => () => undefined,
     getSnapshot: () => previewSnapshot,
+    refresh: () => refreshCalls.push(1),
   },
 }));
 
@@ -79,7 +83,25 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('.error-badge')?.textContent).toContain('ERROR');
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
 
-    act(() => alert?.querySelector<HTMLButtonElement>('button')?.click());
+    act(() => alert?.querySelector<HTMLButtonElement>('[aria-label="Dismiss preview error"]')?.click());
     expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('offers a retry that re-requests the current design', () => {
+    refreshCalls.length = 0;
+    const retry = [...host.querySelectorAll<HTMLButtonElement>('[role="alert"] button')]
+      .find((button) => button.textContent === 'Retry');
+    expect(retry).toBeDefined();
+    act(() => retry?.click());
+    expect(refreshCalls).toHaveLength(1);
+    expect(host.querySelector('.error-badge')?.textContent).toContain('REFRESHING');
+  });
+
+  it('offers a refresh beside the badge whenever the view lags the design', () => {
+    refreshCalls.length = 0;
+    const refresh = host.querySelector<HTMLButtonElement>('.viewport-refresh');
+    expect(refresh?.textContent).toContain('Refresh');
+    act(() => refresh?.click());
+    expect(refreshCalls).toHaveLength(1);
   });
 });

@@ -4,7 +4,7 @@ import { previewSocket } from '../api/previewSocket';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { Icon } from '../shell/icons';
-import { useViewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
+import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces } from './frameScene';
 import { createImportedMeshScene, type ImportedMeshScene } from './importedMesh';
@@ -12,20 +12,24 @@ import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { parseMSH } from './mshParser';
-import { filenameStem, previewBadge, previewErrorMessage, viewportSubtitle } from './presentation';
+import { filenameStem, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
 
-const modes: Array<{ mode: DisplayMode; title: string; icon: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' }> = [
+const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section'; glyph?: string }> = [
   { mode: 'clay', title: 'Clay', icon: 'clay' },
   { mode: 'solid-wire', title: 'Solid + wireframe', icon: 'wire' },
   { mode: 'wireframe', title: 'Wireframe', icon: 'wire' },
   { mode: 'xray', title: 'X-ray', icon: 'xray' },
   { mode: 'zebra', title: 'Zebra', icon: 'zebra' },
   { mode: 'curvature', title: 'Curvature', icon: 'curve' },
+  { mode: 'normals', title: 'Normals — back faces magenta', glyph: 'N' },
   { mode: 'edges', title: 'Hard-boundary edges', icon: 'section' },
 ];
+
+/** How long the viewport may lag the design before it says so out loud. */
+const STALL_NOTICE_MS = 1_500;
 
 function documentTheme(): ViewportTheme {
   return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
@@ -74,6 +78,8 @@ export function Viewport() {
   const [importedMesh, setImportedMesh] = useState<ImportedMeshScene | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
+  const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
+  const [stalled, setStalled] = useState(false);
   const meshInput = useRef<HTMLInputElement>(null);
   const setCamera = (preset: CameraPreset) => setCameraRequest((current) => ({ preset, nonce: current.nonce + 1 }));
   const setCameraDirection = (direction: CameraDirection) => setCameraRequest((current) => ({ direction, nonce: current.nonce + 1 }));
@@ -89,8 +95,19 @@ export function Viewport() {
   const hasSurfaces = hasRenderableSurfaces(activeScene);
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
-  const previewError = preview.error ? previewErrorMessage(preview.error) : null;
+  const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
   const showPreviewError = previewError !== null && dismissedPreviewError !== preview.error;
+  const behindDesign = preview.stale || preview.displayedRevision !== designRevision;
+  const refresh = () => {
+    setDismissedPreviewError(null);
+    setRefreshRequestedAt(performance.now());
+    // Paused means the socket is deliberately stopped. Reconnecting behind the
+    // preference would leave the badge lying about which mode the viewport is
+    // in, so say plainly that this resumes live updates and let the existing
+    // gate do the connecting.
+    if (!preferences.liveUpdate) viewerPreferences.update({ liveUpdate: true });
+    else previewSocket.refresh();
+  };
 
   const importMesh = async (file: File | undefined) => {
     if (!file) return;
@@ -144,6 +161,28 @@ export function Viewport() {
     if (preview.error === null) setDismissedPreviewError(null);
   }, [preview.error]);
 
+  // A refresh is over when the engine answers — with geometry or with a reason.
+  // The timeout is the third outcome: an engine that never answers at all.
+  useEffect(() => {
+    setRefreshRequestedAt(null);
+  }, [preview.displayedRevision, preview.error]);
+  useEffect(() => {
+    if (refreshRequestedAt === null) return undefined;
+    const timer = setTimeout(() => setRefreshRequestedAt(null), 8_000);
+    return () => clearTimeout(timer);
+  }, [refreshRequestedAt]);
+
+  // Every keystroke goes stale for a few tens of milliseconds while the engine
+  // answers, so only say so once it has lasted long enough to be a real stall.
+  useEffect(() => {
+    if (!behindDesign) {
+      setStalled(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => setStalled(true), STALL_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [behindDesign, designRevision]);
+
   useEffect(() => () => {
     if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
   }, []);
@@ -174,7 +213,15 @@ export function Viewport() {
     </div>
     <div className="viewport-live">
       {importedMesh && <span className="imported-mesh-badge">IMPORTED MESH <button type="button" onClick={clearImportedMesh}>Clear</button></span>}
-      <span className={badge.className}><i />{badge.label}</span>
+      <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>
+      {behindDesign && !importedMesh && <button
+        type="button"
+        className="viewport-refresh"
+        disabled={refreshRequestedAt !== null}
+        title={staleReason(preferences.liveUpdate, preview.connection, preview.error)}
+        aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
+        onClick={refresh}
+      ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
       <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> + client <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
     </div>
 
@@ -185,7 +232,12 @@ export function Viewport() {
     </div>}
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>
+      <button type="button" disabled={refreshRequestedAt !== null} onClick={refresh}>Retry</button>
       <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}>×</button>
+    </div>}
+    {activeScene && stalled && !showPreviewError && !connectionInterrupted && !importedMesh && <div className="viewport-connection-banner" role="status">
+      <span><i />{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>
+      <button type="button" onClick={refresh} disabled={refreshRequestedAt !== null}>Refresh</button>
     </div>}
     {activeScene && connectionInterrupted && !importedMesh && <div className={`viewport-connection-banner${showPreviewError ? ' below-error' : ''}`} role="status">
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
@@ -221,7 +273,7 @@ export function Viewport() {
           aria-label={item.title}
           aria-pressed={mode === item.mode}
           onClick={() => setMode(item.mode)}
-        ><Icon name={item.icon}/></button>)}
+        >{item.icon ? <Icon name={item.icon}/> : <span className="wg2-text-glyph">{item.glyph}</span>}</button>)}
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">

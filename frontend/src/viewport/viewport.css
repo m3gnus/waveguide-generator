@@ -1,5 +1,6 @@
 .wg2-viewport { isolation: isolate; container: viewport / inline-size; }
 .wg2-viewport::before { pointer-events: none; }
+.wg2-viewport-canvas-host { position: absolute; inset: 0; }
 .wg2-viewport-canvas { position: absolute !important; inset: 0; width: 100% !important; height: 100% !important; }
 .wg2-viewport .viewport-title,
 .wg2-viewport .viewport-live,
@@ -66,6 +67,13 @@
 .viewport-error-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: center; gap: 9px; width: max-content; max-width: calc(100% - 24px); padding: 6px 7px 6px 9px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: 7px; background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--red); font-size: 9.5px; transform: translateX(-50%); backdrop-filter: blur(10px); }
 .viewport-error-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport-error-banner button { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: transparent; color: currentColor; font-size: 15px; line-height: 1; }
+.viewport-connection-banner button,
+.viewport-error-banner button:not([aria-label]) { width: auto; padding: 0 8px; border: 1px solid currentColor; border-radius: 5px; font: 600 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.viewport-connection-banner button:disabled,
+.viewport-error-banner button:disabled { opacity: .45; }
+.viewport-refresh { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 17px; padding: 0 7px; border: 1px solid rgba(var(--amber-rgb), .34); border-radius: 9px; background: rgba(var(--amber-rgb), .11); color: var(--amber); font: 600 8.5px var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+.viewport-refresh svg { width: 9px; height: 9px; }
+.viewport-refresh:disabled { opacity: .5; }
 .viewport-error-banner button:hover { background: rgba(var(--red-rgb), .12); }
 .wg2-viewport .reconnect-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
 

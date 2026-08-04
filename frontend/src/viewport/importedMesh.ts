@@ -60,7 +60,7 @@ export function createImportedMeshScene(name: string, mesh: ParsedMSH): Imported
       key: `msh:${name}:${tag}`,
       role: roleForTag(tag, mesh.physicalNames),
       shading: 'smooth',
-      materialClass: 'boundary-smooth',
+      materialClass: 'horn-smooth',
       enclosure: false,
       positions: mesh.vertices,
       normals: calculateNormals(mesh.vertices, indices),

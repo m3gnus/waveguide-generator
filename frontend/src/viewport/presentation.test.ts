@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
-import { previewBadge, previewErrorMessage, viewportSubtitle } from './presentation';
+import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 
 describe('preview presentation', () => {
   it('applies badge precedence from paused through live', () => {
@@ -15,6 +15,22 @@ describe('preview presentation', () => {
     expect(previewErrorMessage('unsupported expression')).toBe(
       'Preview failed: unsupported expression. Displayed geometry is not the current design.',
     );
+  });
+
+  it('names the revision when the failure belongs to an edit already moved past', () => {
+    expect(previewErrorMessage('bad morph', 57, 58)).toBe(
+      'Preview failed at revision r57: bad morph. Displayed geometry is not the current design.',
+    );
+    expect(previewErrorMessage('bad morph', 58, 58)).toBe(
+      'Preview failed: bad morph. Displayed geometry is not the current design.',
+    );
+  });
+
+  it('explains a lagging viewport differently for each cause', () => {
+    expect(staleReason(false, 'connected', null)).toContain('paused');
+    expect(staleReason(true, 'reconnecting', null)).toContain('reconnecting');
+    expect(staleReason(true, 'connected', 'boom')).toContain('failed');
+    expect(staleReason(true, 'connected', null)).toContain('Waiting');
   });
 });
 

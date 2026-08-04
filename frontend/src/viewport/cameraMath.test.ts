@@ -1,6 +1,30 @@
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
-import { calculateCameraFit, orthographicExtents, zoomedOrthographicValue } from './cameraMath';
+import { calculateCameraFit, clippingRange, orthographicExtents, zoomedOrthographicValue } from './cameraMath';
+
+describe('depth clipping range', () => {
+  it('brackets the model instead of spanning the universe', () => {
+    // A 165 mm-radius waveguide viewed from ~680 mm — the everyday case that
+    // used to resolve depth in ~28 mm steps because near pinned to 0.001.
+    const { near, far } = clippingRange(680, 165);
+    expect(near).toBeGreaterThan(1);
+    expect(far / near).toBeLessThan(1_000);
+    expect(far).toBeGreaterThan(680 + 165);
+  });
+
+  it('keeps a positive near plane when the camera is inside the model', () => {
+    const { near, far } = clippingRange(12, 400);
+    expect(near).toBeGreaterThan(0);
+    expect(near).toBeLessThan(12);
+    expect(far).toBeGreaterThan(near);
+  });
+
+  it('never divides by a zero distance', () => {
+    const { near, far } = clippingRange(0, 0);
+    expect(near).toBeGreaterThan(0);
+    expect(far).toBeGreaterThan(near);
+  });
+});
 
 describe('orthographic camera math', () => {
   it('fits wide and tall viewports without changing world proportions', () => {

@@ -69,4 +69,54 @@ describe('preview socket state machine', () => {
     expect(JSON.parse(sockets[1].sent[0])).toMatchObject({ epoch: 8, seq: 1, designRevision: 2, lod: 'fine' });
     manager.stop();
   });
+
+  it('keeps an error raised for an edit the user has already moved past', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    useDesignStore.setState({ designRevision: 58 });
+    socket.message(JSON.stringify({ kind: 'error', epoch: 3, designRevision: 57, code: 'internal', message: 'inconsistent local orientation' }));
+    // Discarding this used to leave the viewport reading STALE with no reason.
+    expect(manager.getSnapshot().error).toBe('inconsistent local orientation');
+    expect(manager.getSnapshot().errorRevision).toBe(57);
+    expect(manager.getSnapshot().stale).toBe(true);
+    manager.stop();
+  });
+
+  it('clears the error once a frame for the current revision arrives', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(JSON.stringify({ kind: 'error', epoch: 3, designRevision: 57, code: 'validation', message: 'bad expression' }));
+    expect(manager.getSnapshot().error).toBe('bad expression');
+    socket.message(fixture());
+    expect(manager.getSnapshot().error).toBeNull();
+    expect(manager.getSnapshot().errorRevision).toBeNull();
+    manager.stop();
+  });
+
+  it('refresh re-requests the current design at full detail without an edit', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    expect(socket.sent).toHaveLength(1);
+    manager.refresh();
+    expect(socket.sent).toHaveLength(2);
+    expect(JSON.parse(socket.sent[1])).toMatchObject({ kind: 'preview', epoch: 3, designRevision: 57, lod: 'fine' });
+    manager.stop();
+  });
+
+  it('refresh on a stopped socket restarts it rather than sending into the void', () => {
+    const sockets: MockSocket[] = [];
+    const manager = new PreviewSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; }, 'ws://test/ws/preview');
+    manager.refresh();
+    expect(sockets).toHaveLength(1);
+    manager.stop();
+  });
 });

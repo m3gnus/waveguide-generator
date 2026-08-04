@@ -19,6 +19,8 @@ export interface PreviewSnapshot {
   stale: boolean;
   dropped: number;
   error: string | null;
+  /** Design revision the current error belongs to, so the UI can say so. */
+  errorRevision: number | null;
 }
 
 interface SocketEvent {
@@ -82,7 +84,7 @@ export class PreviewSocketManager {
   private unregisterTimer: (() => void) | null = null;
   private snapshot: PreviewSnapshot = {
     connection: 'idle', epoch: null, frame: null, displayedRevision: null,
-    lastValidRevision: null, stale: true, dropped: 0, error: null,
+    lastValidRevision: null, stale: true, dropped: 0, error: null, errorRevision: null,
   };
 
   constructor(
@@ -103,6 +105,28 @@ export class PreviewSocketManager {
     this.unsubscribeRevision = subscribeRevision((event) => this.onRevision(event));
     this.unregisterTimer = registerRevisionTimer(() => this.cancelDebounce());
     this.connect(false);
+  }
+
+  /**
+   * Re-request the current design at full detail, right now.
+   *
+   * A preview that failed leaves nothing scheduled — the design has not changed,
+   * so no revision event will ever arrive to trigger another attempt. Without an
+   * explicit retry the only ways out are editing something else or reloading the
+   * page, which is what made a stale viewport feel like a dead end.
+   */
+  refresh(): void {
+    if (this.stopped) {
+      this.start();
+      return;
+    }
+    this.cancelDebounce();
+    if (this.socket === null || this.socket.readyState !== OPEN) {
+      // A dropped socket reconnects on its own; asking again cannot help until
+      // it does, and the reconnect sends the current design on `hello`.
+      return;
+    }
+    this.sendCurrent('fine');
   }
 
   stop(): void {
@@ -170,9 +194,12 @@ export class PreviewSocketManager {
       this.update({ dropped: this.snapshot.dropped + 1 });
       return;
     }
-    if (message.kind === 'error' && message.designRevision === useDesignStore.getState().designRevision) {
+    if (message.kind === 'error') {
+      // Record every failure, not only the ones whose revision still matches.
+      // Editing again while a preview is failing used to swallow the reason and
+      // leave the viewport reading STALE with nothing to explain it.
       const detail = message.message ?? Object.values(message.fields ?? {})[0] ?? message.code;
-      this.update({ error: detail, stale: true });
+      this.update({ error: detail, errorRevision: message.designRevision ?? null, stale: true });
     }
   }
 
@@ -196,6 +223,7 @@ export class PreviewSocketManager {
       lastValidRevision: revision,
       stale: false,
       error: null,
+      errorRevision: null,
     });
   }
 

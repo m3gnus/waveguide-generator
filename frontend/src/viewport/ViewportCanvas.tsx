@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
 import { CanvasTexture, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
-import { calculateCameraFit, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
+import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import type { FrameScene } from './frameScene';
 import { createMaterialLibrary } from './materials';
@@ -217,6 +217,10 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     (minY + maxY) / 2,
     (minZ + maxZ) / 2,
   ), [maxX, maxY, maxZ, minX, minY, minZ]);
+  const boundsRadius = useMemo(
+    () => Math.max(Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2, 0.5),
+    [maxX, maxY, maxZ, minX, minY, minZ],
+  );
   const requestedPreset = request.preset;
   const requestedDirection = request.direction;
   const directionX = requestedDirection?.[0] ?? 0;
@@ -305,6 +309,18 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
 
   useEffect(() => installWheelZoomInversion(gl.domElement, preferences.invertWheelZoom), [gl.domElement, preferences.invertWheelZoom]);
 
+  // Fit-time planes go stale the moment the user dollies, and a fixed pair wide
+  // enough for every distance wastes the whole depth buffer. Re-bracket the
+  // model against the camera's actual distance whenever the controls move.
+  const rebracket = () => {
+    const target = controls.current?.target ?? center;
+    const { near, far } = clippingRange(camera.position.distanceTo(target), boundsRadius);
+    if (camera.near === near && camera.far === far) return;
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  };
+
   return <OrbitControls
     ref={controls}
     camera={camera}
@@ -316,7 +332,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     enableDamping={preferences.dampingEnabled}
     dampingFactor={preferences.dampingFactor}
     zoomToCursor
-    onChange={() => scheduler.schedule()}
+    onChange={() => { rebracket(); scheduler.schedule(); }}
   />;
 }
 
@@ -538,8 +554,47 @@ class CanvasErrorBoundary extends Component<{ children: ReactNode; onError: (mes
   render() { return this.state.failed ? null : this.props.children; }
 }
 
+/** Whether the drawing buffer still needs to catch up with its container. */
+export function canvasNeedsRemeasure(
+  container: Pick<HTMLElement, 'clientWidth' | 'clientHeight'>,
+  canvas: Pick<HTMLElement, 'clientWidth' | 'clientHeight'> | null,
+): boolean {
+  if (!canvas || !container.clientWidth || !container.clientHeight) return false;
+  return Math.abs(canvas.clientWidth - container.clientWidth) > 1
+    || Math.abs(canvas.clientHeight - container.clientHeight) > 1;
+}
+
+/**
+ * Force react-three-fiber to re-measure when its own observer missed the mount.
+ *
+ * On a cold start — no stored dock layout — the panel is sized after the React
+ * root inside it mounts, and r3f's measurement never fires again: the canvas
+ * stays at the HTML default 300x150 inside a full-size panel and the viewport
+ * renders nothing at all. Warm reloads hid this completely, because a restored
+ * layout sizes the panel before the canvas mounts. A window resize is the event
+ * r3f's measurement hook already listens for, and the size comparison keeps this
+ * to the one nudge it takes rather than a loop.
+ */
+function useCanvasRemeasure(host: RefObject<HTMLDivElement | null>): void {
+  useEffect(() => {
+    const container = host.current;
+    if (!container || typeof ResizeObserver === 'undefined') return undefined;
+    const sync = () => {
+      if (canvasNeedsRemeasure(container, container.querySelector('canvas'))) {
+        window.dispatchEvent(new Event('resize'));
+      }
+    };
+    const observer = new ResizeObserver(sync);
+    observer.observe(container);
+    sync();
+    return () => observer.disconnect();
+  }, [host]);
+}
+
 export function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProps) {
-  return <CanvasErrorBoundary onError={onRenderFailure}><Canvas
+  const host = useRef<HTMLDivElement>(null);
+  useCanvasRemeasure(host);
+  return <CanvasErrorBoundary onError={onRenderFailure}><div ref={host} className="wg2-viewport-canvas-host"><Canvas
     className="wg2-viewport-canvas"
     frameloop="demand"
     camera={{ fov: 34, near: 0.01, far: 100_000 }}
@@ -552,5 +607,5 @@ export function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProp
     }}
   >
     <Scene {...props} />
-  </Canvas></CanvasErrorBoundary>;
+  </Canvas></div></CanvasErrorBoundary>;
 }

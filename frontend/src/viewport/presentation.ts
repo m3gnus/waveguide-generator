@@ -19,8 +19,29 @@ export function previewBadge(
   return { label: 'LIVE', className: 'live-badge' };
 }
 
-export function previewErrorMessage(error: string): string {
-  return `Preview failed: ${error}. Displayed geometry is not the current design.`;
+export function previewErrorMessage(
+  error: string,
+  errorRevision: number | null = null,
+  currentRevision: number | null = null,
+): string {
+  // An error raised by an edit the user has already moved past is still worth
+  // showing — it explains why the viewport stopped following them — but it must
+  // say which edit it came from rather than implying the current one failed.
+  const superseded = errorRevision !== null && currentRevision !== null && errorRevision !== currentRevision;
+  const attempt = superseded ? `Preview failed at revision r${errorRevision}` : 'Preview failed';
+  return `${attempt}: ${error}. Displayed geometry is not the current design.`;
+}
+
+/** Why the viewport is not showing the current design, in one plain sentence. */
+export function staleReason(
+  liveUpdate: boolean,
+  connection: ConnectionState,
+  error: string | null,
+): string {
+  if (!liveUpdate) return 'Live updates are paused. Refresh to request this design once.';
+  if (connection !== 'connected') return `Preview engine ${connection}. The viewport resumes on reconnect.`;
+  if (error) return 'The last preview attempt failed. Refresh to try this design again.';
+  return 'Waiting for the preview engine to return this design. Refresh to ask again.';
 }
 
 export function filenameStem(filename: string): string {

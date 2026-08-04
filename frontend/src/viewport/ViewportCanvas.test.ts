@@ -1,7 +1,7 @@
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { calculateCameraFit } from './cameraMath';
-import { axisColorsFromTokens, cameraFitKey, canRenderWebGL, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
 
 class FakeScheduler {
   private readonly tasks = new Set<() => void>();
@@ -147,5 +147,23 @@ describe('pickGizmoAxis', () => {
   it('prefers the head facing the camera when two overlap', () => {
     // Looking down -Z, +Z points at the viewer and must win over -Z.
     expect(pickGizmoAxis([50, 200], centre, right, up)).toBe('positive-z');
+  });
+});
+
+describe('canvasNeedsRemeasure', () => {
+  const box = (clientWidth: number, clientHeight: number) => ({ clientWidth, clientHeight });
+
+  it('spots the cold-start canvas left at the HTML default inside a real panel', () => {
+    expect(canvasNeedsRemeasure(box(764, 432), box(300, 150))).toBe(true);
+  });
+
+  it('stays quiet once the canvas matches, so the nudge cannot loop', () => {
+    expect(canvasNeedsRemeasure(box(764, 432), box(764, 432))).toBe(false);
+    expect(canvasNeedsRemeasure(box(764, 432), box(764, 433))).toBe(false);
+  });
+
+  it('does not fire before the container itself has been laid out', () => {
+    expect(canvasNeedsRemeasure(box(0, 0), box(300, 150))).toBe(false);
+    expect(canvasNeedsRemeasure(box(764, 432), null)).toBe(false);
   });
 });

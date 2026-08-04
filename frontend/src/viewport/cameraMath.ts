@@ -53,14 +53,32 @@ export function calculateCameraFit(
   const perspectiveDistance = radius * 1.2 / Math.sin(limitingHalfFov);
   const distance = projection === 'perspective' ? perspectiveDistance : radius * 4;
   const position = center.clone().addScaledVector(viewDirection(view), distance);
-  const clippingDepth = distance + radius * 3;
   return {
     center,
     position,
-    near: Math.max(0.001, distance - clippingDepth * 0.98),
-    far: Math.max(2_000, distance + clippingDepth),
+    ...clippingRange(distance, radius),
     ...orthographicExtents(radius, aspect),
   };
+}
+
+/**
+ * Depth planes that bracket the model instead of the universe.
+ *
+ * The previous rule always collapsed to `near = 0.001` and `far ≥ 2000`, and
+ * since preview geometry is in millimetres that is a 2,000,000:1 depth range —
+ * about 28 mm of depth resolution at a typical viewing distance, on a model
+ * whose wall is a few millimetres thick. Bracketing the model keeps the ratio
+ * near 1000:1, which a 24-bit buffer resolves to well under a hundredth of a
+ * millimetre.
+ *
+ * `near` is floored proportionally rather than absolutely so that dollying
+ * inside the bounding sphere shrinks it too, instead of clipping away whatever
+ * the camera has moved close to.
+ */
+export function clippingRange(distance: number, radius: number): Pick<CameraFit, 'near' | 'far'> {
+  const safeDistance = Math.max(distance, 1e-6);
+  const near = Math.max(safeDistance - radius * 1.5, safeDistance * 0.005, 1e-4);
+  return { near, far: Math.max(near * 10, safeDistance + radius * 4) };
 }
 
 export function zoomedOrthographicValue(current: number, direction: 'in' | 'out'): number {

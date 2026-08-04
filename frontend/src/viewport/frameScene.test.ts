@@ -46,7 +46,7 @@ describe('frameToScene', () => {
     const scene = frameToScene(frame);
     expect(scene.surfaces.map(({ role, materialClass }) => ({ role, materialClass }))).toEqual([
       { role: 'horn.inner', materialClass: 'horn-smooth' },
-      { role: 'mouth_rim', materialClass: 'boundary-flat' },
+      { role: 'mouth_rim', materialClass: 'horn-flat' },
     ]);
     expect(scene.surfaces).toHaveLength(2);
     expect(scene.surfaces[0].positions).toBe(frame.sections['horn.positions']);
@@ -55,6 +55,13 @@ describe('frameToScene', () => {
 
   it('maps enclosure roles to their role-visible material class', () => {
     expect(materialClassForSurface(surface('enclosure.roundover', 'box', 'flat'))).toBe('enclosure-flat');
+  });
+
+  it('colours only the radiating surface apart from the structure', () => {
+    expect(materialClassForSurface(surface('source_cap', 'cap', 'flat'))).toBe('source-flat');
+    for (const role of ['horn.inner', 'horn.outer', 'mouth_rim', 'wall.rear_cap']) {
+      expect(materialClassForSurface(surface(role, role, 'smooth'))).toBe('horn-smooth');
+    }
   });
 
   it('extracts only topology borders and omits the internal triangle diagonal', () => {

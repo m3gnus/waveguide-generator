@@ -6,6 +6,17 @@ import type { DisplayMode } from './types';
 const surfaceModes: DisplayMode[] = ['clay', 'solid-wire', 'wireframe', 'xray', 'zebra', 'curvature', 'edges'];
 
 describe('viewport material mode matrix', () => {
+  it('draws both sides in normals mode so an inverted patch is visible, not invisible', () => {
+    const library = createMaterialLibrary('normals', null);
+    for (const material of Object.values(library.surfaces)) {
+      expect(material.side).toBe(DoubleSide);
+      expect(material).toBeInstanceOf(ShaderMaterial);
+      // Back faces must be flagged, not shaded like front faces.
+      expect((material as ShaderMaterial).fragmentShader).toContain('gl_FrontFacing');
+    }
+    library.all.forEach((material) => material.dispose());
+  });
+
   it.each(surfaceModes)('%s uses the orientation-contract side', (mode) => {
     const library = createMaterialLibrary(mode, null);
     const expected = mode === 'xray' ? DoubleSide : FrontSide;
