@@ -32,6 +32,9 @@ export const EXPORT_FORMATS = [
 export type ExportFormat = typeof EXPORT_FORMATS[number]['id'];
 export type MapReference = -3 | -6 | -9 | -12;
 export const MAP_REFERENCES: MapReference[] = [-3, -6, -9, -12];
+export const RESULT_PANEL_COUNTS = [1, 2, 3, 4, 6] as const;
+export type ResultPanelCount = typeof RESULT_PANEL_COUNTS[number];
+export const MAX_RESULT_PANELS = 6;
 export type JobSort = 'completed_desc' | 'created_desc' | 'rating_desc' | 'name_asc';
 
 export interface Preferences {
@@ -52,7 +55,10 @@ const STORAGE_KEY = 'waveguide-v2-g3-preferences';
 const defaults: Preferences = {
   smoothing: 'none',
   mapReference: -6,
-  chartTypes: ['frequency_response', 'directivity_map_h', 'balloon', 'beam_map', 'impedance', 'summary'],
+  // Every default panel must populate from a default solve. 3D Balloon and
+  // Forward Beam Map both need spherical sampling, which is off by default, so
+  // defaulting to them left two of six panels permanently showing their stub.
+  chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
   chartTheme: 'hornlab',
   exportFormats: [],
   autoExportOnComplete: false,
@@ -77,15 +83,17 @@ export function exportBaseName(preferences: Pick<Preferences, 'outputName' | 'co
   return `${normalizeOutputName(preferences.outputName)}_${Math.max(1, Math.min(999_999, Math.floor(preferences.counter)))}`;
 }
 
-function normalize(raw: Partial<Preferences> = {}): Preferences {
-  const charts = Array.isArray(raw.chartTypes) ? raw.chartTypes.filter((id): id is ChartType => chartIds.has(id)) : [];
+export function normalize(raw: Partial<Preferences> = {}): Preferences {
+  const charts = Array.isArray(raw.chartTypes)
+    ? raw.chartTypes.filter((id): id is ChartType => chartIds.has(id)).slice(0, MAX_RESULT_PANELS)
+    : [...defaults.chartTypes];
   const formats = Array.isArray(raw.exportFormats) ? [...new Set(raw.exportFormats.filter((id): id is ExportFormat => exportIds.has(id)))] : [];
   const mapReference = MAP_REFERENCES.includes(Number(raw.mapReference) as MapReference) ? Number(raw.mapReference) as MapReference : defaults.mapReference;
   return {
     ...defaults,
     smoothing: smoothingIds.has(String(raw.smoothing)) ? raw.smoothing as SmoothingMode : defaults.smoothing,
     mapReference,
-    chartTypes: [...charts, ...defaults.chartTypes.slice(charts.length)].slice(0, defaults.chartTypes.length),
+    chartTypes: charts,
     chartTheme: String(raw.chartTheme || defaults.chartTheme),
     exportFormats: formats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
@@ -97,14 +105,57 @@ function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
+export const STORAGE_VERSION = 3;
+
+function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
+  const { chartTypes: _replaced, ...carried } = preferences;
+  return carried;
+}
+
+function migrateV2ToV3(preferences: Partial<Preferences>): Partial<Preferences> {
+  return {
+    ...preferences,
+    chartTypes: Array.isArray(preferences.chartTypes)
+      ? preferences.chartTypes.slice(0, MAX_RESULT_PANELS)
+      : undefined,
+  };
+}
+
+/**
+ * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
+ * panels while preserving unrelated settings; v2→v3 makes the chart list's
+ * stored length authoritative and carries the existing choices forward.
+ */
+export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {
+  try {
+    const parsed = JSON.parse(raw ?? '{}') as { version?: number; preferences?: Partial<Preferences> };
+    if (parsed.version === STORAGE_VERSION) return { value: normalize(parsed.preferences), migrated: false };
+    if (parsed.version === 2) {
+      return { value: normalize(migrateV2ToV3(parsed.preferences ?? {})), migrated: true };
+    }
+    if (parsed.version === 1) {
+      const v2 = migrateV1ToV2(parsed.preferences ?? {});
+      return { value: normalize(migrateV2ToV3(v2)), migrated: true };
+    }
+    return { value: { ...defaults }, migrated: raw !== null };
+  } catch {
+    return { value: { ...defaults }, migrated: raw !== null };
+  }
+}
+
+export function loadPreferences(raw: string | null): Preferences {
+  return readPreferences(raw).value;
+}
+
 function load(): Preferences {
   if (typeof localStorage === 'undefined') return { ...defaults };
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as { version?: number; preferences?: Partial<Preferences> };
-    return parsed.version === 1 ? normalize(parsed.preferences) : { ...defaults };
-  } catch {
-    return { ...defaults };
+  const { value, migrated } = readPreferences(localStorage.getItem(STORAGE_KEY));
+  // Persist a migrated layout straight away, so resetting the panel selection
+  // happens once rather than on every reload.
+  if (migrated) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, preferences: value })); } catch { /* persistence is best effort */ }
   }
+  return value;
 }
 
 class PreferenceStore {
@@ -114,13 +165,31 @@ class PreferenceStore {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   update(patch: Partial<Preferences>): void {
     this.value = normalize({ ...this.value, ...patch });
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, preferences: this.value })); } catch { /* persistence is best effort */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, preferences: this.value })); } catch { /* persistence is best effort */ }
     this.listeners.forEach((listener) => listener());
   }
   setChartType(index: number, chartType: ChartType): void {
+    if (index < 0 || index >= this.value.chartTypes.length) return;
     const chartTypes = [...this.value.chartTypes];
     chartTypes[index] = chartType;
     this.update({ chartTypes });
+  }
+  setChartCount(count: number): void {
+    const nextCount = Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)));
+    const chartTypes = this.value.chartTypes.slice(0, nextCount);
+    while (chartTypes.length < nextCount) {
+      chartTypes.push(defaults.chartTypes[chartTypes.length] ?? defaults.chartTypes[0]);
+    }
+    this.update({ chartTypes });
+  }
+  closeChart(index: number): void {
+    if (index < 0 || index >= this.value.chartTypes.length) return;
+    this.update({ chartTypes: this.value.chartTypes.filter((_chart, itemIndex) => itemIndex !== index) });
+  }
+  addChart(): void {
+    if (this.value.chartTypes.length >= MAX_RESULT_PANELS) return;
+    const index = this.value.chartTypes.length;
+    this.update({ chartTypes: [...this.value.chartTypes, defaults.chartTypes[index] ?? defaults.chartTypes[0]] });
   }
   toggleFormat(format: ExportFormat): void {
     const exportFormats = this.value.exportFormats.includes(format)

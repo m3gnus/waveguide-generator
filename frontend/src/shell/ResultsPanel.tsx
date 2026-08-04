@@ -8,7 +8,7 @@ import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeri
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
-import { CHART_TYPES, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
+import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 
 function frequency(value: number | undefined): string {
@@ -40,9 +40,43 @@ function splOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnT
   return lineOption(splSeries(items, smoothing).map((series, index) => ({ ...series, lineStyle: { width: index ? 1.2 : 2, type: index ? 'dashed' : 'solid' } })), tokens, 'dB SPL');
 }
 
-function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number): EChartsOption {
+export function heatmapFrequencyLabel(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  if (value >= 1_000) return `${Number((value / 1_000).toPrecision(3))}k`;
+  return String(Number(value.toPrecision(3)));
+}
+
+/**
+ * ECharts only draws cartesian heatmap cells on two *category* axes. On a log
+ * or value axis every cell is emitted with an empty path — nothing renders, and
+ * the guard that says so is compiled out of production builds, so the chart
+ * fails silently. Index the cells against category axes instead. The frequency
+ * axis still reads logarithmically because the sweep itself is log-spaced.
+ */
+export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number): EChartsOption {
   const grid = directivityGrid(result, plane);
-  return { animation: false, tooltip: { trigger: 'item' }, grid: { left: 42, right: 42, top: 12, bottom: 27 }, xAxis: { type: 'log', ...axes(tokens) }, yAxis: { type: 'value', min: grid.angles[0] ?? -90, max: grid.angles.at(-1) ?? 90, name: '°', nameTextStyle: { color: tokens.muted }, ...axes(tokens) }, visualMap: { min: mapReference * 5, max: 0, right: 0, top: 'middle', itemWidth: 8, itemHeight: 70, text: ['0', `${mapReference} ref`], textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: tokens.colormap } }, series: [{ type: 'heatmap', progressive: 0, data: grid.data.filter((cell) => cell[2] !== null), emphasis: { disabled: true } }] };
+  const columnOf = new Map(grid.frequencies.map((frequency, index) => [frequency, index]));
+  const rowOf = new Map(grid.angles.map((angle, index) => [angle, index]));
+  const floor = mapReference * 5;
+  const cells = grid.data.flatMap(([frequency, angle, level]) => {
+    const column = columnOf.get(frequency);
+    const row = rowOf.get(angle);
+    if (column === undefined || row === undefined || level === null) return [];
+    return [[column, row, Math.max(floor, Math.min(0, level)), level]];
+  });
+  const categoryAxis = { ...axes(tokens), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens).axisLabel, hideOverlap: true } };
+  return {
+    animation: false,
+    tooltip: { trigger: 'item', formatter: (params) => {
+      const [column, row, , level] = (Array.isArray(params) ? params[0] : params).value as number[];
+      return `${heatmapFrequencyLabel(grid.frequencies[column])}Hz · ${grid.angles[row]}° · ${level.toFixed(1)} dB`;
+    } },
+    grid: { left: 42, right: 42, top: 12, bottom: 27 },
+    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...categoryAxis },
+    yAxis: { type: 'category', data: grid.angles.map(String), name: '°', nameTextStyle: { color: tokens.muted }, ...categoryAxis },
+    visualMap: { min: floor, max: 0, right: 0, top: 'middle', itemWidth: 8, itemHeight: 70, text: ['0', `${mapReference} ref`], textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: tokens.colormap } },
+    series: [{ type: 'heatmap', progressive: 0, data: cells, emphasis: { disabled: true } }],
+  };
 }
 
 function impedanceOption(result: ResultPayload, tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing']): EChartsOption {
@@ -102,10 +136,28 @@ function ResultChart({ chartType, result, named, tokens }: { chartType: ChartTyp
 
 function ChartCard({ index, chartType, result, named, tokens }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
-  return <section className={`result-card result-${index}`} style={{ gridColumn: index % 2 ? '7 / 13' : '1 / 7' }}>
-    <header style={{ alignItems: 'center' }}><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)} style={{ maxWidth: '72%', color: 'var(--fg1)', background: 'var(--ctl-grad)', border: '1px solid var(--hair)', fontSize: 9 }}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType)}</span></header>
+  return <section className={`result-card result-${index}`}>
+    <header><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType)}</span><button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}>×</button></header>
     <div className="chart-placeholder"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
   </section>;
+}
+
+export function resultLayoutClass(count: number): string {
+  return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
+}
+
+export function ResultsChartGrid({ chartTypes, result, named, tokens }: {
+  chartTypes: ChartType[];
+  result: ResultPayload;
+  named: NamedResult[];
+  tokens: ChartTokens;
+}) {
+  if (!chartTypes.length) {
+    return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
+  }
+  return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens}/>) }
+  </div>;
 }
 
 export function ResultsPanel() {
@@ -159,10 +211,15 @@ export function ResultsPanel() {
     <div className="results-toolbar">
       {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title="Remove from comparison"><i/>{labelFor(id, jobs)} ×</button>)}
       <select aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }} style={{ color: 'var(--fg2)', background: 'var(--ctl-grad)', border: '1px dashed var(--hair)', borderRadius: 10, fontSize: 10 }}><option value="">+ compare</option>{available.map((job) => <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}</option>)}</select>
-      <span className="spacer"/><button disabled={exporting || !primary || !preferences.exportFormats.length} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export selected (${preferences.exportFormats.length})`}</button>
+      <span className="spacer"/>
+      <label className="result-count-control">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+      <button disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} onClick={() => preferencesStore.addChart()}>+ chart</button>
+      <button disabled={exporting || !primary || !preferences.exportFormats.length} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export selected (${preferences.exportFormats.length})`}</button>
     </div>
     <ResultsPreferencesSurface/>
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}</div>}
-    {!primary ? <div className="coming-soon"><b>LOADING RESULTS</b><span>Fetching selected job data…</span></div> : <div className="result-grid" style={{ gridTemplateRows: 'repeat(3, minmax(145px, 1fr))', minHeight: 480, flex: 'none' }}>{preferences.chartTypes.map((chartType, index) => <ChartCard key={index} index={index} chartType={chartType} result={primary} named={named} tokens={tokens}/>)}</div>}
+    {!primary
+      ? <div className="coming-soon"><b>LOADING RESULTS</b><span>Fetching selected job data…</span></div>
+      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={primary} named={named} tokens={tokens}/>}
   </div>;
 }

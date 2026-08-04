@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { EXPORT_FORMATS, MAP_REFERENCES, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
+import { EXPORT_FORMATS, MAP_REFERENCES, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 
 const fieldStyle = { display: 'grid', gap: 3, color: 'var(--fg3)', fontSize: 9 } as const;
@@ -20,12 +20,21 @@ function useThemes(): string[] {
   return themes;
 }
 
-export function ResultsPreferencesSurface() {
+export function ResultPanelCountControl() {
+  const preferences = usePreferences();
+  return <label style={fieldStyle}>Results layout<select aria-label="Results layout count" style={selectStyle} value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}>
+    {!RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) && <option value="">{preferences.chartTypes.length} charts</option>}
+    {RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count} chart{count === 1 ? '' : 's'}</option>)}
+  </select></label>;
+}
+
+export function ResultsPreferencesSurface({ expanded = false }: { expanded?: boolean }) {
   const preferences = usePreferences();
   const themes = useThemes();
-  return <details style={{ borderBottom: '1px solid var(--hair-soft)', padding: '4px 9px' }}>
+  return <details open={expanded || undefined} className="preferences-surface">
     <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 10 }}>Results & export preferences</summary>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '7px 0' }}>
+      <ResultPanelCountControl/>
       <label style={fieldStyle}>Smoothing<select aria-label="Smoothing" style={selectStyle} value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label style={fieldStyle}>Map ref<select aria-label="Map reference" style={selectStyle} value={preferences.mapReference} onChange={(event) => preferencesStore.update({ mapReference: Number(event.target.value) as MapReference })}>{MAP_REFERENCES.map((value) => <option key={value} value={value}>{value} dB</option>)}</select></label>
       <label style={fieldStyle}>Chart theme<select aria-label="Chart theme" style={selectStyle} value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}>{[...new Set([preferences.chartTheme, ...themes])].map((theme) => <option key={theme}>{theme}</option>)}</select></label>
@@ -38,9 +47,9 @@ export function ResultsPreferencesSurface() {
   </details>;
 }
 
-export function JobsPreferencesSurface() {
+export function JobsPreferencesSurface({ expanded = false }: { expanded?: boolean }) {
   const preferences = usePreferences();
-  return <details style={{ borderBottom: '1px solid var(--hair-soft)', padding: '4px 9px' }}>
+  return <details open={expanded || undefined} className="preferences-surface">
     <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 10 }}>Job preferences</summary>
     <div style={{ display: 'flex', gap: 8, padding: '7px 0' }}>
       <label style={fieldStyle}>Default sort<select aria-label="Default task sort" style={selectStyle} value={preferences.jobSort} onChange={(event) => preferencesStore.update({ jobSort: event.target.value as JobSort })}><option value="completed_desc">Completed, newest</option><option value="created_desc">Created, newest</option><option value="rating_desc">Rating, highest</option><option value="name_asc">Name, A–Z</option></select></label>

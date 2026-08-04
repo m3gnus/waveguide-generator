@@ -1,10 +1,4 @@
-.parameter-tabs { position: sticky; top: 0; z-index: 6; display: grid; grid-template-columns: 1fr 1fr; padding: 5px 8px 0; border-bottom: 1px solid var(--hair-soft); background: var(--float-bg); }
-.parameter-tabs button { height: 27px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--fg3); font-size: 10.5px; font-weight: 600; }
-.parameter-tabs button:hover { color: var(--fg1); }
-.parameter-tabs button[aria-selected="true"] { border-bottom-color: var(--acc); color: var(--fg1); }
-.parameter-tabs button:focus-visible { outline: 1px solid var(--acc); outline-offset: -2px; }
-.parameter-tab-label { padding: 6px 9px; border-bottom: 1px solid var(--hair-soft); background: rgba(var(--acc-rgb), .05); color: var(--acc); font: 9px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
-.parameter-search { position: sticky; top: 32px; z-index: 5; display: flex; gap: 4px; padding: 7px 8px; border-bottom: 1px solid var(--hair-soft); background: var(--float-bg); }
+.parameter-search { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; padding: 7px 8px; border-bottom: 1px solid var(--hair-soft); background: var(--float-bg); }
 .parameter-search input { width: 100%; height: 24px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg); font: 10.5px var(--mono); }
 .parameter-search input:focus { border-color: rgba(var(--acc-rgb), .5); outline: 0; box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
 .parameter-search button { width: 23px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); }

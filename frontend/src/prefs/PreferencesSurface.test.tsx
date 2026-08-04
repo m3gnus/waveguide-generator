@@ -19,6 +19,7 @@ describe('preferences surfaces', () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Smoothing"]')?.options).toHaveLength(11);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Map reference"]')?.options).toHaveLength(4);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
     expect(host.querySelector('[aria-label="Output name"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Export counter"]')).not.toBeNull();
     expect(host.querySelectorAll('fieldset input[type="checkbox"]')).toHaveLength(11);

@@ -144,8 +144,8 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   select('common.length_mode', 'lengthMode', 'length_mode', throatExtension, 'Length mode', [{ value: 'profile', label: 'Profile length' }, { value: 'total', label: 'Total length' }], { families: osseFamilies }),
   { id: 'common.coverage_mode', legacyKey: 'coverageMode', path: 'coverage_mode', section: profile, label: 'Coverage mode', kind: 'text', families: ['ICW'] },
   select('morph.target_shape', 'morphTarget', 'morph.target_shape', morphTarget, 'Morph target', [{ value: 0, label: 'None' }, { value: 1, label: 'Rectangle' }, { value: 2, label: 'Circle' }], { families: ['R-OSSE', 'OSSE', 'ICW'] }),
-  number('morph.target_width', 'morphWidth', 'morph.target_width', morphTarget, 'Target width', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
-  number('morph.target_height', 'morphHeight', 'morph.target_height', morphTarget, 'Target height', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
+  number('morph.target_width', 'morphWidth', 'morph.target_width', morphTarget, 'Target width', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000, description: 'Full target width. 0 derives it from the mouth. A Circle target uses the larger of width and height as its diameter.' }),
+  number('morph.target_height', 'morphHeight', 'morph.target_height', morphTarget, 'Target height', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000, description: 'Full target height. 0 derives it from the mouth. A Circle target uses the larger of width and height as its diameter.' }),
   number('morph.corner_radius', 'morphCorner', 'morph.corner_radius', morphTarget, 'Corner radius', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 100, step: 1 }),
   number('morph.rate', 'morphRate', 'morph.rate', morphTarget, 'Morph rate', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 100 }),
   number('morph.fixed_part', 'morphFixed', 'morph.fixed_part', morphTarget, 'Fixed part', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 1, step: .01 }),
@@ -204,7 +204,10 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('simulation.f2', 'freqEnd', 'simulation.f2', frequencySweep, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
   number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', frequencySweep, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0 }),
   select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle' }]),
-  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto' }, { value: 'full_3d', label: 'Full 3D' }, { value: 'circsym', label: 'CircSym' }]),
+  // CircSym is not a backend, it is the axisymmetric meridian fast path: the
+  // solver takes it automatically for a body of revolution. The stored values
+  // stay as ATH spells them so designs round-trip; only the labels changed.
+  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — meridian when eligible' }, { value: 'full_3d', label: 'Force full 3D' }, { value: 'circsym', label: 'Force axisymmetric meridian' }], { description: 'Auto solves a body of revolution on one rotated meridian slice and everything else in full 3D. Forcing the meridian path fails clearly when the geometry is not eligible.' }),
 
   select('output.stl', 'outputSTL', 'output.stl', 'Output & Passthrough', 'STL output flag', yesNo),
   select('output.msh', 'outputMSH', 'output.msh', 'Output & Passthrough', 'MSH output flag', yesNo),
@@ -253,7 +256,7 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
   {
     title: 'Morph Target',
     tab: 'geometry',
-    description: 'Post-profile shaping used to transition the mouth toward another target shape.',
+    description: 'Post-profile shaping that transitions the mouth toward another target shape. Target extents smaller than the mouth are enlarged back to it unless Allow shrinkage is on, so a smaller width or height changes nothing on its own. Leave an extent at 0 to derive it from the mouth.',
   },
   {
     title: 'Wall & Enclosure',

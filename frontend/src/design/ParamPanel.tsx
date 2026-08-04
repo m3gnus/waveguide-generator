@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { convertDesignToFreeform } from '../api/designIo';
+import { fetchSymmetry, type SymmetryResolution } from '../jobs/actions';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { NumberField } from './NumberField';
@@ -252,49 +254,172 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
   </>;
 }
 
-function QuadrantControl({ design }: { design: DesignDocument }) {
-  const setQuadrants = useDesignStore((state) => state.setQuadrants);
-  return <div className="quadrant-wrap"><div className="quadrants">
-    {[2, 1, 3, 4].map((quadrant) => <button key={quadrant} className={design.quadrants.includes(quadrant) ? 'on' : ''} onClick={() => {
-      const next = design.quadrants.includes(quadrant) ? design.quadrants.filter((item) => item !== quadrant) : [...design.quadrants, quadrant];
-      if (next.length) setQuadrants(next);
-    }}>Q{quadrant}</button>)}
-  </div><div className="quadrant-meta"><b>{design.quadrants.length === 4 ? 'Full domain' : design.quadrants.length === 1 ? 'Quarter domain' : 'Reduced domain'}</b><span>{design.quadrants.length} of 4 quadrants</span><em>schema mask {design.mesh.quadrants}</em></div></div>;
+const symmetryModeLabels: Record<SymmetryMode, string> = {
+  auto: 'Auto — smallest domain the geometry allows',
+  full: 'Full domain',
+  half_xz: 'Half domain (mirror about XZ)',
+  half_yz: 'Half domain (mirror about YZ)',
+  quarter: 'Quarter domain',
+};
+
+export function domainName(quadrants: number): string {
+  if (quadrants === 1) return 'Quarter domain';
+  if (quadrants === 12) return 'Half domain (XZ)';
+  if (quadrants === 14) return 'Half domain (YZ)';
+  return 'Full domain';
 }
 
-export function ParamPanel() {
+/** Why auto could not go smaller, in the resolver's own words. */
+export function symmetrySummary(resolution: SymmetryResolution): string {
+  const rejected = [
+    ...(resolution.xz ? [] : resolution.reasons.xz),
+    ...(resolution.yz ? [] : resolution.reasons.yz),
+  ];
+  if (!rejected.length) return 'Both mirror planes hold.';
+  return rejected.join(' ');
+}
+
+function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
+  const revision = useDesignStore((state) => state.designRevision);
+  const [resolution, setResolution] = useState<SymmetryResolution | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    // Resolving samples the surface, so it must not run on every keystroke.
+    const timer = setTimeout(() => {
+      setPending(true);
+      void fetchSymmetry(design)
+        .then((next) => { if (live) { setResolution(next); setError(null); } })
+        .catch((reason) => { if (live) setError(reason instanceof Error ? reason.message : String(reason)); })
+        .finally(() => { if (live) setPending(false); });
+    }, 400);
+    return () => { live = false; clearTimeout(timer); };
+  }, [revision]);
+
+  if (error) return <div className="resolved-mode"><span>Auto resolves to</span><b>—</b><small>{error}</small></div>;
+  if (!resolution) return <div className="resolved-mode"><span>Auto resolves to</span><b>{pending ? 'resolving…' : '—'}</b></div>;
+  return <div className="resolved-mode">
+    <span>Auto resolves to</span><b>{domainName(resolution.quadrants)}</b>
+    <small>{symmetrySummary(resolution)}</small>
+  </div>;
+}
+
+function QuadrantControl({ design }: { design: DesignDocument }) {
+  const setQuadrants = useDesignStore((state) => state.setQuadrants);
+  const symmetry = useSolveOptionsStore((state) => state.symmetry);
+  const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
+  return <div className="quadrant-wrap">
+    <div className="select-row">
+      <label htmlFor="solve-symmetry">Solve domain</label>
+      <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
+        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => <option key={mode} value={mode}>{symmetryModeLabels[mode]}</option>)}
+      </select>
+    </div>
+    {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
+    <div className="quadrants">
+      {[2, 1, 3, 4].map((quadrant) => <button key={quadrant} className={design.quadrants.includes(quadrant) ? 'on' : ''} onClick={() => {
+        const next = design.quadrants.includes(quadrant) ? design.quadrants.filter((item) => item !== quadrant) : [...design.quadrants, quadrant];
+        if (next.length) setQuadrants(next);
+      }}>Q{quadrant}</button>)}
+    </div>
+    <div className="quadrant-meta">
+      <b>{domainName(design.mesh.quadrants)}</b>
+      <span>{design.quadrants.length} of 4 quadrants</span>
+      <em>schema mask {design.mesh.quadrants}</em>
+    </div>
+    {symmetry === 'auto' && <p className="section-note">This is the design&rsquo;s own ATH <code>Mesh.Quadrants</code> field and is saved as written. Auto decides the solved domain instead.</p>}
+  </div>;
+}
+
+export const REVEAL_PARAMETER_EVENT = 'wg:reveal-parameter';
+
+export interface RevealRequest { id: string; tab: ParameterTab; query: string }
+
+/**
+ * A reveal request that waits to be claimed.
+ *
+ * Dockview mounts only the active panel in a group, so routing a parameter from
+ * the command palette activates a tab and then talks to a panel that may not
+ * exist yet. A plain event only reaches listeners that are already attached, and
+ * which side of the panel's mount the announcement lands on is not something the
+ * caller can know. Holding the request until its panel claims it removes the
+ * ordering question rather than betting on an answer.
+ */
+class ParameterRevealRequest {
+  private request: RevealRequest | null = null;
+  private readonly listeners = new Set<() => void>();
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  getSnapshot = (): RevealRequest | null => this.request;
+
+  set(detail: RevealRequest): void {
+    this.request = detail;
+    this.listeners.forEach((listener) => listener());
+  }
+
+  /** Take the request if it belongs to `tab`, leaving another tab's alone. */
+  claim(tab: ParameterTab): RevealRequest | null {
+    if (this.request?.tab !== tab) return null;
+    const claimed = this.request;
+    this.request = null;
+    return claimed;
+  }
+}
+
+export const parameterRevealRequest = new ParameterRevealRequest();
+
+export function requestParameterReveal(detail: RevealRequest): void {
+  parameterRevealRequest.set(detail);
+  window.dispatchEvent(new CustomEvent(REVEAL_PARAMETER_EVENT, { detail }));
+}
+
+export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const design = useDesignStore((state) => state.design);
   const setFamily = useDesignStore((state) => state.setFamily);
   const loadDesign = useDesignStore((state) => state.loadDesign);
   const [query, setQuery] = useState('');
-  const [activeTab, setActiveTabState] = useState<ParameterTab>(() => {
-    try { return localStorage.getItem('wg-param-active-tab') === 'simulation' ? 'simulation' : 'geometry'; } catch { return 'geometry'; }
-  });
   const [freeformChoice, setFreeformChoice] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const searching = Boolean(query.trim());
-  const fieldsBySection = useMemo(() => new Map(PARAMETER_SECTION_DEFINITIONS.map(({ title }) => {
+  const fieldsBySection = useMemo(() => new Map(PARAMETER_SECTION_DEFINITIONS.filter((definition) => definition.tab === tab).map(({ title }) => {
     const fields = PARAMETER_REGISTRY.filter((field) => field.section === title)
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
       .filter((field) => fieldMatchesQuery(field, query));
     return [title, fields] as const;
-  })), [design, query]);
+  })), [design, query, tab]);
 
-  const setActiveTab = (tab: ParameterTab, focus = false) => {
-    setActiveTabState(tab);
-    try { localStorage.setItem('wg-param-active-tab', tab); } catch { /* storage is optional */ }
-    if (focus) document.getElementById(`parameter-tab-${tab}`)?.focus();
-  };
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const current = event.currentTarget.id.endsWith('simulation') ? 'simulation' : 'geometry';
-    const next = event.key === 'Home' ? 'geometry'
-      : event.key === 'End' ? 'simulation'
-        : current === 'geometry' ? 'simulation' : 'geometry';
-    setActiveTab(next, true);
-  };
+  useEffect(() => {
+    const apply = () => {
+      const detail = parameterRevealRequest.claim(tab);
+      if (!detail) return;
+      setQuery(detail.query);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const entry = [...document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-parameter-id]`)]
+          .find((element) => element.dataset.parameterId === detail.id);
+        // jsdom has no scrollIntoView, and losing focus matters more than losing
+        // the scroll, so never let the nicety take the necessity down with it.
+        try { entry?.scrollIntoView({ block: 'center' }); } catch { /* not scrollable here */ }
+        entry?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])')?.focus();
+      }));
+    };
+    // Claim on mount and on every later request; whichever comes second is a
+    // no-op, so this panel gets its request regardless of the order.
+    apply();
+    const unsubscribe = parameterRevealRequest.subscribe(apply);
+    const onEvent = () => apply();
+    window.addEventListener(REVEAL_PARAMETER_EVENT, onEvent);
+    return () => {
+      unsubscribe();
+      window.removeEventListener(REVEAL_PARAMETER_EVENT, onEvent);
+    };
+  }, [tab]);
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} key={field.id}>
     {field.id === 'mesh.quadrants' ? <QuadrantControl design={design} /> : <FieldControl field={field} design={design} />}
@@ -343,47 +468,21 @@ export function ParamPanel() {
     </div>}
   </Section>;
 
-  const renderTab = (tab: ParameterTab) => {
-    const definitions = PARAMETER_SECTION_DEFINITIONS.filter((definition) => definition.tab === tab);
-    return <div
-      id={`parameter-panel-${tab}`}
-      role="tabpanel"
-      aria-labelledby={`parameter-tab-${tab}`}
-      hidden={!searching && activeTab !== tab}
-      key={tab}
-    >
-      {searching && <div className="parameter-tab-label">{tab === 'geometry' ? 'Geometry' : 'Simulation'} matches</div>}
+  const definitions = PARAMETER_SECTION_DEFINITIONS.filter((definition) => definition.tab === tab);
+
+  return (
+    <div className="param-panel panel-scroll" data-param-tab={tab}>
+      <div className="parameter-search">
+        <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
+        <input id={`parameter-filter-${tab}`} type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />
+        {query && <button aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
+      </div>
       {!searching && tab === 'geometry' && modelTypeSection}
       {definitions.map((definition) => <div key={definition.title}>
         {renderRegistrySection(definition)}
         {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." summary="11 controls" forceOpen={false}><DirectivityMapControls /></Section>}
         {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, frequency spacing, and diagnostic output controls." summary="4 options" forceOpen={false}><SolveOptionsControls /></Section>}
       </div>)}
-    </div>;
-  };
-
-  return (
-    <div className="param-panel panel-scroll">
-      <div className="panel-meta"><span className="pill accent">{design.formula}</span><span>complete design inventory</span></div>
-      <div className="parameter-tabs" role="tablist" aria-label="Parameter category">
-        {(['geometry', 'simulation'] as const).map((tab) => <button
-          id={`parameter-tab-${tab}`}
-          type="button"
-          role="tab"
-          aria-controls={`parameter-panel-${tab}`}
-          aria-selected={activeTab === tab}
-          tabIndex={activeTab === tab ? 0 : -1}
-          key={tab}
-          onClick={() => setActiveTab(tab)}
-          onKeyDown={handleTabKeyDown}
-        >{tab === 'geometry' ? 'Geometry' : 'Simulation'}</button>)}
-      </div>
-      <div className="parameter-search">
-        <label className="sr-only" htmlFor="parameter-filter">Filter parameters</label>
-        <input id="parameter-filter" type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />
-        {query && <button aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
-      </div>
-      {(['geometry', 'simulation'] as const).map(renderTab)}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
   );

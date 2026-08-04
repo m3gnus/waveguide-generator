@@ -9,6 +9,7 @@ import {
   isTrustworthySize,
   nextLayoutAction,
   ReactPanelRenderer,
+  LEGACY_LAYOUT_KEY,
   seedSize,
   Workspace,
 } from './Workspace';
@@ -47,17 +48,32 @@ describe('Workspace', () => {
     host.remove();
   });
 
-  it('creates the four persisted dock panels without runtime errors', async () => {
+  it('creates the five persisted dock panels without runtime errors', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await act(async () => {
       root.render(<Workspace resetKey={0}/>);
       await Promise.resolve();
     });
     expect(host.querySelector('.dv-dockview')).not.toBeNull();
-    expect(host.textContent).toContain('Parameters');
+    expect(host.textContent).toContain('Geometry');
+    expect(host.textContent).toContain('Simulation');
     expect(host.textContent).toContain('Viewport');
     expect(host.textContent).toContain('Results');
     expect(host.textContent).toContain('Jobs');
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('ignores a stored old-key parameter layout and falls back to the new default', async () => {
+    localStorage.setItem(LEGACY_LAYOUT_KEY, JSON.stringify({ panels: { parameters: { id: 'parameters', contentComponent: 'parameters', title: 'Parameters' } } }));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await act(async () => {
+      root.render(<Workspace resetKey={0}/>);
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain('Geometry');
+    expect(host.textContent).toContain('Simulation');
+    expect(host.textContent).not.toContain('Parameters');
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
   });
@@ -188,10 +204,11 @@ describe('Workspace', () => {
             "data": [
               {
                 "data": {
-                  "activeView": "parameters",
+                  "activeView": "geometry",
                   "id": "parameters-group",
                   "views": [
-                    "parameters",
+                    "geometry",
+                    "simulation",
                   ],
                 },
                 "size": 300,
@@ -243,20 +260,25 @@ describe('Workspace', () => {
           "width": 1440,
         },
         "panels": {
+          "geometry": {
+            "contentComponent": "geometry",
+            "id": "geometry",
+            "title": "Geometry",
+          },
           "jobs": {
             "contentComponent": "jobs",
             "id": "jobs",
             "title": "Jobs",
           },
-          "parameters": {
-            "contentComponent": "parameters",
-            "id": "parameters",
-            "title": "Parameters",
-          },
           "results": {
             "contentComponent": "results",
             "id": "results",
             "title": "Results",
+          },
+          "simulation": {
+            "contentComponent": "simulation",
+            "id": "simulation",
+            "title": "Simulation",
           },
           "viewport": {
             "contentComponent": "viewport",

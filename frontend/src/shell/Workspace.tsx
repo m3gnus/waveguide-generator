@@ -13,16 +13,27 @@ import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
 
-const LAYOUT_KEY = 'wg2.dockview.layout.v1';
+export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
+export const LAYOUT_KEY = 'wg2.dockview.layout.v2';
 
 const components = {
-  parameters: ParamPanel,
+  geometry: () => <ParamPanel tab="geometry" />,
+  simulation: () => <ParamPanel tab="simulation" />,
   viewport: ViewportPanel,
   results: ResultsPanel,
   jobs: JobsPanel,
 };
 
 type ComponentName = keyof typeof components;
+
+type WorkspacePanel = ComponentName;
+let activateWorkspacePanel = (_panel: WorkspacePanel): boolean => false;
+
+export const workspaceNavigation = {
+  activate(panel: WorkspacePanel): boolean {
+    return activateWorkspacePanel(panel);
+  },
+};
 
 export class ReactPanelRenderer implements IContentRenderer {
   readonly element = document.createElement('div');
@@ -71,7 +82,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
   const layoutHeight = Math.max(RESULTS_HEIGHT + 1, Math.round(height) || FALLBACK_HEIGHT);
   const viewportWidth = layoutWidth - PARAMETERS_WIDTH - JOBS_WIDTH;
   const viewportHeight = layoutHeight - RESULTS_HEIGHT;
-  const group = (id: ComponentName) => ({ id: `${id}-group`, views: [id], activeView: id });
+  const group = (id: string, views: ComponentName[], activeView: ComponentName = views[0]) => ({ id: `${id}-group`, views, activeView });
   return {
     grid: {
       width: layoutWidth,
@@ -81,21 +92,22 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
         type: 'branch',
         size: layoutHeight,
         data: [
-          { type: 'leaf', size: PARAMETERS_WIDTH, data: group('parameters') },
+          { type: 'leaf', size: PARAMETERS_WIDTH, data: group('parameters', ['geometry', 'simulation'], 'geometry') },
           {
             type: 'branch',
             size: viewportWidth,
             data: [
-              { type: 'leaf', size: viewportHeight, data: group('viewport') },
-              { type: 'leaf', size: RESULTS_HEIGHT, data: group('results') },
+              { type: 'leaf', size: viewportHeight, data: group('viewport', ['viewport']) },
+              { type: 'leaf', size: RESULTS_HEIGHT, data: group('results', ['results']) },
             ],
           },
-          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs') },
+          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs']) },
         ],
       },
     },
     panels: {
-      parameters: { id: 'parameters', contentComponent: 'parameters', title: 'Parameters' },
+      geometry: { id: 'geometry', contentComponent: 'geometry', title: 'Geometry' },
+      simulation: { id: 'simulation', contentComponent: 'simulation', title: 'Simulation' },
       viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
       results: { id: 'results', contentComponent: 'results', title: 'Results' },
       jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
@@ -206,6 +218,12 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       keyboardNavigation: true,
     });
     apiRef.current = dockview.api;
+    activateWorkspacePanel = (panel) => {
+      const target = dockview.api.getPanel(panel);
+      if (!target) return false;
+      target.api.setActive();
+      return true;
+    };
     const initialSize = measureHost(host.current, dockview.api);
     const stored = localStorage.getItem(LAYOUT_KEY);
     let restored = false;
@@ -239,6 +257,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       observer?.disconnect();
       subscription.dispose();
       apiRef.current = null;
+      activateWorkspacePanel = () => false;
       coldStartSeeded.current = false;
       dockview.dispose();
     };

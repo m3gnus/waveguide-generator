@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
-import { ParamPanel, resolveOuterBodyMode } from './ParamPanel';
+import { ParamPanel, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 describe('outer-body precedence', () => {
   it('matches all four server resolution branches', () => {
@@ -32,7 +32,7 @@ describe('ParamPanel inventory UX', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<ParamPanel />));
+    act(() => root.render(<ParamPanel tab="geometry" />));
   });
   afterEach(() => {
     act(() => root.unmount());
@@ -40,7 +40,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
-    const input = host.querySelector<HTMLInputElement>('#parameter-filter')!;
+    const input = host.querySelector<HTMLInputElement>('#parameter-filter-geometry')!;
     const setInputValue = (value: string) => Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
     act(() => {
       setInputValue('zMapPoints');
@@ -52,34 +52,37 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('normally hidden by the active mode');
   });
 
-  it('shows cross-tab search results with both tab labels', () => {
-    const input = host.querySelector<HTMLInputElement>('#parameter-filter')!;
+  it('keeps each dock panel filter scoped to its own parameter category', () => {
+    const input = host.querySelector<HTMLInputElement>('#parameter-filter-geometry')!;
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'mesh');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(host.textContent).toContain('Geometry matches');
-    expect(host.textContent).toContain('Simulation matches');
     expect(host.querySelector('[data-parameter-id="mesh.angular_segments"]')).not.toBeNull();
-    expect(host.querySelector('[data-parameter-id="mesh.throat_resolution"]')).not.toBeNull();
+    expect(host.querySelector('[data-parameter-id="mesh.throat_resolution"]')).toBeNull();
   });
 
-  it('uses accessible keyboard tabs and persists the active tab', () => {
-    const geometry = host.querySelector<HTMLButtonElement>('#parameter-tab-geometry')!;
-    const simulation = host.querySelector<HTMLButtonElement>('#parameter-tab-simulation')!;
-    expect(geometry.getAttribute('role')).toBe('tab');
-    expect(geometry.getAttribute('aria-selected')).toBe('true');
-    act(() => geometry.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
-    expect(simulation.getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(simulation);
-    expect(localStorage.getItem('wg-param-active-tab')).toBe('simulation');
-    expect(host.querySelector('#parameter-panel-simulation')?.hasAttribute('hidden')).toBe(false);
-    act(() => simulation.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
-    expect(geometry.getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(geometry);
+  it('uses the dock tab as its only category switcher', () => {
+    expect(host.querySelector('[role="tablist"]')).toBeNull();
+    expect(localStorage.getItem('wg-param-active-tab')).toBeNull();
+    expect(host.querySelector('[data-param-tab="geometry"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('complete design inventory');
+  });
+
+  it('reveals and focuses a parameter routed from the command palette', async () => {
+    act(() => root.render(<ParamPanel tab="simulation" />));
+    await act(async () => {
+      requestParameterReveal({ id: 'simulation.f1', tab: 'simulation', query: 'Sweep start' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    const entry = host.querySelector<HTMLElement>('[data-parameter-id="simulation.f1"]')!;
+    expect(entry).not.toBeNull();
+    expect(document.activeElement).toBe(entry.querySelector('input'));
+    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Sweep start');
   });
 
   it('persists section collapse state', () => {
+    act(() => root.render(<ParamPanel tab="simulation" />));
     const source = host.querySelector<HTMLElement>('[data-section="Source Definition"]')!;
     act(() => source.querySelector<HTMLButtonElement>('.section-head')!.click());
     expect(localStorage.getItem('wg-param-section-open:Source Definition')).toBe('false');
@@ -114,6 +117,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('rejects prospective inverted frequency bounds before committing', () => {
+    act(() => root.render(<ParamPanel tab="simulation" />));
     const entry = host.querySelector<HTMLElement>('[data-parameter-id="simulation.f1"]')!;
     const input = entry.querySelector<HTMLInputElement>('input')!;
     act(() => {
@@ -127,6 +131,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('enforces the legacy Source.Velocity 1/2 domain', () => {
+    act(() => root.render(<ParamPanel tab="simulation" />));
     act(() => useDesignStore.getState().setSourceConvention('legacy'));
     const entry = host.querySelector<HTMLElement>('[data-parameter-id="source.velocity"]')!;
     const input = entry.querySelector<HTMLInputElement>('input')!;
@@ -141,7 +146,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('renders the solve/directivity contracts and editable FREEFORM tables', () => {
-    act(() => host.querySelector<HTMLButtonElement>('#parameter-tab-simulation')!.click());
+    act(() => root.render(<ParamPanel tab="simulation" />));
     expect(host.querySelector('[data-section="Solve options"]')).not.toBeNull();
     expect(host.querySelector('[data-section="Directivity Map"]')).not.toBeNull();
     for (const id of ['solve-engine', 'mesh-validation-mode', 'frequency-spacing', 'solve-verbose', 'polar-angle-start', 'polar-angle-end', 'polar-angle-step', 'polar-distance', 'polar-norm-angle', 'polar-diagonal-angle', 'polar-observation-origin', 'polar-spherical-sampling']) {
@@ -149,7 +154,7 @@ describe('ParamPanel inventory UX', () => {
     }
     act(() => {
       useDesignStore.getState().setFamily('FREEFORM');
-      host.querySelector<HTMLButtonElement>('#parameter-tab-geometry')!.click();
+      root.render(<ParamPanel tab="geometry" />);
     });
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
     expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(2);
@@ -176,5 +181,49 @@ describe('ParamPanel inventory UX', () => {
     act(() => input.blur());
     expect(useDesignStore.getState().design.length).toBe(60);
     expect(useDesignStore.getState().design.profile_h!.points).toEqual(before);
+  });
+});
+
+describe('automatic solve domain', () => {
+  it('names each ATH quadrant mask the way the solver reduces it', () => {
+    expect(domainName(1)).toBe('Quarter domain');
+    expect(domainName(12)).toBe('Half domain (XZ)');
+    expect(domainName(14)).toBe('Half domain (YZ)');
+    expect(domainName(1234)).toBe('Full domain');
+  });
+
+  it('reports only the planes that were actually rejected, and says so when none were', () => {
+    expect(symmetrySummary({
+      quadrants: 1, xz: true, yz: true, reasons: { xz: [], yz: [] },
+      tolerance_mm: 0.01, relative_tolerance: 2e-4,
+    })).toBe('Both mirror planes hold.');
+    expect(symmetrySummary({
+      quadrants: 12, xz: true, yz: false,
+      reasons: { xz: ['unused'], yz: ['guiding curve is rotated'] },
+      tolerance_mm: 0.01, relative_tolerance: 2e-4,
+    })).toBe('guiding curve is rotated');
+  });
+});
+
+describe('parameter reveal requests', () => {
+  it('is claimed by its own tab and left alone by the other', () => {
+    requestParameterReveal({ id: 'rosse.R', tab: 'geometry', query: 'Mouth radius' });
+    expect(parameterRevealRequest.claim('simulation')).toBeNull();
+    expect(parameterRevealRequest.claim('geometry')).toMatchObject({ id: 'rosse.R' });
+    // Claiming consumes it, so a later mount does not re-apply a stale filter.
+    expect(parameterRevealRequest.claim('geometry')).toBeNull();
+  });
+
+  it('is readable by a panel that only mounts after the request was made', () => {
+    // The palette activates a tab and then routes, so the panel that must act
+    // on the request frequently does not exist when it is made.
+    requestParameterReveal({ id: 'simulation.f1', tab: 'simulation', query: 'Sweep start' });
+    expect(parameterRevealRequest.getSnapshot()).toMatchObject({ tab: 'simulation' });
+    let notified = 0;
+    const unsubscribe = parameterRevealRequest.subscribe(() => { notified += 1; });
+    requestParameterReveal({ id: 'rosse.R', tab: 'geometry', query: 'Mouth radius' });
+    expect(notified).toBe(1);
+    unsubscribe();
+    parameterRevealRequest.claim('geometry');
   });
 });

@@ -1,6 +1,6 @@
 import type { SVGProps } from 'react';
 
-type IconName = 'undo' | 'redo' | 'search' | 'play' | 'moon' | 'sun' | 'layout' | 'reset' | 'chip' | 'folder' | 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' | 'box';
+type IconName = 'undo' | 'redo' | 'search' | 'play' | 'moon' | 'sun' | 'layout' | 'settings' | 'reset' | 'chip' | 'folder' | 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' | 'box';
 
 const paths: Record<IconName, string[]> = {
   undo: ['M6 4.2 3.1 7.1 6 10', 'M3.1 7.1h6.1a3.7 3.7 0 0 1 0 7.4H6.4'],
@@ -10,6 +10,7 @@ const paths: Record<IconName, string[]> = {
   moon: ['M13.4 9.8A5.8 5.8 0 0 1 6.2 2.6a5.9 5.9 0 1 0 7.2 7.2Z'],
   sun: ['M11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z', 'M8 1.4V3M8 13v1.6M1.4 8H3M13 8h1.6M3.5 3.5l1.1 1.1m6.8 6.8 1.1 1.1m0-9-1.1 1.1m-6.8 6.8-1.1 1.1'],
   layout: ['M2 3h12v10H2Z', 'M6.2 3v10M11 6.4h3'],
+  settings: ['M8 5.4A2.6 2.6 0 1 1 8 10.6 2.6 2.6 0 0 1 8 5.4Z', 'M8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1m6.8 6.8 1 1m0-8.8-1 1m-6.8 6.8-1 1'],
   reset: ['M3 8a5 5 0 1 0 1.6-3.65', 'M2.8 2.4v3.2H6'],
   chip: ['M4.4 4.4h7.2v7.2H4.4Z', 'M6.6 2v2.4M9.4 2v2.4M6.6 11.6V14M9.4 11.6V14M2 6.6h2.4M2 9.4h2.4m7.2-2.8H14m-2.4 2.8H14'],
   folder: ['M1.8 12.4V4.6h4L7 6.2h7.2v6.2Z'],
