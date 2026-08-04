@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { formatApiDetail, getCapabilities, resolveEngine, submitDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, resolveEngine, submitDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -15,19 +15,18 @@ describe('API validation errors', () => {
 });
 
 describe('solve submission', () => {
-  it('mirrors G1 AUTO engine preference and CircSym compatibility', () => {
+  it('keeps AUTO on real backends even when solver mode forces the Metal fast path', () => {
     const capabilities = { engines: [
-      { name: 'dryrun', available: true, reason: null, version: 'builtin' },
-      { name: 'metal', available: true, reason: null, version: '1' },
-      { name: 'circsym', available: true, reason: null, version: '1' },
+      { name: 'dryrun', available: true, reason: null, version: 'builtin', fast_paths: [] },
+      { name: 'metal', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
     ] };
     expect(resolveEngine('auto', capabilities)).toBe('metal');
-    expect(resolveEngine('auto', capabilities, 'circsym')).toBe('circsym');
+    expect(resolveEngine('auto', capabilities, 'circsym')).toBe('metal');
   });
 
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {
     const options: SolveOptions = {
-      engine: 'auto', mesh_validation_mode: 'strict', verbose: true, frequency_spacing: 'linear',
+      engine: 'auto', symmetry: 'quarter', mesh_validation_mode: 'strict', verbose: true, frequency_spacing: 'linear',
       polar_config: { angle_range: [0, 90, 10], angle_step: 10, distance: 3, norm_angle: 7, inclination: 30, enabled_axes: ['horizontal', 'diagonal'], observation_origin: 'throat', spherical_sampling: true },
     };
     let body: Record<string, unknown> | undefined;
@@ -39,5 +38,18 @@ describe('solve submission', () => {
     expect(body?.options).toEqual(options);
     expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
+  });
+
+  it('posts the canonical design to the live symmetry resolver', async () => {
+    let path = '';
+    let body: Record<string, unknown> | undefined;
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      path = String(input);
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ quadrants: 1, xz: true, yz: true, reasons: { xz: [], yz: [] }, tolerance_mm: 0.01, relative_tolerance: 0.0002 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    await expect(fetchSymmetry(designForFamily('R-OSSE'), fetcher as typeof fetch)).resolves.toMatchObject({ quadrants: 1, xz: true, yz: true });
+    expect(path).toBe('/api/design/symmetry');
+    expect(body?.formula).toBe('R-OSSE');
   });
 });

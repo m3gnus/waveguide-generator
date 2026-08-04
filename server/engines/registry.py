@@ -20,6 +20,7 @@ class EngineInfo:
     available: bool
     reason: str
     version: str | None
+    fast_paths: tuple[str, ...] = ()
 
 
 def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineInfo]:
@@ -41,11 +42,16 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
 
-    for name, probe in (
-        ("metal", metal_status),
-        ("bempp", bempp_status),
-        ("circsym", circsym_status),
-    ):
+    try:
+        meridian_status = circsym_status()
+    except Exception as exc:
+        meridian_status = {
+            "available": False,
+            "reason": f"axisymmetric-meridian detection failed: {exc}",
+            "version": None,
+        }
+
+    for name, probe in (("metal", metal_status), ("bempp", bempp_status)):
         try:
             status = probe()
         except Exception as exc:  # a broken optional stack is unavailable, not fatal
@@ -60,6 +66,13 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 available=bool(status.get("available")),
                 reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
                 version=(str(status["version"]) if status.get("version") is not None else None),
+                fast_paths=(
+                    ("axisymmetric-meridian",)
+                    if name == "metal"
+                    and bool(status.get("available"))
+                    and bool(meridian_status.get("available"))
+                    else ()
+                ),
             )
         )
     return engines
@@ -110,16 +123,14 @@ def resolve_auto_engine(
 ) -> str | None:
     """Resolve AUTO to the best engine this host can actually run.
 
-    Explicit CircSym designs require that specialized adapter. Full-3D and
-    automatic solver modes prefer Metal, then BEMPP. The gated dry-run engine
-    is only a final development fallback when no physical solver is available.
+    Solver mode chooses a path inside a backend, not a backend. AUTO therefore
+    always prefers Metal, then BEMPP. The gated dry-run engine is only a final
+    development fallback when no physical solver is available.
     """
 
     detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
     available = {item.name for item in detected if item.available}
-    normalized_mode = str(solver_mode or "auto").strip().lower().replace("-", "_")
-    if normalized_mode in {"circsym", "circ_sym", "axisymmetric", "axisym"}:
-        return "circsym" if "circsym" in available else None
+    del solver_mode
     for candidate in ("metal", "bempp", "dryrun"):
         if candidate in available:
             return candidate

@@ -50,7 +50,7 @@ def test_auto_is_the_contract_default_and_resolves_by_capability(monkeypatch) ->
     ]
     monkeypatch.setattr("server.engines.registry.detect_engines", lambda **_kwargs: capabilities)
     assert resolve_auto_engine(solver_mode="full_3d") == "bempp"
-    assert resolve_auto_engine(solver_mode="circsym") == "circsym"
+    assert resolve_auto_engine(solver_mode="circsym") == "bempp"
 
 
 def test_runtime_persists_auto_resolution_and_verbose_log(tmp_path: Path, monkeypatch) -> None:

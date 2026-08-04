@@ -176,6 +176,8 @@ def solve_circsym_design(
     metadata: dict[str, Any] = {
         "solver_backend": "metal",
         "solver_mode": "circsym",
+        "solve_path": "axisymmetric-meridian",
+        "axisymmetric_eligibility_reasons": [],
         "device_interface": {"selected": "metal", "metal": metal},
         "engine": "hornlab-metal-bem",
         "phase_time_convention": "exp(+ikr)",

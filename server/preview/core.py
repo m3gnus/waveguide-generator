@@ -266,17 +266,37 @@ def encode_preview_geometry(
         arrays[position_name] = positions
         arrays[index_name] = indices
         arrays[normal_name] = normals
-        surfaces.append(
-            {
-                "role": surface.role,
-                "positions": position_name,
-                "indices": index_name,
-                "normals": normal_name,
-                "shading": surface.shading,
-                "normalMethod": surface.normal_method,
-                "closedPhi": bool(surface.closed_phi),
-            }
-        )
+        declaration = {
+            "role": surface.role,
+            "positions": position_name,
+            "indices": index_name,
+            "normals": normal_name,
+            "shading": surface.shading,
+            "normalMethod": surface.normal_method,
+            "closedPhi": bool(surface.closed_phi),
+        }
+        # FRAME-SPEC §5 optional curvature sections. Absent until the mesher
+        # started producing them, which is why the viewport's curvature heatmap
+        # could never populate; a surface that still has none simply omits them
+        # and the client says so honestly.
+        for field, section in (
+            ("curvature_mean", "curvatureMean"),
+            ("curvature_principal", "curvaturePrincipal"),
+        ):
+            values = getattr(surface, field, None)
+            if values is None:
+                continue
+            array = np.ascontiguousarray(values, dtype="<f4").reshape(-1)
+            if len(array) != len(positions):
+                raise ValueError(
+                    f"{surface.role}: {section} is not row-aligned with positions"
+                )
+            if not np.isfinite(array).all():
+                raise ValueError(f"{surface.role}: {section} contains non-finite values")
+            name = f"{prefix}.{section}"
+            arrays[name] = array
+            declaration[section] = name
+        surfaces.append(declaration)
     metadata = _json_safe(geometry.metadata)
     return encode(
         {

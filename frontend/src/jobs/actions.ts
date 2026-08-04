@@ -6,10 +6,19 @@ export interface EngineCapability {
   available: boolean;
   reason: string | null;
   version: string | null;
+  fast_paths: string[];
 }
 
 export interface Capabilities { engines: EngineCapability[] }
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
+export interface SymmetryResolution {
+  quadrants: 1 | 12 | 14 | 1234;
+  xz: boolean;
+  yz: boolean;
+  reasons: { xz: string[]; yz: string[] };
+  tolerance_mm: number;
+  relative_tolerance: number;
+}
 
 export function toSolveDesign(design: DesignDocument): Record<string, unknown> {
   return serializeDesign(design);
@@ -52,12 +61,24 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
 
 export function resolveEngine(engine: string, capabilities: Capabilities, solverMode = 'auto'): string {
   if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
-  const order = solverMode.toLowerCase().replace('-', '_') === 'circsym'
-    ? ['circsym']
-    : ['metal', 'bempp', 'dryrun'];
+  void solverMode;
+  const order = ['metal', 'bempp', 'dryrun'];
   const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
   if (!available) throw new Error('No solver backend is currently available');
   return available.name.toLowerCase();
+}
+
+export async function fetchSymmetry(
+  design: DesignDocument,
+  fetcher: typeof fetch = fetch,
+): Promise<SymmetryResolution> {
+  const response = await fetcher('/api/design/symmetry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(toSolveDesign(design)),
+  });
+  if (!response.ok) throw new Error(await detail(response));
+  return response.json() as Promise<SymmetryResolution>;
 }
 
 export async function submitDesign(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 import json
 import logging
@@ -13,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.engines.registry import EngineRegistry, detect_engines
+from server.design.schema import DesignConfig
 from server.charts import mount_charts
 from server.design_io import mount_design_io
 from server.exports import mount_exports
@@ -21,6 +23,7 @@ from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.platform.origin import local_origin
 from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
+from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 
 
@@ -121,9 +124,14 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
                 "default": "auto",
                 "resolvedDefault": resolved,
                 "full3dOrder": ["metal", "bempp", "dryrun"],
-                "circsymRequires": "circsym",
+                "metalFastPath": "axisymmetric-meridian",
             },
         }
+
+    @application.post("/api/design/symmetry")
+    async def design_symmetry(design: DesignConfig) -> dict[str, object]:
+        resolution = await asyncio.to_thread(resolve_symmetry, design)
+        return resolution.as_dict()
 
     mount_preview(application)
     mount_design_io(application)

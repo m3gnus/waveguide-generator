@@ -28,6 +28,7 @@ from server.jobs.runtime import (
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
+    SymmetryValidationError,
     UnknownEngineError,
 )
 from server.jobs.store import JobStore
@@ -75,7 +76,7 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
     async def submit_solve(body: SolveRequest) -> SolveAccepted:
         try:
             job_id = await runtime.submit(body)
-        except UnknownEngineError as exc:
+        except (UnknownEngineError, SymmetryValidationError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except EngineUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

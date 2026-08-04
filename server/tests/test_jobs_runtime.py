@@ -215,6 +215,8 @@ def test_dryrun_results_are_deterministic_and_plausibly_shaped(
         ids = [await runtime.submit(_request(delay_ms=0, count=7)) for _ in range(2)]
         await runtime.wait_idle()
         first, second = [await runtime.get_results(job_id) for job_id in ids]
+        first["metadata"].pop("solve_wall_time_seconds")
+        second["metadata"].pop("solve_wall_time_seconds")
         assert first == second
         assert len(first["frequencies"]) == 7
         assert len(first["spl_on_axis"]["spl"]) == 7

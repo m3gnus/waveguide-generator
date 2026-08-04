@@ -15,12 +15,15 @@ import inspect
 import json
 import logging
 import math
+import time
 from typing import Any, Mapping
 import uuid
 
+from server.design.schema import Expr
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.models import SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
+from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,10 @@ class EngineUnavailableError(RuntimeError):
 
 class UnknownEngineError(ValueError):
     """The request named an engine outside the registry."""
+
+
+class SymmetryValidationError(ValueError):
+    """The requested solve domain requires a mirror plane the geometry lacks."""
 
 
 class _CancelledAtCheckpoint(RuntimeError):
@@ -152,9 +159,27 @@ class JobRuntime:
     async def submit(self, request: SolveRequest) -> str:
         await self.start()
         engine_name = request.options.engine
-        known = {"auto", "dryrun", "metal", "bempp", "circsym"}
+        known = {"auto", "dryrun", "metal", "bempp"}
         if engine_name not in known:
             raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
+
+        resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+        try:
+            resolved_quadrants = validate_symmetry_mode(
+                request.options.symmetry, resolution
+            )
+        except ValueError as exc:
+            raise SymmetryValidationError(str(exc)) from exc
+        symmetry_metadata = {
+            "requested": request.options.symmetry,
+            "resolved_quadrants": resolved_quadrants,
+            "auto_resolution": resolution.as_dict(),
+            "design_quadrants": (
+                request.design.root.mesh.quadrants.text()
+                if request.design.root.mesh.quadrants is not None
+                else None
+            ),
+        }
         if engine_name == "auto":
             engine_name = await self.engine_registry.resolve(
                 "auto", solver_mode=request.design.root.simulation.solver_mode
@@ -183,6 +208,7 @@ class JobRuntime:
         now = _now_iso()
         request_dump = request.model_dump(mode="json")
         summary = self._config_summary(request)
+        summary["symmetry"] = symmetry_metadata
         polar_grid = request.options.polar_config.resolved_grid()
         assert request.design_snapshot is not None
         event = self.store.create_job(
@@ -208,6 +234,7 @@ class JobRuntime:
                     "log_tail": [],
                     "design_revision": request.design_revision,
                     "polar_grid": polar_grid,
+                    "symmetry": symmetry_metadata,
                 },
             },
             initial_event=("queued", {"status": "queued", "progress": 0.0}),
@@ -417,6 +444,17 @@ class JobRuntime:
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
         try:
             request = SolveRequest.model_validate(row["config_json"])
+            task_metadata = (
+                dict(row.get("task_metadata") or {})
+                if isinstance(row.get("task_metadata"), Mapping)
+                else {}
+            )
+            symmetry_metadata = dict(task_metadata.get("symmetry") or {})
+            resolved_quadrants = int(
+                symmetry_metadata.get("resolved_quadrants", 1234)
+            )
+            request = request.model_copy(deep=True)
+            request.design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))
             engine = await self.engine_registry.get_engine(request.options.engine)
             if engine is None:
                 raise EngineUnavailableError(f"Solve engine '{request.options.engine}' became unavailable")
@@ -425,7 +463,9 @@ class JobRuntime:
             # gmsh-worker + asyncio.to_thread orchestration, following v1
             # ``simulation_runner.py:397-427,430-527``.
             if request.options.engine != "dryrun":
-                await self._run_real_engine(job_id, request, engine)
+                await self._run_real_engine(
+                    job_id, request, engine, symmetry_metadata=symmetry_metadata
+                )
                 return
             event = self._transition(
                 job_id,
@@ -477,6 +517,7 @@ class JobRuntime:
                 await asyncio.sleep(delay / 3.0 if delay else 0)
 
             start, end, count = self._frequency_options(request)
+            solve_started = time.perf_counter()
             results = await asyncio.to_thread(
                 engine.solve,
                 design,
@@ -488,7 +529,16 @@ class JobRuntime:
                 mesh_validation_mode=request.options.mesh_validation_mode,
                 verbose=request.options.verbose,
             )
-            results = self._with_request_metadata(results, request)
+            result_metadata = results.setdefault("metadata", {})
+            result_metadata.setdefault("solve_path", "full-3d")
+            result_metadata.setdefault("axisymmetric_eligibility_reasons", [])
+            result_metadata["solve_wall_time_seconds"] = (
+                time.perf_counter() - solve_started
+            )
+            self._record_execution_metadata(job_id, result_metadata)
+            results = self._with_request_metadata(
+                results, request, symmetry_metadata=symmetry_metadata
+            )
             self._check_cancelled(job_id)
             await self._stage(
                 job_id, "postprocess", 0.90, "Postprocessing synthetic results", delay
@@ -548,7 +598,14 @@ class JobRuntime:
             logger.error("Simulation error for job %s: %s", job_id, exc, exc_info=True)
             await self._fail_job(job_id, str(exc))
 
-    async def _run_real_engine(self, job_id: str, request: SolveRequest, engine: Any) -> None:
+    async def _run_real_engine(
+        self,
+        job_id: str,
+        request: SolveRequest,
+        engine: Any,
+        *,
+        symmetry_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
         """Run one real adapter while preserving Batch J's lifecycle seam.
 
         Native callbacks arrive from solver threads.  They are marshalled back
@@ -615,6 +672,7 @@ class JobRuntime:
             }
             if "artifact_cb" in inspect.signature(engine.run).parameters:
                 run_kwargs["artifact_cb"] = artifact_callback
+            solve_started = time.perf_counter()
             outcome = await engine.run(request, **run_kwargs)
         finally:
             # Drain callbacks queued by the final native frequency/result hook.
@@ -634,6 +692,11 @@ class JobRuntime:
                 stage_tasks.clear()
 
         self._check_cancelled(job_id)
+        outcome_metadata = outcome.results.setdefault("metadata", {})
+        outcome_metadata.setdefault("solve_path", "full-3d")
+        outcome_metadata.setdefault("axisymmetric_eligibility_reasons", [])
+        outcome_metadata["solve_wall_time_seconds"] = time.perf_counter() - solve_started
+        self._record_execution_metadata(job_id, outcome_metadata)
         if outcome.msh_text and not artifact_persisted:
             try:
                 if outcome.mesh_stats is not None:
@@ -651,7 +714,11 @@ class JobRuntime:
             event = await asyncio.to_thread(
                 self.store.complete_job,
                 job_id,
-                self._with_request_metadata(outcome.results, request),
+                self._with_request_metadata(
+                    outcome.results,
+                    request,
+                    symmetry_metadata=symmetry_metadata,
+                ),
                 {
                     "status": "complete",
                     "stage": "complete",
@@ -817,14 +884,35 @@ class JobRuntime:
 
     @staticmethod
     def _with_request_metadata(
-        results: Mapping[str, Any], request: SolveRequest
+        results: Mapping[str, Any],
+        request: SolveRequest,
+        *,
+        symmetry_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         enriched = dict(results)
         metadata = dict(enriched.get("metadata") or {})
         metadata["design_revision"] = request.design_revision
         metadata["polar_grid"] = request.options.polar_config.resolved_grid()
+        if symmetry_metadata is not None:
+            metadata["symmetry"] = dict(symmetry_metadata)
         enriched["metadata"] = metadata
         return enriched
+
+    def _record_execution_metadata(
+        self, job_id: str, result_metadata: Mapping[str, Any]
+    ) -> None:
+        row = self.store.get_job_row(job_id)
+        if row is None:
+            return
+        metadata = dict(row.get("task_metadata") or {})
+        metadata["solve_path"] = result_metadata.get("solve_path", "full-3d")
+        metadata["axisymmetric_eligibility_reasons"] = list(
+            result_metadata.get("axisymmetric_eligibility_reasons") or []
+        )
+        metadata["solve_wall_time_seconds"] = float(
+            result_metadata.get("solve_wall_time_seconds") or 0.0
+        )
+        self.store.update_job(job_id, task_metadata_json=json.dumps(metadata))
 
     @staticmethod
     def _frequency_options(request: SolveRequest) -> tuple[float, float, int]:
@@ -879,6 +967,12 @@ class JobRuntime:
             "raw_results_file": metadata.get("raw_results_file"),
             "mesh_artifact_file": metadata.get("mesh_artifact_file"),
             "log_tail": metadata.get("log_tail") or [],
+            "symmetry": metadata.get("symmetry") or {},
+            "solve_path": metadata.get("solve_path"),
+            "axisymmetric_eligibility_reasons": metadata.get(
+                "axisymmetric_eligibility_reasons"
+            ) or [],
+            "solve_wall_time_seconds": metadata.get("solve_wall_time_seconds"),
         }
         if detailed:
             item["updated_at"] = row.get("updated_at")
@@ -893,5 +987,6 @@ __all__ = [
     "JobNotFoundError",
     "JobResourceUnavailableError",
     "JobRuntime",
+    "SymmetryValidationError",
     "UnknownEngineError",
 ]

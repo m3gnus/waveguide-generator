@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from server.jobs.models import SolveRequest
-from server.mesh.builder import build_solver_mesh
+from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallback
 from .context import SolverContext
@@ -288,6 +288,56 @@ class MetalEngine:
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
     ) -> EngineRunResult:
+        mode = str(request.design.root.simulation.solver_mode or "auto").strip().lower()
+        if mode not in {"auto", "full_3d", "circsym"}:
+            raise ValueError("solver_mode must be auto, full_3d, or circsym")
+
+        eligibility_reasons: list[str] = []
+        if mode != "full_3d":
+            from . import circsym as circsym_adapter
+
+            if circsym_adapter.circsym_rejection_reasons is None:
+                eligibility_reasons.append(
+                    "installed mesher does not expose axisymmetric-meridian eligibility"
+                )
+            else:
+                try:
+                    eligibility_reasons.extend(
+                        str(reason)
+                        for reason in circsym_adapter.circsym_rejection_reasons(
+                            _solver_mesher_config(request.design)
+                        )
+                    )
+                except Exception as exc:
+                    eligibility_reasons.append(
+                        f"axisymmetric-meridian eligibility check failed: {exc}"
+                    )
+            status = circsym_adapter.circsym_status()
+            if not status["available"] and not eligibility_reasons:
+                eligibility_reasons.append(str(status["reason"]))
+
+            if mode == "circsym" and eligibility_reasons:
+                raise ValueError(
+                    "Forced axisymmetric solver mode is not eligible: "
+                    + "; ".join(eligibility_reasons)
+                )
+            if not eligibility_reasons:
+                outcome = await circsym_adapter.CircSymEngine().run(
+                    request,
+                    cancel_cb=cancel_cb,
+                    stage_cb=stage_cb,
+                    artifact_cb=artifact_cb,
+                )
+                metadata = outcome.results.setdefault("metadata", {})
+                metadata["solve_path"] = "axisymmetric-meridian"
+                metadata["axisymmetric_eligibility_reasons"] = []
+                metadata["solve_path_reason"] = (
+                    "forced by solver_mode='circsym'"
+                    if mode == "circsym"
+                    else "geometry is eligible for Metal's axisymmetric meridian fast path"
+                )
+                return outcome
+
         context = SolverContext.from_request(request, solver_mode="full_3d")
         mesh = await build_solver_mesh(
             request.design,
@@ -307,6 +357,14 @@ class MetalEngine:
             cancellation_callback=cancel_cb,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
+        metadata = results.setdefault("metadata", {})
+        metadata["solve_path"] = "full-3d"
+        metadata["axisymmetric_eligibility_reasons"] = eligibility_reasons
+        metadata["solve_path_reason"] = (
+            "solver_mode='full_3d' explicitly opts out of the meridian fast path"
+            if mode == "full_3d"
+            else "axisymmetric-meridian eligibility was rejected"
+        )
         return EngineRunResult(results=results, msh_text=mesh["msh_text"], mesh_stats=mesh["stats"])
 
 

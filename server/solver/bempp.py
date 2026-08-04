@@ -247,7 +247,7 @@ class BemppEngine:
         artifact_cb: ArtifactCallback | None = None,
     ) -> EngineRunResult:
         if (request.design.root.simulation.solver_mode or "").strip().lower() == "circsym":
-            raise ValueError("BEMPP cannot run solver_mode='circsym'; select the CircSym engine")
+            raise ValueError("BEMPP cannot run solver_mode='circsym'; select Metal or use full_3d")
         context = SolverContext.from_request(request, solver_mode="full_3d")
         reject_bempp_infinite_baffle(context)
         mesh = await build_solver_mesh(
@@ -268,6 +268,10 @@ class BemppEngine:
             cancellation_callback=cancel_cb,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
+        results.setdefault("metadata", {})["solve_path"] = "full-3d"
+        results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
+            "axisymmetric-meridian is a Metal-only fast path"
+        ]
         return EngineRunResult(results=results, msh_text=mesh["msh_text"], mesh_stats=mesh["stats"])
 
 

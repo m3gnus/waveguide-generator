@@ -1,9 +1,11 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 export type MeshValidationMode = 'warn' | 'strict' | 'off';
 export type FrequencySpacing = 'log' | 'linear';
 export type PolarAxis = 'horizontal' | 'vertical' | 'diagonal';
 export type ObservationOrigin = 'mouth' | 'throat';
+export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
 
 /** Mirrors the polar_config request contract introduced by remediation G1. */
 export interface PolarConfig {
@@ -19,6 +21,7 @@ export interface PolarConfig {
 
 export interface SolveOptions {
   engine: string;
+  symmetry: SymmetryMode;
   mesh_validation_mode: MeshValidationMode;
   verbose: boolean;
   frequency_spacing: FrequencySpacing;
@@ -66,11 +69,13 @@ export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
 
 interface SolveOptionsStore {
   engine: string;
+  symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
   verbose: boolean;
   frequencySpacing: FrequencySpacing;
   polar: PolarUiState;
   setEngine: (engine: string) => void;
+  setSymmetry: (symmetry: SymmetryMode) => void;
   setMeshValidationMode: (mode: MeshValidationMode) => void;
   setVerbose: (verbose: boolean) => void;
   setFrequencySpacing: (spacing: FrequencySpacing) => void;
@@ -79,13 +84,15 @@ interface SolveOptionsStore {
   options: () => SolveOptions;
 }
 
-export const useSolveOptionsStore = create<SolveOptionsStore>((set, get) => ({
+export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => ({
   engine: 'auto',
+  symmetry: 'auto',
   meshValidationMode: 'warn',
   verbose: false,
   frequencySpacing: 'log',
   polar: structuredClone(defaultPolarUi),
   setEngine: (engine) => set({ engine }),
+  setSymmetry: (symmetry) => set({ symmetry }),
   setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
   setVerbose: (verbose) => set({ verbose }),
   setFrequencySpacing: (frequencySpacing) => set({ frequencySpacing }),
@@ -104,16 +111,28 @@ export const useSolveOptionsStore = create<SolveOptionsStore>((set, get) => ({
   }),
   options: () => ({
     engine: get().engine,
+    symmetry: get().symmetry,
     mesh_validation_mode: get().meshValidationMode,
     verbose: get().verbose,
     frequency_spacing: get().frequencySpacing,
     polar_config: polarConfigFromUi(get().polar),
+  }),
+}), {
+  name: 'waveguide-v2-solve-options',
+  partialize: (state) => ({
+    engine: state.engine,
+    symmetry: state.symmetry,
+    meshValidationMode: state.meshValidationMode,
+    verbose: state.verbose,
+    frequencySpacing: state.frequencySpacing,
+    polar: state.polar,
   }),
 }));
 
 export function resetSolveOptionsStore(): void {
   useSolveOptionsStore.setState({
     engine: 'auto',
+    symmetry: 'auto',
     meshValidationMode: 'warn',
     verbose: false,
     frequencySpacing: 'log',

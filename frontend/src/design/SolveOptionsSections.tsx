@@ -9,6 +9,12 @@ import {
   type PolarUiState,
 } from '../stores/solveOptions';
 
+export const solverModeLabels = {
+  auto: 'Auto',
+  full_3d: 'Full 3D',
+  circsym: 'Axisymmetric (force)',
+} as const;
+
 export function SolveOptionsControls() {
   const store = useSolveOptionsStore();
   const [engines, setEngines] = useState<EngineCapability[]>([]);
@@ -19,11 +25,20 @@ export function SolveOptionsControls() {
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { active = false; };
   }, []);
+  const backendEngines = engines.filter((engine) => engine.name.toLowerCase() !== 'circsym');
+  const selectedEngine = store.engine === 'auto'
+    ? ['metal', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]
+    : backendEngines.find((engine) => engine.name.toLowerCase() === store.engine);
+  const fastPaths = selectedEngine?.fast_paths ?? [];
   return <>
     <div className="select-row"><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
       <option value="auto">AUTO — first available</option>
-      {engines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
+      {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
     </select></div>
+    <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
+      ? 'Metal capability: automatic axisymmetric meridian fast path when the geometry is eligible.'
+      : 'Selected backend capability: Full 3D.'}</p>
+    <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
     <div className="select-row"><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></div>
     <div className="select-row"><label htmlFor="frequency-spacing">Sweep spacing</label><select id="frequency-spacing" value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></div>
     <label className="toggle-row" htmlFor="solve-verbose"><span>Verbose backend logging</span><input id="solve-verbose" type="checkbox" checked={store.verbose} onChange={(event) => store.setVerbose(event.target.checked)} /></label>

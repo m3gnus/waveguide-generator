@@ -63,6 +63,46 @@ def test_real_preview_geometry_round_trips_with_normals_for_every_surface() -> N
         assert normals.shape == positions.shape
         np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-3)
 
+    # FRAME-SPEC section 5: without these the viewport's curvature heatmap can
+    # never populate, which is exactly how it shipped.
+    declared = [surface for surface in header["surfaces"] if "curvatureMean" in surface]
+    assert declared, "no surface declared analytic curvature"
+    for surface in declared:
+        mean = arrays[surface["curvatureMean"]]
+        principal = arrays[surface["curvaturePrincipal"]]
+        vertices = len(arrays[surface["positions"]])
+        assert mean.dtype == np.dtype("<f4")
+        assert mean.shape == (vertices,)
+        assert principal.shape == (vertices,)
+        assert np.isfinite(mean).all() and np.isfinite(principal).all()
+    # The horn wall is genuinely curved, so a flat heatmap would mean the values
+    # arrived but say nothing.
+    horn = next(surface for surface in header["surfaces"] if surface["role"] == "horn.inner")
+    assert float(np.ptp(arrays[horn["curvatureMean"]])) > 0.0
+
+
+def test_curvature_sections_are_row_aligned_or_rejected() -> None:
+    surface = SimpleNamespace(
+        role="horn.inner",
+        positions=np.zeros((3, 3), dtype=np.float64),
+        indices=np.asarray([], dtype=np.uint32),
+        normals=np.tile((0.0, 0.0, 1.0), (3, 1)),
+        shading="smooth",
+        normal_method="analytic-parametric",
+        closed_phi=False,
+        curvature_mean=np.zeros(2, dtype=np.float64),
+        curvature_principal=np.zeros(3, dtype=np.float64),
+    )
+    with pytest.raises(ValueError, match="row-aligned"):
+        encode_preview_geometry(
+            SimpleNamespace(surfaces=[surface], metadata={}),
+            epoch=1,
+            seq=1,
+            design_revision=1,
+            lod="coarse",
+            eval_ms=1.0,
+        )
+
 
 def test_frame_boundary_refuses_non_finite_geometry() -> None:
     surface = SimpleNamespace(

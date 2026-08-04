@@ -24,8 +24,9 @@ def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> Non
         ("dryrun", True, "Enabled explicitly by WG2_ENABLE_DRYRUN=1"),
         ("metal", True, "helper loadable"),
         ("bempp", False, "package absent"),
-        ("circsym", True, "meridian ready"),
     ]
+    assert detected[1].fast_paths == ("axisymmetric-meridian",)
+    assert all(item.name != "circsym" for item in detected)
 
 
 def test_capability_snapshot_is_reused_by_solve_submission(tmp_path: Path) -> None:

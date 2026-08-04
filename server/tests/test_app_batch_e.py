@@ -113,9 +113,13 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     # Real detection (batch Q) probes THIS machine, so availability values are
     # environment-dependent; assert the report contract, not the environment.
     names = [engine["name"] for engine in engines]
-    assert {"metal", "bempp", "circsym"}.issubset(set(names))
+    assert {"metal", "bempp"}.issubset(set(names))
+    assert "circsym" not in names
     assert "dryrun" not in names
-    assert all(set(engine) == {"name", "available", "reason", "version"} for engine in engines)
+    assert all(
+        set(engine) == {"name", "available", "reason", "version", "fast_paths"}
+        for engine in engines
+    )
     assert all(engine["reason"] for engine in engines if engine["available"] is False)
 
     monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")

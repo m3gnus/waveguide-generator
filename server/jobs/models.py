@@ -98,6 +98,7 @@ class SolveOptions(JobModel):
     """Execution choices kept separate from the authoritative v2 design."""
 
     engine: str = "auto"
+    symmetry: str = "auto"
     frequency_range: list[float] | None = None
     num_frequencies: int | None = Field(default=None, ge=1, le=401)
     frequency_spacing: Literal["log", "linear"] = "log"
@@ -106,12 +107,22 @@ class SolveOptions(JobModel):
     polar_config: PolarConfig = Field(default_factory=PolarConfig)
     stage_delay_ms: int = Field(default=30, ge=0, le=2000)
 
-    @field_validator("engine")
+    @field_validator("engine", "symmetry")
     @classmethod
-    def normalize_engine(cls, value: str) -> str:
+    def normalize_named_option(cls, value: str, info: Any) -> str:
         normalized = value.strip().lower()
         if not normalized:
-            raise ValueError("engine must not be empty")
+            raise ValueError(f"{info.field_name} must not be empty")
+        if info.field_name == "symmetry" and normalized not in {
+            "auto",
+            "full",
+            "half_xz",
+            "half_yz",
+            "quarter",
+        }:
+            raise ValueError(
+                "symmetry must be one of auto, full, half_xz, half_yz, or quarter"
+            )
         return normalized
 
     @field_validator("frequency_spacing", "mesh_validation_mode", mode="before")
@@ -207,6 +218,10 @@ class JobItem(JobModel):
     raw_results_file: str | None = None
     mesh_artifact_file: str | None = None
     log_tail: list[str]
+    symmetry: dict[str, Any] = Field(default_factory=dict)
+    solve_path: Literal["full-3d", "axisymmetric-meridian"] | None = None
+    axisymmetric_eligibility_reasons: list[str] = Field(default_factory=list)
+    solve_wall_time_seconds: float | None = None
 
 
 class JobStatusResponse(JobItem):
