@@ -4,6 +4,24 @@ This is the Phase-1 living inventory. Each v1-behavior cell is backed by a v1 `f
 
 Owners used here are target domains: `design-schema`, `design-ui`, `mesher`, `jobs`, `results`, `exports`, `viewer`, `workspace`, and `platform`. `TBD` is intentional when ownership is not obvious.
 
+## Post-build reconciliation — 2026-08-04
+
+The table above was written during Phase 1, before the build. It is a planning inventory, not a completion ledger: a `Required` cell states that parity is owed, never that v2 lacks the implementation. Completion evidence lives elsewhere — [V1-INPUTS-AUDIT.md](V1-INPUTS-AUDIT.md) for the input surface, [LUNA-TRIAGE.md](LUNA-TRIAGE.md) and [SOL-FINAL-REVIEW.md](SOL-FINAL-REVIEW.md) for the review rounds, and the suites themselves.
+
+This pass re-checked only the twelve rows that asserted an actual gap (`OPEN`). Four are now resolved by implementation, one by evidence:
+
+- **D027 / N001 — grouped-drag undo transactions.** Implemented; drag history is finalized before a family switch or document load, and a document replacement opens a new undo epoch (`frontend/src/stores/design.ts`, tested in `design.test.ts:59` and `:70`).
+- **N003 — WebSocket job streaming.** Implemented over the snapshot+cursor protocol (`frontend/src/api/jobsSocket.ts`, `frontend/src/jobs/jobsSocket.test.ts`), with gap recovery by resume added in the Sol fix round.
+- **N004 — persisted dockview layout.** Implemented; the layout is serialized to `localStorage` and reseeded on load, with a corrupt-payload reset (`frontend/src/shell/Workspace.tsx:116-128`, tested in `Workspace.test.tsx`).
+- **P011 / Q007 — instance locking.** The v1-evidence question is settled negatively: v1 has no application-level single-instance lock (its only locks are the gmsh worker's and a matplotlib render lock), so there is no v1 contract to match. V2 implements one as new behavior in `server/platform/instance.py` (`fcntl`), tested in `server/tests/test_platform_luna.py`.
+
+Still genuinely open, unchanged by the build:
+
+- **V013 / Q006 — generic section-curve overlays.** No owning v1 contract was ever located. Do not claim parity.
+- **N002 — autosave.** Not implemented in v2; no v1 contract either.
+- **N006 / N007 / N008 — command palette, named snapshots, layout presets.** Accepted post-cutover deferrals.
+- **T001 — the six-tab settings modal.** V2 has no consolidated settings surface; the equivalent controls live in panel-inline preference strips plus a viewer-preferences panel (`frontend/src/prefs/`, `frontend/src/viewerprefs/`). This is an architectural difference to confirm or close deliberately, not an accidental omission.
+
 ## §3 seed inventory
 
 | ID | v1 behavior / route / control | Evidence (v1) | v2 owner | Phase | Test / manual script | Compat | Accepted deferral / workaround |
@@ -34,7 +52,7 @@ Owners used here are target domains: `design-schema`, `design-ui`, `mesher`, `jo
 | D024 | Parameter sections carry descriptions/help and persist collapsed state | `src/ui/paramPanel.js:387-452` | design-ui | P2 | accessibility + persistence UI test | Required | None |
 | D025 | Undo/redo keeps a maximum 50-state history and clears redo on a new action | `src/state.js:114-120`; `src/state.js:215-220` | design-schema | P2 | 51-edit history unit test | Required | None |
 | D026 | Undo and redo restore full states, persist them, and emit contextual events | `src/state.js:223-252` | design-schema | P2 | state/event unit test | Required | None |
-| D027 | Grouped drag undo transactions do not exist in v1 | OPEN — new-v2 behavior; no v1 contract to cite | design-schema | P2 | drag transaction E2E | New | None |
+| D027 | Grouped drag undo transactions do not exist in v1 | RESOLVED 2026-08-04 — new-v2 behavior; no v1 contract to cite | design-schema | P2 | `frontend/src/stores/design.test.ts:59,70` | New | None |
 | D028 | Config export preserves an expression only when state still contains its raw string; evaluated numeric state loses the original expression | `src/export/mwgConfig.js:34-44` | design-schema | P1 | raw-string/evaluated round-trip fixtures | Required | None |
 | D029 | Source contours accept a file path or inline-script expression and serialize as `Source.Contours` | `src/config/schema.js:929-934`; `src/export/mwgConfig.js:257-265` | design-schema | P1/P2 | source payload/config fixture | Required | None |
 | D030 | Enclosure geometry includes separately sampled front and back roundover rings | `src/geometry/engine/mesh/enclosure.js:579-624` | mesher | P3/P5 | roundover topology fixtures | Required | None |
@@ -105,14 +123,14 @@ Owners used here are target domains: `design-schema`, `design-ui`, `mesher`, `jo
 | P008 | Runtime doctor reports Metal/BEMPP and dependency readiness | `server/services/runtime_preflight.py:67-125` | platform | P1/P6 | doctor golden JSON | Required | None |
 | P009 | Logs can be filtered by agent/category/event/time/session and exported | `src/logging/queries.js:3-32`; `src/logging/queries.js:92-93` | platform | P6 | query/export unit test | Required | None |
 | P010 | Port-collision startup failure receives tailored guidance | `scripts/backend-startup-status.js:53-83` | platform | P1/P6 | occupied-port launcher test | Required | None |
-| P011 | Instance locking behavior is not verified in bounded v1 sources | OPEN — need launcher/lock owner and duplicate-process fixture | platform | P1/P6 | duplicate launch E2E | OPEN | None |
+| P011 | Instance locking behavior is not verified in bounded v1 sources | RESOLVED 2026-08-04 — v1 has no app-level instance lock (gmsh-worker and matplotlib locks only); v2 adds one in `server/platform/instance.py` | platform | P1/P6 | `server/tests/test_platform_luna.py` | New | None |
 | P012 | Start-all forwards termination to backend/frontend processes | `scripts/start-all.js:95-96`; `scripts/start-all.js:142-168` | platform | P1/P6 | signal/shutdown test | Required | None |
 | P013 | Installers and launchers select a backend interpreter through shared priority rules | `server/README.md:35-48`; `server/start.sh:73-116` | platform | P1/P6 | clean install matrix | Required | None |
 | P014 | Runtime capability helper maps Python, Gmsh, mesher, Metal, and BEMPP readiness to feature-specific guidance | `src/ui/runtimeCapabilities.js:110-175` | platform | P6 | degraded-capability UI matrix | Required | None |
-| N001 | Grouped-drag undo transactions | OPEN — new-v2 behavior; no v1 contract | design-schema | P2 | drag transaction E2E | New | None |
-| N002 | Autosave | OPEN — new-v2 behavior; no v1 contract | workspace | TBD | crash/restart E2E | New | None |
-| N003 | WebSocket job streaming | OPEN — new-v2 behavior; no v1 contract | jobs | P1/P3 | reconnect/cursor E2E | New | None |
-| N004 | Persisted dockview layout | OPEN — new-v2 behavior; v1 stores a simpler layout object (`src/ui/settings/layoutSettings.js:31-46`) | results | P4 | persistence/migration E2E | New | None |
+| N001 | Grouped-drag undo transactions | RESOLVED 2026-08-04 — new-v2 behavior; no v1 contract | design-schema | P2 | `frontend/src/stores/design.test.ts:59,70` | New | None |
+| N002 | Autosave | OPEN — not implemented in v2; no v1 contract either | workspace | TBD | crash/restart E2E | New | None |
+| N003 | WebSocket job streaming | RESOLVED 2026-08-04 — snapshot+cursor protocol with resume-based gap recovery | jobs | P1/P3 | `frontend/src/jobs/jobsSocket.test.ts` | New | None |
+| N004 | Persisted dockview layout | RESOLVED 2026-08-04 — `localStorage` serialize/reseed with corrupt-payload reset (`frontend/src/shell/Workspace.tsx:116-128`); v1 stored a simpler layout object (`src/ui/settings/layoutSettings.js:31-46`) | results | P4 | `frontend/src/shell/Workspace.test.tsx` | New | None |
 | N005 | Scene colors follow `prefers-color-scheme`; an explicit dark/light v2 theme choice is new | `src/viewer/index.js:47-58` | viewer | P6 | theme persistence/visual test | New | None |
 | N006 | Command palette | OPEN — post-cutover behavior; no v1 contract | TBD | Post | acceptance test TBD | Deferred | No v1 workaround required |
 | N007 | Named snapshots | OPEN — post-cutover behavior; v1 has job script snapshots (`src/ui/workspace/generationArtifacts.js:1-14`) | workspace | Post | acceptance test TBD | Deferred | Retain the v1-compatible job snapshot path |
@@ -329,4 +347,4 @@ The inventory contains every decorated HTTP route in the three v1 route modules;
 | Q004 | Perspective and orthographic camera modes represented | `src/ui/settings/modal.js:770-820` | viewer | P2 | compare camera options to V/T rows | Inventoried | None |
 | Q005 | All 110 named parameter keys in the centralized inventory are represented above; closely related guiding-curve keys are grouped into four rows | `src/ui/parameterInventory.js:17-243` | design-ui | P1 | parse inventory and compare C rows | Inventoried | None |
 | Q006 | Generic section-curve overlays remain OPEN because bounded mining did not locate an owning contract | OPEN — evidence needed from renderer/control owner | viewer | TBD | targeted source audit | OPEN | Do not count as compatible |
-| Q007 | Instance locking/duplicate-instance behavior remains OPEN; startup diagnostics exist, but evidence is needed from a launcher/install lock owner | `scripts/backend-startup-status.js:53-102` | platform | P1/P6 | duplicate process test | OPEN | Do not count as compatible |
+| Q007 | Instance locking/duplicate-instance behavior — RESOLVED 2026-08-04: v1 has no app-level lock, so nothing to match; v2 adds one as new behavior | `scripts/backend-startup-status.js:53-102` (startup diagnostics only) | platform | P1/P6 | `server/tests/test_platform_luna.py` | New | None |
