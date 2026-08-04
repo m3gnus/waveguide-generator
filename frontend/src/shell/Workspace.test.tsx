@@ -2,7 +2,16 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SerializedDockview } from 'dockview-core';
-import { addDefaultLayout, createDefaultLayout, nextLayoutAction, Workspace } from './Workspace';
+import {
+  addDefaultLayout,
+  createDefaultLayout,
+  createResizeLayoutHandler,
+  isTrustworthySize,
+  nextLayoutAction,
+  ReactPanelRenderer,
+  seedSize,
+  Workspace,
+} from './Workspace';
 import { jobsSocket } from '../api/jobsSocket';
 
 class ResizeObserverStub {
@@ -10,6 +19,14 @@ class ResizeObserverStub {
   unobserve() {}
   disconnect() {}
 }
+
+const sized = (width: number, height: number) => ({
+  getBoundingClientRect: () => ({ width, height }) as DOMRect,
+  clientWidth: width,
+  clientHeight: height,
+}) as unknown as HTMLElement;
+
+const fakeApi = () => ({ fromJSON: vi.fn(), layout: vi.fn(), width: 0, height: 0 });
 
 describe('Workspace', () => {
   let host: HTMLDivElement;
@@ -49,33 +66,91 @@ describe('Workspace', () => {
     // Deserializing a layout leaves dockview believing it is whatever size it
     // last measured, which puts every panel at its 100px minimum and never
     // recovers — what a first-run visitor saw. The explicit layout() is the fix.
-    const sized = (width: number, height: number) => ({
-      getBoundingClientRect: () => ({ width, height }) as DOMRect,
-      clientWidth: width,
-      clientHeight: height,
-    }) as unknown as HTMLElement;
-    const api = () => ({ fromJSON: vi.fn(), layout: vi.fn(), width: 0, height: 0 });
-
-    const measured = api();
+    const measured = fakeApi();
     addDefaultLayout(measured as never, sized(1200, 800));
     expect(measured.layout).toHaveBeenCalledWith(1200, 800);
     const columns = (measured.fromJSON.mock.calls[0][0] as SerializedDockview).grid.root.data as Array<{ size: number }>;
     expect(columns.map((column) => column.size)).toEqual([300, 580, 320]);
 
-    const unmeasured = api();
+    // An unmeasurable host falls back to the window rather than a fixed guess,
+    // so the pinned side panels are not scaled to someone else's screen.
+    const windowSize: [number, number] = [window.innerWidth, window.innerHeight - 84];
+    const unmeasured = fakeApi();
     addDefaultLayout(unmeasured as never, sized(0, 0));
-    expect(unmeasured.layout).toHaveBeenCalledWith(1440, 900);
+    expect(unmeasured.layout).toHaveBeenCalledWith(...windowSize);
+
+    const settling = fakeApi();
+    addDefaultLayout(settling as never, sized(10, 100));
+    expect(settling.layout).toHaveBeenCalledWith(...windowSize);
+    const settlingColumns = (settling.fromJSON.mock.calls[0][0] as SerializedDockview).grid.root.data as Array<{ size: number }>;
+    expect(settlingColumns[0].size).toBe(300);
+    expect(settlingColumns[2].size).toBe(320);
   });
 
   it('corrects the dock when the host reports a size the mount-time read could not', () => {
     // The host really does measure 10x100 while the surrounding layout resolves:
     // not zero, so it cannot be rejected as unmeasured, and not real either.
-    expect(nextLayoutAction([1268, 640], [10, 100], false)).toBe('reseed');
-    // A layout the user arranged is re-laid-out, never rebuilt over.
-    expect(nextLayoutAction([1268, 640], [10, 100], true)).toBe('layout');
+    expect(nextLayoutAction([1268, 640], [10, 100])).toBe('layout');
     // Unchanged or unmeasurable sizes do nothing, so this cannot loop.
-    expect(nextLayoutAction([1268, 640], [1268, 640], false)).toBe('none');
-    expect(nextLayoutAction([0, 0], [10, 100], false)).toBe('none');
+    expect(nextLayoutAction([1268, 640], [1268, 640])).toBe('none');
+    expect(nextLayoutAction([0, 0], [10, 100])).toBe('none');
+  });
+
+  it('seeds cold-start JSON once while ResizeObserver measurements only lay out', () => {
+    const api = fakeApi();
+    addDefaultLayout(api as never, sized(1268, 640));
+    // Seeded at a trustworthy size, so no correction is owed and no resize may
+    // ever deserialize again — that is what destroys the viewport's WebGL root.
+    const resize = createResizeLayoutHandler(api as never, [1268, 640]);
+
+    resize([1268, 640]);
+    resize([1272, 640]);
+    resize([1272, 640]);
+    resize([1600, 900]);
+
+    expect(api.fromJSON).toHaveBeenCalledTimes(1);
+    expect(api.layout.mock.calls).toEqual([
+      [1268, 640],
+      [1272, 640],
+      [1600, 900],
+    ]);
+  });
+
+  it('seeds an unmeasurable dock from the window, not a fixed guess', () => {
+    // The seed pins the 300px/320px side panels to whatever size it is handed,
+    // and later resizes scale the dock rather than rebuild it — so a fixed
+    // 1440x900 guess would leave a 300px panel at 533px on a 2560px monitor.
+    expect(seedSize([1268, 640])).toEqual([1268, 640]);
+    expect(seedSize([10, 100])).toEqual([window.innerWidth, window.innerHeight - 84]);
+    expect(isTrustworthySize([10, 100])).toBe(false);
+    expect(isTrustworthySize([1268, 640])).toBe(true);
+  });
+
+  it('does not let a deferred dispose unmount a re-initialized panel root', async () => {
+    const renderer = new ReactPanelRenderer('jobs');
+    document.body.append(renderer.element);
+
+    await act(async () => {
+      renderer.init({} as never);
+      await Promise.resolve();
+    });
+    expect(renderer.element.querySelector('.jobs-panel')).not.toBeNull();
+
+    await act(async () => {
+      renderer.dispose();
+      renderer.init({} as never);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderer.element.querySelector('.jobs-panel')).not.toBeNull();
+
+    await act(async () => {
+      renderer.dispose();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    renderer.element.remove();
   });
 
   it('can close and reset the Jobs panel without transferring global socket ownership', async () => {
