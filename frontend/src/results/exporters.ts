@@ -179,7 +179,33 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   });
 }
 
-export function buildChartRenderPayload(result: ResultPayload, preferences: Preferences): Record<string, unknown> {
+export interface ChartReference {
+  result: ResultPayload;
+  label?: string;
+}
+
+function buildChartReferencePayload(reference: ChartReference, preferences: Preferences): Record<string, unknown> {
+  const series = smoothedSeries(reference.result, preferences);
+  return {
+    label: reference.label ?? null,
+    frequencies: series.frequencies,
+    spl: series.spl,
+    di: series.di,
+    di_frequencies: series.diFrequencies,
+    impedance_frequencies: series.impedanceFrequencies,
+    impedance_real: series.impedanceReal,
+    impedance_imaginary: series.impedanceImaginary,
+    impedance_units: 'Z/(rho*c)',
+    impedance_normalization: 'rho_c',
+    beam_shape: reference.result.beam_shape ?? null,
+  };
+}
+
+export function buildChartRenderPayload(
+  result: ResultPayload,
+  preferences: Preferences,
+  reference?: ChartReference,
+): Record<string, unknown> {
   const series = smoothedSeries(result, preferences);
   const observation = result.metadata?.observation;
   const observationRecord = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
@@ -200,6 +226,7 @@ export function buildChartRenderPayload(result: ResultPayload, preferences: Pref
     impedance_normalization: 'rho_c',
     directivity: result.directivity ?? {},
     beam_shape: result.beam_shape ?? null,
+    reference: reference ? buildChartReferencePayload(reference, preferences) : null,
     theme: preferences.chartTheme,
   };
 }

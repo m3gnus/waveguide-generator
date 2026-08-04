@@ -4,6 +4,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
 import { useDesignStore } from '../stores/design';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
+import { CanonicalPlot, buildCanonicalChartRequest, buildCanonicalDirectivityRequest } from '../results/CanonicalPlot';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
@@ -113,24 +114,50 @@ function Summary({ result }: { result: ResultPayload }) {
 
 function ResultChart({ chartType, result, named, tokens }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
   const preferences = usePreferences();
-  if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(named, tokens, preferences.smoothing)} label="Multi-job sound pressure frequency response"/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+  const reference = named[1] ? { result: named[1].result as ResultPayload, label: named[1].label } : undefined;
+  if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <CanonicalPlot
+    request={buildCanonicalChartRequest('frequency_response', result, preferences, reference)}
+    label="HornLab sound pressure frequency response"
+    fallback={<EChart option={splOption(named, tokens, preferences.smoothing)} label="Multi-job sound pressure frequency response"/>}
+  /> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
   if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v') {
     const plane = chartType.endsWith('_v') ? 'vertical' : 'horizontal';
-    return result.directivity?.[plane]?.length ? <EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`${plane} directivity heatmap`}/> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
+    return result.directivity?.[plane]?.length ? <CanonicalPlot
+      request={buildCanonicalDirectivityRequest(result, preferences, plane, reference)}
+      label={`HornLab ${plane} directivity heatmap`}
+      fallback={<EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`${plane} directivity heatmap`}/>}
+    /> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
   }
   if (chartType === 'directivity_map') {
     const directivity = result.directivity as Record<string, unknown[]> | undefined;
     const planes = Object.keys(directivity ?? {}).filter((plane) => directivity?.[plane]?.length);
-    return planes.length ? <div style={{ display: 'flex', width: '100%', height: '100%' }}>{planes.map((plane) => <div key={plane} style={{ position: 'relative', flex: 1 }}><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`${plane} directivity heatmap`}/></div>)}</div> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
+    const fallback = <div style={{ display: 'flex', width: '100%', height: '100%' }}>{planes.map((plane) => <div key={plane} style={{ position: 'relative', flex: 1 }}><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`${plane} directivity heatmap`}/></div>)}</div>;
+    return planes.length ? <CanonicalPlot
+      request={buildCanonicalDirectivityRequest(result, preferences, undefined, reference)}
+      label="HornLab directivity heatmaps"
+      fallback={fallback}
+    /> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
   }
   if (chartType === 'directivity_index') {
     const series = directivityIndexSeries(result, preferences.smoothing);
-    return series.length ? <EChart option={lineOption(series, tokens, 'DI dB')} label="Directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
+    return series.length ? <CanonicalPlot
+      request={buildCanonicalChartRequest('directivity_index', result, preferences, reference)}
+      label="HornLab directivity index by frequency"
+      fallback={<EChart option={lineOption(series, tokens, 'DI dB')} label="Directivity index by frequency"/>}
+    /> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
   }
-  if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <EChart option={lineOption(beamShapeSeries(result), tokens, 'degrees')} label="Horizontal and vertical forward beam width"/> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
+  if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <CanonicalPlot
+    request={buildCanonicalChartRequest('beam_shape', result, preferences, reference)}
+    label="HornLab horizontal and vertical forward beam width"
+    fallback={<EChart option={lineOption(beamShapeSeries(result), tokens, 'degrees')} label="Horizontal and vertical forward beam width"/>}
+  /> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
   if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
   if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
-  if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <EChart option={impedanceOption(result, tokens, preferences.smoothing)} label="Normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+  if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <CanonicalPlot
+    request={buildCanonicalChartRequest('impedance', result, preferences, reference)}
+    label="HornLab normalized acoustic impedance by frequency"
+    fallback={<EChart option={impedanceOption(result, tokens, preferences.smoothing)} label="Normalized acoustic impedance by frequency"/>}
+  /> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
   return <Summary result={result}/>;
 }
 

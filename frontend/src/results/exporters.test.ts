@@ -41,5 +41,6 @@ describe('result exporters', () => {
     expect(String(fetcher.mock.calls[0][0])).toBe('/api/render-charts');
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).theme).toBe('paper');
     expect(buildChartRenderPayload({ ...result, metadata: { observation: { effective_distance_m: 1.5 }, phase_time_convention: 'e^-iwt' } }, context.preferences)).toMatchObject({ phase_reference_distance_m: 1.5, phase_time_convention: 'e^-iwt', impedance_units: 'Z/(rho*c)' });
+    expect(buildChartRenderPayload(result, context.preferences, { result, label: 'reference horn' })).toMatchObject({ reference: { label: 'reference horn', frequencies: [100, 200], spl: [90, null], impedance_normalization: 'rho_c' } });
   });
 });

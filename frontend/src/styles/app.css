@@ -213,6 +213,12 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .chart-placeholder { position: relative; flex: 1; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--plot-bd); border-left: 1px solid var(--plot-bd); background: repeating-linear-gradient(0deg, transparent 0 20%, var(--grid-min) calc(20% + 1px)), repeating-linear-gradient(90deg, transparent 0 20%, var(--grid) calc(20% + 1px)); }
 .chart-placeholder svg { position: absolute; inset: 4px 0; width: 100%; height: calc(100% - 8px); }
 .chart-placeholder path { fill: none; stroke: var(--acc); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.canonical-plot { position: absolute; inset: 0; display: grid; min-width: 0; min-height: 0; place-items: stretch; overflow: hidden; background: var(--bg); }
+.canonical-plot-fallback { position: absolute; inset: 0; }
+.canonical-plot-image { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; }
+.canonical-plot-status { position: absolute; right: 7px; bottom: 7px; padding: 3px 6px; border: 1px solid var(--hair); border-radius: 4px; background: color-mix(in srgb, var(--bg) 88%, transparent); color: var(--fg3); font: 8px var(--mono); letter-spacing: .05em; }
+.canonical-plot-error { position: absolute; right: 7px; bottom: 7px; display: flex; align-items: center; gap: 6px; max-width: calc(100% - 14px); padding: 3px 5px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: 4px; background: color-mix(in srgb, var(--bg) 90%, transparent); color: var(--fg3); font-size: 8px; }
+.canonical-plot-error button { padding: 2px 5px; border: 1px solid var(--hair); border-radius: 3px; color: var(--fg2); }
 
 /* jobs rail */
 .jobs-panel { padding-bottom: 10px; }
