@@ -18,7 +18,7 @@ import math
 from typing import Any, Mapping
 import uuid
 
-from server.engines.registry import detect_engines, get_engine, resolve_auto_engine
+from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.models import SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 
@@ -91,8 +91,11 @@ class EventBroker:
 class JobRuntime:
     """One-worker FIFO runtime with a durable HTTP correctness path."""
 
-    def __init__(self, store: JobStore) -> None:
+    def __init__(
+        self, store: JobStore, *, engine_registry: EngineRegistry | None = None
+    ) -> None:
         self.store = store
+        self.engine_registry = engine_registry or EngineRegistry(factory=get_engine)
         self.events = EventBroker()
         self._queue: deque[str] = deque()
         self._running: set[str] = set()
@@ -153,8 +156,8 @@ class JobRuntime:
         if engine_name not in known:
             raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
         if engine_name == "auto":
-            engine_name = resolve_auto_engine(
-                solver_mode=request.design.root.simulation.solver_mode
+            engine_name = await self.engine_registry.resolve(
+                "auto", solver_mode=request.design.root.simulation.solver_mode
             )
             if engine_name is None:
                 raise EngineUnavailableError(
@@ -164,20 +167,24 @@ class JobRuntime:
                 )
             request = request.model_copy(deep=True)
             request.options.engine = engine_name
-        if get_engine(engine_name) is None:
-            capability = next(
-                (item for item in detect_engines() if item.name == engine_name),
-                None,
+        if await self.engine_registry.get_engine(engine_name) is None:
+            reason = await self.engine_registry.unavailable_reason(engine_name)
+            fallback_reason = (
+                "Dry-run solves require WG2_ENABLE_DRYRUN=1."
+                if engine_name == "dryrun"
+                else "No capability reason was reported."
             )
             raise EngineUnavailableError(
                 f"Solve engine '{engine_name}' is unavailable. "
-                f"{capability.reason if capability is not None else 'Dry-run solves require WG2_ENABLE_DRYRUN=1.' if engine_name == 'dryrun' else 'No capability reason was reported.'}"
+                f"{reason or fallback_reason}"
             )
 
         job_id = str(uuid.uuid4())
         now = _now_iso()
         request_dump = request.model_dump(mode="json")
         summary = self._config_summary(request)
+        polar_grid = request.options.polar_config.resolved_grid()
+        assert request.design_snapshot is not None
         event = self.store.create_job(
             {
                 "id": job_id,
@@ -195,8 +202,13 @@ class JobRuntime:
                 "has_results": False,
                 "has_mesh_artifact": False,
                 "mesh_stats": None,
-                "label": None,
-                "task_metadata": {"log_tail": []},
+                "label": request.label,
+                "script_snapshot": request.design_snapshot.model_dump(mode="json"),
+                "task_metadata": {
+                    "log_tail": [],
+                    "design_revision": request.design_revision,
+                    "polar_grid": polar_grid,
+                },
             },
             initial_event=("queued", {"status": "queued", "progress": 0.0}),
         )
@@ -405,7 +417,7 @@ class JobRuntime:
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
         try:
             request = SolveRequest.model_validate(row["config_json"])
-            engine = get_engine(request.options.engine)
+            engine = await self.engine_registry.get_engine(request.options.engine)
             if engine is None:
                 raise EngineUnavailableError(f"Solve engine '{request.options.engine}' became unavailable")
             # Batch Q extends only this established engine-call seam.  FIFO
@@ -476,6 +488,7 @@ class JobRuntime:
                 mesh_validation_mode=request.options.mesh_validation_mode,
                 verbose=request.options.verbose,
             )
+            results = self._with_request_metadata(results, request)
             self._check_cancelled(job_id)
             await self._stage(
                 job_id, "postprocess", 0.90, "Postprocessing synthetic results", delay
@@ -638,7 +651,7 @@ class JobRuntime:
             event = await asyncio.to_thread(
                 self.store.complete_job,
                 job_id,
-                outcome.results,
+                self._with_request_metadata(outcome.results, request),
                 {
                     "status": "complete",
                     "stage": "complete",
@@ -798,7 +811,20 @@ class JobRuntime:
             "frequency_range": [start, end],
             "num_frequencies": count,
             "engine": request.options.engine,
+            "design_revision": request.design_revision,
+            "polar_grid": request.options.polar_config.resolved_grid(),
         }
+
+    @staticmethod
+    def _with_request_metadata(
+        results: Mapping[str, Any], request: SolveRequest
+    ) -> dict[str, Any]:
+        enriched = dict(results)
+        metadata = dict(enriched.get("metadata") or {})
+        metadata["design_revision"] = request.design_revision
+        metadata["polar_grid"] = request.options.polar_config.resolved_grid()
+        enriched["metadata"] = metadata
+        return enriched
 
     @staticmethod
     def _frequency_options(request: SolveRequest) -> tuple[float, float, int]:
@@ -844,9 +870,12 @@ class JobRuntime:
             "cancellation_requested": bool(row.get("cancellation_requested")),
             "mesh_stats": row.get("mesh_stats"),
             "script_snapshot": row.get("script_snapshot"),
+            "design_revision": int(metadata.get("design_revision") or 0),
+            "polar_grid": metadata.get("polar_grid") or {},
             "rating": metadata.get("rating"),
             "exported_files": metadata.get("exported_files") or [],
             "auto_export_completed_at": metadata.get("auto_export_completed_at"),
+            "auto_export_formats": metadata.get("auto_export_formats") or {},
             "raw_results_file": metadata.get("raw_results_file"),
             "mesh_artifact_file": metadata.get("mesh_artifact_file"),
             "log_tail": metadata.get("log_tail") or [],

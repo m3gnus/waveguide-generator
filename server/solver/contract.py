@@ -54,6 +54,17 @@ def build_directivity_metadata(polar_config: Any, observation: Any) -> dict[str,
         "angle_range_degrees": [start, end],
         "sample_count": count,
         "angular_step_degrees": (end - start) / (count - 1) if count > 1 else None,
+        "requested_angular_step_degrees": (
+            _finite(config.get("angle_step"), math.nan)
+            if config.get("angle_step") is not None
+            else None
+        ),
+        "resolved_grid": {
+            "start": start,
+            "end": end,
+            "count": count,
+            "step": (end - start) / (count - 1) if count > 1 else None,
+        },
         "enabled_axes": axes,
         "planes": [{"id": axis, "phi_degrees": phi[axis]} for axis in axes],
         "normalization_angle_degrees": _finite(config.get("norm_angle", 5.0), 5.0),

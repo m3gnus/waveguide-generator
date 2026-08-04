@@ -66,4 +66,15 @@ describe('design store revision semantics', () => {
     expect(useDesignStore.temporal.getState().isTracking).toBe(true);
     expect(useDesignStore.temporal.getState().pastStates.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('starts a new undo epoch when a document is replaced', () => {
+    useDesignStore.getState().updateField('a', 43);
+    useDesignStore.getState().replaceDesign({ ...structuredClone(seedDesign), a: 31 });
+
+    expect(useDesignStore.getState().design.a).toBe(31);
+    expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
+    expect(useDesignStore.temporal.getState().futureStates).toEqual([]);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.a).toBe(31);
+  });
 });

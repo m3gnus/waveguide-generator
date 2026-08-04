@@ -28,14 +28,16 @@ describe('solve submission', () => {
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {
     const options: SolveOptions = {
       engine: 'auto', mesh_validation_mode: 'strict', verbose: true, frequency_spacing: 'linear',
-      polar_config: { angle_range: [0, 90, 10], distance: 3, norm_angle: 7, inclination: 30, enabled_axes: ['horizontal', 'diagonal'], observation_origin: 'throat', spherical_sampling: true },
+      polar_config: { angle_range: [0, 90, 10], angle_step: 10, distance: 3, norm_angle: 7, inclination: 30, enabled_axes: ['horizontal', 'diagonal'], observation_origin: 'throat', spherical_sampling: true },
     };
     let body: Record<string, unknown> | undefined;
     const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ job_id: 'job-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
-    await expect(submitDesign(designForFamily('R-OSSE'), options, fetcher as typeof fetch)).resolves.toBe('job-1');
+    await expect(submitDesign(designForFamily('R-OSSE'), options, fetcher as typeof fetch, { label: 'atomic', designRevision: 19 })).resolves.toBe('job-1');
     expect(body?.options).toEqual(options);
+    expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
+    expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
   });
 });

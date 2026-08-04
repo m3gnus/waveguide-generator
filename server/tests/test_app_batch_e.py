@@ -89,6 +89,8 @@ class TestClient:
 
 
 def test_health_and_placeholder_shell(tmp_path: Path) -> None:
+    shared_version = json.loads((ROOT / "shared" / "version.json").read_text(encoding="utf-8"))["version"]
+    assert VERSION == shared_version
     client = TestClient(create_app(data_dir=tmp_path))
     health = client.get("/health")
     assert health.status_code == 200

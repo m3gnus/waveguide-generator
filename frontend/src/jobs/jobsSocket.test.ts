@@ -20,7 +20,8 @@ function job(overrides: Partial<JobItem> = {}): JobItem {
     created_at: '2026-08-03T10:00:00Z', queued_at: '2026-08-03T10:00:00Z', started_at: null, completed_at: null,
     config_summary: { formula_type: 'OSSE', engine: 'dryrun' }, has_results: false, has_mesh_artifact: false,
     label: null, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
-    rating: null, exported_files: [], auto_export_completed_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+    design_revision: 0, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
+    auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
     ...overrides,
   };
 }
@@ -65,9 +66,9 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
-  it('detects a cursor gap and refetches the authoritative job list', async () => {
+  it('recovers a cursor gap by requesting replay without relying on an unsolicited snapshot', async () => {
     const socket = new MockSocket();
-    const fetcher = vi.fn(async () => json({ items: [job({ label: 'resynced' })] }));
+    const fetcher = vi.fn(async () => json(job({ status: 'running' })));
     const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
     manager.start();
     socket.message({ v: 1, kind: 'hello', epoch: 9, heartbeatSec: 15 });
@@ -75,16 +76,16 @@ describe('jobs websocket state machine', () => {
     compareSelection.setPrimary('job-1');
     compareSelection.toggleOverlay('orphan');
     socket.message({ v: 1, kind: 'event', epoch: 9, cursor: 8, jobId: 'job-1', type: 'completed', payload: {} });
-    await flush();
-    expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
+    expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({ v: 1, kind: 'resume', epoch: 9, cursor: 3 });
+    expect(fetcher).not.toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
     expect(manager.getSnapshot()).toMatchObject({ cursor: 3 });
     expect(manager.getSnapshot().error).toContain('gap');
-    expect(manager.getSnapshot().jobs[0].label).toBe('resynced');
+    for (let cursor = 4; cursor <= 8; cursor += 1) {
+      socket.message({ v: 1, kind: 'event', epoch: 9, cursor, jobId: 'job-1', type: 'progress', payload: { progress: cursor / 10 } });
+    }
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 8, error: null });
+    expect(manager.getSnapshot().jobs[0].progress).toBe(.8);
     expect(compareSelection.getSnapshot()).toEqual({ primary: 'job-1', overlays: [] });
-    socket.message({ v: 1, kind: 'event', epoch: 9, cursor: 9, jobId: 'job-1', type: 'completed', payload: {} });
-    expect(manager.getSnapshot().cursor).toBe(3);
-    socket.message({ v: 1, kind: 'snapshot', epoch: 9, cursor: 9, jobs: [job({ label: 'snapshot' })] });
-    expect(manager.getSnapshot()).toMatchObject({ cursor: 9, error: null });
     manager.stop();
   });
 

@@ -9,6 +9,7 @@ export interface EngineCapability {
 }
 
 export interface Capabilities { engines: EngineCapability[] }
+export interface SolveSubmissionMetadata { label: string; designRevision: number }
 
 export function toSolveDesign(design: DesignDocument): Record<string, unknown> {
   return serializeDesign(design);
@@ -63,12 +64,20 @@ export async function submitDesign(
   design: DesignDocument,
   requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),
   fetcher: typeof fetch = fetch,
+  metadata: SolveSubmissionMetadata = { label: 'waveguide', designRevision: 0 },
 ): Promise<string> {
   const options = structuredClone(requestedOptions);
+  const wire = toSolveDesign(design);
   const response = await fetcher('/api/solve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: toSolveDesign(design), options }),
+    body: JSON.stringify({
+      design: wire,
+      options,
+      label: metadata.label,
+      design_revision: metadata.designRevision,
+      design_snapshot: { version: 1, design: wire },
+    }),
   });
   if (!response.ok) throw new Error(await detail(response));
   return ((await response.json()) as { job_id: string }).job_id;

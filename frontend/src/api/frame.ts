@@ -26,7 +26,9 @@ export interface FrameHeader {
     maxChordErrorMmRequested: number;
     maxNormalStepDegRequested: number;
     minSilhouetteSegmentsRequested: number;
-    maxChordErrorMmAchieved: number;
+    maxChordErrorMmAchieved: number | null;
+    chordMeasurementComplete: boolean;
+    unmeasuredChordIntervals: number;
     maxNormalStepDegAchieved: number;
     minSilhouetteSegmentsAchieved: number;
     vertexCapLimited?: boolean;

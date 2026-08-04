@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import asyncio
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -31,7 +29,34 @@ CLOSE_TOO_LARGE = 4413
 CLOSE_RESTARTING = 1012
 
 _EPOCHS = count(1)
-_PREVIEW_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wg-preview")
+
+
+class PreviewComputeService:
+    """Application-owned executor with an explicit bounded shutdown policy."""
+
+    def __init__(self, *, max_workers: int = 4) -> None:
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="wg-preview"
+        )
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def run(self, function: Callable[..., bytes], *args: Any) -> bytes:
+        if self._closed:
+            raise RuntimeError("preview service is shutting down")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, function, *args)
+
+    async def shutdown(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        # Queued work is cancelled and running native work is boundedly
+        # abandoned; ThreadPoolExecutor workers finish in the background.
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 class PreviewTransport(Protocol):
@@ -134,6 +159,9 @@ def _fidelity_header(metadata: Mapping[str, Any]) -> dict[str, Any]:
     requested_chord_values: list[float] = []
     requested_normal_values: list[float] = []
     requested_silhouette_values: list[int] = []
+    silhouette_values: list[int] = []
+    unmeasured_intervals = 0
+    chord_measurement_complete = True
     cap_limited = False
     for measured in per_surface.values():
         if not isinstance(measured, Mapping):
@@ -146,6 +174,16 @@ def _fidelity_header(metadata: Mapping[str, Any]) -> dict[str, Any]:
         )
         if isinstance(chord, (int, float)) and math.isfinite(float(chord)):
             chord_values.append(max(0.0, float(chord)))
+        measurement_complete = measured.get("measurement_complete")
+        if measurement_complete is False or not (
+            isinstance(chord, (int, float)) and math.isfinite(float(chord))
+        ):
+            chord_measurement_complete = False
+        raw_unmeasured = measured.get(
+            "unmeasured_interval_count", measured.get("unmeasured_intervals", 0)
+        )
+        if isinstance(raw_unmeasured, int) and not isinstance(raw_unmeasured, bool):
+            unmeasured_intervals += max(0, raw_unmeasured)
         if isinstance(normal, (int, float)) and math.isfinite(float(normal)):
             normal_values.append(max(0.0, float(normal)))
         requested_chord = measured.get("max_chord_error_mm_requested")
@@ -163,20 +201,28 @@ def _fidelity_header(metadata: Mapping[str, Any]) -> dict[str, Any]:
             requested_silhouette, bool
         ):
             requested_silhouette_values.append(max(0, requested_silhouette))
+        achieved_silhouette = measured.get("silhouette_segments_achieved")
+        if isinstance(achieved_silhouette, int) and not isinstance(
+            achieved_silhouette, bool
+        ):
+            silhouette_values.append(max(0, achieved_silhouette))
         cap_limited = cap_limited or measured.get("vertex_cap_limited") is True
-    achieved_chord = max(chord_values, default=0.0)
+    if not per_surface:
+        chord_measurement_complete = True
+    achieved_chord = (
+        max(chord_values, default=0.0) if chord_measurement_complete else None
+    )
     achieved_normal = max(normal_values, default=0.0)
-    counts = metadata.get("actual_segment_counts")
-    silhouette = 0
-    if isinstance(counts, Mapping):
-        raw_silhouette = counts.get("horn_phi", 0)
-        if isinstance(raw_silhouette, int) and not isinstance(raw_silhouette, bool):
-            silhouette = max(0, raw_silhouette)
-    requested_chord = max(requested_chord_values, default=achieved_chord)
+    silhouette = min(silhouette_values, default=0)
+    requested_chord = max(
+        requested_chord_values,
+        default=achieved_chord if achieved_chord is not None else 0.0,
+    )
     requested_normal = max(requested_normal_values, default=achieved_normal)
     requested_silhouette = max(requested_silhouette_values, default=silhouette)
     missed = (
-        achieved_chord > requested_chord
+        not chord_measurement_complete
+        or (achieved_chord is not None and achieved_chord > requested_chord)
         or achieved_normal > requested_normal
         or silhouette < requested_silhouette
     )
@@ -185,6 +231,8 @@ def _fidelity_header(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "maxNormalStepDegRequested": requested_normal,
         "minSilhouetteSegmentsRequested": requested_silhouette,
         "maxChordErrorMmAchieved": achieved_chord,
+        "chordMeasurementComplete": chord_measurement_complete,
+        "unmeasuredChordIntervals": unmeasured_intervals,
         "maxNormalStepDegAchieved": achieved_normal,
         "minSilhouetteSegmentsAchieved": silhouette,
         "vertexCapLimited": cap_limited or missed,
@@ -267,6 +315,7 @@ class PreviewProtocol:
         heartbeat_seconds: float = HEARTBEAT_SECONDS,
         max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
         preview_builder: Callable[[Mapping[str, Any], Any], Any] | None = None,
+        preview_service: PreviewComputeService | None = None,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("heartbeat_seconds must be positive")
@@ -276,6 +325,8 @@ class PreviewProtocol:
         self.heartbeat_seconds = heartbeat_seconds
         self.max_frame_bytes = max_frame_bytes
         self._preview_builder = preview_builder
+        self._preview_service = preview_service or PreviewComputeService()
+        self._owns_preview_service = preview_service is None
         self._transport: PreviewTransport | None = None
         self._worker: asyncio.Task[None] | None = None
         self._pending: _Request | None = None
@@ -352,6 +403,8 @@ class PreviewProtocol:
                 *(task for task in (self._worker,) if task is not None),
                 return_exceptions=True,
             )
+            if self._owns_preview_service:
+                await self._preview_service.shutdown()
 
     async def _heartbeat(self) -> None:
         while True:
@@ -472,10 +525,7 @@ class PreviewProtocol:
         current: _Request | None = request
         while current is not None and not self._closed:
             try:
-                loop = asyncio.get_running_loop()
-                frame = await loop.run_in_executor(
-                    _PREVIEW_EXECUTOR, self._compute_frame, current
-                )
+                frame = await self._preview_service.run(self._compute_frame, current)
             except FrameError as exc:
                 if exc.rule == "frame-too-large":
                     await self._close(CLOSE_TOO_LARGE)
@@ -605,6 +655,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "PreviewProtocol",
     "PreviewProtocolEngine",
+    "PreviewComputeService",
     "PreviewTransport",
     "encode_preview_geometry",
     "preview_options",

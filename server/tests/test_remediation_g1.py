@@ -15,7 +15,7 @@ from server.charts import api as charts_api
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse, serialize
 from server.engines.dryrun import DryRunEngine
-from server.engines.registry import EngineInfo, resolve_auto_engine
+from server.engines.registry import EngineInfo, EngineRegistry, resolve_auto_engine
 from server.jobs.models import PolarConfig, SolveOptions, SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
@@ -55,7 +55,6 @@ def test_auto_is_the_contract_default_and_resolves_by_capability(monkeypatch) ->
 
 def test_runtime_persists_auto_resolution_and_verbose_log(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
-    monkeypatch.setattr("server.jobs.runtime.resolve_auto_engine", lambda **_kwargs: "dryrun")
     request = SolveRequest.model_validate(
         {
             "design": {
@@ -67,7 +66,13 @@ def test_runtime_persists_auto_resolution_and_verbose_log(tmp_path: Path, monkey
     )
 
     async def scenario() -> None:
-        runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("dryrun", True, "test", "builtin")],
+                factory=lambda _name: DryRunEngine(),
+            ),
+        )
         job_id = await runtime.submit(request)
         await runtime.wait_idle()
         status = await runtime.get_job(job_id)
@@ -88,6 +93,16 @@ def test_polar_angle_step_conversion_and_at_least_one_axis() -> None:
     )
     assert polar.angle_range == (-30.0, 90.0, 13)
     assert polar.enabled_axes == ["vertical"]
+    non_divisible = PolarConfig.model_validate(
+        {"angle_range": [0, 180, 26], "angle_step": 7}
+    )
+    assert non_divisible.resolved_grid() == {
+        "start": 0.0,
+        "end": 180.0,
+        "count": 26,
+        "requested_step": 7.0,
+        "resolved_step": 7.2,
+    }
     with pytest.raises(ValidationError, match="at least 1"):
         PolarConfig.model_validate({"enabled_axes": []})
 

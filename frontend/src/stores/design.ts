@@ -301,6 +301,7 @@ interface DesignStore {
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
   setFamily: (family: DesignFamily) => void;
   loadDesign: (design: DesignDocument) => void;
+  replaceDesign: (design: DesignDocument) => void;
   beginDrag: () => void;
   endDrag: () => void;
   undo: () => void;
@@ -417,6 +418,14 @@ export const useDesignStore = create<DesignStore>()(
         cancelRevisionTimers();
         get().endDrag();
         set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1 }));
+        bump('load', true);
+      },
+      replaceDesign: (design) => {
+        cancelRevisionTimers();
+        get().endDrag();
+        set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1 }));
+        useDesignStore.temporal.getState().clear();
+        useDesignStore.temporal.getState().resume();
         bump('load', true);
       },
       beginDrag: () => {

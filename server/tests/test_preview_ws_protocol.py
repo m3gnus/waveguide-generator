@@ -18,6 +18,7 @@ import pytest
 from server.preview.core import (
     CLOSE_TOO_LARGE,
     CLOSE_UNSUPPORTED_VERSION,
+    PreviewComputeService,
     PreviewProtocol,
     preview_options,
 )
@@ -123,6 +124,18 @@ def test_hello_has_one_epoch_heartbeat_and_limit() -> None:
         assert transport.json[1]["kind"] == "ping"
         assert transport.json[1]["epoch"] == 71
         assert sum(message["kind"] == "hello" for message in transport.json) == 1
+
+    asyncio.run(scenario())
+
+
+def test_app_owned_preview_service_rejects_work_after_bounded_shutdown() -> None:
+    async def scenario() -> None:
+        service = PreviewComputeService(max_workers=1)
+        assert await service.run(lambda: b"ready") == b"ready"
+        await service.shutdown()
+        assert service.closed is True
+        with pytest.raises(RuntimeError, match="shutting down"):
+            await service.run(lambda: b"late")
 
     asyncio.run(scenario())
 
@@ -378,8 +391,9 @@ def test_in_flight_native_preview_work_is_abandoned_with_a_global_concurrency_ca
             assert release.wait(2)
             return _small_geometry()
 
+        service = PreviewComputeService(max_workers=4)
         transports = [FakeTransport() for _ in range(5)]
-        protocols = [PreviewProtocol(epoch=50 + index, preview_builder=builder) for index in range(5)]
+        protocols = [PreviewProtocol(epoch=50 + index, preview_builder=builder, preview_service=service) for index in range(5)]
         tasks = [
             asyncio.create_task(protocol.run(transport))
             for protocol, transport in zip(protocols, transports)
@@ -397,6 +411,7 @@ def test_in_flight_native_preview_work_is_abandoned_with_a_global_concurrency_ca
         finally:
             release.set()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await service.shutdown()
 
     asyncio.run(scenario())
 

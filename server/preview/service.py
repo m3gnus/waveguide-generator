@@ -7,17 +7,14 @@ import ipaddress
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from server.preview.core import (
     CLOSE_ORIGIN_REJECTED,
-    CLOSE_RESTARTING,
+    PreviewComputeService,
     PreviewProtocol,
 )
-
-
-router = APIRouter()
 
 
 def _local_origin(origin: str) -> bool:
@@ -59,23 +56,36 @@ class _FastAPITransport:
             await self.websocket.close(code=code)
 
 
-@router.websocket("/ws/preview")
-async def preview_websocket(websocket: WebSocket) -> None:
-    """Serve WS-PROTOCOL v1 preview and curve requests."""
+def create_preview_router(service: PreviewComputeService) -> APIRouter:
+    router = APIRouter()
 
-    origin = websocket.headers.get("origin")
-    if origin is not None and not _local_origin(origin):
-        await websocket.close(code=CLOSE_ORIGIN_REJECTED)
-        return
-    await websocket.accept()
-    protocol = PreviewProtocol()
-    try:
-        await protocol.run(_FastAPITransport(websocket))
-    except asyncio.CancelledError:
-        await protocol.close_restarting()
-        raise
-    except WebSocketDisconnect:
-        return
+    @router.websocket("/ws/preview")
+    async def preview_websocket(websocket: WebSocket) -> None:
+        """Serve WS-PROTOCOL v1 preview and curve requests."""
+
+        origin = websocket.headers.get("origin")
+        if origin is not None and not _local_origin(origin):
+            await websocket.close(code=CLOSE_ORIGIN_REJECTED)
+            return
+        await websocket.accept()
+        protocol = PreviewProtocol(preview_service=service)
+        try:
+            await protocol.run(_FastAPITransport(websocket))
+        except asyncio.CancelledError:
+            await protocol.close_restarting()
+            raise
+        except WebSocketDisconnect:
+            return
+
+    return router
 
 
-__all__ = ["preview_websocket", "router"]
+def mount_preview(application: FastAPI) -> PreviewComputeService:
+    service = PreviewComputeService()
+    application.state.preview_service = service
+    application.include_router(create_preview_router(service))
+    application.router.add_event_handler("shutdown", service.shutdown)
+    return service
+
+
+__all__ = ["create_preview_router", "mount_preview"]

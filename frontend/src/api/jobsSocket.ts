@@ -2,6 +2,11 @@ import { compareSelection } from './results';
 
 export type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
 export type JobsConnection = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+export interface AutoExportFormatStatus {
+  status: 'complete' | 'failed';
+  attempted_at: string;
+  reason?: string;
+}
 
 export interface JobItem {
   id: string;
@@ -21,9 +26,12 @@ export interface JobItem {
   cancellation_requested: boolean;
   mesh_stats: Record<string, unknown> | null;
   script_snapshot: Record<string, unknown> | null;
+  design_revision: number;
+  polar_grid: Record<string, unknown>;
   rating: number | null;
   exported_files: string[];
   auto_export_completed_at: string | null;
+  auto_export_formats: Record<string, AutoExportFormatStatus>;
   raw_results_file: string | null;
   mesh_artifact_file: string | null;
   log_tail: string[];
@@ -275,7 +283,14 @@ export class JobsSocketManager {
     if (cursor !== null && message.cursor !== cursor + 1) {
       this.gapTargetCursor = message.cursor;
       this.update({ error: `Jobs event gap (${cursor} → ${message.cursor}); resyncing` });
-      void this.refetchJobs();
+      if (this.socket?.readyState === OPEN && this.snapshot.epoch !== null) {
+        this.socket.send(JSON.stringify({
+          v: 1,
+          kind: 'resume',
+          epoch: this.snapshot.epoch,
+          cursor,
+        }));
+      }
       return;
     }
     this.update({ cursor: message.cursor });

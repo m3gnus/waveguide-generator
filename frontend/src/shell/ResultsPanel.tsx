@@ -53,6 +53,17 @@ function chartLabel(chartType: ChartType): string {
   return CHART_TYPES.find(({ id }) => id === chartType)?.label ?? chartType;
 }
 
+export function resolvedPolarStepNotice(result: JobResults): string | null {
+  const grid = result.metadata?.polar_grid;
+  if (!grid || typeof grid !== 'object') return null;
+  const record = grid as Record<string, unknown>;
+  const requested = Number(record.requested_step);
+  const resolved = Number(record.resolved_step);
+  if (!Number.isFinite(requested) || !Number.isFinite(resolved)) return null;
+  if (Math.abs(requested - resolved) <= Math.max(1e-9, Math.abs(requested) * 1e-7)) return null;
+  return `${Number(resolved.toPrecision(6))}° resolved (requested ${Number(requested.toPrecision(6))}°)`;
+}
+
 function Summary({ result }: { result: ResultPayload }) {
   const warnings = Array.isArray(result.metadata?.warnings) ? result.metadata.warnings.length : Number(result.metadata?.warning_count ?? 0);
   const cells = [
@@ -90,8 +101,9 @@ function ResultChart({ chartType, result, named, tokens }: { chartType: ChartTyp
 }
 
 function ChartCard({ index, chartType, result, named, tokens }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
+  const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   return <section className={`result-card result-${index}`} style={{ gridColumn: index % 2 ? '7 / 13' : '1 / 7' }}>
-    <header style={{ alignItems: 'center' }}><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)} style={{ maxWidth: '72%', color: 'var(--fg1)', background: 'var(--ctl-grad)', border: '1px solid var(--hair)', fontSize: 9 }}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType)}</span></header>
+    <header style={{ alignItems: 'center' }}><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)} style={{ maxWidth: '72%', color: 'var(--fg1)', background: 'var(--ctl-grad)', border: '1px solid var(--hair)', fontSize: 9 }}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType)}</span></header>
     <div className="chart-placeholder"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
   </section>;
 }

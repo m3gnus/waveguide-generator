@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import uvicorn
 
-from server.app import create_app
+from server.app import VERSION, create_app
 from server.platform.instance import (
     InstanceAlreadyRunning,
     InstanceLock,
@@ -142,7 +142,8 @@ def main(argv: list[str] | None = None) -> int:
             ).start()
 
         logging.getLogger("wg2.launch").info(
-            "Starting Waveguide Generator v2 at http://%s:%d/ (pid %d)",
+            "Starting Waveguide Generator v%s at http://%s:%d/ (pid %d)",
+            VERSION,
             HOST,
             port,
             os.getpid(),

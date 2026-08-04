@@ -189,7 +189,6 @@ def _validate_fidelity(header: Header) -> None:
     float_fields = (
         "maxChordErrorMmRequested",
         "maxNormalStepDegRequested",
-        "maxChordErrorMmAchieved",
         "maxNormalStepDegAchieved",
     )
     int_fields = ("minSilhouetteSegmentsRequested", "minSilhouetteSegmentsAchieved")
@@ -197,13 +196,27 @@ def _validate_fidelity(header: Header) -> None:
         value = fidelity.get(field)
         if not _is_finite_number(value) or value < 0:
             _fail("fidelity-invalid", field)
+    achieved_chord = fidelity.get("maxChordErrorMmAchieved")
+    complete = fidelity.get("chordMeasurementComplete")
+    unmeasured = _safe_integer(fidelity.get("unmeasuredChordIntervals"))
+    if not isinstance(complete, bool) or unmeasured is None or unmeasured < 0:
+        _fail("fidelity-invalid", "chord measurement completeness")
+    if complete:
+        if not _is_finite_number(achieved_chord) or achieved_chord < 0 or unmeasured != 0:
+            _fail("fidelity-invalid", "maxChordErrorMmAchieved")
+    elif achieved_chord is not None or unmeasured < 1:
+        _fail("fidelity-invalid", "maxChordErrorMmAchieved")
     for field in int_fields:
         value = fidelity.get(field)
         if not _is_int(value) or value < 0:
             _fail("fidelity-invalid", field)
 
     missed = (
-        fidelity["maxChordErrorMmAchieved"] > fidelity["maxChordErrorMmRequested"]
+        not complete
+        or (
+            achieved_chord is not None
+            and achieved_chord > fidelity["maxChordErrorMmRequested"]
+        )
         or fidelity["maxNormalStepDegAchieved"] > fidelity["maxNormalStepDegRequested"]
         or fidelity["minSilhouetteSegmentsAchieved"] < fidelity["minSilhouetteSegmentsRequested"]
     )

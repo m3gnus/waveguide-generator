@@ -6,6 +6,7 @@ import pytest
 
 from server.design.schema import DesignConfig, Expr, OSSEConfig
 from server.design.textcfg import TextConfigError, parse, serialize
+from server.preview.translate import design_to_mesher_config
 
 
 SOURCE = """; Parameter config
@@ -101,6 +102,32 @@ def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
     assert text.startswith("; Parameter config\n; Waveguide Generator v2 design-format: 2\n")
     assert text.index("Coverage.Angle") < text.index("Length") < text.index("Term.n")
     assert parse(text).design.formula == "OSSE"
+
+
+@pytest.mark.parametrize(
+    ("raw", "value"),
+    [("6.35*2", 12.7), ("10 + 2*p", None)],
+)
+def test_osse_r0_raw_spelling_round_trips_schema_cfg_reopen_and_mesher(
+    raw: str, value: float | None
+) -> None:
+    # This payload is the exact schema-wire Expr shape emitted by the UI.
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 45,
+            "r0": {"value": value, "raw": raw},
+        }
+    )
+    text = serialize(design)
+    assert f"Throat.Diameter = 2*({raw})" in text
+
+    reopened = parse(text).design
+    assert reopened.root.r0 is not None
+    assert reopened.root.r0.raw == raw
+    assert reopened.root.r0.value == value
+    assert design_to_mesher_config(reopened)["profile"]["r0"] == raw
 
 
 @pytest.mark.parametrize(

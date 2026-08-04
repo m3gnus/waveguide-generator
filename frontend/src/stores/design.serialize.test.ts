@@ -59,6 +59,15 @@ test('serializes raw ATH expressions and four-value enclosure tuples without lea
   expect(payload).not.toHaveProperty('_expressions');
 });
 
+test.each([
+  { value: 12.7, raw: '6.35*2' },
+  { value: null, raw: '10 + 2*p' },
+])('serializes OSSE r0 raw spelling into schema wire for CFG round-trip', (expression) => {
+  useDesignStore.getState().setFamily('OSSE');
+  useDesignStore.getState().updateExpression('r0', expression);
+  expect(serializeDesign(useDesignStore.getState().design).r0).toEqual(expression);
+});
+
 test('FREEFORM length and mouth radius edits target the last imported point', () => {
   useDesignStore.getState().setFamily('FREEFORM');
   useDesignStore.getState().updateValue('profile_h.points', [{ z: 0, r: 12 }, { z: 40, r: 50 }, { z: 120, r: 140 }]);

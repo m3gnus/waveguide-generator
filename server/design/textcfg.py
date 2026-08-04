@@ -255,6 +255,9 @@ def _put(payload: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
 
 
 def _numeric_or_expression_divide_by_two(value: str) -> Any:
+    generated = re.fullmatch(r"\s*2\s*\*\s*\((.*)\)\s*", value, flags=re.DOTALL)
+    if generated is not None:
+        return generated.group(1)
     try:
         number = float(value)
         return number / 2.0 if math.isfinite(number) else value
@@ -720,8 +723,10 @@ def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None
         _line(lines, "Term.s", config.s)
         _line(lines, "Throat.Angle", config.a0)
         if config.r0 is not None:
-            diameter = None if config.r0.value is None else Expr(value=config.r0.value * 2)
-            _line(lines, "Throat.Diameter", diameter or f"2*({config.r0.text()})")
+            if config.r0.raw is not None:
+                _line(lines, "Throat.Diameter", f"2*({config.r0.raw})")
+            elif config.r0.value is not None:
+                _line(lines, "Throat.Diameter", Expr(value=config.r0.value * 2))
         if config.throat_profile is None:
             _line(lines, "Throat.Profile", Expr(value=1))
         _line(lines, "OS.k", config.k)

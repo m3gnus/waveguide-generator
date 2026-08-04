@@ -29,6 +29,8 @@ def fidelity(*, limited: bool = False) -> dict[str, Any]:
         "maxNormalStepDegRequested": 3.0,
         "minSilhouetteSegmentsRequested": 4,
         "maxChordErrorMmAchieved": 0.04 if not limited else 0.08,
+        "chordMeasurementComplete": True,
+        "unmeasuredChordIntervals": 0,
         "maxNormalStepDegAchieved": 2.5,
         "minSilhouetteSegmentsAchieved": 4,
         "vertexCapLimited": limited,

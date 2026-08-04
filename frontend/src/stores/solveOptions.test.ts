@@ -13,6 +13,7 @@ describe('solve and directivity options', () => {
       frequency_spacing: 'log',
       polar_config: {
         angle_range: [0, 180, 37],
+        angle_step: 5,
         distance: 2,
         norm_angle: 5,
         inclination: 45,

@@ -58,6 +58,12 @@ export class SurfaceBufferManager {
         if (color) this.geometry.dispose();
         this.geometry.setAttribute('color', dynamicAttribute(buffers.colors, 3));
       }
+    } else if (this.geometry.getAttribute('color')) {
+      this.geometry.deleteAttribute('color');
+      // Three.js releases the stale WebGL attribute allocation on geometry
+      // disposal and recreates the still-attached position/normal/index data
+      // on the next render.
+      this.geometry.dispose();
     }
     this.geometry.boundingBox = null;
     this.geometry.boundingSphere = null;

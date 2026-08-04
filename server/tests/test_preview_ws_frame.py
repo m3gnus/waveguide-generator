@@ -6,6 +6,8 @@ perform the live socket smoke test from the final batch handoff.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -82,3 +84,39 @@ def test_frame_boundary_refuses_non_finite_geometry() -> None:
             lod="coarse",
             eval_ms=0,
         )
+
+
+def test_incomplete_enclosure_fidelity_remains_unmeasured_in_aggregate() -> None:
+    metadata = json.loads(
+        (Path(__file__).parent / "fixtures" / "incomplete_fidelity_enclosure.json")
+        .read_text(encoding="utf-8")
+    )
+    surface = lambda role: SimpleNamespace(  # noqa: E731 - compact fixture factory
+        role=role,
+        positions=np.asarray([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64),
+        indices=np.asarray([0, 1, 2], dtype=np.uint32),
+        normals=np.asarray([[0, 0, 1]] * 3, dtype=np.float64),
+        shading="smooth",
+        normal_method="exact-planar" if role.startswith("enclosure") else "analytic-parametric",
+        closed_phi=False,
+    )
+    geometry = SimpleNamespace(
+        surfaces=[surface("horn.inner"), surface("enclosure.front")],
+        metadata=metadata,
+    )
+    header, _arrays = decode(
+        encode_preview_geometry(
+            geometry,
+            epoch=1,
+            seq=2,
+            design_revision=3,
+            lod="fine",
+            eval_ms=1.0,
+        )
+    )
+    fidelity = header["fidelity"]
+    assert fidelity["maxChordErrorMmAchieved"] is None
+    assert fidelity["chordMeasurementComplete"] is False
+    assert fidelity["unmeasuredChordIntervals"] == 2
+    assert fidelity["minSilhouetteSegmentsAchieved"] == 4
+    assert set(fidelity["surfaces"]) == {"horn.inner", "enclosure.front"}

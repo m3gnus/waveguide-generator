@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 from server.engines import registry
+from server.engines.dryrun import DryRunEngine
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
@@ -25,6 +26,40 @@ def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> Non
         ("bempp", False, "package absent"),
         ("circsym", True, "meridian ready"),
     ]
+
+
+def test_capability_snapshot_is_reused_by_solve_submission(tmp_path: Path) -> None:
+    calls = 0
+
+    def detect_once() -> list[registry.EngineInfo]:
+        nonlocal calls
+        calls += 1
+        return [registry.EngineInfo("dryrun", True, "test", "builtin")]
+
+    shared_registry = registry.EngineRegistry(
+        detector=detect_once, factory=lambda _name: DryRunEngine()
+    )
+    request = SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "simulation": {"f1": 500, "f2": 501},
+            },
+            "options": {"engine": "dryrun", "stage_delay_ms": 0},
+        }
+    )
+
+    async def scenario() -> None:
+        assert (await shared_registry.capabilities())[0].available is True
+        runtime = JobRuntime(
+            JobStore(tmp_path / "cached.db"), engine_registry=shared_registry
+        )
+        await runtime.submit(request)
+        await runtime.wait_idle()
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+    assert calls == 1
 
 
 def test_real_runtime_seam_persists_artifact_stats_results_and_stages(
@@ -59,7 +94,13 @@ def test_real_runtime_seam_persists_artifact_stats_results_and_stages(
     )
 
     async def scenario() -> None:
-        runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=registry.EngineRegistry(
+                detector=lambda: [registry.EngineInfo("metal", True, "test", "1")],
+                factory=lambda _name: FakeMetal(),
+            ),
+        )
         job_id = await runtime.submit(request)
         await runtime.wait_idle()
         job = await runtime.get_job(job_id)
@@ -97,7 +138,13 @@ def test_real_runtime_persists_mesh_before_a_native_solve_failure(
     )
 
     async def scenario() -> None:
-        runtime = JobRuntime(JobStore(tmp_path / "failed.db"))
+        runtime = JobRuntime(
+            JobStore(tmp_path / "failed.db"),
+            engine_registry=registry.EngineRegistry(
+                detector=lambda: [registry.EngineInfo("metal", True, "test", "1")],
+                factory=lambda _name: FailingMetal(),
+            ),
+        )
         job_id = await runtime.submit(request)
         await runtime.wait_idle()
         job = await runtime.get_job(job_id)

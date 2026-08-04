@@ -57,7 +57,7 @@ export async function exportProfileArtifacts(
 export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const loadDesign = useDesignStore((state) => state.loadDesign);
+  const replaceDesign = useDesignStore((state) => state.replaceDesign);
   const [savedRevision, setSavedRevision] = useState(() => useDesignStore.getState().designRevision);
   const [filename, setFilename] = useState('tritonia_mk2.cfg');
   const [open, setOpen] = useState(false);
@@ -98,7 +98,7 @@ export function DesignFileMenu() {
         return;
       }
       const opened = await openDesignText(text);
-      loadDesign(hydrateDesignDocument(opened.design));
+      replaceDesign(hydrateDesignDocument(opened.design));
       setFilename(`${stem(file.name)}.cfg`);
       setSavedRevision(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));

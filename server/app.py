@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import asdict
+import json
 import logging
 from pathlib import Path
 import time
@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from server.engines.registry import detect_engines
+from server.engines.registry import EngineRegistry, detect_engines
 from server.charts import mount_charts
 from server.design_io import mount_design_io
 from server.exports import mount_exports
@@ -20,11 +20,17 @@ from server.jobs import mount_jobs
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.platform.origin import local_origin
 from server.platform.paths import resolve_data_dir
-from server.preview.service import router as preview_router
+from server.preview.service import mount_preview
 from server.workspace import mount_workspace
 
 
-VERSION = "2.0.0"
+VERSION = str(
+    json.loads(
+        (Path(__file__).resolve().parents[1] / "shared" / "version.json").read_text(
+            encoding="utf-8"
+        )
+    )["version"]
+)
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 request_log = logging.getLogger("wg2.requests")
 _local_origin = local_origin
@@ -38,8 +44,9 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     application = FastAPI(title="Waveguide Generator v2", version=VERSION)
     application.state.started = started
     application.state.data_dir = resolved_data_dir
-    application.state.capabilities_cache = None
-    application.state.capabilities_lock = asyncio.Lock()
+    engine_registry = EngineRegistry(detector=detect_engines)
+    application.state.engine_registry = engine_registry
+    logging.getLogger("wg2").info("Waveguide Generator v%s application initialized", VERSION)
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from
     # ``server/services/gmsh_worker.py:44-84`` and removes the first-build cliff.
@@ -96,14 +103,12 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
 
     @application.get("/api/capabilities")
     async def capabilities() -> dict[str, object]:
-        if application.state.capabilities_cache is None:
-            async with application.state.capabilities_lock:
-                if application.state.capabilities_cache is None:
-                    engines = await asyncio.to_thread(detect_engines)
-                    application.state.capabilities_cache = [asdict(engine) for engine in engines]
+        capabilities_cache = [
+            asdict(engine) for engine in await engine_registry.capabilities()
+        ]
         available = {
             item["name"]
-            for item in application.state.capabilities_cache
+            for item in capabilities_cache
             if item.get("available") is True
         }
         resolved = next(
@@ -111,7 +116,7 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
             None,
         )
         return {
-            "engines": application.state.capabilities_cache,
+            "engines": capabilities_cache,
             "engineSelection": {
                 "default": "auto",
                 "resolvedDefault": resolved,
@@ -120,10 +125,10 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
             },
         }
 
-    application.include_router(preview_router)
+    mount_preview(application)
     mount_design_io(application)
     mount_exports(application)
-    mount_jobs(application)
+    mount_jobs(application, engine_registry)
     mount_workspace(application)
     mount_charts(application)
     # Job tasks stop first; only then may their shared gmsh owner be finalized.

@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults } from '../api/results';
-import { getCapabilities, resolveEngine, submitDesign, type EngineCapability } from '../jobs/actions';
+import { compareSelection } from '../api/results';
+import { hydrateJobDesign, jobDesignWire, replaceWithJobDesign } from '../jobs/jobDesign';
 import { useDesignStore, type DesignDocument } from '../stores/design';
-import { useSolveOptionsStore } from '../stores/solveOptions';
-import { applyJobPreferences, exportBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
+import { applyJobPreferences, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
-import type { ResultPayload } from '../results/types';
-import { JobAutomation } from '../jobs/automation';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 
 function name(job: JobItem): string {
   return job.label || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
@@ -39,8 +36,7 @@ function metrics(job: JobItem, now: number): string {
 }
 
 export function canLoadDesign(job: Pick<JobItem, 'script_snapshot'>): boolean {
-  const snapshot = job.script_snapshot;
-  return Boolean(snapshot && typeof snapshot.formula === 'string');
+  return jobDesignWire(job) !== null && hydrateJobDesign(job) !== null;
 }
 
 function Rating({ job, onError }: { job: JobItem; onError: (message: string) => void }) {
@@ -67,17 +63,16 @@ function MiniJob({ job }: { job: JobItem }) {
 function JobCard({ job, now, run, onError }: {
   job: JobItem;
   now: number;
-  run: (design: DesignDocument) => Promise<void>;
+  run: (design: DesignDocument, designRevision?: number) => Promise<void>;
   onError: (message: string) => void;
 }) {
-  const loadDesign = useDesignStore((state) => state.loadDesign);
   const currentDesign = useDesignStore((state) => state.design);
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
-  const snapshot = job.script_snapshot as unknown as DesignDocument | null;
-  const retry = () => void run(snapshot?.formula ? snapshot : currentDesign).catch((error) => onError(String(error)));
+  const snapshot = hydrateJobDesign(job);
+  const retry = () => void run(snapshot ?? currentDesign, snapshot ? job.design_revision : undefined).catch((error) => onError(String(error)));
   const load = () => {
-    if (snapshot?.formula) loadDesign(snapshot);
+    if (snapshot) replaceWithJobDesign(job);
     if (job.has_results) compareSelection.setPrimary(job.id);
   };
   return <article className={`job-card ${running ? 'running' : failed ? 'failed' : 'complete'}`}>
@@ -102,90 +97,14 @@ function JobCard({ job, now, run, onError }: {
 
 export function JobsPanel() {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
-  const design = useDesignStore((state) => state.design);
-  const revision = useDesignStore((state) => state.designRevision);
-  const selectedEngine = useSolveOptionsStore((state) => state.engine);
+  const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const preferences = usePreferences();
-  const automation = useRef(new JobAutomation()).current;
-  const [capabilities, setCapabilities] = useState<EngineCapability[]>([]);
-  const [capabilityError, setCapabilityError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [now, setNow] = useState(Date.now());
 
-  useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, []);
-  useEffect(() => {
-    let live = true;
-    void getCapabilities().then((value) => {
-      if (!live) return;
-      setCapabilities(value.engines);
-    }).catch((error) => live && setCapabilityError(error instanceof Error ? error.message : String(error)));
-    return () => { live = false; };
-  }, []);
-
-  let effectiveEngine = selectedEngine;
-  if (selectedEngine === 'auto') {
-    try { effectiveEngine = resolveEngine('auto', { engines: capabilities }, design.simulation.solver_mode); } catch { /* unavailable below */ }
-  }
-  const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
-
-  const run = useCallback(async (nextDesign: DesignDocument) => {
-    if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
-    setSubmitting(true);
-    setActionError(null);
-    try {
-      const jobId = await submitDesign(nextDesign);
-      await jobsSocket.patchMetadata(jobId, { script_snapshot: structuredClone(nextDesign), label: exportBaseName(preferences) });
-      await jobsSocket.refresh();
-    } finally {
-      setSubmitting(false);
-    }
-  }, [capability, capabilityError, preferences, selectedEngine]);
-
-  useEffect(() => {
-    void automation.process(snapshot.jobs, preferences, {
-      downloadMesh: (job) => downloadMeshArtifact(job.id),
-      exportCompleted: async (job) => runExportBundle({
-        result: await fetchJobResults(job.id) as ResultPayload,
-        design: job.script_snapshot?.formula ? job.script_snapshot as unknown as DesignDocument : undefined,
-        designRevision: Number(job.config_summary.design_revision ?? 0),
-        preferences,
-      }),
-      markExported: async (job, files, completedAt) => jobsSocket.patchMetadata(job.id, {
-        exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
-        auto_export_completed_at: completedAt,
-      }),
-      incrementCounter: () => preferencesStore.update({ counter: Math.min(999_999, preferencesStore.getSnapshot().counter + 1) }),
-      reportError: setActionError,
-    });
-  }, [automation, preferences, snapshot.jobs]);
-
-  // TopBar is outside this batch's write boundary; bridge its existing control here.
-  useEffect(() => {
-    const button = document.querySelector<HTMLButtonElement>('.solve-button');
-    if (!button) return;
-    const unavailable = capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
-    button.disabled = !capability?.available || submitting;
-    button.title = capability?.available ? (submitting ? 'Submitting solve…' : `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${capability.name})` : capability.name}`) : unavailable;
-    button.setAttribute('aria-busy', String(submitting));
-    const solve = () => void run(design).catch((error) => setActionError(error instanceof Error ? error.message : String(error)));
-    const shortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && capability?.available && !submitting) {
-        event.preventDefault();
-        solve();
-      }
-    };
-    button.addEventListener('click', solve);
-    window.addEventListener('keydown', shortcut);
-    return () => {
-      button.removeEventListener('click', solve);
-      window.removeEventListener('keydown', shortcut);
-    };
-  }, [capability, capabilityError, design, revision, run, submitting]);
 
   const visibleJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
   const { cards, earlier } = useMemo(() => {
@@ -198,12 +117,12 @@ export function JobsPanel() {
   const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
 
   return <div className="jobs-panel panel-scroll">
-    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button onClick={() => void jobsSocket.clearFailed().catch((error) => setActionError(String(error)))} style={{ color: 'var(--red)', background: 'none' }}>clear failed</button>}</div>
+    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))} style={{ color: 'var(--red)', background: 'none' }}>clear failed</button>}</div>
     <JobsPreferencesSurface/>
-    {(actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{actionError ?? snapshot.error}</div>}
+    {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}
-    {cards.map((job) => <JobCard key={job.id} job={job} now={now} run={run} onError={setActionError}/>)}
+    {cards.map((job) => <JobCard key={job.id} job={job} now={now} run={coordinator.run} onError={coordinator.reportError}/>)}
     {earlier.length > 0 && <><div className="earlier"><span>Earlier today</span><i/></div>{earlier.map((job) => <MiniJob key={job.id} job={job}/>)}</>}
   </div>;
 }

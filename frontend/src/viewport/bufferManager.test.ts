@@ -54,13 +54,22 @@ describe('SurfaceBufferManager', () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it('retains a color attribute while curvature is off and disposes GPU state before resizing it', () => {
+  it('removes stale curvature colors on an equal-size no-curvature update', () => {
+    const manager = new SurfaceBufferManager();
+    manager.update({ ...buffers(), colors: new Float32Array(9) });
+    const dispose = vi.spyOn(manager.geometry, 'dispose');
+    manager.update(buffers());
+    expect(manager.geometry.getAttribute('color')).toBeUndefined();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(manager.geometry.getAttribute('position')).toBeDefined();
+    expect(manager.geometry.getAttribute('normal')).toBeDefined();
+    expect(manager.geometry.getIndex()).not.toBeNull();
+  });
+
+  it('disposes GPU state before resizing a color attribute', () => {
     const manager = new SurfaceBufferManager();
     manager.update({ ...buffers(), colors: new Float32Array(9) });
     const color = manager.geometry.getAttribute('color');
-    manager.update(buffers());
-    expect(manager.geometry.getAttribute('color')).toBe(color);
-
     const dispose = vi.spyOn(manager.geometry, 'dispose');
     manager.update({ ...buffers(), colors: new Float32Array(12) });
     expect(dispose).toHaveBeenCalledOnce();

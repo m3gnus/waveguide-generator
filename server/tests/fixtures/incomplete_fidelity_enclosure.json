@@ -1,0 +1,28 @@
+{
+  "api_version": "hornlab.preview/1",
+  "actual_segment_counts": {"horn_phi": 64},
+  "fidelity": {
+    "horn.inner": {
+      "max_chord_error_mm_requested": 0.05,
+      "max_chord_error_mm_achieved": 0.04,
+      "max_normal_step_deg_requested": 3.0,
+      "max_normal_step_deg_achieved": 2.0,
+      "min_silhouette_segments_requested": 4,
+      "silhouette_segments_achieved": 64,
+      "measurement_complete": true,
+      "unmeasured_interval_count": 0,
+      "vertex_cap_limited": false
+    },
+    "enclosure.front": {
+      "max_chord_error_mm_requested": 0.05,
+      "max_chord_error_mm_achieved": null,
+      "max_normal_step_deg_requested": 3.0,
+      "max_normal_step_deg_achieved": 0.0,
+      "min_silhouette_segments_requested": 4,
+      "silhouette_segments_achieved": 4,
+      "measurement_complete": false,
+      "unmeasured_interval_count": 2,
+      "vertex_cap_limited": true
+    }
+  }
+}

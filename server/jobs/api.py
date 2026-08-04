@@ -31,6 +31,7 @@ from server.jobs.runtime import (
     UnknownEngineError,
 )
 from server.jobs.store import JobStore
+from server.engines.registry import EngineRegistry
 from server.platform.origin import local_origin
 
 
@@ -190,11 +191,15 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
     return router
 
 
-def mount_jobs(application: FastAPI) -> JobRuntime:
+def mount_jobs(
+    application: FastAPI, engine_registry: EngineRegistry | None = None
+) -> JobRuntime:
     """Attach one data-dir-bound runtime before the frontend catch-all mount."""
 
     data_dir = Path(application.state.data_dir)
-    runtime = JobRuntime(JobStore.for_data_dir(data_dir))
+    runtime = JobRuntime(
+        JobStore.for_data_dir(data_dir), engine_registry=engine_registry
+    )
     application.state.jobs_runtime = runtime
     application.include_router(create_jobs_router(runtime))
     return runtime

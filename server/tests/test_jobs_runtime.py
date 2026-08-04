@@ -225,3 +225,62 @@ def test_dryrun_results_are_deterministic_and_plausibly_shaped(
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_solve_creation_atomically_persists_snapshot_revision_label_and_polar_grid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+    request = SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "r0": {"value": 12.7, "raw": "6.35*2"},
+                "simulation": {"f1": 250, "f2": 500, "num_frequencies": 2},
+            },
+            "options": {
+                "engine": "dryrun",
+                "stage_delay_ms": 0,
+                "polar_config": {
+                    "angle_range": [0, 180, 26],
+                    "angle_step": 7,
+                },
+            },
+            "label": "  atomic design  ",
+            "design_revision": 42,
+            "design_snapshot": {
+                "version": 1,
+                "design": {
+                    "formula": "OSSE",
+                    "r0": {"value": 12.7, "raw": "6.35*2"},
+                    "simulation": {"f1": 250, "f2": 500, "num_frequencies": 2},
+                },
+            },
+        }
+    )
+
+    async def scenario() -> None:
+        runtime = JobRuntime(JobStore(tmp_path / "atomic.db"))
+        job_id = await runtime.submit(request)
+        job = await runtime.get_job(job_id)
+        assert job["label"] == "atomic design"
+        assert job["design_revision"] == 42
+        assert job["script_snapshot"]["version"] == 1
+        assert job["script_snapshot"]["design"]["r0"] == {
+            "value": 12.7,
+            "raw": "6.35*2",
+        }
+        assert job["polar_grid"] == {
+            "start": 0.0,
+            "end": 180.0,
+            "count": 26,
+            "requested_step": 7.0,
+            "resolved_step": 7.2,
+        }
+        await runtime.wait_idle()
+        results = await runtime.get_results(job_id)
+        assert results["metadata"]["design_revision"] == 42
+        assert results["metadata"]["polar_grid"] == job["polar_grid"]
+        await runtime.shutdown()
+
+    asyncio.run(scenario())

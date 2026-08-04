@@ -8,9 +8,10 @@ v1 ``server/solver/metal_solver.py:79-179``,
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import os
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +65,9 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     return engines
 
 
-def get_engine(name: str, *, environ: Mapping[str, str] | None = None) -> Any | None:
-    """Return a fresh enabled adapter after the same probe exposed by capabilities."""
-
+def create_engine(name: str) -> Any | None:
+    """Construct a known adapter without performing a capability probe."""
     normalized = str(name).strip().lower()
-    available = {item.name: item.available for item in detect_engines(environ=environ)}
-    if not available.get(normalized, False):
-        return None
     if normalized == "dryrun":
         from .dryrun import DryRunEngine
 
@@ -90,8 +87,26 @@ def get_engine(name: str, *, environ: Mapping[str, str] | None = None) -> Any | 
     return None
 
 
+def get_engine(
+    name: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    capabilities: Sequence[EngineInfo] | None = None,
+) -> Any | None:
+    """Return an enabled adapter, optionally reusing an existing probe result."""
+
+    detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
+    available = {item.name: item.available for item in detected}
+    if not available.get(str(name).strip().lower(), False):
+        return None
+    return create_engine(name)
+
+
 def resolve_auto_engine(
-    *, solver_mode: str | None = None, environ: Mapping[str, str] | None = None
+    *,
+    solver_mode: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    capabilities: Sequence[EngineInfo] | None = None,
 ) -> str | None:
     """Resolve AUTO to the best engine this host can actually run.
 
@@ -100,7 +115,8 @@ def resolve_auto_engine(
     is only a final development fallback when no physical solver is available.
     """
 
-    available = {item.name for item in detect_engines(environ=environ) if item.available}
+    detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
+    available = {item.name for item in detected if item.available}
     normalized_mode = str(solver_mode or "auto").strip().lower().replace("-", "_")
     if normalized_mode in {"circsym", "circ_sym", "axisymmetric", "axisym"}:
         return "circsym" if "circsym" in available else None
@@ -108,3 +124,46 @@ def resolve_auto_engine(
         if candidate in available:
             return candidate
     return None
+
+
+class EngineRegistry:
+    """One off-thread capability snapshot shared by HTTP and job submission."""
+
+    def __init__(
+        self,
+        *,
+        detector: Callable[[], list[EngineInfo]] = detect_engines,
+        factory: Callable[[str], Any | None] = create_engine,
+    ) -> None:
+        self._detector = detector
+        self._factory = factory
+        self._cache: tuple[EngineInfo, ...] | None = None
+        self._lock = asyncio.Lock()
+
+    async def capabilities(self) -> tuple[EngineInfo, ...]:
+        if self._cache is None:
+            async with self._lock:
+                if self._cache is None:
+                    self._cache = tuple(await asyncio.to_thread(self._detector))
+        return self._cache
+
+    async def resolve(self, requested: str, *, solver_mode: str | None) -> str | None:
+        capabilities = await self.capabilities()
+        if requested == "auto":
+            return resolve_auto_engine(
+                solver_mode=solver_mode, capabilities=capabilities
+            )
+        return requested if any(
+            item.name == requested and item.available for item in capabilities
+        ) else None
+
+    async def get_engine(self, name: str) -> Any | None:
+        capabilities = await self.capabilities()
+        if not any(item.name == name and item.available for item in capabilities):
+            return None
+        return self._factory(name)
+
+    async def unavailable_reason(self, name: str) -> str | None:
+        capabilities = await self.capabilities()
+        item = next((item for item in capabilities if item.name == name), None)
+        return item.reason if item is not None else None

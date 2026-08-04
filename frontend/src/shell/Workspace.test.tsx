@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultLayout, Workspace } from './Workspace';
+import { jobsSocket } from '../api/jobsSocket';
 
 class ResizeObserverStub {
   observe() {}
@@ -41,6 +42,30 @@ describe('Workspace', () => {
     expect(host.textContent).toContain('Jobs');
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('can close and reset the Jobs panel without transferring global socket ownership', async () => {
+    const start = vi.spyOn(jobsSocket, 'start');
+    const stop = vi.spyOn(jobsSocket, 'stop');
+    await act(async () => {
+      root.render(<Workspace resetKey={0}/>);
+      await Promise.resolve();
+    });
+    const jobsTab = [...host.querySelectorAll<HTMLElement>('.dv-default-tab')]
+      .find((tab) => tab.querySelector('.dv-default-tab-content')?.textContent === 'Jobs');
+    expect(jobsTab).toBeDefined();
+    await act(async () => jobsTab?.querySelector<HTMLElement>('.dv-default-tab-action')?.click());
+    expect([...host.querySelectorAll<HTMLElement>('.dv-default-tab-content')].some((tab) => tab.textContent === 'Jobs')).toBe(false);
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.render(<Workspace resetKey={1}/>);
+      await Promise.resolve();
+    });
+    expect([...host.querySelectorAll<HTMLElement>('.dv-default-tab-content')].some((tab) => tab.textContent === 'Jobs')).toBe(true);
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it('seeds a pinned JSON layout with a flex viewport branch', () => {

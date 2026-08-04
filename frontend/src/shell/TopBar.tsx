@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { useDesignStore } from '../stores/design';
 import { BrandMark, Icon } from './icons';
+import { useSolveControl } from './JobsCoordinator';
 
 type Theme = 'dark' | 'light';
 const THEME_KEY = 'wg2.theme';
@@ -12,6 +13,7 @@ function initialTheme(): Theme {
 }
 
 export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
+  const solve = useSolveControl();
   const undo = useDesignStore((state) => state.undo);
   const redo = useDesignStore((state) => state.redo);
   const revision = useDesignStore((state) => state.designRevision);
@@ -26,7 +28,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   }, [theme]);
 
   return <header className="topbar">
-    <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><span className="brand-version">2.4.1 · local</span></div></div>
+    <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><span className="brand-version">{__WG2_VERSION__} · local</span></div></div>
     <i className="v-separator" />
     <DesignFileMenu />
     <div className="button-group">
@@ -34,7 +36,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
     </div>
     <button className="command-affordance"><Icon name="search"/><span>Search parameters, designs, jobs, commands…</span><kbd>⌘K</kbd></button>
-    <button className="solve-button" disabled title="Solve is enabled in a later phase"><Icon name="play"/>Solve<kbd>⌘↵</kbd></button>
+    <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>Solve<kbd>⌘↵</kbd></button>
     <i className="v-separator" />
     <div className="theme-toggle" aria-label="Color theme">
       <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme"><Icon name="moon"/></button>

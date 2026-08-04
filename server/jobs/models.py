@@ -18,6 +18,8 @@ class PolarConfig(JobModel):
     """Directivity observation contract shared by every solve engine."""
 
     angle_range: tuple[float, float, int] = (0.0, 180.0, 37)
+    # The three-value range is authoritative. angle_step retains the UI's
+    # requested step so non-divisible spans remain observable in metadata.
     angle_step: float | None = Field(default=None, gt=0)
     distance: float = Field(default=2.0, ge=0.1)
     norm_angle: float = 10.0
@@ -74,17 +76,22 @@ class PolarConfig(JobModel):
             raise ValueError("polar_config.angle_range must be increasing")
         if not 2 <= count <= 721:
             raise ValueError("polar_config angle sample count must be between 2 and 721")
-        effective_step = (end - start) / (count - 1)
         if self.angle_step is not None:
             if not math.isfinite(self.angle_step):
                 raise ValueError("polar_config.angle_step must be finite")
-            if not math.isclose(self.angle_step, effective_step, rel_tol=1.0e-7, abs_tol=1.0e-9):
-                raise ValueError(
-                    "polar_config.angle_step does not match angle_range sample count"
-                )
-        else:
-            object.__setattr__(self, "angle_step", effective_step)
         return self
+
+    def resolved_grid(self) -> dict[str, float | int | None]:
+        start, end, count = self.angle_range
+        return {
+            "start": float(start),
+            "end": float(end),
+            "count": int(count),
+            "requested_step": (
+                float(self.angle_step) if self.angle_step is not None else None
+            ),
+            "resolved_step": float((end - start) / (count - 1)),
+        }
 
 
 class SolveOptions(JobModel):
@@ -126,9 +133,39 @@ class SolveOptions(JobModel):
         return self
 
 
+class DesignSnapshot(JobModel):
+    version: Literal[1] = 1
+    design: DesignConfig
+
+
 class SolveRequest(JobModel):
     design: DesignConfig
     options: SolveOptions = Field(default_factory=SolveOptions)
+    label: str | None = None
+    design_revision: int = Field(default=0, ge=0)
+    design_snapshot: DesignSnapshot | None = None
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_snapshot_matches_design(self) -> "SolveRequest":
+        if self.design_snapshot is None:
+            # Backward-compatible API callers still become atomic records: the
+            # server versions the already-validated canonical design wire.
+            object.__setattr__(
+                self,
+                "design_snapshot",
+                DesignSnapshot(design=self.design.model_copy(deep=True)),
+            )
+        elif self.design_snapshot.design != self.design:
+            raise ValueError("design_snapshot.design must match design")
+        return self
 
 
 class SolveAccepted(JobModel):
@@ -161,9 +198,12 @@ class JobItem(JobModel):
     cancellation_requested: bool
     mesh_stats: dict[str, Any] | None = None
     script_snapshot: dict[str, Any] | None = None
+    design_revision: int
+    polar_grid: dict[str, Any]
     rating: int | None = None
     exported_files: list[str]
     auto_export_completed_at: str | None = None
+    auto_export_formats: dict[str, Any]
     raw_results_file: str | None = None
     mesh_artifact_file: str | None = None
     log_tail: list[str]
@@ -204,6 +244,7 @@ class JobMetadataPatch(JobModel):
     rating: int | None = Field(default=None, ge=0, le=5)
     exported_files: list[str] | None = None
     auto_export_completed_at: str | None = None
+    auto_export_formats: dict[str, Any] | None = None
     raw_results_file: str | None = None
     mesh_artifact_file: str | None = None
 
@@ -234,6 +275,7 @@ class JobMetadataPatch(JobModel):
 __all__ = [
     "ClearFailedResponse",
     "DeleteResponse",
+    "DesignSnapshot",
     "JobItem",
     "JobListResponse",
     "JobMetadataPatch",

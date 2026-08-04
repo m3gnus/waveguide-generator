@@ -106,7 +106,6 @@ function validateFidelity(header) {
   const floatFields = [
     "maxChordErrorMmRequested",
     "maxNormalStepDegRequested",
-    "maxChordErrorMmAchieved",
     "maxNormalStepDegAchieved",
   ];
   const intFields = ["minSilhouetteSegmentsRequested", "minSilhouetteSegmentsAchieved"];
@@ -118,10 +117,22 @@ function validateFidelity(header) {
   for (const field of intFields) {
     if (!Number.isSafeInteger(value[field]) || value[field] < 0) fail("fidelity-invalid", field);
   }
+  const complete = value.chordMeasurementComplete;
+  const unmeasured = value.unmeasuredChordIntervals;
+  if (typeof complete !== "boolean" || !Number.isSafeInteger(unmeasured) || unmeasured < 0) {
+    fail("fidelity-invalid", "chord measurement completeness");
+  }
+  if (complete) {
+    if (typeof value.maxChordErrorMmAchieved !== "number" || !Number.isFinite(value.maxChordErrorMmAchieved)
+      || value.maxChordErrorMmAchieved < 0 || unmeasured !== 0) fail("fidelity-invalid", "maxChordErrorMmAchieved");
+  } else if (value.maxChordErrorMmAchieved !== null || unmeasured < 1) {
+    fail("fidelity-invalid", "maxChordErrorMmAchieved");
+  }
   if (value.vertexCapLimited !== undefined && typeof value.vertexCapLimited !== "boolean") {
     fail("fidelity-invalid", "vertexCapLimited");
   }
-  const missed = value.maxChordErrorMmAchieved > value.maxChordErrorMmRequested
+  const missed = !complete
+    || (value.maxChordErrorMmAchieved !== null && value.maxChordErrorMmAchieved > value.maxChordErrorMmRequested)
     || value.maxNormalStepDegAchieved > value.maxNormalStepDegRequested
     || value.minSilhouetteSegmentsAchieved < value.minSilhouetteSegmentsRequested;
   if (missed && value.vertexCapLimited !== true) fail("fidelity-cap-unreported");

@@ -8,6 +8,7 @@ export type ObservationOrigin = 'mouth' | 'throat';
 /** Mirrors the polar_config request contract introduced by remediation G1. */
 export interface PolarConfig {
   angle_range: [number, number, number];
+  angle_step: number;
   distance: number;
   norm_angle: number;
   inclination: number;
@@ -53,6 +54,7 @@ export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
   const count = Math.max(2, Math.floor(span / Math.max(1e-9, ui.angleStep)) + 1);
   return {
     angle_range: [ui.angleStart, ui.angleEnd, count],
+    angle_step: ui.angleStep,
     distance: ui.distance,
     norm_angle: ui.normAngle,
     inclination: ui.diagonalAngle,
