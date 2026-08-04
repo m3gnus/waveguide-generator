@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { DecodedFrame } from '../api/frame';
 import { previewSocket } from '../api/previewSocket';
 import { subscribeRevision, useDesignStore } from '../stores/design';
+import { useDocumentStore } from '../stores/document';
 import { Icon } from '../shell/icons';
 import { useViewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces } from './frameScene';
 import { createImportedMeshScene, type ImportedMeshScene } from './importedMesh';
+import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { parseMSH } from './mshParser';
+import { filenameStem, previewBadge, previewErrorMessage, viewportSubtitle } from './presentation';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
@@ -42,6 +45,7 @@ export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
+  const filename = useDocumentStore((state) => state.filename);
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const selectedRef = useRef<DecodedFrame | null>(null);
@@ -69,8 +73,10 @@ export function Viewport() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [importedMesh, setImportedMesh] = useState<ImportedMeshScene | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const meshInput = useRef<HTMLInputElement>(null);
   const setCamera = (preset: CameraPreset) => setCameraRequest((current) => ({ preset, nonce: current.nonce + 1 }));
+  const setCameraDirection = (direction: CameraDirection) => setCameraRequest((current) => ({ direction, nonce: current.nonce + 1 }));
   const zoom = (direction: ZoomRequest['direction']) => setZoomRequest((current) => ({ direction, nonce: current.nonce + 1 }));
   const toggleProjection = () => setCameraProjection((current) => current === 'perspective' ? 'orthographic' : 'perspective');
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
@@ -82,7 +88,9 @@ export function Viewport() {
   const webgl = canRenderWebGL() && renderFailure === null;
   const hasSurfaces = hasRenderableSurfaces(activeScene);
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
-  const badgeLabel = !preferences.liveUpdate ? 'PAUSED' : connectionInterrupted ? preview.connection.toUpperCase() : preview.stale ? 'STALE' : 'LIVE';
+  const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
+  const previewError = preview.error ? previewErrorMessage(preview.error) : null;
+  const showPreviewError = previewError !== null && dismissedPreviewError !== preview.error;
 
   const importMesh = async (file: File | undefined) => {
     if (!file) return;
@@ -132,6 +140,10 @@ export function Viewport() {
     setClientFrameMs(null);
   }, [preview.epoch]);
 
+  useEffect(() => {
+    if (preview.error === null) setDismissedPreviewError(null);
+  }, [preview.error]);
+
   useEffect(() => () => {
     if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
   }, []);
@@ -151,17 +163,18 @@ export function Viewport() {
       onClientFrame={reportClientFrame}
       theme={theme}
       onRenderFailure={setRenderFailure}
+      onCameraDirection={setCameraDirection}
     />}
 
     <div className="viewport-title">
-      <b>{importedMesh?.name ?? 'tritonia_mk2'}</b>
+      <b>{importedMesh?.name ?? filenameStem(filename)}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} triangles · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-        : `${design.formula} · 84° × 60° · Ø ${((design.R ?? 150) * 2).toFixed(0)} mm · half-sym`}</span>
+        : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
       {importedMesh && <span className="imported-mesh-badge">IMPORTED MESH <button type="button" onClick={clearImportedMesh}>Clear</button></span>}
-      <span className={!preferences.liveUpdate ? 'paused-badge' : connectionInterrupted ? 'reconnect-badge' : preview.stale ? 'stale-badge' : 'live-badge'}><i />{badgeLabel}</span>
+      <span className={badge.className}><i />{badge.label}</span>
       <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> + client <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
     </div>
 
@@ -170,7 +183,11 @@ export function Viewport() {
       <b>{preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
       <span>{importError ?? preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
-    {activeScene && connectionInterrupted && !importedMesh && <div className="viewport-connection-banner" role="status">
+    {showPreviewError && <div className="viewport-error-banner" role="alert">
+      <span>{previewError}</span>
+      <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}>×</button>
+    </div>}
+    {activeScene && connectionInterrupted && !importedMesh && <div className={`viewport-connection-banner${showPreviewError ? ' below-error' : ''}`} role="status">
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
       <b>Last valid geometry retained</b>
     </div>}
@@ -196,33 +213,45 @@ export function Viewport() {
     </div>}
 
     <div className="viewport-tools">
-      {modes.map((item) => <button
-        key={item.mode}
-        className={mode === item.mode ? 'on' : ''}
-        title={item.title}
-        aria-label={item.title}
-        aria-pressed={mode === item.mode}
-        onClick={() => setMode(item.mode)}
-      ><Icon name={item.icon}/></button>)}
+      <div className="viewport-tool-group display-mode-tools">
+        {modes.map((item) => <button
+          key={item.mode}
+          className={mode === item.mode ? 'on' : ''}
+          title={item.title}
+          aria-label={item.title}
+          aria-pressed={mode === item.mode}
+          onClick={() => setMode(item.mode)}
+        ><Icon name={item.icon}/></button>)}
+      </div>
       <i className="wg2-tool-divider" />
-      <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
-      <button className={showEnclosure ? 'on' : ''} title="Show enclosure" aria-label="Show enclosure" aria-pressed={showEnclosure} onClick={() => setShowEnclosure((value) => !value)}><Icon name="box"/></button>
-      <button className={showStats ? 'on' : ''} title="Frame stats" aria-label="Frame stats" aria-pressed={showStats} onClick={() => setShowStats((value) => !value)}><span className="wg2-stats-glyph">Σ</span></button>
+      <div className="viewport-tool-group">
+        <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
+        <button className={showEnclosure ? 'on' : ''} title="Show enclosure" aria-label="Show enclosure" aria-pressed={showEnclosure} onClick={() => setShowEnclosure((value) => !value)}><Icon name="box"/></button>
+        <button className={showStats ? 'on' : ''} title="Frame stats" aria-label="Frame stats" aria-pressed={showStats} onClick={() => setShowStats((value) => !value)}><span className="wg2-stats-glyph">Σ</span></button>
+      </div>
       <i className="wg2-tool-divider" />
-      <input ref={meshInput} className="mesh-file-input" type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh" onChange={(event) => void importMesh(event.target.files?.[0])} />
-      <button type="button" title="Import Gmsh 2.2 mesh" aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
-      <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><span className="wg2-settings-glyph">⚙</span></button>
+      <div className="viewport-tool-group viewport-tool-segment" aria-label="View presets">
+        <button className={`viewport-tool-text${cameraRequest.preset === 'front' ? ' on' : ''}`} onClick={() => setCamera('front')}>Front</button>
+        <button className={`viewport-tool-text${cameraRequest.preset === 'three-quarter' ? ' on' : ''}`} onClick={() => setCamera('three-quarter')}>¾</button>
+        <button className={`viewport-tool-text${cameraRequest.preset === 'top' ? ' on' : ''}`} onClick={() => setCamera('top')}>Top</button>
+      </div>
+      <i className="wg2-tool-divider" />
+      <div className="viewport-tool-group viewport-tool-segment">
+        <button className="viewport-tool-text projection-toggle" aria-label={`Switch to ${cameraProjection === 'perspective' ? 'orthographic' : 'perspective'} camera`} onClick={toggleProjection}>{cameraProjection === 'perspective' ? 'Persp' : 'Ortho'}</button>
+      </div>
+      <i className="wg2-tool-divider" />
+      <div className="viewport-tool-group viewport-tool-segment">
+        <button aria-label="Zoom out" title="Zoom out" onClick={() => zoom('out')}>−</button>
+        <button aria-label="Zoom in" title="Zoom in" onClick={() => zoom('in')}>+</button>
+      </div>
+      <i className="wg2-tool-divider" />
+      <div className="viewport-tool-group">
+        <input ref={meshInput} className="mesh-file-input" type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh" onChange={(event) => void importMesh(event.target.files?.[0])} />
+        <button type="button" title="Import Gmsh 2.2 mesh" aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
+        <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><span className="wg2-settings-glyph">⚙</span></button>
+      </div>
     </div>
     {preferencesOpen && <ViewerPreferencesPanel preferences={preferences} onClose={() => setPreferencesOpen(false)} />}
-    <div className="axis-gizmo"><i className="axis x">x</i><i className="axis y">y</i><i className="axis z">z</i></div>
-    <div className="camera-tools"><div>
-      <button className={cameraRequest.preset === 'front' ? 'on' : ''} onClick={() => setCamera('front')}>Front</button>
-      <button className={cameraRequest.preset === 'three-quarter' ? 'on' : ''} onClick={() => setCamera('three-quarter')}>¾</button>
-      <button className={cameraRequest.preset === 'top' ? 'on' : ''} onClick={() => setCamera('top')}>Top</button>
-      <button className={sectionCut ? 'on' : ''} onClick={() => setSectionCut((value) => !value)}>Section</button>
-      <button className="projection-toggle" aria-label={`Switch to ${cameraProjection === 'perspective' ? 'orthographic' : 'perspective'} camera`} onClick={toggleProjection}>{cameraProjection === 'perspective' ? 'Persp' : 'Ortho'}</button>
-      <button aria-label="Zoom out" title="Zoom out" onClick={() => zoom('out')}>−</button>
-      <button aria-label="Zoom in" title="Zoom in" onClick={() => zoom('in')}>+</button>
-    </div><span>100 mm<i /></span></div>
+    <div className="viewport-scale" aria-hidden="true"><i /></div>
   </div>;
 }

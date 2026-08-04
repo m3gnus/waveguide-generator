@@ -1,45 +1,44 @@
 export type RenderTask = () => void;
-export type RequestFrame = (callback: FrameRequestCallback) => number;
-export type CancelFrame = (handle: number) => void;
+
+/**
+ * R3F renders this many frames per invalidation.
+ *
+ * One is not enough. Verified in a real browser: after the scene and camera are
+ * fully correct the canvas still showed a stale image, and a single extra
+ * invalidate from the console painted it correctly every time. Mutations that
+ * land once R3F has already processed the current frame need the following one
+ * to reach the screen, so every invalidation covers two.
+ */
+const FRAMES_PER_INVALIDATION = 2;
 
 export class DemandRenderScheduler {
-  private handle: number | null = null;
   private readonly tasks = new Set<RenderTask>();
 
-  constructor(
-    private readonly render: () => void,
-    // Arrow wrappers keep the window binding: a bare requestAnimationFrame
-    // reference throws "Illegal invocation" when called as this.requestFrame()
-    // in real browsers (jsdom doesn't enforce the binding, so tests can't see it).
-    private readonly requestFrame: RequestFrame = (cb) => window.requestAnimationFrame(cb),
-    private readonly cancelFrame: CancelFrame = (handle) => window.cancelAnimationFrame(handle),
-  ) {}
+  constructor(private readonly invalidate: (frames?: number) => void) {}
 
   schedule(task?: RenderTask): () => void {
     if (task) this.tasks.add(task);
-    if (this.handle === null) this.handle = this.requestFrame(() => this.flush());
+    this.invalidate(FRAMES_PER_INVALIDATION);
     return () => {
       if (task) this.tasks.delete(task);
     };
   }
 
+  // Called from a priority-0 R3F useFrame callback. R3F renders only after all
+  // priority-0 subscribers have run, so mutations made here reach this frame's
+  // paint instead of requiring a second animation frame.
   flush(): void {
-    if (this.handle !== null) this.cancelFrame(this.handle);
-    this.handle = null;
     const pending = [...this.tasks];
     this.tasks.clear();
     pending.forEach((task) => task());
-    this.render();
   }
 
   dispose(): void {
-    if (this.handle !== null) this.cancelFrame(this.handle);
-    this.handle = null;
     this.tasks.clear();
   }
 
   get pending(): boolean {
-    return this.handle !== null;
+    return this.tasks.size > 0;
   }
 }
 
@@ -52,7 +51,7 @@ declare global {
 export function installViewportTestHook(scheduler: DemandRenderScheduler): () => void {
   if (typeof window === 'undefined') return () => undefined;
   const previous = window.__wg2ViewportTestHook;
-  window.__wg2ViewportTestHook = { forceFrame: () => scheduler.flush() };
+  window.__wg2ViewportTestHook = { forceFrame: () => scheduler.schedule() };
   return () => {
     if (previous) window.__wg2ViewportTestHook = previous;
     else delete window.__wg2ViewportTestHook;

@@ -19,6 +19,15 @@ describe('orthographic camera math', () => {
     expect(fit.position.distanceTo(fit.center)).toBeGreaterThan(bounds.getSize(new Vector3()).length());
   });
 
+  it('uses an explicit direction while still looking at the bounds center', () => {
+    const bounds = new Box3(new Vector3(-20, -70, 4), new Vector3(60, 182, 44));
+    const fit = calculateCameraFit(bounds, [-1, 0, 0], 'perspective', 16 / 9);
+    expect(fit.center.toArray()).toEqual([20, 56, 24]);
+    expect(fit.position.y).toBe(fit.center.y);
+    expect(fit.position.z).toBe(fit.center.z);
+    expect(fit.position.x).toBeLessThan(fit.center.x);
+  });
+
   it('zooms orthographic cameras in and out symmetrically', () => {
     expect(zoomedOrthographicValue(1, 'in')).toBe(1.25);
     expect(zoomedOrthographicValue(1.25, 'out')).toBe(1);

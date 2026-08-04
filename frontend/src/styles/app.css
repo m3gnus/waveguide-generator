@@ -140,7 +140,12 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .viewport-title b { color: var(--fg); font-size: 12px; font-weight: 600; }
 .viewport-title span { margin-top: 2px; color: var(--fg3); font: 9.5px var(--mono); }
 .viewport-live { position: absolute; top: 10px; right: 11px; display: flex; align-items: center; gap: 9px; z-index: 2; color: var(--fg3); font: 9.5px var(--mono); }
-.viewport-live > span:first-child { display: flex; align-items: center; gap: 5px; padding: 3px 7px 3px 6px; border-radius: 11px; font-family: var(--ui); font-weight: 680; letter-spacing: .14em; }
+.viewport-live > .imported-mesh-badge,
+.viewport-live > .paused-badge,
+.viewport-live > .reconnect-badge,
+.viewport-live > .error-badge,
+.viewport-live > .stale-badge,
+.viewport-live > .live-badge { display: flex; align-items: center; gap: 5px; padding: 3px 7px 3px 6px; border-radius: 11px; font-family: var(--ui); font-weight: 680; letter-spacing: .14em; }
 .live-badge { border: 1px solid rgba(var(--green-rgb), .32); background: rgba(var(--green-rgb), .12); color: var(--green); }
 .stale-badge { border: 1px solid rgba(var(--amber-rgb), .32); background: rgba(var(--amber-rgb), .12); color: var(--amber); }
 .viewport-live i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
@@ -155,23 +160,18 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .surface-list div { display: flex; justify-content: space-between; padding: 3px 2px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); font: 9.5px var(--mono); }
 .surface-list b { color: var(--fg1); font-weight: 500; }
 .surface-list p { margin: 0; color: var(--fg3); font-size: 10.5px; }
-.viewport-tools { position: absolute; bottom: 11px; left: 50%; display: flex; gap: 2px; z-index: 2; padding: 3px; border: 1px solid var(--glass-bd); border-radius: 9px; background: var(--glass-bg); box-shadow: var(--glass-sh); transform: translateX(-50%); backdrop-filter: blur(12px); }
+.viewport-tools { position: absolute; bottom: 11px; left: 50%; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; z-index: 2; width: max-content; max-width: calc(100% - 24px); max-height: min(78px, calc(100% - 56px)); overflow: auto; padding: 3px; border: 1px solid var(--glass-bd); border-radius: 9px; background: var(--glass-bg); box-shadow: var(--glass-sh); transform: translateX(-50%); backdrop-filter: blur(12px); scrollbar-width: thin; }
+.viewport-tool-group { display: flex; gap: 2px; min-width: 0; }
 .viewport-tools button { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 6px; background: transparent; color: var(--fg2); }
 .viewport-tools button:hover { background: var(--ov3); color: var(--fg); }
 .viewport-tools button.on { background: rgba(var(--acc-rgb), .11); color: var(--acc); }
 .viewport-tools svg { width: 14px; height: 14px; }
-.axis-gizmo { position: absolute; bottom: 14px; left: 15px; width: 50px; height: 50px; border: 1px solid var(--gz-ring); border-radius: 50%; }
-.axis { position: absolute; display: grid; place-items: center; width: 13px; height: 13px; border: 1px solid currentColor; border-radius: 50%; background: var(--gz-fill); font: normal 7px var(--mono); }
-.axis::before { content: ""; position: absolute; right: 11px; width: 18px; height: 1px; background: currentColor; transform-origin: right; }
-.axis.x { top: 8px; right: -2px; color: var(--red); }.axis.x::before { transform: rotate(-18deg); }
-.axis.y { top: -5px; left: 18px; color: var(--green); }.axis.y::before { transform: rotate(90deg); }
-.axis.z { bottom: -1px; left: -1px; color: var(--blue); }.axis.z::before { transform: rotate(-35deg); }
-.camera-tools { position: absolute; right: 12px; bottom: 11px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.camera-tools div { display: flex; gap: 3px; }
-.camera-tools button { padding: 2.5px 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--fg3); font-size: 9.5px; }
-.camera-tools button.on { border-color: rgba(var(--acc-rgb), .3); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
-.camera-tools > span { display: flex; flex-direction: column; align-items: flex-end; color: var(--fg3); font: 9px var(--mono); }
-.camera-tools > span i { width: 66px; height: 4px; border: 1px solid var(--scale-bd); border-top: 0; }
+.viewport-tools .viewport-tool-text { width: auto; min-width: 30px; padding: 0 6px; font-size: 9px; }
+.viewport-tool-segment { overflow: hidden; border: 1px solid var(--hair); border-radius: 6px; background: var(--seg-bg); gap: 0; }
+.viewport-tool-segment button { border-radius: 0; }
+.viewport-tool-segment button + button { border-left: 1px solid var(--hair); }
+.viewport-scale { position: absolute; right: 13px; bottom: 13px; z-index: 2; pointer-events: none; }
+.viewport-scale i { display: block; width: 66px; height: 4px; border: 1px solid var(--scale-bd); border-top: 0; }
 
 /* result dock */
 .results-panel { display: flex; flex-direction: column; }
@@ -216,6 +216,7 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .status-item { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 11px; border-right: 1px solid var(--hair-soft); white-space: nowrap; }
 .status-item:first-child { padding-left: 0; }.status-item.right { border-right: 0; border-left: 1px solid var(--hair-soft); }
 .status-item b { color: var(--fg1); font-weight: 500; }.status-item svg { width: 10px; height: 10px; color: var(--fg4); }
+.preview-error-status { min-width: 0; max-width: 340px; overflow: hidden; color: var(--red); text-overflow: ellipsis; }
 .engine-badge { display: flex; align-items: center; gap: 5px; padding: 1.5px 6px; border: 1px solid rgba(var(--blue-rgb), .3); border-radius: 3px; background: rgba(var(--blue-rgb), .12); color: var(--blue); font-size: 9px; letter-spacing: .04em; }
 .engine-badge svg { width: 9px; color: currentColor; }
 .connection-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--fg3); }.connection-dot.connected { background: var(--green); box-shadow: 0 0 6px rgba(var(--green-rgb), .7); }.connection-dot.connecting, .connection-dot.reconnecting { background: var(--amber); }

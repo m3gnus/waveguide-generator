@@ -1,0 +1,85 @@
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DecodedFrame } from '../api/frame';
+import type { PreviewSnapshot } from '../api/previewSocket';
+import { resetDesignStore } from '../stores/design';
+import { useDocumentStore } from '../stores/document';
+
+const frame: DecodedFrame = {
+  header: {
+    v: 1,
+    kind: 'preview',
+    epoch: 4,
+    seq: 9,
+    designRevision: 0,
+    lod: 'fine',
+    sections: [],
+    surfaces: [{
+      role: 'horn.inner',
+      positions: 'horn.positions',
+      normals: 'horn.normals',
+      indices: 'horn.indices',
+      shading: 'smooth',
+      normalMethod: 'analytic-parametric',
+    }],
+  },
+  sections: {
+    'horn.positions': new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    'horn.normals': new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    'horn.indices': new Uint32Array([0, 1, 2]),
+  },
+};
+
+const previewSnapshot: PreviewSnapshot = {
+  connection: 'connected',
+  epoch: 4,
+  frame,
+  displayedRevision: 0,
+  lastValidRevision: 0,
+  stale: true,
+  dropped: 0,
+  error: 'ATH expression is unsupported',
+};
+
+vi.mock('../api/previewSocket', () => ({
+  previewSocket: {
+    subscribe: () => () => undefined,
+    getSnapshot: () => previewSnapshot,
+  },
+}));
+
+import { Viewport } from './Viewport';
+
+describe('Viewport preview errors', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetDesignStore();
+    useDocumentStore.setState({ filename: 'loaded-design.cfg' });
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<Viewport />));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    useDocumentStore.setState({ filename: 'tritonia_mk2.cfg' });
+    host.remove();
+  });
+
+  it('shows a dismissible alert while a retained scene is present', () => {
+    const alert = host.querySelector<HTMLElement>('[role="alert"]');
+    expect(alert?.textContent).toContain('Displayed geometry is not the current design');
+    expect(host.textContent).toContain('WebGL unavailable');
+    expect(host.textContent).not.toContain('Waiting for geometry');
+    expect(host.querySelector('.error-badge')?.textContent).toContain('ERROR');
+    expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+
+    act(() => alert?.querySelector<HTMLButtonElement>('button')?.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+});

@@ -1,40 +1,83 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DemandRenderScheduler, type RequestFrame } from './demandRender';
+import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
+
+class FakeFrameDriver {
+  private invalidated = false;
+  private frameCallback: (() => void) | null = null;
+
+  readonly invalidate = vi.fn(() => {
+    this.invalidated = true;
+  });
+
+  useFrame(callback: () => void): void {
+    this.frameCallback = callback;
+  }
+
+  advance(render: () => void): void {
+    if (!this.invalidated || !this.frameCallback) return;
+    this.invalidated = false;
+    this.frameCallback();
+    render();
+  }
+}
 
 describe('DemandRenderScheduler', () => {
-  it('batches uploads into one frame and performs no rendering while idle', () => {
-    let callback: FrameRequestCallback | null = null;
-    const request = vi.fn<RequestFrame>((next) => {
-      callback = next;
-      return 17;
+  it('executes scheduled work inside the R3F frame callback before that frame renders', () => {
+    const driver = new FakeFrameDriver();
+    const scheduler = new DemandRenderScheduler(driver.invalidate);
+    let phase: 'idle' | 'frame' | 'render' = 'idle';
+    const order: string[] = [];
+    driver.useFrame(() => {
+      phase = 'frame';
+      order.push('frame');
+      scheduler.flush();
     });
-    const render = vi.fn();
+
+    scheduler.schedule(() => {
+      expect(phase).toBe('frame');
+      order.push('task');
+    });
+    expect(order).toEqual([]);
+
+    driver.advance(() => {
+      phase = 'render';
+      order.push('render');
+    });
+
+    expect(order).toEqual(['frame', 'task', 'render']);
+  });
+
+  it('coalesces queued tasks into the next invalidated R3F frame and stays idle afterward', () => {
+    const driver = new FakeFrameDriver();
+    const scheduler = new DemandRenderScheduler(driver.invalidate);
     const first = vi.fn();
     const second = vi.fn();
-    const scheduler = new DemandRenderScheduler(render, request, vi.fn());
+    const render = vi.fn();
+    driver.useFrame(() => scheduler.flush());
 
     scheduler.schedule(first);
     scheduler.schedule(second);
-    expect(request).toHaveBeenCalledOnce();
-    expect(render).not.toHaveBeenCalled();
     expect(first).not.toHaveBeenCalled();
     expect(second).not.toHaveBeenCalled();
 
-    const queued = callback as FrameRequestCallback | null;
-    if (!queued) throw new Error('frame was not queued');
-    queued(0);
+    driver.advance(render);
     expect(first).toHaveBeenCalledOnce();
     expect(second).toHaveBeenCalledOnce();
     expect(render).toHaveBeenCalledOnce();
+    expect(scheduler.pending).toBe(false);
 
-    expect(request).toHaveBeenCalledOnce();
+    driver.advance(render);
     expect(render).toHaveBeenCalledOnce();
   });
 
-  it('supports an explicit at-rest frame for screenshot tests', () => {
-    const render = vi.fn();
-    const scheduler = new DemandRenderScheduler(render, vi.fn(() => 1), vi.fn());
-    scheduler.flush();
-    expect(render).toHaveBeenCalledOnce();
+  it('routes the at-rest browser hook through R3F invalidation', () => {
+    const invalidate = vi.fn();
+    const scheduler = new DemandRenderScheduler(invalidate);
+    const uninstall = installViewportTestHook(scheduler);
+
+    window.__wg2ViewportTestHook?.forceFrame();
+
+    expect(invalidate).toHaveBeenCalledOnce();
+    uninstall();
   });
 });

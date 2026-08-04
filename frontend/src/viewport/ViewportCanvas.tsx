@@ -1,19 +1,18 @@
-import { OrbitControls } from '@react-three/drei';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Component, useEffect, useLayoutEffect, useMemo, useRef, type ComponentRef, type ErrorInfo, type ReactNode } from 'react';
-import { OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
+import { GizmoHelper, GizmoViewport, OrbitControls } from '@react-three/drei';
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
+import { CanvasTexture, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
-import { calculateCameraFit, zoomedOrthographicValue } from './cameraMath';
+import { calculateCameraFit, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import type { FrameScene } from './frameScene';
 import { createMaterialLibrary } from './materials';
 import { SurfaceMesh } from './SurfaceMesh';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 
-export interface CameraRequest {
-  preset: CameraPreset;
-  nonce: number;
-}
+export type CameraRequest =
+  | { preset: CameraPreset; direction?: never; nonce: number }
+  | { preset?: never; direction: CameraDirection; nonce: number };
 
 export interface ZoomRequest {
   direction: 'in' | 'out';
@@ -34,6 +33,7 @@ interface ViewportCanvasProps {
   onClientFrame: (milliseconds: number) => void;
   theme: ViewportTheme;
   onRenderFailure: (message: string) => void;
+  onCameraDirection: (direction: CameraDirection) => void;
 }
 
 let cachedWebGL2Support: boolean | null = null;
@@ -99,13 +99,108 @@ export function installWheelZoomInversion(element: HTMLElement, enabled: boolean
   return () => element.removeEventListener('wheel', invert, { capture: true });
 }
 
-function CameraRig({ bounds, request, zoomRequest, projection, preferences, scheduler }: {
+type OrbitControlsInstance = ComponentRef<typeof OrbitControls>;
+
+const fallbackAxisColors: [string, string, string] = ['rgb(255, 111, 96)', 'rgb(90, 212, 141)', 'rgb(111, 157, 255)'];
+
+export function axisColorsFromTokens(style: Pick<CSSStyleDeclaration, 'getPropertyValue'>): [string, string, string] {
+  return (['red', 'green', 'blue'] as const).map((name, index) => {
+    const channels = style.getPropertyValue(`--${name}-rgb`).trim();
+    return channels ? `rgb(${channels})` : fallbackAxisColors[index];
+  }) as [string, string, string];
+}
+
+export function shouldShowAxisGizmo(viewportWidth: number, viewportHeight: number): boolean {
+  return viewportWidth > 600 && viewportHeight > 240;
+}
+
+export type GizmoAxis = 'positive-x' | 'negative-x' | 'positive-y' | 'negative-y' | 'positive-z' | 'negative-z';
+
+const gizmoDirections: Record<GizmoAxis, CameraDirection> = {
+  'positive-x': [1, 0, 0],
+  'negative-x': [-1, 0, 0],
+  'positive-y': [0, 1, 0],
+  'negative-y': [0, -1, 0],
+  'positive-z': [0, 0, 1],
+  'negative-z': [0, 0, -1],
+};
+
+export function gizmoAxisDirection(axis: GizmoAxis): CameraDirection {
+  return gizmoDirections[axis];
+}
+
+/** Gizmo placement, shared by the drei helper and the DOM-level hit test below. */
+export const GIZMO_MARGIN: [number, number] = [50, 125];
+/** drei's Hud camera maps one world unit to one pixel, and the heads sit at scale 40. */
+export const GIZMO_RADIUS_PX = 40;
+const GIZMO_HIT_RADIUS_PX = 15;
+
+/**
+ * Which axis head, if any, sits under a pointer.
+ *
+ * The heads live inside drei's `Hud`, which renders into a portal scene whose
+ * pointer events never reach them here — verified in a real browser, where
+ * neither clicking nor hovering a head produced any response. The gizmo is a
+ * pure orthographic projection of the world axes, so picking it is just
+ * arithmetic: project each unit axis onto the camera's right/up vectors and
+ * take the nearest within a hit radius. Doing it ourselves keeps the gizmo
+ * clickable without depending on drei's portal event plumbing.
+ */
+export function pickGizmoAxis(
+  pointer: [number, number],
+  centre: [number, number],
+  cameraRight: Vector3,
+  cameraUp: Vector3,
+  radiusPx = GIZMO_RADIUS_PX,
+  hitRadiusPx = GIZMO_HIT_RADIUS_PX,
+): GizmoAxis | null {
+  let best: { axis: GizmoAxis; distance: number; depth: number } | null = null;
+  (Object.keys(gizmoDirections) as GizmoAxis[]).forEach((axis) => {
+    const [x, y, z] = gizmoDirections[axis];
+    const direction = new Vector3(x, y, z);
+    const screenX = centre[0] + radiusPx * direction.dot(cameraRight);
+    const screenY = centre[1] - radiusPx * direction.dot(cameraUp);
+    const distance = Math.hypot(pointer[0] - screenX, pointer[1] - screenY);
+    if (distance > hitRadiusPx) return;
+    // Two heads overlap when an axis points at the camera; prefer the near one.
+    const depth = direction.dot(cameraRight.clone().cross(cameraUp));
+    if (!best || distance < best.distance || (distance === best.distance && depth > best.depth)) {
+      best = { axis, distance, depth };
+    }
+  });
+  return best === null ? null : (best as { axis: GizmoAxis }).axis;
+}
+
+interface AppliedTaskKey<T> {
+  current: T;
+}
+
+export function scheduleAppliedTask<T>(
+  scheduler: Pick<DemandRenderScheduler, 'schedule'>,
+  applied: AppliedTaskKey<T>,
+  key: T,
+  task: () => void,
+): () => void {
+  if (applied.current === key) return () => undefined;
+  return scheduler.schedule(() => {
+    task();
+    applied.current = key;
+  });
+}
+
+function cameraUp(direction: Vector3): Vector3 {
+  if (Math.abs(direction.y) < 0.999) return new Vector3(0, 1, 0);
+  return new Vector3(0, 0, direction.y > 0 ? -1 : 1);
+}
+
+function CameraRig({ bounds, request, zoomRequest, projection, preferences, scheduler, controls }: {
   bounds: FrameScene['bounds'];
   request: CameraRequest;
   zoomRequest: ZoomRequest;
   projection: CameraProjection;
   preferences: ViewerPreferences;
   scheduler: DemandRenderScheduler;
+  controls: RefObject<OrbitControlsInstance | null>;
 }) {
   const set = useThree((state) => state.set);
   const get = useThree((state) => state.get);
@@ -115,11 +210,29 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   const camera = useMemo<PerspectiveCamera | OrthographicCamera>(() => projection === 'orthographic'
     ? new OrthographicCamera(-1, 1, 1, -1, 0.001, 100_000)
     : new PerspectiveCamera(34, aspect, 0.001, 100_000), [aspect, projection]);
-  const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
-  const center = useMemo(() => bounds.getCenter(new Vector3()), [bounds]);
+  const { x: minX, y: minY, z: minZ } = bounds.min;
+  const { x: maxX, y: maxY, z: maxZ } = bounds.max;
+  const center = useMemo(() => new Vector3(
+    (minX + maxX) / 2,
+    (minY + maxY) / 2,
+    (minZ + maxZ) / 2,
+  ), [maxX, maxY, maxZ, minX, minY, minZ]);
+  const requestedPreset = request.preset;
+  const requestedDirection = request.direction;
+  const directionX = requestedDirection?.[0] ?? 0;
+  const directionY = requestedDirection?.[1] ?? 0;
+  const directionZ = requestedDirection?.[2] ?? 0;
+  const direction = useMemo(() => requestedPreset === undefined
+    ? viewDirection([directionX, directionY, directionZ])
+    : presetDirection(requestedPreset), [directionX, directionY, directionZ, requestedPreset]);
   const appliedRequest = useRef<string | null>(null);
   const appliedZoom = useRef(zoomRequest.nonce);
   const fitKey = cameraFitKey(bounds, request.nonce, projection, aspect);
+  const fitRequestKey = `${fitKey}:${direction.toArray().join(',')}`;
+  const fit = useMemo(
+    () => calculateCameraFit(bounds, direction, projection, aspect),
+    [aspect, direction, fitKey, projection],
+  );
 
   useLayoutEffect(() => {
     const previous = get().camera;
@@ -127,45 +240,50 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     return () => set({ camera: previous });
   }, [camera, get, set]);
 
-  useEffect(() => {
-    if (appliedRequest.current === fitKey) return;
-    appliedRequest.current = fitKey;
-    return scheduler.schedule(() => {
-      const fit = calculateCameraFit(bounds, request.preset, projection, aspect);
-      camera.position.copy(fit.position);
-      camera.up.set(0, request.preset === 'top' ? 0 : 1, request.preset === 'top' ? -1 : 0);
-      camera.lookAt(fit.center);
-      if (camera instanceof PerspectiveCamera) {
-        camera.aspect = aspect;
-      } else if (camera instanceof OrthographicCamera) {
-        camera.left = fit.left;
-        camera.right = fit.right;
-        camera.top = fit.top;
-        camera.bottom = fit.bottom;
-        camera.zoom = 1;
-      }
-      camera.near = fit.near;
-      camera.far = fit.far;
-      camera.updateProjectionMatrix();
-      controls.current?.target.copy(fit.center);
-      controls.current?.update();
-    });
-  }, [aspect, bounds, camera, fitKey, projection, request.preset, scheduler]);
+  useLayoutEffect(() => {
+    if (appliedRequest.current === fitRequestKey) return;
+    camera.position.copy(fit.position);
+    camera.up.copy(cameraUp(direction));
+    camera.lookAt(fit.center);
+    if (camera instanceof PerspectiveCamera) {
+      camera.aspect = aspect;
+    } else if (camera instanceof OrthographicCamera) {
+      camera.left = fit.left;
+      camera.right = fit.right;
+      camera.top = fit.top;
+      camera.bottom = fit.bottom;
+      camera.zoom = 1;
+    }
+    camera.near = fit.near;
+    camera.far = fit.far;
+    camera.updateProjectionMatrix();
+    controls.current?.target.copy(fit.center);
+    controls.current?.update();
+    appliedRequest.current = fitRequestKey;
+    scheduler.schedule();
+  }, [aspect, camera, direction, fit, fitRequestKey, scheduler]);
 
   useEffect(() => {
+    const instance = controls.current;
+    if (!instance) return;
+    instance.target.copy(fit.center);
+    instance.update();
+    scheduler.schedule();
+  }, [fit, fitRequestKey, scheduler]);
+
+  useLayoutEffect(() => {
     if (appliedZoom.current === zoomRequest.nonce) return;
+    const target = controls.current?.target ?? center;
+    if (camera instanceof OrthographicCamera) {
+      camera.zoom = zoomedOrthographicValue(camera.zoom, zoomRequest.direction);
+      camera.updateProjectionMatrix();
+    } else {
+      const factor = zoomRequest.direction === 'in' ? 0.8 : 1.25;
+      camera.position.sub(target).multiplyScalar(factor).add(target);
+    }
+    controls.current?.update();
     appliedZoom.current = zoomRequest.nonce;
-    return scheduler.schedule(() => {
-      const target = controls.current?.target ?? center;
-      if (camera instanceof OrthographicCamera) {
-        camera.zoom = zoomedOrthographicValue(camera.zoom, zoomRequest.direction);
-        camera.updateProjectionMatrix();
-      } else {
-        const factor = zoomRequest.direction === 'in' ? 0.8 : 1.25;
-        camera.position.sub(target).multiplyScalar(factor).add(target);
-      }
-      controls.current?.update();
-    });
+    scheduler.schedule();
   }, [camera, center, scheduler, zoomRequest.direction, zoomRequest.nonce]);
 
   useEffect(() => {
@@ -202,6 +320,150 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   />;
 }
 
+function InteractiveAxisHead({ axis, color, label, labelColor, onDirection }: {
+  axis: GizmoAxis;
+  color: string;
+  label?: string;
+  labelColor: string;
+  onDirection: (direction: CameraDirection) => void;
+}) {
+  const gl = useThree((state) => state.gl);
+  const [active, setActive] = useState(false);
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext('2d');
+    if (context) {
+      context.beginPath();
+      context.arc(32, 32, 16, 0, 2 * Math.PI);
+      context.closePath();
+      context.fillStyle = color;
+      context.fill();
+      if (label) {
+        context.font = '18px Inter var, Arial, sans-serif';
+        context.textAlign = 'center';
+        context.fillStyle = labelColor;
+        context.fillText(label, 32, 41);
+      }
+    }
+    return new CanvasTexture(canvas);
+  }, [color, label, labelColor]);
+  useEffect(() => () => texture.dispose(), [texture]);
+  const direction = gizmoAxisDirection(axis);
+  const scale = (label ? 1 : 0.75) * (active ? 1.2 : 1);
+  return <sprite
+    position={direction}
+    scale={scale}
+    onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+      event.stopPropagation();
+      setActive(true);
+    }}
+    onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+      event.stopPropagation();
+      setActive(false);
+    }}
+    onPointerDown={(event: ThreeEvent<PointerEvent>) => {
+      event.stopPropagation();
+      onDirection(direction);
+    }}
+  >
+    <spriteMaterial
+      map={texture}
+      map-anisotropy={gl.capabilities.getMaxAnisotropy() || 1}
+      alphaTest={0.3}
+      opacity={label ? 1 : 0.75}
+      toneMapped={false}
+    />
+  </sprite>;
+}
+
+function InteractiveAxisHeads({ axisColors, labelColor, onDirection }: {
+  axisColors: [string, string, string];
+  labelColor: string;
+  onDirection: (direction: CameraDirection) => void;
+}) {
+  return <group scale={40}>
+    <InteractiveAxisHead axis="positive-x" color={axisColors[0]} label="X" labelColor={labelColor} onDirection={onDirection} />
+    <InteractiveAxisHead axis="positive-y" color={axisColors[1]} label="Y" labelColor={labelColor} onDirection={onDirection} />
+    <InteractiveAxisHead axis="positive-z" color={axisColors[2]} label="Z" labelColor={labelColor} onDirection={onDirection} />
+    <InteractiveAxisHead axis="negative-x" color={axisColors[0]} labelColor={labelColor} onDirection={onDirection} />
+    <InteractiveAxisHead axis="negative-y" color={axisColors[1]} labelColor={labelColor} onDirection={onDirection} />
+    <InteractiveAxisHead axis="negative-z" color={axisColors[2]} labelColor={labelColor} onDirection={onDirection} />
+  </group>;
+}
+
+/**
+ * Turns clicks near a gizmo axis head into a camera direction request.
+ *
+ * Lives outside `GizmoHelper` on purpose: inside the Hud portal `state.camera`
+ * is the gizmo's own orthographic camera, and the hit test needs the real one.
+ */
+function GizmoAxisPicker({ onDirection }: { onDirection: (direction: CameraDirection) => void }) {
+  const gl = useThree((state) => state.gl);
+  const camera = useThree((state) => state.camera);
+  const { width, height } = useThree((state) => state.size);
+  const visible = shouldShowAxisGizmo(width, height);
+
+  useEffect(() => {
+    if (!visible) return;
+    const element = gl.domElement;
+    const centre: [number, number] = [GIZMO_MARGIN[0], height - GIZMO_MARGIN[1]];
+    const onPointerDown = (event: PointerEvent) => {
+      const bounds = element.getBoundingClientRect();
+      const right = new Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      const up = new Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      const axis = pickGizmoAxis(
+        [event.clientX - bounds.left, event.clientY - bounds.top],
+        centre,
+        right,
+        up,
+      );
+      if (!axis) return;
+      // Claim the press so OrbitControls does not also start an orbit drag.
+      event.preventDefault();
+      event.stopPropagation();
+      onDirection(gizmoAxisDirection(axis));
+    };
+    element.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => element.removeEventListener('pointerdown', onPointerDown, { capture: true });
+  }, [camera, gl, height, onDirection, visible, width]);
+
+  return null;
+}
+
+function CameraGizmo({ controls, center, scheduler, theme, onDirection }: {
+  controls: RefObject<OrbitControlsInstance | null>;
+  center: Vector3;
+  scheduler: DemandRenderScheduler;
+  theme: ViewportTheme;
+  onDirection: (direction: CameraDirection) => void;
+}) {
+  const { width, height } = useThree((state) => state.size);
+  const axisColors = useMemo(() => typeof document === 'undefined'
+    ? fallbackAxisColors
+    : axisColorsFromTokens(getComputedStyle(document.documentElement)), [theme]);
+  const labelColor = theme === 'light' ? '#fffdf8' : '#080a0f';
+  if (!shouldShowAxisGizmo(width, height)) return null;
+  return <GizmoHelper
+    alignment="bottom-left"
+    margin={GIZMO_MARGIN}
+    onTarget={() => controls.current?.target.clone() ?? center.clone()}
+    onUpdate={() => {
+      controls.current?.update();
+      scheduler.schedule();
+    }}
+  >
+    <GizmoViewport
+      axisColors={axisColors}
+      labelColor={labelColor}
+      hideAxisHeads
+      disabled={false}
+    />
+    <InteractiveAxisHeads axisColors={axisColors} labelColor={labelColor} onDirection={onDirection} />
+  </GizmoHelper>;
+}
+
 function PaintObserver({ marker, startedAt, onClientFrame }: {
   marker: string;
   startedAt: number | null;
@@ -216,13 +478,15 @@ function PaintObserver({ marker, startedAt, onClientFrame }: {
   return null;
 }
 
-function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
+function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
+  useFrame(() => scheduler.flush(), 0);
   const clipPlane = useMemo(() => sectionCut ? new Plane(new Vector3(1, 0, 0), 0) : null, [sectionCut]);
   const materials = useMemo(() => createMaterialLibrary(mode, clipPlane, theme), [clipPlane, mode, theme]);
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);
   const size = useMemo(() => scene.bounds.getSize(new Vector3()), [scene.bounds]);
+  const controls = useRef<OrbitControlsInstance>(null);
 
   useEffect(() => installViewportTestHook(scheduler), [scheduler]);
   useEffect(() => () => scheduler.dispose(), [scheduler]);
@@ -260,7 +524,9 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
     >
       <planeGeometry args={[Math.max(size.z * 1.05, 1), Math.max(size.y * 1.05, 1)]} />
     </mesh>}
-    <CameraRig bounds={scene.bounds} request={cameraRequest} zoomRequest={zoomRequest} projection={cameraProjection} preferences={preferences} scheduler={scheduler} />
+    <CameraRig bounds={scene.bounds} request={cameraRequest} zoomRequest={zoomRequest} projection={cameraProjection} preferences={preferences} scheduler={scheduler} controls={controls} />
+    <CameraGizmo controls={controls} center={center} scheduler={scheduler} theme={theme} onDirection={onCameraDirection} />
+    <GizmoAxisPicker onDirection={onCameraDirection} />
     <PaintObserver marker={sceneMarker} startedAt={frameStartedAt} onClientFrame={onClientFrame} />
   </>;
 }

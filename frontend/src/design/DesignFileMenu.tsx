@@ -9,7 +9,9 @@ import {
   type ImportReport,
 } from '../api/designIo';
 import { useDesignStore } from '../stores/design';
+import { useDocumentStore } from '../stores/document';
 import { Icon } from '../shell/icons';
+import { filenameStem } from '../viewport/presentation';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
@@ -22,10 +24,6 @@ const itemStyle: CSSProperties = {
   display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between',
   padding: '6px 8px', borderRadius: 4, background: 'transparent', textAlign: 'left',
 };
-
-function stem(filename: string): string {
-  return filename.replace(/\.(cfg|txt|mwg)$/i, '') || 'waveguide';
-}
 
 function reportText(report: ImportReport): string {
   const migrations = report.migrationsApplied.length
@@ -59,7 +57,8 @@ export function DesignFileMenu() {
   const revision = useDesignStore((state) => state.designRevision);
   const replaceDesign = useDesignStore((state) => state.replaceDesign);
   const [savedRevision, setSavedRevision] = useState(() => useDesignStore.getState().designRevision);
-  const [filename, setFilename] = useState('tritonia_mk2.cfg');
+  const filename = useDocumentStore((state) => state.filename);
+  const setFilename = useDocumentStore((state) => state.setFilename);
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -99,7 +98,7 @@ export function DesignFileMenu() {
       }
       const opened = await openDesignText(text);
       replaceDesign(hydrateDesignDocument(opened.design));
-      setFilename(`${stem(file.name)}.cfg`);
+      setFilename(`${filenameStem(file.name)}.cfg`);
       setSavedRevision(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));
     });
@@ -118,7 +117,7 @@ export function DesignFileMenu() {
 
   async function exportOne(kind: 'step' | 'stl') {
     await act(async () => {
-      await downloadGeometryExport(kind, design, revision, stem(filename));
+      await downloadGeometryExport(kind, design, revision, filenameStem(filename));
       setMessage(`Exported ${kind.toUpperCase()} from revision ${revision}`);
     });
   }
@@ -126,7 +125,7 @@ export function DesignFileMenu() {
   async function exportProfiles() {
     await act(async () => {
       const result = await exportProfileArtifacts(
-        (kind) => downloadGeometryExport('profiles', design, revision, stem(filename), kind),
+        (kind) => downloadGeometryExport('profiles', design, revision, filenameStem(filename), kind),
         revision,
       );
       setMessage(result);
@@ -135,7 +134,7 @@ export function DesignFileMenu() {
 
   return <div ref={root} style={{ position: 'relative', flex: 'none' }}>
     <button className="file-chip" title="Design file menu" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-      <Icon name="folder"/><span>{stem(filename)}<em>.cfg</em></span>
+      <Icon name="folder"/><span>{filenameStem(filename)}<em>.cfg</em></span>
       {revision !== savedRevision && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
       <span className="chev">⌄</span>
     </button>

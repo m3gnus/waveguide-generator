@@ -2,6 +2,9 @@ import { Box3, MathUtils, Vector3 } from 'three';
 import type { CameraProjection } from '../viewerprefs/viewerPreferences';
 import type { CameraPreset } from './types';
 
+export type CameraDirection = readonly [number, number, number];
+export type CameraView = CameraPreset | CameraDirection | Vector3;
+
 export interface CameraFit {
   center: Vector3;
   position: Vector3;
@@ -19,6 +22,15 @@ export function presetDirection(preset: CameraPreset): Vector3 {
   return new Vector3(0.72, 0.52, 0.72).normalize();
 }
 
+export function viewDirection(view: CameraView): Vector3 {
+  const direction = typeof view === 'string'
+    ? presetDirection(view)
+    : view instanceof Vector3
+      ? view.clone()
+      : new Vector3(...view);
+  return direction.lengthSq() === 0 ? presetDirection('front') : direction.normalize();
+}
+
 export function orthographicExtents(radius: number, aspect: number, padding = 1.2): Pick<CameraFit, 'left' | 'right' | 'top' | 'bottom'> {
   const safeAspect = Math.max(aspect, 0.01);
   const halfHeight = Math.max(radius, 0.5) * padding * Math.max(1, 1 / safeAspect);
@@ -28,7 +40,7 @@ export function orthographicExtents(radius: number, aspect: number, padding = 1.
 
 export function calculateCameraFit(
   bounds: Box3,
-  preset: CameraPreset,
+  view: CameraView,
   projection: CameraProjection,
   aspect: number,
   verticalFovDegrees = 34,
@@ -40,7 +52,7 @@ export function calculateCameraFit(
   const limitingHalfFov = Math.max(0.01, Math.min(verticalHalfFov, horizontalHalfFov));
   const perspectiveDistance = radius * 1.2 / Math.sin(limitingHalfFov);
   const distance = projection === 'perspective' ? perspectiveDistance : radius * 4;
-  const position = center.clone().addScaledVector(presetDirection(preset), distance);
+  const position = center.clone().addScaledVector(viewDirection(view), distance);
   const clippingDepth = distance + radius * 3;
   return {
     center,
