@@ -207,11 +207,31 @@ Freeform.CrossSections = {
         "circle",
     ):
         assert removed not in emitted
-    assert "; FREEFORM point rows: z r [angleDeg]" in emitted
+    assert "; FREEFORM point rows in mm: z r [angleDeg]" in emitted
     assert "50 25 20" in emitted
     assert "50 22 15" in emitted
     assert "0 ellipse" in emitted
     assert parse(emitted).migration_names == []
+
+
+def test_freeform_mm_point_rows_round_trip_without_noise_or_drops() -> None:
+    source = FREEFORM_SOURCE.replace(
+        "Freeform.H = {\nMouthRadius = 50\n}",
+        "Freeform.H = {\nMouthRadius = 50\n}\nFreeform.H.Points = {\n33.3 22.25 17\n70 35\n}",
+    ).replace(
+        "Freeform.V = {\nMouthRadius = 40\n}",
+        "Freeform.V = {\nMouthRadius = 40\n}\nFreeform.V.Points = {\n25 18\n69.125 31.5 -12\n}",
+    )
+    parsed = parse(source)
+    design = parsed.design.root
+    assert design.length.value == 100  # type: ignore[union-attr]
+    assert design.profile_h.points[1].t.value == pytest.approx(0.333)  # type: ignore[union-attr]
+
+    emitted = serialize(parsed.design)
+    for row in ("33.3 22.25 17", "70 35", "25 18", "69.125 31.5 -12"):
+        assert row in emitted
+    assert "69.124999999" not in emitted
+    assert len(parse(emitted).design.root.profile_h.points) == 4  # type: ignore[union-attr]
 
 
 def test_modified_design_preserves_duplicate_extra_assignments_and_token_order() -> None:

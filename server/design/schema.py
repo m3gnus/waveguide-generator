@@ -351,7 +351,7 @@ class ICWConfig(DesignCommon):
 
 
 class FreeformPoint(StrictModel):
-    z: Expr
+    t: Expr
     r: Expr
     angle_deg: Expr | None = None
 
@@ -360,6 +360,25 @@ class FreeformProfile(StrictModel):
     points: list[FreeformPoint]
     throat_angle_deg: Expr | None = None
     mouth_angle_deg: Expr | None = None
+
+    @field_validator("points")
+    @classmethod
+    def _valid_point_domain(cls, points: list[FreeformPoint]) -> list[FreeformPoint]:
+        if len(points) < 2:
+            raise ValueError("FREEFORM profiles require at least 2 points")
+        values = [point.t.value for point in points]
+        if any(value is None for value in values):
+            raise ValueError("FREEFORM profile point t values must be scalar")
+        scalars = [float(value) for value in values if value is not None]
+        if any(value < 0 or value > 1 for value in scalars):
+            raise ValueError("FREEFORM profile point t values must be between 0 and 1")
+        if any(right <= left for left, right in zip(scalars, scalars[1:])):
+            raise ValueError("FREEFORM profile point t values must be strictly increasing")
+        if scalars[0] != 0:
+            raise ValueError("the first FREEFORM profile point must have t = 0")
+        if scalars[-1] != 1:
+            raise ValueError("the last FREEFORM profile point must have t = 1")
+        return points
 
 
 class CornerGrid(StrictModel):
@@ -379,11 +398,21 @@ class CrossSectionStation(StrictModel):
 
 class FreeformConfig(DesignCommon):
     formula: Literal["FREEFORM"]
+    length: Expr
     profile_h: FreeformProfile
     profile_v: FreeformProfile
     cross_sections: list[CrossSectionStation] = Field(min_length=2, max_length=32)
     inflection_policy: Literal["reject", "warn"] | None = None
     corner_grids: list[CornerGrid] = Field(default_factory=list)
+
+    @field_validator("length")
+    @classmethod
+    def _valid_length(cls, length: Expr) -> Expr:
+        if length.value is None:
+            raise ValueError("FREEFORM length must be scalar")
+        if length.value <= 0:
+            raise ValueError("FREEFORM length must be greater than 0")
+        return length
 
     @field_validator("cross_sections")
     @classmethod

@@ -75,6 +75,9 @@ describe('complete parameter registry', () => {
     expect(visibleIds('FREEFORM')).toContain('freeform.inflectionPolicy');
     expect(visibleIds('FREEFORM').some((id) => id.includes('TangentScale') || id.includes('overshoot'))).toBe(false);
     expect(visibleIds('FREEFORM')).not.toContain('morph.target_shape');
+    const length = PARAMETER_REGISTRY.find((field) => field.id === 'freeform.length')!;
+    expect(length.path).toBe('length');
+    expect(length.mirrorPaths).toBeUndefined();
   });
 
   it('mirrors ICW rollback, coverage, OSSE guide, and Z-map mode visibility', () => {

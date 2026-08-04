@@ -158,7 +158,8 @@ export async function convertDesignToFreeform(
   const length = design.L ?? design.depth ?? 120;
   const mouth = design.R ?? 140;
   const throat = design.r0 ?? 12.7;
-  fallback.profile_h!.points = [{ z: 0, r: throat }, { z: length, r: mouth }];
+  fallback.length = length;
+  fallback.profile_h!.points = [{ t: 0, r: throat }, { t: 1, r: mouth }];
   fallback.profile_v!.points = structuredClone(fallback.profile_h!.points);
   fallback.profile_h!.throat_angle_deg = design.a0 ?? 15.5;
   fallback.profile_v!.throat_angle_deg = design.a0 ?? 15.5;
@@ -211,8 +212,9 @@ export function freeformFromProfileCsv(text: string, source: DesignDocument): De
   };
   const H = crop(horizontal); const V = crop(vertical);
   const converted = preserveSharedForFreeform(designForFamily('FREEFORM'), source);
-  converted.profile_h!.points = H;
-  converted.profile_v!.points = V;
+  converted.length = length;
+  converted.profile_h!.points = H.map(({ z, ...point }) => ({ t: z / length, ...point }));
+  converted.profile_v!.points = V.map(({ z, ...point }) => ({ t: z / length, ...point }));
   converted.profile_h!.throat_angle_deg = tangentAngle(H);
   converted.profile_v!.throat_angle_deg = tangentAngle(V);
   converted.profile_h!.mouth_angle_deg = tangentAngle(H, true);

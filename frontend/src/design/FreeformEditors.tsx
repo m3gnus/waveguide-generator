@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
+import { useDesignStore, type CrossSectionStation, type DesignValue, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
 
 export interface ParsedPointPaste {
@@ -20,7 +20,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     if (!compact && (values.length < 2 || values.length > 3)) throw new Error(`Line ${index + 1} must contain 2 or 3 columns.`);
     return values;
   });
-  const validate = (points: FreeformPoint[]) => {
+  const validate = (points: { z: number; r: number; angle_deg?: number }[]) => {
     points.forEach((point, index) => {
       if (point.z < 0) throw new Error(`Line ${index + 1}: z must be at least 0.`);
       if (!(point.r > 0)) throw new Error(`Line ${index + 1}: radius must be greater than 0.`);
@@ -33,28 +33,37 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     const H = parsed.map(([z, h]) => ({ z: z * 10, r: h * 10 }));
     const V = parsed.map(([z, _h, v]) => ({ z: z * 10, r: v * 10 }));
     validate(H); validate(V);
-    return { points: H, pointsByPlane: { H, V }, importedLength: H.at(-1)!.z };
+    const importedLength = H.at(-1)!.z;
+    if (!(importedLength > 0)) throw new Error('Imported length must be greater than 0.');
+    const normalize = (points: typeof H): FreeformPoint[] => points.map(({ z, ...point }) => ({ t: z / importedLength, ...point }));
+    const normalizedH = normalize(H); const normalizedV = normalize(V);
+    return { points: normalizedH, pointsByPlane: { H: normalizedH, V: normalizedV }, importedLength };
   }
   const points = parsed.map(([z, r, angle]) => ({
     z, r,
     ...(angle === undefined ? {} : { angle_deg: angle }),
   }));
   validate(points);
-  return { points, importedLength: points.at(-1)!.z };
+  const importedLength = points.at(-1)!.z;
+  if (!(importedLength > 0)) throw new Error('Imported length must be greater than 0.');
+  return {
+    points: points.map(({ z, ...point }) => ({ t: z / importedLength, ...point })),
+    importedLength,
+  };
 }
 
-function normalizedImportedPoints(imported: FreeformPoint[], current: FreeformPoint[], length: number, adoptLength: boolean): FreeformPoint[] {
-  const sorted = structuredClone(imported).sort((a, b) => a.z - b.z);
-  const targetLength = adoptLength ? sorted.at(-1)!.z : length;
-  const throat = sorted[0]?.z === 0 ? sorted.shift()! : structuredClone(current[0]);
-  const mouth = sorted.at(-1)?.z === targetLength ? sorted.pop()! : { ...structuredClone(current.at(-1)!), z: targetLength };
-  const interior = sorted.filter((point) => point.z > 0 && point.z < targetLength).slice(0, 62);
-  return [{ ...throat, z: 0 }, ...interior, { ...mouth, z: targetLength }];
+export function normalizedImportedPoints(imported: FreeformPoint[], current: FreeformPoint[]): FreeformPoint[] {
+  const sorted = structuredClone(imported).sort((a, b) => a.t - b.t);
+  const throat = sorted[0]?.t === 0 ? sorted.shift()! : structuredClone(current[0]);
+  const mouth = sorted.at(-1)?.t === 1 ? sorted.pop()! : structuredClone(current.at(-1)!);
+  const interior = sorted.filter((point) => point.t > 0 && point.t < 1).slice(0, 62);
+  return [{ ...throat, t: 0 }, ...interior, { ...mouth, t: 1 }];
 }
 
 function PointPaste({ plane, points }: { plane: 'H' | 'V'; points: FreeformPoint[] }) {
   const updateValues = useDesignStore((state) => state.updateValues);
   const other = useDesignStore((state) => plane === 'H' ? state.design.profile_v!.points : state.design.profile_h!.points);
+  const currentLength = useDesignStore((state) => state.design.length ?? 120);
   const [text, setText] = useState('');
   const [applyBoth, setApplyBoth] = useState(false);
   const [adoptLength, setAdoptLength] = useState(true);
@@ -62,24 +71,19 @@ function PointPaste({ plane, points }: { plane: 'H' | 'V'; points: FreeformPoint
   const parsed = useMemo(() => {
     try { return text.trim() ? parsePointPaste(text) : null; } catch (reason) { return reason instanceof Error ? reason : new Error(String(reason)); }
   }, [text]);
-  const currentLength = points.at(-1)?.z ?? 120;
   const apply = () => {
     if (!parsed || parsed instanceof Error) return;
     const targetLength = adoptLength ? parsed.importedLength : currentLength;
     if (targetLength < 20 || targetLength > 1_000) { setError('Imported length must be between 20 and 1000 mm.'); return; }
     const source = parsed.pointsByPlane?.[plane] ?? parsed.points;
-    const updates: Record<string, FreeformPoint[]> = {
-      [`profile_${plane.toLowerCase()}.points`]: normalizedImportedPoints(source, points, currentLength, adoptLength),
+    const updates: Record<string, DesignValue> = {
+      [`profile_${plane.toLowerCase()}.points`]: normalizedImportedPoints(source, points),
     };
+    if (adoptLength) updates.length = parsed.importedLength;
     if (applyBoth) {
       const otherPlane = plane === 'H' ? 'V' : 'H';
       const otherSource = parsed.pointsByPlane?.[otherPlane] ?? parsed.points;
-      updates[`profile_${otherPlane.toLowerCase()}.points`] = normalizedImportedPoints(otherSource, other, currentLength, adoptLength);
-    } else if (adoptLength) {
-      const otherPlane = plane === 'H' ? 'v' : 'h';
-      const resizedOther = structuredClone(other);
-      resizedOther[resizedOther.length - 1].z = targetLength;
-      updates[`profile_${otherPlane}.points`] = resizedOther;
+      updates[`profile_${otherPlane.toLowerCase()}.points`] = normalizedImportedPoints(otherSource, other);
     }
     updateValues(updates);
     setError(null);
@@ -98,21 +102,22 @@ function PointPaste({ plane, points }: { plane: 'H' | 'V'; points: FreeformPoint
 
 export function EditablePointTable({ field, points }: { field: ParameterDefinition; points: FreeformPoint[] }) {
   const updateValue = useDesignStore((state) => state.updateValue);
+  const length = useDesignStore((state) => state.design.length ?? 120);
   const plane = field.id.endsWith('H') ? 'H' : 'V';
   const path = `profile_${plane.toLowerCase()}.points`;
   const interior = points.slice(1, -1);
-  const length = points.at(-1)?.z ?? 120;
-  const update = (index: number, key: keyof FreeformPoint, raw: string) => {
+  const update = (index: number, key: 'z' | 'r' | 'angle_deg', raw: string) => {
     const next = structuredClone(points);
     const target = next[index + 1];
-    if (raw.trim() === '' && key === 'angle_deg') delete target[key];
+    if (raw.trim() === '' && key === 'angle_deg') delete target.angle_deg;
     else {
       const value = Number(raw);
       if (!Number.isFinite(value)) return;
       if (key === 'z' && (value < 1 || value > length - 1)) return;
       if (key === 'r' && value <= 0) return;
       if (key === 'angle_deg' && (value <= -90 || value >= 90)) return;
-      target[key] = value as never;
+      if (key === 'z') target.t = value / length;
+      else target[key] = value as never;
     }
     updateValue(path, next);
   };
@@ -120,18 +125,18 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
     if (interior.length >= 62) return;
     let gapIndex = 0;
     for (let index = 1; index < points.length - 1; index += 1) {
-      if (points[index + 1].z - points[index].z > points[gapIndex + 1].z - points[gapIndex].z) gapIndex = index;
+      if (points[index + 1].t - points[index].t > points[gapIndex + 1].t - points[gapIndex].t) gapIndex = index;
     }
     const left = points[gapIndex]; const right = points[gapIndex + 1];
-    const z = (left.z + right.z) / 2;
-    const r = left.r + ((z - left.z) / (right.z - left.z || 1)) * (right.r - left.r);
-    updateValue(path, [...points.slice(0, gapIndex + 1), { z, r }, ...points.slice(gapIndex + 1)]);
+    const t = (left.t + right.t) / 2;
+    const r = left.r + ((t - left.t) / (right.t - left.t || 1)) * (right.r - left.r);
+    updateValue(path, [...points.slice(0, gapIndex + 1), { t, r }, ...points.slice(gapIndex + 1)]);
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><b>{field.label}</b><span>{interior.length} / 62 interior</span></div>
     <table><thead><tr><th>z mm</th><th>r mm</th><th>angle</th><th /></tr></thead>
-      <tbody>{interior.map((point, index) => <tr key={`${index}-${point.z}`}>
-        <td><input aria-label={`${plane} point ${index + 1} z`} type="number" min={1} max={length - 1} step={.1} defaultValue={point.z} onBlur={(event) => update(index, 'z', event.target.value)} /></td>
+      <tbody>{interior.map((point, index) => <tr key={`${index}-${point.t}-${length}`}>
+        <td><input aria-label={`${plane} point ${index + 1} z`} type="number" min={1} max={length - 1} step={.1} defaultValue={Math.round(point.t * length * 10_000) / 10_000} onBlur={(event) => update(index, 'z', event.target.value)} /></td>
         <td><input aria-label={`${plane} point ${index + 1} radius`} type="number" min={.1} step={.1} defaultValue={point.r} onBlur={(event) => update(index, 'r', event.target.value)} /></td>
         <td><input aria-label={`${plane} point ${index + 1} angle`} type="number" min={-89} max={89} placeholder="auto" defaultValue={point.angle_deg} onBlur={(event) => update(index, 'angle_deg', event.target.value)} /></td>
         <td><button aria-label={`Remove ${plane} point ${index + 1}`} onClick={() => updateValue(path, points.filter((_point, pointIndex) => pointIndex !== index + 1))}>−</button></td>

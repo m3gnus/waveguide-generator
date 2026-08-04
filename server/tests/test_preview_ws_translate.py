@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 from hornlab_mesher.preview.api import build_preview_geometry
 
 from server.design.schema import DesignConfig
+from server.design.migrate import apply_migrations
 from server.design_io.api import open_design
 from server.preview.core import preview_options
 from server.preview.translate import design_to_mesher_config
@@ -143,6 +145,20 @@ def test_freeform_family_golden_uses_rows_and_station_camel_case() -> None:
     serialized = repr(config["profile"])
     for removed in ("strength", "TangentScale", "overshootPolicy"):
         assert removed not in serialized
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    json.loads((Path(__file__).with_name("data") / "freeform-axis-payloads.json").read_text()),
+    ids=lambda fixture: fixture["name"],
+)
+def test_legacy_freeform_axis_migration_preserves_exact_mesher_payload(
+    fixture: dict[str, object],
+) -> None:
+    migrated, applied = apply_migrations(fixture["legacy_design"])  # type: ignore[arg-type]
+    assert applied[-1].name == "005_freeform_normalized_axis"
+    actual = design_to_mesher_config(DesignConfig.model_validate(migrated))
+    assert actual == fixture["expected_mesher_payload"]
 
 
 @pytest.mark.parametrize(

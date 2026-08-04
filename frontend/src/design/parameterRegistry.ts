@@ -125,7 +125,7 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('icw.q', 'q', 'q', profile, 'Legacy smoothness coefficient', { families: ['ICW'], min: -100, max: 100 }),
   number('icw.curl', 'curl', 'curl', profile, 'Curl', { families: ['ICW'], min: -100, max: 100 }),
 
-  number('freeform.length', 'length', 'profile_h.points.$last.z', profile, 'Length', { families: ['FREEFORM'], mirrorPaths: ['profile_v.points.$last.z'], unit: 'mm', min: 20, max: 1_000, step: 1 }),
+  number('freeform.length', 'length', 'length', profile, 'Length', { families: ['FREEFORM'], unit: 'mm', min: 20, max: 1_000, step: 1 }),
   number('freeform.throatRadius', 'throatRadius', 'profile_h.points.0.r', profile, 'Throat radius', { families: ['FREEFORM'], mirrorPaths: ['profile_v.points.0.r'], unit: 'mm', min: .1, max: 200 }),
   number('freeform.throatAngle', 'throatAngle', 'profile_h.throat_angle_deg', profile, 'Throat angle', { families: ['FREEFORM'], mirrorPaths: ['profile_v.throat_angle_deg'], unit: '°', min: -90, max: 90 }),
   number('freeform.mouthRadiusH', 'mouthRadiusH', 'profile_h.points.$last.r', profile, 'Horizontal mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),

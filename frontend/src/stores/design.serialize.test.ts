@@ -84,12 +84,13 @@ test.each([
   expect(serializeDesign(useDesignStore.getState().design).r0).toEqual(expression);
 });
 
-test('FREEFORM length and mouth radius edits target the last imported point', () => {
+test('FREEFORM length is independent while mouth radius still targets the last imported point', () => {
   useDesignStore.getState().setFamily('FREEFORM');
-  useDesignStore.getState().updateValue('profile_h.points', [{ z: 0, r: 12 }, { z: 40, r: 50 }, { z: 120, r: 140 }]);
-  useDesignStore.getState().updateValue('profile_h.points.$last.z', 180);
+  useDesignStore.getState().updateValue('profile_h.points', [{ t: 0, r: 12 }, { t: 1 / 3, r: 50 }, { t: 1, r: 140 }]);
+  useDesignStore.getState().updateValue('length', 180);
   useDesignStore.getState().updateValue('profile_h.points.$last.r', 170);
-  expect(useDesignStore.getState().design.profile_h!.points).toEqual([{ z: 0, r: 12 }, { z: 40, r: 50 }, { z: 180, r: 170 }]);
+  expect(useDesignStore.getState().design.length).toBe(180);
+  expect(useDesignStore.getState().design.profile_h!.points).toEqual([{ t: 0, r: 12 }, { t: 1 / 3, r: 50 }, { t: 1, r: 170 }]);
 });
 
 test('structured and quadrant edits clear stale imported expression sidecars', () => {
@@ -99,7 +100,7 @@ test('structured and quadrant edits clear stale imported expression sidecars', (
     'mesh.quadrants': { value: 14, raw: '14' },
   };
   useDesignStore.getState().loadDesign(design);
-  useDesignStore.getState().updateValue('profile_h.points', [{ z: 0, r: 12.7 }, { z: 120, r: 150 }]);
+  useDesignStore.getState().updateValue('profile_h.points', [{ t: 0, r: 12.7 }, { t: 1, r: 150 }]);
   useDesignStore.getState().setQuadrants([1, 2]);
   expect(useDesignStore.getState().design._expressions).toBeUndefined();
   const payload = serializeDesign(useDesignStore.getState().design);

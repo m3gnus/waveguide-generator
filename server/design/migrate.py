@@ -85,7 +85,20 @@ def _point_row(point: Any) -> list[float] | None:
 def _profile_spec(payload: Payload, axis: str) -> dict[str, Any]:
     wire = payload.get(f"profile_{axis.lower()}")
     if isinstance(wire, Mapping):
-        return dict(wire)
+        profile = dict(wire)
+        points = profile.get("points")
+        if isinstance(points, (list, tuple)):
+            length = _number(payload.get("length"), 120.0)
+            # Migration 001 samples physical meridians. Text-config imports now
+            # reach it already normalized, so reconstruct z only in this
+            # private curve view; the persisted points remain on the t axis.
+            profile["points"] = [
+                {**point, "z": _number(point.get("t")) * length}
+                if isinstance(point, Mapping) and "z" not in point and "t" in point
+                else point
+                for point in points
+            ]
+        return profile
     legacy = payload.get(f"profile{axis}")
     length = _number(payload.get("length"), 120.0)
     throat = _number(payload.get("throatRadius"), 12.7)
@@ -404,6 +417,99 @@ def _migrate_removed_freeform_controls(payload: Payload) -> None:
                 station["shape"] = "ellipse"
 
 
+def _has_freeform_millimetre_axis(payload: Payload) -> bool:
+    """Recognize the two persisted pre-005 FREEFORM point representations."""
+
+    if payload.get("formula") != "FREEFORM":
+        return False
+    for profile_name in ("profile_h", "profile_v"):
+        profile = payload.get(profile_name)
+        if not isinstance(profile, Mapping):
+            continue
+        points = profile.get("points")
+        if not isinstance(points, (list, tuple)):
+            continue
+        if any(isinstance(point, Mapping) and "z" in point for point in points):
+            return True
+        if "length" not in payload and any(
+            isinstance(point, (list, tuple)) and len(point) >= 2 for point in points
+        ):
+            return True
+    return False
+
+
+def _scalar_number(value: Any) -> float | None:
+    """Return a finite scalar without manufacturing a fallback geometry value."""
+
+    try:
+        number = Expr.model_validate(value).value
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return number if number is not None and math.isfinite(number) else None
+
+
+def _legacy_axis_point(point: Any) -> tuple[float, dict[str, Any]] | None:
+    if isinstance(point, Mapping):
+        z = _scalar_number(point.get("z"))
+        if z is None:
+            return None
+        rewritten = dict(point)
+        rewritten.pop("z", None)
+        return z, rewritten
+    if isinstance(point, (list, tuple)) and len(point) >= 2:
+        z = _scalar_number(point[0])
+        if z is None:
+            return None
+        rewritten = {"r": point[1]}
+        if len(point) >= 3:
+            rewritten["angle_deg"] = point[2]
+        return z, rewritten
+    return None
+
+
+def _migrate_freeform_normalized_axis(payload: Payload) -> None:
+    """Store anchors in normalized design space while preserving every anchor.
+
+    Both meridians deliberately use the horizontal profile's physical length.
+    A mismatched vertical endpoint therefore remains visible to schema validation
+    instead of being silently repaired as a separate coordinate system.
+    """
+
+    horizontal = payload.get("profile_h")
+    if not isinstance(horizontal, Mapping):
+        return
+    horizontal_points = horizontal.get("points")
+    if not isinstance(horizontal_points, (list, tuple)) or not horizontal_points:
+        return
+    last = _legacy_axis_point(horizontal_points[-1])
+    if last is None or last[0] <= 0:
+        return
+    length = last[0]
+
+    rewritten_profiles: dict[str, list[dict[str, Any]]] = {}
+    for profile_name in ("profile_h", "profile_v"):
+        profile = payload.get(profile_name)
+        if not isinstance(profile, Mapping):
+            return
+        points = profile.get("points")
+        if not isinstance(points, (list, tuple)):
+            return
+        rewritten: list[dict[str, Any]] = []
+        for point in points:
+            parsed = _legacy_axis_point(point)
+            if parsed is None:
+                return
+            z, values = parsed
+            rewritten.append({"t": z / length, **values})
+        rewritten_profiles[profile_name] = rewritten
+
+    payload["length"] = length
+    for profile_name, points in rewritten_profiles.items():
+        profile = payload[profile_name]
+        assert isinstance(profile, dict)
+        profile["points"] = points
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         name="001_corner_ratio_to_corner_grid",
@@ -439,6 +545,15 @@ MIGRATIONS: tuple[Migration, ...] = (
         note=(
             "Removed obsolete FREEFORM tangent scales, per-anchor strengths, and "
             "overshoot policy, and normalized circle cross-section stations to ellipse."
+        ),
+    ),
+    Migration(
+        name="005_freeform_normalized_axis",
+        applies_if=_has_freeform_millimetre_axis,
+        transform=_migrate_freeform_normalized_axis,
+        note=(
+            "Normalized FREEFORM meridian anchors from absolute z millimetres to "
+            "the shared t axis and moved length to the top-level design."
         ),
     ),
 )

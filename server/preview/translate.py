@@ -93,20 +93,26 @@ def _source_shape(value: Expr | None) -> str | float | None:
     return translated
 
 
-def _profile_points(profile: FreeformProfile, scale: float) -> list[list[str | float]]:
+def _profile_points(
+    profile: FreeformProfile, length: Expr, scale: float
+) -> list[list[str | float]]:
+    length_value = _structural_number(length, "FREEFORM length")
     rows: list[list[str | float]] = []
-    for point in profile.points:
-        row = [_scaled_expr(point.z, scale), _scaled_expr(point.r, scale)]
+    for index, point in enumerate(profile.points):
+        t = _structural_number(point.t, f"FREEFORM point {index + 1} t")
+        row = [t * length_value * scale, _scaled_expr(point.r, scale)]
         if point.angle_deg is not None:
             row.append(_expr(point.angle_deg))
         rows.append([item for item in row if item is not None])
     return rows  # type: ignore[return-value]
 
 
-def _freeform_profile(profile: FreeformProfile, scale: float) -> dict[str, Any]:
+def _freeform_profile(
+    profile: FreeformProfile, length: Expr, scale: float
+) -> dict[str, Any]:
     return _clean(
         {
-            "points": _profile_points(profile, scale),
+            "points": _profile_points(profile, length, scale),
             "throatAngleDeg": _expr(profile.throat_angle_deg),
             "mouthAngleDeg": _expr(profile.mouth_angle_deg),
         }
@@ -137,8 +143,8 @@ def _profile(
         return _clean(
             {
                 "formula": "FREEFORM",
-                "profileH": _freeform_profile(design.profile_h, scale),
-                "profileV": _freeform_profile(design.profile_v, scale),
+                "profileH": _freeform_profile(design.profile_h, design.length, scale),
+                "profileV": _freeform_profile(design.profile_v, design.length, scale),
                 "crossSections": stations,
                 "inflectionPolicy": design.inflection_policy,
             }

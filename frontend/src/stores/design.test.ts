@@ -81,6 +81,8 @@ describe('design store revision semantics', () => {
 
   it('creates FREEFORM designs with only the solved-tangent contract', () => {
     const design = designForFamily('FREEFORM');
+    expect(design.length).toBe(120);
+    expect(design.profile_h?.points).toEqual([{ t: 0, r: 12.7 }, { t: 1, r: 140 }]);
     expect(design.cross_sections?.[0].shape).toBe('ellipse');
     expect(design).not.toHaveProperty('overshoot_policy');
     expect(design.profile_h).not.toHaveProperty('throat_tangent_scale');

@@ -17,7 +17,7 @@ export interface ConfigBlock {
 }
 
 export interface FreeformPoint {
-  z: number;
+  t: number;
   r: number;
   angle_deg?: number;
 }
@@ -81,6 +81,7 @@ export interface DesignDocument {
   theta1_deg?: number;
   depth?: number;
   curl?: number;
+  length?: number;
   throat_profile?: number;
   rotation?: number;
   circ_arc_radius?: number;
@@ -243,13 +244,14 @@ export function designForFamily(family: DesignFamily): DesignDocument {
   }
   return {
     formula: family,
+    length: 120,
     ...shared,
     profile_h: {
-      points: [{ z: 0, r: 12.7 }, { z: 120, r: 140 }],
+      points: [{ t: 0, r: 12.7 }, { t: 1, r: 140 }],
       throat_angle_deg: 15.5, mouth_angle_deg: 60,
     },
     profile_v: {
-      points: [{ z: 0, r: 12.7 }, { z: 120, r: 140 }],
+      points: [{ t: 0, r: 12.7 }, { t: 1, r: 140 }],
       throat_angle_deg: 15.5, mouth_angle_deg: 60,
     },
     cross_sections: [{ t: 0, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }],

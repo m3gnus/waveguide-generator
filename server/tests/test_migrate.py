@@ -149,8 +149,10 @@ def test_removed_freeform_controls_migrate_once_and_validate() -> None:
         "overshoot_policy": "reject",
     }
     migrated, applied = apply_migrations(legacy)
-    assert [item.name for item in applied] == ["004_freeform_solved_tangent_contract"]
-    assert len(applied) == 1
+    assert [item.name for item in applied] == [
+        "004_freeform_solved_tangent_contract",
+        "005_freeform_normalized_axis",
+    ]
     assert "strength" not in migrated["profile_h"]["points"][0]
     assert "strength" not in migrated["profile_v"]["points"][1]
     for profile_name in ("profile_h", "profile_v"):
@@ -169,12 +171,15 @@ def test_removed_freeform_controls_migration_handles_list_rows() -> None:
             "profile_v": {"points": [[0, 10], [100, 40, 45, 1.2]]},
         }
     )
-    assert [item.name for item in applied] == ["004_freeform_solved_tangent_contract"]
-    assert migrated["profile_h"]["points"][0] == [0, 10, 12]
-    assert migrated["profile_v"]["points"][1] == [100, 40, 45]
+    assert [item.name for item in applied] == [
+        "004_freeform_solved_tangent_contract",
+        "005_freeform_normalized_axis",
+    ]
+    assert migrated["profile_h"]["points"][0] == {"t": 0, "r": 10, "angle_deg": 12}
+    assert migrated["profile_v"]["points"][1] == {"t": 1, "r": 40, "angle_deg": 45}
 
 
-def test_current_freeform_payload_does_not_trigger_removed_controls_note() -> None:
+def test_current_freeform_payload_triggers_only_axis_migration() -> None:
     payload = {
         "formula": "FREEFORM",
         "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
@@ -186,8 +191,53 @@ def test_current_freeform_payload_does_not_trigger_removed_controls_note() -> No
         "inflection_policy": "warn",
     }
     migrated, applied = apply_migrations(payload)
+    assert migrated["length"] == 100
+    assert migrated["profile_h"]["points"] == [{"t": 0, "r": 10}, {"t": 1, "r": 50}]
+    assert [item.name for item in applied] == ["005_freeform_normalized_axis"]
+
+
+def test_normalized_axis_migration_applies_once_and_reports_once() -> None:
+    legacy = {
+        "formula": "FREEFORM",
+        "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 70, "r": 30}, {"z": 120, "r": 50}]},
+        "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 120, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+    migrated, applied = apply_migrations(legacy)
+    assert [item.name for item in applied] == ["005_freeform_normalized_axis"]
+    assert len(migrated["profile_h"]["points"]) == 3
+    assert migrated["profile_h"]["points"][1]["t"] == 70 / 120
+    DesignConfig.model_validate(migrated)
+
+    again, second_applied = apply_migrations(migrated)
+    assert again == migrated
+    assert second_applied == []
+
+
+def test_normalized_payload_does_not_trigger_axis_migration() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "length": 100,
+        "profile_h": {"points": [{"t": 0, "r": 10}, {"t": 1, "r": 50}]},
+        "profile_v": {"points": [{"t": 0, "r": 10}, {"t": 1, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+    migrated, applied = apply_migrations(payload)
     assert migrated == payload
-    assert all(item.name != "004_freeform_solved_tangent_contract" for item in applied)
+    assert all(item.name != "005_freeform_normalized_axis" for item in applied)
+
+
+@pytest.mark.parametrize("mouth_z", [0, "p + 1"])
+def test_axis_migration_does_not_invent_an_invalid_length(mouth_z: object) -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "profile_h": {"points": [{"z": 0, "r": 10}, {"z": mouth_z, "r": 50}]},
+        "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
+    }
+    migrated, _applied = apply_migrations(payload)
+    assert migrated == payload
+    with pytest.raises(Exception):
+        DesignConfig.model_validate(migrated)
 
 
 @pytest.mark.parametrize(

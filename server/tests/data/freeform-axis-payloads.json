@@ -1,0 +1,87 @@
+[
+  {
+    "name": "two-anchor-unit-scale",
+    "legacy_design": {
+      "formula": "FREEFORM",
+      "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
+      "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
+      "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}]
+    },
+    "expected_mesher_payload": {
+      "formula": "FREEFORM",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "FREEFORM",
+        "profileH": {"points": [[0.0, 10.0], [100.0, 50.0]]},
+        "profileV": {"points": [[0.0, 10.0], [100.0, 40.0]]},
+        "crossSections": [{"t": 0.0, "shape": "ellipse"}, {"t": 1.0, "shape": "ellipse"}]
+      },
+      "mesh": {"quadrants": 1234, "wallThickness": 5.0, "scaleToMetres": true},
+      "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
+      "morph": {},
+      "gcurve": {},
+      "source": {}
+    }
+  },
+  {
+    "name": "interior-angle-non-unit-scale",
+    "legacy_design": {
+      "formula": "FREEFORM",
+      "scale": 1.5,
+      "profile_h": {"points": [{"z": 0, "r": 12.7}, {"z": 70, "r": 40, "angle_deg": 25}, {"z": 120, "r": 100}]},
+      "profile_v": {"points": [{"z": 0, "r": 12.7}, {"z": 25, "r": 20}, {"z": 120, "r": 80}]},
+      "cross_sections": [
+        {"t": 0, "shape": "ellipse"},
+        {"t": 0.5, "shape": "superellipse", "exponent": 4},
+        {"t": 1, "shape": "rounded_rectangle", "corner_radius_mm": 12}
+      ],
+      "inflection_policy": "warn"
+    },
+    "expected_mesher_payload": {
+      "formula": "FREEFORM",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "FREEFORM",
+        "profileH": {"points": [[0.0, 19.049999999999997], [105.0, 60.0, 25.0], [180.0, 150.0]]},
+        "profileV": {"points": [[0.0, 19.049999999999997], [37.5, 30.0], [180.0, 120.0]]},
+        "crossSections": [
+          {"t": 0.0, "shape": "ellipse"},
+          {"t": 0.5, "shape": "superellipse", "exponent": 4.0},
+          {"t": 1.0, "shape": "rounded_rectangle", "cornerRadiusMm": 18.0}
+        ],
+        "inflectionPolicy": "warn"
+      },
+      "mesh": {"quadrants": 1234, "wallThickness": 7.5, "scaleToMetres": true},
+      "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
+      "morph": {},
+      "gcurve": {},
+      "source": {}
+    }
+  },
+  {
+    "name": "fractional-anchor-half-scale",
+    "legacy_design": {
+      "formula": "FREEFORM",
+      "scale": 0.5,
+      "profile_h": {"points": [{"z": 0, "r": 8}, {"z": 37.5, "r": 15}, {"z": 150, "r": 60}]},
+      "profile_v": {"points": [{"z": 0, "r": 8}, {"z": 90, "r": 30, "angle_deg": -10}, {"z": 150, "r": 45}]},
+      "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+      "mesh": {"wall_thickness": 3, "vertical_offset": 4}
+    },
+    "expected_mesher_payload": {
+      "formula": "FREEFORM",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "FREEFORM",
+        "profileH": {"points": [[0.0, 4.0], [18.75, 7.5], [75.0, 30.0]]},
+        "profileV": {"points": [[0.0, 4.0], [45.0, 15.0, -10.0], [75.0, 22.5]]},
+        "crossSections": [{"t": 0.0, "shape": "ellipse"}, {"t": 1.0, "shape": "ellipse"}]
+      },
+      "mesh": {"quadrants": 1234, "wallThickness": 1.5, "verticalOffset": 2.0, "scaleToMetres": true},
+      "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
+      "morph": {},
+      "gcurve": {},
+      "source": {}
+    }
+  }
+]

@@ -58,18 +58,19 @@ describe('full DesignConfig client store', () => {
     expect(useDesignStore.getState().design).not.toBe(wireCopy);
   });
 
-  it('bumps the revision once for a mirrored FREEFORM scalar commit', () => {
+  it('bumps the revision once for a top-level FREEFORM length commit', () => {
     useDesignStore.getState().setFamily('FREEFORM');
     const before = useDesignStore.getState().designRevision;
-    useDesignStore.getState().updateValues({ 'profile_h.points.1.z': 180, 'profile_v.points.1.z': 180 });
-    expect(useDesignStore.getState().design.profile_h?.points[1].z).toBe(180);
-    expect(useDesignStore.getState().design.profile_v?.points[1].z).toBe(180);
+    useDesignStore.getState().updateValue('length', 180);
+    expect(useDesignStore.getState().design.length).toBe(180);
+    expect(useDesignStore.getState().design.profile_h?.points[1].t).toBe(1);
+    expect(useDesignStore.getState().design.profile_v?.points[1].t).toBe(1);
     expect(useDesignStore.getState().designRevision).toBe(before + 1);
   });
 
   it('round-trips the current FREEFORM point and station shapes', () => {
     const design = designForFamily('FREEFORM');
-    design.profile_h!.points = [{ z: 0, r: 12.7 }, { z: 60, r: 70, angle_deg: 25 }, { z: 120, r: 140 }];
+    design.profile_h!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 70, angle_deg: 25 }, { t: 1, r: 140 }];
     design.cross_sections = [{ t: 0, shape: 'ellipse' }, { t: .5, shape: 'superellipse', exponent: 4 }, { t: 1, shape: 'ellipse' }];
     useDesignStore.getState().loadDesign(design);
     const payload = serializeDesign(useDesignStore.getState().design);

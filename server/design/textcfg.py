@@ -371,7 +371,7 @@ def _point(raw: str, block_name: str, row: int, length: float) -> dict[str, Any]
         raise TextConfigError(f"{block_name} row {row}: angle must be between -90 and 90")
     if len(values) == 4 and not 0 < values[3] <= 3:
         raise TextConfigError(f"{block_name} row {row}: strength must be greater than 0 and at most 3")
-    result = {"z": parts[0], "r": parts[1]}
+    result = {"t": values[0] / length, "r": parts[1]}
     if len(parts) >= 3:
         result["angle_deg"] = parts[2]
     if len(parts) == 4:
@@ -410,12 +410,12 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
             _point(row, points_block_name, index + 1, length_value)
             for index, row in enumerate(rows)
         ]
-        z_values = [float(point["z"]) for point in interior]
+        z_values = [float(point["t"]) * length_value for point in interior]
         if any(right <= left for left, right in zip(z_values, z_values[1:])):
             raise TextConfigError(f"{points_block_name} z values must be strictly increasing")
-        points = [{"z": "0", "r": throat_radius}]
+        points = [{"t": 0, "r": throat_radius}]
         points.extend(interior)
-        points.append({"z": length, "r": info.items["MouthRadius"]})
+        points.append({"t": 1, "r": info.items["MouthRadius"]})
         result = {
             "points": points,
             "throat_angle_deg": flat.get("Freeform.ThroatAngle"),
@@ -476,6 +476,7 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         raise TextConfigError("the last Freeform.CrossSections station must have t = 1")
     result = {
         "formula": "FREEFORM",
+        "length": length,
         "profile_h": profile("H"),
         "profile_v": profile("V"),
         "cross_sections": stations,
@@ -610,11 +611,11 @@ def _block(
 
 def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
     profile_h, profile_v = config.profile_h, config.profile_v
-    length = profile_h.points[-1].z if profile_h.points else None
+    length = config.length
     throat_radius = profile_h.points[0].r if profile_h.points else None
     lines.extend(
         [
-            "; FREEFORM point rows: z r [angleDeg]",
+            "; FREEFORM point rows in mm: z r [angleDeg]",
             "; FREEFORM station rows: t shape [exponent|cornerRadiusMm]",
         ]
     )
@@ -633,7 +634,9 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
         )
         rows = []
         for point in profile.points[1:-1]:
-            values = [_text(point.z), _text(point.r)]
+            assert point.t.value is not None and length.value is not None
+            z_mm = round(point.t.value * length.value, 12)
+            values = [_text(Expr(value=z_mm)), _text(point.r)]
             if point.angle_deg is not None:
                 values.append(_text(point.angle_deg))
             rows.append(" ".join(values))

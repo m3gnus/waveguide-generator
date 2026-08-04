@@ -26,8 +26,9 @@ from server.design.schema import DesignConfig, Expr, FreeformConfig, ICWConfig, 
         (
             {
                 "formula": "FREEFORM",
-                "profile_h": {"points": [{"z": 0, "r": 12.7}, {"z": 120, "r": 100}]},
-                "profile_v": {"points": [{"z": 0, "r": 12.7}, {"z": 120, "r": 80}]},
+                "length": 120,
+                "profile_h": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 100}]},
+                "profile_v": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 80}]},
                 "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
                 "corner_grids": [{"t": 0.5, "values": [[0, 1], [2, 3]]}],
             },
@@ -114,6 +115,57 @@ def test_freeform_requires_v1_readable_cross_section_domain() -> None:
     }
     with pytest.raises(ValidationError, match="at least 2"):
         DesignConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("points", "message"),
+    [
+        ([{"t": 0.1, "r": 1}, {"t": 1, "r": 2}], "first FREEFORM profile point"),
+        ([{"t": 0, "r": 1}, {"t": 0.9, "r": 2}], "last FREEFORM profile point"),
+        ([{"t": 0, "r": 1}, {"t": 0.7, "r": 2}, {"t": 0.6, "r": 3}, {"t": 1, "r": 4}], "strictly increasing"),
+        ([{"t": 0, "r": 1}, {"t": 1.1, "r": 2}], "between 0 and 1"),
+    ],
+)
+def test_freeform_rejects_invalid_normalized_point_domains(
+    points: list[dict[str, float]], message: str
+) -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": points},
+        "profile_v": {"points": [{"t": 0, "r": 1}, {"t": 1, "r": 2}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+    with pytest.raises(ValidationError, match=message):
+        DesignConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize("length", [0, -1])
+def test_freeform_rejects_non_positive_length(length: float) -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "length": length,
+        "profile_h": {"points": [{"t": 0, "r": 1}, {"t": 1, "r": 2}]},
+        "profile_v": {"points": [{"t": 0, "r": 1}, {"t": 1, "r": 2}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+    with pytest.raises(ValidationError, match="greater than 0"):
+        DesignConfig.model_validate(payload)
+
+
+def test_freeform_length_change_preserves_interior_anchors_and_validation() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": [{"t": 0, "r": 10}, {"t": 70 / 120, "r": 30}, {"t": 1, "r": 50}]},
+        "profile_v": {"points": [{"t": 0, "r": 10}, {"t": 25 / 120, "r": 20}, {"t": 1, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+    original = DesignConfig.model_validate(payload)
+    shortened = original.model_dump(mode="json")
+    shortened["length"] = 60
+    validated = DesignConfig.model_validate(shortened)
+    assert [point.t.value for point in validated.root.profile_h.points] == [0, 70 / 120, 1]  # type: ignore[union-attr]
 
 
 def test_v1_sim_type_convention_has_named_schema_values() -> None:

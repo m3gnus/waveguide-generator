@@ -158,4 +158,23 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
   });
+
+  it('changes FREEFORM length without moving or dropping normalized anchors', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('FREEFORM');
+      useDesignStore.getState().updateValue('profile_h.points', [
+        { t: 0, r: 12.7 }, { t: 70 / 120, r: 60 }, { t: 1, r: 140 },
+      ]);
+    });
+    const before = structuredClone(useDesignStore.getState().design.profile_h!.points);
+    const input = host.querySelector<HTMLInputElement>('[data-parameter-id="freeform.length"] input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '60');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.length).toBe(60);
+    expect(useDesignStore.getState().design.profile_h!.points).toEqual(before);
+  });
 });
