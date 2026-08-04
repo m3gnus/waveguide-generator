@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import asyncio
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor

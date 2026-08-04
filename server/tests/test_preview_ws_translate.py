@@ -246,3 +246,18 @@ def test_freeform_strength_without_angle_is_rejected() -> None:
     }
     with pytest.raises(ValueError, match="strength requires angle"):
         _translate(payload)
+
+
+def test_degenerate_morph_rejected() -> None:
+    """Rectangle morph with 0x0 target dimensions must 422, not collapse
+    (live-found seed regression after faithful morph serialization)."""
+    import pytest
+    from server.design.schema import DesignConfig
+    from server.preview.translate import design_to_mesher_config
+
+    design = DesignConfig.model_validate({
+        "formula": "OSSE", "L": 120, "a": 45, "r0": 12.7, "a0": 10,
+        "morph": {"target_shape": 1, "target_width": 0, "target_height": 0},
+    })
+    with pytest.raises(ValueError, match="morph target"):
+        design_to_mesher_config(design)

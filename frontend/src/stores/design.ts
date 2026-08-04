@@ -186,7 +186,9 @@ const common = {
     sf_n2: 1, sf_n3: 1, rotation: 0,
   },
   morph: {
-    target_shape: 1, target_width: 0, target_height: 0, corner_radius: 0,
+    // Morph OFF by default (v1's morphTarget default). A Rectangle target with
+    // 0x0 dimensions is degenerate and collapses the mesher's morph path.
+    target_shape: 0, target_width: 0, target_height: 0, corner_radius: 0,
     rate: 3, fixed_part: 0, allow_shrinkage: 0,
   },
   source: {

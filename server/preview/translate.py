@@ -123,6 +123,26 @@ def _freeform_profile(profile: FreeformProfile, scale: float) -> dict[str, Any]:
     )
 
 
+def _morph_target(morph: Any, scale: float) -> Any:
+    """Reject degenerate morphs instead of collapsing geometry.
+
+    A rectangle/ellipse morph target with nonpositive width AND height would
+    morph the mouth to a point; v1's UI defaults never produced this, and the
+    mesher renders garbage for it (found live: seed design regression after
+    faithful morph serialization landed)."""
+    target = _expr(morph.target_shape)
+    numeric = morph.target_shape.value if morph.target_shape is not None else None
+    if numeric and numeric > 0:
+        width = _number(morph.target_width)
+        height = _number(morph.target_height)
+        if width <= 0 and height <= 0:
+            raise ValueError(
+                "morph target is set but target_width and target_height are both zero; "
+                "set at least one dimension or switch the morph target to None"
+            )
+    return target
+
+
 def _profile(
     design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig, scale: float
 ) -> dict[str, Any]:
@@ -294,7 +314,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
         "morph": _clean(
             {
-                "morphTarget": _expr(morph.target_shape),
+                "morphTarget": _morph_target(morph, scale),
                 "morphWidth": _scaled_expr(morph.target_width, scale),
                 "morphHeight": _scaled_expr(morph.target_height, scale),
                 "morphCorner": _scaled_expr(morph.corner_radius, scale),

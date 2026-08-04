@@ -171,9 +171,18 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   useEffect(() => {
     const instance = controls.current;
     if (!instance) return;
-    if (preferences.keyboardPanEnabled) instance.listenToKeyEvents(gl.domElement);
-    else instance.stopListenToKeyEvents();
-    return () => instance.stopListenToKeyEvents();
+    // OrbitControls.stopListenToKeyEvents() dereferences its key-event target
+    // unconditionally and THROWS when listenToKeyEvents was never called
+    // (null target) — a real-browser-only crash that killed the whole Canvas
+    // subtree during commit (jsdom never exercises this path). Guard both the
+    // toggle-off and the unmount cleanup on having actually listened.
+    if (preferences.keyboardPanEnabled) {
+      instance.listenToKeyEvents(gl.domElement);
+      return () => {
+        try { instance.stopListenToKeyEvents(); } catch { /* target already gone */ }
+      };
+    }
+    return undefined;
   }, [gl.domElement, preferences.keyboardPanEnabled]);
 
   useEffect(() => installWheelZoomInversion(gl.domElement, preferences.invertWheelZoom), [gl.domElement, preferences.invertWheelZoom]);
