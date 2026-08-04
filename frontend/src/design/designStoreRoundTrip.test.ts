@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { designForFamily, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
+import { hydrateDesignDocument } from '../api/designIo';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
 
 describe('full DesignConfig client store', () => {
   beforeEach(() => resetDesignStore());
@@ -64,5 +65,19 @@ describe('full DesignConfig client store', () => {
     expect(useDesignStore.getState().design.profile_h?.points[1].z).toBe(180);
     expect(useDesignStore.getState().design.profile_v?.points[1].z).toBe(180);
     expect(useDesignStore.getState().designRevision).toBe(before + 1);
+  });
+
+  it('round-trips an absent ATH field as null until the user edits it', () => {
+    const hydrated = hydrateDesignDocument({
+      formula: 'R-OSSE',
+      morph: { target_shape: 1, target_width: null },
+    });
+    useDesignStore.getState().loadDesign(hydrated);
+    expect(useDesignStore.getState().design.morph.target_width).toBe(0);
+    expect((serializeDesign(useDesignStore.getState().design).morph as Record<string, unknown>).target_width).toBeNull();
+
+    useDesignStore.getState().updateValue('morph.target_width', 240);
+    expect(useDesignStore.getState().design._absent ?? []).not.toContain('morph.target_width');
+    expect((serializeDesign(useDesignStore.getState().design).morph as Record<string, unknown>).target_width).toBe(240);
   });
 });

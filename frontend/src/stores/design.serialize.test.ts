@@ -3,6 +3,14 @@ import { designForFamily, encodeQuadrants, resetDesignStore, serializeDesign, us
 
 beforeEach(() => resetDesignStore());
 
+test('new designs use ATH\'s verified 5 mm wall default', () => {
+  for (const family of ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const) {
+    const design = designForFamily(family);
+    expect(design.mesh.wall_thickness).toBe(5);
+    expect((serializeDesign(design).mesh as Record<string, unknown>).wall_thickness).toBe(5);
+  }
+});
+
 test('R-OSSE payload drops the OSSE-only guiding_curve and all UI mirrors', () => {
   const payload = serializeDesign(designForFamily('R-OSSE'));
   expect(payload).not.toHaveProperty('guiding_curve');
@@ -89,4 +97,37 @@ test('structured and quadrant edits clear stale imported expression sidecars', (
   const payload = serializeDesign(useDesignStore.getState().design);
   expect(((payload.profile_h as { points: { r: number }[] }).points[1].r)).toBe(150);
   expect((payload.mesh as Record<string, unknown>).quadrants).toBe(12);
+});
+
+test('serializes absent paths as null, strips the sidecar, and emits an edited value', () => {
+  const design = designForFamily('R-OSSE');
+  design._absent = ['morph.target_width'];
+  useDesignStore.getState().loadDesign(design);
+  const absentPayload = serializeDesign(useDesignStore.getState().design);
+  expect((absentPayload.morph as Record<string, unknown>).target_width).toBeNull();
+  expect(absentPayload).not.toHaveProperty('_absent');
+
+  useDesignStore.getState().updateValue('morph.target_width', 320);
+  expect(useDesignStore.getState().design._absent ?? []).not.toContain('morph.target_width');
+  expect((serializeDesign(useDesignStore.getState().design).morph as Record<string, unknown>).target_width).toBe(320);
+});
+
+test('round-trips absent wall thickness as null and preserves an explicit zero', () => {
+  const design = designForFamily('R-OSSE');
+  design._absent = ['mesh.wall_thickness'];
+  useDesignStore.getState().loadDesign(design);
+  expect((serializeDesign(useDesignStore.getState().design).mesh as Record<string, unknown>).wall_thickness).toBeNull();
+
+  useDesignStore.getState().updateValue('mesh.wall_thickness', 0);
+  expect(useDesignStore.getState().design._absent ?? []).not.toContain('mesh.wall_thickness');
+  expect((serializeDesign(useDesignStore.getState().design).mesh as Record<string, unknown>).wall_thickness).toBe(0);
+});
+
+test('clears concrete absent paths when a $last array path is edited', () => {
+  const design = designForFamily('FREEFORM');
+  design._absent = ['profile_h.points.1.r'];
+  useDesignStore.getState().loadDesign(design);
+  useDesignStore.getState().updateValue('profile_h.points.$last.r', 175);
+  expect(useDesignStore.getState().design._absent).toBeUndefined();
+  expect(((serializeDesign(useDesignStore.getState().design).profile_h as { points: { r: number }[] }).points[1].r)).toBe(175);
 });

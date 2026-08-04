@@ -1,14 +1,24 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 
 export type ParameterSection =
-  | 'Profile'
-  | 'Source'
-  | 'Symmetry / Quadrants'
-  | 'Geometry extras'
-  | 'Enclosure'
-  | 'Mesh & Sampling'
-  | 'Simulation'
+  | 'Profile Dimensions'
+  | 'Throat Extension'
+  | 'Morph Target'
+  | 'Wall & Enclosure'
+  | 'Guiding Curve'
+  | 'Viewport mesh'
+  | 'Frequency Sweep'
+  | 'Source Definition'
+  | 'Solve & export mesh'
   | 'Output & Passthrough';
+
+export type ParameterTab = 'geometry' | 'simulation';
+
+export interface ParameterSectionDefinition {
+  title: ParameterSection;
+  tab: ParameterTab;
+  description: string;
+}
 
 export type ParameterKind = 'number' | 'select' | 'text' | 'toggle' | 'table' | 'indicator';
 
@@ -41,10 +51,15 @@ export interface ParameterDefinition {
 
 const allFamilies: DesignFamily[] = ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'];
 const osseFamilies: DesignFamily[] = ['R-OSSE', 'OSSE'];
-const profile = 'Profile' as const;
-const geometry = 'Geometry extras' as const;
-const mesh = 'Mesh & Sampling' as const;
-const simulation = 'Simulation' as const;
+const profile = 'Profile Dimensions' as const;
+const throatExtension = 'Throat Extension' as const;
+const morphTarget = 'Morph Target' as const;
+const wallEnclosure = 'Wall & Enclosure' as const;
+const guidingCurve = 'Guiding Curve' as const;
+const viewportMesh = 'Viewport mesh' as const;
+const frequencySweep = 'Frequency Sweep' as const;
+const sourceDefinition = 'Source Definition' as const;
+const solveExportMesh = 'Solve & export mesh' as const;
 
 const number = (
   id: string,
@@ -97,13 +112,13 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('icw.a0', 'a0', 'a0', profile, 'Throat half-angle', { families: ['ICW'], unit: '°', min: -90, max: 90 }),
   number('icw.L', 'L', 'L', profile, 'Horn length', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, visibleWhen: (design) => design.termination !== 'rollback' }),
   number('icw.R', 'R', 'R', profile, 'Mouth radius', { families: ['ICW'], unit: 'mm', min: .1, max: 1_000, disabledWhen: (design) => (design.coverage_angle ?? 0) > 0 ? 'Emergent while coverage hold is enabled.' : undefined }),
-  number('icw.coverage_angle', 'coverage_angle', 'coverage_angle', geometry, 'Coverage angle', { families: ['ICW'], unit: '°', min: 0, max: 80, step: 1, precision: 0, disabledWhen: (design) => design.termination === 'rollback' ? 'Coverage hold applies to flat-baffle termination only.' : undefined }),
-  number('icw.hold_start', 'hold_start', 'hold_start', geometry, 'Coverage hold start', { families: ['ICW'], unit: 'σ', min: .05, max: .9, step: .01, visibleWhen: (design) => design.termination !== 'rollback' }),
-  number('icw.hold_end', 'hold_end', 'hold_end', geometry, 'Coverage hold end', { families: ['ICW'], unit: 'σ', min: .1, max: .95, step: .01, visibleWhen: (design) => design.termination !== 'rollback' }),
+  number('icw.coverage_angle', 'coverage_angle', 'coverage_angle', profile, 'Coverage angle', { families: ['ICW'], unit: '°', min: 0, max: 80, step: 1, precision: 0, disabledWhen: (design) => design.termination === 'rollback' ? 'Coverage hold applies to flat-baffle termination only.' : undefined }),
+  number('icw.hold_start', 'hold_start', 'hold_start', profile, 'Coverage hold start', { families: ['ICW'], unit: 'σ', min: .05, max: .9, step: .01, visibleWhen: (design) => design.termination !== 'rollback' }),
+  number('icw.hold_end', 'hold_end', 'hold_end', profile, 'Coverage hold end', { families: ['ICW'], unit: 'σ', min: .1, max: .95, step: .01, visibleWhen: (design) => design.termination !== 'rollback' }),
   number('icw.n_coeff', 'n_coeff', 'n_coeff', profile, 'Curvature coefficients', { families: ['ICW'], min: 5, max: 24, step: 1, precision: 0 }),
-  select('icw.termination', 'termination', 'termination', geometry, 'Termination', [{ value: 'flat_baffle', label: 'Flat baffle' }, { value: 'rollback', label: 'Rollback' }], { families: ['ICW'] }),
-  number('icw.theta1_deg', 'theta1_deg', 'theta1_deg', geometry, 'Rollback curl angle', { families: ['ICW'], unit: '°', min: 91, max: 179, step: 1, precision: 0, visibleWhen: (design) => design.termination === 'rollback' }),
-  number('icw.depth', 'depth', 'depth', geometry, 'Rollback depth', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, step: 1, visibleWhen: (design) => design.termination === 'rollback' }),
+  select('icw.termination', 'termination', 'termination', profile, 'Termination', [{ value: 'flat_baffle', label: 'Flat baffle' }, { value: 'rollback', label: 'Rollback' }], { families: ['ICW'] }),
+  number('icw.theta1_deg', 'theta1_deg', 'theta1_deg', profile, 'Rollback curl angle', { families: ['ICW'], unit: '°', min: 91, max: 179, step: 1, precision: 0, visibleWhen: (design) => design.termination === 'rollback' }),
+  number('icw.depth', 'depth', 'depth', profile, 'Rollback depth', { families: ['ICW'], unit: 'mm', min: 1, max: 1_000, step: 1, visibleWhen: (design) => design.termination === 'rollback' }),
   // ICW schema additions not present in the v1 centralized inventory.
   number('icw.a', 'a', 'a', profile, 'Legacy coverage coefficient', { families: ['ICW'], unit: '°', min: -180, max: 180 }),
   number('icw.k', 'k', 'k', profile, 'Legacy flare coefficient', { families: ['ICW'], min: -100, max: 100 }),
@@ -128,73 +143,73 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   select('freeform.inflectionPolicy', 'inflectionPolicy', 'inflection_policy', profile, 'Curve direction', [{ value: 'warn', label: 'Warn on S-curves' }, { value: 'reject', label: 'Enforce one-way' }], { families: ['FREEFORM'] }),
 
   // Throat extension, morph, coverage/length modes, and complete OSSE guide controls.
-  number('common.throat_ext_angle', 'throatExtAngle', 'throat_ext_angle', geometry, 'Throat extension angle', { families: osseFamilies, unit: '°', min: -90, max: 90 }),
-  number('common.throat_ext_length', 'throatExtLength', 'throat_ext_length', geometry, 'Throat extension length', { families: osseFamilies, unit: 'mm', min: 0, max: 1_000 }),
-  number('common.slot_length', 'slotLength', 'slot_length', geometry, 'Straight slot length', { families: osseFamilies, unit: 'mm', min: 0, max: 1_000 }),
-  select('common.length_mode', 'lengthMode', 'length_mode', geometry, 'Length mode', [{ value: 'profile', label: 'Profile length' }, { value: 'total', label: 'Total length' }], { families: osseFamilies }),
-  { id: 'common.coverage_mode', legacyKey: 'coverageMode', path: 'coverage_mode', section: geometry, label: 'Coverage mode', kind: 'text', families: ['ICW'] },
-  select('morph.target_shape', 'morphTarget', 'morph.target_shape', geometry, 'Morph target', [{ value: 0, label: 'None' }, { value: 1, label: 'Rectangle' }, { value: 2, label: 'Circle' }], { families: ['R-OSSE', 'OSSE', 'ICW'] }),
-  number('morph.target_width', 'morphWidth', 'morph.target_width', geometry, 'Target width', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
-  number('morph.target_height', 'morphHeight', 'morph.target_height', geometry, 'Target height', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
-  number('morph.corner_radius', 'morphCorner', 'morph.corner_radius', geometry, 'Corner radius', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 100, step: 1 }),
-  number('morph.rate', 'morphRate', 'morph.rate', geometry, 'Morph rate', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 100 }),
-  number('morph.fixed_part', 'morphFixed', 'morph.fixed_part', geometry, 'Fixed part', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 1, step: .01 }),
-  select('morph.allow_shrinkage', 'morphAllowShrinkage', 'morph.allow_shrinkage', geometry, 'Allow shrinkage', yesNo, { families: ['R-OSSE', 'OSSE', 'ICW'] }),
-  select('osse.throat_profile', 'throatProfile', 'throat_profile', geometry, 'Throat profile', [{ value: 1, label: 'OS-SE' }, { value: 3, label: 'Circular arc' }], { families: ['OSSE'] }),
-  number('osse.rotation', 'rot', 'rotation', geometry, 'Profile rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360 }),
-  select('guide.curve_type', 'gcurveType', 'guiding_curve.curve_type', geometry, 'Guiding curve mode', [{ value: 0, label: 'Explicit coverage' }, { value: 1, label: 'Superellipse' }, { value: 2, label: 'Superformula' }], { families: ['OSSE'] }),
-  number('guide.distance', 'gcurveDist', 'guiding_curve.distance', geometry, 'Guiding curve distance', { families: ['OSSE'], min: 0, max: 10_000 }),
-  number('guide.width', 'gcurveWidth', 'guiding_curve.width', geometry, 'Guiding curve width', { families: ['OSSE'], unit: 'mm', min: 0, max: 2_000 }),
-  number('guide.aspect_ratio', 'gcurveAspectRatio', 'guiding_curve.aspect_ratio', geometry, 'Guiding curve aspect ratio', { families: ['OSSE'], min: .01, max: 100 }),
-  number('guide.superellipse_n', 'gcurveSeN', 'guiding_curve.superellipse_n', geometry, 'Guiding superellipse exponent', { families: ['OSSE'], min: .01, max: 100, visibleWhen: (design) => design.guiding_curve.curve_type === 1 }),
-  number('guide.superformula', 'gcurveSf', 'guiding_curve.superformula', geometry, 'Superformula tuple', { families: ['OSSE'], min: -1_000, max: 1_000, visibleWhen: (design) => design.guiding_curve.curve_type === 2 }),
-  ...(['sf_a', 'sf_b', 'sf_m1', 'sf_m2', 'sf_n1', 'sf_n2', 'sf_n3'] as const).map((key) => number(`guide.${key}`, `gcurveSf${key.slice(3).toUpperCase()}`, `guiding_curve.${key}`, geometry, `Superformula ${key.slice(3)}`, { families: ['OSSE'], min: -1_000, max: 1_000, visibleWhen: (design) => design.guiding_curve.curve_type === 2 })),
-  number('guide.rotation', 'gcurveRot', 'guiding_curve.rotation', geometry, 'Guiding curve rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360 }),
-  number('osse.circ_arc_term_angle', 'circArcTermAngle', 'circ_arc_term_angle', geometry, 'Circular arc terminal angle', { families: ['OSSE'], unit: '°', min: -180, max: 180, visibleWhen: (design) => design.throat_profile === 3 }),
-  number('osse.circ_arc_radius', 'circArcRadius', 'circ_arc_radius', geometry, 'Circular arc radius override', { families: ['OSSE'], unit: 'mm', min: 0, max: 10_000, visibleWhen: (design) => design.throat_profile === 3 }),
+  number('common.throat_ext_angle', 'throatExtAngle', 'throat_ext_angle', throatExtension, 'Throat extension angle', { families: osseFamilies, unit: '°', min: -90, max: 90 }),
+  number('common.throat_ext_length', 'throatExtLength', 'throat_ext_length', throatExtension, 'Throat extension length', { families: osseFamilies, unit: 'mm', min: 0, max: 1_000 }),
+  number('common.slot_length', 'slotLength', 'slot_length', throatExtension, 'Straight slot length', { families: osseFamilies, unit: 'mm', min: 0, max: 1_000 }),
+  select('common.length_mode', 'lengthMode', 'length_mode', throatExtension, 'Length mode', [{ value: 'profile', label: 'Profile length' }, { value: 'total', label: 'Total length' }], { families: osseFamilies }),
+  { id: 'common.coverage_mode', legacyKey: 'coverageMode', path: 'coverage_mode', section: profile, label: 'Coverage mode', kind: 'text', families: ['ICW'] },
+  select('morph.target_shape', 'morphTarget', 'morph.target_shape', morphTarget, 'Morph target', [{ value: 0, label: 'None' }, { value: 1, label: 'Rectangle' }, { value: 2, label: 'Circle' }], { families: ['R-OSSE', 'OSSE', 'ICW'] }),
+  number('morph.target_width', 'morphWidth', 'morph.target_width', morphTarget, 'Target width', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
+  number('morph.target_height', 'morphHeight', 'morph.target_height', morphTarget, 'Target height', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 2_000 }),
+  number('morph.corner_radius', 'morphCorner', 'morph.corner_radius', morphTarget, 'Corner radius', { families: ['R-OSSE', 'OSSE', 'ICW'], unit: 'mm', min: 0, max: 100, step: 1 }),
+  number('morph.rate', 'morphRate', 'morph.rate', morphTarget, 'Morph rate', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 100 }),
+  number('morph.fixed_part', 'morphFixed', 'morph.fixed_part', morphTarget, 'Fixed part', { families: ['R-OSSE', 'OSSE', 'ICW'], min: 0, max: 1, step: .01 }),
+  select('morph.allow_shrinkage', 'morphAllowShrinkage', 'morph.allow_shrinkage', morphTarget, 'Allow shrinkage', yesNo, { families: ['R-OSSE', 'OSSE', 'ICW'] }),
+  select('osse.throat_profile', 'throatProfile', 'throat_profile', guidingCurve, 'Throat profile', [{ value: 1, label: 'OS-SE' }, { value: 3, label: 'Circular arc' }], { families: ['OSSE'] }),
+  number('osse.rotation', 'rot', 'rotation', guidingCurve, 'Profile rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360 }),
+  select('guide.curve_type', 'gcurveType', 'guiding_curve.curve_type', guidingCurve, 'Guiding curve mode', [{ value: 0, label: 'Explicit coverage' }, { value: 1, label: 'Superellipse' }, { value: 2, label: 'Superformula' }], { families: ['OSSE'] }),
+  number('guide.distance', 'gcurveDist', 'guiding_curve.distance', guidingCurve, 'Guiding curve distance', { families: ['OSSE'], min: 0, max: 10_000 }),
+  number('guide.width', 'gcurveWidth', 'guiding_curve.width', guidingCurve, 'Guiding curve width', { families: ['OSSE'], unit: 'mm', min: 0, max: 2_000 }),
+  number('guide.aspect_ratio', 'gcurveAspectRatio', 'guiding_curve.aspect_ratio', guidingCurve, 'Guiding curve aspect ratio', { families: ['OSSE'], min: .01, max: 100 }),
+  number('guide.superellipse_n', 'gcurveSeN', 'guiding_curve.superellipse_n', guidingCurve, 'Guiding superellipse exponent', { families: ['OSSE'], min: .01, max: 100, visibleWhen: (design) => design.guiding_curve.curve_type === 1 }),
+  number('guide.superformula', 'gcurveSf', 'guiding_curve.superformula', guidingCurve, 'Superformula tuple', { families: ['OSSE'], min: -1_000, max: 1_000, visibleWhen: (design) => design.guiding_curve.curve_type === 2 }),
+  ...(['sf_a', 'sf_b', 'sf_m1', 'sf_m2', 'sf_n1', 'sf_n2', 'sf_n3'] as const).map((key) => number(`guide.${key}`, `gcurveSf${key.slice(3).toUpperCase()}`, `guiding_curve.${key}`, guidingCurve, `Superformula ${key.slice(3)}`, { families: ['OSSE'], min: -1_000, max: 1_000, visibleWhen: (design) => design.guiding_curve.curve_type === 2 })),
+  number('guide.rotation', 'gcurveRot', 'guiding_curve.rotation', guidingCurve, 'Guiding curve rotation', { families: ['OSSE'], unit: '°', min: -360, max: 360 }),
+  number('osse.circ_arc_term_angle', 'circArcTermAngle', 'circ_arc_term_angle', guidingCurve, 'Circular arc terminal angle', { families: ['OSSE'], unit: '°', min: -180, max: 180, visibleWhen: (design) => design.throat_profile === 3 }),
+  number('osse.circ_arc_radius', 'circArcRadius', 'circ_arc_radius', guidingCurve, 'Circular arc radius override', { families: ['OSSE'], unit: 'mm', min: 0, max: 10_000, visibleWhen: (design) => design.throat_profile === 3 }),
 
   // Source including schema-carried contours and explicit velocity convention.
-  select('source.shape', 'sourceShape', 'source.shape', 'Source', 'Source surface', [{ value: 1, label: 'Spherical cap' }, { value: 2, label: 'Flat disc' }]),
-  number('source.radius', 'sourceRadius', 'source.radius', 'Source', 'Source radius', { unit: 'mm', min: -1, max: 2_000 }),
-  select('source.curvature', 'sourceCurv', 'source.curvature', 'Source', 'Source curvature', [{ value: 0, label: 'Auto' }, { value: 1, label: 'Convex' }, { value: -1, label: 'Concave' }]),
-  number('source.velocity', 'sourceAmplitude', 'source.velocity', 'Source', 'Source amplitude', { unit: 'm/s', min: 0, max: 100, step: .01, precision: 3 }),
-  select('source.velocity_convention', 'sourceVelocity', 'source.velocity_convention', 'Source', 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }]),
-  { id: 'source.contours', legacyKey: 'sourceContours', path: 'source.contours', section: 'Source', label: 'Source contours', kind: 'text', description: 'File path or inline-script expression; preserved verbatim.' },
+  select('source.shape', 'sourceShape', 'source.shape', sourceDefinition, 'Source surface', [{ value: 1, label: 'Spherical cap' }, { value: 2, label: 'Flat disc' }]),
+  number('source.radius', 'sourceRadius', 'source.radius', sourceDefinition, 'Source radius', { unit: 'mm', min: -1, max: 2_000 }),
+  select('source.curvature', 'sourceCurv', 'source.curvature', sourceDefinition, 'Source curvature', [{ value: 0, label: 'Auto' }, { value: 1, label: 'Convex' }, { value: -1, label: 'Concave' }]),
+  number('source.velocity', 'sourceAmplitude', 'source.velocity', sourceDefinition, 'Source amplitude', { unit: 'm/s', min: 0, max: 100, step: .01, precision: 3 }),
+  select('source.velocity_convention', 'sourceVelocity', 'source.velocity_convention', sourceDefinition, 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }]),
+  { id: 'source.contours', legacyKey: 'sourceContours', path: 'source.contours', section: sourceDefinition, label: 'Source contours', kind: 'text', description: 'File path or inline-script expression; preserved verbatim.' },
 
   // Symmetry is custom-rendered as quadrants but registered against schema mesh.quadrants.
-  { id: 'mesh.quadrants', legacyKey: 'quadrants', path: 'mesh.quadrants', section: 'Symmetry / Quadrants', label: 'Solve/export quadrants', kind: 'select' },
+  { id: 'mesh.quadrants', legacyKey: 'quadrants', path: 'mesh.quadrants', section: solveExportMesh, label: 'Solve/export quadrants', kind: 'select' },
 
   // Full enclosure schema block.
-  number('enclosure.depth', 'encDepth', 'enclosure.depth', 'Enclosure', 'Enclosure depth', { unit: 'mm', min: 0, max: 2_000, step: 1 }),
-  number('enclosure.edge_radius', 'encEdge', 'enclosure.edge_radius', 'Enclosure', 'Edge radius', { unit: 'mm', min: 0, max: 1_000 }),
-  select('enclosure.edge_type', 'encEdgeType', 'enclosure.edge_type', 'Enclosure', 'Edge finish', [{ value: 1, label: 'Rounded' }, { value: 2, label: 'Chamfered' }]),
-  ...([['space_l', 'encSpaceL', 'Left margin'], ['space_t', 'encSpaceT', 'Top margin'], ['space_r', 'encSpaceR', 'Right margin'], ['space_b', 'encSpaceB', 'Bottom margin']] as const).map(([path, key, label]) => number(`enclosure.${path}`, key, `enclosure.${path}`, 'Enclosure', label, { unit: 'mm', min: 0, max: 2_000 })),
-  number('enclosure.front_resolution', 'encFrontResolution', 'enclosure.front_resolution', 'Enclosure', 'Front baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
-  number('enclosure.back_resolution', 'encBackResolution', 'enclosure.back_resolution', 'Enclosure', 'Rear baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
+  number('enclosure.depth', 'encDepth', 'enclosure.depth', wallEnclosure, 'Enclosure depth', { unit: 'mm', min: 0, max: 2_000, step: 1, visibleWhen: (design) => design.enclosure.depth > 0 }),
+  number('enclosure.edge_radius', 'encEdge', 'enclosure.edge_radius', wallEnclosure, 'Edge radius', { unit: 'mm', min: 0, max: 1_000, visibleWhen: (design) => design.enclosure.depth > 0 }),
+  select('enclosure.edge_type', 'encEdgeType', 'enclosure.edge_type', wallEnclosure, 'Edge finish', [{ value: 1, label: 'Rounded' }, { value: 2, label: 'Chamfered' }], { visibleWhen: (design) => design.enclosure.depth > 0 }),
+  ...([['space_l', 'encSpaceL', 'Left margin'], ['space_t', 'encSpaceT', 'Top margin'], ['space_r', 'encSpaceR', 'Right margin'], ['space_b', 'encSpaceB', 'Bottom margin']] as const).map(([path, key, label]) => number(`enclosure.${path}`, key, `enclosure.${path}`, wallEnclosure, label, { unit: 'mm', min: 0, max: 2_000, visibleWhen: (design) => design.enclosure.depth > 0 })),
+  number('enclosure.front_resolution', 'encFrontResolution', 'enclosure.front_resolution', solveExportMesh, 'Front baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
+  number('enclosure.back_resolution', 'encBackResolution', 'enclosure.back_resolution', solveExportMesh, 'Rear baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
 
-  // Viewport sampling and solve/export mesh are deliberately kept together but labelled distinctly.
-  number('mesh.angular_segments', 'angularSegments', 'mesh.angular_segments', mesh, 'Surface angular samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
-  number('mesh.length_segments', 'lengthSegments', 'mesh.length_segments', mesh, 'Surface length samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
-  number('mesh.corner_segments', 'cornerSegments', 'mesh.corner_segments', mesh, 'Surface corner samples', { min: 0, max: 1_024, step: 1, precision: 0 }),
-  number('mesh.throat_segments', 'throatSegments', 'mesh.throat_segments', mesh, 'Throat slice samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
-  number('mesh.throat_slice_density', 'throatSliceDensity', 'mesh.throat_slice_density', mesh, 'Preview slice bias', { min: .01, max: .99, step: .01 }),
-  select('mesh.sampling_mode', 'samplingMode', 'mesh.sampling_mode', mesh, 'Z-map sampling mode', [{ value: 'uniform', label: 'Uniform' }, { value: 'ath-default-zmap', label: 'ATH default Z-map' }, { value: 'zmap', label: 'Custom Z-map points' }]),
-  { id: 'mesh.z_map_points', legacyKey: 'zMapPoints', path: 'mesh.z_map_points', section: mesh, label: 'Z-map points', kind: 'text', visibleWhen: (design) => design.mesh.sampling_mode === 'zmap', description: 'ATH point expression, preserved verbatim.' },
-  number('mesh.throat_resolution', 'throatResolution', 'mesh.throat_resolution', mesh, 'Throat mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
-  number('mesh.mouth_resolution', 'mouthResolution', 'mesh.mouth_resolution', mesh, 'Mouth mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'For 20 kHz, λ/6 is approximately 2.86 mm.' }),
-  { id: 'schema-gap.max_edge', legacyKey: 'maxEdge', section: mesh, label: 'Maximum edge guard', kind: 'number', unit: 'mm', disabledReason: 'Not present in server DesignConfig; use the regional resolution controls until the server schema adds it.' },
-  number('mesh.rear_resolution', 'rearResolution', 'mesh.rear_resolution', mesh, 'Rear mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
-  number('mesh.aperture_resolution_scale', 'apertureResolutionScale', 'mesh.aperture_resolution_scale', mesh, 'Aperture mesh scale', { min: .01, max: 100 }),
-  number('mesh.max_triangles', 'maxTriangles', 'mesh.max_triangles', mesh, 'Hard triangle limit', { min: 1, max: 10_000_000, step: 1_000, precision: 0 }),
-  select('mesh.allow_large_mesh', 'allowLargeMesh', 'mesh.allow_large_mesh', mesh, 'Large mesh approval', [{ value: 0, label: 'Block over budget' }, { value: 1, label: 'Approve over budget' }]),
-  number('mesh.vertical_offset', 'verticalOffset', 'mesh.vertical_offset', mesh, 'Export vertical offset', { unit: 'mm', min: -10_000, max: 10_000 }),
-  number('mesh.wall_thickness', 'wallThickness', 'mesh.wall_thickness', mesh, 'Wall thickness', { unit: 'mm', min: 0, max: 1_000 }),
+  // Viewport tessellation is intentionally separate from the solve/export mesh.
+  number('mesh.angular_segments', 'angularSegments', 'mesh.angular_segments', viewportMesh, 'Surface angular samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
+  number('mesh.length_segments', 'lengthSegments', 'mesh.length_segments', viewportMesh, 'Surface length samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
+  number('mesh.corner_segments', 'cornerSegments', 'mesh.corner_segments', viewportMesh, 'Surface corner samples', { min: 0, max: 1_024, step: 1, precision: 0 }),
+  number('mesh.throat_segments', 'throatSegments', 'mesh.throat_segments', viewportMesh, 'Throat slice samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
+  number('mesh.throat_slice_density', 'throatSliceDensity', 'mesh.throat_slice_density', viewportMesh, 'Preview slice bias', { min: .01, max: .99, step: .01 }),
+  select('mesh.sampling_mode', 'samplingMode', 'mesh.sampling_mode', viewportMesh, 'Z-map sampling mode', [{ value: 'uniform', label: 'Uniform' }, { value: 'ath-default-zmap', label: 'ATH default Z-map' }, { value: 'zmap', label: 'Custom Z-map points' }]),
+  { id: 'mesh.z_map_points', legacyKey: 'zMapPoints', path: 'mesh.z_map_points', section: viewportMesh, label: 'Z-map points', kind: 'text', visibleWhen: (design) => design.mesh.sampling_mode === 'zmap', description: 'ATH point expression, preserved verbatim.' },
+  number('mesh.throat_resolution', 'throatResolution', 'mesh.throat_resolution', solveExportMesh, 'Throat mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
+  number('mesh.mouth_resolution', 'mouthResolution', 'mesh.mouth_resolution', solveExportMesh, 'Mouth mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'For 20 kHz, λ/6 is approximately 2.86 mm.' }),
+  number('schema-gap.max_edge', 'maxEdge', 'mesh.max_edge', solveExportMesh, 'Maximum edge guard', { unit: 'mm', min: .01, max: 10_000, description: 'Optional post-build guard for the longest realized triangle edge.' }),
+  number('mesh.rear_resolution', 'rearResolution', 'mesh.rear_resolution', solveExportMesh, 'Rear mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
+  number('mesh.aperture_resolution_scale', 'apertureResolutionScale', 'mesh.aperture_resolution_scale', solveExportMesh, 'Aperture mesh scale', { min: .01, max: 100 }),
+  number('mesh.max_triangles', 'maxTriangles', 'mesh.max_triangles', solveExportMesh, 'Hard triangle limit', { min: 1, max: 10_000_000, step: 1_000, precision: 0 }),
+  select('mesh.allow_large_mesh', 'allowLargeMesh', 'mesh.allow_large_mesh', solveExportMesh, 'Large mesh approval', [{ value: 0, label: 'Block over budget' }, { value: 1, label: 'Approve over budget' }]),
+  number('mesh.vertical_offset', 'verticalOffset', 'mesh.vertical_offset', solveExportMesh, 'Export vertical offset', { unit: 'mm', min: -10_000, max: 10_000 }),
+  number('mesh.wall_thickness', 'wallThickness', 'mesh.wall_thickness', wallEnclosure, 'Wall thickness', { unit: 'mm', min: 0, max: 1_000, description: "Leaving this unset uses ATH's 5 mm default.", visibleWhen: (design) => design.enclosure.depth <= 0 && design.mesh.wall_thickness > 0 }),
 
-  number('simulation.f1', 'freqStart', 'simulation.f1', simulation, 'Sweep start', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
-  number('simulation.f2', 'freqEnd', 'simulation.f2', simulation, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
-  number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', simulation, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0 }),
-  select('simulation.sim_type', 'simType', 'simulation.sim_type', simulation, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle' }]),
-  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', simulation, 'Solver mode', [{ value: 'auto', label: 'Auto' }, { value: 'full_3d', label: 'Full 3D' }, { value: 'circsym', label: 'CircSym' }]),
+  number('simulation.f1', 'freqStart', 'simulation.f1', frequencySweep, 'Sweep start', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
+  number('simulation.f2', 'freqEnd', 'simulation.f2', frequencySweep, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0 }),
+  number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', frequencySweep, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0 }),
+  select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle' }]),
+  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto' }, { value: 'full_3d', label: 'Full 3D' }, { value: 'circsym', label: 'CircSym' }]),
 
   select('output.stl', 'outputSTL', 'output.stl', 'Output & Passthrough', 'STL output flag', yesNo),
   select('output.msh', 'outputMSH', 'output.msh', 'Output & Passthrough', 'MSH output flag', yesNo),
@@ -229,10 +244,66 @@ export const TRACEABILITY_PARAMETER_INVENTORY = [
   ...commonTraceKeys.map((key) => ({ key, family: undefined })),
 ];
 
-export const PARAMETER_SECTIONS: ParameterSection[] = [
-  'Profile', 'Source', 'Symmetry / Quadrants', 'Geometry extras', 'Enclosure',
-  'Mesh & Sampling', 'Simulation', 'Output & Passthrough',
+export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
+  {
+    title: 'Profile Dimensions',
+    tab: 'geometry',
+    description: 'Primary dimensions for the selected horn family. Labels keep the canonical ATH symbol where it helps.',
+  },
+  {
+    title: 'Throat Extension',
+    tab: 'geometry',
+    description: 'Optional conical throat extension and initial straight slot controls for OSSE-family profiles.',
+  },
+  {
+    title: 'Morph Target',
+    tab: 'geometry',
+    description: 'Post-profile shaping used to transition the mouth toward another target shape.',
+  },
+  {
+    title: 'Wall & Enclosure',
+    tab: 'geometry',
+    description: 'Freestanding wall-shell controls and enclosure clearances that change the exported or simulated solid.',
+  },
+  {
+    title: 'Guiding Curve',
+    tab: 'geometry',
+    description: 'OSSE-only throat profile, rotation, and guide-shape controls used to bend or infer the horn profile.',
+  },
+  {
+    title: 'Viewport mesh',
+    tab: 'geometry',
+    description: 'Live preview tessellation controls. They change viewport smoothness and responsiveness, not the BEM solve mesh.',
+  },
+  {
+    title: 'Frequency Sweep',
+    tab: 'simulation',
+    description: 'Backend BEM sweep start, end, and sample count. These stay aligned with import and export config keys.',
+  },
+  {
+    title: 'Source Definition',
+    tab: 'simulation',
+    description: 'Source surface, orientation, and contour inputs used to build the radiating boundary.',
+  },
+  {
+    title: 'Solve & export mesh',
+    tab: 'simulation',
+    description: 'HornLab mesher sizing and export-coordinate controls used for solves, downloads, and persisted mesh artifacts.',
+  },
+  {
+    title: 'Output & Passthrough',
+    tab: 'simulation',
+    description: 'Output flags and imported configuration content preserved for lossless export.',
+  },
 ];
+
+export const PARAMETER_SECTIONS: ParameterSection[] = PARAMETER_SECTION_DEFINITIONS.map(({ title }) => title);
+
+export function tabForParameterSection(section: ParameterSection): ParameterTab {
+  const definition = PARAMETER_SECTION_DEFINITIONS.find((item) => item.title === section);
+  if (!definition) throw new Error(`Unknown parameter section: ${section}`);
+  return definition.tab;
+}
 
 /** The 43 daggered v1 fields, plus the two legacy four-value baffle tuples. */
 export const EXPRESSION_PARAMETER_IDS = new Set([

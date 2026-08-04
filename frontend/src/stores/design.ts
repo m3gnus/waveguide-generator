@@ -152,6 +152,7 @@ export interface DesignDocument {
     aperture_resolution_scale: number;
     max_triangles: number;
     allow_large_mesh: number;
+    max_edge?: number;
   };
   simulation: {
     f1: number;
@@ -171,6 +172,8 @@ export interface DesignDocument {
   corner_grids?: CornerGrid[];
   /** UI sidecar for lossless ATH expression spelling; stripped on the wire. */
   _expressions?: Record<string, ExprNumber>;
+  /** Schema paths omitted by the source config; restored to null on the wire. */
+  _absent?: string[];
 }
 
 const common = {
@@ -205,7 +208,9 @@ const common = {
     angular_segments: 40, corner_segments: 4, throat_segments: 0,
     length_segments: 20, throat_resolution: 6, mouth_resolution: 15,
     throat_slice_density: .5, sampling_mode: 'uniform', z_map_points: '',
-    vertical_offset: 0, quadrants: 1234, wall_thickness: 0, rear_resolution: 40,
+    // ATH defaults omitted WallThickness to 5 mm, verified against ath.exe;
+    // see hornlab_mesher/config_parser.py's ATH-defaults note.
+    vertical_offset: 0, quadrants: 1234, wall_thickness: 5, rear_resolution: 40,
     aperture_resolution_scale: 1.5, max_triangles: 50_000, allow_large_mesh: 0,
   },
   simulation: {
@@ -324,13 +329,24 @@ function setAtPath(design: DesignDocument, path: string, value: DesignValue): De
   return next;
 }
 
-function withoutExpression(design: DesignDocument, path: string): DesignDocument {
+function pathsOverlap(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}.`) || right.startsWith(`${left}.`);
+}
+
+function withoutPreservedMetadata(design: DesignDocument, path: string): DesignDocument {
   const concretePath = resolveConcretePath(design, path);
-  const matches = Object.keys(design._expressions ?? {}).filter((key) => key === path || key.startsWith(`${path}.`) || key === concretePath || key.startsWith(`${concretePath}.`));
-  if (!matches.length) return design;
+  const editedPaths = [path, concretePath];
+  const expressionMatches = Object.keys(design._expressions ?? {}).filter((key) => editedPaths.some((edited) => pathsOverlap(key, edited)));
+  const absentMatches = (design._absent ?? []).filter((key) => editedPaths.some((edited) => pathsOverlap(key, edited)));
+  if (!expressionMatches.length && !absentMatches.length) return design;
   const next = structuredClone(design);
-  matches.forEach((key) => { delete next._expressions?.[key]; });
+  expressionMatches.forEach((key) => { delete next._expressions?.[key]; });
   if (next._expressions && Object.keys(next._expressions).length === 0) delete next._expressions;
+  if (absentMatches.length) {
+    const matched = new Set(absentMatches);
+    next._absent = next._absent?.filter((key) => !matched.has(key));
+    if (!next._absent?.length) delete next._absent;
+  }
   return next;
 }
 
@@ -363,21 +379,21 @@ export const useDesignStore = create<DesignStore>()(
       updateField: (path, value) => get().updateValue(path, value),
       updateValue: (path, value) => {
         set((state) => ({
-          design: withoutExpression(setAtPath(state.design, path, value), path),
+          design: withoutPreservedMetadata(setAtPath(state.design, path, value), path),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
       updateValues: (updates) => {
         set((state) => ({
-          design: Object.keys(updates).reduce((next, path) => withoutExpression(next, path), setMany(state.design, updates)),
+          design: Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates)),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
       updateExpression: (path, expression) => {
         set((state) => {
-          let design = structuredClone(state.design);
+          let design = withoutPreservedMetadata(structuredClone(state.design), path);
           if (expression.value !== null) design = setAtPath(design, path, expression.value);
           design._expressions = { ...design._expressions, [path]: structuredClone(expression) };
           return { design, designRevision: state.designRevision + 1 };
@@ -387,14 +403,12 @@ export const useDesignStore = create<DesignStore>()(
       setQuadrants: (quadrants) => {
         const sorted = [...quadrants].sort();
         set((state) => {
-          const expressions = { ...state.design._expressions };
-          delete expressions['mesh.quadrants'];
+          const design = withoutPreservedMetadata(state.design, 'mesh.quadrants');
           return {
             design: {
-              ...state.design,
+              ...design,
               quadrants: sorted,
-              mesh: { ...state.design.mesh, quadrants: encodeQuadrants(sorted) },
-              ...(Object.keys(expressions).length ? { _expressions: expressions } : { _expressions: undefined }),
+              mesh: { ...design.mesh, quadrants: encodeQuadrants(sorted) },
             },
             designRevision: state.designRevision + 1,
           };
@@ -402,10 +416,13 @@ export const useDesignStore = create<DesignStore>()(
         bump('edit', false);
       },
       setSourceConvention: (velocity_convention) => {
-        set((state) => ({
-          design: { ...state.design, source: { ...state.design.source, velocity_convention } },
-          designRevision: state.designRevision + 1,
-        }));
+        set((state) => {
+          const design = withoutPreservedMetadata(state.design, 'source.velocity_convention');
+          return {
+            design: { ...design, source: { ...design.source, velocity_convention } },
+            designRevision: state.designRevision + 1,
+          };
+        });
         bump('edit', false);
       },
       setFamily: (family) => {
@@ -491,7 +508,7 @@ export function resetDesignStore(): void {
  *   FreeformConfig forbid it) and is dropped for every other family.
  */
 export function serializeDesign(design: DesignDocument): Record<string, unknown> {
-  const { quadrants, enclosure, mesh, _expressions, ...root } = structuredClone(design);
+  const { quadrants, enclosure, mesh, _expressions, _absent, ...root } = structuredClone(design);
   const wireEnclosure = {
     depth: enclosure.depth,
     edge_radius: enclosure.edge_radius,
@@ -515,6 +532,7 @@ export function serializeDesign(design: DesignDocument): Record<string, unknown>
   Object.entries(_expressions ?? {}).forEach(([path, expression]) => {
     setWirePath(payload, path, expression);
   });
+  (_absent ?? []).forEach((path) => setWirePath(payload, path, null));
   return payload;
 }
 

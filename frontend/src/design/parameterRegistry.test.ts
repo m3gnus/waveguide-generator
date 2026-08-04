@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import {
   PARAMETER_REGISTRY,
+  PARAMETER_SECTION_DEFINITIONS,
   TRACEABILITY_PARAMETER_INVENTORY,
   EXPRESSION_PARAMETER_IDS,
   fieldIsVisible,
@@ -42,6 +43,22 @@ describe('complete parameter registry', () => {
         )), `${family}.${key}`).toBe(true);
       }
     }
+  });
+
+  it('assigns every registry field to exactly one Geometry or Simulation tab', () => {
+    expect(new Set(PARAMETER_SECTION_DEFINITIONS.map(({ title }) => title)).size).toBe(PARAMETER_SECTION_DEFINITIONS.length);
+    for (const field of PARAMETER_REGISTRY) {
+      const owners = PARAMETER_SECTION_DEFINITIONS.filter(({ title }) => title === field.section);
+      expect(owners, field.id).toHaveLength(1);
+      expect(['geometry', 'simulation']).toContain(owners[0].tab);
+    }
+
+    const sectionFor = (id: string) => PARAMETER_REGISTRY.find((field) => field.id === id)?.section;
+    expect(sectionFor('mesh.angular_segments')).toBe('Viewport mesh');
+    expect(sectionFor('mesh.throat_resolution')).toBe('Solve & export mesh');
+    expect(sectionFor('mesh.wall_thickness')).toBe('Wall & Enclosure');
+    expect(sectionFor('mesh.quadrants')).toBe('Solve & export mesh');
+    expect(sectionFor('source.shape')).toBe('Source Definition');
   });
 
   it('applies profile and guiding controls to the correct family', () => {
@@ -89,16 +106,22 @@ describe('complete parameter registry', () => {
     expect([...tupleIds].every((id) => EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
   });
 
-  it('keeps v1-preconfigurable values editable before their dependent mode is active', () => {
+  it('keeps solve-mesh preconfiguration visible while outer-body fields follow the explicit mode', () => {
     const osse = designForFamily('OSSE');
     osse.guiding_curve.curve_type = 1;
     osse.morph.target_shape = 0;
     osse.enclosure.depth = 0;
     osse.mesh.wall_thickness = 0;
-    for (const id of ['osse.a', 'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'enclosure.space_l', 'enclosure.front_resolution', 'mesh.wall_thickness', 'mesh.rear_resolution']) {
+    for (const id of ['osse.a', 'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'enclosure.front_resolution', 'mesh.rear_resolution']) {
       const field = PARAMETER_REGISTRY.find((item) => item.id === id)!;
       expect(fieldIsVisible(field, osse), id).toBe(true);
       expect(field.disabledWhen?.(osse), id).toBeUndefined();
     }
+    expect(fieldIsVisible(PARAMETER_REGISTRY.find((item) => item.id === 'enclosure.space_l')!, osse)).toBe(false);
+    expect(fieldIsVisible(PARAMETER_REGISTRY.find((item) => item.id === 'mesh.wall_thickness')!, osse)).toBe(false);
+  });
+
+  it('documents ATH\'s omitted wall-thickness default', () => {
+    expect(PARAMETER_REGISTRY.find((item) => item.id === 'mesh.wall_thickness')?.description).toContain('5 mm');
   });
 });

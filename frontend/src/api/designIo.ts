@@ -73,9 +73,13 @@ export async function saveDesignDocument(
   return response.json() as Promise<SaveDesignResponse>;
 }
 
-function unwrapExpressions(value: unknown, path = '', expressions: Record<string, ExprNumber> = {}): unknown {
-  if (Array.isArray(value)) return value.map((item, index) => unwrapExpressions(item, path ? `${path}.${index}` : String(index), expressions));
-  if (value === null || typeof value !== 'object') return value;
+function unwrapExpressions(value: unknown, path = '', expressions: Record<string, ExprNumber> = {}, absent: string[] = []): unknown {
+  if (Array.isArray(value)) return value.map((item, index) => unwrapExpressions(item, path ? `${path}.${index}` : String(index), expressions, absent));
+  if (value === null) {
+    if (path) absent.push(path);
+    return value;
+  }
+  if (typeof value !== 'object') return value;
   const record = value as Record<string, unknown>;
   if ('value' in record && Object.keys(record).every((key) => key === 'value' || key === 'raw')) {
     if (typeof record.raw === 'string') {
@@ -86,7 +90,7 @@ function unwrapExpressions(value: unknown, path = '', expressions: Record<string
     }
     return record.value ?? null;
   }
-  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, unwrapExpressions(item, path ? `${path}.${key}` : key, expressions)]));
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, unwrapExpressions(item, path ? `${path}.${key}` : key, expressions, absent)]));
 }
 
 function merge<T>(base: T, incoming: unknown): T {
@@ -105,7 +109,8 @@ function merge<T>(base: T, incoming: unknown): T {
 /** Convert schema-wire Expr objects into the store's evaluated document shape. */
 export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocument {
   const expressions: Record<string, ExprNumber> = {};
-  const unwrapped = unwrapExpressions(wire, '', expressions) as Record<string, unknown>;
+  const absent: string[] = [];
+  const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;
   const formula = unwrapped.formula as DesignFamily;
   if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'].includes(formula)) {
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
@@ -117,6 +122,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   document.source.contours = document.source.contours ?? '';
   if (document.mesh.z_map_points.trim()) document.mesh.sampling_mode = 'zmap';
   if (Object.keys(expressions).length) document._expressions = expressions;
+  if (absent.length) document._absent = [...new Set(absent)];
   return document;
 }
 
@@ -233,6 +239,8 @@ function preserveSharedForFreeform(converted: DesignDocument, source: DesignDocu
   const commonExpression = /^(?:scale|throat_ext_angle|throat_ext_length|slot_length|morph\.|source\.|enclosure\.|mesh\.|simulation\.|output\.)/;
   const expressions = Object.fromEntries(Object.entries(source._expressions ?? {}).filter(([path]) => commonExpression.test(path) && path !== 'morph.target_shape'));
   if (Object.keys(expressions).length) converted._expressions = expressions;
+  const absent = (source._absent ?? []).filter((path) => commonExpression.test(path) && path !== 'morph.target_shape');
+  if (absent.length) converted._absent = absent;
   return converted;
 }
 
