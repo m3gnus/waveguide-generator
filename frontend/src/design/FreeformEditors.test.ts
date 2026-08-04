@@ -4,14 +4,15 @@ import { designForFamily } from '../stores/design';
 import { parsePointPaste } from './FreeformEditors';
 
 describe('FREEFORM editor workflows', () => {
-  it('parses H/V compact CSV and v1 four-column point rows with ranges', () => {
+  it('parses H/V compact CSV and two- or three-column point rows with ranges', () => {
     const compact = parsePointPaste('# z_cm;r_h_cm;r_v_cm\n0;1.27;1.27\n12;14;10');
     expect(compact.importedLength).toBe(120);
     expect(compact.pointsByPlane?.H.at(-1)).toEqual({ z: 120, r: 140 });
     expect(compact.pointsByPlane?.V.at(-1)).toEqual({ z: 120, r: 100 });
-    expect(parsePointPaste('0 12.7 15 1\n120 140 60 2').points.at(-1)).toEqual({ z: 120, r: 140, angle_deg: 60, strength: 2 });
-    expect(() => parsePointPaste('10 20 95 1')).toThrow('angle must be between');
-    expect(() => parsePointPaste('10 20 20 4')).toThrow('strength must be');
+    expect(parsePointPaste('0 12.7\n120 140').points.at(-1)).toEqual({ z: 120, r: 140 });
+    expect(parsePointPaste('0 12.7 15\n120 140 60').points.at(-1)).toEqual({ z: 120, r: 140, angle_deg: 60 });
+    expect(() => parsePointPaste('10 20 95')).toThrow('angle must be between');
+    expect(() => parsePointPaste('10 20 20 1')).toThrow('strength was removed');
   });
 
   it('uses a server converter when available and falls back to endpoint-preserving conversion on older servers', async () => {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  designForFamily,
   registerRevisionTimer,
   resetDesignStore,
   seedDesign,
@@ -76,5 +77,13 @@ describe('design store revision semantics', () => {
     expect(useDesignStore.temporal.getState().futureStates).toEqual([]);
     useDesignStore.getState().undo();
     expect(useDesignStore.getState().design.a).toBe(31);
+  });
+
+  it('creates FREEFORM designs with only the solved-tangent contract', () => {
+    const design = designForFamily('FREEFORM');
+    expect(design.cross_sections?.[0].shape).toBe('ellipse');
+    expect(design).not.toHaveProperty('overshoot_policy');
+    expect(design.profile_h).not.toHaveProperty('throat_tangent_scale');
+    expect(design.profile_h).not.toHaveProperty('mouth_tangent_scale');
   });
 });

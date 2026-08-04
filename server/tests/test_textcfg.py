@@ -37,7 +37,7 @@ Freeform.V = {
 MouthRadius = 40
 }
 Freeform.CrossSections = {
-0 circle
+0 ellipse
 1 ellipse
 }
 """
@@ -146,7 +146,7 @@ def test_eof_with_unbalanced_block_or_function_is_a_parse_error(source: str) -> 
     "source",
     [
         FREEFORM_SOURCE.replace("MouthRadius = 50\n", ""),
-        FREEFORM_SOURCE.replace("0 circle\n", "0 circle 999\n"),
+        FREEFORM_SOURCE.replace("0 ellipse\n", "0 ellipse 999\n"),
         FREEFORM_SOURCE.replace("1 ellipse\n", ""),
         FREEFORM_SOURCE.replace("1 ellipse\n", "0.5 mystery\n1 ellipse\n"),
     ],
@@ -166,6 +166,52 @@ Option = alpha
     parsed = parse(source)
     assert parsed.extra_keys["Freeform.Future"] == "raw=text"
     assert parsed.extra_blocks["Freeform.FutureBlock"].entries == ["row one", "Option = alpha"]
+
+
+def test_legacy_freeform_controls_load_and_rewrite_without_removed_keys() -> None:
+    source = """; Parameter config
+Freeform.Length = 100
+Freeform.ThroatRadius = 10
+Freeform.OvershootPolicy = allow
+Freeform.H = {
+MouthRadius = 50
+ThroatTangentScale = 1.2
+MouthTangentScale = 0.8
+}
+Freeform.H.Points = {
+50 25 20 1.5
+}
+Freeform.V = {
+MouthRadius = 40
+ThroatTangentScale = 1.1
+MouthTangentScale = 0.9
+}
+Freeform.V.Points = {
+50 22 15 0.7
+}
+Freeform.CrossSections = {
+0 circle
+1 ellipse
+}
+"""
+    parsed = parse(source)
+    assert parsed.migration_names == ["004_freeform_solved_tangent_contract"]
+    emitted = serialize(parsed)
+    for removed in (
+        "Freeform.OvershootPolicy",
+        "ThroatTangentScale",
+        "MouthTangentScale",
+        "strength",
+        " 1.5",
+        " 0.7",
+        "circle",
+    ):
+        assert removed not in emitted
+    assert "; FREEFORM point rows: z r [angleDeg]" in emitted
+    assert "50 25 20" in emitted
+    assert "50 22 15" in emitted
+    assert "0 ellipse" in emitted
+    assert parse(emitted).migration_names == []
 
 
 def test_modified_design_preserves_duplicate_extra_assignments_and_token_order() -> None:

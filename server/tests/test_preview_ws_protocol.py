@@ -374,6 +374,7 @@ def test_preview_applies_legacy_migrations_before_translation() -> None:
         await transport.incoming.put(None)
         await task
         assert configs[0]["profile"]["inflectionPolicy"] == "warn"
+        assert configs[0]["profile"]["crossSections"][0]["shape"] == "ellipse"
 
     asyncio.run(scenario())
 

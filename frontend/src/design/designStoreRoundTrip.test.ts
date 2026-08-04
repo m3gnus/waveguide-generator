@@ -67,6 +67,16 @@ describe('full DesignConfig client store', () => {
     expect(useDesignStore.getState().designRevision).toBe(before + 1);
   });
 
+  it('round-trips the current FREEFORM point and station shapes', () => {
+    const design = designForFamily('FREEFORM');
+    design.profile_h!.points = [{ z: 0, r: 12.7 }, { z: 60, r: 70, angle_deg: 25 }, { z: 120, r: 140 }];
+    design.cross_sections = [{ t: 0, shape: 'ellipse' }, { t: .5, shape: 'superellipse', exponent: 4 }, { t: 1, shape: 'ellipse' }];
+    useDesignStore.getState().loadDesign(design);
+    const payload = serializeDesign(useDesignStore.getState().design);
+    expect(payload.profile_h).toEqual(design.profile_h);
+    expect(payload.cross_sections).toEqual(design.cross_sections);
+  });
+
   it('round-trips an absent ATH field as null until the user edits it', () => {
     const hydrated = hydrateDesignDocument({
       formula: 'R-OSSE',

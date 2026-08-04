@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from server.design.migrate import MIGRATIONS, apply_migrations
+from server.design.schema import DesignConfig
 from server.design.textcfg import parse
 
 
@@ -20,7 +21,7 @@ def test_corner_ratio_uses_local_minimum_profile_radius_and_is_idempotent() -> N
         "mouthRadiusH": 110,
         "mouthRadiusV": 60,
         "cross_sections": [
-            {"t": 0, "shape": "circle"},
+            {"t": 0, "shape": "ellipse"},
             {"t": 0.5, "shape": "rounded_rectangle", "corner_ratio": 0.2},
             {"t": 1, "shape": "ellipse"},
         ],
@@ -74,6 +75,7 @@ Freeform.CrossSections = {
     assert parsed.migration_names == [
         "001_corner_ratio_to_corner_grid",
         "002_inflection_allow_to_warn",
+        "004_freeform_solved_tangent_contract",
     ]
     assert parsed.design.root.cross_sections[1].corner_radius_mm.value == 5.3  # type: ignore[union-attr]
     assert parsed.design.root.inflection_policy == "warn"  # type: ignore[union-attr]
@@ -118,6 +120,74 @@ def test_js_artifacts_are_dropped_only_for_schema_numeric_paths() -> None:
     assert migrated["source"]["contours"] == "NaN"
     assert migrated["extra_keys"] == {"L": "NaN", "Future": "undefined"}
     assert [item.name for item in applied] == ["003_js_undefined_lines_dropped"]
+
+
+def test_removed_freeform_controls_migrate_once_and_validate() -> None:
+    legacy = {
+        "formula": "FREEFORM",
+        "profile_h": {
+            "points": [
+                {"z": 0, "r": 10, "angle_deg": 12, "strength": 0.8},
+                {"z": 100, "r": 50},
+            ],
+            "throat_tangent_scale": 1.2,
+            "mouth_tangent_scale": 0.9,
+        },
+        "profile_v": {
+            "points": [
+                {"z": 0, "r": 10},
+                {"z": 50, "r": 28, "angle_deg": 20, "strength": 1.5},
+                {"z": 100, "r": 40},
+            ],
+            "throat_tangent_scale": 1.1,
+            "mouth_tangent_scale": 0.7,
+        },
+        "cross_sections": [
+            {"t": 0, "shape": "circle"},
+            {"t": 1, "shape": "ellipse"},
+        ],
+        "overshoot_policy": "reject",
+    }
+    migrated, applied = apply_migrations(legacy)
+    assert [item.name for item in applied] == ["004_freeform_solved_tangent_contract"]
+    assert len(applied) == 1
+    assert "strength" not in migrated["profile_h"]["points"][0]
+    assert "strength" not in migrated["profile_v"]["points"][1]
+    for profile_name in ("profile_h", "profile_v"):
+        assert "throat_tangent_scale" not in migrated[profile_name]
+        assert "mouth_tangent_scale" not in migrated[profile_name]
+    assert "overshoot_policy" not in migrated
+    assert migrated["cross_sections"][0]["shape"] == "ellipse"
+    DesignConfig.model_validate(migrated)
+
+
+def test_removed_freeform_controls_migration_handles_list_rows() -> None:
+    migrated, applied = apply_migrations(
+        {
+            "formula": "FREEFORM",
+            "profile_h": {"points": [[0, 10, 12, 0.8], [100, 50]]},
+            "profile_v": {"points": [[0, 10], [100, 40, 45, 1.2]]},
+        }
+    )
+    assert [item.name for item in applied] == ["004_freeform_solved_tangent_contract"]
+    assert migrated["profile_h"]["points"][0] == [0, 10, 12]
+    assert migrated["profile_v"]["points"][1] == [100, 40, 45]
+
+
+def test_current_freeform_payload_does_not_trigger_removed_controls_note() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
+        "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
+        "cross_sections": [
+            {"t": 0, "shape": "ellipse"},
+            {"t": 1, "shape": "ellipse"},
+        ],
+        "inflection_policy": "warn",
+    }
+    migrated, applied = apply_migrations(payload)
+    assert migrated == payload
+    assert all(item.name != "004_freeform_solved_tangent_contract" for item in applied)
 
 
 @pytest.mark.parametrize(

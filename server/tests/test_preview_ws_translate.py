@@ -114,8 +114,14 @@ def test_freeform_family_golden_uses_rows_and_station_camel_case() -> None:
                     {"z": 120, "r": 100},
                 ],
                 "mouth_angle_deg": 0,
+                "throat_tangent_scale": 1.2,
+                "mouth_tangent_scale": 0.8,
             },
-            "profile_v": {"points": [{"z": 0, "r": 12.7}, {"z": 120, "r": 80}]},
+            "profile_v": {
+                "points": [{"z": 0, "r": 12.7}, {"z": 120, "r": 80}],
+                "throat_tangent_scale": 1.1,
+                "mouth_tangent_scale": 0.9,
+            },
             "cross_sections": [
                 {"t": 0, "shape": "circle"},
                 {"t": 0.5, "shape": "superellipse", "exponent": 4},
@@ -126,15 +132,17 @@ def test_freeform_family_golden_uses_rows_and_station_camel_case() -> None:
     )
     assert config["profile"] == {
         "formula": "FREEFORM",
-        "profileH": {"points": [[0.0, 12.7, 10.0, 0.8], [120.0, 100.0]], "mouthAngleDeg": 0.0},
+        "profileH": {"points": [[0.0, 12.7, 10.0], [120.0, 100.0]], "mouthAngleDeg": 0.0},
         "profileV": {"points": [[0.0, 12.7], [120.0, 80.0]]},
         "crossSections": [
-            {"t": 0.0, "shape": "circle"},
+            {"t": 0.0, "shape": "ellipse"},
             {"t": 0.5, "shape": "superellipse", "exponent": 4.0},
             {"t": 1.0, "shape": "rounded_rectangle", "cornerRadiusMm": 12.0},
         ],
-        "overshootPolicy": "allow",
     }
+    serialized = repr(config["profile"])
+    for removed in ("strength", "TangentScale", "overshootPolicy"):
+        assert removed not in serialized
 
 
 @pytest.mark.parametrize(
@@ -237,24 +245,11 @@ def test_corner_grid_is_explicitly_rejected_when_mesher_cannot_translate_it() ->
         "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
         "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
         "cross_sections": [
-            {"t": 0, "shape": "circle", "corner_grid": [[0, 1]]},
+            {"t": 0, "shape": "ellipse", "corner_grid": [[0, 1]]},
             {"t": 1, "shape": "ellipse"},
         ],
     }
     with pytest.raises(ValueError, match="corner_grid"):
-        _translate(payload)
-
-
-def test_freeform_strength_without_angle_is_rejected() -> None:
-    payload = {
-        "formula": "FREEFORM",
-        "profile_h": {
-            "points": [{"z": 0, "r": 10, "strength": 2}, {"z": 100, "r": 50}]
-        },
-        "profile_v": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 40}]},
-        "cross_sections": [{"t": 0, "shape": "circle"}, {"t": 1, "shape": "ellipse"}],
-    }
-    with pytest.raises(ValueError, match="strength requires angle"):
         _translate(payload)
 
 

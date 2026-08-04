@@ -153,5 +153,9 @@ describe('ParamPanel inventory UX', () => {
     });
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
     expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(2);
+    expect(host.textContent).not.toContain('tangent scale');
+    expect(host.textContent).not.toContain('Spline overshoot');
+    expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
   });
 });

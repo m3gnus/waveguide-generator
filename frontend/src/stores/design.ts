@@ -20,20 +20,17 @@ export interface FreeformPoint {
   z: number;
   r: number;
   angle_deg?: number;
-  strength?: number;
 }
 
 export interface FreeformProfile {
   points: FreeformPoint[];
   throat_angle_deg?: number;
   mouth_angle_deg?: number;
-  throat_tangent_scale?: number;
-  mouth_tangent_scale?: number;
 }
 
 export interface CrossSectionStation {
   t: number;
-  shape: 'circle' | 'ellipse' | 'superellipse' | 'rounded_rectangle';
+  shape: 'ellipse' | 'superellipse' | 'rounded_rectangle';
   exponent?: number;
   corner_radius_mm?: number;
   corner_grid?: number[][];
@@ -167,7 +164,6 @@ export interface DesignDocument {
   profile_h?: FreeformProfile;
   profile_v?: FreeformProfile;
   cross_sections?: CrossSectionStation[];
-  overshoot_policy?: string;
   inflection_policy?: string;
   corner_grids?: CornerGrid[];
   /** UI sidecar for lossless ATH expression spelling; stripped on the wire. */
@@ -251,15 +247,12 @@ export function designForFamily(family: DesignFamily): DesignDocument {
     profile_h: {
       points: [{ z: 0, r: 12.7 }, { z: 120, r: 140 }],
       throat_angle_deg: 15.5, mouth_angle_deg: 60,
-      throat_tangent_scale: 1, mouth_tangent_scale: 1,
     },
     profile_v: {
       points: [{ z: 0, r: 12.7 }, { z: 120, r: 140 }],
       throat_angle_deg: 15.5, mouth_angle_deg: 60,
-      throat_tangent_scale: 1, mouth_tangent_scale: 1,
     },
-    cross_sections: [{ t: 0, shape: 'circle' }, { t: 1, shape: 'ellipse' }],
-    overshoot_policy: 'reject',
+    cross_sections: [{ t: 0, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }],
     inflection_policy: 'warn',
     corner_grids: [],
   };

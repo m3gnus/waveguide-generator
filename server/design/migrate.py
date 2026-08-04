@@ -351,6 +351,59 @@ def _migrate_js_undefined(payload: Payload) -> None:
     _strip_js_undefined(payload)
 
 
+_REMOVED_FREEFORM_PROFILE_KEYS = frozenset(
+    {"throat_tangent_scale", "mouth_tangent_scale"}
+)
+
+
+def _has_removed_freeform_controls(payload: Payload) -> bool:
+    if "overshoot_policy" in payload:
+        return True
+    for profile_name in ("profile_h", "profile_v"):
+        profile = payload.get(profile_name)
+        if not isinstance(profile, Mapping):
+            continue
+        if any(key in profile for key in _REMOVED_FREEFORM_PROFILE_KEYS):
+            return True
+        points = profile.get("points")
+        if isinstance(points, (list, tuple)) and any(
+            (isinstance(point, Mapping) and "strength" in point)
+            or (isinstance(point, (list, tuple)) and len(point) >= 4)
+            for point in points
+        ):
+            return True
+    stations = payload.get("cross_sections")
+    return isinstance(stations, (list, tuple)) and any(
+        isinstance(station, Mapping) and station.get("shape") == "circle"
+        for station in stations
+    )
+
+
+def _migrate_removed_freeform_controls(payload: Payload) -> None:
+    payload.pop("overshoot_policy", None)
+    for profile_name in ("profile_h", "profile_v"):
+        profile = payload.get(profile_name)
+        if not isinstance(profile, dict):
+            continue
+        for key in _REMOVED_FREEFORM_PROFILE_KEYS:
+            profile.pop(key, None)
+        points = profile.get("points")
+        if not isinstance(points, list):
+            continue
+        for index, point in enumerate(points):
+            if isinstance(point, dict):
+                point.pop("strength", None)
+            elif isinstance(point, list) and len(point) >= 4:
+                del point[3]
+            elif isinstance(point, tuple) and len(point) >= 4:
+                points[index] = [*point[:3], *point[4:]]
+    stations = payload.get("cross_sections")
+    if isinstance(stations, list):
+        for station in stations:
+            if isinstance(station, dict) and station.get("shape") == "circle":
+                station["shape"] = "ellipse"
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         name="001_corner_ratio_to_corner_grid",
@@ -377,6 +430,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "defaults, matching v1's absent-key behavior. Found live in real corpus "
             "snapshots (e.g. 260311_simulation_2: Throat.Diameter = NaN broke mesh "
             "builds with non-finite coordinates)."
+        ),
+    ),
+    Migration(
+        name="004_freeform_solved_tangent_contract",
+        applies_if=_has_removed_freeform_controls,
+        transform=_migrate_removed_freeform_controls,
+        note=(
+            "Removed obsolete FREEFORM tangent scales, per-anchor strengths, and "
+            "overshoot policy, and normalized circle cross-section stations to ellipse."
         ),
     ),
 )

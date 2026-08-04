@@ -16,7 +16,8 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     const values = line.split(compact ? ';' : /[\s,]+/).map((item) => Number(item.trim()));
     if (values.some((value) => !Number.isFinite(value))) throw new Error(`Line ${index + 1} contains a non-numeric value.`);
     if (compact && values.length !== 3) throw new Error(`Line ${index + 1} must contain z, H, and V.`);
-    if (!compact && (values.length < 2 || values.length > 4)) throw new Error(`Line ${index + 1} must contain 2–4 columns.`);
+    if (!compact && values.length === 4) throw new Error(`Line ${index + 1}: per-anchor strength was removed; tangent speed is now solved automatically.`);
+    if (!compact && (values.length < 2 || values.length > 3)) throw new Error(`Line ${index + 1} must contain 2 or 3 columns.`);
     return values;
   });
   const validate = (points: FreeformPoint[]) => {
@@ -24,7 +25,6 @@ export function parsePointPaste(text: string): ParsedPointPaste {
       if (point.z < 0) throw new Error(`Line ${index + 1}: z must be at least 0.`);
       if (!(point.r > 0)) throw new Error(`Line ${index + 1}: radius must be greater than 0.`);
       if (point.angle_deg !== undefined && (point.angle_deg < -90 || point.angle_deg > 90)) throw new Error(`Line ${index + 1}: angle must be between −90 and 90°.`);
-      if (point.strength !== undefined && (!(point.strength > 0) || point.strength > 3)) throw new Error(`Line ${index + 1}: strength must be greater than 0 and at most 3.`);
     });
     points.sort((left, right) => left.z - right.z);
     if (points.length > 64) throw new Error('A profile supports at most 62 interior points.');
@@ -35,10 +35,9 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     validate(H); validate(V);
     return { points: H, pointsByPlane: { H, V }, importedLength: H.at(-1)!.z };
   }
-  const points = parsed.map(([z, r, angle, strength]) => ({
+  const points = parsed.map(([z, r, angle]) => ({
     z, r,
     ...(angle === undefined ? {} : { angle_deg: angle }),
-    ...(strength === undefined ? {} : { strength }),
   }));
   validate(points);
   return { points, importedLength: points.at(-1)!.z };
@@ -87,7 +86,7 @@ function PointPaste({ plane, points }: { plane: 'H' | 'V'; points: FreeformPoint
   };
   const parseError = parsed instanceof Error ? parsed.message : null;
   return <div className="point-paste">
-    <textarea aria-label={`Paste ${plane} points`} rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z r [angle strength]\n# or z_cm;r_h_cm;r_v_cm'} />
+    <textarea aria-label={`Paste ${plane} points`} rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z r [angle]\n# or z_cm;r_h_cm;r_v_cm'} />
     <div className="paste-meta">Imported length <b>{parsed && !(parsed instanceof Error) ? `${parsed.importedLength} mm` : '—'}</b> · current <b>{currentLength} mm</b></div>
     <label><input type="checkbox" checked={applyBoth} onChange={(event) => setApplyBoth(event.target.checked)} /> Apply to both H and V</label>
     <label><input type="radio" checked={adoptLength} onChange={() => setAdoptLength(true)} /> Use imported length</label>
@@ -106,17 +105,15 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   const update = (index: number, key: keyof FreeformPoint, raw: string) => {
     const next = structuredClone(points);
     const target = next[index + 1];
-    if (raw.trim() === '' && (key === 'angle_deg' || key === 'strength')) delete target[key];
+    if (raw.trim() === '' && key === 'angle_deg') delete target[key];
     else {
       const value = Number(raw);
       if (!Number.isFinite(value)) return;
       if (key === 'z' && (value < 1 || value > length - 1)) return;
       if (key === 'r' && value <= 0) return;
       if (key === 'angle_deg' && (value <= -90 || value >= 90)) return;
-      if (key === 'strength' && (value <= 0 || value > 3)) return;
       target[key] = value as never;
     }
-    if (key === 'angle_deg' && raw.trim() === '') delete target.strength;
     updateValue(path, next);
   };
   const add = () => {
@@ -132,12 +129,11 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
     <div className="readonly-table-head"><b>{field.label}</b><span>{interior.length} / 62 interior</span></div>
-    <table><thead><tr><th>z mm</th><th>r mm</th><th>angle</th><th>strength</th><th /></tr></thead>
+    <table><thead><tr><th>z mm</th><th>r mm</th><th>angle</th><th /></tr></thead>
       <tbody>{interior.map((point, index) => <tr key={`${index}-${point.z}`}>
         <td><input aria-label={`${plane} point ${index + 1} z`} type="number" min={1} max={length - 1} step={.1} defaultValue={point.z} onBlur={(event) => update(index, 'z', event.target.value)} /></td>
         <td><input aria-label={`${plane} point ${index + 1} radius`} type="number" min={.1} step={.1} defaultValue={point.r} onBlur={(event) => update(index, 'r', event.target.value)} /></td>
         <td><input aria-label={`${plane} point ${index + 1} angle`} type="number" min={-89} max={89} placeholder="auto" defaultValue={point.angle_deg} onBlur={(event) => update(index, 'angle_deg', event.target.value)} /></td>
-        <td><input aria-label={`${plane} point ${index + 1} strength`} type="number" min={.001} max={3} step={.1} placeholder="1" disabled={point.angle_deg === undefined} defaultValue={point.strength} onBlur={(event) => update(index, 'strength', event.target.value)} /></td>
         <td><button aria-label={`Remove ${plane} point ${index + 1}`} onClick={() => updateValue(path, points.filter((_point, pointIndex) => pointIndex !== index + 1))}>−</button></td>
       </tr>)}</tbody>
     </table>
@@ -167,7 +163,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     <table><thead><tr><th>t</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={`${index}-${station.t}`}>
         <td><input aria-label={`Station ${index + 1} position`} type="number" min={0} max={1} step={.01} disabled={index === 0 || index === stations.length - 1} defaultValue={station.t} onBlur={(event) => update(index, { t: Number(event.target.value) })} /></td>
-        <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} disabled={index === 0} onChange={(event) => update(index, { shape: event.target.value as CrossSectionStation['shape'] })}>{index === 0 && <option value="circle">Circle</option>}<option value="ellipse">Ellipse</option><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></select></td>
+        <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} disabled={index === 0} onChange={(event) => update(index, { shape: event.target.value as CrossSectionStation['shape'] })}><option value="ellipse">Ellipse</option><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></select></td>
         <td>{station.shape === 'superellipse' ? <input aria-label={`Station ${index + 1} exponent`} type="number" min={2} max={16} step={.1} defaultValue={station.exponent ?? 4} onBlur={(event) => update(index, { exponent: Number(event.target.value) })} /> : station.shape === 'rounded_rectangle' ? <input aria-label={`Station ${index + 1} corner radius`} type="number" min={1} step={1} defaultValue={station.corner_radius_mm ?? 10} onBlur={(event) => update(index, { corner_radius_mm: Number(event.target.value) })} /> : '—'}</td>
         <td><button aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
       </tr>)}

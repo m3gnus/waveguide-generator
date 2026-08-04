@@ -32,6 +32,14 @@ test('ICW and FREEFORM payloads also drop guiding_curve', () => {
   }
 });
 
+test('FREEFORM payload uses ellipse at the throat and omits removed tangent controls', () => {
+  const payload = serializeDesign(designForFamily('FREEFORM'));
+  expect((payload.cross_sections as { shape: string }[])[0].shape).toBe('ellipse');
+  expect(payload).not.toHaveProperty('overshoot_policy');
+  expect(payload.profile_h).not.toHaveProperty('throat_tangent_scale');
+  expect(payload.profile_h).not.toHaveProperty('mouth_tangent_scale');
+});
+
 test.each([
   [[1], 1],
   [[1, 2], 12],

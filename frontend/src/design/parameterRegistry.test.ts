@@ -15,7 +15,7 @@ const TRACEABILITY_KEYS = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
   ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth'],
-  FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'throatTangentScaleH', 'mouthTangentScaleH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'throatTangentScaleV', 'mouthTangentScaleV', 'crossSections', 'overshootPolicy', 'inflectionPolicy'],
+  FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
   COMMON: [
     'throatExtAngle', 'throatExtLength', 'slotLength',
     'morphTarget', 'morphWidth', 'morphHeight', 'morphCorner', 'morphRate', 'morphFixed', 'morphAllowShrinkage',
@@ -30,10 +30,10 @@ const TRACEABILITY_KEYS = {
 } as const;
 
 describe('complete parameter registry', () => {
-  it('covers every one of the 110 family-qualified traceability entries with no deferrals', () => {
+  it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
-    expect(encodedCount).toBe(110);
-    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(110);
+    expect(encodedCount).toBe(105);
+    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(105);
     expect(TRACEABILITY_PARAMETER_INVENTORY.every(traceEntryIsRegistered)).toBe(true);
 
     for (const [family, keys] of Object.entries(TRACEABILITY_KEYS)) {
@@ -72,6 +72,8 @@ describe('complete parameter registry', () => {
     expect(visibleIds('ICW')).toContain('icw.termination');
     expect(visibleIds('ICW')).not.toContain('icw.theta1_deg');
     expect(visibleIds('FREEFORM')).toContain('freeform.crossSections');
+    expect(visibleIds('FREEFORM')).toContain('freeform.inflectionPolicy');
+    expect(visibleIds('FREEFORM').some((id) => id.includes('TangentScale') || id.includes('overshoot'))).toBe(false);
     expect(visibleIds('FREEFORM')).not.toContain('morph.target_shape');
   });
 

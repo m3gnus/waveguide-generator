@@ -131,15 +131,10 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('freeform.mouthRadiusH', 'mouthRadiusH', 'profile_h.points.$last.r', profile, 'Horizontal mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),
   number('freeform.mouthAngleH', 'mouthAngleH', 'profile_h.mouth_angle_deg', profile, 'Horizontal mouth angle', { families: ['FREEFORM'], unit: '°', min: -90, max: 90 }),
   { id: 'freeform.interiorH', legacyKey: 'interiorH', path: 'profile_h.points', section: profile, label: 'Horizontal spline points', kind: 'table', families: ['FREEFORM'] },
-  number('freeform.throatTangentScaleH', 'throatTangentScaleH', 'profile_h.throat_tangent_scale', profile, 'Horizontal throat tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
-  number('freeform.mouthTangentScaleH', 'mouthTangentScaleH', 'profile_h.mouth_tangent_scale', profile, 'Horizontal mouth tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
   number('freeform.mouthRadiusV', 'mouthRadiusV', 'profile_v.points.$last.r', profile, 'Vertical mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1 }),
   number('freeform.mouthAngleV', 'mouthAngleV', 'profile_v.mouth_angle_deg', profile, 'Vertical mouth angle', { families: ['FREEFORM'], unit: '°', min: -90, max: 90 }),
   { id: 'freeform.interiorV', legacyKey: 'interiorV', path: 'profile_v.points', section: profile, label: 'Vertical spline points', kind: 'table', families: ['FREEFORM'] },
-  number('freeform.throatTangentScaleV', 'throatTangentScaleV', 'profile_v.throat_tangent_scale', profile, 'Vertical throat tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
-  number('freeform.mouthTangentScaleV', 'mouthTangentScaleV', 'profile_v.mouth_tangent_scale', profile, 'Vertical mouth tangent scale', { families: ['FREEFORM'], min: .1, max: 3 }),
   { id: 'freeform.crossSections', legacyKey: 'crossSections', path: 'cross_sections', section: profile, label: 'Cross-section stations', kind: 'table', families: ['FREEFORM'] },
-  select('freeform.overshootPolicy', 'overshootPolicy', 'overshoot_policy', profile, 'Spline overshoot', [{ value: 'reject', label: 'Reject' }, { value: 'allow', label: 'Allow' }], { families: ['FREEFORM'] }),
   select('freeform.inflectionPolicy', 'inflectionPolicy', 'inflection_policy', profile, 'Curve direction', [{ value: 'warn', label: 'Warn on S-curves' }, { value: 'reject', label: 'Enforce one-way' }], { families: ['FREEFORM'] }),
 
   // Throat extension, morph, coverage/length modes, and complete OSSE guide controls.
@@ -223,7 +218,7 @@ const familyTraceKeys: Record<DesignFamily, readonly string[]> = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
   ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth'],
-  FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'throatTangentScaleH', 'mouthTangentScaleH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'throatTangentScaleV', 'mouthTangentScaleV', 'crossSections', 'overshootPolicy', 'inflectionPolicy'],
+  FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
 };
 
 const commonTraceKeys = [
@@ -238,7 +233,7 @@ const commonTraceKeys = [
   'maxTriangles', 'allowLargeMesh', 'verticalOffset', 'quadrants', 'encFrontResolution', 'encBackResolution',
 ] as const;
 
-/** Exact 110-entry list from parameterInventory.js, with family duplicates qualified. */
+/** Current family-qualified parameter inventory, with family duplicates qualified. */
 export const TRACEABILITY_PARAMETER_INVENTORY = [
   ...Object.entries(familyTraceKeys).flatMap(([family, keys]) => keys.map((key) => ({ key, family: family as DesignFamily }))),
   ...commonTraceKeys.map((key) => ({ key, family: undefined })),

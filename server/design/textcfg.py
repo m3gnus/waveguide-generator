@@ -416,13 +416,16 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         points = [{"z": "0", "r": throat_radius}]
         points.extend(interior)
         points.append({"z": length, "r": info.items["MouthRadius"]})
-        return {
+        result = {
             "points": points,
             "throat_angle_deg": flat.get("Freeform.ThroatAngle"),
             "mouth_angle_deg": info.items.get("MouthAngle"),
-            "throat_tangent_scale": info.items.get("ThroatTangentScale"),
-            "mouth_tangent_scale": info.items.get("MouthTangentScale"),
         }
+        if "ThroatTangentScale" in info.items:
+            result["throat_tangent_scale"] = info.items["ThroatTangentScale"]
+        if "MouthTangentScale" in info.items:
+            result["mouth_tangent_scale"] = info.items["MouthTangentScale"]
+        return result
 
     stations: list[dict[str, Any]] = []
     station_block = blocks.get("Freeform.CrossSections")
@@ -467,18 +470,20 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         raise TextConfigError("Freeform.CrossSections permits at most 32 station rows")
     if any(right <= left for left, right in zip(station_t, station_t[1:])):
         raise TextConfigError("Freeform.CrossSections t values must be strictly increasing")
-    if station_t[0] != 0 or stations[0]["shape"] != "circle":
-        raise TextConfigError('the first Freeform.CrossSections station must be "0 circle"')
+    if station_t[0] != 0 or stations[0]["shape"] not in {"circle", "ellipse"}:
+        raise TextConfigError('the first Freeform.CrossSections station must be "0 circle" or "0 ellipse"')
     if station_t[-1] != 1:
         raise TextConfigError("the last Freeform.CrossSections station must have t = 1")
-    return {
+    result = {
         "formula": "FREEFORM",
         "profile_h": profile("H"),
         "profile_v": profile("V"),
         "cross_sections": stations,
-        "overshoot_policy": flat.get("Freeform.OvershootPolicy"),
         "inflection_policy": flat.get("Freeform.InflectionPolicy"),
     }
+    if "Freeform.OvershootPolicy" in flat:
+        result["overshoot_policy"] = flat["Freeform.OvershootPolicy"]
+    return result
 
 
 def _build_payload(flat_source: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> dict[str, Any]:
@@ -609,14 +614,13 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
     throat_radius = profile_h.points[0].r if profile_h.points else None
     lines.extend(
         [
-            "; FREEFORM point rows: z r [angleDeg [strength]]",
+            "; FREEFORM point rows: z r [angleDeg]",
             "; FREEFORM station rows: t shape [exponent|cornerRadiusMm]",
         ]
     )
     _line(lines, "Freeform.Length", length)
     _line(lines, "Freeform.ThroatRadius", throat_radius)
     _line(lines, "Freeform.ThroatAngle", profile_h.throat_angle_deg)
-    _line(lines, "Freeform.OvershootPolicy", config.overshoot_policy)
     _line(lines, "Freeform.InflectionPolicy", config.inflection_policy)
     for axis, profile in (("H", profile_h), ("V", profile_v)):
         _block(
@@ -625,8 +629,6 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
             [
                 ("MouthRadius", profile.points[-1].r if profile.points else None),
                 ("MouthAngle", profile.mouth_angle_deg),
-                ("ThroatTangentScale", profile.throat_tangent_scale),
-                ("MouthTangentScale", profile.mouth_tangent_scale),
             ],
         )
         rows = []
@@ -634,8 +636,6 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
             values = [_text(point.z), _text(point.r)]
             if point.angle_deg is not None:
                 values.append(_text(point.angle_deg))
-            if point.strength is not None:
-                values.append(_text(point.strength))
             rows.append(" ".join(values))
         _block(lines, f"Freeform.{axis}.Points", [], rows)
     rows = []
@@ -827,7 +827,14 @@ def serialize(design: ParsedDesign | DesignConfig) -> str:
     """Serialize in stable v1 writer order, returning exact bytes when pristine."""
 
     if isinstance(design, ParsedDesign):
-        if design.source_text is not None and _semantic_fingerprint(design.design) == design._initial_fingerprint:
+        if (
+            design.source_text is not None
+            and not any(
+                item.name == "004_freeform_solved_tangent_contract"
+                for item in design.migrations
+            )
+            and _semantic_fingerprint(design.design) == design._initial_fingerprint
+        ):
             return design.source_text
         return _serialize_canonical(design.design, design.comments)
     if isinstance(design, DesignConfig):

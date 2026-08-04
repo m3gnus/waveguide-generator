@@ -354,21 +354,12 @@ class FreeformPoint(StrictModel):
     z: Expr
     r: Expr
     angle_deg: Expr | None = None
-    strength: Expr | None = None
-
-    @model_validator(mode="after")
-    def _strength_requires_angle(self) -> FreeformPoint:
-        if self.strength is not None and self.angle_deg is None:
-            raise ValueError("strength requires angle_deg")
-        return self
 
 
 class FreeformProfile(StrictModel):
     points: list[FreeformPoint]
     throat_angle_deg: Expr | None = None
     mouth_angle_deg: Expr | None = None
-    throat_tangent_scale: Expr | None = None
-    mouth_tangent_scale: Expr | None = None
 
 
 class CornerGrid(StrictModel):
@@ -380,7 +371,7 @@ class CornerGrid(StrictModel):
 
 class CrossSectionStation(StrictModel):
     t: Expr
-    shape: Literal["circle", "ellipse", "superellipse", "rounded_rectangle"]
+    shape: Literal["ellipse", "superellipse", "rounded_rectangle"]
     exponent: Expr | None = None
     corner_radius_mm: Expr | None = None
     corner_grid: list[list[Expr]] | None = None
@@ -391,7 +382,6 @@ class FreeformConfig(DesignCommon):
     profile_h: FreeformProfile
     profile_v: FreeformProfile
     cross_sections: list[CrossSectionStation] = Field(min_length=2, max_length=32)
-    overshoot_policy: Literal["reject", "allow"] | None = None
     inflection_policy: Literal["reject", "warn"] | None = None
     corner_grids: list[CornerGrid] = Field(default_factory=list)
 
@@ -408,8 +398,8 @@ class FreeformConfig(DesignCommon):
             raise ValueError("cross-section station t values must be between 0 and 1")
         if any(right <= left for left, right in zip(scalars, scalars[1:])):
             raise ValueError("cross-section station t values must be strictly increasing")
-        if scalars[0] != 0 or stations[0].shape != "circle":
-            raise ValueError('the first cross-section station must be "0 circle"')
+        if scalars[0] != 0 or stations[0].shape != "ellipse":
+            raise ValueError('the first cross-section station must be "0 ellipse"')
         if scalars[-1] != 1:
             raise ValueError("the last cross-section station must have t = 1")
         return stations

@@ -99,8 +99,6 @@ def _profile_points(profile: FreeformProfile, scale: float) -> list[list[str | f
         row = [_scaled_expr(point.z, scale), _scaled_expr(point.r, scale)]
         if point.angle_deg is not None:
             row.append(_expr(point.angle_deg))
-            if point.strength is not None:
-                row.append(_expr(point.strength))
         rows.append([item for item in row if item is not None])
     return rows  # type: ignore[return-value]
 
@@ -111,8 +109,6 @@ def _freeform_profile(profile: FreeformProfile, scale: float) -> dict[str, Any]:
             "points": _profile_points(profile, scale),
             "throatAngleDeg": _expr(profile.throat_angle_deg),
             "mouthAngleDeg": _expr(profile.mouth_angle_deg),
-            "throatTangentScale": _expr(profile.throat_tangent_scale),
-            "mouthTangentScale": _expr(profile.mouth_tangent_scale),
         }
     )
 
@@ -144,7 +140,6 @@ def _profile(
                 "profileH": _freeform_profile(design.profile_h, scale),
                 "profileV": _freeform_profile(design.profile_v, scale),
                 "crossSections": stations,
-                "overshootPolicy": design.overshoot_policy,
                 "inflectionPolicy": design.inflection_policy,
             }
         )
