@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import pytest
+from hornlab_mesher.preview.api import build_preview_geometry
 
 from server.design.schema import DesignConfig
+from server.design_io.api import open_design
+from server.preview.core import preview_options
 from server.preview.translate import design_to_mesher_config
 
 
@@ -132,15 +138,18 @@ def test_freeform_family_golden_uses_rows_and_station_camel_case() -> None:
 
 
 @pytest.mark.parametrize(
-    ("extra", "mode"),
+    ("extra", "mode", "wall_thickness"),
     [
-        ({"enclosure": {"depth": 80}}, "enclosure"),
-        ({"simulation": {"sim_type": "infinite-baffle"}}, "infinite-baffle"),
-        ({"mesh": {"wall_thickness": 3}}, "freestanding"),
-        ({}, "bare"),
+        ({"enclosure": {"depth": 80}}, "enclosure", 5.0),
+        ({"simulation": {"sim_type": "infinite-baffle"}}, "infinite-baffle", 0.0),
+        ({"mesh": {"wall_thickness": 3}}, "freestanding", 3.0),
+        ({"mesh": {"wall_thickness": 0}}, "bare", 0.0),
+        ({}, "freestanding", 5.0),
     ],
 )
-def test_mode_precedence_and_full_viewport_symmetry(extra: dict[str, object], mode: str) -> None:
+def test_mode_precedence_and_full_viewport_symmetry(
+    extra: dict[str, object], mode: str, wall_thickness: float
+) -> None:
     payload: dict[str, object] = {"formula": "OSSE", **extra}
     if "mesh" in payload:
         payload["mesh"] = {"quadrants": 1, **payload["mesh"]}  # type: ignore[dict-item]
@@ -149,6 +158,7 @@ def test_mode_precedence_and_full_viewport_symmetry(extra: dict[str, object], mo
     config = _translate(payload)
     assert config["mode"] == mode
     assert config["mesh"]["quadrants"] == 1234
+    assert config["mesh"]["wallThickness"] == wall_thickness
 
 
 def test_source_shape_mapping_and_unsupported_contours() -> None:
@@ -248,16 +258,69 @@ def test_freeform_strength_without_angle_is_rejected() -> None:
         _translate(payload)
 
 
-def test_degenerate_morph_rejected() -> None:
-    """Rectangle morph with 0x0 target dimensions must 422, not collapse
-    (live-found seed regression after faithful morph serialization)."""
-    import pytest
-    from server.design.schema import DesignConfig
-    from server.preview.translate import design_to_mesher_config
+@pytest.mark.parametrize(
+    ("morph", "expected"),
+    [
+        ({"target_shape": 1}, {"morphTarget": 1.0}),
+        (
+            {"target_shape": 1, "target_width": 0, "target_height": 0},
+            {"morphTarget": 1.0, "morphWidth": 0.0, "morphHeight": 0.0},
+        ),
+        ({"target_shape": 2}, {"morphTarget": 2.0}),
+    ],
+)
+def test_morph_implicit_target_extents_translate(
+    morph: dict[str, object], expected: dict[str, float]
+) -> None:
+    config = _translate(
+        {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 45,
+            "r0": 12.7,
+            "a0": 10,
+            "morph": morph,
+        }
+    )
+    assert config["morph"] == expected
 
-    design = DesignConfig.model_validate({
-        "formula": "OSSE", "L": 120, "a": 45, "r0": 12.7, "a0": 10,
-        "morph": {"target_shape": 1, "target_width": 0, "target_height": 0},
-    })
-    with pytest.raises(ValueError, match="morph target"):
-        design_to_mesher_config(design)
+
+def test_morph_real_target_extents_keep_waveguide_scale() -> None:
+    config = _translate(
+        {
+            "formula": "OSSE",
+            "scale": 2,
+            "morph": {"target_shape": 1, "target_width": 80, "target_height": 40},
+        }
+    )
+    assert config["morph"] == {
+        "morphTarget": 1.0,
+        "morphWidth": 160.0,
+        "morphHeight": 80.0,
+    }
+
+
+def test_tritonia_reference_import_translates_to_mesher_config() -> None:
+    path = Path(__file__).with_name("data") / "260308tritonia-q.txt"
+    opened = asyncio.run(open_design(path.read_text(encoding="utf-8")))
+    design = DesignConfig.model_validate(opened["design"])
+
+    config = design_to_mesher_config(design)
+    geometry = build_preview_geometry(config, preview_options("coarse"))
+    surface_roles = [surface.role for surface in geometry.surfaces]
+
+    assert config["mode"] == "freestanding"
+    assert config["mesh"]["wallThickness"] == pytest.approx(3.51)
+    assert surface_roles == [
+        "horn.inner",
+        "horn.outer",
+        "mouth_rim",
+        "source_cap",
+        "wall.rear_cap",
+    ]
+    assert config["morph"] == {
+        "morphTarget": "1",
+        "morphCorner": 12.636,
+        "morphRate": "3",
+        "morphFixed": "0.0",
+    }

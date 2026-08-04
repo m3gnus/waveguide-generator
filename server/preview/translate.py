@@ -29,12 +29,6 @@ def _expr(value: Expr | None) -> str | float | None:
     return value.value
 
 
-def _number(value: Expr | None, fallback: float = 0.0) -> float:
-    if value is None or value.value is None or not math.isfinite(value.value):
-        return fallback
-    return float(value.value)
-
-
 def _structural_number(value: Expr | None, field: str, fallback: float = 0.0) -> float:
     if value is None:
         return fallback
@@ -121,26 +115,6 @@ def _freeform_profile(profile: FreeformProfile, scale: float) -> dict[str, Any]:
             "mouthTangentScale": _expr(profile.mouth_tangent_scale),
         }
     )
-
-
-def _morph_target(morph: Any, scale: float) -> Any:
-    """Reject degenerate morphs instead of collapsing geometry.
-
-    A rectangle/ellipse morph target with nonpositive width AND height would
-    morph the mouth to a point; v1's UI defaults never produced this, and the
-    mesher renders garbage for it (found live: seed design regression after
-    faithful morph serialization landed)."""
-    target = _expr(morph.target_shape)
-    numeric = morph.target_shape.value if morph.target_shape is not None else None
-    if numeric and numeric > 0:
-        width = _number(morph.target_width)
-        height = _number(morph.target_height)
-        if width <= 0 and height <= 0:
-            raise ValueError(
-                "morph target is set but target_width and target_height are both zero; "
-                "set at least one dimension or switch the morph target to None"
-            )
-    return target
 
 
 def _profile(
@@ -257,7 +231,20 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         if root.enclosure is not None
         else 0.0
     )
-    wall_thickness = _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness")
+    # ATH treats an omitted wall thickness as 5 mm for normal simulations and
+    # 0 mm for infinite-baffle simulations. Keep the document field nullable
+    # for lossless CFG round-trips and apply that default only at translation.
+    default_wall_thickness = (
+        0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
+    )
+    wall_thickness = (
+        _structural_number(
+            root.mesh.wall_thickness,
+            "mesh.wall_thickness",
+            default_wall_thickness,
+        )
+        * scale
+    )
     if root.mesh.quadrants is not None:
         _structural_number(root.mesh.quadrants, "mesh.quadrants")
     # Inactive enclosure values remain valid preconfiguration. Simulation mode
@@ -289,7 +276,11 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 # and rejects empty points — so a blank value must OMIT the key.
                 "zMapPoints": mesh.z_map_points.strip() or None if mesh.z_map_points is not None else None,
                 "quadrants": 1234,
-                "wallThickness": _scaled_expr(mesh.wall_thickness, scale),
+                "wallThickness": (
+                    wall_thickness
+                    if mesh.wall_thickness is None
+                    else _scaled_expr(mesh.wall_thickness, scale)
+                ),
                 "throatResolution": _scaled_expr(mesh.throat_resolution, scale),
                 "mouthResolution": _scaled_expr(mesh.mouth_resolution, scale),
                 "rearResolution": _scaled_expr(mesh.rear_resolution, scale),
@@ -314,7 +305,9 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
         "morph": _clean(
             {
-                "morphTarget": _morph_target(morph, scale),
+                "morphTarget": _expr(morph.target_shape),
+                # ATH and profile_sampling.py define absent/zero target extents
+                # as implicit extents derived from the waveguide mouth.
                 "morphWidth": _scaled_expr(morph.target_width, scale),
                 "morphHeight": _scaled_expr(morph.target_height, scale),
                 "morphCorner": _scaled_expr(morph.corner_radius, scale),
