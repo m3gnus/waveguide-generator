@@ -45,6 +45,81 @@ def _result() -> SimpleNamespace:
     )
 
 
+def test_metal_readiness_smoke_is_cached(monkeypatch) -> None:
+    probes = 0
+
+    def discover_runtime(*, run_smoke_test: bool):
+        nonlocal probes
+        assert run_smoke_test is True
+        probes += 1
+        return SimpleNamespace(
+            available=True,
+            helper_executable_path=__file__,
+            unavailable_reasons=(),
+            smoke_test_error=None,
+        )
+
+    monkeypatch.setattr(
+        metal,
+        "discover_metal_backend",
+        lambda: SimpleNamespace(
+            available=True,
+            native_helper_available=True,
+            reason="",
+            supported_platform=True,
+            native_executable=__file__,
+        ),
+    )
+    monkeypatch.setattr(metal, "discover_native_runtime", discover_runtime)
+    monkeypatch.setattr(metal, "native_config", object())
+    monkeypatch.setattr(metal, "native_solve", object())
+    metal.metal_status.cache_clear()
+    try:
+        first = metal.metal_status()
+        first["available"] = False
+        assert metal.metal_status()["available"] is True
+        assert probes == 1
+    finally:
+        metal.metal_status.cache_clear()
+
+
+def test_metal_readiness_failure_is_retried(monkeypatch) -> None:
+    probes = 0
+
+    def discover_backend():
+        nonlocal probes
+        probes += 1
+        return SimpleNamespace(
+            available=probes > 1,
+            native_helper_available=probes > 1,
+            reason="temporarily unavailable",
+            supported_platform=True,
+            native_executable=__file__ if probes > 1 else None,
+        )
+
+    monkeypatch.setattr(metal, "discover_metal_backend", discover_backend)
+    monkeypatch.setattr(
+        metal,
+        "discover_native_runtime",
+        lambda **_kwargs: SimpleNamespace(
+            available=True,
+            helper_executable_path=__file__,
+            unavailable_reasons=(),
+            smoke_test_error=None,
+        ),
+    )
+    monkeypatch.setattr(metal, "native_config", object())
+    monkeypatch.setattr(metal, "native_solve", object())
+    metal.metal_status.cache_clear()
+    try:
+        assert metal.metal_status()["available"] is False
+        assert metal.metal_status()["available"] is True
+        assert metal.metal_status()["available"] is True
+        assert probes == 2
+    finally:
+        metal.metal_status.cache_clear()
+
+
 class _Config(SimpleNamespace):
     pass
 

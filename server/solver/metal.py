@@ -8,6 +8,7 @@ frequency cancellation, metadata, and common mapping port v1
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 import importlib.metadata
 import logging
 import tempfile
@@ -57,7 +58,15 @@ def _version() -> str | None:
         return None
 
 
-def metal_status() -> dict[str, Any]:
+class _MetalProbeUnavailable(Exception):
+    """Carry an unavailable status without letting ``lru_cache`` retain it."""
+
+    def __init__(self, status: dict[str, Any]) -> None:
+        super().__init__(status.get("reason", "Metal is unavailable."))
+        self.status = status
+
+
+def _probe_metal_status() -> dict[str, Any]:
     """Probe both package backend and helper executable, as v1 lines 79-139."""
 
     if discover_metal_backend is None or native_config is None or native_solve is None:
@@ -118,6 +127,31 @@ def metal_status() -> dict[str, Any]:
             else None
         ),
     }
+
+
+@lru_cache(maxsize=1)
+def _cached_successful_metal_status() -> dict[str, Any]:
+    status = _probe_metal_status()
+    if not status["available"]:
+        # functools does not cache exceptions, so a transient capability
+        # failure is retried on the next readiness check.
+        raise _MetalProbeUnavailable(status)
+    return status
+
+
+def metal_status() -> dict[str, Any]:
+    """Return a defensive snapshot, caching only successful readiness probes."""
+
+    try:
+        status = _cached_successful_metal_status()
+    except _MetalProbeUnavailable as exc:
+        status = exc.status
+    return dict(status)
+
+
+# Preserve the public cache maintenance hook used by tests and app lifecycle
+# code without exposing the private cached implementation.
+metal_status.cache_clear = _cached_successful_metal_status.cache_clear  # type: ignore[attr-defined]
 
 
 def _observation(context: SolverContext, msh_text: str) -> Any:
