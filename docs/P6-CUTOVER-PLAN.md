@@ -64,12 +64,25 @@ disabled with a stated reason, the cause surfaced in job detail, no crash path
 through rerun/compare. Fixtures come from the real v1 database, not synthetic
 rows.
 
-**Optional, and cheap enough to consider (decision §3.5):** because the v1 bag
-already carries ATH-style keys and `_blocks`, a legacy snapshot can be rendered
-back to ATH text and fed through v2's existing, well-tested `textcfg.parse` —
-the same reader that opens legacy `.mwg` files — rather than needing a new field
-mapping. That would make the 26 reopenable. It is a feature, not a data-safety
-requirement, so it should not gate cutover.
+**Recovery — built (Magnus, 2026-08-05).** `server/design/legacy_snapshot.py`
+ports v1's own `generateMWGConfigContent` serializer, so a legacy bag is
+rendered back to ATH text and read by the existing `textcfg.parse` rather than
+through a second field mapping that would drift from the first. Checked against
+the JavaScript itself: running v1's real serializer under node over all 25
+non-FREEFORM snapshots gives output byte-identical to the port. **25 of 26 are
+recoverable**; the one FREEFORM job raises and must be re-entered.
+
+That leaves the 9 snapshot-less jobs, which remain unrecoverable by
+construction, and the graceful-degradation UI work below.
+
+**Found while verifying this, unrelated to migration:** 12 of the 25 recovered
+R-OSSE designs fail `build_preview_geometry` with `horn.outer: inconsistent
+local orientation`. It is not a migration defect — a from-scratch R-OSSE design
+reproduces it, and sweeping wall thickness 0–12 mm in 0.1 steps shows **only
+5.1–6.0 mm fails**. The offset shell folds near the rollback where the wall is
+comparable to the local radius of curvature; the orientation guard is correctly
+refusing the result. The whole preview raises, so the viewport shows nothing.
+Tracked separately; it blocks no P6 gate but it does affect ordinary use.
 
 ### 0.3 The Node-free install goal is not yet true
 
