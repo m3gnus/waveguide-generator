@@ -6,7 +6,7 @@
     },
     "hornlab-metal-bem": {
       "repo": "https://github.com/m3gnus/hornlab-metal-bem.git",
-      "sha": "c89086ea19c1237a556db23c71be10955a20676b"
+      "sha": "4bcf889cf8f1740b0a4b8de734624cd434f7dcbe"
     },
     "hornlab-plots": {
       "repo": "https://github.com/m3gnus/hornlab-plots.git",
@@ -14,7 +14,7 @@
     },
     "hornlab-waveguide-mesher": {
       "repo": "https://github.com/m3gnus/hornlab-waveguide-mesher.git",
-      "sha": "d6ac47954ab3bdafa3380d40da32e58ca504c7e9"
+      "sha": "a1c90422716f95b2c9c30e685fbf52623c951434"
     }
   }
 }
