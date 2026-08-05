@@ -6,6 +6,7 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { applyJobPreferences, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { Icon } from './icons';
 
 function name(job: JobItem): string {
   return job.label || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
@@ -51,20 +52,24 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
     >★</button>)}</span>
   </div>;
 }
-function MiniJob({ job }: { job: JobItem }) {
-  return <button className="mini-job" onClick={() => job.has_results && compareSelection.setPrimary(job.id)} title={job.has_results ? 'Show results' : job.error_message ?? job.status}>
-    <i style={{ background: job.status === 'error' ? 'var(--red)' : job.status === 'cancelled' ? 'var(--fg3)' : 'var(--green)' }}/>
-    <span>{name(job)}</span>
-    <em>{job.rating ? `${'★'.repeat(job.rating)}${'☆'.repeat(5 - job.rating)}` : ''}</em>
-    <time>{clock(job.completed_at ?? job.created_at)}</time>
-  </button>;
+function MiniJob({ job, onRemove }: { job: JobItem; onRemove: (job: JobItem) => void }) {
+  return <div className="mini-job">
+    <button className="mini-job-main" onClick={() => job.has_results && compareSelection.setPrimary(job.id)} title={job.has_results ? 'Show results' : job.error_message ?? job.status}>
+      <i style={{ background: job.status === 'error' ? 'var(--red)' : job.status === 'cancelled' ? 'var(--fg3)' : 'var(--green)' }}/>
+      <span>{name(job)}</span>
+      <em>{job.rating ? `${'★'.repeat(job.rating)}${'☆'.repeat(5 - job.rating)}` : ''}</em>
+      <time>{clock(job.completed_at ?? job.created_at)}</time>
+    </button>
+    <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>
+  </div>;
 }
 
-function JobCard({ job, now, run, onError }: {
+function JobCard({ job, now, run, onError, onRemove }: {
   job: JobItem;
   now: number;
   run: (design: DesignDocument, designRevision?: number) => Promise<void>;
   onError: (message: string) => void;
+  onRemove: (job: JobItem) => void;
 }) {
   const currentDesign = useDesignStore((state) => state.design);
   const running = job.status === 'running' || job.status === 'queued';
@@ -76,7 +81,7 @@ function JobCard({ job, now, run, onError }: {
     if (job.has_results) compareSelection.setPrimary(job.id);
   };
   return <article className={`job-card ${running ? 'running' : failed ? 'failed' : 'complete'}`}>
-    <header><i/><b>{name(job)} <em>· {job.id.slice(0, 6)}</em></b><time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at)}</time></header>
+    <header><i/><b>{name(job)} <em>· {job.id.slice(0, 6)}</em></b><time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at)}</time>{!running && <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}</header>
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
@@ -100,6 +105,7 @@ export function JobsPanel() {
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const preferences = usePreferences();
   const [now, setNow] = useState(Date.now());
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
@@ -115,14 +121,18 @@ export function JobsPanel() {
     return { cards: visibleJobs.filter((job) => prominent.has(job.id)), earlier: visibleJobs.filter((job) => !prominent.has(job.id)) };
   }, [visibleJobs]);
   const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
+  const remove = (job: JobItem) => {
+    if (!window.confirm(`Remove “${name(job)}” and its saved results?`)) return;
+    void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));
+  };
 
   return <div className="jobs-panel panel-scroll">
-    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))} style={{ color: 'var(--red)', background: 'none' }}>clear failed</button>}</div>
-    <JobsPreferencesSurface/>
+    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
+    {preferencesOpen && <JobsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}
-    {cards.map((job) => <JobCard key={job.id} job={job} now={now} run={coordinator.run} onError={coordinator.reportError}/>)}
-    {earlier.length > 0 && <><div className="earlier"><span>Earlier today</span><i/></div>{earlier.map((job) => <MiniJob key={job.id} job={job}/>)}</>}
+    {cards.map((job) => <JobCard key={job.id} job={job} now={now} run={coordinator.run} onError={coordinator.reportError} onRemove={remove}/>)}
+    {earlier.length > 0 && <><div className="earlier"><span>Earlier today</span><i/></div>{earlier.map((job) => <MiniJob key={job.id} job={job} onRemove={remove}/>)}</>}
   </div>;
 }

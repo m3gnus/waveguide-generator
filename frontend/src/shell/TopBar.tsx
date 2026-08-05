@@ -117,11 +117,11 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>Solve<kbd>⌘↵</kbd></button>
     <i className="v-separator" />
     <div className="theme-toggle" aria-label="Color theme">
-      <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme"><Icon name="moon"/></button>
-      <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme"><Icon name="sun"/></button>
+      <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
+      <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme" aria-pressed={theme === 'light'}><Icon name="sun"/></button>
     </div>
     <button className="icon-button" onClick={() => setSettingsOpen(true)} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
-    <button className="icon-button" onClick={onResetLayout} title="Reset layout"><Icon name="layout"/></button>
+    <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
     <span className="revision-chip" title="Design revision">r{revision}</span>
     <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={closeSettings}/>
   </header>;

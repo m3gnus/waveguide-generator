@@ -62,4 +62,12 @@ describe('results chart layouts', () => {
     act(() => add.click());
     expect(preferencesStore.getSnapshot().chartTypes).toHaveLength(1);
   });
+
+  it('opens a full-size interactive detail view and closes it with Escape', () => {
+    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['summary'], result, named: [], tokens })));
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Expand panel 1"]')!.click());
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
 });

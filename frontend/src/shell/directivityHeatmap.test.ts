@@ -1,7 +1,7 @@
 import * as echarts from 'echarts';
 import { describe, expect, it } from 'vitest';
-import { heatmapFrequencyLabel, heatmapOption } from './ResultsPanel';
-import type { ChartTokens } from '../results/EChart';
+import { contourSegments, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid } from './ResultsPanel';
+import { readChartTokens, type ChartTokens } from '../results/EChart';
 import type { ResultPayload } from '../results/types';
 
 const tokens: ChartTokens = {
@@ -10,9 +10,9 @@ const tokens: ChartTokens = {
 };
 
 /** A solve-shaped payload: log-spaced sweep, 5° polar grid, one plane. */
-function payload(): ResultPayload {
-  const frequencies = Array.from({ length: 40 }, (_, index) => 400 * (40 ** (index / 39)));
-  const angles = Array.from({ length: 37 }, (_, index) => index * 5);
+function payload(frequencyCount = 40, angleCount = 37): ResultPayload {
+  const frequencies = Array.from({ length: frequencyCount }, (_, index) => 400 * (40 ** (index / Math.max(1, frequencyCount - 1))));
+  const angles = Array.from({ length: angleCount }, (_, index) => index * (180 / Math.max(1, angleCount - 1)));
   return {
     frequencies,
     directivity: {
@@ -41,10 +41,14 @@ function renderedCells(option: ReturnType<typeof heatmapOption>) {
 }
 
 describe('directivity heatmap', () => {
-  it('draws every polar cell instead of emitting empty paths', () => {
-    const { drawn, empty } = renderedCells(heatmapOption(payload(), tokens, 'horizontal', -6));
+  it('draws a four-times denser interpolated field instead of empty paths', () => {
+    const dense = interpolateDirectivityGrid(payload(12, 13), 'horizontal');
+    const { drawn, empty } = renderedCells(heatmapOption(payload(12, 13), tokens, 'horizontal', -6));
     expect(empty).toBe(0);
-    expect(drawn).toBe(40 * 37);
+    expect(dense.factor).toBe(4);
+    expect(dense.frequencies).toHaveLength(45);
+    expect(dense.angles).toHaveLength(49);
+    expect(drawn).toBeGreaterThanOrEqual(dense.frequencies.length * dense.angles.length);
   });
 
   it('uses category axes on both dimensions, which is what echarts requires', () => {
@@ -53,8 +57,8 @@ describe('directivity heatmap', () => {
     };
     expect(option.xAxis.type).toBe('category');
     expect(option.yAxis.type).toBe('category');
-    expect(option.xAxis.data).toHaveLength(40);
-    expect(option.yAxis.data).toHaveLength(37);
+    expect(option.xAxis.data).toHaveLength(157);
+    expect(option.yAxis.data).toHaveLength(145);
   });
 
   it('renders nothing but still builds a valid option for a plane with no data', () => {
@@ -67,5 +71,22 @@ describe('directivity heatmap', () => {
     expect(heatmapFrequencyLabel(1000)).toBe('1k');
     expect(heatmapFrequencyLabel(16000)).toBe('16k');
     expect(heatmapFrequencyLabel(1258.9)).toBe('1.26k');
+  });
+
+  it('builds contour segments and overlays labeled reference series', () => {
+    expect(contourSegments([
+      [0, -10],
+      [0, -10],
+    ], -6)).toHaveLength(1);
+    const option = heatmapOption(payload(), tokens, 'horizontal', -6) as { series: Array<{ name?: string }> };
+    expect(option.series.map((series) => series.name)).toEqual(expect.arrayContaining(['-3 dB contour', '-6 dB contour', '-12 dB contour']));
+  });
+
+  it('uses a light HornLab-compatible chart surface with the light app theme', () => {
+    document.documentElement.dataset.theme = 'light';
+    expect(readChartTokens()).toMatchObject({ background: '#FFFDF8', foreground: '#1A1A1A', accent: '#1F5FBF' });
+    document.documentElement.dataset.theme = 'dark';
+    expect(readChartTokens()).toMatchObject({ background: '#0F1927', foreground: '#C8D8EC', accent: '#4FC3F7' });
+    delete document.documentElement.dataset.theme;
   });
 });

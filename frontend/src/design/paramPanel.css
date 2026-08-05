@@ -54,3 +54,38 @@
 .point-paste { margin-top: 4px; padding: 5px; border-top: 1px solid var(--hair-soft); }
 .point-paste textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg); font: 9px var(--mono); }
 .point-paste label { display: block; margin: 3px 0; color: var(--fg2); font-size: 9px; }
+
+/* Shared dense-control scale. Keep the rail compact without dropping below a
+   readable engineering UI baseline. */
+.parameter-search { gap: 6px; padding: 8px 9px; }
+.parameter-search input { height: var(--control-h); padding-inline: 9px; border-radius: var(--r3); font-size: var(--type-3); }
+.parameter-search button { width: var(--control-h); border-radius: var(--r3); }
+.section-description { margin: 4px 0 9px; font-size: var(--type-2); line-height: 1.45; }
+.disabled-reason,
+.lambda-hint,
+.schema-gap small { font-size: var(--type-1); line-height: 1.4; }
+.param-text-row > input { height: var(--control-h-sm); padding-inline: 8px; border-radius: var(--r3); font-size: var(--type-3); }
+.expr-value { top: 27px; font-size: var(--type-1); }
+.resolved-mode { padding: 7px 8px; border-radius: var(--r3); font-size: var(--type-1); }
+.toggle-row,
+.passthrough-row { min-height: 30px; font-size: var(--type-3); }
+.axis-toggles { gap: 7px 12px; padding: 8px; border-radius: var(--r3); font-size: var(--type-2); }
+.section-note,
+.paste-meta,
+.readonly-parameter-table p,
+.filter-note { font-size: var(--type-1); line-height: 1.45; }
+.readonly-parameter-table table { font-size: var(--type-1); }
+.readonly-parameter-table th,
+.readonly-parameter-table td { padding: 5px 6px; }
+.schema-gap > span { font-size: var(--type-3); }
+.schema-gap button,
+.family-switch-choice button,
+.editable-parameter-table > button,
+.point-paste button { min-height: 26px; padding: 4px 8px; border-radius: var(--r3); font-size: var(--type-1); }
+.editable-parameter-table th,
+.editable-parameter-table td { font-size: var(--type-1); }
+.editable-parameter-table input,
+.editable-parameter-table select { height: 26px; padding-inline: 5px; border-radius: var(--r3); font-size: var(--type-1); }
+.editable-parameter-table td button { width: 24px; height: 24px; border-radius: var(--r3); }
+.point-paste textarea { padding: 8px; border-radius: var(--r3); font-size: var(--type-2); line-height: 1.45; }
+.point-paste label { font-size: var(--type-2); }

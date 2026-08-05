@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, loadPreferences, MAP_REFERENCES, preferencesStore, readPreferences, STORAGE_VERSION } from './preferences';
+import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, jobBaseName, loadPreferences, MAP_REFERENCES, preferencesStore, readPreferences, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
   return { id, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
@@ -18,6 +18,11 @@ describe('client preferences', () => {
     expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', 'stl']);
     expect(exportBaseName(preferencesStore.getSnapshot())).toBe('horn_alpha_999999');
     expect(JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences') ?? '{}').version).toBe(STORAGE_VERSION);
+  });
+  it('builds a friendly versioned job name with an optional local-date prefix', () => {
+    const now = new Date(2026, 7, 5, 12, 0, 0);
+    expect(jobBaseName({ outputName: ' Tritonia mk2 ', jobVersion: 7, datePrefix: false }, now)).toBe('Tritonia_mk2_v07');
+    expect(jobBaseName({ outputName: 'Tritonia', jobVersion: 103, datePrefix: true }, now)).toBe('2026-08-05_Tritonia_v103');
   });
   it('resets only the panel selection when migrating a v1 layout', () => {
     const stored = JSON.stringify({ version: 1, preferences: {

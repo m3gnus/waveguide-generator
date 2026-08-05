@@ -59,6 +59,8 @@ interface ErrorMessage {
 }
 
 const OPEN = 1;
+export const PREVIEW_COARSE_INTERVAL_MS = 33;
+export const PREVIEW_FINE_IDLE_MS = 140;
 const defaultFactory: WebSocketFactory = (url) => new WebSocket(url) as unknown as WebSocketLike;
 
 function previewUrl(): string {
@@ -73,11 +75,12 @@ export class PreviewSocketManager {
   private helloSeen = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private coarseTimer: ReturnType<typeof setTimeout> | null = null;
+  private fineTimer: ReturnType<typeof setTimeout> | null = null;
+  private coarsePending = false;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatMs = 30_000;
   private maxFrameBytes: number | undefined;
-  private queuedRevision: number | null = null;
   private stopped = true;
   private readonly listeners = new Set<() => void>();
   private unsubscribeRevision: (() => void) | null = null;
@@ -103,7 +106,7 @@ export class PreviewSocketManager {
     if (!this.stopped) return;
     this.stopped = false;
     this.unsubscribeRevision = subscribeRevision((event) => this.onRevision(event));
-    this.unregisterTimer = registerRevisionTimer(() => this.cancelDebounce());
+    this.unregisterTimer = registerRevisionTimer(() => this.cancelPreviewTimers());
     this.connect(false);
   }
 
@@ -120,7 +123,7 @@ export class PreviewSocketManager {
       this.start();
       return;
     }
-    this.cancelDebounce();
+    this.cancelPreviewTimers();
     if (this.socket === null || this.socket.readyState !== OPEN) {
       // A dropped socket reconnects on its own; asking again cannot help until
       // it does, and the reconnect sends the current design on `hello`.
@@ -131,7 +134,7 @@ export class PreviewSocketManager {
 
   stop(): void {
     this.stopped = true;
-    this.cancelDebounce();
+    this.cancelPreviewTimers();
     this.clearTimer('reconnect');
     this.clearTimer('heartbeat');
     this.unsubscribeRevision?.();
@@ -186,7 +189,7 @@ export class PreviewSocketManager {
       this.maxFrameBytes = message.limits?.maxFrameBytes;
       this.update({ connection: 'connected', epoch: message.epoch, error: null });
       this.armHeartbeat();
-      this.sendCurrent('fine');
+      this.sendProgressive();
       return;
     }
     if ('epoch' in message && message.epoch !== undefined && message.epoch !== this.snapshot.epoch) return;
@@ -230,19 +233,40 @@ export class PreviewSocketManager {
   private onRevision(event: RevisionEvent): void {
     this.update({ stale: event.revision !== this.snapshot.displayedRevision });
     if (event.immediate) {
-      this.cancelDebounce();
-      this.sendCurrent('fine');
+      this.cancelPreviewTimers();
+      this.sendProgressive();
       return;
     }
-    this.queuedRevision = event.revision;
-    if (!this.debounceTimer) {
+    if (!this.coarseTimer) {
       this.sendCurrent('coarse');
-      this.debounceTimer = setTimeout(() => {
-        this.debounceTimer = null;
-        if (this.queuedRevision !== null) this.sendCurrent('fine');
-        this.queuedRevision = null;
-      }, 33);
+      this.armCoarseWindow();
+    } else {
+      this.coarsePending = true;
     }
+    this.scheduleFine();
+  }
+
+  private sendProgressive(): void {
+    this.sendCurrent('coarse');
+    this.scheduleFine();
+  }
+
+  private armCoarseWindow(): void {
+    this.coarseTimer = setTimeout(() => {
+      this.coarseTimer = null;
+      if (!this.coarsePending) return;
+      this.coarsePending = false;
+      this.sendCurrent('coarse');
+      this.armCoarseWindow();
+    }, PREVIEW_COARSE_INTERVAL_MS);
+  }
+
+  private scheduleFine(): void {
+    if (this.fineTimer) clearTimeout(this.fineTimer);
+    this.fineTimer = setTimeout(() => {
+      this.fineTimer = null;
+      this.sendCurrent('fine');
+    }, PREVIEW_FINE_IDLE_MS);
   }
 
   private sendCurrent(lod: 'coarse' | 'fine'): void {
@@ -280,10 +304,12 @@ export class PreviewSocketManager {
     this.heartbeatTimer = setTimeout(() => this.socket?.close(), this.heartbeatMs);
   }
 
-  private cancelDebounce(): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.debounceTimer = null;
-    this.queuedRevision = null;
+  private cancelPreviewTimers(): void {
+    if (this.coarseTimer) clearTimeout(this.coarseTimer);
+    if (this.fineTimer) clearTimeout(this.fineTimer);
+    this.coarseTimer = null;
+    this.fineTimer = null;
+    this.coarsePending = false;
   }
 
   private clearTimer(kind: 'heartbeat' | 'reconnect'): void {

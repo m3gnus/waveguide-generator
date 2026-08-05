@@ -9,12 +9,13 @@ import {
   type SerializedDockview,
 } from 'dockview';
 import { ParamPanel } from '../design/ParamPanel';
+import { AppQueryProvider } from '../queryClient';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
 
 export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
-export const LAYOUT_KEY = 'wg2.dockview.layout.v2';
+export const LAYOUT_KEY = 'wg2.dockview.layout.v3';
 
 const components = {
   geometry: () => <ParamPanel tab="geometry" />,
@@ -42,7 +43,7 @@ export class ReactPanelRenderer implements IContentRenderer {
   private teardown = Promise.resolve();
 
   constructor(private readonly name: ComponentName) {
-    this.element.className = 'dock-panel-content';
+    this.element.className = `dock-panel-content dock-panel-${name}`;
   }
 
   init(_parameters: GroupPanelPartInitParameters): void {
@@ -52,7 +53,7 @@ export class ReactPanelRenderer implements IContentRenderer {
       if (generation !== this.generation) return;
       const root = createRoot(this.element);
       this.root = root;
-      root.render(<Component />);
+      root.render(<AppQueryProvider><Component /></AppQueryProvider>);
     });
   }
 
@@ -72,17 +73,75 @@ export class ReactPanelRenderer implements IContentRenderer {
 const PARAMETERS_WIDTH = 300;
 const JOBS_WIDTH = 320;
 const RESULTS_HEIGHT = 340;
+const COMPACT_BREAKPOINT = 800;
+const MEDIUM_BREAKPOINT = 1100;
 const FALLBACK_WIDTH = 1440;
 const FALLBACK_HEIGHT = 900;
 /** Top bar plus status bar, excluded when guessing the dock size from the window. */
 const WORKSPACE_CHROME_HEIGHT = 84;
 
 export function createDefaultLayout(width: number, height: number): SerializedDockview {
-  const layoutWidth = Math.max(PARAMETERS_WIDTH + JOBS_WIDTH + 1, Math.round(width) || FALLBACK_WIDTH);
-  const layoutHeight = Math.max(RESULTS_HEIGHT + 1, Math.round(height) || FALLBACK_HEIGHT);
-  const viewportWidth = layoutWidth - PARAMETERS_WIDTH - JOBS_WIDTH;
-  const viewportHeight = layoutHeight - RESULTS_HEIGHT;
+  const layoutWidth = Math.max(1, Math.round(width) || FALLBACK_WIDTH);
+  const layoutHeight = Math.max(1, Math.round(height) || FALLBACK_HEIGHT);
   const group = (id: string, views: ComponentName[], activeView: ComponentName = views[0]) => ({ id: `${id}-group`, views, activeView });
+  const panels = {
+    geometry: { id: 'geometry', contentComponent: 'geometry', title: 'Geometry' },
+    simulation: { id: 'simulation', contentComponent: 'simulation', title: 'Simulation' },
+    viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
+    results: { id: 'results', contentComponent: 'results', title: 'Results' },
+    jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
+  };
+
+  if (layoutWidth < COMPACT_BREAKPOINT) {
+    return {
+      grid: {
+        width: layoutWidth,
+        height: layoutHeight,
+        orientation: Orientation.HORIZONTAL,
+        root: {
+          type: 'branch',
+          size: layoutHeight,
+          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs'], 'viewport') }],
+        },
+      },
+      panels,
+      activeGroup: 'viewport',
+    };
+  }
+
+  if (layoutWidth < MEDIUM_BREAKPOINT) {
+    const parametersWidth = 280;
+    const contentWidth = layoutWidth - parametersWidth;
+    const resultsHeight = Math.min(300, Math.max(220, Math.round(layoutHeight * .38)));
+    return {
+      grid: {
+        width: layoutWidth,
+        height: layoutHeight,
+        orientation: Orientation.HORIZONTAL,
+        root: {
+          type: 'branch',
+          size: layoutHeight,
+          data: [
+            { type: 'leaf', size: parametersWidth, data: group('parameters', ['geometry', 'simulation'], 'geometry') },
+            {
+              type: 'branch',
+              size: contentWidth,
+              data: [
+                { type: 'leaf', size: layoutHeight - resultsHeight, data: group('viewport', ['viewport']) },
+                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs'], 'results') },
+              ],
+            },
+          ],
+        },
+      },
+      panels,
+      activeGroup: 'viewport',
+    };
+  }
+
+  const viewportWidth = layoutWidth - PARAMETERS_WIDTH - JOBS_WIDTH;
+  const resultsHeight = Math.min(RESULTS_HEIGHT, Math.max(240, Math.round(layoutHeight * .38)));
+  const viewportHeight = layoutHeight - resultsHeight;
   return {
     grid: {
       width: layoutWidth,
@@ -98,20 +157,14 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
             size: viewportWidth,
             data: [
               { type: 'leaf', size: viewportHeight, data: group('viewport', ['viewport']) },
-              { type: 'leaf', size: RESULTS_HEIGHT, data: group('results', ['results']) },
+              { type: 'leaf', size: resultsHeight, data: group('results', ['results']) },
             ],
           },
           { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs']) },
         ],
       },
     },
-    panels: {
-      geometry: { id: 'geometry', contentComponent: 'geometry', title: 'Geometry' },
-      simulation: { id: 'simulation', contentComponent: 'simulation', title: 'Simulation' },
-      viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
-      results: { id: 'results', contentComponent: 'results', title: 'Results' },
-      jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
-    },
+    panels,
     activeGroup: 'viewport',
   };
 }
@@ -134,7 +187,7 @@ export function applyDefaultLayout(api: DockviewApi, width: number, height: numb
 
 /** Whether a measurement is big enough to be a real window rather than mid-CSS noise. */
 export function isTrustworthySize([width, height]: [number, number]): boolean {
-  return width >= PARAMETERS_WIDTH + JOBS_WIDTH + 1 && height >= RESULTS_HEIGHT + 1;
+  return width >= 320 && height >= 320;
 }
 
 /**
@@ -171,20 +224,19 @@ export function addDefaultLayout(api: DockviewApi, host: HTMLElement | null): vo
 export function nextLayoutAction(
   current: [number, number],
   laidOut: [number, number],
-): 'none' | 'layout' {
+): 'none' | 'layout' | 'rebuild' {
   const [width, height] = current;
   if (!width || !height) return 'none';
   if (width === laidOut[0] && height === laidOut[1]) return 'none';
+  const mode = (value: number) => value < COMPACT_BREAKPOINT ? 'compact' : value < MEDIUM_BREAKPOINT ? 'medium' : 'wide';
+  if (mode(width) !== mode(laidOut[0])) return 'rebuild';
   return 'layout';
 }
 
 /**
- * Resizes the existing dock; never rebuilds it.
- *
- * Rebuilding destroys every panel renderer — including the viewport's WebGL
- * root, which is how the dock came to be recreated dozens of times per load
- * and exhaust the browser's contexts. The layout is seeded exactly once, at
- * mount; every measurement after that is a plain `api.layout`.
+ * Resizes the existing dock, rebuilding only when a responsive layout boundary
+ * is crossed. This keeps ordinary drag-resizing cheap while ensuring compact
+ * windows never inherit the unusable three-column desktop arrangement.
  */
 export function createResizeLayoutHandler(
   api: DockviewApi,
@@ -192,9 +244,11 @@ export function createResizeLayoutHandler(
 ): (current: [number, number]) => void {
   let laidOut = initialSize;
   return (current) => {
-    if (nextLayoutAction(current, laidOut) === 'none') return;
+    const action = nextLayoutAction(current, laidOut);
+    if (action === 'none') return;
     laidOut = current;
-    api.layout(current[0], current[1]);
+    if (action === 'rebuild') applyDefaultLayout(api, current[0], current[1]);
+    else api.layout(current[0], current[1]);
   };
 }
 
@@ -240,7 +294,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       coldStartSeeded.current = true;
       addDefaultLayout(dockview.api, host.current);
     }
-    const resizeLayout = createResizeLayoutHandler(dockview.api, initialSize);
+    const resizeLayout = createResizeLayoutHandler(dockview.api, seedSize(initialSize));
     // The mount-time size is unreliable (see nextLayoutAction), so keep watching
     // and resize the existing dock as soon as the host reports its real size.
     let observer: ResizeObserver | undefined;

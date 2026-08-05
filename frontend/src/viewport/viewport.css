@@ -75,6 +75,7 @@
 .viewport-refresh svg { width: 9px; height: 9px; }
 .viewport-refresh:disabled { opacity: .5; }
 .viewport-error-banner button:hover { background: rgba(var(--red-rgb), .12); }
+.viewport-error-banner button svg { width: 13px; height: 13px; }
 .wg2-viewport .reconnect-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
 
 @media (max-width: 900px) {
@@ -87,3 +88,34 @@
   .viewport-scale { display: none; }
   .viewport-tools { bottom: 8px; }
 }
+
+/* Viewer popovers use the same surface and control language as global settings. */
+.viewer-preferences {
+  right: 12px;
+  bottom: 58px;
+  width: min(340px, calc(100% - 24px));
+  border-radius: var(--r);
+  background: var(--surface-floating);
+}
+.viewer-preferences header { min-height: 42px; padding: 8px 12px; }
+.viewer-preferences header b { font-size: var(--type-2); }
+.viewer-preferences header button { width: var(--control-h-sm); height: var(--control-h-sm); border-radius: var(--r3); }
+.viewer-pref-scroll { padding: 8px 12px 12px; }
+.viewer-pref-scroll h3 { margin: 12px 0 7px; font-size: var(--type-1); }
+.viewer-pref-range { gap: 7px; padding: 7px 0; font-size: var(--type-2); }
+.viewer-pref-range output { font-size: var(--type-1); }
+.viewer-pref-toggle { min-height: 34px; font-size: var(--type-2); }
+.viewer-pref-scroll fieldset { border-radius: var(--r); }
+.viewer-pref-scroll legend,
+.viewer-pref-scroll fieldset label { font-size: var(--type-1); }
+.viewer-preferences footer { padding: 10px 12px; }
+.viewer-preferences footer button { min-height: var(--control-h-sm); padding-inline: 9px; border-radius: var(--r3); font-size: var(--type-1); }
+.mesh-import-error,
+.viewport-connection-banner,
+.viewport-error-banner { border-radius: var(--r); font-size: var(--type-1); }
+.viewport-empty,
+.viewport-mode-empty { border-radius: var(--r); }
+.viewport-empty b,
+.viewport-mode-empty b { font-size: var(--type-2); }
+.viewport-empty span,
+.viewport-mode-empty span { font-size: var(--type-2); }

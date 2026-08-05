@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
 import { useDesignStore } from '../stores/design';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { CanonicalPlot, buildCanonicalChartRequest, buildCanonicalDirectivityRequest } from '../results/CanonicalPlot';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { Icon } from './icons';
+import { trapDialogFocus } from './SettingsDialog';
 
 function frequency(value: number | undefined): string {
   if (!value) return '—';
@@ -30,11 +32,29 @@ function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['j
 }
 
 function axes(tokens: ChartTokens) {
-  return { axisLine: { lineStyle: { color: tokens.grid } }, axisLabel: { color: tokens.muted, fontSize: 9 }, splitLine: { lineStyle: { color: tokens.grid } }, minorSplitLine: { lineStyle: { color: tokens.gridMinor } } };
+  return {
+    axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
+    axisTick: { lineStyle: { color: tokens.muted } },
+    axisLabel: { color: tokens.muted, fontSize: 9 },
+    splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
+    minorSplitLine: { show: true, lineStyle: { color: tokens.gridMinor, width: .5 } },
+  };
 }
 
 function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string): EChartsOption {
-  return { animation: false, color: tokens.series, tooltip: { trigger: 'axis' }, legend: { top: 0, right: 4, textStyle: { color: tokens.muted, fontSize: 9 } }, grid: { left: 42, right: 12, top: 25, bottom: 27 }, xAxis: { type: 'log', name: 'Hz', nameTextStyle: { color: tokens.muted }, ...axes(tokens) }, yAxis: { type: 'value', name: yName, nameTextStyle: { color: tokens.muted }, ...axes(tokens) }, series };
+  return {
+    animationDuration: 180,
+    backgroundColor: tokens.background,
+    color: tokens.series,
+    textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
+    tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 10 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } } },
+    legend: { top: 4, right: 8, textStyle: { color: tokens.muted, fontSize: 9 }, itemWidth: 14, itemHeight: 3 },
+    grid: { left: 49, right: 18, top: 30, bottom: 34, containLabel: false },
+    xAxis: { type: 'log', logBase: 10, name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 9 }, minorTick: { show: true }, ...axes(tokens) },
+    yAxis: { type: 'value', name: yName, nameTextStyle: { color: tokens.muted, fontSize: 9 }, ...axes(tokens) },
+    dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
+    series,
+  };
 }
 
 function splOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing']): EChartsOption {
@@ -47,6 +67,92 @@ export function heatmapFrequencyLabel(value: number): string {
   return String(Number(value.toPrecision(3)));
 }
 
+export interface InterpolatedDirectivityGrid {
+  frequencies: number[];
+  angles: number[];
+  values: Array<Array<number | null>>;
+  factor: number;
+}
+
+const MAX_INTERPOLATED_CELLS = 50_000;
+
+/** Bilinear interpolation in log-frequency/index space for a smooth live map. */
+export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4): InterpolatedDirectivityGrid {
+  const source = directivityGrid(result, plane);
+  if (!source.frequencies.length || !source.angles.length) return { frequencies: [], angles: [], values: [], factor: 1 };
+  const sourceValues = Array.from({ length: source.angles.length }, () => Array<number | null>(source.frequencies.length).fill(null));
+  const columnOf = new Map(source.frequencies.map((frequency, index) => [frequency, index]));
+  const rowOf = new Map(source.angles.map((angle, index) => [angle, index]));
+  source.data.forEach(([frequency, angle, value]) => {
+    const column = columnOf.get(frequency);
+    const row = rowOf.get(angle);
+    if (column !== undefined && row !== undefined) sourceValues[row][column] = value;
+  });
+  let factor = Math.max(1, Math.floor(requestedFactor));
+  const cellCount = (candidate: number) => ((source.frequencies.length - 1) * candidate + 1) * ((source.angles.length - 1) * candidate + 1);
+  while (factor > 1 && cellCount(factor) > MAX_INTERPOLATED_CELLS) factor -= 1;
+  const columns = (source.frequencies.length - 1) * factor + 1;
+  const rows = (source.angles.length - 1) * factor + 1;
+  const interpolateAxis = (values: number[], position: number, logarithmic = false) => {
+    if (values.length === 1) return values[0];
+    const left = Math.min(values.length - 2, Math.floor(position / factor));
+    const t = Math.min(1, (position - left * factor) / factor);
+    if (logarithmic && values[left] > 0 && values[left + 1] > 0) return values[left] * ((values[left + 1] / values[left]) ** t);
+    return values[left] + (values[left + 1] - values[left]) * t;
+  };
+  const frequencies = Array.from({ length: columns }, (_, column) => interpolateAxis(source.frequencies, column, true));
+  const angles = Array.from({ length: rows }, (_, row) => interpolateAxis(source.angles, row));
+  const values = Array.from({ length: rows }, (_, row) => Array.from({ length: columns }, (_, column) => {
+    if (source.frequencies.length === 1 && source.angles.length === 1) return sourceValues[0][0];
+    const x0 = Math.min(source.frequencies.length - 1, Math.floor(column / factor));
+    const y0 = Math.min(source.angles.length - 1, Math.floor(row / factor));
+    const x1 = Math.min(source.frequencies.length - 1, x0 + 1);
+    const y1 = Math.min(source.angles.length - 1, y0 + 1);
+    const tx = x0 === x1 ? 0 : (column - x0 * factor) / factor;
+    const ty = y0 === y1 ? 0 : (row - y0 * factor) / factor;
+    const samples: Array<[number | null, number]> = [
+      [sourceValues[y0][x0], (1 - tx) * (1 - ty)],
+      [sourceValues[y0][x1], tx * (1 - ty)],
+      [sourceValues[y1][x0], (1 - tx) * ty],
+      [sourceValues[y1][x1], tx * ty],
+    ];
+    const usable = samples.filter((sample): sample is [number, number] => sample[0] !== null && Number.isFinite(sample[0]) && sample[1] > 0);
+    const weight = usable.reduce((sum, sample) => sum + sample[1], 0);
+    return weight ? usable.reduce((sum, sample) => sum + sample[0] * sample[1], 0) / weight : null;
+  }));
+  return { frequencies, angles, values, factor };
+}
+
+type ContourSegment = [number, number, number, number];
+
+/** Small marching-squares pass used for labeled engineering reference lines. */
+export function contourSegments(values: Array<Array<number | null>>, level: number): ContourSegment[] {
+  const segments: ContourSegment[] = [];
+  const crossing = (a: number, b: number, x1: number, y1: number, x2: number, y2: number): [number, number] | null => {
+    if (!((a < level && b >= level) || (a >= level && b < level))) return null;
+    const t = (level - a) / (b - a);
+    return [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
+  };
+  for (let row = 0; row < values.length - 1; row += 1) {
+    for (let column = 0; column < (values[row]?.length ?? 0) - 1; column += 1) {
+      const topLeft = values[row][column];
+      const topRight = values[row][column + 1];
+      const bottomRight = values[row + 1][column + 1];
+      const bottomLeft = values[row + 1][column];
+      if ([topLeft, topRight, bottomRight, bottomLeft].some((value) => value === null || !Number.isFinite(value))) continue;
+      const points = [
+        crossing(topLeft!, topRight!, column, row, column + 1, row),
+        crossing(topRight!, bottomRight!, column + 1, row, column + 1, row + 1),
+        crossing(bottomLeft!, bottomRight!, column, row + 1, column + 1, row + 1),
+        crossing(topLeft!, bottomLeft!, column, row, column, row + 1),
+      ].filter((point): point is [number, number] => point !== null);
+      if (points.length >= 2) segments.push([points[0][0], points[0][1], points[1][0], points[1][1]]);
+      if (points.length === 4) segments.push([points[2][0], points[2][1], points[3][0], points[3][1]]);
+    }
+  }
+  return segments;
+}
+
 /**
  * ECharts only draws cartesian heatmap cells on two *category* axes. On a log
  * or value axis every cell is emitted with an empty path — nothing renders, and
@@ -55,28 +161,48 @@ export function heatmapFrequencyLabel(value: number): string {
  * axis still reads logarithmically because the sweep itself is log-spaced.
  */
 export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number): EChartsOption {
-  const grid = directivityGrid(result, plane);
-  const columnOf = new Map(grid.frequencies.map((frequency, index) => [frequency, index]));
-  const rowOf = new Map(grid.angles.map((angle, index) => [angle, index]));
+  const grid = interpolateDirectivityGrid(result, plane);
   const floor = mapReference * 5;
-  const cells = grid.data.flatMap(([frequency, angle, level]) => {
-    const column = columnOf.get(frequency);
-    const row = rowOf.get(angle);
-    if (column === undefined || row === undefined || level === null) return [];
-    return [[column, row, Math.max(floor, Math.min(0, level)), level]];
-  });
+  const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
   const categoryAxis = { ...axes(tokens), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens).axisLabel, hideOverlap: true } };
+  const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
+  const contourSeries = contourLevels.flatMap((level, contourIndex) => {
+    const segments = contourSegments(grid.values, level);
+    if (!segments.length) return [];
+    const labelIndex = segments.reduce((best, segment, index) => {
+      const target = Math.max(0, grid.frequencies.length - 1) * Math.min(.9, .58 + contourIndex * .1);
+      const midpoint = (segment[0] + segment[2]) / 2;
+      const bestMidpoint = (segments[best][0] + segments[best][2]) / 2;
+      return Math.abs(midpoint - target) < Math.abs(bestMidpoint - target) ? index : best;
+    }, 0);
+    const color = contourIndex === 0 ? tokens.foreground : contourIndex === 1 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
+    return [{
+      name: `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
+      data: segments.map((segment, index) => [...segment, level, index === labelIndex ? 1 : 0]),
+      renderItem: (_params: unknown, api: { value: (index: number) => unknown; coord: (value: number[]) => number[] }) => {
+        const start = api.coord([Number(api.value(0)), Number(api.value(1))]);
+        const end = api.coord([Number(api.value(2)), Number(api.value(3))]);
+        const children: Array<Record<string, unknown>> = [{ type: 'line', shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] }, style: { stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .9, lineDash: level <= -12 ? [4, 3] : undefined } }];
+        if (Number(api.value(5))) children.push({ type: 'text', style: { x: (start[0] + end[0]) / 2 + 3, y: (start[1] + end[1]) / 2 - 3, text: `${level} dB`, fill: color, font: '9px ui-monospace, monospace', backgroundColor: tokens.background, padding: [2, 3], borderRadius: 2 } });
+        return { type: 'group', children };
+      },
+    }];
+  });
   return {
-    animation: false,
-    tooltip: { trigger: 'item', formatter: (params) => {
-      const [column, row, , level] = (Array.isArray(params) ? params[0] : params).value as number[];
-      return `${heatmapFrequencyLabel(grid.frequencies[column])}Hz · ${grid.angles[row]}° · ${level.toFixed(1)} dB`;
+    animationDuration: 180,
+    backgroundColor: tokens.background,
+    textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
+    tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 10 }, formatter: (params) => {
+      const [, , , level, frequencyValue, angleValue] = (Array.isArray(params) ? params[0] : params).value as number[];
+      return `${heatmapFrequencyLabel(frequencyValue)}Hz · ${Number(angleValue.toFixed(2))}° · ${level.toFixed(1)} dB`;
     } },
-    grid: { left: 42, right: 42, top: 12, bottom: 27 },
-    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...categoryAxis },
-    yAxis: { type: 'category', data: grid.angles.map(String), name: '°', nameTextStyle: { color: tokens.muted }, ...categoryAxis },
-    visualMap: { min: floor, max: 0, right: 0, top: 'middle', itemWidth: 8, itemHeight: 70, text: ['0', `${mapReference} ref`], textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: tokens.colormap } },
-    series: [{ type: 'heatmap', progressive: 0, data: cells, emphasis: { disabled: true } }],
+    grid: { left: 45, right: 51, top: 15, bottom: 30 },
+    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 20, nameTextStyle: { color: tokens.muted, fontSize: 9 }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), name: '°', nameTextStyle: { color: tokens.muted }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 4, top: 'middle', itemWidth: 9, itemHeight: 82, text: ['0 dB', `${floor} dB`], textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: tokens.colormap } },
+    // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
+    // stop after the first angle band and leave the rest of the map blank.
+    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...contourSeries] as EChartsOption['series'],
   };
 }
 
@@ -114,59 +240,65 @@ function Summary({ result }: { result: ResultPayload }) {
 
 function ResultChart({ chartType, result, named, tokens }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
   const preferences = usePreferences();
-  const reference = named[1] ? { result: named[1].result as ResultPayload, label: named[1].label } : undefined;
-  if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <CanonicalPlot
-    request={buildCanonicalChartRequest('frequency_response', result, preferences, reference)}
-    label="HornLab sound pressure frequency response"
-    fallback={<EChart option={splOption(named, tokens, preferences.smoothing)} label="Multi-job sound pressure frequency response"/>}
-  /> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-  if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v') {
-    const plane = chartType.endsWith('_v') ? 'vertical' : 'horizontal';
-    return result.directivity?.[plane]?.length ? <CanonicalPlot
-      request={buildCanonicalDirectivityRequest(result, preferences, plane, reference)}
-      label={`HornLab ${plane} directivity heatmap`}
-      fallback={<EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`${plane} directivity heatmap`}/>}
-    /> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
-  }
-  if (chartType === 'directivity_map') {
-    const directivity = result.directivity as Record<string, unknown[]> | undefined;
-    const planes = Object.keys(directivity ?? {}).filter((plane) => directivity?.[plane]?.length);
-    const fallback = <div style={{ display: 'flex', width: '100%', height: '100%' }}>{planes.map((plane) => <div key={plane} style={{ position: 'relative', flex: 1 }}><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`${plane} directivity heatmap`}/></div>)}</div>;
-    return planes.length ? <CanonicalPlot
-      request={buildCanonicalDirectivityRequest(result, preferences, undefined, reference)}
-      label="HornLab directivity heatmaps"
-      fallback={fallback}
-    /> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
-  }
-  if (chartType === 'directivity_index') {
-    const series = directivityIndexSeries(result, preferences.smoothing);
-    return series.length ? <CanonicalPlot
-      request={buildCanonicalChartRequest('directivity_index', result, preferences, reference)}
-      label="HornLab directivity index by frequency"
-      fallback={<EChart option={lineOption(series, tokens, 'DI dB')} label="Directivity index by frequency"/>}
-    /> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
-  }
-  if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <CanonicalPlot
-    request={buildCanonicalChartRequest('beam_shape', result, preferences, reference)}
-    label="HornLab horizontal and vertical forward beam width"
-    fallback={<EChart option={lineOption(beamShapeSeries(result), tokens, 'degrees')} label="Horizontal and vertical forward beam width"/>}
-  /> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
-  if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
-  if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
-  if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <CanonicalPlot
-    request={buildCanonicalChartRequest('impedance', result, preferences, reference)}
-    label="HornLab normalized acoustic impedance by frequency"
-    fallback={<EChart option={impedanceOption(result, tokens, preferences.smoothing)} label="Normalized acoustic impedance by frequency"/>}
-  /> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
-  return <Summary result={result}/>;
+  return useMemo(() => {
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(named, tokens, preferences.smoothing)} label="Interactive HornLab sound pressure frequency response"/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v') {
+      const plane = chartType.endsWith('_v') ? 'vertical' : 'horizontal';
+      return result.directivity?.[plane]?.length ? <EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`Interactive HornLab ${plane} directivity heatmap`}/> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
+    }
+    if (chartType === 'directivity_map') {
+      const directivity = result.directivity as Record<string, unknown[]> | undefined;
+      const planes = Object.keys(directivity ?? {}).filter((plane) => directivity?.[plane]?.length);
+      return planes.length ? <div className="directivity-multiplane">{planes.map((plane) => <div key={plane}><span>{plane}</span><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`Interactive ${plane} directivity heatmap`}/></div>)}</div> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
+    }
+    if (chartType === 'directivity_index') {
+      const series = directivityIndexSeries(result, preferences.smoothing);
+      return series.length ? <EChart option={lineOption(series, tokens, 'DI [dB]')} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
+    }
+    if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]')} label="Interactive HornLab horizontal and vertical forward beam width"/> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
+    if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
+    if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
+    if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <EChart option={impedanceOption(result, tokens, preferences.smoothing)} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+    return <Summary result={result}/>;
+  }, [chartType, named, preferences.mapReference, preferences.smoothing, result, tokens]);
 }
 
 function ChartCard({ index, chartType, result, named, tokens }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
+  const [expanded, setExpanded] = useState(false);
+  const detail = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focus = requestAnimationFrame(() => detail.current?.querySelector<HTMLElement>('button, select, [tabindex]:not([tabindex="-1"])')?.focus());
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setExpanded(false);
+        return;
+      }
+      trapDialogFocus(detail, event);
+    };
+    window.addEventListener('keydown', close);
+    return () => {
+      cancelAnimationFrame(focus);
+      window.removeEventListener('keydown', close);
+      previous?.focus();
+    };
+  }, [expanded]);
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
-  return <section className={`result-card result-${index}`}>
-    <header><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType)}</span><button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}>×</button></header>
-    <div className="chart-placeholder"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
-  </section>;
+  const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType);
+  return <>
+    <section className={`result-card result-${index}`}>
+      <header><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{subtitle}</span><button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button><button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button></header>
+      <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
+    </section>
+    {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
+      <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
+        <header><div><b>{chartLabel(chartType)}</b><span>{subtitle}</span></div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
+      </section>
+    </div>, document.body)}
+  </>;
 }
 
 export function resultLayoutClass(count: number): string {
@@ -191,13 +323,12 @@ export function ResultsPanel() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const preferences = usePreferences();
-  const design = useDesignStore((state) => state.design);
-  const designRevision = useDesignStore((state) => state.designRevision);
   const tokens = useChartTokens();
   const [loaded, setLoaded] = useState<Record<string, ResultPayload>>({});
   const [error, setError] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   useEffect(() => {
     if (selection.primary && jobs.some((job) => job.id === selection.primary && job.has_results)) return;
@@ -215,12 +346,13 @@ export function ResultsPanel() {
   }, [ids.join('|')]);
 
   const primary = selection.primary ? loaded[selection.primary] : undefined;
-  const named = ids.flatMap((id) => loaded[id] ? [{ id, label: labelFor(id, jobs), result: loaded[id] }] : []);
-  const available = jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id));
+  const named = useMemo(() => ids.flatMap((id) => loaded[id] ? [{ id, label: labelFor(id, jobs), result: loaded[id] }] : []), [ids, jobs, loaded]);
+  const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const exportSelected = async () => {
     if (!primary) return;
     setExporting(true); setExportStatus(null);
     try {
+      const { design, designRevision } = useDesignStore.getState();
       const result = await runExportBundle({ result: primary, design, designRevision, preferences });
       if (selection.primary && result.files.length) {
         const job = jobs.find(({ id }) => id === selection.primary);
@@ -232,7 +364,10 @@ export function ResultsPanel() {
     finally { setExporting(false); }
   };
 
-  if (!selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll"><ResultsPreferencesSurface/><div className="coming-soon" role="status"><b>NO RESULTS</b><span>Run a solve to populate result charts.</span></div></div>;
+  if (!selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
+    <div className="results-toolbar"><span className="spacer"/><button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
+    {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}<div className="coming-soon" role="status"><b>NO RESULTS</b><span>Run a solve to populate result charts.</span></div>
+  </div>;
 
   return <div className="results-panel panel-scroll">
     <div className="results-toolbar">
@@ -242,8 +377,9 @@ export function ResultsPanel() {
       <label className="result-count-control">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} onClick={() => preferencesStore.addChart()}>+ chart</button>
       <button disabled={exporting || !primary || !preferences.exportFormats.length} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export selected (${preferences.exportFormats.length})`}</button>
+      <button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
-    <ResultsPreferencesSurface/>
+    {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}</div>}
     {!primary
       ? <div className="coming-soon"><b>LOADING RESULTS</b><span>Fetching selected job data…</span></div>

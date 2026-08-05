@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   downloadGeometryExport,
   downloadText,
@@ -14,16 +14,6 @@ import { Icon } from '../shell/icons';
 import { filenameStem } from '../viewport/presentation';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
-
-const menuStyle: CSSProperties = {
-  position: 'absolute', top: 32, left: 0, zIndex: 1000, width: 210, padding: 5,
-  border: '1px solid var(--hair-hi)', borderRadius: 7, background: 'var(--float-bg)',
-  boxShadow: 'var(--float-sh)', color: 'var(--fg)',
-};
-const itemStyle: CSSProperties = {
-  display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between',
-  padding: '6px 8px', borderRadius: 4, background: 'transparent', textAlign: 'left',
-};
 
 function reportText(report: ImportReport): string {
   const migrations = report.migrationsApplied.length
@@ -132,30 +122,26 @@ export function DesignFileMenu() {
     });
   }
 
-  return <div ref={root} style={{ position: 'relative', flex: 'none' }}>
+  return <div ref={root} className="design-file-menu">
     <button className="file-chip" title="Design file menu" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
       <Icon name="folder"/><span>{filenameStem(filename)}<em>.cfg</em></span>
       {revision !== savedRevision && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
       <span className="chev">⌄</span>
     </button>
-    <input ref={openInput} className="sr-only" type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
-    <input ref={reportInput} className="sr-only" type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
-    {open && <div role="menu" aria-label="Design file menu" style={menuStyle}>
-      <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
-      <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void save()}><span>Save</span><kbd>cfg</kbd></button>
-      <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
-      <div style={{ height: 1, margin: '4px 3px', background: 'var(--hair)' }}/>
-      <button role="menuitem" aria-expanded={exportsOpen} style={itemStyle} disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
-      {exportsOpen && <div role="menu" aria-label="Export design" style={{ paddingLeft: 9 }}>
-        <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void exportOne('step')}><span>STEP</span><span>.step</span></button>
-        <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
-        <button role="menuitem" style={itemStyle} disabled={busy} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
+    <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
+    <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
+    {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void save()}><span>Save</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
+      <div className="design-menu-divider"/>
+      <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
+      {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
+        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')}><span>STEP</span><span>.step</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
       </div>}
     </div>}
-    {message && <div role="status" onClick={() => setMessage(null)} style={{
-      position: 'fixed', right: 12, top: 52, zIndex: 1100, maxWidth: 520, padding: '8px 11px',
-      border: '1px solid var(--hair-hi)', borderRadius: 6, background: 'var(--float-bg)',
-      boxShadow: 'var(--float-sh)', color: 'var(--fg2)', fontSize: 10,
-    }}>{message}</div>}
+    {message && <div role="status" className="design-menu-status" onClick={() => setMessage(null)}>{message}</div>}
   </div>;
 }

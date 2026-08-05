@@ -50,10 +50,21 @@ export function NumberField({
   const [editing, setEditing] = useState(false);
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const drag = useRef<{ x: number; value: number } | null>(null);
+  const dragFrame = useRef<number | null>(null);
+  const pendingDragValue = useRef<number | null>(null);
   const cancelBlur = useRef(false);
+  const commitCallback = useRef(onCommit);
   const endDragCallback = useRef(onEndDrag);
+  const currentValue = useRef(value);
+  commitCallback.current = onCommit;
   endDragCallback.current = onEndDrag;
+  currentValue.current = value;
   const parsed = Number(draft);
+  const showEvaluatedExpression = Boolean(
+    expression?.raw
+    && expression.value !== null
+    && !Number.isFinite(Number(expression.raw.trim())),
+  );
   const draftMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
   const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
   const invalid = draft.trim() === '' || (!isExpression && (!Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage)));
@@ -111,18 +122,36 @@ export function NumberField({
     const rounded = Number(next.toFixed(precision));
     setDraft(rounded.toFixed(precision));
     setDragDelta(rounded - drag.current.value);
-    if (rounded !== value) onCommit(rounded);
+    pendingDragValue.current = rounded;
+    if (dragFrame.current === null) {
+      dragFrame.current = requestAnimationFrame(() => {
+        dragFrame.current = null;
+        const pending = pendingDragValue.current;
+        pendingDragValue.current = null;
+        if (pending !== null && pending !== currentValue.current) commitCallback.current(pending);
+      });
+    }
   };
 
   const endDrag = () => {
     if (!drag.current) return;
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = null;
+    const pending = pendingDragValue.current;
+    pendingDragValue.current = null;
+    if (pending !== null && pending !== currentValue.current) commitCallback.current(pending);
     drag.current = null;
     setDragDelta(null);
     onEndDrag?.();
   };
 
   useEffect(() => () => {
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = null;
     if (!drag.current) return;
+    const pending = pendingDragValue.current;
+    pendingDragValue.current = null;
+    if (pending !== null && pending !== currentValue.current) commitCallback.current(pending);
     drag.current = null;
     endDragCallback.current?.();
   }, []);
@@ -162,7 +191,7 @@ export function NumberField({
         {unit && <span className="unit">{unit}</span>}
         <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />
       </div>
-      {expression?.raw && expression.value !== null && <span className="expr-value" title="Evaluated value">= {Number(expression.value.toPrecision(8))}</span>}
+      {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}</span>}
       {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="sr-only">{draftMessage ?? invalidMessage}</span>}
     </div>
   );

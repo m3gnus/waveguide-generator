@@ -99,14 +99,13 @@ describe('Workspace', () => {
     addDefaultLayout(settling as never, sized(10, 100));
     expect(settling.layout).toHaveBeenCalledWith(...windowSize);
     const settlingColumns = (settling.fromJSON.mock.calls[0][0] as SerializedDockview).grid.root.data as Array<{ size: number }>;
-    expect(settlingColumns[0].size).toBe(300);
-    expect(settlingColumns[2].size).toBe(320);
+    expect(settlingColumns.map((column) => column.size)).toEqual([280, windowSize[0] - 280]);
   });
 
   it('corrects the dock when the host reports a size the mount-time read could not', () => {
     // The host really does measure 10x100 while the surrounding layout resolves:
     // not zero, so it cannot be rejected as unmeasured, and not real either.
-    expect(nextLayoutAction([1268, 640], [10, 100])).toBe('layout');
+    expect(nextLayoutAction([1268, 640], [10, 100])).toBe('rebuild');
     // Unchanged or unmeasurable sizes do nothing, so this cannot loop.
     expect(nextLayoutAction([1268, 640], [1268, 640])).toBe('none');
     expect(nextLayoutAction([0, 0], [10, 100])).toBe('none');
@@ -129,6 +128,22 @@ describe('Workspace', () => {
       [1268, 640],
       [1272, 640],
       [1600, 900],
+    ]);
+  });
+
+  it('rebuilds once when a resize crosses a responsive layout boundary', () => {
+    const api = fakeApi();
+    const resize = createResizeLayoutHandler(api as never, [1280, 720]);
+
+    resize([1180, 720]);
+    resize([1040, 720]);
+    resize([980, 720]);
+
+    expect(api.fromJSON).toHaveBeenCalledTimes(1);
+    expect(api.layout.mock.calls).toEqual([
+      [1180, 720],
+      [1040, 720],
+      [980, 720],
     ]);
   });
 
@@ -290,12 +305,32 @@ describe('Workspace', () => {
     `);
   });
 
+  it('uses a tabbed single-pane workspace on compact screens', () => {
+    const compact = createDefaultLayout(720, 680);
+    expect(compact.grid.root.type).toBe('branch');
+    const rows = compact.grid.root.data as Array<{ data: unknown }>;
+    expect(rows[0].data).toMatchObject({
+      activeView: 'viewport',
+      views: ['geometry', 'simulation', 'viewport', 'results', 'jobs'],
+    });
+  });
+
+  it('moves jobs beside results at medium widths', () => {
+    const medium = createDefaultLayout(960, 700);
+    expect(medium.grid.root.type).toBe('branch');
+    const columns = medium.grid.root.data as Array<{ data: unknown; size: number }>;
+    expect(columns.map((column) => column.size)).toEqual([280, 680]);
+    const analysis = (columns[1].data as Array<{ data: { views: string[] } }>)[1];
+    expect(analysis.data.views).toEqual(['results', 'jobs']);
+  });
+
   it.each([[1440, 900], [1280, 720]])('preserves rail sizes at %d×%d', (width, height) => {
     const layout = createDefaultLayout(width, height);
     const columns = layout.grid.root.data as Array<{ size?: number; data: unknown }>;
     const center = columns[1].data as Array<{ size?: number }>;
+    const resultsHeight = Math.min(340, Math.max(240, Math.round(height * .38)));
     expect(columns.map((column) => column.size)).toEqual([300, width - 620, 320]);
-    expect(center.map((row) => row.size)).toEqual([height - 340, 340]);
+    expect(center.map((row) => row.size)).toEqual([height - resultsHeight, resultsHeight]);
     expect(layout.grid.width).toBe(width);
   });
 });

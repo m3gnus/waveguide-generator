@@ -35,7 +35,9 @@ describe('preview socket state machine', () => {
     sockets[0].message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
     expect(manager.getSnapshot().connection).toBe('connected');
     expect(sockets[0].sent).toHaveLength(1);
-    expect(JSON.parse(sockets[0].sent[0])).toMatchObject({ kind: 'preview', epoch: 3, seq: 1, designRevision: 1, lod: 'fine' });
+    expect(JSON.parse(sockets[0].sent[0])).toMatchObject({ kind: 'preview', epoch: 3, seq: 1, designRevision: 1, lod: 'coarse' });
+    vi.advanceTimersByTime(140);
+    expect(JSON.parse(sockets[0].sent[1])).toMatchObject({ kind: 'preview', epoch: 3, seq: 2, designRevision: 1, lod: 'fine' });
     manager.stop();
   });
 
@@ -66,7 +68,27 @@ describe('preview socket state machine', () => {
     vi.advanceTimersByTime(250);
     expect(sockets).toHaveLength(2);
     sockets[1].message(JSON.stringify({ v: 1, kind: 'hello', epoch: 8, heartbeatSec: 15 }));
-    expect(JSON.parse(sockets[1].sent[0])).toMatchObject({ epoch: 8, seq: 1, designRevision: 2, lod: 'fine' });
+    expect(JSON.parse(sockets[1].sent[0])).toMatchObject({ epoch: 8, seq: 1, designRevision: 2, lod: 'coarse' });
+    manager.stop();
+  });
+
+  it('keeps coarse previews flowing but waits for edit inactivity before fine work', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    vi.advanceTimersByTime(140);
+    socket.sent.length = 0;
+
+    useDesignStore.getState().updateField('a', 46);
+    vi.advanceTimersByTime(70);
+    useDesignStore.getState().updateField('a', 47);
+    vi.advanceTimersByTime(139);
+    expect(socket.sent.map((message) => JSON.parse(message)).filter(({ lod }) => lod === 'fine')).toHaveLength(0);
+    vi.advanceTimersByTime(1);
+    const fine = socket.sent.map((message) => JSON.parse(message)).filter(({ lod }) => lod === 'fine');
+    expect(fine).toHaveLength(1);
+    expect(fine[0]).toMatchObject({ designRevision: 3, lod: 'fine' });
     manager.stop();
   });
 

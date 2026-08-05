@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { CompareStore, ResultsLruCache, type JobResults } from '../api/results';
+import { describe, expect, it, vi } from 'vitest';
+import { CompareStore, fetchJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
 import { complexToDb, directivityGrid, impedanceSeries, polarSeries, splSeries } from './mappers';
 
 function result(offset = 0): JobResults {
@@ -34,6 +34,20 @@ describe('results LRU', () => {
   it('clamps oversized cache budgets to 15', () => {
     expect(new ResultsLruCache(100).maxEntries).toBe(15);
     expect(new ResultsLruCache(Number.NaN).maxEntries).toBe(15);
+  });
+
+  it('shares one request when multiple panels ask for the same job concurrently', async () => {
+    resultsCache.clear();
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(result()), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const [first, second] = await Promise.all([
+      fetchJobResults('shared-job', fetcher),
+      fetchJobResults('shared-job', fetcher),
+    ]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(first).toBe(second);
   });
 
   it('prunes deleted primary and overlay job ids', () => {

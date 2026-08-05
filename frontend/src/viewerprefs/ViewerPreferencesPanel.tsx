@@ -1,5 +1,6 @@
 import type { ChangeEvent } from 'react';
 import { DEFAULT_VIEWER_PREFERENCES, type CameraProjection, type ViewerPreferences, viewerPreferences } from './viewerPreferences';
+import { Icon } from '../shell/icons';
 
 function RangePreference({ label, field, value, min, max, step }: {
   label: string;
@@ -23,7 +24,7 @@ function TogglePreference({ label, checked, onChange }: { label: string; checked
 export function ViewerPreferencesPanel({ preferences, onClose }: { preferences: ViewerPreferences; onClose: () => void }) {
   const setProjection = (startupCameraMode: CameraProjection) => viewerPreferences.update({ startupCameraMode });
   return <section className="viewer-preferences" aria-label="Viewer preferences">
-    <header><b>Viewer preferences</b><button type="button" aria-label="Close viewer preferences" onClick={onClose}>×</button></header>
+    <header><b>Viewer preferences</b><button type="button" aria-label="Close viewer preferences" onClick={onClose}><Icon name="close"/></button></header>
     <div className="viewer-pref-scroll">
       <h3>Orbit controls</h3>
       <RangePreference label="Rotate speed" field="rotateSpeed" value={preferences.rotateSpeed} min={0.1} max={5} step={0.1} />

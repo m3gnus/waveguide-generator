@@ -23,4 +23,16 @@ describe('client latency', () => {
     expect(clock.requestStartedAt({ epoch: 8, designRevision: 13, lod: 'fine' })).toBe(1_000);
     expect(clock.requestStartedAt({ epoch: 8, designRevision: 14, lod: 'fine' })).toBeNull();
   });
+
+  it('prunes the oldest request timestamps when frames never arrive', () => {
+    const clock = new ClientLatencyClock(2);
+    clock.beginEpoch(3, 1, 100);
+    clock.recordRequest(3, 2, 'coarse', 110);
+    clock.recordRequest(3, 3, 'fine', 120);
+
+    expect(clock.requestStartedAt({ epoch: 3, designRevision: 1, lod: 'coarse' })).toBeNull();
+    expect(clock.requestStartedAt({ epoch: 3, designRevision: 1, lod: 'fine' })).toBeNull();
+    expect(clock.requestStartedAt({ epoch: 3, designRevision: 2, lod: 'coarse' })).toBe(110);
+    expect(clock.requestStartedAt({ epoch: 3, designRevision: 3, lod: 'fine' })).toBe(120);
+  });
 });

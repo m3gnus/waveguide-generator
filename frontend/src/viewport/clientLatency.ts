@@ -11,11 +11,14 @@ export class ClientLatencyClock {
   private epochStartedAt = 0;
   private readonly requests = new Map<string, number>();
 
+  constructor(private readonly maxRequests = 256) {}
+
   beginEpoch(epoch: number, revision: number, startedAt: number): void {
     if (this.epoch === epoch) return;
     this.epoch = epoch;
     this.epochStartedAt = startedAt;
     this.requests.clear();
+    this.recordRequest(epoch, revision, 'coarse', startedAt);
     this.recordRequest(epoch, revision, 'fine', startedAt);
   }
 
@@ -26,7 +29,15 @@ export class ClientLatencyClock {
 
   recordRequest(epoch: number, revision: number, lod: PreviewLod, startedAt: number): void {
     if (epoch !== this.epoch || startedAt < this.epochStartedAt) return;
-    this.requests.set(requestKey(epoch, revision, lod), startedAt);
+    const key = requestKey(epoch, revision, lod);
+    // Refresh insertion order when a request supersedes the same revision/LOD.
+    this.requests.delete(key);
+    this.requests.set(key, startedAt);
+    while (this.requests.size > Math.max(1, this.maxRequests)) {
+      const oldest = this.requests.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.requests.delete(oldest);
+    }
   }
 
   requestStartedAt(header: Pick<FrameHeader, 'epoch' | 'designRevision' | 'lod'>): number | null {

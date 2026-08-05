@@ -57,6 +57,15 @@ describe('design store revision semantics', () => {
     unsubscribe();
   });
 
+  it.each(['undo', 'redo'] as const)('leaves revision timers alone when %s has no history state', (operation) => {
+    useDesignStore.temporal.getState().clear();
+    const cancel = vi.fn();
+    const unregister = registerRevisionTimer(cancel);
+    useDesignStore.getState()[operation]();
+    expect(cancel).not.toHaveBeenCalled();
+    unregister();
+  });
+
   it.each(['family', 'load'] as const)('finalizes active drag history before %s replacement', (operation) => {
     useDesignStore.getState().beginDrag();
     useDesignStore.getState().updateField('R', 175);

@@ -38,18 +38,54 @@ describe('jobs websocket state machine', () => {
 
   it('accepts snapshot then contiguous events and tracks live job fields', async () => {
     const socket = new MockSocket();
-    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/api/status/')
-      ? json(job({ status: 'running', progress: .42, stage: 'solve', stage_message: 'Solving' }))
-      : json({ items: [job()] }));
+    const fetcher = vi.fn(async () => json({ items: [job()] }));
     const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
     manager.start();
     socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
     socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10, jobs: [job()] });
-    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'progress', payload: { progress: .42 } });
-    expect(manager.getSnapshot().cursor).toBe(11);
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'started', payload: { started_at: '2026-08-03T10:00:01Z' } });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 12, jobId: 'job-1', type: 'stage', payload: { stage: 'solve', message: 'Solving' } });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 13, jobId: 'job-1', type: 'progress', payload: { progress: .42 } });
+    expect(manager.getSnapshot().cursor).toBe(13);
     expect(manager.getSnapshot().jobs[0].progress).toBe(.42);
     await flush();
     expect(manager.getSnapshot().jobs[0]).toMatchObject({ status: 'running', stage: 'solve', stage_message: 'Solving' });
+    expect(fetcher).not.toHaveBeenCalled();
+    manager.stop();
+  });
+
+  it('splits multiline log chunks into bounded individual tail lines', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10, jobs: [job({ log_tail: ['existing'] })] });
+    const lines = Array.from({ length: 32 }, (_, index) => `line-${index + 1}`);
+    socket.message({
+      v: 1,
+      kind: 'event',
+      epoch: 4,
+      cursor: 11,
+      jobId: 'job-1',
+      type: 'log',
+      // New servers preserve every logical line in `lines`; `chunk` remains a
+      // single-line compatibility field for older clients.
+      payload: { chunk: lines.at(-1), lines },
+    });
+
+    expect(manager.getSnapshot().jobs[0].log_tail).toHaveLength(30);
+    expect(manager.getSnapshot().jobs[0].log_tail[0]).toBe('line-3');
+    expect(manager.getSnapshot().jobs[0].log_tail.at(-1)).toBe('line-32');
+    socket.message({
+      v: 1,
+      kind: 'event',
+      epoch: 4,
+      cursor: 12,
+      jobId: 'job-1',
+      type: 'log',
+      payload: { chunk: 'legacy-a\r\nlegacy-b' },
+    });
+    expect(manager.getSnapshot().jobs[0].log_tail.slice(-2)).toEqual(['legacy-a', 'legacy-b']);
     manager.stop();
   });
 
@@ -103,7 +139,7 @@ describe('jobs websocket state machine', () => {
     manager.start();
     socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
     socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
-    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'progress', payload: { progress: .2 } });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'queued', payload: {} });
     socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'completed', payload: {} });
     resolveSecond(json(job({ status: 'complete', progress: 1, has_results: true })));
     await flush();
@@ -114,7 +150,7 @@ describe('jobs websocket state machine', () => {
     let resolveDeleted!: (response: Response) => void;
     fetcher.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveDeleted = resolve; }));
     compareSelection.setPrimary('job-1');
-    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 4, jobId: 'job-1', type: 'progress', payload: { progress: .9 } });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 4, jobId: 'job-1', type: 'failed', payload: { message: 'late failure' } });
     socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 5, jobId: 'job-1', type: 'deleted', payload: {} });
     resolveDeleted(json(job({ status: 'running' })));
     await flush();
@@ -164,6 +200,23 @@ describe('rating metadata', () => {
     resolveSecond(json({}));
     await newer;
     expect(manager.getSnapshot().jobs[0].rating).toBe(4);
+    manager.stop();
+  });
+});
+
+describe('individual job deletion', () => {
+  it('deletes one terminal job and prunes it from result selection', async () => {
+    const socket = new MockSocket();
+    const fetcher = vi.fn(async () => json({ deleted: true, job_id: 'job-1' }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ status: 'complete', has_results: true })] });
+    compareSelection.setPrimary('job-1');
+    await manager.deleteJob('job-1');
+    expect(fetcher).toHaveBeenCalledWith('/api/jobs/job-1', { method: 'DELETE' });
+    expect(manager.getSnapshot().jobs).toEqual([]);
+    expect(compareSelection.getSnapshot().primary).toBeNull();
     manager.stop();
   });
 });

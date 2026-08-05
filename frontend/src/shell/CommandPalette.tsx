@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
+import { trapDialogFocus } from './SettingsDialog';
 
 export type PaletteKind = 'Parameters' | 'Jobs' | 'Commands';
 
@@ -28,6 +29,7 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
   const isOpen = useRef(false);
   const previousFocus = useRef<HTMLElement | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
   const visible = useMemo(() => entries.filter((entry) => entryMatches(entry, query)), [entries, query]);
 
   const openPalette = () => {
@@ -69,7 +71,9 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
   useEffect(() => setActiveIndex(0), [query]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Escape') {
+    if (event.key === 'Tab') {
+      trapDialogFocus(dialog, event.nativeEvent);
+    } else if (event.key === 'Escape') {
       event.preventDefault();
       closePalette();
     } else if (event.key === 'ArrowDown') {
@@ -87,7 +91,7 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
   return <>
     <button className="command-affordance" onClick={openPalette} aria-haspopup="dialog" aria-expanded={open}><Icon name="search"/><span>Search parameters, designs, jobs, commands…</span><kbd>⌘K</kbd></button>
     {open && <div className="modal-backdrop command-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closePalette(); }}>
-      <div className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
+      <div ref={dialog} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
         <div className="command-search"><Icon name="search"/><input ref={input} role="combobox" aria-label="Search commands" aria-controls="command-palette-results" aria-expanded="true" aria-activedescendant={visible[activeIndex] ? `palette-${visible[activeIndex].id}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search parameters, jobs, and commands…"/><kbd>⌘K</kbd></div>
         <div id="command-palette-results" className="command-results" role="listbox">
           {!visible.length && <div className="command-empty" role="status"><b>No matches</b><span>Try a parameter label, key, symbol, job name, or command.</span></div>}

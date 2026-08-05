@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
-import { previewSocket } from '../api/previewSocket';
+import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { Icon } from '../shell/icons';
@@ -132,15 +132,8 @@ export function Viewport() {
   useEffect(() => subscribeRevision((event) => {
     const epoch = currentEpoch.current;
     if (epoch === null) return;
-    if (event.immediate) {
-      if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
-      fineRequestTimer.current = null;
-      queuedFineRevision.current = null;
-      latencyClock.current.recordRequest(epoch, event.revision, 'fine', performance.now());
-      return;
-    }
+    if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
     queuedFineRevision.current = event.revision;
-    if (fineRequestTimer.current) return;
     latencyClock.current.recordRequest(epoch, event.revision, 'coarse', performance.now());
     fineRequestTimer.current = setTimeout(() => {
       fineRequestTimer.current = null;
@@ -150,7 +143,7 @@ export function Viewport() {
       if (revision !== null && activeEpoch !== null) {
         latencyClock.current.recordRequest(activeEpoch, revision, 'fine', performance.now());
       }
-    }, 33);
+    }, PREVIEW_FINE_IDLE_MS);
   }), []);
 
   useEffect(() => {
@@ -233,7 +226,7 @@ export function Viewport() {
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>
       <button type="button" disabled={refreshRequestedAt !== null} onClick={refresh}>Retry</button>
-      <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}>×</button>
+      <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>
     </div>}
     {activeScene && stalled && !showPreviewError && !connectionInterrupted && !importedMesh && <div className="viewport-connection-banner" role="status">
       <span><i />{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>
@@ -279,7 +272,7 @@ export function Viewport() {
       <div className="viewport-tool-group">
         <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
         <button className={showEnclosure ? 'on' : ''} title="Show enclosure" aria-label="Show enclosure" aria-pressed={showEnclosure} onClick={() => setShowEnclosure((value) => !value)}><Icon name="box"/></button>
-        <button className={showStats ? 'on' : ''} title="Frame stats" aria-label="Frame stats" aria-pressed={showStats} onClick={() => setShowStats((value) => !value)}><span className="wg2-stats-glyph">Σ</span></button>
+        <button className={showStats ? 'on' : ''} title="Frame stats" aria-label="Frame stats" aria-pressed={showStats} onClick={() => setShowStats((value) => !value)}><Icon name="metrics"/></button>
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group viewport-tool-segment" aria-label="View presets">
@@ -300,7 +293,7 @@ export function Viewport() {
       <div className="viewport-tool-group">
         <input ref={meshInput} className="mesh-file-input" type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh" onChange={(event) => void importMesh(event.target.files?.[0])} />
         <button type="button" title="Import Gmsh 2.2 mesh" aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
-        <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><span className="wg2-settings-glyph">⚙</span></button>
+        <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
       </div>
     </div>
     {preferencesOpen && <ViewerPreferencesPanel preferences={preferences} onClose={() => setPreferencesOpen(false)} />}

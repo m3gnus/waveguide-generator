@@ -4,7 +4,7 @@ import { fetchJobResults } from '../api/results';
 import { getCapabilities, resolveEngine, submitDesign, type EngineCapability } from '../jobs/actions';
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
-import { exportBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
+import { jobBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
 import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
@@ -52,6 +52,11 @@ export function useSolveControl(): SolveControl {
   return value;
 }
 
+export function incrementJobVersion(): void {
+  const current = preferencesStore.getSnapshot().jobVersion;
+  preferencesStore.update({ jobVersion: Math.min(999_999, current + 1) });
+}
+
 export function JobsCoordinator({ children }: { children: ReactNode }) {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const design = useDesignStore((state) => state.design);
@@ -90,8 +95,9 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
         nextDesign,
         useSolveOptionsStore.getState().options(),
         fetch,
-        { label: exportBaseName(preferences), designRevision: nextRevision },
+        { label: jobBaseName(preferences), designRevision: nextRevision },
       );
+      incrementJobVersion();
       await jobsSocket.refresh();
     } finally {
       setSubmitting(false);

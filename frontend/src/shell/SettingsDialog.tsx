@@ -60,7 +60,7 @@ export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
   if (!open) return null;
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={dialog} className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <header><div><h2 id="settings-title">Settings</h2><p>Application preferences are saved automatically.</p></div><button className="dialog-close" aria-label="Close settings" onClick={onClose}>×</button></header>
+      <header><div><h2 id="settings-title">Settings</h2><p>Application preferences are saved automatically.</p></div><button className="dialog-close" aria-label="Close settings" onClick={onClose}><Icon name="close"/></button></header>
       <div className="settings-scroll">
         <section className="settings-theme" aria-labelledby="settings-theme-title">
           <h3 id="settings-theme-title">Theme</h3>

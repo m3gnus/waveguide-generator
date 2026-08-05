@@ -47,6 +47,8 @@ export interface Preferences {
   autoDownloadMesh: boolean;
   outputName: string;
   counter: number;
+  jobVersion: number;
+  datePrefix: boolean;
   jobSort: JobSort;
   minRating: number;
 }
@@ -65,6 +67,8 @@ const defaults: Preferences = {
   autoDownloadMesh: false,
   outputName: 'horn',
   counter: 1,
+  jobVersion: 1,
+  datePrefix: false,
   jobSort: 'completed_desc',
   minRating: 0,
 };
@@ -100,12 +104,14 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     autoDownloadMesh: raw.autoDownloadMesh === true,
     outputName: normalizeOutputName(raw.outputName),
     counter: Number.isFinite(Number(raw.counter)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.counter)))) : defaults.counter,
+    jobVersion: Number.isFinite(Number(raw.jobVersion)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.jobVersion)))) : defaults.jobVersion,
+    datePrefix: raw.datePrefix === true,
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
     minRating: Number.isFinite(Number(raw.minRating)) ? Math.max(0, Math.min(5, Math.floor(Number(raw.minRating)))) : defaults.minRating,
   };
 }
 
-export const STORAGE_VERSION = 3;
+export const STORAGE_VERSION = 4;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -121,15 +127,33 @@ function migrateV2ToV3(preferences: Partial<Preferences>): Partial<Preferences> 
   };
 }
 
+function migrateV3ToV4(preferences: Partial<Preferences>): Partial<Preferences> {
+  return preferences;
+}
+
+export function jobBaseName(
+  preferences: Pick<Preferences, 'outputName' | 'jobVersion' | 'datePrefix'>,
+  now = new Date(),
+): string {
+  const prefix = preferences.datePrefix
+    ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_`
+    : '';
+  const version = Math.max(1, Math.min(999_999, Math.floor(preferences.jobVersion)));
+  return `${prefix}${normalizeOutputName(preferences.outputName)}_v${String(version).padStart(2, '0')}`;
+}
+
 /**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
- * stored length authoritative and carries the existing choices forward.
+ * stored length authoritative; v3→v4 adds independent job-version naming.
  */
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {
   try {
     const parsed = JSON.parse(raw ?? '{}') as { version?: number; preferences?: Partial<Preferences> };
     if (parsed.version === STORAGE_VERSION) return { value: normalize(parsed.preferences), migrated: false };
+    if (parsed.version === 3) {
+      return { value: normalize(migrateV3ToV4(parsed.preferences ?? {})), migrated: true };
+    }
     if (parsed.version === 2) {
       return { value: normalize(migrateV2ToV3(parsed.preferences ?? {})), migrated: true };
     }

@@ -458,22 +458,21 @@ export const useDesignStore = create<DesignStore>()(
         set({ dragSnapshot: null });
       },
       undo: () => {
-        cancelRevisionTimers();
         const snapshot = get().dragSnapshot;
+        if (!snapshot && !useDesignStore.temporal.getState().pastStates.length) return;
+        cancelRevisionTimers();
         if (snapshot) {
           useDesignStore.temporal.getState().resume();
           set((state) => ({ design: snapshot, dragSnapshot: null, designRevision: state.designRevision + 1 }));
-        } else if (useDesignStore.temporal.getState().pastStates.length) {
+        } else {
           useDesignStore.temporal.getState().undo();
           set((state) => ({ designRevision: state.designRevision + 1 }));
-        } else {
-          return;
         }
         bump('undo', true);
       },
       redo: () => {
-        cancelRevisionTimers();
         if (!useDesignStore.temporal.getState().futureStates.length) return;
+        cancelRevisionTimers();
         useDesignStore.temporal.getState().redo();
         set((state) => ({ designRevision: state.designRevision + 1 }));
         bump('redo', true);

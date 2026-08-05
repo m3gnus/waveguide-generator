@@ -57,22 +57,33 @@ export class ResultsLruCache {
 }
 
 export const resultsCache = new ResultsLruCache(15);
+const inFlightResults = new Map<string, Promise<JobResults>>();
 
 export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fetch): Promise<JobResults> {
   const cached = resultsCache.get(jobId);
   if (cached) return cached;
-  const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}`);
-  if (!response.ok) {
-    let detail = `Results request failed: ${response.status}`;
-    try {
-      const body = await response.json() as { detail?: string };
-      if (body.detail) detail = body.detail;
-    } catch { /* status is enough */ }
-    throw new Error(detail);
+  const existing = inFlightResults.get(jobId);
+  if (existing) return existing;
+  const request = (async () => {
+    const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}`);
+    if (!response.ok) {
+      let detail = `Results request failed: ${response.status}`;
+      try {
+        const body = await response.json() as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch { /* status is enough */ }
+      throw new Error(detail);
+    }
+    const result = await response.json() as JobResults;
+    resultsCache.set(jobId, result);
+    return result;
+  })();
+  inFlightResults.set(jobId, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlightResults.get(jobId) === request) inFlightResults.delete(jobId);
   }
-  const result = await response.json() as JobResults;
-  resultsCache.set(jobId, result);
-  return result;
 }
 
 export class CompareStore {

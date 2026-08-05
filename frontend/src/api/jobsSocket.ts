@@ -174,6 +174,13 @@ export class JobsSocketManager {
     this.update({ jobs: this.snapshot.jobs.filter((job) => !deleted.has(job.id)) });
   }
 
+  async deleteJob(jobId: string): Promise<void> {
+    const response = await this.fetcher(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+    if (!response.ok) throw await responseError(response);
+    this.invalidateJob(jobId);
+    this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
+  }
+
   async patchMetadata(jobId: string, fields: Record<string, unknown>): Promise<void> {
     const response = await this.fetcher(`/api/jobs/${encodeURIComponent(jobId)}/metadata`, {
       method: 'PATCH',
@@ -272,7 +279,7 @@ export class JobsSocketManager {
         this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId) });
       } else {
         this.applyDelta(message);
-        void this.refreshJob(message.jobId);
+        if (this.eventNeedsRefresh(message)) void this.refreshJob(message.jobId);
       }
       if (message.cursor >= this.gapTargetCursor) {
         this.gapTargetCursor = null;
@@ -300,7 +307,15 @@ export class JobsSocketManager {
       return;
     }
     this.applyDelta(message);
-    void this.refreshJob(message.jobId);
+    if (this.eventNeedsRefresh(message)) void this.refreshJob(message.jobId);
+  }
+
+  private eventNeedsRefresh(message: EventMessage): boolean {
+    if (!this.snapshot.jobs.some((job) => job.id === message.jobId)) return true;
+    return message.type === 'queued'
+      || message.type === 'completed'
+      || message.type === 'failed'
+      || message.type === 'cancelled';
   }
 
   private applyDelta(message: EventMessage): void {
@@ -317,7 +332,10 @@ export class JobsSocketManager {
     if (message.type === 'log') {
       const chunk = typeof payload.chunk === 'string' ? payload.chunk : '';
       const current = this.snapshot.jobs.find((job) => job.id === message.jobId)?.log_tail ?? [];
-      patch.log_tail = [...current, chunk].filter(Boolean).slice(-30);
+      const lines = Array.isArray(payload.lines)
+        ? payload.lines.filter((line): line is string => typeof line === 'string' && Boolean(line))
+        : chunk.split(/\r\n|\r|\n/).filter(Boolean);
+      patch.log_tail = [...current, ...lines].slice(-30);
     }
     if (message.type === 'completed') Object.assign(patch, { status: 'complete', progress: 1, has_results: true });
     if (message.type === 'failed') Object.assign(patch, { status: 'error', error_message: String(payload.message ?? 'Simulation failed') });
