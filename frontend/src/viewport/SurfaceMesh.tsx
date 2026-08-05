@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { BufferAttribute, BufferGeometry } from 'three';
 import { SurfaceBufferManager } from './bufferManager';
 import type { DemandRenderScheduler } from './demandRender';
-import { curvatureColors, surfaceBoundaryPositions } from './frameScene';
+import { curvatureColors, MAX_EDGE_TRIANGLES, surfaceBoundaryPositions } from './frameScene';
 import type { DisplayMode, MaterialLibrary, SceneSurface } from './types';
 
 export interface SurfaceMeshProps {
@@ -26,6 +26,15 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
     geometry.setAttribute('position', new BufferAttribute(surfaceBoundaryPositions(surface), 3));
     return geometry;
   }, [mode, surface]);
+  const material = materials.surfaces[surface.materialClass];
+  const edgeFallback = mode === 'edges' && Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES;
+  const edgeFillMaterial = useMemo(() => {
+    if (!edgeFallback) return null;
+    const fallback = material.clone();
+    fallback.colorWrite = true;
+    fallback.polygonOffset = false;
+    return fallback;
+  }, [edgeFallback, material]);
 
   useEffect(() => scheduler.schedule(() => {
     manager.update({
@@ -38,14 +47,15 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
 
   useEffect(() => () => manager.dispose(), [manager]);
   useEffect(() => () => boundary?.dispose(), [boundary]);
+  useEffect(() => () => edgeFillMaterial?.dispose(), [edgeFillMaterial]);
 
-  const material = materials.surfaces[surface.materialClass];
   // Curvature data is optional even at fine LOD. Keep the neutral material
   // visible when it is absent so switching inspection modes never blanks the
   // model; Viewport explains that only the analytic heatmap is unavailable.
-  const renderSurface = mode !== 'edges';
   return <group visible={visible}>
-    {renderSurface && <mesh geometry={manager.geometry} material={material} renderOrder={mode === 'xray' ? 10 : 1} />}
+    {mode !== 'edges' && <mesh geometry={manager.geometry} material={material} renderOrder={mode === 'xray' ? 10 : 1} />}
+    {mode === 'edges' && <mesh geometry={manager.geometry} material={material} renderOrder={1} />}
+    {edgeFillMaterial && <mesh geometry={manager.geometry} material={edgeFillMaterial} renderOrder={2} />}
     {mode === 'solid-wire' && <mesh geometry={manager.geometry} material={materials.wire} renderOrder={2} />}
     {mode === 'edges' && boundary && <lineSegments geometry={boundary} material={materials.edge} renderOrder={3} />}
     {sectionCut && <>

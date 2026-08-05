@@ -40,6 +40,26 @@ function fixture(): DecodedFrame {
   };
 }
 
+function sceneSurface(positions: number[], indices: number[]): ReturnType<typeof frameToScene>['surfaces'][number] {
+  return {
+    ...frameToScene(fixture()).surfaces[0],
+    positions: new Float32Array(positions),
+    normals: new Float32Array(positions.length),
+    indices: new Uint32Array(indices),
+  };
+}
+
+function hasSegment(lines: Float32Array, a: [number, number, number], b: [number, number, number]): boolean {
+  for (let offset = 0; offset < lines.length; offset += 6) {
+    const forward = lines[offset] === a[0] && lines[offset + 1] === a[1] && lines[offset + 2] === a[2]
+      && lines[offset + 3] === b[0] && lines[offset + 4] === b[1] && lines[offset + 5] === b[2];
+    const reverse = lines[offset] === b[0] && lines[offset + 1] === b[1] && lines[offset + 2] === b[2]
+      && lines[offset + 3] === a[0] && lines[offset + 4] === a[1] && lines[offset + 5] === a[2];
+    if (forward || reverse) return true;
+  }
+  return false;
+}
+
 describe('frameToScene', () => {
   it('maps roles to material classes while retaining every declared hard-boundary surface', () => {
     const frame = fixture();
@@ -65,13 +85,35 @@ describe('frameToScene', () => {
   });
 
   it('extracts only topology borders and omits the internal triangle diagonal', () => {
-    const sceneSurface = {
-      ...frameToScene(fixture()).surfaces[0],
-      positions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
-      normals: new Float32Array(12),
-      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
-    };
-    expect(surfaceBoundaryPositions(sceneSurface)).toHaveLength(4 * 2 * 3);
+    expect(surfaceBoundaryPositions(sceneSurface(
+      [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+      [0, 1, 2, 0, 2, 3],
+    ))).toHaveLength(4 * 2 * 3);
+  });
+
+  it('welds a coplanar unwelded seam while retaining the true open boundary', () => {
+    const lines = surfaceBoundaryPositions(sceneSurface(
+      [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 2, 0, 0, 2, 1, 0, 1, 1, 0],
+      [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+    ));
+    expect(lines).toHaveLength(6 * 2 * 3);
+    expect(hasSegment(lines, [1, 0, 0], [1, 1, 0])).toBe(false);
+  });
+
+  it('draws a welded 90-degree tangent break', () => {
+    const lines = surfaceBoundaryPositions(sceneSurface(
+      [0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1],
+      [0, 3, 2, 0, 2, 1, 0, 1, 5, 0, 5, 4],
+    ));
+    expect(hasSegment(lines, [0, 0, 0], [0, 1, 0])).toBe(true);
+  });
+
+  it('draws a true open boundary', () => {
+    const lines = surfaceBoundaryPositions(sceneSurface(
+      [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      [0, 1, 2],
+    ));
+    expect(lines).toHaveLength(3 * 2 * 3);
   });
 
   it('maps non-finite curvature samples to the finite neutral color', () => {
@@ -85,6 +127,15 @@ describe('frameToScene', () => {
     const sceneSurface = frameToScene(fixture()).surfaces[0];
     sceneSurface.indices = new Uint32Array((MAX_EDGE_TRIANGLES + 1) * 3);
     expect(surfaceBoundaryPositions(sceneSurface)).toHaveLength(0);
+  });
+
+  it('keeps over-cap fill geometry and marks edge mode unavailable', () => {
+    const frame = fixture();
+    frame.sections['horn.indices'] = new Uint32Array((MAX_EDGE_TRIANGLES + 1) * 3);
+    const scene = frameToScene(frame);
+    expect(scene.edgeModeUnavailable).toBe(true);
+    expect(scene.surfaces[0].positions).toHaveLength(9);
+    expect(scene.surfaces[0].indices).toHaveLength((MAX_EDGE_TRIANGLES + 1) * 3);
   });
 
   it('distinguishes valid empty-surface frames from renderable scenes', () => {

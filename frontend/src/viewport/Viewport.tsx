@@ -6,7 +6,7 @@ import { useDocumentStore } from '../stores/document';
 import { Icon } from '../shell/icons';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
-import { frameToScene, hasRenderableSurfaces } from './frameScene';
+import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
 import { createImportedMeshScene, type ImportedMeshScene } from './importedMesh';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
@@ -93,6 +93,8 @@ export function Viewport() {
   const surfaces = activeScene?.surfaces ?? [];
   const webgl = canRenderWebGL() && renderFailure === null;
   const hasSurfaces = hasRenderableSurfaces(activeScene);
+  const edgeModeUnavailable = activeScene?.edgeModeUnavailable === true
+    || Boolean(activeScene?.surfaces.some((surface) => Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES));
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
@@ -241,6 +243,9 @@ export function Viewport() {
     {activeScene && renderFailure && <div className="viewport-empty" role="status"><b>WebGL renderer stopped</b><span>{renderFailure}. Reopen the viewport after checking graphics acceleration.</span></div>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <div className="viewport-mode-empty">
       <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
+    </div>}
+    {activeScene && mode === 'edges' && edgeModeUnavailable && <div className="viewport-mode-empty">
+      <b>Edge inspection unavailable</b><span>This frame exceeds the 250,000-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</span>
     </div>}
     {importError && activeScene && <div className="mesh-import-error" role="alert">Import failed: {importError}</div>}
 

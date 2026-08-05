@@ -6,6 +6,7 @@ export interface FrameScene {
   surfaces: SceneSurface[];
   bounds: Box3;
   hasCurvature: boolean;
+  edgeModeUnavailable?: boolean;
 }
 
 export function hasRenderableSurfaces(scene: FrameScene | null): boolean {
@@ -79,7 +80,12 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
     };
   });
   if (bounds.isEmpty()) bounds.set(new Vector3(-50, -50, -50), new Vector3(50, 50, 50));
-  return { surfaces, bounds, hasCurvature: surfaces.some((surface) => surface.curvature !== null) };
+  return {
+    surfaces,
+    bounds,
+    hasCurvature: surfaces.some((surface) => surface.curvature !== null),
+    edgeModeUnavailable: surfaces.some((surface) => Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES),
+  };
 }
 
 export function curvatureColors(values: Float32Array): Float32Array {
@@ -105,54 +111,98 @@ export function surfaceBoundaryPositions(surface: SceneSurface): Float32Array {
   const triangleCount = Math.floor(surface.indices.length / 3);
   if (triangleCount > MAX_EDGE_TRIANGLES) return new Float32Array();
   const vertexCount = Math.floor(surface.positions.length / 3);
-  const keys = new BigUint64Array(triangleCount * 3);
-  let edgeCount = 0;
-  const add = (a: number, b: number) => {
-    if (a >= vertexCount || b >= vertexCount) return;
-    const low = Math.min(a, b);
-    const high = Math.max(a, b);
-    keys[edgeCount] = (BigInt(low) << 32n) | BigInt(high);
-    edgeCount += 1;
+  const weldedVertices = new Map<string, number>();
+  const weldedIds = new Uint32Array(vertexCount);
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const offset = vertex * 3;
+    const key = [
+      Math.round(surface.positions[offset] / EDGE_VERTEX_GRID),
+      Math.round(surface.positions[offset + 1] / EDGE_VERTEX_GRID),
+      Math.round(surface.positions[offset + 2] / EDGE_VERTEX_GRID),
+    ].join(',');
+    let weldedId = weldedVertices.get(key);
+    if (weldedId === undefined) {
+      weldedId = weldedVertices.size;
+      weldedVertices.set(key, weldedId);
+    }
+    weldedIds[vertex] = weldedId;
+  }
+
+  interface Edge {
+    a: number;
+    b: number;
+    normals: Array<[number, number, number]>;
+  }
+  const edges = new Map<string, Edge>();
+  const add = (weldedA: number, weldedB: number, sourceA: number, sourceB: number, normal: [number, number, number]) => {
+    if (weldedA === weldedB) return;
+    const low = Math.min(weldedA, weldedB);
+    const high = Math.max(weldedA, weldedB);
+    const key = `${low}:${high}`;
+    const edge = edges.get(key);
+    if (edge) {
+      edge.normals.push(normal);
+      return;
+    }
+    edges.set(key, { a: sourceA, b: sourceB, normals: [normal] });
   };
   for (let offset = 0; offset + 2 < surface.indices.length; offset += 3) {
-    const a = surface.indices[offset];
-    const b = surface.indices[offset + 1];
-    const c = surface.indices[offset + 2];
-    add(a, b);
-    add(b, c);
-    add(c, a);
+    const originalA = surface.indices[offset];
+    const originalB = surface.indices[offset + 1];
+    const originalC = surface.indices[offset + 2];
+    if (originalA >= vertexCount || originalB >= vertexCount || originalC >= vertexCount) continue;
+    const a = originalA * 3;
+    const b = originalB * 3;
+    const c = originalC * 3;
+    const abx = surface.positions[b] - surface.positions[a];
+    const aby = surface.positions[b + 1] - surface.positions[a + 1];
+    const abz = surface.positions[b + 2] - surface.positions[a + 2];
+    const acx = surface.positions[c] - surface.positions[a];
+    const acy = surface.positions[c + 1] - surface.positions[a + 1];
+    const acz = surface.positions[c + 2] - surface.positions[a + 2];
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+    const length = Math.hypot(nx, ny, nz);
+    if (!Number.isFinite(length) || length === 0) continue;
+    const normal: [number, number, number] = [nx / length, ny / length, nz / length];
+    const weldedA = weldedIds[originalA];
+    const weldedB = weldedIds[originalB];
+    const weldedC = weldedIds[originalC];
+    add(weldedA, weldedB, originalA, originalB, normal);
+    add(weldedB, weldedC, originalB, originalC, normal);
+    add(weldedC, weldedA, originalC, originalA, normal);
   }
-  const sorted = keys.subarray(0, edgeCount);
-  sorted.sort();
-  let boundaryCount = 0;
-  for (let index = 0; index < sorted.length;) {
-    let end = index + 1;
-    while (end < sorted.length && sorted[end] === sorted[index]) end += 1;
-    if (end === index + 1) boundaryCount += 1;
-    index = end;
-  }
-  const positions = new Float32Array(boundaryCount * 6);
-  let target = 0;
-  for (let index = 0; index < sorted.length;) {
-    let end = index + 1;
-    while (end < sorted.length && sorted[end] === sorted[index]) end += 1;
-    if (end !== index + 1) {
-      index = end;
-      continue;
+
+  const featureEdges = [...edges.values()].filter(({ normals }) => {
+    if (normals.length === 1) return true;
+    for (let first = 0; first < normals.length; first += 1) {
+      for (let second = first + 1; second < normals.length; second += 1) {
+        const dot = Math.abs(
+          normals[first][0] * normals[second][0]
+          + normals[first][1] * normals[second][1]
+          + normals[first][2] * normals[second][2],
+        );
+        if (dot < FEATURE_EDGE_COSINE) return true;
+      }
     }
-    const key = sorted[index];
-    const a = Number(key >> 32n) * 3;
-    const b = Number(key & 0xffff_ffffn) * 3;
-    positions[target] = surface.positions[a];
-    positions[target + 1] = surface.positions[a + 1];
-    positions[target + 2] = surface.positions[a + 2];
-    positions[target + 3] = surface.positions[b];
-    positions[target + 4] = surface.positions[b + 1];
-    positions[target + 5] = surface.positions[b + 2];
-    target += 6;
-    index = end;
-  }
+    return false;
+  });
+  const positions = new Float32Array(featureEdges.length * 6);
+  featureEdges.forEach(({ a, b }, index) => {
+    const sourceA = a * 3;
+    const sourceB = b * 3;
+    const target = index * 6;
+    positions[target] = surface.positions[sourceA];
+    positions[target + 1] = surface.positions[sourceA + 1];
+    positions[target + 2] = surface.positions[sourceA + 2];
+    positions[target + 3] = surface.positions[sourceB];
+    positions[target + 4] = surface.positions[sourceB + 1];
+    positions[target + 5] = surface.positions[sourceB + 2];
+  });
   return positions;
 }
 
+const EDGE_VERTEX_GRID = 1e-4;
+const FEATURE_EDGE_COSINE = Math.cos(20 * Math.PI / 180);
 export const MAX_EDGE_TRIANGLES = 250_000;
