@@ -1,0 +1,87 @@
+name: Release
+
+# Goal 6 of the rebuild plan: end users must not need a Node runtime. The SPA is
+# therefore built here, once, and attached to the tagged release; the installer
+# downloads that artifact instead of building from a clone. Nothing else about
+# the app ships here -- the Python side comes from the tag itself, and the
+# HornLab modules from the SHAs pinned in pins.json.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach to"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  spa:
+    name: Build and attach the SPA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Tag must match shared/version.json
+        # The version reaches the UI, /health and the update checker from this
+        # one file. A tag that disagrees with it ships a build that misreports
+        # itself, which is worse than a failed release.
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          declared="v$(python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          if [ "$tag" != "$declared" ]; then
+            echo "Tag $tag does not match shared/version.json ($declared)." >&2
+            exit 1
+          fi
+          echo "version=${declared#v}" >> "$GITHUB_ENV"
+
+      - name: Build the SPA
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="waveguide-generator-v2-spa-${{ env.version }}"
+          tar -czf "$name.tar.gz" -C frontend dist
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          echo "artifact=$name" >> "$GITHUB_ENV"
+          tar -tzf "$name.tar.gz" | head -5
+
+      - name: Refuse to ship an empty bundle
+        # A silently-successful build that produced no index.html would install
+        # cleanly and then serve nothing.
+        run: |
+          set -euo pipefail
+          tar -tzf "${{ env.artifact }}.tar.gz" | grep -q "^dist/index.html$"
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            ${{ env.artifact }}.tar.gz
+            ${{ env.artifact }}.tar.gz.sha256
+          fail_on_unmatched_files: true
+          body: |
+            Waveguide Generator v2 ${{ env.version }} — beta.
+
+            `${{ env.artifact }}.tar.gz` is the prebuilt SPA. The installer
+            downloads it so that running v2 needs no Node.js. Verify it against
+            the accompanying `.sha256` before extracting over `frontend/dist`.
+
+            v1 remains the supported release on the `v1` branch.

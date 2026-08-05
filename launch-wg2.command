@@ -21,7 +21,18 @@ if [[ ! -f "launch/serve.py" ]] || [[ ! -d "server" ]]; then
 fi
 
 if [[ ! -f "frontend/dist/index.html" ]]; then
-  fail "The built frontend is missing. Run 'cd frontend && npm install && npm run build' first."
+  # Running v2 is not supposed to require Node. Releases ship the built SPA as
+  # an attached archive, so point there first and leave the local build as the
+  # developer path rather than the only one.
+  fail "The built interface is missing.
+
+Download waveguide-generator-v2-spa-<version>.tar.gz from the release:
+  https://github.com/m3gnus/waveguide-generator/releases
+and extract it so that frontend/dist/index.html exists:
+  tar -xzf waveguide-generator-v2-spa-<version>.tar.gz -C frontend
+
+If you are working on the interface itself, build it instead:
+  cd frontend && npm install && npm run build"
 fi
 
 # WG2_PYTHON can explicitly select another interpreter. Otherwise the launcher

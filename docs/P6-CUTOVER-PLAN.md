@@ -78,16 +78,23 @@ prebuilt SPA. Today `frontend/dist/` is in `.gitignore` and `launch-wg2.command`
 hard-fails with *"The built frontend is missing"* when it is absent. As it
 stands, installing v2 from a clone requires Node and a build.
 
-**Decision required before installers are written** (§P6.2). Options:
+**Settled (Magnus, 2026-08-05): option A — a GitHub Release artifact.** CI builds
+the SPA once and attaches it to the tag; the installer downloads it. This matches
+"releases ship a prebuilt SPA" literally, keeps build products out of git
+history, and gives the beta the distribution channel §P6.5 needs anyway. The
+alternatives were committing `dist/` on release tags (build products in history,
+growing per release) and having the installer build it (simplest to write, but
+abandons goal 6).
 
-| Option | End users need Node | Repo stays clean | Notes |
-|---|---|---|---|
-| **A. GitHub Release artifact** | No | Yes | CI builds `dist/`, attaches a tarball to a tagged release; installer downloads it. Recommended — matches "releases ship a prebuilt SPA" literally. |
-| B. Commit `dist/` on release tags only | No | Mostly | Build products in history; bloat grows per release. |
-| C. Installer builds the SPA | **Yes** | Yes | Simplest to write; abandons goal 6. |
+Implemented in `.github/workflows/release.yml`, which fires on a `v*` tag:
+it refuses to build when the tag disagrees with `shared/version.json`, packages
+`frontend/dist` as `waveguide-generator-v2-spa-<version>.tar.gz` with a
+`.sha256` beside it, refuses to publish a bundle that has no `dist/index.html`,
+and attaches both to the release. Packaging was rehearsed locally — a 658 KB
+archive containing `dist/index.html`.
 
-Option A also gives the beta a real distribution channel, which §P6.5 needs
-anyway.
+`launch-wg2.command` now points at the release when the interface is missing,
+and keeps the npm build as the developer path rather than the only one.
 
 ---
 
@@ -152,7 +159,9 @@ test in CI, and one full round trip on a real 109 MB database.
 
 *Size: L. The biggest remaining piece.*
 
-Decide §0.3 first — everything else here depends on it.
+§0.3 is settled and the release pipeline exists, so the installer's job is now
+well defined: get the repo at a tag, download and verify that tag's SPA archive,
+create the Python environment, and launch.
 
 v1's installer is 365 lines of shell + 471 of batch + `check_venv.py`, backed by
 two contract test suites (`tests/installer-contract.test.js`,
