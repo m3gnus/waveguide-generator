@@ -8,7 +8,9 @@ Gmsh artifact and that artifact is parsed back for solver statistics/tags.
 
 from __future__ import annotations
 
-import copy
+import hashlib
+import importlib.metadata
+import json
 import math
 import tempfile
 from collections.abc import Callable, Mapping
@@ -22,12 +24,16 @@ from server.design.schema import DesignConfig, Expr
 from server.preview.translate import design_to_mesher_config
 from server.solver.quadrants import normalise_quadrants
 
+from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .gmsh_worker import run_on_gmsh_worker
 from .integrity import mesh_integrity_report, mesh_semantic_orientation_report
 
 
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4, 12}
 LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
+SOLVER_MESH_CACHE_FORMAT_VERSION = 1
+
+_solver_mesh_cache = SolverMeshArtifactCache()
 
 CancelCallback = Callable[[], None]
 ProgressCallback = Callable[[str, float, str], None]
@@ -100,7 +106,7 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
         if root.enclosure is not None
         else 0.0
     )
-    config = copy.deepcopy(design_to_mesher_config(design))
+    config = design_to_mesher_config(design)
     mesh = config.setdefault("mesh", {})
     quadrants = normalise_quadrants(
         _strict_scalar(root.mesh.quadrants, 1234.0, "mesh.quadrants")
@@ -128,6 +134,57 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
         if edge > 0.0 and positive and edge >= min(positive) - 1.0e-9:
             config.setdefault("enclosure", {})["edge"] = 0.0
     return config
+
+
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+
+
+def _solver_mesh_cache_key(design: DesignConfig) -> str:
+    """Hash only inputs that can change the authoritative MSH artifact.
+
+    Solve frequencies, polar sampling, and validation policy are intentionally
+    absent: they operate after mesh generation.  Geometry and mesh options are
+    already normalized by ``_solver_mesher_config``.
+    """
+
+    payload = {
+        "cache_format_version": SOLVER_MESH_CACHE_FORMAT_VERSION,
+        "artifact_options": {
+            "format": "gmsh-msh-text",
+            "units": "m",
+        },
+        "generator_versions": {
+            "hornlab-waveguide-mesher": _distribution_version(
+                "hornlab-waveguide-mesher"
+            ),
+            "gmsh": _distribution_version("gmsh"),
+        },
+        "mesher_config": _solver_mesher_config(design),
+    }
+    canonical = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def clear_solver_mesh_cache() -> None:
+    """Drop all reusable artifacts, for recovery or explicit recomputation."""
+
+    _solver_mesh_cache.clear()
+
+
+def solver_mesh_cache_info() -> SolverMeshCacheInfo:
+    """Return bounded-cache usage without exposing mutable cache contents."""
+
+    return _solver_mesh_cache.info()
 
 
 def _triangles_and_tags(mesh: meshio.Mesh) -> tuple[np.ndarray, np.ndarray]:
@@ -190,14 +247,28 @@ def _build_sync(
         _check_cancel(cancel_cb)
 
     if triangles.size == 0:
-        raise RuntimeError("hornlab-waveguide-mesher produced no triangular solver elements")
-    if vertices.ndim != 2 or vertices.shape[1:] != (3,) or not np.isfinite(vertices).all():
-        raise RuntimeError("hornlab-waveguide-mesher produced invalid or non-finite vertices")
-    tag_values = [int(value) for value in tags.tolist()]
-    invalid_tags = sorted(set(tag_values) - CANONICAL_SURFACE_TAGS)
+        raise RuntimeError(
+            "hornlab-waveguide-mesher produced no triangular solver elements"
+        )
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1:] != (3,)
+        or not np.isfinite(vertices).all()
+    ):
+        raise RuntimeError(
+            "hornlab-waveguide-mesher produced invalid or non-finite vertices"
+        )
+    unique_tags, unique_counts = np.unique(tags, return_counts=True)
+    tag_count_values = {
+        int(tag): int(count)
+        for tag, count in zip(unique_tags, unique_counts, strict=True)
+    }
+    invalid_tags = sorted(set(tag_count_values) - CANONICAL_SURFACE_TAGS)
     if invalid_tags:
-        raise RuntimeError(f"HornLab mesher returned unsupported surface tags: {invalid_tags}")
-    if 2 not in tag_values:
+        raise RuntimeError(
+            f"HornLab mesher returned unsupported surface tags: {invalid_tags}"
+        )
+    if 2 not in tag_count_values:
         raise RuntimeError("HornLab mesher returned no source-tagged elements (tag 2)")
 
     metadata = _json_safe(getattr(result, "metadata", None) or {})
@@ -205,7 +276,9 @@ def _build_sync(
         vertices,
         triangles,
         expected_volume_sign=(
-            -1 if str(config.get("mode", "")).strip().lower() == "infinite-baffle" else 1
+            -1
+            if str(config.get("mode", "")).strip().lower() == "infinite-baffle"
+            else 1
         ),
     )
     semantic_orientation = mesh_semantic_orientation_report(
@@ -216,23 +289,28 @@ def _build_sync(
     )
     integrity["semantic_orientation"] = semantic_orientation
     integrity["valid"] = bool(integrity["valid"] and semantic_orientation["valid"])
-    tag_counts = {str(tag): tag_values.count(tag) for tag in sorted(CANONICAL_SURFACE_TAGS)}
+    tag_counts = {
+        str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS)
+    }
     bounds_min = np.min(vertices, axis=0)
     bounds_max = np.max(vertices, axis=0)
     domain_multiplier = float(metadata.get("meshDomainMultiplier", 1.0) or 1.0)
     if not math.isfinite(domain_multiplier) or domain_multiplier <= 0.0:
         domain_multiplier = 1.0
     triangle_count = int(len(triangles))
-    triangle_points = vertices[triangles]
-    edge_lengths_m = np.concatenate(
-        (
-            np.linalg.norm(triangle_points[:, 1] - triangle_points[:, 0], axis=1),
-            np.linalg.norm(triangle_points[:, 2] - triangle_points[:, 1], axis=1),
-            np.linalg.norm(triangle_points[:, 0] - triangle_points[:, 2], axis=1),
+    max_edge_squared = 0.0
+    for start, end in ((0, 1), (1, 2), (2, 0)):
+        edge = vertices[triangles[:, end]] - vertices[triangles[:, start]]
+        max_edge_squared = max(
+            max_edge_squared,
+            float(np.max(np.einsum("ij,ij->i", edge, edge))),
         )
+    max_edge_mm = math.sqrt(max_edge_squared) * 1000.0
+    scale = (
+        _strict_scalar(root_scale, 1.0, "scale")
+        if (root_scale := design.root.scale)
+        else 1.0
     )
-    max_edge_mm = float(np.max(edge_lengths_m) * 1000.0)
-    scale = _strict_scalar(root_scale, 1.0, "scale") if (root_scale := design.root.scale) else 1.0
     max_edge_guard_mm = (
         _strict_scalar(design.root.mesh.max_edge, 0.0, "mesh.max_edge") * scale
         if design.root.mesh.max_edge is not None
@@ -255,7 +333,9 @@ def _build_sync(
             "The solve may take significantly longer and use more memory."
         )
     if not integrity["valid"]:
-        warnings.append("Solver mesh contains invalid, degenerate, or non-manifold triangles.")
+        warnings.append(
+            "Solver mesh contains invalid, degenerate, or non-manifold triangles."
+        )
 
     stats = {
         "vertex_count": int(len(vertices)),
@@ -290,18 +370,6 @@ def _build_sync(
         "stats": stats,
         "integrity": integrity,
         "metadata": metadata,
-        "canonical_mesh": {
-            "vertices": vertices.reshape(-1).tolist(),
-            "indices": triangles.reshape(-1).astype(int).tolist(),
-            "surfaceTags": tag_values,
-            "metadata": {
-                "units": "m",
-                "unitScaleToMeter": 1.0,
-                "tagCounts": tag_counts,
-                "generatedBy": "hornlab-waveguide-mesher",
-                "mesherMetadata": metadata,
-            },
-        },
     }
 
 
@@ -310,26 +378,42 @@ async def build_solver_mesh(
     options: Any,
     cancel_cb: CancelCallback | None = None,
     progress_cb: ProgressCallback | None = None,
+    *,
+    force_rebuild: bool = False,
 ) -> dict[str, Any]:
     """Build the authoritative full OCC mesh on the single gmsh worker.
 
     ``cancel_cb`` is checked before configuration, immediately before/after the
     non-interruptible OCC call, and after parsing.  This matches v1's cooperative
     cancellation checkpoints at ``simulation_runner.py:347,438-443``.
+    ``force_rebuild`` bypasses and refreshes the process-local artifact cache.
     """
 
-    validated = design if isinstance(design, DesignConfig) else DesignConfig.model_validate(design)
+    validated = (
+        design
+        if isinstance(design, DesignConfig)
+        else DesignConfig.model_validate(design)
+    )
     _check_cancel(cancel_cb)
     _progress(progress_cb, "mesh_prepare", 0.0, "Preparing HornLab solver mesh")
-    result = await run_on_gmsh_worker(
-        _build_sync,
-        validated.model_dump(mode="json"),
-        cancel_cb,
-    )
+    cache_key = _solver_mesh_cache_key(validated)
+    result = None if force_rebuild else _solver_mesh_cache.get(cache_key)
+    cache_hit = result is not None
+    if result is None:
+        result = await run_on_gmsh_worker(
+            _build_sync,
+            validated.model_dump(mode="json"),
+            cancel_cb,
+        )
+        _solver_mesh_cache.put(cache_key, result)
     _check_cancel(cancel_cb)
     _progress(progress_cb, "mesh_validate", 1.0, "Validated HornLab solver mesh")
 
-    validation_mode = str(_option(options, "mesh_validation_mode", "warn") or "warn").lower()
+    validation_mode = str(
+        _option(options, "mesh_validation_mode", "warn") or "warn"
+    ).lower()
+    result["stats"]["mesh_cache_hit"] = cache_hit
+    result["stats"]["mesh_cache_key"] = cache_key
     result["stats"]["mesh_validation_mode"] = validation_mode
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")
@@ -345,5 +429,8 @@ async def build_solver_mesh(
 __all__ = [
     "CANONICAL_SURFACE_TAGS",
     "LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES",
+    "SOLVER_MESH_CACHE_FORMAT_VERSION",
     "build_solver_mesh",
+    "clear_solver_mesh_cache",
+    "solver_mesh_cache_info",
 ]

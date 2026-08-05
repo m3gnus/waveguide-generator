@@ -12,7 +12,12 @@ import numpy as np
 import pytest
 
 from server.design.schema import DesignConfig
-from server.mesh.builder import build_solver_mesh
+from server.mesh import builder as mesh_builder
+from server.mesh.builder import (
+    build_solver_mesh,
+    clear_solver_mesh_cache,
+    solver_mesh_cache_info,
+)
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.mesh.integrity import mesh_integrity_report
 
@@ -68,7 +73,9 @@ def test_gmsh_worker_serializes_every_call_on_one_persistent_thread() -> None:
             active -= 1
             return identity
 
-        identities = await asyncio.gather(*(run_on_gmsh_worker(observe) for _ in range(8)))
+        identities = await asyncio.gather(
+            *(run_on_gmsh_worker(observe) for _ in range(8))
+        )
         assert len(set(identities)) == 1
         assert maximum == 1
 
@@ -107,9 +114,108 @@ def test_mesh_build_cancellation_at_prebuild_checkpoint() -> None:
 
     async def scenario() -> None:
         with pytest.raises(RuntimeError, match="cancelled during mesh stage"):
-            await build_solver_mesh(_tiny_design(), {"mesh_validation_mode": "warn"}, cancel)
+            await build_solver_mesh(
+                _tiny_design(), {"mesh_validation_mode": "warn"}, cancel
+            )
 
     asyncio.run(scenario())
+
+
+def test_solver_mesh_cache_reuses_artifact_and_supports_force_rebuild(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    async def fake_worker(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "msh_text": f"$MeshFormat\nartifact-{calls}",
+            "stats": {"warnings": []},
+            "integrity": {"valid": True},
+            "metadata": {"build": calls},
+        }
+
+    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    clear_solver_mesh_cache()
+
+    async def scenario() -> None:
+        first = await build_solver_mesh(
+            _tiny_design(), {"mesh_validation_mode": "warn"}
+        )
+        second = await build_solver_mesh(
+            _tiny_design(), {"mesh_validation_mode": "warn"}
+        )
+        forced = await build_solver_mesh(
+            _tiny_design(),
+            {"mesh_validation_mode": "warn"},
+            force_rebuild=True,
+        )
+
+        assert first["stats"]["mesh_cache_hit"] is False
+        assert second["stats"]["mesh_cache_hit"] is True
+        assert second["msh_text"] == first["msh_text"]
+        assert second["stats"]["mesh_cache_key"] == first["stats"]["mesh_cache_key"]
+        assert forced["stats"]["mesh_cache_hit"] is False
+        assert forced["msh_text"] != first["msh_text"]
+
+        clear_solver_mesh_cache()
+        after_clear = await build_solver_mesh(
+            _tiny_design(), {"mesh_validation_mode": "warn"}
+        )
+        assert after_clear["stats"]["mesh_cache_hit"] is False
+        assert after_clear["msh_text"] != forced["msh_text"]
+
+    try:
+        asyncio.run(scenario())
+        assert calls == 3
+        assert solver_mesh_cache_info().entries == 1
+    finally:
+        clear_solver_mesh_cache()
+
+
+def test_solver_mesh_cache_key_ignores_solve_sampling_but_tracks_geometry(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    async def fake_worker(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "msh_text": f"$MeshFormat\nartifact-{calls}",
+            "stats": {"warnings": []},
+            "integrity": {"valid": True},
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    baseline = _tiny_design().model_dump(mode="json")
+    sampling_only = _tiny_design().model_dump(mode="json")
+    sampling_only["simulation"]["f1"] = 600
+    changed_geometry = _tiny_design().model_dump(mode="json")
+    changed_geometry["L"] = 61
+    clear_solver_mesh_cache()
+
+    async def scenario() -> None:
+        first = await build_solver_mesh(baseline, {"mesh_validation_mode": "warn"})
+        sampled = await build_solver_mesh(
+            sampling_only, {"mesh_validation_mode": "strict"}
+        )
+        changed = await build_solver_mesh(
+            changed_geometry, {"mesh_validation_mode": "warn"}
+        )
+
+        assert sampled["stats"]["mesh_cache_hit"] is True
+        assert sampled["stats"]["mesh_cache_key"] == first["stats"]["mesh_cache_key"]
+        assert changed["stats"]["mesh_cache_hit"] is False
+        assert changed["stats"]["mesh_cache_key"] != first["stats"]["mesh_cache_key"]
+
+    try:
+        asyncio.run(scenario())
+        assert calls == 2
+    finally:
+        clear_solver_mesh_cache()
 
 
 @pytest.mark.skipif(
